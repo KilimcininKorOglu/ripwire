@@ -75,6 +75,7 @@ enum class NodeField : std::uint8_t
     Receiver, Right, Scope, Source, Subject,
     Superclasses, Target, Trait, Type, Update,
     Value,
+    Op,
     Count
 };
 
@@ -100,6 +101,7 @@ inline constexpr std::array<NodeFieldName, kNodeFieldCount> kNodeFieldNames = { 
     { "receiver", 8 },       { "right", 5 },          { "scope", 5 },          { "source", 6 },         { "subject", 7 },
     { "superclasses", 12 },  { "target", 6 },         { "trait", 5 },          { "type", 4 },           { "update", 6 },
     { "value", 5 },
+    { "op", 2 },
 } };
 
 static_assert( kNodeFieldNames.size() == kNodeFieldCount, "kNodeFieldNames must carry exactly one spelling per NodeField" );
