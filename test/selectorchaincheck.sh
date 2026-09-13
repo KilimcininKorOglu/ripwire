@@ -120,7 +120,9 @@ esac
 # ── (d) --affected accepts a pasted `path:line` locator ───────────────────────────────────────────────
 D_L="$( run --affected=src/graph.h:1148 2>/dev/null )"
 D_P="$( run --affected=src/graph.h      2>/dev/null )"
-tset(){ printf '%s' "$1" | grep -oE '<test p="[^"]*"' | sort | tr '\n' ' '; }
+# E1: a tests_to_run row may name SEVERAL files (`<g … p="a,b,c" run_unknown="1"/>`), so the set of files
+# is read by test/testrowpaths.py — THE shared reader — not by a grep for one row shape.
+tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sort | tr '\n' ' '; }
 { [ -n "$( tset "$D_P" )" ] && [ "$( tset "$D_L" )" = "$( tset "$D_P" )" ]; } \
   && ok "(d) --affected=src/graph.h:1148 ≡ --affected=src/graph.h (same test set)" \
   || no "(d) --affected path:line ≠ path (line=[$( tset "$D_L" )] plain=[$( tset "$D_P" )])"

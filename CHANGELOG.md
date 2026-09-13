@@ -101,27 +101,36 @@ no harness has a runner that was the same 16 or 23 bytes repeated once per row: 
 path), so runner-less rows whose per-row attributes are byte-equal are now served as one row,
 `<g hops="2" n="17" p="a,b,c" run_unknown="1"/>` (JSON: `"p"` — or `"test"` — becomes an array beside
 `"n"`; text: `[hops=2] (17): a, b, c   (run: not derivable)`), emitted where its first member stood. Rows
-with a runner stay single, a group of one stays a `<t>` row, a comma inside an XML path is `&#44;`, and
-every path is kept verbatim — the multiset of paths before and after is identical and so is their ORDER,
-which is what `test/testrowruncheck.sh` arm 12 proves on a fixture with three hop groups and a runner row
+with a runner stay single, a group of one stays a `<t>` row, a path that contains a comma is never grouped
+at all (`p=` is a comma-separated list and every XML parser undoes an entity before a consumer splits on the
+delimiter, so an escaped comma would reappear as a separator and `n=` would disagree with what the reader
+counts — the text twin had no escape to undo), and every path is kept verbatim — the multiset of paths
+before and after is identical and so is their ORDER, which is what `test/testrowruncheck.sh` arm 12 proves
+on a fixture with three hop groups and a runner row
 in the middle of one of them, in all three dialects (red on the previous binary). All twelve emitters —
 `--affected`, `--exercises`, `--test-gate` XML and JSON, `--situ`, `--pr-context`, `--handoff`,
 `--flags --flip`, `--pack-task` XML and JSON, the MCP `situational_awareness` twin and the edit
 receipt — render through one seam in `testmap.h`, and the M21(b) rule keeps its meaning: a `<t>` or
 `<g>` row carries `run=` or `run_unknown="1"`, never neither. Measured on RocksDB (`wc -c`, same cache,
-same commit): `--affected=db/write_batch.cc` 10,668 → 6,878 B, `--test-gate=db/write_batch.cc` 13,242 →
-9,633 B (its JSON 11,055 → 7,163 B), `--situ=db/write_batch.cc` 11,769 → 7,357 B; 8 `<g>` rows replace
-124 single rows (a group covers a contiguous run only, so the one runner row inside the hops=2 tier splits
-it in two — order is preserved by construction, `test/testrowruncheck.sh` arm 12 reads the paths back in
-emitted order) and the residual spent on the disclosure is 160 B (XML) and 230 B (text) per list.
-`--pack-task`'s byte-budgeted tests section caps a group at its own budget — applied before every join, so
-two paths that each fit alone are never joined into one row the section then rejects whole (arm 13 sweeps
-the budget and requires the first section that fits to be one singleton) — and counts `shown=`/`total=` in
-files, so the same bundle now names 54 of 109 tests where it named 28. On this tree every harness
-has a runner, so nothing groups and the only change is the legend that now defines `<g>`: the
-`--test-gate` legend pin moves 2,720 → 2,900 B (measured 2,843) and the `ripwire.pack-task/v1` compact
-pin 820 → 880 B (measured 865), both because the compact dialect and every rows-bearing full legend now
-define `run_unknown=` and `<g n= p=>` — a definition `--affected` and the compact dialect never carried.
+same commit): `--affected=db/write_batch.cc` 10,668 → 6,992 B, `--test-gate=db/write_batch.cc` 13,242 →
+9,747 B (its JSON 11,055 → 7,163 B), `--situ=db/write_batch.cc` 11,769 → 7,357 B, and in the compact
+dialect 9,312 → 5,313 B and 11,223 → 7,596 B; 8 `<g>` rows replace 124 single rows (a group covers a
+contiguous run only, so the one runner row inside the hops=2 tier splits it in two — order is preserved by
+construction, `test/testrowruncheck.sh` arm 12 reads the paths back in emitted order) and the residual
+spent on the disclosure is 160 B (XML, 10 `run_unknown="1"`) and 230 B (text) per list.
+`--pack-task`'s tests section is byte-budgeted, so it CUTS over its own grouped, escaped rendering: it takes
+the largest prefix of the row list whose rendered `<tests>` body fits the section budget, found by bisection
+(the rendered size is monotone in the prefix length, so the bisection is exact), and counts `shown=`/`total=`
+in test files. Measured on RocksDB with `--pack-task="change WriteBatch::Put"` at the default 6,000-token
+budget, `wc -c`, same cache, same commit: `<tests shown="55" total="109">` where the pre-E1 bundle named 28,
+the whole bundle 11,993 → 12,490 B. On this tree every harness has a runner, so nothing groups and the only
+change is the legend that now defines `<g>`: the `--test-gate` legend pin moves 2,720 → 3,000 B (measured
+2,957) and the `ripwire.pack-task/v1` compact pin 820 → 880 B (measured 865), both because the compact
+dialect and every rows-bearing full legend now define `run_unknown=` and `<g n= p=>` — a definition
+`--affected` and the compact dialect never carried. The MCP manifest ceiling moves 42,384 → 42,800 B
+(measured 42,777) for one 207-byte clause spliced into the two tool descriptions that serve these rows as
+JSON: `situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
+reads `p` as a string has nowhere else to learn that it can be an array.
 The clause is rows-gated everywhere it is spliced — `--affected`, `--exercises`, `--pack-task`, the
 partitioned bundle, and `--pr-context`, whose legend precedes its files in the STREAM but is now decided
 after them: the chosen body is rendered first, the pricer charges the clause per candidate trim level from
@@ -130,7 +139,39 @@ legend and the delivered legend cannot disagree. A corpus-level predicate over-a
 file outside the selected range, or a trim level whose `testCap` is 0, bought the clause for a document
 with no row — and both now pay nothing (measured on `test/defaultceilingcheck.sh`'s 120-file, no-test
 fixture: unconditional, the default bundle went 7,989 → 8,025 tokens over its 8,000 budget; gated, 7,989;
-`test/prcontextcheck.sh` pins all four sides, red first).
+`test/prcontextcheck.sh` pins all four sides, red first). The clause is gated on a COUNT the emitter
+reports with its rows, never on a search of the rendered bytes: `--pr-context` charges the trim level's own
+row count and the partitioned bundle sums what each slice kept. Asking the bytes was wrong twice — a
+`--pr-context` body and a `--pack-task` slice can both carry the literal text of the element inside CDATA,
+and `--pack-task="write_report" --partition=2` over a two-file corpus with no test at all bought the outer
+clause because one body prints `<tests n="%d">` (`test/testrowruncheck.sh` arm 15, red first). `--handoff`
+and `--flags --flip` spliced the clause unconditionally and now ask the same count; `--handoff` is
+byte-budgeted with heuristic rows dropped tail-first, so on a packet with no test row the 180 B it was
+paying could evict a real row (arm 14, red first).
+
+Two byte-accounting rules changed with it. `--pack-task`'s tests section used to group FIRST and cut the
+group rows with the generic list cutter under a per-row cap whose estimate was computed on UNESCAPED path
+bytes, so a corpus whose test paths hold `&` or `<` rendered wider than the cap admitted; the cutter breaks
+at the first over-budget entry, so the whole tail of the section went with it — `run=` singles included.
+Measured on a matched pair of ten-test fixtures differing in one byte per name (`&` against `_`) at
+`--token-budget=1440`: the control named 5 files and the `&` fixture named none. Cutting over the grouped,
+escaped rendering fixes it and is strictly better than cutting the single rows and grouping afterwards,
+which would have been safe but spends fewer of its bytes (2 files where grouping-first served 5); across
+budgets 1440–1860 the new cut names 6–11 files against the old 5–11, and the `&` fixture never empties
+(`test/testrowruncheck.sh` arm 13). And `--pr-context`, which must render a level to price it, rendered
+through a helper that returned an empty string on an `open_memstream` failure with no alert at all — a
+document could have shipped its legend, root and closing tag around an empty body claiming
+`truncated="none"`. Every such render now goes through one seam in `infra/emit.h` (`rw::renderToString`,
+which `packtask.h` already had in its own spelling) that reports the failure, and both `--pr-context` exits
+fall back to streaming the level straight out: complete, correct bytes, a modelled estimate, and a
+`DEGRADED_PATH_ALERT` saying which — serialize.h's own degrade contract.
+
+Nine gates assert something about these rows, and each had its own reader: since a row can now name several
+files, `grep -oE '"tests_to_run":\[[^]]*\]'` stopped at the first `]` (the end of the first group's path
+array, so three arms asserted over two and a half rows and passed vacuously), `sed`-based XML readers saw
+only the single rows, and the text reader took `$1` of a line that on a group line is `[hops=1]`. They all
+want the same thing — the files named, in emitted order — so they now all ask `test/testrowpaths.py`, one
+reader for all three dialects and both row shapes.
 
 ### Added — --for pages its answer one file per row, and says when to widen
 

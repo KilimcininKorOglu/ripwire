@@ -269,7 +269,9 @@ done
 
 # ── 7) H2H-Graft F1: rows in EVIDENCE order, stem partner first, hops= disclosed ──────────────────────
 # Ordered basenames (NOT sorted — the order IS the claim).
-tord(){ printf '%s' "$1" | grep -oE '<test p="[^"]*"' | grep -oE '[^/"]*"$' | sed 's/"$//' | tr '\n' ','; }
+# E1: the files named, in EMITTED order (a <g> row contributes its members in place) — through the shared
+# reader, so this gate and the eight others that ask the same question cannot disagree about what a row is.
+tord(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | tr '\n' ','; }
 D="$( run --affected=src/deep.cpp )"
 [ "$( tord "$D" )" = "deep_test.cpp,test_zdirect.cpp,test_afar.cpp," ] && [ "$( cnt "$D" )" = 3 ] \
     && ok "(7a) --affected=src/deep.cpp: partner first, then hops asc — deep_test, test_zdirect(1), test_afar(2); tests=3" \

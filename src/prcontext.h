@@ -522,6 +522,8 @@ struct PrTrimRender
     std::size_t estTokens   = 0;
     std::size_t level       = 0;
     std::string truncated   = "none";
+    std::size_t testFiles   = 0;      // E1: test FILES this level's body actually rendered — 0 ⇒ no <test>/<g> row
+    bool        rendered    = true;   // false ⇒ the measurement buffer failed; `body` is empty and means nothing
 };
 
 // ONE estimator for every --pr-context root, never two counters (serialize.h's standing rule, the one
@@ -533,26 +535,23 @@ struct PrTrimRender
 // The floor-exceeded suffix feeds back into the price (it lengthens truncated=, hence the root tag), so it
 // is applied and RE-PRICED: monotone, since adding bytes to a document already over budget cannot bring it
 // under, so one re-price is the fixpoint and the printed number is the document's real price either way.
-// One level's body, rendered to a string — the ladder's probe and (E1) the unbudgeted root's single render,
-// which needs the body before the head can be written.
+// One level's body, plus the two facts a caller cannot recover from the bytes: how many test FILES it
+// rendered (E1 — the run-hint clause is gated on that count, never on a string match over the body) and
+// whether the measurement buffer opened at all. Through infra/emit.h's ONE renderToString seam, so a failure
+// is ALERTED rather than returned as an indistinguishable empty body.
 template< typename EmitFn >
-inline std::string prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
+inline PrTrimRender prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
 {
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::string rendered;
-    if( std::FILE* ms = open_memstream( &buf, &sz ) )
+    PrTrimRender out;
+    const rw::Rendered r = rw::renderToString( [ & ]( std::FILE* ms ) { emitFiles( ms, trim, &out.testFiles ); },
+                                                "pr-context: open_memstream failed — this level was not measured" );
+    out.body     = r.text;
+    out.rendered = r.ok;
+    if( !r.ok )
     {
-        emitFiles( ms, trim );
-        std::fflush( ms );
-        std::fclose( ms );
-        if( buf )
-        {
-            rendered.assign( buf, sz );
-        }
+        out.testFiles = 0;
     }
-    std::free( buf );
-    return rendered;
+    return out;
 }
 
 template< typename EmitFn, typename PriceFn >
@@ -563,10 +562,13 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
     PrTrimRender out;
     for( std::size_t li = 0; li < nLevels; ++li )
     {
+        const PrTrimRender probe = prRenderLevel( emitFiles, kPrTrims[li] );
+        out.body      = probe.body;
+        out.testFiles = probe.testFiles;
+        out.rendered  = probe.rendered;
         out.level     = li;
         out.truncated = li > 0 ? std::string( kPrTrims[li].dropped ) : std::string( "none" );
-        out.body      = prRenderLevel( emitFiles, kPrTrims[li] );
-        out.estTokens = price( out.body, li, out.truncated, windowAttrs );
+        out.estTokens = price( out.body, out.testFiles, li, out.truncated, windowAttrs );
         if( out.estTokens <= budgetTokens )
         {
             break;
@@ -574,7 +576,7 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
         if( li + 1 == nLevels )
         {
             out.truncated += ";budget-floor-exceeded";   // even the floor render is over budget
-            out.estTokens = price( out.body, li, out.truncated, windowAttrs );
+            out.estTokens = price( out.body, out.testFiles, li, out.truncated, windowAttrs );
         }
     }
     return out;
@@ -676,13 +678,13 @@ inline std::string prEmptyRootTail( std::uint32_t skippedModeOnly, std::size_t b
 template< typename PriceFn >
 inline std::pair<std::size_t, std::string> prEmptyRootPrice( const PriceFn& price, std::size_t budgetTokens )
 {
-    const std::size_t plain = price( kPrEmptyDiffBody, 0, std::string( "none" ), std::string() );
+    const std::size_t plain = price( kPrEmptyDiffBody, 0, 0, std::string( "none" ), std::string() );
     if( budgetTokens == 0 || plain <= budgetTokens )
     {
         return { plain, std::string( "none" ) };
     }
     const std::string labelled( "budget-floor-exceeded" );
-    return { price( kPrEmptyDiffBody, 0, labelled, std::string() ), labelled };
+    return { price( kPrEmptyDiffBody, 0, 0, labelled, std::string() ), labelled };
 }
 
 // Open the <pr-context> root: the attributes EVERY form shares, this site's own tail, and the one remark row
@@ -741,19 +743,15 @@ struct PrPriceCtx
 //
 // The attribute is part of the document it prices, so its own digits are converged in ≤4 passes exactly as
 // pricedRootAttr converges them.
-// E1 (CodeRabbit on #214): the ONE predicate that decides whether a rendered body carries the run clause's
-// subject — a <test>/<g> row — read by the pricer for every candidate level and by the writer for the chosen
-// one, so the priced legend and the delivered legend cannot disagree. Rows are the only place these two
-// openers occur in this document.
-inline bool prBodyHasTestRow( std::string_view body ) noexcept
-{
-    return body.find( "<test p=\"" ) != std::string_view::npos || body.find( "<g " ) != std::string_view::npos;
-}
-
-inline std::size_t prPriceDocument( const PrPriceCtx& c, std::string_view body, std::size_t level,
+// E1 (review of #214): the run clause is charged for a level exactly when that level's body RENDERED a test
+// row, and the count comes from the emitter that wrote it (PrTrimRender::testFiles), never from a string
+// match over the rendered bytes — a body can carry the literal text of a tag inside CDATA or an attribute,
+// and a predicate that greps for one is answering a different question than the emitter did. The pricer and
+// the writer read the SAME count, so the priced legend and the delivered legend cannot disagree.
+inline std::size_t prPriceDocument( const PrPriceCtx& c, std::string_view body, std::size_t testFiles, std::size_t level,
                                     const std::string& truncatedEscaped, const std::string& windowAttrs )
 {
-    const std::size_t bodyBytes = body.size() + ( prBodyHasTestRow( body ) ? c.runClauseBytes : 0 );   // E1: the clause rides only a rows-bearing document
+    const std::size_t bodyBytes = body.size() + ( testFiles > 0 ? c.runClauseBytes : 0 );   // E1: the clause rides only a rows-bearing document
     std::size_t       est       = 0;
     for( int pass = 0; pass < 4; ++pass )
     {
@@ -930,12 +928,14 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
 
     // E1: both legend forms are built now and ONE is written later, once the body is known (prBodyHasTestRow);
     // the envelope is priced without the clause and the pricer adds runClauseBytes for a rows-bearing body.
-    const std::string legendText       = prLegendText( escBase, g.unindexedFiles > 0, false );
-    const std::string legendWithClause = prLegendText( escBase, g.unindexedFiles > 0, true );
-    const std::string anchorNoteText   = prAnchorNoteText( anchorAttr );
-    const auto        writeHead        = [ & ]( std::string_view body )
+    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, false );
+    const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
+    // The clause-bearing form is built ONCE, and only if it is the form that gets written — the difference
+    // between the two is exactly kRunHintLegendClause (prLegendText splices that constant and nothing else),
+    // so the pricer reads the constant's size rather than a second rendering's.
+    const auto        writeHead      = [ & ]( std::size_t testFiles )
     {
-        const std::string& legend = prBodyHasTestRow( body ) ? legendWithClause : legendText;
+        const std::string legend = testFiles > 0 ? prLegendText( escBase, g.unindexedFiles > 0, true ) : legendText;
         std::fwrite( legend.data(), 1, legend.size(), out );
         std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
     };
@@ -948,11 +948,11 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // R2/N4: the price context (see prPriceDocument) — the envelope and every root attribute that does not
     // vary per candidate trim level, gathered once.
     const PrPriceCtx priceCtx{ .g = &g, .sharedAttrs = &sharedAttrs, .anchor = &anchor, .baseEscaped = &escBase, .atAttrs = &atAttrStr,
-                               .envelopeBytes = envelopeBytes, .runClauseBytes = legendWithClause.size() - legendText.size(),
+                               .envelopeBytes = envelopeBytes, .runClauseBytes = rw::kRunHintLegendClause.size(),
                                .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
                                .budgetTokens = budgetTokens, .isDefaultBudget = budget.isDefault };
-    const auto priceOf = [ & ]( std::string_view body, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )
-    { return prPriceDocument( priceCtx, body, level, ex( truncatedRaw ), windowAttrs ); };
+    const auto priceOf = [ & ]( std::string_view body, std::size_t testFiles, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )
+    { return prPriceDocument( priceCtx, body, testFiles, level, ex( truncatedRaw ), windowAttrs ); };
 
     if( changed.empty() )
     {
@@ -960,7 +960,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
         const std::string rootOpen = prRootOpenText( g, sharedAttrs,
                                                      prEmptyRootTail( skippedModeOnly, budgetTokens, budget.isDefault, emptyEst, ex( emptyTruncated ) ) + atAttrStr,
                                                      anchor, escBase );
-        writeHead( kPrEmptyDiffBody );
+        writeHead( 0 );   // the empty-diff body is a fixed comment: no changed file, so no test row
         std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
         std::fwrite( kPrEmptyDiffBody.data(), 1, kPrEmptyDiffBody.size(), out );
         std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
@@ -996,7 +996,10 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // The per-file body emitter, parameterized by a trim level so the budget path can render it at several
     // depths into a memstream to measure, then re-render the chosen one to `out`. At the deepest trim it is
     // still one <file> element PER changed file (counts intact) — files are never dropped, only detail is.
-    const auto emitFilesRange = [ & ]( std::FILE* o, const PrTrim& trim, std::size_t begin, std::size_t end )
+    // `testFilesOut` (optional): the number of test FILES the rows below actually rendered, accumulated over
+    // the range — E1's ONE gate for the run-hint clause, reported BY the emitter instead of grepped back out
+    // of its bytes. nullptr on the streaming degrade path, which has no legend left to decide.
+    const auto emitFilesRange = [ & ]( std::FILE* o, const PrTrim& trim, std::size_t begin, std::size_t end, std::size_t* testFilesOut )
     {
         for( std::size_t ci = begin; ci < end; ++ci )
         {
@@ -1081,9 +1084,12 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
             if( trim.testCap > 0 )
             {
                 rw::emitTo( o, "<tests count=\"{}\" shown=\"{}\" capped=\"{}\">", testFiles.size(), tSc.shown, tSc.capped );
-                // §A9.5 / E1: the shown window, grouped where no runner is derivable (testmap.h's seam)
-                rw::emitRaw( o, testRowsJoined( prRunners, testRowsOutOf( std::span( testFiles ).first( tSc.shown ), prPathRel ), TestRowShape{ RowDialect::Xml, "test" }, ex ).c_str() );
+                // §A9.5 / E1: the shown window, grouped where no runner is derivable (testmap.h's seam), which
+                // returns the FILE count with the rows — the number the legend's clause is gated on.
+                const JoinedTestRows tRows = testRowsList( prRunners, testRowsOutOf( std::span( testFiles ).first( tSc.shown ), prPathRel ), TestRowShape{ RowDialect::Xml, "test" }, ex );
+                rw::emitRaw( o, tRows.text.c_str() );
                 rw::emitRaw( o, "</tests>" );
+                if( testFilesOut ) { *testFilesOut += tRows.files; }
             }
             else
             {
@@ -1207,16 +1213,28 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // P4 (L7): the changed-file WINDOW — --limit/--offset when given, else every file (the budget may still cut it below)
     const PageWindow  filePw    = pageWindow( changed.size(), budget.pageLimit, budget.pageOffset );
     std::size_t       fileEnd   = filePw.end;
-    const auto        emitFiles = [ & ]( std::FILE* o, const PrTrim& trim ) { emitFilesRange( o, trim, filePw.begin, fileEnd ); };
+    const auto        emitFiles = [ & ]( std::FILE* o, const PrTrim& trim, std::size_t* testFilesOut ) { emitFilesRange( o, trim, filePw.begin, fileEnd, testFilesOut ); };
 
     // NO budget at all (only a multi-root sub-bundle handed 0): level 0, no budget attributes.
     if( budgetTokens == 0 )
     {
         const std::string rootOpen = prRootOpenText( g, sharedAttrs, " files=\"" + std::to_string( changed.size() ) + "\" skipped_mode_only=\"" + std::to_string( skippedModeOnly ) + "\"" + atAttrStr, anchor, escBase );
-        const std::string body = prRenderLevel( emitFiles, kPrTrims[0] );   // E1: rendered first, so the head can follow the body
-        writeHead( body );
+        // E1: the head carries a rule about rows, so it follows the body's DECISION even though it precedes
+        // the body in the stream — the level is rendered into a measurement buffer first and its row count
+        // decides the legend form. DEGRADE (infra/emit.h renderToString, which alerts): if that buffer cannot
+        // be opened there is no count, so the clause-less legend is written and the body is STREAMED straight
+        // to `out` exactly as it was before E1. Complete, correct bytes either way — never an empty body.
+        const PrTrimRender flat = prRenderLevel( emitFiles, kPrTrims[0] );
+        writeHead( flat.testFiles );
         std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
-        std::fwrite( body.data(), 1, body.size(), out );
+        if( flat.rendered )
+        {
+            std::fwrite( flat.body.data(), 1, flat.body.size(), out );
+        }
+        else
+        {
+            emitFiles( out, kPrTrims[0], nullptr );
+        }
         std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
         return 0;
     }
@@ -1258,9 +1276,20 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
                                                  prBudgetTail( changed.size(), skippedModeOnly, budgetTokens, chosen, ex( chosen.truncated ) )
                                                      + ( budget.isDefault ? " budget_default=\"1\"" : "" ) + windowAttrs + atAttrStr,
                                                  anchor, escBase );
-    writeHead( chosen.body );   // E1: the legend form the chosen body was priced with
+    writeHead( chosen.testFiles );   // E1: the legend form the chosen body was priced with, from the same count
     std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
-    std::fwrite( chosen.body.data(), 1, chosen.body.size(), out );
+    if( chosen.rendered )
+    {
+        std::fwrite( chosen.body.data(), 1, chosen.body.size(), out );
+    }
+    else
+    {
+        // DEGRADE (renderToString alerted): no level could be measured, so est_tokens= is the modelled number
+        // for an empty body — but the document still owes its bytes. Stream the floor level straight out, the
+        // same contract serialize.h's ChargedSection degrade keeps: complete, correct bytes, a wrong estimate,
+        // and an alert saying which. Never an empty <pr-context>.
+        emitFiles( out, kPrTrims[0], nullptr );
+    }
     std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
     return 0;
 }

@@ -209,7 +209,16 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # this twin. Its description gained NO prose: a first draft named coverage= and the page there (+109 B) and was
 # removed rather than re-anchored around, the L7 precedent above — the schema properties are where a client renders
 # an argument, and the answer's own legend defines coverage= and the page. Headroom after this line: 23 B.
-CEILING = 42384
+# RE-ANCHORED 2026-09-13 (review of #214): 42,384 → 42,800 = +416 B, EXACTLY the one 207-byte clause spliced
+# into the TWO tool descriptions that serve tests_to_run rows as JSON — `situational_awareness` and `explore`
+# (measured against a build of ff8d77a1: 42,361 B here, 23 B under the old ceiling). It is NOT the L7 case the
+# line above declines. That one removed prose describing an ARGUMENT, because the schema properties are where a
+# client renders an argument and the answer's own legend defines the rest. This clause describes the RESPONSE:
+# E1 made a tests_to_run row's `p` a path string OR an array of paths beside `n`, and these two answers carry
+# no legend of any kind — `situational_awareness` returns bare JSON with no vocabulary block — so a caller that
+# parses `p` as a string has nowhere else to learn otherwise before it breaks. ONE wording (mcp.h
+# kTestRowJsonShapeClause), spliced twice, never a third paraphrase. Headroom after this line: 23 B.
+CEILING = 42800
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )
