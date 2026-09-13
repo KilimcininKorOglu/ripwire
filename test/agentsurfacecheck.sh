@@ -88,14 +88,14 @@ ROWS='
 --offset=|--for|help|--offset=|the widening page continuation
 coverage=|--for|test/fixture --for=area --limit=5|coverage="|the thin-answer coverage gauge
 sc=|--for|test/cppqualfix| sc="|short symbol ids on map rows
-<g |--affected|. --affected=src/cli.h|<g |grouped tests-to-run rows
+<g|--affected|. --affected=src/cli.h|<g|grouped tests-to-run rows (the row shape, or the legend clause that defines it)
 merge_bombs_skipped=|--rank-by=churn-decay|. --rank-by=churn-decay|merge_bombs_skipped=|the skipped-merge-bomb disclosure
-scope=|--in=|. --rank-by=churn-decay|scope=|the scoped recency block
+scope=|--in=|. --rank-by=churn-decay --in=src|scope=|the scoped recency block
 '
 # PENDING: shapes this release lands in another lane, which this build does not have yet. A row here
 # asserts nothing about the surfaces — and FAILS the moment the binary does have it, so the list cannot
 # outlive its reason.
-PENDING='|--in=|sc=|<g |merge_bombs_skipped=|scope=|'
+PENDING='|--in=|sc=|<g|merge_bombs_skipped=|scope=|'
 
 # named PAIR: TERM and VERB within a five-line window of one surface file
 pairNamed(){
