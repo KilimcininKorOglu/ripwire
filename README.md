@@ -2034,7 +2034,7 @@ tier: it parses with its own vendored grammar, so its headings are symbols, not 
 > there. Come here when you want to know exactly what a command does, what its output means, or where the tool stops
 > being right.
 
-Publication date: 2026-09-12
+Publication date: 2026-09-12. Every claim below re-verified against a 0.6.0 build on 2026-09-13.
 
 ripwire analyzes a source tree. The tool writes a ranked symbol map to standard output. The map
 shows the symbols that matter for a task, the callers of those symbols, and the tests that reach
@@ -2043,7 +2043,7 @@ server, no daemon. It uses a network only when you give it a git URL instead of 
 it shallow-clones into a cache.
 
 This guide tells you how to install, operate, and evaluate ripwire. Read `docs/COMMANDS.md` for the
-full command reference. Run `./build/ripwire --help` for the current flag list. The binary generates
+full command reference. Run `ripwire --help` for the current flag list. The binary generates
 `--help` from its own flag table, so `--help` is the authority. If this guide disagrees with
 `--help`, report this guide as a defect.
 
