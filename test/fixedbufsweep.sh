@@ -159,7 +159,7 @@ TABLE = {
     ( "src/verbs_report.h", "row" ): ( 5, "safe",       "row[96] + row[192], runSkipped's two row emitters (§L1). row[96] at the <f> drop row: '\" why=\"%s\" bytes=\"%llu\" ext=\"' where %s is the CLOSED vocabulary {oversize, excluded, unsupported-ext, ignored, ignored-dir, nest-refused, escaped-root} (15 B longest, still unsupported-ext; escaped-root is 12) = ~60 B. row[192] at the <h> parse-health row: three %s from the closed why= vocabulary (31 B for the joined 'degraded-parse,minified-suspect'), one %u, two %.3f of ratios that are <=1.0 by construction (errBytes sums DISJOINT top-most ERROR spans, ws sample is its own denominator) and 14 B even if a future edit broke that, one %u = ~131 B. Both p= values are written by escapeXml OUTSIDE the buffer." ),
     # ── src/mcpverbs.h ───────────────────────────────────────────────────────────────────────────────────
     ( "src/mcpverbs.h", "nb" ): ( 7, "safe",       "nb[160] x4: the CLI notes' MCP twins, byte-identical format. Plural '' / 's' only." ),
-    ( "src/pageview.h", "buf + written" ): ( 1, "safe",   "pageDisclosure's H8 floor marker (capture-audit L4): the %s is syn.floor, one of TWO fixed literals (' counts_floor=\"1\"' 17 B, or its JSON twin ',\"counts_floor\":true' 20 B), appended AFTER the paging snprintf into the SAME caller buffer with the remaining capacity (bufCap - written) as its size, guarded by written < bufCap. Every caller's buffer is sized against kPageDisclosureCap, which the floor literal is part of by construction; nothing user-supplied, nothing escaped." ),
+    ( "src/pageview.h", "buf + written" ): ( 3, "safe",   "THREE appends into the TAIL of a caller buffer, all bounded by (bufCap - written) and guarded by a written-versus-bufCap test, and all three sized against kPageDisclosureCap by construction. (1) pageDisclosure's H8 floor marker (capture-audit L4): the %s is syn.floor, one of TWO fixed literals. (2,3) pagingDisclosure's two dialect arms (C1-b, 2026-09-13): the paging half is written after an OPTIONAL leading total=, so an element that already spells its total under its own name (the map's <recent of=>) can skip it — the arms interpolate counts and the syntax table's boolean literals only, nothing user-supplied and nothing escaped." ),
     # ── src/packtask.h ───────────────────────────────────────────────────────────────────────────────────
     ( "src/packtask.h", "open" ):      ( 2, "safe",       "open[160] (`%.*s` x2, so INVISIBLE to the pre-wave-3 population, and it is an XML OPEN TAG — the shape §B14 is about): packTaskListSection's '<TAG EXTRA shown=\"%zu\" total=\"%zu\" capped=\"%d\">'. Safe by ARITHMETIC, not by shape. 30 B of literal ('<' 1 + ' shown=\"' 8 + '\" total=\"' 9 + '\" capped=\"' 10 + '\">' 2). tag comes from the FOUR call sites (:448 'far', :610 'callers', :659 'notes', :698 'tests') ⇒ 7 B. extraAttr is farAttr[32]/callersAttr[32] or the empty literal, and those two are themselves ' of_top=\"%zu\"' snprintf'd into a char[32] ⇒ 31 B at most. Two %zu ⇒ 20 digits each, %d ⇒ 1. Worst case 30+7+31+20+20+1 = 109 B + NUL against 160: 50 B of margin. NOTE both `.*` precisions are int( v.size() ) — they print a string_view, they do not clamp it; the bound is the caller vocabulary and the char[32] feeding extraAttr. SECOND SITE (2026-08-28 serving-shape round, :903): restatePackTaskBodiesWrapper restates the bodies open tag into its own open[112] — two %zu at 20 digits, a fixed capped literal, and a %s that is the 13 B compress literal or empty, ~35 B of literal in total, worst case 88 B against 111 usable. All-numeric/fixed-vocab, same class as the first site." ),
     # ── src/partition.h ──────────────────────────────────────────────────────────────────────────────────
@@ -253,7 +253,7 @@ NUMERIC_ONLY = {
     ( "src/serialize.h", "nb" ): 2,
     ( "src/serialize.h", "precAttr" ): 1,
     ( "src/serialize.h", "rankAttr" ): 1,
-    ( "src/serialize.h", "rc" ): 2,
+    ( "src/serialize.h", "rc" ): 1,
     ( "src/serialize.h", "rootsAttr" ): 1,
     ( "src/serialize.h", "sh" ): 1,
     ( "src/serialize.h", "skippedAttr" ): 1,
@@ -431,7 +431,7 @@ if not bad:
 #            format to derive a class from — the same reason nestAttr and escAttr are rows. mentions is +2 because
 #            the comment on that buffer names formatTo as well; arch.h's third mention, its emit.h include line,
 #            predates this change. The code it replaced wrote through emitRaw/emitTo, which this gate does not count.
-EXPECTED = { "mentions": 322, "calls": 218, "sites": 218, "rows": 92, "widthforms": 0 }
+EXPECTED = { "mentions": 324, "calls": 219, "sites": 219, "rows": 92, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

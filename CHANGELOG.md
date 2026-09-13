@@ -17,37 +17,74 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ### Added — `--in=DIR` scopes the recent-changes block to a directory and stubs the map it was not asked for
 
-"What changed recently in DIR?" is six of the thirty reference questions, and `--rank-by=churn-decay`
-answered it with a whole-repository symbol map plus one global `<recent n="40">` block that a directory
-with more than 40 recently-touched files never fits into; nothing in the binary took a directory as a
-scope. `--in=DIR` (root-relative, an existing directory under the root; a trailing slash is ignored,
-absolute paths and `..` are refused) keeps the global block byte-identical — three of the six golds sit
-outside the named directory and complete only through it — and adds a second block
-`<recent scope="DIR" n= of= merge_bombs_skipped=>` after it with DIR's files only, `p=` spelled
-root-relative exactly as the global block spells them (a sub-root-relative spelling missed every
-held-out gold: 0/30 raw against 19/30 prefixed), same order. The block pages the way every listing here
-pages: 40 rows by default, `capped="1"` plus a pasteable `next="--rank-by=churn-decay --in=DIR
---offset=40"` when DIR has more, `--limit=N` for the page size, `offset=` on a later page. The symbol
-map collapses to a disclosed stub `<symbols total=N shown="0" next="--rank-by=churn-decay"/>` — the
-map was not asked for, `total=` is the row count the same run without `--in=` carries, and the header's
-own `shown=` reads 0 so it cannot claim rows the document lacks (docs/METHODOLOGY.md §9.3: a disclosed
-cut is still terminal). The flag is refused, naming the remedy, with any other verb, under multi-root,
-with `--top-k=0` and with `--json`; the verb refusal is decided after dispatch precedence resolves, so
-it names the verb that actually answered rather than guessing from a list; the MCP surface exposes no
-churn ranker, so there is no twin to extend.
+"What changed recently in DIR?" is six of the thirty questions in this project's frozen reference set (the
+RocksDB corpus pinned at `0e2801ac`, scored by the frozen-30 harness described in `docs/EVALS.md`), and
+`--rank-by=churn-decay` answered it with a whole-repository symbol map plus one global `<recent n="40">`
+block that a directory with more than 40 recently-touched files never fits into; nothing in the binary took
+a directory as a scope. `--in=DIR` (root-relative, an existing directory under the root; a trailing slash is
+ignored, absolute paths and `..` are refused) keeps the global block byte-identical — three of the six golds
+sit outside the named directory and complete only through it — and adds a second block
+`<recent scope="DIR" n= of= capped= …>` after it with DIR's files only, `p=` spelled root-relative exactly
+as the global block spells them, same order. That spelling is the whole of the retrieval result: scored by
+the same harness on the same 30 questions, the sub-root-relative spelling the obvious workaround produces
+completed 0 of 30 against 19 of 30 for the root-prefixed one, because every gold path in the set is written
+root-relative.
 
-Measured on the RocksDB corpus at `0e2801ac` (`--rank-by=churn-decay`, warm cache, bytes on stdout):
-39,813 B bare → 10,241 B with `--in=db`, 10,165 B with `--in=util`, 10,711 B with `--in=table`. The
-saving is the stub (61 B in place of the 200-row map); the scoped block itself costs 2.2–2.8 KB per
-answer, and the global block (2,395 B) is unchanged. On this repository's own tree: 46,843 B → 9,259 B
-with `--in=src`. Gate: `test/recentscopecheck.sh` — a 53-commit fixture with 45 files under `db/`
-proves the scoped rows are only DIR's and spelled as the global block spells them, the global block is
-byte-identical with and without the flag, page 2 (`--offset=40`) is the exact remainder with no
-overlap and the pasted `next=` reproduces it byte-for-byte, a gold outside DIR leads the global block,
-the stub's `total=` equals the un-stubbed map's `shown=` and `<s>` count, thirteen refusals name their
-remedy — three of them the verbs that win dispatch, where the flag used to be accepted and ignored at
-exit 0 with an empty stderr — a directory with a space and one starting with `-` work, and determinism,
-`xmllint` and both legends hold; 42 arms red on the previous binary, 58 green now.
+The block pages the way every listing here pages, in `pageview.h`'s vocabulary: 40 rows by default, then
+`capped=` beside its `n=` on every page (rule 3), `has_more=`/`next_offset=`/`offset=`/`limit=` when the
+listing was cut or a window was asked for, and a pasteable `next=`. Its `of=` IS its total, so the paging
+half carries no `total=`: one number under two names is a shape this project has removed elsewhere, because a
+parser then has to know they are the same listing to avoid counting it twice. `next=` replays THIS
+run's own corpus and window flags (`--since`, `--exclude`, `--no-ignore`, `--ignore-tests`), so the page it
+names is a page of the same answer; a presentation flag is deliberately not replayed, because it cannot move
+`of=`. Past 120 bytes (`kNextAttrMaxBytes`, the ceiling every other `next=` in the tool already respected)
+the attribute is absent and `has_more=` still says the page exists — a hint that pastes wrong is worse than
+none. The scoped block rides exactly when the global one does: an absent block means no history was mined,
+`n="0"` means history was mined and no file under DIR was touched.
+
+The symbol map collapses to a disclosed stub `<symbols stubbed="1" would_show=N next="…"/>` — the map was
+not asked for, so it is not ranked at all (no PageRank runs, and the header carries no `pr_iters=` for an
+iteration that did not happen), and `would_show=` is how many symbol ROWS the same run without `--in=` would
+print. It deliberately borrows no paging attribute: `total=` is reserved for THE total (rule 2) and the stub's
+number is a page size, `shown=` would drag a `capped=` with it (rule 3), and rule 3's own sentence sanctions
+an element that carries neither.
+
+DIR is validated against the CRAWL and not only the filesystem — at least one indexed file must be spelled
+`DIR/`, byte-exact. The filesystem answers a different question: on a case-folding volume `--in=DB` is a
+directory, a symlink alias is a directory, and a subtree `--exclude` dropped is a directory, and all three
+would otherwise be answered with an empty block, which reads as "nothing changed there".
+
+REFUSED, exactly, and `--help` lists the same set: with any flag that answers instead of the scoped map,
+under multi-root, with `--top-k=N` for any N (the map it sizes is the stub), and with `--json`. The first of
+those is DERIVED from the flag tables rather than from a list of verbs — the shape `--html` already used —
+so `--map-diff`, `--expand`/`--outline`/`--pack-signatures`, `--doctor`, `--batch`, `--mcp` and the CLI edit
+bridge are covered by the same three lines that cover a report verb, and a flag added tomorrow refuses
+tomorrow with nobody editing the guard. `--in` is NOT a member of the paging verb set: it is a modifier of
+the default map, and membership made the shaping guard refuse every `--top-k`/`--max-tokens`/`--token-budget`
+beside it with a message naming verbs and claiming the default map honours the budgets it had just refused.
+`--limit`/`--offset` compose (they window the scoped element) and so do `--max-tokens`/`--token-budget` (they
+shape the document that is emitted). The MCP surface exposes no churn ranker, so there is no twin to extend.
+
+Measured on the RocksDB corpus at `0e2801ac` (`--rank-by=churn-decay`, warm cache, bytes on stdout via
+`wc -c`): 39,942 B bare → 10,601 B with `--in=db`, 10,525 B with `--in=util`, 11,071 B with `--in=table`.
+The saving is the stub (69 B in place of the 200-row map); the scoped block itself costs ~2.3–2.8 KB per
+answer, and the global block is unchanged. On this repository's own tree: 46,787 B → 9,629 B with
+`--in=src`; on llvm-project (183,835 tracked files) 48,150 B → 6,051 B with `--in=llvm/lib/Analysis`.
+Because the map is never ranked, sorted, bucketed or estimated under `--in`, the run is also cheaper, though
+only by the share of it that ranking was: user time, median of five interleaved warm samples with a scratch
+cache, 0.73 s → 0.71 s on RocksDB and 2.55 s → 2.37 s on llvm-project (~3% and ~7%). Ingest and the call
+graph dominate both, and that is the honest size of this win.
+
+Gate: `test/recentscopecheck.sh`, 85 arms on a 53-commit fixture with 45 files under `db/` — the scoped rows
+are only DIR's and spelled as the global block spells them, the global block is byte-identical with and
+without the flag, page 2 (`--offset=40`) is the exact remainder with no overlap and the pasted `next=`
+reproduces it byte-for-byte, `next=` replays `--exclude` and the pasted page lands on the same `of=`, an
+over-120-byte `next=` is absent while `has_more="1"` remains, the stub carries no `total=`/`shown=`/`capped=`
+and no `pr_iters=` rides the stubbed header, a window that mined nothing prints NEITHER block, a case-folded
+name / a symlink alias / an excluded subtree each refuse naming the crawl, eight preemption arms sample the
+derived refusal (`--lint`, `--hotspots`, `--query`, `--map-diff`, `--expand`, `--pack-signatures`, `--doctor`,
+`--batch`), `--top-k` refuses with exactly one message where it used to print three, and `--max-tokens`/
+`--token-budget`/`--limit` compose with a clean stderr.
 
 ### Fixed — a churn window says how many commits it skipped as merge bombs
 
@@ -61,7 +98,16 @@ absence is never ambiguous; the full and compact legends define it and state the
 repository's own tree the attribute reads `merge_bombs_skipped="5"` — five commits the map had been
 quietly built without. Gate: `test/churndecaycheck.sh` arm 7 builds a repository whose HEAD commit adds
 101 files and asserts the block reads `"1"`, that none of those files is a row, and that both legends
-define the attribute; red on the previous binary (no attribute anywhere), green now. A window whose
+define the attribute; red on the previous binary (no attribute anywhere), green now. Both legends say
+"more than 100 INDEXED files" — the rule counts the files this crawl HOLDS, never the commit's raw file
+count, so a commit of 120 `.txt` files and one `.py` is not skipped and the old wording described a
+different rule from the code's. The threshold is the named constant at all four call sites now; the two
+`--rank-by=churn` walks kept a literal `100` beside a comment claiming parity with it. `merge_bombs_skipped=`
+rides the GLOBAL block only: it counts the window's skipped commits, and stamping that number on a
+directory-scoped element read as "N commits under DIR were skipped", which is wrong for any DIR smaller than
+the repository. STILL UNDISCLOSED, and named here rather than left silent: `--cochange`, `--situ`'s co-change
+partners and `--pr-context` apply their own commit-size skip at a cap of 30 with no counter at all — the same
+class of silent drop, on three other verbs; disclosing those is a separate round. A window whose
 every commit was skipped — a shallow clone of a large tree is exactly this shape: llvm-project at depth
 1 is one 183,835-file commit — used to print no block at all, which reads as "no history mined"; it now
 prints `<recent n="0" of="0" merge_bombs_skipped="1"></recent>`, zero rows and the reason (arm 7h, red

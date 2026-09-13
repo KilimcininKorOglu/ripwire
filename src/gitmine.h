@@ -1832,13 +1832,21 @@ inline std::vector<float> churnPriorFromFreq( const IngestResult& ing, const std
 
 // `outHasChurnEvidence` (§B2.2, optional): false ⇒ the window mined NOTHING and the returned prior is uniform,
 // i.e. the caller's "churn-ranked" map is the structural one. The emitting verb needs that fact to stamp it
+// The merge-bomb rule's threshold for the churn rankers: a commit touching more than this many INDEXED files is skipped
+// (bulk renames / reformats / license sweeps / wide merges destroy the signal). kChurnDecayRankLegend and the compact
+// `merge_bombs_skipped=` reading spell the number in prose, so a change here moves both (the static_assert beside
+// the legend pins that).
+inline constexpr std::size_t kChurnMergeBombMaxFiles = 100;   // the churn rankers' merge-bomb rule; skipped commits are disclosed as <recent merge_bombs_skipped=>
+
 // (see churnWindowStamp); nullptr keeps every pre-existing call byte-identical.
 inline std::vector<float> churnTeleport( const std::string& root, const IngestResult& ing, const char* since = "18 months ago", const SinceScope* scope = nullptr,
                                          bool* outHasChurnEvidence = nullptr )
 {
     PROFILE_SCOPE_DESCRIBE( "gitmine: churnTeleport (rank-by=churn)" );
     std::vector<std::uint32_t> freq( ing.files.size(), 0 );
-    const auto sets = gitCommitFileSets( root, ing, since, 100, scope );   // generous cap: keep refactors, drop merge-bombs
+    // The SAME merge-bomb threshold the decayed walk names (main.cpp's churn-decay call passes it by name and claims
+    // parity in a comment): a literal here is that claim written twice, and the second copy is the one that rots.
+    const auto sets = gitCommitFileSets( root, ing, since, kChurnMergeBombMaxFiles, scope );   // keep refactors, drop merge-bombs
     for( const auto& set : sets )
     {
         for( const std::uint32_t f : set )
@@ -1866,7 +1874,7 @@ inline std::vector<float> churnTeleportWorkspace( const std::vector<std::string>
     bool anyHistory = false;
     for( std::uint32_t r = 0; r < rootDirs.size(); ++r )
     {
-        const auto sets = gitCommitFileSets( rootDirs[r], ing, since, 100, nullptr, r );
+        const auto sets = gitCommitFileSets( rootDirs[r], ing, since, kChurnMergeBombMaxFiles, nullptr, r );   // the named threshold, not a second literal
         if( !sets.empty() )
         {
             anyHistory = true;
@@ -1924,17 +1932,14 @@ struct DecayedChurnMined
     std::vector<std::int64_t> lastEpoch;
     bool                      anyHistory = false;
     // merge_bombs_skipped= (2026-09-12): commits in the mined window the `maxFiles` rule SKIPPED — they touched more than
-    // kChurnMergeBombMaxFiles indexed files and contributed nothing to weights[] or lastEpoch[]. Counted so the <recent>
-    // block can say so: a held-out gold commit with 71 src files (>100 total) was invisible to it, and nothing in the
-    // output said a commit had been dropped. Always emitted, "0" included, so absence is never ambiguous.
+    // kChurnMergeBombMaxFiles INDEXED files (the resolved fileIds in `cur`, never the commit's raw --name-only count)
+    // and contributed nothing to weights[] or lastEpoch[]. Counted so the <recent> block can say so, because such a
+    // commit is invisible to the rows AND to the prior and nothing else in the output says one was dropped: this
+    // repository's own history has five (the widest is a 349-indexed-file sweep). Always emitted, "0" included, so
+    // absence is never ambiguous. The distinction is load-bearing and used to be told wrong here: a commit of 121
+    // files of which 71 are indexed is NOT skipped — 71 is under the threshold — so the rule never hides it.
     std::uint32_t             mergeBombsSkipped = 0;
 };
-
-// The merge-bomb rule's threshold for the churn rankers: a commit touching more than this many INDEXED files is skipped
-// (bulk renames / reformats / license sweeps / wide merges destroy the signal). kChurnDecayRankLegend and the compact
-// `merge_bombs_skipped=` reading spell the number in prose, so a change here moves both (the static_assert beside
-// the legend pins that).
-inline constexpr std::size_t kChurnMergeBombMaxFiles = 100;   // the churn rankers' merge-bomb rule; skipped commits are disclosed as <recent merge_bombs_skipped=>
 
 inline DecayedChurnMined gitLogDecayedFileMining( const std::string& root, const IngestResult& ing, const std::string& windowArgs,
                                                   std::size_t maxFiles, std::uint32_t onlyRoot = UINT32_MAX )
@@ -2103,23 +2108,22 @@ struct RecentFile
 // admitted-file count BEFORE the window, so a caller can say capped= and spell the next page. The global block is this
 // with an admit-all predicate and skip 0 (recentRowsFromDecayed below), byte-identical to its pre-C1 form; --in=DIR
 // passes the root-relative directory-prefix predicate (main.cpp churnRankedGraph).
-template <typename KeepFile>
-inline std::vector<RecentFile> recentRowsFromDecayedIf( const std::string& root, const IngestResult& ing, const DecayedChurnMined& m,
-                                                        KeepFile&& keepFile, std::size_t keep, std::size_t skip, std::size_t* outOf )
+// BUILD AND SORT ONCE. Split out of recentRowsFromDecayedIf so a run that wants TWO pages of the same mining
+// pass (--in=DIR: the global block and DIR's) pays for one build and one sort, not two — the scoped page is a
+// FILTER over this list, and filtering preserves order, so both pages come out of the same comparison work.
+// The HEAD anchor comes from the CACHED reader: this used to call gitHeadCommitEpoch directly, so the second
+// page opened a second `git log -1` popen for a number the process already had.
+inline std::vector<RecentFile> decayedRecentRowsSorted( const std::string& root, const IngestResult& ing, const DecayedChurnMined& m )
 {
     std::vector<RecentFile> rows;
-    const std::int64_t      headEpoch = m.anyHistory ? gitHeadCommitEpoch( root ) : 0;
+    const std::int64_t      headEpoch = m.anyHistory ? gitHeadCommitEpochCached( root ) : 0;
     for( std::uint32_t f = 0; f < std::uint32_t( m.weights.size() ); ++f )
     {
-        if( m.weights[f] > 0.0 && keepFile( f ) )
+        if( m.weights[f] > 0.0 )
         {
             const std::int64_t age = ( headEpoch > m.lastEpoch[f] ) ? ( headEpoch - m.lastEpoch[f] ) : 0;
             rows.push_back( RecentFile{ f, std::uint32_t( age / 86400 ), m.weights[f] } );
         }
-    }
-    if( outOf )
-    {
-        *outOf = rows.size();
     }
     std::sort( rows.begin(), rows.end(), [ & ]( const RecentFile& a, const RecentFile& b )
                {
@@ -2127,21 +2131,42 @@ inline std::vector<RecentFile> recentRowsFromDecayedIf( const std::string& root,
                    if( a.weight != b.weight )   { return a.weight > b.weight; }
                    return ing.files[a.fileId] < ing.files[b.fileId];
                } );
-    const std::size_t pageBegin = std::min( skip, rows.size() );
-    const std::size_t pageEnd   = std::min( pageBegin + keep, rows.size() );
-    if( pageBegin > 0 )
-    {
-        rows.erase( rows.begin(), rows.begin() + std::ptrdiff_t( pageBegin ) );
-    }
-    rows.resize( pageEnd - pageBegin );
     return rows;
 }
 
-inline std::vector<RecentFile> recentRowsFromDecayed( const std::string& root, const IngestResult& ing, const DecayedChurnMined& m,
-                                                      std::size_t keep, std::size_t* outOf )
+// ONE page out of that sorted list: rows [skip, skip+keep) of the files `keepFile` admits, pageWindow's
+// semantics (a skip past the end is an empty page, never out of range). `outOf` receives the admitted count
+// BEFORE the window, so the caller can say capped= and spell the next page.
+template <typename KeepFile>
+inline std::vector<RecentFile> recentPageFromSorted( const std::vector<RecentFile>& sorted, KeepFile&& keepFile,
+                                                     std::size_t keep, std::size_t skip, std::size_t* outOf )
 {
-    return recentRowsFromDecayedIf( root, ing, m, []( std::uint32_t ) { return true; }, keep, 0, outOf );
+    std::vector<RecentFile> rows;
+    std::size_t             admitted = 0;
+    for( const RecentFile& r : sorted )
+    {
+        if( !keepFile( r.fileId ) )
+        {
+            continue;
+        }
+        if( admitted >= skip && rows.size() < keep )
+        {
+            rows.push_back( r );
+        }
+        ++admitted;
+    }
+    if( outOf )
+    {
+        *outOf = admitted;
+    }
+    return rows;
 }
+
+// (recentRowsFromDecayed/recentRowsFromDecayedIf stood here as one-line wrappers over the pair above. Both
+// lost their last caller when the map started taking BOTH its pages out of one sorted list, and a wrapper
+// nothing calls is the dead-code kind --quality-delta names — so they are gone rather than kept "for
+// symmetry": the two functions above are the whole surface, and the admit-all page is spelled at its one
+// call site, where the predicate is visible.)
 
 // Multi-root --rank-by=churn-decay: mine each root's history AGAINST ITS OWN files, accumulate ONE weight
 // table, apply the smoothing once — the churnTeleportWorkspace rule, with the same per-repo-scale caveat

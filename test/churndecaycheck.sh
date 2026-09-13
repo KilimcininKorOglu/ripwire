@@ -173,10 +173,14 @@ fi
 # — new.py (2 commits at HEAD's day, weight ≈ 2.0) before old.py (6 commits 400 days back, ≈ 0.28) — with
 # age_d= on HEAD's clock and the weight the ranker used, and it precedes every <f> group.
 R6="$( perl -e 'alarm 20; exec @ARGV' "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache 2>/dev/null )"
-printf '%s' "$R6" | grep -q '<recent n="2" of="2" ' \
- \
-        && ok "arm 6a: <recent n=\"2\" of=\"2\" …> is emitted" \
-        || no "arm 6a: no <recent n=\"2\" of=\"2\" …> element"
+# The CLOSED attribute set, not a prefix. This arm was loosened to a prefix match when merge_bombs_skipped=
+# landed, and a prefix cannot see an attribute ADDED after of= — which is exactly how the window's
+# merge_bombs_skipped= came to be stamped on the scoped block too, unnoticed by any arm here. arm 7h pins only
+# the all-bomb shape (n="0" of="0"), so this is the one arm that pins a rows>0 global block's whole tag.
+r6_tag="$( printf '%s' "$R6" | grep -oE '<recent [^>]*>' | head -1 )"
+[ "$r6_tag" = '<recent n="2" of="2" merge_bombs_skipped="0">' ] \
+        && ok "arm 6a: the global block's tag is exactly $r6_tag (closed set: n=, of=, merge_bombs_skipped=)" \
+        || no "arm 6a: global block tag is '$r6_tag', expected <recent n=\"2\" of=\"2\" merge_bombs_skipped=\"0\">"
 r6_first="$( printf '%s' "$R6" | grep -oE '<rc p="[^"]*"' | head -1 )"
 [ "$r6_first" = '<rc p="new.py"' ] && ok "arm 6b: the file with the newest decayed weight leads (new.py)" \
                                     || no "arm 6b: first <rc> is '$r6_first', expected new.py"
@@ -241,12 +245,15 @@ printf '%s' "$r7_recent" | grep -q 'of="1"' \
 printf '%s' "$R6" | grep -oE '<recent [^>]*>' | head -1 | grep -q 'merge_bombs_skipped="0"' \
     && ok "arm 7d: a window with no merge bomb says merge_bombs_skipped=\"0\" (always emitted; absence is never ambiguous)" \
     || no "arm 7d: the plain fixture's <recent> lacks merge_bombs_skipped=\"0\" (got: $( printf '%s' "$R6" | grep -oE '<recent [^>]*>' | head -1 ))"
-printf '%s' "$R7" | grep -q 'merge_bombs_skipped= ' && printf '%s' "$R7" | grep -q '100 files' \
-    && ok "arm 7e: the full legend defines merge_bombs_skipped= and states the 100-file threshold" \
-    || no "arm 7e: the full legend does not define merge_bombs_skipped= with its threshold"
+# The threshold counts INDEXED files — the resolved fileIds the crawl holds, never the commit's raw
+# --name-only count — and both legends used to say "100 files", which reads as the latter. A 120-.txt +
+# 1-.py commit is NOT skipped by this rule, so the prose was describing a different rule from the code's.
+printf '%s' "$R7" | grep -q 'merge_bombs_skipped= ' && printf '%s' "$R7" | grep -q '100 INDEXED files' \
+    && ok "arm 7e: the full legend defines merge_bombs_skipped= and states the 100-INDEXED-file threshold" \
+    || no "arm 7e: the full legend does not define merge_bombs_skipped= with its INDEXED-file threshold"
 R7c="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$BOMB" --rank-by=churn-decay --no-cache --legend=compact 2>/dev/null )"
-printf '%s' "$R7c" | grep -q 'merge_bombs_skipped=N' && printf '%s' "$R7c" | grep -q '100 files' \
-    && ok "arm 7f: the compact legend defines merge_bombs_skipped=N with the 100-file threshold" \
+printf '%s' "$R7c" | grep -q 'merge_bombs_skipped=N' && printf '%s' "$R7c" | grep -q '100 INDEXED files' \
+    && ok "arm 7f: the compact legend defines merge_bombs_skipped=N with the 100-INDEXED-file threshold" \
     || no "arm 7f: the compact legend does not define merge_bombs_skipped= (legend: $( printf '%s' "$R7c" | grep -oE '<!-- ripwire map[^>]*-->' | head -c 300 ))"
 if command -v xmllint >/dev/null 2>&1; then
     printf '%s' "$R7" | xmllint --noout - 2>/dev/null \

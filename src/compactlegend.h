@@ -193,6 +193,10 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- r:root=",                    // the map header's terse spelling of the same block
     "<!-- pr_iters=",                  // the PageRank convergence block on map-family roots
     "<!-- at= is the git commit",      // the churn/quality provenance block
+    "<!-- in=DIR: ",                   // C1-b's scoped-block clause (serialize.h kRecentScopeLegendOpen/Close). Without
+                                       // this row the ~640 B prose survived BESIDE the compact terms that restate it,
+                                       // and was charged into est_tokens — the same defect the graph_unindexed= row
+                                       // above was added for, on the newest conditional clause.
     "<!-- metrics: ",                  // --metrics' per-symbol attribute block
     "<!-- of= is the resolved SEED",   // --around's boundary block
     "<!-- anchoring: ",                // --pr-context=REF's merge-base block
@@ -334,11 +338,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "of",                "<recent n= of=>: the n= newest-touched of of= touched files; <rc age_d=> days since its last commit, w= decayed weight", true, "recent" },
     // merge_bombs_skipped= (2026-09-12): the cut the churn-decay miner makes, disclosed on the block it shapes (gitmine.h
     // kChurnMergeBombMaxFiles). Always on <recent>, "0" included, so the term rides every churn-decay map.
-    { "merge_bombs_skipped", "merge_bombs_skipped=N: N commits touching more than 100 files skipped, uncounted; a file only they touched is absent", true, "recent" },
+    { "merge_bombs_skipped", "merge_bombs_skipped=N: N commits touching more than 100 INDEXED files skipped, uncounted; a file only they touched is absent; the window's count, so the global block only", true, "recent" },
     // C1-b (2026-09-12): in=DIR — the scoped block (ELEMENT-qualified: scope= rides only a <recent>) and the map stub (total= on
     // <symbols> alone; the paging window clause above already reads shown=/capped=). Both present-only.
-    { "scope",             "<recent scope=DIR>: a second block after the unchanged global one, DIR's files only (p= root-relative); offset= the row it starts at; capped=1 + next= page it (offset=/limit=)", true, "recent" },
-    { "total",             "<symbols total=N shown=0 next=>: the symbol map in= did not ask for, N rows in the same run without in=; next= fetches it", true, "symbols" },
+    { "scope",             "<recent scope=DIR>: a second block riding when the global one does, DIR's files only (p= root-relative); of= is its total; capped=/has_more=/next_offset=/offset=/limit= page it, next= is that page", true, "recent" },
+    { "stubbed",           "<symbols stubbed=1 would_show=N next=>: the symbol map in= did not ask for was not rendered; N rows the same run without in= would print (not the header's symbols= corpus count); next= fetches it", true, "symbols" },
     // The map's ROW fields that are absent at their default, defined only inside the always-on `<!-- ripwire v1` legend (prose):
     // lpin= and overloads= on <s>, prov= on <c>. Row-level, because each has one meaning tool-wide and the map emitter is its one
     // XML writer. test/compactlegendcheck.sh (S) population 4 reads that legend's absence-marked row fields from source.

@@ -1040,7 +1040,56 @@ inline std::string churnDecayWindowLabel( std::string_view minedSpan )
 // typed), so a scoped row is byte-identical to its global twin — a sub-root-relative spelling missed every held-out gold
 // (0/30 raw vs 19/30 prefixed). DIR's trailing slash is stripped the way the crawl root's is (sarif::rootPrefixOf), so
 // `db/` and `db` are one answer and one next=. The page is [--offset, --offset + max(--limit, kRecentRows)).
-inline void scopedRecentPage( const MainDispatch& d, const rw::DecayedChurnMined& mined, ChurnRanking& cr )
+// C1-b (Fable review on #212) — THE ONE COMPOSER behind both next= strings the scoped map carries.
+//
+// THE DEFECT. Both were hand-spelled as "--rank-by=churn-decay [--since=V]" and nothing else, so every flag
+// that shapes the CORPUS was dropped from the invocation the tool told the caller to paste: --exclude,
+// --no-ignore, --ignore-tests, --stable, --legend, --max-tokens, --token-budget. `--in=a --exclude=b` reported
+// total="6" and handed back a next= that yields twelve rows — a page pointer into a different corpus, which is
+// worse than no pointer at all. And the scoped next= had no LENGTH cap, while every other next= in the tool
+// returns "" past kNextAttrMaxBytes (forPageInvocation, flipimpact): a long --since plus a deep DIR plus
+// --limit/--offset sails past 120 bytes and pastes wrong.
+//
+// THE SHAPE. One function, two callers, one cap. `withIn` picks the scoped page (--in=DIR carried, at the next
+// offset) or the stub's "same run without --in".
+//
+// WHAT IT REPLAYS, and the line: the flags that decide WHICH ROWS EXIST — the CORPUS (--exclude, --no-ignore,
+// --ignore-tests) and the WINDOW (--since, --limit/--offset) — and nothing else. A presentation flag
+// (--legend=compact, --max-tokens, --token-budget) changes how the same rows are rendered, never which rows
+// the page holds, so replaying it would spend the 120-byte budget on bytes that cannot make the pasted page
+// name a different answer. of= is the number this attribute is a page INTO, and of= moves only with the
+// corpus and the window.
+//
+// They are named explicitly because they are parseArgs' hand-written arms (--exclude= is repeatable;
+// --limit/--offset/--rank-by are closed-value arms) and no table row can see them; the TABLE-ROW flags cannot
+// appear at all, because inPreemptedBy refuses every one that is not a ride-along before this run reaches the
+// map. Past the cap it returns "" — a hint that pastes wrong is worse than none.
+inline std::string scopedMapNextInvocation( const rw::Config& cfg, std::string_view scopeDir, bool withIn, std::size_t nextOffset )
+{
+    std::string inv = "--rank-by=churn-decay";
+    if( !cfg.since.empty() )
+    {
+        inv += " " + rw::nextFlag( "--since=", cfg.since );
+    }
+    for( const std::string& x : cfg.excludes )
+    {
+        inv += " " + rw::nextFlag( "--exclude=", x );
+    }
+    if( cfg.noIgnore )     { inv += " --no-ignore"; }
+    if( cfg.ignoreTests )  { inv += " --ignore-tests"; }
+    if( withIn )
+    {
+        inv += " " + rw::nextFlag( "--in=", scopeDir );
+        inv += " --offset=" + std::to_string( nextOffset );
+        if( cfg.pageLimit > 0 )
+        {
+            inv += " --limit=" + std::to_string( cfg.pageLimit );
+        }
+    }
+    return inv.size() > rw::kNextAttrMaxBytes ? std::string() : inv;
+}
+
+inline void scopedRecentPage( const MainDispatch& d, const std::vector<rw::RecentFile>& sorted, ChurnRanking& cr )
 {
     using namespace rw;
     const std::string rootPrefix = sarif::rootPrefixOf( d.cfg.roots[0] );
@@ -1048,8 +1097,42 @@ inline void scopedRecentPage( const MainDispatch& d, const rw::DecayedChurnMined
     const auto        underDir   = [ & ]( std::uint32_t f ) { return sarif::rootRelativeUri( d.ing.files[f], rootPrefix ).starts_with( dirPrefix ); };
     const std::size_t pageRows   = std::size_t( effectiveRowCap( d.cfg.pageLimit, int( kRecentRows ) ) );
     cr.scopedOffset              = d.cfg.pageOffset > 0 ? std::size_t( d.cfg.pageOffset ) : 0;
-    cr.scoped                    = recentRowsFromDecayedIf( d.root, d.ing, mined, underDir, pageRows, cr.scopedOffset, &cr.scopedOf );
+    // The SAME sorted list the global block was cut from — one build, one sort, one HEAD-epoch read for both pages.
+    cr.scoped                    = recentPageFromSorted( sorted, underDir, pageRows, cr.scopedOffset, &cr.scopedOf );
     cr.hasScoped                 = true;
+}
+
+// C1-b (Fable review on #212) — THE SECOND HALF of validating --in=DIR, and the only half that can tell a
+// directory from a typo.
+//
+// inDirIsUnderRoot (below) asks the FILESYSTEM, and the filesystem answers a different question from the one
+// the block will be built from. On APFS `--in=DB` resolves to `db/` and is a directory; `--in=dblink` where
+// dblink -> db is a directory; `--exclude=tests --in=tests` is a directory the crawl was told to drop. All
+// three passed, and all three produced `<recent scope=… n="0" of="0">` — the typo-reads-as-nothing-changed
+// answer the refusal exists to prevent, in the exact shape the flag's own comment promised it would not take.
+//
+// The crawl's root-relative spellings are the ground truth, so the check is against THEM, byte-exact: at least
+// one indexed file must begin `DIR/`. A case-folded name, a symlink alias and an excluded subtree all fail it
+// for the same honest reason — nothing under that spelling is in the corpus this answer is about — and the
+// message says which three causes to look at, because they are the three that make a real directory miss.
+inline bool inDirMatchesCrawl( const rw::Config& cfg, const rw::IngestResult& ing, const std::string& rootArg )
+{
+    using namespace rw;
+    const std::string rootPrefix = sarif::rootPrefixOf( rootArg );
+    const std::string dirPrefix  = sarif::rootPrefixOf( cfg.inDir ) + "/";
+    for( const std::string& f : ing.files )
+    {
+        if( sarif::rootRelativeUri( f, rootPrefix ).starts_with( dirPrefix ) )
+        {
+            return true;
+        }
+    }
+    rw::emitTo( stderr, "ripwire: --in={}: no indexed file is under \"{}\" — the directory exists but this crawl holds nothing spelled that way, "
+                          "so a scoped block would say \"nothing changed\" for a directory it never read. Name it as the map spells it "
+                          "(case-exact, the real path and not a symlink to it, and not a subtree --exclude dropped); "
+                          "ripwire <dir> --rank-by=churn-decay lists the spellings under p=\n",
+                std::string_view( cfg.inDir.data(), cfg.inDir.size() ), std::string_view( dirPrefix.data(), dirPrefix.size() - 1 ) );
+    return false;
 }
 
 inline ChurnRanking churnRankedGraph( const MainDispatch& d )
@@ -1092,16 +1175,29 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
         const std::string       windowArgs = isScoped ? sinceLogArgs( sinceScope, "" ) : std::string{};
         const DecayedChurnMined mined      = gitLogDecayedFileMining( d.root, d.ing, windowArgs, kChurnMergeBombMaxFiles );   // same merge-bomb cap as churnTeleport
         hasChurnEvidence                   = mined.anyHistory;
-        rw::RankedGraph    ranked = rankGraphTeleport( d.g, churnPriorFromDecayed( d.ing, mined.weights, mined.anyHistory ) );
+
+        // C1-b efficiency: under --in=DIR the symbol map is a STUB — not one ranked row is printed — so the
+        // power iteration that produces those rows' k= is work whose entire output is discarded. It is SKIPPED,
+        // and the header then carries no pr_iters=/pr_converged= because no iteration ran: an honest absence,
+        // not a number for a computation that did not happen (prconverge.h isPageRank=false). The rank vector is
+        // still SIZED (zero-filled) so every index serialize takes stays in range on a stubbed document.
+        const bool         stubbed = !d.cfg.inDir.empty();
+        rw::RankedGraph    ranked  = stubbed ? rw::RankedGraph{} : rankGraphTeleport( d.g, churnPriorFromDecayed( d.ing, mined.weights, mined.anyHistory ) );
+        if( stubbed )
+        {
+            ranked.rank.assign( d.ing.symbols.size(), 0.0f );
+        }
         std::string        window = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since ) : std::string_view( "all-history" ) ),
                                                       hasChurnEvidence );
         discloseEmptyChurn( window );
-        ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, true } };
-        cr.recent            = recentRowsFromDecayed( d.root, d.ing, mined, kRecentRows, &cr.recentOf );
+        ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, !stubbed } };
+        // ONE build + ONE sort of the decayed rows, shared by both blocks (gitmine.h decayedRecentRowsSorted).
+        const std::vector<rw::RecentFile> sorted = decayedRecentRowsSorted( d.root, d.ing, mined );
+        cr.recent            = recentPageFromSorted( sorted, []( std::uint32_t ) { return true; }, kRecentRows, 0, &cr.recentOf );
         cr.mergeBombsSkipped = mined.mergeBombsSkipped;
-        if( !d.cfg.inDir.empty() )
+        if( stubbed )
         {
-            scopedRecentPage( d, mined, cr );   // C1-b: --in=DIR's page, from the same pass (no second git walk)
+            scopedRecentPage( d, sorted, cr );   // C1-b: --in=DIR's page, from the same pass and the same sort
         }
         return cr;
     }
@@ -1204,6 +1300,14 @@ int runDefaultMap( const MainDispatch& d )
     // roots=/<root label=…> disclosure inside serialize() and is untouched (rootArg stays empty there).
     const bool             mapSingleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
     const std::string_view mapRootArg    = mapSingleRoot ? cfg.roots[0] : std::string_view();
+
+    // C1-b: the crawl-side half of --in=DIR's validation, taken as soon as the corpus exists and BEFORE any
+    // history is mined — a directory this crawl does not hold cannot be answered about, and must not be
+    // answered about with an empty block. (The filesystem half ran at root resolution; see inDirMatchesCrawl.)
+    if( !cfg.inDir.empty() && !inDirMatchesCrawl( cfg, ing, std::string( mapRootArg ) ) )
+    {
+        return 1;   // the refusal is on stderr (inDirMatchesCrawl)
+    }
 
     std::vector<float> rank;
     // W2-F: the map header's pr_iters= / pr_converged= (src/prconverge.h). Default-constructed is
@@ -1413,15 +1517,14 @@ int runDefaultMap( const MainDispatch& d )
         mapAnn.scopeDir       = scopeDirStr;
         mapAnn.scopedRecentOf = scopedRecentOf;
         mapAnn.scopedOffset   = scopedOffset;
-        const std::string sinceArg   = cfg.since.empty() ? std::string() : " " + rw::nextFlag( "--since=", cfg.since );
+        mapAnn.scopedLimit           = cfg.pageLimit;
         const std::size_t nextOffset = scopedOffset + scopedRecent.size();
         if( nextOffset < scopedRecentOf )
         {
-            scopedNext = "--rank-by=churn-decay" + sinceArg + " " + rw::nextFlag( "--in=", mapAnn.scopeDir ) + " --offset=" + std::to_string( nextOffset )
-                       + ( cfg.pageLimit > 0 ? " --limit=" + std::to_string( cfg.pageLimit ) : std::string() );
-            mapAnn.scopedNext = scopedNext;
+            scopedNext        = scopedMapNextInvocation( cfg, mapAnn.scopeDir, /*withIn=*/true, nextOffset );
+            mapAnn.scopedNext = scopedNext;   // "" past kNextAttrMaxBytes: has_more= still says a page exists
         }
-        stubNext           = "--rank-by=churn-decay" + sinceArg;
+        stubNext           = scopedMapNextInvocation( cfg, mapAnn.scopeDir, /*withIn=*/false, 0 );
         mapAnn.stubSymbols = true;
         mapAnn.stubNext    = stubNext;
     }
@@ -2486,6 +2589,52 @@ inline constexpr std::string_view kHtmlRideAlong[] =
     "--most-important-last", "--no-auto-order", "--no-post-check", "--route", "--stable",
 };
 
+// C1-b (CodeRabbit + Fable review on #212) — --in=DIR's own preemption sweep, the SAME shape as --html's above
+// and for the same reason, one layer deeper.
+//
+// THE DEFECT. cli.h's guard can say "--rank-by=churn-decay is not selected"; it cannot say "something else is
+// going to ANSWER". `--in=src --map-diff` exited 0 with 28 KB of map, zero <recent> and zero <symbols>, and a
+// header still reading rank_by="churn-decay" — the map-diff branch precedes the churn branch in runDefaultMap,
+// so the block --in scopes was never built. The same hole held --expand/--outline/--pack-signatures/--mermaid
+// (they ride the map --in stubs: --expand even prints "add --top-k=0 for the bodies alone" while --top-k is
+// refused beside --in), --doctor, --batch, --mcp and the CLI edit bridge, none of which reach runDefaultMap at
+// all. A first fix keyed on "a report verb won dispatch" and closed only the slots scanReportVerbPrecedence
+// knows; these are all OUTSIDE that table.
+//
+// DERIVED, NOT ENUMERATED — the argument htmlPreemptedBy makes in full above, which applies here verbatim:
+// firstFlagOutside() walks the rows parseArgs itself matched, so the refusal is "anything that is not on the
+// compose list" and a flag added tomorrow refuses tomorrow with nobody editing this. The residual risk runs the
+// other way (a new map-shaping flag would refuse until it is added below) and that is the safe direction.
+//
+// The list itself: kMapShapingFlags minus --map-diff and --metrics (both are map SHAPES that replace or
+// decorate the very ranking --in reads — --map-diff takes the branch ahead of churn, --metrics decorates rows
+// the stub does not print), plus the crawl/ordering shapers a scoped answer genuinely composes with. --limit,
+// --offset, --top-k, --max-tokens and --token-budget are kIntFlags rows, which this walk does not visit at all,
+// so they compose or refuse by their own guards in cli.h — which is where that decision is documented.
+inline constexpr std::string_view kInRideAlong[] =
+{
+    "--in", "--json", "--ignore-tests", "--no-cache", "--no-ignore", "--no-stable", "--refetch", "--compress",
+    "--cache", "--since", "--pin-census", "--scip", "--legend",
+    "--most-important-last", "--no-auto-order", "--no-post-check", "--route", "--no-route", "--stable",
+};
+
+// the flag that answers instead of the scoped map, or empty when --in is honoured on this run
+std::string_view inPreemptedBy( const rw::Config& c )
+{
+    if( c.inDir.empty() )
+    {
+        return {};
+    }
+    // the hand-written parseArgs residue no table row can see — the same honest cost htmlPreemptedBy and
+    // jsonUnsupportedVerb both pay at their own tops. --pack-top-n is an INT row, which the walk skips, and it
+    // serves bodies beside the map exactly as --expand does.
+    if( c.exportCcJson )    { return "--export=cc.json"; }
+    if( c.packTopN > 0 )    { return "--pack-top-n"; }
+    if( !c.expand.empty() ) { return "--expand"; }    // a VECTOR member (comma-split), invisible to the walk
+    if( !c.outline.empty() ){ return "--outline"; }   // the same shape
+    return firstFlagOutside( c, {}, kInRideAlong );
+}
+
 // the verb that answered instead of the default map, or empty when --html is honoured on this run
 std::string_view htmlPreemptedBy( const rw::Config& c )
 {
@@ -2504,26 +2653,8 @@ std::string_view htmlPreemptedBy( const rw::Config& c )
     return firstFlagOutside( c, kMapShapingFlags, kHtmlRideAlong );
 }
 
-std::optional<int> refuseInertMainModifiers( const rw::Config& cfg, const VerbPrecedence& prec )
+std::optional<int> refuseInertMainModifiers( const rw::Config& cfg )
 {
-    // C1-b (CodeRabbit on #212): --in=DIR has exactly ONE consumer — the default map's churn-decay branch
-    // (runDefaultMap -> churnRankedGraph -> scopedRecentPage). validateModifierGuards judges what cli.h can see on its
-    // own (rankBy, the root count, --top-k), but it cannot see which verb will WIN dispatch, so every report verb was
-    // a hole: `--rank-by=churn-decay --in=db --lint` parsed clean, runLint returned before the map, and --in was
-    // accepted and silently ignored — the inert-modifier class this whole function exists to refuse.
-    //
-    // The condition is the winner's mere EXISTENCE, not a list of verbs, for the same reason htmlPreemptedBy derives
-    // its answer instead of enumerating one: a verb added tomorrow is covered with nobody editing this. --query is
-    // covered too and is not an exception to explain away — it reaches runDefaultMap, but through the lexical branch
-    // that replaces the churn ranking outright, so no <recent> block of either kind is built on that path.
-    if( !cfg.inDir.empty() && prec.winner != nullptr )
-    {
-        const std::string_view winner( prec.winner );
-        rw::emitTo( stderr, "ripwire: --in=DIR scopes the recent-changes block of the DEFAULT churn-decay map, and {} answered this run — "
-                              "nothing was scoped. Drop {} to get the scoped block (e.g. ripwire <dir> --rank-by=churn-decay --in=src)\n",
-                    winner, winner );
-        return 1;
-    }
     if( const std::string_view verb = htmlPreemptedBy( cfg ); !verb.empty() )
     {
         // The pointer is phrased so it reads correctly for a verb with no symbol (--lint, --export) as well as
@@ -3152,6 +3283,18 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         }
     }
 
+    // C1-b: --in=DIR is refused HERE — ahead of the CLI edit bridge, --doctor, --batch, --mcp and every report
+    // verb — because those dispatch before the default map and would leave the flag accepted and ignored. The
+    // answer is derived from the flag tables (inPreemptedBy), not from a list of verbs; cli.h already refused
+    // the cases it can see on its own (no host, multi-root, --top-k).
+    if( const std::string_view answered = inPreemptedBy( cfg ); !answered.empty() )
+    {
+        rw::emitTo( stderr, "ripwire: --in=DIR scopes the recent-changes block of the DEFAULT churn-decay map, and {} answers instead — "
+                              "nothing was scoped. Drop {} to get the scoped block (e.g. ripwire <dir> --rank-by=churn-decay --in=src)\n",
+                    std::string_view( answered.data(), answered.size() ), std::string_view( answered.data(), answered.size() ) );
+        return 1;
+    }
+
     // CLI-first edit verbs reuse the MCP transaction engine and therefore own their own indexed pass.
     // Dispatch before the ordinary ingest pipeline so the preferred CLI path never parses the tree twice.
     if( std::optional<int> guarded = runEditPreviewGuard( cfg ) )
@@ -3212,7 +3355,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     // capture-audit 2026-09-04 (M16): the two modifiers whose "alone" test needs main's knowledge (the flag
     // universe walk, the root list) — refused here, before any dispatch, the way validateModifierGuards
     // refuses the ones cli.h can judge on its own.
-    if( const std::optional<int> refused = refuseInertMainModifiers( cfg, verbPrec ) )
+    if( const std::optional<int> refused = refuseInertMainModifiers( cfg ) )
     {
         return *refused;
     }
