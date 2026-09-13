@@ -3103,6 +3103,15 @@ inline constexpr ViewFlag kViewFlags[] =
     { "--pack-task=",      &Config::packTask        , EmptyValue::HandlerRefuses, nullptr, nullptr, &Config::packTaskFlag },     // "--pack-task: a task string is required"
 };
 
+// Does THIS build ship the flag spelled `prefix`? Asked by the surfaces that COMPOSE a command for someone
+// else to run — the task router is the first — because a recommendation carrying a flag the parser it will
+// be handed to has no row for exits non-zero on the first paste. The table is the only honest answer: a
+// hand-kept list of "flags we have" is a second source that drifts, which is the disease §B5 above treats.
+inline constexpr bool shipsViewFlag( std::string_view prefix ) noexcept
+{
+    return std::ranges::any_of( kViewFlags, [prefix]( const ViewFlag& vf ) { return vf.prefix == prefix; } );
+}
+
 // §B5 - the column above is only a decision if the build enforces it. `needs`/`example` are the Refuse
 // sentence's two halves: a Refuse row without them would print "it needs (null)", and a Meaningful or
 // HandlerRefuses row that carries them is a row whose author wrote a refusal the scan will never print -

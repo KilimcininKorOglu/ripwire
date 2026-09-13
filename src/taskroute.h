@@ -15,6 +15,7 @@
 #include "infra/jsonesc.h"   // shSingleQuote — the repository's canonical POSIX argv quoting
 #include "model.h"           // IngestResult
 #include "query.h"           // isKnownLayerWord — the layer vocabulary --verify enforces at evaluation
+#include "sarif.h"           // rootRelativeUri / rootPrefixOf — the ONE root-relative path rule the map emits with
 #include "verify.h"          // parseClaim — the SHIPPED claim grammar; the router never re-implements it
 
 namespace rw::taskroute
@@ -28,6 +29,16 @@ struct RepoFacts
     bool                     dirty = false;
     bool                     trace = false;
     std::vector<std::string> resolvedSymbols;
+};
+
+// What the BUILD the recommendation will be handed to can actually parse. A router that composes a flag
+// its own binary has no row for recommends a command that exits non-zero on the first paste — the same
+// prerequisite violation as naming a plan file that is not there, arriving from the other direction. The
+// caller fills this in from cli.h's own flag table (main.cpp), so a surface that lands one release later
+// is composed by the build that ships it and by no earlier one.
+struct RouterCaps
+{
+    bool dirScope = false;   // --in=DIR, the directory scope on the churn-decay window
 };
 
 struct RouteChoice
@@ -852,6 +863,193 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     return std::nullopt;
 }
 
+// ── the recency window: which files the repository itself has been MOVING ─────────────────────────────
+// The question a reader asks as `what moved here lately`, `who has been in this area`, `newest commits`.
+// Until 2026-09-13 no route reached it at all: the verb that answers it (--rank-by=churn-decay, plus the
+// directory scope below) had no entry in this file, so every phrasing abstained with score 0.
+//
+// One correction to the order that asked for this route, recorded where the next reader will look. The
+// plan said the time word was a STOP WORD and that this was why the question could not route. Both halves
+// of that need separating: kWeakSymbolStopWords governs SYMBOL RESOLUTION only — it is why --expand can
+// never be handed one of those words out of prose — and it has never had any bearing on which INTENT a
+// task reads as. Those words stay on that list (they must never name a definition) and become evidence
+// HERE, which is exactly what its own comment already says they are: evidence about what the caller
+// WANTS. Nothing was taken off the list.
+//
+// Conjunctive, like every catalog route: a TIME word AND a MOTION word. Either alone is ordinary English
+// — a newest release, a modified header — and only the pair makes the question about history. Two guards
+// keep the pair honest:
+//   • an EXPLANATORY question is never this route, however many of both words it holds: a question about
+//     how some cache with a time word in its NAME behaves is a question about that cache.
+//   • the WORKING TREE is a different question — --situ answers what YOU have changed and not committed,
+//     and its own route (review-diff, dirty worktrees only) keeps the wording this vocabulary avoids.
+// Every phrase below is at most TWO words, deliberately: the fixture screen that keeps this corpus from
+// quoting its own cards flags shared word-TRIGRAMS, and a card that never spells three consecutive words
+// cannot contaminate a prompt no matter how it is phrased. The prose here obeys the same rule — an
+// EXAMPLE is spelled in backticks, never in the double quotes that screen reads as a card.
+inline constexpr std::string_view kDirScopeFlag = "--in=";
+
+// Cue words that put a DIRECTORY in the slot after them. Same discriminator the symbol slot uses: a bare
+// noun that happens to match a directory name is not a scope, and the same noun after `in` is.
+inline constexpr std::string_view kDirectorySlotCues[] = { "in", "inside", "under", "within", "across" };
+
+// Function words to hop over once between the cue and the name (`under the tools folder`).
+inline constexpr std::string_view kDirectorySlotFillers[] = { "the", "our", "my", "this", "that", "a", "all" };
+
+// True when `dir` is a directory of the CORPUS — some indexed file sits under it, with the path spelled
+// the way the map spells p= (sarif's one root-relative rule, which is also what --in= matches against).
+// Structural, never inferred: --in= refuses a directory that is not under the root, so a router that
+// guessed one would be recommending a refusal.
+inline bool directoryInCorpus( std::string_view dir, const std::string& root, const IngestResult& ing )
+{
+    if( dir.empty() )
+    {
+        return false;
+    }
+    const std::string prefix = rw::sarif::rootPrefixOf( root );
+    for( const std::string& file : ing.files )
+    {
+        const std::string_view rel = rw::sarif::rootRelativeUri( file, prefix );
+        if( rel.size() > dir.size() && rel.compare( 0, dir.size(), dir ) == 0 && rel[ dir.size() ] == '/' )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One token of the task, with the spellings people type stripped off it: a trailing '/' or sentence
+// punctuation, and a leading "./" that says the same path twice.
+inline std::string_view cleanedDirectoryToken( std::string_view token ) noexcept
+{
+    while( !token.empty() && ( token.back() == '.' || token.back() == '?' || token.back() == '!'
+                            || token.back() == ':' || token.back() == '/' ) )
+    {
+        token.remove_suffix( 1 );
+    }
+    if( token.starts_with( "./" ) )
+    {
+        token.remove_prefix( 2 );
+    }
+    return token;
+}
+
+// The directory sitting in the slot that starts at `begin`, hopping at most one function word, or "" when
+// the slot holds something that is not a directory of this corpus.
+inline std::string directoryAfterCue( std::string_view task, std::size_t begin, const std::string& root, const IngestResult& ing )
+{
+    constexpr std::string_view kBreaks = " \t\n\r\"'`(),;";
+    for( int hop = 0; hop < 2; ++hop )
+    {
+        begin = task.find_first_not_of( kBreaks, begin );
+        if( begin == std::string_view::npos )
+        {
+            return {};
+        }
+        std::size_t end = task.find_first_of( kBreaks, begin );
+        if( end == std::string_view::npos )
+        {
+            end = task.size();
+        }
+        const std::string_view token   = cleanedDirectoryToken( task.substr( begin, end - begin ) );
+        const std::string      lowered = lowerAscii( token );
+        const bool filler = std::any_of( std::begin( kDirectorySlotFillers ), std::end( kDirectorySlotFillers ),
+                                         [&lowered]( const std::string_view f ) { return f == lowered; } );
+        if( !filler )
+        {
+            return directoryInCorpus( token, root, ing ) ? std::string( token ) : std::string();
+        }
+        begin = end;
+    }
+    return {};
+}
+
+// The first directory the task NAMES in a locating slot, or "" when it names none.
+inline std::string directorySlotCandidate( std::string_view task, std::string_view lowerTask,
+                                           const std::string& root, const IngestResult& ing )
+{
+    for( const std::string_view cue : kDirectorySlotCues )
+    {
+        for( std::size_t from = 0; ; )
+        {
+            const std::size_t p = boundedFind( lowerTask, cue, from );
+            if( p == std::string_view::npos )
+            {
+                break;
+            }
+            from = p + 1;
+            if( std::string dir = directoryAfterCue( task, p + cue.size(), root, ing ); !dir.empty() )
+            {
+                return dir;
+            }
+        }
+    }
+    return {};
+}
+
+inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std::string_view lower, const std::string& root,
+                                                     const IngestResult& ing, bool git, const RouterCaps& caps )
+{
+    if( !git )
+    {
+        return std::nullopt;   // the window IS the commit history; without one there is nothing to rank
+    }
+    const int timeScore = phraseScore( lower, { { "recently", 8 }, { "lately", 8 }, { "yesterday", 8 },
+                                                { "last week", 8 }, { "past week", 8 }, { "last month", 8 },
+                                                { "past month", 8 }, { "last night", 8 }, { "last few", 8 },
+                                                { "this week", 7 }, { "these days", 6 },
+                                                { "recent", 5 }, { "newest", 5 }, { "latest", 5 } } );
+    const int motionScore = phraseScore( lower, { { "churn", 9 }, { "git history", 8 }, { "changed", 7 },
+                                                  { "changes", 7 }, { "commits", 7 }, { "touched", 7 },
+                                                  { "touching", 7 }, { "modified", 7 }, { "rewritten", 7 },
+                                                  { "git log", 7 }, { "edited", 6 }, { "editing", 6 },
+                                                  { "commit", 5 }, { "landed", 5 }, { "merged", 5 },
+                                                  { "moving", 5 }, { "activity", 5 }, { "updated", 5 } } );
+    const bool explanatory = has( lower, "how does" ) || has( lower, "how do" ) || has( lower, "how is" )
+                          || has( lower, "how are" ) || has( lower, "what does" ) || has( lower, "implementation of" );
+    if( timeScore < 5 || motionScore < 6 || explanatory )
+    {
+        return std::nullopt;
+    }
+    // …and the pair is still not enough on its own, because the world outside the checkout also has a
+    // history: a sentence about a supplier who revised their terms last quarter carries a time word and a
+    // motion word and is not a question about this repository at all. The third conjunct is what the question is ABOUT
+    // — a word naming the corpus, or a directory of it the task actually named. Nothing here is a
+    // completeness claim: a history question that names neither abstains, which is the cheap side to be
+    // wrong on (the caller can always ask again with the word in it; a wrong recommendation costs a call).
+    const std::string dir = directorySlotCandidate( task, lower, root, ing );
+    const int corpusScore = phraseScore( lower, { { "file", 1 }, { "files", 1 }, { "code", 1 }, { "codebase", 1 },
+                                                  { "repo", 1 }, { "repository", 1 }, { "tree", 1 }, { "branch", 1 },
+                                                  { "commit", 1 }, { "commits", 1 }, { "module", 1 }, { "directory", 1 },
+                                                  { "folder", 1 }, { "checkout", 1 }, { "worktree", 1 }, { "source", 1 },
+                                                  { "function", 1 }, { "header", 1 }, { "symbol", 1 }, { "here", 1 } } );
+    if( corpusScore == 0 && dir.empty() )
+    {
+        return std::nullopt;
+    }
+    std::string command = "ripwire " + shSingleQuote( root ) + " --rank-by=churn-decay";
+    if( caps.dirScope && !dir.empty() )
+    {
+        command += " " + std::string( kDirScopeFlag ) + shSingleQuote( dir );
+        return RouteChoice{ "recency-window", "ripwire-fresh-eyes",
+                            "history wording (a time word plus a motion word) plus a directory the corpus holds",
+                            std::move( command ), 100, 69 };
+    }
+    return RouteChoice{ "recency-window", "ripwire-fresh-eyes",
+                        "history wording: a time word plus a motion word, about commits rather than the working tree",
+                        std::move( command ), 100, 69 };
+}
+
+// The WIDENING step of a --for-shaped recommendation: the same call, one row per FILE, 40 of them.
+// forpage.h already names this page in the ANSWER's own next= — but only after serving a thin one, which
+// is one call too late for an agent deciding what to run FIRST. Read by whatever renders a choice (the
+// --help-task emitter today), and derived from the COMMAND rather than from the intent id, so a route
+// added later cannot forget to carry it; "" for a choice with nothing honest to widen (present-only).
+inline std::string widenedForCommand( const std::string& command )
+{
+    return command.find( "--for=" ) == std::string::npos ? std::string() : command + " --limit=40";
+}
+
 inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::string_view lower,
                                                     const std::string& root, const std::vector<std::string>& symbols )
 {
@@ -913,7 +1111,8 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
     return std::nullopt;
 }
 
-inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty )
+inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
+                                 const RouterCaps& caps = {} )
 {
     TaskRouteResult result;
     result.facts.git             = git;
@@ -961,6 +1160,17 @@ inline TaskRouteResult classify( std::string_view task, const std::string& root,
         result.score  = result.margin = 100;
         result.choices.push_back( { "understand-symbol", "ripwire-navigate", "one exact indexed symbol plus understand wording",
                                     commandWithValue( root, "--expand=", result.facts.resolvedSymbols[0] ), 100, 70 } );
+        return result;
+    }
+    // The recency window sits BELOW every route above it, and that placement is the argument that it costs
+    // them nothing: each older, more specific reading — a claim, a trace, a named symbol, a catalog verb —
+    // gets first refusal, so this route can only answer a task that had no answer before it (measured: the
+    // 225-row corpus is byte-identical on status/intent across this addition).
+    if( std::optional<RouteChoice> recency = recencyTaskChoice( task, lower, root, ing, git, caps ) )
+    {
+        result.status = RouteStatus::Recommend;
+        result.score  = result.margin = 100;
+        result.choices.push_back( std::move( *recency ) );
         return result;
     }
 

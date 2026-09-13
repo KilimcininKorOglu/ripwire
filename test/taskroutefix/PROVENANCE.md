@@ -292,3 +292,45 @@ row collides with any of it.
 
 **Seal: sha256(prompts.tsv) = `1719aea95449e222718ec38151d2bd6998a95e1dd070038baa0b6e28fd0c9cf5`**
 (post-round; rows=225, dev=111, test=114).
+
+## 2026-09-13 — the recency window (`recency-window`)
+
+**What the round added to the router:** one intent, for the question a reader asks as *what has this
+repository been moving*. It is conjunctive in three parts — a TIME word, a MOTION word, and a word naming
+the corpus (or a directory of it the task named) — and it sits BELOW every pre-existing route, so each
+older and more specific reading keeps first refusal.
+
+**Rows added: 14 (10 positives, 4 negatives), `provenance=handwritten-recency`**, split by the same
+content-hash rule (no hand assignment). Handwritten rather than instrumented because the trigger is not a
+closed phrase list this time: a prompt can satisfy all three conjuncts with words the cards do not spell,
+and 4 of the 10 positives do. Four of the positives name a DIRECTORY the fixture holds
+(`bench/taskroute_eval.py::make_repo` gained `storage/queue.cpp` for exactly that reason — two camelCase
+names that appear in no prompt, so no pre-existing row's symbol resolution moves).
+
+**The four negatives are the classes the three conjuncts exist to refuse**, one each: a time word inside a
+compound NAME with no motion word; a motion word about the world rather than the checkout (a supplier's
+terms); a time word with no motion word at all; and an EXPLANATORY question that satisfies all three
+conjuncts and is still a question about how something works, not about history.
+
+**Held-out floors, before → after** (`bench/taskroute_eval.py`, same binary flags, only the corpus and the
+binary changed; the pre-change binary is this lane's own `origin/main` build, kept for the comparison):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 114 → 121 | 0.939 → **0.942** | 1.000 → 1.000 | 0.000 → 0.000 | 1.000 → 1.000 | 0.907 → **0.914** |
+| dev | 111 → 118 | 0.946 → **0.949** | 1.000 → 1.000 | 0.000 → 0.000 | 1.000 → 1.000 | 0.929 → **0.932** |
+| all | 225 → 239 | 0.942 → **0.946** | 1.000 → 1.000 | 0.000 → 0.000 | 1.000 → 1.000 | 0.918 → **0.923** |
+
+**Regression discipline.** The 225 rows that predate this intent are BYTE-IDENTICAL on (status, intent) —
+the pre-existing set scores 0.939 / 0.946 / 0.942 on the new binary, the same three numbers and the same
+confusion rows it scored on the old one. All 14 new rows are correct, so the deltas above are arithmetic
+on a larger denominator, not a re-ranking.
+
+**Screen: unchanged at 2 flagged lines** (61 and 176, both pre-existing). Two authoring rules kept it
+there and are worth repeating: every new CARD phrase is at most two words, so a card can never supply a
+whole trigram; and every EXAMPLE in the new source comments is written in backticks, because the screen
+reads double-quoted spans in `src/taskroute.h` as cards — the first draft of one comment quoted a decoy
+prompt verbatim and flagged it, which is the screen working exactly as designed.
+
+**Seal: sha256(prompts.tsv) = `c9fc7f316db6b8c1495918b0380a31be4541f771a84b332bac03ce4e142d3b0f`**
+(post-round; rows=239, dev=118, test=121).

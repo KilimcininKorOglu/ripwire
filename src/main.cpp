@@ -2546,7 +2546,11 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     const std::string stamp = rw::gitstamp::stampAt( root );
     const bool        git   = !stamp.empty();
     const bool        dirty = stamp.ends_with( "+dirty" );
-    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty );
+    // What this build can actually parse, read off the flag table itself (cli.h shipsViewFlag) rather than
+    // asserted here: the router composes the directory scope only on a binary that has the row for it.
+    rw::taskroute::RouterCaps caps;
+    caps.dirScope = rw::shipsViewFlag( rw::taskroute::kDirScopeFlag );
+    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty, caps );
 
     std::vector<char> esc;
     const auto ex = [&]( std::string_view s ) { return std::string( rw::escapeXml( s, esc ) ); };
@@ -2562,7 +2566,10 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     for( const rw::taskroute::RouteChoice& choice : route.choices )
     {
         out += "<choice intent=\"" + ex( choice.id ) + "\" skill=\"" + ex( choice.skill ) + "\" reason=\"" + ex( choice.reason );
-        out += "\" score=\"" + std::to_string( choice.score ) + "\"><run>" + ex( choice.command ) + "</run></choice>";
+        out += "\" score=\"" + std::to_string( choice.score ) + "\"";
+        // present-only: the WIDENING follow-up of a --for-shaped recommendation, nothing on any other
+        out += rw::nextAttrXml( rw::taskroute::widenedForCommand( choice.command ) );
+        out += "><run>" + ex( choice.command ) + "</run></choice>";
     }
     out += "</task-route>\n";
     std::fputs( out.c_str(), stdout );

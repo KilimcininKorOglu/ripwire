@@ -44,7 +44,16 @@ cat >"$REPO/package.json" <<'JSON'
   "notes": "fixture package for the router gate"
 }
 JSON
-git -C "$REPO" add router.cpp package.json
+# A SUBDIRECTORY with code in it, because a directory is the one thing the recency route below needs and
+# a flat fixture cannot provide: "what changed recently in storage" may only compose a scope when the
+# directory really is in the corpus. Its two names are camelCase and appear in no other arm's prompt, so
+# nothing above can start resolving a symbol it did not resolve before.
+mkdir -p "$REPO/storage"
+cat >"$REPO/storage/queue.cpp" <<'SRC'
+int flushPending() { return 1; }
+int drainPending() { return flushPending(); }
+SRC
+git -C "$REPO" add router.cpp package.json storage/queue.cpp
 git -C "$REPO" commit -qm base
 route(){ "$BIN" "$REPO" --no-cache --help-task="$1" 2>"$TMP/err"; }
 
@@ -274,6 +283,75 @@ PLRUN="$( "$BIN" "$REPO" --no-cache --plan-lint=plan-gate.md )"; rc=$?
 [ $rc -le 2 ] && ok "the emitted --plan-lint=FILE command runs against a real plan file (rc=$rc)" \
               || no "the emitted --plan-lint=FILE command failed to run (rc=$rc)"
 rm -f "$REPO/plan-gate.md"
+
+# ── the recency window: what the repository has been MOVING (2026-09-13) ──────────────────────────────
+# "what changed recently in storage/" had no route at all — every phrasing abstained with score="0", so
+# the verb that answers it (--rank-by=churn-decay, and its --in=DIR scope) was unreachable from a task
+# said in words. All four recommend arms below are RED against a pre-change binary (abstain, score="0").
+#
+# The route is CONJUNCTIVE: a time word AND a motion word. The two decoy arms are why — "recent" and
+# "latest" are ordinary English, and a compound noun that contains one ("the recent-file cache") is a
+# question about a cache. The third guard is the working tree: --situ answers what YOU changed and have
+# not committed, and the dirty-worktree arm above still routes review-diff, unchanged.
+RW1="$( route 'what changed recently in this repository' )"
+case "$RW1" in *'status="recommend"'*'intent="recency-window"'*'skill="ripwire-fresh-eyes"'*'--rank-by=churn-decay'*) ok "time word + motion word -> --rank-by=churn-decay";; *) no "recency route wrong: $RW1";; esac
+RW2="$( route 'who touched files in storage lately' )"
+case "$RW2" in *'status="recommend"'*'intent="recency-window"'*'--rank-by=churn-decay'*) ok "who-touched wording routes to the recency window";; *) no "who-touched recency route wrong: $RW2";; esac
+# The DIRECTORY half. --in=DIR refuses a directory that is not under the root, so the router composes it
+# only when the corpus really holds one — and only when the BUILD ships the flag. Both directions are
+# asserted against the shipped flag table, because a router that recommends a flag its own binary does
+# not have is a prerequisite violation, and one that drops a scope the binary does have is a lost answer.
+RW3="$( route 'what changed recently in storage/' )"
+if "$BIN" --help=all 2>&1 | grep -q -- '--in='; then
+    case "$RW3" in *'--rank-by=churn-decay'*'--in='*'storage'*) ok "a named directory in the corpus scopes the window (--in=storage)";; *) no "recency route did not scope to the named directory: $RW3";; esac
+    RWRUN="$( "$BIN" "$REPO" --no-cache --rank-by=churn-decay --in=storage )"; rc=$?
+    { [ $rc -eq 0 ] && printf '%s' "$RWRUN" | grep -q '<recent '; } \
+        && ok "the emitted scoped recency command runs and returns a <recent> block" \
+        || no "the emitted scoped recency command failed to run (rc=$rc)"
+else
+    case "$RW3" in *'--in='*) no "the router composed --in= on a build whose flag table does not ship it: $RW3";; *) ok "this build ships no --in= flag, and the router composes none (the scope is added by the build that has it)";; esac
+fi
+RWRUN0="$( "$BIN" "$REPO" --no-cache --rank-by=churn-decay )"; rc=$?
+{ [ $rc -eq 0 ] && printf '%s' "$RWRUN0" | grep -q '<recent '; } \
+    && ok "the emitted bare recency command runs and returns a <recent> block" \
+    || no "the emitted bare recency command failed to run (rc=$rc)"
+# A directory the corpus does NOT hold is never composed: --in= would refuse it.
+RW4="$( route 'what changed recently in the vendor folder of this repo' )"
+case "$RW4" in *'--rank-by=churn-decay'*) case "$RW4" in *'--in='*) no "the router invented a directory the corpus does not hold: $RW4";; *) ok "an unindexed directory name mints no scope — the window is still served, unscoped";; esac;; *) no "an unindexed directory name lost the route entirely: $RW4";; esac
+# Decoys: a time word inside a NAME, and an explanatory question that happens to contain both words.
+RW0="$( route 'how does the recent-file cache work' )"
+case "$RW0" in *'--rank-by=churn-decay'*) no "an explanatory question about a cache routed to the churn window: $RW0";; *) ok "'the recent-file cache' is a cache question, not a history question";; esac
+RW0B="$( route 'we recently agreed to ship the announcement on friday' )"
+case "$RW0B" in *'--rank-by=churn-decay'*) no "a time word with no motion word minted a churn window: $RW0B";; *) ok "a time word alone never mints the recency window";; esac
+
+# ── the WIDENING page is named on the FIRST call, not only after a thin answer ────────────────────────
+# forpage.h's next= names `--for=TASK --limit=N` when the answer it already served came back thin. That
+# is one call too late for an agent choosing what to run first, so every --for-shaped recommendation
+# carries the same widening step as its own next=. Present-only: a choice whose command is not a --for
+# carries no next= at all. RED against a pre-change binary: no <choice> carried the attribute.
+FW="$( route 'Find the code responsible for this retry timeout bug' )"
+case "$FW" in *'intent="locate-task"'*'next='*'--limit=40'*) ok "a --for-shaped recommendation names the widening page as its next=";; *) no "locate-task carries no widening next=: $FW";; esac
+case "$MR" in *'next='*) no "a non---for recommendation carried a next= (present-only): $MR";; *) ok "a recommendation that is not a --for carries no next=";; esac
+route 'Find the code responsible for this retry timeout bug' >"$TMP/fw.xml"
+FWNEXT="$( python3 - "$TMP/fw.xml" <<'PY'
+import sys, shlex, xml.etree.ElementTree as ET
+root = ET.parse( sys.argv[1] ).getroot()
+choice = root.find( 'choice' )
+sys.stdout.write( '\n'.join( shlex.split( choice.get( 'next', '' ) )[1:] ) if choice is not None else '' )
+PY
+)"
+if [ -n "$FWNEXT" ]; then
+    OLDIFS="$IFS"; IFS='
+'; set -f; # shellcheck disable=SC2086
+    set -- $FWNEXT; IFS="$OLDIFS"; set +f
+    FWRUN="$( "$BIN" --no-cache "$@" )"; rc=$?
+    { [ $rc -eq 0 ] && printf '%s' "$FWRUN" | grep -q '<files '; } \
+        && ok "the emitted widening next= runs and returns the file-grain <files> page" \
+        || no "the emitted widening next= failed to run (rc=$rc, argv=[$FWNEXT])"
+else
+    no "no next= recovered from the locate-task recommendation"
+fi
+
 # ── two routers, ONE vocabulary: every shipped skill must be nameable by --help-task ──────────────────
 # F-R1-09 measured 8 of 16. This arm reads BOTH sides from disk — the skill directories that exist, and
 # the skill= names src/taskroute.h can emit — so it fails when a NEW skill ships with no route as much as
@@ -314,7 +392,8 @@ if [ "$rc" -ne 0 ] && grep -qi 'json' "$TMP/json.err"; then ok "unsupported --js
 "$BIN" "$REPO" "$ROOT/test/fixture" --help-task='plan a feature' >/dev/null 2>"$TMP/multi.err"; rc=$?
 if [ "$rc" -ne 0 ] && grep -qi 'single-root' "$TMP/multi.err"; then ok "multi-root routing refuses"; else no "multi-root routing did not refuse"; fi
 for f in --verify --connect --expand --grep --grep-context --edit-check --from-trace --situ --pack-task --exemplar --for \
-         --edit-plan --dry-run --handles --legend --doctor --agent=codex --test-gate --slice --slice-flow --at --uses --seams; do "$BIN" --help=all 2>&1 | grep -q -- "$f" || no "recommended flag absent from --help: $f"; done
+         --edit-plan --dry-run --handles --legend --doctor --agent=codex --test-gate --slice --slice-flow --at --uses --seams \
+         --rank-by= --limit=; do "$BIN" --help=all 2>&1 | grep -q -- "$f" || no "recommended flag absent from --help: $f"; done
 
 # ── byte-compat: the verify-claim template must emit the SHIPPED --verify grammar byte-exactly ─────────
 # (PLAN 2026-08-13 addendum: gate against the real verb's PARSER, never a copy of its syntax.)
