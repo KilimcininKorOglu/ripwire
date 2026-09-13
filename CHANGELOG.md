@@ -256,6 +256,16 @@ aim at the exact ceiling, while dropping `route=` and labelling the bundle keep 
 tolerance, which exists for a residual a lens cannot trim. The same query now reads `est_tokens="1146"`
 at `--token-budget=1200` with every clause riding. No tolerance was widened and no ceiling was raised.
 
+**Not fully closed, and measured rather than assumed.** The same rung still fires on some documents that fit:
+`ripwire . --for="pagerank power iteration" --token-budget=2500` delivers 5,769 B against the 6,250 B its root
+promises — 481 B of headroom, `bodies="0"`, no `over_ceiling=` — and has still dropped its legend clauses and
+spliced the 193-byte note. So `fitsExactCeiling` is rejecting documents that fit: the rate is right now, the
+bytes it prices are not (the ladder charges a payload the finished document does not carry). The remaining
+error is a fraction of the original one and in the same direction — a lens trimming an explanation it could
+have afforded, never a document over its budget — and it is stated here rather than left for a reader to find,
+because a fix that closes most of a defect and is written up as closing all of it is worth less than the
+measurement. The residual is its own round.
+
 Rung zero also stopped being byte-negative. It removed 110–164 bytes of clauses and spliced a 161-byte
 note naming them: on a route-less compact answer that is **+51 bytes**, a rung that made the document it
 was shrinking bigger and cost the reader three definitions to do it. The candidate is built and compared,

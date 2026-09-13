@@ -174,4 +174,33 @@ grep -q '<cand [^>]*p="' "$TMP/cand.xml" \
     && ok "(E2) --format=candidates rows carry p= (the flat export names its own file)" \
     || no "(E2) --format=candidates rows carry no p=: $( grep -o '<cand [^>]*/>' "$TMP/cand.xml" | head -1 )"
 
+# (E3) THE SERVING MODE IS A ROOT ATTRIBUTE, AND THE LEGEND SELECTOR READS IT THERE (CodeRabbit, PR #215).
+# --expand has two servings with two compact schemas, and applyCompactDialect chose between them by searching
+# the WHOLE document for `mode="whole-file"`. An --expand BUNDLE carries its bodies as CDATA, so any body that
+# merely MENTIONS that literal — a gate script grepping for it, a doc quoting it, this very file — took the
+# expand-file legend onto a document made of <bodies>/<b>/<calls>. A legend describing a shape the document
+# does not contain is the defect the expand-file schema was ADDED to fix; this arm is the other direction.
+E3="$TMP/e3"; mkdir -p "$E3"
+{ printf 'def alpha():\n    marker = %s\n    return marker\n\n' "'mode=\"whole-file\"'"
+  i=0; while [ "$i" -lt 400 ]; do printf 'def pad%s():\n    return %s\n\n' "$i" "$i"; i=$(( i + 1 )); done; } > "$E3/a.py"
+"$BIN" "$E3" --expand=alpha --legend=compact --no-cache >"$TMP/e3.xml" 2>/dev/null </dev/null
+E3_MODE="$( grep -o 'mode="[^"]*"' "$TMP/e3.xml" | head -1 )"
+E3_SCHEMA="$( grep -o 'schema="[^"]*"' "$TMP/e3.xml" | head -1 )"
+if [ "$E3_MODE" = 'mode="bundle"' ]; then
+    # the padding did its job: this IS the bundle serving, and the body below it holds the literal
+    grep -q 'mode=\\"whole-file\\"\|mode="whole-file"' "$TMP/e3.xml" \
+        && ok "(E3) the probe is non-vacuous: a BUNDLE whose body carries the literal mode=\"whole-file\"" \
+        || no "(E3) the probe body no longer carries the literal — this arm would prove nothing"
+    [ "$E3_SCHEMA" = 'schema="ripwire.expand/v1"' ] \
+        && ok "(E3) a bundle that MENTIONS mode=\"whole-file\" in a body keeps the bundle legend ($E3_SCHEMA)" \
+        || no "(E3) a bundle whose body mentions mode=\"whole-file\" took the WRONG legend: $E3_SCHEMA (root says $E3_MODE)"
+else
+    no "(E3) the probe did not serve the bundle shape (root says $E3_MODE) — this arm proves nothing"
+fi
+# …and the positive control: a REAL whole-file serving still selects expand-file.
+"$BIN" test/nestedqualfix --expand=Outer --legend=compact --no-cache >"$TMP/e3b.xml" 2>/dev/null </dev/null
+{ grep -q 'mode="whole-file"' "$TMP/e3b.xml" && grep -q 'schema="ripwire.expand-file/v1"' "$TMP/e3b.xml"; } \
+    && ok "(E3) control: a real whole-file serving still selects ripwire.expand-file/v1" \
+    || no "(E3) control: a whole-file serving no longer selects expand-file: $( grep -o 'schema="[^"]*"' "$TMP/e3b.xml" | head -1 )"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "ALL FAIL"; exit 1; }

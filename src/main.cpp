@@ -1125,25 +1125,42 @@ struct ExpandServeChoice
     std::string ctxOpen;
 };
 
+// The whole-file serving's own legend (PR #215 review item 9), as ONE constant: the bytes CHARGED in the
+// bundle-vs-file comparison below and the bytes APPENDED to the root in runDefaultMap are the same object, so
+// the choice cannot be made on a price the document does not pay. It carries no "--": it rides inside an XML
+// comment, where a double hyphen is ill-formed (G4).
+inline constexpr std::string_view kExpandWholeFileLegend =
+    "<!-- ripwire expand (whole file): <src p=file sym=\"name:line,...\"> wraps the file's own "
+    "text; an <s n= sc= l=/> row names each requested symbol that has an enclosing scope, and "
+    "its full id composes as p::sc::n from the src row's p=. -->";
+
 inline ExpandServeChoice chooseExpandServe( std::size_t bundleBytes, const rw::WholeFileRender& wf, std::size_t budgetBytes )
 {
     char open[ 160 ];
     ExpandServeChoice c;
+    // WHAT THE FILE CANDIDATE ACTUALLY COSTS (CodeRabbit, PR #215). This compared wf.rawBytes against a
+    // bundleBytes that is priced to the byte — root attrs, the unproven residue, the map, the bodies section —
+    // while the whole-file candidate's own legend is appended AFTER this decision and only in that mode. The
+    // file side was therefore under-priced by exactly this constant, so inside that band the tool chose, and
+    // REPORTED, the whole-file form as smaller while the bundle it rejected was the smaller document. The
+    // pack-budget arm above is deliberately left on rawBytes: that ceiling is about the FILE's own size
+    // against --pack-budget, not about which of two candidates is cheaper to serve.
+    const std::size_t wholeFileBytes = wf.rawBytes + kExpandWholeFileLegend.size();
     if( wf.complete && wf.rawBytes > budgetBytes )
     {
         rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file {}B over pack-budget {}B\">",
                        wf.rawBytes, budgetBytes );
     }
-    else if( wf.complete && wf.rawBytes < bundleBytes )
+    else if( wf.complete && wholeFileBytes < bundleBytes )
     {
         c.serveWholeFile = true;
         rw::formatTo( open, sizeof( open ), "<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">",
-                       wf.rawBytes, bundleBytes );
+                       wholeFileBytes, bundleBytes );
     }
     else if( wf.complete )
     {
         rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">",
-                       bundleBytes, wf.rawBytes );
+                       bundleBytes, wholeFileBytes );
     }
     else
     {
@@ -1851,9 +1868,7 @@ int runDefaultMap( const MainDispatch& d )
     // anywhere: it rides inside an XML comment, where a double hyphen is ill-formed (G4).
     if( serveWholeFile )
     {
-        ctxOpenStr += "<!-- ripwire expand (whole file): <src p=file sym=\"name:line,...\"> wraps the file's own "
-                      "text; an <s n= sc= l=/> row names each requested symbol that has an enclosing scope, and "
-                      "its full id composes as p::sc::n from the src row's p=. -->";
+        ctxOpenStr += kExpandWholeFileLegend;   // …the SAME bytes chooseExpandServe charged the file candidate
     }
 
     // r27-emitters T2: the ride-along map. A bare `--expand=SYM` costs ~24 KB for a ~1.4 KB body because the

@@ -757,10 +757,16 @@ struct CeilingLadderChoice
 // TWO CEILINGS, ONE LADDER (2026-09-13, PR #215 review item 1). `fitsExact` is the ceiling the root PROMISES
 // (ceilingBytes: est_tokens <= budget_tokens); `fitsAllowance` is that ceiling plus the first-entry tolerance.
 // Which rung is judged by which is the whole design:
-//   (a) as built and (b) echo dropped are judged by fitsExact — the echo is a byte-for-byte duplicate of task=,
-//       so spending it costs the reader NOTHING, and a document whose own root will say over_ceiling="1" should
-//       spend every free rung before it says so. Rung zero (the caller's droppable legend clauses, above this
-//       function in --for) belongs to the same class and uses the same ceiling.
+//   (a) as built is judged by fitsExact — a document that already fits what its root PROMISES keeps everything,
+//       and rung zero (the caller's droppable legend clauses, above this function in --for) is entered on the
+//       same ceiling for the same reason: both are free, so they are tried at the tighter number.
+//   (b) echo dropped is TRIED because (a) failed the exact ceiling, and ACCEPTED at the allowance. The two are
+//       not the same question and the asymmetry is deliberate: the echo is a byte-for-byte duplicate of task=,
+//       so DROPPING it costs the reader nothing and is worth doing at the tighter number; but REFUSING it for a
+//       residual inside the tolerance would send the ladder on to (c), which throws route= away — real, unique
+//       information — to buy bytes the tolerance already grants. Accepting (b) at the allowance is what keeps
+//       (c) from firing on an overshoot (c) exists to tolerate. A bundle can therefore stop at (b), keep route=,
+//       and still be labelled over_ceiling="1" by the verdict: that is the tolerance working, not a missed rung.
 //   (c) route= dropped and (d) the honest label are judged by fitsAllowance — (c) is the first UNIQUE-information
 //       loss and (d) is the verdict, and the tolerance exists precisely so neither fires on a residual a lens
 //       cannot trim. Trimming real content, or calling a lens failed, at the exact ceiling would spend the

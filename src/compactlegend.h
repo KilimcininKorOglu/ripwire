@@ -870,9 +870,19 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
 {
     const CompactRootInfo root = findCompactRoot( doc );
     if( root.tag.empty() ) { return CompactOutcome::NotXml; }
-    // …and the root says WHICH serving this is, for the one verb that has two (see the expand rows above).
-    std::string_view effectiveHint = hint;
-    if( hint == "expand" && doc.find( "mode=\"whole-file\"" ) != std::string::npos )
+    // …and the ROOT says which serving this is, for the one verb that has two (see the expand rows above).
+    //
+    // THE ROOT TAG, NOT THE DOCUMENT (CodeRabbit 5216..., PR #215). This searched the WHOLE document, and an
+    // --expand BUNDLE carries its bodies as CDATA: any body that merely MENTIONS the literal `mode="whole-file"`
+    // — a gate script that greps for it, a doc that quotes it, this repository's own test/scroundtripcheck.sh —
+    // selected the expand-file legend for a document made of <bodies>/<b>/<calls>. REPRODUCED on a 400-function
+    // Python fixture whose first body holds the string: the root printed mode="bundle" reason="bundle 1957B <=
+    // file 11844B" and served <bodies>, under a legend reading `<src p= sym=>; <s n= sc= l=/>`. That is the very
+    // defect the expand-file row exists to fix, pointed the other way — a legend describing a shape the document
+    // does not contain. The serving mode is a ROOT ATTRIBUTE and is read only there.
+    std::string_view       effectiveHint = hint;
+    const std::string_view rootOpen      = std::string_view( doc ).substr( root.openBegin, root.openEnd - root.openBegin );
+    if( hint == "expand" && rootOpen.find( " mode=\"whole-file\"" ) != std::string_view::npos )
     {
         effectiveHint = "expand-file";
     }
