@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <new>            // std::bad_alloc — renderToString's injected emitter-throw fault, below
 #include <type_traits>
 #include <cstring>
 #include <cstdio>
@@ -164,15 +165,65 @@ template<class... A> inline std::size_t formatTo( char* buf, std::size_t cap, st
 // Review of #214: the copy in prcontext.h returned "" on failure with NO alert, and the unbudgeted
 // --pr-context path had just been routed through it — so an open_memstream failure would have shipped a
 // legend, a root tag and a closing tag around an EMPTY body, with truncated="none" saying nothing was cut.
-// A degrade has to be visible and the caller has to be able to see it: `ok` is false exactly when the buffer
-// could not be opened (and then `text` is empty and nothing was written), the alert names the site through
+// A degrade has to be visible and the caller has to be able to see it: `ok` is false exactly when the bytes
+// returned are not the bytes the emitter wrote (and then `text` is empty), the alert names the site through
 // the caller's own message — "which buffer failed" is the useful half — and the caller then takes its own
-// documented path. Never a silent empty body.
+// documented path. Never a silent empty body, and never a silent SHORT one.
+//
+// CodeRabbit on #214: the first version asked open_memstream and then ignored what fflush and fclose
+// answered, setting ok=true regardless. Both can fail, and either failure means the same thing: `buf`/`sz`
+// are not the whole document. A memstream grows by realloc, so an allocation failure the per-row fwrites
+// swallowed surfaces at the FLUSH; and it is fclose's final flush that publishes *buf and *sz at all, so a
+// failure there leaves them stale or unset. Reading them anyway is exactly how a TRUNCATED document passes
+// for a whole one — the same defect as the empty body above, one size smaller and harder to see. Both
+// results are checked; fclose still runs whatever fflush said, because the stream has to be closed either
+// way, and it runs exactly once. `buf` is freed once, on every path (free( nullptr ) is a no-op).
 struct Rendered
 {
     std::string text;
     bool        ok = false;
 };
+
+// ── THE EMITTER ITSELF MAY THROW, and that is a degrade, not a way out ───────────────────────────────
+// The emitter was called outside any handler. A throw from it — std::bad_alloc out of the std::format
+// fallback is the reachable one, since the whole point of this seam is to buffer a document whose size is
+// not known in advance — skipped the fclose, the free, the alert and the documented empty-result fallback in
+// one jump: the memstream and its buffer leaked, and the caller got an exception where its contract says it
+// gets `ok == false`.
+//
+// The answer is the one this layer gives everywhere a throw crosses a seam that owns a resource: catch AT
+// the seam, release what it owns, DISCLOSE, and hand back the degraded value the caller already reads. It is
+// the same answer this function gives when open_memstream fails, so callers need no new case — `ok == false`
+// has always meant "these are not the bytes the emitter wrote", and a caller that has a fallback for the
+// empty buffer has one for this.
+//
+// FAULT INJECTION, because a throw path is otherwise unreachable from a test: non-NDEBUG only (so it is
+// `constexpr false` and the getenv is deleted in release: zero release cost), read ONCE per process (so it
+// cannot change mid-document and determinism holds), and EXACT "1" is the only ON value, because the
+// contract is a switch — a prefix test would let "=10" and "=0" mean whatever the reader guessed, which is a
+// defect worth fixing once, here, rather than once per switch.
+//
+// THE ENV NAME CARRIES THIS LAYER'S PREFIX, NOT THE HOST'S. Everything under infra/ is built to travel to
+// another repository; a host-named switch would arrive there describing a program its reader has never run,
+// which is exactly what the layering gate refuses. A host that owns its own fault switches names them its
+// own way and reads them through faultSwitchOn below.
+#ifndef NDEBUG
+inline bool faultSwitchOn( const char* envName ) noexcept
+{
+    const char* value = std::getenv( envName );
+    return value != nullptr && std::strcmp( value, "1" ) == 0;
+}
+#else
+inline constexpr bool faultSwitchOn( const char* ) noexcept { return false; }
+#endif
+
+// Each switch keeps its own named wrapper and its own once-per-process read: the name is what a reader greps
+// for, and the `static` is what keeps the answer from changing mid-document (determinism).
+inline bool isRenderEmitThrowFaultInjected() noexcept
+{
+    static const bool isOn = faultSwitchOn( "INFRA_FAULT_RENDER_EMIT_THROW" );
+    return isOn;
+}
 
 template<class Emit>
 inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
@@ -186,15 +237,42 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
         DEGRADED_PATH_ALERT( degradeMsg );
         return out;
     }
-    emit( m );
-    std::fflush( m );
-    std::fclose( m );
-    if( buf )
+    try
+    {
+        // The injected fault stands exactly where a real std::bad_alloc would escape: the stream is open and
+        // nothing has been cleaned up yet, which is the state the catch below exists to unwind.
+        if( isRenderEmitThrowFaultInjected() ) { throw std::bad_alloc(); }
+        emit( m );
+    }
+    catch( ... )
+    {
+        // Everything this function owns, released once, in the order the non-throwing path releases it. The
+        // stream is closed rather than flushed first: there is no document to salvage, and fclose frees the
+        // FILE either way. `out` is still the default-constructed failure — empty text, ok == false.
+        std::fclose( m );
+        std::free( buf );
+        // NOT degradeMsg: that one says the BUFFER failed, and here it did not — the emitter did. The macro
+        // takes a const char*, so this is its own literal rather than a composed string; the caller is named
+        // anyway, because __PRETTY_FUNCTION__ carries the Emit lambda's own file and line.
+        DEGRADED_PATH_ALERT( "renderToString: the emitter THREW — nothing was measured, "
+                             "the caller takes its documented fallback" );
+        return out;
+    }
+    // Order matters: fflush first (it reports the write error), then fclose UNCONDITIONALLY (it owns the
+    // stream, and skipping it on a flush failure would leak it). A null buf after a clean close is itself a
+    // failure — an emitter that wrote nothing still gets a zero-length, null-terminated buffer.
+    const bool flushed = std::fflush( m ) == 0;
+    const bool closed  = std::fclose( m ) == 0;
+    out.ok             = flushed && closed && buf != nullptr;
+    if( out.ok )
     {
         out.text.assign( buf, sz );
     }
+    else
+    {
+        DEGRADED_PATH_ALERT( degradeMsg );
+    }
     std::free( buf );
-    out.ok = true;
     return out;
 }
 

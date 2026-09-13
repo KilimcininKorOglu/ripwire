@@ -1711,5 +1711,42 @@ while IFS='|' read -r kind name where <&3; do
     esac
 done 3<"$TMP/s.rows"
 
+# ── (R) THE COMPACT <g> TERM SAYS WHAT THE FULL CLAUSE SAYS ────────────────────────────────────────────
+#
+# THE FINDING (review of 6621370f). testmap.h stopped escaping a comma inside a grouped path — a path holding
+# ',' is not grouped at all now — and the FULL clause was rewritten to say so and to state that a shown=/total=
+# over these rows counts test FILES. The COMPACT twin of the same rule, compactlegend.h's <g> term, was not:
+# it still promised "every path verbatim (&#44; a comma)", an escape the body no longer emits, and it never
+# carried the counts-FILES rule. A reader holding only the compact legend was told to undo an entity that is
+# not there, and `--affected --legend=compact` on a comma-path corpus contradicted its own rows.
+#
+# WHY A GATE AND NOT ONE CONSTANT. Every other shared sentence in this tree is ONE constant spliced twice, and
+# that is the right shape — but the compact dialect exists precisely to RE-SPELL, not to quote: kRunHintLegendClause
+# is 350+ B and the compact term is a 194 B line in a table that is charged per verb. So the two are pinned
+# against each other instead, and the REQUIRED FACTS are derived from the full constant rather than typed here:
+# a fact is a distinctive phrase the full clause uses, and the compact term must use the same words for it.
+# Add a fact to the full clause and this arm fails until the compact term carries it too.
+RG_FULL="$( sed -n '/^inline constexpr std::string_view kRunHintLegendClause =/,/;$/p' "$ROOT/src/testmap.h" )"
+RG_COMPACT="$( grep -F '"<g n= p=a,b,c>' "$ROOT/src/compactlegend.h" )"
+if [ -z "$RG_FULL" ] || [ -z "$RG_COMPACT" ]; then
+    no "(R) could not read both wordings out of src/ (full=$( printf '%s' "$RG_FULL" | wc -c ) B, compact=$( printf '%s' "$RG_COMPACT" | wc -c ) B)"
+else
+    rgbad=""
+    # the two facts a <g> consumer cannot act without, in the FULL clause's own words
+    for fact in "verbatim" "a path holding ','" "splits into exactly n=" "counts test FILES"; do
+        printf '%s' "$RG_FULL"    | grep -qF "$fact" || rgbad="$rgbad [full clause lost the fact: $fact]"
+        printf '%s' "$RG_COMPACT" | grep -qF "$fact" || rgbad="$rgbad [compact term does not state: $fact]"
+    done
+    # and the escape neither may promise again: an XML parser undoes it BEFORE a consumer splits p= on ','
+    for w in "$RG_FULL" "$RG_COMPACT"; do
+        printf '%s' "$w" | grep -qF '&#44;' && rgbad="$rgbad [a wording still promises the &#44; escape testmap.h deleted]"
+    done
+    # the compact term stays qualified to <g> and present-only, or --flags' own <g> pays for it
+    printf '%s' "$RG_COMPACT" | grep -qF 'true, "g"' || rgbad="$rgbad [the compact <g> term lost its element qualifier / present-only flag]"
+    [ -z "$rgbad" ] \
+        && ok "(R) the compact <g> term states every fact the full run-hint clause states, in the same words, and neither promises the deleted &#44; escape" \
+        || no "(R) the compact and full readings of <g> have drifted:$rgbad"
+fi
+
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

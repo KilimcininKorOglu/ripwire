@@ -133,8 +133,20 @@ inline constexpr std::string_view kAtSeedShortClause = "@FILE:LINE line-seeds re
 // rows grew a second shape and these descriptions still promised the first — a caller reading `p` as a
 // string breaks on the array, and `run_unknown` appeared nowhere in this file at all. ONE wording, spliced,
 // never a fourth paraphrase; the manifest ceiling moves with it, measured, in the same commit.
+//
+// CodeRabbit on #214: the first wording named the key `p`, and only one of the three producers spells it
+// that way. situational_awareness emits "test" (mcpverbs.h, TestRowShape{ Json, "test" }); explore
+// (packtask.h) and the edit receipt (mcpedit.h) emit "p". So the clause told a situational_awareness caller
+// to read a key its answer does not carry — worse than the silence it replaced, because it reads as a
+// contract. Both spellings are named, per producer, in the SINGLE quotes kAtSeedRebindClause already uses
+// for a key: this string is spliced straight into the tools/list JSON, so a double quote here has to survive
+// a C++ literal AND JSON escaping to keep the manifest parseable — the first draft did not, and mcpmanifest-
+// check caught it as a JSONDecodeError rather than a byte count. The key is the ONLY thing that differs: the
+// string-or-array rule, the `n` beside an array, and the run/run_unknown obligation are one rule for all
+// three, and are stated once.
 inline constexpr std::string_view kTestRowJsonShapeClause =
-    "tests_to_run rows: p is a path STRING, or an ARRAY of paths beside n when several runner-less tests share "
+    "tests_to_run rows: the path key is 'test' on situational_awareness and 'p' on explore and the edit "
+    "receipts; its value is a path STRING, or an ARRAY of paths beside n when several runner-less tests share "
     "their attributes and are served as ONE row; every row carries run (the command) or run_unknown:true. ";
 
 inline constexpr std::string_view kAtSeedRebindClause =

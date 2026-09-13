@@ -203,9 +203,21 @@ the whole bundle 11,993 → 12,490 B. On this tree every harness has a runner, s
 change is the legend that now defines `<g>`: the `--test-gate` legend pin moves 2,720 → 3,000 B (measured
 2,957) and the `ripwire.pack-task/v1` compact pin 820 → 880 B (measured 865), both because the compact
 dialect and every rows-bearing full legend now define `run_unknown=` and `<g n= p=>` — a definition
-`--affected` and the compact dialect never carried. The MCP manifest ceiling moves 42,384 → 42,800 B
-(measured 42,777) for one 207-byte clause spliced into the two tool descriptions that serve these rows as
-JSON: `situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
+`--affected` and the compact dialect never carried. That compact `<g>` term now says what the full clause
+says, in the full clause's own words: its first form promised "every path verbatim (`&#44;` a comma)", an
+escape `testmap.h` does not emit — a path holding `,` is not grouped at all — and it never carried the rule
+that a `shown=`/`total=` over these rows counts test FILES, so a reader holding only the compact legend was
+told to undo an entity that is not there and disagreed with the full legend about what the pair counts. The
+term goes 99 → 194 B and is charged only on a document that carries a `<g>` row (measured on a fixture of six
+runner-less tests, `--affected --legend=compact` 501 → 596 B); no pin moves, on this tree or on any gate
+fixture, because every harness here has a runner and nothing groups. The two wordings cannot be one constant
+— the compact dialect exists to re-spell, not to quote — so `test/compactlegendcheck.sh` arm (R) pins them
+against each other, reading the phrases it requires out of `kRunHintLegendClause` itself rather than
+restating them, and fails the next release where either wording drops one or promises `&#44;` again (red on
+the parent commit's source). The MCP manifest ceiling moves 42,384 → 42,800 B
+(measured 42,777) for one 207-byte clause, plus the one-space separator that joins it to the sentence before
+it, spliced into each of the two tool descriptions that serve these rows as JSON (2 × 208 B):
+`situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
 reads `p` as a string has nowhere else to learn that it can be an array.
 The clause is rows-gated everywhere it is spliced — `--affected`, `--exercises`, `--pack-task`, the
 partitioned bundle, and `--pr-context`, whose legend precedes its files in the STREAM but is now decided
@@ -242,12 +254,56 @@ which `packtask.h` already had in its own spelling) that reports the failure, an
 fall back to streaming the level straight out: complete, correct bytes, a modelled estimate, and a
 `DEGRADED_PATH_ALERT` saying which — serialize.h's own degrade contract.
 
-Nine gates assert something about these rows, and each had its own reader: since a row can now name several
+Six gates read the PATHS out of these rows, and each had its own reader: since a row can now name several
 files, `grep -oE '"tests_to_run":\[[^]]*\]'` stopped at the first `]` (the end of the first group's path
 array, so three arms asserted over two and a half rows and passed vacuously), `sed`-based XML readers saw
 only the single rows, and the text reader took `$1` of a line that on a group line is `[hops=1]`. They all
-want the same thing — the files named, in emitted order — so they now all ask `test/testrowpaths.py`, one
-reader for all three dialects and both row shapes.
+want the same thing — the files named, in emitted order — so `test/affectedcheck.sh`,
+`test/impactpartitioncheck.sh`, `test/receiptpostcheck.sh`, `test/rootrelemitcheck.sh`,
+`test/selectorchaincheck.sh` and `test/testrowruncheck.sh` now all ask `test/testrowpaths.py`, one reader for
+all three dialects and both row shapes. Two more gates read these rows and keep their own readers, because
+neither asks for the paths: `test/listingpagingcheck.sh` sums `n=` over the group rows to prove the family
+never pages, and `test/w3fixlegendcheck.sh` counts path occurrences on a `--situ` line. That shared reader
+had two silences of its own, and both now fail loudly with a control in `test/testrowruncheck.sh` arm 16. Its
+JSON slicer returned the same nothing for a document with no `tests_to_run` field and for one whose array
+never closes, and the path reader turned that into an empty list at exit 0 — so a TRUNCATED document
+asserted over zero rows and passed, which is the defect the file was written to end. The two are different
+claims: no field is an answer (0 paths, exit 0), an unclosed list is exit 2 with a named reason. And the text
+dialect's single-row reader took `(\S+)`, which stops at the first space, so a test path holding one was
+reported truncated — a path that does not exist, produced silently. It now cuts the run suffix and the
+renderer's own attribute tail (`[changed] [partner] [hops=N]`, in that order and no other) and keeps
+everything between verbatim; what the text dialect still cannot resolve is a path holding the literal
+three-space `(run: ` opener, because that dialect carries no escaping at all — XML and JSON are exact.
+
+Three more things the row work left half-said. `rw::renderToString` asked `open_memstream` and then ignored
+what `fflush` and `fclose` answered, returning `ok=true` regardless: a memstream grows by `realloc`, so an
+allocation failure the per-row writes swallowed surfaces at the flush, and it is the close that publishes the
+buffer and its size at all. Reading them anyway is how a SHORT document passes for a whole one — the same
+defect as the empty body one size smaller. Both results are now checked, the alert fires, and `--pr-context`
+takes the streaming fallback it already documents. The MCP row-shape clause named the key `p`, and only one
+of its three producers spells it that way: `situational_awareness` emits `test`, `explore` and the edit
+receipt emit `p`. A clause naming the wrong key is worse than no clause, because a caller reads it as a
+contract, so it names both per producer while the rules they share are still stated once; the manifest
+ceiling moves 42,800 → 43,000 B for a measured 42,973 (the clause 207 → 305 B in each of the same two
+descriptions, 2 × 98 B). And `renderToString` called the emitter outside any handler: a throw from it —
+`std::bad_alloc` out of the `std::format` fallback is the reachable one, since the point of the seam is to
+buffer a document whose size is not known in advance — skipped the `fclose`, the `free`, the alert and the
+documented empty-result fallback in one jump, leaking the memstream and its buffer and handing the caller an
+exception where its contract says `ok == false`. Measured on this tree with the fault injected:
+`--pr-context` aborted at `rc=134` with **zero bytes** on stdout and `libc++abi: terminating due to uncaught
+exception of type std::bad_alloc` — the whole document lost, not just its estimate. The seam now catches at
+its own boundary, releases what it owns once, discloses, and returns the degraded value its callers already
+read, so the same run exits 0 with a complete 14,627-byte well-formed document carrying the same 20 `<f>`
+rows as the undegraded control. The alert names the throw rather than borrowing the buffer's message, which
+on that path would be a wrong cause attached to a right consequence. Because a throw path is otherwise
+unreachable from a gate, it is driven by an in-source fault switch in `serialize.h`'s
+`isChargeBufferFaultInjected` shape — non-NDEBUG only, read once per process, exact `"1"` the only ON value —
+and `test/prcontextcheck.sh` arm (F) asserts the whole contract with its own observability probe, red on the
+parent commit (`rc=134`, 0 B, no alert). That switch carries the `INFRA_` prefix rather than this project's:
+everything under `src/infra/` is built to travel to another repository, and `test/infraportcheck.sh` (C)
+refuses a layer file that names the host — it caught the switch's first spelling, which is the gate doing
+exactly what it exists for.
+
 ### Added — the task router knows the recency question, and every new shape is named where an agent reads
 
 Two halves of one gap, both measured as absences rather than argued. **The router could not reach the
