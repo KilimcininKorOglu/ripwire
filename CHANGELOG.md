@@ -15,6 +15,30 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--situ`'s disclosures are attributes
+
+`--situ` is the only report with no XML root to hang attributes on, so every disclosure it owed was written
+as a sentence, and the sentences grew: the graph-count floor clause ran 601 B, the decl/def partner header
+228 B, the tests-to-run header 267 B and the script-gate caveat 158 B — about 800 B of prose on every call,
+carrying facts a reader can only act on once they are named. They are now named. The floor line is
+`counts_floor=1 graph_ambiguous=N graph_unresolved=N graph_unindexed=N (map-header gauges) — every count
+above is a FLOOR, never a total; a zero is "none found", never "none exists"` (601 → 198 B), using the same
+attribute spellings the XML and JSON dialects already use, so the three share one vocabulary. The partner
+header carries `not_dependents=1` (228 → 134 B), section `[1]` carries `prcontext_cap=20` where it used to
+spell `--pr-context`'s own cap as an aside, section `[2]` carries `order=evidence` — the attribute
+`--affected`'s root already carries for the same ordering (267 → 220 B) — and the script-gate blind spot is
+`script_gates_unmodelled=N`, the same counter `--affected` publishes, with its cause kept (158 → 132 B).
+Nothing was dropped: every floor, cap and caveat survives, and the readings that have no attribute form (how
+to read a zero; what `[changed]`/`[partner]`/`hops` mean on a row) stay as the shortest sentence that defines
+them. Measured with `wc -c`, same cache, same commit: on this repo `--situ=src/situ.h` 2,320 → 1,836 B
+(−484) and `--situ=src/testmap.h` 2,302 → 1,818 B; on RocksDB @0e2801ac `--situ=db/write_batch.cc` 7,412 →
+6,781 B (−631). The gate is the new `test/situshapecheck.sh`: one arm per converted disclosure, each
+asserting the attribute is present, that its value agrees with the XML sibling's where one exists
+(`graph_unindexed=`, `script_gates_unmodelled=`), that the reading survives, and a per-line byte ratchet so
+the prose cannot creep back; 10 of its rows are red on the previous binary. `test/floormarkcheck.sh` keeps
+the two anchor phrases it matches — `counts_floor=1` and "is a FLOOR, never a total" — and situshapecheck
+mirrors them, so a regression reds in both.
+
 ### Changed — one absolute root per change report
 
 `--test-gate`, `--situ` and `--affected` state the crawl root once, in the envelope (`root=` in XML and

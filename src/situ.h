@@ -361,19 +361,19 @@ inline constexpr std::size_t kSituPartnerFileRowsShown = 4;   // section [1] —
 // XML root to carry attributes — and the exact pasteable follow-up. All of it appears ONLY on a cut section:
 // an untruncated section is byte-unchanged, and no section ever prints capped=0.
 inline std::string situShowingNote( std::size_t shown, std::size_t rowTotal, const char* rowNoun,
-                                    std::string_view nextInvocation = {}, std::string_view extraProse = {} )
+                                    std::string_view nextInvocation = {}, std::string_view extraAttrs = {} )
 {
     if( rowTotal <= shown )
     {
         return {};
     }
-    // ORDER IS THE CONTRACT: prose first, then the machine triple, then `next:` LAST — a pasteable command has
-    // to run to the end of the parenthetical or a reader cannot tell where it stops. `extraProse` is the one
-    // section-specific sentence (section [1] pointing at --pr-context's own cap) that used to be spliced in by
-    // hand at size() - 1, which put it AFTER the command.
+    // ORDER IS THE CONTRACT: the reading first, then the machine attributes, then `next:` LAST — a pasteable
+    // command has to run to the end of the parenthetical or a reader cannot tell where it stops. A5:
+    // `extraAttrs` is the one section-specific fact (section [1] naming --pr-context's own cap), and it is an
+    // ATTRIBUTE spelled beside the triple rather than the 68 B sentence it used to be spliced in as.
     std::string note = " (showing " + std::to_string( shown ) + " of " + std::to_string( rowTotal ) + " " + rowNoun;
-    note += std::string( extraProse );
     note += " — shown=" + std::to_string( shown ) + " total=" + std::to_string( rowTotal ) + " capped=1";
+    note += std::string( extraAttrs );
     if( !nextInvocation.empty() )
     {
         note += "; next: " + std::string( nextInvocation );
@@ -430,7 +430,9 @@ inline void writeSituDeclDefRows( std::FILE* out, const std::vector<DeclDefPartn
     {
         return;
     }
-    rw::emitTo( out, "        decl/def partners of the file(s) you named ({}){} — symbols DECLARED there and DEFINED here, or the reverse (a header/impl pair, a stub, a partial class); NOT transitive dependents, so they are absent from the list below:\n",
+    // A5: the 229 B sentence said one nameable thing the reader could not otherwise know — these rows are
+    // NOT transitive dependents, so they are absent from the [1] list below. That is not_dependents=1.
+    rw::emitTo( out, "        decl/def partners ({}) not_dependents=1{} — declared there and defined here, or the reverse (header/impl, stub, partial class):\n",
                   partnerFiles.size(), situShowingNote( kSituPartnerFileRowsShown, partnerFiles.size(), "files" ).c_str() );
     for( std::size_t i = 0; i < partnerFiles.size() && i < kSituPartnerFileRowsShown; ++i )
     {
@@ -555,7 +557,7 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     const std::size_t blastShown = blastPage.end - blastPage.begin;
     const std::string blastNote = situShowingNote( blastShown, affected.size(), "files",
                                                    situNextInvocation( page.selector, affected.size() ),
-                                                   "; --pr-context's own per-file blast-radius list is also capped, at 20" );
+                                                   " prcontext_cap=20" );   // A5: --pr-context's own per-file blast-radius list is capped at 20 too
     rw::emitTo( out, "  [1] blast radius: {} symbols across {} files transitively depend on these changes{}\n",
                   reach.size(), affected.size(), blastNote.c_str() );
     // F3: the decl/def partner FIRST — it is the answer to "what else has to change with this file" that the
@@ -592,10 +594,13 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // C1 F-10: this listing had a 25-row cap and no relief. It is the ANSWER — the rows you run, the rows
     // --test-gate exits 4 on — so it is served whole and carries no showing-note at all: there is nothing to
     // disclose when nothing can be dropped.
+    // A5: order=evidence is the SAME attribute --affected's root carries for the same ordering, so the two
+    // verbs name it identically; what follows is the reading of the tags the rows themselves print, which has
+    // no attribute form and therefore stays as the shortest sentence that defines them.
     rw::emitTo( out, "  [2] tests to run ({}){}", tests.size(),
                   tests.empty() ? ": (none transitively reach these files)\n"
-                                : " — evidence order: [changed] you edited it, [partner] named after a changed file, then hops (1 = calls a changed symbol directly); "
-                                  "a line (n): a, b lists n files sharing that evidence with no derivable runner; a (run: …) is relative to root:\n" );
+                                : " order=evidence: [changed] you edited it, [partner] named after a changed file, then hops asc (1 = direct); "
+                                  "\"(n): a, b\" = n runner-less files sharing that evidence; a (run: …) is relative to root:\n" );
     // §P11.4: this section says "tests to run" and named files that are not commands. The runner is appended
     // where one is DERIVABLE and omitted where it is not — see testmap.h; a guessed command is worse than none.
     // E1: runner-less rows with equal evidence are ONE `[hops=N] (n): a, b` line — testmap.h's seam, the multiset unchanged
@@ -607,8 +612,8 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // named above, however much of the change it exercises. Same number, same counter as --affected's
     // script_gates_unmodelled= (testmap.h), because it is literally the same blindness on the same traversal
     // — and it matters MOST on the empty listing above, which otherwise reads as "nothing tests this".
-    rw::emitTo( out, "        ({} test/*.sh gates are NOT modelled: script-to-binary edges are not call edges, "
-                       "so they never appear here — a path count, not every one invokes the binary)\n",
+    rw::emitTo( out, "        script_gates_unmodelled={} — test/*.sh gates never appear above: script-to-binary "
+                       "edges are not call edges (a path count)\n",
                   scriptGatesUnmodelledCount( ing ) );
 
     // (3) co-change partners NOT in the diff — "you usually edit these together; did you forget?"
