@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate the ripwire command showcase against the CURRENT binary. Successor to runner.py."""
-import subprocess, time, os, re, sys, json, tempfile, shutil
+import subprocess, time, os, re, sys, json, tempfile, shutil, shlex, html
 
 # No absolute machine paths here: test/ is a SHIP path and ripwirepubliccheck greps it for home-dir
 # prefixes. REPO is derived from this script's own location; SCRATCH is a per-run temp dir (override
@@ -203,7 +203,6 @@ for t in sorted(ts, key=lambda t: -len(json.dumps(t))):
 ''')
 open(empty_payload_path, "w").write("")
 
-import shlex
 def mcp(*reqs):
     """One-shot stdio JSON-RPC exchange: newline-delimited requests piped into `--mcp`, one response line each."""
     return "printf '%s\\n' " + " ".join(shlex.quote(r) for r in reqs) + f" | {BIN} --mcp"
@@ -307,7 +306,7 @@ add(S2, f"{BIN} . --around=rankGraphTeleport", "Ego graph around one symbol — 
 add(S2, f"{BIN} . --around=rankGraphTeleport --around-depth=2", "The restoring knob: --around-depth=2 brings back the whole 2-hop neighbourhood (depth=\"2\" on the root) — pay for it only when the 1-hop view was not enough.")
 add(S2, f"{BIN} . --around=rankGraphTeleport --around-fanout=4", "The other knob: --around-fanout=4 keeps only the 4 strongest edges per node (default 32) — the same 1-hop depth, a quarter of the rows.")
 add(S2, f"{BIN} . --callers=rankGraphTeleport", "Who calls SYM (1-hop in-edges).")
-add(S2, f"{BIN} . --callers=rankGraphTeleport --legend=compact", "The same rows under --legend=compact: the prose legend becomes one <=400 B comment plus schema=\"ripwire.callers/v1\" on the root — every row byte and every completeness attribute (counts_floor=, graph_ambiguous=, next=) identical, ~3 KB of legend gone. Works on EVERY XML verb now, not four.")
+add(S2, f"{BIN} . --callers=rankGraphTeleport --legend=compact", "The same rows under --legend=compact: the prose legend becomes one compact comment plus schema=\"ripwire.callers/v1\" on the root — every row byte and every completeness attribute (counts_floor=, graph_ambiguous=, next=) identical, ~3 KB of legend gone. Works on EVERY XML verb now, not four.")
 add(S2, f"{BIN} . --callers=DoesNotExist", "Unknown-symbol REFUSAL shape (exit 1) with a did-you-mean from real edit distance.")
 add(S2, f"{BIN} . --callees=rankGraphTeleport", "What SYM calls (1-hop out-edges).")
 add(S2, f"{BIN} . --uses=rankGraphTeleport", "The resolvable use-sites (call/read/write/import/extends) with file:line; count= is a floor.")
@@ -376,24 +375,47 @@ add(S4, f"{BIN} . --pr-context", onTree(
     "No-LLM review-evidence bundle for the working-tree diff — recorded against a DIRTY tree, so it is populated rather than empty."))
 add(S4, f"{BIN} . --pr-context=HEAD~1", "The BASEREF form: diffed against merge-base(BASEREF, HEAD), never the ref tip — here the previous commit on the current line (a ref with NO merge base falls back to a disclosed two-dot diff: anchor=\"ref-tip-two-dot\").")
 add(S4, f"{BIN} . --merge-scout=HEAD~2,HEAD~1", "Pairwise cross-arm conflict sites + suggested landing order (any committish sharing a merge base with HEAD works as an arm; one that does not is reported ok=\"0\", never compared).", timeout=600)
-add(S4, f"{BIN} . --stray-content=lane", "Which lane-* refs still hold divergent authored work vs HEAD, with verdicts.", timeout=600)
-# wave-3 close (2026-09-05): the two ref-family substrings used to be hard-coded (`worktree-agent-a1`, `r27`) and
-# matched nothing on this checkout — both blocks recorded a refusal under a caption describing the healthy path
-# (showcasecapturecheck arm E). A family substring is now the first of a preferred list that selects >= 1 local
-# ref, else the first real ref itself; the caption follows the choice, so a checkout with none of the families
-# still records an honest block (a REAL ref, caption saying so) rather than a refusal captioned as a measurement.
+# wave-3 close (2026-09-05): the two ref-family substrings below used to be hard-coded (`worktree-agent-a1`,
+# `r27`) and matched nothing on this checkout — both blocks recorded a refusal under a caption describing the
+# healthy path (showcasecapturecheck arm E). A family substring is now the first of a preferred list that
+# selects >= 1 local ref, else the first real ref itself; the caption follows the choice, so a checkout with
+# none of the families still records an honest block (a REAL ref, caption saying so) rather than a refusal
+# captioned as a measurement. 2026-09-10: the plain `--stray-content=lane` / `--stray-content=lane --abi` pair
+# just below was still hard-coded to "lane" and hit the exact same failure the moment a checkout's short-lived
+# `lane/*` branches were merged and deleted (routine post-merge cleanup, so this is the COMMON case, not an
+# edge one) — moved onto the same _refFamily mechanism rather than adding a third ad hoc substring.
+# 2026-09-12: the pick varies with whatever refs the recording checkout holds, so every part of a block now
+# follows it. Captions NAME the substring (they said "lane-*" for any family, and "a second ref family" over a
+# second block that repeated the first when only one family existed); the second block never re-selects what
+# the first showed; the single-branch fallback is a branch no other ref's name contains, so its filter selects
+# exactly that branch; every substring is shell-quoted, because add() runs through a shell and a ref name may
+# carry characters the shell would expand; and the recorded output is checked against the heading before the
+# capture is written (the stray-content agreement check after the run loop).
 _localRefs = subprocess.run( "git for-each-ref --format='%(refname:short)' refs/heads", shell=True, cwd=REPO, capture_output=True ).stdout.decode().split()
-def _refFamily( preferred ):
+def _refFamily( preferred, shown="" ):
+    """(substring, kind) for one stray-content selection. kind is "family" (the first preferred substring that
+    selects a ref `shown` does not), "branch" (no such family: one real branch whose name no other local ref
+    contains, so the substring filter selects exactly it) or "none" (nothing left to select: a name no local
+    ref carries, which the verb refuses)."""
+    fresh = [ r for r in _localRefs if not ( shown and shown in r ) ]
     for sub in preferred:
-        if any( sub in r for r in _localRefs ):
-            return sub, True
-    return ( _localRefs[0] if _localRefs else "no-such-ref" ), False
-_famA, _famAIsFamily = _refFamily( [ "worktree-agent-", "feat/", "fix/", "lane/" ] )
-_famB, _famBIsFamily = _refFamily( [ "lane/", "feat/", "fix/", "worktree-agent-" ] )
-add(S4, f"{BIN} . --stray-content={_famA}", ( "A second ref family (the substring picked at capture time from the refs this checkout really has): merged refs are OMITTED from the rows and counted in merged=; refs sharing no merge base with HEAD (a shallow clone, or a pre-rewrite history) land in unknown= with ok=\"0\" — the counters always reconcile against refs=." if _famAIsFamily else "A single real ref (no ref family exists on this checkout, so the substring is one branch name): the counters still reconcile against refs=." ), timeout=600)
-add(S4, f"{BIN} . --stray-content={_famB} --plan", ( "Select the genuinely-unmerged refs of one family and feed them to merge-scout for a landing order (a merged family yields an empty landing set — still a measurement, disclosed on the root)." if _famBIsFamily else "The landing plan over a single real ref." ), timeout=900)
+        if sub != shown and any( sub in r for r in fresh ):
+            return sub, "family"
+    for r in fresh:
+        if sum( r in other for other in _localRefs ) == 1:
+            return r, "branch"
+    return "no-such-ref", "none"
+def _strayScope( sub, kind ):
+    return { "family": f"the `{sub}` ref family",
+             "branch": f"the one branch `{sub}` (no ref family left to select on this checkout)",
+             "none":   f"`{sub}`, which no local ref carries, so the verb REFUSES (exit 1)" }[ kind ]
+_famB, _famBKind = _refFamily( [ "lane/", "feat/", "fix/", "worktree-agent-" ] )
+_famA, _famAKind = _refFamily( [ "worktree-agent-", "feat/", "fix/", "lane/" ], shown=_famB )
+add(S4, f"{BIN} . --stray-content={shlex.quote( _famB )}", f"Which refs of {_strayScope( _famB, _famBKind )} still hold divergent authored work vs HEAD, with verdicts.", timeout=600)
+add(S4, f"{BIN} . --stray-content={shlex.quote( _famA )}", f"A second selection, {_strayScope( _famA, _famAKind )}, picked at capture time from the refs this checkout really has and never the selection above: merged refs are OMITTED from the rows and counted in merged=; refs sharing no merge base with HEAD (a shallow clone, or a pre-rewrite history) land in unknown= with ok=\"0\" — the counters always reconcile against refs=.", timeout=600)
+add(S4, f"{BIN} . --stray-content={shlex.quote( _famB )} --plan", f"Select the genuinely-unmerged refs of {_strayScope( _famB, _famBKind )} and feed them to merge-scout for a landing order (a fully merged selection yields an empty landing set — still a measurement, disclosed on the root).", timeout=900)
 add(S4, f"{BIN} . --stray-content=zzzz-no-such-ref --plan", "A --plan filter that selects NO ref REFUSES (exit 1) naming the substring — before the wave-3 close this fell through to the '>512 refs match' sentence, and --abi under the same filter answered an empty measurement at exit 0.")
-add(S4, f"{BIN} . --stray-content=lane --abi", "Cross-branch ABI-break gate: struct byte-contract drift on each ref's AUTHORED paths — exit 2 when any drift row is found (the only kind that gates), 0 when the compared refs are clean, and exit 1 if the --stray-content filter matches no ref at all.", timeout=600)
+add(S4, f"{BIN} . --stray-content={shlex.quote( _famB )} --abi", f"Cross-branch ABI-break gate over {_strayScope( _famB, _famBKind )}: struct byte-contract drift on each ref's AUTHORED paths — exit 2 when any drift row is found (the only kind that gates), 0 when the compared refs are clean, and exit 1 if the --stray-content filter matches no ref at all.", timeout=600)
 add(S4, f"{BIN} . --whereis=rankGraphTeleport", "Which ref's tree defines or mentions SYM — HEAD first, then every local branch.", timeout=600)
 add(S4, f"{BIN} . --whereis=computeOnePairOverlap --with-history", "Same, plus a git-history <fate> row (never / removed-by-commit) for names no tree carries.", timeout=600)
 add(S4, f"{BIN} . --flags", "The dark-content dashboard: gates BUILT but OFF. CHANGED: no longer invents gates from comments/heredocs, so the count only reflects real ifndef/define, CMake option(), and getenv gates.")
@@ -731,6 +753,28 @@ for i, c in enumerate(C):
     results.append(dict(c=c, out=out, err=err, rc=rc, dt=dt, post=post_out, pre=pre_out))
     print(f"[{i+1}/{len(C)}] rc={rc} {dt:.2f}s  {c['cmd'][:100]}", file=sys.stderr)
 
+# --- the stray-content agreement check ---------------------------------
+# A block's heading IS its command (both are c["cmd"]), so the half left to prove is the output's: the root's
+# filter= and every ref row must name the substring that heading shows. A capture once published a
+# `--stray-content=<one branch>` heading over filter="lane" rows — two same-date captures merged as text, which
+# no generator can see afterwards. What the generator can do is never write a block that disagrees with
+# itself, whatever refs the recording checkout holds: checked on the raw output, before anything is written.
+_strayArg = re.compile(r"--stray-content=(\S+)")
+_strayBad = []
+for r in results:
+    m = _strayArg.search(r["c"]["cmd"])
+    if not m:
+        continue
+    want = shlex.split(m.group(1))[0]
+    text = r["out"].decode("utf-8", "replace")
+    root = re.search(r'<(?:stray-content|landing-plan|abi)\b[^>]*?\sfilter="([^"]*)"', text)
+    rows = [html.unescape(n) for n in re.findall(r'<(?:ref|undetermined|excluded) name="([^"]*)"', text)]
+    if (root and html.unescape(root.group(1)) != want) or any(want not in n for n in rows):
+        _strayBad.append(f"{r['c']['cmd']} -> filter={root.group(1) if root else '(none)'} rows={rows[:3]}")
+if _strayBad:
+    sys.exit("showcase_capture: refusing to write — a --stray-content block's output does not select what its heading names:\n  "
+             + "\n  ".join(_strayBad))
+
 # --- formatting --------------------------------------------------------
 def explode(text):
     """Re-wrap minified single-line XML/JSON at tag seams for display (real output is one line)."""
@@ -791,6 +835,16 @@ def fmt_block(data):
         out.append(marker)
     return "\n".join(out)
 
+def publish_block(data):
+    """fmt_block, then the project's own rebrand rows withheld (exportscrub.withhold_rebrand_rows).
+
+    AFTER the display cut, deliberately: the window and its `… [N more display lines]` marker still describe
+    the real output, and the disclosure's count is exactly the rows taken out of what this block shows. So
+    rows shown + withheld + past the cut still equals the pairs= the tool reported — the sum
+    test/docscommandscheck.sh arm (E) checks on every capture."""
+    lines, _withheld = exportscrub.withhold_rebrand_rows(fmt_block(data).split("\n"))
+    return "\n".join(lines)
+
 ver = subprocess.run(f"{BIN} --version", shell=True, cwd=REPO, capture_output=True).stdout.decode().strip()
 # §B11.5: the --help line count is DERIVED at generation time — the hardcoded "543 lines" went stale
 # (live was 669) and a meta-claim about the binary must come from the binary.
@@ -841,12 +895,12 @@ for r in results:
         doc.append(r["pre"].rstrip())
         doc.append(FENCE + "\n")
     doc.append(FENCE)
-    doc.append(fmt_block(r["out"]))
+    doc.append(publish_block(r["out"]))
     doc.append(FENCE + "\n")
     if r["err"].strip():
         doc.append("stderr:\n")
         doc.append(FENCE)
-        doc.append(fmt_block(r["err"]))
+        doc.append(publish_block(r["err"]))
         doc.append(FENCE + "\n")
     if r["post"]:
         doc.append(c.get("post_label", "Artifact written:") + "\n")
@@ -879,13 +933,21 @@ published = exportscrub.scrub(published, "ripwire")
 # checked but NOT substituted: an audit COORDINATE has no honest rewrite in a transcript (the
 # generator DROPS such lines from COMMANDS.md samples, which a recorded run cannot do), so a coordinate
 # reaching the output is a human decision about the source it came from, not something to paper over.
+# The same goes for a rebrand rename row that survived publish_block: withholding takes out only a row
+# that is its line's whole content, so one sharing a line with other output stops the write here.
 HOME_RE = re.compile(r"/[Uu]sers/")
-CLASSES = (("absolute home path", HOME_RE.search),
+CLASSES = (("the project's own rebrand rename row", exportscrub.rebrand_rename_row),
+           ("absolute home path", HOME_RE.search),
            ("temp/scratch path", exportscrub.TMP_PATH.search),
            ("internal coordinate shape", exportscrub.COORD.search),
            ("internal document name", exportscrub.INTERNAL_DOC.search),
            ("email address", exportscrub.find_address))
-leaks = [f"{i}: {label}: {line.strip()[:100]}"
+def leak_shown(line):
+    """A line carrying a rebrand row is named by that row's public side, never printed: the refusal would
+    otherwise publish the old spelling in the very log that reports it."""
+    row = exportscrub.rebrand_rename_row(line)
+    return exportscrub.rebrand_row_public_side(row) if row is not None else line.strip()[:100]
+leaks = [f"{i}: {label}: {leak_shown(line)}"
          for i, line in enumerate(published.split("\n"), 1)
          for label, hit in CLASSES if hit(line)]
 if leaks:

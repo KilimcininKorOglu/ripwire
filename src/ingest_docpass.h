@@ -37,24 +37,23 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
     const docparse::DocKind kind = docparse::docKindOf( ext );
     if( cacheEnabled && kind != docparse::DocKind::None )
     {
-        std::string docBytes;
-        if( docparse::detail::readWholeFile( path, docBytes ) )
+        if( const std::optional<std::string> docBytes = docparse::detail::readWholeFile( path ) )
         {
             char blobName[ 64 ];
             if( kind == docparse::DocKind::Markitdown )
             {
                 rw::formatTo( blobName, sizeof( blobName ), "ripwire-docmd-{:016x}.bin",
-                               static_cast<unsigned long long>( fnv1a64( docBytes ) ) );
+                               static_cast<unsigned long long>( fnv1a64( *docBytes ) ) );
             }
             else
             {
                 // Hand-rolled extraction is also pure, but its parser is part of the cache identity.
                 // Bump this when the ipynb/html/csv text shape changes; stale text is worse than a miss.
                 rw::formatTo( blobName, sizeof( blobName ), "ripwire-doctxt-1-{:016x}.bin",
-                               static_cast<unsigned long long>( fnv1a64( docBytes ) ) );
+                               static_cast<unsigned long long>( fnv1a64( *docBytes ) ) );
             }
             textBlobPath = quality::resolveCacheBlobPath( quality::cacheDirLadder(), blobName );
-            docparse::detail::readWholeFile( textBlobPath, text );   // miss ⇒ text stays empty
+            text = docparse::detail::readWholeFile( textBlobPath ).value_or( std::string() );   // miss ⇒ text stays empty
         }
     }
     if( text.empty() )

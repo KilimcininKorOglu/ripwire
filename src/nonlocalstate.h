@@ -226,16 +226,19 @@ inline bool isAnalyzedLang( Lang l ) noexcept
 // here in the SAME change that appends Lang::Dart: a Dart corpus holds real functions and real library
 // scope state, captureUses reads neither, and before this row --nonlocal-state emitted no
 // unanalyzed_langs= at all on a corpus that was half Dart — the absence of the attribute, not a zero.
-// Gate: the registration arm of test/dartcheck.sh, with lua as its live contrast. The emission order is
-// this table's order, which makes it deterministic.
+// KOTLIN is named for the same reason: a Kotlin corpus holds real functions and real top-level/companion-
+// object state, captureUses does not read Kotlin's assignment shapes either, and the same "attribute
+// absent, not zero" failure applies. Gate: the registration arm of test/kotlincheck.sh (Dart's is
+// test/dartcheck.sh), with lua as their shared live contrast. The emission order is this table's order,
+// which makes it deterministic.
 struct UnanalyzedLang { Lang lang; std::string_view name; };
-inline constexpr std::array<UnanalyzedLang, 14> kUnanalyzedLangs = { {
+inline constexpr std::array<UnanalyzedLang, 15> kUnanalyzedLangs = { {
     { Lang::C, "c" }, { Lang::Go, "go" }, { Lang::Rust, "rust" },
     { Lang::JavaScript, "javascript" }, { Lang::TypeScript, "typescript" },
     { Lang::Java, "java" }, { Lang::CSharp, "csharp" }, { Lang::Swift, "swift" },
     { Lang::Ruby, "ruby" }, { Lang::Bash, "bash" },
     { Lang::Php, "php" }, { Lang::Lua, "lua" }, { Lang::Elixir, "elixir" },
-    { Lang::Dart, "dart" } } };
+    { Lang::Dart, "dart" }, { Lang::Kotlin, "kotlin" } } };
 
 // The immutability keywords of the covered families. A declaration prefix carrying any of these is not
 // mutable state. Conservative on purpose: a type argument that merely MENTIONS const (`vector<const T*> v`)
@@ -972,6 +975,10 @@ inline int writeNonLocalStateReport( const IngestResult& ing, const Graph& g, in
     };
 
     std::fputs( kNonLocalStateLegend, stdout );
+    // #66: the root below carries graph_unindexed= when the crawl could not read a file at all, and the legend
+    // above is one closed literal — so its definition rides as its own adjacent comment, emitted on exactly
+    // the emitter's own condition (graphlegend.h graphUnindexedLegendComment), never a re-derivation of it.
+    rw::emitTo( stdout, "{}", rw::graphUnindexedLegendComment( g.unindexedFiles > 0 ).c_str() );
     rw::emitTo( stdout, "<nonlocal_state cells=\"{}\" functions=\"{}\"{}{}", scan.cells.size(), total, rw::cstr( disclosure ),
                  rw::graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
     if( !scan.unanalyzedLangs.empty() )

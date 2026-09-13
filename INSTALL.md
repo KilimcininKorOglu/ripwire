@@ -23,12 +23,17 @@ The installer:
 
 Linux builds run on RHEL 8 and later; every release is smoke-tested on RHEL 9 before it publishes.
 
+From 0.6.0 the prebuilt x86-64 binaries need an x86-64-v3 CPU (AVX2, BMI2, FMA and the rest of that level), roughly
+Intel Haswell (2013) or AMD Excavator (2015) and newer; the installer checks before it downloads. On an older CPU,
+[build from source](#build-from-source) with `./install.sh`, which builds for that machine's CPU (`-DRIPWIRE_NATIVE=ON`).
+
 | Variable | Effect |
 | --- | --- |
 | `RIPWIRE_REPO` | Required: `redhat-et/ripwire`. |
 | `RIPWIRE_VERSION` | Install a specific tag, e.g. `v0.5.0`. Default: the latest release. |
 | `RIPWIRE_INSTALL_PREFIX` | Install under this prefix instead of `~/.local`; the binary goes in `<prefix>/bin`. |
 | `RIPWIRE_INSTALL_YES=1` | Skip the confirmation prompt. |
+| `RIPWIRE_SKIP_CPU_CHECK=1` | Skip the x86-64-v3 CPU check. The binary is still test-run before it is installed. |
 | `RIPWIRE_NO_ACTIVATE=1` | Stage the skills without activating them. |
 
 Then try it in a repository:
@@ -49,6 +54,9 @@ cd ripwire
 cmake -S . -B build && cmake --build build -j
 ./build/ripwire --version
 ```
+
+On x86-64 the default build targets x86-64-v3 as well, so on an older CPU add `-DRIPWIRE_NATIVE=ON` to the
+first command to build for that machine's own CPU, or use `./install.sh` below, which does so.
 
 To put a source build on your `PATH`, run `./install.sh` from the checkout. It builds a Release binary tuned
 for this machine's CPU in `build-install/` and installs it under `RIPWIRE_INSTALL_PREFIX`, or under
@@ -72,8 +80,10 @@ you changed it):
 | openclaw (initial support) | `bash ~/.local/share/ripwire/skills/install.sh --openclaw` | `~/.agents/skills` |
 | Anything else | `bash ~/.local/share/ripwire/skills/install.sh <dir>` | `<dir>` |
 
-Hermes and openclaw support is initial. CI checks what the installers write on disk, but neither has been
-verified against a real Hermes or openclaw install yet. If you use one, the help-wanted issues
+Hermes and openclaw support is initial. CI checks what the installers write on disk. For Hermes, a contributor
+also ran the installer and the MCP registration against a real Hermes install when support landed
+([#51](https://github.com/redhat-et/ripwire/pull/51)), but the maintainers have not re-verified it since. openclaw
+has not been verified against a real install yet. If you use one, the help-wanted issues
 [#69 (Hermes)](https://github.com/redhat-et/ripwire/issues/69) and
 [#68 (openclaw)](https://github.com/redhat-et/ripwire/issues/68) ask for exactly that check.
 

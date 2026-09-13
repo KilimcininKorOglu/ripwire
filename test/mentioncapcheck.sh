@@ -37,6 +37,12 @@
 # MUTATION CONTROL: assertion 2 of every arm is exactly what a revert of this fix removes, and assertion 1
 # proves the fixture still reaches the reverted code. Run against a binary built from the parent commit —
 #   RIPWIRE_BIN=<base>/ripwire bash test/mentioncapcheck.sh
+#
+#   (H) A BARE BOOLEAN IS NOT A DISCLOSURE. mention_files_capped= and doc_mentions_capped= passed nullptr
+#       as their total, so the caller learned that content was withheld and neither how much nor how to
+#       get it — §9-3 unmet by the same file whose mention_tokens_capped/mention_syms_capped both carry
+#       one. H1/H3 require the total beside each flag and require it to EXCEED the shown count; H2
+#       requires it absent when the cap did not fire, so an uncut answer stays byte-identical.
 # — and every assertion 2 must FAIL while every assertion 1 still passes. That is the red run this gate was
 # written from, before the code existed.
 #
@@ -50,7 +56,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
@@ -63,6 +69,8 @@ anchorFiles(){ printf '%s' "$1" | grep -o 'mention anchor: [0-9]* file' | grep -
 anchorSyms(){  printf '%s' "$1" | grep -o '+ [0-9]* symbols named' | grep -o '[0-9]*' | head -1; }
 attr(){ printf '%s' "$2" | grep -o "$1=\"[0-9]*\"" | head -1; }
 has(){ printf '%s' "$2" | grep -q "$1"; }
+# attr() returns `name="N"` (the form the older arms compare as text); num() is its VALUE, for arithmetic.
+num(){ attr "$1" "$2" | grep -o '[0-9]*' | head -1; }
 
 # ===================================================================================================
 # (A) kMentionMaxRawTokens=16 — the extraction window over the TASK TEXT
@@ -454,15 +462,51 @@ else
     ok "G3 an ordinary query pays zero bytes for the caps that did not fire"
 fi
 g1="$( run "$TMP/c10" --for="$C_Q" )"; g2="$( run "$TMP/c10" --for="$C_Q" )"
-[ "$g1" = "$g2" ] && ok "G4 a disclosed bundle is byte-identical run to run" || no "G4 the disclosed bundle is not deterministic"
+if [ "$g1" = "$g2" ]; then ok "G4 a disclosed bundle is byte-identical run to run"; else no "G4 the disclosed bundle is not deterministic"; fi
 if command -v xmllint >/dev/null 2>&1; then
     xf=0
     for doc in "$aLate" "$bWide" "$cWide" "$dWide" "$eWide"; do
         printf '%s' "$doc" | xmllint --noout - >/dev/null 2>&1 || xf=1
     done
-    [ "$xf" -eq 0 ] && ok "G5 every disclosed document is well-formed XML" || no "G5 a disclosed document is ill-formed"
+    if [ "$xf" -eq 0 ]; then ok "G5 every disclosed document is well-formed XML"; else no "G5 a disclosed document is ill-formed"; fi
 else
     ok "G5 (skipped: no xmllint)"
+fi
+
+# ── (H) A BARE BOOLEAN IS NOT A DISCLOSURE ─────────────────────────────────────────────────────────
+# mention_files_capped= and doc_mentions_capped= were noteCap(..., nullptr, ...): the caller was told that
+# something had been withheld and neither how much nor how to get it. docs/METHODOLOGY.md §9-3 says a cut
+# is terminal only when the caller can finish in one more KNOWN call, and the sibling caps in the same
+# file — mention_tokens_capped, mention_syms_capped — have always passed a total. Both now do.
+if has 'mention_files_capped="1"' "$bWide"; then
+    hTot="$( num mention_files_total "$bWide" )"
+    hSeen="$( anchorFiles "$bWide" )"
+    if [ -n "$hTot" ] && [ -n "$hSeen" ] && [ "$hTot" -gt "$hSeen" ]; then
+        ok "H1 mention_files_capped=\"1\" carries mention_files_total=\"$hTot\" against $hSeen lifted — the gap is nameable"
+    else
+        no "H1 the file cut disclosed no usable total (total='$hTot' lifted='$hSeen') — a bare boolean is not a disclosure"
+    fi
+else
+    no "H1 fixture broken: the wide file fixture no longer discloses a cut"
+fi
+# the total must be ABSENT when the cap did not fire — a zero-cost run stays zero-cost
+if has 'mention_files_total' "$bNarrow"; then
+    no "H2 an uncut run paid for mention_files_total= — the attribute is not gated on the cut"
+else
+    ok "H2 an uncut run carries no mention_files_total= (the disclosure costs nothing when nothing was cut)"
+fi
+# the doc half, on the tool's own tree: doc_mentions= is the shown count, doc_mentions_total= the choice set
+hDoc="$( run "$ROOT" --for="pagerank power iteration" )"
+if has 'doc_mentions_capped="1"' "$hDoc"; then
+    dTot="$( num doc_mentions_total "$hDoc" )"
+    dSeen="$( num doc_mentions "$hDoc" )"
+    if [ -n "$dTot" ] && [ -n "$dSeen" ] && [ "$dTot" -gt "$dSeen" ]; then
+        ok "H3 doc_mentions_capped=\"1\" carries doc_mentions_total=\"$dTot\" beside doc_mentions=\"$dSeen\""
+    else
+        no "H3 the doc cut disclosed no usable total (total='$dTot' shown='$dSeen')"
+    fi
+else
+    ok "H3 (no doc cut on this tree today — nothing to check, and nothing claimed)"
 fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES"

@@ -13,6 +13,7 @@
 #include "quality.h"           // A5: cacheDirLadder + sweepStaleCacheBlobsOnce — the cache-dir hygiene hook (saveCache)
 #include "embedded_queries.h"  // configure-generated constexpr tags.scm table; no runtime source-tree dependency
 #include "infra/nodekind.h"    // rw::kindIs - the inline node-kind compare the per-AST-node dispatch chains run on (OPTREMARKS F3)
+#include "infra/fieldid.h"     // rw::fieldChild - the same defect one layer down: the field NAME resolved once per grammar, not per node
 #include "infra/hashutil.h"    // sanitizer-clean modulo-2^64 FNV multiplication
 #include "infra/namesplit.h"   // H4: stripTemplateArgs for the C++ qualified-call re-split (shared with tracelocus.h)
 #include "infra/jsonesc.h"     // rw::shSingleQuote - the git ignore probe quotes its root the same way every other git popen does
@@ -24,6 +25,8 @@
                                 // primitive, reused for a --match query's node-kind tokens (see nearestNodeKindHint)
 #include "pattern.h"           // R2: the pattern surface's compiler + matcher — AstWalk::Pattern rides the shared file walk
 #include "preprocdead.h"       // #62: the ONE literal `#if 0` rule (shared with slice.h) — dead call sites never become edges
+#include "extentsuspect.h"     // extent honesty: the containment rules + the recovered/suspect bit vocabulary
+#include "macroreparse.h"      // member-macro re-parse: the scanner, the offset-preserving blank, the adoption rule
 
 #include "infra/Diagnostics.h"
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -160,6 +163,7 @@ extern "C"
     const TSLanguage* tree_sitter_lua( void );
     const TSLanguage* tree_sitter_elixir( void );
     const TSLanguage* tree_sitter_dart( void );
+    const TSLanguage* tree_sitter_kotlin( void );
 }
 
 // ── the ingest-family sections (2026-08-29 split; ingest() phases followed 2026-08-30) ──────────────
@@ -265,6 +269,10 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     // read+hash (safe). v15: result.files is passed in because the blob's offset table lets the load
     // deserialise ONLY the records for the files THIS crawl asked for — a wider configuration's blob is
     // never walked past its table (docs/EVALS.md, the offset-table retry).
+    // The [grammar][field] TSFieldId table (src/infra/fieldid.h), filled before ANY thread exists. Every
+    // AST walk downstream — the parse pool, --slice, --lint, the preprocessor reader — reads it lock-free.
+    warmFieldIdTable();
+
     CacheLoadStats cacheStats;
     HashMap<std::string, FileFacts> cache =
         cacheFile.empty() ? HashMap<std::string, FileFacts>{}
@@ -288,6 +296,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     HashMap<std::string, FileFacts>().swap( cache );
 
     result.fileHealth = std::move( scan.health );   // §L1: after saveCache, before the (unmeasured) doc pass
+    collectNestRefusals( scan, result );             // the Kotlin nesting guard's refusals, as --skipped rows (ingest_prewarm.h)
 
     // ── doc post-pass (P1-B): every collected document file (notebook/html/csv/…) becomes a docText
     //    override + one whole-file Section node — parallel extract, deterministic ascending-fileId merge
@@ -312,6 +321,9 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     // 4) attribute each reference to its enclosing definition (innermost span containing it) — the
     //    per-file DefSpanIndex + DefSweep cursor every fact family below shares (ingest_model.h).
     DefSpanIndex spanIndex = buildDefSpanIndex( result, raw.defs );
+
+    // 4a) extent honesty — the containment rules over the same sorted spans; bits land on Symbol::extentSuspect.
+    markExtentSuspects( result, raw.defs, spanIndex );
 
     // references: order a uint32 index permutation (radix by startByte), then MOVE each RawRef's strings
     // into its Reference while the shared sweep attributes fromSymbol (ingest_model.h).

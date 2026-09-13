@@ -27,7 +27,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 SRC="$ROOT/test/columnarcommafix/columnar_comma_test.cpp"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 echo "columnarcommacheck: SRC=$SRC"
@@ -45,7 +45,9 @@ command -v "$CXX" >/dev/null 2>&1 || CXX=g++
 # (PR #1, run 30732976779). Rationale + the CMake mapping this mirrors: scripts/cxxstd.sh.
 . "$ROOT/scripts/cxxstd.sh"
 CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"
-"$CXX" "$CXXSTD" -I "$ROOT/src" -I "$ROOT/src/infra" -I "$ROOT/third_party" "$SRC" -o "$TMP/t" 2>"$TMP/build.err"
+# diagnostics.cpp supplies Diagnostics::ConsoleLog::handleAssert — link it exactly as every other
+# standalone harness in test/ does, now that buildPathTable carries a VERIFY_NO_ALIAS3 guard.
+"$CXX" "$CXXSTD" -I "$ROOT/src" -I "$ROOT/src/infra" -I "$ROOT/third_party" "$SRC" "$ROOT/src/infra/diagnostics.cpp" -o "$TMP/t" 2>"$TMP/build.err"
 if [ -x "$TMP/t" ]; then
     ok "standalone gate binary built"
 else
@@ -54,7 +56,7 @@ fi
 
 "$TMP/t" "$TMP/out.txt"
 rc=$?
-[ $rc -eq 0 ] && ok "gate binary exits 0" || { no "gate binary exited $rc"; exit 1; }
+if [ $rc -eq 0 ]; then ok "gate binary exits 0"; else { no "gate binary exited $rc"; exit 1; }; fi
 
 SYM_LINE="$( sed -n '/^SYMROWS_BEGIN$/,/^SYMROWS_END$/p' "$TMP/out.txt" | sed -n 2p )"
 USE_LINE="$( sed -n '/^USESROWS_BEGIN$/,/^USESROWS_END$/p' "$TMP/out.txt" | sed -n 2p )"
@@ -67,8 +69,8 @@ USE_LINE="$( sed -n '/^USESROWS_BEGIN$/,/^USESROWS_END$/p' "$TMP/out.txt" | sed 
 NAME_ARR="$( printf '%s' "$SYM_LINE" | grep -oE '<name>[^<]*</name>' | sed -E 's/<name>(.*)<\/name>/\1/' )"
 IN_ARR="$(   printf '%s' "$USE_LINE" | grep -oE '<in_id>[^<]*</in_id>' | sed -E 's/<in_id>(.*)<\/in_id>/\1/' )"
 
-[ -n "$NAME_ARR" ] && ok "extracted <name> array: $NAME_ARR" || no "could not extract <name> array"
-[ -n "$IN_ARR" ]   && ok "extracted <in_id> array: $IN_ARR"     || no "could not extract <in_id> array"
+if [ -n "$NAME_ARR" ]; then ok "extracted <name> array: $NAME_ARR"; else no "could not extract <name> array"; fi
+if [ -n "$IN_ARR" ]; then ok "extracted <in_id> array: $IN_ARR"; else no "could not extract <in_id> array"; fi
 
 # (2)/(3) field count via naive ',' split must equal the row count (3 and 2), NOT more.
 NAME_FIELDS="$( awk -F',' '{print NF}' <<<"$NAME_ARR" )"

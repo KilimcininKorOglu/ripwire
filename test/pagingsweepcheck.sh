@@ -100,19 +100,24 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 PREBIN="${RIPWIRE_PREBIN:-}"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
-cd "$ROOT"
+# Inherited from a hook running the suite, these would aim every git and ripwire call below at the caller's
+# repository (GIT_COMMON_DIR too: it redirects refs even when GIT_DIR is unset): the paging fixture's own init/commit/branch calls, and the ref scans of the --whereis and
+# --stray-content rows, which must read ONLY the refs that fixture holds (see mkPagingFixture).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+cd "$ROOT" || exit 2
 
 echo "pagingsweepcheck: BIN=$BIN  PREBIN=${PREBIN:-<none>}"
 
 # PAGE_CORPUS lets one arm point at a corpus other than this checkout. The paging contract
 # (limit windows, offset advances, has_more terminates) is a property of the CODE, not of the corpus, so
 # an arm whose row supply this repo cannot guarantee is re-anchored onto a fixture built below rather
-# than left to red on whichever clone happens to be short of rows. Defaults to $ROOT: every other arm is
-# untouched.
+# than left to red on whichever clone happens to be short of rows — and so is an arm whose INPUT this
+# checkout cannot hold still between two runs (--whereis: the ref namespace). Defaults to $ROOT: every
+# other arm is untouched.
 # §R-J: --grep's <unindexed> block (queries/*.scm-class hits) is a SEPARATE population from the indexed
 # hits= this whole file's paging CONTRACT is about. Stripped here, at the one seam every page_verb capture
 # runs through, so a pattern that happens to also live in an unsupported-ext file cannot inflate a generic
@@ -138,6 +143,10 @@ cold(){ "$BIN" "${PAGE_CORPUS:-$ROOT}" "$@" --no-cache 2>/dev/null | stripUninde
 # TWO places therefore stay COLD on purpose, and say so at their own site: page_verb's (G) determinism
 # pair (a pair of runs restoring ONE cache file cannot observe a re-crawl+re-rank ordering defect), and
 # section (I)'s differential against a SECOND binary, which must never read a cache this one wrote.
+# Cold rules out the cache, not motion in the input: each run of a cold pair re-reads everything it answers
+# from, so all of it must hold still between the two. --whereis also answers from the enclosing repository's
+# refs, which on $ROOT every session on the machine writes, so its (G) pair runs on the in-gate fixture built
+# below — and (I) runs it, and --stray-content, there too.
 # cacheFor() keys on the corpus and primes on first use, so the in-gate fixture built below — and any
 # PAGE_CORPUS override — gets its OWN file instead of silently reading $ROOT's.
 cacheFor(){   # $1 = corpus dir → that corpus's cache path, primed once on first use
@@ -149,8 +158,9 @@ cacheFor(){   # $1 = corpus dir → that corpus's cache path, primed once on fir
 ROOTCACHE="$( cacheFor "$ROOT" )"   # the main corpus, primed up front — section (K) invokes $BIN directly
 
 # ── the in-gate paging fixture ────────────────────────────────────────────────────────────────────────
-# TWO of these arms — --mentions and --stray-content — need a corpus-SHAPE this repo does not supply on
-# a fresh clone, which is every clone but the author's and therefore every CI leg:
+# THREE of these arms run here instead of on $ROOT. Two — --mentions and --stray-content — need a
+# corpus-SHAPE this repo does not supply on a fresh clone, which is every clone but the author's and
+# therefore every CI leg:
 #
 #   --mentions=main       needs >= 6 doc rows for page_verb's (C) seam check (page[0:3]+[3:6] == [0:6])
 #                         and >= 4 for has_more="1" on --limit=3. The published repo has exactly 3 docs
@@ -162,10 +172,24 @@ ROOTCACHE="$( cacheFor "$ROOT" )"   # the main corpus, primed up front — secti
 #                         unanalysable ("v=unknown ... the fix is to deepen the clone") — so even a repo
 #                         with real stray branches could not assert here.
 #
-# So both are re-anchored onto one throwaway fixture built from scratch here: 8 markdown docs naming one
-# symbol, and 8 branches each authoring lines HEAD does not have. It carries its own full history, so it
-# asserts identically on a fresh clone, a shallow CI checkout, and the author's machine. Every other arm
-# still runs against $ROOT. Both verbs also still meet the live corpus in section (K)'s honoring-set loop.
+# The third, --whereis, has rows to spare on $ROOT. What it lacks there is an input that holds still:
+#
+#   --whereis             scans every refs/heads of the repository ENCLOSING the crawl root. On $ROOT that
+#                         is the checkout's .git, which every worktree and every session on the machine
+#                         writes, and which pargates' tree tripwire cannot see (a ref write is not a `git
+#                         status` line). (G)'s cold pair compares whole documents, so one branch created
+#                         between its two runs moved refs_scanned="302" -> "303", blobs=, hits=/total= and
+#                         <more hits=>, and a full pargates run (2026-09-12) reported "paged page NOT
+#                         deterministic" about a verb that answered correctly both times. Stripping those
+#                         attributes would have kept (G) green by comparing less; here the refs are the
+#                         gate's own, so (G) still compares every byte.
+#
+# So all three are re-anchored onto one throwaway fixture built from scratch here: 8 markdown docs naming
+# one symbol, and 8 branches each authoring lines HEAD does not have. It carries its own full history, so
+# it asserts identically on a fresh clone, a shallow CI checkout, and the author's machine, and nothing but
+# this gate writes a ref in it. Every other arm still runs against $ROOT. All three verbs also still meet
+# the live corpus in section (K)'s honoring-set loop, and --whereis in (H), (L) and the §A10.1 legend arm
+# too — each of those reads the ref namespace once per assertion, so ref motion cannot split a comparison.
 PAGEFIX="$TMP/pagefix"
 mkPagingFixture(){
     mkdir -p "$PAGEFIX/src" "$PAGEFIX/docs" || return 1
@@ -180,6 +204,7 @@ mkPagingFixture(){
         git config user.email paging@example.invalid
         git config user.name  paging-fixture
         git config commit.gpgsign false
+        git config core.hooksPath /dev/null   # no host hook runs in (or adds a ref to) a repo whose refs arms count
         git add -A && git commit -qm "fixture base" || exit 1
         local home; home="$( git rev-parse --abbrev-ref HEAD )"   # init.defaultBranch varies by host
         local b
@@ -225,14 +250,14 @@ page_verb(){
     # (A) --limit=3 emits EXACTLY 3 rows. This is the bug: before the fix it emitted the full capped list.
     p0="$( run "$@" --limit=3 --offset=0 )"
     n0="$( printf '%s' "$p0" | grep -oE "$rowpat" | wc -l | tr -d ' ' )"
-    [ "$n0" = 3 ] && ok "$label: --limit=3 emits exactly 3 rows" || no "$label: --limit=3 emitted $n0 rows (expected 3) — accepted-and-ignored?"
+    if [ "$n0" = 3 ]; then ok "$label: --limit=3 emits exactly 3 rows"; else no "$label: --limit=3 emitted $n0 rows (expected 3) — accepted-and-ignored?"; fi
 
     # (B) the six-attribute vocabulary, spelled as --lint spells it, plus capped=.
-    printf '%s' "$p0" | grep -q 'has_more="1"'   && ok "$label: has_more=\"1\" on a partial page"     || no "$label: missing has_more=\"1\""
-    printf '%s' "$p0" | grep -q 'next_offset="3"' && ok "$label: next_offset=\"3\" advances the loop"  || no "$label: missing next_offset=\"3\""
-    printf '%s' "$p0" | grep -q 'offset="0" limit="3"' && ok "$label: offset=/limit= echoed"          || no "$label: missing offset=\"0\" limit=\"3\""
-    printf '%s' "$p0" | grep -q "$shownattr=\"3\"" && ok "$label: $shownattr=\"3\" == rows emitted"    || no "$label: missing $shownattr=\"3\""
-    printf '%s' "$p0" | grep -qE 'total="[0-9]+"' && ok "$label: total= present"                      || no "$label: missing total="
+    if printf '%s' "$p0" | grep -q 'has_more="1"'; then ok "$label: has_more=\"1\" on a partial page"; else no "$label: missing has_more=\"1\""; fi
+    if printf '%s' "$p0" | grep -q 'next_offset="3"'; then ok "$label: next_offset=\"3\" advances the loop"; else no "$label: missing next_offset=\"3\""; fi
+    if printf '%s' "$p0" | grep -q 'offset="0" limit="3"'; then ok "$label: offset=/limit= echoed"; else no "$label: missing offset=\"0\" limit=\"3\""; fi
+    if printf '%s' "$p0" | grep -q "$shownattr=\"3\""; then ok "$label: $shownattr=\"3\" == rows emitted"; else no "$label: missing $shownattr=\"3\""; fi
+    if printf '%s' "$p0" | grep -qE 'total="[0-9]+"'; then ok "$label: total= present"; else no "$label: missing total="; fi
 
     # (C) --offset ADVANCES: page[0:3] + page[3:6] == page[0:6], no row dropped or duplicated at the seam.
     p3="$( run "$@" --limit=3 --offset=3 )"
@@ -262,9 +287,9 @@ page_verb(){
     # defect the --match arms below are deliberately shaped to flap on); two runs restoring one already-
     # primed cache would agree by construction and could not observe it.
     local d1 d2; d1="$( cold "$@" --limit=3 --offset=3 )"; d2="$( cold "$@" --limit=3 --offset=3 )"
-    [ "$d1" = "$d2" ] && ok "$label: paged page deterministic" || no "$label: paged page NOT deterministic"
+    if [ "$d1" = "$d2" ]; then ok "$label: paged page deterministic"; else no "$label: paged page NOT deterministic"; fi
     if command -v xmllint >/dev/null 2>&1; then
-        printf '%s' "$p3" | xmllint --noout - 2>/dev/null && ok "$label: xml well-formed under paging" || no "$label: xml MALFORMED under paging"
+        if printf '%s' "$p3" | xmllint --noout - 2>/dev/null; then ok "$label: xml well-formed under paging"; else no "$label: xml MALFORMED under paging"; fi
     fi
 }
 
@@ -275,7 +300,6 @@ page_verb "clones"      '<group '     --clones
 page_verb "doc-drift"   '<doc p='     --doc-drift
 SHOWNATTR=shown_modules \
 page_verb "communities" '<community ' --communities
-page_verb "whereis"     '<hit '       --whereis=rankGraph
 page_verb "grep"        '<hit '       --grep=NodeId
 page_verb "hotspots"    '<f p='       --hotspots
 
@@ -312,6 +336,35 @@ page_verb "graph-query"      '<s t='         --graph-query='name("main")'
 # asserted is identical; only the corpus that supplies the rows changes.
 PAGE_CORPUS="$PAGEFIX" page_verb "mentions"      '<doc p='    --mentions=renderWidget
 PAGE_CORPUS="$PAGEFIX" page_verb "stray-content" '<ref name=' --stray-content
+# --whereis runs there too, for a different reason: not rows ($ROOT has hits to spare) but its REF input, which on
+# $ROOT every session on the machine writes — see mkPagingFixture(). renderWidget keeps every branch the arm took
+# over rankGraph on $ROOT: its 90 hits (10 on HEAD, 10 on each of the 8 strays) exceed the 60-hit default cap, so
+# (E) still checks the CUT posture (M2), and the rows (C) and (G) page through are still HEAD's index-labelled rows.
+#
+# The isolation is asserted, not assumed. GUARD: (G)'s exact page must scan the fixture's 8 stray branches and
+# nothing else (refs_scanned= does not count HEAD); pointed back at a shared checkout it reads that clone's branch
+# count instead ("302" where this was found, "0" on a fresh clone) and reds. CONTROL: a branch created IN the
+# fixture must reach that same page (refs_scanned="9"), and deleting it must restore the page byte for byte — so
+# ref motion does reach the pair, and only this gate can cause it. The control branches at stray1, not at HEAD: a
+# ref whose tip IS HEAD's commit is not scanned at all, so a control there would move nothing (shape 5).
+wherePageG(){ PAGE_CORPUS="$PAGEFIX" cold --whereis=renderWidget --limit=3 --offset=3; }
+WH0="$( wherePageG )"
+if ! printf '%s' "$WH0" | grep -q '<whereis sym="renderWidget" on-head="1" refs_scanned="8" '; then
+    no "whereis fixture refs: (G)'s page does not scan exactly the paging fixture's 8 stray branches — its pair would compare two reads of a ref namespace this gate does not own (got: $( printf '%s' "$WH0" | grep -oE '<whereis [^>]*>' | head -c 160 ))"
+else
+    git -C "$PAGEFIX" branch -q wherecontrol stray1 >/dev/null 2>&1
+    WH1="$( wherePageG )"
+    git -C "$PAGEFIX" branch -q -D wherecontrol >/dev/null 2>&1
+    WH2="$( wherePageG )"
+    if ! printf '%s' "$WH1" | grep -q ' refs_scanned="9" '; then
+        no "whereis fixture refs (control): a branch created in the paging fixture did not reach (G)'s page (no refs_scanned=\"9\") — ref motion cannot reach the pair there, so the isolation proves nothing"
+    elif [ "$WH2" != "$WH0" ]; then
+        no "whereis fixture refs (control): deleting the control branch did not restore (G)'s page byte for byte"
+    else
+        ok "whereis fixture refs: (G)'s page scans only the fixture's 8 branches; a branch created there reaches it (refs_scanned=9) and deleting it restores every byte"
+    fi
+fi
+PAGE_CORPUS="$PAGEFIX" page_verb "whereis"       '<hit '      --whereis=renderWidget
 
 # --zoom is a NESTED hierarchy — every level emits a <module level="L" ...> element, so a bare '<module '
 # pattern would count every descendant too, not just the top-level row list --limit/--offset actually
@@ -335,8 +388,8 @@ else
 fi
 DC_P0="$( run --dead-code --limit=2 --offset=0 )"
 DC_N0="$( printf '%s' "$DC_P0" | grep -oE '<d n=' | wc -l | tr -d ' ' )"
-[ "$DC_N0" = 2 ] && ok "dead-code: --limit=2 emits exactly 2 rows" || no "dead-code: --limit=2 emitted $DC_N0 rows (expected 2)"
-printf '%s' "$DC_P0" | grep -q "total=\"$DC_TOTAL\"" && ok "dead-code: total=\"$DC_TOTAL\" present" || no "dead-code: missing total=\"$DC_TOTAL\""
+if [ "$DC_N0" = 2 ]; then ok "dead-code: --limit=2 emits exactly 2 rows"; else no "dead-code: --limit=2 emitted $DC_N0 rows (expected 2)"; fi
+if printf '%s' "$DC_P0" | grep -q "total=\"$DC_TOTAL\""; then ok "dead-code: total=\"$DC_TOTAL\" present"; else no "dead-code: missing total=\"$DC_TOTAL\""; fi
 DC_END="$( run --dead-code --limit=2 --offset=999999 )"; DC_EC=$?
 DC_NEND="$( printf '%s' "$DC_END" | grep -oE '<d n=' | wc -l | tr -d ' ' )"
 if [ "$DC_EC" = 0 ] && [ "$DC_NEND" = 0 ] && printf '%s' "$DC_END" | grep -q 'has_more="0"'; then
@@ -368,7 +421,7 @@ disclose(){   # $1=label $2=root-element $3=row-pattern $4..=verb args
     else
         ok "$label: shown=\"$shown\" == the $rows rows that follow"
     fi
-    printf '%s' "$root" | grep -qE 'capped="[01]"' && ok "$label: capped=\"0|1\" present" || no "$label: no capped= flag"
+    if printf '%s' "$root" | grep -qE 'capped="[01]"'; then ok "$label: capped=\"0|1\" present"; else no "$label: no capped= flag"; fi
 }
 disclose "hotspots" "hotspots" '<f p='   --hotspots
 disclose "cochange" "cochange" '<pair '  --cochange
@@ -439,6 +492,7 @@ refuses "--stray-content --abi --limit=3"  "--callers" --stray-content --abi --l
 # and the honoring set really honors: every verb the message names must exit 0 under --limit=3.
 for v in --lint --hotspots --callers=escapeXml --callees=runUses --tree --deps --cochange --owners \
          --clones --doc-drift --communities --whereis=rankGraph --grep=NodeId --impact=escapeXml --uses=escapeXml \
+         --flags --situ=src/situ.h \
          --seams --zoom --external-surface --dead-code --mentions=main --stray-content; do
     if "$BIN" "$ROOT" $v --limit=3 --cache="$ROOTCACHE" >/dev/null 2>"$TMP/k2.err"; then
         ok "honoring set: $v --limit=3 exits 0"
@@ -503,7 +557,7 @@ if [ -n "$PREBIN" ] && [ -x "$PREBIN" ]; then
     # deliberately narrow to those two spots so a regression ELSEWHERE in --deps' output is still caught.
     strip(){ sed -E -e 's/ shown="[0-9]+" capped="[01]"//g' -e 's/<deps files="[0-9]+"/<deps/' -e 's/<!--[^>]*-->//g' \
                      -e 's/<health[^>]*\/>/<health\/>/' -e 's/instab="[0-9.]+"/instab="X"/g'; }
-    for v in "--clones" "--communities" "--doc-drift" "--grep=NodeId" "--hotspots" "--cochange" "--whereis=rankGraph" "--owners" \
+    for v in "--clones" "--communities" "--doc-drift" "--grep=NodeId" "--hotspots" "--cochange" "--owners" \
              "--callers=escapeXml" "--callees=runUses" "--tree" "--deps" "--impact=escapeXml" "--uses=escapeXml"; do
         "$BIN"    "$ROOT" $v --no-cache 2>/dev/null | strip > "$TMP/new"
         "$PREBIN" "$ROOT" $v --no-cache 2>/dev/null | strip > "$TMP/old"
@@ -514,6 +568,15 @@ if [ -n "$PREBIN" ] && [ -x "$PREBIN" ]; then
             diff "$TMP/old" "$TMP/new" | head -4 | cut -c1-200
         fi
     done
+    # --whereis separately, on the paging fixture: it reads the enclosing repository's REFS, and on $ROOT every
+    # session on the machine writes those, so a branch created between the two sides would red this differential
+    # about ref motion rather than about either binary — (G)'s defect, see mkPagingFixture(). --stray-content,
+    # below, moves for the same reason.
+    "$BIN"    "$PAGEFIX" --whereis=renderWidget --no-cache 2>/dev/null | strip > "$TMP/new"
+    "$PREBIN" "$PAGEFIX" --whereis=renderWidget --no-cache 2>/dev/null | strip > "$TMP/old"
+    diff -q "$TMP/old" "$TMP/new" >/dev/null \
+        && ok "--whereis (paging fixture): un-paginated data byte-identical modulo root disclosure attrs" \
+        || no "--whereis (paging fixture): un-paginated output CHANGED beyond the root disclosure attrs"
     # --match separately: its query carries a space, so it cannot ride the unquoted `for v` expansion.
     # This ONE arm stays (string_literal) — a non-nesting kind — while the paging arms above use
     # (call_expression): the PRE-change binary's tie order over a nesting kind was NONDETERMINISTIC (the
@@ -527,7 +590,7 @@ if [ -n "$PREBIN" ] && [ -x "$PREBIN" ]; then
 
     # §P15/§P16's seven: none of them changed their un-paginated byte shape at all (see the extended table
     # above), so no strip() normalization is needed — a bare diff must hold.
-    for v in "--seams" "--zoom" "--external-surface" "--dead-code" "--mentions=main" "--stray-content"; do
+    for v in "--seams" "--zoom" "--external-surface" "--dead-code" "--mentions=main"; do
         "$BIN"    "$ROOT" $v --no-cache 2>/dev/null > "$TMP/new"
         "$PREBIN" "$ROOT" $v --no-cache 2>/dev/null > "$TMP/old"
         if diff -q "$TMP/old" "$TMP/new" >/dev/null; then
@@ -537,6 +600,12 @@ if [ -n "$PREBIN" ] && [ -x "$PREBIN" ]; then
             diff "$TMP/old" "$TMP/new" | head -4 | cut -c1-200
         fi
     done
+    # --stray-content on the paging fixture, for --whereis's reason above: its input is the refs.
+    "$BIN"    "$PAGEFIX" --stray-content --no-cache 2>/dev/null > "$TMP/new"
+    "$PREBIN" "$PAGEFIX" --stray-content --no-cache 2>/dev/null > "$TMP/old"
+    diff -q "$TMP/old" "$TMP/new" >/dev/null \
+        && ok "--stray-content (paging fixture): un-paginated output byte-identical to the pre-change binary" \
+        || no "--stray-content (paging fixture): un-paginated output CHANGED vs the pre-change binary"
     "$BIN"    "$ROOT" --graph-query='name("main")' --no-cache 2>/dev/null > "$TMP/new"
     "$PREBIN" "$ROOT" --graph-query='name("main")' --no-cache 2>/dev/null > "$TMP/old"
     diff -q "$TMP/old" "$TMP/new" >/dev/null \
@@ -631,6 +700,15 @@ TABLE = {
     # <u> rows, and for the same reason: one bare shown= could not describe a listing whose other half
     # deliberately prints outside the window.
     "--edit-check":         ( [ "--edit-check=escapeXml" ], "unflagged" ),
+    # 2026-09-10 (C1 F-07/F-10): --flags' per-gate <read> sites and --flip's six context listings page, and
+    # so do --situ's blast-radius and co-change sections. Neither root carries a bare shown=/capped= — every
+    # cut is disclosed on the CHILD that was cut (rule 6's secondary-listing pair), so the root is uncut by
+    # construction and this arm's "cut nothing ⇒ the quintet must be absent" branch is the one that applies.
+    "--flags":              ( [ "--flags" ], None ),
+    # --situ is the FIRST PROSE member of the honoring set: it has no XML root, so it spells the same
+    # shown=/total=/capped= facts in its section headers. Parsing a root element out of it would fail for a
+    # reason that has nothing to do with paging, so it is checked as prose below instead.
+    "--situ":               ( [ "--situ=src/situ.h" ], "PROSE" ),
 }
 fail = 0
 missing = [ v for v in universe if v not in TABLE ]
@@ -645,6 +723,21 @@ for verb in universe:
     if verb not in TABLE: continue
     args, primary = TABLE[ verb ]
     doc = subprocess.run( [ BIN, ROOT ] + args, capture_output=True, text=True, errors="replace" ).stdout
+    if primary == "PROSE":
+        # the prose dialect of rules 1+3: a cut section states shown=/total=/capped=1 inline, and nothing
+        # states capped=0. There is no window to page from, so the quintet does not apply — but the
+        # disclosure still has to be there and still has to be arithmetic.
+        cutSections = re.findall( r'shown=(\d+) total=(\d+) capped=1', doc )
+        if 'capped=0' in doc:
+            print( f"  FAIL  (L) {verb}: prose report emits capped=0 — a disclosure that fired to say nothing was cut" ); fail = 1
+        elif not cutSections:
+            print( f"  ..    (L) {verb}: prose report cut nothing on this corpus" )
+        elif any( int( sh ) >= int( to ) for sh, to in cutSections ):
+            print( f"  FAIL  (L) {verb}: prose report says capped=1 with shown >= total: {cutSections}" ); fail = 1
+        else:
+            checked += 1
+            print( f"  PASS  (L) {verb}: {len(cutSections)} cut prose section(s), each shown < total with capped=1" )
+        continue
     lead = LEAD.match( doc )
     legend = lead.group( 0 ) if lead else ""
     body = doc[ len( legend ): ]

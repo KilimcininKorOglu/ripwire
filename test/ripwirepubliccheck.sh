@@ -30,7 +30,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 cd "$ROOT" || { printf 'ripwirepubliccheck: cannot cd to repo root %s\n' "$ROOT"; exit 2; }
 fail=0
 
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 # A missing tool must never read as a clean tree — that is the green-while-inert failure this suite
@@ -434,7 +434,7 @@ tracked = set(paths)
 # instead of quietly shrinking the search.
 _deps = 'third_party/deps'
 _grammars = ('bash', 'c', 'cpp', 'csharp', 'cuda', 'dart', 'elixir', 'go', 'java', 'javascript', 'json',
-             'objc', 'python', 'ruby', 'rust', 'swift', 'toml', 'yaml')
+             'kotlin', 'objc', 'python', 'ruby', 'rust', 'swift', 'toml', 'yaml')
 roots = (['src', 'src/infra', 'third_party', '']                        # our targets
          + [f'{_deps}/tree_sitter/lib/include']                         # PUBLIC, given to every target
          + [f'{_deps}/tree_sitter/lib/src', f'{_deps}/tree_sitter/lib/src/wasm']   # tree-sitter PRIVATE

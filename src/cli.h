@@ -765,7 +765,7 @@ inline constexpr char kHelpHead[] =
         "ripwire — the \"ripgrep of AI context\": parse a codebase, rank symbols by Personalized PageRank,\n"
         "stream a deterministic minified XML map to stdout. Zero runtime deps. Languages: C++, C, ObjC/ObjC++,\n"
         "Metal (MSL, .metal — C++ grammar), CUDA (.cu/.cuh — tree-sitter-cuda, <<<>>> launches are call edges),\n"
-        "Python, TypeScript, JavaScript, Java, Ruby, PHP (.php/.phtml), Lua, Elixir (.ex/.exs), Dart (.dart), Bash, Go, Rust, Swift, C#;\n"
+        "Python, TypeScript, JavaScript, Java, Ruby, PHP (.php/.phtml), Lua, Elixir (.ex/.exs), Dart (.dart), Kotlin (.kt), Bash, Go, Rust, Swift, C#;\n"
         "JSON, TOML, YAML (config keys); Markdown (.md/.markdown — headings are section symbols with spans).\n\n"
         "usage: ripwire <dir> [flags]            # default = the ranked map of <dir> on stdout\n"
         "       ripwire <dir1> <dir2> ... [flags] # multi-root workspace: ONE merged graph over 2..16 checkouts\n"
@@ -784,7 +784,7 @@ inline constexpr char kHelpHead[] =
         "                               plain --query, and --format=candidates (incl. with --for). --for's OWN\n"
         "                               signature/lego/compose bundle self-limits via --pack-top-n instead — --top-k is\n"
         "                               INERT there (documented, not fixed — a real fix is a behavior change).\n"
-        "                               --pack-task/--from-trace/--run-trace/--situ self-budget via --token-budget, not --top-k.\n"
+        "                               --pack-task/--from-trace/--run-trace self-budget via --token-budget, not --top-k.\n"
         "                               --top-k=0 emits NO ranked map at all — ONLY the payload you asked for\n"
         "                               (--expand/--outline/--pack-signatures/--pack-top-n). Use it when you want the\n"
         "                               body and not the ~200-symbol map that otherwise rides along with it; the <ctx>\n"
@@ -1065,8 +1065,8 @@ inline constexpr char kHelpHead[] =
         "                               emitted as <f via=\"import\" lazy=\"0|1\"> rows (format=columnar carries the count only). NEVER added to reaches= —\n"
         "                               files and symbols are different units, and an importer may use a different symbol from that file, or none at all.\n"
         "                               lazy=\"1\": every one of that importer's edges is written inside a closure — a TS/JS require()/import()\n"
-        "                               inside a function body, a Ruby constant receiver inside a method/lambda/block, a Ruby autoload —\n"
-        "                               not at load time: still a real dependency, weaker than a top-level one\n"
+        "                               inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby\n"
+        "                               autoload or rescue class — not at load time: still a real dependency, weaker than a top-level one\n"
         "    counts_floor=\"1\"           every count on the graph verbs is a FLOOR, never a total; a 0 means none found\n"
         "                               on --callers/--callees/--uses/--impact/--edit-check every count is a FLOOR, never a total: the\n"
         "                               call graph is extracted from source text by name, so dynamic dispatch\n"
@@ -1154,13 +1154,15 @@ inline constexpr char kHelpHead[] =
         "                               For task-ranked retrieval use --for=TASK (ranks by PageRank + task relevance).\n"
         "                               --regex is LINE-ORIENTED, like grep/rg: each line is its own search range, so ^ and $\n"
         "                               are LINE anchors and no match may span a newline (a trailing CR sits outside the range).\n"
-        "      --grep-context=N | --grep-before=N / --grep-after=N   ripgrep-style N lines of source around each hit\n"
-        "      --and=STR (repeatable)   modifies --grep=STR: keep only hits where STR is ALSO present (literal-only, no --regex)\n"
-        "      --not=STR (repeatable)   modifies --grep=STR: drop hits where STR IS present (literal-only, no --regex)\n"
-        "      --grep-scope=line|file   modifies --and=/--not=: line (default) requires the SAME matched line; file requires\n"
+        "    --grep-context=N | --grep-before=N / --grep-after=N     ripgrep-style N lines of source around each hit\n"
+        "    --and=STR (repeatable)     modifies --grep=STR: keep only hits where STR is ALSO present (literal-only, no --regex)\n"
+        "    --not=STR (repeatable)     modifies --grep=STR: drop hits where STR IS present (literal-only, no --regex)\n"
+        "    --grep-scope=line|file     modifies --and=/--not=: must the other term hit the SAME line (default) or anywhere in the file\n"
+        "                               modifies --and=/--not=: line (default) requires the SAME matched line; file requires\n"
         "                               anywhere in the same file. Second occurrence of --grep=/--regex= itself REFUSES\n"
         "                               (naming --and= as the AND spelling) rather than silently overwriting the pattern.\n"
-        "      --grep-in=code|any       SPAN TIERS: which tree-sitter span a hit must sit in to print. code (default) serves the\n"
+        "    --grep-in=code|any         SPAN TIERS: which tree-sitter span a hit must sit in — code (default) or any (exhaustive)\n"
+        "                               SPAN TIERS: which tree-sitter span a hit must sit in to print. code (default) serves the\n"
         "                               CODE tier when any hit is code, and otherwise comment AND string TOGETHER (tier=\n"
         "                               \"comment+string\"), disclosing what it held back (suppressed_comment=/suppressed_string=);\n"
         "                               a pattern living only in prose is still answered, never silently emptied. any turns\n"
@@ -1294,8 +1296,8 @@ inline constexpr char kHelpHead[] =
         "                               acd/nccd number comparable across builds: sh, rb, lua and ex joined it at parser\n"
         "                               version 81 and every one of those numbers moved on a corpus holding them.\n"
         "                               STRUCTURE vs USE (parser version 83): a LAZY edge -- every directive of the pair\n"
-        "                               written inside a closure (Ruby method/lambda/block, TS/JS function body) or a Ruby\n"
-        "                               autoload -- is a use, not a load-time dependency: it is in --impact's importer tier\n"
+        "                               written inside a closure (Ruby method/lambda/block, TS/JS function body), a Ruby\n"
+        "                               autoload or rescue class -- is a use, not a load-time dependency: it is in --impact's importer tier\n"
         "                               (lazy=1) and in the row's inc t= list, NOT in afferent/instab/transitive/godfiles/\n"
         "                               stabledeps/cycles/ccd/acd/nccd/shape. <health lazy_edges=> counts the pairs left out,\n"
         "                               a row's lazy_edges= its own; both absent when 0\n"
@@ -1303,6 +1305,8 @@ inline constexpr char kHelpHead[] =
         "                               complexity x recent git churn (maintenance pain); each row's top= is the worst function's\n"
         "                               BARE name, top_ccx= its cognitive complexity, top_l= its source line (build an --expand\n"
         "                               selector from p=/top_l=/top=, not from top= alone — it no longer carries a :line suffix)\n"
+        "                               A function whose extent failed a containment check is LEFT OUT of ccx=/score=/top= and\n"
+        "                               counted: extent_suspect_syms= on its row, unranked_extent_suspect= for a file with none left\n"
         "    --clones                   token-normalized duplicate bodies\n"
         "    --readability              rank functions least-readable first, by volume, token entropy and length\n"
         "                               per-function readability lens, LEAST readable first: vol= Halstead volume V (N*log2(eta)),\n"
@@ -1596,14 +1600,16 @@ inline constexpr char kHelpHead[] =
         "                               accept the current findings into .ripwire_quality_acks (per-finding ratchet): re-runs suppress them honestly (acked=\"N\") until one WORSENS past its acked size.\n"
         "                               =REASON implies the --quality-delta report it acks; the reason-less spelling needs --quality-delta\n"
         "                               beside it (refused alone). An ack with 0 findings to accept writes nothing and says so.\n"
-        "      --ack-only=SUBSTR[,SUBSTR] (with --quality-ack) ack only SOME findings — those whose KIND, canonical id, or\n"
+        "    --ack-only=SUBSTR[,SUBSTR]   (with --quality-ack) ack only SOME findings — those whose KIND, canonical id or FACET matches\n"
+        "                               (with --quality-ack) ack only SOME findings — those whose KIND, canonical id, or\n"
         "                               FACET contains one of these; the pseudo-token 'gating' selects exactly what would\n"
         "                               exit 2. Bare --quality-ack accepts the WHOLE report, so accepting one deliberate\n"
         "                               change silently accepts the rest — how a ratchet turns into a rubber stamp. Prefer\n"
         "                               the facet: --ack-only=contract-change acks the deliberate arity changes WITHOUT the\n"
         "                               never-gating api-surface new-symbol rows. Matching nothing refuses (exit 1) rather\n"
         "                               than falling back to acking everything. Whatever you leave unacked stays visible.\n"
-        "      --scope=GLOB[,GLOB...]   (with --quality-delta/--quality-ack) OWNERSHIP partition for a working tree that has\n"
+        "    --scope=GLOB[,GLOB...]     (with --quality-delta/--quality-ack) file findings by OWNERSHIP when one tree has several writers\n"
+        "                               (with --quality-delta/--quality-ack) OWNERSHIP partition for a working tree that has\n"
         "                               MORE THAN ONE WRITER in it — N agent sessions sharing one checkout. The delta compares\n"
         "                               the working tree against HEAD, so every concurrent writer's uncommitted rows land in\n"
         "                               YOUR report; this files each finding by its p= path. Rows in scope gate as usual; rows\n"
@@ -1673,8 +1679,9 @@ inline constexpr char kHelpHead[] =
         "                               discloses resolved_from_seed, a faulted seed refuses with a specific diagnosis, and\n"
         "                               --edit-target-file may not accompany a seed), or a freshness-pinned sym# handle\n"
         "                               emitted by --grep --handles.\n"
-        "      --edit-payload=FILE|-    required exact byte payload ('-' reads stdin); empty payloads refuse, never imply deletion\n"
-        "      --edit-target-file=PATH  optional file-path substring disambiguating a same-named definition. RELATIVE (matched against\n"
+        "    --edit-payload=FILE|-      required exact byte payload ('-' reads stdin); empty payloads refuse, never imply deletion\n"
+        "    --edit-target-file=PATH    optional file-path substring disambiguating a same-named definition (relative or absolute)\n"
+        "                               optional file-path substring disambiguating a same-named definition. RELATIVE (matched against\n"
         "                               the indexed spelling) or ABSOLUTE (matched against the file's resolved on-disk path), so the\n"
         "                               path a receipt or a trace hands you works verbatim. These three CLI verbs\n"
         "                               reuse the MCP edit engine: freshness hash, lock, pre-rename recheck, fsync, mode preservation\n"
@@ -1696,14 +1703,16 @@ inline constexpr char kHelpHead[] =
         "                               in EVIDENCE order (a changed or partner test outranks a deeper graph hop);\n"
         "                               else --test-gate=FILE; under --no-post-check: --edit-check=FILE:SYM). Edit, see what\n"
         "                               landed, verify and find the tests to run is ONE call.\n"
-        "      --no-post-check          skip that folded verification (the index refresh it needs is the one the next verb call\n"
+        "    --no-post-check            skip that folded verification — pass it when you are about to edit again immediately\n"
+        "                               skip that folded verification (the index refresh it needs is the one the next verb call\n"
         "                               would pay for anyway; pass this when you are about to edit again immediately). The MCP\n"
         "                               spelling is post_check:false. Single-root only.\n"
         "    --edit-plan=FILE           apply several edits as one transaction, described in a versioned JSON file\n"
         "                               versioned JSON multi-edit transaction: {version:1, edits:[{op,target,file?,payload}]};\n"
         "                               op is one of replace_symbol_body, insert_before_symbol, insert_after_symbol\n"
         "                               each target takes the same forms as TARGET above (a name, an @FILE:LINE seed, a handle)\n"
-        "      --dry-run | --apply      the plan's explicit mode: --dry-run preflights and prints the receipt without writing,\n"
+        "    --dry-run | --apply        the plan's mode: --dry-run preflights, --apply commits; exactly one of the two is required\n"
+        "                               the plan's explicit mode: --dry-run preflights and prints the receipt without writing,\n"
         "                               --apply commits; exactly one of the two is required. Payload paths are relative to the\n"
         "                               plan file and CONFINED to its directory: a path resolving outside it (an absolute path,\n"
         "                               a '..' escape, or a symlink pointing out) refuses, naming the path it resolved to, and\n"
@@ -2186,7 +2195,8 @@ inline constexpr char kHelpTail[] =
         "                               eventually but never past its own fair share. Each section truncates rank-adaptively and\n"
         "                               the header reports EVERY truncation (no silent caps). A tiny budget degrades to\n"
         "                               ranking-only WITH the truncation note. Refuses loudly without a task string.\n"
-        "      --partition=N            (with --pack-task, N=2..16) FAN-OUT form: instead of one bundle, emit ONE shared common core\n"
+        "    --partition=N              (with --pack-task, N=2..16) FAN OUT: one shared core plus N per-agent slices, not one bundle\n"
+        "                               (with --pack-task, N=2..16) FAN-OUT form: instead of one bundle, emit ONE shared common core\n"
         "                               plus N per-agent slices, so N parallel agents stop re-deriving the same orientation. The\n"
         "                               task's ranked surface is carved along the call graph's own Louvain communities — a partition\n"
         "                               is a union of WHOLE modules (largest-first packing) so it reads coherently; when there are\n"
@@ -2283,7 +2293,11 @@ inline constexpr char kHelpTail[] =
         "                               population, plus unsupported_ext=, excluded_dirs= (SUBTREES --exclude pruned: contents\n"
         "                               UNKNOWN, not zero), pruned_dirs= (SUBTREES this build always prunes by policy — the\n"
         "                               committed noise/vendor/build denylist and any dir holding a CMakeCache.txt — contents\n"
-        "                               likewise UNKNOWN), degraded_parse=, minified_suspect=, unmeasured= (indexed files this run\n"
+        "                               likewise UNKNOWN), degraded_parse=, minified_suspect=, extent_suspect_files= (files holding\n"
+        "                               a definition whose extent/scope failed a containment check; the <h> row says\n"
+        "                               why=extent-suspect with extent_suspect_syms=), macro_blanked_files= (files whose\n"
+        "                               symbols come from a re-parse with semicolon-less member macro invocations blanked;\n"
+        "                               the <h> row says why=macro-blanked with macro_blanked=), unmeasured= (indexed files this run\n"
         "                               never parsed) and the effective ceilings, so a zero-row report still states its\n"
         "                               bounds. rows_capped=\"1\" ⇒ rows are a sample of an exact count. Rows sort by path;\n"
         "                               composes with --max-file-size/--exclude and multi-root (rows carry the\n"
@@ -2327,7 +2341,7 @@ inline constexpr char kHelpTail[] =
         "    --legend=full|compact      choose the legend posture for every XML verb — use compact when calling repeatedly\n"
         "                               output legend posture for EVERY XML verb. MAKING REPEATED CALLS (an agent, a\n"
         "                               script, a benchmark harness)? USE compact. The legend is a FIXED ~3 KB per call,\n"
-        "                               so its share is a function of ANSWER SIZE, not of the verb: at least 50% of a\n"
+        "                               so its share is a function of ANSWER SIZE, not of the verb: at least 45% of a\n"
         "                               small --callers/--uses/--impact/--affected answer (and more on --callees and\n"
         "                               --edit-check), a little of a large --for bundle. Every ROW is byte-identical; the\n"
         "                               only payload change is a schema=\"ripwire.<verb>/v1\" attribute the root GAINS.\n"
@@ -2337,9 +2351,9 @@ inline constexpr char kHelpTail[] =
         "                               keeps every row byte and every data/completeness attribute (counts_floor= capped= shown=\n"
         "                               total= has_more= next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned\n"
         "                               schema id on the root (schema=\"ripwire.<verb>/v1\") and replaces the explanatory prose\n"
-        "                               with ONE <=400 B legend naming those attributes — the meanings live here and in the full\n"
+        "                               with ONE legend naming those attributes — the meanings live here and in the full\n"
         "                               legend. DATA comments stay (the map header, pack-task's body-omitted rows, +more). Per\n"
-        "                               call this drops 2.9-5.2 KB on the navigation verbs (--edit-check 5.2 KB -> <0.4 KB);\n"
+        "                               call this drops 2.8-5.8 KB on the navigation verbs (--edit-check 6.3 KB -> 0.5 KB);\n"
         "                               the MCP twin is the argument legend: on every XML-answering verb, where compact is\n"
         "                               the DEFAULT and legend:\"full\" restores this prose (M1, 2026-09-05: the ten-verb MCP\n"
         "                               edit loop pays 2,866 B of legend instead of 30,839 B). The CLI default stays full.\n"
@@ -2364,12 +2378,16 @@ inline constexpr char kHelpTail[] =
         "                               --zoom --external-surface --dead-code --mentions --graph-query --stray-content\n"
         "                               --test-gate --readability --ensemble --quality-panel --context-ratio\n"
         "                               --nonlocal-state --comment-coherence --naming-consistency --safe-delete --pr-context\n"
-        "                               --edit-check.\n"
+        "                               --edit-check --flags --situ.\n"
         "                               Emit at most N rows, skipping the first M; N overrides the verb's own display cap\n"
         "                               (40 hotspot files, 30 co-change pairs, 60 whereis hits, 100 grep/match hits, 40\n"
         "                               impact rows, 20 seam pairs, 40 readability rows, 40 ensemble symbol rows, 40 context-ratio\n"
         "                               symbol rows, 40 nonlocal-state rows, 200 graph-query rows / --top-k, 40\n"
-        "                               unflagged --edit-check caller rows).\n"
+        "                               unflagged --edit-check caller rows, 8 --flags read sites per gate, 25 --flip\n"
+        "                               context rows per listing, 8 --situ blast-radius files and 8 co-change partners).\n"
+        "                               A verb NEVER pages the rows that ARE its answer: --edit-check's flagged callers,\n"
+        "                               --flip's and --situ's tests-to-run rows and --flags' gate rows ride every page in\n"
+        "                               full, and every verdict/count attribute is computed over the full set first.\n"
         "                               With --offset alone (no --limit) the verb's own default page size applies and\n"
         "                               the root discloses limit=\"0\" — on OUTPUT that 0 means 'no explicit --limit',\n"
         "                               never a zero-row page (the flag itself refuses --limit=0). A BARE run whose\n"
@@ -2436,8 +2454,9 @@ inline constexpr char kHelpTail[] =
         "                               cached one (default: reuse forever; stderr notes the cached clone's age)\n"
         "    --scip=index.scip          consume a SCIP index as a precision overlay: exact call edges replace name guesses\n"
         "                               consume a SCIP index as a PRECISION overlay: precise call edges replace\n"
-        "                               name-based guesses (tagged prov=\"scip\"), ambiguous= drops. Missing/corrupt\n"
-        "                               index → degrades to name-based (never fails). Zero deps (hand-rolled reader).\n"
+        "                               name-based guesses (tagged prov=\"scip\"), ambiguous= drops. A path that is missing,\n"
+        "                               empty or not a regular file refuses (exit 1). A corrupt index warns on stderr and\n"
+        "                               degrades to name-based. Zero deps (hand-rolled reader).\n"
         "    --pin-census=FILE          eval only: record which mechanism resolved each call site\n"
         "                               eval-only: write a per-call-site census of WHICH mechanism resolved each call\n"
         "                               (unique/qualified/receiver-rule/cone/arity/locality/split/scip/binding) and the\n"
@@ -2511,7 +2530,19 @@ enum class HelpTier : std::uint8_t
 };
 
 // A line's role in the catalog, decided by indentation alone — the same contract
-// docs/docs_commands_build.py's parse_help() has always parsed this text with.
+// docs/docs_commands_build.py's parse_help() parses this text with.
+//
+// FOUR SPACES IS THE ONLY INDENT THAT MEANS "THIS ROW EXISTS". Anything deeper is prose, however much
+// it looks like a row, and tier 1 drops it. v0.6.0 shipped the counter-example: twelve flag rows were
+// written at SIX spaces to read as sub-flags of the entry above them, this function classified all
+// twelve as Cont, and fifteen real flags — --and --not --grep-in --grep-scope --grep-context
+// --grep-before --grep-after --ack-only --scope --edit-payload --edit-target-file --no-post-check
+// --dry-run --apply --partition — were absent from `--help` while working perfectly. parse_help then
+// accepted 4..6, so docs/COMMANDS.md listed every one of them and the disagreement had no symptom
+// there; the only visible edge was `--help=--and` REFUSING with "`ripwire --help` lists every row",
+// which was a false claim about our own output.
+// Nest a sub-flag by what its summary SAYS, never by moving it right; test/helpbudgetcheck.sh arm (K)
+// fails the moment an accepted flag stops being named on the first screen.
 enum class HelpLine : std::uint8_t
 {
     Section,   // two spaces then text: a family heading
@@ -3373,12 +3404,18 @@ inline void validatePlanLanes( Config& c ) noexcept
 // 25-row literal cap (situ.h kMaxUntestedRows) with no shown=/capped= and a refusal on --limit that FALSELY
 // claimed "no page to walk" (there were 41 more rows). It now windows through pageview.h like every verb
 // above, so it belongs in the honoring set, not the refusing one.
+// 2026-09-10 (C1 F-07/F-10): --flags (with its --flip mode) and --situ join. Both were listing verbs whose
+// row caps no flag could reach: --flags cut the <read> sites under a gate at 8, --flip cut six listings at
+// 25, and --situ cut its blast-radius and co-change sections at 8 while REFUSING --limit outright. All of
+// those listings run through pageWindow() now, which is what membership in this set means. --situ is the
+// first PROSE member — it has no XML root, so it spells the same shown=/total=/capped= facts in its section
+// headers (situ.h) and test/pagingsweepcheck.sh (L) reads it as prose rather than parsing a root element.
 constexpr const char* kPagingHonoringVerbs =
     "--lint --hotspots --callers --callees --tree --deps --cochange --owners --clones --doc-drift "
     "--communities --community --whereis --grep/--regex --match --pattern --impact --uses --exercises "
     "--seams --zoom --external-surface --dead-code --mentions --graph-query --stray-content --test-gate "
     "--readability --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
-    "--naming-consistency --safe-delete --pr-context --edit-check";
+    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ";
 
 inline bool honorsPaging( const Config& c ) noexcept
 {
@@ -3390,7 +3427,9 @@ inline bool honorsPaging( const Config& c ) noexcept
         || !c.graphQuery.empty() || ( c.strayContent && !c.landingPlan && !c.abiFlag ) || c.testGate
         || c.readability || c.ensemble || c.qualityPanel || c.contextRatio || c.nonlocalState || c.commentCoherence
         || c.namingConsistency || !c.safeDeleteSym.empty() || c.prContext   // P4 (L7): the changed-file window
-        || !c.editCheckSym.empty();   // 2026-09-10: --edit-check windows its UNFLAGGED caller rows (editcheck.h)
+        || !c.editCheckSym.empty()    // 2026-09-10: --edit-check windows its UNFLAGGED caller rows (editcheck.h)
+        || c.darkFlags                // 2026-09-10 (C1 F-07): --flags' per-gate <read> sites, and --flip's six listings
+        || c.situ || !c.situFiles.empty();   // 2026-09-10 (C1 F-10): --situ sections [1] and [3] (section [2] is the answer)
 }
 
 // --limit/--offset on a verb that windows NOTHING. Same accept-then-silently-ignore class as every guard in
@@ -3643,8 +3682,11 @@ struct ShapingVerb
 //   HONOURS --top-k       default map (+ the same riders), --query, --format=candidates, --recall,
 //                         --graph-query, and the MCP/batch/--listen pass-throughs
 //   IGNORES both          --pack-task, --exemplar, --around, --path, --lego, --report,
-//                         --situ, --scan-skills, --merge-scout, and --for for --top-k (R12's residual)
-//                         (--edit-check LEFT this class on 2026-09-10: it joined honorsPaging when its
+//                         --scan-skills, --merge-scout, and --for for --top-k (R12's residual)
+//                         (--situ and --flags LEFT this class on 2026-09-10 (C1 F-07/F-10), the way
+//                         --edit-check did: their row listings became windowable, so they joined
+//                         honorsPaging and refuse all three like every other member.)
+//                         (--edit-check LEFT this class the same day: it joined honorsPaging when its
 //                         unflagged caller rows became windowable, so it refuses all three like every
 //                         other paging member instead of accepting them and ignoring them. A verb cannot
 //                         hold a row in BOTH tables — the header sentence above is the invariant.)
@@ -3673,7 +3715,6 @@ inline constexpr ShapingVerb kShapingVerbs[] = {
     { "--report",       &Config::report,       nullptr },
     { "--slice",        nullptr, &Config::sliceSpec    },
     { "--at",           nullptr, &Config::atSpec       },
-    { "--situ",         &Config::situ,         nullptr },
     { "--handoff",      &Config::handoff,      nullptr, false, false, true },   // writeHandoffPacket takes the budget
     { "--scan-skills",  &Config::scanSkills,   nullptr },
     { "--merge-scout",  &Config::mergeScoutFlag, nullptr },
@@ -3690,7 +3731,6 @@ inline constexpr ShapingVerb kShapingVerbs[] = {
     // which rides the default map's serialize path and honours --top-k/--max-tokens like the map does.
     { "--html",              &Config::html,               nullptr, true, true },
     { "--verify",            nullptr, &Config::verifyClaim },
-    { "--flags",             &Config::darkFlags,          nullptr },
     { "--layout",            &Config::layoutFlag,         nullptr },
     { "--field-affinity",    &Config::fieldAffinity,      nullptr },
     { "--naming-calibration",&Config::namingCalibration,  nullptr },

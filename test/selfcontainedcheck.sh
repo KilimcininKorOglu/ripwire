@@ -9,7 +9,7 @@ TMP="$( mktemp -d )"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
 
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { printf 'no ripwire binary at %s\n' "$BIN"; exit 2; }
@@ -56,9 +56,9 @@ fi
 if python3 - "$TMP/a.xml" <<'PY'
 import sys, xml.etree.ElementTree as ET
 syms = {s.get('n'): s for s in ET.parse(sys.argv[1]).iter('s')}
-assert {'Sample.Math', 'square', 'twice', 'secret', 'answer'} <= set(syms)
-assert 'square' in {c.get('n') for c in syms['twice'].iter('c')}
-assert 'secret' in {c.get('n') for c in syms['answer'].iter('c')}
+assert {'Sample.Math', 'square/1', 'twice/1', 'secret/0', 'answer/0'} <= set(syms)
+assert 'square/1' in {c.get('n') for c in syms['twice/1'].iter('c')}
+assert 'secret/0' in {c.get('n') for c in syms['answer/0'].iter('c')}
 PY
 then
     ok "isolated binary extracts Elixir definitions and call edges"

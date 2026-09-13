@@ -31,7 +31,7 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 command -v python3 >/dev/null 2>&1 || { no "python3 is required by binoverridecheck"; echo "FAILURES ABOVE"; exit "$fail"; }
@@ -106,15 +106,18 @@ EXEMPT = {
     "optremarkscheck.sh":        "checks -DRIPWIRE_OPT_REMARKS/-DRIPWIRE_PGO CMake config text; no binary invocation",
     "optremarkshotcheck.sh":     "audits scripts/optremarks.py's HOT_FILES/COLD_FILES against the SOURCE TREE (os.walk over src/, plus each file's own RIPWIRE_<X>_TU guard); the subject is a triage list versus the files it claims to cover, so no ripwire binary is bound or executed at all",
     "pargatescheck.sh":          "meta-check of test/pargates.py's own source; pure file check",
+    "noaliascheck.sh":           "compiles its OWN $CXX probes against src/infra/Diagnostics.h (debug trap, -O2 -DNDEBUG IR + objdump bands, the GCC-shape preprocess, the =false control) and greps src/ for a bare __restrict; READS build/CMakeCache.txt for the front end and CMake's -basic-aa-separate-storage probe result but never invokes build/ripwire — the file contains neither RIPWIRE_BIN nor $BIN",
     "pmccheck.sh":               "builds its OWN standalone harness binary, independent of build/ripwire",
     "portablebuildcheck.sh":     "CMake-configure-level gate only; the gate's own banner says 'no ripwire binary needed'",
     "qschemetripcheck.sh":       "greps src/quality.h's tripwire comment against the test/*.sh manifest; pure file check",
     "radixsimdcheck.sh":         "builds its OWN standalone harness binaries per SIMD arm, independent of build/ripwire",
+    "strkerncheck.sh":           "drives the CMake target ripwire_test_strkern (test/verify_strkern.cpp) and two direct-compiled SIMD arms (mutated, x86_64 cross) — never invokes build/ripwire",
     "releaseinstallcheck.sh":    "tests install.sh against a FABRICATED release asset/stub server; independent of build/ripwire",
     "reusefirstworkflowcheck.sh":"checks skills/ripwire-reuse-first/SKILL.md content; pure file check",
     "ripwirepubliccheck.sh":     "checks git-tracked files for leaked private content; pure file/grep check",
     "svectorcheck.sh":           "compiles isolated $CXX probes for the svector container; never invokes build/ripwire",
     "timsortcheck.sh":           "compiles isolated $CXX harnesses for the vendored timsort header (correctness, determinism and the zero-allocation workspace property); never invokes build/ripwire",
+    "worktreeleakcheck.sh":      "kills COPIES of the gates that check out a commit of the repository (and headbinlib's HEAD-binary builder) inside throwaway repositories, against a stub ripwire and a cmake shim it writes itself; the subject is what a killed gate leaves in the shared .git, so build/ripwire is never bound or executed -- the file contains no $BIN (verified by reading it), so (2b)'s static tell needs no exemption for it",
 }
 
 toRun = [ g for g in gates if g not in EXEMPT ]

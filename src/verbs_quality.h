@@ -29,6 +29,12 @@ std::string noBaselineFatalMessage( const std::string& baselineFile, const rw::q
     // auto-compare against" errMsg) has always carried both halves for the identical state, so a CLI reader
     // could not tell the fallback had even been tried and would look for a bug in the sidecar. Same two
     // clauses, same order, same verb-name spelling convention as the stale arms below.
+    if( sel.sidecarSymlinkRefused )
+    {
+        // Round 3 (pathguard.h): "no <file>" is false while a link sits at the name, so say what happened to it.
+        return "ripwire: " + baselineFile + " is a symlink, which is refused on read exactly as on write (it was not opened), and there is no git HEAD to auto-compare against — "
+               "replace the link with a regular copy of its target, or remove it and run `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
+    }
     if( !sel.isSidecarStale() )
     {
         return "ripwire: no " + baselineFile + " and no git HEAD to auto-compare against — run `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
@@ -159,6 +165,7 @@ struct DeltaBasis
     gtl::btree_map<std::string, rw::quality::AckRecord> acks;
     rw::quality::IdentityHealing                        healing;
     std::size_t                                         registerMacroExcluded = 0;   // P2.2: disclosed dead-code exemption count
+    std::size_t                                         apiNewSurface         = 0;   // Q-DIAL-4: new PUBLIC symbols this change added — the count that replaced one never-gating row each
     std::size_t acksBadLines = 0;   // 2026-09-06: .ripwire_quality_acks lines skipped as unparseable (disclosed on the root)
 };
 
@@ -195,7 +202,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, refs.target().ing, refs.target().g,
                                              out.deltaRoot, root, cfg.qualityAck, refs.rangeSpan );
         out.regs    = quality::computeDelta( refs.target().ing, refs.target().g, out.baseSel.snapshot,
-                                             out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded );
+                                             out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface );
         return std::nullopt;
     }
 
@@ -243,8 +250,9 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
             rw::emitTo( stderr, "ripwire: {} exists but is not a readable baseline (unrecognizable, or a pre-Q1 sidecar without per-symbol loc records) — IGNORED; "
                                   "auto-comparing the working tree vs git HEAD; re-pin it with --quality-baseline\n", baselineFile.c_str() );
         }
-        else if( !out.baseSel.isSidecarStale() )
-        { // the stale/healed case is silent by design — only the true "never baselined" case is informative
+        else if( !out.baseSel.isSidecarStale() && !out.baseSel.sidecarSymlinkRefused )
+        { // the stale/healed case is silent by design — only the true "never baselined" case is informative. A refused
+          // link (pathguard.h round 3) is not "never baselined" either, and pathguard has already said why on stderr.
             rw::emitTo( stderr, "ripwire: no {} — auto-comparing the working tree vs git HEAD (commit the baseline with --quality-baseline to pin it)\n",
                           baselineFile.c_str() );
         }
@@ -254,7 +262,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     out.acks    = quality::readAckRecords( quality::acksPath( root ), out.acksBadLines );
     out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, d.ing, d.g,
                                          std::string( cfg.rootPath ), root, cfg.qualityAck );
-    out.regs = quality::computeDelta( d.ing, d.g, out.baseSel.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded );
+    out.regs = quality::computeDelta( d.ing, d.g, out.baseSel.snapshot, cfg.rootPath, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface );
     return std::nullopt;
 }
 
@@ -371,6 +379,7 @@ std::size_t partitionByScope( const rw::quality::Scope& scope, std::vector<rw::q
                               std::vector<rw::quality::Regression>& outOfScope,
                               const gtl::btree_map<std::string, rw::quality::AckRecord>& acks )
 {
+    VERIFY_NO_ALIAS( regs, outOfScope );   // push_back into outOfScope while iterating regs: the same vector twice is UB
     if( !scope.active() )
     {
         return 0;
@@ -485,6 +494,7 @@ inline constexpr const char* kQdLegendCore =
     "preexisting by construction. preexisting-worse= and new-symbol= partition regressions=. stale= is a "
     "FOURTH axis, never gating and never counted in regressions=: rows in the .ripwire_quality_acks ledger "
     "whose target no longer applies. "
+    "api-new-surface= COUNTS the new PUBLIC symbols (never gates, not in regressions=, printed even at zero). "
     "register-macro-excluded= is a FLOOR, not a finding: symbols this run excluded from the dead-code kind "
     "because their own definition is a registered self-registering test/benchmark macro call. Never gates, "
     "never counted in regressions=, printed even at zero (zero means none excluded, not that the check did "
@@ -532,6 +542,10 @@ inline constexpr const char* kQdBaseHeadUnreadable =
     "working tree was compared against the HEAD tree — re-pin it with quality-baseline. baseline_bad_lines= and "
     "acks_bad_lines=, when present, count sidecar lines of a known kind whose payload did not parse and were "
     "skipped (absent means none). ";
+inline constexpr const char* kQdBaseHeadSymlinkRefused =
+    "baseline=\"git-HEAD (symlinked sidecar refused)\" means .ripwire_quality_baseline is a SYMLINK, which is refused on "
+    "read exactly as on write: it was not opened, so the working tree was compared against the HEAD tree — replace "
+    "the link with a regular copy of its target, or remove it and re-pin with quality-baseline. ";
 inline constexpr const char* kQdBaseHeadIgnored =
     "baseline=\"git-HEAD (stale sidecar ignored)\" is the same staleness verdict, but the file was left on "
     "disk (the read-only MCP arm, or an unlink that failed), and the comparison fell back to the HEAD "
@@ -618,7 +632,9 @@ inline constexpr const char* kQdRowLegend =
     "the numeric kinds; p=\"path:line\" is the locator (root-relative; the first-sorting member for the "
     "clone kinds; omitted, never faked, when none resolves). churn= and surface= are per-kind "
     "classification facets (short-horizon-churn's self/ambient split; api-surface's new-symbol/"
-    "contract-change tier). Every row the header's gating= counter counts also carries a gating attribute "
+    "contract-change tier). churn= facets never gate alone: the kind gates only on 2+ COMMITTED in-window "
+    "rewrites of the edited lines. "
+    "Every row the header's gating= counter counts also carries a gating attribute "
     "set to 1 — marked positively, never by the ABSENCE of sev or origin. ";
 
 // Emitted only when a clone-family row (duplication / new-clone-of-reused-helper) is in the document,
@@ -717,6 +733,7 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
     else if( p.marker == "git-HEAD (stale sidecar removed)" ) { std::fputs( kQdBaseHeadRemoved, stdout ); }
     else if( p.marker == "git-HEAD (stale sidecar ignored)" ) { std::fputs( kQdBaseHeadIgnored, stdout ); }
     else if( p.marker == "git-HEAD (sidecar unreadable)"     ) { std::fputs( kQdBaseHeadUnreadable, stdout ); }
+    else if( p.marker == "git-HEAD (symlinked sidecar refused)" ) { std::fputs( kQdBaseHeadSymlinkRefused, stdout ); }
     else                                                      { std::fputs( kQdBaseHead,        stdout ); }
     if( p.baselineAbsorbed > 0 )
     {
@@ -826,8 +843,7 @@ inline std::string registerMacroConfigWarningAttr( const rw::quality::RegisterMa
 int ackNothingToAccept( const std::string& acksFile, const gtl::btree_map<std::string, rw::quality::AckRecord>& acks,
                         const rw::quality::Scope& scope, std::size_t outOfScopeCount )
 {
-    std::string onDisk;
-    rw::docparse::detail::readWholeFile( acksFile, onDisk );   // absent file ⇒ "" ⇒ never equal to a rendered ledger
+    const std::string onDisk = rw::docparse::detail::readWholeFile( acksFile ).value_or( std::string() );   // absent file ⇒ "" ⇒ never equal to a rendered ledger
     if( acks.empty() || rw::quality::renderAckRecords( acks ) == onDisk )
     {
         if( scope.active() && outOfScopeCount > 0 )
@@ -1307,9 +1323,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             const std::string absorbedJson = baselineAbsorbed == 0 ? std::string()
                                             : ",\"baseline_absorbed\":" + std::to_string( baselineAbsorbed );
             rw::emitTo( stdout, "{{\"baseline\":\"{}\",\"regressions\":{},\"minor\":{},\"acked\":{},\"stale\":{},"
-                         "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{},\"register-macro-excluded\":{},\"at\":{}{}{}{}{}{},\"r\":[",
+                         "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{},\"register-macro-excluded\":{},\"api-new-surface\":{},\"at\":{}{}{}{}{}{},\"r\":[",
                          jsonStr( baseMarkerJ ).c_str(), regs.size(), minorCount, ackedCount, staleAcks.size(),
-                         preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, atJsonJ.c_str(), refs.jsonAttrs.c_str(),
+                         preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface, atJsonJ.c_str(), refs.jsonAttrs.c_str(),
                          identityJson.c_str(), scopeJson.c_str(), configWarnJson.c_str(), absorbedJson.c_str() );
             // P1: one row emitter, called for both halves of the scope partition — the disclosed rows carry
             // the identical key set, so nothing about a row changes by being someone else's. `gatingAllowed`
@@ -1413,8 +1429,8 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         if( baseSel.sidecarBadLines > 0 ) { sidecarHealthAttrs += " baseline_bad_lines=\"" + std::to_string( baseSel.sidecarBadLines ) + "\""; }
         if( basis.acksBadLines > 0 )      { sidecarHealthAttrs += " acks_bad_lines=\"" + std::to_string( basis.acksBadLines ) + "\""; }
         // at= anchors this regression list to the commit (+dirty state) it was computed against.
-        rw::emitTo( stdout, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\"{}{}{}{}{}{}{}>",
-                     baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded,
+        rw::emitTo( stdout, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
+                     baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
                      // R-I: at= is OMITTED for the ref-pair form rather than stamped with the working tree's
                      // sha, which would anchor the list to a commit it was not computed from. base_ref= and
                      // target_ref= are the anchor there, and they carry FULL shas because a wave measurement
@@ -2007,7 +2023,12 @@ std::optional<int> runEditCheck( const MainDispatch& d )
         return std::nullopt;
     }
 
-    const std::vector<NodeId> matches = resolveAllByNameQualified( ing, cfg.editCheckSym );
+    // H1: the out-param is the decl→def widening's RESIDUE — same-named definitions this selector found and could not tie
+    // to the file it named. callers=/incompatible= are read from the one definition picked below, so unreported, a drop
+    // reached the reader as incompatible="0": a no-broken-callers reading about a definition nobody read. The --dry-run
+    // preview re-resolves on the tree it measures and reports its own (editpreview.h).
+    std::size_t               ecUnprovenDefs = 0;
+    const std::vector<NodeId> matches        = resolveAllByNameQualified( ing, cfg.editCheckSym, &ecUnprovenDefs );
     if( matches.empty() )
     {
         // §B4.2: the shared refusal — see selectorrefuse.h. A `file:name` whose FILE half is the fault used
@@ -2055,7 +2076,7 @@ std::optional<int> runEditCheck( const MainDispatch& d )
     // editCheckRowWindow). cli.h's honorsPaging() lists this verb, so the pair reaches here rather than
     // being refused, and 0/0 — the un-spelled window — is the default cap, not "unbounded".
     const std::string xml = editCheckBundleText( ing, d.g, d.root, cfg.maxFileBytes, cfg.excludes, focus, d.notesPtr,
-                                                  /*preview=*/false, cfg.pageLimit, cfg.pageOffset );
+                                                  /*preview=*/false, cfg.pageLimit, cfg.pageOffset, ecUnprovenDefs );
     std::fwrite( xml.data(), 1, xml.size(), stdout );
     return 0;
 }

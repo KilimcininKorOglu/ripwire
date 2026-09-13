@@ -328,6 +328,40 @@ already knew about the others, several while fixing one. So the rule is mechanic
   a caller-owned arena.
 - **Symmetric bare scopes** for deterministic RAII teardown.
 
+### Aliasing: spelling, placement, contract
+
+- **Spelling: `__restrict__` only, never `__restrict`.** On macOS, `<sys/cdefs.h>` does
+  `#if __STDC_VERSION__ < 199901` / `#define __restrict` (empty), and `__STDC_VERSION__` is
+  undefined in C++, so every `__restrict` that follows any libc/libc++ include is silently deleted.
+  `__restrict__` is a keyword, not a macro, and survives.
+- **Prefer `VERIFY_NO_ALIAS( a, b )` (objects) or `VERIFY_NO_ALIAS_BUF( a, b )` (OWNING containers only: `std::vector`, `std::string`, `std::array`) in
+  the body over a qualifier on the signature.** For a container, the promise has to land on
+  `.data()` — on the objects themselves it is inert for the loop, because the optimizer reaches the
+  heap buffer through a pointer loaded from the header, not through the header's own address. Never a
+  view: two `std::span` or `std::string_view` objects can look into ONE allocation, and the promise is per
+  allocation, so the macro refuses them at compile time — promise the owners they came from. Place
+  the macro at the top of the function, before the first load or store through either argument; if the
+  function already has a "nothing to do" early return on empty input, put it after that return, so the
+  promise is never made on a null `.data()` (measured: same loop effect, plus only the emptiness test the
+  function paid for anyway). Do not add an early return for the macro's sake — the one line is the full
+  effect, and two empty containers are a vacuous promise, not a broken one.
+  Three reasons, one each: it is checked in debug and is the same optimizer fact in release
+  (`__builtin_assume_separate_storage`) on compilers that consume it — clang 18+ by default, LLVM 17 /
+  AppleClang 16 only with the `-mllvm -basic-aa-separate-storage` that CMake adds when the compiler
+  accepts it (and there only for scalar accesses, not the loop vectorizer), GCC and clang before 17
+  not at all, where the release expansion is `( (void)0 )` and only the debug check runs; it does not
+  change the API; `__builtin_assume( &a != &b )` is NOT that fact — alias analysis never reads it.
+- **The contract is different complete allocations, not different addresses.** Verbatim from
+  clang's `LanguageExtensions.rst`: the arguments "are assumed to point into separately allocated
+  storage (either different variable definitions or different dynamic storage allocations) …
+  'storage' here refers to the outermost enclosing allocation of any particular object (so for
+  example, it's never correct to call this function passing the addresses of fields in the same
+  struct, elements of the same array, etc.)". Two elements of one array or two members of one
+  struct are undefined behaviour, not a stricter case of the promise. Locals allocated inside the
+  function are already known-distinct to the optimizer; the macro is for parameters and members —
+  and only for parameters/members of the *same element type*, since different types are already
+  separated by TBAA.
+
 ### Output: `std::print`, feature-tested and disclosed — never a new printf-family site
 
 - **Pick the primitive by what you actually have.** All three live in `src/infra/emit.h`; a same-shaped
@@ -491,6 +525,61 @@ HTML (invisible when rendered), `// gatecount` in the deck's JavaScript. A count
 behind. Do not spell the marker inside a site file except at a real site.
 
 Scope each commit. A commit that touches one concern is a commit a reviewer can actually check.
+
+## 7. How we write
+
+This applies to commit subjects, PR descriptions, issues, gate comments, `README.md` and the docs. It is
+here because tone drifts every time someone rewrites a page, and drift in either direction costs us
+contributors: too warm and vague reads as not competent, too cold and dense reads as a project nobody
+wants to spend a Saturday on.
+
+**Competence carries the fun.** The humour in this repo is not decoration laid on top of the engineering —
+it comes from being unusually exact about something and then being light about it. Get the precision right
+and the tone follows.
+
+The reference for the voice is the commit log, not the front page:
+
+> ``#if 0`` stopped serving calls and went on serving every other role
+> twelve flag rows sat one indent too deep, so `--help` did not list every row
+> `graph_unindexed=` shipped a number the document never defined
+
+**Commit subjects say what was WRONG, not what you did.** "fix(help): twelve flag rows sat one indent too
+deep" tells a reader in the log five months from now what the world was like before the commit.
+"fix(help): change indentation" tells them nothing they cannot get from the diff.
+
+**Let the number be the punchline.** `182,555 files. 194 s → 156 s.` An adjective on a strong number makes
+it weaker — "blazingly fast" reads as though the writer does not trust the measurement. Declining to
+embellish *is* the confidence.
+
+**Deadpan the failures, especially ours.** "The gate that guards H2 reports PASS on H2." That sentence is
+funny and damning at once, and it signals more competence than any claim of quality could: a project that
+roasts its own bugs precisely is obviously run by people who find them. Never write a defect up as though
+it were someone else's fault or a surprise.
+
+**Rhythm, not exclamation marks.** Long sentence, then a short one. "Declined calls, derailed parses and
+cut answers now say so. A zero means none found." The energy is in the cut.
+
+**Attitude in the names, precision in the bodies.** "Rip'n Fast. Fewer Tokens. Better Code." earns its
+swagger because every claim underneath it is measured and linked. Swagger plus receipts is fun; swagger
+alone is marketing, receipts alone is a paper.
+
+**Respect the reader rather than welcoming them.** "The research is done, the pointers are in the prompt,
+and the prompt writes a plan and stops" recruits better than "we'd love your help!" — it says *your time is
+worth something and we spent ours first*. Warmth that costs the writer nothing reads as filler; warmth that
+shows up as prepared work reads as real.
+
+Cut on sight: hedges (`we think maybe`, `a bit`, `somewhat`, `basically`), mission statements
+("on a mission to revolutionize…"), exclamation marks after a claim, emoji standing in for a point of view,
+and apologising for the age of the project. "Twelve weeks old and there is a lot worth doing" is confident;
+"it's still early days, sorry!" is the same fact, badly told.
+
+**The test.** Read a paragraph as two people: a skeptical staff engineer scanning for overclaim, and a
+curious newcomer deciding whether this looks like a good weekend. Warm-and-vague loses the first;
+cold-and-dense loses the second. A line like *"a zero means none found, never none exists"* wins both — it
+is a precise contract and it has a point of view.
+
+None of this licenses inaccuracy. Where this section and §2's honesty rules could ever disagree, the
+honesty rules win and the sentence gets rewritten until it is both.
 
 By contributing you agree that your contributions are licensed under the project's `LICENSE`, and
 that you will follow `CODE_OF_CONDUCT.md`. Security issues go through `SECURITY.md`, not the public

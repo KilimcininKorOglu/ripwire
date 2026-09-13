@@ -6,6 +6,7 @@
 #include "infra/emit.h"  // rw::formatTo — snprintf's shape kept (stack buffer, snprintf's return)
 #include <format>          // std::format_to_n — the appendf lambdas append through it directly
 #include "model.h"
+#include "extentsuspect.h"   // extent honesty: extent_suspect= reason spellings (extent::extentSuspectReasons)
 #include "nextverb.h"   // P3 (L7): next= on the top-ranked <d> row
 #include "arch.h"        // P3: builtinLayer() — the file-node layer= tag
 #include "graph.h"     // H6/F2: definitionCountOfName — the ONE resolver behind --lego's defs= single-pick disclosure
@@ -15,6 +16,7 @@
 #include "redact.h"      // deterministic secret redaction of emitted body content (opt-out --no-redact)
 #include "infra/sortutil.h"    // numeric-key radix helpers for rank/file score order
 #include "infra/jsonesc.h"     // F9: jsonesc::utf8SeqLen — the canonical UTF-8-sequence-length core (was duplicated here)
+#include "infra/strkern.h"     // S5: appendCleanRun — the run-copy skip that replaces escapeXml's per-byte switch
 #include "notes.h"       // L3: field-notes NoteIndex — the retrieval-time surfacing lookup (INERT when null)
 #include "pageview.h"    // §P8: pageWindow / pageDisclosure — the shared --limit/--offset contract (packDeps)
 #include "sarif.h"       // R-E (2026-08-17): rootRelativeUri/rootPrefixOf — the same root= single-root-only
@@ -124,6 +126,23 @@ using jsonesc::utf8SeqLen;
 // reference (xmlControlCharRef — see M2 above: G4 + attribute-value normalization); an invalid UTF-8 sequence
 // (A4-F20) is scrubbed to '?' so the emitted name/path/doc-comment/sig text is always well-formed XML AND
 // valid UTF-8 regardless of source bytes.
+// S5 — THE BYTE SET IS THE CONTRACT. Everything below that is NOT in this set is copied through
+// unchanged by the switch's `default:` arm, so the run loop may memcpy it in bulk without looking at it;
+// everything that IS in the set still goes through the SAME switch, one byte at a time, unchanged. The
+// set is therefore derivable from the switch and must be re-derived with it: the five entity bytes, the
+// whole C0 range (\t \n \r become character references, every other C0 is scrubbed to a space by
+// xmlSafeByte), and every byte >= 0x80 (utf8SeqLen decides whether the sequence is copied or scrubbed
+// to '?'). 0x7F is deliberately absent — xmlSafeByte passes DEL through, so it is a clean-run byte.
+// test/emitescapecheck.sh's MUT arm exists because a set one member short is otherwise silent.
+inline constexpr strkern::Byteset256 kXmlEscapeByteset = []
+{
+    strkern::Byteset256 set;
+    set.addRange( 0x00, 0x1F );
+    set.add( '&' );  set.add( '<' );  set.add( '>' );  set.add( '"' );  set.add( '\'' );
+    set.addRange( 0x80, 0xFF );
+    return set;
+}();
+
 inline std::string_view escapeXml( std::string_view s, std::vector<char>& out )
 {
     out.clear();
@@ -132,7 +151,11 @@ inline std::string_view escapeXml( std::string_view s, std::vector<char>& out )
     const auto put  = [ & ]( const char* lit ) { while( *lit ) { out.push_back( *lit++ ); } };
     const char*       d = s.data();
     const std::size_t n = s.size();
-    for( std::size_t i = 0; i < n; )
+    // Init and increment skip to the next byte the switch actually has an opinion about, copying
+    // everything before it in one insert. On ordinary source text — names, paths, signatures,
+    // doc-comments — that run is the whole string: one scan and one memcpy for the whole call.
+    for( std::size_t i = strkern::appendCleanRun( d, 0, n, kXmlEscapeByteset, out ); i < n;
+         i = strkern::appendCleanRun( d, i, n, kXmlEscapeByteset, out ) )
     {
         const char c = d[i];
         switch( c )
@@ -663,26 +686,81 @@ struct CeilingLadderNotes { std::string_view echoDropped, echoAndRouteDropped, o
 //       hit the wall is owed the complete bundle and an honest label, not a mutilated bundle.
 // Every candidate is measured WITH its own disclosure bytes included. Pure function of its inputs — no clock,
 // no map order — so the chosen shape is deterministic.
-template<typename BuildFn>
-inline std::string climbCeilingLadder( BuildFn&& build, std::string_view builtHeader, std::size_t payloadBytes,
-                                       std::size_t byteCeiling, bool hasRouteAttr, const CeilingLadderNotes& notes )
+//
+// THE FIT TEST IS THE CALLER'S when what rides a header depends on the header. --for prices its root AFTER the
+// ladder picks a shape: est_tokens=, plus over_ceiling="1" and the legend clause defining it whenever that price
+// exceeds budget_tokens. Those bytes change with the shape, so no fixed payload can stand in for them, and pricing
+// the BUILT header let a bundle ship 70 B past the allowance with no rung fired (PR #135, estchargecheck #11 A7).
+// climbCeilingLadderBy climbs the same rungs against `fits( candidateHeader )`. climbCeilingLadder is its
+// fixed-payload form, so the two cannot climb different ladders — and it returns the same CeilingLadderChoice,
+// because a caller that needs the rung must not have to go looking for it in the string (see below).
+//
+// M3 — THE RUNG IS RETURNED, NOT LEFT TO BE GUESSED. A caller needs the verdict (--for puts over_ceiling="1" on
+// its root when the last rung fires) and the only other place to read it from is the finished document, by
+// searching it for the rung's own note. That is FORGEABLE: the header carries the caller's task echoed verbatim
+// by contract (routeoncecheck), so a task containing the note text is indistinguishable from a rung that really
+// fired — --for shipped `budget_tokens="100000" est_tokens="3932" over_ceiling="1"` on a 9.8 KB document for
+// exactly that reason, a root contradicting itself in one unit, and --pack-task shipped the same label off the
+// 13-character substring `over_ceiling:` typed into a task. The branch that BUILDS a candidate is the branch
+// that knows its rung, so carrying that value OUT is what makes the forgery impossible rather than merely
+// unlikely. Gate: test/ceilingverdictcheck.sh, both lenses.
+//
+// `fits` is NOT told the rung, and the first version of M3 was wrong to pass it one. The terminal rung (d) is
+// the branch that never asks — it is what the ladder lands on when nothing fit — so `fits` can only ever be
+// called with (a), (b) or (c), and a predicate that tested for (d) was testing a value it could not receive.
+// --for had one, pricing over_ceiling="1"'s 70 B "onto the candidate that will actually carry them": invariantly
+// false, and harmless only because the caller's real predicate (est_tokens > budget_tokens) prices those bytes
+// on every candidate anyway. A branch that cannot fire is deleted here rather than documented.
+enum class CeilingRung : std::uint8_t
 {
-    const auto fits = [ & ]( std::size_t headerBytes ) { return headerBytes + payloadBytes <= byteCeiling; };
-    if( fits( builtHeader.size() ) )
+    AsBuilt = 0,           // (a) it already fitted — the overwhelmingly common case
+    EchoDropped,           // (b) the comment's task echo dropped — a byte-for-byte duplicate of task=
+    EchoAndRouteDropped,   // (c) that plus the verbatim route= attribute — the first unique-information loss
+    OverCeiling            // (d) nothing reached the allowance: the complete bundle, honestly labelled
+};
+
+struct CeilingLadderChoice
+{
+    std::string header;
+    CeilingRung rung = CeilingRung::AsBuilt;
+};
+
+template<typename BuildFn, typename FitsFn>
+inline CeilingLadderChoice climbCeilingLadderBy( BuildFn&& build, std::string_view builtHeader, FitsFn&& fits, bool hasRouteAttr,
+                                                 const CeilingLadderNotes& notes )
+{
+    if( fits( builtHeader ) )
     {
-        return std::string( builtHeader );
+        return { std::string( builtHeader ), CeilingRung::AsBuilt };
     }
 
-    std::string candidate = build( /*withRouteAttr=*/true, /*withTaskEcho=*/false, notes.echoDropped );
-    if( !fits( candidate.size() ) && hasRouteAttr )
+    // ONE fit test per candidate. The rung-(b) shape used to be priced twice — harmless when `fits` is the
+    // fixed-payload comparison below, but --for's predicate rebuilds and re-prices a whole header through
+    // finishForLensHeader, so the second call was a duplicated fixpoint on every budgeted run.
+    CeilingLadderChoice choice{ build( /*withRouteAttr=*/true, /*withTaskEcho=*/false, notes.echoDropped ), CeilingRung::EchoDropped };
+    bool                candidateFits = fits( std::string_view( choice.header ) );
+    if( !candidateFits && hasRouteAttr )
     {
-        candidate = build( /*withRouteAttr=*/false, /*withTaskEcho=*/false, notes.echoAndRouteDropped );
+        choice        = { build( /*withRouteAttr=*/false, /*withTaskEcho=*/false, notes.echoAndRouteDropped ), CeilingRung::EchoAndRouteDropped };
+        candidateFits = fits( std::string_view( choice.header ) );
     }
-    if( !fits( candidate.size() ) )
+    if( !candidateFits )
     {
-        candidate = build( /*withRouteAttr=*/true, /*withTaskEcho=*/true, notes.overCeiling );
+        choice = { build( /*withRouteAttr=*/true, /*withTaskEcho=*/true, notes.overCeiling ), CeilingRung::OverCeiling };
     }
-    return candidate;
+    return choice;
+}
+
+// The fixed-payload form — same rungs, same return. It hands back the CHOICE and not the header alone because
+// both of its callers need the rung: --pack-task labels its root from it, and reading that label back out of
+// the chosen string is the forgery above (`chosen.find( "over_ceiling:" )`, live until 0.6.1).
+template<typename BuildFn>
+inline CeilingLadderChoice climbCeilingLadder( BuildFn&& build, std::string_view builtHeader, std::size_t payloadBytes,
+                                               std::size_t byteCeiling, bool hasRouteAttr, const CeilingLadderNotes& notes )
+{
+    return climbCeilingLadderBy( build, builtHeader,
+                                 [ & ]( std::string_view header ) { return header.size() + payloadBytes <= byteCeiling; },
+                                 hasRouteAttr, notes );
 }
 
 // ── B0.3 rank-adaptive --for payload budget (R1 hypothesis #4) ────────────────────────────────────────
@@ -1483,7 +1561,7 @@ struct MapAnnotations
     // the two BOUNDS that decide what the neighbourhood even contains — --around-depth (default 2) and
     // --around-fanout (default 32) — were not recoverable at all, from the output or from --help. A reader
     // handed 189 rows could not tell a 1-hop from a 3-hop answer. defs= is the same single-pick disclosure
-    // --callers/--uses/--impact/--path already carry: resolveFocus takes the lowest-id definition, so a name
+    // --callers/--uses/--impact/--path already carry: resolveFocus takes ONE definition (graph.h states which), so a name
     // with several says so on the root instead of silently answering about one of them.
     // Held by value with a default that renders NOTHING (empty `of`), so every unseeded map is byte-identical.
     struct SeedDisclosure
@@ -1498,6 +1576,10 @@ struct MapAnnotations
         // neighbourhood the bounds did not clip is byte-identical to before (presence has to mean something).
         std::uint32_t fanoutCut      = 0;       // symbols the fanout cap dropped that are absent from the whole answer (exact)
         bool          depthTruncated = false;   // ≥1 symbol one hop past the last emitted hop is absent
+        // H1: the decl→def residue of a file:name seed — same-named definitions the selector found and could not tie to the
+        // file it named, so the walk never started from them. unproven_defs= beside defs= and its clause in the legend,
+        // both absent at zero (graphlegend.h unprovenDefsAttrXml / unprovenDefsVerbComment).
+        std::size_t   unprovenDefs   = 0;
     };
     // F3 (H2H-Graft): rank_by=churn-decay's file-level <recent> rows; null/empty ⇒ absent, byte-free. Positional
     // slots 8 and 9 at main.cpp's mapAnn (seed below is filled by assignment, never positionally).
@@ -1688,6 +1770,14 @@ inline constexpr const char* kIgnoredLegend =
     "<!-- hdr:ignored_files=files-git's-own-ignore-rules-covered(exact;would-otherwise-be-indexed;the-no-ignore-flag-restores-them)"
     " hdr:ignored_dirs=SUBTREES-those-rules-pruned(walk-stopped-there:contents-UNKNOWN-not-zero;the-skipped-verb-rows-both) -->";
 
+// Tier 3's declines: the header's declined= and the answers' declined_calls=. Charged to the map that carries
+// declined= (kIgnoredLegend's rule), because an always-on entry measured +177 B and +70 est_tokens on
+// test/fixture, a map that cannot carry the attribute. No '>' anywhere: gates read these comments with a
+// [^>]* pattern, and one '>' inside the text silently empties what they read (lpincheck arm F found it).
+inline constexpr const char* kDeclinedMapLegend =
+    "<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,"
+    "none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->";
+
 // §L10: sibs=/inc=/<calls> on an --expand <b> body (withFileContext=true — --expand's own two call sites,
 // never packBodies' other callers) had NO in-band definition anywhere — only in --help prose, which a
 // reader of the XML never sees. Printed once, right inside <bodies ...>, before the first <b> child, on
@@ -1736,6 +1826,39 @@ inline constexpr const char* kBodiesLegend =
     "redacted=\"1\" = a credential shape was rewritten to a [REDACTED:kind] marker (the no-redact flag serves the "
     "bytes; the edit verbs refuse a payload carrying MORE such markers than the bytes it would replace already "
     "do, so source that spells one round-trips). Absent = paste-back is byte-exact. -->";
+
+// EXTENT HONESTY (src/extentsuspect.h, gate test/extentcheck.sh) — the ONE reading of extent_suspect= on every ROW
+// surface: the map's <s>, a bundle's <d> and <b>. Written only into a document that carries the attribute, right
+// where the reader meets it, so a corpus with nothing flagged stays byte-identical. The map adds the header count
+// as its own `hdr:` comment (the compact dialect already treats that opener as prose), so the row reading exists
+// once and cannot drift into two.
+inline constexpr std::string_view kExtentSuspectRowLegend =
+    "<!-- extent_suspect=containment-checks-this-definition-FAILED(its-span,id=-scope-and-t=-kind-may-be-parse-recovery-artifacts;"
+    "loc/cx/ccx/nest-summed-over-that-span-too;read-source;the-row-stays):name(its-own-name-lies-outside-its-own-signature)"
+    "|head(a-definition-sits-in-another's-return-type-position,before-its-name;C-family;marks-the-whole-top-level-definition-tree)"
+    "|scope(filed-under-C::-while-inside-a-different-class;C++)"
+    "|error(the-parse-recovered-its-class-or-kind;and-every-definition-inside-that-class)"
+    "(comma-joined-in-this-order;absent=every-check-held,not-a-proof-the-extent-is-right) -->";
+inline constexpr std::string_view kExtentSuspectHdrLegend =
+    "<!-- hdr:extent_suspect_syms=definitions-carrying-extent_suspect-corpus-wide(not-only-the-shown-rows;absent-if-0) -->";
+
+// MEMBER-MACRO RE-PARSE (src/macroreparse.h, gate test/macroreparsecheck.sh) — the map header's reading of
+// macro_blanked_files=, written only into a map that carries it (so a corpus with no re-parsed file keeps every byte).
+inline constexpr std::string_view kMacroBlankedHdrLegend =
+    "<!-- hdr:macro_blanked_files=files-whose-symbols-come-from-a-RE-PARSE(their-first-parse-held-error-bytes;"
+    "semicolon-less-ALL-CAPS-member-macro-invocations-blanked-to-spaces,offsets-unchanged;adopted-only-with-strictly-fewer-error-bytes;"
+    "the-skipped-verb-rows-each-with-macro_blanked=N;absent-if-0) -->";
+
+// The row attribute itself, on a std::string row (bundles). Absent when every check held.
+inline void appendExtentSuspectAttr( std::string& row, const Symbol& s )
+{
+    if( s.extentSuspect != 0 )
+    {
+        row += " extent_suspect=\"";
+        row += extent::extentSuspectReasons( s.extentSuspect );
+        row += "\"";
+    }
+}
 
 inline constexpr const char* kMetricsLegend =
     "<!-- metrics: in=fan-in out=fan-out cx=cyclomatic ccx=cognitive loc=lines params=count nest=MAX-depth "
@@ -1872,6 +1995,19 @@ inline std::string buildIgnoredAttr( const CrawlSkips& skips )
     return attr;
 }
 
+// §SEC1 — how many files the crawl REFUSED because a symlink took them out of the root (ingest.h carries the
+// rule). On the DEFAULT map, not only on --skipped, because the default map is the surface an agent actually
+// reads and a corpus that quietly shrank is precisely what the honesty contract forbids: files= would
+// otherwise present the survivors as the tree. Same absent-when-zero rule as skipped_oversize= / ignored_files=
+// — a repository with no escaping symlink (every repository, until one is hostile) keeps a byte-identical map,
+// which is what test/golden.xml and every argvdiff vector ride on. The DEFINITION lives in the --skipped
+// legend and --help, not here, for the reason buildUnindexedAttr's note measured: the map's fixed floor has
+// seven bytes of headroom at the smallest --max-tokens budgets, and no clause of any wording fits.
+inline std::string buildEscapedRootAttr( const CrawlSkips& skips )
+{
+    return skips.escapedFiles == 0 ? std::string() : " escaped_root=" + std::to_string( skips.escapedFiles );
+}
+
 // The per-symbol honesty counters (graph.h ambOut / unresolvedOut / locPinOut) reach both map dialects as
 // NULLABLE vectors — nullptr ⇒ never measured (a pure sizing pass). These two are the only ways the emitters
 // read them, so "an absent counter reads as zero" is stated once instead of in six hand-rolled chains.
@@ -1945,7 +2081,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        const std::vector<std::uint32_t>* locPinOut = nullptr,
                        // Phase 5: the external-name veto's refusal count (graph.h g.externalCalls) → header external=N,
                        // absent when zero, so a veto-free corpus is byte-identical.
-                       std::size_t externalCalls = 0 )
+                       std::size_t externalCalls = 0,
+                       // Tier 3's per-caller declines (graph.h g.declinedOut) → header declined=N, absent when zero, so a
+                       // corpus where no call reached tier 3 undecided stays byte-identical.
+                       const std::vector<std::uint32_t>* declinedOut = nullptr )
 {
     const std::size_t* changedCount = ann.changedCount;
     const std::string* mapAtStamp   = ann.atStamp;
@@ -2040,6 +2179,26 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     std::string legend = outProv
         ? "<!-- ripwire v1 t=fn|method|cls|struct|iface|var|sec|macro(#define;degraded:body-is-replacement-text,edges-cross-expansion) p=path layer=arch-layer(opt) n=name id=canonical(path::scope::name,when-scoped) k=rank c=call amb=ambiguous-calls(read-source) lpin=calls-pinned-by-locality-prior-alone(a-disclosed-guess;read-source;absent-if-0) overloads=N-same-name-defs-merged-into-this-row(absent-if-1;shown=counts-them-individually,so-rows+sum(overloads-1)=shown) prov=per-EDGE-confidence(orthogonal-to-k):scip(index-pinned;precise)|binding(cross-lang-FFI)|import(ES-named-import;module+export-named)|split(one-arm-of-a-k-way-pick;read-source;these-are-the-edges-amb=-counts)(absent=uniquely-resolved-name-based) hdr:unresolved=call-name-defined-only-in-a-lang-incompatible-file (edges heuristic) hdr:locality_pinned=sum-of-lpin(absent-if-0) hdr:external=calls-refused-as-bound-outside-the-tree(builtin/stdlib-name-without-in-repo-evidence,external-import,super-past-the-tree;no-edge;absent-if-0) r:est_tokens=hdr-copy(none-if-stable) -->"
         : "<!-- ripwire v1 t=fn|method|cls|struct|iface|var|sec|macro(#define;degraded:body-is-replacement-text,edges-cross-expansion) p=path layer=arch-layer(opt) n=name id=canonical(path::scope::name,when-scoped) k=rank c=call amb=ambiguous-calls(read-source) lpin=calls-pinned-by-locality-prior-alone(a-disclosed-guess;read-source;absent-if-0) overloads=N-same-name-defs-merged-into-this-row(absent-if-1;shown=counts-them-individually,so-rows+sum(overloads-1)=shown) hdr:unresolved=call-name-defined-only-in-a-lang-incompatible-file (edges heuristic) hdr:locality_pinned=sum-of-lpin(absent-if-0) hdr:external=calls-refused-as-bound-outside-the-tree(builtin/stdlib-name-without-in-repo-evidence,external-import,super-past-the-tree;no-edge;absent-if-0) r:est_tokens=hdr-copy(none-if-stable) -->";
+    // EXTENT HONESTY (src/extentsuspect.h): how many definitions carry extent_suspect= corpus-wide — the header's
+    // extent_suspect_syms= — and the row + header readings, appended ONLY when that is non-zero, so a corpus with
+    // nothing flagged keeps every byte of this legend.
+    std::size_t extentSuspectTotal = 0;
+    for( const Symbol& sym : ing.symbols )
+    {
+        extentSuspectTotal += sym.extentSuspect != 0 ? 1u : 0u;
+    }
+    if( extentSuspectTotal > 0 )
+    {
+        legend += kExtentSuspectRowLegend;
+        legend += kExtentSuspectHdrLegend;
+    }
+    // MEMBER-MACRO RE-PARSE (src/macroreparse.h): files whose symbols come from a re-parse — the header's
+    // macro_blanked_files= — and its reading, appended ONLY when non-zero, under the same byte-identity rule.
+    const std::size_t macroBlankedFiles = macroBlankedFileCount( ing );
+    if( macroBlankedFiles > 0 )
+    {
+        legend += kMacroBlankedHdrLegend;
+    }
     // R-E fix (2026-08-19): root= was added to <r> with nothing defining it — legendcoveragecheck's arm (A)
     // named it on nine roster verbs at once (the default map, --around, and every map-* variant share this
     // legend). Spelled in THIS legend's own key=meaning dialect rather than as the prose sentence
@@ -2065,9 +2224,12 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     {
         legend += "<!-- of= is the resolved SEED this neighbourhood is centred on; depth= call hops walked and fanout= "
                   "neighbours kept per hop are its whole boundary, so a row's absence means outside them, not nonexistent. "
-                  "defs= (only when >1) = that NAME has N definitions and the lowest-id one was walked; qualify with "
+                  "defs= (only when >1) = that NAME has N definitions and the lowest-id one was walked (a C/C++ declaration "
+                  "without a body yields to the lowest-id definition of its scope that has one); qualify with "
                   "file:name or @FILE:LINE to pick another. -->";
         legend += seedBiteLegend( ann.seed );   // C2: charged only on a run whose root carries a bite attribute (the at= rule)
+        // H1: charged only on a run whose root carries unproven_defs= — the same rule, and part of the head est_tokens prices.
+        legend += unprovenDefsVerbComment( UnprovenDefsVerb::Around, ann.seed.unprovenDefs > 0, "<!-- ripwire around: " );
     }
     if( metrics )
     {
@@ -2096,6 +2258,8 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const std::size_t ambTotal        = counterTotal( ambOut );          // calls the resolver could not pin to one target
     const std::size_t unresolvedTotal = counterTotal( unresolvedOut );   // calls to an in-repo name, all defs lang-filtered
     const std::size_t locPinTotal     = counterTotal( locPinOut );       // Phase 4: calls the locality prior ALONE pinned
+    const std::size_t declinedTotal   = counterTotal( declinedOut );     // calls tier 3 declined: no edge, and no guess
+    legend += declinedTotal > 0 ? kDeclinedMapLegend : "";               // charged to the map that carries declined=
     // C1 DRIFT FIX (Round C lane B, found by re-reading this header's own output). `precise=` means "how many
     // out-edges a SCIP index PINNED", and the emitter's own comment below says it is "emitted ONLY under
     // --scip". Both were true when outProv held only {0, 1}. A4-R5 then added value 2 (an FFI binding edge)
@@ -2148,6 +2312,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // §L1: the LANGUAGES this build could not read at all — buildUnindexedAttr carries the whole rule.
     const std::string unindexedAttr = buildUnindexedAttr( ing.crawlSkips );
     const std::string ignoredAttr   = buildIgnoredAttr( ing.crawlSkips );   // §N6-C, empty unless the ignore rules cut something
+    const std::string escapedAttr   = buildEscapedRootAttr( ing.crawlSkips ); // §SEC1, empty unless a symlink left the root
     // §B13.4: --max-tokens=N asked for a TOKEN count and got a BYTE ceiling. Both numbers, on the map that
     // was shaped by them, so the ~10% the headroom leaves unused is a disclosed fact rather than a silent
     // one. Emitted ONLY under --max-tokens (nullptr for every other caller ⇒ byte-identical default map).
@@ -2199,8 +2364,22 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         {
             stats += " external=";  stats += std::to_string( externalCalls );
         }
+        if( declinedTotal > 0 )                                // tier-3 declines: same rule, after external= so no adjacency moves
+        {
+            stats += " declined=";  stats += std::to_string( declinedTotal );
+        }
+        // The two parse-honesty gauges follow the call-resolution family (ambiguous= .. declined=), in this order,
+        // so declined= stays adjacent to external= and the resolver's gauges read as one contiguous run.
+        if( extentSuspectTotal > 0 )                           // extent honesty: same absent-when-0 rule
+        {
+            stats += " extent_suspect_syms=";  stats += std::to_string( extentSuspectTotal );
+        }
+        if( macroBlankedFiles > 0 )                            // member-macro re-parse: same absent-when-0 rule
+        {
+            stats += " macro_blanked_files=";  stats += std::to_string( macroBlankedFiles );
+        }
         stats += precAttr;  stats += rootsAttr;  stats += changedAttr;  stats += skippedAttr;  stats += unindexedAttr;
-        stats += ignoredAttr;  stats += fitAttr;
+        stats += ignoredAttr;  stats += escapedAttr;  stats += fitAttr;
         stats += " order=";      stats += orderAttr;
         stats += " -->";
         return stats;
@@ -2231,6 +2410,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
             h += " depth=\"";   h += std::to_string( ann.seed.depth );     h += "\"";
             h += " fanout=\"";  h += std::to_string( ann.seed.fanout );    h += "\"";
             if( ann.seed.defs > 1 ) { h += " defs=\"";  h += std::to_string( ann.seed.defs );  h += "\""; }
+            h += unprovenDefsAttrXml( ann.seed.unprovenDefs );   // H1: beside defs=, the rest of what the seed name resolved to
             h += seedBiteAttrs( ann.seed );   // C2: each bound's BITE, right after the bound it qualifies (empty when neither bit)
         }
         // §A9.6: after at= (so gitstampcheck's `<r at="<sha>` byte sequence is unmoved) — see MapAnnotations.
@@ -2490,6 +2670,14 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                 rw::formatTo( attr, sizeof( attr ), "{}{}", rw::cstr( ambs ), rw::cstr( kbuf ) );
             }
             w.write( attr );
+            // EXTENT HONESTY (kExtentSuspectRowLegend): the containment checks this row's extent/scope/kind failed.
+            // After k= so every pre-existing adjacency holds; absent when every check held (clean corpora unchanged).
+            if( s.extentSuspect != 0 )
+            {
+                w.write( " extent_suspect=\"" );
+                w.write( extent::extentSuspectReasons( s.extentSuspect ) );
+                w.write( "\"" );
+            }
             // Essential complexity (model.h Symbol::ev), --metrics only. Emitted iff ev >= 2: ev >= 1 for any
             // walked fn/method body, so on a row carrying cx= ABSENT means exactly ev == 1 — lossless in the
             // strictest sense, and never a bare ev="1" (G4 + the honesty contract point the same way). Routed
@@ -3253,6 +3441,14 @@ inline std::string sigRowHead( const IngestResult& ing, NodeId id, const SigRowF
         rw::formatTo( tail, sizeof( tail ), "{}{}{}>", facts.lens, facts.pure, rw::cstr( rankAttr ) );
     }
     head += tail;
+    // extent honesty (kExtentSuspectRowLegend): after r=, before next=, absent when every check held — so every
+    // pre-existing adjacency on an unflagged row is byte-stable and the budget ledger still measures this string.
+    if( s.extentSuspect != 0 )
+    {
+        head.pop_back();   // the '>'
+        appendExtentSuspectAttr( head, s );
+        head += '>';
+    }
     // P3 (L7, nextverb.h): the TOP-ranked row hands the agent the body to read — --expand=FILE:NAME, the
     // file-qualified selector (a same-named def elsewhere cannot answer), spelled with the same root-relative
     // path the row's own p= carries. Only r=1: one next per document, the one that ends the search.
@@ -3794,7 +3990,12 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             return c + e.notes.size();                                               // W3-N2: notes are pre-rendered, so their
             //   EXACT emitted size is known (jsonSigEntryCost)
         };
-        std::size_t total = 6 + 7;                                                   // "<sigs>" + "</sigs>"
+        // extent honesty: a flagged row carries extent_suspect=, and its reading rides this same block — CHARGED here,
+        // so the ladder budgets it like every other byte it writes. Over-reserved only when the ladder later drops every
+        // flagged row; then the reading is not written and those bytes simply go unused.
+        const auto isFlaggedEntry  = [ & ]( const SigEntry& e ) { return ing.symbols[ order[ e.globalRank - 1 ] ].extentSuspect != 0; };   // globalRank is 1-based
+        const bool anyFlaggedEntry = std::any_of( entries.begin(), entries.end(), isFlaggedEntry );
+        std::size_t total = 6 + 7 + ( anyFlaggedEntry ? kExtentSuspectRowLegend.size() : 0u );   // "<sigs>" + "</sigs>" (+ the reading)
         for( const SigFile& sf : sigFiles )
         {
             total += sf.wrapBytes;
@@ -3868,6 +4069,11 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         {
             w.write( "<sigs>" );
         }
+        // extent honesty: the row reading, charged into `total` above, written only when a flagged row survived the ladder
+        if( std::any_of( entries.begin(), entries.end(), [ & ]( const SigEntry& e ) { return !e.dropped && isFlaggedEntry( e ); } ) )
+        {
+            w.write( kExtentSuspectRowLegend );
+        }
         std::vector<char> fileNotesPending( sigFiles.size(), 1 );   // P7: a file's notes ride its FIRST live row
         for( const SigEntry& e : entries )
         {
@@ -3896,6 +4102,12 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
     // no r= — P7 left this shape alone (nothing here carries a rank to order by); every rank-adaptive caller
     // returned from the flat path above, so the tiers this loop used to apply under rankAdaptivePayload are gone.
     w.write( "<sigs>" );
+    // extent honesty: this streaming path writes rows as it reads them, so the reading rides whenever the corpus holds
+    // a flagged definition — a superset of what these rows can carry (defining an absent attribute costs bytes, never truth).
+    if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& sym ) { return sym.extentSuspect != 0; } ) )
+    {
+        w.write( kExtentSuspectRowLegend );
+    }
     for( std::uint32_t f : fileOrder )
     {
         if( used >= budgetBytes )
@@ -4911,6 +5123,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
             children += "\" n=\"";  children += escapeXml( s.name, esc );  children += "\"";
             children += partAttr;                                 // octocode partial-fetch: lines="lo-hi/total" (empty on the whole-body path)
             appendBodyFidelityAttrs( children, bodyScrubbed, bodyRedacted );
+            appendExtentSuspectAttr( children, s );   // extent honesty: this body's span may be a recovery artifact
             // V1 (octocode F2): sibs=/inc= — the file-context lookup an --expand caller used to need a
             // second --outline call for. `fileCtx` is empty when withFileContext is false, so this is a
             // single failed HashMap::find per body (no-op) on every other packBodies caller. The actual
@@ -4977,6 +5190,12 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     if( withFileContext )
     {
         w.write( kBodiesLegend );
+    }
+    // extent honesty: the row reading rides whenever a requested body is flagged — a superset of the rows written
+    // (defining an absent attribute costs bytes, never truth) — and is priced by the caller's one chargeSection.
+    if( std::any_of( nodes.begin(), nodes.end(), [ & ]( NodeId n ) { return n < ing.symbols.size() && ing.symbols[ n ].extentSuspect != 0; } ) )
+    {
+        w.write( kExtentSuspectRowLegend );
     }
     w.write( open );
     w.write( children );
@@ -5976,7 +6195,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
         const bool  isContractExtracted = legoMethodContractSound( isym.lang );
         const char* caveatAttr          = legoContractCaveat( isContractExtracted, focusId != kNoNode );   // §A9.4
         // H6/F2 (capture-audit 2026-09-04): the TARGETED form resolves a bare name through resolveFocus,
-        // which picks the LOWEST-ID definition. `--lego=size` (6 definitions in 4 files) therefore answered
+        // which then picked the LOWEST-ID definition. `--lego=size` (6 definitions in 4 files) therefore answered
         // implementors="0" about ONE of them with nothing on the row to say a pick had happened, so a
         // genuine "this interface has no implementors" and a wrong-definition zero rendered identically.
         // defs= is that fact on the row — the same disclosure --owners and --layout already carry for the
@@ -6143,7 +6362,7 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
              "version 81. a per-file target row (inc t=) with no edge behind it is a directive that did not resolve to an indexed file "
              "(external package, or a specifier this tool declines to guess at, e.g. a shell path built from a variable) "
              "— it is shown, never silently dropped. a LAZY edge — a pair every one of whose directives is written inside a "
-             "closure (a Ruby method/lambda/block, a TS/JS function body) or is a Ruby autoload — is a USE, not a load-time "
+             "closure (a Ruby method/lambda/block, a TS/JS function body) or is a Ruby autoload or rescue class — is a USE, not a load-time "
              "dependency: it is in the impact verb's importer tier (lazy=1) and in this row's inc t= list, and it is NOT in "
              "afferent=/instab=/transitive=/godfiles/stabledeps/cycles/ccd/acd/nccd/shape=; health lazy_edges= counts the "
              "pairs left out and a row's lazy_edges= its own — both absent when 0. "
@@ -6556,6 +6775,9 @@ struct JsonMapHeader
                                                     // names every root) or a caller that never passes one.
     std::size_t                      localityPinnedCount = 0;   // Phase 4: Σ lpin — "locality_pinned":N, absent when 0
     std::size_t                      externalCount = 0;         // Phase 5: the veto's refusals — "external":N, absent when 0
+    std::size_t                      declinedCount = 0;         // tier 3's declines — "declined":N, absent when 0
+    std::size_t                      extentSuspectCount = 0;    // extent honesty: "extent_suspect_syms":N, absent when 0
+    std::size_t                      macroBlankedCount  = 0;    // member-macro re-parse: "macro_blanked_files":N, absent when 0
 };
 
 // §B1.2: the PROVENANCE stamp — the JSON half of the XML `<r at= rank_by= window=>` attributes. Without it
@@ -6693,6 +6915,23 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
         rw::formatTo( hdr, sizeof( hdr ), "\"external\":{},", h.externalCount );
         w.write( hdr );
     }
+    // tier 3's declines — the JSON twin of the XML `declined=`, same absent-when-zero rule.
+    if( h.declinedCount > 0 )
+    {
+        rw::formatTo( hdr, sizeof( hdr ), "\"declined\":{},", h.declinedCount );
+        w.write( hdr );
+    }
+    // extent honesty: the JSON twin of the XML header's extent_suspect_syms=, same absent-when-zero rule and the
+    // XML header's order (after the call-resolution family, declined included).
+    if( h.extentSuspectCount > 0 )
+    {
+        w.write( "\"extent_suspect_syms\":" + std::to_string( h.extentSuspectCount ) + "," );   // composed, not a fixed buffer
+    }
+    // member-macro re-parse: the JSON twin of the XML header's macro_blanked_files=, same absent-when-zero rule.
+    if( h.macroBlankedCount > 0 )
+    {
+        w.write( "\"macro_blanked_files\":" + std::to_string( h.macroBlankedCount ) + "," );
+    }
 
     // §P0.5d, JSON lane: the size-ceiling disclosure must reach --json consumers too — the XML header
     // gained skipped_oversize= and a JSON reader (MCP clients most of all) must not be the one audience
@@ -6700,6 +6939,15 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
     if( !h.ing.skippedOversize.empty() )
     {
         rw::formatTo( hdr, sizeof( hdr ), "\"skipped_oversize\":{},", h.ing.skippedOversize.size() );
+        w.write( hdr );
+    }
+
+    // §SEC1, JSON lane: the crawl-boundary refusal must reach --json/MCP consumers too, by the same argument
+    // skipped_oversize= makes one paragraph up — the audience most likely to be a model is the one least able
+    // to notice a corpus that shrank. Same absent-when-zero rule as the XML side.
+    if( h.ing.crawlSkips.escapedFiles > 0 )
+    {
+        rw::formatTo( hdr, sizeof( hdr ), "\"escaped_root\":{},", ( unsigned long long ) h.ing.crawlSkips.escapedFiles );
         w.write( hdr );
     }
 
@@ -6805,7 +7053,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
                            std::string_view rootArg = {},      // R-E: same single-root-only root argument the
                                                                  // XML serialize() takes (see its own comment)
                            const std::vector<std::uint32_t>* locPinOut = nullptr,   // Phase 4: same as serialize()'s
-                           std::size_t externalCalls = 0 )                          // Phase 5: same as serialize()'s
+                           std::size_t externalCalls = 0,                           // Phase 5: same as serialize()'s
+                           const std::vector<std::uint32_t>* declinedOut = nullptr ) // tier-3 declines: same as serialize()'s
 {
     const std::size_t S = ing.symbols.size();
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
@@ -6865,6 +7114,12 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     const std::size_t ambTotal        = counterTotal( ambOut );
     const std::size_t unresolvedTotal = counterTotal( unresolvedOut );
     const std::size_t locPinTotal     = counterTotal( locPinOut );   // Phase 4: Σ lpin, the JSON twin of locality_pinned=
+    const std::size_t declinedTotal   = counterTotal( declinedOut ); // Σ declinedOut, the JSON twin of declined=
+    std::size_t       extentSuspectTotal = 0;                          // extent honesty: the JSON twin of extent_suspect_syms=
+    for( const Symbol& sym : ing.symbols )
+    {
+        extentSuspectTotal += sym.extentSuspect != 0 ? 1u : 0u;
+    }
     const char* orderAttr = stable ? "stable"
                           : mostImportantLast ? "important-last"
                           : autoFlip ? "important-last(auto:fill)"
@@ -6888,7 +7143,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     {
         JsonWriter hw( dst );
         writeJsonMapHeader( hw, esc, JsonMapHeader{ ing, S, outTargets.size(), keep, estTokens, ambTotal,
-                                                    unresolvedTotal, orderAttr, outProv, &ann, rootArg, locPinTotal, externalCalls } );
+                                                    unresolvedTotal, orderAttr, outProv, &ann, rootArg, locPinTotal, externalCalls, declinedTotal,
+                                                    extentSuspectTotal, macroBlankedFileCount( ing ) } );
         hw.write( ",\"r\":[" );
     };
 
@@ -6946,6 +7202,9 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
 
             if( const std::uint32_t lpinK = counterAt( locPinOut, id ); lpinK > 0 )   // Phase 4: the XML lpin= twin
             { rw::formatTo( num, sizeof( num ), ",\"lpin\":{}", lpinK );  w.write( num ); }
+
+            if( s.extentSuspect != 0 )   // extent honesty: the XML extent_suspect= twin, same reason spelling
+            { w.write( ",\"extent_suspect\":" );  writeJsonStr( w, extent::extentSuspectReasons( s.extentSuspect ), esc ); }
 
             if( !stable )
             { rw::formatTo( num, sizeof( num ), ",\"k\":{:.4f}", double( rank[id] ) );  w.write( num ); }

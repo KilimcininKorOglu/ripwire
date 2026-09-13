@@ -157,7 +157,6 @@ struct SymTreeIndex
 // bodyHashesBySym already skipped — no file is ever double-counted between the two lanes.
 inline void injectFileLevelFallback( SymTreeIndex& out, const IngestResult& ing, std::string_view root, const SymbolsByFile& realBodySyms )
 {
-    std::string bytes;
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
         if( f < realBodySyms.size() && !realBodySyms[f].empty() )
@@ -169,7 +168,8 @@ inline void injectFileLevelFallback( SymTreeIndex& out, const IngestResult& ing,
         // --quality-delta reported the two as a 320-token clone the moment the quality-side copy was
         // extracted. Unreadable or empty degrades the same way in both: contributes nothing, never crashes,
         // and nothing is hidden because there is no content to hide.
-        if( !docparse::detail::readWholeFile( ing.files[f], bytes ) || bytes.empty() )
+        const std::string bytes = docparse::detail::readWholeFile( ing.files[f] ).value_or( std::string() );
+        if( bytes.empty() )
         {
             continue;
         }
@@ -193,7 +193,7 @@ inline SymTreeIndex buildTreeIndex( const IngestResult& ing, std::string_view ro
         }
         const std::string    relFile( relForHash( ing.files[ s.fileId ], root ) );
         const std::string    canon = canonicalId( relFile, s.scope, s.name );          // DISPLAY id (may be a bare name)
-        const std::uint64_t  key   = quality::pathQualifiedKey( relFile, s.scope, s.name );   // COMPARISON key — the one body-hash key space
+        const std::uint64_t  key   = quality::pathQualifiedKey( relFile, s );   // COMPARISON key — the one body-hash key space (the Symbol overload: one keying rule per language)
         out.identity.try_emplace( key, ChangedSym{ key, relFile, canon } );   // first writer wins — overloads share one id
     }
     const SymbolsByFile realBodySyms = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte; } );
@@ -336,7 +336,7 @@ class TreeIndexMemo
 public:
     TreeIndexMemo( const std::string& root, const std::vector<std::string>& excludes, std::size_t maxFileBytes )
         : root_( root ), excludes_( excludes ), maxFileBytes_( maxFileBytes ),
-          repoHex_( quality::headSnapRepoHex( root ) ), exclHex_( msExclHex( excludes ) ) {}
+          repoHex_( quality::cacheRootKeyHex( root ) ), exclHex_( msExclHex( excludes ) ) {}
 
     // Register one future get(sha) BEFORE the diff loop runs — see the class comment above.
     void reserve( const std::string& sha ) { ++pending_[ sha ]; }

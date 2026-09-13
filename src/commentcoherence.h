@@ -102,6 +102,7 @@ inline bool isCommentStopword( std::string_view w ) noexcept
 // splitIdentifier(...) lowercased, one call site — the ONE tokenizer this whole lens uses (header note).
 inline void lowerSplitInto( std::string_view text, std::vector<std::string>& scratch, std::vector<std::string>& out )
 {
+    VERIFY_NO_ALIAS( scratch, out );
     naminglens::splitIdentifier( text, scratch );
     out.reserve( out.size() + scratch.size() );
     for( const std::string& tok : scratch )
@@ -200,12 +201,14 @@ inline CommentCoherenceScan computeCommentCoherence( const IngestResult& ing )
         if( fileLoaded[s.fileId] == 0 )
         {
             fileLoaded[s.fileId] = 1;
-            if( !docparse::detail::readWholeFile( diskPath( ing, s.fileId ), fileBytes[s.fileId] ) )
+            std::optional<std::string> bytes = docparse::detail::readWholeFile( diskPath( ing, s.fileId ) );
+            if( !bytes )
             {
                 fileFailed[s.fileId] = 1;
                 ++scan.unreadableFileCount;
                 DEGRADED_PATH_ALERT( "comment-coherence: an indexed file could not be read — its functions are absent from the report" );
             }
+            fileBytes[s.fileId] = std::move( bytes ).value_or( std::string() );
         }
         if( fileFailed[s.fileId] != 0 )
         {

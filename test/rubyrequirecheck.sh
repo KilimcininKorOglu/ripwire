@@ -32,7 +32,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 FIX="$ROOT/test/rubyrequirefix"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
@@ -54,8 +54,8 @@ for t in './sib' 'json' 'tool.rb' 'shared' 'optional_gem'; do
         && ok "capture: <inc t=\"$t\"/>" \
         || no "capture: no <inc t=\"$t\"/> row"
 done
-printf '%s' "$DEPS" | grep -q '<f p="main.rb" includes="12"' \
-    && ok 'capture: exactly 12 directives — `require some_variable` is NOT invented; `autoload :Late, "lib/helper"` IS a directive (parser version 82)' \
+printf '%s' "$DEPS" | grep -q '<f p="main.rb" includes="13"' \
+    && ok 'capture: exactly 13 directives — `require some_variable` is NOT invented; `autoload :Late, "lib/helper"` IS a directive (parser version 82); `rescue LoadError` is a shown, out-of-tree rescue class (parser version 93)' \
     || no "capture: directive count wrong: $( printf '%s' "$DEPS" | grep -oE '<f p="main.rb" includes="[0-9]*"' )"
 
 # ── 2. RESOLUTION ─────────────────────────────────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ done
 # (a) unique-or-degrade: `require "shared"` is answered by ./shared.rb AND lib/shared.rb. main.rb's cone
 #     is therefore exactly {itself + 7 resolved files} = 8; a resolver that picked one would make it 9. (The
 #     autoload's lib/helper.rb is already in the cone through `require_relative`, so parser version 82 adds no file.)
-printf '%s' "$DEPS" | grep -q '<f p="main.rb" includes="12" afferent="0" instab="1.00" transitive="8">' \
+printf '%s' "$DEPS" | grep -q '<f p="main.rb" includes="13" afferent="0" instab="1.00" transitive="8">' \
     && ok 'mutation control: the ambiguous `require "shared"` degrades — cone is 8, not 9' \
     || no "mutation control: the ambiguous require resolved: $( printf '%s' "$DEPS" | grep -oE '<f p="main.rb"[^>]*>' )"
 printf '%s' "$DEPS" | grep -qE '<f p="(lib/)?shared.rb" afferent=' \
@@ -111,12 +111,12 @@ cmp -s "$TMP/dots" "$TMP/abs" \
     || { no 'root spelling: the load-path probes are anchored differently under the two spellings'; diff "$TMP/dots" "$TMP/abs" | head -4; }
 "$BIN" "$FIX" --deps --no-cache >"$TMP/d1" 2>/dev/null
 "$BIN" "$FIX" --deps --no-cache >"$TMP/d2" 2>/dev/null
-cmp -s "$TMP/d1" "$TMP/d2" && ok "deterministic (two --no-cache runs identical)" || no "non-deterministic"
+if cmp -s "$TMP/d1" "$TMP/d2"; then ok "deterministic (two --no-cache runs identical)"; else no "non-deterministic"; fi
 "$BIN" "$FIX" --deps --cache="$TMP/c.bin" >"$TMP/cold" 2>/dev/null
 "$BIN" "$FIX" --deps --cache="$TMP/c.bin" >"$TMP/warm" 2>/dev/null
-cmp -s "$TMP/cold" "$TMP/warm" && ok "warm == cold (directives survive the cache round-trip)" || no "warm != cold"
+if cmp -s "$TMP/cold" "$TMP/warm"; then ok "warm == cold (directives survive the cache round-trip)"; else no "warm != cold"; fi
 if command -v xmllint >/dev/null 2>&1; then
-    xmllint --noout "$TMP/d1" 2>/dev/null && ok "xml well-formed" || no "xml malformed"
+    if xmllint --noout "$TMP/d1" 2>/dev/null; then ok "xml well-formed"; else no "xml malformed"; fi
 else
     ok "xml well-formed (xmllint absent — skipped)"
 fi

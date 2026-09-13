@@ -48,6 +48,24 @@
     #endif
   #endif
 
+  // The upstream code uses POSIX descriptor calls for bounded regular-file reads. Keep the calls available
+  // on MSVC through the CRT, but do not invent an O_NOFOLLOW value: pathguard.h has the real Win32
+  // FILE_FLAG_OPEN_REPARSE_POINT implementation for the security-sensitive opens.
+  #ifndef O_NONBLOCK
+    #define O_NONBLOCK 0
+  #endif
+  #ifndef F_GETFL
+    #define F_GETFL 3
+  #endif
+  #ifndef F_SETFL
+    #define F_SETFL 4
+  #endif
+  #ifndef open
+    #define open _open
+  #endif
+  #ifndef fdopen
+    #define fdopen _fdopen
+  #endif
   #ifndef S_ISREG
     #define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
   #endif
@@ -69,7 +87,40 @@
 
   #include <cstddef>
   #include <cstdint>
+  #include <cerrno>
   #include <string>
+
+  /// MSVC's _fstat64 uses its private _stat64 layout, while the portable sources expose struct stat.
+  /// Copy the fields consumed by the descriptor callers instead of aliasing incompatible objects.
+  inline int rw_fstat( int fd, struct stat* out ) noexcept
+  {
+      struct _stat64 native{};
+      if( ::_fstat64( fd, &native ) != 0 )
+      {
+          return -1;
+      }
+      out->st_mode = native.st_mode;
+      out->st_size = native.st_size;
+      return 0;
+  }
+  #ifndef fstat
+    #define fstat rw_fstat
+  #endif
+
+  /// Regular Windows files never expose POSIX descriptor status flags; the SCIP reader only uses these
+  /// operations to clear O_NONBLOCK after its non-blocking probe, so both operations are safe no-ops.
+  inline int rw_fcntl( int, int command, int /*flags*/ = 0 ) noexcept
+  {
+      if( command == F_GETFL || command == F_SETFL )
+      {
+          return 0;
+      }
+      errno = EINVAL;
+      return -1;
+  }
+  #ifndef fcntl
+    #define fcntl rw_fcntl
+  #endif
 
   using ssize_t = SSIZE_T;
 

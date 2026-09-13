@@ -4,6 +4,7 @@
 // resolved out-edges for serialization. Ranking lives in pagerank.cpp.
 
 #include "model.h"
+#include "elixir_resolve.h"      // lexical module/name/arity resolution; reuses cached Binding records
 #include "filter.h"              // isTestPath — for the Q2 tested= post-pass
 #include "pageview.h"            // LB-H: kImportReachRowCap — the import tier's display cap lives with the rest of the truncation vocabulary
 #include "graphlegend.h"         // M15: graphGaugeAttrXml/Json + kGraphCountFloorAttrXml/Json — graphCountFloorAttrXml( g ) below
@@ -24,6 +25,7 @@
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <span>          // std::span — transitiveCallers' seed seam takes any contiguous NodeId range
@@ -110,6 +112,20 @@ struct Graph
                                                      // external import binding, a `super()` whose MRO left the tree). No
                                                      // edge, never counted in ambOut/unresolvedOut. Serialized as the
                                                      // header `external=N` / JSON "external":N, absent when 0.
+    // Tier 3's DECLINES: a call whose candidates are two or more same-language definitions, none in the caller's
+    // file or directory, that no qualifier or receiver rule pinned. Still no edge — the ladder refuses to guess —
+    // but no longer silent. declinedOut is per CALLER, like ambOut: summed it is the header `declined=N` (JSON
+    // "declined":N, absent when 0), and over one selector's definitions it is the callees answer's declined_calls=.
+    // declinedCandOff/declinedCand are a CSR over the declined calls in resolve order — call k's candidates sit in
+    // [off[k], off[k+1]) — which the callers and impact answers read to count the declines that could have meant
+    // THEIR symbols, once per call however many of those symbols one call named.
+    std::vector<std::uint32_t> declinedOut;
+    std::vector<std::uint32_t> declinedCandOff;
+    std::vector<NodeId>        declinedCand;
+    // Every call reference's disposition (pincensus.h CallDisposition), one bucket per reference. Read by buildGraph's
+    // unaccounted alert and copied into pinCensus when a census is armed; its external/unresolved/declined buckets
+    // equal those header gauges by construction.
+    CallDispositionCounts      callDispositions{};
     std::vector<std::string>   localityKey; // per-symbol S6-C SCORING key (resolve.h::localityKeyOf): canonId when scoped,
                                             // `path::name` when not. Read ONLY by the S6-C block; never an identity.
     std::vector<std::string>   canonId;     // per-symbol canonical SCIP-style id `path::scope::name` (S6-C); the
@@ -165,6 +181,21 @@ inline const char* provLabel( std::uint8_t prov ) noexcept
 // header — lives on the C++ side of the language split; without this bridge a vendored C library's
 // `.c`/`.h` pair (or a C++ `extern "C"` caller of it) could never resolve a single call. All OTHER
 // language pairs stay strictly separate (a Python `draw` never resolves to a C++ `draw`).
+//
+// Kotlin/Java share a SECOND, independent bridge for the same reason: a mixed Android/JVM module's
+// Kotlin call sites and Java definitions (and vice versa) live in one JVM classpath, exactly as
+// C++/ObjC/C live in one link unit — without this a Nanidroid-shaped module (61 .kt + 16 .java in one
+// app/) would resolve zero cross-language calls.
+//
+// This predicate is BARE-NAME admission, and on its own that DELETES edges rather than disclosing a
+// collision: an unrelated same-named Kotlin definition joins a Java call's candidate set, and the tier
+// ladder drops a bare call whose candidates sit in several other directories without counting it anywhere
+// (so the "honestly ambiguous" pair this comment once promised only held in a one-directory fixture). The
+// bridge is therefore this predicate PLUS keepOwnJvmLanguageCandidates, which lets a Java or Kotlin
+// reference reach the other language only when its own defines no candidate of that name. That filter's
+// comment carries the measurement (square/retrofit's Response.body: 279 callers -> 5 -> 279) and the
+// trade-off it accepts (a qualified Kotlin `JavaBridge.helper()` binds a same-named Kotlin `helper`).
+// Narrowing by import or receiver type is still a resolver feature this port does not add.
 inline bool langCompatible( Lang a, Lang b ) noexcept
 {
     if( a == b )
@@ -173,7 +204,13 @@ inline bool langCompatible( Lang a, Lang b ) noexcept
     }
     const bool aCish = ( a == Lang::Cpp || a == Lang::ObjC || a == Lang::C );
     const bool bCish = ( b == Lang::Cpp || b == Lang::ObjC || b == Lang::C );
-    return aCish && bCish;
+    if( aCish && bCish )   // short-circuit before the JVM check below: langCompatible runs per candidate
+    {                       // in graph.h's hot reference-resolution loops, and the common C-family-only
+        return true;        // corpus case should not pay for two extra enum comparisons it doesn't need.
+    }
+    const bool aJvm = ( a == Lang::Kotlin || a == Lang::Java );
+    const bool bJvm = ( b == Lang::Kotlin || b == Lang::Java );
+    return aJvm && bJvm;
 }
 
 // langCompatible's sibling: which definition KINDS a reference of a given ROLE may bind to. One predicate
@@ -700,6 +737,201 @@ inline bool keepRustQualifiedCandidates( const IngestResult& ing, ChaConeMemo& c
     }
     cand.swap( survivors );
     return true;
+}
+
+// The std::-QUALIFIED C++ call scope guard — the C-family sibling of keepRustQualifiedCandidates, and far
+// narrower than it.
+//
+// A call written `std::X( … )` looks up the canonical key `std::X` first; when the def lives in the standard
+// library that misses, and the bare-name spray used to hand the site to whatever in-repo `X` it found. A LONE
+// candidate is the dangerous case, because nothing splits it: measured on a large C++20 engine, one string
+// wrapper's `move()` member took ~2,100 callers' std::move sites at full confidence — no amb=, no prov="split" —
+// and became the top-ranked symbol of the tree. test/stdqualcheck.sh reproduces it on test/stdqualfix.
+//
+// WHY ONLY `std`, NEVER THE RUST RULE FOR EVERY QUALIFIER. In C++ a qualifier legitimately misses its def's scope:
+// a namespace alias (`namespace fs = vendor::fsimpl; fs::exists( p )`), a using-declaration re-exporting a name,
+// a qualifier naming a class that inherits the member. A general "the qualifier must be the scope" rule deletes
+// those true edges (the gate's alias arm is one). `std` is the qualifier the language itself closes: a program
+// may not declare into namespace std beyond specializations ([namespace.std]), which live inside it, and `std`
+// can be neither a user alias nor a class at global scope. So a std-qualified call can only mean a def inside std.
+//
+// A candidate survives when it IS inside std: scope `std`; a scope written `std::…` (a member of
+// `template<> struct std::hash<T>`, or of `namespace std::x`); or a standard library's inline ABI namespace
+// (externalnames.h kStdInlineNamespaceNames), because `namespace std { inline namespace __1 { … } }` defs carry
+// the immediate scope "__1". The call side reads the immediate qualifier the same way, so `std::move`,
+// `::std::move` and `std::__1::move` arrive as "std", "std" and "__1".
+//
+// STATED FLOORS, not closed here (each pinned or recorded by the gate):
+//   * a NESTED std namespace — `std::chrono::duration_cast` arrives as qualifier "chrono", indistinguishable
+//     from a user's `mylib::chrono::` — keeps today's ladder;
+//   * ObjC++ (Lang::ObjC, .mm): tree-sitter-objc parses `std::move( x )` as an ERROR node spelling `std::` beside
+//     a bare `move( x )` call (measured), and ingest sets no qualifier for Lang::ObjC, so the reference arrives
+//     unqualified and the guard cannot see it (the Phase-5 veto still refuses table names such as move). The
+//     Lang::ObjC arm below is live the day extraction supplies a qualifier;
+//   * Lang::C is unaffected by construction: C has no `::`, and ingest sets a call qualifier for Lang::Cpp only.
+//     CUDA (.cu/.cuh) and Metal (.metal) ARE Lang::Cpp, so they take this guard exactly as .cpp does.
+//
+// Returns false when NOTHING survives, and the caller refuses the site through vetoExternal — `external=`, one
+// `C external` census row, no edge — the Phase-5 veto's own bucket, because a standard-library name with no
+// in-repo evidence is exactly what it counts. `unresolved=` is untouched, as in the Rust guard.
+//
+// WHY `canonical` AND NOT THE RUST GUARD'S `alreadyPinned`. Rule 3 (the include-file narrow) DOES run for a
+// qualified call: `std::exchange` in a file that #includes the one header defining an `exchange` gets narrowed
+// to it and pinned. An #include is evidence about files, never about namespace std, so only the canonical tier
+// exempts a site. A SCIP-pinned site cannot reach here with candidates (the overlay fills `tier`, never `cand`),
+// and the FFI binding tier is Python/JS/TS-only, so neither needs a parameter.
+inline bool keepStdQualifiedCandidates( const IngestResult& ing, const Reference& r, bool canonical, std::vector<NodeId>& cand )
+{
+    const bool cppFamilyRef = r.lang == Lang::Cpp || r.lang == Lang::ObjC;
+    if( canonical || !cppFamilyRef || r.qualifier.empty() || cand.empty() )
+    {
+        return true; // guard does not apply
+    }
+    // One segment that names namespace std: `std` itself, or a standard library's inline ABI namespace
+    // (externalnames.h kStdInlineNamespaceNames — its sortedness static_assert is what makes this search valid).
+    const auto namesStd = []( std::string_view segment ) -> bool
+    {
+        return segment == "std"
+            || std::binary_search( std::begin( externalnames::kStdInlineNamespaceNames ), std::end( externalnames::kStdInlineNamespaceNames ),
+                                   segment, rw::sortutil::svLess );
+    };
+    if( !namesStd( r.qualifier ) )
+    {
+        return true; // any other qualifier keeps the unchanged ladder — see WHY ONLY `std` above
+    }
+
+    // stable in-place compaction, as the namespace gate does — preserves candidate order, allocates nothing.
+    std::size_t keepCount = 0;
+    for( std::size_t ci = 0; ci < cand.size(); ++ci )
+    {
+        const std::string& scope = ing.symbols[ cand[ ci ] ].scope;
+        if( namesStd( scope ) || scope.starts_with( "std::" ) )
+        {
+            cand[ keepCount++ ] = cand[ ci ];
+        }
+    }
+    cand.resize( keepCount );
+    return keepCount != 0;
+}
+
+// THE DECL/DEF COLLAPSE, one name at a time (buildGraph step 1e; adversarial-review #1). A C++ header declaration and its
+// .cpp definition are two same-named symbols. Left alone they make tier 3 see two candidates and DROP every cross-directory
+// call to the function, and let a bodyless prototype shadow its own body in the same-file and same-directory tiers. So once
+// a name has a DEFINITION (model.h isDefinitionNotDeclaration), its declarations stop being resolution targets; a name with
+// no definition anywhere (extern, pure-virtual only) keeps its declarations as the best available target.
+//
+// A declaration is evicted only by a definition of its own COLLAPSE KEY:
+//   * its ROOT, in a multi-root workspace — root A's body must not evict root B's decl-only best-available target, so each
+//     root resolves exactly as it does alone;
+//   * its FAMILY — Kotlin rows with Kotlin rows, and every other language together, which is what the whole collapse always
+//     was (the C-family bridge's header/.c pairing lives inside that one family). Kotlin shares CANDIDATES with Java through
+//     langCompatible's JVM bridge, but never a declaration: no Java interface method is a prototype of a Kotlin function,
+//     or the reverse. Collapsed together, a Kotlin body evicted a Java interface-only declaration — so ADDING a .kt file
+//     moved a Java call's edge onto Kotlin code — and a Java body evicted a Kotlin interface member. A tree without a .kt
+//     file has one family and collapses byte-identically. Gate: test/kotlincheck.sh §13, and §14c's invariant.
+// One pass marks which keys hold a definition and one keeps — O(K) per name, where the per-root version it replaces
+// rescanned the name's ids once per declaration. `ids` keeps its order, and is untouched when nothing is evicted.
+inline void collapseDeclarationsOfName( const IngestResult& ing, bool multiRoot, rw::SmallVec<NodeId, 2>& ids )
+{
+    std::array<bool, 2u * kMaxWorkspaceRoots> keyHasDefinition {};
+    const auto keyOf = [ & ]( NodeId id ) noexcept -> std::size_t
+    {
+        const Symbol&     s    = ing.symbols[ id ];
+        const std::size_t root = multiRoot ? std::min<std::size_t>( ing.fileRoot[ s.fileId ], kMaxWorkspaceRoots - 1u ) : 0u;
+        return 2u * root + ( s.lang == Lang::Kotlin ? 1u : 0u );
+    };
+    bool anyDefinition = false;
+    for( NodeId id : ids )
+    {
+        if( isDefinitionNotDeclaration( ing.symbols[ id ] ) )
+        {
+            keyHasDefinition[ keyOf( id ) ] = true;
+            anyDefinition                   = true;
+        }
+    }
+    if( !anyDefinition )
+    {
+        return;
+    }
+    rw::SmallVec<NodeId, 2> kept;
+    bool                    anyEvicted = false;
+    for( NodeId id : ids )
+    {
+        if( isDefinitionNotDeclaration( ing.symbols[ id ] ) || !keyHasDefinition[ keyOf( id ) ] )
+        {
+            kept.push_back( id );
+        }
+        else
+        {
+            anyEvicted = true;
+        }
+    }
+    if( anyEvicted )
+    {
+        ids = std::move( kept );
+    }
+}
+
+// JVM OWN-LANGUAGE-FIRST — the candidate filter that keeps the Kotlin<->Java bridge from deleting edges.
+//
+// langCompatible admits a Kotlin/Java pair by bare NAME. Past it, the tier ladder resolves a bare call to the same file,
+// else the same directory, else a UNIQUE global — and drops the call, with no edge, no amb= and no unresolved=, when the
+// survivors sit in two or more other directories (tier 3 in buildGraph). Before the bridge, a Java call to a name only Java
+// defines once WAS that unique global. The bridge added every same-named Kotlin definition to the set, the global stopped
+// being unique, and the call vanished: on square/retrofit the test-only Kotlin `body()` functions (five spelled in two test
+// directories, three of them with bodies) took Response.java's `body` from 279 callers to 5 — 253 Java (caller, callee)
+// pairs deleted by files that Java code never references, with every gauge unmoved.
+//
+// THE RULE: a Java or Kotlin reference admits the OTHER JVM language's candidates only when its OWN language offers none.
+// Every name the caller's language defines then resolves exactly as it did before the bridge existed — so adding .kt files
+// never moves a Java-only edge — and the bridge keeps the job it exists for: a Kotlin call into a name only Java defines,
+// and the reverse. Applied to call candidates (buildGraph, right after the namespace gate) and to base candidates in the
+// inheritance overlay, so a Kotlin `class Tagged : Marker` stops implementing a same-named Java interface too.
+//
+// THE TRADE-OFFS, stated here rather than discovered. (1) An explicitly QUALIFIED Kotlin call `JavaBridge.helper()` binds a
+// same-named KOTLIN `helper` when one exists, not the Java class its receiver names, because Kotlin receivers do not narrow
+// candidates yet (the navigation_expression gap disclosed at ingest_binds.h isMemberAccessNode). Without this filter that
+// call reached BOTH definitions in a one-directory layout — and NEITHER once the two files sat in different directories.
+// (2) The filter runs BEFORE the locality tiers, so a Kotlin call whose Java target sits in its own directory loses it to
+// same-named Kotlin definitions elsewhere, which tier 3 may then drop: retrofit's KotlinExtensions.kt `response.body()`,
+// beside Response.java, now meets three Kotlin test `body()` functions in two other directories and gets no edge. Measured
+// over retrofit, ktor and nowinandroid, that is the whole cost: one Kotlin (caller, callee) pair. A Java caller cannot be
+// given the same locality exception — a nearer Kotlin candidate would move a Java-only edge the moment a .kt file
+// appeared, which is the invariant this filter exists to keep. Gate: test/kotlincheck.sh §5 and §14.
+//
+// `cand` is narrowed in place with its order kept, and is untouched unless the reference is Java or Kotlin AND the set
+// holds both its own language and the other one.
+inline void keepOwnJvmLanguageCandidates( const IngestResult& ing, const Reference& r, std::vector<NodeId>& cand ) noexcept
+{
+    if( r.lang != Lang::Java && r.lang != Lang::Kotlin )
+    {
+        return;
+    }
+    const auto isOtherJvm = [ & ]( NodeId id ) noexcept
+    {
+        const Lang candLang = ing.symbols[ id ].lang;
+        return ( candLang == Lang::Java || candLang == Lang::Kotlin ) && candLang != r.lang;
+    };
+    bool anyOwn   = false;
+    bool anyOther = false;
+    for( NodeId c : cand )
+    {
+        anyOwn   = anyOwn || ing.symbols[ c ].lang == r.lang;
+        anyOther = anyOther || isOtherJvm( c );
+    }
+    if( !anyOwn || !anyOther )
+    {
+        return;
+    }
+    std::size_t keepCount = 0;
+    for( std::size_t ci = 0; ci < cand.size(); ++ci )
+    {
+        if( !isOtherJvm( cand[ ci ] ) )
+        {
+            cand[ keepCount++ ] = cand[ ci ];
+        }
+    }
+    cand.resize( keepCount );
 }
 
 
@@ -1422,6 +1654,19 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
     return tables;
 }
 
+// Counts one call reference's disposition when its resolve-loop iteration ENDS — on every exit, each `continue`
+// included — so no exit needs a counter of its own, only the assignment naming what happened. A reference that
+// leaves naming nothing is counted Unaccounted, and the conservation line cannot balance silently.
+struct DispositionTally
+{
+    const CallDisposition& disposition;
+    CallDispositionCounts& counts;
+    ~DispositionTally()
+    {
+        ++counts[ std::size_t( disposition ) ];
+    }
+};
+
 // `census` arms the eval-only S6-C silent-pin census (src/pincensus.h): every DECIDED call site records
 // which narrowing stage committed it and to which canonical target. It adds rows to g.pinCensus and
 // changes NOTHING else — no candidate is admitted, dropped or reordered by it, so the emitted map is
@@ -1436,6 +1681,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     g.ambOut.assign( N, 0u );   // counted in the resolve loop: calls that stay split across >1 def after narrowing
     g.locPinOut.assign( N, 0u );   // counted in the resolve loop: calls the S6-C locality tie-break alone pinned to one def
     g.unresolvedOut.assign( N, 0u );   // counted in the resolve loop: calls whose in-repo defs were all lang-filtered
+    g.declinedOut.assign( N, 0u );     // counted in the resolve loop: calls tier 3 declined to guess at (no edge)
+    g.declinedCandOff.assign( 1, 0u ); // the declined-call CSR's leading offset: call k's candidates are [off[k], off[k+1])
     if( scip ) { g.scipDocsSeen = scip->documentsSeen; g.scipEdgesPinned = scip->edgesPinned; }
     // #66: carry the crawl's own unindexed-extension roll-up onto the graph, so the verbs that answer off
     // this CSR can disclose the same gap the map header already prints. Summed HERE, from the identical
@@ -1520,77 +1767,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
     }
 
-    // decl/def collapse (adversarial-review #1): a C++ header decl + its .cpp def are TWO same-named
-    // symbols. Left alone, that (a) makes tier-3 see cand.size()==2 and DROP every cross-dir call to the
-    // function (the most common C++ layout → a disconnected graph), and (b) lets a bodyless local prototype
-    // shadow the real def in the same-file/dir tiers, so rank flows to an empty decl. Fix once, here: if a
-    // name has ≥1 real DEFINITION (body present: endByte > sigEndByte), keep only the definitions as
-    // resolution targets — forward declarations of one function aren't an ambiguity and must not shadow or
-    // block it. Names with no def anywhere (extern / pure-virtual only) keep their decls (best available).
-    const auto hasBody = [ & ]( NodeId id ) noexcept { return ing.symbols[id].endByte > ing.symbols[id].sigEndByte; };
+    // decl/def collapse (adversarial-review #1) — collapseDeclarationsOfName carries the rule, its per-root and per-family
+    // keys, and why a Kotlin body never evicts a Java declaration (or the reverse).
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1e: decl/def collapse" );
         for( auto& [ name, ids ] : byName )
         {
-            if( !multiRoot )
-            {
-                bool anyDef = false;
-                for( NodeId id : ids )
-                {
-                    if( hasBody( id ) )
-                    {
-                        anyDef = true;
-                        break;
-                    }
-                }
-                if( !anyDef )
-                {
-                    continue;
-                }
-                rw::SmallVec<NodeId, 2> defs;
-                for( NodeId id : ids )
-                {
-                    if( hasBody( id ) )
-                    {
-                        defs.push_back( id );
-                    }
-                }
-                ids = std::move( defs );
-            }
-            else
-            {
-                // multi-root: collapse PER ROOT — root A's def must not evict root B's decl-only best-available
-                // target (each root's solo resolution behavior is preserved exactly; lookups are root-filtered).
-                bool anyRootCollapses = false;
-                const auto rootHasDef = [ & ]( std::uint32_t r ) noexcept
-                {
-                    for( NodeId id : ids )
-                    {
-                        if( ing.fileRoot[ing.symbols[id].fileId] == r && hasBody( id ) )
-                        {
-                            return true;
-                        }
-                    }
-                    return false;
-                };
-                for( NodeId id : ids )
-                {
-                    if( !hasBody( id ) && rootHasDef( ing.fileRoot[ ing.symbols[id].fileId ] ) ) { anyRootCollapses = true; break; }
-                }
-                if( !anyRootCollapses )
-                {
-                    continue;
-                }
-                rw::SmallVec<NodeId, 2> kept;
-                for( NodeId id : ids )
-                {
-                    if( hasBody( id ) || !rootHasDef( ing.fileRoot[ing.symbols[id].fileId] ) )
-                    {
-                        kept.push_back( id );
-                    }
-                }
-                ids = std::move( kept );
-            }
+            collapseDeclarationsOfName( ing, multiRoot, ids );
         }
     }
 
@@ -1605,7 +1788,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1f: canonByName (scope::name -> def ids)" );
         for( const Symbol& s : ing.symbols )
         {
-            if( s.scope.empty() || !hasBody( s.id ) )
+            if( s.scope.empty() || !isDefinitionNotDeclaration( s ) )
             {
                 continue;
             }
@@ -1686,7 +1869,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // resolver degrades to the name-based fallback ladder + honest amb=. The caller's OWN file is excluded (f ∉ trans[f]).
     // Deterministic: a pure function of the sorted ing.files + ing.includes; each set is sorted+deduped
     // so rule3IncludeFile's binary-search membership is valid and order-stable (warm == cold).
-    auto [ includeAdj, includeContext ] = buildPreciseIncludeAdjWithContext( ing );
+    // `forCallNarrow`: a Ruby constant read off a VALUE position (an argument, a rescue class — parser version 93)
+    // is a dependency of the file but not import evidence for a bare call, so it never enters this set. --deps,
+    // --impact's importer tier and the lazy-pair count read the same records through the default path and keep it.
+    auto [ includeAdj, includeContext ] = buildPreciseIncludeAdjWithContext( ing, /*dedup=*/true, /*lazyPairsOut=*/nullptr, /*forCallNarrow=*/true );
     std::vector<std::vector<NodeId>> fileIncludes = transitiveIncludeSet( includeAdj );
     const JsImportTables jsImports = buildJsImportTables( ing, includeContext.fileRoot ? &includeContext : nullptr );
     // per-symbol fileId view for Rule 3 (group a candidate def by its file without passing the whole IngestResult).
@@ -1774,6 +1960,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // to the variable's type; Rule 3 pins a call to the ONE file the caller includes that defines it — all
     // BEFORE the bare-name spray below. See resolve.h.
     const Narrower narrower( canonByName, varType, fileIncludes, symFileId );
+    const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The
     // four rules used to carry four copies of this loop; the filter is stated once so it cannot drift.
@@ -1796,13 +1983,14 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ExternalVeto above buildGraph; `vetoExternal` is the refusal: no edge, one header count, one `C external`
     // census row with no target.
     const ExternalVeto externalVeto{ ing, canonByName, fieldNarrow.localNameSet, extVeto };
-    const auto vetoExternal = [ & ]( const Reference& ref )
+    const auto vetoExternal = [ & ]( const Reference& ref ) -> CallDisposition
     {
         ++g.externalCalls;
         if( census )
         {
             g.pinCensus.addRow( ref.fromSymbol, ref.calleeName, PinMech::External, 0, 0, 0, ref.line );   // no target: a refusal
         }
+        return CallDisposition::External;   // the site's disposition, named by the one function that counts external=
     };
 
     // accumulate per (from,to): summed per-ref confidence + an integer ref count (key = from<<32|to).
@@ -1924,14 +2112,23 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
     for( const Reference& r : ing.references )
     {
-        // file-scope / inheritance / doc-mention / HAS-A → not a call. ABS-3: read/write/import use-sites
-        // are ALSO excluded here — they live only in the use-site index, NEVER in the call graph CSR, so
-        // PageRank and the default ranked map are unchanged by them (G5). Role Macro (the macro-edges
-        // round) IS admitted beside Call: an invocation of an indexed function-like #define is a real
-        // control-flow edge once expanded — the honest difference is its label, not its existence.
-        if( r.fromSymbol == kNoNode || r.isInherit || r.isDocLink || r.isCompose
-            || ( r.role != RefRole::Call && r.role != RefRole::Macro ) )
+        // inheritance / doc-mention / HAS-A → not a call. ABS-3: read/write/import use-sites are ALSO excluded
+        // here — they live only in the use-site index, NEVER in the call graph CSR, so PageRank and the default
+        // ranked map are unchanged by them (G5). Role Macro (the macro-edges round) IS admitted beside Call: an
+        // invocation of an indexed function-like #define is a real control-flow edge once expanded — the honest
+        // difference is its label, not its existence. The predicate lives in pincensus.h because the census
+        // writer re-derives this same population to check the dispositions against.
+        if( !isResolvableCallReference( r ) )
         {
+            continue;
+        }
+        // From here on every exit names its disposition and the tally counts it when the iteration ends,
+        // whichever `continue` ends it. An exit that names nothing is counted Unaccounted (DispositionTally).
+        CallDisposition        disposition = CallDisposition::Unaccounted;
+        const DispositionTally tally{ disposition, g.callDispositions };
+        if( r.fromSymbol == kNoNode )
+        {
+            disposition = CallDisposition::FileScope;   // no caller node for an edge; the use-site index still lists the site
             continue;
         }
         const auto it = byName.find( r.calleeName );
@@ -2020,7 +2217,48 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
 
         // ---- name-based resolution (the fallback ladder below + P2-D narrowing) — SKIPPED when the SCIP overlay pinned this site.
         bool canonical = false;
-        if( !scipPinned && !r.qualifier.empty() )
+        if( !scipPinned && r.lang == Lang::Elixir )
+        {
+            elixirResolver.resolve( r, cand );
+            std::erase_if( cand, [ & ]( NodeId c ) { return !sameRoot( c, r.fileId ); } );
+            if( cand.empty() )
+            {
+                // No lexical fact answers this call: no alias, import or receiver names a definition of its
+                // module/name/arity. The commonest reason is a `use` — `__using__` injects imports the tool
+                // does not expand (docs/ARCHITECTURE.md, Elixir extraction) — and the next is a wrong arity or
+                // an excluded import. Decided 2026-09-12 (PR #81 review item 2): NO edge is minted from the
+                // name ladder, because a same-spelled function in an unrelated module is exactly the false
+                // edge this resolver exists to refuse (on one framework corpus the ladder gave `text/2` 55
+                // callers where 3 were real); and the drop is COUNTED, never silent. Same vocabulary as the
+                // ladder's own refusal below: a spelling some in-repo definition carries is unresolved= (the
+                // header gauge, and the caller's own unresolvedOut); a spelling no definition carries at all is
+                // undefined, which has no header surface by design (pincensus.h); and in a multi-root run a
+                // name defined only in ANOTHER root is that root's, counted OtherRoot, as the solo run would
+                // say. Modelling what `__using__` injects stays open (test/elixirnamearitycheck.sh arm A).
+                if( it == byName.end() )
+                {
+                    disposition = CallDisposition::Undefined;
+                    continue;
+                }
+                bool anySameRootDef = !multiRoot;
+                for( NodeId c : it->second )
+                {
+                    if( multiRoot && sameRoot( c, r.fileId ) ) { anySameRootDef = true; break; }
+                }
+                if( anySameRootDef )
+                {
+                    ++g.unresolvedOut[ r.fromSymbol ];
+                    disposition = CallDisposition::Unresolved;
+                }
+                else
+                {
+                    disposition = CallDisposition::OtherRoot;
+                }
+                continue;
+            }
+            canonical = true;
+        }
+        if( !scipPinned && r.lang != Lang::Elixir && !r.qualifier.empty() )
         {
             qkey.clear();                                       // "qualifier::name" — reused buffer, identical bytes
             qkey.append( r.qualifier ).append( "::" ).append( r.calleeName );
@@ -2081,13 +2319,14 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 const JsImportTarget& bound = imported->second;
                 if( !shadowed && bound.outcome == JsImportOutcome::External )
                 {
-                    vetoExternal( r );
+                    disposition = vetoExternal( r );
                     continue;
                 }
                 if( shadowed || bound.outcome == JsImportOutcome::Refused
                     || ( bound.outcome == JsImportOutcome::Unlisted && bound.renamed ) )
                 {
                     ++g.unresolvedOut[ r.fromSymbol ];
+                    disposition = CallDisposition::Unresolved;
                     continue;
                 }
                 if( bound.outcome == JsImportOutcome::Pinned )
@@ -2124,6 +2363,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 if( cand.empty() )
                 {
                     ++g.unresolvedOut[r.fromSymbol];   // a KNOWN-indirect call the tool refuses to guess at
+                    disposition = CallDisposition::Unresolved;
                     continue;
                 }
             }
@@ -2148,7 +2388,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         if( !scipPinned && !canonical && !narrowed && r.recv == RecvKind::SuperObj && bindingTier.empty() )
         {
-            vetoExternal( r );
+            disposition = vetoExternal( r );
             continue;
         }
         // P2-D Rule 2 (receiver-variable type): a named-receiver call `x.m()` / `x->m()` resolves to the method
@@ -2206,7 +2446,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         if( !scipPinned && !canonical && !narrowed && r.role == RefRole::Call && r.qualifier.empty() && bindingTier.empty()
             && it != byName.end() && externalVeto.isExternalBound( r ) )
         {
-            vetoExternal( r );
+            disposition = vetoExternal( r );
             continue;
         }
         if( !scipPinned && !canonical && !narrowed )
@@ -2222,6 +2462,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 if( bindingTier.empty() )
                 {
+                    disposition = CallDisposition::Undefined;
                     continue;
                 }
             }
@@ -2282,16 +2523,31 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             cand.resize( keepCount );
         }
 
+        // ---- JVM own-language-first — see keepOwnJvmLanguageCandidates (no-op unless a Java/Kotlin set holds both) --
+        if( !scipPinned )
+        {
+            keepOwnJvmLanguageCandidates( ing, r, cand );
+        }
+
         // ---- H4 W3: RUST qualified-call scope guard — see keepRustQualifiedCandidates ------------------
         const bool alreadyPinned = scipPinned || canonical || narrowed;
         if( !keepRustQualifiedCandidates( ing, chaCones, r, alreadyPinned, cand ) && bindingTier.empty() )
         {
-            continue;                                                           // qualified-external → no edge
+            disposition = CallDisposition::QualifiedExternal;                   // qualified-external → no edge
+            continue;
+        }
+
+        // ---- std::-qualified C++ call scope guard — see keepStdQualifiedCandidates -------------------------
+        if( !keepStdQualifiedCandidates( ing, r, canonical, cand ) )
+        {
+            disposition = vetoExternal( r );                                    // nothing inside std answers → external=, counted External
+            continue;
         }
 
         // ---- tier ladder (the name-based fallback) — SKIPPED when the SCIP overlay pinned this site (tier already holds the
         // precise target(s) at full confidence; the ladder would only re-derive a guess). -----------------
-        if( !scipPinned )
+        if( !scipPinned && r.lang == Lang::Elixir ) { tier = cand; }
+        if( !scipPinned && r.lang != Lang::Elixir )
         {
             if( cand.empty() )
             {
@@ -2308,6 +2564,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     // language. That is a call the tool would otherwise SILENTLY drop as "external" while a plausibly-
                     // internal (cross-language-filtered / mis-classified) def exists. Count it so `unresolved=N` sees
                     // it. The guard is defensive/self-documenting (it is invariant-true at this site).
+                    disposition = CallDisposition::Undefined;   // `it == end` cannot reach here (site A continued); named anyway
                     if( it != byName.end() )
                     {
                         // multi-root: the per-root semantics of this gauge is "defined in THIS root but
@@ -2324,6 +2581,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                         if( anySameRootDef )
                         {
                             ++g.unresolvedOut[r.fromSymbol];
+                            disposition = CallDisposition::Unresolved;
+                        }
+                        else
+                        {
+                            disposition = CallDisposition::OtherRoot;
                         }
                     }
                     continue;
@@ -2362,6 +2624,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 if( cand.size() == 1 || narrowed || canonical ) { tier = cand; tierConf = 0.2f; }
                 else
                 {
+                    // DECLINED. Still no edge and still no guess — that precision rule is the ladder's point. What
+                    // is gone is the silence: the decline counts on the caller (declinedOut → the header's
+                    // declined=, the callees answer's declined_calls=) and records the candidates it could equally
+                    // have meant (declinedCand → the callers and impact answers' declined_calls=), so a count="0"
+                    // there says a call was declined rather than reading as "no caller exists".
+                    // test/declinecheck.sh arms (A) and (B).
+                    ++g.declinedOut[ r.fromSymbol ];
+                    g.declinedCand.insert( g.declinedCand.end(), cand.begin(), cand.end() );
+                    g.declinedCandOff.push_back( std::uint32_t( g.declinedCand.size() ) );
+                    disposition = CallDisposition::Declined;
                     continue;
                 }
             }
@@ -2369,7 +2641,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         if( tier.empty() )
         {
-            continue; // a covered-but-empty SCIP site (all self/out-of-range) yields no edge
+            disposition = CallDisposition::Self;   // a covered-but-empty SCIP site (all self/out-of-range) yields no edge
+            continue;
         }
 
         // ── B2.1 CHA-lite + B2.2 arity filter — two SOUND, deterministic prunes of a STILL-ambiguous tier, run
@@ -2469,7 +2742,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // contradicted by the receiver (`this->` IS the enclosing class; a typed var already narrowed above).
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
-        if( !scipPinned && !bindingPinned && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
+        if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
          && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
@@ -2607,6 +2880,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         if( nReal == 0 )
         {
+            disposition = CallDisposition::Self;   // the tier held only the caller itself: a recursion, not an edge
             continue;
         }
         // ---- the Phase-4 disclosure marker (shipped): the census's `locality` label, by the same predicate ---
@@ -2659,6 +2933,17 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 importEdges[ekey] = 1;  // remember (from,to) for prov="import"
             }
         }
+        disposition = CallDisposition::Bound;
+    }
+    // A reference that left the loop naming no disposition is a resolver bug behind a correct-looking map: the
+    // edges are right and the census's conservation line is not. Every plain build says so, census or not.
+    if( g.callDispositions[ std::size_t( CallDisposition::Unaccounted ) ] > 0 )
+    {
+        DEGRADED_PATH_ALERT( "buildGraph: a call reference left the resolve loop without a disposition (pincensus.h CallDisposition)" );
+    }
+    if( census )
+    {
+        g.pinCensus.dispositions = g.callDispositions;   // the census writes the conservation line from its own copy
     }
     }
 
@@ -2761,6 +3046,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // than restated, because a second copy of one rule is how the two copies end up disagreeing.
     const auto isClassLike = []( SymKind k ) noexcept
     { return namespaceCompatible( RefRole::Extends, k ); };
+    std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
     for( const Reference& r : ing.references )
@@ -2803,6 +3089,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             continue;
         }
+        baseCand.clear();
         for( NodeId baseId : it->second )
         {
             if( !isClassLike( ing.symbols[baseId].kind ) )
@@ -2824,6 +3111,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 continue;
             }
+            baseCand.push_back( baseId );
+        }
+        // the call edges' JVM rule, applied to bases: a Kotlin class implements a same-named Java interface only when
+        // Kotlin defines no candidate of that name, and the reverse (keepOwnJvmLanguageCandidates; kotlincheck §14c).
+        keepOwnJvmLanguageCandidates( ing, r, baseCand );
+        for( NodeId baseId : baseCand )
+        {
             g.implementors[ baseId ].push_back( derived );
         }
     }
@@ -3415,12 +3709,13 @@ inline AtSeed resolveAtSeed( const IngestResult& ing, std::string_view spec )
     if( r.fileMatches.size() > 1 )  { r.fault = AtFault::FileAmbiguous;  return r; }
     r.fileId = r.fileMatches[0];
 
-    std::string text;
-    if( !docparse::detail::readWholeFile( diskPath( ing, r.fileId ), text ) )
+    const std::optional<std::string> onDisk = docparse::detail::readWholeFile( diskPath( ing, r.fileId ) );
+    if( !onDisk )
     {
         r.fault = AtFault::FileUnreadable;   // indexed but gone from disk — say that, never "0 lines"
         return r;
     }
+    const std::string& text = *onDisk;
     r.lineStarts.push_back( 0 );
     for( std::size_t byteIndex = 0; byteIndex < text.size(); ++byteIndex )
     {
@@ -3484,7 +3779,7 @@ inline std::vector<NodeId> resolveAllByScopeQualified( const IngestResult& ing, 
     const std::string_view name      = spec.substr( cut + 2 );
     for( const Symbol& s : ing.symbols )
     {
-        if( s.name == name && !s.scope.empty() && scopeSuffixMatches( s.scope, scopePart ) )
+        if( elixirNameMatches( s, name ) && !s.scope.empty() && scopeSuffixMatches( s.scope, scopePart ) )
         {
             out.push_back( s.id );
         }
@@ -3493,7 +3788,7 @@ inline std::vector<NodeId> resolveAllByScopeQualified( const IngestResult& ing, 
 }
 
 // resolveFocus — the --around/--lego/--edit-check single-pick resolver — is defined BELOW
-// resolveAllByNameQualified as its lowest-id projection (2026-08-30, selectorscopecheck): the two used to
+// resolveAllByNameQualified as its single-pick projection (2026-08-30, selectorscopecheck): the two used to
 // carry the same spec grammar as separate loops, and the moment the Scope::name tier landed in both, the
 // clone lens flagged the pair — one resolver, one pick rule, no drift.
 
@@ -3820,7 +4115,7 @@ inline std::vector<NodeId> resolveAllByName( const IngestResult& ing, std::strin
     std::vector<NodeId> out;
     for( const Symbol& s : ing.symbols )
     {
-        if( s.name == name )
+        if( elixirNameMatches( s, name ) )
         {
             out.push_back( s.id );
         }
@@ -3838,10 +4133,153 @@ inline std::size_t definitionCountOfName( const IngestResult& ing, NodeId focus 
     return focus == kNoNode ? 0 : resolveAllByName( ing, ing.symbols[ focus ].name ).size();
 }
 
+// H1 (2026-09-11) — THE POSITIVE PROOF declToDefFollowThrough below was missing, as its own function.
+//
+// `Symbol::scope` is the IMMEDIATELY ENCLOSING class/namespace name only — namespaces are dropped (model.h;
+// the varType table ~3000 lines up says the same thing about its own key: "Symbol scopes drop namespaces, so
+// two same-NAMED classes collapse onto one key here"). So `s.scope == d.scope` is NOT "the same scope": it is
+// the same BARE class name, and for a FREE function, whose scope is "", it is nothing at all — the widening
+// then degenerates to name alone, which is exactly what the contract note below forbids in writing. Both
+// shapes shipped in 0.6.0 and both answered a count that was too HIGH: `a/Store.h:putObject` served
+// `b::Store::putObject`'s caller, and `api.h:helper` served every anonymous-namespace `helper` in the tree.
+// A count carrying counts_floor="1" may be UNDER the truth; over it is not a floor at all, it is a wrong
+// answer wearing an honesty marker.
+//
+// So a candidate definition is kept only with EVIDENCE that it belongs to the declaration's file:
+//   1. it IS in one of the declaration files — a guard, not the live path: the early return below already
+//      fires when the file-tier selection holds a bodied def, and a same-file def is ALWAYS in that
+//      selection (both sides match the same `file` substring), so this clause exists to make the proof sound
+//      on its own terms rather than on that invariant holding forever;
+//   2. its file #includes one of the declaration files, resolved PATH-precisely through
+//      resolve.h::resolvePreciseInclude — the same entry point buildPreciseIncludeAdj resolves every corpus
+//      include with, so quote-vs-angle and relative-to-includer handling stay in ONE place — and NEVER by
+//      basename: the two `Store.h` of the H1 repro differ only by path.
+// Anything else is DROPPED, which leaves the count under the truth (the floor's safe direction), and the
+// caller reports how many were dropped so the answer is not a bare zero.
+//
+// COST — why this does not call buildPreciseIncludeAdj. That builds a whole-corpus path index and resolves
+// EVERY include in the tree; on a 182,555-file corpus it is far too much for a path that runs per selector.
+// It is also not needed: only the declaration files matter, so the index handed to the resolver holds ONLY
+// those, and a hit is by construction a hit on one of them (re-checked against `isDecl` anyway, so the
+// function is sound without trusting each language's internals). The pass is O(ing.includes) byte lookups
+// for the candidate-file filter, plus one resolve per include OF a candidate file.
+//
+// WHAT DOES NOT PROVE — all of it in the under-count direction, and none of it silent, because the caller's
+// residue count covers every drop: a Rust `use crate::…` (no crate root is mined here — resolvePreciseInclude's
+// own documented default), an Elixir module reference (no module index — likewise), a Ruby symbolic require,
+// a TRANSITIVE include (`impl.cpp` → `pch.h` → the declaring header), and, in a merged workspace, a cross-root
+// include that escapes its own root on disk or resolves through a tsconfig/go.mod alias. Each of those needs
+// a whole-corpus pass this seam deliberately does not take.
+//
+// RULE 2, the scan, split out of the proof below so the bolted-on resolver call does not inflate its
+// complexity (the same reason #63 split declToDefFollowThrough out of resolveAllByNameQualified). Marks
+// every still-unproven `isCand` file whose own #include directives resolve to an `isDecl` file. All three
+// arrays are indexed BY FILE ID; `proven` is read as well as written, so an already-proven file costs no
+// resolve.
+inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std::vector<char>& isDecl,
+                                             const std::vector<char>& isCand, std::vector<char>& proven )
+{
+    VERIFY_NO_ALIAS3( isDecl, isCand, proven );   // three same-role dense arrays: proven[] is written while isDecl[]/isCand[] are read
+    // The index: ONE entry per DECLARATION file, keyed the way buildPreciseIncludeAdj keys its own
+    // (lexicalNormalize on BOTH sides, so a `.`-rooted crawl's `./a/x.h` and a resolved `a/x.h` agree).
+    HashMap<std::string, std::uint32_t> declIndex;
+    for( std::uint32_t f = 0; f < isDecl.size(); ++f )
+    {
+        if( isDecl[ f ] != 0 )
+        {
+            declIndex.emplace( lexicalNormalize( ing.files[ f ] ), f );
+        }
+    }
+    // Multi-root: fileRoot/rootLabels/rootAbs reproduce the same-root soundness gate and the root-relative
+    // anchor exactly, so a workspace resolves intra-root includes as it does today; absIndex is left EMPTY on
+    // purpose — the §3.1a disk-shape escape probe then simply misses, which costs a cross-root proof and can
+    // never invent one. Single root: ws stays nullptr and every call is byte-identical to the single-root
+    // path buildPreciseIncludeAdj takes.
+    WsIncludeCtx        wsCtx;
+    const WsIncludeCtx* ws = nullptr;
+    if( !ing.fileRoot.empty() && !ing.rootLabels.empty() )
+    {
+        wsCtx.fileRoot   = &ing.fileRoot;
+        wsCtx.rootAbs    = ing.rootReals;
+        wsCtx.rootLabels = ing.rootLabels;
+        ws               = &wsCtx;
+    }
+
+    for( const Include& inc : ing.includes )
+    {
+        // Skipped: a symbolic Ruby constant (it resolves through its own corpus-wide definition index, never
+        // as a path), an include from a file that holds no candidate, and one whose file is already proven.
+        const bool worthResolving = !inc.isSymbolic && inc.fileId < isCand.size()
+                                 && isCand[ inc.fileId ] != 0 && proven[ inc.fileId ] == 0;
+        if( !worthResolving )
+        {
+            continue;
+        }
+        const std::uint32_t to = resolvePreciseInclude( ing.files[ inc.fileId ], inc.target, inc.isAngle, declIndex,
+                                                        {}, false, ws, inc.fileId, nullptr );
+        if( to != kNoFile && to < isDecl.size() && isDecl[ to ] != 0 )
+        {
+            proven[ inc.fileId ] = char( 1 );
+        }
+    }
+}
+
+// Returns one flag PER FILE: 1 = a definition in that file is proven to belong to one of the declaration
+// files, by rule 1 or rule 2. Per-file byte arrays rather than sorted id sets and a binary search per
+// candidate: the widening runs once per selector, so O(files) bytes from one memset is the cheaper and much
+// plainer shape — and it is the one buildGraph's own per-file marks already use.
+inline std::vector<char> includeProofOfDeclFiles( const IngestResult& ing, const std::vector<NodeId>& decls,
+                                                  const std::vector<NodeId>& cands )
+{
+    const std::size_t F = ing.files.size();
+    std::vector<char> isDecl( F, 0 );
+    std::vector<char> proven( F, 0 );
+    for( NodeId id : decls )
+    {
+        isDecl[ ing.symbols[ id ].fileId ] = char( 1 );
+        proven[ ing.symbols[ id ].fileId ] = char( 1 );   // rule 1 — see clause 1 of the note above
+    }
+    std::vector<char> isCand( F, 0 );
+    std::size_t       openCount = 0;   // distinct candidate files still needing evidence
+    for( NodeId id : cands )
+    {
+        const std::uint32_t f = ing.symbols[ id ].fileId;
+        openCount += ( isCand[ f ] == 0 && proven[ f ] == 0 ) ? 1u : 0u;
+        isCand[ f ] = char( 1 );
+    }
+    if( openCount != 0 && !ing.includes.empty() )
+    {
+        markCandidateFilesIncludingDecl( ing, isDecl, isCand, proven );   // rule 2
+    }
+    return proven;
+}
+
+// The (scope, name) CANDIDATE gather — only a gather: what KEEPS a candidate is includeProofOfDeclFiles
+// above. Deduped, and in ascending NodeId because ing.symbols is walked in id order. `isDefinitionNotDeclaration`
+// is the decl/def collapse's own predicate, on purpose: a bodyless Kotlin class/interface counts as a
+// definition here too, not a declaration to widen past.
+inline std::vector<NodeId> declToDefCandidates( const IngestResult& ing, std::string_view name, const std::vector<NodeId>& sel )
+{
+    std::vector<NodeId> cands;
+    for( NodeId declId : sel )
+    {
+        const Symbol& d = ing.symbols[ declId ];
+        for( const Symbol& s : ing.symbols )
+        {
+            const bool sameContract = s.name == name && s.scope == d.scope && isDefinitionNotDeclaration( s );
+            if( sameContract && langCompatible( s.lang, d.lang ) && std::find( cands.begin(), cands.end(), s.id ) == cands.end() )
+            {
+                cands.push_back( s.id );
+            }
+        }
+    }
+    return cands;
+}
+
 // X9(b): qualified "file:name" variant of resolveAllByName, for --callers/--callees/--impact — a same-
 // named symbol living in more than one file (a common overload/shadow shape) previously had no way to
 // disambiguate on these verbs even though --around/--lego/--edit-check already could (resolveFocus). Uses
-// the SAME splitQualifiedSpec rule as resolveFocus, but returns EVERY match (not just the lowest-id pick)
+// the SAME splitQualifiedSpec rule as resolveFocus, but returns EVERY match (not just the single pick)
 // — --callers/--impact want the union across all matches (overloads share callers/impact by design),
 // unlike --around's single-target ego-graph. A bare "name" (no colon) is BYTE-IDENTICAL to the existing
 // resolveAllByName( ing, name ) — every symbol with that name, across every file — so this is purely
@@ -3867,8 +4305,13 @@ inline std::size_t definitionCountOfName( const IngestResult& ing, NodeId focus 
 //     every free `size` in the repository — an over-count inside an honesty fix, which is strictly worse
 //     than the silence it replaces. A method's scope is its class, so this is exactly as specific as the
 //     `Scope::name` tier the reporter showed already working.
-//   * Bodied only, via the house predicate (`endByte > sigEndByte` — shared verbatim with the decl/def
-//     collapse and arch.h's pure-interface detection), and langCompatible with the declaration, so a
+//     H1 AMENDMENT (2026-09-11): (scope, name) is NOT specific enough, and for a free function it IS name
+//     alone — `Symbol::scope` drops namespaces and is "" for a free function, so both over-counts the clause
+//     forbids shipped anyway. The match above is now only how CANDIDATES are gathered; what KEEPS one is the
+//     positive file proof in includeProofOfDeclFiles just above (same file, or that file's precise #include),
+//     and everything unproven is dropped and counted out through `unprovenDefCountOut`.
+//   * Bodied only, via the predicate the decl/def collapse reads (model.h isDefinitionNotDeclaration: the
+//     span test, and a Kotlin type), and langCompatible with the declaration, so a
 //     Python `putObject` never answers for a C++ header.
 //   * The declarations are KEPT alongside the definitions, not replaced. `--uses` counts reference sites
 //     against the decl too (a `Type::method` mention in another header), and dropping them would trade
@@ -3883,15 +4326,27 @@ inline std::size_t definitionCountOfName( const IngestResult& ing, NodeId focus 
 // nesting 2 -> 5 (ripwire's own --quality-delta said so), for a rule that is one self-contained question.
 // `sel` is the file-tier selection, widened IN PLACE; empty `file` or a selection that already holds a
 // definition leaves it byte-identical. See the contract note at the call site.
+//
+// `unprovenDefCountOut` (H1, optional — every existing call site is unaffected) is THE RESIDUE: how many
+// same-named candidate definitions were found and then dropped for want of the file proof. It is the one
+// number that separates "this declaration has no definition in the corpus" from "definitions exist and none
+// of them provably belongs to the file you named" — without it, a dropped candidate reaches the reader as a
+// bare zero, which is the shape #63 exists to kill. Always written when the pointer is non-null (0 when the
+// widening never runs), never left stale.
 inline void declToDefFollowThrough( const IngestResult& ing, std::string_view file, std::string_view name,
-                                    std::vector<NodeId>& sel )
+                                    std::vector<NodeId>& sel, std::size_t* unprovenDefCountOut = nullptr )
 {
+    if( unprovenDefCountOut != nullptr )
+    {
+        *unprovenDefCountOut = 0;
+    }
     if( file.empty() || sel.empty() )
     {
         return;
     }
-    const auto hasBody = [ & ]( NodeId id ) noexcept
-    { return ing.symbols[id].endByte > ing.symbols[id].sigEndByte; };
+    // The decl/def collapse's own predicate (model.h isDefinitionNotDeclaration), on purpose: a bodyless Kotlin
+    // class/interface counts as a definition here too, not a declaration to widen past.
+    const auto hasBody = [ & ]( NodeId id ) noexcept { return isDefinitionNotDeclaration( ing.symbols[ id ] ); };
 
     for( NodeId id : sel )
     {
@@ -3901,28 +4356,48 @@ inline void declToDefFollowThrough( const IngestResult& ing, std::string_view fi
         }
     }
 
-    std::vector<NodeId> defs;
-    for( NodeId declId : sel )
+    // CANDIDATES, by the (scope, name) match — which the H1 amendment on the call site's note explains is a
+    // gathering rule, never a keeping one: `scope` drops namespaces and is "" for a free function.
+    const std::vector<NodeId> cands = declToDefCandidates( ing, name, sel );
+    if( cands.empty() )
     {
-        const Symbol& d = ing.symbols[ declId ];
-        for( const Symbol& s : ing.symbols )
+        return;
+    }
+
+    // A candidate is proven against ANY declaration in the selection, not only the one whose scope matched
+    // it: every member of `sel` is a declaration the caller's own selector named, so a definition tied to one
+    // of them is tied to the answer.
+    const std::vector<char> proven = includeProofOfDeclFiles( ing, sel, cands );
+
+    std::size_t unprovenCount = 0;
+    for( NodeId id : cands )
+    {
+        if( proven[ ing.symbols[ id ].fileId ] != 0 )
         {
-            const bool sameContract = s.name == name && s.scope == d.scope && hasBody( s.id );
-            if( sameContract && langCompatible( s.lang, d.lang ) && std::find( defs.begin(), defs.end(), s.id ) == defs.end() )
-            {
-                defs.push_back( s.id );
-            }
+            sel.push_back( id );   // KEEP the decls - see the fifth clause of the call site's note
+        }
+        else
+        {
+            ++unprovenCount;       // found, not provable: dropped, and DISCLOSED rather than served
         }
     }
-    for( NodeId id : defs )
+    if( unprovenDefCountOut != nullptr )
     {
-        sel.push_back( id );   // KEEP the decls - see the fifth clause of the call site's note
+        *unprovenDefCountOut = unprovenCount;
     }
     std::sort( sel.begin(), sel.end() );   // NodeId order - the contract every caller of this already relies on
 }
 
-inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, std::string_view spec )
+// `unprovenDefCountOut` (H1, optional): the residue declToDefFollowThrough dropped — see its contract. Zero
+// on every path that never reaches the widening (an @FILE:LINE seed, a canonical id, a Scope::name tier, a
+// bare name), so a reader never has to ask whether the number is stale.
+inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, std::string_view spec,
+                                                      std::size_t* unprovenDefCountOut = nullptr )
 {
+    if( unprovenDefCountOut != nullptr )
+    {
+        *unprovenDefCountOut = 0;
+    }
     if( !spec.empty() && spec.front() == '@' )
     { // @FILE:LINE line seed — the innermost covering definition (exactly one: a line names one place), or
       // empty; a verb's own retry logic (--slice's HEAD:VAR split) and the shared refusal clause both rely
@@ -3957,7 +4432,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     std::vector<NodeId> out;
     for( const Symbol& s : ing.symbols )
     {
-        if( s.name == name && ( file.empty() || filePathContains( ing.files[ s.fileId ], file ) ) )
+        if( elixirNameMatches( s, name ) && ( file.empty() || filePathContains( ing.files[ s.fileId ], file ) ) )
         {
             out.push_back( s.id );
         }
@@ -3965,7 +4440,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
 
     // #63: a header-qualified selector resolves to DECLARATIONS, which carry no call-graph edges.
     // Widen to the definitions they stand for. Full contract and its limits: declToDefFollowThrough above.
-    declToDefFollowThrough( ing, file, name, out );
+    declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
     return out;
 }
 
@@ -4247,6 +4722,9 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         const std::string_view ctxOwner = ownerOfContext( r.fromSymbol );
         switch( r.recv )
         {
+            case RecvKind::ElixirModule:
+            case RecvKind::ElixirSelfModule:
+            break; // module receivers name callables, not instance fields
             case RecvKind::None:
             {
                 candidatesIn( ctxOwner, r.lang );   // empty ⇒ a local/global/inherited name — not a field use this pass can see
@@ -4380,15 +4858,49 @@ inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::
     return {};
 }
 
-// resolve a --around/--lego spec to the lowest-id matching symbol; kNoNode if none. The lowest-id
-// PROJECTION of resolveAllByNameQualified — matches ascend by NodeId there (symbols are walked in id
-// order and every tier preserves that), so front() IS the historic lowest-id pick; one grammar, one
-// resolver, and every tier the full resolver gains (canonical id, Scope::name) reaches the single-pick
-// verbs in the same commit. Declared here, below the full resolver, for exactly that reason.
-inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec )
+// resolve a --around/--lego/--connect spec to ONE matching symbol; kNoNode if none. A PROJECTION of
+// resolveAllByNameQualified — matches ascend by NodeId there (symbols are walked in id order and every tier preserves
+// that) — so one grammar, one resolver, and every tier the full resolver gains (canonical id, Scope::name) reaches the
+// single-pick verbs in the same commit. Declared here, below the full resolver, for exactly that reason.
+//
+// THE PICK is the lowest id, with ONE exception: a bodyless C/C++ lowest id (a header prototype, an in-class method
+// declaration, a forward-declared class) yields to the lowest-id C/C++ match WITH a body in the SAME scope, when the set
+// holds one. The lowest id alone made the declaration the focus whenever its header sorted first, and a declaration has
+// no call or extends edges — so --around served its own row, --connect found no join and --lego counted no implementor,
+// for a bare name and a fully proven file:name alike (decltodefcheck E3a..E3d). Everything else keeps the lowest id:
+//   * a set of declarations only, or a single match — nothing to prefer;
+//   * every other language — measured on this repository, an unscoped "bodied first" moved 69 non-C/C++ names (Python and
+//     JSON keys, Ruby classes, TypeScript overload signatures, even py -> cpp), none of them a declaration beside its
+//     definition; this rule moved 54 names, every one a C/C++ declaration to its definition (E3e);
+//   * a body in ANOTHER scope — a pure virtual's override in a derived class is a dispatch claim, not the declaration's
+//     definition, the same line declToDefFollowThrough draws (E3f).
+// `defs=` on these verbs still says how many definitions the NAME has, so a pick among several stays disclosed.
+//
+// `unprovenDefCountOut` (H1, optional): the residue the full resolver reports for the SAME selector — the same-named
+// definitions a file:name spelling dropped, which the single pick therefore never focuses on either. Passed straight
+// through, so it is written on every path exactly as resolveAllByNameQualified writes it.
+inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec, std::size_t* unprovenDefCountOut = nullptr )
 {
-    const std::vector<NodeId> matches = resolveAllByNameQualified( ing, spec );
-    return matches.empty() ? kNoNode : matches.front();
+    const std::vector<NodeId> matches = resolveAllByNameQualified( ing, spec, unprovenDefCountOut );
+    if( matches.empty() )
+    {
+        return kNoNode;
+    }
+    const Symbol& lowest = ing.symbols[ matches.front() ];
+    const auto    cOrCpp = []( Lang lang ) noexcept { return lang == Lang::Cpp || lang == Lang::C; };
+    if( isDefinitionNotDeclaration( lowest ) || !cOrCpp( lowest.lang ) )
+    {
+        return matches.front();
+    }
+    for( NodeId id : matches )
+    {
+        const Symbol& candidate = ing.symbols[ id ];
+        if( isDefinitionNotDeclaration( candidate ) && cOrCpp( candidate.lang ) && candidate.scope == lowest.scope )
+        {
+            return id;
+        }
+    }
+    return matches.front();
 }
 
 // clearly side-effecting C/C++ intrinsics (I/O, allocation, nondeterminism, process control). A
@@ -4787,27 +5299,32 @@ inline StructuralIncludeAdj resolveStructuralIncludeAdj( const IngestResult& ing
     {
         return out;   // no lazy directive anywhere: the structure IS the full graph, byte-identical to before
     }
+    // `dropped` collects the ids the cut removes from one file's row so the PAIR count is over DISTINCT ids. The
+    // un-deduped adjacency is in DIRECTIVE order, not sorted (buildPreciseIncludeAdj sorts only when dedup=true), so
+    // the earlier "equal ids are adjacent" shortcut counted a pair once per RUN of equal ids: `Errors::Boom`,
+    // `User`, `Errors::Bust` in one method resolve to errors.rb, user.rb, errors.rb and read as lazy_edges=3 for
+    // two pairs (parser version 93, test/rubyargcheck.sh service.rb, where three spellings of one file's classes
+    // are interleaved with two other files). One scratch vector, reused across files; sort + unique is the count.
+    std::vector<std::uint32_t> dropped;
     for( std::uint32_t f = 0; f < out.adj.size(); ++f )
     {
         std::vector<std::uint32_t>& outs = out.adj[f];
         std::uint32_t               kept = 0;
-        std::uint32_t               lastDropped = std::numeric_limits<std::uint32_t>::max();
+        dropped.clear();
         for( std::uint32_t j = 0; j < outs.size(); ++j )
         {
             const std::uint32_t to  = outs[j];
             const auto          it  = lazyPairs.find( ( std::uint64_t( f ) << 32 ) | std::uint64_t( to ) );
             if( it != lazyPairs.end() && it->second != 0 )
             {
-                if( to != lastDropped )   // outs is sorted (buildPreciseIncludeAdj), so equal ids are adjacent: count the PAIR once
-                {
-                    ++out.lazyEdgesByFile[f];
-                    lastDropped = to;
-                }
+                dropped.push_back( to );
                 continue;
             }
             outs[kept++] = to;
         }
         outs.resize( kept );
+        std::sort( dropped.begin(), dropped.end() );
+        out.lazyEdgesByFile[f] = static_cast<std::uint32_t>( std::unique( dropped.begin(), dropped.end() ) - dropped.begin() );
         out.lazyEdges += out.lazyEdgesByFile[f];
     }
     return out;
@@ -6098,6 +6615,54 @@ inline std::string graphCountFloorAttrXml( const Graph& g )
 inline std::string graphCountFloorAttrJson( const Graph& g )
 {
     return graphGaugeAttrJson( g.ambOut, g.unresolvedOut, g.unindexedFiles ) + kGraphCountFloorAttrJson;
+}
+
+// declined_calls= on the callers and impact answers: how many tier-3 declines named at least one of `targets`
+// among their candidates. The unit is the CALL, never (call, candidate): a bare-name selector unions every
+// same-named definition, and a declined call that could have meant two of them is still ONE call the answer
+// may be missing.
+inline std::size_t declinedCallsNaming( const Graph& g, std::span<const NodeId> targets )
+{
+    if( g.declinedCand.empty() || targets.empty() )
+    {
+        return 0;
+    }
+    std::vector<char> isTarget( g.declinedOut.size(), 0 );
+    for( const NodeId t : targets )
+    {
+        if( t < isTarget.size() )
+        {
+            isTarget[ t ] = 1;
+        }
+    }
+    std::size_t callCount = 0;
+    for( std::size_t callIndex = 0; callIndex + 1 < g.declinedCandOff.size(); ++callIndex )
+    {
+        for( std::uint32_t slot = g.declinedCandOff[ callIndex ]; slot < g.declinedCandOff[ callIndex + 1 ]; ++slot )
+        {
+            if( isTarget[ g.declinedCand[ slot ] ] )
+            {
+                ++callCount;
+                break;
+            }
+        }
+    }
+    return callCount;
+}
+
+// declined_calls= on the callees answer: the declines MADE by `sources`. Every call has exactly one caller, so
+// the per-caller counts add up exactly across a selector with several definitions.
+inline std::size_t declinedCallsMadeBy( const Graph& g, std::span<const NodeId> sources ) noexcept
+{
+    std::size_t callCount = 0;
+    for( const NodeId s : sources )
+    {
+        if( s < g.declinedOut.size() )
+        {
+            callCount += g.declinedOut[ s ];
+        }
+    }
+    return callCount;
 }
 
 }   // namespace rw

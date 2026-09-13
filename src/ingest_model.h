@@ -58,6 +58,11 @@ inline void dedupRawDefs( std::vector<RawDef>& rawDefs )
                    {
                        return a.nameByte < b.nameByte;
                    }
+                   if( a.lang == Lang::Elixir && b.lang == Lang::Elixir )
+                   {
+                       if( a.scope != b.scope ) { return a.scope < b.scope; }
+                       if( a.name != b.name ) { return a.name < b.name; }
+                   }
                    // same identity: most-specific kind first so unique() keeps it
                    const int specificityA = specificity( a.kind ), specificityB = specificity( b.kind );
                    if( specificityA != specificityB )
@@ -76,7 +81,8 @@ inline void dedupRawDefs( std::vector<RawDef>& rawDefs )
 
     const auto sameIdentity = []( const RawDef& a, const RawDef& b ) noexcept
     {
-        return a.fileId == b.fileId && a.nameByte == b.nameByte;
+        return a.fileId == b.fileId && a.nameByte == b.nameByte
+            && ( a.lang != Lang::Elixir || ( a.scope == b.scope && a.name == b.name ) );
     };
     rawDefs.erase( std::unique( rawDefs.begin(), rawDefs.end(), sameIdentity ), rawDefs.end() );
 }
@@ -224,7 +230,8 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
                    {
                        return a.name < b.name;
                    }
-                   return a.startByte < b.startByte;   // stable last-resort tiebreak
+                   if( a.startByte != b.startByte ) { return a.startByte < b.startByte; }
+                   return a.scope < b.scope;   // shared Elixir implementation bodies have distinct module scopes
                } );
 
     result.symbols.reserve( rawDefs.size() );
@@ -367,6 +374,45 @@ inline DefSpanIndex buildDefSpanIndex( const IngestResult& result, const std::ve
                    } );
     }
     return index;
+}
+
+// 4a) extent honesty (src/extentsuspect.h, gate test/extentcheck.sh): classify every file's definitions against
+//     the containment rules and record the failed reasons on the Symbol. Rides the span order buildDefSpanIndex
+//     just produced (startByte ascending, endByte descending — exactly the order the classifier's stack needs), so
+//     the pass adds no sort of its own. Every input is a fact the cache already carries (the extents, nameByte,
+//     RawDef::recovered), so the bits are recomputed on every load and never persisted: a warm run and a cold run
+//     classify identically, and a rule change needs no parser bump.
+inline void markExtentSuspects( IngestResult& result, const std::vector<RawDef>& rawDefs, const DefSpanIndex& index )
+{
+    PROFILE_SCOPE_DESCRIBE( "ingest/build-model: extent honesty (containment check)" );
+
+    std::vector<extent::ExtentDef> fileDefs;
+    std::vector<std::uint8_t>      fileBits;
+    extent::ExtentScratch          scratch;
+    for( std::size_t fileId = 0; fileId < result.files.size(); ++fileId )
+    {
+        const std::size_t begin = index.fileSpanStart[ fileId ];
+        const std::size_t end   = index.fileSpanStart[ fileId + 1 ];
+        if( end == begin )
+        {
+            continue;
+        }
+
+        fileDefs.clear();
+        for( std::size_t spanIndex = begin; spanIndex < end; ++spanIndex )
+        {
+            const NodeId  id = index.spans[ spanIndex ].id;
+            const Symbol& s  = result.symbols[ id ];
+            const RawDef& d  = rawDefs[ id ];   // aligned 1:1 with result.symbols after assignSymbols' sort
+            fileDefs.push_back( { s.sigStartByte, s.sigEndByte, s.endByte, d.nameByte, s.kind, s.lang, d.recovered, s.name, s.scope } );
+        }
+        fileBits.assign( fileDefs.size(), 0 );
+        extent::classifyFileExtents( fileDefs, fileBits, scratch );
+        for( std::size_t spanIndex = begin; spanIndex < end; ++spanIndex )
+        {
+            result.symbols[ index.spans[ spanIndex ].id ].extentSuspect = fileBits[ spanIndex - begin ];
+        }
+    }
 }
 
 // innermost enclosing def of a byte position: the container span with the LARGEST start ≤ pos whose end
@@ -554,6 +600,70 @@ inline std::vector<std::uint32_t> orderReferences( const std::vector<RawRef>& ra
     return refOrder;
 }
 
+// A multi-target defimpl shares written spans; give each implementation its own attributed references.
+//
+// ORDER: the clones are spliced in BESIDE the reference they were cloned from, never appended to the tail.
+// emitReferences hands this function a vector in (fileId, startByte, name, role, isInherit) order, and two
+// consumers read that order rather than re-deriving it: graph.h's chaUpDeclared records a derived type's
+// direct bases in source order (`super()` resolution), and editpreview.h splices a re-parsed file in by
+// partitioning ing.references on fileId, which only reproduces a real re-ingest while each file's refs are
+// one contiguous ascending run. A clone shares its original's whole sort key — only fromSymbol and the
+// rewritten qualifier differ — so the position next to it is exactly where a sort would have put it.
+inline void expandElixirImplementationReferences( IngestResult& result )
+{
+    HashMap<std::string, std::vector<NodeId>> sharedSpans;
+    const auto keyOf = []( const Symbol& symbol )
+    {
+        return std::to_string( symbol.fileId ) + ":" + std::to_string( symbol.sigStartByte ) + ":" + std::to_string( symbol.endByte );
+    };
+    std::size_t count = 0;
+    for( const Symbol& symbol : result.symbols ) { count += symbol.lang == Lang::Elixir ? 1 : 0; }
+    if( count == 0 ) { return; }
+    sharedSpans.reserve( count );
+    for( const Symbol& symbol : result.symbols )
+    {
+        if( symbol.lang == Lang::Elixir ) { sharedSpans[ keyOf( symbol ) ].push_back( symbol.id ); }
+    }
+    std::vector<std::pair<std::size_t, Reference>> expanded;   // (index of the original, the clone) — spliced in below
+    for( std::size_t refIndex = 0; refIndex < result.references.size(); ++refIndex )
+    {
+        Reference& ref = result.references[ refIndex ];
+        if( ref.lang != Lang::Elixir || ref.fromSymbol >= result.symbols.size() ) { continue; }
+        const auto found = sharedSpans.find( keyOf( result.symbols[ ref.fromSymbol ] ) );
+        if( found == sharedSpans.end() || found->second.size() < 2 ) { continue; }
+        const auto& nodes = found->second;
+        const std::string& primary = result.symbols[ nodes.front() ].scope;
+        const Reference original = ref;
+        for( NodeId node : nodes )
+        {
+            Reference clone = original;
+            clone.fromSymbol = node;
+            const std::string& scope = result.symbols[ node ].scope;
+            if( clone.recv == RecvKind::None && clone.role != RefRole::Import && clone.role != RefRole::Extends ) { clone.qualifier = scope; }
+            else if( clone.recv == RecvKind::ElixirSelfModule && !primary.empty() && clone.qualifier.starts_with( primary ) )
+            {
+                clone.qualifier.replace( 0, primary.size(), scope );
+            }
+            if( node == original.fromSymbol ) { ref = std::move( clone ); }
+            else { expanded.emplace_back( refIndex, std::move( clone ) ); }
+        }
+    }
+    if( expanded.empty() ) { return; }
+    std::vector<Reference> merged;
+    merged.reserve( result.references.size() + expanded.size() );
+    std::size_t nextClone = 0;                                 // expanded is already in ascending original-index order
+    for( std::size_t refIndex = 0; refIndex < result.references.size(); ++refIndex )
+    {
+        merged.push_back( std::move( result.references[ refIndex ] ) );
+        while( nextClone < expanded.size() && expanded[ nextClone ].first == refIndex )
+        {
+            merged.push_back( std::move( expanded[ nextClone ].second ) );
+            ++nextClone;
+        }
+    }
+    result.references = std::move( merged );
+}
+
 // rawRefs is consumed here (never read again) → MOVE its 5 strings into each Reference instead of copying.
 inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, const std::vector<std::uint32_t>& refOrder, const DefSpanIndex& spanIndex )
 {
@@ -584,6 +694,7 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.startByte   = r.startByte;                // shadow fix round: for the block-span containment test
         ref.fromSymbol  = refSweep.find( r.fileId, r.startByte );
     }
+    expandElixirImplementationReferences( result );
 }
 
 // member-variable round (card A3): a Python field is DEFINED by its first `self.x = …` assignment, and that very

@@ -41,7 +41,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 LIB="$ROOT/test/lib/headbinlib.sh"
 WORKFLOWS="$ROOT/.github/workflows"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
@@ -359,8 +359,8 @@ c2="$( shimCalls "$d" )"
     && ok "(B) unset: a second call hits the cache ($c1 cmake call(s) before, $c2 after)" \
     || no "(B) unset: the second call did not come from the cache: rc=$( rcOf "$d/second" ) stdout='$( cat "$d/second.out" 2>/dev/null )' cmake calls $c1 -> $c2"
 [ "$( git -C "$CORPUS" worktree list 2>/dev/null | grep -c . )" -eq 1 ] \
-    && ok "(B) unset: the build's throwaway worktree is removed" \
-    || no "(B) unset: a throwaway worktree was left behind: $( git -C "$CORPUS" worktree list 2>&1 | tr '\n' '|' )"
+    && ok "(B) unset: the build registers no worktree in the corpus (its checkout is a private clone; test/worktreeleakcheck.sh kills it mid-build)" \
+    || no "(B) unset: the build left a worktree registered in the corpus: $( git -C "$CORPUS" worktree list 2>&1 | tr '\n' '|' )"
 
 # mutation: the library without its staged dispatch must go back to building, so the refusal arm above can go red
 MUTLIB="$TMP/headbinlib.nostage.sh"

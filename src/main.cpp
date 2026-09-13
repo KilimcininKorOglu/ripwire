@@ -162,8 +162,16 @@ using rw::quality::isHeaderPath;           // quality.h — the --dead-code elig
 using rw::quality::sourceHasStaticToken;
 using rw::quality::deadCodeEligibleKind;
 
-// Warm-by-default cache location: a per-root file keyed by the root's ABSOLUTE path (FNV-1a 64), under
-// the hardened cacheDirLadder(), so repeated invocations on the same tree re-parse only changed files.
+// Warm-by-default cache location: a per-root file keyed by the root's ABSOLUTE path, under the hardened
+// cacheDirLadder(), so repeated invocations on the same tree re-parse only changed files.
+//
+// The 16-hex root field comes from quality.h's `cacheRootKeyHex` — the ONE canonical spelling every cache
+// family now shares (lean/rich here, `ripwire-mcp-<key>.cache`, and shaKeyedCachePath's qheadsnap/qsnap/
+// qbody/qhist/qms/qchurn/stier). This function used to open-code the hash with a TRUNCATED FNV-1a offset
+// basis while quality.h used the real one, so one root minted two key families and the byte-budget pin
+// (evictBySizeBudget) could only ever see half of them. The seed that survived is this function's, because
+// it is the one that keeps the 1.76 GB llvm parse cache warm; the full argument lives beside
+// `kCacheRootKeySeed`.
 // Absolute path so two different dirs both invoked as "." don't collide (a collision would only ever
 // cost a cold re-parse — the cache is keyed per-file-path internally — but absolute keeps each tree's
 // cache distinct and warm). Cache content is content-hashed + parserVer-gated, so a stale/foreign cache
@@ -195,14 +203,7 @@ using rw::quality::deadCodeEligibleKind;
 // and can no longer truncate the shared blob. Gate: test/cacheoffsetcheck.sh.
 std::string defaultCachePath( const std::string& root, bool captureValueUses )
 {
-    char        absbuf[ PATH_MAX ];
-    const char* abs = realpath( root.c_str(), absbuf ) ? absbuf : root.c_str();
-    std::uint64_t h = 1469598103934665603ull;
-    for( const char* c = abs; *c; ++c ) { h ^= static_cast<unsigned char>( *c ); h = rw::hashutil::fnv1aMultiply( h ); }
-    char tail[ 48 ];
-    rw::formatTo( tail, sizeof( tail ), "ripwire-{:016x}-{}.bin",
-                   static_cast<unsigned long long>( h ), captureValueUses ? "rich" : "lean" );
-    return resolveCacheBlobPath( cacheDirLadder(), tail );
+    return rw::quality::rootKeyedCachePath( root, "ripwire-", captureValueUses ? "-rich.bin" : "-lean.bin" );
 }
 
 std::string canonicalProcessLockPart( std::string_view path )
@@ -626,29 +627,62 @@ struct NoteTargetResolution
     bool        refused = false;    // the refusal is already on stderr; the caller exits 1
 };
 
+// The UNIQUE-definition arm of resolveNoteAddTarget: store the canonical id and SAY SO when it differs from what was
+// typed. Lifted out when H1's residue line joined it, because the handler already sat at the verbosity bar.
+//
+// H1 — the decl→def residue, on the one surface this verb has: its stderr. `unprovenDefs` is what the resolver dropped
+// for a file:name target — same-named definitions it could not tie to the file it named — and `consequence` says what
+// that means for THIS outcome: a note stored on the declaration, or a refusal that stored nothing. One line for both, so
+// the count and the remedy cannot drift apart between them; nothing is printed at zero.
+void emitNoteAddUnprovenDefs( std::size_t unprovenDefs, const char* consequence )
+{
+    if( unprovenDefs == 0 )
+    {
+        return;
+    }
+    rw::emitTo( stderr, "ripwire: --note-add: unproven_defs={} — the target also matched {} same-named definition(s) it could not tie to "
+                          "the file it named; {}. Widen the target to the bare NAME, or to Scope::name, to see them\n",
+                unprovenDefs, unprovenDefs, consequence );
+}
+
+// The one definition left is the declaration: the note keys it, and it will not surface on the dropped definitions.
+NoteTargetResolution noteTargetForDefinition( const MainDispatch& d, rw::NodeId def, const std::string& rawTarget,
+                                              const std::string& normalized, std::size_t unprovenDefs )
+{
+    using namespace rw;
+    const IngestResult& ing = d.ing;
+    const Symbol&       s   = ing.symbols[ def ];
+    // EXACTLY the key --notes' liveness set and serialize.h's surfacing lookup build (canonicalIdRelTo),
+    // spelled from the same three fields, so "stored" and "found" can never be two different strings.
+    const std::string canon = canonicalId( relForHash( ing.files[ s.fileId ], d.root ), s.scope, s.name );
+    if( canon != normalized )
+    {
+        rw::emitTo( stderr, "ripwire: --note-add: target '{}' canonicalised to '{}' — that is the id --for/--expand key notes by\n",
+                      rawTarget.c_str(), canon.c_str() );
+    }
+    emitNoteAddUnprovenDefs( unprovenDefs, "the note keys the declaration above and will not surface on them" );
+    return { canon, false };
+}
+
 NoteTargetResolution resolveNoteAddTarget( const MainDispatch& d, const std::string& rawTarget, std::string normalized )
 {
     using namespace rw;
     const IngestResult& ing = d.ing;
 
-    const std::vector<NodeId> defs = resolveAllByNameQualified( ing, rawTarget );
+    std::size_t               naUnprovenDefs = 0;   // H1: the residue both outcomes below disclose
+    const std::vector<NodeId> defs           = resolveAllByNameQualified( ing, rawTarget, &naUnprovenDefs );
 
     if( defs.size() == 1 )
     {
-        const Symbol&     s     = ing.symbols[ defs[0] ];
-        // EXACTLY the key --notes' liveness set and serialize.h's surfacing lookup build (canonicalIdRelTo),
-        // spelled from the same three fields, so "stored" and "found" can never be two different strings.
-        const std::string canon = canonicalId( relForHash( ing.files[ s.fileId ], d.root ), s.scope, s.name );
-        if( canon != normalized )
-        {
-            rw::emitTo( stderr, "ripwire: --note-add: target '{}' canonicalised to '{}' — that is the id --for/--expand key notes by\n",
-                          rawTarget.c_str(), canon.c_str() );
-        }
-        return { canon, false };
+        return noteTargetForDefinition( d, defs[0], rawTarget, normalized, naUnprovenDefs );
     }
 
     if( defs.size() > 1 )
     {
+        // H1 on the REFUSAL: the candidates it lists are the definitions the resolver could PROVE, so a caller who retypes
+        // one of them never learns the dropped ones exist. Said first, and worded for a path that stores nothing
+        // (decltodefcheck E2y2).
+        emitNoteAddUnprovenDefs( naUnprovenDefs, "they are not among the definitions listed below, and no note was stored" );
         const std::vector<EditCheckGroup> groups = editCheckGroups( ing, d.g, defs );
         std::string msg = "ripwire: --note-add: target '" + rawTarget + "' is ambiguous — it matches "
                         + std::to_string( defs.size() ) + " definitions in " + std::to_string( groups.size() )
@@ -1371,7 +1405,7 @@ int runDefaultMap( const MainDispatch& d )
             DEGRADED_PATH_ALERT( "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
         std::fflush( m );  std::fclose( m );  std::free( buf );
         return sz;
     };
@@ -1410,7 +1444,7 @@ int runDefaultMap( const MainDispatch& d )
         }
         serializeJson( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics,
                        fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
-                       g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls );
+                       g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
         std::fflush( m );
         std::fclose( m );
         std::free( buf );
@@ -1569,6 +1603,10 @@ int runDefaultMap( const MainDispatch& d )
     // like --callers/--callees/--impact/--lego/--around/--edit-check.
     std::vector<NodeId>         expandNodes;
     HashMap<NodeId, LineRange>  expandRanges;
+    // H1: the decl→def residue of every --expand and --outline item, SUMMED: the two verbs share one <ctx> root, a bare
+    // NAME item adds 0, and the remedy is the same for any item (widen its file:name spelling). Unreported, a file:name
+    // item whose definitions were dropped served the declaration's text alone with nothing saying what was left out.
+    std::size_t                 ctxUnprovenDefs = 0;
     if( !cfg.expand.empty() )
     {
         bool expandMissed = false;
@@ -1577,8 +1615,10 @@ int runDefaultMap( const MainDispatch& d )
             // §P8 seam 1: resolveAllByNameQualified — the SAME resolver --callers/--callees/--impact use,
             // so `file:name` / `file:line:name` / a canonical id / a bare name all mean here exactly what
             // they mean there. On a bare name it is byte-identical to the resolveAllByName it replaces.
-            const ExpandToken         et      = parseExpandToken( tok, "--expand" );
-            const std::vector<NodeId> matches = resolveAllByNameQualified( ing, et.selector );
+            const ExpandToken         et              = parseExpandToken( tok, "--expand" );
+            std::size_t               tokUnprovenDefs = 0;
+            const std::vector<NodeId> matches         = resolveAllByNameQualified( ing, et.selector, &tokUnprovenDefs );
+            ctxUnprovenDefs += tokUnprovenDefs;
             if( matches.empty() )
             {
                 // §M7 (W3FIX): --expand takes the same file:name grammar as --uses/--callers and refused in the
@@ -1650,7 +1690,9 @@ int runDefaultMap( const MainDispatch& d )
                               rawNm.c_str(), ot.selector.c_str(), ot.range.startLine, ot.range.endLine );
             }
 
-            const std::vector<NodeId> matches = resolveAllByNameQualified( ing, nm );
+            std::size_t               nmUnprovenDefs = 0;
+            const std::vector<NodeId> matches        = resolveAllByNameQualified( ing, nm, &nmUnprovenDefs );
+            ctxUnprovenDefs += nmUnprovenDefs;   // H1: onto the <ctx> root --expand shares
             if( matches.empty() )
             {
                 // §M7 (W3FIX): same grammar, same shared refusal as --expand above.
@@ -1668,6 +1710,14 @@ int runDefaultMap( const MainDispatch& d )
             return 1;
         }
     }
+
+    // H1: the residue's attribute and its clause, for the <ctx> root --expand and --outline share. Built ONCE, because
+    // three things read their bytes and must agree: the payload charge below (so est_tokens covers them in every serving
+    // mode), the M6 bundle price, and the --max-tokens ceiling verdict. All three are empty at zero, so an answer that
+    // dropped nothing prices, chooses and emits byte-identically.
+    const std::string ctxUnprovenAttr   = rw::unprovenDefsAttrXml( ctxUnprovenDefs );
+    const std::string ctxUnprovenLegend = rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Expand, ctxUnprovenDefs > 0, "<!-- ripwire expand: " );
+    const std::size_t ctxUnprovenBytes  = ctxUnprovenAttr.size() + ctxUnprovenLegend.size();
 
     // §P6.8: `out` replaces every `stdout` from here through the map body's closing tag, so nothing reaches
     // the real stdout until finishTokenBudgetGate below has measured and decided (see openTokenBudgetBuffer's
@@ -1725,7 +1775,8 @@ int runDefaultMap( const MainDispatch& d )
         + ( ( !expandNodes.empty() && !bodiesSection.isRendered )
                 ? estimateExpandBodyTokens( ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress,
                                             expandRanges.empty() ? nullptr : &expandRanges )
-                : bodiesSection.tokens );
+                : bodiesSection.tokens )
+        + ( ctxUnprovenBytes > 0 ? rw::tokensForEmittedBytes( ctxUnprovenBytes, rw::kBytesPerTokenDefault ) : 0 );   // H1: charged at the markup rate
 
     // ── M6 (density audit 2026-08-08, owner directive: ONE call does the smart thing, no two-step) ──────
     // CHEAPEST-COMPLETE-ANSWER SERVING for a BARE --expand. The verb could always serve three forms:
@@ -1780,7 +1831,7 @@ int runDefaultMap( const MainDispatch& d )
         // guarded siblings at the ceiling verdict and the topK>0 emission gate). Same guard here: a map
         // that will not be emitted must not be charged, exactly like every other measureEmittedMapBytes
         // call site in this function.
-        const std::size_t bundleBytes = ( sizeof( "<ctx>" ) - 1 ) + ctxRootBytesWhenNoMap
+        const std::size_t bundleBytes = ( sizeof( "<ctx>" ) - 1 ) + ctxRootBytesWhenNoMap + ctxUnprovenBytes   // H1: the root carries it in both modes
                                       + ( mapTopK > 0 ? measureEmittedMapBytes( mapTopK, payloadTokens ) : 0 )
                                       + bodiesSection.xml.size() + ( sizeof( "</ctx>" ) - 1 );
         wholeFile = rw::renderWholeFiles( ing, expandNodes, redactPtr, d.notesPtr, cfg.compress, mapRootArg );   // D2: shaped candidate (R-R: root-relative <src p=>)
@@ -1803,6 +1854,15 @@ int runDefaultMap( const MainDispatch& d )
     {
         VERIFY( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
         ctxOpenStr.insert( 4, ctxRootAttr );
+    }
+    // H1: the residue rides the root in EVERY serving mode (whole-file, bundle with its map, bodies alone), and its clause
+    // rides straight after the start tag, ahead of the map or the payload, so the reader meets it before the text it
+    // qualifies. The later est_tokens splices find the start tag's own '>' first, so they still land on the root.
+    if( ctxUnprovenDefs > 0 )
+    {
+        VERIFY( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+        ctxOpenStr.insert( 4, ctxUnprovenAttr );
+        ctxOpenStr += ctxUnprovenLegend;
     }
 
     // r27-emitters T2: the ride-along map. A bare `--expand=SYM` costs ~24 KB for a ~1.4 KB body because the
@@ -1842,7 +1902,7 @@ int runDefaultMap( const MainDispatch& d )
     // is inside the delivered map portion (everything through `</r>`), so the verdict charges it exactly as
     // the search above did; see mapCtxOpenBytes's own comment for the 1-byte-over measurement that found it.
     if( cfg.maxTokens > 0 && mapTopK > 0
-        && measureEmittedMapBytes( mapTopK, cfg.json ? 0 : payloadTokens ) + mapCtxOpenBytes > maxTokensCeilingBytes )
+        && measureEmittedMapBytes( mapTopK, cfg.json ? 0 : payloadTokens ) + mapCtxOpenBytes + ctxUnprovenBytes > maxTokensCeilingBytes )
     {
         maxTokensFit.isOverCeiling = true;
     }
@@ -1891,11 +1951,11 @@ int runDefaultMap( const MainDispatch& d )
         {
             serializeJson( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics,
                            fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
-                           g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls );
+                           g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
         }
         else
         {
-            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls );
+            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
         }
     }
     else
@@ -2666,7 +2726,7 @@ std::optional<int> runCliEdit( const rw::Config& cfg )
 //
 // --for/--grep/--slice compact their own legend (each emitter branches on cfg.legend); every other XML verb
 // is compacted HERE, after the fact: the run's stdout is captured into an anonymous tmpfile, the finished
-// document is rewritten once by compactlegend.h (prose comments out, ONE ≤400 B legend + schema= in, every
+// document is rewritten once by compactlegend.h (prose comments out, ONE compact legend + schema= in, every
 // payload byte untouched), and written to the real stdout. Exit codes pass through unchanged. A run that
 // produced no XML root (a refusal already happened, or a text verb slipped past validateLegendModifier's
 // list) is refused here naming the flag — never served as if the posture had applied.
@@ -2706,31 +2766,167 @@ static bool cachePathIsDirectory( const std::string& cachePath )
     return true;
 }
 
+// OWNER DECISION 2026-09-12 — the ways a --scip path the caller NAMED cannot be read as an index AT ALL, decided in one
+// place from ONE open: it does not open; it is a directory; it is any other kind of file that is not a regular file (a
+// FIFO, a device); it is an empty regular file. Returns the reason for dispatchMain's refusal sentence, or an empty view
+// when the path goes on to loadScipOverlay. A directory, a device and an empty file used to reach loadScipOverlay's
+// "cannot read index" and serve the name-based map at exit 0. A FIFO with no writer HUNG instead, inside a blocking open
+// that waits for a writer for ever, so the probe opens O_NONBLOCK: a read-only open of a FIFO then returns at once. fstat
+// answers on that descriptor — no second path resolution, so a rename between the checks cannot make them describe two
+// different files. Still a degrade, decided in scip.h: bytes that do not DECODE (corrupt/truncated), an index over its
+// size bound, a short read.
+static std::string_view scipIndexUnreadableReason( const std::string& scipPath )
+{
+    const int probeFd = ::open( scipPath.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    if( probeFd < 0 )
+    {
+        return "cannot open the index";
+    }
+    struct stat probeStat;
+    const bool  isStatted = ::fstat( probeFd, &probeStat ) == 0;
+    ::close( probeFd );
+    if( !isStatted )
+    {
+        DEGRADED_PATH_ALERT( "--scip: fstat on the opened index failed — file kind and size undecided, loadScipOverlay's read decides" );
+        return {};
+    }
+    if( S_ISDIR( probeStat.st_mode ) )
+    {
+        return "is a directory, not an index file";
+    }
+    if( !S_ISREG( probeStat.st_mode ) )
+    {
+        return "is not a regular file (a FIFO or a device), not an index file";
+    }
+    if( probeStat.st_size == 0 )
+    {
+        return "is empty (0 bytes), not an index";
+    }
+    return {};
+}
+
 static int dispatchMain( const rw::Config& cfg, char** argv );
 
-// the key for a SHARED root (`r` = the map family, `ctx` = the bundle family), from the flags that shaped it
-static std::string_view compactLegendHint( const rw::Config& c ) noexcept
+// The key for a SHARED root (`r` = the map family, `ctx` = the bundle family) is read off the ANSWER, never off a flag order.
+// The ROOT picks the family: one flag order across both families cannot be right, because verb precedence interleaves them, and
+// a key from the other family took that root's FIRST spec, so --pack-task --metrics compacted as pack-signatures
+// (test/compactlegendcheck.sh (D36)). Nor can a flag order WITHIN a family: the bundle hint read --expand before --pack-task and
+// the map hint --around before --query, so --pack-task --expand compacted as expand and --query --around as around, over
+// documents byte-identical to --pack-task's and --query's alone ((D38), CodeRabbit on #203). So within the family a verb with a
+// mark of its own names its key only when the document carries that mark, and a flag whose verb lost dispatch cannot lend its
+// schema to the verb that answered. The row order is left as a TIE-BREAK between marks that share one answer: --metrics renders
+// into --map-diff's and --around's answers and keeps its old place between them, and a pack-task root carries from-trace's
+// task= beside its own budget_tokens=. A rule with no mark (--query, and the bundle modifiers only the default map renders, which
+// answers last) is read only after every marked verb was ruled out, which the static_asserts below hold.
+enum class CompactKeyMark : std::uint8_t
 {
-    if( c.mapDiff )                { return "map-diff"; }
-    if( c.metrics )                { return "metrics"; }
-    if( !c.around.empty() )        { return "around"; }
-    if( !c.query.empty() )         { return "query"; }
-    if( c.skippedList )            { return "skipped"; }
-    if( c.notesList )              { return "notes"; }
-    if( !c.legoType.empty() )      { return "lego"; }
-    if( !c.expand.empty() )        { return "expand"; }
-    if( c.packTaskFlag || !c.packTask.empty() ) { return "pack-task"; }
-    if( !c.fromTrace.empty() || !c.runTrace.empty() ) { return "from-trace"; }
-    if( !c.exemplar.empty() )      { return "exemplar"; }
-    if( c.packSignatures )         { return "pack-signatures"; }
-    if( c.packTopN > 0 )           { return "pack-top-n"; }
+    None,            // no mark of its own: the flag alone names the key
+    RootAttr,        // the root's own open tag carries needle="
+    FirstChild,      // the root's first child element, past the legend comments before it, is <needle>
+    MapHeaderField,  // the map header comment carries the unquoted field needle=
+    CommentOpener,   // a comment outside CDATA opens with needle (the verb's own legend block)
+};
+
+struct CompactKeyRule
+{
+    std::string_view key;
+    bool ( *isAsked )( const rw::Config& ) noexcept;
+    CompactKeyMark   mark;
+    std::string_view needle;
+};
+
+// Each mark read against its one emitter: changed= is serialize.h's changedCount, which only runDefaultMap's map-diff arm passes
+// (a clean tree still prints changed=0, and the query arm ahead of it never does); the metrics block is serialize.h's
+// `if( metrics )` legend; of= is the SeedDisclosure only --around's annotation fills.
+static constexpr CompactKeyRule kMapKeyRules[] =
+{
+    { "map-diff", []( const rw::Config& c ) noexcept { return c.mapDiff; },         CompactKeyMark::MapHeaderField, "changed" },
+    { "metrics",  []( const rw::Config& c ) noexcept { return c.metrics; },         CompactKeyMark::CommentOpener,  "<!-- metrics: " },
+    { "around",   []( const rw::Config& c ) noexcept { return !c.around.empty(); }, CompactKeyMark::RootAttr,       "of" },
+    { "query",    []( const rw::Config& c ) noexcept { return !c.query.empty(); },  CompactKeyMark::None,           {} },
+};
+
+// <skipped>, <notes> and <lego> open runSkipped's, runNotes' and the --lego arm's <ctx>; budget_tokens= rides every pack-task root
+// (packtask.h rootAttrsFor); task= rides every --from-trace and --run-trace root (ctxRootOpen with the trace label), including
+// the command-succeeded record, which has no <trace> block.
+static constexpr CompactKeyRule kBundleKeyRules[] =
+{
+    { "skipped",         []( const rw::Config& c ) noexcept { return c.skippedList; },                               CompactKeyMark::FirstChild, "skipped" },
+    { "notes",           []( const rw::Config& c ) noexcept { return c.notesList; },                                 CompactKeyMark::FirstChild, "notes" },
+    { "lego",            []( const rw::Config& c ) noexcept { return !c.legoType.empty(); },                         CompactKeyMark::FirstChild, "lego" },
+    { "pack-task",       []( const rw::Config& c ) noexcept { return c.packTaskFlag || !c.packTask.empty(); },       CompactKeyMark::RootAttr,   "budget_tokens" },
+    { "from-trace",      []( const rw::Config& c ) noexcept { return !c.fromTrace.empty() || !c.runTrace.empty(); }, CompactKeyMark::RootAttr,   "task" },
+    { "expand",          []( const rw::Config& c ) noexcept { return !c.expand.empty(); },                           CompactKeyMark::None,       {} },
+    { "exemplar",        []( const rw::Config& c ) noexcept { return !c.exemplar.empty(); },                         CompactKeyMark::None,       {} },
+    { "pack-signatures", []( const rw::Config& c ) noexcept { return c.packSignatures; },                            CompactKeyMark::None,       {} },
+    { "pack-top-n",      []( const rw::Config& c ) noexcept { return c.packTopN > 0; },                              CompactKeyMark::None,       {} },
+};
+
+// A rule with no mark sits below every marked rule, so a bare flag is read only once the answer itself has ruled out every verb
+// that could have answered in its place.
+static constexpr bool unmarkedRulesTrail( std::span<const CompactKeyRule> rules ) noexcept
+{
+    bool hasUnmarkedAbove = false;
+    for( const CompactKeyRule& rule : rules )
+    {
+        if( rule.mark == CompactKeyMark::None )
+        {
+            hasUnmarkedAbove = true;
+        }
+        else if( hasUnmarkedAbove )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert( unmarkedRulesTrail( kMapKeyRules ), "kMapKeyRules: a rule with no mark sits above a marked rule" );
+static_assert( unmarkedRulesTrail( kBundleKeyRules ), "kBundleKeyRules: a rule with no mark sits above a marked rule" );
+
+static bool isCompactKeyMarkPresent( const CompactKeyRule& rule, std::string_view doc, const rw::CompactRootInfo& root )
+{
+    switch( rule.mark )
+    {
+        case CompactKeyMark::None:
+            return true;
+        case CompactKeyMark::RootAttr:
+            return rw::headHasAttr( doc.substr( root.openBegin, root.openEnd - root.openBegin ), rule.needle );
+        case CompactKeyMark::FirstChild:
+            return rw::isElementNamed( rw::compactFirstChildTag( doc, root ), rule.needle );
+        case CompactKeyMark::MapHeaderField:
+            return rw::spanHasAttr( rw::compactMapHeader( doc ), rule.needle, {} );
+        case CompactKeyMark::CommentOpener:
+            return !rw::compactCommentOpenedBy( doc, rule.needle ).empty();
+    }
+    return false;
+}
+
+static std::string_view compactLegendHint( const rw::Config& c, std::string_view doc )
+{
+    const rw::CompactRootInfo root = rw::findCompactRoot( doc );
+    if( root.tag.empty() )
+    {
+        return {};   // no root element: applyCompactDialect answers NotXml before any key is read
+    }
+    // The default map's --token-budget gate replaces an over-budget answer with <r withheld="1"/> (main.cpp's budget gate, its one
+    // emitter): no rows, no header, no legend, so no verb's mark. Nothing on it can rule a verb out, so there the flags keep their
+    // old order. That is the one residue no mark can reach: a withheld --query --map-diff still compacts as map-diff.
+    const bool isWithheld = root.tag == "r" && rw::spanHasAttr( doc.substr( root.openBegin, root.openEnd - root.openBegin ), "withheld", "\"1\"" );
+    const std::span<const CompactKeyRule> rules = root.tag == "r" ? std::span<const CompactKeyRule>( kMapKeyRules ) : std::span<const CompactKeyRule>( kBundleKeyRules );
+    for( const CompactKeyRule& rule : rules )
+    {
+        if( rule.isAsked( c ) && ( isWithheld || isCompactKeyMarkPresent( rule, doc, root ) ) )
+        {
+            return rule.key;
+        }
+    }
     return {};
 }
 
 // --for's compact legend is its own (verbs_for.h): it splices est_tokens=/dropped_positive=/weak= and the
 // adaptive/relevance-floor counts INTO its comments (estchargecheck A10 pins the form), so the layer would strip
 // data there. It is the one verb the layer skips. --grep/--slice compact natively too, but their compact
-// legends are pure prose — the layer restates them at ≤400 B and keeps their schema id.
+// legends are pure prose — the layer restates them as its own compact legend and keeps their schema id.
 static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 {
     return !c.forTask.empty();
@@ -2776,7 +2972,7 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
     {
         return rc;   // a refusal (or an empty answer) — nothing to rewrite, the exit code says what happened
     }
-    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg ) ) )
+    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
     {
         case rw::CompactOutcome::Rewritten:
         case rw::CompactOutcome::AlreadyCompact:
@@ -3435,22 +3631,24 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     //   --cache=/nope/x.bin served the map at exit 0 and never wrote the path, so every later run paid a
     //                       cold parse while the caller believed a cache existed.
     // Eight siblings (--from-trace --batch --arch --plan-lint --lint-rules --with-profile --edit-plan
-    // --scan-skill) already refused. Degrade-and-continue stays the contract for inputs the tool DISCOVERED
-    // (the default cache path, the default skill homes) and for a --scip index that opens but does not
-    // DECODE — that file exists, and scipcheck.sh's corrupt/fuzz arms depend on the byte-identical degrade.
-    // Gate: namedfileinputcheck.sh.
+    // --scan-skill) already refused. OWNER DECISION 2026-09-12: for --scip the refusal covers every path that cannot
+    // be read as an index AT ALL — one that does not open, a directory, any other file that is not a regular file (a
+    // FIFO, a device), an empty file — all decided by scipIndexUnreadableReason from one non-blocking open.
+    // Degrade-and-continue stays the contract for inputs the tool DISCOVERED (the default cache path, the default skill
+    // homes) and for a --scip index that has bytes but does not DECODE — that file exists, and scipcheck.sh's
+    // corrupt/fuzz arms depend on the byte-identical degrade.
+    // Gate: namedfileinputcheck.sh (arms A-D, F).
     if( !cfg.scipIndex.empty() )
     {
-        const std::string scipPath( cfg.scipIndex );
-        std::FILE*        probe = std::fopen( scipPath.c_str(), "rb" );
-        if( probe == nullptr )
+        const std::string      scipPath( cfg.scipIndex );
+        const std::string_view unreadableReason = scipIndexUnreadableReason( scipPath );
+        if( !unreadableReason.empty() )
         {
-            rw::emitTo( stderr, "ripwire: --scip={}: cannot open the index — refusing rather than serving the name-based map "
+            rw::emitTo( stderr, "ripwire: --scip={}: {} — refusing rather than serving the name-based map "
                                   "you named a precision index to improve on (generate one with scip-clang/scip-python, or drop --scip)\n",
-                          scipPath.c_str() );
+                          scipPath.c_str(), unreadableReason );
             return 1;
         }
-        std::fclose( probe );
     }
     // M8 (capture-audit 2026-09-04, lens 6 F7/F7b, lens 7 F-SINCE-1) — --since is a GLOBAL flag with four
     // consumers (--hotspots, --slice, --cochange, --rank-by=churn[-decay]), and the §P0.5c ruling that "a
@@ -3664,15 +3862,17 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             "        includes/targets   = {} ({} B)\n",
             total, bytes, ing.files.size(), pathB, ing.symbols.size(), nameB, ing.references.size(), calleeB, ing.includes.size(), incB );
     }
-    // SCIP precision overlay: parse the index (if --scip given) → map to ripwire ids → hand to
-    // buildGraph as an optional parameter. A missing/corrupt/mismatched index yields an EMPTY overlay
-    // (one DEGRADED_PATH_ALERT + stderr note) and the build proceeds name-based, byte-identical to no --scip.
+    // SCIP precision overlay: parse the index (if --scip given) → map to ripwire ids → hand to buildGraph as an optional
+    // parameter. An unreadable/corrupt/mismatched index yields an EMPTY overlay (one DEGRADED_PATH_ALERT + stderr note) and
+    // the build proceeds name-based, byte-identical to no --scip. A path that cannot be opened, is not a regular file or is
+    // empty never gets here: it was refused above, exit 1. The probe closed its descriptor, though, so scipReadFile opens the
+    // path again itself — O_NONBLOCK, reading a regular file only — and a path replaced since by a FIFO degrades, never hangs.
     ScipOverlay scipOverlay;
     if( !cfg.scipIndex.empty() )
     {
         scipOverlay = loadScipOverlay( cfg.scipIndex, ing );
     }
-    // An EMPTY overlay (no --scip, OR a missing/corrupt/mismatched index that already alerted) is treated as
+    // An EMPTY overlay (no --scip, OR an unreadable/corrupt/mismatched index that already alerted) is treated as
     // no overlay at all: scipPtr stays nullptr so buildGraph/serialize produce output BYTE-IDENTICAL to a
     // run with no --scip (the degrade contract — a bad index must never change the map, only stderr).
     const ScipOverlay* scipPtr = scipOverlay.empty() ? nullptr : &scipOverlay;
