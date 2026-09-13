@@ -248,6 +248,54 @@ array, so three arms asserted over two and a half rows and passed vacuously), `s
 only the single rows, and the text reader took `$1` of a line that on a group line is `[hops=1]`. They all
 want the same thing — the files named, in emitted order — so they now all ask `test/testrowpaths.py`, one
 reader for all three dialects and both row shapes.
+### Added — the task router knows the recency question, and every new shape is named where an agent reads
+
+Two halves of one gap, both measured as absences rather than argued. **The router could not reach the
+history question at all**: `what changed recently in DIR`, `who touched this lately`, `the newest commits
+here` — every phrasing abstained with `score="0"`, so `--rank-by=churn-decay` and the `--in=DIR` scope
+beside it were unreachable from a task said in words. `ripwire <dir> --help-task="<task>"` now answers
+those with the `recency-window` intent under `ripwire-fresh-eyes`. The route is conjunctive in three
+parts, because two are not enough: a TIME word, a MOTION word, and a word naming the corpus (or a
+directory of it the task named) — a time word alone is usually part of a compound noun, and a time word
+plus a motion word is also a sentence about a supplier's terms last quarter. An explanatory question is
+never this route however many of the three it holds, and the working tree stays `--situ`'s question. A
+directory is composed into `--in=DIR` only when the corpus really holds it AND the running build ships the
+flag, read off the flag table itself: a router that recommends a flag its own parser has no row for hands
+back a command that exits non-zero on the first paste. Cues are matched WORD-BOUNDED, which is not a
+detail: with the substring spelling `here` occurred inside where/there, `source` inside outsource, `file`
+inside profile and `code` inside codec, and a sentence about a supplier revising their terms recommended
+the churn window at `confidence="high"`. That holds for the multi-word cues too, which delimit their own
+interior and nothing at their two ends — `show documentation` contains `how do` and `show issues` contains
+`how is`, so both of those questions about this repository's history tripped the explanatory guard and lost
+the route that answers them. The route also sits BELOW the weighted tier, which is how it
+reads a dirty worktree: on a dirty tree `is my diff safe to merge, i changed these files recently` is
+still the `review-diff` question, and that route wins before this one is consulted. Held out
+(`bench/taskroute_eval.py`, the committed 225-row corpus plus 24 rows for this round, split by its
+content-hash rule): accuracy 0.939 → **0.946** test, 0.946 → **0.950** dev, precision 1.000 and harmful
+0.000 unchanged. The 225 pre-existing rows score the same three numbers on the new binary — and, measured,
+**0 of them reach the new route at all**, so that identity is reported as the near-vacuous check it is
+rather than as evidence.
+
+**And the first call now names the widening step.** `--for`'s file-grain page was named only by a thin
+ANSWER's own `next=` — one call too late for an agent choosing what to run first — so every `--for`-shaped
+recommendation carries the page as its own `next=`, keyed off the INTENT (a task that merely quotes the
+flag inside another verb's argument gets none) and spelled by `forpage.h`'s own `forWidenNext`, so it
+obeys the same quoting and the same 120-byte ceiling every other `next=` obeys. The `--help-task` document
+also gains the LEGEND it never had in the default dialect: every attribute on its only screen was
+undefined, and it now joins `legendcoveragecheck`'s enumeration and `nextverbcheck`'s population.
+
+The shapes this release adds are also named where an agent actually reads them: the recency window with
+`--in=DIR` and `merge_bombs_skipped=` (ripwire-fresh-eyes), the thin-answer `coverage=` gauge and the
+`--for … --limit=40` page (ripwire-orient and its `map-before-you-read` companion), the `p::sc::n`
+composition of a row's identity, and the grouped `<g hops= n= p= run_unknown="1"/>` tests-to-run row
+(ripwire-change-check). **A new gate keeps it that way**: `test/agentsurfacecheck.sh` is a ratchet over all
+163 long flags `--help` advertises — each is named in a skill body or the `ripwire wrap` primer or recorded
+on a committed floor with the reason it is still a gap (5 lines today) — plus a per-shape arm that requires
+the term and its verb within five lines of one another on one surface, probing the binary first so a
+surface never promises what the build cannot parse. `docs/COMMANDS.md` is deliberately not an accepted
+surface: it names every flag by construction, and a gate a generated document satisfies for free cannot
+fail.
+
 ### Fixed — the reference guide said things the binary does not
 
 @heliocipher's reference guide was verified claim by claim against a 0.6.0 build, and its flags held up: of the 82

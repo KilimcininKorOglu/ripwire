@@ -59,6 +59,7 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include "query.h"
 #include "pattern.h"               // R2: the pattern surface's compiler + disclosures (the matcher runs inside the ingest walk)
 #include "verify.h"                // G4 verify-a-claim: the --verify closed claim grammar + verdict/limit vocabularies (runVerify below)
+#include "forpage.h"               // forWidenNext — the ONE spelling of the --for widening page, with its byte ceiling
 #include "taskroute.h"             // --help-task: deterministic task -> one safe CLI recommendation or abstention
 #include "quality.h"
 #include "cloneidiom.h"          // idiom-class demotion for clone findings — the closed 3-idiom shape classifier both --clones and the quality-delta duplication kind annotate rows with
@@ -2546,11 +2547,30 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     const std::string stamp = rw::gitstamp::stampAt( root );
     const bool        git   = !stamp.empty();
     const bool        dirty = stamp.ends_with( "+dirty" );
-    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty );
+    // What this build can actually parse, read off the flag table itself (cli.h shipsViewFlag) rather than
+    // asserted here: the router composes the directory scope only on a binary that has the row for it.
+    rw::taskroute::RouterCaps caps;
+    caps.dirScope = rw::shipsViewFlag( rw::taskroute::kDirScopeFlag );
+    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty, caps );
 
     std::vector<char> esc;
     const auto ex = [&]( std::string_view s ) { return std::string( rw::escapeXml( s, esc ) ); };
-    std::string out = "<task-route status=\"";
+    // THE LEGEND. Until 2026-09-13 this document had none in the default dialect: every attribute a reader
+    // meets on its only screen was undefined, and the compact layer's present-only legend was the only
+    // place any of them was explained. One line, every attribute, no flag spelled (a literal double hyphen
+    // is ill-formed inside an XML comment — G4).
+    std::string out = "<!-- ripwire help-task: one task in, ONE safe command out, or an honest abstention. "
+                      "status=recommend|ambiguous|abstain and confidence=high|low|none track each other; "
+                      "score= is the winning card's evidence total and margin= its lead over the runner-up "
+                      "(100/100 on a structural route, one the shipped parser itself accepts). <facts> is the "
+                      "repository evidence the decision read: git= dirty= a git repo and an uncommitted diff, "
+                      "trace= a pasted stack/sanitizer shape, resolved_symbols= how many indexed names the task "
+                      "NAMES. <choice> is the recommendation: intent= the route, skill= the skill that owns it, "
+                      "reason= the evidence in words, and <run> the command, pasteable as is. This tool "
+                      "recommends only: it never runs what it names. ";
+    out += rw::kNextLegendClause;
+    out += "-->";
+    out += "<task-route status=\"";
     out += rw::taskroute::statusName( route.status );
     out += "\" confidence=\"";
     out += route.status == rw::taskroute::RouteStatus::Recommend ? "high" :
@@ -2562,7 +2582,15 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     for( const rw::taskroute::RouteChoice& choice : route.choices )
     {
         out += "<choice intent=\"" + ex( choice.id ) + "\" skill=\"" + ex( choice.skill ) + "\" reason=\"" + ex( choice.reason );
-        out += "\" score=\"" + std::to_string( choice.score ) + "\"><run>" + ex( choice.command ) + "</run></choice>";
+        out += "\" score=\"" + std::to_string( choice.score ) + "\"";
+        // present-only: the WIDENING follow-up of a --for-shaped recommendation, nothing on any other.
+        // Keyed off the INTENT, and spelled by forpage.h's own forWidenNext — the same quoting and the same
+        // kNextAttrMaxBytes ceiling the answer's next= obeys, so a task too long to paste emits nothing
+        // rather than a hint that pastes wrong.
+        const bool widens = rw::taskroute::isOneOf( choice.id, std::begin( rw::taskroute::kForShapedIntents ),
+                                                   std::size( rw::taskroute::kForShapedIntents ) );
+        out += rw::nextAttrXml( widens ? rw::forWidenNext( cfg.helpTask ) : std::string() );
+        out += "><run>" + ex( choice.command ) + "</run></choice>";
     }
     out += "</task-route>\n";
     std::fputs( out.c_str(), stdout );
