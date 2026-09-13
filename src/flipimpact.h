@@ -1263,7 +1263,7 @@ inline void writeFlip( std::FILE* out, const FlipResult& res, const IngestResult
     // read from a different seed, so it is served whole on every page. SIZE_MAX, not maxRows.
     // E1: rows without a runner are grouped (testmap.h's seam), so the listing is rendered whole and wrapped here
     // exactly as writeCappedList wraps an uncut list — `<tests n="N">` with no cut attributes, n= the FILE count.
-    const rw::TestRunnerIndex flipRunners( ing );
+    const rw::TestRunnerIndex flipRunners( ing, root );
     rw::emitTo( out, "<tests n=\"{}\">", res.tests.size() );
     rw::emitRaw( out, rw::testRowsJoined( flipRunners, rw::testRowsOutOf( res.tests, rel ), rw::TestRowShape{ rw::RowDialect::Xml, "t" }, ex ).c_str() );
     rw::emitRaw( out, "</tests>" );

@@ -15,6 +15,30 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — one absolute root per change report
+
+`--test-gate`, `--situ` and `--affected` state the crawl root once, in the envelope (`root=` in XML and
+JSON, the `root:` line in `--situ`'s text), and every path below it is relative to that root — which is
+what makes the document independent of where the tree is checked out. One emitter never joined: the
+`run=` command. It pasted the stored disk path verbatim, so on an absolute root `--test-gate` printed
+the checkout prefix three times (the anchor, `next=`, and every `<t>` row's `run=`) and `--situ` once per
+runnable test line: a per-row cost against a per-document fact. The runner index now takes the run's root
+and spells the command through the same relativizer every `p=` beside it uses, at all fourteen sites that
+build one, so the twelve emitters sharing it cannot disagree; a multi-root run, whose disk path lies under
+no single root, keeps the absolute command rather than become relative to a root that does not contain it.
+The rule is stated where it is consumed: the shared run-hint clause gains "A run= command is relative to
+root=." (27 B, emitted only on a document that has rows) and `--situ`'s `[2]` header says "a (run: …) is
+relative to root:". Measured with `wc -c` on a clean tree with the same warm cache and an absolute root:
+on this repo (root 132 chars) `--test-gate=src/testmap.h` 5,327 → 5,100 B; on RocksDB @0e2801ac (root 66
+chars) `--test-gate=db/write_batch.cc` 9,793 → 9,696 B, `--situ=db/write_batch.cc` 7,445 → 7,412 B and
+`--affected=db/write_batch.cc` 6,971 → 6,941 B. The saving is one root spelling per echo less the legend
+clause, so it grows with checkout depth and with how many rows have a runner at all. The gate is a new
+ARM 9 in `test/rootrelemitcheck.sh`: a fixture carrying a real runner script, at two checkout depths, over
+the eight verbs that echo a command — one anchor per document, no absolute path anywhere else,
+byte-identical documents at both depths, and the printed `run=` actually executed from the declared root.
+Red first on the unchanged binary (8 FAIL rows); `test/runhintcheck.sh`'s pins move with the contract, and
+`test/printf_parity.manifest` moves for `--pack-task` alone, the one verb whose legend text changed.
+
 ### Changed — tests-to-run rows without a runner are grouped by hop distance
 
 Every tests-to-run row that had no derivable runner said so on the row — `run_unknown="1"` in XML,

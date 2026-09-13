@@ -277,7 +277,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     // SAME facts — carried run="bash test/…" for those same files. The packet whose whole purpose is to be
     // read by the NEXT session was the one that said least. Built here, inside the section's scope, because
     // TestRunnerIndex is lazy: a packet with no test row reads no runner script.
-    const rw::TestRunnerIndex hoRunners( ing );
+    const rw::TestRunnerIndex hoRunners( ing, root );
     const auto                hoEsc = [ & ]( std::string_view t ) { return std::string( escapeXml( t, esc ) ); };
     v += rw::testRowsJoined( hoRunners, rw::testRowsOutOf( facts.tests, hoPathRel ), rw::TestRowShape{ rw::RowDialect::Xml, "t" }, hoEsc );   // E1: <g> where no runner is derivable
     v += "</tests></verified>";

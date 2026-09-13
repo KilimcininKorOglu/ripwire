@@ -1421,7 +1421,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // inside the section's scope, because it is lazy — a bundle with no test row reads no runner script.
         // §B14 — std::string rows, not char[512]: a row carries TWO unbounded interpolands (the test path AND
         // the runner command), so it was the widest of the six breaching sites.
-        const rw::TestRunnerIndex         runners( ing );
+        const rw::TestRunnerIndex         runners( ing, in.rootArg );
         const std::string                 ptPrefix = in.rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( in.rootArg );
         const std::vector<rw::TestRowOut> ptRows   = rw::testRowsOutOf( testFiles, [ & ]( std::uint32_t f ) -> std::string_view
         {
@@ -1661,7 +1661,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         { char b[ 96 ];  rw::formatTo( b, sizeof( b ), ",\"tests_total\":{},\"tests_kept\":{},\"tests_to_run\":[", tests.totalUnits, tests.keptUnits );  j += b; }
         // §A9.5: the JSON sibling of the XML run= above — situ's tests_to_run already carries it, and one
         // computation path must not serialize two different obligations.
-        const rw::TestRunnerIndex   jsonRunners( ing );
+        const rw::TestRunnerIndex   jsonRunners( ing, in.rootArg );
         const auto                  jrun = [ & ]( std::string_view s ) { return jsonStr( s ); };
         const std::vector<rw::RenderedTestRow> jsonRows = rw::testRowsRendered( jsonRunners, rw::testRowsOutOf( testFiles, jPathRel ), rw::TestRowShape{ rw::RowDialect::Json, "p" }, jrun, &testPartition );
         for( std::size_t i = 0; i < testsShown && i < jsonRows.size(); ++i )

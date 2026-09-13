@@ -494,6 +494,123 @@ for spelling in abs rel; do
   fi
 done
 
+# ── ARM 9 — THE COMMAND ECHOES: one absolute root per document, even when a runner IS derivable ─────────
+# A3 (PLAN_OUTPUT_ROUTING_LOOP §1.5): the arms above sweep a fixture with NO runner script, so every test row
+# reads run_unknown="1" and the one emitter that pastes a PATH INSIDE A COMMAND — testmap.h's spell() — was
+# never exercised by them. It spelled diskPath(), i.e. the whole checkout prefix, so `--test-gate` on an
+# absolute root printed the root three times (the anchor, next=, and every <t> row's run=) and `--situ`
+# printed it once per runnable test line. That is a per-ROW cost against a per-DOCUMENT fact, exactly what
+# ARM 1/2/5 exist to forbid; it simply had no fixture that could see it.
+#
+# So this arm builds one: the fixture plus a real runner script whose text names the changed harness (the
+# MENTION evidence kind), which makes run= and next= materialize on every verb that echoes a command. It then
+# asserts the same three properties the matrix above asserts — one anchor, no other absolute path, depth
+# independence — AND the property that makes relativizing safe: the echoed command still RUNS from the root.
+A9="$TMP/runner"; rm -rf "$A9"; mkdir -p "$A9"; cp -R "$FIX/." "$A9/"
+cat > "$A9/test_geometry.cpp" <<'A9EOF'
+#include "geometry.h"
+
+double test_distance( Point a, Point b )
+{
+    return distance( a, b );
+}
+A9EOF
+cat > "$A9/test_geometry.sh" <<'A9EOF'
+#!/usr/bin/env bash
+# the corpus's runner: its TEXT names geometry.cpp, which is the MENTION evidence testmap.h derives run= from
+exit 0
+A9EOF
+chmod +x "$A9/test_geometry.sh"
+seed_git "$A9"
+# the same corpus one directory deeper, so the one-anchor claim is a MEASURED bound here too
+A9D="$TMP/ddddddddd/ddddddddd/ddddddddd/ddddddddd/runner"; rm -rf "$A9D"; mkdir -p "$A9D"; cp -R "$A9/." "$A9D/"
+seed_git "$A9D"
+A9_DELTA=$(( ${#A9D} - ${#A9} ))
+
+A9_VERBS=(
+  "test-gate:--test-gate=geometry.cpp"
+  "test-gate-json:--test-gate=geometry.cpp|--json"
+  "situ:--situ=geometry.cpp"
+  "affected:--affected=distance"
+  "exercises:--exercises=test_geometry.cpp"
+  "pr-context:--pr-context"
+  "pack-task:--pack-task=compute the area"
+  "handoff:--handoff"
+)
+# the runner had better be derivable, or every assertion below is vacuous
+if ! run_at "$A9" "--test-gate=geometry.cpp" | grep -q 'run="'; then
+  no "ARM9 the fixture derives NO run= at all — every assertion below would be a false green"
+else
+  ok "ARM9 fixture: a runner IS derivable (run= is emitted), so the command echoes are live"
+fi
+for entry in "${A9_VERBS[@]}"; do
+  name="${entry%%:*}"; spec="${entry#*:}"
+  run_at "$A9"  "$spec" > "$TMP/a9.short"
+  run_at "$A9D" "$spec" > "$TMP/a9.deep"
+  read -r lk tot anc <<EOF
+$( leaks "$A9" < "$TMP/a9.short" )
+EOF
+  if [ "$lk" -eq 0 ]; then
+    ok "ARM9 $name — ${tot} root occurrence(s), all ${anc} inside the envelope anchor"
+  else
+    no "ARM9 $name — ${lk} absolute-path leak(s) of ${tot} occurrence(s) (${anc} anchored): $( tr '<' '\n' < "$TMP/a9.short" | grep -m1 -o "[a-z_]*=\"[^\"]*$A9[^\"]*\"" | head -c 160 )"
+  fi
+  if [ "$anc" -le 1 ]; then
+    ok "ARM9 $name declares the absolute root ${anc} time(s) — once per document"
+  else
+    no "ARM9 $name declares the absolute root ${anc} times — the document states it ONCE"
+  fi
+  mask "$A9"  < "$TMP/a9.short" > "$TMP/a9.ms"
+  mask "$A9D" < "$TMP/a9.deep"  > "$TMP/a9.md"
+  if cmp -s "$TMP/a9.ms" "$TMP/a9.md"; then
+    ok "ARM9 $name depth-independent with a live runner"
+  else
+    no "ARM9 $name differs with checkout depth once a run= is derivable (+$(( $( wc -c < "$TMP/a9.deep" ) - $( wc -c < "$TMP/a9.short" ) ))B over ${A9_DELTA} chars)"
+  fi
+done
+
+# The point of a relative command is that it is still runnable — from the root the document declares.
+# Pulled out of the loop because it EXECUTES what the document printed, which is the whole claim: an agent
+# that cd's to root= and pastes run= gets the runner, not a "No such file or directory".
+a9_cmd(){ tr '<' '\n' < "$1" | sed -n 's/.* run="\([^"]*\)".*/\1/p' | head -1; }
+run_at "$A9" "--test-gate=geometry.cpp" > "$TMP/a9.tg"
+A9CMD="$( a9_cmd "$TMP/a9.tg" )"
+A9NEXT="$( tr '<' '\n' < "$TMP/a9.tg" | sed -n 's/.* next="\([^"]*\)".*/\1/p' | head -1 )"
+if [ -z "$A9CMD" ]; then
+  no "ARM9 --test-gate emitted no run= — the runnability assertion would be a false green"
+else
+  case "$A9CMD" in
+    */) no "ARM9 run=\"$A9CMD\" ends in a separator" ;;
+    *"$A9"*) no "ARM9 run=\"$A9CMD\" still carries the absolute checkout prefix" ;;
+    *) ok "ARM9 run=\"$A9CMD\" is root-relative" ;;
+  esac
+  if ( cd "$A9" && eval "$A9CMD" >/dev/null 2>&1 ); then
+    ok "ARM9 the printed run= actually runs from root= ($A9CMD)"
+  else
+    no "ARM9 the printed run= does NOT run from root= ($A9CMD) — a relative command that cannot be pasted is worse than an absolute one"
+  fi
+fi
+if [ -n "$A9NEXT" ] && [ "$A9NEXT" = "$A9CMD" ]; then
+  ok "ARM9 next= pastes the same root-relative command as the first row's run= ($A9NEXT)"
+elif [ -n "$A9NEXT" ]; then
+  no "ARM9 next=\"$A9NEXT\" disagrees with the first row's run=\"$A9CMD\""
+fi
+# --situ is the text dialect of the same echo: its `(run: …)` recipe and its `root:` line.
+run_at "$A9" "--situ=geometry.cpp" > "$TMP/a9.situ"
+# a ROW's recipe, never the section header's own "(run: …)" mention of the convention
+A9SITU="$( sed -n 's/^ \{8\}.*(run: \([^)]*\)).*/\1/p' "$TMP/a9.situ" | grep -v 'not derivable' | head -1 )"
+if [ -z "$A9SITU" ]; then
+  no "ARM9 --situ printed no (run: …) recipe — the text dialect's echo is untested"
+else
+  case "$A9SITU" in
+    *"$A9"*) no "ARM9 --situ's (run: $A9SITU) still carries the absolute checkout prefix" ;;
+    *)       ok "ARM9 --situ's (run: $A9SITU) is root-relative" ;;
+  esac
+  grep -q 'relative to root' "$TMP/a9.situ" \
+    && ok "ARM9 --situ says its run recipe is relative to the root it declares" \
+    || no "ARM9 --situ prints a relative run recipe and never says what it is relative to"
+fi
+
 # ── the MCP dialect ─────────────────────────────────────────────────────────────────────────────────────
 if ! python3 "$ROOT/test/rootrelemitmcp.py" "$BIN" "$SHORT" "$DEEP"; then
   fail=1

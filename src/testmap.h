@@ -26,6 +26,7 @@
 #include "docparse.h"     // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
 #include "mention.h"      // mention_detail::baseNameOf + stripExt — the ONE basename/stem pair binstale.h/gitmine.h reuse
 #include "infra/namesplit.h" // namesplit::isIdentChar — the canonical ASCII identifier-byte predicate
+#include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
 
 #include <algorithm>
 #include <cstdio>
@@ -489,7 +490,14 @@ inline std::vector<NodeId> exercisedSymbols( const IngestResult& ing, const Grap
 class TestRunnerIndex
 {
 public:
-    explicit TestRunnerIndex( const IngestResult& ing ) : ing_( &ing )
+    // A3 (one absolute root per document): `root` is the run's own crawl root, and its ONLY use is to spell
+    // the command below relative to it — the same rootPrefixOf/rootRelativeUri pair every p= emitter uses.
+    // Defaulted to "" so a caller that has no root (or a multi-root run, where the disk path is not under any
+    // single root) keeps the absolute spelling: an unrelativizable command must stay pasteable, never become
+    // a path relative to a root that does not contain it.
+    explicit TestRunnerIndex( const IngestResult& ing, std::string_view root = {} )
+        : ing_( &ing ),
+          rootPrefix_( root.empty() || !ing.realPaths.empty() ? std::string() : rw::sarif::rootPrefixOf( root ) )
     {
         for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
         {
@@ -595,15 +603,15 @@ private:
     // is dropped for readability; the result is pasteable from the repo root.
     std::string spell( std::uint32_t runnerFile ) const
     {
-        std::string_view p = diskPath( *ing_, runnerFile );
-        if( p.rfind( "./", 0 ) == 0 )
-        {
-            p = p.substr( 2 );
-        }
+        const std::string& disk = diskPath( *ing_, runnerFile );
+        // A3: root-relative, like every p= beside it. rootRelativeUri strips a leading "./" unconditionally,
+        // so the readability strip the pre-A3 code did by hand is the SAME call now, not a second rule.
+        std::string_view p = rw::sarif::rootRelativeUri( disk, rootPrefix_ );
         return std::string( runnerVerb( p ) ) + " " + std::string( p );
     }
 
     const IngestResult*                         ing_;
+    std::string                                 rootPrefix_;   // A3: "" ⇒ the command keeps its stored spelling
     std::vector<std::uint32_t>                  runners_;
     mutable std::vector<std::string>            texts_;
     mutable bool                                textsLoaded_ = false;
@@ -916,7 +924,7 @@ inline constexpr std::string_view kRunHintLegendClause =
     "run= is the command that discharges a test row; run_unknown=\"1\" means none is derivable for that "
     "harness (a guess would be worse than none) — a <t> or <g> row carries one or the other, never neither. "
     "<g n= p=a,b,c> is 2+ runner-less rows with equal attributes served as ONE row: n= how many, p= their paths "
-    "in list order (&#44; a comma in a path), every path verbatim. ";
+    "in list order (&#44; a comma in a path), every path verbatim. A run= command is relative to root=. ";
 
 // The clause is a rule about ROWS, so a legend splices it only when the rendered rows are non-empty — a
 // tests="0" answer pays nothing for it (--affected/--exercises; --test-gate and --pack-task gate it the same way).

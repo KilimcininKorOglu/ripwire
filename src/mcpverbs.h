@@ -1247,7 +1247,7 @@ inline std::string situationDiffJson( const std::string& root, const std::string
     // §B6 M11: the run= hint index, from the SAME source --affected/--situ/--test-gate/--pr-context read
     // (testmap.h). runFieldJson is that header's JSON call shape, so "absent means NOT DERIVABLE" — the
     // load-bearing half of the rule — is decided in one place for every emitter rather than re-decided here.
-    const TestRunnerIndex runners( ing );
+    const TestRunnerIndex runners( ing, root );
     const auto            jsonEsc = []( std::string_view sv ) { return mcpdetail::jsonEscape( std::string( sv ) ); };
 
     // M10: this verb reads git (the diff itself, plus an 18-month co-change mine below) and, before this

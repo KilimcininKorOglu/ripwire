@@ -128,7 +128,7 @@ std::optional<int> runAffected( const MainDispatch& d )
         // run=/run_unknown=/<g> clause only when there are rows for it to be a rule about — a tests="0" answer,
         // the common clean case, pays nothing for it. The index is constructed here (not hoisted into
         // MainDispatch) because it is lazy — a run with no test row reads no script.
-        const rw::TestRunnerIndex   runners( ing );
+        const rw::TestRunnerIndex   runners( ing, d.root );
         std::vector<rw::TestRowOut> afRows;
         afRows.reserve( answer.rows.size() );
         for( rw::TestRow row : answer.rows )   // by value: a matched test file's changed= is spelled seed_kind="test" on this verb
@@ -240,7 +240,7 @@ std::optional<int> runExercises( const MainDispatch& d )
     const std::string harnessAttr = exercisesHarnessAttr( ing, sel.testFiles );   // §A9.1, empty for a .cpp/.py harness
     // §P11.4 / E1: the seed rows are the tests you are about to re-run — rendered before the legend so the
     // run=/run_unknown=/<g> clause rides only a document that has rows (testmap.h's seam; grouped where no runner is derivable)
-    const rw::TestRunnerIndex     runners( ing );
+    const rw::TestRunnerIndex     runners( ing, d.root );
     const auto                    exPathRel = [ & ]( std::uint32_t f ) -> std::string_view
     {
         return exSingleRoot ? rw::sarif::rootRelativeUri( ing.files[f], exRootPrefix ) : std::string_view( ing.files[f] );

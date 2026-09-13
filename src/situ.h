@@ -595,11 +595,11 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     rw::emitTo( out, "  [2] tests to run ({}){}", tests.size(),
                   tests.empty() ? ": (none transitively reach these files)\n"
                                 : " — evidence order: [changed] you edited it, [partner] named after a changed file, then hops (1 = calls a changed symbol directly); "
-                                  "a line (n): a, b lists n files sharing that evidence with no derivable runner:\n" );
+                                  "a line (n): a, b lists n files sharing that evidence with no derivable runner; a (run: …) is relative to root:\n" );
     // §P11.4: this section says "tests to run" and named files that are not commands. The runner is appended
     // where one is DERIVABLE and omitted where it is not — see testmap.h; a guessed command is worse than none.
     // E1: runner-less rows with equal evidence are ONE `[hops=N] (n): a, b` line — testmap.h's seam, the multiset unchanged
-    const TestRunnerIndex situRunners( ing );
+    const TestRunnerIndex situRunners( ing, root );
     rw::emitRaw( out, testRowsJoined( situRunners, evidenceRowsOut( testRows, EvDialect::Text, situPathRel ), TestRowShape{ RowDialect::Text, {}, "        " },
                                       []( std::string_view s ) { return std::string( s ); } ).c_str() );
     // §B7.3: this section inherits --affected's blind spot without --affected's disclosure — a shell harness
@@ -1158,7 +1158,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where
     // one is derivable. Absent run= = not derivable (testmap.h states why a fallback would be a lie).
-    const TestRunnerIndex gateRunners( ing );
+    const TestRunnerIndex gateRunners( ing, root );
     // shown_tests= / tests_capped= are DERIVED from the rows this document actually emits, not asserted.
     // tests_capped= was the string literal "0" — a disclosure that could never become "1", so if a <t> row
     // cap were ever added the attribute would keep saying nothing was cut while something was. It is kept
@@ -1229,7 +1229,7 @@ inline void writeTestGateReportJson( std::FILE* out, const IngestResult& ing, co
     const std::size_t testRows = r.tests.size() + r.shellGates.obligations.size();
     // same rows-gate as the XML twin, so the two dialects disclose the SAME facts about the same run rather
     // than one carrying a root the other omits (test/mcpclidiffcheck.sh's parity question).
-    const TestRunnerIndex gateRunnersJ( ing );   // P3 (L7): the root's next= needs the runner index before the rows
+    const TestRunnerIndex gateRunnersJ( ing, root );   // P3 (L7): the root's next= needs the runner index before the rows
     const bool         tgJHasRows  = ( testRows > 0 || !r.untested.empty() );
     const std::string  tgJRootJson = ( root.empty() || !tgJHasRows ) ? std::string() : ( ",\"root\":\"" + jsonStr( root ) + "\"" );
     // The XML twin's derived pair, mirrored key-for-key: "tests_capped":false was a literal here too.
@@ -1245,7 +1245,7 @@ inline void writeTestGateReportJson( std::FILE* out, const IngestResult& ing, co
                  graphCountFloorAttrJson( g ).c_str(),   // M15: the JSON twin's gauge + "counts_floor":true
                  rw::cstr( pageJson ), atJson.c_str(), tgJRootJson.c_str(),   // M12: root= rides only when the document has rows (same gate as the XML twin)
                  nextFieldJson( testGateNextInvocation( ing, r, gateRunnersJ ) ).c_str()  );   // P3 (L7): the XML twin's next=
-    const TestRunnerIndex gateRunners( ing );                       // §P11.4, the JSON sibling of the XML run=
+    const TestRunnerIndex gateRunners( ing, root );                       // §P11.4, the JSON sibling of the XML run=
     const auto            jesc = []( std::string_view s ) { return jsonStr( s ); };
     rw::emitRaw( out, testRowsJoined( gateRunners, evidenceRowsOut( r.testRows, EvDialect::Json, tgJPathRel ), TestRowShape{ RowDialect::Json, "p" }, jesc, "," ).c_str() );   // E1: the XML twin's <g>, "p" an array
     for( std::size_t i = 0; i < r.shellGates.obligations.size(); ++i )

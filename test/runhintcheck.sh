@@ -52,23 +52,34 @@ runof(){ printf '%s' "$2" | grep -oE "<[a-z]+ p=\"[^\"]*$1\"( (seed_kind|changed
 A="$( run --affected=src/core.cpp )"
 
 # ── 1) MENTION evidence: the *check.sh that names the harness becomes its run= ────────────────────────
-[ "$( runof 'mything_harness.cpp' "$A" )" = "bash $R/test/mythingcheck.sh" ] \
+[ "$( runof 'mything_harness.cpp' "$A" )" = "bash test/mythingcheck.sh" ] \
     && ok "--affected: mention-derived run= on mything_harness.cpp" \
     || no "--affected mention hint wrong: '$( runof 'mything_harness.cpp' "$A" )'"
 
 # ── 2) STEM evidence: foo.cpp <-> foo.sh ─────────────────────────────────────────────────────────────
-[ "$( runof 'samename.cpp' "$A" )" = "bash $R/test/samename.sh" ] \
+[ "$( runof 'samename.cpp' "$A" )" = "bash test/samename.sh" ] \
     && ok "--affected: stem-derived run= on samename.cpp" \
     || no "--affected stem hint wrong: '$( runof 'samename.cpp' "$A" )'"
 
-# ── 2b) run= is spelled with the SAME root the caller passed, exactly as p= is ────────────────────────
+# ── 2b) run= is spelled RELATIVE TO root=, exactly as the p= beside it is ────────────────────────────
 # A hint whose path spelling disagreed with the p= beside it would be a second vocabulary for "where this
-# file is" — the §P8 defect, in the one attribute meant to be pasted into a shell. Scanned as ".", both
-# are repo-relative and the command is pasteable from the repo root.
+# file is" — the §P8 defect, in the one attribute meant to be pasted into a shell.
+# A3 (2026-09-13, PLAN_OUTPUT_ROUTING_LOOP §1.5): this arm used to pin run= to "the root spelling the caller
+# passed", which made an ABSOLUTE scan print the whole checkout prefix inside the command — one absolute
+# path per ROW against a per-DOCUMENT fact (test/rootrelemitcheck.sh ARM 9 is the emission contract). run=
+# is now root-relative under BOTH spellings, so the two runs agree byte-for-byte on the command and the
+# document is independent of where the tree is checked out.
 REL="$( cd "$R" && perl -e 'alarm 20; exec @ARGV' "$BIN" . --affected=src/core.cpp --no-cache 2>/dev/null )"
 [ "$( runof 'mything_harness.cpp' "$REL" )" = "bash test/mythingcheck.sh" ] \
-    && ok "run= follows the caller's root spelling (scanned as '.', run=\"bash test/mythingcheck.sh\")" \
+    && ok "run= is root-relative under a relative scan (run=\"bash test/mythingcheck.sh\")" \
     || no "run= root spelling wrong under a relative scan: '$( runof 'mything_harness.cpp' "$REL" )'"
+[ "$( runof 'mything_harness.cpp' "$REL" )" = "$( runof 'mything_harness.cpp' "$A" )" ] \
+    && ok "run= is the SAME command under an absolute and a relative root — no checkout prefix rides the row" \
+    || no "run= differs between an absolute scan ('$( runof 'mything_harness.cpp' "$A" )') and a relative one ('$( runof 'mything_harness.cpp' "$REL" )')"
+# …and it must still RUN from the root the document declares, which is the whole point of relativizing it.
+( cd "$R" && eval "$( runof 'mything_harness.cpp' "$A" )" >/dev/null 2>&1 ) \
+    && ok "the printed run= executes from the declared root" \
+    || no "the printed run= does not execute from the declared root — a relative command that cannot be pasted is worse than an absolute one"
 
 # ── 3) NO evidence → NO run=. The half that keeps the attribute trustworthy. ──────────────────────────
 case "$A" in
@@ -79,18 +90,18 @@ esac
 
 # ── 4) the same hint on --test-gate, the verb that EXITS 4 on the obligation ──────────────────────────
 G="$( run --test-gate=src/core.cpp )"
-[ "$( runof 'mything_harness.cpp' "$G" )" = "bash $R/test/mythingcheck.sh" ] \
+[ "$( runof 'mything_harness.cpp' "$G" )" = "bash test/mythingcheck.sh" ] \
     && ok "--test-gate <t> rows carry the same run= (the exit-4 obligation is now dischargeable)" \
     || no "--test-gate run= missing/wrong: '$( runof 'mything_harness.cpp' "$G" )'"
 
 # ── 4b) …and in its --json sibling, under the same key ───────────────────────────────────────────────
 GJ="$( run --test-gate=src/core.cpp --json )"
-case "$GJ" in *'"run":"bash '*'/test/mythingcheck.sh"'*) ok "--test-gate --json tests_to_run rows carry \"run\"" ;;
+case "$GJ" in *'"run":"bash test/mythingcheck.sh"'*) ok "--test-gate --json tests_to_run rows carry \"run\"" ;;
               *) no "--test-gate --json has no run key: $GJ" ;; esac
 
 # ── 4c) …and on --situ's text report ─────────────────────────────────────────────────────────────────
 S="$( run --situ=src/core.cpp )"
-case "$S" in *'(run: bash '*'/test/mythingcheck.sh)'*) ok "--situ tests-to-run lines carry the run command" ;;
+case "$S" in *'(run: bash test/mythingcheck.sh)'*) ok "--situ tests-to-run lines carry the run command" ;;
              *) no "--situ tests-to-run lines have no run command" ;; esac
 
 # ── 5) determinism + G4 ──────────────────────────────────────────────────────────────────────────────
@@ -108,10 +119,10 @@ fi
 #      this is the MENTION path on a corpus with 255 candidate runner scripts — where a wrong tie-break or
 #      an over-eager match would show up immediately.
 RA="$( perl -e 'alarm 90; exec @ARGV' "$BIN" "$ROOT" --affected=src/graph.h 2>/dev/null )"
-[ "$( runof 'cloneband_harness.cpp' "$RA" )" = "bash $ROOT/test/clonebandcheck.sh" ] \
+[ "$( runof 'cloneband_harness.cpp' "$RA" )" = "bash test/clonebandcheck.sh" ] \
     && ok "repo: cloneband_harness.cpp -> run=\"bash test/clonebandcheck.sh\"" \
     || no "repo: cloneband_harness.cpp run= wrong: '$( runof 'cloneband_harness.cpp' "$RA" )'"
-[ "$( runof 'connectcore_harness.cpp' "$RA" )" = "bash $ROOT/test/connectcorecheck.sh" ] \
+[ "$( runof 'connectcore_harness.cpp' "$RA" )" = "bash test/connectcorecheck.sh" ] \
     && ok "repo: connectcore_harness.cpp -> run=\"bash test/connectcorecheck.sh\"" \
     || no "repo: connectcore_harness.cpp run= wrong: '$( runof 'connectcore_harness.cpp' "$RA" )'"
 
@@ -121,12 +132,12 @@ RA="$( perl -e 'alarm 90; exec @ARGV' "$BIN" "$ROOT" --affected=src/graph.h 2>/d
 #      by a bundle that also carries bodies, callers and notes should not have to leave the bundle to find
 #      the command. Both now read the same TestRunnerIndex; absence still means "not derivable".
 P="$( run --pack-task="drive mid through core" )"
-[ "$( runof 'mything_harness.cpp' "$P" )" = "bash $R/test/mythingcheck.sh" ] \
+[ "$( runof 'mything_harness.cpp' "$P" )" = "bash test/mythingcheck.sh" ] \
     && ok "--pack-task <test> rows carry run= (same index as affected/situ/test-gate/exercises)" \
     || no "--pack-task run= missing/wrong: '$( runof 'mything_harness.cpp' "$P" )'"
 
 PJ="$( run --pack-task="drive mid through core" --json )"
-case "$PJ" in *'"run":"bash '*'/test/mythingcheck.sh"'*) ok "--pack-task --json tests_to_run rows carry \"run\"" ;;
+case "$PJ" in *'"run":"bash test/mythingcheck.sh"'*) ok "--pack-task --json tests_to_run rows carry \"run\"" ;;
               *) no "--pack-task --json has no run key in tests_to_run" ;; esac
 
 # --pr-context needs real git history, so the fixture becomes a repo HERE — after every arm above has run
@@ -136,7 +147,7 @@ if command -v git >/dev/null 2>&1; then
         && git add -A && git commit -qm base ) >/dev/null 2>&1
     printf 'int extra() { return mid(); }\n' >> "$R/src/core.cpp"
     PR="$( run --pr-context )"
-    [ "$( runof 'mything_harness.cpp' "$PR" )" = "bash $R/test/mythingcheck.sh" ] \
+    [ "$( runof 'mything_harness.cpp' "$PR" )" = "bash test/mythingcheck.sh" ] \
         && ok "--pr-context <test> rows carry run= (the review lens's obligation is dischargeable)" \
         || no "--pr-context run= missing/wrong: '$( runof 'mything_harness.cpp' "$PR" )'"
     case "$PR" in

@@ -1031,7 +1031,7 @@ namespace mcpedit
         // The SAME answer --affected=<this file> gives, through the SAME function — see
         // testmap.h::affectedAnswerForFile for why this used to be a private walk and what that cost.
         const AffectedAnswer  ans = rw::affectedAnswerForFile( ing, g, fileId );
-        const TestRunnerIndex runners( ing );
+        const TestRunnerIndex runners( ing, root );
         const auto            jesc   = []( std::string_view t ) { return mcpdetail::jsonEscape( std::string( t ) ); };
         const std::string     prefix = rw::sarif::rootPrefixOf( root );
         std::string           out    = ",\"tests_to_run\":[";
@@ -1150,7 +1150,7 @@ namespace mcpedit
             // evidence order now, so next= suggests the changed/partner test ahead of a deeper graph hop
             const std::uint32_t firstTest = withTests ? rw::firstTestFileForFile( ing, g, editedFile ) : rw::kNoFile;
             *nextOut = receiptNextFor( fileIdentity, symbolName, out,
-                                       firstTest == rw::kNoFile ? std::string() : TestRunnerIndex( ing ).commandFor( firstTest ) );
+                                       firstTest == rw::kNoFile ? std::string() : TestRunnerIndex( ing, root ).commandFor( firstTest ) );
         }
         return out;
     }

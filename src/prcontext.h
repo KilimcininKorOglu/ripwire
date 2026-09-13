@@ -955,7 +955,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     const auto allOwners = gitFileAuthors( root, ing, UINT32_MAX, 182.5, onlyRoot );
 
     // §A9.5 / §P11.4: run= on the named test rows, from the SAME index --affected/--situ/--test-gate read.
-    const TestRunnerIndex prRunners( ing );   // built once, like coSets/allOwners — the bundle re-renders
+    const TestRunnerIndex prRunners( ing, root );   // built once, like coSets/allOwners — the bundle re-renders
 
     // One-time file→defined-symbols index (in id order == file/line order), so each changed file reads its
     // symbols in O(1) instead of re-scanning all N symbols (A4-P10). Buckets fill in ascending id order.
