@@ -370,7 +370,9 @@ fi
 # and the caller got an exception where its contract says it gets ok == false.
 #
 # A throw path is unreachable from a gate by ordinary means, so this drives the in-source fault switch
-# RIPWIRE_FAULT_RENDER_EMIT_THROW=1 — serialize.h's isChargeBufferFaultInjected idiom, and therefore living
+# INFRA_FAULT_RENDER_EMIT_THROW=1 — serialize.h's isChargeBufferFaultInjected idiom (the INFRA_ prefix, not
+# this project's, because src/infra/ is built to travel and test/infraportcheck.sh (C) refuses a layer file
+# that names the host — it caught this switch's first spelling), and therefore living
 # ONLY on the non-NDEBUG flavour, the same flavour DEGRADED_PATH_ALERT lives on. So, like estchargecheck #14,
 # this arm establishes that flavour with its OWN probe rather than assuming it, and must never pass for lack
 # of an alert it could not have seen.
@@ -383,7 +385,7 @@ fi
 # depends on nothing the working tree happens to hold.
 PRC_FAULT_OUT="$TMP/f_dg.out"; PRC_FAULT_ERR="$TMP/f_dg.err"
 PRC_FAULT_BASE="HEAD~3"
-RIPWIRE_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
+INFRA_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
 prc_f_rc=$?
 # and the range must actually name a file, or every assertion below is vacuous
 if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! grep -aq 'THREW' "$PRC_FAULT_ERR"; then
@@ -395,7 +397,7 @@ if ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
     if "$BIN" --version 2>/dev/null | grep -q 'release'; then
         printf '  INFO  (F) emitter-throw degrade is unobservable on this NDEBUG flavour (the plain build proves it)\n'
     else
-        no "(F) RIPWIRE_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a flavour that can see one — the seam regressed"
+        no "(F) INFRA_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a flavour that can see one — the seam regressed"
     fi
 else
     ok "(F) observability probe: the emitter-throw fault switch is live and alerts on this flavour"

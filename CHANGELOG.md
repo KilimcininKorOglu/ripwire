@@ -147,7 +147,10 @@ on that path would be a wrong cause attached to a right consequence. Because a t
 unreachable from a gate, it is driven by an in-source fault switch in `serialize.h`'s
 `isChargeBufferFaultInjected` shape — non-NDEBUG only, read once per process, exact `"1"` the only ON value —
 and `test/prcontextcheck.sh` arm (F) asserts the whole contract with its own observability probe, red on the
-parent commit (`rc=134`, 0 B, no alert).
+parent commit (`rc=134`, 0 B, no alert). That switch carries the `INFRA_` prefix rather than this project's:
+everything under `src/infra/` is built to travel to another repository, and `test/infraportcheck.sh` (C)
+refuses a layer file that names the host — it caught the switch's first spelling, which is the gate doing
+exactly what it exists for.
 
 ### Added — the task router knows the recency question, and every new shape is named where an agent reads
 

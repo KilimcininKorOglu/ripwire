@@ -185,30 +185,28 @@ struct Rendered
 };
 
 // ── THE EMITTER ITSELF MAY THROW, and that is a degrade, not a way out ───────────────────────────────
-// CodeRabbit on #214: `emit( m )` was called outside any handler. A throw from it — std::bad_alloc out of
-// the std::format fallback is the reachable one, since the whole point of this seam is to buffer a document
-// whose size is not known in advance — skipped the fclose, the free, the alert and the documented
-// empty-result fallback in one jump: the memstream and its buffer leaked, and the caller got an exception
-// where its contract says it gets `ok == false`.
+// The emitter was called outside any handler. A throw from it — std::bad_alloc out of the std::format
+// fallback is the reachable one, since the whole point of this seam is to buffer a document whose size is
+// not known in advance — skipped the fclose, the free, the alert and the documented empty-result fallback in
+// one jump: the memstream and its buffer leaked, and the caller got an exception where its contract says it
+// gets `ok == false`.
 //
-// The house answer to "a throw crosses a seam that owns a resource" is this tree's own: catch at the seam,
-// release what it owns, DISCLOSE, and hand back the degraded value the caller already knows how to read
-// (search.h's `catch( ... ) { out.degraded = true; return out; }`, ingest_astquery.h's per-file degrade).
-// It is the same answer this function already gives when open_memstream fails, and the callers need no new
-// case: `ok == false` has always meant "these are not the bytes the emitter wrote", and --pr-context
-// already streams the floor level straight out when it sees one.
+// The answer is the one this layer gives everywhere a throw crosses a seam that owns a resource: catch AT
+// the seam, release what it owns, DISCLOSE, and hand back the degraded value the caller already reads. It is
+// the same answer this function gives when open_memstream fails, so callers need no new case — `ok == false`
+// has always meant "these are not the bytes the emitter wrote", and a caller that has a fallback for the
+// empty buffer has one for this.
 //
-// FAULT INJECTION, because a throw path is otherwise unreachable from a gate: the switch below is
-// serialize.h's isChargeBufferFaultInjected idiom, verbatim in shape — non-NDEBUG only (so it is
-// `constexpr false` and the getenv is deleted in release, G2/G3), read ONCE per process (so it cannot
-// change mid-document and determinism holds), and EXACT "1" is the only ON value, because the contract is a
-// switch and a prefix test would let "=10" and "=0" disagree with what they say. test/prcontextcheck.sh
-// arm (F) drives it and asserts the whole contract: complete bytes, the alert, no leak under LSan.
-// ONE reader for every such switch (serialize.h's charge-buffer fault is the other). The parsing rule is
-// the part worth having in one place: EXACT "1" is the only ON value, because the contract is a switch and a
-// prefix test would let "=10" and "=0" mean whatever the reader guessed — a defect this tree already fixed
-// once, in the charge-buffer switch, and would otherwise have had to fix again here. Under NDEBUG it is
-// `constexpr false`, so the branch and the getenv are both deleted (G2/G3: zero release cost).
+// FAULT INJECTION, because a throw path is otherwise unreachable from a test: non-NDEBUG only (so it is
+// `constexpr false` and the getenv is deleted in release: zero release cost), read ONCE per process (so it
+// cannot change mid-document and determinism holds), and EXACT "1" is the only ON value, because the
+// contract is a switch — a prefix test would let "=10" and "=0" mean whatever the reader guessed, which is a
+// defect worth fixing once, here, rather than once per switch.
+//
+// THE ENV NAME CARRIES THIS LAYER'S PREFIX, NOT THE HOST'S. Everything under infra/ is built to travel to
+// another repository; a host-named switch would arrive there describing a program its reader has never run,
+// which is exactly what the layering gate refuses. A host that owns its own fault switches names them its
+// own way and reads them through faultSwitchOn below.
 #ifndef NDEBUG
 inline bool faultSwitchOn( const char* envName ) noexcept
 {
@@ -223,7 +221,7 @@ inline constexpr bool faultSwitchOn( const char* ) noexcept { return false; }
 // for, and the `static` is what keeps the answer from changing mid-document (determinism).
 inline bool isRenderEmitThrowFaultInjected() noexcept
 {
-    static const bool isOn = faultSwitchOn( "RIPWIRE_FAULT_RENDER_EMIT_THROW" );
+    static const bool isOn = faultSwitchOn( "INFRA_FAULT_RENDER_EMIT_THROW" );
     return isOn;
 }
 
