@@ -16,6 +16,7 @@
 #include "model.h"           // IngestResult
 #include "query.h"           // isKnownLayerWord — the layer vocabulary --verify enforces at evaluation
 #include "verify.h"          // parseClaim — the SHIPPED claim grammar; the router never re-implements it
+#include "compactlegend.h"  // rw::legendCompactAppliesTo — ONE answer to "does --legend=compact apply here"
 
 namespace rw::taskroute
 {
@@ -913,7 +914,32 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
     return std::nullopt;
 }
 
+// ONE PLACE APPLIES THE COMPACT-LEGEND POSTURE (PR #215 review item 5). A1-2 put --legend=compact on 26 route
+// commands by editing 26 strings, which is 26 chances to miss one and no rule for the 27th. classifyRoutes below
+// is the whole router; classify() is the one exit, and it applies the posture to every choice it returns.
+//
+// WHAT DECIDES: rw::legendCompactAppliesTo (cli.h), the SAME list of non-XML surfaces the binary REFUSES the flag
+// on, asked of a command string instead of a parsed Config. So the router cannot generate a command its own
+// binary rejects — which it did: `--zoom --legend=compact --mermaid` shipped in a skill, and a hand-listed gate
+// enforced it. --for is exempt by policy, not by refusal, and legendCompactAppliesTo says so in one place.
+// Idempotent: a command that already carries --legend= is left alone, so the hand-applied 26 are untouched and
+// this is a no-op on them. Gate: test/taskroutecheck.sh runs every generated command against the binary.
+inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty );
+
 inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty )
+{
+    TaskRouteResult result = classifyRoutes( task, root, ing, git, dirty );
+    for( RouteChoice& choice : result.choices )
+    {
+        if( rw::legendCompactAppliesTo( choice.command ) )
+        {
+            choice.command += " --legend=compact";
+        }
+    }
+    return result;
+}
+
+inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty )
 {
     TaskRouteResult result;
     result.facts.git             = git;

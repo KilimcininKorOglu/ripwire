@@ -1175,6 +1175,12 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         const CeilingLadderChoice chosen = climbCeilingLadder( [ & ]( bool, bool withSrcEcho, std::string_view extra )
                                                                { return buildTraceHeader( withSrcEcho, extra ); },
                                                                headerStr, pricedBytesOf( whole.size() ) - headerStr.size() + rootAttrsBound,
+                                                               // ONE ceiling twice: this lens states its ceiling in BYTES and labels
+                                                               // over_ceiling= against `namedCeiling`, so it has no token-rate
+                                                               // mismatch for the two-ceiling ladder to resolve (PR #215 item 1 names
+                                                               // --for and --pack-task). Passing the same predicate for both rungs
+                                                               // reproduces the pre-#215 single-ceiling climb exactly.
+                                                               ceilingAllowanceFromBudgetBytes( bundleBudget ),
                                                                ceilingAllowanceFromBudgetBytes( bundleBudget ),
                                                                /*hasRouteAttr=*/false, kNotes );
         if( chosen.header != headerStr )

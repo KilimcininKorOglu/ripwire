@@ -530,6 +530,68 @@ meter_log()
 meter_w1=""
 meter_w2=""
 meter_arg1=""
+# ---- BEGIN MIRRORED BLOCK rw_is_ripwire_call (PR #215 review item 6) -------------------------------------
+# KEEP BYTE-IDENTICAL in hooks/ripwire-claude-route.sh, hooks/ripwire-codex-route.sh and hooks/ripwire-nudge.sh.
+# test/routehookcheck.sh extracts the three copies and diffs them, the kIngestParserVerMirror pattern: three
+# files answering one question must answer it in one text, or the meter and the hooks disagree about the very
+# same command line — which is exactly what happened, and it makes the adoption numbers unreadable.
+#
+# WHAT THIS REPLACES. A regex that looked for `ripwire` after a separator. It said NO to every WRAPPED
+# invocation an agent actually types — `time ./build/ripwire .`, `sudo ripwire`, `env RIPWIRE_BIN=x ripwire`,
+# `xargs ripwire`, `exec ripwire`, `nohup ripwire`, `if ripwire … ; then`, `{ ripwire … ; }` — and still said
+# YES to `git commit -m "fix; ripwire hook"`, where the word sits inside a quoted string and no ripwire runs.
+# Both errors corrupt the same measurement in opposite directions.
+#
+# WHAT IT DOES. The shell's own model, the one meter_lead in the nudge hook already used: split the line into
+# words, walk it, and ask whether any COMMAND-POSITION word is the binary. Command position is the start of the
+# line and anything after a separator; the wrapper words below are stepped over because they do not consume the
+# command, and `cd DIR`, `rtk proxy` and `VAR=value` prefixes are stepped over with their operand. The word is
+# then basename'd, so `./build/ripwire` and `/opt/rw/ripwire` count and `/opt/ripwire/bin/other` does not.
+# Unquoted splitting is what makes the quoted-string case come out right: `-m "fix;` and `ripwire` are two
+# words, and the second is not in command position because the first did not end a command.
+rw_is_ripwire_call()
+{
+    set -f
+    # shellcheck disable=SC2086
+    set -- $1
+    set +f
+    rw_at_cmd=1
+    while [ "$#" -gt 0 ]
+    do
+        if [ "$rw_at_cmd" = 1 ]
+        then
+            case "$1" in
+                '&&'|'||'|';'|'&'|'|'|'{'|'('|'!')                     shift; continue ;;
+                if|while|until|do|then|else|elif|done|fi|esac)         shift; continue ;;
+                *=*)                                                   shift; continue ;;
+                sudo|command|env|time|nice|nohup|exec|builtin|xargs)    shift; continue ;;
+                cd|pushd)
+                    shift
+                    case "${1:-}" in
+                        ''|'&&'|'||'|';'|'&'|'|') ;;
+                        *) shift ;;
+                    esac
+                    continue ;;
+                rtk)
+                    shift
+                    if [ "${1:-}" = "proxy" ]; then shift; fi
+                    continue ;;
+            esac
+            rw_word="${1##*/}"
+            if [ "$rw_word" = "ripwire" ]; then return 0; fi
+            rw_at_cmd=0
+            shift
+            continue
+        fi
+        case "$1" in
+            '&&'|'||'|';'|'&'|'|') rw_at_cmd=1 ;;
+        esac
+        shift
+    done
+    return 1
+}
+# ---- END MIRRORED BLOCK rw_is_ripwire_call ---------------------------------------------------------------
+
 meter_lead()
 {
     set -f
@@ -719,9 +781,15 @@ meter_classify_head()
     _blead="$meter_w1"
     _bsub="$meter_w2"
     mclass=""
+    # PR #215 review item 6: the ripwire decision is rw_is_ripwire_call's, not a second opinion about the lead
+    # word. meter_lead stops at the first command word, so `time ./build/ripwire .` classified as `time` here
+    # while the route hooks (once they were fixed) counted it as a call — one line, two answers, and the
+    # substitution rate is a ratio of the two counts. One block, mirrored, asked by both.
+    if rw_is_ripwire_call "$_bc"
+    then
+        mclass="ripwire-cli"; return 0
+    fi
     case "$_blead" in
-        ripwire)
-            mclass="ripwire-cli"; return 0 ;;
         grep|egrep|fgrep|zgrep|rg|ag|ack|ack-grep|ugrep)
             # A COUNT-ONLY or QUIET grep is a POLL, not a search (2026-09-02, from mining the log for
             # the A/B readout: ~14% of that window's grep-class rows were these). `grep -c Building

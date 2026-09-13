@@ -102,6 +102,68 @@ resolve_arm()
 # one that carries the recommended verb makes the outcome `adopted`. Two, because a longer window
 # collects verbs the agent would have reached anyway — that choice is registered, not tuned.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# ---- BEGIN MIRRORED BLOCK rw_is_ripwire_call (PR #215 review item 6) -------------------------------------
+# KEEP BYTE-IDENTICAL in hooks/ripwire-claude-route.sh, hooks/ripwire-codex-route.sh and hooks/ripwire-nudge.sh.
+# test/routehookcheck.sh extracts the three copies and diffs them, the kIngestParserVerMirror pattern: three
+# files answering one question must answer it in one text, or the meter and the hooks disagree about the very
+# same command line — which is exactly what happened, and it makes the adoption numbers unreadable.
+#
+# WHAT THIS REPLACES. A regex that looked for `ripwire` after a separator. It said NO to every WRAPPED
+# invocation an agent actually types — `time ./build/ripwire .`, `sudo ripwire`, `env RIPWIRE_BIN=x ripwire`,
+# `xargs ripwire`, `exec ripwire`, `nohup ripwire`, `if ripwire … ; then`, `{ ripwire … ; }` — and still said
+# YES to `git commit -m "fix; ripwire hook"`, where the word sits inside a quoted string and no ripwire runs.
+# Both errors corrupt the same measurement in opposite directions.
+#
+# WHAT IT DOES. The shell's own model, the one meter_lead in the nudge hook already used: split the line into
+# words, walk it, and ask whether any COMMAND-POSITION word is the binary. Command position is the start of the
+# line and anything after a separator; the wrapper words below are stepped over because they do not consume the
+# command, and `cd DIR`, `rtk proxy` and `VAR=value` prefixes are stepped over with their operand. The word is
+# then basename'd, so `./build/ripwire` and `/opt/rw/ripwire` count and `/opt/ripwire/bin/other` does not.
+# Unquoted splitting is what makes the quoted-string case come out right: `-m "fix;` and `ripwire` are two
+# words, and the second is not in command position because the first did not end a command.
+rw_is_ripwire_call()
+{
+    set -f
+    # shellcheck disable=SC2086
+    set -- $1
+    set +f
+    rw_at_cmd=1
+    while [ "$#" -gt 0 ]
+    do
+        if [ "$rw_at_cmd" = 1 ]
+        then
+            case "$1" in
+                '&&'|'||'|';'|'&'|'|'|'{'|'('|'!')                     shift; continue ;;
+                if|while|until|do|then|else|elif|done|fi|esac)         shift; continue ;;
+                *=*)                                                   shift; continue ;;
+                sudo|command|env|time|nice|nohup|exec|builtin|xargs)    shift; continue ;;
+                cd|pushd)
+                    shift
+                    case "${1:-}" in
+                        ''|'&&'|'||'|';'|'&'|'|') ;;
+                        *) shift ;;
+                    esac
+                    continue ;;
+                rtk)
+                    shift
+                    if [ "${1:-}" = "proxy" ]; then shift; fi
+                    continue ;;
+            esac
+            rw_word="${1##*/}"
+            if [ "$rw_word" = "ripwire" ]; then return 0; fi
+            rw_at_cmd=0
+            shift
+            continue
+        fi
+        case "$1" in
+            '&&'|'||'|';'|'&'|'|') rw_at_cmd=1 ;;
+        esac
+        shift
+    done
+    return 1
+}
+# ---- END MIRRORED BLOCK rw_is_ripwire_call ---------------------------------------------------------------
+
 if [ "${1:-}" = "--observe" ]; then
     meter_home || exit 0
     session="$( printf '%s' "$input" | jq -r '.session_id // .conversation_id // empty' 2>/dev/null )"
@@ -121,12 +183,11 @@ if [ "${1:-}" = "--observe" ]; then
     observed=""
     case "$tool" in
         Bash)
-            # 2026-09-12: only the COMMAND WORD counts as a ripwire call — `ripwire`, `./build/ripwire`, any path whose
-            # basename is ripwire — in command position: at the start, after ; & | ( or $(, past any leading VAR=value
-            # assignments. A token ending in /ripwire in ARGUMENT position (`cd …/ripwire && git log`, `ls /opt/ripwire`)
-            # used to count, burn a window slot, and turn a real adoption two commands later into `missed` (the local
-            # routing analysis's instrument bug). Gate: test/routehookcheck.sh O7 / test/codexpromptroutecheck.sh.
-            printf '%s' "$command" | grep -Eq '(^|[;&|(]|\$\()[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:]]*/)?ripwire([[:space:]]|$)' || exit 0
+            # Only a COMMAND-POSITION word counts as a ripwire call, wrappers and all: rw_is_ripwire_call, the
+            # block mirrored in the three hooks (see its own comment). A token ending in /ripwire in ARGUMENT
+            # position (`cd …/ripwire && git log`) does not count and never did burn a window slot since.
+            # Gate: test/routehookcheck.sh O7/O9 / test/codexpromptroutecheck.sh.
+            rw_is_ripwire_call "$command" || exit 0
             observed="$( printf '%s' "$command" | grep -oE -- '--[a-z0-9-]+' | head -1 )"
             [ -n "$observed" ] || observed="<map>"
             ;;

@@ -381,5 +381,40 @@ esac
 EVAL="$( python3 "$ROOT/bench/taskroute_eval.py" --bin "$BIN" --corpus "$ROOT/test/taskroutefix/prompts.tsv" --split test 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "held-out command-routing floors ($EVAL)"; else no "held-out command-routing floors failed: $EVAL"; fi
 
+
+# ── R-LEG: every command this router GENERATES is one the binary accepts (PR #215 review item 5) ───────────
+# A1-2 put --legend=compact on the route commands by editing 26 strings. That is 26 chances to be wrong and no
+# rule for the 27th, and the same hand-application shipped `--zoom --legend=compact --mermaid` into a skill —
+# a command the binary REFUSES. classify() applies the posture once now (rw::legendCompactAppliesTo), and this
+# arm is what makes that a fact rather than an intention: every <run> the router emits over the whole prompt
+# corpus is executed against an EMPTY directory, and the refusal line must never appear. The refusal is a
+# parse-time check, so an empty corpus answers in milliseconds and no operand can mask it.
+RLEG_EMPTY="$TMP/rleg_empty"; mkdir -p "$RLEG_EMPTY"
+cut -f5 "$ROOT/test/taskroutefix/prompts.tsv" 2>/dev/null | sed '1d' > "$TMP/rleg_tasks.txt"   # column 5 is the prompt
+: > "$TMP/rleg_cmds.txt"
+while IFS= read -r _t; do
+    [ -n "$_t" ] || continue
+    route "$_t" 2>/dev/null | grep -oE '<run>[^<]*' | sed 's/^<run>//' >> "$TMP/rleg_cmds.txt"
+done < "$TMP/rleg_tasks.txt"
+# the <run> line is XML-escaped; unescape the two entities the router can emit, then drop the leading `ripwire`
+sed -e "s/&apos;/'/g" -e 's/&quot;/"/g' -e 's/&amp;/\&/g' "$TMP/rleg_cmds.txt" | sort -u > "$TMP/rleg_u.txt"
+rleg_n=0; rleg_bad=0
+while IFS= read -r _c; do
+    [ -n "$_c" ] || continue
+    _args="${_c#ripwire }"
+    _args="${_args#\'*\' }"          # the quoted root the router spells; this arm supplies its own
+    rleg_n=$(( rleg_n + 1 ))
+    # shellcheck disable=SC2086
+    eval "\"\$BIN\" \"\$RLEG_EMPTY\" $_args" >/dev/null 2>"$TMP/rleg.err" || true
+    if grep -q 'applies to the XML verbs only' "$TMP/rleg.err"; then
+        rleg_bad=$(( rleg_bad + 1 ))
+        [ "$rleg_bad" -le 5 ] && printf '        REFUSED: %s\n' "$( printf '%s' "$_c" | head -c 140 )"
+    fi
+done < "$TMP/rleg_u.txt"
+[ "$rleg_n" -gt 0 ] || no "R-LEG: the prompt corpus produced no <run> command — this arm proved nothing"
+[ "$rleg_bad" -eq 0 ] \
+    && ok "R-LEG: all $rleg_n distinct generated commands are ACCEPTED by this binary (the router cannot emit a command its own binary refuses)" \
+    || no "R-LEG: $rleg_bad of $rleg_n generated commands are REFUSED by this binary (listed above)"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

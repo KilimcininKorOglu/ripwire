@@ -185,7 +185,7 @@ something always fires.)
    id, or its **facet**:
 
    ```bash
-   ripwire <dir> --quality-delta --legend=compact --ack-only=contract-change --quality-ack="arity change required by <fix>"
+   ripwire <dir> --quality-delta --ack-only=contract-change --quality-ack="arity change required by <fix>"
    ```
 
    Prefer the facet over the kind when one exists: `api-surface` also covers the never-gating `new-symbol`
@@ -203,7 +203,7 @@ something always fires.)
 
    ```bash
    ripwire <dir> --quality-delta --legend=compact --scope=src/render,src/render_gl.h             # gate on MY subtree only
-   ripwire <dir> --quality-delta --legend=compact --scope=src/render --quality-ack="deliberate"  # …and ack only my rows
+   ripwire <dir> --quality-delta --scope=src/render --quality-ack="deliberate"  # …and ack only my rows
    ```
 
    Rows outside the scope are **still printed**, under an `<out-of-scope>` element with a do-not-ack

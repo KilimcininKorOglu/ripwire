@@ -386,6 +386,24 @@ inline std::string shapeFactorText( int pct )
 // The ONE spelling of what happened, appended to the routed reason so it lands in route= (and its JSON
 // twin) verbatim. Empty when no shape fired — silence means nothing happened, the same convention route=
 // and over_ceiling already use.
+//
+// PR #215 review item 4 — and the ONE PRODUCER of the whole route= value is routeNoteOf() below it, because the
+// four sites that built this string by hand did not all build the same string. Row 6 made route= a CODE
+// (`name-exact(X)`, `subtoken+body[:broad|:declined(…)]`) and dropped the "routed: " prose prefix at three of
+// them; the MCP FILE PAGE kept `"routed: " + rc.reason`, so one server, on one query, answered its bundle with
+// `route="name-exact(pick)"` and its page with `route="routed: name-exact(pick)"` — a spelling no legend in the
+// product defines, and a parity break with both the CLI page and this server's own default serving. A value
+// with a vocabulary needs a producer, not four spellings.
+inline std::string shapeDemotionNote( const queryshape::Verdict& shape );
+
+// `noRoute` is the caller's --no-route / no_route: the router never ran, so there is no route to report and the
+// attribute is absent (ctxRootOpen omits it on an empty value). Every route= on every surface comes from here.
+template<typename RouteChoiceT>
+inline std::string routeNoteOf( const RouteChoiceT& rc, const queryshape::Verdict& shape, bool noRoute )
+{
+    return noRoute ? std::string() : rc.reason + shapeDemotionNote( shape );
+}
+
 inline std::string shapeDemotionNote( const queryshape::Verdict& shape )
 {
     if( !shape.fires() )

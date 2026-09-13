@@ -174,30 +174,53 @@ helpOut2="$( "$BIN" --help=all 2>/dev/null )"
     && ok "--help still ships --slice=/--slice-flow (the flags the find-bug skill now names)" \
     || no "--help no longer ships --slice=/--slice-flow — the skill fix now names a retired flag"
 
-# A1-2 (owner decision 2026-09-12): every `ripwire <dir> --VERB…` a skill spells for an XML verb carries
-# --legend=compact; --for is exempt (its compact legend is its own and the first call of a session wants the full
-# one), and so are the text/JSON/writer verbs the binary refuses the flag on. The list is the shipped policy —
-# the same list the 2026-09-12 transform applied — spelled here so a skill edit that drops the flag is red.
-SKILL_COMPACT_VERBS="callers callees impact uses expand around path connect mentions at exemplar lego pack-task pack-signatures from-trace edit-check safe-delete verify whereis affected test-gate quality-delta quality-panel hotspots clones lint seams deps communities community zoom tree cochange owners readability ensemble context-ratio naming-consistency comment-coherence nonlocal-state dead-code doc-drift notes stray-content skipped flags metrics grep regex match query map-diff pr-context external-surface exercises doctor dmm help-task merge-scout plan-lint scan-skills handoff layout graph-query slice outline"
+# A1-2 (owner decision 2026-09-12): every `ripwire <dir> --VERB…` a skill spells carries --legend=compact
+# WHERE THE BINARY ACCEPTS IT. --for is exempt by policy (its compact legend is its own and the first call of a
+# session wants the full one); everything else is decided by the BINARY, not by a list kept here.
+#
+# WHY NOT A LIST (PR #215 review item 5). This arm used to hold SKILL_COMPACT_VERBS, sixty verb names typed out
+# by hand, and it named `zoom`. skills/ripwire-orient/SKILL.md spells `ripwire <dir> --zoom --legend=compact
+# --mermaid`, which the binary REFUSES ("--legend=compact applies to the XML verbs only — --mermaid has no XML
+# legend to compact") — so the gate was enforcing a broken command, and would have kept enforcing it. The verb
+# is not what decides; the whole command is, because --mermaid/--html/--situ/the writer flags turn an XML verb
+# into a non-XML run. Two more broken lines in ripwire-quality-bar/SKILL.md fell out of the same probe, which is
+# the argument for asking the binary: a hand list cannot find what nobody thought to type into it.
+#
+# THE PROBE. Each distinct command that carries --legend=compact is RUN against an empty temp directory. The
+# refusal is a parse-time check, so an empty corpus answers it in milliseconds and a bogus SYM operand cannot
+# mask it; nothing but the refusal line is read, and no other failure counts.
+SKILL_TMP="$( mktemp -d )"; trap 'rm -rf "$SKILL_TMP"' EXIT
+SKILL_EMPTY="$SKILL_TMP/empty"
+mkdir -p "$SKILL_EMPTY"
 BT='`'
-missing=0; checked=0
-for _v in $SKILL_COMPACT_VERBS; do
-    while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        checked=$(( checked + 1 ))
-        # the command span: from `ripwire <dir> --VERB` to the closing backtick (or end of line)
-        span="$( printf '%s\n' "$line" | grep -oE -- "ripwire <dir> --$_v(=|$BT|[[:space:]]|\$)[^$BT]*" | head -1 )"
-        case "$span" in *'--legend=compact'*) ;; *) missing=$(( missing + 1 )); [ $missing -le 5 ] && printf '        %s: %s\n' "$_v" "$( printf '%s' "$span" | head -c 120 )";; esac
-    done <<<"$( grep -rhE -- "ripwire <dir> --$_v(=|$BT|[[:space:]]|\$)" "$ROOT/skills" --include='*.md' )"
-done
-[ "$checked" -gt 0 ] || no "skills compact policy: no command spelled for any policy verb — the arm inspected nothing"
-[ "$missing" -eq 0 ] \
-    && ok "skills compact policy: all $checked \`ripwire <dir> --VERB\` commands on XML verbs carry --legend=compact" \
-    || no "skills compact policy: $missing of $checked XML-verb commands in skills/ lack --legend=compact"
-if grep -rhE -- 'ripwire <dir> --for=[^`]*--legend=compact' "$ROOT/skills" --include='*.md' | grep -q .; then
-    no "skills compact policy: a --for command carries --legend=compact (exempt: the first call wants the full legend)"
-else
-    ok "skills compact policy: no --for command carries --legend=compact"
-fi
+sc_checked=0; sc_bad=0
+# every distinct `ripwire <dir> …--legend=compact…` command span the skills spell
+grep -rhoE --include='*.md' -- "ripwire <dir> --[a-z0-9-]+[^$BT]*" "$ROOT/skills" \
+    | grep -F -- '--legend=compact' | sed 's/[[:space:]]*$//' | sort -u > "$SKILL_TMP/skill_compact_cmds.txt"
+while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    args="${cmd#ripwire <dir> }"
+    sc_checked=$(( sc_checked + 1 ))
+    # shellcheck disable=SC2086
+    if "$BIN" "$SKILL_EMPTY" $args >/dev/null 2>"$SKILL_TMP/skillprobe.err"; then :; fi
+    if grep -q 'applies to the XML verbs only' "$SKILL_TMP/skillprobe.err"; then
+        sc_bad=$(( sc_bad + 1 ))
+        [ "$sc_bad" -le 5 ] && printf '        REFUSED: %s\n' "$( printf '%s' "$cmd" | head -c 140 )"
+    fi
+done < "$SKILL_TMP/skill_compact_cmds.txt"
+[ "$sc_checked" -gt 0 ] || no "skills compact policy: no skill command carries --legend=compact — the arm inspected nothing"
+[ "$sc_bad" -eq 0 ] \
+    && ok "skills compact policy: all $sc_checked distinct --legend=compact commands are ACCEPTED by this binary (asked, not listed)" \
+    || no "skills compact policy: $sc_bad of $sc_checked --legend=compact commands are REFUSED by this binary (listed above) — the flag does not belong on them"
+# …and the other direction: --for must NOT carry it (the one policy exemption this gate does state, because it
+# is a choice and not a refusal — the binary accepts --legend=compact on --for perfectly well).
+sc_for=0
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    sc_for=$(( sc_for + 1 ))
+done <<<"$( grep -rhoE --include='*.md' -- "ripwire <dir> --for=[^$BT]*--legend=compact[^$BT]*" "$ROOT/skills" )"
+[ "$sc_for" -eq 0 ] \
+    && ok "skills compact policy: no --for command carries --legend=compact (its compact legend is its own)" \
+    || no "skills compact policy: $sc_for --for command(s) carry --legend=compact"
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

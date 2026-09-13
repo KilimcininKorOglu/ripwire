@@ -143,4 +143,35 @@ if grep -q '<d [^>]* id="' "$TMP/for.xml"; then no "(F) a <d> row still prints i
 "$BIN" test/cppqualfix --no-cache --json >"$TMP/map.json" 2>/dev/null </dev/null
 if grep -q '"sc":"Widget"' "$TMP/map.json" && ! grep -q '"id":"qual.cpp::' "$TMP/map.json"; then ok "(G) --json rows carry \"sc\" and no \"id\""; else no "(G) --json rows do not mirror sc= (id present or sc absent)"; fi
 
+
+# (E2) the two serving shapes row 6 reached LAST (PR #215 review item 9): the WHOLE-FILE --expand and the
+# --format=candidates export. The whole-file anchor rows kept id="PATH::SCOPE::NAME" inside a <src p="PATH">
+# that had just printed the path, on a document carrying no legend at all — a repetition AND an undefined
+# first-screen attribute on the one --expand shape with nothing else to read.
+"$BIN" test/nestedqualfix --expand=Outer --no-cache >"$TMP/wf.xml" 2>/dev/null </dev/null
+if grep -q 'mode="whole-file"' "$TMP/wf.xml"; then
+    if grep -q '<s n="Outer" sc="Outer" l=' "$TMP/wf.xml" && ! grep -q '<s [^>]*id="outer.hpp::' "$TMP/wf.xml"; then
+        ok "(E2) whole-file --expand anchor rows carry sc= and no path-repeating id="
+    else
+        no "(E2) whole-file --expand anchor rows still spell id= (or lost sc=): $( grep -o '<s [^>]*/>' "$TMP/wf.xml" | head -1 )"
+    fi
+    # …and the composition is DEFINED there, which it never was: the row's p= comes from its <src>.
+    grep -q 'composes as p::sc::n' "$TMP/wf.xml" \
+        && ok "(E2) the whole-file root defines the composition (sc= is not an undefined first-screen attribute)" \
+        || no "(E2) the whole-file serving carries no legend defining sc=/the composition"
+    # the composed id still RESOLVES, which is the whole contract
+    "$BIN" test/nestedqualfix --expand='outer.hpp::Outer::Outer' --no-cache >"$TMP/wf2.xml" 2>/dev/null </dev/null
+    grep -q '<' "$TMP/wf2.xml" && [ -s "$TMP/wf2.xml" ] \
+        && ok "(E2) the composed id from a whole-file row still resolves through --expand" \
+        || no "(E2) the composed id p::sc::n from a whole-file anchor row resolves nothing"
+else
+    no "(E2) test/nestedqualfix --expand=Outer no longer serves the whole-file shape — this arm proves nothing"
+fi
+# candidates: the flat export keeps id= by design (no <f> wrapper, no p= repetition) — pinned so the design
+# stays a decision rather than an omission nobody re-checked.
+"$BIN" test/cppqualfix --for=widget --format=candidates --no-cache >"$TMP/cand.xml" 2>/dev/null </dev/null
+grep -q '<cand [^>]*p="' "$TMP/cand.xml" \
+    && ok "(E2) --format=candidates rows carry p= (the flat export names its own file)" \
+    || no "(E2) --format=candidates rows carry no p=: $( grep -o '<cand [^>]*/>' "$TMP/cand.xml" | head -1 )"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "ALL FAIL"; exit 1; }

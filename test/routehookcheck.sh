@@ -496,5 +496,62 @@ done
     && ok "P1 docs: EVALS.md carries the pre-registered metric and band this hook is the instrument for" \
     || no "P1 docs: EVALS.md is missing:$PMISS"
 
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# O9 — rw_is_ripwire_call: ONE block, three files, and the shapes an agent actually types (PR #215 item 6)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# The regex this replaced said NO to every WRAPPED invocation (`time ./build/ripwire`, `sudo`, `env X=1`,
+# `xargs`, `exec`, `nohup`, `if ripwire`, `{ ripwire`) and YES to a quoted string in a git message. Worse, the
+# nudge hook's own meter kept a THIRD opinion, so the two counts whose ratio is the published substitution rate
+# were taken with different instruments. The block is mirrored; these arms assert the copies are identical
+# (the kIngestParserVerMirror pattern) and that the rule answers each shape correctly.
+echo
+echo "=== O9: the command-word rule is one text in three files, and reads the wrapped shapes ==="
+extract_block(){ awk '/^# ---- BEGIN MIRRORED BLOCK rw_is_ripwire_call/,/^# ---- END MIRRORED BLOCK rw_is_ripwire_call/' "$1"; }
+B_CLAUDE="$TMP/b_claude.sh"; B_CODEX="$TMP/b_codex.sh"; B_NUDGE="$TMP/b_nudge.sh"
+extract_block "$ROOT/hooks/ripwire-claude-route.sh" > "$B_CLAUDE"
+extract_block "$ROOT/hooks/ripwire-codex-route.sh"  > "$B_CODEX"
+extract_block "$ROOT/hooks/ripwire-nudge.sh"        > "$B_NUDGE"
+if [ ! -s "$B_CLAUDE" ]; then
+    no "O9 the mirrored block is absent from hooks/ripwire-claude-route.sh (the arm below would prove nothing)"
+elif diff -q "$B_CLAUDE" "$B_CODEX" >/dev/null && diff -q "$B_CLAUDE" "$B_NUDGE" >/dev/null; then
+    ok "O9 rw_is_ripwire_call is byte-identical in the three hooks ($( wc -l < "$B_CLAUDE" | tr -d ' ' ) lines)"
+else
+    no "O9 the three copies of rw_is_ripwire_call have DRIFTED — the hooks and the meter will disagree on the same command line"
+fi
+
+# The rule itself, sourced from the claude hook's copy so the arm tests what ships.
+cat "$B_CLAUDE" > "$TMP/rule.sh"
+printf 'if rw_is_ripwire_call "$1"; then echo 1; else echo 0; fi\n' >> "$TMP/rule.sh"
+o9_bad=0; o9_n=0
+o9(){   # $1 = expected (1/0), $2 = command line
+    o9_n=$(( o9_n + 1 ))
+    got="$( sh "$TMP/rule.sh" "$2" 2>/dev/null )"
+    [ "$got" = "$1" ] || { o9_bad=$(( o9_bad + 1 )); printf '        want=%s got=%s  %s\n' "$1" "$got" "$2"; }
+}
+# CALLS — every one of these runs ripwire, and every one of them read as "not a call" before this change
+o9 1 'ripwire . --for=x'
+o9 1 './build/ripwire .'
+o9 1 'time ./build/ripwire .'
+o9 1 'sudo ripwire .'
+o9 1 'env RIPWIRE_BIN=x ripwire .'
+o9 1 'xargs ripwire'
+o9 1 'exec ripwire .'
+o9 1 'nohup ripwire . &'
+o9 1 'if ripwire . --for=x; then echo y; fi'
+o9 1 '{ ripwire . ; }'
+o9 1 'cd /tmp && ripwire .'
+o9 1 'rtk proxy ripwire .'
+o9 1 'git log --oneline && ripwire .'
+# NOT CALLS — the word appears, nothing runs
+o9 0 'git commit -m "fix; ripwire hook"'
+o9 0 'cd /opt/src/ripwire && git log --oneline'
+o9 0 'ls /opt/ripwire'
+o9 0 'grep -r ripwire src/'
+o9 0 'echo ripwire'
+[ "$o9_bad" -eq 0 ] \
+    && ok "O9 command-word rule: $o9_n shapes read correctly (13 wrapped/sequenced calls, 5 appearances that run nothing)" \
+    || no "O9 command-word rule: $o9_bad of $o9_n shapes read WRONG (listed above)"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

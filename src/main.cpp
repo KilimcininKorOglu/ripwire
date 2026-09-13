@@ -1845,6 +1845,17 @@ int runDefaultMap( const MainDispatch& d )
         ctxOpenStr += ctxUnprovenLegend;
     }
 
+    // PR #215 review item 9: the whole-file serving prints <s n= sc= l=/> anchor rows inside <src p=>, and
+    // carried NO legend at all — sc= (and id= before it) was an undefined first-screen attribute on the one
+    // --expand shape that has no other legend to read. One clause, on the shape that emits the rows. No "--"
+    // anywhere: it rides inside an XML comment, where a double hyphen is ill-formed (G4).
+    if( serveWholeFile )
+    {
+        ctxOpenStr += "<!-- ripwire expand (whole file): <src p=file sym=\"name:line,...\"> wraps the file's own "
+                      "text; an <s n= sc= l=/> row names each requested symbol that has an enclosing scope, and "
+                      "its full id composes as p::sc::n from the src row's p=. -->";
+    }
+
     // r27-emitters T2: the ride-along map. A bare `--expand=SYM` costs ~24 KB for a ~1.4 KB body because the
     // 200-symbol default map is emitted alongside it, and nothing ever said so. The M6 auto-selection above
     // now drops the whole bundle when the FILE is cheaper; when the bundle (map included) IS the cheaper

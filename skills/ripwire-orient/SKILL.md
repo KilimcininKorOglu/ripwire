@@ -125,7 +125,7 @@ Read top-down; a `dir=` that doesn't match its parent's is a cross-cutting conce
 Trailing `<bridge …>` entries name the high-traffic integration seams *between* top modules — pair with
 `--seams` to see which ones no test reaches.
 
-**8. Render it** — `ripwire <dir> --zoom --legend=compact --mermaid` (or `--mermaid` for the flat module graph): a
+**8. Render it** — `ripwire <dir> --zoom --mermaid` (or `--mermaid` for the flat module graph): a
 `flowchart TB`, paste at mermaid.live. For hand-exploring, `ripwire <dir> --html[=FILE]` writes a
 self-contained clickable wiki (module cards → subgraphs → Sourcetrail-style node recentering, no CDN);
 `--color-by=community|cx|churn|tested` sets its initial node-colour lens (a live selector covers the rest).

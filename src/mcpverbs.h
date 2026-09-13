@@ -1706,7 +1706,10 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     if( page.limit > 0 || page.offset > 0 )
     {
         const ForFilePage filePage = computeForFilePage( ing, lensRank, mcpEvidence );
-        const std::string pageRootOpen = ctxRootOpen( task, noRoute ? std::string() : ( "routed: " + rc.reason + shapeDemotionNote( shape ) ), mcpRootArg );
+        // PR #215 review item 4: this page composed "routed: " + rc.reason by hand and so answered in a spelling
+        // row 6 retired everywhere else — a parity break with the CLI page AND with this server's own bundle two
+        // functions down. ONE producer (filter.h routeNoteOf), same call as every other site.
+        const std::string pageRootOpen = ctxRootOpen( task, routeNoteOf( rc, shape, noRoute ), mcpRootArg );
         return renderForFilePageXml( ing, filePage, ForPageRenderParts{ task, pageRootOpen, forCoveragePct( mcpEvidence, topLensId( lensRank ) ),
                                                                         page.limit, page.offset, mcpRootArg, /*compactLegend=*/false } );
     }
@@ -1790,7 +1793,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // §L10b + verify-wave2 F6: same trim as the CLI --for twin (verbs_for.h) — no leading " [" and no
     // trailing "]"; the value lands only in route=, where the attribute quote is the delimiter.
     const std::string mcpForAtAttrStr = gitstamp::atAttr( root );   // M10's at=, computed once: spliced onto the root AND exempted from the sigs charge below
-    std::string rootOpenStr = ctxRootOpen( task, noRoute ? std::string() : ( rc.reason + shapeDemotionNote( shape ) ),   // row 6: the route CODE, as the CLI twin
+    std::string rootOpenStr = ctxRootOpen( task, routeNoteOf( rc, shape, noRoute ),   // row 6: the route CODE, ONE producer (filter.h)
                                            flRootArg );   // §B1.7: same root attrs as the CLI twin (no route= under no_route, as --no-route)
     if( !rootOpenStr.empty() && rootOpenStr.back() == '>' )
     {
@@ -3581,7 +3584,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     lr.rank      = ( rc.which == LexMode::NameExact ) ? lexicalScoresNameExactRanked( ing, task, &tierMul )
                                                        : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul );
     // §L10b + verify-wave2 F6: same trim as the other route= construction sites — neither bracket.
-    lr.routeNote = noRoute ? std::string() : ( rc.reason + shapeDemotionNote( shape ) );   // row 6: the route CODE, as the CLI twin
+    lr.routeNote = routeNoteOf( rc, shape, noRoute );   // row 6: the route CODE, ONE producer (filter.h)
 
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {

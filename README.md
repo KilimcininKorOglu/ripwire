@@ -735,15 +735,14 @@ call a CLI.
 <summary><b>What comes back</b> — real output from this repository, pretty-printed and trimmed (re-captured 2026-09-05; rows are served in rank order, each naming its file)</summary>
 
 ```xml
-<ctx task="incremental cache invalidation" route="routed: subtoken+body BM25 (--for's default) — no strong
-     name hit, multi-word conceptual query" confidence="high" margin_pct="20"
+<ctx task="incremental cache invalidation" route="subtoken+body" confidence="high" margin_pct="20"
      bundle="compact" bodies="0" reason="compact-route" est_tokens="3995">
   <sigs shown="23" total="40" capped="1">
     <d l="106" n="kCacheMagic" p="src/ingest_cache.h" cx="0" ccx="0" in="0" churn="11" amp="71" pure="1" r="1"
        next="--expand=src/ingest_cache.h:kCacheMagic"><doc>incremental cache (--cache): per-file content hash + raw facts so a re-run re-parses ONLY c…</doc>constexpr std::uint32_t kCacheMagic = 0x4b505443</d>
-    <d l="1307" n="spanTierMemoPath" id="src/ingest_astquery.h::rw::spanTierMemoPath" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
-    <d l="247" n="ingestCommitTree" id="src/dmm.h::rw::dmm::ingestCommitTree" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
-    <d l="841" n="mcpRefreshedThisRequest" id="src/mcpindex.h::rw::mcpRefreshedThisRequest" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
+    <d l="1307" n="spanTierMemoPath" sc="rw" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
+    <d l="247" n="ingestCommitTree" sc="rw::dmm" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
+    <d l="841" n="mcpRefreshedThisRequest" sc="rw" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
     …
   </sigs>
   <hops shown="2" total="6" capped="1" noedge="2">
@@ -1244,12 +1243,12 @@ $ ripwire . --top-k=3
      precise=… skipped_oversize=… order=important-first -->
 <r est_tokens="435">
 <f p="./src/infra/svector.h" layer="infra">
-<s t="method" n="size" id="./src/infra/svector.h::svector::size" k="…"></s>
-<s t="method" n="push_back" id="./src/infra/svector.h::svector::push_back" amb="2" k="…">
-<c n="buf"/><c n="buf"/><c n="grow"/></s>
+<s t="method" n="size" sc="svector" k="…"></s>
+<s t="method" n="push_back" sc="svector" amb="2" k="…">
+<c n="buf" l="…,…"/><c n="grow" l="…"/></s>
 </f>
 <f p="./src/scipoverlay.h">
-<s t="method" n="empty" id="./src/scipoverlay.h::ScipOverlay::empty" k="…"></s>
+<s t="method" n="empty" sc="ScipOverlay" k="…"></s>
 </f>
 </r>
 ```

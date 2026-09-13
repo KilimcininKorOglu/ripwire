@@ -645,6 +645,35 @@ inline constexpr std::size_t ceilingAllowanceBytes( std::size_t budgetTokens ) n
     return std::size_t( double( budgetTokens ) * kMinBytesPerToken * kCeilingFirstEntryTolerance );
 }
 
+// THE EXACT CEILING, IN THE UNIT THE ROOT PRINTS. Both task lenses label a root over_ceiling="1" on
+// `est_tokens > budget_tokens`, and est_tokens prices the delivered document at kBytesPerTokenDefault — so the
+// largest document that keeps the root silent is budgetTokens x kBytesPerTokenDefault, NOT the allowance above
+// and NOT budgetTokens x kMinBytesPerToken.
+//
+// WHY THIS EXISTS (2026-09-13, PR #215 review item 1). The ladder's free rungs were priced at kMinBytesPerToken
+// (2.36) while the verdict they exist to avoid is priced at kBytesPerTokenDefault (2.50), a 6% disagreement in
+// the direction that makes the lens trim a document its own root calls conformant. MEASURED on the pre-fix
+// binary: `test/cppqualfix --for="widget ping make box" --token-budget=1200` printed est_tokens="778" with no
+// over_ceiling= — comfortably inside its budget — and had still dropped three legend clauses "(ceiling)"; at
+// --token-budget=1300 the same query kept every clause at est_tokens="1146". A lens must not pay a rung for a
+// ceiling it is not against. The tolerance above is for the residual a lens cannot trim (a first signature is
+// not divisible) and still governs the rungs that COST something — see climbCeilingLadderBy, which takes both.
+inline constexpr std::size_t ceilingBytes( std::size_t budgetTokens ) noexcept
+{
+    return std::size_t( double( budgetTokens ) * kBytesPerTokenDefault );
+}
+
+// The conservative hard byte ceiling a token target implies at the DENSEST language rate — a different number
+// from ceilingBytes above, with a different job: --pack-task PUBLISHES it (`budget_ceiling_bytes` in the JSON
+// dialect, "ceiling C" in the ledger line) so a consumer can check a bundle without re-deriving a rate. It was
+// open-coded at three sites in packtask.h; one expression now, so the published number and the ledger's number
+// cannot drift. Deliberately NOT repointed at ceilingBytes: this one is what the lens declares to a caller, and
+// changing its rate would change a published contract that no defect asks to move.
+inline constexpr std::size_t declaredByteCeiling( std::size_t budgetTokens ) noexcept
+{
+    return std::size_t( double( budgetTokens ) * kMinBytesPerToken );
+}
+
 // The SHAPING budget the same token count buys — tokens x the densest-language byte rate x the headroom.
 // Distinct from the allowance above (which spends kCeilingFirstEntryTolerance, an OVERSHOOT bar) and
 // deliberately adjacent to it, so the two are read together and never confused.
@@ -725,11 +754,24 @@ struct CeilingLadderChoice
     CeilingRung rung = CeilingRung::AsBuilt;
 };
 
-template<typename BuildFn, typename FitsFn>
-inline CeilingLadderChoice climbCeilingLadderBy( BuildFn&& build, std::string_view builtHeader, FitsFn&& fits, bool hasRouteAttr,
-                                                 const CeilingLadderNotes& notes )
+// TWO CEILINGS, ONE LADDER (2026-09-13, PR #215 review item 1). `fitsExact` is the ceiling the root PROMISES
+// (ceilingBytes: est_tokens <= budget_tokens); `fitsAllowance` is that ceiling plus the first-entry tolerance.
+// Which rung is judged by which is the whole design:
+//   (a) as built and (b) echo dropped are judged by fitsExact — the echo is a byte-for-byte duplicate of task=,
+//       so spending it costs the reader NOTHING, and a document whose own root will say over_ceiling="1" should
+//       spend every free rung before it says so. Rung zero (the caller's droppable legend clauses, above this
+//       function in --for) belongs to the same class and uses the same ceiling.
+//   (c) route= dropped and (d) the honest label are judged by fitsAllowance — (c) is the first UNIQUE-information
+//       loss and (d) is the verdict, and the tolerance exists precisely so neither fires on a residual a lens
+//       cannot trim. Trimming real content, or calling a lens failed, at the exact ceiling would spend the
+//       tolerance the design has always granted.
+// Passing the same predicate twice reproduces the pre-#215 single-ceiling ladder exactly, which is what
+// climbCeilingLadder's byte-ceiling pair does when a caller gives it one number.
+template<typename BuildFn, typename FitsExactFn, typename FitsAllowanceFn>
+inline CeilingLadderChoice climbCeilingLadderBy( BuildFn&& build, std::string_view builtHeader, FitsExactFn&& fitsExact,
+                                                 FitsAllowanceFn&& fitsAllowance, bool hasRouteAttr, const CeilingLadderNotes& notes )
 {
-    if( fits( builtHeader ) )
+    if( fitsExact( builtHeader ) )
     {
         return { std::string( builtHeader ), CeilingRung::AsBuilt };
     }
@@ -738,11 +780,13 @@ inline CeilingLadderChoice climbCeilingLadderBy( BuildFn&& build, std::string_vi
     // fixed-payload comparison below, but --for's predicate rebuilds and re-prices a whole header through
     // finishForLensHeader, so the second call was a duplicated fixpoint on every budgeted run.
     CeilingLadderChoice choice{ build( /*withRouteAttr=*/true, /*withTaskEcho=*/false, notes.echoDropped ), CeilingRung::EchoDropped };
-    bool                candidateFits = fits( std::string_view( choice.header ) );
+    // (b) is enough when it reaches the exact ceiling, and ALSO when it merely lands inside the allowance: the
+    // residual past the exact ceiling is what the tolerance is for, and nothing a reader would miss buys it back.
+    bool candidateFits = fitsAllowance( std::string_view( choice.header ) );
     if( !candidateFits && hasRouteAttr )
     {
         choice        = { build( /*withRouteAttr=*/false, /*withTaskEcho=*/false, notes.echoAndRouteDropped ), CeilingRung::EchoAndRouteDropped };
-        candidateFits = fits( std::string_view( choice.header ) );
+        candidateFits = fitsAllowance( std::string_view( choice.header ) );
     }
     if( !candidateFits )
     {
@@ -756,10 +800,14 @@ inline CeilingLadderChoice climbCeilingLadderBy( BuildFn&& build, std::string_vi
 // the chosen string is the forgery above (`chosen.find( "over_ceiling:" )`, live until 0.6.1).
 template<typename BuildFn>
 inline CeilingLadderChoice climbCeilingLadder( BuildFn&& build, std::string_view builtHeader, std::size_t payloadBytes,
-                                               std::size_t byteCeiling, bool hasRouteAttr, const CeilingLadderNotes& notes )
+                                               std::size_t exactCeiling, std::size_t allowanceCeiling, bool hasRouteAttr,
+                                               const CeilingLadderNotes& notes )
 {
-    return climbCeilingLadderBy( build, builtHeader,
-                                 [ & ]( std::string_view header ) { return header.size() + payloadBytes <= byteCeiling; },
+    const auto fitsWithin = [ & ]( std::size_t ceiling )
+    {
+        return [ &, ceiling ]( std::string_view header ) { return header.size() + payloadBytes <= ceiling; };
+    };
+    return climbCeilingLadderBy( build, builtHeader, fitsWithin( exactCeiling ), fitsWithin( allowanceCeiling ),
                                  hasRouteAttr, notes );
 }
 
@@ -1477,10 +1525,19 @@ inline std::string countFieldIfAbove( std::uint32_t n, std::uint32_t floor, std:
 // is unchanged, only its spelling shrinks. The legend spells the composition (id = p::sc::n) and every
 // selector keeps accepting the composed form: test/scroundtripcheck.sh. ONE writer for the map <s> row and
 // the signature <d> row, so the two can never drift on when sc= appears.
+// THE PRESENCE RULE ITSELF, in one place. Four emitters spell sc= — this writer (the map <s> row), sigRowHead's
+// string form (the signature <d> row) and the two JSON twins — and each of them re-derived `!s.scope.empty()`.
+// A presence rule open-coded at four sites has three chances to be changed in two, and the legend clause that
+// DEFINES sc= is now gated on the same question (verbs_for.h, both dialects), which makes it five. One predicate.
+inline bool hasScopeAttr( const Symbol& s ) noexcept
+{
+    return !s.scope.empty();
+}
+
 template <typename W>
 inline void writeScopeAttr( W& w, const Symbol& s, std::vector<char>& esc )
 {
-    if( !s.scope.empty() )
+    if( hasScopeAttr( s ) )
     {
         w.write( " sc=\"" );  w.write( escapeXml( s.scope, esc ) );  w.write( "\"" );
     }
@@ -3409,7 +3466,7 @@ inline std::string sigRowHead( const IngestResult& ing, NodeId id, const SigRowF
     std::string head = lineAttr;
     head += escapeXml( s.name, esc );          // escapeXml returns a view INTO esc — copy before the next call
     head += "\"";
-    if( !s.scope.empty() )   // row 6: the short id — the scope segment only; p= (this row's, or its <f>'s) supplies the rest
+    if( hasScopeAttr( s ) )   // row 6: the short id — the scope segment only; p= (this row's, or its <f>'s) supplies the rest
     { head += " sc=\"";  head += escapeXml( s.scope, esc );  head += "\""; }
     // P7 (terminality round A, lane R, 2026-09-05): p= (and layer= when the file sits in a builtin layer) ride
     // EVERY row that carries r= — the lens serving is FLAT now (rows in rank order, no <f p=> wrapper), so the
@@ -4654,12 +4711,25 @@ inline std::vector<NodeId> calleeWalkOrder( NodeId id, const std::vector<std::ui
 // full row each: 716 B over the twelve --for answers of the 2026-09-12 re-measure). Walk order is kept:
 // a merged row sits where its FIRST callee sat. shown= still counts callees, never rows — the legend says
 // so. No file read, no signature slice, and no redaction seam: a bare identifier is not a credential shape,
-// which is why this path does not take a RedactCounts the way the signature row below does. Charged at
-// what the unmerged row emitted (the merge only ever saves bytes past that charge).
+// which is why this path does not take a RedactCounts the way the signature row below does.
+//
+// CHARGED AT WHAT IT PRINTS (PR #215 review item 8). This used to charge every callee `name + 16` whether it
+// opened a row or merged into one, on the reasoning that "the merge only ever saves bytes past that charge".
+// It does not: the charge is what the BLOCK'S CAP spends, so a block of overloads was billed a full row for
+// each `,203` it actually printed — about 4 B charged as 20-30 — and the cap then fired early and wrote
+// `capped="1"` over a listing that would have fit whole. A cap that cuts an answer it did not need to cut is
+// the class METHODOLOGY §9 forbids outright: the disclosure is honest about a cut that should never have
+// happened. A merge is charged the comma and the digits it appends, and nothing else.
+//
+// l= IS ASCENDING (same item). The list was appended in WALK order, which is the lens's RANK order, so the two
+// definition lines of one overloaded name came out `l="70,69"` on one query and `l="69,70"` on another — the
+// same fact in two spellings, from a document that promises determinism. Line numbers have a natural order and
+// it is not the ranker's; they are sorted ascending, so a row's content depends on the row and not on how the
+// walk reached it. Row ORDER is unchanged: a merged row still sits where its first callee sat.
 struct MergedCalleeNameRow
 {
-    std::string_view name;    // a view into ing.symbols — stable for the emitter's lifetime
-    std::string      lines;   // "203" or "203,206": every definition line of that name in walk order
+    std::string_view           name;    // a view into ing.symbols — stable for the emitter's lifetime
+    std::vector<std::uint32_t> lines;   // every definition line of that name; joined ascending at append time
 };
 
 inline void collectCalleeNameRow( std::vector<MergedCalleeNameRow>& rows, const Symbol& cs,
@@ -4672,15 +4742,16 @@ inline void collectCalleeNameRow( std::vector<MergedCalleeNameRow>& rows, const 
     {
         if( r.name == cs.name )
         {
-            r.lines += ',';  r.lines += lb;  merged = true;
+            r.lines.push_back( cs.line );  merged = true;
             break;
         }
     }
     if( !merged )
     {
-        rows.push_back( MergedCalleeNameRow { cs.name, lb } );
+        rows.push_back( MergedCalleeNameRow { cs.name, { cs.line } } );
     }
-    used += cs.name.size() + 16;
+    // the comma and the digits a merge appends, or the whole row it opens
+    used += merged ? std::strlen( lb ) + 1 : cs.name.size() + 16;
     if( sink.recorded )
     {
         sink.recorded->push_back( EmittedBodyCall { cs.name, cs.line, std::string() } );   // §H5: no sig to record
@@ -4688,14 +4759,24 @@ inline void collectCalleeNameRow( std::vector<MergedCalleeNameRow>& rows, const 
 }
 
 // …and the rows written out, once the block's walk is complete.
-inline void appendMergedCalleeNameRows( std::string& callsBody, const std::vector<MergedCalleeNameRow>& rows, std::vector<char>& esc )
+inline void appendMergedCalleeNameRows( std::string& callsBody, std::vector<MergedCalleeNameRow>& rows, std::vector<char>& esc )
 {
-    for( const MergedCalleeNameRow& r : rows )
+    for( MergedCalleeNameRow& r : rows )
     {
+        std::sort( r.lines.begin(), r.lines.end() );   // ascending, so the row reads the same whatever the walk order was
         callsBody += "<c n=\"";
         callsBody += escapeXml( r.name, esc );
         callsBody += "\" l=\"";
-        callsBody += r.lines;
+        for( std::size_t i = 0; i < r.lines.size(); ++i )
+        {
+            if( i > 0 )
+            {
+                callsBody += ',';
+            }
+            char lb[ 16 ];
+            rw::formatTo( lb, sizeof( lb ), "{}", r.lines[i] );
+            callsBody += lb;
+        }
         callsBody += "\"/>";
     }
 }
@@ -5489,9 +5570,16 @@ inline WholeFileRender renderWholeFiles( const IngestResult& ing, const std::vec
         r.rawBytes += body.size();
 
         // sym= anchors (name:line per requested node in this file, request order) + their field notes,
-        // plus (D2) an <s n= id= l=/> row per symbol whose canonical id adds an enclosing scope — the
+        // plus (D2) an <s n= sc= l=/> row per symbol whose canonical id adds an enclosing scope — the
         // exact S6-C emit-only-when-disambiguating rule the map rows follow, so the canonical-id surface
         // survives the serving-mode flip at zero cost for scope-less symbols.
+        //
+        // ROW 6 REACHED HERE LAST (PR #215 review item 9). These rows kept the full `id="PATH::SCOPE::NAME"`
+        // on the argument that "their path does not repeat on the row" — but it does: the row sits inside
+        // <src p="PATH">, which has just printed it, exactly like the <f p=> wrapper the map dropped id= for.
+        // And this document carried NO LEGEND AT ALL, so id= was an undefined first-screen attribute on top of
+        // being a repetition. sc= here, one presence rule (hasScopeAttr) with every other emitter, and the
+        // whole-file root now states the composition. Gate: test/scroundtripcheck.sh (E).
         std::string anchors;
         std::string anchorRows;
         std::string noteStr;
@@ -5509,13 +5597,12 @@ inline WholeFileRender renderWholeFiles( const IngestResult& ing, const std::vec
             anchors += s.name;
             anchors += ':';
             anchors += std::to_string( s.line );
-            const std::string canon = canonicalIdForEmit( ing, s, rootArg );   // R-R
-            if( canon != s.name )
+            if( hasScopeAttr( s ) )
             {
                 anchorRows += "<s n=\"";
                 anchorRows += escapeXml( s.name, esc );
-                anchorRows += "\" id=\"";
-                anchorRows += escapeXml( canon, esc );
+                anchorRows += "\" sc=\"";
+                anchorRows += escapeXml( s.scope, esc );
                 anchorRows += "\" l=\"";
                 anchorRows += std::to_string( s.line );
                 anchorRows += "\"/>";
@@ -7232,7 +7319,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
             w.write( "{\"t\":" );  writeJsonStr( w, symTag( s.kind ), esc );
             w.write( ",\"n\":" );  writeJsonStr( w, s.name, esc );
 
-            if( !s.scope.empty() ) { w.write( ",\"sc\":" );  writeJsonStr( w, s.scope, esc ); }   // row 6: the XML sibling's sc=, same presence rule
+            if( hasScopeAttr( s ) ) { w.write( ",\"sc\":" );  writeJsonStr( w, s.scope, esc ); }   // row 6: the XML sibling's sc=, one presence rule (hasScopeAttr)
 
             if( rows.overloads[ rowIndex ] > 1 )
             { rw::formatTo( num, sizeof( num ), ",\"overloads\":{}", rows.overloads[ rowIndex ] );  w.write( num ); }
@@ -7452,7 +7539,7 @@ inline std::string jsonSigRowHead( const IngestResult& ing, NodeId id, std::uint
     appendJsonStrField( head, ",\"n\":", s.name );
     if( !s.scope.empty() )   // row 6: the XML sibling's sc= — keys mirror attribute names one to one
     {
-        appendJsonStrField( head, ",\"sc\":", s.scope );
+        if( hasScopeAttr( s ) ) { appendJsonStrField( head, ",\"sc\":", s.scope ); }   // row 6: one presence rule (hasScopeAttr)
     }
     // P7: the row names its file (and its builtin layer) — the XML sibling's p=/layer=, same root-relative spelling
     appendJsonStrField( head, ",\"p\":", lensRowPath( ing, fileId, rootArg ) );

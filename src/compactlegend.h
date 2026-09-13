@@ -36,6 +36,38 @@
 namespace rw
 {
 
+// THE SAME QUESTION, ASKED OF A COMMAND STRING (PR #215 review item 5). The list below refuses --legend on a
+// parsed Config; the generators — the prompt router's <run> line, the tool-call router, `ripwire wrap`'s paste
+// block — hold a command STRING and had no way to ask it, so the posture was applied by editing each string and
+// a skill shipped `--zoom --legend=compact --mermaid`, which this very function refuses. One list, two callers.
+//
+// The flags named here are exactly the `nonXml` arms below, plus --for, which is exempt by POLICY rather than by
+// refusal (the binary compacts --for perfectly well; A1-2's decision is that the first call of a session wants
+// the full legend, and --for's compact legend is its own dialect). A command that already states a posture is
+// left alone, so applying this twice cannot produce two --legend= flags.
+// Gate: test/taskroutecheck.sh runs every command the router generates and asserts the binary never refuses it;
+// test/skilltruthcheck.sh does the same for every command the skills spell.
+inline bool legendCompactAppliesTo( std::string_view command )
+{
+    static constexpr std::string_view kNotCompactable[] = {
+        "--legend=",                                                              // already stated
+        "--for=",                                                                 // policy exemption, not a refusal
+        "--situ", "--recall=", "--report", "--mermaid", "--html", "--plan-lanes", "--sarif", "--eval",
+        "--export", "--note-add=", "--quality-baseline", "--quality-ack", "--index-out=", "--pin-census=",
+        "--baseline", "--replace-symbol-body", "--insert-before-symbol", "--insert-after-symbol", "--edit-plan=",
+        "--mcp", "--listen=",
+    };
+    for( std::string_view flag : kNotCompactable )
+    {
+        if( command.find( flag ) != std::string_view::npos )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+
 // One entry per XML root the tool emits. `key` is the schema id stem (ripwire.<key>/v1); `purpose` is the reading
 // of the verb and of the root vocabulary EVERY answer of that root carries. Its bytes count against the verb's
 // per-verb pin in test/compactlegendcheck.sh, and that pin is measured from the definitions, never the reverse.

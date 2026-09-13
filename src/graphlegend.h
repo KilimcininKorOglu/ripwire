@@ -304,6 +304,29 @@ inline constexpr std::string_view kForIdRouteLegend =
 inline constexpr std::string_view kForRouteCodeLegend =
     "; route= name-exact(X)|subtoken+body[:broad|:declined]";
 
+// ONE decision about what these two readings ARE for a given answer. Two surfaces APPEND them (the CLI lens's
+// forLensHeaderText, the MCP `for` twin) and both must then EXEMPT exactly those bytes from the signature-trim
+// charge — four sites mirroring one rule by hand, which is the shape that ships a ledger 64 B short and
+// underflows a subtraction (verbs_for.h records that exact incident for the confidence clause). The caller asks
+// once and uses `.sc`/`.route` to append and `.bytes()` to exempt, so the two can only ever agree.
+struct ForIdRouteLegendParts
+{
+    std::string_view sc;      // "" when no served row carries a scope
+    std::string_view route;   // "" when this root carries no route=
+
+    std::size_t bytes() const noexcept { return sc.size() + route.size(); }
+};
+
+inline ForIdRouteLegendParts forIdRouteLegendParts( bool legendOn, bool scPresent, bool routePresent ) noexcept
+{
+    if( !legendOn )
+    {
+        return {};   // rung zero took the readings; the attributes stay and the dropped note names them
+    }
+    return { scPresent    ? kForIdRouteLegend   : std::string_view(),
+             routePresent ? kForRouteCodeLegend : std::string_view() };
+}
+
 inline const char* forRootRelPathsLegendShort( bool rootOn, bool atOn = false ) noexcept
 {
     if( !rootOn )

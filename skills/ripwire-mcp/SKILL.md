@@ -90,7 +90,7 @@ enclosing-chain report) and `@FILE:LINE` in any SYM selector; contract gate: `te
 | Verb | CLI twin | Ask it for |
 |---|---|---|
 | `analyze` | `ripwire <dir>` | the ranked XML map |
-| `for` (`task`) | `--for=TASK` | the task lens: signatures + cx/in metrics framed for reuse. **Auto-routes** the ranker — pass a symbol NAME verbatim as `task` to get name-exact retrieval (recall@1 ~99%); a conceptual phrase uses subtoken+body. Header prints `[routed: …]`. |
+| `for` (`task`) | `--for=TASK` | the task lens: signatures + cx/in metrics framed for reuse. **Auto-routes** the ranker — pass a symbol NAME verbatim as `task` to get name-exact retrieval (recall@1 ~99%); a conceptual phrase uses subtoken+body. Root carries `route=` as a code (`name-exact(X)` / `subtoken+body[:broad|:declined]`). |
 | `find_symbol` (`symbol`) | `--callers` + `--callees` | locate a symbol with its callers AND callees in one call — each symbol carries a `handle` |
 | `find_referencing_symbols` (`symbol`) | `--callers=SYM` | just who references/calls it — also handle-bearing |
 | `grep` (`pattern`) | `--grep=STR` | parallel literal scan + enclosing symbol + matched line |
