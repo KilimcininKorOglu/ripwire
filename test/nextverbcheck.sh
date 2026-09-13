@@ -166,5 +166,18 @@ if command -v xmllint >/dev/null 2>&1; then
 fi
 if rrun --grep=distance >"$TMP/g1b"; cmp -s "$TMP/g1" "$TMP/g1b"; then ok "grep next= is deterministic"; else no "grep next= differs between runs"; fi
 
+echo "=== (N) --help-task: a --for-shaped recommendation carries the WIDENING page as its next= ==="
+# 2026-09-13: the router's recommendation is a next=-carrying document like any other, and it was outside
+# this population — so nothing checked that the follow-up it hands an agent parses, runs, or fits the
+# ceiling. It is spelled by forpage.h's forWidenNext, the same function the --for ANSWER's own next= uses.
+rrun --help-task='find the code responsible for the area rounding bug' >"$TMP/ht"
+grep -q 'intent="locate-task"' "$TMP/ht" \
+    && checkNext "help-task locate" "$TMP/ht" '^--for=.* --limit=40$' "row" \
+    || no "fixture: --help-task did not route to locate-task ($( grep -o 'intent="[^"]*"' "$TMP/ht" | head -1 ))"
+# present-only: a recommendation that is not a --for bundle carries none at all
+rrun --help-task='where is the rot in code I did not write' >"$TMP/ht2"
+if [ -z "$( nexts "$TMP/ht2" )" ]; then ok "help-task non---for recommendation carries no next="
+else no "help-task non---for recommendation carries a next=: $( nexts "$TMP/ht2" )"; fi
+
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

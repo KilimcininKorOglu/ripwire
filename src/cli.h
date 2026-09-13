@@ -3,12 +3,14 @@
 // cli.h — hand-rolled zero-dependency argument parser. Linear argv scan into one
 // POD Config; flags are additive; first non-flag positional is the root path.
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -3131,6 +3133,15 @@ inline constexpr ViewFlag kViewFlags[] =
     { "--note-add=",       &Config::noteAdd         , EmptyValue::HandlerRefuses, nullptr, nullptr, &Config::noteAddFlag },      // "--note-add: want \"TARGET: text\""
     { "--pack-task=",      &Config::packTask        , EmptyValue::HandlerRefuses, nullptr, nullptr, &Config::packTaskFlag },     // "--pack-task: a task string is required"
 };
+
+// Does THIS build ship the flag spelled `prefix`? Asked by the surfaces that COMPOSE a command for someone
+// else to run — the task router is the first — because a recommendation carrying a flag the parser it will
+// be handed to has no row for exits non-zero on the first paste. The table is the only honest answer: a
+// hand-kept list of "flags we have" is a second source that drifts, which is the disease §B5 above treats.
+inline constexpr bool shipsViewFlag( std::string_view prefix ) noexcept
+{
+    return std::ranges::any_of( kViewFlags, [prefix]( const ViewFlag& vf ) { return vf.prefix == prefix; } );
+}
 
 // §B5 - the column above is only a decision if the build enforces it. `needs`/`example` are the Refuse
 // sentence's two halves: a Refuse row without them would print "it needs (null)", and a Meaningful or

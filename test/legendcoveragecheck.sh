@@ -208,6 +208,10 @@ ROSTER = [
     ("layout",             [SMALL, "--layout=MapAnnotations"]),
     ("notes",              [ROOT,  "--notes"]),
     ("scan-skills",        [ROOT,  "--scan-skills"]),
+    # 2026-09-13: the router's own document was outside this roster, and it was the one shape with NO
+    # legend in the default dialect at all — every attribute on its only screen undefined. The probe is a
+    # RECOMMEND, not an abstain: an abstain carries no <choice>, so half the vocabulary would be unseen.
+    ("help-task",          [SMALL, "--help-task=find the code responsible for this retry timeout bug"]),
 ]
 
 # the v1 core row keys, defined verbatim in every map legend and re-stated in the row dictionaries — excluded
