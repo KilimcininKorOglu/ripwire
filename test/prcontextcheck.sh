@@ -374,9 +374,22 @@ fi
 # ONLY on the non-NDEBUG flavour, the same flavour DEGRADED_PATH_ALERT lives on. So, like estchargecheck #14,
 # this arm establishes that flavour with its OWN probe rather than assuming it, and must never pass for lack
 # of an alert it could not have seen.
+#
+# THE BASE REF IS NOT OPTIONAL. A bare `--pr-context` reads `git diff HEAD`, so on a CLEAN checkout the
+# change set is empty, prcontext takes its empty-diff branch, no trim level is ever RENDERED, and
+# renderToString is never called — the arm then finds no alert and blames the seam for a fixture that asked
+# it nothing. (Written against a dirty tree, it passed; the first clean run after a merge is what exposed
+# it — test/gatecheck's "the fixture is the live repo" trap.) A committed range is deterministic here and
+# depends on nothing the working tree happens to hold.
 PRC_FAULT_OUT="$TMP/f_dg.out"; PRC_FAULT_ERR="$TMP/f_dg.err"
-RIPWIRE_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
+PRC_FAULT_BASE="HEAD~3"
+RIPWIRE_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
 prc_f_rc=$?
+# and the range must actually name a file, or every assertion below is vacuous
+if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! grep -aq 'THREW' "$PRC_FAULT_ERR"; then
+    "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" 2>/dev/null | grep -aq '<f ' \
+        || no "(F) precondition: --pr-context=$PRC_FAULT_BASE names no changed file, so the emitter-throw arm asserts nothing"
+fi
 if ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
     # Either an NDEBUG build (unobservable BY DESIGN — the plain-flavour leg proves it) or a real regression.
     if "$BIN" --version 2>/dev/null | grep -q 'release'; then
@@ -394,7 +407,7 @@ else
     # (F1) THE DOCUMENT STILL SHIPS. The whole point of the degrade: the caller loses the ESTIMATE, never the
     #      content. prcontext.h streams the floor level straight out when no level could be measured.
     [ "$prc_f_rc" -eq 0 ] \
-        && ok "(F1) --pr-context still exits 0 with every render throwing" \
+        && ok "(F1) --pr-context=$PRC_FAULT_BASE still exits 0 with every render throwing" \
         || no "(F1) --pr-context exited $prc_f_rc with the emitter-throw fault injected — the throw escaped instead of degrading"
     if grep -aq '</pr-context>' "$PRC_FAULT_OUT" && grep -aq '<pr-context' "$PRC_FAULT_OUT"; then
         ok "(F2) the degraded document is CLOSED — a root, a body and a closing tag, never an empty element"
@@ -413,7 +426,7 @@ else
     #      loses is the ESTIMATE; what it must never lose is content, and "same count" would assert the wrong
     #      invariant and fail on any tree whose control trims. Compared by ELEMENT COUNT, not bytes.
     f_files="$( grep -ao '<f ' "$PRC_FAULT_OUT" | wc -l | tr -d ' ' )"
-    "$BIN" "$ROOT" --pr-context >"$TMP/f_ctl.out" 2>/dev/null
+    "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$TMP/f_ctl.out" 2>/dev/null
     c_files="$( grep -ao '<f ' "$TMP/f_ctl.out" | wc -l | tr -d ' ' )"
     if [ "${f_files:-0}" -eq 0 ]; then
         no "(F4) the degraded document carries NO <f> row — the degrade lost the content it exists to keep"
