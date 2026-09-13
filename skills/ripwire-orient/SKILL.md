@@ -62,6 +62,10 @@ unique costs you the whole map). That is the flow, and it is cheaper than the bo
 of the old bundle on conceptual queries, and the edges tell you which symbol is worth the second call.
 `--auto-bodies` restores inline bodies on that route if you want them; `--signatures-only` drops both
 shapes; `--detail=N` picks the body count explicitly.
+**Composing a selector out of a row** (the map's rows and `--for`'s alike): a scoped row carries `sc=`, its
+enclosing scope, instead of repeating its whole id — the canonical id is `p::sc::n`, assembled from the
+row's own `p=` (or the `<f p=>` it sits under), `sc=` and `n=`. Every selector (`--expand`, `--callers`,
+`--impact`, `--uses`) accepts that composed `path::scope::name`, so paste the three parts, not a bare name.
 `--for` **auto-routes** (default, no flag needed): a query that *names a symbol* (`--for="buildGraph"`) gets
 name-exact BM25 (recall@1 ~99% vs ~77% generic) — **know the name, query it verbatim**; a conceptual phrase
 uses subtoken+body BM25 instead. The header prints which ranker fired; `--no-route` forces the plain ranker.
@@ -70,6 +74,14 @@ gets lifted near the top (+4.9pp held-out; a task naming nothing indexed is byte
 `--no-mention-boost`. It also surfaces DOCS: a markdown design/plan doc that `backtick`-names one of the
 query's top-resolved symbols is lifted into the bundle too (strictly below that symbol's own score) — the
 doc explains it even when its own prose shares no words with your query; disable with `--no-doc-mention`.
+**When the answer comes back THIN, widen before you read.** A thin `--for` answer — the head spread over
+fewer than three files, or `coverage=` under 50 — says so on the root: `coverage="N"` is the IDF-weighted
+share (whole percent) of your query's subtokens found in the top-ranked symbol's name, doc or body, and it
+rides the root **only** on a thin answer (a confident one carries neither the attribute nor its clause).
+The step then is not a body, it is a wider net: `ripwire <dir> --for="<task>" --limit=40` serves the
+FILE-GRAIN page — one row per file holding any positive-score symbol, `score=`/`n=`/`sym=` per row,
+`--offset=M` for the next page. A thin answer's own `next=` names that page for you; reach for it on the
+FIRST call when the task is vague enough that one ranked head is unlikely to hold the answer.
 `--adaptive` cuts the result at the relevance cliff instead of a fixed top-k. Same
 routing in the MCP `for` verb. Orienting from a pasted issue/bug-report's own text? `--anchor` beats plain
 `--for` on Loc-Bench (n=560) — a mild win, not a default (`bench/locbench/README.md`). `--cochange-boost` is

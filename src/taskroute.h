@@ -15,6 +15,7 @@
 #include "infra/jsonesc.h"   // shSingleQuote — the repository's canonical POSIX argv quoting
 #include "model.h"           // IngestResult
 #include "query.h"           // isKnownLayerWord — the layer vocabulary --verify enforces at evaluation
+#include "sarif.h"           // rootRelativeUri / rootPrefixOf — the ONE root-relative path rule the map emits with
 #include "verify.h"          // parseClaim — the SHIPPED claim grammar; the router never re-implements it
 #include "compactlegend.h"  // rw::legendCompactAppliesTo — ONE answer to "does --legend=compact apply here"
 
@@ -29,6 +30,16 @@ struct RepoFacts
     bool                     dirty = false;
     bool                     trace = false;
     std::vector<std::string> resolvedSymbols;
+};
+
+// What the BUILD the recommendation will be handed to can actually parse. A router that composes a flag
+// its own binary has no row for recommends a command that exits non-zero on the first paste — the same
+// prerequisite violation as naming a plan file that is not there, arriving from the other direction. The
+// caller fills this in from cli.h's own flag table (main.cpp), so a surface that lands one release later
+// is composed by the build that ships it and by no earlier one.
+struct RouterCaps
+{
+    bool dirScope = false;   // --in=DIR, the directory scope on the churn-decay window
 };
 
 struct RouteChoice
@@ -61,6 +72,13 @@ inline std::string lowerAscii( std::string_view text )
     return out;
 }
 
+// "is this word one of these?" — the shape four tables' predicates were each writing out by hand, which is
+// how a five-line any_of becomes a duplication finding against its own neighbours.
+inline bool isOneOf( std::string_view word, const std::string_view* table, std::size_t count ) noexcept
+{
+    return std::any_of( table, table + count, [word]( const std::string_view t ) { return t == word; } );
+}
+
 inline bool wordByte( char c ) noexcept
 {
     const unsigned char u = static_cast<unsigned char>( c );
@@ -86,17 +104,43 @@ inline bool has( std::string_view lower, std::string_view phrase ) noexcept
     return lower.find( phrase ) != std::string_view::npos;
 }
 
-inline int phraseScore( std::string_view lower, std::initializer_list<std::pair<std::string_view, int>> phrases ) noexcept
+// HOW a cue is matched is the only thing the two spellings below differ in, so it is a parameter and not a
+// second loop: a bare WORD matched as a substring is a different word — `here` occurs inside
+// where/there/adhere, `file` inside profile, `code` inside codec, `moving` inside removing. Getting that
+// wrong is not academic: with the substring spelling the recency route below recommended the churn window,
+// at confidence="high", for a sentence about a supplier revising their terms (2026-09-13 review).
+//
+// A multi-word cue is SAFER, not safe, and the first round of that review overstated it as "a phrase
+// carries its own boundaries". The space inside a phrase delimits its interior and nothing at its two
+// ENDS: `how do` is found across `show documentation`, `how is` across `show issues`. So Substring is not
+// a licence — it is for the phrases whose first and last words do not finish or begin ordinary words, and
+// a caller that cannot say that of its own cues asks for WordBounded (kExplanatoryCues does).
+enum class CueMatch : std::uint8_t { Substring, WordBounded };
+
+inline int cueScore( std::string_view lower, CueMatch how,
+                     std::initializer_list<std::pair<std::string_view, int>> cues ) noexcept
 {
     int score = 0;
-    for( const auto& [ phrase, weight ] : phrases )
+    for( const auto& [ cue, weight ] : cues )
     {
-        if( has( lower, phrase ) )
+        const bool hit = how == CueMatch::WordBounded ? boundedFind( lower, cue ) != std::string_view::npos
+                                                      : has( lower, cue );
+        if( hit )
         {
             score += weight;
         }
     }
     return score;
+}
+
+inline int phraseScore( std::string_view lower, std::initializer_list<std::pair<std::string_view, int>> phrases ) noexcept
+{
+    return cueScore( lower, CueMatch::Substring, phrases );
+}
+
+inline int wordScore( std::string_view lower, std::initializer_list<std::pair<std::string_view, int>> words ) noexcept
+{
+    return cueScore( lower, CueMatch::WordBounded, words );
 }
 
 inline bool looksLikeTrace( std::string_view lower ) noexcept
@@ -202,8 +246,7 @@ inline bool precededBySymbolCue( std::string_view lowerTask, std::size_t pos ) n
         --begin;
     }
     const std::string_view word = lowerTask.substr( begin, end - begin );
-    if( std::none_of( std::begin( kWeakSymbolCues ), std::end( kWeakSymbolCues ),
-                      [word]( const std::string_view cue ) { return cue == word; } ) )
+    if( !isOneOf( word, std::begin( kWeakSymbolCues ), std::size( kWeakSymbolCues ) ) )
     {
         return false;
     }
@@ -232,8 +275,7 @@ inline bool weakSymbolCandidate( std::string_view name ) noexcept
     {
         return false;
     }
-    return std::none_of( std::begin( kWeakSymbolStopWords ), std::end( kWeakSymbolStopWords ),
-                         [name]( const std::string_view stop ) { return stop == name; } );
+    return !isOneOf( name, std::begin( kWeakSymbolStopWords ), std::size( kWeakSymbolStopWords ) );
 }
 
 // The first word-bounded occurrence of an all-lowercase `name` that sits in a symbol slot, or npos when
@@ -476,71 +518,100 @@ inline std::string firstFileLineToken( std::string_view task )
     return {};
 }
 
-// Cue phrases that place the word right after them in a VARIABLE slot — "trace the flow of budget",
-// "the data flowing into total_bytes". A local variable never appears in ing.symbols (extraction indexes
+// Cue phrases that place the word right after them in a VARIABLE slot — trace the flow OF budget, the
+// data flowing INTO total_bytes. A local variable never appears in ing.symbols (extraction indexes
 // definitions, not locals), so this is the router's only channel for naming one: purely lexical, mirroring
-// the symbol-slot design above (a cue is the whole discriminator, not the word itself). Longer/more
-// specific phrases are listed first only for readability; every one is tried and the EARLIEST match in the
-// task wins, so overlapping cues ("into" inside "flows into") cannot pick a later, weaker anchor.
+// the symbol-slot design above (a cue is the whole discriminator, not the word itself).
 inline constexpr std::string_view kVariableSlotCues[] = {
     "the value of", "value of", "flowing into", "flows into", "feeds into", "feed into", "flow of", "into",
 };
 
-// A short function-word the extractor should hop over once ("the", "a data flow value of..." style
-// filler) rather than accept as the variable itself — "flow of the budget" should name budget, not the.
-inline constexpr std::string_view kVariableSlotFillers[] = {
-    "the", "a", "an", "this", "that", "it", "its", "data", "value", "code",
+// Short function words the extractor hops over rather than accepting as the name itself — `flow of the
+// budget` names budget, not the; `under our tools folder` names tools, not our. ONE table for every slot
+// reader: the two that existed differed only by which three words each author happened to think of, which
+// is the shape a duplicate takes when it is written twice instead of shared.
+inline constexpr std::string_view kSlotFillers[] = {
+    "the", "a", "an", "this", "that", "it", "its", "all", "our", "my", "data", "value", "code",
 };
 
-inline std::string variableSlotCandidate( std::string_view task, std::string_view lowerTask ) noexcept
+// THE slot walk, shared by every reader of "the thing named right after one of these cues".
+//
+// EARLIEST MATCH, across all cues: the cue occurrences are visited in POSITION order, not in the order the
+// cue table happens to list them, so `what changed lately across src, but only in test` reads `across src`
+// — the first slot in the sentence — rather than whichever cue sits earlier in an array. (The variable
+// reader had this rule and the directory reader did not; they are one walk now, so they cannot disagree
+// again.) At each occurrence the raw token is handed to `normalize` — a variable is an identifier run, a
+// directory keeps its slashes and drops a trailing one — and then to `accept`. A slot the predicate turns
+// down is not the end of the search: the walk moves to the next cue occurrence, because a sentence may
+// name something that is not a directory before it names one that is.
+template< std::size_t CueCount, typename Normalize, typename Accept >
+inline std::string slotCandidate( std::string_view task, std::string_view lowerTask,
+                                  const std::string_view ( &cues )[ CueCount ],
+                                  Normalize normalize, Accept accept )
 {
-    std::size_t bestPos = std::string_view::npos;
-    std::size_t bestEnd = 0;
-    for( const std::string_view cue : kVariableSlotCues )
+    constexpr std::string_view kSlotBreaks = " \t\n\r\"\'`(),;";
+    std::vector<std::size_t> starts;            // where each cue occurrence's slot begins, position order
+    for( std::size_t c = 0; c < CueCount; ++c )
     {
         for( std::size_t from = 0; ; )
         {
-            const std::size_t p = boundedFind( lowerTask, cue, from );
+            const std::size_t p = boundedFind( lowerTask, cues[c], from );
             if( p == std::string_view::npos )
             {
                 break;
             }
-            if( bestPos == std::string_view::npos || p < bestPos )
-            {
-                bestPos = p;
-                bestEnd = p + cue.size();
-            }
+            starts.push_back( p + cues[c].size() );
             from = p + 1;
         }
     }
-    if( bestPos == std::string_view::npos )
+    std::sort( starts.begin(), starts.end() );
+    for( const std::size_t slot : starts )
     {
-        return {};
-    }
-    std::size_t begin = bestEnd;
-    for( int hop = 0; hop < 2; ++hop )
-    {
-        while( begin < task.size() && task[begin] == ' ' ) { ++begin; }
-        std::size_t end = begin;
-        while( end < task.size() && wordByte( task[end] ) ) { ++end; }
-        if( end == begin )
+        std::size_t begin = slot;
+        for( int hop = 0; hop < 2; ++hop )
         {
-            return {};
+            begin = task.find_first_not_of( kSlotBreaks, begin );
+            if( begin == std::string_view::npos )
+            {
+                break;
+            }
+            std::size_t end = task.find_first_of( kSlotBreaks, begin );
+            if( end == std::string_view::npos )
+            {
+                end = task.size();
+            }
+            const std::string_view token = normalize( task.substr( begin, end - begin ) );
+            if( token.empty() )
+            {
+                break;
+            }
+            if( !isOneOf( lowerAscii( token ), std::begin( kSlotFillers ), std::size( kSlotFillers ) ) )
+            {
+                if( accept( token ) )
+                {
+                    return std::string( token );
+                }
+                break;   // this slot named something else — a LATER cue may still name what we want
+            }
+            begin = end;
         }
-        const std::string_view word   = task.substr( begin, end - begin );
-        const std::string      lowered = lowerAscii( word );
-        bool filler = false;
-        for( std::size_t f = 0; f < std::size( kVariableSlotFillers ) && !filler; ++f )
-        {
-            filler = kVariableSlotFillers[f] == lowered;
-        }
-        if( !filler )
-        {
-            return std::string( word );
-        }
-        begin = end;
     }
     return {};
+}
+
+// a variable is the leading identifier run of the token (`budget,` is budget)
+inline std::string_view identifierRunOf( std::string_view token ) noexcept
+{
+    std::size_t n = 0;
+    while( n < token.size() && wordByte( token[n] ) ) { ++n; }
+    return token.substr( 0, n );
+}
+
+inline std::string variableSlotCandidate( std::string_view task, std::string_view lowerTask )
+{
+    return slotCandidate( task, lowerTask, kVariableSlotCues,
+                          []( const std::string_view t ) { return identifierRunOf( t ); },
+                          []( const std::string_view ) { return true; } );
 }
 
 inline void addLexical( std::vector<RouteChoice>& choices, const char* id, const char* skill, const char* reason,
@@ -853,6 +924,207 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     return std::nullopt;
 }
 
+// ── the recency window: which files the repository itself has been MOVING ─────────────────────────────
+// The question a reader asks as `what moved here lately`, `who has been in this area`, `newest commits`.
+// Until 2026-09-13 no route reached it at all: the verb that answers it (--rank-by=churn-decay, plus the
+// directory scope below) had no entry in this file, so every phrasing abstained with score 0.
+//
+// One correction to the order that asked for this route, recorded where the next reader will look. The
+// plan said the time word was a STOP WORD and that this was why the question could not route. Both halves
+// of that need separating: kWeakSymbolStopWords governs SYMBOL RESOLUTION only — it is why --expand can
+// never be handed one of those words out of prose — and it has never had any bearing on which INTENT a
+// task reads as. Those words stay on that list (they must never name a definition) and become evidence
+// HERE, which is exactly what its own comment already says they are: evidence about what the caller
+// WANTS. Nothing was taken off the list.
+//
+// Conjunctive, like every catalog route: a TIME word AND a MOTION word. Either alone is ordinary English
+// — a newest release, a modified header — and only the pair makes the question about history. Two guards
+// keep the pair honest:
+//   • an EXPLANATORY question is never this route, however many of both words it holds: a question about
+//     how some cache with a time word in its NAME behaves is a question about that cache.
+//   • the WORKING TREE is a different question — --situ answers what YOU have changed and not committed,
+//     and its own route (review-diff, dirty worktrees only) keeps the wording this vocabulary avoids.
+// Every phrase below is at most TWO words, deliberately: the fixture screen that keeps this corpus from
+// quoting its own cards flags shared word-TRIGRAMS, and a card that never spells three consecutive words
+// cannot contaminate a prompt no matter how it is phrased. The prose here obeys the same rule — an
+// EXAMPLE is spelled in backticks, never in the double quotes that screen reads as a card.
+inline constexpr std::string_view kDirScopeFlag = "--in=";
+
+// Cue words that put a DIRECTORY in the slot after them. Same discriminator the symbol slot uses: a bare
+// noun that happens to match a directory name is not a scope, and the same noun after `in` is.
+inline constexpr std::string_view kDirectorySlotCues[] = { "in", "inside", "under", "within", "across" };
+
+// True when `dir` is a directory of the CORPUS — some indexed file sits under it, with the path spelled
+// the way the map spells p= (sarif's one root-relative rule, which is also what the scope flag matches
+// against). Structural, never inferred: the flag refuses a directory that is not under the root, so a
+// router that guessed one would be recommending a refusal.
+inline bool directoryInCorpus( std::string_view dir, const std::string& root, const IngestResult& ing )
+{
+    if( dir.empty() )
+    {
+        return false;
+    }
+    const std::string prefix = rw::sarif::rootPrefixOf( root );
+    for( const std::string& file : ing.files )
+    {
+        const std::string_view rel = rw::sarif::rootRelativeUri( file, prefix );
+        if( rel.size() > dir.size() && rel.substr( 0, dir.size() ) == dir && rel[ dir.size() ] == '/' )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One token of the task, with the spellings people type stripped off it: a trailing '/' or sentence
+// punctuation, and a leading "./" that says the same path twice.
+inline std::string_view cleanedDirectoryToken( std::string_view token ) noexcept
+{
+    while( !token.empty() && ( token.back() == '.' || token.back() == '?' || token.back() == '!'
+                            || token.back() == ':' || token.back() == '/' ) )
+    {
+        token.remove_suffix( 1 );
+    }
+    if( token.starts_with( "./" ) )
+    {
+        token.remove_prefix( 2 );
+    }
+    return token;
+}
+
+// Calendar words that turn a bare `since` into a WINDOW. git's own vocabulary (--since=REV|DATE): a day, a
+// month or a date after it is a time bound, while `since the rewrite` is not one this router can hand over.
+inline constexpr std::string_view kCalendarWords[] = {
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "yesterday",
+    "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+    "november", "december", "midnight", "noon",
+};
+
+// The EXPLANATORY reading, which is never the history route however many of its three conjuncts hold.
+// WORD-BOUNDED, and the boundary is the whole point: a multi-word cue is NOT self-delimiting, which the
+// first review round's comment on CueMatch assumed it was. The space INSIDE a phrase delimits nothing at
+// its two ENDS — the first word can finish another word and the last can begin one. `show documentation`
+// contains `how do` and `show issues` contains `how is`, so both of those questions ABOUT this repository's
+// history lost the route that answers them (2026-09-13, second review round).
+inline constexpr std::string_view kExplanatoryCues[] = {
+    "how does", "how do", "how is", "how are", "what does", "implementation of",
+};
+
+// `since Monday`, `since 2026-09-01` — structural, because a date has no paraphrase (the same reasoning
+// firstFileLineToken is built on). Word-bounded, so `sincerely` is not a window.
+inline bool saysSinceWhen( std::string_view lowerTask ) noexcept
+{
+    for( std::size_t from = 0; ; )
+    {
+        const std::size_t p = boundedFind( lowerTask, "since", from );
+        if( p == std::string_view::npos )
+        {
+            return false;
+        }
+        from = p + 1;
+        std::size_t begin = p + 5;
+        while( begin < lowerTask.size() && lowerTask[begin] == ' ' ) { ++begin; }
+        std::size_t end = begin;
+        while( end < lowerTask.size() && wordByte( lowerTask[end] ) ) { ++end; }
+        const std::string_view word = lowerTask.substr( begin, end - begin );
+        if( word.empty() )
+        {
+            continue;
+        }
+        if( std::isdigit( static_cast<unsigned char>( word.front() ) ) != 0
+         || isOneOf( word, std::begin( kCalendarWords ), std::size( kCalendarWords ) ) )
+        {
+            return true;
+        }
+    }
+}
+
+inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std::string_view lower, const std::string& root,
+                                                     const IngestResult& ing, bool git, const RouterCaps& caps )
+{
+    if( !git )
+    {
+        return std::nullopt;   // the window IS the commit history; without one there is nothing to rank
+    }
+    // SINGLE words are word-bounded, multi-word phrases are not: a phrase carries its own boundaries, and a
+    // bare word matched as a substring is a different word. `here` inside where/there/adhere, `source`
+    // inside outsource, `file` inside profile, `code` inside codec, `moving` inside removing, `changed`
+    // inside unchanged — each of those was a live false positive of the substring spelling (the
+    // counter-example in the paragraph below routed with confidence="high" until this was fixed).
+    const int timeScore = wordScore( lower, { { "recently", 8 }, { "lately", 8 }, { "yesterday", 8 },
+                                              { "newest", 5 }, { "latest", 5 }, { "recent", 5 } } )
+                        + phraseScore( lower, { { "last week", 8 }, { "past week", 8 }, { "last month", 8 },
+                                                { "past month", 8 }, { "last night", 8 }, { "last few", 8 },
+                                                { "this week", 7 }, { "these days", 6 } } )
+                        + ( saysSinceWhen( lower ) ? 8 : 0 );
+    const int motionScore = wordScore( lower, { { "churn", 9 }, { "changed", 7 }, { "changes", 7 },
+                                                { "commits", 7 }, { "touched", 7 }, { "touching", 7 },
+                                                { "modified", 7 }, { "rewritten", 7 }, { "rewrote", 7 },
+                                                { "edited", 6 }, { "editing", 6 }, { "edits", 6 },
+                                                { "commit", 6 }, { "landed", 6 }, { "merged", 6 },
+                                                { "moving", 6 }, { "activity", 6 }, { "updated", 6 },
+                                                { "updates", 6 } } )
+                          + phraseScore( lower, { { "git history", 8 }, { "git log", 7 } } );
+    // `what is new in DIR` is this question with NEITHER word spelled: `new` carries the time sense and the
+    // change sense at once, and giving it a weight in both tables would have every `new feature` sentence
+    // read as history. Recognised as the phrase it is, and only in the question forms that mean it.
+    const bool newInPhrase = has( lower, "what is new in" ) || has( lower, "what's new in" )
+                          || has( lower, "whats new in" ) || has( lower, "anything new in" );
+    const bool explanatory = std::any_of( std::begin( kExplanatoryCues ), std::end( kExplanatoryCues ),
+                                          [lower]( const std::string_view cue ) { return boundedFind( lower, cue ) != std::string_view::npos; } );
+    if( ( ( timeScore < 5 || motionScore < 6 ) && !newInPhrase ) || explanatory )
+    {
+        return std::nullopt;
+    }
+    // …and the pair is still not enough on its own, because the world outside the checkout also has a
+    // history: `our supplier changed their terms recently, where is that noted?` carries a time word and a
+    // motion word and is not a question about this repository at all. The third conjunct is what the
+    // question is ABOUT — a word naming the corpus, or a directory of it the task actually named. Nothing
+    // here is a completeness claim: a history question that names neither abstains, which is the cheap side
+    // to be wrong on (the caller asks again with the word in it; a wrong recommendation costs a call).
+    // the EARLIEST directory of this corpus the task names in a locating slot, or "" when it names none
+    const std::string dir = slotCandidate( task, lower, kDirectorySlotCues,
+                                           []( const std::string_view t ) { return cleanedDirectoryToken( t ); },
+                                           [&]( const std::string_view t ) { return directoryInCorpus( t, root, ing ); } );
+    const int corpusScore = wordScore( lower, { { "file", 1 }, { "files", 1 }, { "code", 1 }, { "codebase", 1 },
+                                                { "repo", 1 }, { "repository", 1 }, { "tree", 1 }, { "branch", 1 },
+                                                { "commit", 1 }, { "commits", 1 }, { "module", 1 }, { "directory", 1 },
+                                                { "folder", 1 }, { "checkout", 1 }, { "worktree", 1 }, { "source", 1 },
+                                                { "function", 1 }, { "header", 1 }, { "symbol", 1 }, { "here", 1 } } );
+    if( corpusScore == 0 && dir.empty() )
+    {
+        return std::nullopt;
+    }
+    std::string command = "ripwire " + shSingleQuote( root ) + " --rank-by=churn-decay";
+    if( dir.empty() )
+    {
+        return RouteChoice{ "recency-window", "ripwire-fresh-eyes",
+                            "history wording: a time word plus a motion word, about commits rather than the working tree",
+                            std::move( command ), 100, 69 };
+    }
+    if( caps.dirScope )
+    {
+        command += " " + std::string( kDirScopeFlag ) + shSingleQuote( dir );
+        return RouteChoice{ "recency-window", "ripwire-fresh-eyes",
+                            "history wording plus a directory the corpus holds, scoped to it",
+                            std::move( command ), 100, 69 };
+    }
+    // The task NAMED a directory and this build has no flag to scope with. Dropping it silently would hand
+    // back a whole-repository answer to a question about one directory with nothing saying so; the reason
+    // is where that is said, since it is the only prose a caller of this verb reads.
+    return RouteChoice{ "recency-window", "ripwire-fresh-eyes",
+                        "history wording plus a directory this build cannot scope to; the whole repository is shown instead",
+                        std::move( command ), 100, 69 };
+}
+
+// The intents whose command IS a --for bundle over the task text, and which a file-grain page therefore
+// WIDENS. Keyed by INTENT and never by searching the command for the flag: a task that quotes the flag
+// itself (`plan the new feature: replace the for= flag scoring`) puts that string inside another verb's
+// quoted argument, and a continuation built from it pastes a page width onto a verb that refuses it
+// (measured: exit 1). The page's own spelling and its byte ceiling belong to forpage.h; this list is only
+// the answer to "does this recommendation have one".
+inline constexpr std::string_view kForShapedIntents[] = { "compact-legend", "locate-task", "opt-remark" };
+
 inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::string_view lower,
                                                     const std::string& root, const std::vector<std::string>& symbols )
 {
@@ -916,19 +1188,26 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
 
 // ONE PLACE APPLIES THE COMPACT-LEGEND POSTURE (PR #215 review item 5). A1-2 put --legend=compact on 26 route
 // commands by editing 26 strings, which is 26 chances to miss one and no rule for the 27th. classifyRoutes below
-// is the whole router; classify() is the one exit, and it applies the posture to every choice it returns.
+// is the whole router; classify() is the one exit, and it applies the posture to every choice it returns — which
+// is what makes the 27th free: #218's recency intent (merged here) spells its commands without the flag and
+// gets it anyway, without knowing the rule exists.
 //
 // WHAT DECIDES: rw::legendCompactAppliesTo (compactlegend.h), the SAME list of non-XML surfaces cli.h REFUSES the flag
 // on, asked of a command string instead of a parsed Config. So the router cannot generate a command its own
 // binary rejects — which it did: `--zoom --legend=compact --mermaid` shipped in a skill, and a hand-listed gate
 // enforced it. --for is exempt by policy, not by refusal, and legendCompactAppliesTo says so in one place.
-// Idempotent: a command that already carries --legend= is left alone, so the hand-applied 26 are untouched and
+// Idempotent: a command that already carries --legend= is left alone, so the hand-applied ones are untouched and
 // this is a no-op on them. Gate: test/taskroutecheck.sh runs every generated command against the binary.
-inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty );
+//
+// caps rides through untouched (#218): classify() decides nothing about routing, it only applies the posture to
+// what classifyRoutes returned, so every routing input is forwarded verbatim.
+inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
+                                       const RouterCaps& caps );
 
-inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty )
+inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
+                                 const RouterCaps& caps = {} )
 {
-    TaskRouteResult result = classifyRoutes( task, root, ing, git, dirty );
+    TaskRouteResult result = classifyRoutes( task, root, ing, git, dirty, caps );
     for( RouteChoice& choice : result.choices )
     {
         if( rw::legendCompactAppliesTo( choice.command ) )
@@ -939,7 +1218,8 @@ inline TaskRouteResult classify( std::string_view task, const std::string& root,
     return result;
 }
 
-inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty )
+inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
+                                       const RouterCaps& caps )
 {
     TaskRouteResult result;
     result.facts.git             = git;
@@ -1020,8 +1300,20 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
     addLexical( candidates, "locate-task", "ripwire-find-bug", "code-location or symptom wording",
                 commandWithValue( root, "--for=", task ), locateScore, 8, 30 );
 
+    // The recency window runs LAST, and only when the weighted tier named nothing at all. That placement is
+    // the whole argument that it costs the older routes nothing — and it is also how it reads `dirty`,
+    // which it must: on a dirty worktree `is my diff safe to merge, i changed these files recently` carries
+    // a time word, a motion word and a corpus word, and it is still the review-diff question. review-diff
+    // is a candidate there (dirty-only, by its own wording), so it wins before this route is reached, and
+    // on a CLEAN tree the same sentence has no diff to review and the history reading is the honest one.
     if( candidates.empty() )
     {
+        if( std::optional<RouteChoice> recency = recencyTaskChoice( task, lower, root, ing, git, caps ) )
+        {
+            result.status = RouteStatus::Recommend;
+            result.score  = result.margin = 100;
+            result.choices.push_back( std::move( *recency ) );
+        }
         return result;
     }
     std::sort( candidates.begin(), candidates.end(), []( const RouteChoice& a, const RouteChoice& b )

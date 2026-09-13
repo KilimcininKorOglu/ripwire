@@ -131,8 +131,11 @@ printf '%s' "$CTX1" | grep -Fq -- '--expand' && printf '%s' "$CTX1" | grep -Fq '
 printf '%s' "$OUT1" | grep -qi 'permissionDecision\|"deny"' \
     && no "R5 route: output carries a permission decision (must never — deny BLOCKS the prompt)" \
     || ok "R5 route: no permission decision anywhere in the output"
-# ONE recommendation, not a catalogue: exactly one <run> element reaches the agent.
-RUNS="$( printf '%s' "$CTX1" | grep -o '<run>' | wc -l | tr -d ' ' )"
+# ONE recommendation, not a catalogue: exactly one <run> element reaches the agent. Counted in the DATA:
+# the document's legend names the elements it defines (2026-09-13), and a legend that says the word is not
+# a second recommendation — the same reason taskroutecheck reads every arm off the comment-stripped body.
+RUNS="$( printf '%s' "$CTX1" | python3 -c 'import sys,re
+sys.stdout.write( re.sub( r"<!--.*?-->", "", sys.stdin.read(), flags=re.S ) )' | grep -o '<run>' | wc -l | tr -d ' ' )"
 [ "$RUNS" = "1" ] && ok "R6 route: exactly ONE paste-ready command is injected" \
     || no "R6 route: injected $RUNS <run> elements, expected 1"
 

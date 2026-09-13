@@ -70,6 +70,12 @@ emits a flat `<cand r= s= n= id= k= p= l=>` top-K — identity + score + signatu
      never treat its absence as "there is no runner"**. Narrow the question to ONE function with
      `--affected=SYM` (or `--affected=file:NAME` when a path shares the name) instead of widening it to the
      whole file, and invert it with `--exercises=test/<harness>` to see what a given test actually covers.
+     On a corpus where few harnesses have a runner, `--affected` serves the runner-less rows GROUPED:
+     `<g hops="2" n="17" p="a,b,c" run_unknown="1"/>` is ONE row standing for 17 test files at the same hop
+     distance (`p=` lists them comma-separated, a `,` inside a path written `&#44;`), with the
+     not-derivable disclosure stated once for the group. Rows that DO have a `run=` stay single `<t>` rows.
+     The obligation is unchanged — every path is still listed verbatim, and a row carries `run=` or
+     `run_unknown="1"`, never neither.
    - **co-change partners NOT in the diff** — files that historically move together (should they be in this
      change too? — the Shotgun Surgery check: one change that has to land in many places, and did not)
 

@@ -64,7 +64,18 @@ int binary() { return target(); }
 """,
         encoding="utf-8",
     )
-    run(["git", "add", "router.cpp", "package.json"], repo)
+    # A SUBDIRECTORY, because the recency route's directory scope needs one: "what changed in storage"
+    # may only compose a scope when the corpus really holds that directory. Both names are camelCase and
+    # appear in no prompt, so no row's symbol resolution changes (the 225 pre-existing rows are
+    # byte-identical on status/intent across this addition).
+    (repo / "storage").mkdir()
+    (repo / "storage" / "queue.cpp").write_text(
+        """int flushPending() { return 1; }
+int drainPending() { return flushPending(); }
+""",
+        encoding="utf-8",
+    )
+    run(["git", "add", "router.cpp", "package.json", "storage/queue.cpp"], repo)
     run(["git", "commit", "-qm", "base"], repo)
     return repo
 

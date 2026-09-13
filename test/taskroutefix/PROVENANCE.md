@@ -292,3 +292,128 @@ row collides with any of it.
 
 **Seal: sha256(prompts.tsv) = `1719aea95449e222718ec38151d2bd6998a95e1dd070038baa0b6e28fd0c9cf5`**
 (post-round; rows=225, dev=111, test=114).
+
+## 2026-09-13 — the recency window (`recency-window`)
+
+**What the round added to the router:** one intent, for the question a reader asks as *what has this
+repository been moving*. It is conjunctive in three parts — a TIME word, a MOTION word, and a word naming
+the corpus (or a directory of it the task named) — and it sits BELOW every pre-existing route, so each
+older and more specific reading keeps first refusal.
+
+**Rows added: 14 (10 positives, 4 negatives), `provenance=handwritten-recency`**, split by the same
+content-hash rule (no hand assignment). Handwritten rather than instrumented because the trigger is not a
+closed phrase list this time: a prompt can satisfy all three conjuncts with words the cards do not spell,
+and 4 of the 10 positives do. Four of the positives name a DIRECTORY the fixture holds
+(`bench/taskroute_eval.py::make_repo` gained `storage/queue.cpp` for exactly that reason — two camelCase
+names that appear in no prompt, so no pre-existing row's symbol resolution moves).
+
+**The four negatives are the classes the three conjuncts exist to refuse**, one each: a time word inside a
+compound NAME with no motion word; a motion word about the world rather than the checkout (a supplier's
+terms); a time word with no motion word at all; and an EXPLANATORY question that satisfies all three
+conjuncts and is still a question about how something works, not about history.
+
+**Held-out floors, before → after** (`bench/taskroute_eval.py`, same binary flags, only the corpus and the
+binary changed; the pre-change binary is this lane's own `origin/main` build, kept for the comparison):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 114 → 121 | 0.939 → **0.942** | 1.000 → 1.000 | 0.000 → 0.000 | 1.000 → 1.000 | 0.907 → **0.914** |
+| dev | 111 → 118 | 0.946 → **0.949** | 1.000 → 1.000 | 0.000 → 0.000 | 1.000 → 1.000 | 0.929 → **0.932** |
+| all | 225 → 239 | 0.942 → **0.946** | 1.000 → 1.000 | 0.000 → 0.000 | 1.000 → 1.000 | 0.918 → **0.923** |
+
+**Regression discipline.** The 225 rows that predate this intent are BYTE-IDENTICAL on (status, intent) —
+the pre-existing set scores 0.939 / 0.946 / 0.942 on the new binary, the same three numbers and the same
+confusion rows it scored on the old one. All 14 new rows are correct, so the deltas above are arithmetic
+on a larger denominator, not a re-ranking.
+
+**Screen: unchanged at 2 flagged lines** (61 and 176, both pre-existing). Two authoring rules kept it
+there and are worth repeating: every new CARD phrase is at most two words, so a card can never supply a
+whole trigram; and every EXAMPLE in the new source comments is written in backticks, because the screen
+reads double-quoted spans in `src/taskroute.h` as cards — the first draft of one comment quoted a decoy
+prompt verbatim and flagged it, which is the screen working exactly as designed.
+
+**Seal: sha256(prompts.tsv) = `c9fc7f316db6b8c1495918b0380a31be4541f771a84b332bac03ce4e142d3b0f`**
+(post-round; rows=239, dev=118, test=121).
+
+### 2026-09-13, review round — eight more rows, and one claim withdrawn
+
+**The claim withdrawn.** The section above reports that the 225 pre-existing rows are byte-identical on
+(status, intent) across the new intent. That is true and it is nearly VACUOUS as evidence that the route is
+safe: measured on the same fixture, **0 of those 225 prompts reach the recency route at all** (they fail
+one of the three conjuncts before the route is consulted), so the identity was never in question. The
+evidence that the route does not steal an answer is the eight rows below and the gate's own arms, not that
+table. Recorded here because a number that cannot move is not a measurement.
+
+**Rows added: 8.** Four NEGATIVES for the word-boundary class the review found: with the single-word corpus
+cues matched as substrings, `here` inside where/there, `source` inside outsource, `file` inside profile
+and `code` inside codec each let a sentence about the world outside the checkout recommend the churn
+window at `confidence="high"`. One negative for the WORKING TREE on a dirty tree (the diff question stays
+`review-diff`; the route now sits below the weighted tier, where the dirty-only review route lives, and
+that is how it reads `dirty`). Three POSITIVES for vocabulary that abstained: a verb weighted below the
+floor (`landed`), git's own `since <a day or a date>` window, and `what is new in DIR`.
+
+**Two rows are `instrumented-cli`, not `handwritten`**, by the rule the 2026-09-10 section states: their
+trigger is a small closed phrase list (`what is new in`, `safe to merge`), so a sentence that routes
+necessarily reuses one of its phrases and the trigram screen would flag it for quoting a card it has to
+quote. The other six are handwritten and screened.
+
+**Held-out floors** (`bench/taskroute_eval.py`, 247 rows):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 128 | **0.945** | 1.000 | 0.000 | 1.000 | 0.917 |
+| dev | 119 | **0.950** | 1.000 | 0.000 | 1.000 | 0.933 |
+| all | 247 | **0.947** | 1.000 | 0.000 | 1.000 | 0.925 |
+
+The original 225 still score 0.939 / 0.946 / 0.942 on this binary — the same three numbers with the same
+confusion rows.
+
+**Screen: 1 flagged line** (176, pre-existing), DOWN from the 2 this corpus carried before the round.
+**[CORRECTED 2026-09-13, see the section below: that reading does not reproduce. The screen reports 2
+flagged lines at this seal, 61 and 176, and reported the same 2 before the round.]**
+
+**Seal: sha256(prompts.tsv) = `7a732691a4040e8a0c16cb95cfd9ac90f0cccb8ea904301c2228777636d47843`** (rows=247, dev=119, test=128).
+
+### 2026-09-13, second review round — a multi-word cue is not self-delimiting
+
+**The defect.** The round above bounded the SINGLE-word cues and left the multi-word ones on substring
+matching, on the reasoning that "a phrase carries its own boundaries". A phrase delimits its own INTERIOR
+and nothing at its two ends: the first word of `how do` can finish another word and the last can begin one.
+`show documentation` contains `how do`; `show issues` contains `how is`. Both sentences are questions about
+this repository's history, and both hit the EXPLANATORY guard and abstained. The six explanatory cues are
+word-bounded now (`kExplanatoryCues`), and the CueMatch comment no longer claims what is not true of a
+phrase. Reported by CodeRabbit on #218 (review 5192045896, `src/taskroute.h:1059`).
+
+**The reported repro did not reproduce, and the real one is narrower.** The review cited
+`what changed recently in the documentation directory`, on the reading that `documentation` contains
+`how do`. It does not — no cue is a substring of that word, and that prompt already routed
+`recency-window` on the unfixed binary. The false positive needs the cue to span TWO words: a word ending
+in `how`/`what` followed by one beginning `do`/`is`/`are`/`does`. `show issues …` and `show documentation …`
+are the rows below, both verified RED (abstain, `score="0"`) against the unfixed binary.
+
+**Rows added: 2**, both `test` by the content-hash rule (no hand assignment): one POSITIVE that must route
+`recency-window` (it names `storage`, which the eval fixture holds, so the scope half is exercised — on a
+build shipping the flag it is `--in=storage`; this build has no such row in its flag table and composes
+none), and one NEGATIVE, `how do i see the files in storage that changed recently`, which must still
+abstain: bounding the cues may not buy the positives at the price of the genuine explanatory question.
+
+**Held-out floors** (`bench/taskroute_eval.py`, 249 rows):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 130 | **0.946** | 1.000 | 0.000 | 1.000 | 0.918 |
+| dev | 119 | **0.950** | 1.000 | 0.000 | 1.000 | 0.933 |
+| all | 249 | **0.948** | 1.000 | 0.000 | 1.000 | 0.925 |
+
+The original 225 still score 0.939 / 0.946 / 0.942 on this binary.
+
+**Screen: 2 flagged lines** (61 `i change its`, 176 `the value of`), and this is the CORRECTION the section
+above needs. Measured three ways with one binary: at `5e1ae383`, the commit before this lane, the screen
+reports both; at the previous round's own seal it reports both; with the two rows below it reports both and
+nothing else. The round above recorded "1 flagged line … DOWN from 2" — that reading does not reproduce at
+its own seal, and no corpus row was relabelled that could have produced it. Both flags are pre-existing rows
+tripping card literals older than this lane (`did I change its contract?` and the `the value of` variable
+cue), neither is a row this lane wrote, and the count has been 2 throughout. A number that was never
+measured is not a measurement, which is the same rule this file applied to the byte-identity claim.
+
+**Seal: sha256(prompts.tsv) = `bb802dabd45bf228b51296cca2a0f35c54824895f429954959ef7219416d0f30`** (rows=249, dev=119, test=130).
