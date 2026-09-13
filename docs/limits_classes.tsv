@@ -36,6 +36,8 @@ kEvidenceCap	OUTPUT
 kExpandMaxPer	OUTPUT
 kExpandMaxSeeds	OUTPUT
 kFieldWalkCap	INDEXING
+kForPageRowsDefault	OUTPUT
+kForPageUnionSymbolCap	INDEXING
 kHandoffCochangeRows	OUTPUT
 kHandoffDocRows	OUTPUT
 kHandoffNoteRows	OUTPUT
