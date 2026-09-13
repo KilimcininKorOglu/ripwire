@@ -49,7 +49,7 @@ echo "testrowruncheck: BIN=$BIN"
 # Every site that prints a tests_to_run row. The list is the CONTRACT: a site added to src/ and not added
 # here fails, which is the only way a family gate stays a family gate.
 EXPECTED_SITES="src/verbs_change.h src/situ.h src/prcontext.h src/packtask.h src/handoff.h src/flipimpact.h src/mcpverbs.h src/mcpedit.h"
-FOUND_SITES="$( cd "$ROOT" && grep -lE 'testRows(Rendered|Joined)\(|"<(t|test) p=\\"|\{\\"test\\":|\{\\"p\\":\\"%s\\"%s\}' src/*.h src/*.cpp 2>/dev/null \
+FOUND_SITES="$( cd "$ROOT" && grep -lE 'testRows(Rendered|Joined|List)\(|"<(t|test) p=\\"|\{\\"test\\":|\{\\"p\\":\\"%s\\"%s\}' src/*.h src/*.cpp 2>/dev/null \
                 | grep -vE 'src/(serialize|testmap)\.h' | sort | tr '\n' ' ' | sed 's/ $//' )"
 WANT_SITES="$( printf '%s\n' $EXPECTED_SITES | sort | tr '\n' ' ' | sed 's/ $//' )"
 [ "$FOUND_SITES" = "$WANT_SITES" ] \
@@ -113,6 +113,28 @@ cat > "$WORK/test/covered.sh" <<'EOF'
 echo covered
 EOF
 chmod +x "$WORK/test/covered.sh"
+# a DARK gate whose guarded region sits in a file the tests reach, so --flags --flip has a report to make
+# with <t> rows in it (arm 7 skipped on every fixture for a release — it also read the wrong row element).
+printf 'cmake_minimum_required( VERSION 3.20 )\nproject( trr )\noption( FEATURE_WRAP "the dark one" OFF )\n' > "$WORK/CMakeLists.txt"
+# INSIDE wrapper's body, not beside it: a flip's tests are the tests that reach the gate's HOSTS, and a
+# host that is itself dark is reached by nothing — the region has to sit in a function a test already calls.
+cat > "$WORK/src/app.cpp" <<'APPEOF'
+int compute( int x )
+{
+    return x * 2;
+}
+
+int wrapper( int x )
+{
+#ifdef FEATURE_WRAP
+    if( x > 100 )
+    {
+        return compute( x + 1 );
+    }
+#endif
+    return compute( x );
+}
+APPEOF
 ( cd "$WORK" && git init -q && git config user.email t@t && git config user.name t \
   && git add -A && git commit -qm init >/dev/null 2>&1 )
 # a second commit so the ref-taking verbs (--pr-context, --handoff) have a base to diff against, and a
@@ -160,7 +182,15 @@ JHAS='"run":"'
 JUNK='"run_unknown":true'
 # the JSON dialects embed the tests_to_run LIST inside a document that also carries file rows keyed "p";
 # slice the list first so the arm asks its question of the row family it is about and no other.
-json_tests(){ printf '%s' "$1" | sed 's/\\"/"/g' | grep -oE '"tests_to_run":\[[^]]*\]'; }
+#
+# Review of #214: this slicer was `grep -oE '"tests_to_run":\[[^]]*\]'`, which stops at the first ']' — and
+# since E1 the first ']' is the end of the FIRST GROUP's path array, not of the list. Arms 3, 5 and 9 were
+# asserting over two and a half rows and passing vacuously. The slice is now taken by BRACKET DEPTH, in
+# test/testrowpaths.py, which is also the reader every other gate in the tree uses for these rows.
+ROWPATHS="$ROOT/test/testrowpaths.py"
+json_tests(){ printf '%s' "$1" | sed 's/\\"/"/g' | python3 "$ROWPATHS" jsonlist; }
+# the FILES a document names, in emitted order, in any dialect — singles and <g>/array groups alike
+row_paths(){ printf '%s' "$2" | python3 "$ROWPATHS" paths "$1"; }
 
 # ── ARM 1 — --affected (verbs_change.h) ────────────────────────────────────────────────────────────────
 rows_disclosed "(1) --affected"  "$( rw --affected=compute,wrapper )" "$XROW" "$XHAS" "$XUNK"
@@ -178,7 +208,9 @@ rows_disclosed "(5) --pack-task json" "$( json_tests "$( rw --pack-task="change 
 # ── ARM 6 — --handoff (handoff.h) — the row family lens 2 L2 found carrying NO run= at all ─────────────
 rows_disclosed "(6) --handoff" "$( rw --handoff )" "$XROW" "$XHAS" "$XUNK"
 # ── ARM 7 — --flags --flip (flipimpact.h) ──────────────────────────────────────────────────────────────
-FLIPNAME="$( rw --flags | grep -oE '<g n="[^"]+"' | head -1 | sed -E 's/^<g n="([^"]*)"$/\1/' )"
+# the gate row is `<gate name="…" kind=…>`; this arm read `<g n="…"` for a release, which matches nothing
+# --flags emits, so it skipped on every fixture including one that HAS a gate (review of #214).
+FLIPNAME="$( rw --flags | grep -oE '<gate name="[^"]+"' | head -1 | sed -E 's/^<gate name="([^"]*)"$/\1/' )"
 FLIPOUT=""
 [ -n "$FLIPNAME" ] && FLIPOUT="$( rw --flags --flip="$FLIPNAME" )"
 if printf '%s' "$FLIPOUT" | grep -qE '<(t|test) p="'; then
@@ -242,18 +274,20 @@ else
     printf '  SKIP  (11) this document emitted no run_unknown row\n'
 fi
 
-# ── ARM 12 — E1: grouping never changes the MULTISET of paths, in any dialect ─────────────────────────
+# ── ARM 12 — E1: grouping never changes the MULTISET of paths NOR THEIR ORDER, in any dialect ─────────
 # A fixture with THREE hop groups (tests reaching the changed symbol at depth 1, 2 and 3) and a runner row
 # in the MIDDLE of the depth-1 group (t_leaf_b.sh stem-matches t_leaf_b.cpp; path order a < b < c < d), so
 # the arm sees: a runner-less run interrupted by a single run= row, groups at three distinct hops=, and the
 # same eight paths in --affected, --test-gate (XML and JSON) and --situ's text. What it proves: every path
 # appears exactly once (verbatim — a reader's grep for a file name must still hit), the run= row stays a
 # single row, at least three <g> rows exist with distinct hops=, the root's tests= count is the number of
-# FILES, not rows, and — CodeRabbit on #214, the A,B,A shape — the ORDER is preserved: the paths read off
-# the rows in emitted order (a group contributing its members in place) are exactly the order the single
-# rows had, so a group only ever covers a CONTIGUOUS run and a runner row never has a later sibling hoisted
-# in front of it. Red on the pre-E1 binary (no <g> row at all) and, for the order half, on 7ab0956a (which
-# grouped a, c, d across b: a,c,d,b).
+# FILES, not rows, and — review of #214, the A,B,A shape — the ORDER is preserved: the paths read off the
+# rows in emitted order are exactly the order the single rows had, so a group only ever covers a CONTIGUOUS
+# run and a runner row never has a later sibling hoisted in front of it. Red on the pre-E1 binary (no <g>
+# row at all) and, for the order half, on 7ab0956a (which grouped a, c, d across b: a,c,d,b).
+#
+# The paths are read by test/testrowpaths.py — THE shared reader, so this arm and the eight other gates that
+# assert over these rows cannot disagree about what a row is.
 command -v python3 >/dev/null 2>&1 || no "(12) python3 missing — the multiset arm cannot run"
 W2="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2"' EXIT
 mkdir -p "$W2/src" "$W2/test"
@@ -265,140 +299,240 @@ for n in mid_a mid_b; do printf 'int mid( int x );\nint test_%s( void )\n{\n    
 for n in top_a top_b; do printf 'int top( int x );\nint test_%s( void )\n{\n    return top( 1 );\n}\n' "$n" > "$W2/test/t_$n.cpp"; done
 printf '#!/usr/bin/env bash\necho leaf_b\n' > "$W2/test/t_leaf_b.sh"; chmod +x "$W2/test/t_leaf_b.sh"
 ( cd "$W2" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
-printf 'int leaf2( int x ) { return x + 2; }\n' >> "$W2/src/leaf.cpp"
+# a second commit and a dirty tree, so the DIFF-seeded verbs (--pr-context, --handoff) have a change set to
+# answer about: without one they report files="0" and name no test at all, and arm 12's group-shape half
+# (and arm 14's positive control) would be asserting over an empty document.
+printf 'int leaf_extra( int x )\n{\n    return x + 2;\n}\n' >> "$W2/src/leaf.cpp"
+( cd "$W2" && git add -A && git commit -qm second >/dev/null 2>&1 )
+printf 'int leaf_extra2( int x )\n{\n    return x + 3;\n}\n' >> "$W2/src/leaf.cpp"
 rw2(){ ( cd "$W2" && "$BIN" . "$@" --no-cache 2>/dev/null ); }
 A12="$( rw2 --affected=src/leaf.cpp )"
 G12="$( rw2 --test-gate=src/leaf.cpp )"
 J12="$( rw2 --test-gate=src/leaf.cpp --json )"
 S12="$( rw2 --situ=src/leaf.cpp )"
-python3 - "$A12" "$G12" "$J12" "$S12" <<'PY12'
-import sys, re, json
-aff, tg, tgj, situ = sys.argv[1:5]
+P12="$( rw2 --pr-context )"
+H12="$( rw2 --handoff )"
+K12="$( rw2 --pack-task="change leaf" )"
+KJ12="$( rw2 --pack-task="change leaf" --json )"
+ROOT="$ROOT" python3 - "$A12" "$G12" "$J12" "$S12" "$P12" "$H12" "$K12" "$KJ12" <<'PY12'
+import sys, os, re
+sys.path.insert( 0, os.path.join( os.environ[ "ROOT" ], "test" ) )
+import testrowpaths as trp                      # THE shared reader — singles and <g>/array groups, any dialect
+aff, tg, tgj, situ, prc, hoff, pt, ptj = sys.argv[1:9]
 ORDER  = [ "test/t_%s.cpp" % n for n in ( "leaf_a", "leaf_b", "leaf_c", "leaf_d", "mid_a", "mid_b", "top_a", "top_b" ) ]   # evidence order: hops asc, then path
 EXPECT = sorted( ORDER )
 fails = []
-def xml_paths( doc ):
-    out, groups, singles_run = [], [], []
-    for m in re.finditer( r'<(t|test|g)( [^>]*)/>', doc ):
-        tag, attrs = m.group( 1 ), m.group( 2 )
-        at = dict( re.findall( r' ([a-z_]+)="([^"]*)"', attrs ) )
-        if tag == "g":
-            ps = [ p.replace( "&#44;", "," ) for p in at["p"].split( "," ) ]
-            if int( at.get( "n", "-1" ) ) != len( ps ): fails.append( "n=%s on a <g> row listing %d paths" % ( at.get( "n" ), len( ps ) ) )
-            if at.get( "run_unknown" ) != "1": fails.append( "a <g> row without run_unknown=1: %s" % m.group( 0 ) )
-            if len( ps ) < 2: fails.append( "a <g> row of one: %s" % m.group( 0 ) )
-            groups.append( at.get( "hops" ) ); out += ps
-        else:
-            if "run" in at: singles_run.append( at["p"] )
-            out.append( at["p"] )
-    return out, groups, singles_run
-a_paths, a_groups, a_run = xml_paths( aff )
-g_paths, g_groups, g_run = xml_paths( tg )
-if not a_paths: fails.append( "--affected emitted no test row at all (fixture broken)" )
-for label, paths in ( ( "--affected", a_paths ), ( "--test-gate", g_paths ) ):
-    if sorted( paths ) != EXPECT: fails.append( "%s multiset %r != %r" % ( label, sorted( paths ), EXPECT ) )
-    if paths != ORDER: fails.append( "%s ORDER changed by grouping: %r != %r (a group must cover a contiguous run only)" % ( label, paths, ORDER ) )
-for label, groups in ( ( "--affected", a_groups ), ( "--test-gate", g_groups ) ):
-    if len( set( groups ) ) < 3 or None in groups: fails.append( "%s: expected >=3 <g> rows at distinct hops=, got hops=%r" % ( label, groups ) )
-for label, run in ( ( "--affected", a_run ), ( "--test-gate", g_run ) ):
-    if run != [ "test/t_leaf_b.cpp" ]: fails.append( "%s: the run= row must be the single test/t_leaf_b.cpp, got %r" % ( label, run ) )
-m = re.search( r'<test-gate [^>]*\btests="(\d+)"', tg )
-if not m or int( m.group( 1 ) ) != len( EXPECT ): fails.append( "--test-gate tests= must count FILES (%d), got %s" % ( len( EXPECT ), m and m.group( 1 ) ) )
-# JSON twin: "p" is a string on a single row and an ARRAY on a group row
-# the list is sliced on bracket DEPTH: a group row's "p":[…] array sits inside it, so a lazy `\[.*?\]` would
-# stop at the first inner `]` (the shape that made this arm read red while the document was valid JSON)
-def balanced_list( doc, key ):
-    i = doc.find( key )
-    if i < 0: return None
-    i = doc.find( "[", i ); depth = 0; instr = False
-    for k in range( i, len( doc ) ):
-        c = doc[k]
-        if instr:
-            if c == "\\": continue
-            if c == '"': instr = False
-            continue
-        if c == '"': instr = True
-        elif c == "[": depth += 1
-        elif c == "]":
-            depth -= 1
-            if depth == 0: return doc[i:k+1]
-    return None
-jl = balanced_list( tgj, '"tests_to_run":' )
-try:
-    rows = json.loads( jl ) if jl else []
-except Exception as e:
-    rows = []; fails.append( "--test-gate --json tests_to_run is not JSON: %s" % e )
-j_paths = []
-for r in rows:
-    p = r.get( "p" )
-    if isinstance( p, list ):
-        j_paths += p
-        if r.get( "n" ) != len( p ) or r.get( "run_unknown" ) is not True: fails.append( "JSON group row without n=/run_unknown: %r" % r )
+
+# (a) the four dialects that serve the WHOLE list: same paths, same order, through the shared reader.
+for label, doc, dialect in ( ( "--affected", aff, "xml" ), ( "--test-gate", tg, "xml" ),
+                             ( "--test-gate --json", tgj, "json" ), ( "--situ text", situ, "text" ) ):
+    paths = trp.xml_paths( doc ) if dialect == "xml" else ( trp.json_paths( doc ) if dialect == "json" else trp.text_paths( doc ) )
+    if sorted( paths ) != EXPECT:
+        fails.append( "%s multiset %r != %r" % ( label, sorted( paths ), EXPECT ) )
+    if paths != ORDER:
+        fails.append( "%s ORDER changed by grouping: %r != %r (a group must cover a contiguous run only)" % ( label, paths, ORDER ) )
+
+# (b) the group shape itself EXISTS, at three distinct hops=, and the run= row stayed a single row.
+for label, doc in ( ( "--affected", aff ), ( "--test-gate", tg ) ):
+    body = trp.strip_comments( doc )
+    hops = re.findall( r'<g [^>]*?\bhops="(\d+)"', body )
+    if len( set( hops ) ) < 3:
+        fails.append( "%s: expected >=3 <g> rows at distinct hops=, got hops=%r" % ( label, hops ) )
+    runs = [ m.group( 0 ) for m in re.finditer( r'<(?:t|test|g)\b[^>]*?\brun="[^"]*"[^>]*/>', body ) ]
+    if len( runs ) != 1 or runs[0].startswith( "<g " ):
+        fails.append( "%s: the runner row is not exactly one SINGLE row: %r" % ( label, runs ) )
+    tests = re.findall( r'\btests="(\d+)"', body )
+    if tests and tests[0] != str( len( EXPECT ) ):
+        fails.append( "%s: tests=%s counts rows, not FILES (expected %d)" % ( label, tests[0], len( EXPECT ) ) )
+
+# (c) review of #214: the <g> shapes of the OTHER emitters were produced by no arm at all. This fixture
+#     forms a group, so every one of them must show one — and every group row must carry the disclosure.
+for label, doc, dialect in ( ( "--pr-context", prc, "xml" ), ( "--handoff", hoff, "xml" ),
+                             ( "--pack-task", pt, "xml" ), ( "--pack-task --json", ptj, "json" ) ):
+    if dialect == "xml":
+        body   = trp.strip_comments( doc )
+        groups = re.findall( r"<g [^>]*/>", body )
+        if not groups:
+            fails.append( "%s renders no <g> group row on a fixture that forms one" % label )
+        for grow in groups:
+            if 'run_unknown="1"' not in grow:
+                fails.append( "%s group row carries no disclosure: %r" % ( label, grow ) )
+            if not re.search( r'\bn="\d+"', grow ):
+                fails.append( "%s group row carries no n=: %r" % ( label, grow ) )
     else:
-        j_paths.append( p )
-        if "run" not in r and r.get( "run_unknown" ) is not True: fails.append( "JSON single row carries neither: %r" % r )
-if sorted( j_paths ) != EXPECT: fails.append( "--test-gate --json multiset %r != %r" % ( sorted( j_paths ), EXPECT ) )
-if j_paths != ORDER: fails.append( "--test-gate --json ORDER changed by grouping: %r" % j_paths )
-# --situ text: `        path [hops=N]   (run: …)` singles and `        [hops=N] (n): a, b, c   (run: not derivable)` groups
-sec = situ.split( "tests to run", 1 )[1].split( "\n  [3]", 1 )[0] if "tests to run" in situ else ""
-s_paths, s_groups = [], 0
-for line in sec.split( "\n" ):
-    if not line.startswith( "        " ) or line.startswith( "        (" ): continue
-    body = line[8:]
-    gm = re.match( r'(\[[^\]]*\] )?\((\d+)\): (.*?)   \(run: not derivable\)$', body )
-    if gm:
-        ps = gm.group( 3 ).split( ", " ); s_groups += 1
-        if int( gm.group( 2 ) ) != len( ps ): fails.append( "situ group count (%s) != %d paths" % ( gm.group( 2 ), len( ps ) ) )
-        s_paths += ps
-    else:
-        if "   (run: " not in body: fails.append( "situ line carries no run recipe/disclosure: %r" % line )
-        s_paths.append( body.split( " ", 1 )[0] )
-if sorted( s_paths ) != EXPECT: fails.append( "--situ text multiset %r != %r" % ( sorted( s_paths ), EXPECT ) )
-if s_paths != ORDER: fails.append( "--situ text ORDER changed by grouping: %r" % s_paths )
-if s_groups < 3: fails.append( "--situ text: expected >=3 group lines, got %d" % s_groups )
+        import json as _json
+        sl = trp.json_list_slice( doc )
+        rows = _json.loads( sl ) if sl else []
+        arrays = [ r for r in rows if isinstance( r.get( "p", r.get( "test" ) ), list ) ]
+        if not arrays:
+            fails.append( "%s renders no array (group) row on a fixture that forms one: %r" % ( label, rows ) )
+        for r in arrays:
+            if r.get( "run_unknown" ) is not True or "n" not in r:
+                fails.append( "%s group row missing n= or the disclosure: %r" % ( label, r ) )
+    # and the files a group names are files this fixture has
+    got = trp.xml_paths( doc ) if dialect == "xml" else trp.json_paths( doc )
+    if not got:
+        fails.append( "%s named no test file at all" % label )
+    for g in got:
+        if not g.endswith( tuple( os.path.basename( e ) for e in EXPECT ) ):
+            fails.append( "%s named a path this fixture does not have: %r" % ( label, g ) )
+
 if fails:
     print( "\n".join( fails ) ); sys.exit( 1 )
-print( "OK %d paths, %d <g> rows on --affected" % ( len( EXPECT ), len( a_groups ) ) )
+print( "OK %d paths in order, groups present in 8 dialect/verb combinations" % len( EXPECT ) )
 PY12
 r12=$?
 [ "$r12" -eq 0 ] \
-    && ok "(12) E1: grouping keeps the path multiset AND order in every dialect (8 paths, >=3 hop groups, the run= row single in place, tests= counts files)" \
-    || no "(12) E1: the grouped rows do not carry the same paths as the single rows did (details above)"
+    && ok "(12) E1: grouping keeps the path multiset AND order in every dialect, and every emitter renders the <g> shape (8 paths, >=3 hop groups, the run= row single in place, tests= counts files)" \
+    || no "(12) E1: the grouped rows do not carry the same paths, order or shape as the single rows did (details above)"
 
-# ── ARM 13 — E1: a byte cap never drops two paths that each fit as a singleton ───────────────────────
-# --pack-task's <tests> section is byte-budgeted per ROW, so a group is capped at the section's budget
-# (testmap.h partitionTestRows maxGroupBytes). CodeRabbit on #214: the cap was applied only from the THIRD
-# member on, so two runner-less paths that each fit alone were joined into one <g> row the section then
-# rejected whole — the bundle named NO test where it could have named one. The arm sweeps --token-budget
-# upward on a two-test corpus with no runner: the FIRST budget at which a <tests> section appears must serve
-# ONE file as a single <test> row (shown="1", no <g>), and shown= must never decrease as the budget grows.
-# Red on 7ab0956a: the first section to appear is `<g n="2">` shown="2".
-W3="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2" "$W3"' EXIT
-mkdir -p "$W3/src" "$W3/test"
-printf 'int compute_value( int x )\n{\n    return x + 1;\n}\n' > "$W3/src/core.cpp"
-for n in alpha_long_name beta_long_name; do printf 'int compute_value( int x );\nint test_%s( void )\n{\n    return compute_value( 1 );\n}\n' "$n" > "$W3/test/t_$n.cpp"; done
-( cd "$W3" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
-first=""; firstrow=""; prev=0; mono=1; seen=0
-for b in $( seq 1000 20 1700 ); do
-    o="$( cd "$W3" && "$BIN" . --no-cache --pack-task="compute_value" --token-budget=$b 2>/dev/null )"
-    sh="$( printf '%s' "$o" | grep -oE '<tests shown="[0-9]+"' | grep -oE '[0-9]+' )"
-    [ -n "$sh" ] || sh=0
-    [ "$sh" -lt "$prev" ] && mono=0
-    prev=$sh
-    if [ -z "$first" ] && [ "$sh" -gt 0 ]; then first=$b; firstrow="$( printf '%s' "$o" | grep -oE '<tests .*</tests>' | cut -c1-160 )"; fi
-    [ "$sh" -eq 2 ] && seen=1
+# ── ARM 13 — E1: a path that ESCAPES WIDER than it reads never costs the section its rows ─────────────
+# --pack-task's <tests> section is byte-budgeted. It used to GROUP first and hand the group rows to the
+# generic list cutter under a per-row byte cap whose estimate was `attrs + 48 + Σ(path+1)` over UNESCAPED
+# paths — so a corpus whose test paths hold '&' (or '<', or '"') rendered wider than the cap admitted, the
+# cutter broke at the first over-budget entry, and the whole TAIL of the section went with it, run= singles
+# included. The section now cuts over its own grouped, ESCAPED rendering (packTaskTestsSection).
+#
+# A true matched pair: the same ten test files, the same path LENGTHS, differing in exactly one byte per
+# name — '&' in one fixture, '_' in the other — plus one harness with a runner so a run= single is in play.
+# The property: at every budget the '&' fixture names at least one file whenever the control does (it may
+# name fewer — escaped paths really are wider — but it must never collapse to nothing), and neither fixture
+# ever goes backwards as the budget grows. Red on ff8d77a1: at --token-budget=1440 the control serves 5
+# files and the '&' fixture serves 0.
+A13="$( mktemp -d )"; C13="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2" "$A13" "$C13"' EXIT
+mk13(){ d="$1"; sep="$2"; mkdir -p "$d/src" "$d/test"
+    printf 'int compute_value( int x )\n{\n    return x + 1;\n}\n' > "$d/src/core.cpp"
+    for n in a b c d e f x y z w; do printf 'int compute_value( int x );\nint test_%s( void )\n{\n    return compute_value( 1 );\n}\n' "$n" > "$d/test/${n}${sep}t.cpp"; done
+    printf 'int compute_value( int x );\nint test_run( void )\n{\n    return compute_value( 1 );\n}\n' > "$d/test/runme_t.cpp"
+    printf '#!/usr/bin/env bash\necho runme\n' > "$d/test/runme_t.sh"; chmod +x "$d/test/runme_t.sh"
+    ( cd "$d" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 ); }
+mk13 "$A13" '&'
+mk13 "$C13" '_'
+named13(){ ( cd "$1" && "$BIN" . --no-cache --pack-task="compute_value" --token-budget="$2" 2>/dev/null ) | python3 "$ROWPATHS" paths xml | grep -c . ; }
+bad13=""; prevA=0; prevC=0; sawA=0
+for b in 1440 1500 1560 1620 1680 1740 1800 1860; do
+    na="$( named13 "$A13" $b )"; nc="$( named13 "$C13" $b )"
+    [ "$na" -gt 0 ] && sawA=1
+    [ "$nc" -gt 0 ] && [ "$na" -eq 0 ] && bad13="$bad13 budget=$b: control names $nc file(s), the '&' fixture names NONE"
+    [ "$na" -lt "$prevA" ] && bad13="$bad13 budget=$b: the '&' fixture went backwards ($prevA -> $na)"
+    [ "$nc" -lt "$prevC" ] && bad13="$bad13 budget=$b: the control went backwards ($prevC -> $nc)"
+    prevA=$na; prevC=$nc
 done
-if [ -z "$first" ]; then
-    no "(13) no --token-budget in 1000..1700 produced a <tests> section — the sweep cannot bite"
-elif [ "$seen" -ne 1 ]; then
-    no "(13) the sweep never reached shown=\"2\" — the fixture's two tests are not both served at 1700 tokens"
-elif printf '%s' "$firstrow" | grep -q '<g ' || ! printf '%s' "$firstrow" | grep -q 'shown="1"'; then
-    no "(13) at --token-budget=$first the first <tests> section to fit is a GROUP, not one singleton: $firstrow"
-elif [ "$mono" -ne 1 ]; then
-    no "(13) shown= decreased as the budget grew"
+if [ "$sawA" -ne 1 ] || [ "$prevC" -eq 0 ]; then
+    no "(13) neither fixture named a test file anywhere in 1440..1860 — the arm cannot bite"
+elif [ -n "$bad13" ]; then
+    no "(13) a '&' in a test path costs the <tests> section its rows:$bad13"
 else
-    ok "(13) E1: the byte cap admits one file before two (first <tests> at --token-budget=$first is shown=\"1\", a single <test> row; shown= monotone)"
+    ok "(13) E1: a path that escapes wider than it reads never drops the <tests> section (10 tests, '&' vs '_', budgets 1440..1860; both monotone, neither empty where the other is not)"
 fi
+
+# ── ARM 14 — the run-hint clause is gated on ROWS at every site that splices it ───────────────────────
+# The clause is a rule ABOUT rows (~180 B). Review of #214: --handoff and --flags --flip spliced it
+# unconditionally — and --handoff is BYTE-BUDGETED with heuristic rows dropped tail-first, so a packet with
+# <tests n="0"> could evict a real row to pay for a rule about rows it has none of. Both now ask
+# testmap.h's ONE gate (runHintClauseIfRows) with the count the seam returned.
+# Fixture: a corpus with NO test file at all, so every verb below renders zero rows. Red on ff8d77a1 for
+# --handoff; --flags --flip is asserted on the same corpus for the same reason.
+N14="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2" "$A13" "$C13" "$N14"' EXIT
+mkdir -p "$N14/src"
+printf 'int alpha( int x )\n{\n    return x + 1;\n}\n' > "$N14/src/a.cpp"
+# a DARK preprocessor gate, so --flags --flip has something to report on this corpus too: its legend splices
+# the same clause and, review of #214, spliced it unconditionally.
+cat > "$N14/src/b.cpp" <<'B14'
+int alpha( int x );
+
+int beta( int x )
+{
+    return alpha( x ) + 2;
+}
+
+#ifdef FEATURE_ZETA
+int zeta_only( int x )
+{
+    return alpha( x ) * 3;
+}
+#endif
+B14
+# the gate itself is a CMake option() — the shape --flags reports as kind="cmake" default="OFF" dark="1"
+printf 'cmake_minimum_required( VERSION 3.20 )\nproject( n14 )\noption( FEATURE_ZETA "the dark one" OFF )\n' > "$N14/CMakeLists.txt"
+( cd "$N14" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+printf 'int gamma_fn( int x ) { return x - 1; }\n' >> "$N14/src/b.cpp"
+CLAUSE='run= is the command that discharges a test row'
+bad14=""
+for v in --handoff --pr-context --test-gate --affected=src/a.cpp; do
+    o="$( cd "$N14" && "$BIN" . $v --no-cache 2>/dev/null )"
+    rows="$( printf '%s' "$o" | python3 "$ROWPATHS" paths xml | grep -c . )"
+    has="$( printf '%s' "$o" | grep -c "$CLAUSE" )"
+    [ "$rows" -eq 0 ] && [ "$has" -ne 0 ] && bad14="$bad14 $v(0 rows, clause present)"
+    [ "$rows" -gt 0 ] && [ "$has" -eq 0 ] && bad14="$bad14 $v($rows rows, clause MISSING)"
+done
+# --flags --flip on the same no-test corpus: zero <t> rows, so no clause either
+FN14="$( ( cd "$N14" && "$BIN" . --flags --no-cache 2>/dev/null ) | grep -oE '<gate name="[^"]+"' | head -1 | sed -E 's/^<gate name="([^"]*)"$/\1/' )"
+if [ -n "$FN14" ]; then
+    o="$( cd "$N14" && "$BIN" . --flags --flip="$FN14" --no-cache 2>/dev/null )"
+    rows="$( printf '%s' "$o" | python3 "$ROWPATHS" paths xml | grep -c . )"
+    has="$( printf '%s' "$o" | grep -c "$CLAUSE" )"
+    [ "$rows" -eq 0 ] && [ "$has" -ne 0 ] && bad14="$bad14 --flags --flip=$FN14(0 rows, clause present)"
+    [ "$rows" -gt 0 ] && [ "$has" -eq 0 ] && bad14="$bad14 --flags --flip=$FN14($rows rows, clause MISSING)"
+else
+    bad14="$bad14 --flags found no gate on the fixture (the flip half of this arm cannot bite)"
+fi
+
+# the positive control: the grouping fixture from arm 12 DOES carry rows, so the same verbs must carry it
+for v in --handoff --pr-context; do
+    o="$( rw2 $v )"
+    rows="$( printf '%s' "$o" | python3 "$ROWPATHS" paths xml | grep -c . )"
+    has="$( printf '%s' "$o" | grep -c "$CLAUSE" )"
+    [ "$rows" -gt 0 ] && [ "$has" -eq 0 ] && bad14="$bad14 control:$v($rows rows, clause MISSING)"
+    [ "$rows" -eq 0 ] && bad14="$bad14 control:$v named no row — the positive control cannot bite"
+done
+[ -z "$bad14" ] \
+    && ok "(14) the run-hint clause rides exactly the documents that render a row (5 verbs on a no-test corpus, 2 positive controls)" \
+    || no "(14) the run-hint clause is not rows-gated:$bad14"
+
+# ── ARM 15 — the partitioned bundle gates its outer clause on a COUNT, never on rendered bytes ────────
+# partition.h asked `xml.find( "<tests " )` of each slice's RENDERED output. A bundle whose <bodies> CDATA
+# quotes the literal text `<tests ` — any source file that WRITES that element does — answered yes with
+# zero rows, and the outer legend paid ~180 B for a rule about rows the document has none of. Each bundle
+# now REPORTS its kept count (packTaskBundleText's testsKeptOut) and the counts are summed.
+# Fixture: a corpus with NO test file whose one body prints `<tests n="%d">`. Red on ff8d77a1.
+Q15="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2" "$A13" "$C13" "$N14" "$Q15"' EXIT
+mkdir -p "$Q15/src"
+cat > "$Q15/src/emitter.cpp" <<'EOF'
+#include <cstdio>
+
+void write_report( FILE* out, int n )
+{
+    std::fprintf( out, "<tests n=\"%d\">", n );
+    std::fprintf( out, "</tests>" );
+}
+
+void caller_one( FILE* out )
+{
+    write_report( out, 1 );
+}
+
+void caller_two( FILE* out )
+{
+    write_report( out, 2 );
+}
+EOF
+printf 'void unrelated_helper( int x )\n{\n    (void)x;\n}\n' > "$Q15/src/other.cpp"
+( cd "$Q15" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+O15="$( cd "$Q15" && "$BIN" . --no-cache --pack-task="write_report" --partition=2 2>/dev/null )"
+lit15="$( printf '%s' "$O15" | grep -c '<tests ' )"
+sec15="$( printf '%s' "$O15" | grep -c '<tests shown=' )"
+cls15="$( printf '%s' "$O15" | grep -c "$CLAUSE" )"
+if [ "$lit15" -eq 0 ]; then
+    no "(15) the fixture's body does not carry the literal '<tests ' — the arm cannot bite"
+elif [ "$sec15" -ne 0 ]; then
+    no "(15) the fixture produced a real <tests> section — it was meant to have no test file at all"
+elif [ "$cls15" -ne 0 ]; then
+    no "(15) the partitioned bundle charges the run-hint clause for a body that merely QUOTES '<tests ' (zero rows)"
+else
+    ok "(15) the partitioned bundle's outer clause follows the slices' kept COUNTS, not a grep over their bytes"
+fi
+
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

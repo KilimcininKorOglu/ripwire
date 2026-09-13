@@ -1153,7 +1153,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     // H2H-Graft F1: the evidence clause (testmap.h's ONE wording) rides the rows-gated half, like the run= rule.
     rw::emitTo( out, "<!-- {}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
-                  tgHasRows ? kTestGateRunLegend : std::string_view{},
+                  runHintClauseIfRows( testRows ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
                   rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where

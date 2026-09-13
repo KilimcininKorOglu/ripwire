@@ -93,15 +93,29 @@ EOF
 # RE-PINNED 2720 -> 2900 (2026-09-12, output-routing loop E1 / A4-2, owner call). ONE new FACT, in the SAME
 # row-gated clause (testmap.h kRunHintLegendClause, so the zero-row report still pays nothing):
 #   +180 B  the <g> group row — 2+ runner-less rows with equal evidence attributes served as ONE row, n= how
-#           many, p= their paths in list order (&#44; a comma), every path verbatim. It is what lets the
-#           not-derivable disclosure be said once per GROUP instead of once per row (rocksdb, 127 rows: 126
-#           `run_unknown="1"` -> 9, test-gate 13,242 -> 9,594 B) and legendcoveragecheck wants n= defined
+#           many, p= their paths in list order, every path verbatim. It is what lets the not-derivable
+#           disclosure be said once per GROUP instead of once per row (rocksdb, 127 rows: 126
+#           `run_unknown="1"` -> 10, test-gate 13,242 -> 9,633 B) and legendcoveragecheck wants n= defined
 #           wherever a document carries it.
-# Measured on this fixture: 2663 -> 2843 B; 2900 leaves ~57 B — the same posture as every pin above.
-if [ "$legend" -le 2900 ]; then
-    ok "(a) --test-gate legend is $legend B (<= 2900 B budget; total=$total payload=$payload)"
+# Measured on this fixture: 2663 -> 2843 B.
+# RE-PINNED 2900 -> 3000 (2026-09-13, review of #214). TWO facts a consumer of a <g> row cannot do without,
+# both in the same row-gated clause, so a zero-row report still pays nothing:
+#   +65 B   a path holding ',' is NEVER grouped, so p= splits into exactly n= paths. The seam used to spell
+#           such a path &#44; and say so here; every XML parser undoes that entity BEFORE a consumer splits
+#           on the delimiter, so the escape was a promise the format could not keep. Refusing to group the
+#           row is the only spelling that is right in all three dialects, and this sentence is what makes
+#           `split( p, "," )` a safe thing for a reader to write.
+#   +49 B   a section's shown=/total= over these rows count test FILES, so a <g n=N> row is N of them. Same
+#           finding from the other side: --pack-task prints <tests shown="54" total="109"> above 30-odd
+#           RENDERED rows, and the bundle legend's own "shown=rows kept" sentence flatly contradicted it.
+#           Said HERE rather than in that always-on bundle legend, which is charged against the ceiling it
+#           describes: unconditional it put packtaskcheck's 2000-token arm 5620 B over a 5428 B ceiling
+#           (measured), and a bundle with no <tests> section has no use for it.
+# Measured on this fixture: 2843 -> 2957 B; 3000 leaves ~43 B — the same posture as every pin above.
+if [ "$legend" -le 3000 ]; then
+    ok "(a) --test-gate legend is $legend B (<= 3000 B budget; total=$total payload=$payload)"
 else
-    no "(a) --test-gate legend is $legend B (> 2900 B budget) — the essay re-inflated"
+    no "(a) --test-gate legend is $legend B (> 3000 B budget) — the essay re-inflated"
 fi
 
 # (b) the honesty vocabulary + the §B12.5 cross-verb UNIT-collision anchors (test/testgatecheck.sh arm (g)

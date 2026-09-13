@@ -195,8 +195,11 @@ fi
 # ── E1 follow-up (CodeRabbit on #214, third thread): the clause follows the RENDERED rows, not the corpus ──
 # "the corpus holds a test file" over-approximated: a test file elsewhere in the corpus, or a trim level whose
 # testCap is 0, still bought the clause for a document that renders no test row. The legend is now built after
-# the level is chosen and priced per candidate level from that level's own rendered body — the same predicate
-# (a <test>/<g> row in the body) decides both. Two fixtures, both RED on 7ab0956a:
+# the level is chosen and priced per candidate level from that level's OWN ROW COUNT — the emitter reports how
+# many test files it wrote (PrTrimRender::testFiles) and both the pricer and the writer read that one number.
+# A first fix grepped the rendered body for a `<test p="`/`<g ` opener instead; the review of #214 found the
+# same mistake in partition.h, where a CDATA body quoting the literal text of the element answered yes with
+# zero rows, so neither place asks the bytes any more. Two fixtures, both RED on 7ab0956a:
 #   (i)  a test file OUTSIDE the selected range: test/t_other.cpp exercises src/b.cpp, and only src/a.cpp is
 #        in the diff — no changed file reaches a test, so no row renders, so no clause;
 #   (ii) the existing fixture (test_core.cpp IS reached) under a budget small enough that the ladder lands on a

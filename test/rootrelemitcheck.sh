@@ -341,10 +341,12 @@ done
 # diffed with `sort | uniq`. The arms above catch each verb's leak in isolation; this one pins the CROSS-VERB
 # property directly, because that is the property an agent actually consumes. Run at BOTH root spellings: a
 # verb can be self-consistent and still disagree with its siblings on only one of the two.
-tests_to_run_rows(){ # <root> <argspec...> → one path per line
+# E1 / review of #214: a tests_to_run row may name SEVERAL files (`<g … p="a,b,c" run_unknown="1"/>`), and
+# this reader saw only the singles — on a corpus where the rows group it compared two EMPTY lists and passed.
+# Every dialect is now read by test/testrowpaths.py, THE shared reader.
+tests_to_run_rows(){ # <root> <argspec...> → one path per line, emitted order
   local root="$1"; shift
-  "$BIN" "$root" "$@" 2>/dev/null \
-    | tr '<' '\n' | sed -n 's/^test p="\([^"]*\)".*/\1/p; s/^t p="\([^"]*\)".*/\1/p'
+  "$BIN" "$root" "$@" 2>/dev/null | python3 "$ROOT/test/testrowpaths.py" paths xml
 }
 # This arm needs a corpus that HAS a test file. $SHORT/$DEEP do not: the fixture's one cross-dir caller is a
 # test only by virtue of the "test/fixture/…" path it lives at in THIS repo, and a copy of it elsewhere is
@@ -368,15 +370,15 @@ for spelling in abs rel; do
   # this corpus, reaches only the cross-dir consumer — the symbol reading is the one that reaches the test.
   a_rows=$( cd "$CD" && tests_to_run_rows "$RT" --affected=distance )
   g_rows=$( cd "$CD" && tests_to_run_rows "$RT" --test-gate=geometry.cpp )
-  # the JSON twin carries "p" in BOTH arrays — narrow to tests_to_run so this compares like with like
+  # the JSON twin carries "p" in BOTH arrays — the shared reader slices tests_to_run by BRACKET DEPTH (a
+  # group row's "p" is itself an array, so the first ']' is not the end of the list) and unwraps both shapes
   j_rows=$( cd "$CD" && "$BIN" "$RT" --test-gate=geometry.cpp --json 2>/dev/null \
-            | sed -n 's/.*"tests_to_run":\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | sed -n 's/.*"p":"\([^"]*\)".*/\1/p' )
-  # M21(b) re-pin (capture-audit 2026-09-04, lane L8): every --situ tests-to-run line now ends in a run
-  # recipe OR its "(run: not derivable)" disclosure, so the old "the line contains no '(' " extraction
-  # matched nothing and this arm read red while the SPELLING it exists to compare was correct. Re-pinned to
-  # the new contract: take the path FIELD off a row line, not the whole line.
+            | python3 "$ROOT/test/testrowpaths.py" paths json )
+  # M21(b) re-pin (capture-audit 2026-09-04, lane L8): every --situ tests-to-run line ends in a run recipe
+  # OR its "(run: not derivable)" disclosure. E1 then made a line able to carry SEVERAL paths, and `$1` of
+  # such a line is `[hops=1]`, not a path — so the text dialect goes through the shared reader too.
   s_rows=$( cd "$CD" && "$BIN" "$RT" --situ=geometry.cpp 2>/dev/null \
-            | sed -n '/tests to run/,/^  \[3\]/p' | awk '/^        [^ (]/ { print $1 }' )
+            | python3 "$ROOT/test/testrowpaths.py" paths text )
   if [ -z "$a_rows" ]; then
     no "ARM6/$spelling --affected emitted NO test row for distance — the arm would be a false green"
     continue

@@ -21,11 +21,15 @@
 // both arms and reaches neither.) fmt is NOT vendored: the standard library has the feature, so a vendored
 // copy would be a G3 regression.
 
+#include "Diagnostics.h"   // DEGRADED_PATH_ALERT — renderToString's open_memstream degrade, below
+
 #include <cstddef>
+#include <cstdlib>
 #include <type_traits>
 #include <cstring>
 #include <cstdio>
 #include <format>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -149,6 +153,49 @@ template<class... A> inline std::size_t formatTo( char* buf, std::size_t cap, st
     const auto r = std::format_to_n( buf, static_cast<std::ptrdiff_t>( cap - 1 ), f, std::forward<A>( a )... );
     *r.out = '\0';
     return static_cast<std::size_t>( r.size );
+}
+
+// ── THE render-an-emitter-into-a-string seam ─────────────────────────────────────────────────────────
+// An emitter writes to a FILE*. A caller that must MEASURE what it wrote (a budget ladder pricing its own
+// document before it commits to a trim level) or REORDER it (a legend whose wording depends on the body that
+// follows it in the stream) needs those bytes as a string first. That is one seven-line memstream dance, and
+// it was hand-written at each such site.
+//
+// Review of #214: the copy in prcontext.h returned "" on failure with NO alert, and the unbudgeted
+// --pr-context path had just been routed through it — so an open_memstream failure would have shipped a
+// legend, a root tag and a closing tag around an EMPTY body, with truncated="none" saying nothing was cut.
+// A degrade has to be visible and the caller has to be able to see it: `ok` is false exactly when the buffer
+// could not be opened (and then `text` is empty and nothing was written), the alert names the site through
+// the caller's own message — "which buffer failed" is the useful half — and the caller then takes its own
+// documented path. Never a silent empty body.
+struct Rendered
+{
+    std::string text;
+    bool        ok = false;
+};
+
+template<class Emit>
+inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
+{
+    Rendered    out;
+    char*       buf = nullptr;
+    std::size_t sz  = 0;
+    std::FILE*  m   = open_memstream( &buf, &sz );
+    if( !m )
+    {
+        DEGRADED_PATH_ALERT( degradeMsg );
+        return out;
+    }
+    emit( m );
+    std::fflush( m );
+    std::fclose( m );
+    if( buf )
+    {
+        out.text.assign( buf, sz );
+    }
+    std::free( buf );
+    out.ok = true;
+    return out;
 }
 
 }   // namespace rw
