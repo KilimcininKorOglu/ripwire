@@ -366,8 +366,13 @@ CORE = { "p", "n", "t", "id", "l", "k", "c" }
 # elements' trios are here because `defined` sees one name: <tail>'s three are what the note is ABOUT, <sigs>'s
 # three are legendOff's and are closed by the same three words. Do not add a line here to make a red go away
 # without saying, in the commit, which clause was dropped and why it is not worth a sentence of its own.
+# SHRUNK 2026-09-13 (PR #215 review item 10): the compact dialect's four lines stopped reproducing and the arm
+# had been printing "verify, then shrink the FLOOR in this file" for four runs without anyone shrinking it — a
+# floor that outlives its findings is a floor nobody reads. They are gone because this dialect's rung zero no
+# longer fires on these documents: it is taken only when the drop PAYS (verbs_for.h), and in the compact dialect
+# the note was longer than the clauses it replaced, so the readings ride and close their own attributes.
 FLOOR = { "default": { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
-          "compact": { "sigs@shown", "sigs@total", "tail@shown", "tail@total" } }
+          "compact": set() }
 
 LEAD = re.compile( rb'\A(?:\s*<!--.*?-->)+', re.S )
 ATTR = re.compile( rb'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>' )

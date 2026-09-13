@@ -96,6 +96,11 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "ctx", "notes",      "field notes by target: <target id= dangling=> holds <note d= sha= branch=>; counts = the rows" },
     { "ctx", "lego",       "ONE interface/base type: <iface n= p= defs= implementors=>, its <m> method contract, every implementor" },
     { "ctx", "expand",     "full bodies: <bodies shown= total= capped=> of <b t= l= p= n= sibs= sibs_total= sibs_capped= inc=>; <calls><c n= l=> resolved callees" },
+    // PR #215 review item 9: --expand has TWO servings and they share no element. The line above describes the
+    // BUNDLE serving; the whole-file serving is <src p= sym=> with <s n= sc= l=/> anchor rows and no <bodies> at
+    // all, so that line described a shape the document does not contain — and was LONGER than the full dialect's
+    // own clause, which compactlegendcheck's "compact must shrink" arm reads as the contradiction it is.
+    { "ctx", "expand-file", "the file's own text: <src p= sym=>; <s n= sc= l=/> per scoped symbol; full id = p::sc::n" },
     // pack-task (2026-09-12, the lane's end): the bundle's own vocabulary reads here, checked against packtask.h. task= is the task
     // text (a bare --pack-task refuses); <far> is the ranked name-only tier inside <sigs> (renderNameOnlyRows: t= n= p=), of_top=
     // there the ranked rows it was cut from (topRanked); <calls><c> are a body's callee signatures; <callers> rows are the bodies'
@@ -865,7 +870,13 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
 {
     const CompactRootInfo root = findCompactRoot( doc );
     if( root.tag.empty() ) { return CompactOutcome::NotXml; }
-    const CompactLegendSpec* spec = findCompactSpec( root.tag, hint );
+    // …and the root says WHICH serving this is, for the one verb that has two (see the expand rows above).
+    std::string_view effectiveHint = hint;
+    if( hint == "expand" && doc.find( "mode=\"whole-file\"" ) != std::string::npos )
+    {
+        effectiveHint = "expand-file";
+    }
+    const CompactLegendSpec* spec = findCompactSpec( root.tag, effectiveHint );
     if( spec == nullptr ) { return root.hasSchema ? CompactOutcome::AlreadyCompact : CompactOutcome::UnknownRoot; }
 
     // pass 1: the legend text is computed from the ORIGINAL document (payload attributes are unchanged by the

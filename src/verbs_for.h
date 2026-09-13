@@ -670,7 +670,7 @@ inline std::string legendDroppedNote( bool compact, bool thin, bool routeWasOn, 
     return note;
 }
 
-// A1′ (owner decision 2026-09-12): --for's COMPACT legend, pinned at 500 B (test/compactlegendcheck.sh, the
+// A1′ (owner decision 2026-09-12): --for's COMPACT legend, pinned like every other verb's (test/compactlegendcheck.sh, the
 // ripwire.for/v1 row) and PRESENT-ONLY — every clause below is emitted only when the document carries the
 // attribute it defines, and every reading is the shortest honest one. It used to spend 1,177–1,216 B here
 // (the same sentences as the default dialect with a schema id in front) and was exempt from the per-verb

@@ -24,7 +24,7 @@
 # jsoncheck #8b and shapingflagcheck (F) use — so a verb added tomorrow is probed tomorrow. Each flag runs at
 # defaults on a tmp git fixture; whatever answers with an XML root is an XML verb and must honor compact,
 # everything else must refuse it, and each verb's prose legend fits its per-verb pin (pinFor). LOOP arm (L): the ten-verb
-# loop's compact legend bill ≤ 5,000 B (was 29,824 on the ripwire tree). MCP arm (M): edit_check with legend:"compact" answers
+# loop's compact legend bill ≤ 4,700 B (was 29,824 on the ripwire tree). MCP arm (M): edit_check with legend:"compact" answers
 # in ≤ 900 B on a clean tree, and five more MCP verbs' legends fit their per-verb pins.
 # CONDITIONAL arm (D): an absent-at-zero or form-conditional attribute (declined_calls=, unproven_defs=, bodyless_defs=,
 # the member form, the multi-root <root label=> rows, --lego's caveat=; on the map family and --impact: pr_iters=,
@@ -324,7 +324,7 @@ probeFor()
 # with attributes still undefined. Each schema's pin is its LARGEST measured (U) probe on this gate's fixture, rounded up to the
 # next multiple of 10 B, plus 10 B, so a verb whose legend grows is re-pinned in the commit that adds the bytes, with the bytes
 # attributed there. A schema with no row FAILS: a new XML verb is measured and pinned, never waved through under a default.
-# --for's NATIVE compact legend joined the table 2026-09-12 (A1′, owner decision): pinned at 500 B, present-only
+# --for's NATIVE compact legend joined the table 2026-09-12 (A1′, owner decision): pinned per the rule below, present-only
 # definitions — it used to spend 1,177–1,216 B on this fixture and was exempt by name (below).
 # ONE ROW PER SCHEMA: the pin, then the largest (U) probe it was measured from. Measured 2026-09-12 in the fourth sweep's last
 # pass, once every attribute the --impact, --safe-delete, --communities, --community and map-header answers print had a reading;
@@ -338,19 +338,25 @@ probeFor()
 # (measured 908, the --rank-by=churn probe), map-diff 800 -> 910 (901), pack-signatures 680 -> 780 (775), metrics 720 -> 820
 # (814), query 630 -> 730 (723), pack-task 820 -> 980 (974), pack-top-n 660 -> 770 (761). The bytes the reading costs are the
 # bytes the rows save: 20 B per scoped row (this repo's flagless map, 137 scoped rows: -4,048 B, -15.3%).
-# RE-PINNED 2026-09-13 (merge of lane/sc-legend and lane/for-widen): ripwire.for/v1 500 -> 690, measured 678 on the
-# MERGED tree (rule above: largest measured (U) probe, up to the next 10 B, plus 10). A1' pinned this dialect at 500
-# from 494 with only its own clauses present; lane for-widen then added the coverage= reading and the thin rule
-# (kForCompactCoverageClause, forpage.h, 168 B) and this gate's --for=geometry probe IS a thin answer, so the probe
-# carries it. Measured, not summed. The other seven schemas sc-legend re-pinned were re-measured here too and all
-# still fit: map 892 of 920, map-diff 885 of 910, pack-signatures 759 of 780, metrics 798 of 820, query 707 of 730,
-# pack-task 974 of 980, pack-top-n 745 of 770.
+# RE-MEASURED 2026-09-13 (PR #215 review item 10). The table's own rule above is "the largest measured (U) probe,
+# rounded up to the next multiple of 10 B, plus 10", and seven rows did not follow it — pack-task sat at 980 over a
+# measured 974 where the rule says 990, and five others sat 10 B tight against numbers that had moved underneath
+# them. A rule stated in a comment and not applied by the table is not a rule. Every schema was re-probed on this
+# build and every pin recomputed from its own measurement, so the `pin` column is now derivable from the `measured`
+# column and a reader can check it: map 892 -> 910, map-diff 885 -> 900, pack-signatures 759 -> 770, metrics
+# 798 -> 810, query 707 -> 720, around 760 -> 770, pack-task 974 -> 990, pack-top-n 745 -> 760, for 654 -> 670.
+#
+# ripwire.for/v1 in particular: A1' pinned it at 500 from 494 with only its own clauses present; the merge with
+# #213 put the coverage= reading on the same probe (this gate's --for=geometry IS a thin answer), and this round
+# made the sc= and route= readings present-only. 654 B is the number on the tree that ships, measured three times
+# and never held to a pin by trimming a clause.
+# ripwire.expand-file/v1 is NEW: --expand has two servings and they share no element (see compactlegend.h).
 # schema                      pin  measured
 PIN_TABLE='
-ripwire.map/v1                   920   908
-ripwire.map-diff/v1              910   901
-ripwire.pack-signatures/v1       780   775
-ripwire.metrics/v1               820   814
+ripwire.map/v1                   910   892
+ripwire.map-diff/v1              900   885
+ripwire.pack-signatures/v1       770   759
+ripwire.metrics/v1               810   798
 ripwire.deps/v1                  260   245
 ripwire.hotspots/v1              280   264
 ripwire.clones/v1                290   280
@@ -391,12 +397,12 @@ ripwire.mentions/v1              180   168
 ripwire.affected/v1              350   339
 ripwire.verify/v1                330   316
 ripwire.help-task/v1             170   153
-ripwire.query/v1                 730   723
+ripwire.query/v1                 720   707
 ripwire.grep/v1                  360   345
 ripwire.match/v1                 270   260
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1              250   232
-ripwire.around/v1                780   760
+ripwire.around/v1                770   760
 ripwire.callers/v1               330   317
 ripwire.callees/v1               380   369
 ripwire.uses/v1                  290   271
@@ -409,10 +415,11 @@ ripwire.merge-scout/v1           220   208
 ripwire.whereis/v1               240   223
 ripwire.community/v1             730   719
 ripwire.layout/v1                160   149
-ripwire.pack-task/v1             980   974
-ripwire.pack-top-n/v1            770   761
+ripwire.pack-task/v1             990   974
+ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
-ripwire.for/v1                   690   678
+ripwire.expand-file/v1           240   230
+ripwire.for/v1                   670   654
 '
 pinFor()
 {
@@ -445,7 +452,7 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
     schema="$( leg schema "$TMP/u.c" )"
     lb="$( leg prose "$TMP/u.c" "$TMP/u.full" )"; lball="$( leg bytes "$TMP/u.c" )"; lbfull="$( leg bytes "$TMP/u.full" )"
     case "$schema" in ripwire.*/v1) ;; *) no "(U) $probe compact root has no schema=\"ripwire.<key>/v1\" (got '$schema')" ;; esac
-    # A1′ (2026-09-12): --for is pinned like every other verb now (ripwire.for/v1 at 500 B) — its native compact
+    # A1′ (2026-09-12): --for is pinned like every other verb now (the ripwire.for/v1 row) — its native compact
     # legend defines only the terms the document carries; the "shrinks vs full" arm below still runs on it.
     pin="$( pinFor "$schema" )"
     if [ -z "$pin" ]; then

@@ -50,7 +50,7 @@ past leading `VAR=value` assignments) — never a directory argument or a bare w
 `test/routehookcheck.sh` O8 and `test/codexpromptroutecheck.sh` carry the regression shape (red on
 the previous hooks: rows=3 where 1 was wanted; the Codex twin's position-2 adoption read as missed).
 
-### Changed — `--for`'s compact legend is pinned at 500 bytes
+### Changed — `--for`'s compact legend is present-only, and pinned like every other verb's
 
 Under `--legend=compact` every other XML verb answers with a legend that defines only the terms its
 document carries, measured and pinned per schema in `test/compactlegendcheck.sh`; `--for` did not. Its
@@ -64,11 +64,16 @@ confidence gauge), and the data notes keep their numbers without their sentences
 (`[floor: kept 7 of 40]`, `[doc mentions: 1 doc, 1 symbol; doc_mentions=]`); the three
 ceiling-droppable clauses still fall together under a tight `--token-budget` and the dropped note still
 names them. Measured with the gate's own splitter (comment bytes not present verbatim in the default
-dialect's document) on its fixture probe `--for=geometry`: 915 → 494 B, pinned at 500 as the new
-`ripwire.for/v1` row, the exemption gone. Per call on this tree, three tasks under `--legend=compact`:
-9,947 → 9,669, 10,075 → 9,682 and 5,156 → 4,624 B (−278, −393, −532 B) with the same signature rows
-served (32, 26, 3). The MCP `for` twin declares no `legend` field and serves the default dialect only,
-so its bytes are unchanged (9,132, 9,149 and 2,173 B on the same tasks). `legendcoveragecheck` holds:
+dialect's document) on its fixture probe `--for=geometry`: 915 B on the pre-change binary → **654 B**
+here, pinned at **670** as the new `ripwire.for/v1` row (the table's own rule: the largest measured probe,
+up to the next 10 B, plus 10), the exemption gone. A1′ first pinned it at 500 from 494 with only its own
+clauses present; the merge with #213 put the `coverage=` reading on the same probe, and this round made
+the `sc=` and `route=` readings present-only, so the number was re-measured at each step rather than the
+clauses trimmed to hold a pin. Per call on this repository, default legend → `--legend=compact`, three
+tasks measured with `wc -c` on this build: `pagerank power iteration` 9,881 → 9,344 B (−537, and 25 → 29
+signature rows, because the bytes the legend gives back are spent on rows), `rank graph teleport`
+10,127 → 9,818 B (−309, 22 → 25 rows), and the name-exact `escapeXml` 5,823 → 4,601 B (−1,222). The MCP
+`for` twin declares no `legend` field and serves the default dialect only, so its bytes are unchanged. `legendcoveragecheck` holds:
 every attribute the compact document carries on its first screen has a `name=` definition in that one
 comment, with `next=`, `pure=` and `schema=` on the recorded floor exactly as before.
 
@@ -122,7 +127,9 @@ because A1′'s present-only `--for` legend outweighs what both lanes added); th
 `test/forrankordercheck.sh`'s q5 9,470 → 9,880, attributed four ways (main tree/main binary 9,464, this
 tree/main binary 9,470, so corpus drift is 6 B — the other 410 B is this change, and it is five more
 ranked rows); five goldens regenerated for the row shape and the clauses; the printf-parity manifest
-re-pinned for `help_all` alone, 41 labels unchanged.
+re-pinned for `help_all` alone at the merge (`UPDATE_GOLDEN_EXPECT` matched, 41 labels unchanged); across
+the whole lane seven of its 42 labels moved — six for the row-6 row shape and `help_all` once more for the
+merged `--help` text.
 
 ### Fixed — `--for`'s rung zero fires on the exact ceiling, not on the overshoot allowance
 
@@ -178,6 +185,80 @@ and is absent from the default head and tail; one row per file, determinism, pag
 pre-change binary. The byte pins that ride a thin `--for` header
 (forrankordercheck's fixture rows, forrootlegendcheck, compactlegendcheck's loop, the two `--no-route`
 goldens) were re-anchored with the measured number; the confident ones read the base again.
+
+### Fixed — the review round: a ceiling priced in the wrong unit, and a shape that outlived its output
+
+Ten findings from the 2026-09-13 review of this lane, each reproduced before it was touched.
+
+The one that changed behaviour for every budgeted call: `--for` and `--pack-task` tested their ceiling
+rungs at `kMinBytesPerToken` (2.36) while `est_tokens=` and `over_ceiling=` price the delivered document
+at `kBytesPerTokenDefault` (2.50). A lens therefore spent rungs against a ceiling it was not measured
+against, and dropped legend clauses from documents its own root reports as conformant:
+`test/cppqualfix --for="widget ping make box" --token-budget=1200` printed `est_tokens="778"` with no
+`over_ceiling=` and had dropped all three droppable clauses "(ceiling)". `rw::ceilingBytes( budgetTokens )`
+is the one expression for what a root promises, and the ladder now takes two ceilings: the as-built and
+task-echo rungs (the echo is a byte-for-byte duplicate of `task=`, so spending it costs a reader nothing)
+aim at the exact ceiling, while dropping `route=` and labelling the bundle keep the 1.15 first-entry
+tolerance, which exists for a residual a lens cannot trim. The same query now reads `est_tokens="1149"`
+at `--token-budget=1200` with every clause riding. No tolerance was widened and no ceiling was raised.
+
+Rung zero also stopped being byte-negative. It removed 110–164 bytes of clauses and spliced a 161-byte
+note naming them: on a route-less compact answer that is **+51 bytes**, a rung that made the document it
+was shrinking bigger and cost the reader three definitions to do it. The candidate is built and compared,
+and a drop that does not pay is not taken.
+
+The dropped-clause note itself described a different document. Four constants picked by one `coverage=`
+lookup: the thin spellings named neither `sc=` nor `route=` though rung zero clears that reading on a thin
+answer too, the default spelling claimed `route=` had been dropped under `--no-route` where it never rode,
+and the compact spellings named `sc=`, which that dialect defines in a clause rung zero does not touch.
+One assembler builds the note from the four facts that decide what was there to lose.
+
+Both identity readings are **present-only** now: `sc=` rides when a served row carries a scope, `route=`
+when the root carries the attribute — one decision (`rw::forIdRouteLegendParts`) shared by the append, the
+signature-charge exemption, the CLI lens and the MCP twin, which had been mirroring it by hand at four
+sites. A corpus of free functions pays nothing for the vocabulary of scope: `test/anchorfix`'s and
+`test/routefix`'s goldens are byte-identical to their pre-lane selves again.
+
+Three surfaces were answering in shapes the tool no longer produces. The MCP **file page** composed
+`"routed: " + reason` by hand, so one server answered its bundle `route="name-exact(pick)"` and its page
+`route="routed: name-exact(pick)"` — a spelling no legend defines; one producer (`routeNoteOf`) serves all
+four sites. `--expand`'s **whole-file** serving still printed `id="PATH::SCOPE::NAME"` inside a `<src
+p="PATH">` that had just printed the path, on a document carrying no legend at all; it prints `sc=` and the
+root states the composition, and the compact dialect gained the `ripwire.expand-file/v1` schema, because
+`--expand`'s two servings share no element and one purpose line had been describing the wrong one.
+`docs/COMMANDS.md` was rebuilt from a capture re-recorded on this binary in a **ref-clean clone** (96 `id=`
+rows → 26, all of them JSON-RPC and cluster ids; 19 `id=canonical(…)` legends → 1, the `--uses` row's
+`in_id=`, which names a different symbol and is correct). `bench/shotgun/cc_static.py` keyed on `id`, which
+is absent now, so it fell through to `path::name` and collapsed two same-named methods of one file into one
+key — a silent miscount in a benchmark; it composes `p::sc::n`.
+
+A cap could cut an answer it did not need to: a merged callee row was charged `name+16` while printing about
+four bytes, so a block of overloads exhausted its budget early and wrote `capped="1"` over a listing that
+would have fit. Charged at what it prints. And `l=` was appended in rank order, so one fact had two
+spellings between queries (`l="70,69"` / `l="69,70"`); sorted ascending.
+
+Three gates were enforcing or reporting the wrong thing. `attrvocabcheck` arm 8 matched map rows by the
+retired `id=` spelling, checked zero rows and printed a PASS; it is re-keyed and now fails on zero checks
+(six rows cross-checked). `skilltruthcheck` held a hand-typed list of sixty verb names that included `zoom`,
+so it enforced `--zoom --legend=compact --mermaid` — a command the binary refuses; the arm now RUNS each of
+the 43 distinct `--legend=compact` commands the skills spell against an empty directory and reads the
+refusal, which immediately found two more broken lines in `ripwire-quality-bar`. `taskroutecheck` gained the
+same probe over all 34 commands the router generates, and the router applies the posture once
+(`rw::legendCompactAppliesTo`) instead of in 26 hand-edited strings. `legendcoveragecheck`'s shared-name
+floor shrank by the four lines it had been reporting as no-longer-reproducing.
+
+The route hooks and their own meter disagreed about the same command line, and the substitution rate is a
+ratio of those counts. The observe regex missed every wrapped invocation an agent types (`time
+./build/ripwire`, `sudo`, `env X=1`, `xargs`, `exec`, `nohup`, `if ripwire`, `{ ripwire`) and still matched
+`git commit -m "fix; ripwire hook"`. `rw_is_ripwire_call` is the shell's own model — walk the words, ask
+whether any command-position word basenames to `ripwire` — mirrored byte-identical in the three hooks and
+asked by the meter too; `routehookcheck` O9 diffs the copies and reads 18 shapes.
+
+Pins moved, every number re-measured on this build: `test/compactlegendcheck.sh`'s table was re-derived from
+its own stated rule (largest measured probe, up to the next 10 bytes, plus 10), which seven rows had not been
+following — map 892 → pin 910, map-diff 885 → 900, pack-signatures 759 → 770, metrics 798 → 810, query
+707 → 720, around 760 → 770, pack-task 974 → 990, pack-top-n 745 → 760, `ripwire.for/v1` 654 → 670, and the
+new `ripwire.expand-file/v1` 230 → 240; the ten-verb loop reads 4,645 B under its 4,700 pin.
 
 ### Added — Elixir module and arity resolution (parser version 95)
 
