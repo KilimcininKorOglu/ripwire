@@ -334,3 +334,40 @@ prompt verbatim and flagged it, which is the screen working exactly as designed.
 
 **Seal: sha256(prompts.tsv) = `c9fc7f316db6b8c1495918b0380a31be4541f771a84b332bac03ce4e142d3b0f`**
 (post-round; rows=239, dev=118, test=121).
+
+### 2026-09-13, review round — eight more rows, and one claim withdrawn
+
+**The claim withdrawn.** The section above reports that the 225 pre-existing rows are byte-identical on
+(status, intent) across the new intent. That is true and it is nearly VACUOUS as evidence that the route is
+safe: measured on the same fixture, **0 of those 225 prompts reach the recency route at all** (they fail
+one of the three conjuncts before the route is consulted), so the identity was never in question. The
+evidence that the route does not steal an answer is the eight rows below and the gate's own arms, not that
+table. Recorded here because a number that cannot move is not a measurement.
+
+**Rows added: 8.** Four NEGATIVES for the word-boundary class the review found: with the single-word corpus
+cues matched as substrings, `here` inside where/there, `source` inside outsource, `file` inside profile
+and `code` inside codec each let a sentence about the world outside the checkout recommend the churn
+window at `confidence="high"`. One negative for the WORKING TREE on a dirty tree (the diff question stays
+`review-diff`; the route now sits below the weighted tier, where the dirty-only review route lives, and
+that is how it reads `dirty`). Three POSITIVES for vocabulary that abstained: a verb weighted below the
+floor (`landed`), git's own `since <a day or a date>` window, and `what is new in DIR`.
+
+**Two rows are `instrumented-cli`, not `handwritten`**, by the rule the 2026-09-10 section states: their
+trigger is a small closed phrase list (`what is new in`, `safe to merge`), so a sentence that routes
+necessarily reuses one of its phrases and the trigram screen would flag it for quoting a card it has to
+quote. The other six are handwritten and screened.
+
+**Held-out floors** (`bench/taskroute_eval.py`, 247 rows):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 128 | **0.945** | 1.000 | 0.000 | 1.000 | 0.917 |
+| dev | 119 | **0.950** | 1.000 | 0.000 | 1.000 | 0.933 |
+| all | 247 | **0.947** | 1.000 | 0.000 | 1.000 | 0.925 |
+
+The original 225 still score 0.939 / 0.946 / 0.942 on this binary — the same three numbers with the same
+confusion rows.
+
+**Screen: 1 flagged line** (176, pre-existing), DOWN from the 2 this corpus carried before the round.
+
+**Seal: sha256(prompts.tsv) = `7a732691a4040e8a0c16cb95cfd9ac90f0cccb8ea904301c2228777636d47843`** (rows=247, dev=119, test=128).

@@ -28,15 +28,25 @@ plus a motion word is also a sentence about a supplier's terms last quarter. An 
 never this route however many of the three it holds, and the working tree stays `--situ`'s question. A
 directory is composed into `--in=DIR` only when the corpus really holds it AND the running build ships the
 flag, read off the flag table itself: a router that recommends a flag its own parser has no row for hands
-back a command that exits non-zero on the first paste. Held out (`bench/taskroute_eval.py`, the committed
-225-row corpus plus 14 rows for this intent, split by its content-hash rule): accuracy 0.939 → **0.942**
-test, 0.946 → **0.949** dev, precision 1.000 and harmful 0.000 unchanged, and the 225 pre-existing rows
-are byte-identical on (status, intent).
+back a command that exits non-zero on the first paste. Single-word cues are matched WORD-BOUNDED, which is not a
+detail: with the substring spelling `here` occurred inside where/there, `source` inside outsource, `file`
+inside profile and `code` inside codec, and a sentence about a supplier revising their terms recommended
+the churn window at `confidence="high"`. The route also sits BELOW the weighted tier, which is how it
+reads a dirty worktree: on a dirty tree `is my diff safe to merge, i changed these files recently` is
+still the `review-diff` question, and that route wins before this one is consulted. Held out
+(`bench/taskroute_eval.py`, the committed 225-row corpus plus 22 rows for this round, split by its
+content-hash rule): accuracy 0.939 → **0.945** test, 0.946 → **0.950** dev, precision 1.000 and harmful
+0.000 unchanged. The 225 pre-existing rows score the same three numbers on the new binary — and, measured,
+**0 of them reach the new route at all**, so that identity is reported as the near-vacuous check it is
+rather than as evidence.
 
 **And the first call now names the widening step.** `--for`'s file-grain page was named only by a thin
 ANSWER's own `next=` — one call too late for an agent choosing what to run first — so every `--for`-shaped
-recommendation carries `next="… --limit=40"`, derived from the command rather than the intent id and
-present-only.
+recommendation carries the page as its own `next=`, keyed off the INTENT (a task that merely quotes the
+flag inside another verb's argument gets none) and spelled by `forpage.h`'s own `forWidenNext`, so it
+obeys the same quoting and the same 120-byte ceiling every other `next=` obeys. The `--help-task` document
+also gains the LEGEND it never had in the default dialect: every attribute on its only screen was
+undefined, and it now joins `legendcoveragecheck`'s enumeration and `nextverbcheck`'s population.
 
 The shapes this release adds are also named where an agent actually reads them: the recency window with
 `--in=DIR` and `merge_bombs_skipped=` (ripwire-fresh-eyes), the thin-answer `coverage=` gauge and the

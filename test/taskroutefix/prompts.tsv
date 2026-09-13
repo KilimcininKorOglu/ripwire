@@ -238,3 +238,11 @@ test	clean	abstain	handwritten-recency	how do we rebuild the list of recently ch
 dev	clean	abstain	handwritten-recency	our storage vendor changed their pricing last month
 dev	clean	abstain	handwritten-recency	we recently agreed to move the announcement to friday
 dev	clean	abstain	handwritten-recency	write up the latest status for the release newsletter
+test	clean	abstain	handwritten-recency	our supplier changed their terms recently, where is that noted?
+test	clean	abstain	handwritten-recency	we outsource the icon work and that vendor changed their rates last week
+test	clean	abstain	handwritten-recency	the marketing profile was updated recently by the agency
+test	clean	abstain	handwritten-recency	the audio codec people changed their licence last month
+test	dirty	review-diff	instrumented-cli	is my diff safe to merge, i changed these files recently
+dev	clean	recency-window	handwritten-recency	what landed in storage this week
+test	clean	recency-window	handwritten-recency	commits since Monday under storage
+test	clean	recency-window	instrumented-cli	what is new in the storage directory

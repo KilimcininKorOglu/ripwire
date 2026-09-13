@@ -3,12 +3,14 @@
 // cli.h — hand-rolled zero-dependency argument parser. Linear argv scan into one
 // POD Config; flags are additive; first non-flag positional is the root path.
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>

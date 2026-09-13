@@ -55,7 +55,15 @@ int drainPending() { return flushPending(); }
 SRC
 git -C "$REPO" add router.cpp package.json storage/queue.cpp
 git -C "$REPO" commit -qm base
-route(){ "$BIN" "$REPO" --no-cache --help-task="$1" 2>"$TMP/err"; }
+routeRaw(){ "$BIN" "$REPO" --no-cache --help-task="$1" 2>"$TMP/err"; }
+# The document opens with its LEGEND, and the legend names the attributes it defines (next=, <run>, …).
+# Every arm below is about the DATA, so route() hands them the document with that comment removed — a
+# legend that mentions an attribute must never be able to satisfy an assertion about a row carrying one.
+# The legend has arms of its own, at the end of this file.
+route(){ routeRaw "$1" | python3 -c 'import sys
+s=sys.stdin.read()
+a=s.find("<!--"); b=s.find("-->", a)
+sys.stdout.write( s[:a] + s[b+3:] if a >= 0 and b >= 0 else s )'; }
 
 if "$BIN" --help=all 2>&1 | grep -q -- '--help-task='; then ok "--help advertises --help-task="; else no "--help does not advertise --help-task="; fi
 V="$( route 'calls(betaNode, alphaNode)' )"
@@ -287,16 +295,41 @@ rm -f "$REPO/plan-gate.md"
 # ── the recency window: what the repository has been MOVING (2026-09-13) ──────────────────────────────
 # "what changed recently in storage/" had no route at all — every phrasing abstained with score="0", so
 # the verb that answers it (--rank-by=churn-decay, and its --in=DIR scope) was unreachable from a task
-# said in words. All four recommend arms below are RED against a pre-change binary (abstain, score="0").
+# said in words. Every recommend arm below is RED against a pre-change binary (abstain, score="0").
 #
-# The route is CONJUNCTIVE: a time word AND a motion word. The two decoy arms are why — "recent" and
-# "latest" are ordinary English, and a compound noun that contains one ("the recent-file cache") is a
-# question about a cache. The third guard is the working tree: --situ answers what YOU changed and have
-# not committed, and the dirty-worktree arm above still routes review-diff, unchanged.
+# The route is CONJUNCTIVE in THREE parts: a time word, a motion word, and a word naming the CORPUS (or a
+# directory of it the task named). Two are not enough — a supplier who revised their terms last quarter
+# satisfies the first two — and the single-word cues are WORD-BOUNDED, which the decoy arms below are
+# about: `here` occurs inside where/there/adhere, `source` inside outsource, `file` inside profile, `code`
+# inside codec. With the substring spelling each of those sentences recommended the churn window at
+# confidence="high" (2026-09-13 review); each is an arm now.
 RW1="$( route 'what changed recently in this repository' )"
-case "$RW1" in *'status="recommend"'*'intent="recency-window"'*'skill="ripwire-fresh-eyes"'*'--rank-by=churn-decay'*) ok "time word + motion word -> --rank-by=churn-decay";; *) no "recency route wrong: $RW1";; esac
+case "$RW1" in *'status="recommend"'*'intent="recency-window"'*'skill="ripwire-fresh-eyes"'*'--rank-by=churn-decay'*) ok "time word + motion word + corpus word -> --rank-by=churn-decay";; *) no "recency route wrong: $RW1";; esac
 RW2="$( route 'who touched files in storage lately' )"
 case "$RW2" in *'status="recommend"'*'intent="recency-window"'*'--rank-by=churn-decay'*) ok "who-touched wording routes to the recency window";; *) no "who-touched recency route wrong: $RW2";; esac
+# The vocabulary the 2026-09-13 review found missing: verbs weighted below the floor, and the two time
+# spellings git itself uses. All three abstained before it.
+for P in 'what landed in storage this week' \
+         'commits since Monday under storage' \
+         'what is new in the storage directory'; do
+    RWV="$( route "$P" )"
+    case "$RWV" in *'intent="recency-window"'*'--rank-by=churn-decay'*) ok "recency vocabulary routes: $P";; *) no "recency vocabulary missed [$P]: $RWV";; esac
+done
+# WORD-BOUNDED single-word cues. Each of these four carries a time word and a motion word and is about the
+# world outside the checkout; each routed at confidence="high" when the corpus cue was a substring match.
+for P in 'our supplier changed their terms recently, where is that noted?' \
+         'we outsource the icon work and that vendor changed their rates last week' \
+         'the marketing profile was updated recently by the agency' \
+         'the audio codec people changed their licence last month'; do
+    RWD="$( route "$P" )"
+    case "$RWD" in *'--rank-by=churn-decay'*) no "a substring corpus cue minted the churn window [$P]: $RWD";; *) ok "a corpus cue inside another word never mints the window: ${P:0:44}";; esac
+done
+# THE WORKING TREE IS A DIFFERENT QUESTION, and the route reads `dirty` by sitting below the weighted tier
+# where the dirty-only review route lives. Red against the first cut of this lane (recency-window).
+printf '\n// dirty for the recency arm\n' >>"$REPO/router.cpp"
+RWT="$( route 'is my diff safe to merge, i changed these files recently' )"
+case "$RWT" in *'status="recommend"'*'intent="review-diff"'*'--situ'*) ok "on a DIRTY tree the diff question stays review-diff, not the churn window";; *) no "the churn window stole the dirty-worktree review question: $RWT";; esac
+git -C "$REPO" restore router.cpp
 # The DIRECTORY half. --in=DIR refuses a directory that is not under the root, so the router composes it
 # only when the corpus really holds one — and only when the BUILD ships the flag. Both directions are
 # asserted against the shipped flag table, because a router that recommends a flag its own binary does
@@ -309,7 +342,10 @@ if "$BIN" --help=all 2>&1 | grep -q -- '--in='; then
         && ok "the emitted scoped recency command runs and returns a <recent> block" \
         || no "the emitted scoped recency command failed to run (rc=$rc)"
 else
-    case "$RW3" in *'--in='*) no "the router composed --in= on a build whose flag table does not ship it: $RW3";; *) ok "this build ships no --in= flag, and the router composes none (the scope is added by the build that has it)";; esac
+    case "$RW3" in *'--in='*) no "the router composed --in= on a build whose flag table does not ship it: $RW3";; *) ok "this build ships no --in= flag, and the router composes none";; esac
+    # …and a dropped scope is DISCLOSED: the caller asked about one directory and is being handed the whole
+    # repository, which the reason is the only place to say (2026-09-13 review).
+    case "$RW3" in *'reason="'*'cannot scope'*) ok "the dropped directory scope is disclosed in the reason";; *) no "a named directory was dropped silently: $RW3";; esac
 fi
 RWRUN0="$( "$BIN" "$REPO" --no-cache --rank-by=churn-decay )"; rc=$?
 { [ $rc -eq 0 ] && printf '%s' "$RWRUN0" | grep -q '<recent '; } \
@@ -318,39 +354,57 @@ RWRUN0="$( "$BIN" "$REPO" --no-cache --rank-by=churn-decay )"; rc=$?
 # A directory the corpus does NOT hold is never composed: --in= would refuse it.
 RW4="$( route 'what changed recently in the vendor folder of this repo' )"
 case "$RW4" in *'--rank-by=churn-decay'*) case "$RW4" in *'--in='*) no "the router invented a directory the corpus does not hold: $RW4";; *) ok "an unindexed directory name mints no scope — the window is still served, unscoped";; esac;; *) no "an unindexed directory name lost the route entirely: $RW4";; esac
-# Decoys: a time word inside a NAME, and an explanatory question that happens to contain both words.
-RW0="$( route 'how does the recent-file cache work' )"
-case "$RW0" in *'--rank-by=churn-decay'*) no "an explanatory question about a cache routed to the churn window: $RW0";; *) ok "'the recent-file cache' is a cache question, not a history question";; esac
+# EARLIEST slot wins, across cues: the sentence names a real directory first and a non-directory later, and
+# the answer must be the first one. Cue-table order gave `in test` here before the walk was shared.
+RW5="$( route 'what changed lately across storage, but only in the release notes' )"
+case "$RW5" in *'intent="recency-window"'*) ok "the earliest directory slot is the one the window scopes to";; *) no "earliest-slot recency route wrong: $RW5";; esac
+# Decoys: a time word inside a NAME, and an explanatory question that satisfies all three conjuncts.
+RW0="$( route 'the recent-file cache keeps the last 40 entries' )"
+case "$RW0" in *'--rank-by=churn-decay'*) no "a time word inside a compound NAME minted a churn window: $RW0";; *) ok "'the recent-file cache' is a cache, not a history question";; esac
 RW0B="$( route 'we recently agreed to ship the announcement on friday' )"
 case "$RW0B" in *'--rank-by=churn-decay'*) no "a time word with no motion word minted a churn window: $RW0B";; *) ok "a time word alone never mints the recency window";; esac
+RW0C="$( route 'how do we rebuild the list of recently changed files' )"
+case "$RW0C" in *'--rank-by=churn-decay'*) no "an explanatory question satisfying all three conjuncts still routed: $RW0C";; *) ok "an explanatory question is never the history route";; esac
 
 # ── the WIDENING page is named on the FIRST call, not only after a thin answer ────────────────────────
 # forpage.h's next= names `--for=TASK --limit=N` when the answer it already served came back thin. That
 # is one call too late for an agent choosing what to run first, so every --for-shaped recommendation
-# carries the same widening step as its own next=. Present-only: a choice whose command is not a --for
-# carries no next= at all. RED against a pre-change binary: no <choice> carried the attribute.
+# carries the same widening step as its own next=. RED against a pre-change binary: no <choice> carried
+# the attribute. Keyed off the INTENT and spelled by forpage.h (2026-09-13 review): keyed off the COMMAND
+# STRING, a task that merely QUOTES the flag handed --pack-task a page width it refuses (exit 1).
 FW="$( route 'Find the code responsible for this retry timeout bug' )"
 case "$FW" in *'intent="locate-task"'*'next='*'--limit=40'*) ok "a --for-shaped recommendation names the widening page as its next=";; *) no "locate-task carries no widening next=: $FW";; esac
 case "$MR" in *'next='*) no "a non---for recommendation carried a next= (present-only): $MR";; *) ok "a recommendation that is not a --for carries no next=";; esac
+FQ="$( route 'plan the new feature: replace the --for= flag scoring and the budget' )"
+case "$FQ" in *'next='*) no "a task that merely QUOTES the for flag was given a widening next=: $FQ";; *) ok "a quoted flag inside another verb's task text mints no next=";; esac
 route 'Find the code responsible for this retry timeout bug' >"$TMP/fw.xml"
 FWNEXT="$( python3 - "$TMP/fw.xml" <<'PY'
 import sys, shlex, xml.etree.ElementTree as ET
 root = ET.parse( sys.argv[1] ).getroot()
 choice = root.find( 'choice' )
-sys.stdout.write( '\n'.join( shlex.split( choice.get( 'next', '' ) )[1:] ) if choice is not None else '' )
+nxt = '' if choice is None else choice.get( 'next', '' )
+sys.stdout.write( '\n'.join( shlex.split( nxt ) ) )
 PY
 )"
+FWBYTES="$( printf '%s' "$FWNEXT" | tr '\n' ' ' | wc -c | tr -d ' ' )"
 if [ -n "$FWNEXT" ]; then
     OLDIFS="$IFS"; IFS='
 '; set -f; # shellcheck disable=SC2086
     set -- $FWNEXT; IFS="$OLDIFS"; set +f
-    FWRUN="$( "$BIN" --no-cache "$@" )"; rc=$?
+    FWRUN="$( "$BIN" "$REPO" --no-cache "$@" )"; rc=$?
     { [ $rc -eq 0 ] && printf '%s' "$FWRUN" | grep -q '<files '; } \
         && ok "the emitted widening next= runs and returns the file-grain <files> page" \
         || no "the emitted widening next= failed to run (rc=$rc, argv=[$FWNEXT])"
+    [ "$FWBYTES" -le 121 ] \
+        && ok "the widening next= is ${FWBYTES} B, inside the shared next= ceiling" \
+        || no "the widening next= is ${FWBYTES} B, past the 120 B ceiling every other next= obeys"
 else
     no "no next= recovered from the locate-task recommendation"
 fi
+# …and past the ceiling it emits NOTHING rather than a hint that pastes wrong (forpage.h's own rule).
+LONGTASK="Find the code responsible for this retry timeout bug in the scheduler and the queue and the retry budget and the backoff table and the metrics"
+FWL="$( route "$LONGTASK" )"
+case "$FWL" in *'next='*) no "an over-long task emitted a next= past the ceiling: $FWL";; *) ok "a task too long to paste emits no widening next= at all";; esac
 
 # ── two routers, ONE vocabulary: every shipped skill must be nameable by --help-task ──────────────────
 # F-R1-09 measured 8 of 16. This arm reads BOTH sides from disk — the skill directories that exist, and
@@ -459,6 +513,21 @@ esac
 
 EVAL="$( python3 "$ROOT/bench/taskroute_eval.py" --bin "$BIN" --corpus "$ROOT/test/taskroutefix/prompts.tsv" --split test 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "held-out command-routing floors ($EVAL)"; else no "held-out command-routing floors failed: $EVAL"; fi
+
+# ── the document defines what it prints (2026-09-13 review) ──────────────────────────────────────────
+# The default dialect carried NO legend: every attribute on its only screen was undefined, and the compact
+# layer's present-only legend was the only place any of them was explained. RED against a pre-change
+# binary: the document begins with "<task-route", not with a comment.
+LG="$( routeRaw 'Find the code responsible for this retry timeout bug' | python3 -c 'import sys
+s=sys.stdin.read(); a=s.find("<!--"); b=s.find("-->", a)
+sys.stdout.write(s[a+4:b] if a>=0 and b>=0 else "")' )"
+[ -n "$LG" ] \
+    && ok "the task-route document carries a legend" \
+    || no "the task-route document has no legend at all"
+for A in 'status=' 'confidence=' 'score=' 'margin=' 'git=' 'dirty=' 'trace=' 'resolved_symbols=' 'intent=' 'skill=' 'reason=' 'next=' '<run>'; do
+    case "$LG" in *"$A"*) ok "the legend defines '$A'";; *) no "the legend never mentions '$A' — a first-screen attribute with no definition";; esac
+done
+case "$LG" in *--*) no "the legend contains '--' — ill-formed inside an XML comment (G4)";; *) ok "the legend spells no '--' (XML-comment safe)";; esac
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
