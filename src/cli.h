@@ -1687,7 +1687,7 @@ inline constexpr char kHelpHead[] =
         "                               on a payload that is unreadable, empty, oversize or NUL-bearing, on one whose splice raises\n"
         "                               the file's parse errors, on one that does not define SYM, and on a span the file's current\n"
         "                               bytes no longer fit. Single-root, and it previews a body REPLACEMENT only.\n"
-        "    --replace-symbol-body=TARGET   replace one definition's body atomically with the bytes from --edit-payload\n"
+        "    --replace-symbol-body=TARGET   replace one whole definition atomically with the bytes from --edit-payload\n"
         "                               atomically replace one uniquely-resolved definition with the bytes from --edit-payload=FILE|-\n"
         "                               (ONE trailing newline on the payload folds into the newline already after the span — a heredoc\n"
         "                               or echo always appends one the span never had; disclosed as trailing_newline_folded=true; a\n"

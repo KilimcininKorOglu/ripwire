@@ -3029,7 +3029,7 @@ $ ./build/ripwire . --edit-check=rankGraphTeleport
 
 ### `--replace-symbol-body=TARGET`
 
-**Answers:** replace one definition's body atomically with the bytes from --edit-payload atomically replace one uniquely-resolved definition with the bytes from --edit-payload=FILE|- (ONE trailing newline on the payload folds into the newline already after the span — a heredoc or echo always appends one the span never had;
+**Answers:** replace one whole definition atomically with the bytes from --edit-payload atomically replace one uniquely-resolved definition with the bytes from --edit-payload=FILE|- (ONE trailing newline on the payload folds into the newline already after the span — a heredoc or echo always appends one the span never had;
 
 disclosed as trailing_newline_folded=true; a second one, a deliberate blank line, stays)
 
@@ -3046,7 +3046,7 @@ $ ./build/ripwire . --replace-symbol-body=DoesNotExist --edit-payload=<scratch>/
 
 **Caveats (stated by the binary):**
 
-- replace one definition's body atomically with the bytes from --edit-payload atomically replace one uniquely-resolved definition with the bytes from --edit-payload=FILE|- (ONE trailing newline on the payload folds into the newline already after the span — a heredoc or echo always appends one the span never had;
+- replace one whole definition atomically with the bytes from --edit-payload atomically replace one uniquely-resolved definition with the bytes from --edit-payload=FILE|- (ONE trailing newline on the payload folds into the newline already after the span — a heredoc or echo always appends one the span never had;
 
 ### `--insert-before-symbol=TARGET`
 
