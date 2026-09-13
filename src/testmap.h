@@ -487,6 +487,14 @@ inline std::vector<NodeId> exercisedSymbols( const IngestResult& ing, const Grap
 //
 // COST: the candidate scripts' texts are read at most ONCE per invocation and only LAZILY — nothing is read
 // until a row actually asks for a hint, so every verb that emits no test row pays nothing at all.
+// A3 / review of #219: run= is spelled relative to root= exactly when the run HAS one root and declares it.
+// A multi-root run's disk path lies under no single root, so its command must stay absolute — and the legend
+// sentence below is gated on this SAME predicate, so the spelling and the claim cannot disagree.
+inline bool runsAreRootRelative( const IngestResult& ing, std::string_view root ) noexcept
+{
+    return ing.realPaths.empty() && !root.empty();
+}
+
 class TestRunnerIndex
 {
 public:
@@ -497,7 +505,7 @@ public:
     // a path relative to a root that does not contain it.
     explicit TestRunnerIndex( const IngestResult& ing, std::string_view root = {} )
         : ing_( &ing ),
-          rootPrefix_( root.empty() || !ing.realPaths.empty() ? std::string() : rw::sarif::rootPrefixOf( root ) )
+          rootPrefix_( runsAreRootRelative( ing, root ) ? rw::sarif::rootPrefixOf( root ) : std::string() )
     {
         for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
         {
@@ -525,6 +533,10 @@ public:
         return cache_.emplace( fileId, derive( fileId ) ).first->second;
     }
 
+    // Whether the commands this index spells are relative to a root — the SAME fact the legend sentence
+    // is gated on, read off the index rather than re-derived at each legend site.
+    bool rootRelative() const noexcept { return !rootPrefix_.empty(); }
+
     std::string commandForScript( std::uint32_t fileId ) const
     { return fileId < ing_->files.size() && runnerVerb( ing_->files[fileId] ) != nullptr ? spell( fileId ) : std::string(); }
 
@@ -548,8 +560,7 @@ private:
     // primitives binstale.h, gitmine.h and docdrift.h already stem paths with. Re-rolling them here is
     // exactly the new-clone-of-a-reused-helper --quality-delta reports, and it would also fork the
     // "strip the LAST dot" convention that every other stemming call site in this repo shares.
-    static std::string_view stemOf( std::string_view p ) noexcept
-    { return mention_detail::stripExt( mention_detail::baseNameOf( p ) ); }
+    static std::string_view stemOf( std::string_view p ) noexcept { return mention_detail::pathStem( p ); }
 
     void loadTexts() const
     {
@@ -963,12 +974,23 @@ inline constexpr std::string_view kRunHintLegendClause =
     "verbatim in list order — a path holding ',' is never grouped, so p= splits into exactly n= paths. A "
     "shown=/total= over these rows counts test FILES: a <g> row is n= of them. ";
 
+// A3 / review of #219: the ROOT-RELATIVE half of the rule, and it is CONDITIONAL. Spliced unconditionally —
+// as the first cut of A3 did — this sentence told a multi-root reader, in a document carrying no root= at
+// all, that its absolute command was relative to something. runsAreRootRelative (above) decides BOTH the
+// spelling and the sentence, so the two cannot disagree. Gate: rootrelemitcheck ARM 9c, runhintcheck 2d.
+inline constexpr std::string_view kRunRootRelSentence =
+    "A run= command is relative to root=: run it from there. ";
+
 // The clause is a rule about ROWS, so a legend splices it only when the document actually renders one — a
 // tests="0" answer pays nothing for it. THE gate, taking the count testRowsList returns (or, for a section
 // that cut its own rows, that section's kept count): one rule, one spelling, asked by all eight sites.
-inline std::string_view runHintClauseIfRows( std::size_t testFilesRendered ) noexcept
+inline std::string runHintClauseIfRows( std::size_t testFilesRendered, bool rootRelativeRuns )
 {
-    return testFilesRendered == 0 ? std::string_view() : kRunHintLegendClause;
+    if( testFilesRendered == 0 )
+    {
+        return {};
+    }
+    return std::string( kRunHintLegendClause ) + ( rootRelativeRuns ? std::string( kRunRootRelSentence ) : std::string() );
 }
 
 // ── P9 (capture-audit 2026-09-04) — the tests_to_run row set for ONE changed file ────────────────────
@@ -1210,7 +1232,7 @@ inline std::vector<std::string> suiteMemberStems( const std::vector<std::string>
     for( const std::string& token : tokens )
     {
         if( token.find( '/' ) == std::string::npos ) { continue; }
-        const std::string_view stem = mention_detail::stripExt( mention_detail::baseNameOf( token ) );
+        const std::string_view stem = mention_detail::pathStem( token );
         if( !stem.empty() ) { stems.emplace_back( stem ); }
     }
     appendForListStems( tokens, stems );
@@ -1271,7 +1293,7 @@ inline ShellGateIndex buildShellGateIndex( const IngestResult& ing, const std::v
     {
         const std::string_view path = ing.files[f];
         if( !isTestPath( path ) || !path.ends_with( ".sh" ) || mention_detail::baseNameOf( path ) == "regression.sh" ) { continue; }
-        const std::string_view stem = mention_detail::stripExt( mention_detail::baseNameOf( path ) );
+        const std::string_view stem = mention_detail::pathStem( path );
         if( std::find( registeredTokens.begin(), registeredTokens.end(), stem ) == registeredTokens.end() ) { continue; }
         addRegisteredShellGate( ing, changedFiles, f, index );
     }

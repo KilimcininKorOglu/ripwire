@@ -1350,10 +1350,18 @@ inline std::string situationDiffJson( const std::string& root, const std::string
             situJSibs += "{\"file\":\"" + mcpdetail::jsonEscape( std::string( situJPathRelStr( p ) ) ) + "\"}";
         }
     }
-    situJSibs += "],\"siblings_total\":" + std::to_string( facts.siblings.paths.size() );
+    // Review of #219: siblings_total used to be the length of the array beside it — a tautology a reader
+    // cannot act on. This payload's standing rule is that an absent limit serves EVERY row (see the header
+    // above), so the honest form is not a cap but the PAIR pageview.h rule 1 asks for: the population, and
+    // an explicit statement that nothing was cut. `false` is emitted, never omitted — an absent
+    // siblings_capped would be exactly the silence this fixes.
+    situJSibs += "],\"siblings_total\":" + std::to_string( facts.siblings.paths.size() )
+              +  ",\"siblings_capped\":false";
     if( facts.siblings.unindexedRowsFloor )
     {
-        situJSibs += ",\"siblings_unindexed_rows_floor\":true";   // the crawl's unsupported-extension ROW list was itself cut
+        // …and the population itself is a FLOOR when the crawl's unsupported-extension ROW list was cut:
+        // a sibling no grammar can read may simply never have been rowed. Rides the EMPTY list too.
+        situJSibs += ",\"siblings_unindexed_rows_floor\":true";
     }
     out += "]" + declDefAndWindowJson( facts, situJPathRel ) + situJSibs + ",\"forgotten\":[";
     {

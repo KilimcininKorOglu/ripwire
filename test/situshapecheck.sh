@@ -18,6 +18,23 @@
 # prose cannot creep back. test/floormarkcheck.sh keeps the two anchor phrases; this gate mirrors them, so a
 # regression reds HERE too rather than only in a gate about a different property.
 #
+# THE BYTE TABLE — one number per line, one corpus, named here so nothing else has to restate it. Measured
+# by this gate's own `${#line}` (characters), on THIS repo at `--situ=src/graph.h` except the partner header,
+# which is measured on the fixture below at `--situ=core/widget.cc` (this repo has no decl/def partner for
+# graph.h). The "before" column is what these same arms printed, red, against the pre-A5 binary:
+#
+#     line                     before   after   ratchet
+#     graph-count floor          601      344     360
+#     decl/def partner header    228      209     220
+#     [2] tests-to-run header    267      220     230
+#     script-gate disclosure     165*     132     140          (* derived from the pre-A5 literal with this
+#                                                                corpus's count: the arm did not exist yet)
+#
+# The ratchets sit above the after values, not on them: this gate forbids the PARAGRAPH coming back, and a
+# later lane adding one honest word to a reading should not have to move a pin to do it. Review of #219 moved
+# the floor and partner ratchets UP (200 -> 360, 140 -> 220) when the readings those lines had dropped were
+# restored — the reading is the disclosure, and a ratchet that forbids it is a ratchet aimed at the wrong thing.
+#
 # Exit 0 = ALL PASS, non-zero = SOME FAILED.
 
 set -u
@@ -135,8 +152,12 @@ else
                   *) ok "(1) floor line omits graph_unindexed= — nothing was unindexed" ;; esac
   fi
   N="$( len_of 'counts_floor=1' "$REPO_OUT" )"
-  [ "$N" -le 200 ] && ok "(1) floor line is ${N} B (ratchet 200) — an attribute line, not a paragraph" \
-                   || no "(1) floor line is ${N} B, over the 200 B ratchet: the prose has crept back"
+  if [ "$N" -le 360 ]
+  then
+      ok "(1) floor line is ${N} B (ratchet 360) — an attribute line, not a paragraph"
+  else
+      no "(1) floor line is ${N} B, over the 360 B ratchet: the prose has crept back"
+  fi
 fi
 
 # ── (2) THE DECL/DEF PARTNER HEADER — the "NOT dependents" caveat becomes an attribute ───────────────────
@@ -151,8 +172,12 @@ else
   case "$PH" in *'(2)'*|*'(1)'*|*'(3)'*) ok "(2) partner header still states how many partners there are" ;;
                 *) no "(2) partner header lost its count: $PH" ;; esac
   N="$( len_of 'decl/def partners' "$OUT" )"
-  [ "$N" -le 140 ] && ok "(2) partner header is ${N} B (ratchet 140)" \
-                   || no "(2) partner header is ${N} B, over the 140 B ratchet"
+  if [ "$N" -le 220 ]
+  then
+      ok "(2) partner header is ${N} B (ratchet 220)"
+  else
+      no "(2) partner header is ${N} B, over the 220 B ratchet"
+  fi
 fi
 
 # ── (3) SECTION [1]'s pr-context ASIDE — a cap is a number, so it is an attribute ────────────────────────
@@ -336,6 +361,161 @@ PYEOF
     *core/widget.h*)      ok "(7d) the MCP twin carries the same siblings ($MROWS)" ;;
     *)                    no "(7d) the MCP twin's siblings disagree with the CLI report: $MROWS" ;;
   esac
+fi
+
+# ── (8) EVERY READING SURVIVES — an attribute without a reading is a token, not a disclosure ────────────
+# Review of #219: A5 is a compression of the SENTENCE, never of the FACT, and --situ is the one dialect with
+# no legend anywhere to look the fact up in (it refuses --legend=compact; test/compactlegendcheck.sh (R)).
+# So a gauge name here has to carry its own short gloss. These arms assert the READING, not the token — the
+# four that the first cut of A5 dropped, plus the two attributes it introduced.
+READINGS="$TMP/readings"; : > "$READINGS"
+read_arm(){ # read_arm <label> <file> <substring the reading must contain>
+  if grep -qF -- "$3" "$2"
+  then
+      ok "(8) $1"
+  else
+      no "(8) $1 — the report never says: $3"
+  fi
+}
+read_arm "the floor names its CAUSE (a name-based call graph)"         "$REPO_OUT" "name-based"
+read_arm "graph_unindexed= says what an unindexed file IS"              "$REPO_OUT" "no grammar"
+read_arm "the resolver gauges point at the map header"                  "$REPO_OUT" "map header"
+read_arm "not_dependents= says these rows are not transitive dependents" "$OUT"      "NOT transitive dependents"
+read_arm "prcontext_cap= says whose cap it is"                          "$REPO_OUT" "--pr-context"
+# and the [2] header's evidence reading, which arm (4) already models
+read_arm "order=evidence is glossed by the tag reading"                 "$REPO_OUT" "[partner]"
+
+# ── (9) THE SIBLING BLOCK DOES NOT PAGE WITH SECTION [1]'s OFFSET ───────────────────────────────────────
+# Review of #219: the block honoured page.offset, which is the BLAST-RADIUS window's offset. --offset=20 on
+# a nine-sibling stem printed "lexical siblings (9) … shown=0 total=9 capped=1" — zero rows, and a next=
+# offering --limit=9, which cannot restore rows an OFFSET removed. --offset=7 silently dropped six. The
+# siblings are a small fixed block, not a paged listing: a cap and --limit, no offset.
+"$BIN" "$FX" --situ=core/wide.cc                >"$TMP/off0.txt" 2>/dev/null
+"$BIN" "$FX" --situ=core/wide.cc --offset=7     >"$TMP/off7.txt" 2>/dev/null
+"$BIN" "$FX" --situ=core/wide.cc --offset=20    >"$TMP/off20.txt" 2>/dev/null
+sib_block(){ sed -n '/lexical siblings/,/^  \[2\]/p' "$1" | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }'; }
+B0="$( sib_block "$TMP/off0.txt" )"; B7="$( sib_block "$TMP/off7.txt" )"; B20="$( sib_block "$TMP/off20.txt" )"
+N0="$( printf '%s\n' "$B0" | grep -c . )"; N7="$( printf '%s\n' "$B7" | grep -c . )"; N20="$( printf '%s\n' "$B20" | grep -c . )"
+if [ "$N0" -eq 0 ]; then
+  no "(9) the wide-stem report lists no siblings at offset 0 — the arm would be a false green"
+else
+  [ "$B7" = "$B0" ]  && ok "(9) --offset=7 leaves the sibling block unchanged ($N0 rows)" \
+                     || no "(9) --offset=7 changed the sibling block ($N0 -> $N7 rows) — [1]'s offset is not the block's"
+  [ "$B20" = "$B0" ] && ok "(9) --offset=20 leaves the sibling block unchanged ($N0 rows)" \
+                     || no "(9) --offset=20 emptied or cut the sibling block ($N0 -> $N20 rows)"
+  # …and it never advertises relief that cannot restore what was removed
+  if grep -m1 'lexical siblings' "$TMP/off20.txt" | grep -q 'shown=0'
+  then
+      no "(9) at --offset=20 the block claims shown=0 of a non-empty population — a cut with no relief"
+  else
+      ok "(9) the block never reports shown=0 over a population it holds"
+  fi
+fi
+
+# ── (10) THE CUT ROW LIST IS A FLOOR, AND A FLOOR THAT CANNOT SHOW AS ZERO ──────────────────────────────
+# Review of #219: the unindexed candidates come from the crawl's unsupported-extension ROW list, which is
+# capped at 500 rows (the COUNT stays exact). When that cut removes the only sibling, the old code produced
+# an EMPTY list — and suppressed the block entirely, so the report said nothing at all where it should have
+# said "I could not see all of them". A silent zero is the one thing METHODOLOGY §9 forbids outright.
+FLOORFX="$TMP/floorfx"; rm -rf "$FLOORFX"; mkdir -p "$FLOORFX/aa" "$FLOORFX/nn"
+# lonely.cc has no same-stem neighbour of any kind, so its sibling list is EMPTY — and the corpus carries
+# more unindexed files than the crawl will row, so "empty" is a FLOOR: some candidate may simply not have
+# been seen. That is the case the first cut printed nothing at all for.
+printf 'int lonely( int n ) { return n; }\n' > "$FLOORFX/nn/lonely.cc"
+i=0
+while [ "$i" -lt 700 ]; do
+    printf 'inline int d%d( int n ) { return n; }\n' "$i" > "$FLOORFX/aa/d$( printf '%04d' "$i" ).inl"
+    i=$(( i + 1 ))
+done
+( cd "$FLOORFX" && git init -q -b main >/dev/null 2>&1
+  git config user.email rw@example.invalid; git config user.name ripwire
+  git add -A >/dev/null 2>&1
+  GIT_AUTHOR_DATE='2026-01-01T00:00:00 +0000' GIT_COMMITTER_DATE='2026-01-01T00:00:00 +0000' \
+    git commit -q -m seed >/dev/null 2>&1 ) || true
+"$BIN" "$FLOORFX" --situ=nn/lonely.cc >"$TMP/floor.txt" 2>/dev/null
+FLOORSIB="$( grep -m1 'lexical siblings' "$TMP/floor.txt" )"
+# the premise: the crawl really did cut its unsupported-extension ROW list (the COUNT stays exact)
+CUTROWS="$( "$BIN" "$FLOORFX" --skipped 2>/dev/null | tr '<' '\n' | grep -c '^f p=.*unsupported-ext' )"
+CUTTOTAL="$( "$BIN" "$FLOORFX" --skipped 2>/dev/null | tr '<' '\n' | sed -n 's/^skipped .*unsupported_ext="\([0-9]*\)".*/\1/p' | head -1 )"
+if [ "${CUTROWS:-0}" -ge "${CUTTOTAL:-0}" ]; then
+  no "(10) the fixture did not cut the unsupported row list (${CUTROWS} rows of ${CUTTOTAL}) — the arm would be a false green"
+else
+  ok "(10) premise: the crawl rowed ${CUTROWS} of ${CUTTOTAL} unsupported files, so the candidate list IS short"
+  if [ -z "$FLOORSIB" ]; then
+    no "(10) an EMPTY sibling list over a CUT candidate list prints nothing at all — a silent zero"
+  else
+    ok "(10) the empty list still speaks: $FLOORSIB"
+    case "$FLOORSIB" in
+      *unindexed_rows_floor=1*) ok "(10) it discloses unindexed_rows_floor=1 — the zero is a floor, not a total" ;;
+      *) no "(10) it does not disclose that the candidate list was cut: $FLOORSIB" ;;
+    esac
+    case "$FLOORSIB" in
+      *"(0)"*) ok "(10) it says the count it found is 0" ;;
+      *) no "(10) the empty block does not state a zero count: $FLOORSIB" ;;
+    esac
+  fi
+  # a corpus whose row list was NOT cut must not claim a floor — the mirror, so the disclosure discriminates
+  case "$( grep -m1 'lexical siblings' "$OUT" )" in
+    *unindexed_rows_floor*) no "(10) the small fixture claims unindexed_rows_floor with nothing cut" ;;
+    *)                      ok "(10) mirror: a corpus with nothing cut claims no floor" ;;
+  esac
+  # the MCP twin must not assert a confident empty either
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+                  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"situational_awareness","arguments":{"path":"'"$FLOORFX"'","diff":"nn/lonely.cc"}}}' \
+      | "$BIN" --mcp >"$TMP/floor.json" 2>/dev/null
+    if python3 - "$TMP/floor.json" <<'PYEOF'
+import json, sys
+last = [ l for l in open( sys.argv[1] ) if l.strip() ][-1]
+try:
+    inner = json.loads( json.loads( last )["result"]["content"][0]["text"] )
+except Exception:
+    sys.exit( 2 )
+sys.exit( 0 if inner.get( "siblings_unindexed_rows_floor" ) is True else 1 )
+PYEOF
+    then
+      ok "(10) the MCP twin carries siblings_unindexed_rows_floor:true beside its empty list"
+    else
+      no "(10) the MCP twin reports siblings [] with no floor — a confident zero"
+    fi
+  fi
+fi
+
+# ── (11) THE MCP TWIN'S siblings_total IS A POPULATION, NOT A ROW COUNT ─────────────────────────────────
+# Review of #219: the twin served every row and set siblings_total to the number it had just emitted — a
+# tautology no reader can use. Either it caps like the CLI and total= is the population, or it says plainly
+# that it is uncapped. Whichever it does, this arm reads the two numbers against the CLI's own total.
+if command -v python3 >/dev/null 2>&1; then
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+                '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"situational_awareness","arguments":{"path":"'"$FX"'","diff":"core/wide.cc"}}}' \
+    | "$BIN" --mcp >"$TMP/wide.json" 2>/dev/null
+  MW="$( python3 - "$TMP/wide.json" <<'PYEOF'
+import json, sys
+last = [ l for l in open( sys.argv[1] ) if l.strip() ][-1]
+try:
+    inner = json.loads( json.loads( last )["result"]["content"][0]["text"] )
+except Exception:
+    print( "__NONE__" ); raise SystemExit
+print( "%d %s %s" % ( len( inner.get( "siblings", [] ) ), inner.get( "siblings_total" ), inner.get( "siblings_capped" ) ) )
+PYEOF
+)"
+  set -- $MW
+  MSHOWN="${1:-}"; MTOTAL="${2:-}"; MCAPPED="${3:-}"
+  CLITOTAL="$( grep -m1 'lexical siblings' "$TMP/off0.txt" | sed -n 's/.*total=\([0-9]*\).*/\1/p' )"
+  [ -z "$CLITOTAL" ] && CLITOTAL="$( grep -m1 'lexical siblings' "$TMP/off0.txt" | sed -n 's/.*lexical siblings (\([0-9]*\)).*/\1/p' )"
+  if [ "$MW" = "__NONE__" ] || [ -z "$MTOTAL" ] || [ "$MTOTAL" = None ]; then
+    no "(11) the MCP twin carries no siblings_total ($MW)"
+  else
+    [ "$MTOTAL" = "$CLITOTAL" ] && ok "(11) the twin's siblings_total ($MTOTAL) is the same POPULATION the CLI reports" \
+                               || no "(11) the twin says siblings_total=$MTOTAL, the CLI says $CLITOTAL"
+    if [ -z "$MCAPPED" ] || [ "$MCAPPED" = None ]; then
+      no "(11) the twin states no siblings_capped — siblings_total is then a count of its own rows, which tells a reader nothing"
+    elif [ "$MSHOWN" -lt "$MTOTAL" ] && [ "$MCAPPED" != True ]; then
+      no "(11) the twin emitted $MSHOWN of $MTOTAL siblings and says siblings_capped=$MCAPPED"
+    else
+      ok "(11) the twin's row count ($MSHOWN of $MTOTAL) agrees with its own siblings_capped=$MCAPPED"
+    fi
+  fi
 fi
 
 echo

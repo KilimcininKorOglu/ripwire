@@ -126,18 +126,24 @@ inline const char* sarifLevel( std::string_view sev )
 // which strips the same way for the same reason). SARIF wants a plain root-relative URI regardless of
 // which spelling the caller used, so this normalizes BOTH shapes against `rootPrefix` (the run's root,
 // trailing '/' already stripped — see rootPrefixOf below) rather than assuming a leading "./".
+// Review of #219: the leading-"./" strip used to RETURN, before the prefix was ever tried. That is correct
+// for the root "." (where the stored spelling is "./x" and "x" is the answer) and wrong for every other
+// relative root: `ripwire ./corp` stores "./corp/test/x.sh", the early return yielded "corp/test/x.sh", and
+// pasting that from the root the document declares is `cd ./corp && bash corp/test/x.sh` — rc 127. Both
+// sides carry the same optional "./", so both sides drop it FIRST and the prefix comparison runs on what is
+// left. Root "." then normalizes to "." , matches no path, and the answer is the "./"-stripped file exactly
+// as before — the one case the old early return got right is the one case this keeps byte-identical.
 inline std::string_view rootRelativeUri( std::string_view file, std::string_view rootPrefix )
 {
-    if( file.rfind( "./", 0 ) == 0 )
+    const auto dropLeadingDot = []( std::string_view p ) noexcept
+    { return p.rfind( "./", 0 ) == 0 ? p.substr( 2 ) : p; };
+    const std::string_view f = dropLeadingDot( file );
+    const std::string_view r = dropLeadingDot( rootPrefix );
+    if( !r.empty() && f.size() > r.size() + 1 && f.compare( 0, r.size(), r ) == 0 && f[ r.size() ] == '/' )
     {
-        return file.substr( 2 );
+        return f.substr( r.size() + 1 );
     }
-    if( !rootPrefix.empty() && file.size() > rootPrefix.size() + 1
-        && file.compare( 0, rootPrefix.size(), rootPrefix ) == 0 && file[ rootPrefix.size() ] == '/' )
-    {
-        return file.substr( rootPrefix.size() + 1 );
-    }
-    return file;
+    return f;
 }
 
 // Normalize a scan root for rootRelativeUri above: drop trailing '/' so the prefix strips cleanly

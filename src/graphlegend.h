@@ -178,9 +178,14 @@ inline std::string graphCountFloorBrief( bool hasUnindexed )
 // dropped: METHODOLOGY §9 puts honesty in the attributes, and the sentence was never the honest part.
 // The trailing {} is the #66 gauge — EMPTY when nothing went unindexed, so this dialect keeps the same
 // omit-at-zero reading as the attribute rather than printing a bare "0" the other two never print.
-// Gate: test/situshapecheck.sh (1); test/floormarkcheck.sh (9) keeps the two anchor phrases verbatim.
+// Review of #219: an attribute with no reading is a token, not a disclosure — and this is the ONE dialect
+// with no legend to look a token up in (--situ refuses --legend=compact; compactlegendcheck (R)). So the
+// floor's CAUSE (a name-based call graph) and what an unindexed file IS stay on the line. They are the
+// price of having no legend, not prose the compression was entitled to.
+// Gate: test/situshapecheck.sh (1) and (8); test/floormarkcheck.sh (9) keeps the two anchor phrases.
 inline constexpr const char* kGraphCountFloorTextLine =
-    "        counts_floor=1 graph_ambiguous={} graph_unresolved={}{} (map-header gauges) — every count above is a FLOOR, never a total; a zero is \"none found\", never \"none exists\"\n"; // std::format FORMAT: two gauge totals + the clause
+    "        counts_floor=1 graph_ambiguous={} graph_unresolved={}{} (the map header's own gauges) — every count above is a FLOOR, never a total: "
+    "call edges are name-based, so dynamic dispatch, callbacks and macros can be missing; a zero is \"none found\", never \"none exists\"\n"; // std::format FORMAT: two gauge totals + the clause
 
 // The #66 clause for the prose dialect. "" at zero — the absence IS the confident case, same as the attribute.
 inline std::string graphUnindexedTextClause( std::size_t unindexedFiles )
@@ -189,8 +194,8 @@ inline std::string graphUnindexedTextClause( std::size_t unindexedFiles )
     {
         return {};
     }
-    char buf[64]; // literal 18 B + one size_t at 20 digits = 38 B worst case; snprintf truncates regardless
-    rw::formatTo( buf, sizeof( buf ), " graph_unindexed={}", unindexedFiles );
+    char buf[128]; // literal 63 B + one size_t at 20 digits = 83 B worst case; snprintf truncates regardless
+    rw::formatTo( buf, sizeof( buf ), " graph_unindexed={} (files no grammar in this build could read at all)", unindexedFiles );
     return buf;
 }
 

@@ -112,10 +112,18 @@ EOF
 #           describes: unconditional it put packtaskcheck's 2000-token arm 5620 B over a 5428 B ceiling
 #           (measured), and a bundle with no <tests> section has no use for it.
 # Measured on this fixture: 2843 -> 2957 B; 3000 leaves ~43 B — the same posture as every pin above.
-if [ "$legend" -le 3000 ]; then
-    ok "(a) --test-gate legend is $legend B (<= 3000 B budget; total=$total payload=$payload)"
+# RE-PINNED 3000 -> 3070 (2026-09-13, review of #219). ONE new FACT, in the same row-gated clause, and
+# CONDITIONAL on top of that (testmap.h kRunRootRelSentence, spliced only when runsAreRootRelative — a
+# multi-root run declares no root= and pays 0 B):
+#   +56 B   "A run= command is relative to root=: run it from there." The run= commands themselves became
+#           root-relative in this lane, which is what makes the document independent of where the tree is
+#           checked out — and a relative command whose anchor is not stated is a command the reader cannot
+#           paste. The rule is said where it is consumed, beside the rows it is about.
+# Measured on this fixture: 2957 -> 3013 B; 3070 leaves ~57 B — the same posture as every pin above.
+if [ "$legend" -le 3070 ]; then
+    ok "(a) --test-gate legend is $legend B (<= 3070 B budget; total=$total payload=$payload)"
 else
-    no "(a) --test-gate legend is $legend B (> 3000 B budget) — the essay re-inflated"
+    no "(a) --test-gate legend is $legend B (> 3070 B budget) — the essay re-inflated"
 fi
 
 # (b) the honesty vocabulary + the §B12.5 cross-verb UNIT-collision anchors (test/testgatecheck.sh arm (g)

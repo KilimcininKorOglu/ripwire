@@ -1131,7 +1131,7 @@ $ ./build/ripwire . --handoff
 
 **Answers:** before a PR: name the tests to run and the untested blast radius;
 
-exit 4 if either is non-empty agent self-check before a PR (pair with --quality-delta): names the tests to run + the UNTESTED blast radius; exit 4 if either obligation is non-empty (run the tests, then rely on green). (default = git diff) run= on a test row        --affected/--situ/--test-gate/--exercises/--pr-context/--pack-task name harness FILES, not commands. A row carries run="<cmd>" when a runner is DERIVABLE from real evidence: a test-dir .sh/.py whose basename stem matches the harness's, or whose TEXT names the harness file. Spelled with the same root you scanned, so it pastes straight into a shell. NO run= means NOT DERIVABLE -- never a guessed suite command
+exit 4 if either is non-empty agent self-check before a PR (pair with --quality-delta): names the tests to run + the UNTESTED blast radius; exit 4 if either obligation is non-empty (run the tests, then rely on green). (default = git diff) run= on a test row        --affected/--situ/--test-gate/--exercises/--pr-context/--pack-task name harness FILES, not commands. A row carries run="<cmd>" when a runner is DERIVABLE from real evidence: a test-dir .sh/.py whose basename stem matches the harness's, or whose TEXT names the harness file. Spelled RELATIVE to the root= the document declares, so it pastes into a shell run from there, and the document does not change with where the tree is checked out (a MULTI-ROOT run declares no single root, so it stays absolute). NO run= means NOT DERIVABLE -- never a guessed suite command
 
 **Try it**
 

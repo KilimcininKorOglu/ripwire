@@ -448,13 +448,8 @@ struct SituSiblings
     bool                     unindexedRowsFloor = false;   // the crawl's unsupported-extension ROW list was itself cut
 };
 
-// dirOf is siblift.h's (the other same-directory lens), stem is mention.h's pair — the two primitives this
-// rule needs both already exist, and a third spelling of either is the clone --quality-delta reports.
-inline std::string_view situStemOf( std::string_view path ) noexcept
-{
-    return mention_detail::stripExt( mention_detail::baseNameOf( path ) );
-}
-
+// dirOf is siblift.h's (the other same-directory lens) and the stem is mention.h's pathStem — both
+// primitives already existed, and a third spelling of either is the clone --quality-delta reports.
 // One changed file's test: same directory, and the same stem or testmap.h's stem-partner convention. Named
 // so lexicalSiblings below reads as the two loops it is (candidates x changed files) rather than four levels.
 inline bool isLexicalSiblingOf( std::string_view cand, std::string_view changed ) noexcept
@@ -463,7 +458,8 @@ inline bool isLexicalSiblingOf( std::string_view cand, std::string_view changed 
     {
         return false;
     }
-    return situStemOf( cand ) == situStemOf( changed ) || isTestPartnerOf( cand, changed ) || isTestPartnerOf( changed, cand );
+    return mention_detail::pathStem( cand ) == mention_detail::pathStem( changed )
+        || isTestPartnerOf( cand, changed ) || isTestPartnerOf( changed, cand );
 }
 
 // ADDITIVE, deliberately: a file may be BOTH a decl/def partner (symbol identity) and a lexical sibling
@@ -510,8 +506,11 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
     }
     std::sort( out.paths.begin(), out.paths.end() );
     out.paths.erase( std::unique( out.paths.begin(), out.paths.end() ), out.paths.end() );
-    out.unindexedRowsFloor = !out.paths.empty()
-                          && ing.crawlSkips.unsupported.size() < ing.crawlSkips.unsupportedFiles;
+    // Review of #219: this used to be gated on a NON-EMPTY result, and the emitter suppressed an empty
+    // block — so when the crawl's 500-row cut removed the only candidate, the report said nothing at all.
+    // That is the silent zero non-negotiable #3 forbids: the cut is a property of the CANDIDATE LIST, not
+    // of the answer, so it is recorded whenever the row list was short and the block speaks even at zero.
+    out.unindexedRowsFloor = ing.crawlSkips.unsupported.size() < ing.crawlSkips.unsupportedFiles;
     return out;
 }
 
@@ -528,7 +527,8 @@ inline void writeSituDeclDefRows( std::FILE* out, const std::vector<DeclDefPartn
     }
     // A5: the 229 B sentence said one nameable thing the reader could not otherwise know — these rows are
     // NOT transitive dependents, so they are absent from the [1] list below. That is not_dependents=1.
-    rw::emitTo( out, "        decl/def partners ({}) not_dependents=1{} — declared there and defined here, or the reverse (header/impl, stub, partial class):\n",
+    rw::emitTo( out, "        decl/def partners ({}) not_dependents=1{} — symbols declared there and defined here, or the reverse (header/impl, stub, partial class); "
+                       "NOT transitive dependents, so they are absent from the list below:\n",
                   partnerFiles.size(), situShowingNote( kSituPartnerFileRowsShown, partnerFiles.size(), "files" ).c_str() );
     for( std::size_t i = 0; i < partnerFiles.size() && i < kSituPartnerFileRowsShown; ++i )
     {
@@ -542,18 +542,30 @@ inline void writeSituDeclDefRows( std::FILE* out, const std::vector<DeclDefPartn
 template <typename PathRelStrFn>
 inline void writeSituSiblingRows( std::FILE* out, const SituSiblings& sibs, PathRelStrFn pathRel, const SituPageArgs& page )
 {
-    if( sibs.paths.empty() )
+    // Review of #219: an empty list is NOT nothing to say when the candidate list itself was cut — that zero
+    // is a floor, and a floor a reader cannot see is a confident wrong answer. Silence is kept only for the
+    // honest empty: nothing found, and nothing was hidden from the search.
+    if( sibs.paths.empty() && !sibs.unindexedRowsFloor )
     {
         return;
     }
-    const PageWindow  win   = pageWindow( sibs.paths.size(), effectiveRowCap( page.limit, int( kSituSiblingRowsShown ) ), page.offset );
-    const std::size_t shown = win.end - win.begin;
-    rw::emitTo( out, "        lexical siblings ({}) not_dependents=1{}{} — same directory and stem as a changed file (header/impl partner, test, .inl); static, not a graph result:\n",
+    // …and the block does NOT take section [1]'s offset. Review of #219: it did, so `--situ=F --offset=20`
+    // printed "shown=0 total=9 capped=1" with a next= offering --limit=9 — relief that cannot restore rows an
+    // OFFSET removed — and --offset=7 dropped six rows silently. This is a small fixed block with a cap and
+    // --limit, like the decl/def partner rows above it, not a paged listing.
+    const std::size_t cap   = effectiveRowCap( page.limit, int( kSituSiblingRowsShown ) );
+    const std::size_t shown = sibs.paths.size() < cap ? sibs.paths.size() : cap;
+    rw::emitTo( out, "        lexical siblings ({}){}{} — same directory and stem as a changed file (its header/impl partner, its test, its .inl): "
+                       "NOT transitive dependents, so they are absent from the list below; lexical and static, never a graph result{}\n",
                   sibs.paths.size(),
-                  sibs.unindexedRowsFloor ? " unindexed_rows_floor=1" : "",
+                  " not_dependents=1",
                   situShowingNote( shown, sibs.paths.size(), "files",
-                                   situNextInvocation( page.selector, sibs.paths.size() ) ).c_str() );
-    for( std::size_t i = win.begin; i < win.end; ++i )
+                                   situNextInvocation( page.selector, sibs.paths.size() ) ).c_str(),
+                  sibs.unindexedRowsFloor
+                      ? " — unindexed_rows_floor=1: the crawl rows at most 500 unreadable-extension files, and it hit that cut here, "
+                        "so a sibling no grammar can read may be missing and this count is a FLOOR"
+                      : "" );
+    for( std::size_t i = 0; i < shown; ++i )
     {
         const std::string_view rp = pathRel( sibs.paths[i] );
         rw::emitTo( out, "        {}\n", std::string_view( rp.data(), rp.size() ) );
@@ -682,7 +694,7 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     const std::size_t blastShown = blastPage.end - blastPage.begin;
     const std::string blastNote = situShowingNote( blastShown, affected.size(), "files",
                                                    situNextInvocation( page.selector, affected.size() ),
-                                                   " prcontext_cap=20" );   // A5: --pr-context's own per-file blast-radius list is capped at 20 too
+                                                   " prcontext_cap=20 (--pr-context's own per-file list is cut at 20 too)" );
     rw::emitTo( out, "  [1] blast radius: {} symbols across {} files transitively depend on these changes{}\n",
                   reach.size(), affected.size(), blastNote.c_str() );
     // F3: the decl/def partner FIRST — it is the answer to "what else has to change with this file" that the
@@ -1289,7 +1301,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
     // H2H-Graft F1: the evidence clause (testmap.h's ONE wording) rides the rows-gated half, like the run= rule.
     rw::emitTo( out, "<!-- {}{}{}{}{}-->{}", kTestGateLegend,
                   tgHasRows ? kTestGateRowLegend : "", std::string_view( kTestRowEvidenceLegend.data(), tgHasRows ? int( kTestRowEvidenceLegend.size() ) : 0 ),
-                  runHintClauseIfRows( testRows ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
+                  runHintClauseIfRows( testRows, runsAreRootRelative( ing, root ) ),   // the ONE gate: this clause is about <t> rows, so an untested-only report pays nothing
                   rw::graphUnindexedLegend( g.unindexedFiles > 0 ),   // #66: exactly when the root carries the attribute
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where

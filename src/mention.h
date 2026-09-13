@@ -272,6 +272,11 @@ inline std::string_view stripExt( std::string_view name ) noexcept
     return ( dot == std::string_view::npos || dot == 0 ) ? name : name.substr( 0, dot );
 }
 
+// A path's STEM — its basename with the last extension dropped ("src/a/b_test.py" → "b_test"). Both halves
+// already lived here; the PAIR was being re-spelled at four call sites (testmap.h twice, situ.h, binstale.h),
+// which is exactly the new-clone-of-a-reused-helper --quality-delta reports. One name, one composition.
+inline std::string_view pathStem( std::string_view path ) noexcept { return stripExt( baseNameOf( path ) ); }
+
 // does `path` end with the mention's segments as whole path components (extension-agnostic on the last)?
 // e.g. segments [transformers, optimization] matches "src/transformers/optimization.py".
 inline bool pathSuffixMatches( std::string_view path, const std::vector<std::string>& segments ) noexcept

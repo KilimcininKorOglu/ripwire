@@ -1808,9 +1808,15 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // mcpattrparitycheck still sees one spelling on every root.
     droppedPositiveAttr += lr.capAttrs;
 
+    // The clause is now BUILT (the root-relative sentence is conditional, so the seam composes a string
+    // rather than handing back one of two constants), and PackTaskHeaderParts holds VIEWS — so it is owned
+    // by a named local here, like report and droppedPositiveAttr above it. Binding the view straight to the
+    // returned temporary is a dangling read the moment the full expression ends, and it showed as exactly
+    // that: packtaskcheck's bundle was both malformed and non-deterministic (two runs, two sha256s).
+    const std::string runClauseStr = rw::runHintClauseIfRows( tests.kept, rw::runsAreRootRelative( ing, in.rootArg ) );   // the ONE gate: the section's own kept count
     const PackTaskHeaderParts headerParts{ task, rootOpenStr, taskNote, mentionNote, boostNote,
                                             docMentionNote, sibliftNote, expandNote, report, droppedPositiveAttr, in.rootArg,
-                                            rw::runHintClauseIfRows( tests.kept ) };   // the ONE gate: the section's own kept count
+                                            runClauseStr };
     const auto buildHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
     {
         if( in.innerBundle )   // P10 (L7): a partition slice — the outer <ctx-partitions> legend speaks once for all of them

@@ -592,9 +592,13 @@ else
     no "ARM9 the printed run= does NOT run from root= ($A9CMD) — a relative command that cannot be pasted is worse than an absolute one"
   fi
 fi
-if [ -n "$A9NEXT" ] && [ "$A9NEXT" = "$A9CMD" ]; then
+# Review of #219: an EMPTY next= used to fall out of this chain printing neither ok nor no — a silent pass
+# on the one attribute the arm exists to read. --test-gate's next= is never optional on a document with rows.
+if [ -z "$A9NEXT" ]; then
+  no "ARM9 --test-gate printed NO next= on a document with test rows — the follow-up is not optional"
+elif [ "$A9NEXT" = "$A9CMD" ]; then
   ok "ARM9 next= pastes the same root-relative command as the first row's run= ($A9NEXT)"
-elif [ -n "$A9NEXT" ]; then
+else
   no "ARM9 next=\"$A9NEXT\" disagrees with the first row's run=\"$A9CMD\""
 fi
 # --situ is the text dialect of the same echo: its `(run: …)` recipe and its `root:` line.
@@ -611,6 +615,117 @@ else
   grep -q 'relative to root' "$TMP/a9.situ" \
     && ok "ARM9 --situ says its run recipe is relative to the root it declares" \
     || no "ARM9 --situ prints a relative run recipe and never says what it is relative to"
+fi
+
+# ── ARM 9b — EVERY ROOT SPELLING NAMES THE SAME COMMAND, AND IT RUNS ────────────────────────────────────
+# Review of #219: rootRelativeUri() returned on a stored path's leading "./" BEFORE it tried the root prefix,
+# so `ripwire ./corp` stored "./corp/test/x.sh", the relativizer stripped only the "./" and the document said
+# run="bash corp/test/x.sh" — which, pasted from the root the document declares, is
+# (cd ./corp && bash corp/test/x.sh) => rc 127. The same wrong prefix rode every p= and every sibling row.
+# So the spelling sweep is a matrix, not a pair: a command is the SAME bytes under every way of naming one
+# root, and it EXECUTES from that root under each of them.
+A9B="$TMP/spell"; rm -rf "$A9B"; mkdir -p "$A9B/corp"
+cp -R "$A9/." "$A9B/corp/"
+rm -rf "$A9B/corp/.git"; seed_git "$A9B/corp"
+ln -s corp "$A9B/link" 2>/dev/null
+a9b_run(){ # a9b_run <cwd> <root-spelling>  → the first run= the test-gate prints
+  ( cd "$1" && printf '' | "$BIN" "$2" --test-gate=geometry.cpp 2>/dev/null ) \
+    | tr '<' '\n' | sed -n 's/.* run="\([^"]*\)".*/\1/p' | head -1
+}
+A9B_REF="$( a9b_run "$A9B/corp" "." )"
+if [ -z "$A9B_REF" ]; then
+  no "ARM9b the spelling fixture derives no run= — every arm below would be a false green"
+else
+  ok "ARM9b reference spelling (root '.') says run=\"$A9B_REF\""
+  # each row: a working directory and the root spelling used from it
+  for pair in "$A9B/corp|." "$A9B|corp" "$A9B|./corp" "$A9B|corp/" "$A9B|$A9B/corp" "$A9B|link"; do
+    cwd="${pair%%|*}"; spell="${pair#*|}"
+    got="$( a9b_run "$cwd" "$spell" )"
+    if [ "$got" = "$A9B_REF" ]; then
+      ok "ARM9b root spelled '$spell' says the same run=\"$got\""
+    else
+      no "ARM9b root spelled '$spell' says run=\"$got\" but root '.' says \"$A9B_REF\" — one root, two commands"
+    fi
+    if [ -z "$got" ]; then
+      no "ARM9b root spelled '$spell' printed NO run= — nothing to execute"
+    elif ( cd "$A9B/corp" && eval "$got" >/dev/null 2>&1 ); then
+      ok "ARM9b the command printed under '$spell' executes from the root it names"
+    else
+      no "ARM9b the command printed under '$spell' does NOT execute from the root it names (run=\"$got\")"
+    fi
+  done
+fi
+
+# ── ARM 9c — MULTI-ROOT: no single root, so no relative command AND no claim of one ─────────────────────
+# Review of #219: TestRunnerIndex keeps the absolute command on a multi-root run (there is no single root
+# for it to be relative to), but the legend clause was spliced unconditionally — so a document with NO root=
+# at all told the reader its commands were relative to it. The spelling and the sentence must be decided by
+# the SAME predicate; this arm pins both halves against each other.
+A9M1="$TMP/mr/A"; A9M2="$TMP/mr/B"; rm -rf "$TMP/mr"; mkdir -p "$A9M1" "$A9M2"
+cp -R "$A9/." "$A9M1/"; rm -rf "$A9M1/.git"; seed_git "$A9M1"
+cp -R "$FIX/." "$A9M2/"; seed_git "$A9M2"
+MR="$( "$BIN" "$A9M1" "$A9M2" --affected=distance 2>/dev/null )"
+if [ -z "$MR" ]; then
+  printf '  SKIP  ARM9c the multi-root run emitted nothing on this fixture\n'
+else
+  MRRUN="$( printf '%s' "$MR" | tr '<' '\n' | sed -n 's/.* run="\([^"]*\)".*/\1/p' | head -1 )"
+  MRCLAUSE=no; case "$MR" in *"relative to root="*) MRCLAUSE=yes ;; esac
+  MRROOT=no;   case "$MR" in *' root="'*) MRROOT=yes ;; esac
+  if [ -z "$MRRUN" ]; then
+    printf '  SKIP  ARM9c the multi-root run derived no run= (root= present: %s)\n' "$MRROOT"
+  else
+    # the multi-root document declares no single root=, so the command MUST stay absolute…
+    # the command is `<verb> <path>`; it is the PATH that must stay absolute, so test the argument
+    MRPATH="${MRRUN##* }"
+    case "$MRPATH" in
+      /*) ok "ARM9c multi-root keeps an absolute run=\"$MRRUN\" — there is no single root to be relative to" ;;
+      *)  no "ARM9c multi-root printed a RELATIVE run=\"$MRRUN\" in a document with root= $MRROOT — unresolvable" ;;
+    esac
+    # …and the legend must not claim otherwise
+    if [ "$MRCLAUSE" = yes ] && [ "$MRROOT" = no ]; then
+      no "ARM9c multi-root says \"relative to root=\" in a document that declares no root= — a false claim"
+    else
+      ok "ARM9c multi-root does not claim its command is relative to a root it never declares"
+    fi
+  fi
+fi
+
+# ── ARM 9d — --flags --flip: a document full of root-relative paths that declared no root ───────────────
+# Review of #219: writeFlip spells every p= through relForHash( …, root ) — root-relative — and its <t> rows
+# now carry a root-relative run= as well, but <flip> itself declared no root= at all. A consumer holding that
+# document cannot resolve one path in it. The fixture is test/flagsfix (the gate corpus that actually HAS a
+# dark feature), copied to two depths so the one-anchor claim is measured here too.
+FLAGSFIX="$ROOT/test/flagsfix"
+if [ ! -d "$FLAGSFIX" ]; then
+  no "ARM9d test/flagsfix is missing — the --flip anchor arm cannot run"
+else
+  A9F="$TMP/flip"; A9FD="$TMP/ddddddddd/ddddddddd/ddddddddd/ddddddddd/flip"
+  rm -rf "$A9F" "$A9FD"; mkdir -p "$A9F" "$A9FD"
+  cp -R "$FLAGSFIX/." "$A9F/"; cp -R "$FLAGSFIX/." "$A9FD/"
+  seed_git "$A9F"; seed_git "$A9FD"
+  "$BIN" "$A9F"  --flags --flip=FIXTURE_DARK_FEATURE --no-cache >"$TMP/flip.s" 2>/dev/null
+  "$BIN" "$A9FD" --flags --flip=FIXTURE_DARK_FEATURE --no-cache >"$TMP/flip.d" 2>/dev/null
+  if [ ! -s "$TMP/flip.s" ]; then
+    no "ARM9d --flags --flip emitted nothing on test/flagsfix — the arm would be a false green"
+  else
+    read -r lk tot anc <<EOF
+$( leaks "$A9F" < "$TMP/flip.s" )
+EOF
+    [ "$lk" -eq 0 ] && ok "ARM9d --flip: no absolute path outside the envelope (${anc} anchor(s))" \
+                    || no "ARM9d --flip: ${lk} absolute-path leak(s) of ${tot} occurrence(s)"
+    if printf '%s' "$( cat "$TMP/flip.s" )" | grep -q '<flip[^>]* root="'; then
+      ok "ARM9d --flip declares the root its p= rows are relative to"
+    else
+      no "ARM9d --flip prints root-relative p= rows and declares NO root= — nothing in it can be resolved"
+    fi
+    [ "$anc" -le 1 ] && ok "ARM9d --flip declares the absolute root ${anc} time(s) — once per document" \
+                     || no "ARM9d --flip declares the absolute root ${anc} times"
+    mask "$A9F"  < "$TMP/flip.s" > "$TMP/flip.ms"
+    mask "$A9FD" < "$TMP/flip.d" > "$TMP/flip.md"
+    cmp -s "$TMP/flip.ms" "$TMP/flip.md" \
+      && ok "ARM9d --flip is depth-independent" \
+      || no "ARM9d --flip differs with checkout depth"
+  fi
 fi
 
 # ── the MCP dialect ─────────────────────────────────────────────────────────────────────────────────────

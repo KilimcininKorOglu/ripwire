@@ -77,9 +77,62 @@ REL="$( cd "$R" && perl -e 'alarm 20; exec @ARGV' "$BIN" . --affected=src/core.c
     && ok "run= is the SAME command under an absolute and a relative root — no checkout prefix rides the row" \
     || no "run= differs between an absolute scan ('$( runof 'mything_harness.cpp' "$A" )') and a relative one ('$( runof 'mything_harness.cpp' "$REL" )')"
 # …and it must still RUN from the root the document declares, which is the whole point of relativizing it.
-( cd "$R" && eval "$( runof 'mything_harness.cpp' "$A" )" >/dev/null 2>&1 ) \
-    && ok "the printed run= executes from the declared root" \
-    || no "the printed run= does not execute from the declared root — a relative command that cannot be pasted is worse than an absolute one"
+# Review of #219: an EMPTY run= makes `eval ""` succeed, so this arm passed on the one outcome it exists to
+# forbid — a row with no command at all. The emptiness is checked BEFORE anything is executed.
+RUNCMD="$( runof 'mything_harness.cpp' "$A" )"
+if [ -z "$RUNCMD" ]
+then
+    no "the row carries NO run= at all — there is no command to execute, and an empty eval would pass"
+elif ( cd "$R" && eval "$RUNCMD" >/dev/null 2>&1 )
+then
+    ok "the printed run= executes from the declared root ($RUNCMD)"
+else
+    no "the printed run= does not execute from the declared root ($RUNCMD) — a relative command that cannot be pasted is worse than an absolute one"
+fi
+
+# ── 2c) EVERY spelling of one root names the SAME command ────────────────────────────────────────────
+# Review of #219: `ripwire ./sub` stored "./sub/test/x.sh" and the relativizer stripped only the leading
+# "./", so the document said run="bash sub/test/x.sh" — wrong from the root it declares. The root is one
+# place, however the caller spells it, so the command must be one string.
+PARENT="$( dirname "$R" )"; LEAF="$( basename "$R" )"
+for spell in "$LEAF" "./$LEAF" "$LEAF/"; do
+    GOT="$( cd "$PARENT" && perl -e 'alarm 20; exec @ARGV' "$BIN" "$spell" --affected=src/core.cpp --no-cache 2>/dev/null )"
+    GOTRUN="$( runof 'mything_harness.cpp' "$GOT" )"
+    if [ "$GOTRUN" = "bash test/mythingcheck.sh" ]
+    then
+        ok "root spelled '$spell' says run=\"$GOTRUN\""
+    else
+        no "root spelled '$spell' says run=\"$GOTRUN\", not the root-relative \"bash test/mythingcheck.sh\""
+    fi
+    if [ -n "$GOTRUN" ] && ( cd "$R" && eval "$GOTRUN" >/dev/null 2>&1 )
+    then
+        ok "the command printed under '$spell' executes from that root"
+    else
+        no "the command printed under '$spell' does not execute from that root"
+    fi
+done
+
+# ── 2d) MULTI-ROOT: the absolute command stays, and no legend claims otherwise ────────────────────────
+# There is no single root for a command to be relative to, so the spelling keeps the disk path — and the
+# sentence that says "relative to root=" must not be spliced into a document that declares no root=.
+MR2="$TMP/mr2"; rm -rf "$MR2"; mkdir -p "$MR2/src"
+printf 'int other() { return 1; }\n' > "$MR2/src/other.cpp"
+MRDOC="$( perl -e 'alarm 40; exec @ARGV' "$BIN" "$R" "$MR2" --affected=src/core.cpp --no-cache 2>/dev/null )"
+MRRUN2="$( runof 'mything_harness.cpp' "$MRDOC" )"
+if [ -z "$MRDOC" ]; then
+    printf '  SKIP  2d the multi-root run emitted nothing on this fixture\n'
+elif [ -z "$MRRUN2" ]; then
+    printf '  SKIP  2d the multi-root run derived no run= for mything_harness.cpp\n'
+else
+    case "${MRRUN2##* }" in
+        /*) ok "2d multi-root keeps the absolute command ($MRRUN2) — there is no single root to be relative to" ;;
+        *)  no "2d multi-root printed a relative command ($MRRUN2) in a document with no single root" ;;
+    esac
+    case "$MRDOC" in
+        *"relative to root="*) no "2d multi-root splices \"relative to root=\" into a document that declares no root=" ;;
+        *)                     ok "2d multi-root does not claim a relativity it does not have" ;;
+    esac
+fi
 
 # ── 3) NO evidence → NO run=. The half that keeps the attribute trustworthy. ──────────────────────────
 case "$A" in

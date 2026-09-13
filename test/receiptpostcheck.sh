@@ -589,5 +589,27 @@ else
                                                || no "(17) the wrap blurb neither prescribes nor mentions the receipt's edit_check"
 fi
 
+# ── ARM 18 — the receipt's own ROOT, so its root-relative echoes can be resolved ───────────────────────
+# Review of #219 (A3): the receipt's "file", its tests_to_run[].run recipes and its stderr "next:" are all
+# spelled RELATIVE to the crawl root — which is right, and useless on its own: an MCP client runs in its own
+# working directory and the receipt named no root at all. Its JSON siblings (--test-gate --json, the
+# situational_awareness payload) have carried "root" all along; the receipt is the one that hands the caller
+# a command to paste, so it is the one that least afforded to omit it.
+R18="$( cd "$TMP/w" && "$BIN" . --insert-before-symbol=report --edit-payload="$TMP/insert.py" 2>/dev/null )"
+if [ -z "$R18" ]; then
+    no "(18) the edit verb produced no receipt — the arm would be a false green"
+else
+    printf '%s' "$R18" | python3 -c '
+import sys, json
+r = json.load( sys.stdin )
+root = r.get( "root" )
+assert root, "the receipt carries no \"root\" key, so its relative file=/run=/next= cannot be resolved"
+f = r.get( "file", "" )
+assert not f.startswith( "/" ), "file=%r is absolute; the root key exists to make it relative" % f
+print( "OK" )' >/dev/null 2>&1 \
+        && ok "(18) the receipt declares the root its file=/run=/next= are relative to" \
+        || no "(18) the receipt's paths are root-relative and it declares NO root — nothing in it resolves from a client cwd"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

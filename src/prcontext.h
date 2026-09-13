@@ -615,7 +615,7 @@ inline std::string prBudgetTail( std::size_t changedFiles, std::uint32_t skipped
 // (CodeRabbit on #214): a test elsewhere in the corpus, or a testCap=0 level, bought the clause for a document
 // with no row. Measured on test/defaultceilingcheck.sh's 120-file, no-test fixture: unconditional, 7,989 ->
 // 8,025 tokens, over the 8,000 default budget; gated, 7,989.
-inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, bool withRunClause )
+inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, bool withRunClause, bool rootRelativeRuns )
 {
     return std::string(
                  "<!-- ripwire pr-context: no-LLM review-evidence bundle per changed file — defined symbols, their callers, blast radius (transitive dependents), affected tests, co-change partners not in the diff, and owners. "
@@ -643,7 +643,7 @@ inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindex
                  // --impact reports, so the same floor applies to hundreds of attributes in this one document.
                  // The shared constants, never a pr-context wording — that is the §B4 echo-site rule.
                  + rw::graphCountDisclosure( hasUnindexed )
-                 + std::string( withRunClause ? rw::kRunHintLegendClause : std::string_view() )   // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
+                 + rw::runHintClauseIfRows( withRunClause ? 1 : 0, rootRelativeRuns )   // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
                  + "-->";
 }
 
@@ -928,14 +928,15 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
 
     // E1: both legend forms are built now and ONE is written later, once the body is known (prBodyHasTestRow);
     // the envelope is priced without the clause and the pricer adds runClauseBytes for a rows-bearing body.
-    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, false );
+    const bool        prRootRelRuns  = rw::runsAreRootRelative( ing, root );
+    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, false, prRootRelRuns );
     const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
     // The clause-bearing form is built ONCE, and only if it is the form that gets written — the difference
     // between the two is exactly kRunHintLegendClause (prLegendText splices that constant and nothing else),
     // so the pricer reads the constant's size rather than a second rendering's.
     const auto        writeHead      = [ & ]( std::size_t testFiles )
     {
-        const std::string legend = testFiles > 0 ? prLegendText( escBase, g.unindexedFiles > 0, true ) : legendText;
+        const std::string legend = testFiles > 0 ? prLegendText( escBase, g.unindexedFiles > 0, true, prRootRelRuns ) : legendText;
         std::fwrite( legend.data(), 1, legend.size(), out );
         std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
     };
@@ -948,7 +949,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // R2/N4: the price context (see prPriceDocument) — the envelope and every root attribute that does not
     // vary per candidate trim level, gathered once.
     const PrPriceCtx priceCtx{ .g = &g, .sharedAttrs = &sharedAttrs, .anchor = &anchor, .baseEscaped = &escBase, .atAttrs = &atAttrStr,
-                               .envelopeBytes = envelopeBytes, .runClauseBytes = rw::kRunHintLegendClause.size(),
+                               .envelopeBytes = envelopeBytes, .runClauseBytes = rw::runHintClauseIfRows( 1, prRootRelRuns ).size(),
                                .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
                                .budgetTokens = budgetTokens, .isDefaultBudget = budget.isDefault };
     const auto priceOf = [ & ]( std::string_view body, std::size_t testFiles, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )

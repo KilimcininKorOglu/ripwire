@@ -386,7 +386,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     const auto assemble = [ & ]( std::size_t keepRows, std::size_t withheld )
     {
         std::string doc = kHandoffLegendHead;
-        doc += rw::runHintClauseIfRows( hoTests.files );   // M21(b): the ONE wording through the ONE gate — never a seventh paraphrase
+        doc += rw::runHintClauseIfRows( hoTests.files, rw::runsAreRootRelative( ing, root ) );   // M21(b): the ONE wording through the ONE gate — never a seventh paraphrase
         if( anySymsCapped ) { doc += handoffSymsCapClause(); }   // absent unless an <f> row was cut
         doc += kHandoffLegendTail;
         doc += "<handoff";

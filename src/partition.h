@@ -609,7 +609,7 @@ inline std::string packTaskPartitionText( const IngestResult& ing, const Graph& 
         sliceTests += part.testsKept;
     }
     whole += "<!-- ripwire task bundle (every ctx below)";  whole += kPackTaskBundleLegendBody;   // P10 (L7): stated once
-    whole += rw::runHintClauseIfRows( sliceTests );
+    whole += rw::runHintClauseIfRows( sliceTests, rw::runsAreRootRelative( ing, inBase.rootArg ) );
     whole += " -->";
     whole += bundleOpen( "core", -1, core );
     whole += core.xml;

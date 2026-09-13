@@ -1129,7 +1129,17 @@ namespace mcpedit
             if( nextOut != nullptr ) { *nextOut = nextFlag( "--test-gate=", fileIdentity ); }
             return ",\"post_check_unavailable\":\"the edited file is not in the refreshed index\"";
         }
+        // Review of #219 (A3): every path this receipt hands back — "file", each tests_to_run[].run recipe and
+        // the stderr "next:" — is spelled RELATIVE to the crawl root, and the receipt named no root at all.
+        // An MCP client runs in its own working directory, so a relative command it cannot anchor is a
+        // command it cannot paste. The receipt's JSON siblings (--test-gate --json, situational_awareness)
+        // have carried "root" all along; this is the surface that least afforded to omit it. Single-root
+        // only, the same condition every other root= keeps. Gate: test/receiptpostcheck.sh (18).
         std::string out;
+        if( ing.realPaths.empty() && !root.empty() )
+        {
+            out += ",\"root\":\"" + mcpdetail::jsonEscape( root ) + "\"";
+        }
         if( focus == kNoNode )
         {
             // Honest, and it happens: a replace whose payload defines a DIFFERENT name leaves no definition
