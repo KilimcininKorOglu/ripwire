@@ -311,8 +311,8 @@ inline constexpr std::string_view kForRouteCodeLegend =
 // once and uses `.sc`/`.route` to append and `.bytes()` to exempt, so the two can only ever agree.
 struct ForIdRouteLegendParts
 {
-    std::string_view sc;      // "" when no served row carries a scope
-    std::string_view route;   // "" when this root carries no route=
+    std::string_view sc; // "" when no served row carries a scope
+    std::string_view route; // "" when this root carries no route=
 
     std::size_t bytes() const noexcept { return sc.size() + route.size(); }
 };
@@ -321,9 +321,9 @@ inline ForIdRouteLegendParts forIdRouteLegendParts( bool legendOn, bool scPresen
 {
     if( !legendOn )
     {
-        return {};   // rung zero took the readings; the attributes stay and the dropped note names them
+        return {}; // rung zero took the readings; the attributes stay and the dropped note names them
     }
-    return { scPresent    ? kForIdRouteLegend   : std::string_view(),
+    return { scPresent ? kForIdRouteLegend : std::string_view(),
              routePresent ? kForRouteCodeLegend : std::string_view() };
 }
 

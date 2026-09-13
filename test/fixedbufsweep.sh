@@ -248,7 +248,12 @@ NUMERIC_ONLY = {
     ( "src/serialize.h", "gfb" ): 1,
     ( "src/serialize.h", "inAttr" ): 1,
     ( "src/serialize.h", "kbuf" ): 1,
-    ( "src/serialize.h", "lb" ): 3,   # row 6 (2026-09-12): collectCalleeNameRow's line buffer (the merged <c n= l=> row) joined the two
+    ( "src/serialize.h", "lb" ): 4,   # row 6 (2026-09-12): collectCalleeNameRow's line buffer (the merged <c n= l=> row) joined the two
+                                      #   …and a FOURTH (2026-09-13, PR #215 item 8): appendMergedCalleeNameRows joins the row's
+                                      #   line numbers itself now, because l= is sorted ASCENDING at append time rather than
+                                      #   accumulated as text in walk order. Same shape as the site three lines above it —
+                                      #   "{}" of one std::uint32_t, ten digits worst case against 15 usable + NUL, no %s and
+                                      #   nothing escaped, so it does not join the string-interpolating population
     ( "src/serialize.h", "lineAttr" ): 1,
     ( "src/serialize.h", "nb" ): 1,   # row 6 (2026-09-12): appendCalleeNameRow's `"\" l=\"{}\"/>"` buffer went with the merge
     ( "src/serialize.h", "precAttr" ): 1,
@@ -431,7 +436,16 @@ if not bad:
 #            format to derive a class from — the same reason nestAttr and escAttr are rows. mentions is +2 because
 #            the comment on that buffer names formatTo as well; arch.h's third mention, its emit.h include line,
 #            predates this change. The code it replaced wrote through emitRaw/emitTo, which this gate does not count.
-EXPECTED = { "mentions": 322, "calls": 218, "sites": 218, "rows": 92, "widthforms": 0 }
+#            2026-09-13 (PR #215 review item 8, the merged <c n= l=> row's ascending l=): +1 call/+1 mention,
+#            +1 site, rows/widthforms UNMOVED — re-derived from `git diff 6e8dd75a -- src/`, not accepted from
+#            the delta. The one new call is serialize.h appendMergedCalleeNameRows' `char lb[16]`, which joins
+#            the EXISTING ( serialize.h, lb ) row above (3 -> 4 sites) rather than opening a new one: the row
+#            now holds four buffers of that name in that file. MergedCalleeNameRow stopped carrying its lines
+#            as accumulated text — the walk pushes uint32 line numbers and the append sorts them ascending, so
+#            one fact stopped having two spellings between queries — and the digits are formatted here instead.
+#            "{}" of one std::uint32_t: no %s, nothing escaped, ten digits worst case against 15 usable + NUL,
+#            so it does not join the string-interpolating population and rows is unmoved.
+EXPECTED = { "mentions": 323, "calls": 219, "sites": 219, "rows": 92, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,
