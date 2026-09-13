@@ -355,6 +355,7 @@ inline std::vector<DeclDefPartner> declDefPartners( const IngestResult& ing, con
 inline constexpr std::size_t kSituBlastFilesShown = 8;    // section [1] — blast-radius file rows; a raisable DEFAULT
 inline constexpr std::size_t kSituPartnerRowsShown = 8;   // section [3] — co-change partner rows; a raisable DEFAULT
 inline constexpr std::size_t kSituPartnerFileRowsShown = 4;   // section [1] — decl/def partner rows
+inline constexpr std::size_t kSituSiblingRowsShown = 8;      // section [1] — L-D lexical sibling rows; a raisable DEFAULT
 
 // §B12.1 gave this the "showing N of M <noun>" form so a reader could see the gap without a second sentence;
 // C1 F-10 adds the machine half — pageview.h's shown=/total=/capped= spelled in prose, because --situ has no
@@ -419,6 +420,104 @@ inline std::string situNextInvocation( std::string_view selector, std::size_t ne
     return verb + " --limit=" + std::to_string( needed );
 }
 
+// ── L-D — a changed file's LEXICAL siblings ──────────────────────────────────────────────────────────
+// The files that move WITH a changed file are usually its neighbours by NAME, and the caller-walk can reach
+// none of them: a header does not call the source that implements it, an .inl is not indexed at all, and a
+// harness the graph cannot link (a fixture-built test, a generated main) is reached by nothing. On the frozen
+// question set (PLAN_OUTPUT_ROUTING_LOOP §1.5, lesson L-D) two answers were incomplete for exactly that
+// reason. So section [1] lists them, and the rule is deliberately the dumbest one that is always right:
+//
+//   SAME DIRECTORY, and the same filename stem — or the stem-partner convention testmap.h already owns
+//   (<stem>_test, test_<stem>, <Stem>Test, _unittest, _spec), so widget.cc names widget_test.cc.
+//
+// SAME DIRECTORY is load-bearing, not a performance trick: a same-stem file in another directory is a
+// NAMESAKE, not a partner (RocksDB has db/version_set.cc and utilities/…/version_set_test.cc that are about
+// different things), and listing namesakes would make the block noise on exactly the large corpora it is for.
+//
+// The candidate population is the crawl's, not the INDEX's: a `.inl`, `.ipp` or `.tcc` partner has no grammar
+// in any build, so it never enters ing.files, and it is the sibling a C++ change most often has to edit. Those
+// come from ing.crawlSkips.unsupported — whose ROW list is capped even though its count is exact, which is the
+// one place this list can be short of the truth and is disclosed as unindexed_rows_floor=1 when it applies.
+//
+// STATIC BY CONSTRUCTION: no git, no graph, no history window. That is what makes it cheap, and it is also
+// why it cannot leak a future commit into an answer about the present.
+struct SituSiblings
+{
+    std::vector<std::string> paths;                   // the STORED spelling (relativized by the caller), path-ascending, unique
+    bool                     unindexedRowsFloor = false;   // the crawl's unsupported-extension ROW list was itself cut
+};
+
+inline std::string_view situDirOf( std::string_view path ) noexcept
+{
+    const std::size_t slash = path.rfind( '/' );
+    return slash == std::string_view::npos ? std::string_view() : path.substr( 0, slash );
+}
+
+inline std::string_view situStemOf( std::string_view path ) noexcept
+{
+    return mention_detail::stripExt( mention_detail::baseNameOf( path ) );
+}
+
+// ADDITIVE, deliberately: a file may be BOTH a decl/def partner (symbol identity) and a lexical sibling
+// (name), and the header/implementation pair is the commonest case of exactly that. Suppressing the overlap
+// was tried and reverted — it removed `widget.h` from "the siblings of widget.cc", which is the one row a
+// reader of this block is looking for, to save about 20 B. The two blocks answer two questions, and each
+// answers its own whole.
+inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<char>& changedFile )
+{
+    SituSiblings out;
+    std::vector<std::string_view> changedPaths;
+    for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
+    {
+        if( changedFile[f] )
+        {
+            changedPaths.push_back( ing.files[f] );
+        }
+    }
+    if( changedPaths.empty() )
+    {
+        return out;
+    }
+    const auto isSiblingOfAnyChanged = [ & ]( std::string_view cand ) noexcept
+    {
+        for( std::string_view c : changedPaths )
+        {
+            if( cand == c || situDirOf( cand ) != situDirOf( c ) )
+            {
+                continue;
+            }
+            if( situStemOf( cand ) == situStemOf( c ) || isTestPartnerOf( cand, c ) || isTestPartnerOf( c, cand ) )
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto consider = [ & ]( std::string_view cand )
+    {
+        if( isSiblingOfAnyChanged( cand ) )
+        {
+            out.paths.emplace_back( cand );
+        }
+    };
+    for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
+    {
+        if( !changedFile[f] )
+        {
+            consider( ing.files[f] );
+        }
+    }
+    for( const SkippedFile& sk : ing.crawlSkips.unsupported )
+    {
+        consider( sk.path );
+    }
+    std::sort( out.paths.begin(), out.paths.end() );
+    out.paths.erase( std::unique( out.paths.begin(), out.paths.end() ), out.paths.end() );
+    out.unindexedRowsFloor = !out.paths.empty()
+                          && ing.crawlSkips.unsupported.size() < ing.crawlSkips.unsupportedFiles;
+    return out;
+}
+
 // Section [1]'s decl/def rows and section [3]'s empty-co-change line, as their own emitters: writeSituation
 // is already this file's largest function and the quality bar counts what a caller ADDS to it, so a fact that
 // is nameable gets a name. `pathRel` is the caller's own root-relative spelling, passed in rather than
@@ -438,6 +537,29 @@ inline void writeSituDeclDefRows( std::FILE* out, const std::vector<DeclDefPartn
     {
         const std::string_view pp = pathRel( partnerFiles[i].fileId );
         rw::emitTo( out, "        {}  ({} shared symbols)\n", std::string_view( pp.data(), pp.size() ), partnerFiles[i].shared );
+    }
+}
+
+// L-D's rows. `pathRel` takes a STORED path rather than a fileId, because an unindexed sibling (.inl/.ipp)
+// has no fileId at all — the one place this report names a file the index does not hold.
+template <typename PathRelStrFn>
+inline void writeSituSiblingRows( std::FILE* out, const SituSiblings& sibs, PathRelStrFn pathRel,
+                                  std::string_view nextInvocation, int pageLimit, int pageOffset )
+{
+    if( sibs.paths.empty() )
+    {
+        return;
+    }
+    const PageWindow  win   = pageWindow( sibs.paths.size(), effectiveRowCap( pageLimit, int( kSituSiblingRowsShown ) ), pageOffset );
+    const std::size_t shown = win.end - win.begin;
+    rw::emitTo( out, "        lexical siblings ({}) not_dependents=1{}{} — same directory and stem as a changed file (header/impl partner, test, .inl); static, not a graph result:\n",
+                  sibs.paths.size(),
+                  sibs.unindexedRowsFloor ? " unindexed_rows_floor=1" : "",
+                  situShowingNote( shown, sibs.paths.size(), "files", nextInvocation ).c_str() );
+    for( std::size_t i = win.begin; i < win.end; ++i )
+    {
+        const std::string_view rp = pathRel( sibs.paths[i] );
+        rw::emitTo( out, "        {}\n", std::string_view( rp.data(), rp.size() ) );
     }
 }
 
@@ -467,9 +589,15 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // from the document, same as every structured verb's root= attribute).
     const bool         situSingleRoot = ing.realPaths.empty();
     const std::string  situRootPrefix = situSingleRoot ? rw::sarif::rootPrefixOf( root ) : std::string();
+    // L-D names one kind of file the index does not hold (an unindexed .inl sibling), so the relativizer is
+    // split in two: the STORED-path form is the primitive, and the fileId form is that same call.
+    const auto          situPathRelStr = [ & ]( std::string_view p ) -> std::string_view
+    {
+        return situSingleRoot ? rw::sarif::rootRelativeUri( p, situRootPrefix ) : p;
+    };
     const auto          situPathRel   = [ & ]( std::uint32_t fileId ) -> std::string_view
     {
-        return situSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ fileId ], situRootPrefix ) : std::string_view( ing.files[ fileId ] );
+        return situPathRelStr( ing.files[ fileId ] );
     };
 
     std::uint32_t       nChanged = 0;
@@ -562,7 +690,8 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
                   reach.size(), affected.size(), blastNote.c_str() );
     // F3: the decl/def partner FIRST — it is the answer to "what else has to change with this file" that the
     // dependent-symbol ranking below can never produce, because a header does not depend on its own source.
-    writeSituDeclDefRows( out, declDefPartners( ing, changedFile ), situPathRel );
+    const std::vector<DeclDefPartner> situPartners = declDefPartners( ing, changedFile );
+    writeSituDeclDefRows( out, situPartners, situPathRel );
     {   // H5/M15: the same floor + gauge the XML graph verbs mark, in this report's prose — through the SAME
         // fold, graphGaugeTotals, that graphGaugeAttrXml and graphGaugeAttrJson go through. PR #72 (382e66e6)
         // introduced that fold in the same commit that widened the gauge to three, precisely to stop the two
@@ -572,6 +701,10 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
         const auto [gaugeAmb, gaugeUnresolved] = graphGaugeTotals( g.ambOut, g.unresolvedOut );
         rw::emitTo( out, kGraphCountFloorTextLine, gaugeAmb, gaugeUnresolved, graphUnindexedTextClause( g.unindexedFiles ).c_str() );
     }
+    // L-D: the lexical neighbours of the changed files, which the caller walk above can never reach.
+    const SituSiblings situSibs = lexicalSiblings( ing, changedFile );
+    writeSituSiblingRows( out, situSibs, situPathRelStr,
+                          situNextInvocation( page.selector, situSibs.paths.size() ), page.limit, page.offset );
     for( std::size_t i = blastPage.begin; i < blastPage.end; ++i )
     {
         const std::string_view rp = situPathRel( affected[i] );
@@ -696,6 +829,7 @@ struct SituationFacts
     // Carried on the FACTS, not re-derived per surface, so the CLI report, the MCP JSON and --handoff cannot
     // disclose it three ways or two of them forget.
     std::vector<DeclDefPartner>                   declDef;       // F3: files defining the SAME (scope, name) symbols as the changed set — the header/impl pair the transitive list cannot reach
+    SituSiblings                                  siblings;      // L-D: same-directory, same-stem neighbours of the changed files — STORED spellings (an unindexed .inl has no fileId)
     std::string                                   coWindow;      // the window label its co-change was mined in ("18mo@HEAD"), empty only if never mined
     std::size_t                                   coCommits = 0; // commits that window actually contained — 0 ⇒ the zero above is not a measurement
     std::vector<std::pair<std::uint32_t, std::uint64_t>> hotspots; // (changed file, cx×churn score) for high-risk changed files (score desc, path asc)
@@ -778,6 +912,7 @@ inline SituationFacts computeSituationFacts( const std::string& root, const Inge
     // popen per probed file — up to 40 — the O(files)-subprocess storm). Deterministic for a fixed HEAD.
     const auto                     coSets = gitCommitFileSets( root, ing, "18 months ago", 30 );
     facts.declDef  = declDefPartners( ing, changedFile );  // F3: same relationship, same rule, one implementation
+    facts.siblings = lexicalSiblings( ing, changedFile );   // L-D: the same list the CLI report's [1] prints
     facts.coWindow = defaultWindowLabel( root, "18mo" );   // F2: the composed zero's window travels WITH the zero
     facts.coCommits = coSets.size();
     HashMap<std::uint32_t, double> partnerDeg;

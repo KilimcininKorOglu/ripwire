@@ -15,6 +15,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--situ` lists a changed file's lexical siblings
+
+The files that move WITH a changed file are usually its neighbours by name, and the caller walk can reach
+none of them: a header does not call the source that implements it, an `.inl` is not indexed by any grammar
+in any build, and a harness the graph cannot link — a fixture-built test, a generated `main` — is reached by
+nothing. A byte-and-answer attribution over a frozen 30-question set found two answers incomplete for
+exactly that reason. Section `[1]` of `--situ` now lists them, under the decl/def partners and the floor
+clause: `lexical siblings (N) not_dependents=1 — same directory and stem as a changed file (header/impl
+partner, test, .inl); static, not a graph result`, then one root-relative path per row. The rule is the
+dumbest one that is always right — same directory, and the same filename stem or the stem-partner convention
+the tests-to-run rows already use (`<stem>_test`, `test_<stem>`, `<Stem>Test`, `_unittest`, `_spec`). Same
+directory is load-bearing rather than a speed trick: a same-stem file in another directory is a namesake, not
+a partner, and listing namesakes would make the block noise on exactly the large trees it is for. The
+candidate population is the CRAWL's, not the index's, so an `.inl`/`.ipp`/`.tcc` partner — the sibling a C++
+change most often has to edit, and one no grammar can read — is named; the crawl's unsupported-extension row
+list is itself capped, and the one case where that can shorten this list is disclosed as
+`unindexed_rows_floor=1`. The block is capped at 8 rows with `shown=`/`total=`/`capped=1` and a pasteable
+`next:`, and `--limit=N` raises it like the report's other two listings. The MCP `situational_awareness`
+twin carries the same list as `siblings` with `siblings_total`. It costs what it lists: measured with
+`wc -c` on RocksDB @0e2801ac, `--situ=db/write_batch.cc` 6,781 → 6,967 B (+186 for a one-row block naming
+`db/write_batch_test.cc`, which no other section of that report reaches); on this repo, where every source
+file is a lone `.h`, no file has a lexical sibling and the report is byte-unchanged. Gate:
+`test/situshapecheck.sh` arms (7)–(7d) on a fixture with a `.h`/`.cc`/`_test.cc`/`.inl` quadruple, a
+same-stem DECOY in another directory and a same-directory file with a different stem — both must be absent —
+plus a nine-sibling stem for the cap and its disclosure, a no-git copy of the same tree proving the block is
+static (and therefore cannot leak), and the MCP twin agreeing row for row. All four arms red on the previous
+binary.
+
 ### Changed — `--situ`'s disclosures are attributes
 
 `--situ` is the only report with no XML root to hang attributes on, so every disclosure it owed was written

@@ -1236,9 +1236,14 @@ inline std::string situationDiffJson( const std::string& root, const std::string
     // CLI text twin (situ.h::writeSituation) states the SAME fact on its own leading "root: …" line.
     const bool         situJSingleRoot = ing.realPaths.empty();
     const std::string  situJRootPrefix = situJSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
+    // L-D: the STORED-path form is the primitive (an unindexed sibling has no fileId); the fileId form is it.
+    const auto          situJPathRelStr = [ & ]( std::string_view p ) -> std::string_view
+    {
+        return situJSingleRoot ? sarif::rootRelativeUri( p, situJRootPrefix ) : p;
+    };
     const auto          situJPathRel   = [ & ]( std::uint32_t f ) -> std::string_view
     {
-        return situJSingleRoot ? sarif::rootRelativeUri( ing.files[f], situJRootPrefix ) : std::string_view( ing.files[f] );
+        return situJPathRelStr( ing.files[f] );
     };
 
     const auto fileObj = [ & ]( std::uint32_t f ) -> std::string
@@ -1338,7 +1343,28 @@ inline std::string situationDiffJson( const std::string& root, const std::string
     // F2: and the window the co-change zero below was mined in — a JSON reader that only sees an empty
     // `forgotten` array cannot tell "no partners" from "the window mined nothing", and this surface is the
     // one where that reads most like an answer.
-    out += "]" + declDefAndWindowJson( facts, situJPathRel ) + ",\"forgotten\":[";
+    // L-D: the same lexical siblings the CLI report's [1] section lists — the ONE list here whose members
+    // may not be indexed at all (an unindexed .inl has no fileId), so they carry the STORED spelling through
+    // the string relativizer rather than the fileId one. Served whole, like every other array in this payload.
+    std::string situJSibs = ",\"siblings\":[";
+    {
+        bool first = true;
+        for( const std::string& p : facts.siblings.paths )
+        {
+            if( !first )
+            {
+                situJSibs += ",";
+            }
+            first = false;
+            situJSibs += "{\"file\":\"" + mcpdetail::jsonEscape( std::string( situJPathRelStr( p ) ) ) + "\"}";
+        }
+    }
+    situJSibs += "],\"siblings_total\":" + std::to_string( facts.siblings.paths.size() );
+    if( facts.siblings.unindexedRowsFloor )
+    {
+        situJSibs += ",\"siblings_unindexed_rows_floor\":true";   // the crawl's unsupported-extension ROW list was itself cut
+    }
+    out += "]" + declDefAndWindowJson( facts, situJPathRel ) + situJSibs + ",\"forgotten\":[";
     {
         bool first = true;
         for( std::size_t i = situJForgot.begin; i < situJForgot.end; ++i )

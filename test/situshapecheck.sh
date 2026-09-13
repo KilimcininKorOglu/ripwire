@@ -71,6 +71,14 @@ EOF
 cat > "$FX/other/widget.cc" <<'EOF'
 int otherWidget( int n ) { return n - 1; }
 EOF
+# the WIDE stem: nine same-directory, same-stem siblings, so the block's cap and its disclosure are live
+for f in wide.h wide_test.cc wide_unittest.cc wide_spec.cc wideTest.cc; do
+  printf '#pragma once\nint wideThing_%s( int n );\n' "$( printf '%s' "$f" | tr './-' '___' )" > "$FX/core/$f"
+done
+printf 'int wideThing( int n ) { return n; }\n' > "$FX/core/wide.cc"
+for f in wide.inl wide.ipp wide.hpp wide.hxx; do
+  printf 'inline int wideInline_%s( int n ) { return n; }\n' "$( printf '%s' "$f" | tr './-' '___' )" > "$FX/core/$f"
+done
 cat > "$FX/app/main.cc" <<'EOF'
 #include "core/widget.h"
 
@@ -207,6 +215,118 @@ done
 "$BIN" "$FX" --situ=core/widget.cc >"$TMP/d1" 2>/dev/null
 "$BIN" "$FX" --situ=core/widget.cc >"$TMP/d2" 2>/dev/null
 cmp -s "$TMP/d1" "$TMP/d2" && ok "(6) --situ is byte-identical across two runs" || no "(6) --situ is not deterministic"
+
+# ── (7) LEXICAL SIBLINGS (L-D) — the files that move WITH a changed file, which no graph walk can reach ──
+# A change to core/widget.cc almost always touches core/widget.h and core/widget_test.cc, and neither is a
+# transitive DEPENDENT: a header does not call its own implementation, and a test the graph cannot link (a
+# fixture-built harness, a generated main) is reached by nothing. The frozen-30 attribution put two of our
+# incomplete answers exactly there. This block is lexical and static — same directory, same stem — so it
+# costs no history and cannot leak a future commit into an answer about the present.
+SIB="$( grep -m1 'lexical siblings' "$OUT" )"
+if [ -z "$SIB" ]; then
+  no "(7) --situ lists no lexical siblings for core/widget.cc"
+else
+  ok "(7) --situ has a lexical-siblings block: $SIB"
+  sib_rows(){ sed -n '/lexical siblings/,/^  \[2\]/p' "$1" | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }'; }
+  ROWS="$( sib_rows "$OUT" )"
+  for want in core/widget.h core/widget_test.cc core/widget.inl; do
+    printf '%s\n' "$ROWS" | grep -qx -- "$want" \
+      && ok "(7) siblings include $want" \
+      || no "(7) siblings do NOT include $want (rows: $( printf '%s' "$ROWS" | tr '\n' ' ' ))"
+  done
+  # the DECOY: same stem, different directory. A sibling is a neighbour, not a namesake.
+  printf '%s\n' "$ROWS" | grep -qx -- 'other/widget.cc' \
+    && no "(7) siblings wrongly include other/widget.cc — a same-stem file in a DIFFERENT directory" \
+    || ok "(7) siblings exclude other/widget.cc (same stem, different directory)"
+  # the neighbour that is not a namesake
+  printf '%s\n' "$ROWS" | grep -qx -- 'core/gadget.cc' \
+    && no "(7) siblings wrongly include core/gadget.cc — same directory, different stem" \
+    || ok "(7) siblings exclude core/gadget.cc (same directory, different stem)"
+  # the changed file itself is not its own sibling
+  printf '%s\n' "$ROWS" | grep -qx -- 'core/widget.cc' \
+    && no "(7) siblings list the changed file itself" \
+    || ok "(7) siblings exclude the changed file itself"
+  # root-relative, like every other path in the report
+  BAD="$( printf '%s\n' "$ROWS" | grep -E '^(/|\./)' | head -1 )"
+  [ -z "$BAD" ] && ok "(7) sibling paths are root-relative" || no "(7) sibling path '$BAD' is absolute or ./-prefixed"
+  case "$SIB" in
+    *'not_dependents=1'*) ok "(7) the block says these are NOT transitive dependents (not_dependents=1)" ;;
+    *)                    no "(7) the block does not say these rows are not dependents: $SIB" ;;
+  esac
+fi
+
+# ── (7b) BOUNDED, and the bound DISCLOSED ───────────────────────────────────────────────────────────────
+WIDE="$TMP/wide.txt"
+"$BIN" "$FX" --situ=core/wide.cc >"$WIDE" 2>/dev/null
+WSIB="$( grep -m1 'lexical siblings' "$WIDE" )"
+if [ -z "$WSIB" ]; then
+  no "(7b) the wide-stem file lists no siblings at all — the cap arm would be a false green"
+else
+  case "$WSIB" in
+    *'capped=1'*) ok "(7b) a stem with more siblings than the cap discloses capped=1: $WSIB" ;;
+    *)            no "(7b) the sibling block is cut without saying so: $WSIB" ;;
+  esac
+  case "$WSIB" in
+    *'shown='*'total='*) ok "(7b) the cut names shown= and total=" ;;
+    *)                   no "(7b) the cut names no shown=/total= pair: $WSIB" ;;
+  esac
+  case "$WSIB" in
+    *'next: --situ'*) ok "(7b) the cut carries a pasteable next: that widens it" ;;
+    *)                no "(7b) the cut offers no relief: $WSIB" ;;
+  esac
+  WROWS="$( sed -n '/lexical siblings/,/^  \[2\]/p' "$WIDE" | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }' | grep -c . )"
+  WTOTAL="$( printf '%s' "$WSIB" | sed -n 's/.*total=\([0-9]*\).*/\1/p' )"
+  [ "${WROWS:-0}" -lt "${WTOTAL:-0}" ] && ok "(7b) ${WROWS} rows of ${WTOTAL} — the count is the population, not the rows" \
+                                       || no "(7b) shown rows (${WROWS}) do not sit under total=${WTOTAL}"
+  # --limit raises it, exactly as it raises [1] and [3]
+  "$BIN" "$FX" --situ=core/wide.cc --limit=40 >"$TMP/wide40.txt" 2>/dev/null
+  W40="$( sed -n '/lexical siblings/,/^  \[2\]/p' "$TMP/wide40.txt" | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }' | grep -c . )"
+  [ "${W40:-0}" -gt "${WROWS:-0}" ] && ok "(7b) --limit=40 widens the sibling block (${WROWS} -> ${W40} rows)" \
+                                    || no "(7b) --limit did not widen the sibling block (${WROWS} -> ${W40})"
+fi
+
+# ── (7c) STATIC: the block does not depend on git history ───────────────────────────────────────────────
+# The lesson this implements is deliberately LEXICAL: it must answer the same way on a tree with no history
+# at all, which is also what makes it unable to leak a future commit into an answer about the present.
+NOGIT="$TMP/nogit"; rm -rf "$NOGIT"; mkdir -p "$NOGIT"
+( cd "$FX" && tar cf - --exclude .git . ) | ( cd "$NOGIT" && tar xf - )
+"$BIN" "$NOGIT" --situ=core/widget.cc >"$TMP/nogit.txt" 2>/dev/null
+NG="$( sed -n '/lexical siblings/,/^  \[2\]/p' "$TMP/nogit.txt" | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }' )"
+GT="$( sed -n '/lexical siblings/,/^  \[2\]/p' "$OUT" | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }' )"
+if [ -z "$NG" ]; then
+  no "(7c) the sibling block vanished on a tree with no git history — it is not static"
+elif [ "$NG" = "$GT" ]; then
+  ok "(7c) the sibling block is identical with and without git history — static, so it cannot leak"
+else
+  no "(7c) the sibling block differs with and without git history: [$( printf '%s' "$NG" | tr '\n' ' ' )] vs [$( printf '%s' "$GT" | tr '\n' ' ' )]"
+fi
+
+# ── (7d) the MCP twin answers the same question with the same list ──────────────────────────────────────
+if command -v python3 >/dev/null 2>&1; then
+  MCPOUT="$TMP/mcp.json"
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+                 '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"situational_awareness","arguments":{"path":"'"$FX"'","diff":"core/widget.cc"}}}' \
+    | "$BIN" --mcp >"$MCPOUT" 2>/dev/null
+  MROWS="$( python3 - "$MCPOUT" <<'PYEOF'
+import json, sys
+last = [l for l in open(sys.argv[1]) if l.strip()][-1]
+r = json.loads(last)
+try:
+    inner = json.loads(r["result"]["content"][0]["text"])
+except Exception:
+    print("__NONE__"); raise SystemExit
+sibs = inner.get("siblings")
+if sibs is None:
+    print("__MISSING__"); raise SystemExit
+print(" ".join(sorted(s.get("file", "") for s in sibs)))
+PYEOF
+)"
+  case "$MROWS" in
+    __MISSING__|__NONE__) no "(7d) the MCP situational_awareness twin carries no siblings list ($MROWS)" ;;
+    *core/widget.h*)      ok "(7d) the MCP twin carries the same siblings ($MROWS)" ;;
+    *)                    no "(7d) the MCP twin's siblings disagree with the CLI report: $MROWS" ;;
+  esac
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then echo "situshapecheck: ALL PASS"; else echo "situshapecheck: SOME FAILED"; fi
