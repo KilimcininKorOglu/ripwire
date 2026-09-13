@@ -19,6 +19,7 @@
 #include "gitstamp.h"    // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "testmap.h"     // §P11.4: TestRunnerIndex / runAttr — the run= hint on a named test row
 #include "didyoumean.h"  // H6: nearestIndexedFileClause — the ONE path near-miss suggester, shared with the MCP arm
+#include "siblift.h"     // L-D: siblift_detail::dirOf — the ONE "directory of a path" primitive, reused not re-rolled
 #include "serialize.h"   // L2: jsonStr() — writeTestGateReportJson's escaping (self-contained: don't rely on
                          // include-order in whichever TU pulls situ.h in first)
 #include "pageview.h"    // §A3a: the ONE paging/truncation vocabulary — the
@@ -447,15 +448,22 @@ struct SituSiblings
     bool                     unindexedRowsFloor = false;   // the crawl's unsupported-extension ROW list was itself cut
 };
 
-inline std::string_view situDirOf( std::string_view path ) noexcept
-{
-    const std::size_t slash = path.rfind( '/' );
-    return slash == std::string_view::npos ? std::string_view() : path.substr( 0, slash );
-}
-
+// dirOf is siblift.h's (the other same-directory lens), stem is mention.h's pair — the two primitives this
+// rule needs both already exist, and a third spelling of either is the clone --quality-delta reports.
 inline std::string_view situStemOf( std::string_view path ) noexcept
 {
     return mention_detail::stripExt( mention_detail::baseNameOf( path ) );
+}
+
+// One changed file's test: same directory, and the same stem or testmap.h's stem-partner convention. Named
+// so lexicalSiblings below reads as the two loops it is (candidates x changed files) rather than four levels.
+inline bool isLexicalSiblingOf( std::string_view cand, std::string_view changed ) noexcept
+{
+    if( cand == changed || siblift_detail::dirOf( cand ) != siblift_detail::dirOf( changed ) )
+    {
+        return false;
+    }
+    return situStemOf( cand ) == situStemOf( changed ) || isTestPartnerOf( cand, changed ) || isTestPartnerOf( changed, cand );
 }
 
 // ADDITIVE, deliberately: a file may be BOTH a decl/def partner (symbol identity) and a lexical sibling
@@ -478,26 +486,15 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
     {
         return out;
     }
-    const auto isSiblingOfAnyChanged = [ & ]( std::string_view cand ) noexcept
+    const auto consider = [ & ]( std::string_view cand )
     {
         for( std::string_view c : changedPaths )
         {
-            if( cand == c || situDirOf( cand ) != situDirOf( c ) )
+            if( isLexicalSiblingOf( cand, c ) )
             {
-                continue;
+                out.paths.emplace_back( cand );
+                return;
             }
-            if( situStemOf( cand ) == situStemOf( c ) || isTestPartnerOf( cand, c ) || isTestPartnerOf( c, cand ) )
-            {
-                return true;
-            }
-        }
-        return false;
-    };
-    const auto consider = [ & ]( std::string_view cand )
-    {
-        if( isSiblingOfAnyChanged( cand ) )
-        {
-            out.paths.emplace_back( cand );
         }
     };
     for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
@@ -543,19 +540,19 @@ inline void writeSituDeclDefRows( std::FILE* out, const std::vector<DeclDefPartn
 // L-D's rows. `pathRel` takes a STORED path rather than a fileId, because an unindexed sibling (.inl/.ipp)
 // has no fileId at all — the one place this report names a file the index does not hold.
 template <typename PathRelStrFn>
-inline void writeSituSiblingRows( std::FILE* out, const SituSiblings& sibs, PathRelStrFn pathRel,
-                                  std::string_view nextInvocation, int pageLimit, int pageOffset )
+inline void writeSituSiblingRows( std::FILE* out, const SituSiblings& sibs, PathRelStrFn pathRel, const SituPageArgs& page )
 {
     if( sibs.paths.empty() )
     {
         return;
     }
-    const PageWindow  win   = pageWindow( sibs.paths.size(), effectiveRowCap( pageLimit, int( kSituSiblingRowsShown ) ), pageOffset );
+    const PageWindow  win   = pageWindow( sibs.paths.size(), effectiveRowCap( page.limit, int( kSituSiblingRowsShown ) ), page.offset );
     const std::size_t shown = win.end - win.begin;
     rw::emitTo( out, "        lexical siblings ({}) not_dependents=1{}{} — same directory and stem as a changed file (header/impl partner, test, .inl); static, not a graph result:\n",
                   sibs.paths.size(),
                   sibs.unindexedRowsFloor ? " unindexed_rows_floor=1" : "",
-                  situShowingNote( shown, sibs.paths.size(), "files", nextInvocation ).c_str() );
+                  situShowingNote( shown, sibs.paths.size(), "files",
+                                   situNextInvocation( page.selector, sibs.paths.size() ) ).c_str() );
     for( std::size_t i = win.begin; i < win.end; ++i )
     {
         const std::string_view rp = pathRel( sibs.paths[i] );
@@ -703,8 +700,7 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     }
     // L-D: the lexical neighbours of the changed files, which the caller walk above can never reach.
     const SituSiblings situSibs = lexicalSiblings( ing, changedFile );
-    writeSituSiblingRows( out, situSibs, situPathRelStr,
-                          situNextInvocation( page.selector, situSibs.paths.size() ), page.limit, page.offset );
+    writeSituSiblingRows( out, situSibs, situPathRelStr, page );
     for( std::size_t i = blastPage.begin; i < blastPage.end; ++i )
     {
         const std::string_view rp = situPathRel( affected[i] );
