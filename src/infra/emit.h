@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <new>            // std::bad_alloc — renderToString's injected emitter-throw fault, below
 #include <type_traits>
 #include <cstring>
 #include <cstdio>
@@ -183,6 +184,49 @@ struct Rendered
     bool        ok = false;
 };
 
+// ── THE EMITTER ITSELF MAY THROW, and that is a degrade, not a way out ───────────────────────────────
+// CodeRabbit on #214: `emit( m )` was called outside any handler. A throw from it — std::bad_alloc out of
+// the std::format fallback is the reachable one, since the whole point of this seam is to buffer a document
+// whose size is not known in advance — skipped the fclose, the free, the alert and the documented
+// empty-result fallback in one jump: the memstream and its buffer leaked, and the caller got an exception
+// where its contract says it gets `ok == false`.
+//
+// The house answer to "a throw crosses a seam that owns a resource" is this tree's own: catch at the seam,
+// release what it owns, DISCLOSE, and hand back the degraded value the caller already knows how to read
+// (search.h's `catch( ... ) { out.degraded = true; return out; }`, ingest_astquery.h's per-file degrade).
+// It is the same answer this function already gives when open_memstream fails, and the callers need no new
+// case: `ok == false` has always meant "these are not the bytes the emitter wrote", and --pr-context
+// already streams the floor level straight out when it sees one.
+//
+// FAULT INJECTION, because a throw path is otherwise unreachable from a gate: the switch below is
+// serialize.h's isChargeBufferFaultInjected idiom, verbatim in shape — non-NDEBUG only (so it is
+// `constexpr false` and the getenv is deleted in release, G2/G3), read ONCE per process (so it cannot
+// change mid-document and determinism holds), and EXACT "1" is the only ON value, because the contract is a
+// switch and a prefix test would let "=10" and "=0" disagree with what they say. test/prcontextcheck.sh
+// arm (F) drives it and asserts the whole contract: complete bytes, the alert, no leak under LSan.
+// ONE reader for every such switch (serialize.h's charge-buffer fault is the other). The parsing rule is
+// the part worth having in one place: EXACT "1" is the only ON value, because the contract is a switch and a
+// prefix test would let "=10" and "=0" mean whatever the reader guessed — a defect this tree already fixed
+// once, in the charge-buffer switch, and would otherwise have had to fix again here. Under NDEBUG it is
+// `constexpr false`, so the branch and the getenv are both deleted (G2/G3: zero release cost).
+#ifndef NDEBUG
+inline bool faultSwitchOn( const char* envName ) noexcept
+{
+    const char* value = std::getenv( envName );
+    return value != nullptr && std::strcmp( value, "1" ) == 0;
+}
+#else
+inline constexpr bool faultSwitchOn( const char* ) noexcept { return false; }
+#endif
+
+// Each switch keeps its own named wrapper and its own once-per-process read: the name is what a reader greps
+// for, and the `static` is what keeps the answer from changing mid-document (determinism).
+inline bool isRenderEmitThrowFaultInjected() noexcept
+{
+    static const bool isOn = faultSwitchOn( "RIPWIRE_FAULT_RENDER_EMIT_THROW" );
+    return isOn;
+}
+
 template<class Emit>
 inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
 {
@@ -195,7 +239,27 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
         DEGRADED_PATH_ALERT( degradeMsg );
         return out;
     }
-    emit( m );
+    try
+    {
+        // The injected fault stands exactly where a real std::bad_alloc would escape: the stream is open and
+        // nothing has been cleaned up yet, which is the state the catch below exists to unwind.
+        if( isRenderEmitThrowFaultInjected() ) { throw std::bad_alloc(); }
+        emit( m );
+    }
+    catch( ... )
+    {
+        // Everything this function owns, released once, in the order the non-throwing path releases it. The
+        // stream is closed rather than flushed first: there is no document to salvage, and fclose frees the
+        // FILE either way. `out` is still the default-constructed failure — empty text, ok == false.
+        std::fclose( m );
+        std::free( buf );
+        // NOT degradeMsg: that one says the BUFFER failed, and here it did not — the emitter did. The macro
+        // takes a const char*, so this is its own literal rather than a composed string; the caller is named
+        // anyway, because __PRETTY_FUNCTION__ carries the Emit lambda's own file and line.
+        DEGRADED_PATH_ALERT( "renderToString: the emitter THREW — nothing was measured, "
+                             "the caller takes its documented fallback" );
+        return out;
+    }
     // Order matters: fflush first (it reports the write error), then fclose UNCONDITIONALLY (it owns the
     // stream, and skipping it on a flush failure would leak it). A null buf after a clean close is itself a
     // failure — an emitter that wrote nothing still gets a zero-length, null-terminated buffer.

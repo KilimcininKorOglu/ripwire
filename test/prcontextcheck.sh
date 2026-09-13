@@ -362,4 +362,66 @@ else
     ok "P10.4 invariant: dependents>0 always implies files>0 (files= is the reached total)"
 fi
 
+# ── (F) THE EMITTER THROWS: renderToString releases what it owns, discloses, and the document still ships ──
+#
+# THE FINDING (CodeRabbit on #214, src/infra/emit.h). `emit( m )` was called outside any handler. A throw
+# from it — std::bad_alloc out of the std::format fallback is the reachable one — skipped the fclose, the
+# free, the alert and the documented empty-result fallback in one jump: the memstream and its buffer leaked
+# and the caller got an exception where its contract says it gets ok == false.
+#
+# A throw path is unreachable from a gate by ordinary means, so this drives the in-source fault switch
+# RIPWIRE_FAULT_RENDER_EMIT_THROW=1 — serialize.h's isChargeBufferFaultInjected idiom, and therefore living
+# ONLY on the non-NDEBUG flavour, the same flavour DEGRADED_PATH_ALERT lives on. So, like estchargecheck #14,
+# this arm establishes that flavour with its OWN probe rather than assuming it, and must never pass for lack
+# of an alert it could not have seen.
+PRC_FAULT_OUT="$TMP/f_dg.out"; PRC_FAULT_ERR="$TMP/f_dg.err"
+RIPWIRE_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
+prc_f_rc=$?
+if ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
+    # Either an NDEBUG build (unobservable BY DESIGN — the plain-flavour leg proves it) or a real regression.
+    if "$BIN" --version 2>/dev/null | grep -q 'release'; then
+        printf '  INFO  (F) emitter-throw degrade is unobservable on this NDEBUG flavour (the plain build proves it)\n'
+    else
+        no "(F) RIPWIRE_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a flavour that can see one — the seam regressed"
+    fi
+else
+    ok "(F) observability probe: the emitter-throw fault switch is live and alerts on this flavour"
+    # (F0) the alert names the CAUSE IT HAD. degradeMsg says the BUFFER failed; on this path it did not, so
+    #      reusing it would have been a wrong reason attached to a right consequence.
+    grep -aq 'open_memstream failed' "$PRC_FAULT_ERR" \
+        && no "(F0) the emitter-throw alert blames open_memstream, which did not fail on this path" \
+        || ok "(F0) the emitter-throw alert names the throw, not the buffer"
+    # (F1) THE DOCUMENT STILL SHIPS. The whole point of the degrade: the caller loses the ESTIMATE, never the
+    #      content. prcontext.h streams the floor level straight out when no level could be measured.
+    [ "$prc_f_rc" -eq 0 ] \
+        && ok "(F1) --pr-context still exits 0 with every render throwing" \
+        || no "(F1) --pr-context exited $prc_f_rc with the emitter-throw fault injected — the throw escaped instead of degrading"
+    if grep -aq '</pr-context>' "$PRC_FAULT_OUT" && grep -aq '<pr-context' "$PRC_FAULT_OUT"; then
+        ok "(F2) the degraded document is CLOSED — a root, a body and a closing tag, never an empty element"
+    else
+        no "(F2) the degraded --pr-context document is not a closed <pr-context> root ($( wc -c <"$PRC_FAULT_OUT" | tr -d ' ' ) B)"
+    fi
+    if command -v xmllint >/dev/null 2>&1; then
+        xmllint --noout "$PRC_FAULT_OUT" 2>/dev/null \
+            && ok "(F3) the degraded document is well-formed XML (G4 holds through the degrade)" \
+            || no "(F3) the degraded --pr-context document does not parse — a degrade may not breach G4"
+    fi
+    # (F4) and it is not a stub. The direction here is the whole point and is easy to get backwards — this
+    #      arm did, and caught itself: the degrade streams kPrTrims[0], the UNTRIMMED floor, while the
+    #      undegraded run picks whichever level fits its token budget. So the degraded document carries at
+    #      LEAST as many rows as the control and routinely more (40 against 4 on this tree). What the caller
+    #      loses is the ESTIMATE; what it must never lose is content, and "same count" would assert the wrong
+    #      invariant and fail on any tree whose control trims. Compared by ELEMENT COUNT, not bytes.
+    f_files="$( grep -ao '<f ' "$PRC_FAULT_OUT" | wc -l | tr -d ' ' )"
+    "$BIN" "$ROOT" --pr-context >"$TMP/f_ctl.out" 2>/dev/null
+    c_files="$( grep -ao '<f ' "$TMP/f_ctl.out" | wc -l | tr -d ' ' )"
+    if [ "${f_files:-0}" -eq 0 ]; then
+        no "(F4) the degraded document carries NO <f> row — the degrade lost the content it exists to keep"
+    elif [ "$f_files" -ge "${c_files:-0}" ]; then
+        ok "(F4) the degraded document carries $f_files <f> row(s) against the control's $c_files — content kept (the floor level is untrimmed), estimate lost"
+    else
+        no "(F4) the degraded document carries $f_files <f> row(s), FEWER than the control's $c_files — the degrade lost content, not just the charge"
+    fi
+fi
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

@@ -133,7 +133,21 @@ of its three producers spells it that way: `situational_awareness` emits `test`,
 receipt emit `p`. A clause naming the wrong key is worse than no clause, because a caller reads it as a
 contract, so it names both per producer while the rules they share are still stated once; the manifest
 ceiling moves 42,800 → 43,000 B for a measured 42,973 (the clause 207 → 305 B in each of the same two
-descriptions, 2 × 98 B).
+descriptions, 2 × 98 B). And `renderToString` called the emitter outside any handler: a throw from it —
+`std::bad_alloc` out of the `std::format` fallback is the reachable one, since the point of the seam is to
+buffer a document whose size is not known in advance — skipped the `fclose`, the `free`, the alert and the
+documented empty-result fallback in one jump, leaking the memstream and its buffer and handing the caller an
+exception where its contract says `ok == false`. Measured on this tree with the fault injected:
+`--pr-context` aborted at `rc=134` with **zero bytes** on stdout and `libc++abi: terminating due to uncaught
+exception of type std::bad_alloc` — the whole document lost, not just its estimate. The seam now catches at
+its own boundary, releases what it owns once, discloses, and returns the degraded value its callers already
+read, so the same run exits 0 with a complete 14,627-byte well-formed document carrying the same 20 `<f>`
+rows as the undegraded control. The alert names the throw rather than borrowing the buffer's message, which
+on that path would be a wrong cause attached to a right consequence. Because a throw path is otherwise
+unreachable from a gate, it is driven by an in-source fault switch in `serialize.h`'s
+`isChargeBufferFaultInjected` shape — non-NDEBUG only, read once per process, exact `"1"` the only ON value —
+and `test/prcontextcheck.sh` arm (F) asserts the whole contract with its own observability probe, red on the
+parent commit (`rc=134`, 0 B, no alert).
 
 ### Fixed — the reference guide said things the binary does not
 
