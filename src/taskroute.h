@@ -104,11 +104,16 @@ inline bool has( std::string_view lower, std::string_view phrase ) noexcept
 }
 
 // HOW a cue is matched is the only thing the two spellings below differ in, so it is a parameter and not a
-// second loop: a PHRASE carries its own boundaries and may be found anywhere, while a bare WORD matched as
-// a substring is a different word — `here` occurs inside where/there/adhere, `file` inside profile, `code`
-// inside codec, `moving` inside removing. Getting that wrong is not academic: with the substring spelling
-// the recency route below recommended the churn window, at confidence="high", for a sentence about a
-// supplier revising their terms (2026-09-13 review).
+// second loop: a bare WORD matched as a substring is a different word — `here` occurs inside
+// where/there/adhere, `file` inside profile, `code` inside codec, `moving` inside removing. Getting that
+// wrong is not academic: with the substring spelling the recency route below recommended the churn window,
+// at confidence="high", for a sentence about a supplier revising their terms (2026-09-13 review).
+//
+// A multi-word cue is SAFER, not safe, and the first round of that review overstated it as "a phrase
+// carries its own boundaries". The space inside a phrase delimits its interior and nothing at its two
+// ENDS: `how do` is found across `show documentation`, `how is` across `show issues`. So Substring is not
+// a licence — it is for the phrases whose first and last words do not finish or begin ordinary words, and
+// a caller that cannot say that of its own cues asks for WordBounded (kExplanatoryCues does).
 enum class CueMatch : std::uint8_t { Substring, WordBounded };
 
 inline int cueScore( std::string_view lower, CueMatch how,
@@ -994,6 +999,16 @@ inline constexpr std::string_view kCalendarWords[] = {
     "november", "december", "midnight", "noon",
 };
 
+// The EXPLANATORY reading, which is never the history route however many of its three conjuncts hold.
+// WORD-BOUNDED, and the boundary is the whole point: a multi-word cue is NOT self-delimiting, which the
+// first review round's comment on CueMatch assumed it was. The space INSIDE a phrase delimits nothing at
+// its two ENDS — the first word can finish another word and the last can begin one. `show documentation`
+// contains `how do` and `show issues` contains `how is`, so both of those questions ABOUT this repository's
+// history lost the route that answers them (2026-09-13, second review round).
+inline constexpr std::string_view kExplanatoryCues[] = {
+    "how does", "how do", "how is", "how are", "what does", "implementation of",
+};
+
 // `since Monday`, `since 2026-09-01` — structural, because a date has no paraphrase (the same reasoning
 // firstFileLineToken is built on). Word-bounded, so `sincerely` is not a window.
 inline bool saysSinceWhen( std::string_view lowerTask ) noexcept
@@ -1054,8 +1069,8 @@ inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std:
     // read as history. Recognised as the phrase it is, and only in the question forms that mean it.
     const bool newInPhrase = has( lower, "what is new in" ) || has( lower, "what's new in" )
                           || has( lower, "whats new in" ) || has( lower, "anything new in" );
-    const bool explanatory = has( lower, "how does" ) || has( lower, "how do" ) || has( lower, "how is" )
-                          || has( lower, "how are" ) || has( lower, "what does" ) || has( lower, "implementation of" );
+    const bool explanatory = std::any_of( std::begin( kExplanatoryCues ), std::end( kExplanatoryCues ),
+                                          [lower]( const std::string_view cue ) { return boundedFind( lower, cue ) != std::string_view::npos; } );
     if( ( ( timeScore < 5 || motionScore < 6 ) && !newInPhrase ) || explanatory )
     {
         return std::nullopt;

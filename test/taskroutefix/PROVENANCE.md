@@ -369,5 +369,51 @@ The original 225 still score 0.939 / 0.946 / 0.942 on this binary — the same t
 confusion rows.
 
 **Screen: 1 flagged line** (176, pre-existing), DOWN from the 2 this corpus carried before the round.
+**[CORRECTED 2026-09-13, see the section below: that reading does not reproduce. The screen reports 2
+flagged lines at this seal, 61 and 176, and reported the same 2 before the round.]**
 
 **Seal: sha256(prompts.tsv) = `7a732691a4040e8a0c16cb95cfd9ac90f0cccb8ea904301c2228777636d47843`** (rows=247, dev=119, test=128).
+
+### 2026-09-13, second review round — a multi-word cue is not self-delimiting
+
+**The defect.** The round above bounded the SINGLE-word cues and left the multi-word ones on substring
+matching, on the reasoning that "a phrase carries its own boundaries". A phrase delimits its own INTERIOR
+and nothing at its two ends: the first word of `how do` can finish another word and the last can begin one.
+`show documentation` contains `how do`; `show issues` contains `how is`. Both sentences are questions about
+this repository's history, and both hit the EXPLANATORY guard and abstained. The six explanatory cues are
+word-bounded now (`kExplanatoryCues`), and the CueMatch comment no longer claims what is not true of a
+phrase. Reported by CodeRabbit on #218 (review 5192045896, `src/taskroute.h:1059`).
+
+**The reported repro did not reproduce, and the real one is narrower.** The review cited
+`what changed recently in the documentation directory`, on the reading that `documentation` contains
+`how do`. It does not — no cue is a substring of that word, and that prompt already routed
+`recency-window` on the unfixed binary. The false positive needs the cue to span TWO words: a word ending
+in `how`/`what` followed by one beginning `do`/`is`/`are`/`does`. `show issues …` and `show documentation …`
+are the rows below, both verified RED (abstain, `score="0"`) against the unfixed binary.
+
+**Rows added: 2**, both `test` by the content-hash rule (no hand assignment): one POSITIVE that must route
+`recency-window` (it names `storage`, which the eval fixture holds, so the scope half is exercised — on a
+build shipping the flag it is `--in=storage`; this build has no such row in its flag table and composes
+none), and one NEGATIVE, `how do i see the files in storage that changed recently`, which must still
+abstain: bounding the cues may not buy the positives at the price of the genuine explanatory question.
+
+**Held-out floors** (`bench/taskroute_eval.py`, 249 rows):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 130 | **0.946** | 1.000 | 0.000 | 1.000 | 0.918 |
+| dev | 119 | **0.950** | 1.000 | 0.000 | 1.000 | 0.933 |
+| all | 249 | **0.948** | 1.000 | 0.000 | 1.000 | 0.925 |
+
+The original 225 still score 0.939 / 0.946 / 0.942 on this binary.
+
+**Screen: 2 flagged lines** (61 `i change its`, 176 `the value of`), and this is the CORRECTION the section
+above needs. Measured three ways with one binary: at `5e1ae383`, the commit before this lane, the screen
+reports both; at the previous round's own seal it reports both; with the two rows below it reports both and
+nothing else. The round above recorded "1 flagged line … DOWN from 2" — that reading does not reproduce at
+its own seal, and no corpus row was relabelled that could have produced it. Both flags are pre-existing rows
+tripping card literals older than this lane (`did I change its contract?` and the `the value of` variable
+cue), neither is a row this lane wrote, and the count has been 2 throughout. A number that was never
+measured is not a measurement, which is the same rule this file applied to the byte-identity claim.
+
+**Seal: sha256(prompts.tsv) = `bb802dabd45bf228b51296cca2a0f35c54824895f429954959ef7219416d0f30`** (rows=249, dev=119, test=130).

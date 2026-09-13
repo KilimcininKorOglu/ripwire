@@ -246,3 +246,5 @@ test	dirty	review-diff	instrumented-cli	is my diff safe to merge, i changed thes
 dev	clean	recency-window	handwritten-recency	what landed in storage this week
 test	clean	recency-window	handwritten-recency	commits since Monday under storage
 test	clean	recency-window	instrumented-cli	what is new in the storage directory
+test	clean	recency-window	handwritten-recency	show issues with the files in storage that changed recently
+test	clean	abstain	handwritten-recency	how do i see the files in storage that changed recently

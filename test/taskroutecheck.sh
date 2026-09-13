@@ -365,6 +365,20 @@ RW0B="$( route 'we recently agreed to ship the announcement on friday' )"
 case "$RW0B" in *'--rank-by=churn-decay'*) no "a time word with no motion word minted a churn window: $RW0B";; *) ok "a time word alone never mints the recency window";; esac
 RW0C="$( route 'how do we rebuild the list of recently changed files' )"
 case "$RW0C" in *'--rank-by=churn-decay'*) no "an explanatory question satisfying all three conjuncts still routed: $RW0C";; *) ok "an explanatory question is never the history route";; esac
+# …and a MULTI-WORD cue is not self-delimiting either (2026-09-13, second review round). The review above
+# bounded the single-word cues on the reasoning that "a phrase carries its own boundaries" — true of the
+# space INSIDE a phrase, false at its two ends: the first word of `how do` can finish another word and the
+# last can start one. `show documentation` contains `how do`, `show issues` contains `how is`, and both
+# sentences below therefore tripped the EXPLANATORY guard and lost the route they are asking for. RED
+# against the unbounded spelling (abstain, score="0") for both.
+for P in 'show issues with the files in storage that changed recently' \
+         'show documentation files in storage that changed recently'; do
+    RWE="$( route "$P" )"
+    case "$RWE" in *'intent="recency-window"'*'--rank-by=churn-decay'*) ok "an explanatory cue spanning two other words does not kill the route: $P";; *) no "a cross-word explanatory cue killed the recency route [$P]: $RWE";; esac
+done
+# The control the arm above must not buy at the price of: a real explanatory question, bounded cue and all.
+RW0D="$( route 'how do i see the files in storage that changed recently' )"
+case "$RW0D" in *'--rank-by=churn-decay'*) no "a genuine explanatory question routed once the cues were bounded: $RW0D";; *) ok "'how do i …' is still never the history route";; esac
 
 # ── the WIDENING page is named on the FIRST call, not only after a thin answer ────────────────────────
 # forpage.h's next= names `--for=TASK --limit=N` when the answer it already served came back thin. That

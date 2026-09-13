@@ -28,14 +28,17 @@ plus a motion word is also a sentence about a supplier's terms last quarter. An 
 never this route however many of the three it holds, and the working tree stays `--situ`'s question. A
 directory is composed into `--in=DIR` only when the corpus really holds it AND the running build ships the
 flag, read off the flag table itself: a router that recommends a flag its own parser has no row for hands
-back a command that exits non-zero on the first paste. Single-word cues are matched WORD-BOUNDED, which is not a
+back a command that exits non-zero on the first paste. Cues are matched WORD-BOUNDED, which is not a
 detail: with the substring spelling `here` occurred inside where/there, `source` inside outsource, `file`
 inside profile and `code` inside codec, and a sentence about a supplier revising their terms recommended
-the churn window at `confidence="high"`. The route also sits BELOW the weighted tier, which is how it
+the churn window at `confidence="high"`. That holds for the multi-word cues too, which delimit their own
+interior and nothing at their two ends — `show documentation` contains `how do` and `show issues` contains
+`how is`, so both of those questions about this repository's history tripped the explanatory guard and lost
+the route that answers them. The route also sits BELOW the weighted tier, which is how it
 reads a dirty worktree: on a dirty tree `is my diff safe to merge, i changed these files recently` is
 still the `review-diff` question, and that route wins before this one is consulted. Held out
-(`bench/taskroute_eval.py`, the committed 225-row corpus plus 22 rows for this round, split by its
-content-hash rule): accuracy 0.939 → **0.945** test, 0.946 → **0.950** dev, precision 1.000 and harmful
+(`bench/taskroute_eval.py`, the committed 225-row corpus plus 24 rows for this round, split by its
+content-hash rule): accuracy 0.939 → **0.946** test, 0.946 → **0.950** dev, precision 1.000 and harmful
 0.000 unchanged. The 225 pre-existing rows score the same three numbers on the new binary — and, measured,
 **0 of them reach the new route at all**, so that identity is reported as the near-vacuous check it is
 rather than as evidence.
