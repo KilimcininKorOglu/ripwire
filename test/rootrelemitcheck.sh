@@ -373,13 +373,14 @@ for spelling in abs rel; do
             | sed -n 's/.*"tests_to_run":\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | sed -n 's/.*"p":"\([^"]*\)".*/\1/p' )
   # A5 re-pin (2026-09-13): the section's closing script-gate disclosure is now the attribute line
   # `script_gates_unmodelled=N — …`, which starts with a non-space non-"(" byte and so was read as a path
-  # row. A row path never contains "=", so that is the discriminator.
+  # row. An attribute line OPENS with `name=`; a grouped row opens with `[hops=N]`, so the discriminator is
+  # the leading bytes, not "contains =".
   # M21(b) re-pin (capture-audit 2026-09-04, lane L8): every --situ tests-to-run line now ends in a run
   # recipe OR its "(run: not derivable)" disclosure, so the old "the line contains no '(' " extraction
   # matched nothing and this arm read red while the SPELLING it exists to compare was correct. Re-pinned to
   # the new contract: take the path FIELD off a row line, not the whole line.
   s_rows=$( cd "$CD" && "$BIN" "$RT" --situ=geometry.cpp 2>/dev/null \
-            | sed -n '/tests to run/,/^  \[3\]/p' | awk '/^        [^ (]/ && $1 !~ /=/ { print $1 }' )
+            | sed -n '/tests to run/,/^  \[3\]/p' | awk '/^        [^ (]/ && $1 !~ /^[a-z_]+=/ { print $1 }' )
   if [ -z "$a_rows" ]; then
     no "ARM6/$spelling --affected emitted NO test row for distance — the arm would be a false green"
     continue

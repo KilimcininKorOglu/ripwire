@@ -190,7 +190,10 @@ else
 fi
 # ── ARM 8 — --situ's TEXT dialect (situ.h) ─────────────────────────────────────────────────────────────
 SITU="$( rw --situ )"
-SITU_ROWS="$( printf '%s\n' "$SITU" | sed -n '/tests to run/,/^  \[3\]/p' | grep -E '^        [^ (]' )"
+# A5 (2026-09-13): the section's closing script-gate disclosure is now the attribute line
+# `script_gates_unmodelled=N — …` rather than a parenthesised sentence, so "starts with (" no longer
+# excludes it. A ROW's first token is a path, and a path never contains "=" — that is the discriminator.
+SITU_ROWS="$( printf '%s\n' "$SITU" | sed -n '/tests to run/,/^  \[3\]/p' | grep -E '^        [^ (]' | grep -vE '^        [a-z_]+=' )"
 if [ -z "$SITU_ROWS" ]; then
     no "(8) --situ: fixture produced no 'tests to run' rows — the arm cannot bite"; printf '%s\n' "$SITU" | head -30
 else
@@ -345,6 +348,10 @@ s_paths, s_groups = [], 0
 for line in sec.split( "\n" ):
     if not line.startswith( "        " ) or line.startswith( "        (" ): continue
     body = line[8:]
+    # A5: the section's closing disclosure is an attribute line (`script_gates_unmodelled=N — …`), not a row.
+    # An attribute line OPENS with `name=`; a group row opens with `[hops=N]`, which is why this tests the
+    # leading bytes rather than "does the first token contain =".
+    if re.match( r'[a-z_]+=', body ): continue
     gm = re.match( r'(\[[^\]]*\] )?\((\d+)\): (.*?)   \(run: not derivable\)$', body )
     if gm:
         ps = gm.group( 3 ).split( ", " ); s_groups += 1

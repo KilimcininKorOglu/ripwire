@@ -214,7 +214,12 @@ done
 # determinism, on the verb this gate reshapes
 "$BIN" "$FX" --situ=core/widget.cc >"$TMP/d1" 2>/dev/null
 "$BIN" "$FX" --situ=core/widget.cc >"$TMP/d2" 2>/dev/null
-cmp -s "$TMP/d1" "$TMP/d2" && ok "(6) --situ is byte-identical across two runs" || no "(6) --situ is not deterministic"
+if cmp -s "$TMP/d1" "$TMP/d2"
+then
+    ok "(6) --situ is byte-identical across two runs"
+else
+    no "(6) --situ is not deterministic"
+fi
 
 # ── (7) LEXICAL SIBLINGS (L-D) — the files that move WITH a changed file, which no graph walk can reach ──
 # A change to core/widget.cc almost always touches core/widget.h and core/widget_test.cc, and neither is a
@@ -248,7 +253,12 @@ else
     || ok "(7) siblings exclude the changed file itself"
   # root-relative, like every other path in the report
   BAD="$( printf '%s\n' "$ROWS" | grep -E '^(/|\./)' | head -1 )"
-  [ -z "$BAD" ] && ok "(7) sibling paths are root-relative" || no "(7) sibling path '$BAD' is absolute or ./-prefixed"
+  if [ -z "$BAD" ]
+  then
+      ok "(7) sibling paths are root-relative"
+  else
+      no "(7) sibling path '$BAD' is absolute or ./-prefixed"
+  fi
   case "$SIB" in
     *'not_dependents=1'*) ok "(7) the block says these are NOT transitive dependents (not_dependents=1)" ;;
     *)                    no "(7) the block does not say these rows are not dependents: $SIB" ;;
