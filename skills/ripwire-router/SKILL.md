@@ -84,7 +84,9 @@ a rule an agent must remember to look up is a rule that loses to a habit.
 
 ## The legend: compact by default, full when a definition needs its reasoning
 
-Every command these skills spell asks for the compact legend (`--legend=compact`: terse definitions of only the attributes the answer carries). Add `--legend=full` when a definition's reasoning is needed — a term you do not recognise, a floor or cap you need explained, or a map a human will read. `--for` is the exception: its default legend is already the one to read first, and its compact legend is its own.
+Every command these skills spell asks for the compact legend (`--legend=compact`: terse definitions of only the attributes the answer carries). Add `--legend=full` when a definition's reasoning is needed — a term you do not recognise, a floor or cap you need explained, or a map a human will read. `--for` is the exception by CHOICE: its default legend is already the one to read first, and its compact legend is its own.
+
+The other exceptions are not a choice — **the binary refuses the flag on any command that does not answer with an XML legend**, and a command it refuses runs not at all. Two families: the **state-changing** commands, which write something rather than answer (`--quality-ack`, `--quality-baseline`, `--arch --baseline`, `--note-add`, `--replace-symbol-body` / `--insert-before-symbol` / `--insert-after-symbol`, `--edit-plan`, `--index-out=`, `--pin-census=`), and the **non-XML renderings** (`--mermaid`, `--html`, `--report`, `--sarif`, `--situ`, `--recall=`, `--export`). Those carry no `--legend=` at all. This matters when you compose rather than copy: a flag that turns an XML verb into one of these — `--zoom --mermaid`, `--quality-delta --quality-ack` — takes the whole command with it, so the verb is not what decides, the command is. Nothing here is a rule you have to apply by hand: `ripwire --help-task` applies it for you, and `test/skilltruthcheck.sh` runs every `--legend=compact` command these skills spell against the binary and fails on a refusal.
 
 ## Cross-cutting disciplines (fire ALONGSIDE a moment skill, not instead)
 

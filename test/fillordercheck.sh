@@ -115,7 +115,14 @@ OFIX="$( order_of test/fixture )"
 # RE-PIN 2026-09-12 (row 6, sc=): 884 -> 894. The map legend's sc= reading (the composition rule id = p::sc::n,
 # replacing the shorter id=canonical(...) clause) is +40 B on a fixture whose 14 rows carry ONE scoped symbol, so the
 # legend outgrows the row saving here; on a real tree the rows win (this repo's flagless map: -15.3%). Only the pin moved.
-{ [ "$EFIX" = "894" ] && [ "$OFIX" = "important-first" ]; } \
+# RE-PIN 2026-09-13 (PR #215 review, CodeRabbit 5191303552): 894 -> 895, and NOT because anything grew. The byte MODEL
+# still charged each scoped symbol `path::scope::name` -- the id= the row stopped printing -- so it billed the path and
+# the name a second time on every scoped row. Charged at what the row prints (` sc=""` + the scope) it prices fewer
+# bytes, and the reported est_tokens is emitted-bytes / the MODEL'S OWN rate (tokensForEmittedBytes with
+# mapEst.bytesPerToken()), so a model that prices a different mix publishes a different rate: here 2.496 -> 2.497 B/tok
+# against an emitted size that did not move one byte. Hence +1, on a document byte-identical to its previous self --
+# this fixture's golden is 2,234 B before and after, and est_tokens= is the ONLY character that differs in it.
+{ [ "$EFIX" = "895" ] && [ "$OFIX" = "important-first" ]; } \
     && ok "test/fixture (est_tokens=$EFIX) does NOT auto-flip — order=$OFIX (golden neutral)" \
     || no "test/fixture unexpectedly changed order or est_tokens (est=$EFIX order=$OFIX)"
 

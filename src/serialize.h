@@ -1385,7 +1385,7 @@ inline constexpr std::size_t kEnvelopeBytes = 320;
 
 // Per-element MARKUP byte costs (default map), measured against real output:
 //   <f p="…">…</f>            = 12 + path            (+9 when a builtin layer= tag is present)
-//   <s t="…" n="…" …></s>     = 19 + name            (+11 for k=, +6+canon when scoped; metrics adds more)
+//   <s t="…" n="…" …></s>     = 19 + name            (+11 for k=, +6+scope when scoped; metrics adds more)
 //   <c n="…"/>                = 9  + callee-name
 inline constexpr std::size_t kFileMarkupBytes   = 12;
 inline constexpr std::size_t kSymMarkupBytes    = 19 + 11;   // base tags + the default k="0.XXXX" attr
@@ -1419,6 +1419,12 @@ inline constexpr std::size_t kFillOrderThreshold   = kNominalWindowTokens / 2;  
 // ORDER, so it cannot wait for the emitted bytes), which is precisely what a pure function of the symbol
 // set is for; the REPORTED size describes the finished document and is measured. Both are documented at
 // their use sites in serialize().
+// The sc= presence rule, declared here and defined beside writeScopeAttr below: the byte MODEL must charge a
+// scope attribute on exactly the rows the emitter prints one on, so it asks the same question the emitters do
+// rather than re-deriving it — that re-derivation is how the model came to charge a shape the row stopped
+// printing (PR #215 review).
+inline bool hasScopeAttr( const Symbol& s ) noexcept;
+
 inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<NodeId>& order, std::size_t keep,
                                      const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets )
 {
@@ -1440,10 +1446,20 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
         }
         markupBytes += kSymMarkupBytes;
         contentBytesByLang[ li ] += double( s.name.size() );
-        if( !s.scope.empty() )
+        if( hasScopeAttr( s ) )
         {
+            // ROW 6, AND THE MODEL FOLLOWED IT LAST (PR #215 review, CodeRabbit 5191303552). The row used to
+            // print id="PATH::SCOPE::NAME", and this charged exactly that: the file path, the scope, the name
+            // and the two "::" separators. The row prints ` sc="SCOPE"` now — the path once per <f p=> (charged
+            // above, at `seen[f]`) and the name once on the row (charged just above) — so the path and the name
+            // were being billed a SECOND time on every scoped symbol. Over-charging is not the safe direction:
+            // mapEstTokens is what `--token-budget` withholds a map on (main.cpp, `withheld_est_tokens=`), what
+            // the open_memstream degrade path reports as est_tokens=, and what the T3 fill-order auto-flip
+            // compares against kFillOrderThreshold — so an inflated model withholds maps that fit and flips an
+            // order that should not have flipped. Charged at what the row prints: 6 B of markup for ` sc=""`
+            // and the scope segment as content, nothing else.
             markupBytes += 6;
-            contentBytesByLang[ li ] += double( ing.files[f].size() + s.scope.size() + s.name.size() + 4 );
+            contentBytesByLang[ li ] += double( s.scope.size() );
         }
         for( std::uint32_t e = outOff[id]; e < outOff[id + 1]; ++e )
         {
