@@ -1135,22 +1135,65 @@ inline bool inDirMatchesCrawl( const rw::Config& cfg, const rw::IngestResult& in
     return false;
 }
 
+// The uniform-ranking fallback disclosure, shared by all three arms below: a churn map whose window mined
+// NOTHING is byte-identical to --rank-by=pagerank, and this stderr line is the only place that fact appears.
+// A free function rather than the capturing lambda it was, because the decay arm is its own function now
+// (churnDecayRanking) and a lambda cannot be shared across the two without being handed to it.
+inline void discloseUniformChurnFallback( bool hasChurnEvidence, const char* verbLabel, const std::string& windowStamp )
+{
+    if( hasChurnEvidence )
+    {
+        return;
+    }
+    rw::emitTo( stderr, "ripwire: {} found no commits in its window; using uniform (structural) ranking — this map is "
+                          "byte-identical to --rank-by=pagerank (header: window=\"{}\")\n", verbLabel, windowStamp.c_str() );
+}
+
+// --rank-by=churn-decay's ARM, lifted whole out of churnRankedGraph — which is a three-way dispatcher that was
+// carrying this entire body inline. C1-b's stub branch pushed that function from ccx 18 to 24 against a bar of
+// 15, and the answer to a dispatcher growing a fourth concept is a name for the concept, not an ack: the decay
+// arm mines once and spends that one pass three ways (the teleport prior, the global <recent> page, and under
+// --in=DIR the scoped page), which is a nameable job and now has the name.
+inline ChurnRanking churnDecayRanking( const MainDispatch& d, const rw::SinceScope& sinceScope, bool isScoped, const char* verbLabel )
+{
+    using namespace rw;
+    // F3: ONE mining pass feeds both the teleport prior (churnPriorFromDecayed, exactly what churnDecayTeleport
+    // builds) and the map's file-level <recent> rows — so the file-level answer costs no second git walk.
+    const std::string       windowArgs = isScoped ? sinceLogArgs( sinceScope, "" ) : std::string{};
+    const DecayedChurnMined mined      = gitLogDecayedFileMining( d.root, d.ing, windowArgs, kChurnMergeBombMaxFiles );   // same merge-bomb cap as churnTeleport
+
+    // C1-b efficiency: under --in=DIR the symbol map is a STUB — not one ranked row is printed — so the
+    // power iteration that produces those rows' k= is work whose entire output is discarded. It is SKIPPED,
+    // and the header then carries no pr_iters=/pr_converged= because no iteration ran: an honest absence,
+    // not a number for a computation that did not happen (prconverge.h isPageRank=false). The rank vector is
+    // still SIZED (zero-filled) so every index serialize takes stays in range on a stubbed document.
+    const bool      stubbed = !d.cfg.inDir.empty();
+    rw::RankedGraph ranked  = stubbed ? rw::RankedGraph{} : rankGraphTeleport( d.g, churnPriorFromDecayed( d.ing, mined.weights, mined.anyHistory ) );
+    if( stubbed )
+    {
+        ranked.rank.assign( d.ing.symbols.size(), 0.0f );
+    }
+    std::string window = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since ) : std::string_view( "all-history" ) ),
+                                           mined.anyHistory );
+    discloseUniformChurnFallback( mined.anyHistory, verbLabel, window );
+    ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, !stubbed } };
+    // ONE build + ONE sort of the decayed rows, shared by both blocks (gitmine.h decayedRecentRowsSorted).
+    const std::vector<rw::RecentFile> sorted = decayedRecentRowsSorted( d.root, d.ing, mined );
+    cr.recent            = recentPageFromSorted( sorted, []( std::uint32_t ) { return true; }, kRecentRows, 0, &cr.recentOf );
+    cr.mergeBombsSkipped = mined.mergeBombsSkipped;
+    if( stubbed )
+    {
+        scopedRecentPage( d, sorted, cr );   // C1-b: --in=DIR's page, from the same pass and the same sort
+    }
+    return cr;
+}
+
 inline ChurnRanking churnRankedGraph( const MainDispatch& d )
 {
     using namespace rw;
     const bool isDecay          = ( d.cfg.rankBy == RankBy::ChurnDecay );
     const char* const verbLabel = isDecay ? "--rank-by=churn-decay" : "--rank-by=churn";
     bool hasChurnEvidence       = false;
-
-    const auto discloseEmptyChurn = [ & ]( const std::string& windowStamp )
-    {
-        if( hasChurnEvidence )
-        {
-            return;
-        }
-        rw::emitTo( stderr, "ripwire: {} found no commits in its window; using uniform (structural) ranking — this map is "
-                              "byte-identical to --rank-by=pagerank (header: window=\"{}\")\n", verbLabel, windowStamp.c_str() );
-    };
 
     if( d.multiRoot )
     {
@@ -1162,7 +1205,7 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
         rw::RankedGraph    ranked = isDecay ? rankGraphTeleport( d.g, churnDecayTeleportWorkspace( rootDirs, d.ing, &hasChurnEvidence ) )
                                             : rankGraphTeleport( d.g, churnTeleportWorkspace( rootDirs, d.ing, "18 months ago", &hasChurnEvidence ) );
         std::string        window = churnWindowStamp( isDecay ? churnDecayWindowLabel( "all-history" ) : rw::defaultWindowLabel( d.root, "18mo" ), hasChurnEvidence );
-        discloseEmptyChurn( window );
+        discloseUniformChurnFallback( hasChurnEvidence, verbLabel, window );
         return { std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, true } };
     }
 
@@ -1170,43 +1213,14 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
     const bool       isScoped   = !d.cfg.since.empty() && sinceScope.active;   // the §P9 N7 rule, one verb over
     if( isDecay )
     {
-        // F3: ONE mining pass feeds both the teleport prior (churnPriorFromDecayed, exactly what churnDecayTeleport
-        // builds) and the map's file-level <recent> rows — so the file-level answer costs no second git walk.
-        const std::string       windowArgs = isScoped ? sinceLogArgs( sinceScope, "" ) : std::string{};
-        const DecayedChurnMined mined      = gitLogDecayedFileMining( d.root, d.ing, windowArgs, kChurnMergeBombMaxFiles );   // same merge-bomb cap as churnTeleport
-        hasChurnEvidence                   = mined.anyHistory;
-
-        // C1-b efficiency: under --in=DIR the symbol map is a STUB — not one ranked row is printed — so the
-        // power iteration that produces those rows' k= is work whose entire output is discarded. It is SKIPPED,
-        // and the header then carries no pr_iters=/pr_converged= because no iteration ran: an honest absence,
-        // not a number for a computation that did not happen (prconverge.h isPageRank=false). The rank vector is
-        // still SIZED (zero-filled) so every index serialize takes stays in range on a stubbed document.
-        const bool         stubbed = !d.cfg.inDir.empty();
-        rw::RankedGraph    ranked  = stubbed ? rw::RankedGraph{} : rankGraphTeleport( d.g, churnPriorFromDecayed( d.ing, mined.weights, mined.anyHistory ) );
-        if( stubbed )
-        {
-            ranked.rank.assign( d.ing.symbols.size(), 0.0f );
-        }
-        std::string        window = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since ) : std::string_view( "all-history" ) ),
-                                                      hasChurnEvidence );
-        discloseEmptyChurn( window );
-        ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, !stubbed } };
-        // ONE build + ONE sort of the decayed rows, shared by both blocks (gitmine.h decayedRecentRowsSorted).
-        const std::vector<rw::RecentFile> sorted = decayedRecentRowsSorted( d.root, d.ing, mined );
-        cr.recent            = recentPageFromSorted( sorted, []( std::uint32_t ) { return true; }, kRecentRows, 0, &cr.recentOf );
-        cr.mergeBombsSkipped = mined.mergeBombsSkipped;
-        if( stubbed )
-        {
-            scopedRecentPage( d, sorted, cr );   // C1-b: --in=DIR's page, from the same pass and the same sort
-        }
-        return cr;
+        return churnDecayRanking( d, sinceScope, isScoped, verbLabel );
     }
     rw::RankedGraph    ranked = rankGraphTeleport( d.g, churnTeleport( d.root, d.ing, "18 months ago", d.cfg.since.empty() ? nullptr : &sinceScope, &hasChurnEvidence ) );
     // F1: the DEFAULT window's stamp names the anchor that produced it ("18mo@HEAD"); an ACTIVE --since is
     // the user's own value and is stamped verbatim, exactly as before.
     const std::string  defaultWindow = rw::defaultWindowLabel( d.root, "18mo" );
     std::string        window = churnWindowStamp( isScoped ? std::string_view( d.cfg.since ) : std::string_view( defaultWindow ), hasChurnEvidence );
-    discloseEmptyChurn( window );
+    discloseUniformChurnFallback( hasChurnEvidence, verbLabel, window );
     return { std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, true } };
 }
 

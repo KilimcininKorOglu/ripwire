@@ -1205,7 +1205,7 @@ trailing `…`.
 </details>
 
 <details>
-<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="6"</code> ships labelled a floor</summary>
+<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="7"</code> ships labelled a floor</summary>
 
 **Ten seconds, no index server, no embeddings, no API key** — a parse and a call graph, built on the
 spot. The rows below are a real capture: the callers and their files are gate-held current
@@ -1214,13 +1214,14 @@ grow — nothing can keep a line number true in a document, so it is not claimed
 
 ```
 $ ripwire . --callers=rankGraphTeleport
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" counts_floor="1">
-<s t="fn" n="runEval" p="src/eval.h:169"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3115"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3664"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:995"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1120"/>
-<s t="fn" n="getIndex" p="src/mcpindex.h:1104"/>
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" counts_floor="1">
+<s t="fn" n="runEval" p="src/eval.h:171"/>
+<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
+<s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
 
@@ -1228,7 +1229,7 @@ $ ripwire . --callers=rankGraphTeleport
 dispatch contributes no edge (a call through a function pointer or callback is an edge only when
 ONE function is bound to that variable in scope and the variable never escapes — its address taken
 or reference-bound — and a macro-generated call site — tagged
-`role="macro"` — only when its function-like `#define` is indexed): `count="6"` is a **floor**,
+`role="macro"` — only when its function-like `#define` is indexed): `count="7"` is a **floor**,
 and the element says so before you read a single row.
 
 </details>
@@ -2390,12 +2391,13 @@ ripwire . --callers=rankGraphTeleport
 The leading legend comment is elided here; the line numbers are a capture and move as files grow:
 
 ```xml
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" graph_ambiguous="7801" graph_unresolved="4860" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="7827" graph_unresolved="4865" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
 <s t="fn" n="runEval" p="src/eval.h:171"/>
 <s t="fn" n="rankGraph" p="src/graph.h:3445"/>
 <s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:1031"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1156"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
 <s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```

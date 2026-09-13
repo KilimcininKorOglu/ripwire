@@ -1830,14 +1830,16 @@ inline std::vector<float> churnPriorFromFreq( const IngestResult& ing, const std
     return p;
 }
 
-// `outHasChurnEvidence` (§B2.2, optional): false ⇒ the window mined NOTHING and the returned prior is uniform,
-// i.e. the caller's "churn-ranked" map is the structural one. The emitting verb needs that fact to stamp it
 // The merge-bomb rule's threshold for the churn rankers: a commit touching more than this many INDEXED files is skipped
 // (bulk renames / reformats / license sweeps / wide merges destroy the signal). kChurnDecayRankLegend and the compact
 // `merge_bombs_skipped=` reading spell the number in prose, so a change here moves both (the static_assert beside
-// the legend pins that).
+// the legend pins that). It sits ABOVE churnTeleport's own comment because its first consumer is churnTeleport's
+// body: moving it here split that comment in two, which left "the emitting verb needs that fact to stamp it"
+// dangling and orphaned the sentence that finishes it.
 inline constexpr std::size_t kChurnMergeBombMaxFiles = 100;   // the churn rankers' merge-bomb rule; skipped commits are disclosed as <recent merge_bombs_skipped=>
 
+// `outHasChurnEvidence` (§B2.2, optional): false ⇒ the window mined NOTHING and the returned prior is uniform,
+// i.e. the caller's "churn-ranked" map is the structural one. The emitting verb needs that fact to stamp it
 // (see churnWindowStamp); nullptr keeps every pre-existing call byte-identical.
 inline std::vector<float> churnTeleport( const std::string& root, const IngestResult& ing, const char* since = "18 months ago", const SinceScope* scope = nullptr,
                                          bool* outHasChurnEvidence = nullptr )
