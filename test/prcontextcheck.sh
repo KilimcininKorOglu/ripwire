@@ -385,6 +385,20 @@ fi
 # depends on nothing the working tree happens to hold.
 PRC_FAULT_OUT="$TMP/f_dg.out"; PRC_FAULT_ERR="$TMP/f_dg.err"
 PRC_FAULT_BASE="HEAD~3"
+#
+# WHICH FLAVOUR IS THIS BINARY? ASK IT, WITH AN ALERT IT IS KNOWN TO EMIT.
+# Both the fault switch and DEGRADED_PATH_ALERT exist only on the non-NDEBUG flavour, so on a Release build
+# there is no alert to see and this arm must not read that silence as a regression. The first version of the
+# probe settled the question by grepping `--version` for "release" — a LABEL, whose spelling is not this
+# gate's to depend on, and which the plain build spells "dev" and the Release build spells neither. It
+# answered "this flavour can see alerts" on macOS Release and then failed the SEAM for the missing alert:
+# CI red on one job, for a property of the gate, not of the code under test. The binary is asked directly
+# now, with the SIBLING fault switch (serialize.h's charge buffer), whose alert is independent of everything
+# this arm changes — if that one speaks, this binary can speak, and only then is the emitter-throw alert
+# required of it.
+INFRA_PROBE_ERR="$TMP/f_probe.err"
+RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$ROOT/src" --top-k=5 --pack-signatures --no-cache >/dev/null 2>"$INFRA_PROBE_ERR"
+if grep -aq 'open_memstream failed' "$INFRA_PROBE_ERR"; then PRC_ALERTS=1; else PRC_ALERTS=0; fi
 INFRA_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
 prc_f_rc=$?
 # and the range must actually name a file, or every assertion below is vacuous
@@ -392,15 +406,38 @@ if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! 
     "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" 2>/dev/null | grep -aq '<f ' \
         || no "(F) precondition: --pr-context=$PRC_FAULT_BASE names no changed file, so the emitter-throw arm asserts nothing"
 fi
-if ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
-    # Either an NDEBUG build (unobservable BY DESIGN — the plain-flavour leg proves it) or a real regression.
-    if "$BIN" --version 2>/dev/null | grep -q 'release'; then
-        printf '  INFO  (F) emitter-throw degrade is unobservable on this NDEBUG flavour (the plain build proves it)\n'
+if [ "$PRC_ALERTS" -eq 0 ]; then
+    # NO-ALERT FLAVOUR (NDEBUG). The fault switch is `constexpr false` here and the alert macro is compiled
+    # out, so this arm cannot exercise the degrade at all and must not pretend to: the PLAIN build is what
+    # proves it (CLAUDE.md). What is still assertable, and worth asserting, is that the verb this arm drives
+    # is not broken on this flavour — the same document the alerting leg demands, minus the degrade.
+    printf '  INFO  (F) this binary emits no DEGRADED_PATH_ALERT (NDEBUG): the emitter-throw degrade is unobservable BY DESIGN here, and the plain-flavour leg is what proves it\n'
+    if grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
+        no "(F) a binary that cannot emit the charge-buffer alert emitted the emitter-throw one — the two disagree about this flavour"
     else
-        no "(F) INFRA_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a flavour that can see one — the seam regressed"
+        ok "(F) consistency: no alert on a flavour that compiles them out"
     fi
+    [ "$prc_f_rc" -eq 0 ] \
+        && ok "(F1) --pr-context=$PRC_FAULT_BASE exits 0 with the (compiled-out) fault requested" \
+        || no "(F1) --pr-context exited $prc_f_rc on a flavour where the fault is not even compiled in"
+    if grep -aq '</pr-context>' "$PRC_FAULT_OUT" && grep -aq '<pr-context' "$PRC_FAULT_OUT"; then
+        ok "(F2) the document is CLOSED — a root, a body and a closing tag"
+    else
+        no "(F2) the --pr-context document is not a closed <pr-context> root ($( wc -c <"$PRC_FAULT_OUT" | tr -d ' ' ) B)"
+    fi
+    if command -v xmllint >/dev/null 2>&1; then
+        xmllint --noout "$PRC_FAULT_OUT" 2>/dev/null \
+            && ok "(F3) the document is well-formed XML (G4 holds)" \
+            || no "(F3) the --pr-context document does not parse"
+    fi
+    f_rel="$( grep -ao '<f ' "$PRC_FAULT_OUT" | wc -l | tr -d ' ' )"
+    [ "${f_rel:-0}" -gt 0 ] \
+        && ok "(F4) the document carries $f_rel <f> row(s) — the verb is intact on this flavour" \
+        || no "(F4) the document carries NO <f> row over $PRC_FAULT_BASE"
+elif ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
+    no "(F) INFRA_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the seam regressed"
 else
-    ok "(F) observability probe: the emitter-throw fault switch is live and alerts on this flavour"
+    ok "(F) observability probe: this binary emits alerts (the charge-buffer fault spoke) and the emitter-throw fault alerts too"
     # (F0) the alert names the CAUSE IT HAD. degradeMsg says the BUFFER failed; on this path it did not, so
     #      reusing it would have been a wrong reason attached to a right consequence.
     grep -aq 'open_memstream failed' "$PRC_FAULT_ERR" \
