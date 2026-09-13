@@ -15,6 +15,41 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — the task router knows the recency question, and every new shape is named where an agent reads
+
+Two halves of one gap, both measured as absences rather than argued. **The router could not reach the
+history question at all**: `what changed recently in DIR`, `who touched this lately`, `the newest commits
+here` — every phrasing abstained with `score="0"`, so `--rank-by=churn-decay` and the `--in=DIR` scope
+beside it were unreachable from a task said in words. `ripwire <dir> --help-task="<task>"` now answers
+those with the `recency-window` intent under `ripwire-fresh-eyes`. The route is conjunctive in three
+parts, because two are not enough: a TIME word, a MOTION word, and a word naming the corpus (or a
+directory of it the task named) — a time word alone is usually part of a compound noun, and a time word
+plus a motion word is also a sentence about a supplier's terms last quarter. An explanatory question is
+never this route however many of the three it holds, and the working tree stays `--situ`'s question. A
+directory is composed into `--in=DIR` only when the corpus really holds it AND the running build ships the
+flag, read off the flag table itself: a router that recommends a flag its own parser has no row for hands
+back a command that exits non-zero on the first paste. Held out (`bench/taskroute_eval.py`, the committed
+225-row corpus plus 14 rows for this intent, split by its content-hash rule): accuracy 0.939 → **0.942**
+test, 0.946 → **0.949** dev, precision 1.000 and harmful 0.000 unchanged, and the 225 pre-existing rows
+are byte-identical on (status, intent).
+
+**And the first call now names the widening step.** `--for`'s file-grain page was named only by a thin
+ANSWER's own `next=` — one call too late for an agent choosing what to run first — so every `--for`-shaped
+recommendation carries `next="… --limit=40"`, derived from the command rather than the intent id and
+present-only.
+
+The shapes this release adds are also named where an agent actually reads them: the recency window with
+`--in=DIR` and `merge_bombs_skipped=` (ripwire-fresh-eyes), the thin-answer `coverage=` gauge and the
+`--for … --limit=40` page (ripwire-orient and its `map-before-you-read` companion), the `p::sc::n`
+composition of a row's identity, and the grouped `<g hops= n= p= run_unknown="1"/>` tests-to-run row
+(ripwire-change-check). **A new gate keeps it that way**: `test/agentsurfacecheck.sh` is a ratchet over all
+163 long flags `--help` advertises — each is named in a skill body or the `ripwire wrap` primer or recorded
+on a committed floor with the reason it is still a gap (5 lines today) — plus a per-shape arm that requires
+the term and its verb within five lines of one another on one surface, probing the binary first so a
+surface never promises what the build cannot parse. `docs/COMMANDS.md` is deliberately not an accepted
+surface: it names every flag by construction, and a gate a generated document satisfies for free cannot
+fail.
+
 ### Added — --for pages its answer one file per row, and says when to widen
 
 On the pre-registered follow-up ladder (a 2,066-file C++ corpus pinned at one commit, the frozen 30
