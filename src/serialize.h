@@ -7537,9 +7537,9 @@ inline std::string jsonSigRowHead( const IngestResult& ing, NodeId id, std::uint
     // P2.3: the chain key — "n" always, "id" only when the canonical form adds an enclosing scope
     // (the XML sibling's rule, sigRowHead above), so a JSON consumer can chain onward too.
     appendJsonStrField( head, ",\"n\":", s.name );
-    if( !s.scope.empty() )   // row 6: the XML sibling's sc= — keys mirror attribute names one to one
+    if( hasScopeAttr( s ) )   // row 6: the XML sibling's sc=, ONE presence rule — keys mirror attribute names one to one
     {
-        if( hasScopeAttr( s ) ) { appendJsonStrField( head, ",\"sc\":", s.scope ); }   // row 6: one presence rule (hasScopeAttr)
+        appendJsonStrField( head, ",\"sc\":", s.scope );
     }
     // P7: the row names its file (and its builtin layer) — the XML sibling's p=/layer=, same root-relative spelling
     appendJsonStrField( head, ",\"p\":", lensRowPath( ing, fileId, rootArg ) );

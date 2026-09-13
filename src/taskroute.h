@@ -918,7 +918,7 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
 // commands by editing 26 strings, which is 26 chances to miss one and no rule for the 27th. classifyRoutes below
 // is the whole router; classify() is the one exit, and it applies the posture to every choice it returns.
 //
-// WHAT DECIDES: rw::legendCompactAppliesTo (cli.h), the SAME list of non-XML surfaces the binary REFUSES the flag
+// WHAT DECIDES: rw::legendCompactAppliesTo (compactlegend.h), the SAME list of non-XML surfaces cli.h REFUSES the flag
 // on, asked of a command string instead of a parsed Config. So the router cannot generate a command its own
 // binary rejects — which it did: `--zoom --legend=compact --mermaid` shipped in a skill, and a hand-listed gate
 // enforced it. --for is exempt by policy, not by refusal, and legendCompactAppliesTo says so in one place.

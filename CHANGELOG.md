@@ -69,10 +69,12 @@ here, pinned at **670** as the new `ripwire.for/v1` row (the table's own rule: t
 up to the next 10 B, plus 10), the exemption gone. A1′ first pinned it at 500 from 494 with only its own
 clauses present; the merge with #213 put the `coverage=` reading on the same probe, and this round made
 the `sc=` and `route=` readings present-only, so the number was re-measured at each step rather than the
-clauses trimmed to hold a pin. Per call on this repository, default legend → `--legend=compact`, three
-tasks measured with `wc -c` on this build: `pagerank power iteration` 9,881 → 9,344 B (−537, and 25 → 29
-signature rows, because the bytes the legend gives back are spent on rows), `rank graph teleport`
-10,127 → 9,818 B (−309, 22 → 25 rows), and the name-exact `escapeXml` 5,823 → 4,601 B (−1,222). The MCP
+clauses trimmed to hold a pin. Per call, default legend → `--legend=compact`, three tasks
+measured with `wc -c` on this repository at the lane's merge of `origin/main` 0e3573af:
+`pagerank power iteration` 9,875 → 9,338 B (−537, and 25 → 29 signature rows, because the bytes the legend
+gives back are spent on rows), `rank graph teleport` 10,121 → 9,812 B (−309, 22 → 25 rows), and the
+name-exact `escapeXml` 6,290 → 4,918 B (−1,372). The **delta** is the claim: the absolute bytes carry
+`churn=`/`amp=` readings derived from git history, so they move by a few bytes per commit landed. The MCP
 `for` twin declares no `legend` field and serves the default dialect only, so its bytes are unchanged. `legendcoveragecheck` holds:
 every attribute the compact document carries on its first screen has a `name=` definition in that one
 comment, with `next=`, `pure=` and `schema=` on the recorded floor exactly as before.
@@ -127,9 +129,13 @@ because A1′'s present-only `--for` legend outweighs what both lanes added); th
 `test/forrankordercheck.sh`'s q5 9,470 → 9,880, attributed four ways (main tree/main binary 9,464, this
 tree/main binary 9,470, so corpus drift is 6 B — the other 410 B is this change, and it is five more
 ranked rows); five goldens regenerated for the row shape and the clauses; the printf-parity manifest
-re-pinned for `help_all` alone at the merge (`UPDATE_GOLDEN_EXPECT` matched, 41 labels unchanged); across
-the whole lane seven of its 42 labels moved — six for the row-6 row shape and `help_all` once more for the
-merged `--help` text.
+re-pinned for `help_all` alone at each of the lane's two merges with `main` (`UPDATE_GOLDEN_EXPECT`
+matched both times, 41 labels unchanged); across the whole lane seven of its 42 labels moved — six for the
+row-6 row shape and `help_all` for the merged `--help` text. The second merge (`origin/main` 0e3573af)
+also brought `help` and `expand`: `help` moved on main alone (#217 re-worded `--replace-symbol-body`'s
+summary line) and `expand` on this lane alone (the whole-file serving's `sc=`), so each was resolved to the
+side that moved it, while `help_all` — moved by BOTH — was re-measured against the merged build rather than
+picked from a parent that never produced that text.
 
 ### Fixed — `--for`'s rung zero fires on the exact ceiling, not on the overshoot allowance
 
@@ -199,7 +205,7 @@ against, and dropped legend clauses from documents its own root reports as confo
 is the one expression for what a root promises, and the ladder now takes two ceilings: the as-built and
 task-echo rungs (the echo is a byte-for-byte duplicate of `task=`, so spending it costs a reader nothing)
 aim at the exact ceiling, while dropping `route=` and labelling the bundle keep the 1.15 first-entry
-tolerance, which exists for a residual a lens cannot trim. The same query now reads `est_tokens="1149"`
+tolerance, which exists for a residual a lens cannot trim. The same query now reads `est_tokens="1146"`
 at `--token-budget=1200` with every clause riding. No tolerance was widened and no ceiling was raised.
 
 Rung zero also stopped being byte-negative. It removed 110–164 bytes of clauses and spliced a 161-byte
