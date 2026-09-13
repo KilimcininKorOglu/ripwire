@@ -35,6 +35,42 @@ cmake -S . -B asan -DRIPWIRE_ASAN=ON && cmake --build asan -j
 LSAN_OPTIONS=suppressions=lsan_suppressions.txt ./asan/ripwire <dir> >/dev/null
 ```
 
+### Stale objects — the build that reports success and is wrong
+
+Make decides what to recompile by comparing timestamps, and header tracking in this tree is correct
+and complete. But a timestamp only means something if the sources hold still. Edit `src/model.h` — or
+`git checkout` a branch that does — **while a build is in flight**, and that build writes object
+files whose mtime is newer than the header but whose content predates it. Make then correctly
+concludes "up to date" and never recompiles them again. `cmake --build build -j` reports success,
+exit 0, no warnings, for as long as you keep trying.
+
+So: **never edit the tree while a build is running, and never background a build you then edit
+around.** After a branch switch, or whenever you are unsure, do not trust an incremental rebuild:
+
+```bash
+cmake --build build --clean-first -j          # and the same for asan/, if that tree is in play
+```
+
+Three ways this has been hit, so you can recognise the symptom instead of debugging the wrong bug:
+
+- **A sanitizer report of a bug that does not exist.** Half the objects had `sizeof(Symbol)==96` and
+  half `104`, and ASan reported a heap-buffer-overflow in `ingest`. The tell was the region size:
+  1344 bytes = 14 × 96, an exact multiple of the *previous* struct size. If a report's region
+  divides evenly by an old `sizeof`, stop debugging and rebuild.
+- **A mirrored constant that would not update.** `src/quality.h`'s `kIngestParserVerMirror` was
+  edited while a clean rebuild ran. The binary kept emitting the old value through repeated
+  successful rebuilds, and `qextractionkeycheck` failed as though the mirror update had been missed.
+  `touch`ing the header fixed it — which is the diagnosis, not the fix: the object was newer than
+  the source it disagreed with.
+- **An impossible `std::length_error`.** SIGABRT out of a `resize( symbols.size() )`, where `.size()`
+  came from a vector whose element size half the objects disagree on. Zero repro in 38 runs on a
+  clean rebuild of the same commit.
+
+`test/g1freshcheck.sh` catches the ordinary stale binary — one older than its sources — and is worth
+believing when it fires. It cannot catch this variant, because here the binary is *newer* than the
+source and only its contents are stale. Nothing in CMake can repair a source that changed
+mid-compile; the discipline is the fix.
+
 ### Building on Linux
 
 ripwire builds and passes its suite on Ubuntu 24.04 with gcc 13.3 or clang 18, but a few things
@@ -471,7 +507,10 @@ Release CI job covered it.
 1. Write the gate, then the code.
 2. Build both flavours locally; run `python3 test/pargates.py . ./build/ripwire -j 6` green.
 3. Run the sanitizer build clean, and the determinism gate three times.
-4. Add any new `test/*check.sh` to `test/regression.sh` in the same commit.
+4. Add any new `test/*check.sh` to `test/regression.sh` in the same commit — but first check
+   whether a gate already owns the subject and can take another arm. A new gate file forces a
+   `docs/gatecount_build.py` regeneration that collides with every other open lane; a new arm
+   in an existing gate costs nothing outside its own file.
 5. **Never edit the published gate count by hand.** After adding a gate — and again after any rebase
    or merge that moved the `for _g in …; do` loop — run `python3 docs/gatecount_build.py`. See below.
 6. If your change alters emitted output, regenerate the goldens as their **own** commit with the
@@ -486,6 +525,16 @@ both write N+1, git auto-merges the **identical** text clean, and the tree publi
 of N+2 with every existing check green (each branch's count matches its own loop, and the merged loop
 matches main's — the member *sets* differ at the same number). That collided seven times in one night
 on 2026-09-10. The merge recipe is therefore: **union the `for _g in …` sets, run the generator, done.**
+
+**An advertised count is an enumeration, not a sentence.** Every number this project prints about
+itself — flags, gates, skills, folded repositories, orchestrator prompts — is derived from something
+countable in the tree and pinned by an arm in `test/readmedriftcheck.sh`. Before writing a number
+into prose, ask which command produces it. And **if a set can be counted more than one way, the
+prose must say which set it counts**: `skills/` is 17 routable skills (`skills/*/SKILL.md`), 18
+`SKILL.md` files in all (`skills/hermes/` holds a Hermes-native one), and 16 activated for every
+agent (`ripwire-opt-remarks` is `audience: contributor`). All three are correct answers to "how many
+skills are there", which is precisely why README.md carried two of them at once, unlabelled, until
+arm (J) was written.
 
 Each published site carries a marker comment the generator owns — `<!-- gatecount -->` in markdown and
 HTML (invisible when rendered), `// gatecount` in the deck's JavaScript. A count claim on a line
