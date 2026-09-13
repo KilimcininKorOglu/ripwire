@@ -138,8 +138,9 @@ ROSTER = [
     # THE BUDGET IS 900, AND THE OLD 1300 WAS A KNIFE-EDGE. The band recorded here was "~1100 to ~1340",
     # measured only on a developer worktree — and the rung's top edge is a function of the CHECKOUT PATH
     # LENGTH, because the document charges its own `root="…"` bytes. Measured on this tree at two roots:
-    # a 38-character root fires rung zero up to 1288 and not at 1290; a 137-character root still fires at
-    # 1310. CI checks the tree out into the runner's work directory, which is 33 characters on the Linux
+    # a 38-character root fires rung zero at 1287 and NOT at 1288; a 137-character root fires at 1323 and not
+    # at 1324 (bisected, same commit and binary). CI checks the tree out into the runner's work directory,
+    # which is 33 characters on the Linux
     # runners and 34 on the macOS ones (this file may not spell either path: ripwirepubliccheck arm 2 refuses
     # an absolute home path in a tracked file, and it is right to, since it cannot tell a runner's home from
     # a person's). So 1300 was INSIDE the band on a long local path and OUTSIDE it on every CI runner — green
@@ -371,12 +372,15 @@ BIN, ROOT, TMP = sys.argv[1:4]
 SMALL = os.path.join( ROOT, "src" )
 QUERY = "--for=rank symbols by pagerank"
 # TIGHT is MID-RUNG, and MARGIN is what proves it. The rung-zero band's top edge moves with the length of
-# the checkout path, because the document charges its own `root="…"` bytes: measured on this tree, a 38-char
-# root fires rung zero up to 1288 and not at 1290, a 137-char root still fires at 1310. The old TIGHT of 1300
-# sat between those two numbers, so this arm was green on a developer worktree and red on every CI runner
-# (CI checks out at 33-34 characters). A budget that only fires on the machine that chose it is not a probe.
-# TIGHT=900 sits ~390 tokens below the SHORTEST measured edge, and the band is flat beneath it — from 100 up
-# to the edge the note's text and arm (F)'s census do not change — so this is mid-rung, not a tolerance.
+# the checkout path, because the document charges its own `root="…"` bytes. Bisected on this tree, same commit
+# and binary, only the root differing: a 38-character root fires rung zero at 1287 and NOT at 1288; a
+# 137-character root fires at 1323 and not at 1324. The old TIGHT of 1300 sat BETWEEN those two numbers, so
+# this arm was green on a developer worktree and red on every CI runner (CI checks out at 33-34 characters).
+# A budget that only fires on the machine that chose it is not a probe. TIGHT=900 sits 387 tokens below the
+# SHORTEST measured edge, and the band is flat beneath it — from 100 up to the edge the note's text and arm
+# (F)'s census do not change — so this is mid-rung, not a tolerance. Both edges move when src/ changes (this
+# lane re-measured them across a merge that added a 385-line file, and the short one moved by a single token),
+# which is the other reason the headroom is gated below rather than trusted here.
 # MARGIN re-runs the same query 200 tokens ABOVE TIGHT and requires the note there too, which turns "the
 # probe has headroom" from a claim in this comment into a row that fails when it stops being true.
 TIGHT, MARGIN, WIDE = "--token-budget=900", "--token-budget=1100", "--token-budget=8000"
