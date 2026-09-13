@@ -102,27 +102,74 @@ path), so runner-less rows whose per-row attributes are byte-equal are now serve
 `<g hops="2" n="17" p="a,b,c" run_unknown="1"/>` (JSON: `"p"` — or `"test"` — becomes an array beside
 `"n"`; text: `[hops=2] (17): a, b, c   (run: not derivable)`), emitted where its first member stood. Rows
 with a runner stay single, a group of one stays a `<t>` row, a comma inside an XML path is `&#44;`, and
-every path is kept verbatim — the multiset of paths before and after is identical, which is what
-`test/testrowruncheck.sh` arm 12 proves on a fixture with three hop groups and a runner row in the
-middle of one of them, in all three dialects (red on the previous binary). All twelve emitters —
+every path is kept verbatim — the multiset of paths before and after is identical and so is their ORDER,
+which is what `test/testrowruncheck.sh` arm 12 proves on a fixture with three hop groups and a runner row
+in the middle of one of them, in all three dialects (red on the previous binary). All twelve emitters —
 `--affected`, `--exercises`, `--test-gate` XML and JSON, `--situ`, `--pr-context`, `--handoff`,
 `--flags --flip`, `--pack-task` XML and JSON, the MCP `situational_awareness` twin and the edit
 receipt — render through one seam in `testmap.h`, and the M21(b) rule keeps its meaning: a `<t>` or
 `<g>` row carries `run=` or `run_unknown="1"`, never neither. Measured on RocksDB (`wc -c`, same cache,
-same commit): `--affected=db/write_batch.cc` 10,668 → 6,839 B, `--test-gate=db/write_batch.cc` 13,242 →
-9,594 B (its JSON 11,055 → 7,121 B), `--situ=db/write_batch.cc` 11,769 → 7,313 B; 7 `<g>` rows replace
-124 single rows and the residual spent on the disclosure is 144 B (XML) and 207 B (text) per list.
-`--pack-task`'s byte-budgeted tests section caps a group at its own budget and counts `shown=`/`total=`
-in files, so the same bundle now names 54 of 109 tests where it named 28. On this tree every harness
+same commit): `--affected=db/write_batch.cc` 10,668 → 6,878 B, `--test-gate=db/write_batch.cc` 13,242 →
+9,633 B (its JSON 11,055 → 7,163 B), `--situ=db/write_batch.cc` 11,769 → 7,357 B; 8 `<g>` rows replace
+124 single rows (a group covers a contiguous run only, so the one runner row inside the hops=2 tier splits
+it in two — order is preserved by construction, `test/testrowruncheck.sh` arm 12 reads the paths back in
+emitted order) and the residual spent on the disclosure is 160 B (XML) and 230 B (text) per list.
+`--pack-task`'s byte-budgeted tests section caps a group at its own budget — applied before every join, so
+two paths that each fit alone are never joined into one row the section then rejects whole (arm 13 sweeps
+the budget and requires the first section that fits to be one singleton) — and counts `shown=`/`total=` in
+files, so the same bundle now names 54 of 109 tests where it named 28. On this tree every harness
 has a runner, so nothing groups and the only change is the legend that now defines `<g>`: the
 `--test-gate` legend pin moves 2,720 → 2,900 B (measured 2,843) and the `ripwire.pack-task/v1` compact
 pin 820 → 880 B (measured 865), both because the compact dialect and every rows-bearing full legend now
 define `run_unknown=` and `<g n= p=>` — a definition `--affected` and the compact dialect never carried.
-The clause is rows-gated on `--affected`, `--exercises`, `--pack-task` and the partitioned bundle, and on
-`--pr-context` — whose legend is priced before its files render — gated on the corpus holding a test file
-at all (measured on `test/defaultceilingcheck.sh`'s 120-file, no-test fixture: unconditional, the default
-bundle went 7,989 → 8,025 tokens over its 8,000 budget; gated, 7,989; `test/prcontextcheck.sh` pins both
-sides, red first).
+The clause is rows-gated everywhere it is spliced — `--affected`, `--exercises`, `--pack-task`, the
+partitioned bundle, and `--pr-context`, whose legend precedes its files in the STREAM but is now decided
+after them: the chosen body is rendered first, the pricer charges the clause per candidate trim level from
+that level's own body, and the form the chosen body was priced with is the form written, so the priced
+legend and the delivered legend cannot disagree. A corpus-level predicate over-approximated it — a test
+file outside the selected range, or a trim level whose `testCap` is 0, bought the clause for a document
+with no row — and both now pay nothing (measured on `test/defaultceilingcheck.sh`'s 120-file, no-test
+fixture: unconditional, the default bundle went 7,989 → 8,025 tokens over its 8,000 budget; gated, 7,989;
+`test/prcontextcheck.sh` pins all four sides, red first).
+
+### Added — --for pages its answer one file per row, and says when to widen
+
+On the pre-registered follow-up ladder (a 2,066-file C++ corpus pinned at one commit, the frozen 30
+questions, six deterministic steps per tool, no model in the loop), every ripwire follow-up completed 0
+answers through step 4: `--for`'s `next=` pointed at `--expand` (a body, not a wider list), `--top-k` was
+inert on `--for`, and `--format=candidates` is symbol-grain (40 symbols is about 18 files in 11 KB). The
+one follow-up that completed answers in that ladder was a file-grain page — one row per file, about 6 KB.
+Local telemetry had `--for` → `--expand` followed 0 of 259 times.
+
+`--for=TASK --limit=N` (`--offset=M` pages it) is now that page: a `<files>` document of one
+`<f p= score= n= sym=/>` row per positive-score file, `p=` spelled root-relative exactly as every other
+verb spells it, ranked file-first by `score=` — the IDF-weighted share of the query's subtokens the file's
+top 8 symbols cover between them (a term counts once however often it recurs, so one huge file cannot
+monopolise; ties by the best symbol's lens score, then path). The root carries the house paging vocabulary
+(`shown= total= capped= has_more= next_offset= offset= limit=`) and a `next=` naming the next page.
+When the answer is THIN — the top-ranked symbol's name, doc or body carries under 50% of the query's
+IDF-weighted subtokens (an unmatched subtoken weighs as the rarest, so a `(#12147)` token lowers the share
+honestly), or the ranked head spreads over fewer than 3 files — `--for`'s root carries `coverage=` (that
+share, whole percent) with its legend clause, and the r=1 row's `next=` names `--for=TASK --limit=40`
+instead of the body. A confident answer carries none of the three and is byte-identical to before; the
+`--json` and MCP twins follow the same present-only rule. The MCP `for` twin takes the same
+`limit`/`offset` and serves the same page through the same renderer. Beside the page every bundle-shaping flag is refused, never ignored (`--limit=0` and non-numeric
+values were already refused). `--top-k` stays inert on `--for` and `--help` now says which flag widens.
+
+Measured, on the ladder re-registered with the page as step 2 on the `--for` shapes: ripwire's
+complete@step row is unchanged at 14/14/14/14/17/17 — the page completed no question, because the seven
+misses it ran on hold 3–21 gold files each — while adding gold files on four of the seven (+2, +1, +3 and
++6 files) at 5,539–6,212 B per page (mean 5,841 B), and the thin rule named the page on 4 of those 7
+misses. The frozen-30 single-call instrument is unchanged at 14/30 complete and 42/129 gold files named;
+its median bytes-to-answer is 6,348 B (5,988 B before: 10 of the 12 `--for` questions on that instrument
+are thin — commit subjects with a `(#NNNN)` token, "how does A reach B" questions — and carry the clause;
+the 2 confident ones read the base again, and the 18 non-`--for` questions moved by the 2–4 B the git
+stamp moved on every verb). Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at page rank 13
+and is absent from the default head and tail; one row per file, determinism, paging with no overlap,
+`coverage=` defined in both dialects, thin versus confident `next=`, the refusals, MCP parity — red on the
+pre-change binary. The byte pins that ride a thin `--for` header
+(forrankordercheck's fixture rows, forrootlegendcheck, compactlegendcheck's loop, the two `--no-route`
+goldens) were re-anchored with the measured number; the confident ones read the base again.
 
 ### Added — Elixir module and arity resolution (parser version 95)
 

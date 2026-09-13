@@ -244,19 +244,23 @@ fi
 
 # ── ARM 12 — E1: grouping never changes the MULTISET of paths, in any dialect ─────────────────────────
 # A fixture with THREE hop groups (tests reaching the changed symbol at depth 1, 2 and 3) and a runner row
-# in the MIDDLE of the depth-1 group (t_leaf_b.sh stem-matches t_leaf_b.cpp; path order a < b < c), so the
-# arm sees: a runner-less group interrupted by a single run= row, groups at three distinct hops=, and the
-# same seven paths in --affected, --test-gate (XML and JSON) and --situ's text. What it proves: every path
+# in the MIDDLE of the depth-1 group (t_leaf_b.sh stem-matches t_leaf_b.cpp; path order a < b < c < d), so
+# the arm sees: a runner-less run interrupted by a single run= row, groups at three distinct hops=, and the
+# same eight paths in --affected, --test-gate (XML and JSON) and --situ's text. What it proves: every path
 # appears exactly once (verbatim — a reader's grep for a file name must still hit), the run= row stays a
-# single row, at least three <g> rows exist with distinct hops=, and the root's tests= count is the number
-# of FILES, not rows. Red on the pre-E1 binary (no <g> row at all).
+# single row, at least three <g> rows exist with distinct hops=, the root's tests= count is the number of
+# FILES, not rows, and — CodeRabbit on #214, the A,B,A shape — the ORDER is preserved: the paths read off
+# the rows in emitted order (a group contributing its members in place) are exactly the order the single
+# rows had, so a group only ever covers a CONTIGUOUS run and a runner row never has a later sibling hoisted
+# in front of it. Red on the pre-E1 binary (no <g> row at all) and, for the order half, on 7ab0956a (which
+# grouped a, c, d across b: a,c,d,b).
 command -v python3 >/dev/null 2>&1 || no "(12) python3 missing — the multiset arm cannot run"
 W2="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2"' EXIT
 mkdir -p "$W2/src" "$W2/test"
 printf 'int leaf( int x )\n{\n    return x + 1;\n}\n' > "$W2/src/leaf.cpp"
 printf 'int leaf( int x );\nint mid( int x )\n{\n    return leaf( x );\n}\n' > "$W2/src/mid.cpp"
 printf 'int mid( int x );\nint top( int x )\n{\n    return mid( x );\n}\n' > "$W2/src/top.cpp"
-for n in leaf_a leaf_b leaf_c; do printf 'int leaf( int x );\nint test_%s( void )\n{\n    return leaf( 1 );\n}\n' "$n" > "$W2/test/t_$n.cpp"; done
+for n in leaf_a leaf_b leaf_c leaf_d; do printf 'int leaf( int x );\nint test_%s( void )\n{\n    return leaf( 1 );\n}\n' "$n" > "$W2/test/t_$n.cpp"; done
 for n in mid_a mid_b; do printf 'int mid( int x );\nint test_%s( void )\n{\n    return mid( 1 );\n}\n' "$n" > "$W2/test/t_$n.cpp"; done
 for n in top_a top_b; do printf 'int top( int x );\nint test_%s( void )\n{\n    return top( 1 );\n}\n' "$n" > "$W2/test/t_$n.cpp"; done
 printf '#!/usr/bin/env bash\necho leaf_b\n' > "$W2/test/t_leaf_b.sh"; chmod +x "$W2/test/t_leaf_b.sh"
@@ -270,7 +274,8 @@ S12="$( rw2 --situ=src/leaf.cpp )"
 python3 - "$A12" "$G12" "$J12" "$S12" <<'PY12'
 import sys, re, json
 aff, tg, tgj, situ = sys.argv[1:5]
-EXPECT = sorted( "test/t_%s.cpp" % n for n in ( "leaf_a", "leaf_b", "leaf_c", "mid_a", "mid_b", "top_a", "top_b" ) )
+ORDER  = [ "test/t_%s.cpp" % n for n in ( "leaf_a", "leaf_b", "leaf_c", "leaf_d", "mid_a", "mid_b", "top_a", "top_b" ) ]   # evidence order: hops asc, then path
+EXPECT = sorted( ORDER )
 fails = []
 def xml_paths( doc ):
     out, groups, singles_run = [], [], []
@@ -292,6 +297,7 @@ g_paths, g_groups, g_run = xml_paths( tg )
 if not a_paths: fails.append( "--affected emitted no test row at all (fixture broken)" )
 for label, paths in ( ( "--affected", a_paths ), ( "--test-gate", g_paths ) ):
     if sorted( paths ) != EXPECT: fails.append( "%s multiset %r != %r" % ( label, sorted( paths ), EXPECT ) )
+    if paths != ORDER: fails.append( "%s ORDER changed by grouping: %r != %r (a group must cover a contiguous run only)" % ( label, paths, ORDER ) )
 for label, groups in ( ( "--affected", a_groups ), ( "--test-gate", g_groups ) ):
     if len( set( groups ) ) < 3 or None in groups: fails.append( "%s: expected >=3 <g> rows at distinct hops=, got hops=%r" % ( label, groups ) )
 for label, run in ( ( "--affected", a_run ), ( "--test-gate", g_run ) ):
@@ -332,6 +338,7 @@ for r in rows:
         j_paths.append( p )
         if "run" not in r and r.get( "run_unknown" ) is not True: fails.append( "JSON single row carries neither: %r" % r )
 if sorted( j_paths ) != EXPECT: fails.append( "--test-gate --json multiset %r != %r" % ( sorted( j_paths ), EXPECT ) )
+if j_paths != ORDER: fails.append( "--test-gate --json ORDER changed by grouping: %r" % j_paths )
 # --situ text: `        path [hops=N]   (run: …)` singles and `        [hops=N] (n): a, b, c   (run: not derivable)` groups
 sec = situ.split( "tests to run", 1 )[1].split( "\n  [3]", 1 )[0] if "tests to run" in situ else ""
 s_paths, s_groups = [], 0
@@ -347,6 +354,7 @@ for line in sec.split( "\n" ):
         if "   (run: " not in body: fails.append( "situ line carries no run recipe/disclosure: %r" % line )
         s_paths.append( body.split( " ", 1 )[0] )
 if sorted( s_paths ) != EXPECT: fails.append( "--situ text multiset %r != %r" % ( sorted( s_paths ), EXPECT ) )
+if s_paths != ORDER: fails.append( "--situ text ORDER changed by grouping: %r" % s_paths )
 if s_groups < 3: fails.append( "--situ text: expected >=3 group lines, got %d" % s_groups )
 if fails:
     print( "\n".join( fails ) ); sys.exit( 1 )
@@ -354,8 +362,43 @@ print( "OK %d paths, %d <g> rows on --affected" % ( len( EXPECT ), len( a_groups
 PY12
 r12=$?
 [ "$r12" -eq 0 ] \
-    && ok "(12) E1: grouping keeps the path multiset in every dialect (7 paths, >=3 hop groups, the run= row single, tests= counts files)" \
+    && ok "(12) E1: grouping keeps the path multiset AND order in every dialect (8 paths, >=3 hop groups, the run= row single in place, tests= counts files)" \
     || no "(12) E1: the grouped rows do not carry the same paths as the single rows did (details above)"
+
+# ── ARM 13 — E1: a byte cap never drops two paths that each fit as a singleton ───────────────────────
+# --pack-task's <tests> section is byte-budgeted per ROW, so a group is capped at the section's budget
+# (testmap.h partitionTestRows maxGroupBytes). CodeRabbit on #214: the cap was applied only from the THIRD
+# member on, so two runner-less paths that each fit alone were joined into one <g> row the section then
+# rejected whole — the bundle named NO test where it could have named one. The arm sweeps --token-budget
+# upward on a two-test corpus with no runner: the FIRST budget at which a <tests> section appears must serve
+# ONE file as a single <test> row (shown="1", no <g>), and shown= must never decrease as the budget grows.
+# Red on 7ab0956a: the first section to appear is `<g n="2">` shown="2".
+W3="$( mktemp -d )"; trap 'rm -rf "$WORK" "$W2" "$W3"' EXIT
+mkdir -p "$W3/src" "$W3/test"
+printf 'int compute_value( int x )\n{\n    return x + 1;\n}\n' > "$W3/src/core.cpp"
+for n in alpha_long_name beta_long_name; do printf 'int compute_value( int x );\nint test_%s( void )\n{\n    return compute_value( 1 );\n}\n' "$n" > "$W3/test/t_$n.cpp"; done
+( cd "$W3" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+first=""; firstrow=""; prev=0; mono=1; seen=0
+for b in $( seq 1000 20 1700 ); do
+    o="$( cd "$W3" && "$BIN" . --no-cache --pack-task="compute_value" --token-budget=$b 2>/dev/null )"
+    sh="$( printf '%s' "$o" | grep -oE '<tests shown="[0-9]+"' | grep -oE '[0-9]+' )"
+    [ -n "$sh" ] || sh=0
+    [ "$sh" -lt "$prev" ] && mono=0
+    prev=$sh
+    if [ -z "$first" ] && [ "$sh" -gt 0 ]; then first=$b; firstrow="$( printf '%s' "$o" | grep -oE '<tests .*</tests>' | cut -c1-160 )"; fi
+    [ "$sh" -eq 2 ] && seen=1
+done
+if [ -z "$first" ]; then
+    no "(13) no --token-budget in 1000..1700 produced a <tests> section — the sweep cannot bite"
+elif [ "$seen" -ne 1 ]; then
+    no "(13) the sweep never reached shown=\"2\" — the fixture's two tests are not both served at 1700 tokens"
+elif printf '%s' "$firstrow" | grep -q '<g ' || ! printf '%s' "$firstrow" | grep -q 'shown="1"'; then
+    no "(13) at --token-budget=$first the first <tests> section to fit is a GROUP, not one singleton: $firstrow"
+elif [ "$mono" -ne 1 ]; then
+    no "(13) shown= decreased as the budget grew"
+else
+    ok "(13) E1: the byte cap admits one file before two (first <tests> at --token-budget=$first is shown=\"1\", a single <test> row; shown= monotone)"
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

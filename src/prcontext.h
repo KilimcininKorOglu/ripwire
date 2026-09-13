@@ -533,6 +533,28 @@ struct PrTrimRender
 // The floor-exceeded suffix feeds back into the price (it lengthens truncated=, hence the root tag), so it
 // is applied and RE-PRICED: monotone, since adding bytes to a document already over budget cannot bring it
 // under, so one re-price is the fixpoint and the printed number is the document's real price either way.
+// One level's body, rendered to a string — the ladder's probe and (E1) the unbudgeted root's single render,
+// which needs the body before the head can be written.
+template< typename EmitFn >
+inline std::string prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
+{
+    char*       buf = nullptr;
+    std::size_t sz  = 0;
+    std::string rendered;
+    if( std::FILE* ms = open_memstream( &buf, &sz ) )
+    {
+        emitFiles( ms, trim );
+        std::fflush( ms );
+        std::fclose( ms );
+        if( buf )
+        {
+            rendered.assign( buf, sz );
+        }
+    }
+    std::free( buf );
+    return rendered;
+}
+
 template< typename EmitFn, typename PriceFn >
 inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budgetTokens, const PriceFn& price,
                                      const std::string& windowAttrs )
@@ -541,24 +563,10 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
     PrTrimRender out;
     for( std::size_t li = 0; li < nLevels; ++li )
     {
-        char*       buf = nullptr;
-        std::size_t sz  = 0;
-        std::string rendered;
-        if( std::FILE* ms = open_memstream( &buf, &sz ) )
-        {
-            emitFiles( ms, kPrTrims[li] );
-            std::fflush( ms );
-            std::fclose( ms );
-            if( buf )
-            {
-                rendered.assign( buf, sz );
-            }
-        }
-        std::free( buf );
         out.level     = li;
         out.truncated = li > 0 ? std::string( kPrTrims[li].dropped ) : std::string( "none" );
-        out.body      = std::move( rendered );
-        out.estTokens = price( out.body.size(), li, out.truncated, windowAttrs );
+        out.body      = prRenderLevel( emitFiles, kPrTrims[li] );
+        out.estTokens = price( out.body, li, out.truncated, windowAttrs );
         if( out.estTokens <= budgetTokens )
         {
             break;
@@ -566,7 +574,7 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
         if( li + 1 == nLevels )
         {
             out.truncated += ";budget-floor-exceeded";   // even the floor render is over budget
-            out.estTokens = price( out.body.size(), li, out.truncated, windowAttrs );
+            out.estTokens = price( out.body, li, out.truncated, windowAttrs );
         }
     }
     return out;
@@ -597,12 +605,15 @@ inline std::string prBudgetTail( std::size_t changedFiles, std::uint32_t skipped
 // this comment IS ~91% of that document. Same bytes in the same order; they are simply measured before
 // they are written, the way every other priced root measures itself (serialize.h §H7). File scope, beside
 // kPrEmptyDiffBody, so the emitter reads as the decisions it makes rather than as the prose it ships.
-// E1 (2026-09-12): `corpusHasTests` gates testmap.h's run=/run_unknown=/<g> clause. This legend is written
-// and PRICED before the files render (the budget ladder fits est_tokens= to the envelope), so the clause
-// cannot ride the rows the way --affected's does; it rides the one pre-render fact that decides whether a
-// <test>/<g> row is possible at all — the corpus holds a test file. Measured on test/defaultceilingcheck.sh's
-// 120-file, no-test fixture: unconditional, 7,989 -> 8,025 tokens, over the 8,000 default budget.
-inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, bool corpusHasTests )
+// E1 (2026-09-12): `withRunClause` splices testmap.h's run=/run_unknown=/<g> clause. The clause is a rule about
+// rows, so it rides only a document whose chosen body renders a <test>/<g> row (prBodyHasTestRow): the writer
+// builds both forms, the pricer charges runClauseBytes per candidate level from that level's own body, and the
+// form matching the chosen body is written — after the choice, since the legend precedes the root in the
+// stream but not in the decision. A corpus-level predicate ("the corpus holds a test file") over-approximated
+// (CodeRabbit on #214): a test elsewhere in the corpus, or a testCap=0 level, bought the clause for a document
+// with no row. Measured on test/defaultceilingcheck.sh's 120-file, no-test fixture: unconditional, 7,989 ->
+// 8,025 tokens, over the 8,000 default budget; gated, 7,989.
+inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, bool withRunClause )
 {
     return std::string(
                  "<!-- ripwire pr-context: no-LLM review-evidence bundle per changed file — defined symbols, their callers, blast radius (transitive dependents), affected tests, co-change partners not in the diff, and owners. "
@@ -630,7 +641,7 @@ inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindex
                  // --impact reports, so the same floor applies to hundreds of attributes in this one document.
                  // The shared constants, never a pr-context wording — that is the §B4 echo-site rule.
                  + rw::graphCountDisclosure( hasUnindexed )
-                 + std::string( corpusHasTests ? rw::kRunHintLegendClause : std::string_view() )   // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — corpus-gated
+                 + std::string( withRunClause ? rw::kRunHintLegendClause : std::string_view() )   // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
                  + "-->";
 }
 
@@ -665,13 +676,13 @@ inline std::string prEmptyRootTail( std::uint32_t skippedModeOnly, std::size_t b
 template< typename PriceFn >
 inline std::pair<std::size_t, std::string> prEmptyRootPrice( const PriceFn& price, std::size_t budgetTokens )
 {
-    const std::size_t plain = price( kPrEmptyDiffBody.size(), 0, std::string( "none" ), std::string() );
+    const std::size_t plain = price( kPrEmptyDiffBody, 0, std::string( "none" ), std::string() );
     if( budgetTokens == 0 || plain <= budgetTokens )
     {
         return { plain, std::string( "none" ) };
     }
     const std::string labelled( "budget-floor-exceeded" );
-    return { price( kPrEmptyDiffBody.size(), 0, labelled, std::string() ), labelled };
+    return { price( kPrEmptyDiffBody, 0, labelled, std::string() ), labelled };
 }
 
 // Open the <pr-context> root: the attributes EVERY form shares, this site's own tail, and the one remark row
@@ -709,7 +720,8 @@ struct PrPriceCtx
     const PrContextMask* anchor          = nullptr;
     const std::string*   baseEscaped     = nullptr;
     const std::string*   atAttrs         = nullptr;   // gitstamp::atAttr, appended past every tail attribute
-    std::size_t          envelopeBytes   = 0;         // legend + anchoring note + closing tag (never the root tag)
+    std::size_t          envelopeBytes   = 0;         // legend (WITHOUT the run clause) + anchoring note + closing tag (never the root tag)
+    std::size_t          runClauseBytes  = 0;         // E1: testmap.h's run=/run_unknown=/<g> clause, charged only for a body that renders a test row
     std::size_t          changedFiles    = 0;
     std::uint32_t        skippedModeOnly = 0;
     std::size_t          budgetTokens    = 0;
@@ -729,10 +741,20 @@ struct PrPriceCtx
 //
 // The attribute is part of the document it prices, so its own digits are converged in ≤4 passes exactly as
 // pricedRootAttr converges them.
-inline std::size_t prPriceDocument( const PrPriceCtx& c, std::size_t bodyBytes, std::size_t level,
+// E1 (CodeRabbit on #214): the ONE predicate that decides whether a rendered body carries the run clause's
+// subject — a <test>/<g> row — read by the pricer for every candidate level and by the writer for the chosen
+// one, so the priced legend and the delivered legend cannot disagree. Rows are the only place these two
+// openers occur in this document.
+inline bool prBodyHasTestRow( std::string_view body ) noexcept
+{
+    return body.find( "<test p=\"" ) != std::string_view::npos || body.find( "<g " ) != std::string_view::npos;
+}
+
+inline std::size_t prPriceDocument( const PrPriceCtx& c, std::string_view body, std::size_t level,
                                     const std::string& truncatedEscaped, const std::string& windowAttrs )
 {
-    std::size_t est = 0;
+    const std::size_t bodyBytes = body.size() + ( prBodyHasTestRow( body ) ? c.runClauseBytes : 0 );   // E1: the clause rides only a rows-bearing document
+    std::size_t       est       = 0;
     for( int pass = 0; pass < 4; ++pass )
     {
         PrTrimRender probe;
@@ -906,12 +928,17 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     }
     std::sort( changed.begin(), changed.end(), [ & ]( std::uint32_t a, std::uint32_t b ) { return ing.files[a] < ing.files[b]; } );
 
-    const bool corpusHasTests = std::any_of( ing.files.begin(), ing.files.end(), []( const std::string& f ) { return rw::isTestPath( f ); } );
-    const std::string legendText = prLegendText( escBase, g.unindexedFiles > 0, corpusHasTests );
-    std::fwrite( legendText.data(), 1, legendText.size(), out );
-
-    const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
-    std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
+    // E1: both legend forms are built now and ONE is written later, once the body is known (prBodyHasTestRow);
+    // the envelope is priced without the clause and the pricer adds runClauseBytes for a rows-bearing body.
+    const std::string legendText       = prLegendText( escBase, g.unindexedFiles > 0, false );
+    const std::string legendWithClause = prLegendText( escBase, g.unindexedFiles > 0, true );
+    const std::string anchorNoteText   = prAnchorNoteText( anchorAttr );
+    const auto        writeHead        = [ & ]( std::string_view body )
+    {
+        const std::string& legend = prBodyHasTestRow( body ) ? legendWithClause : legendText;
+        std::fwrite( legend.data(), 1, legend.size(), out );
+        std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
+    };
 
     // R2/N4: the fixed, non-body envelope of every root this emitter writes — the legend, the anchoring
     // note, and the closing tag. The root's OWN start tag varies with the tail it carries, so it is
@@ -921,10 +948,11 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // R2/N4: the price context (see prPriceDocument) — the envelope and every root attribute that does not
     // vary per candidate trim level, gathered once.
     const PrPriceCtx priceCtx{ .g = &g, .sharedAttrs = &sharedAttrs, .anchor = &anchor, .baseEscaped = &escBase, .atAttrs = &atAttrStr,
-                               .envelopeBytes = envelopeBytes, .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
+                               .envelopeBytes = envelopeBytes, .runClauseBytes = legendWithClause.size() - legendText.size(),
+                               .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
                                .budgetTokens = budgetTokens, .isDefaultBudget = budget.isDefault };
-    const auto priceOf = [ & ]( std::size_t bodyBytes, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )
-    { return prPriceDocument( priceCtx, bodyBytes, level, ex( truncatedRaw ), windowAttrs ); };
+    const auto priceOf = [ & ]( std::string_view body, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )
+    { return prPriceDocument( priceCtx, body, level, ex( truncatedRaw ), windowAttrs ); };
 
     if( changed.empty() )
     {
@@ -932,6 +960,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
         const std::string rootOpen = prRootOpenText( g, sharedAttrs,
                                                      prEmptyRootTail( skippedModeOnly, budgetTokens, budget.isDefault, emptyEst, ex( emptyTruncated ) ) + atAttrStr,
                                                      anchor, escBase );
+        writeHead( kPrEmptyDiffBody );
         std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
         std::fwrite( kPrEmptyDiffBody.data(), 1, kPrEmptyDiffBody.size(), out );
         std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
@@ -1184,8 +1213,10 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     if( budgetTokens == 0 )
     {
         const std::string rootOpen = prRootOpenText( g, sharedAttrs, " files=\"" + std::to_string( changed.size() ) + "\" skipped_mode_only=\"" + std::to_string( skippedModeOnly ) + "\"" + atAttrStr, anchor, escBase );
+        const std::string body = prRenderLevel( emitFiles, kPrTrims[0] );   // E1: rendered first, so the head can follow the body
+        writeHead( body );
         std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
-        emitFiles( out, kPrTrims[0] );
+        std::fwrite( body.data(), 1, body.size(), out );
         std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
         return 0;
     }
@@ -1227,6 +1258,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
                                                  prBudgetTail( changed.size(), skippedModeOnly, budgetTokens, chosen, ex( chosen.truncated ) )
                                                      + ( budget.isDefault ? " budget_default=\"1\"" : "" ) + windowAttrs + atAttrStr,
                                                  anchor, escBase );
+    writeHead( chosen.body );   // E1: the legend form the chosen body was priced with
     std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
     std::fwrite( chosen.body.data(), 1, chosen.body.size(), out );
     std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
