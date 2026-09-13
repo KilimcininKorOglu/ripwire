@@ -2504,8 +2504,26 @@ std::string_view htmlPreemptedBy( const rw::Config& c )
     return firstFlagOutside( c, kMapShapingFlags, kHtmlRideAlong );
 }
 
-std::optional<int> refuseInertMainModifiers( const rw::Config& cfg )
+std::optional<int> refuseInertMainModifiers( const rw::Config& cfg, const VerbPrecedence& prec )
 {
+    // C1-b (CodeRabbit on #212): --in=DIR has exactly ONE consumer — the default map's churn-decay branch
+    // (runDefaultMap -> churnRankedGraph -> scopedRecentPage). validateModifierGuards judges what cli.h can see on its
+    // own (rankBy, the root count, --top-k), but it cannot see which verb will WIN dispatch, so every report verb was
+    // a hole: `--rank-by=churn-decay --in=db --lint` parsed clean, runLint returned before the map, and --in was
+    // accepted and silently ignored — the inert-modifier class this whole function exists to refuse.
+    //
+    // The condition is the winner's mere EXISTENCE, not a list of verbs, for the same reason htmlPreemptedBy derives
+    // its answer instead of enumerating one: a verb added tomorrow is covered with nobody editing this. --query is
+    // covered too and is not an exception to explain away — it reaches runDefaultMap, but through the lexical branch
+    // that replaces the churn ranking outright, so no <recent> block of either kind is built on that path.
+    if( !cfg.inDir.empty() && prec.winner != nullptr )
+    {
+        const std::string_view winner( prec.winner );
+        rw::emitTo( stderr, "ripwire: --in=DIR scopes the recent-changes block of the DEFAULT churn-decay map, and {} answered this run — "
+                              "nothing was scoped. Drop {} to get the scoped block (e.g. ripwire <dir> --rank-by=churn-decay --in=src)\n",
+                    winner, winner );
+        return 1;
+    }
     if( const std::string_view verb = htmlPreemptedBy( cfg ); !verb.empty() )
     {
         // The pointer is phrased so it reads correctly for a verb with no symbol (--lint, --export) as well as
@@ -3194,7 +3212,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     // capture-audit 2026-09-04 (M16): the two modifiers whose "alone" test needs main's knowledge (the flag
     // universe walk, the root list) — refused here, before any dispatch, the way validateModifierGuards
     // refuses the ones cli.h can judge on its own.
-    if( const std::optional<int> refused = refuseInertMainModifiers( cfg ) )
+    if( const std::optional<int> refused = refuseInertMainModifiers( cfg, verbPrec ) )
     {
         return *refused;
     }

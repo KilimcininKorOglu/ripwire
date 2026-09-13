@@ -32,8 +32,9 @@ map collapses to a disclosed stub `<symbols total=N shown="0" next="--rank-by=ch
 map was not asked for, `total=` is the row count the same run without `--in=` carries, and the header's
 own `shown=` reads 0 so it cannot claim rows the document lacks (docs/METHODOLOGY.md §9.3: a disclosed
 cut is still terminal). The flag is refused, naming the remedy, with any other verb, under multi-root,
-with `--top-k=0` and with `--json`; the MCP surface exposes no churn ranker, so there is no twin to
-extend.
+with `--top-k=0` and with `--json`; the verb refusal is decided after dispatch precedence resolves, so
+it names the verb that actually answered rather than guessing from a list; the MCP surface exposes no
+churn ranker, so there is no twin to extend.
 
 Measured on the RocksDB corpus at `0e2801ac` (`--rank-by=churn-decay`, warm cache, bytes on stdout):
 39,813 B bare → 10,241 B with `--in=db`, 10,165 B with `--in=util`, 10,711 B with `--in=table`. The
@@ -43,9 +44,10 @@ with `--in=src`. Gate: `test/recentscopecheck.sh` — a 53-commit fixture with 4
 proves the scoped rows are only DIR's and spelled as the global block spells them, the global block is
 byte-identical with and without the flag, page 2 (`--offset=40`) is the exact remainder with no
 overlap and the pasted `next=` reproduces it byte-for-byte, a gold outside DIR leads the global block,
-the stub's `total=` equals the un-stubbed map's `shown=` and `<s>` count, ten refusals name their
-remedy, a directory with a space and one starting with `-` work, and determinism, `xmllint` and both
-legends hold; 39 arms red on the previous binary, 54 green now.
+the stub's `total=` equals the un-stubbed map's `shown=` and `<s>` count, thirteen refusals name their
+remedy — three of them the verbs that win dispatch, where the flag used to be accepted and ignored at
+exit 0 with an empty stderr — a directory with a space and one starting with `-` work, and determinism,
+`xmllint` and both legends hold; 42 arms red on the previous binary, 58 green now.
 
 ### Fixed — a churn window says how many commits it skipped as merge bombs
 

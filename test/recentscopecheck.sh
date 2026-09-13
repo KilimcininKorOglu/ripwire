@@ -26,8 +26,11 @@
 #   5  the stub: <symbols total="N" shown="0" next="--rank-by=churn-decay"/> replaces the <f> groups;
 #      N equals the un-stubbed map's shown= AND its <s> row count; the header's own shown= reads 0.
 #   6  refusals (exit 1, empty stdout, a message that names the remedy): --in= on --rank-by=churn, on
-#      --hotspots, alone, with --json, with --top-k=0; DIR missing, DIR a file, DIR absolute, DIR with "..".
-#   7  a DIR with a space and a DIR starting with '-' work; a trailing slash normalises.
+#      --hotspots, alone, with --json, with --top-k=0; DIR missing, DIR a file, DIR absolute, DIR with "..";
+#      and (6l/6m/6n) the DISPATCH-voided class — a report verb that answers before the default map ever
+#      renders, which cli.h cannot see because it does not know the winner.
+#   7  a DIR with a space and a DIR starting with '-' work; a trailing slash normalises; plus a mutation
+#      control that proves the two "carries no capped=/next=" assertions can actually SEE those attributes.
 #   8  merge_bombs_skipped= rides BOTH blocks.
 #   9  determinism (two runs byte-identical), well-formed XML, both legends define scope= and the stub.
 #
@@ -156,7 +159,7 @@ tag2="$( scopedTag "$P2" )"
 printf '%s' "$tag2" | grep -q 'offset="40"' \
     && ok "arm 3c: page 2 says offset=\"40\"" \
     || no "arm 3c: page 2 lacks offset=\"40\""
-[ -n "$tag2" ] && ! printf '%s' "$tag2" | grep -q 'capped=\|next=' \
+[ -n "$tag2" ] && ! printf '%s' "$tag2" | grep -qE 'capped=|next=' \
     && ok "arm 3d: the last page carries no capped= and no next=" \
     || no "arm 3d: the last page must exist and carry neither capped= nor next= (got: '$tag2')"
 rows2="$( scopedRows "$P2" )"
@@ -239,6 +242,14 @@ refuses "arm 6g: DIR is a file"               "not a directory"        --rank-by
 refuses "arm 6h: DIR absolute"                "root-relative"          --rank-by=churn-decay "--in=$REPO/db"
 refuses "arm 6i: DIR climbs out"              "root-relative"          --rank-by=churn-decay --in=../repo/db
 refuses "arm 6j: DIR is the root itself"      "root-relative"          --rank-by=churn-decay --in=.
+# CodeRabbit on #212: validateModifierGuards judges rankBy, root count and top-k, but not the VERB — when a report verb
+# wins dispatch (--lint, --hotspots) the run returns before the default map, the only consumer of --in, so the flag was
+# accepted and ignored. The refusal is dispatch-aware (main.cpp, after precedence resolution) and names the winner.
+# 6n is the subtle member: --query DOES reach runDefaultMap, but through the lexical branch that replaces the churn
+# ranking, so no <recent> block of either kind is built there either — it is voided like the rest, not a composition.
+refuses "arm 6l: --in= voided by --lint winning dispatch"     "--lint"     --rank-by=churn-decay --in=db --lint
+refuses "arm 6m: --in= voided by --hotspots winning dispatch" "--hotspots" --rank-by=churn-decay --in=db --hotspots
+refuses "arm 6n: --in= voided by --query winning dispatch"    "--query"    --rank-by=churn-decay --in=db --query=f00
 "$BIN" "$REPO" --no-cache --rank-by=churn-decay --in= >"$WORK/r.out" 2>"$WORK/r.err" </dev/null; rc=$?
 [ "$rc" = 1 ] && [ ! -s "$WORK/r.out" ] \
     && ok "arm 6k: --in= with an empty value is refused" \
@@ -253,7 +264,21 @@ tagS="$( scopedTag "$SP" )"
 [ "$( scopedRows "$SP" | grep -c '^my dir/' )" = 2 ] \
     && ok "arm 7b: both rows are spelled 'my dir/…'" \
     || no "arm 7b: rows under 'my dir' wrong: $( scopedRows "$SP" | tr '\n' ' ' )"
-printf '%s' "$tagS" | grep -q 'capped=\|next=' && no "arm 7c: a 2-file directory must not be capped" || ok "arm 7c: a 2-file directory carries no capped= and no next="
+if printf '%s' "$tagS" | grep -qE 'capped=|next='; then
+    no "arm 7c: a 2-file directory must not be capped (got: $tagS)"
+else
+    ok "arm 7c: a 2-file directory carries no capped= and no next="
+fi
+# MUTATION CONTROL for the two negative assertions above (3d, 7c): the pattern must SEE a tag that carries the
+# attribute, or a green there proves nothing. POSIX BRE does not define \\| as alternation, so the previous
+# spelling could pass both on a capped tag (CodeRabbit, #212).
+if printf '%s' '<recent scope="x" n="1" of="2" capped="1" next="--rank-by=churn-decay --in=x --offset=1">' | grep -qE 'capped=|next=' \
+   && printf '%s' '<recent scope="x" n="1" of="2" capped="1">' | grep -qE 'capped=|next=' \
+   && ! printf '%s' '<recent scope="x" n="1" of="1">' | grep -qE 'capped=|next='; then
+    ok "arm 7c control: the negative pattern sees capped= and next= on a mutant tag and stays quiet on a clean one"
+else
+    no "arm 7c control: the negative pattern cannot see capped=/next= on a mutant tag — arms 3d and 7c are inert"
+fi
 DA2="$( run --rank-by=churn-decay "--in=-dash" 2>"$WORK/e7d" )"; ec=$?
 [ "$ec" = 0 ] && printf '%s' "$( scopedTag "$DA2" )" | grep -q '^<recent scope="-dash" n="2" of="2" ' \
     && ok "arm 7d: --in=-dash (a directory starting with '-') works" \
