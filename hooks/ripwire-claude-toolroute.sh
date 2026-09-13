@@ -406,7 +406,7 @@ case "$recommended" in
 esac
 [ -n "$runCmd" ] || exit 0
 
-context="$( printf '%s\n%s' 'Ripwire produced a confidence-gated CLI recommendation from the shape of this tool call, before it ran. Prefer it when it answers the need; continue with the original call when more evidence is still required.' "$runCmd" )"
+context="$( printf '%s\n%s' 'Ripwire produced a confidence-gated CLI recommendation from the shape of this tool call, before it ran. Prefer it when it answers the need (add --legend=full if a definition is unclear); continue with the original call when more evidence is still required.' "$runCmd" )"
 jq -cn --arg context "$context" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$context}}' \
     2>/dev/null || exit 0

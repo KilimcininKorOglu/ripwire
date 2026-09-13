@@ -136,6 +136,6 @@ fi
 [ "$status" = recommend ] || exit 0
 # printf, not an inline \n: inside double quotes the shell keeps \n as two literal characters, and the
 # injected context then carries a visible backslash-n instead of a line break.
-context="$( printf '%s\n%s' 'Ripwire produced a confidence-gated CLI recommendation before tool selection. Prefer it when it answers the task; continue beyond it when implementation or verification still needs more evidence.' "$route" )"
+context="$( printf '%s\n%s' 'Ripwire produced a confidence-gated CLI recommendation before tool selection. Prefer it when it answers the task (add --legend=full if a definition is unclear); continue beyond it when implementation or verification still needs more evidence.' "$route" )"
 jq -cn --arg context "$context" \
     '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$context}}' 2>/dev/null || exit 0

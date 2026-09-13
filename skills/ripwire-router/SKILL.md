@@ -82,6 +82,10 @@ grew 32K → 256K, LongCodeBench). If a `ripwire wrap` primer or the opt-in `ski
 nudge is installed, these same substitutions arrive without anyone loading this file — that is the point:
 a rule an agent must remember to look up is a rule that loses to a habit.
 
+## The legend: compact by default, full when a definition needs its reasoning
+
+Every command these skills spell asks for the compact legend (`--legend=compact`: terse definitions of only the attributes the answer carries). Add `--legend=full` when a definition's reasoning is needed — a term you do not recognise, a floor or cap you need explained, or a map a human will read. `--for` is the exception: its default legend is already the one to read first, and its compact legend is its own.
+
 ## Cross-cutting disciplines (fire ALONGSIDE a moment skill, not instead)
 
 - **ripwire-orient / `map-before-you-read.md`** — the map-before-you-read token+accuracy discipline for *any* read, at *any* moment (a companion file since 2026-09-07; it was the standalone `efficient` skill).

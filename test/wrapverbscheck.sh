@@ -340,6 +340,38 @@ else
 fi
 
 echo
+echo "=== 8. every agent surface also says how to get the FULL legend back (owner question, 2026-09-13) ==="
+# Compact is what the generated commands ask for; an agent must also know when and how to ask for the full
+# legend (a term it does not recognise, a floor or cap it needs explained, a map a human will read). Four
+# surfaces, one sentence each — the wrap blurb (the session-start primer extracts it), the router skill (the
+# skills' shared conventions, not seventeen bodies), the prompt router's injected context, and the MCP
+# schema's `legend` field. The phrase asserted is the one the four surfaces share; a surface that drops it
+# is red, not a judgement call.
+FULL_PHRASE='--legend=full'
+if grep -qF -- "$FULL_PHRASE" "$TMP/blurb7" && grep -qiF 'definition' "$TMP/blurb7"; then
+    ok "8: the wrap blurb says when to add --legend=full"
+else
+    no "8: the wrap blurb never says how to get the full legend back (no --legend=full line)"
+fi
+if grep -qF -- "$FULL_PHRASE" "$ROOT/skills/ripwire-router/SKILL.md"; then
+    ok "8: skills/ripwire-router/SKILL.md carries the --legend=full convention"
+else
+    no "8: skills/ripwire-router/SKILL.md never mentions --legend=full"
+fi
+for _h in ripwire-claude-route.sh ripwire-claude-toolroute.sh ripwire-codex-route.sh; do
+    if grep -q -- "add --legend=full" "$ROOT/hooks/$_h"; then
+        ok "8: hooks/$_h's injected context says to add --legend=full when a definition is unclear"
+    else
+        no "8: hooks/$_h's injected context never mentions --legend=full"
+    fi
+done
+if printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | "$BIN" --mcp 2>/dev/null | grep -q 'restores the full legend'; then
+    ok "8: the MCP schema's legend field says \"full\" restores the full legend"
+else
+    no "8: the MCP schema's legend field does not say that \"full\" restores the full legend"
+fi
+
+echo
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"
     exit 0

@@ -24,13 +24,18 @@ itself tells repeated callers to leave: most of a small `--callers`/`--uses`/`--
 identical rows either way. Every one of those commands now carries `--legend=compact` where the verb
 accepts it (the XML verbs); `--for` keeps the default legend (its compact legend is its own, and the
 first call of a session wants the full one), and the text, JSON and writer verbs the binary refuses
-the flag on are untouched. Counted on this commit: 158 `ripwire <dir> --VERB` commands in 17 skill
+the flag on are untouched. Counted on this commit: 158 `ripwire <dir>` verb commands in 17 skill
 files (bodies only — no description changed, so no skill's stop rules or boundaries moved), 9
 commands in the wrap paste block (its 10–20 line band unchanged), 26 `--help-task` routes and the 2
 tool-call routes. Humans running the bare CLI see no difference. Gates, red first: `wrapverbscheck`
 arm 7 asserts the flag on every blurb command for the ten XML verbs it spells and its absence on
 `--for` (10 FAIL against the previous build); `skilltruthcheck` asserts it on every skill command for
-the shipped verb list (152 of 154 missing before the transform) and its absence on `--for`.
+the shipped verb list (152 of 154 missing before the transform) and its absence on `--for`. Each surface also
+says how to get the full legend back (owner question, 2026-09-13): the wrap paste block, the router skill's
+shared conventions, the three route hooks' injected context and the MCP schema's `legend` field each carry
+one sentence — add `--legend=full` when a definition's reasoning is needed (a term you do not recognise, a
+floor or cap you need explained, a map a human will read); `wrapverbscheck` arm 8 asserts the sentence on
+all four surfaces, red first.
 
 ### Fixed — the route hooks counted a directory named ripwire as a ripwire call
 
@@ -90,21 +95,43 @@ same 185 rows), `test/cppqualfix` 2,935 → 2,781 B, `test/nestedqualfix` 2,045 
 four scoped rows (`test/accessshapefix`) grows 9 B, because the `sc=` reading is longer than the
 `id=canonical(…)` clause it replaces and four rows do not pay it back. On `--for` the bundle is
 byte-shaped, so the row savings became rows, not bytes: three conceptual and name-exact tasks on this
-tree served 25 → 28, 21 → 24 and 3 → 3 signature rows at 10,042 → 10,142, 10,256 → 10,180 and
-5,971 → 5,886 B; the MCP `for` twin on the same tasks 8,752 → 9,008, 8,882 → 9,001 and 1,965 → 2,025 B
-with 26 → 31, 23 → 27 and 1 → 1 rows. The one new legend clause — the `sc=` composition rule and the
-`route=` code vocabulary, 123 B, ceiling-droppable with the confidence clause and exempt from the
-signature-trim charge like every other disclosure — keeps the readings of the codes in `--help`'s
-`--no-route` entry rather than on every answer: a 259 B first spelling grew a 2.9 KB fixture bundle by
-10% and tripped `test/forrankordercheck.sh`'s 4% ratchet. The `--json`
+tree served 25 → 28, 21 → 24 and 3 → 3 signature rows at 10,042 → 10,048, 10,256 → 10,086 and
+5,971 → 5,792 B; the MCP `for` twin on the same tasks 8,752 → 8,914, 8,882 → 8,907 and 1,965 → 1,931 B.
+The new legend is two clauses, both ceiling-droppable with the confidence clause and both exempt from the
+signature-trim charge like every other disclosure: the `sc=` composition rule (`; sc=scope (full id
+p::sc::n)`, 29 B) on every answer, and the `route=` code vocabulary (54 B) only on the answers whose root
+carries `route=` — the same present-only condition the compact dialect already used, and one shared
+spelling for both dialects so a code cannot acquire two readings. The route clause rides the document
+rather than living only in `--help`'s `--no-route` entry (where the fuller reading of each code still is)
+because a code with no reading anywhere in the answer is an undefined first-screen attribute:
+`test/legendcoverage_baseline.txt` is a ratchet that may only be edited downward, and dropping the clause
+opened two new lines in it. A 259 B first spelling grew a 2.9 KB fixture bundle by 10% and tripped
+`test/forrankordercheck.sh`'s 4% ratchet; the 83 B shipped here crosses it on the two smallest fixture
+bundles only, which re-pin under the gate's own q5 precedent. The `--json`
 twins mirror the attribute (`"sc"`), so `mcpattrparity` holds without a rename. Pins moved with the
 bytes: seven compact-legend schemas in `test/compactlegendcheck.sh` (map 810 → 920, map-diff 800 → 910,
 pack-signatures 680 → 780, metrics 720 → 820, query 630 → 730, pack-task 820 → 980, pack-top-n
 660 → 770) and the ten-verb loop 4,900 → 5,000 B, all for the one new whole-document `sc=` reading; the
-`test/fixture` map's `est_tokens` 884 → 894; seven of `test/forrankordercheck.sh`'s nine frozen-fixture
-bundle bases follow the output (+84…+142 B each, the whole delta the tool's, the ten repository queries
-inside the ratchet at +0.8…+3.9%); five goldens regenerated for the row shape; the printf-parity manifest
-re-pinned for the labels the rows and the help text move.
+`test/fixture` map's `est_tokens` 884 → 894; two of `test/forrankordercheck.sh`'s nine frozen-fixture bundle
+bases (`ffifix` 2,050 → 2,148, `hostilefix` 2,074 → 2,172 — the two smallest, where 83 B of reading is 4.7%),
+its other seven and its ten repository queries staying at their registered bases inside the ratchet; five
+goldens regenerated for the row shape; the printf-parity manifest re-pinned for the labels the rows and the
+help text move.
+
+### Fixed — `--for`'s rung zero fires on the exact ceiling, not on the overshoot allowance
+
+Under an explicit `--token-budget`, `--for` prices its header against the delivered-byte allowance
+(budget × 2.36 × 1.15) and, when the document does not fit, first drops the three explanatory legend
+clauses whose loss costs no fact (confidence, tail, the `sc=` rule) before touching anything a reader
+would miss. The 1.15 tolerance exists for the residual a lens cannot trim — a first signature is not
+divisible — but it also gated that first drop, so a document 1–15% over its budget that still carried
+all three clauses shipped `over_ceiling="1"` with them riding: on a fixture whose path left a few dozen
+bytes of slack, `test/fornotesbudgetcheck.sh`'s 1640 rung measured est_tokens=1755 and
+`test/forrootlegendcheck.sh`'s 800 rung 831 (both CI, PR #215). The free drop is now tried against the
+number the root promises (budget × 2.36) and only what remains is judged by the tolerance: the same
+1640 rung reads 1402 with its seven rows intact and the dropped-clause note present, the 800 rung 787.
+`test/estchargecheck.sh`'s late-label sweep control is re-anchored to where that residual band now sits
+on its corpus (760..1500; hits at 780–810).
 
 ### Added — Elixir module and arity resolution (parser version 95)
 
