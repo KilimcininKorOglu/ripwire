@@ -152,6 +152,54 @@ tree the same 1640 rung reads est_tokens=1515 with eight rows intact, and `forro
 (850 since lane for-widen re-anchored it) reads 832 with the root-relative clause surviving.
 `test/estchargecheck.sh`'s late-label sweep control is re-anchored to where that residual band now sits
 on its corpus (760..1500; hits at 780–810).
+### Fixed — the reference guide said things the binary does not
+
+@heliocipher's reference guide was verified claim by claim against a 0.6.0 build, and its flags held up: of the 82
+`--` tokens it named, the 72 that are ripwire flags all exist and are spelled as it spells them (the other ten
+belong to `cmake`, `xmllint`, `graphify`, `skills/install.sh`, or are anchor fragments). What it got wrong it
+mostly inherited from this repository.
+**"Dynamic dispatch contributes no edge"** was the opposite of the truth — a virtual call emits one edge per
+candidate in the receiver's inheritance cone, each `prov="split"` and counted in `amb=`; a four-class fixture
+returns three edges, not zero, with CHA-lite correctly dropping the same-name method of the unrelated class. The
+honesty section was understating the tool, which costs a reader's trust the way overstating it does.
+**`MSVC 19.36+`** was offered as a supported compiler beside an operating-system row naming only macOS and Linux;
+it is not a target, and the row now points Windows users at WSL2. **"18 task-shaped skill files"** was one of three
+defensible counts of one directory — 17 routable (`skills/*/SKILL.md`), 18 `SKILL.md` files in all
+(`skills/hermes/` holds a Hermes-native one), 16 activated for every agent (`ripwire-opt-remarks` carries
+`audience: contributor`) — and the README stated two of them, neither labelled. **"208 compile-time caps"** is 210
+by `docs/limits_build.py`'s own derivation from `src/`. **"Directory symlinks are not followed"** understated the
+limit: no symlink is followed, and a symlinked source file is not indexed at all, so a tree that reaches its
+sources through links reads as if they were not there. **Exit code 2 was missing** from the exit-code table, which
+is the one a CI script most needs — a policy gate fired (`--arch`, `--scan-skill`, `--quality-delta`), not an
+unknown failure. And one sentence sent a reader to `--scan-skills` to check a single file, which is the directory
+verb; the file verb is `--scan-skill=FILE`.
+
+Unstated, and now stated: `git` is a runtime dependency for the history-backed verbs, which refuse with exit 1 and
+a named reason rather than answering thin — `--map-diff` and `--rank-by=churn` answer and disclose the uniform
+fallback, `--dmm` and `--pr-context` return an explicit unavailable row. A git URL as the root is the one thing
+that touches the network. The write verbs return a receipt — region, `blob_sha`, contract check, tests to run —
+so an agent never re-reads the file, and their payload is a whole definition, signature included, not a braced
+body. Test coverage is read from call edges out of indexed test symbols, so a shell suite that runs a built binary
+as a subprocess is invisible to it (`harness=script`, `reaches=0`) — which is this repository's own shape. `--json`
+is an allow-list of nine verbs. `--quality-panel` has a `strict` preset that drops the two families which reshuffle
+on unchanged code. Several verbs stay single-root in a multi-root run. Section 3.2 now splits by why a reader is
+there — `scripts/pgobuild.sh` for a binary to use, the plain tree for work on the tool — and scopes the
+`NDEBUG`/`DEGRADED_PATH_ALERT` warning to the development tree, where it belongs.
+
+`--replace-symbol-body`'s one-line `--help` summary said it replaces a definition's *body*. It replaces the whole
+definition, signature included, as its own long help already said and as both insert verbs say. An agent that
+believed the summary sent a braced body and deleted the signature — disclosed in the receipt as
+`post_check_unavailable`, not refused.
+
+`test/readmedriftcheck.sh` gains three arms, so these counts cannot drift again: **(J)** the skills count, pinned to
+the routable set and to the install fold's "sixteen of the seventeen"; **(K)** the `--json` allow-list, harvested
+from `--help=--json` and required to match the guide in both directions, so a verb that gains `--json` support fails
+the gate until the guide is updated; **(L)** the cap inventory, pinned to `docs/limits_build.py`'s derivation. Each
+carries its own mutation control. Arm **(B)** took `head -1`, and so pinned one of the *two* sites stating the flag
+count — the reference guide's copy had been free to drift since it was written; it now checks every site and names
+the line that disagrees. `CONTRIBUTING.md` gains the rule those arms encode — an advertised count is an enumeration,
+and if a set can be counted more than one way the prose must say which set — and the stale-object build hazard,
+which until now lived only in `CLAUDE.md` ([#217](https://github.com/redhat-et/ripwire/pull/217)).
 
 ### Added — --for pages its answer one file per row, and says when to widen
 
