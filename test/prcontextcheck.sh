@@ -192,6 +192,47 @@ else
     no "run clause: the no-test fixture did not produce a one-file bundle: $( echo "$NTOUT" | head -c 300 )"
 fi
 
+# ── E1 follow-up (CodeRabbit on #214, third thread): the clause follows the RENDERED rows, not the corpus ──
+# "the corpus holds a test file" over-approximated: a test file elsewhere in the corpus, or a trim level whose
+# testCap is 0, still bought the clause for a document that renders no test row. The legend is now built after
+# the level is chosen and priced per candidate level from that level's own rendered body — the same predicate
+# (a <test>/<g> row in the body) decides both. Two fixtures, both RED on 7ab0956a:
+#   (i)  a test file OUTSIDE the selected range: test/t_other.cpp exercises src/b.cpp, and only src/a.cpp is
+#        in the diff — no changed file reaches a test, so no row renders, so no clause;
+#   (ii) the existing fixture (test_core.cpp IS reached) under a budget small enough that the ladder lands on a
+#        level with testCap=0 (L2+): no row renders, so no clause even though the corpus and the diff both have one.
+OT="$TMP/othertest"; mkdir -p "$OT/src" "$OT/test"; git -C "$OT" init -q
+git -C "$OT" config user.email a@x.com; git -C "$OT" config user.name A
+printf 'int ga( int x ) { return x; }\n' >"$OT/src/a.cpp"
+printf 'int gb( int x ) { return x * 2; }\n' >"$OT/src/b.cpp"
+printf 'int gb( int x );\nint test_gb( void ) { return gb( 1 ); }\n' >"$OT/test/t_other.cpp"
+git -C "$OT" add -A; git -C "$OT" commit -qm init
+printf 'int ha( int x ) { return ga( x ) + 1; }\n' >>"$OT/src/a.cpp"
+OTOUT="$( "$BIN" "$OT" --pr-context --no-cache 2>/dev/null )"
+# rows live in the BODY, after the root's start tag — the legend's own `<g n= p=…>` definition must not read as a row
+OTBODY="${OTOUT#*<pr-context }"
+if echo "$OTOUT" | grep -q 'files="1"' && ! echo "$OTBODY" | grep -qE '<(test|g) '; then
+    echo "$OTOUT" | grep -q 'run_unknown=' \
+        && no "run clause (i): a test file OUTSIDE the selected range still bought the clause for a document with no test row" \
+        || ok "run clause (i): a test file outside the selected range buys no clause (no <test>/<g> row renders)"
+else
+    no "run clause (i): the other-test fixture did not produce a one-file, zero-test-row bundle: $( echo "$OTOUT" | head -c 300 )"
+fi
+TC0=""
+for n in 300 400 500 600 800 1000 1200 1500; do
+    o="$( "$BIN" "$REPO" --pr-context --no-cache --max-tokens=$n 2>/dev/null )"
+    lvl="$( echo "$o" | grep -oE 'trim_level="[0-9]+"' | head -1 | grep -oE '[0-9]+' )"
+    body="${o#*<pr-context }"
+    if [ -n "$lvl" ] && [ "$lvl" -ge 2 ] && echo "$body" | grep -q '<tests count="[1-9]' && ! echo "$body" | grep -qE '<(test|g) '; then TC0=$n; TC0OUT="$o"; break; fi
+done
+if [ -z "$TC0" ]; then
+    no "run clause (ii): no --max-tokens in 300..1500 landed on a testCap=0 level with tests counted but no row — the arm cannot bite"
+else
+    echo "$TC0OUT" | grep -q 'run_unknown=' \
+        && no "run clause (ii): at --max-tokens=$TC0 (trim_level>=2, testCap=0) the document renders no test row yet still pays for the clause" \
+        || ok "run clause (ii): at --max-tokens=$TC0 (trim_level>=2, testCap=0) no test row renders and no clause is paid for"
+fi
+
 # ── §P11.7: files ordered by BLAST RADIUS, and a doc file's headings collapsed to a count ───────────
 #
 # The finding: the flagship review bundle emitted its <file> sections in PATH order, so on this repo

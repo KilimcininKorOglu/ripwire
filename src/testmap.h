@@ -743,16 +743,25 @@ inline std::vector<std::vector<std::uint32_t>> partitionTestRows( const TestRunn
             groups.push_back( { i } );
             continue;
         }
-        // every later runner-less row with the same attrs joins; the scan is O(rows²) on lists of a few hundred rows
+        // A group covers a CONTIGUOUS run only: the scan stops at the first row that is not a runner-less row
+        // with the same attrs. The rows arrive in evidence order, so equal-attribute runner-less rows are
+        // already adjacent and the only thing that can interrupt a run is a same-attribute row WITH a runner;
+        // hoisting the rows after it into a group in front of it would move them ahead of it (CodeRabbit on
+        // #214: A, B(run), A became G(A,A), B). Stopping instead costs one more <g> per interruption and makes
+        // order-preservation true by construction — test/testrowruncheck.sh arm 12 reads the paths back in
+        // emitted order and asserts they are the single rows' order. Linear: every row is visited once.
         std::vector<std::uint32_t> members{ i };
         std::size_t                bytes = rows[i].attrs.size() + 48 + rows[i].path.size();
         for( std::uint32_t j = i + 1; j < rows.size(); ++j )
         {
-            if( taken[j] || rows[j].attrs != rows[i].attrs || !idx.commandFor( rows[j].fileId ).empty() )
+            if( rows[j].attrs != rows[i].attrs || !idx.commandFor( rows[j].fileId ).empty() )
             {
-                continue;
+                break;
             }
-            if( maxGroupBytes != 0 && members.size() >= 2 && bytes + rows[j].path.size() + 1 > maxGroupBytes )
+            // The cap is applied before EVERY join, the second member included: two paths that each fit as a
+            // singleton must never be joined into one row the byte-budgeted section then rejects whole
+            // (arm 13). A chunk closed at one member is rendered as a single row.
+            if( maxGroupBytes != 0 && bytes + rows[j].path.size() + 1 > maxGroupBytes )
             {
                 groups.push_back( std::move( members ) );   // this chunk is full: close it, the next member opens another at the same key
                 members = {};

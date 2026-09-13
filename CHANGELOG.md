@@ -33,11 +33,14 @@ middle of one of them, in all three dialects (red on the previous binary). All t
 `--flags --flip`, `--pack-task` XML and JSON, the MCP `situational_awareness` twin and the edit
 receipt — render through one seam in `testmap.h`, and the M21(b) rule keeps its meaning: a `<t>` or
 `<g>` row carries `run=` or `run_unknown="1"`, never neither. Measured on RocksDB (`wc -c`, same cache,
-same commit): `--affected=db/write_batch.cc` 10,668 → 6,839 B, `--test-gate=db/write_batch.cc` 13,242 →
-9,594 B (its JSON 11,055 → 7,121 B), `--situ=db/write_batch.cc` 11,769 → 7,313 B; 7 `<g>` rows replace
-124 single rows and the residual spent on the disclosure is 144 B (XML) and 207 B (text) per list.
-`--pack-task`'s byte-budgeted tests section caps a group at its own budget and counts `shown=`/`total=`
-in files, so the same bundle now names 54 of 109 tests where it named 28. On this tree every harness
+same commit): `--affected=db/write_batch.cc` 10,668 → 6,878 B, `--test-gate=db/write_batch.cc` 13,242 →
+9,633 B (its JSON 11,055 → 7,163 B), `--situ=db/write_batch.cc` 11,769 → 7,357 B; 8 `<g>` rows replace
+124 single rows (a group covers a contiguous run only, so the one runner row inside the hops=2 tier splits
+it in two — order is preserved by construction, `test/testrowruncheck.sh` arm 12 reads the paths back in
+emitted order) and the residual spent on the disclosure is 160 B (XML) and 230 B (text) per list.
+`--pack-task`'s byte-budgeted tests section caps a group at its own budget — applied before every join, so
+two paths that each fit alone are never joined into one row the section then rejects (arm 13) — and counts
+`shown=`/`total=` in files, so the same bundle now names 54 of 109 tests where it named 28. On this tree every harness
 has a runner, so nothing groups and the only change is the legend that now defines `<g>`: the
 `--test-gate` legend pin moves 2,720 → 2,900 B (measured 2,843) and the `ripwire.pack-task/v1` compact
 pin 820 → 880 B (measured 865), both because the compact dialect and every rows-bearing full legend now
