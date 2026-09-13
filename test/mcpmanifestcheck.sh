@@ -202,13 +202,24 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 #   TOTAL             41,220 -> 42,084 B on the merged tree, attributed tool by tool against main's binary
 #                      (both lanes had re-anchored alone — 41,650 and 42,000 — and the sum is what ships).
 # Headroom after this line: 116 B, less than one declared argument, which is rule 5 above working.
+# RE-ANCHORED 2026-09-12 (lane for-widen, L-W): 42,200 → 42,384 = +184 B, EXACTLY the two declared optional arguments
+# `limit`/`offset` on `for` (the `for` schema 525 → 709 B in this arm's own json.dumps metric: the envelope plus the
+# description the contract obliges each property to carry), measured against a build of the lane's base (1cf3086e:
+# 42,177 B here, 23 B under the old ceiling) — the file-grain widening page (forpage.h) joins the paging family on
+# this twin. Its description gained NO prose: a first draft named coverage= and the page there (+109 B) and was
+# removed rather than re-anchored around, the L7 precedent above — the schema properties are where a client renders
+# an argument, and the answer's own legend defines coverage= and the page. Headroom after this line: 23 B.
 #   RE-ANCHORED 2026-09-13 (PR #215, owner question "how does an agent ask for the longer answer"): 42,200 -> 42,700,
 #   measured 42,636 B. The `legend` field's description gains one clause — "full (restores the full legend)",
 #   +32 B on each of the 17 tools that declare the field (+544 B) — so the schema an agent reads when choosing the
 #   argument's value says what "full" does. This is PROSE on a declared argument, which rule 5 above does not move
 #   the ceiling for; the owner asked for exactly this clause and authorized moving the pin with the measured number
 #   (2026-09-13 06:30), and that authority and this attribution are the whole justification. Headroom after: 64 B.
-CEILING = 42700
+#   MERGED 2026-09-13 (lane/sc-legend + lane/for-widen): both anchors above are real and they add. 42,200 -> 42,900,
+#   RE-MEASURED on the merged tree at 42,820 B (descriptions 19,967, schemas 18,426, 31 tools), not summed from the two
+#   lanes' separate anchors (42,384 and 42,700), because neither lane could see the other's bytes. Headroom after this
+#   line: 80 B, less than one declared argument, which is rule 5 above working.
+CEILING = 42900
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )

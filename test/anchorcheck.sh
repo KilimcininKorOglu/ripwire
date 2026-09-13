@@ -9,6 +9,11 @@
 # words never touch. This gate asserts:
 #   * GOLDEN NEUTRALITY — --for WITHOUT --anchor is byte-identical to the pre-change golden capture
 #     (test/anchorfix/golden_for.xml, captured from the pre---anchor binary).
+# RE-PIN 2026-09-13 (lane/sc-legend, PR #215): golden_for.xml 3,557 -> 3,586 B (+29 B, est_tokens 1349 -> 1361).
+# ONE identified change: the sc= composition rule joins the legend (graphlegend.h kForIdRouteLegend). This probe is
+# --no-route, so the route= code's reading is NOT here -- that absence is the control on the clause being
+# present-only. Verified before re-pinning: with that one clause and est_tokens= normalised out, the live document
+# and the previous golden are byte-identical -- no ranking, anchor or row byte moved.
 #   * the targeted expansion case — frobnicateWidgetCache (the lexical anchor) directly calls
 #     flushEvictionQueue, which shares NO token with the query: it must appear in the ANCHORED top-4
 #     and must NOT appear in the plain lexical top-4.

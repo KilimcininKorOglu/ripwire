@@ -338,6 +338,13 @@ probeFor()
 # (measured 908, the --rank-by=churn probe), map-diff 800 -> 910 (901), pack-signatures 680 -> 780 (775), metrics 720 -> 820
 # (814), query 630 -> 730 (723), pack-task 820 -> 980 (974), pack-top-n 660 -> 770 (761). The bytes the reading costs are the
 # bytes the rows save: 20 B per scoped row (this repo's flagless map, 137 scoped rows: -4,048 B, -15.3%).
+# RE-PINNED 2026-09-13 (merge of lane/sc-legend and lane/for-widen): ripwire.for/v1 500 -> 690, measured 678 on the
+# MERGED tree (rule above: largest measured (U) probe, up to the next 10 B, plus 10). A1' pinned this dialect at 500
+# from 494 with only its own clauses present; lane for-widen then added the coverage= reading and the thin rule
+# (kForCompactCoverageClause, forpage.h, 168 B) and this gate's --for=geometry probe IS a thin answer, so the probe
+# carries it. Measured, not summed. The other seven schemas sc-legend re-pinned were re-measured here too and all
+# still fit: map 892 of 920, map-diff 885 of 910, pack-signatures 759 of 780, metrics 798 of 820, query 707 of 730,
+# pack-task 974 of 980, pack-top-n 745 of 770.
 # schema                      pin  measured
 PIN_TABLE='
 ripwire.map/v1                   920   908
@@ -405,7 +412,7 @@ ripwire.layout/v1                160   149
 ripwire.pack-task/v1             980   974
 ripwire.pack-top-n/v1            770   761
 ripwire.expand/v1                280   265
-ripwire.for/v1                   500   494
+ripwire.for/v1                   690   678
 '
 pinFor()
 {
@@ -521,7 +528,13 @@ echo
 # RE-MEASURED 2026-09-12 (that sweep's design review): 4,849 B, the pin unchanged at 4,900. Attributed against the last-pass build:
 # --impact 777 → 770 B (the shorter <f lazy=> reading) and --safe-delete 712 → 708 B (t= reads a match, dead_code_candidate= says
 # outside); nothing else in the loop moved.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 5,000 B (29,824 B in full on the ripwire tree) ==="
+# RE-ANCHORED 2026-09-13 (merge of lane/sc-legend and lane/for-widen): 5,000 (sc-legend) / 5,100 (for-widen) → 4,700 B,
+# measured 4,645 on the MERGED tree — DOWN, not up, and re-measured rather than summed because neither lane could see
+# the other's arithmetic. Attributed per verb on this build: the loop's --for probe pays 916 B (it was ~1,120 before
+# A1' rebuilt --for's compact legend present-only, and it is a THIN answer here, so it also carries for-widen's
+# coverage= reading, +162 B); the other nine verbs are 317/770/271/425/212/400/339/708/287 B and did not move. Same
+# rule as every anchor above: the next multiple of 100 B over the measured total.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,700 B (29,824 B in full on the ripwire tree) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -530,8 +543,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 5000 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 5,000 B; full: $fullBytes B)"
+[ "$loopBytes" -le 4700 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 4,700 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="

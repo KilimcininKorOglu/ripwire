@@ -116,7 +116,27 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # q3/q9 sit at +3.6% from corpus growth alone with NO tool change behind it — that drift is the evidence that
 # arm (3) measures the live repository and needs a frozen fixture; re-basing them would erase the evidence and
 # leave the problem. Expect them to trip on ordinary growth; when they do, the fix is the fixture, not a re-pin.
-REPO_BASE=( 9981 9961 9784 9968 9755 9949 9909 9745 9613 9806 )
+# RE-PINNED AGAIN 2026-09-13 (lane for-widen, owner decision 22:55: coverage= is PRESENT-ONLY, thin answers only): all ten
+# repo answers are CONFIDENT on this tree, so they carry no coverage= and no clause and read within a few bytes of the base
+# build again (q2 +16 B, q7 +1 B: the r=1 row's next= spelling; q10 9861 on the tree as it stands, its head having moved
+# on this lane's own source text). The nine fixture bundles below: the seven THIN ones keep the gauge (+312..+364 B), the
+# two confident ones (ffifix/geometry, hostilefix/call) read exactly the base.
+# RE-PINNED 2026-09-12 (lane for-widen, L-W): all ten bases follow an OUTPUT change, the q5 precedent above. Measured on this
+# tree (the lane's own new source, src/forpage.h, is part of the corpus — q10's head moved +241 B on that text alone) with
+# the lane's base build (1cf3086e): 10134 10013 10080 10102 9470 9397 10008 10070 9966 10139 — q1..q4/q7..q10 had already
+# drifted +2.5%..+3.7% on corpus growth alone (the frozen-fixture note above still stands); with the lane's build:
+# 10463 10337 10409 10431 9799 9726 10337 10399 10294 10468, i.e. +324..+329 B on every query = the coverage= root fact,
+# its legend clause (kForCoverageLegend, forpage.h) and the r=1 row's widening next= on a thin answer. Nothing else moved
+# (routecheck/anchorcheck's goldens re-pinned the same day with every other byte proven identical).
+# q5 RE-PINNED 2026-09-13 (merge of lane/sc-legend and lane/for-widen), the q5 precedent above, third time on the same
+# query: 9,470 -> 9,880 B (+4.33%). ATTRIBUTED FOUR WAYS, which is what the precedent requires — main tree / main binary
+# 9,464 B, LANE tree / main binary 9,470 B (so corpus drift is +6 B, not the cause), main tree / lane binary 9,875 B,
+# lane tree / lane binary 9,880 B: the whole +410 B is the TOOL, and it is +410 B of ANSWER. Main serves this query
+# shown="20" of 40 ranked rows; this build serves shown="25". The sc= rows are ~20 B shorter than the id= rows they
+# replace, so the byte-shaped <sigs> section fits five more signature rows, and the legend that grew 154 B (the sc=
+# rule, the route= code's reading and the merged-callee reading) is paid for several times over in rows. The other
+# nine stay at their for-widen bases: -1.11%, +0.36%, -0.45%, +1.54%, +0.02%, +1.66%, +0.18%, -0.56%, +2.30%.
+REPO_BASE=( 10134 10029 10080 10102 9880 9397 10009 10070 9966 9861 )
 
 # ── (1)+(2) rank order + p= on every row, four dialects ───────────────────────────────────────────────────
 order_fail=0
@@ -160,24 +180,19 @@ for q in "${REPO_Q[@]}"; do
     fi
 done
 # nine fixture bundles measured on the pre-fix binary (git-less copies; d5ac29a7)
-# TWO RE-PINNED 2026-09-13 (row 6: sc= short ids, route= as a code, and the route= code's present-only reading —
-# the q5 precedent, a TOOL change crossing 4%, so the base follows the output; the seven under 4% stay at
-# d5ac29a7). The fixtures are frozen, git-less copies, so the whole delta is the tool's: the 29 B sc= composition
-# rule + the 54 B route= code reading (graphlegend.h) + the compact bundle's merged-callee clause, minus the
-# route prose the code replaced and the id= bytes the scoped rows no longer repeat. A 2 KB bundle cannot absorb
-# 82 B of reading the way the 10 KB repository bundles below do — those measure +0.8…+3.9%, inside the ratchet.
-# Measured on this lane's build, each on its own copy: ffifix/geometry 2050 -> 2148 (+4.78%),
-# hostilefix/'call a native function from python' 2074 -> 2172 (+4.73%).
-FX_BASE="fixture|geometry area of a shape|2895
-fixture|call a native function from python|3067
-fixture|parse the config and load it|3277
-ffifix|geometry area of a shape|2148
-ffifix|call a native function from python|3068
-ffifix|parse the config and load it|3506
-hostilefix|geometry area of a shape|2775
-hostilefix|call a native function from python|2172
-hostilefix|parse the config and load it|2928"
-echo "  ledger: nine fixture bundles — base bytes @d5ac29a7 (two @row-6 2026-09-13) → now"
+# RE-PINNED 2026-09-12 (lane for-widen, L-W), the nine fixture bundles, same output change as the ten repo queries above:
+# measured base build (1cf3086e) → this build: fixture/geometry 2950 → 3299, fixture/call 3126 → 3490, fixture/parse 3349 → 3691, ffifix/geometry 2082 → 2082, ffifix/call 3116 → 3468, ffifix/parse 3525 → 3877, hostilefix/geometry 2834 → 3146, hostilefix/call 2106 → 2106, hostilefix/parse 3002 → 3360 — the coverage= root fact, its clause and the widening next= on a thin answer; on a 2–3.5 KB bundle that is 12–20%,
+# which is why the 4% band cannot absorb a root-fact addition on these and the bases follow it (the q5 precedent).
+FX_BASE="fixture|geometry area of a shape|3319
+fixture|call a native function from python|3510
+fixture|parse the config and load it|3711
+ffifix|geometry area of a shape|2082
+ffifix|call a native function from python|3488
+ffifix|parse the config and load it|3897
+hostilefix|geometry area of a shape|3166
+hostilefix|call a native function from python|2106
+hostilefix|parse the config and load it|3380"
+echo "  ledger: nine fixture bundles — base bytes @d5ac29a7 → now"
 while IFS='|' read -r fx q base; do
     now="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null | wc -c | tr -d ' ' )"
     pct="$( python3 -c "print( '%+.2f' % ( ( $now - $base ) * 100.0 / $base ) )" )"

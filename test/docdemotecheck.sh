@@ -99,13 +99,23 @@ PY
 "$BIN" docdemotefix --for="$BUGQ" --no-route --format=candidates --no-cache >"$TMP/noroute.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ"     --no-cache >"$TMP/bugfor.xml"    2>/dev/null
 "$BIN" docdemotefix --for="$TRACEQ"   --no-cache >"$TMP/tracefor.xml"  2>/dev/null
-# RE-PIN 2026-09-13 (PR #215, row 6): docdemotegolden_for.xml 5,383 -> 5,437 B (+54 B, est_tokens "2153"
-# -> "2175"). ONE identified change: the route= code's reading (graphlegend.h kForRouteCodeLegend) now rides
-# the default dialect too, present-only, beside the attribute it defines — this conceptual query routes
-# subtoken+body, so its root carries route= and the clause appears. Verified before re-pinning: with that one
-# clause and est_tokens= normalised out, the live document and the previous golden are byte-identical — no
-# ranking, demotion or route byte moved. The noroute golden is UNCHANGED, which is the control: with no
-# route= there is no clause, and (h) proves it.
+# RE-PIN 2026-09-13 (merge of lane/sc-legend and lane/for-widen): docdemotegolden_for.xml RE-MEASURED on the
+# MERGED tree at 5,809 B (est_tokens "2328"), from 5,887 on for-widen's tree and 5,425 on sc-legend's. Neither
+# lane's own number is the merged one, so this is measured, not summed. Three identified changes, and the golden
+# carries all three:
+#   sc-legend (PR #215, row 6)  the scoped <d> rows carry sc= instead of the path-repeating id= (this is the
+#       SHRINK: 78 B off the rows here); route= is a code, not prose; and the callee rows of one calls block
+#       merge, which adds its own reading to the legend.
+#   sc-legend (PR #215, 2026-09-13)  the sc= composition rule (29 B) and the route= code's reading (54 B) join
+#       the default dialect's legend -- the second present-only, and this conceptual query's root carries route=,
+#       so it appears.
+#   for-widen (L-W)  the query is a THIN answer under the present-only rule (coverage="36"), so the root carries
+#       coverage= with its legend clause and the r=1 row's next= names the file-grain page instead of the body.
+# Verified before re-pinning, against BOTH sides' goldens: the legend comment differs from for-widen's by exactly
+# two insertions (the two clauses above, and the merged-callee reading) and by nothing else; the rows differ from
+# sc-legend's by exactly the r=1 next=. No ranking, demotion or route byte moved, and arm (f)'s own demotion
+# assertions still hold. The noroute golden is the control on the present-only rule: with no route= there is no
+# route clause, and (h) proves it -- it is byte-identical on the merged tree at 9,409 B.
 # RE-PIN 2026-09-10 (cap-disclosure lane, fix 2): docdemotegolden_for.xml 5505 -> 5517 B (est_tokens
 # "2202" -> "2207") and docdemotegolden_noroute.xml 9556 -> 9568 B (est_tokens "3386" -> "3391"). ONE
 # identified change, +12 B on each = FOUR three-byte U+2026 markers: cleanSig's 240-byte cap

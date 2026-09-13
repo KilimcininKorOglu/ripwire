@@ -90,13 +90,15 @@ old spelling still resolves on input. Two smaller cuts ride the same rows: `rout
 with its reading in the legend instead of 107 bytes of prose per answer (23 bytes now; the `anchors:`
 evidence clause is unchanged), and a `--for` compact bundle merges the same-named callees of one `calls`
 block into one `<c n= l="70,69"/>` row (`shown=` still counts callees). Measured with `wc -c` against the
-pre-change build of the same commit: the flagless map of this repository 26,402 → 22,354 B (−15.3%, the
-same 185 rows), `test/cppqualfix` 2,935 → 2,781 B, `test/nestedqualfix` 2,045 → 1,937 B; a fixture with
-four scoped rows (`test/accessshapefix`) grows 9 B, because the `sc=` reading is longer than the
-`id=canonical(…)` clause it replaces and four rows do not pay it back. On `--for` the bundle is
-byte-shaped, so the row savings became rows, not bytes: three conceptual and name-exact tasks on this
-tree served 25 → 28, 21 → 24 and 3 → 3 signature rows at 10,042 → 10,048, 10,256 → 10,086 and
-5,971 → 5,792 B; the MCP `for` twin on the same tasks 8,752 → 8,914, 8,882 → 8,907 and 1,965 → 1,931 B.
+build of `origin/main` (f6a27167) run on this same merged tree, so no corpus drift rides the numbers: the
+flagless map of this repository 26,449 → 22,407 B (−15.3%, the same rows), `test/cppqualfix` 2,935 →
+2,781 B, `test/nestedqualfix` 2,045 → 1,937 B; a fixture with four scoped rows (`test/accessshapefix`)
+grows 9 B, because the `sc=` reading is longer than the `id=canonical(…)` clause it replaces and four rows
+do not pay it back. On `--for` the bundle is byte-shaped, so the row savings became ROWS: three tasks on
+this tree, same tree and same day, main's binary → this one — `pagerank power iteration` 9,470 B at
+`shown="20"` → 9,880 B at `shown="25"`, `rank graph teleport` 10,134 B at 19 rows → 10,022 B at 22 rows,
+and the name-exact `escapeXml` 5,977 → 5,846 B. Five more ranked rows for 410 B on the first; three more
+for 112 fewer bytes on the second.
 The new legend is two clauses, both ceiling-droppable with the confidence clause and both exempt from the
 signature-trim charge like every other disclosure: the `sc=` composition rule (`; sc=scope (full id
 p::sc::n)`, 29 B) on every answer, and the `route=` code vocabulary (54 B) only on the answers whose root
@@ -106,17 +108,21 @@ rather than living only in `--help`'s `--no-route` entry (where the fuller readi
 because a code with no reading anywhere in the answer is an undefined first-screen attribute:
 `test/legendcoverage_baseline.txt` is a ratchet that may only be edited downward, and dropping the clause
 opened two new lines in it. A 259 B first spelling grew a 2.9 KB fixture bundle by 10% and tripped
-`test/forrankordercheck.sh`'s 4% ratchet; the 83 B shipped here crosses it on the two smallest fixture
-bundles only, which re-pin under the gate's own q5 precedent. The `--json`
+`test/forrankordercheck.sh`'s 4% ratchet; the 83 B shipped here crosses it nowhere on the nine frozen
+fixture bundles (+0.5…+3.2%). The `--json`
 twins mirror the attribute (`"sc"`), so `mcpattrparity` holds without a rename. Pins moved with the
-bytes: seven compact-legend schemas in `test/compactlegendcheck.sh` (map 810 → 920, map-diff 800 → 910,
+bytes, every one of them RE-MEASURED on the merged tree rather than carried over from either lane's own:
+seven compact-legend schemas in `test/compactlegendcheck.sh` (map 810 → 920, map-diff 800 → 910,
 pack-signatures 680 → 780, metrics 720 → 820, query 630 → 730, pack-task 820 → 980, pack-top-n
-660 → 770) and the ten-verb loop 4,900 → 5,000 B, all for the one new whole-document `sc=` reading; the
-`test/fixture` map's `est_tokens` 884 → 894; two of `test/forrankordercheck.sh`'s nine frozen-fixture bundle
-bases (`ffifix` 2,050 → 2,148, `hostilefix` 2,074 → 2,172 — the two smallest, where 83 B of reading is 4.7%),
-its other seven and its ten repository queries staying at their registered bases inside the ratchet; five
-goldens regenerated for the row shape; the printf-parity manifest re-pinned for the labels the rows and the
-help text move.
+660 → 770) for the one new whole-document `sc=` reading; `ripwire.for/v1` 500 → 690 (measured 678 — A1′
+pinned that dialect at 500 from 494 with only its own clauses present, and the merge brought the
+`coverage=` reading onto the same probe); the ten-verb legend loop 4,900 → 4,700 B (measured 4,645 — DOWN,
+because A1′'s present-only `--for` legend outweighs what both lanes added); the MCP manifest ceiling
+42,200 → 42,900 (measured 42,820); `test/fixture`'s map `est_tokens` 884 → 894;
+`test/forrankordercheck.sh`'s q5 9,470 → 9,880, attributed four ways (main tree/main binary 9,464, this
+tree/main binary 9,470, so corpus drift is 6 B — the other 410 B is this change, and it is five more
+ranked rows); five goldens regenerated for the row shape and the clauses; the printf-parity manifest
+re-pinned for `help_all` alone, 41 labels unchanged.
 
 ### Fixed — `--for`'s rung zero fires on the exact ceiling, not on the overshoot allowance
 
@@ -128,10 +134,50 @@ divisible — but it also gated that first drop, so a document 1–15% over its 
 all three clauses shipped `over_ceiling="1"` with them riding: on a fixture whose path left a few dozen
 bytes of slack, `test/fornotesbudgetcheck.sh`'s 1640 rung measured est_tokens=1755 and
 `test/forrootlegendcheck.sh`'s 800 rung 831 (both CI, PR #215). The free drop is now tried against the
-number the root promises (budget × 2.36) and only what remains is judged by the tolerance: the same
-1640 rung reads 1402 with its seven rows intact and the dropped-clause note present, the 800 rung 787.
+number the root promises (budget × 2.36) and only what remains is judged by the tolerance. On the merged
+tree the same 1640 rung reads est_tokens=1515 with eight rows intact, and `forrootlegendcheck`'s arm 2
+(850 since lane for-widen re-anchored it) reads 832 with the root-relative clause surviving.
 `test/estchargecheck.sh`'s late-label sweep control is re-anchored to where that residual band now sits
 on its corpus (760..1500; hits at 780–810).
+
+### Added — --for pages its answer one file per row, and says when to widen
+
+On the pre-registered follow-up ladder (a 2,066-file C++ corpus pinned at one commit, the frozen 30
+questions, six deterministic steps per tool, no model in the loop), every ripwire follow-up completed 0
+answers through step 4: `--for`'s `next=` pointed at `--expand` (a body, not a wider list), `--top-k` was
+inert on `--for`, and `--format=candidates` is symbol-grain (40 symbols is about 18 files in 11 KB). The
+one follow-up that completed answers in that ladder was a file-grain page — one row per file, about 6 KB.
+Local telemetry had `--for` → `--expand` followed 0 of 259 times.
+
+`--for=TASK --limit=N` (`--offset=M` pages it) is now that page: a `<files>` document of one
+`<f p= score= n= sym=/>` row per positive-score file, `p=` spelled root-relative exactly as every other
+verb spells it, ranked file-first by `score=` — the IDF-weighted share of the query's subtokens the file's
+top 8 symbols cover between them (a term counts once however often it recurs, so one huge file cannot
+monopolise; ties by the best symbol's lens score, then path). The root carries the house paging vocabulary
+(`shown= total= capped= has_more= next_offset= offset= limit=`) and a `next=` naming the next page.
+When the answer is THIN — the top-ranked symbol's name, doc or body carries under 50% of the query's
+IDF-weighted subtokens (an unmatched subtoken weighs as the rarest, so a `(#12147)` token lowers the share
+honestly), or the ranked head spreads over fewer than 3 files — `--for`'s root carries `coverage=` (that
+share, whole percent) with its legend clause, and the r=1 row's `next=` names `--for=TASK --limit=40`
+instead of the body. A confident answer carries none of the three and is byte-identical to before; the
+`--json` and MCP twins follow the same present-only rule. The MCP `for` twin takes the same
+`limit`/`offset` and serves the same page through the same renderer. Beside the page every bundle-shaping flag is refused, never ignored (`--limit=0` and non-numeric
+values were already refused). `--top-k` stays inert on `--for` and `--help` now says which flag widens.
+
+Measured, on the ladder re-registered with the page as step 2 on the `--for` shapes: ripwire's
+complete@step row is unchanged at 14/14/14/14/17/17 — the page completed no question, because the seven
+misses it ran on hold 3–21 gold files each — while adding gold files on four of the seven (+2, +1, +3 and
++6 files) at 5,539–6,212 B per page (mean 5,841 B), and the thin rule named the page on 4 of those 7
+misses. The frozen-30 single-call instrument is unchanged at 14/30 complete and 42/129 gold files named;
+its median bytes-to-answer is 6,348 B (5,988 B before: 10 of the 12 `--for` questions on that instrument
+are thin — commit subjects with a `(#NNNN)` token, "how does A reach B" questions — and carry the clause;
+the 2 confident ones read the base again, and the 18 non-`--for` questions moved by the 2–4 B the git
+stamp moved on every verb). Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at page rank 13
+and is absent from the default head and tail; one row per file, determinism, paging with no overlap,
+`coverage=` defined in both dialects, thin versus confident `next=`, the refusals, MCP parity — red on the
+pre-change binary. The byte pins that ride a thin `--for` header
+(forrankordercheck's fixture rows, forrootlegendcheck, compactlegendcheck's loop, the two `--no-route`
+goldens) were re-anchored with the measured number; the confident ones read the base again.
 
 ### Added — Elixir module and arity resolution (parser version 95)
 

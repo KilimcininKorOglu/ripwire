@@ -11,6 +11,10 @@
 #   (a) SAFE FALLBACK — a CONCEPTUAL --for query defaults to subtoken+body; its RANKING is byte-identical to
 #       the pre-routing golden captured via --no-route (the confidence gate does not over-fire on prose).
 #   (b) identifier query — --for="buildGraph" (DEFAULT, no flag) routes to name-exact; the header says so.
+# RE-PIN 2026-09-13 (lane/sc-legend, PR #215): routefix/golden_for.xml 3,776 -> 3,805 B (+29 B, est_tokens
+# 1433 -> 1445). ONE identified change: the sc= composition rule joins the legend. The golden is the --no-route
+# capture, so the route= code's reading is NOT here -- the control on that clause being present-only. Verified
+# before re-pinning: with that clause and est_tokens= normalised out, live and previous goldens are byte-identical.
 #   (c) --no-route forces subtoken+body and matches the pre-flip capture byte-for-byte (golden neutrality
 #       preserved for the opt-out path); its header carries NO 'routed:' note.
 #   (d) determinism — two DEFAULT --route runs are byte-identical.
