@@ -99,6 +99,13 @@ PY
 "$BIN" docdemotefix --for="$BUGQ" --no-route --format=candidates --no-cache >"$TMP/noroute.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ"     --no-cache >"$TMP/bugfor.xml"    2>/dev/null
 "$BIN" docdemotefix --for="$TRACEQ"   --no-cache >"$TMP/tracefor.xml"  2>/dev/null
+# RE-PIN 2026-09-13 (PR #215, row 6): docdemotegolden_for.xml 5,383 -> 5,437 B (+54 B, est_tokens "2153"
+# -> "2175"). ONE identified change: the route= code's reading (graphlegend.h kForRouteCodeLegend) now rides
+# the default dialect too, present-only, beside the attribute it defines — this conceptual query routes
+# subtoken+body, so its root carries route= and the clause appears. Verified before re-pinning: with that one
+# clause and est_tokens= normalised out, the live document and the previous golden are byte-identical — no
+# ranking, demotion or route byte moved. The noroute golden is UNCHANGED, which is the control: with no
+# route= there is no clause, and (h) proves it.
 # RE-PIN 2026-09-10 (cap-disclosure lane, fix 2): docdemotegolden_for.xml 5505 -> 5517 B (est_tokens
 # "2202" -> "2207") and docdemotegolden_noroute.xml 9556 -> 9568 B (est_tokens "3386" -> "3391"). ONE
 # identified change, +12 B on each = FOUR three-byte U+2026 markers: cleanSig's 240-byte cap

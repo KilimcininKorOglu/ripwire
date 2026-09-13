@@ -1791,10 +1791,16 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         // the splice at the end of this function.
         rootOpenStr.insert( rootOpenStr.size() - 1, " lens=\"churn,amp,tested\"" );
     }
+    // Read off the BUILT root open, never re-derived from noRoute: the two must agree, and only one of them is
+    // what the caller actually receives.
+    const bool  mcpForRouteAttrOn = rootOpenStr.find( " route=\"" ) != std::string::npos;
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
-                          + std::string( rw::kForIdRouteLegend )   // row 6: sc= and the route= code — the CLI twin's exact clause
+                          + std::string( rw::kForIdRouteLegend )   // row 6: sc= — the CLI twin's exact clause
+                          // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
+                          // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
+                          + std::string( mcpForRouteAttrOn ? rw::kForRouteCodeLegend : std::string_view() )
                           + "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
                           + std::string( mcpForConf.note )
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
@@ -1850,7 +1856,8 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // Row 6 (2026-09-12): the sc=/route= reading (kForIdRouteLegend, appended above) is exempt on the same contract —
     // charged, it grew this header by 259 B and dropped one ranked row the CLI still served (mcpforparitycheck (2),
     // two of four conceptual tasks: the exact regression the paragraph above records for the 125 B of 2026-09-04).
-    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - rw::kForIdRouteLegend.size()
+    const std::size_t mcpIdRouteExemptBytes = rw::kForIdRouteLegend.size() + ( mcpForRouteAttrOn ? rw::kForRouteCodeLegend.size() : 0u );
+    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes
                                  + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
     const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
 

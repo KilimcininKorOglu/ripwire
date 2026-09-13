@@ -593,7 +593,7 @@ inline constexpr std::string_view kForLegendDroppedNote =
 // reason kForCompactLegendConfidence is one constant — the byte ledgers that exempt and charge these strings
 // read their sizes, and a string built at runtime has no size to read at compile time.
 inline constexpr std::string_view kForLegendDroppedNoteCompact =
-    " [legend clauses: confidence=/margin_pct=, sc=/route= and r=/tail (total= shown= capped=) dropped (ceiling) - "
+    " [legend clauses: confidence=/margin_pct=, route= and r=/tail (total= shown= capped=) dropped (ceiling) - "
     "the attributes stay; a wider token-budget defines them]";
 
 // A1′ (owner decision 2026-09-12): --for's COMPACT legend, pinned at 500 B (test/compactlegendcheck.sh, the
@@ -617,8 +617,9 @@ inline constexpr std::string_view kForCompactLegendRoot =
 inline constexpr std::string_view kForCompactLegendRows =
     "d: cx= ccx= complexity, in= callers, churn= amp= change, clone= tested= 1, sc= scope, id=p::sc::n; "
     "total= shown= capped=1 if cut";
-inline constexpr std::string_view kForCompactLegendRoute =
-    "; route= name-exact(X)|subtoken+body[:broad|:declined]";
+// ONE spelling for both dialects (graphlegend.h kForRouteCodeLegend): the compact dialect and the default one
+// say the same thing about route=, so they cannot drift into two readings of one code.
+inline constexpr std::string_view kForCompactLegendRoute = rw::kForRouteCodeLegend;
 inline constexpr std::string_view kForCompactLegendConfidence =
     "; confidence=/margin_pct= head score drop (low=flat)";
 inline constexpr std::string_view kForCompactLegendHops =
@@ -665,13 +666,22 @@ inline std::string compactForNote( std::string_view note )
     return std::string( note );
 }
 
+// Does THIS answer's root carry route=? The reading of a code is present-only in both dialects, so both ask the
+// question the same way: the ladder's rung (c) may have dropped the attribute (withRouteAttr), and a run the
+// router never ran for (no-route, or a verb with no route at all) never had one. Read off the built root open
+// rather than re-derived from the route reason, so the clause can only appear beside the attribute it defines.
+inline bool forRouteAttrPresent( const ForLensHeaderParts& p, bool withRouteAttr ) noexcept
+{
+    return withRouteAttr && p.rootOpenStr.find( " route=\"" ) != std::string_view::npos;
+}
+
 inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p, bool withRouteAttr, std::string_view extraNotes )
 {
     h += "<!-- ripwire for ripwire.for/v1: ";
     h += kForCompactLegendRoot;
     h += kForCompactLegendRows;
     // the ceiling-droppable trio — rung zero clears confidenceNote/tailLegend/idRouteLegend together and splices the note below
-    if( p.idRouteLegend && withRouteAttr && p.rootOpenStr.find( " route=\"" ) != std::string_view::npos )
+    if( p.idRouteLegend && forRouteAttrPresent( p, withRouteAttr ) )
     {
         h += kForCompactLegendRoute;
     }
@@ -792,7 +802,11 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
          "— prefer composing/reusing these; watch the high-churn/high-amp/cloned ones";
     if( p.idRouteLegend )
     {
-        h.append( rw::kForIdRouteLegend );   // row 6: sc= and the route= code — dropped by rung zero with the two clauses below
+        h.append( rw::kForIdRouteLegend );   // row 6: sc= — dropped by rung zero with the two clauses below
+        if( forRouteAttrPresent( p, withRouteAttr ) )
+        {
+            h.append( rw::kForRouteCodeLegend );   // …and the route= code, present-only, the compact dialect's own condition
+        }
     }
     // P3 (L7): the r=1 <d> row carries next= (nextverb.h). NOT defined here on purpose: every byte of this header
     // is un-charged by the token ladder, and fornotesbudgetcheck's tight rungs leave it ~0 tokens of headroom
@@ -2373,9 +2387,11 @@ std::optional<int> runForLens( const MainDispatch& d )
         // (forbudgetmonotoncheck #1/#5 caught it, 6507 B against 6141 B at --token-budget=8000). Subtract what was
         // EMITTED in this dialect, exactly as the confidence and tail clauses above do.
         // A1′: the compact dialect emits ONLY the route clause here (sc= rides its always-on row clause), and only when
-        // the root carries route= — subtract exactly what appendCompactForLegend appended.
+        // the root carries route= — subtract exactly what appendCompactForLegend appended. The DEFAULT dialect emits the
+        // sc= rule always and the same route clause under the same present-only condition (forRouteAttrPresent).
+        const std::size_t routeCodeEmitted     = routeNoteRaw.empty() ? 0u : rw::kForRouteCodeLegend.size();
         const std::size_t idRouteLegendEmitted = !headerParts.idRouteLegend ? 0u
-                                               : ( compactLegendOn ? ( routeNoteRaw.empty() ? 0u : kForCompactLegendRoute.size() ) : rw::kForIdRouteLegend.size() );
+                                               : ( compactLegendOn ? routeCodeEmitted : rw::kForIdRouteLegend.size() + routeCodeEmitted );
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
@@ -2735,7 +2751,21 @@ std::optional<int> runForLens( const MainDispatch& d )
             // kForLegendDroppedNote, naming the attributes whose definitions just went. Silence here was the
             // reader seeing confidence= margin_pct= budget_tokens= r= and the <tail> counts with nothing in the
             // legend about any of them and no way to tell a budget cut from a feature that does not exist.
-            if( !fitsCeiling( headerStr ) && ( !headerParts.confidenceNote.empty() || headerParts.tailLegend || headerParts.idRouteLegend ) )
+            // RUNG ZERO TRIGGERS ON THE EXACT CEILING, not on the 1.15 allowance the ladder's own rungs and the
+            // over_ceiling verdict are judged by (2026-09-13, PR #215 CI). kCeilingFirstEntryTolerance exists for the
+            // residual a lens cannot trim — a first signature that is not divisible — and it was also gating this
+            // rung, so a document 1..15% over its budget that STILL carried three droppable clauses shipped over_ceiling=1
+            // with all three riding: fornotesbudgetcheck's 1640 rung at est_tokens=1755 and forrootlegendcheck's 800
+            // rung at 831 on CI, where the slack a different fixture path leaves is a few dozen bytes. The free drop
+            // is tried first, at the number the root promises; only what remains after it is measured against the
+            // tolerance. Same fit test otherwise (the reserve-priced header plus every other byte stdout receives).
+            const auto fitsExactCeiling = [ & ]( std::string_view candidate )
+            {
+                const std::size_t exactCeiling = std::size_t( double( cfg.tokenBudget ) * rw::kMinBytesPerToken );
+                return candidate.size() + ladderPayloadBytes <= exactCeiling
+                    && finishForLensHeader( std::string( candidate ), rootFinish ).size() + emittedNonHeaderBytes <= exactCeiling;
+            };
+            if( !fitsExactCeiling( headerStr ) && ( !headerParts.confidenceNote.empty() || headerParts.tailLegend || headerParts.idRouteLegend ) )
             {
                 headerParts.confidenceNote = {};
                 headerParts.tailLegend     = false;   // deep-tail: the explainer falls with the confidence clause —

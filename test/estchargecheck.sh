@@ -501,7 +501,12 @@ for i in range( 4 ):
         fh.write( "\n".join( lines ) )
 PYG
 a7s_bad=""; a7s_badn=0; a7s_runs=0; a7s_inside_labelled=0
-for spec in "default:1200:1500:" "detail_graph:2880:3080:--detail=20 --with-graph"; do
+# RE-ANCHORED 2026-09-13 (PR #215): the default sweep starts at 760, not 1200. --for's rung zero now triggers on the
+# EXACT ceiling (verbs_for.h), so a document 1..15% over its budget drops its three explanatory clauses before the
+# allowance is consulted; on this corpus the late-label band (over_ceiling="1" INSIDE the allowance — the residual
+# after that drop) therefore sits at 780..810 instead of inside 1200..1500, and the control below would otherwise be
+# inert. Swept 700..3300 step 10 on the new binary: default hits at 780 790 800 810, none on the --detail=20 arm.
+for spec in "default:760:1500:" "detail_graph:2880:3080:--detail=20 --with-graph"; do
     s_label="${spec%%:*}"; s_rest="${spec#*:}"; s_from="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_to="${s_rest%%:*}"; s_args="${s_rest#*:}"
     for (( N = s_from; N <= s_to; N += 10 )); do
         # shellcheck disable=SC2086
@@ -520,7 +525,7 @@ for spec in "default:1200:1500:" "detail_graph:2880:3080:--detail=20 --with-grap
     done
 done
 [ "$a7s_badn" -eq 0 ] \
-    && ok "#11 A7 sweep: $a7s_runs budgets over a git-less corpus (default 1200..1500, --detail=20 --with-graph 2880..3080, step 10) — every document within N x 2.36 x 1.15 at exit 0, or on the ladder's disclosed last rung" \
+    && ok "#11 A7 sweep: $a7s_runs budgets over a git-less corpus (default 760..1500, --detail=20 --with-graph 2880..3080, step 10) — every document within N x 2.36 x 1.15 at exit 0, or on the ladder's disclosed last rung" \
     || no "#11 A7 sweep: $a7s_badn of $a7s_runs budgets deliver past the allowance with no ladder rung fired (first:$a7s_bad) — a byte spliced in after the ladder priced the document"
 # control: the sweep must cross the band the defect lives in — a root that says over_ceiling="1" while the document
 # still fits the allowance (est_tokens > N at 2.50 B/tok, bytes <= 2.714 B/tok). No such budget = inert, re-anchor.
