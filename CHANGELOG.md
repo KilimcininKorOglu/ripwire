@@ -111,7 +111,29 @@ want the same thing — the files named, in emitted order — so `test/affectedc
 `test/selectorchaincheck.sh` and `test/testrowruncheck.sh` now all ask `test/testrowpaths.py`, one reader for
 all three dialects and both row shapes. Two more gates read these rows and keep their own readers, because
 neither asks for the paths: `test/listingpagingcheck.sh` sums `n=` over the group rows to prove the family
-never pages, and `test/w3fixlegendcheck.sh` counts path occurrences on a `--situ` line.
+never pages, and `test/w3fixlegendcheck.sh` counts path occurrences on a `--situ` line. That shared reader
+had two silences of its own, and both now fail loudly with a control in `test/testrowruncheck.sh` arm 16. Its
+JSON slicer returned the same nothing for a document with no `tests_to_run` field and for one whose array
+never closes, and the path reader turned that into an empty list at exit 0 — so a TRUNCATED document
+asserted over zero rows and passed, which is the defect the file was written to end. The two are different
+claims: no field is an answer (0 paths, exit 0), an unclosed list is exit 2 with a named reason. And the text
+dialect's single-row reader took `(\S+)`, which stops at the first space, so a test path holding one was
+reported truncated — a path that does not exist, produced silently. It now cuts the run suffix and the
+renderer's own attribute tail (`[changed] [partner] [hops=N]`, in that order and no other) and keeps
+everything between verbatim; what the text dialect still cannot resolve is a path holding the literal
+three-space `(run: ` opener, because that dialect carries no escaping at all — XML and JSON are exact.
+
+Three more things the row work left half-said. `rw::renderToString` asked `open_memstream` and then ignored
+what `fflush` and `fclose` answered, returning `ok=true` regardless: a memstream grows by `realloc`, so an
+allocation failure the per-row writes swallowed surfaces at the flush, and it is the close that publishes the
+buffer and its size at all. Reading them anyway is how a SHORT document passes for a whole one — the same
+defect as the empty body one size smaller. Both results are now checked, the alert fires, and `--pr-context`
+takes the streaming fallback it already documents. The MCP row-shape clause named the key `p`, and only one
+of its three producers spells it that way: `situational_awareness` emits `test`, `explore` and the edit
+receipt emit `p`. A clause naming the wrong key is worse than no clause, because a caller reads it as a
+contract, so it names both per producer while the rules they share are still stated once; the manifest
+ceiling moves 42,800 → 43,000 B for a measured 42,973 (the clause 207 → 305 B in each of the same two
+descriptions, 2 × 98 B).
 
 ### Fixed — the reference guide said things the binary does not
 

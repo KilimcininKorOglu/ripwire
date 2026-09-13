@@ -164,10 +164,19 @@ template<class... A> inline std::size_t formatTo( char* buf, std::size_t cap, st
 // Review of #214: the copy in prcontext.h returned "" on failure with NO alert, and the unbudgeted
 // --pr-context path had just been routed through it — so an open_memstream failure would have shipped a
 // legend, a root tag and a closing tag around an EMPTY body, with truncated="none" saying nothing was cut.
-// A degrade has to be visible and the caller has to be able to see it: `ok` is false exactly when the buffer
-// could not be opened (and then `text` is empty and nothing was written), the alert names the site through
+// A degrade has to be visible and the caller has to be able to see it: `ok` is false exactly when the bytes
+// returned are not the bytes the emitter wrote (and then `text` is empty), the alert names the site through
 // the caller's own message — "which buffer failed" is the useful half — and the caller then takes its own
-// documented path. Never a silent empty body.
+// documented path. Never a silent empty body, and never a silent SHORT one.
+//
+// CodeRabbit on #214: the first version asked open_memstream and then ignored what fflush and fclose
+// answered, setting ok=true regardless. Both can fail, and either failure means the same thing: `buf`/`sz`
+// are not the whole document. A memstream grows by realloc, so an allocation failure the per-row fwrites
+// swallowed surfaces at the FLUSH; and it is fclose's final flush that publishes *buf and *sz at all, so a
+// failure there leaves them stale or unset. Reading them anyway is exactly how a TRUNCATED document passes
+// for a whole one — the same defect as the empty body above, one size smaller and harder to see. Both
+// results are checked; fclose still runs whatever fflush said, because the stream has to be closed either
+// way, and it runs exactly once. `buf` is freed once, on every path (free( nullptr ) is a no-op).
 struct Rendered
 {
     std::string text;
@@ -187,14 +196,21 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
         return out;
     }
     emit( m );
-    std::fflush( m );
-    std::fclose( m );
-    if( buf )
+    // Order matters: fflush first (it reports the write error), then fclose UNCONDITIONALLY (it owns the
+    // stream, and skipping it on a flush failure would leak it). A null buf after a clean close is itself a
+    // failure — an emitter that wrote nothing still gets a zero-length, null-terminated buffer.
+    const bool flushed = std::fflush( m ) == 0;
+    const bool closed  = std::fclose( m ) == 0;
+    out.ok             = flushed && closed && buf != nullptr;
+    if( out.ok )
     {
         out.text.assign( buf, sz );
     }
+    else
+    {
+        DEGRADED_PATH_ALERT( degradeMsg );
+    }
     std::free( buf );
-    out.ok = true;
     return out;
 }
 

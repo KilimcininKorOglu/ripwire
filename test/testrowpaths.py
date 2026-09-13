@@ -88,15 +88,30 @@ def xml_paths( doc ):
     return out
 
 
+class TestRowParseError( Exception ):
+    """A document that NAMES a tests_to_run list this reader cannot read to its end.
+
+    CodeRabbit on #214: this was not distinguished from the field being absent. Both returned None, json_paths
+    turned None into [], and the caller got an empty answer and exit 0 — so a TRUNCATED document (a gate that
+    captured a killed run, a byte cap that cut mid-array) asserted over zero rows and passed vacuously. That is
+    the very failure this file was written to end. The two cases are not the same claim: no `tests_to_run` field
+    is an ANSWER ("this document serves no such list", None -> []), while a field whose array never closes is a
+    document this reader cannot read at all, and the only honest thing to return is an error. Exit 2, as the
+    module header promises for exactly this."""
+
+
 def json_list_slice( doc ):
     """The "tests_to_run":[…] value, sliced by BRACKET DEPTH (a group row's "p" is itself an array, so the
-    first ']' is not the end of the list) and string-aware (a ']' inside a path is not a bracket)."""
+    first ']' is not the end of the list) and string-aware (a ']' inside a path is not a bracket).
+
+    Returns None when the document has no "tests_to_run" field at all. Raises TestRowParseError when it has
+    one that this reader cannot slice — see that class for why the two are not the same answer."""
     i = doc.find( '"tests_to_run"' )
     if i < 0:
         return None
     i = doc.find( "[", i )
     if i < 0:
-        return None
+        raise TestRowParseError( '"tests_to_run" is present but is followed by no "[" — not a list at all' )
     depth = 0
     instr = False
     esc = False
@@ -118,7 +133,8 @@ def json_list_slice( doc ):
             depth -= 1
             if depth == 0:
                 return doc[i:k + 1]
-    return None
+    raise TestRowParseError( '"tests_to_run" list is never closed: %d bracket(s) still open at end of document '
+                             '(%d bytes read from the field)' % ( depth, len( doc ) - i ) )
 
 
 def json_paths( doc ):
@@ -138,22 +154,43 @@ def json_paths( doc ):
     return out
 
 
+# The text dialect's row grammar, spelled from the RENDERER rather than guessed at (testmap.h: the Text arm
+# of testRowEvidence, and runSuffixTextDisclosed). A row is
+#
+#     <indent><path>[ [changed]][ [partner]][ [hops=N]]   (run: <cmd>|not derivable)
+#
+# and a GROUP row replaces <path> with "<attrs> (n): a, b, c", its attrs leading. The three evidence
+# attributes are optional, but they are emitted in THAT ORDER and no other, and the run suffix always opens
+# with exactly three spaces. So the whole tail of a row is a closed, known shape.
+#
+# CodeRabbit on #214: the single-row reader took `(\S+)`, which stops at the first space — a test path
+# holding a space was reported TRUNCATED, silently, as a path that does not exist. A generic bracket matcher
+# would have the mirror-image bug (a path holding "[...]" would lose it), which is why this is pinned to the
+# renderer's own sequence instead: everything before the known attribute tail is the path, spaces included.
+# The one ambiguity left is the dialect's, not the reader's — text carries NO escaping, so a path containing
+# the literal three-space "(run: " opener cannot be told from the suffix. XML and JSON are exact; a gate that
+# needs a path that adversarial should assert in one of those.
+_TEXT_RUN_OPEN = "   (run: "
+_TEXT_ATTR_TAIL = re.compile( r"(?: \[changed\])?(?: \[partner\])?(?: \[hops=\d+\])?$" )
 _TEXT_GROUP = re.compile( r"^\s*(?:\[[^\]]*\]\s*)*\((\d+)\):\s*(.*?)\s{2,}\(run: " )
-_TEXT_SINGLE = re.compile( r"^\s{4,}(\S+)\s.*?\(run: " )
 
 
 def text_paths( doc ):
     out = []
     for line in doc.split( "\n" ):
-        if "(run: " not in line:
+        if _TEXT_RUN_OPEN not in line or not line.rstrip( "\r" ).endswith( ")" ):
             continue
         g = _TEXT_GROUP.match( line )
         if g:
             out.extend( p.strip() for p in g.group( 2 ).split( "," ) if p.strip() )
             continue
-        s = _TEXT_SINGLE.match( line )
-        if s:
-            out.append( s.group( 1 ) )
+        # a SINGLE row: cut the run suffix, then the known attribute tail; what is left of the indent is the
+        # path, verbatim — spaces and all.
+        head = line[ :line.index( _TEXT_RUN_OPEN ) ]
+        head = _TEXT_ATTR_TAIL.sub( "", head )
+        path = head.strip()
+        if path:
+            out.append( path )
     return out
 
 
@@ -165,7 +202,11 @@ def main( argv ):
     if mode == "jsonlist":
         src = argv[2] if len( argv ) > 2 else None
         doc = open( src ).read() if src else sys.stdin.read()
-        sl = json_list_slice( doc )
+        try:                                                    # an unbalanced list is exit 2 here too, not ""
+            sl = json_list_slice( doc )
+        except TestRowParseError as e:
+            sys.stderr.write( "testrowpaths: json dialect unreadable: %s\n" % e )
+            return 2
         sys.stdout.write( sl if sl else "" )
         return 0
     if mode != "paths" or len( argv ) < 3:

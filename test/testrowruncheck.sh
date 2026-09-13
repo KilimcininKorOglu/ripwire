@@ -534,5 +534,45 @@ else
 fi
 
 
+# ── ARM 16 — THE SHARED READER'S OWN TWO SILENCES (CodeRabbit on #214) ────────────────────────────────
+# test/testrowpaths.py exists because eight private readers went quiet instead of failing. Two of its own
+# did the same, and neither had a control until now.
+#
+# (a) A TRUNCATED JSON document. json_list_slice returned None both when the field is ABSENT and when its
+#     array never closes, and json_paths turned None into [] with exit 0 — so a document cut mid-array
+#     asserted over zero rows and PASSED. The two are different claims and now answer differently: no field
+#     is an answer (0 paths, exit 0); a field whose list never closes is exit 2 with a named reason.
+# (b) A PATH WITH A SPACE in the text dialect. The single-row reader took `(\S+)`, which stops at the first
+#     space, so such a path was reported TRUNCATED — a path that does not exist, produced silently. The
+#     reader now cuts the run suffix and the renderer's own attribute tail ([changed] [partner] [hops=N], in
+#     that order) and keeps everything else verbatim.
+#
+# Both arms are RED on the reader as it stood at 6621370f (a: 0 paths, rc=0; b: "test/with" for
+# "test/with space.cpp") and are pure reader tests — no binary, so they cost nothing.
+r16bad=""
+# (a) absent field: an answer. Truncated list: an error. Balanced list with a group: the rows.
+a16="$( printf '%s' '{"blast_radius":[]}' | python3 "$ROWPATHS" paths json 2>/dev/null )"; a16rc=$?
+[ "$a16rc" -eq 0 ] && [ -z "$a16" ] || r16bad="$r16bad [absent tests_to_run should be 0 paths at rc=0, got rc=$a16rc paths=$( printf '%s' "$a16" | tr '\n' ' ' )]"
+t16="$( printf '%s' '{"tests_to_run":[{"p":["a","b"],"n":2},{"p":"c"}' | python3 "$ROWPATHS" paths json 2>/dev/null )"; t16rc=$?
+[ "$t16rc" -eq 2 ] && [ -z "$t16" ] || r16bad="$r16bad [an unterminated tests_to_run array must be exit 2 with no rows, got rc=$t16rc paths=$( printf '%s' "$t16" | tr '\n' ' ' )]"
+l16="$( printf '%s' '{"tests_to_run":[{"p":["a","b"],"n":2},{"p":"c"}]}' | python3 "$ROWPATHS" jsonlist 2>/dev/null )"; l16rc=$?
+[ "$l16rc" -eq 0 ] && [ -n "$l16" ] || r16bad="$r16bad [the balanced control no longer slices: rc=$l16rc]"
+j16="$( printf '%s' '{"tests_to_run":[{"p":["a","b"],"n":2},{"p":"c"}' | python3 "$ROWPATHS" jsonlist 2>/dev/null )"; j16rc=$?
+[ "$j16rc" -eq 2 ] || r16bad="$r16bad [jsonlist swallows the same truncation: rc=$j16rc]"
+# (b) the text dialect, in the renderer's own spelling (testmap.h: path, then [changed] [partner] [hops=N],
+#     then three spaces and the run suffix). Every path here holds a space; one holds all three attributes.
+T16="$( printf '%s\n' \
+    '        test/with space.cpp   (run: not derivable)' \
+    '        test/two words.cpp [hops=2]   (run: ctest -R two)' \
+    '        test/a b c.cpp [changed] [partner] [hops=1]   (run: ctest -R abc)' \
+    '        [hops=3] (2): test/g one.cpp, test/g two.cpp   (run: not derivable)' )"
+p16="$( printf '%s' "$T16" | python3 "$ROWPATHS" paths text 2>/dev/null | tr '\n' '|' )"
+e16='test/with space.cpp|test/two words.cpp|test/a b c.cpp|test/g one.cpp|test/g two.cpp|'
+[ "$p16" = "$e16" ] || r16bad="$r16bad [text single rows truncate a path at its first space: got '$p16' want '$e16']"
+[ -z "$r16bad" ] \
+    && ok "(16) the shared reader fails LOUDLY on a truncated tests_to_run array (exit 2, absent field still 0 rows) and keeps a text path's spaces" \
+    || no "(16) the shared reader is still silent where it should fail:$r16bad"
+
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
