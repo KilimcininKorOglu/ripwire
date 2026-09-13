@@ -608,7 +608,8 @@ inline std::string prBudgetTail( std::size_t changedFiles, std::uint32_t skipped
 // they are written, the way every other priced root measures itself (serialize.h §H7). File scope, beside
 // kPrEmptyDiffBody, so the emitter reads as the decisions it makes rather than as the prose it ships.
 // E1 (2026-09-12): `withRunClause` splices testmap.h's run=/run_unknown=/<g> clause. The clause is a rule about
-// rows, so it rides only a document whose chosen body renders a <test>/<g> row (prBodyHasTestRow): the writer
+// rows, so it rides only a document whose chosen body renders a <test>/<g> row — decided by the COUNT that
+// body's own emitter reported (PrTrimRender::testFiles), never by a search of the rendered bytes. The writer
 // builds both forms, the pricer charges runClauseBytes per candidate level from that level's own body, and the
 // form matching the chosen body is written — after the choice, since the legend precedes the root in the
 // stream but not in the decision. A corpus-level predicate ("the corpus holds a test file") over-approximated
@@ -926,8 +927,9 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     }
     std::sort( changed.begin(), changed.end(), [ & ]( std::uint32_t a, std::uint32_t b ) { return ing.files[a] < ing.files[b]; } );
 
-    // E1: both legend forms are built now and ONE is written later, once the body is known (prBodyHasTestRow);
-    // the envelope is priced without the clause and the pricer adds runClauseBytes for a rows-bearing body.
+    // E1: both legend forms are built now and ONE is written later, once the body is known — writeHead takes
+    // that body's own PrTrimRender::testFiles count. The envelope is priced without the clause and the pricer
+    // adds runClauseBytes for a rows-bearing body.
     const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, false );
     const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
     // The clause-bearing form is built ONCE, and only if it is the form that gets written — the difference

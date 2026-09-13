@@ -209,8 +209,9 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # this twin. Its description gained NO prose: a first draft named coverage= and the page there (+109 B) and was
 # removed rather than re-anchored around, the L7 precedent above — the schema properties are where a client renders
 # an argument, and the answer's own legend defines coverage= and the page. Headroom after this line: 23 B.
-# RE-ANCHORED 2026-09-13 (review of #214): 42,384 → 42,800 = +416 B, EXACTLY the one 207-byte clause spliced
-# into the TWO tool descriptions that serve tests_to_run rows as JSON — `situational_awareness` and `explore`
+# RE-ANCHORED 2026-09-13 (review of #214): 42,384 → 42,800 = +416 B, EXACTLY the one 207-byte clause plus the
+# single space that separates it from the sentence before it (208 B), spliced into EACH of the TWO tool
+# descriptions that serve tests_to_run rows as JSON — `situational_awareness` and `explore`; 2 × 208 = 416
 # (measured against a build of ff8d77a1: 42,361 B here, 23 B under the old ceiling). It is NOT the L7 case the
 # line above declines. That one removed prose describing an ARGUMENT, because the schema properties are where a
 # client renders an argument and the answer's own legend defines the rest. This clause describes the RESPONSE:

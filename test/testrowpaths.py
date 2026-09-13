@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """testrowpaths.py — THE tests_to_run row reader every gate shares.
 
-WHY THIS FILE EXISTS. Nine gates assert something about the tests_to_run row family, and each one had
-grown its own reader: `grep -oE '<t p="[^"]*"'`, `sed -n 's/.*<test p="\\([^"]*\\)".*/\\1/p'`,
+WHY THIS FILE EXISTS. Six gates read the PATHS out of the tests_to_run row family — affectedcheck,
+impactpartitioncheck, receiptpostcheck, rootrelemitcheck, selectorchaincheck, testrowruncheck — and each one
+had grown its own reader: `grep -oE '<t p="[^"]*"'`, `sed -n 's/.*<test p="\\([^"]*\\)".*/\\1/p'`,
 `grep -oE '"tests_to_run":\\[[^]]*\\]'`, `awk '{print $1}'`. Every one of them was written when a row was
 one path, and E1 (2026-09-12) made a row possibly be SEVERAL — `<g n="3" p="a,b,c"/>` in XML, a `"p"`
 ARRAY in JSON, `[hops=2] (3): a, b, c` in the text dialect. The private readers did not fail; they went
@@ -13,9 +14,12 @@ QUIET or, worse, wrong:
   * `sed -n 's/^test p=//'` and friends saw the singles and silently skipped every group row;
   * the text reader took `$1` of the line, which on a group line is `[hops=1]`, not a path.
 
-The invariant all nine actually want is THE FILES NAMED, in emitted order. That is one question, so it is
+The invariant all six actually want is THE FILES NAMED, in emitted order. That is one question, so it is
 answered in one place, for every dialect, and a gate that adds a new assertion gets the group shapes for
-free instead of re-deriving them.
+free instead of re-deriving them. Two further gates read these rows and are NOT converted, because neither
+asks for the paths: test/listingpagingcheck.sh sums `n=` over the <g> rows to prove the family never pages,
+and test/w3fixlegendcheck.sh counts path occurrences on a --situ line. Both were made group-aware in place
+(E1) and stay that way — routing a COUNT through a path reader would only add a dialect hop.
 
     python3 test/testrowpaths.py paths xml|json|text  [FILE]   # one path per line, emitted order
     python3 test/testrowpaths.py jsonlist             [FILE]   # the balanced "tests_to_run":[...] slice

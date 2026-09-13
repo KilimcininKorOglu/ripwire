@@ -51,9 +51,21 @@ the whole bundle 11,993 → 12,490 B. On this tree every harness has a runner, s
 change is the legend that now defines `<g>`: the `--test-gate` legend pin moves 2,720 → 3,000 B (measured
 2,957) and the `ripwire.pack-task/v1` compact pin 820 → 880 B (measured 865), both because the compact
 dialect and every rows-bearing full legend now define `run_unknown=` and `<g n= p=>` — a definition
-`--affected` and the compact dialect never carried. The MCP manifest ceiling moves 42,384 → 42,800 B
-(measured 42,777) for one 207-byte clause spliced into the two tool descriptions that serve these rows as
-JSON: `situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
+`--affected` and the compact dialect never carried. That compact `<g>` term now says what the full clause
+says, in the full clause's own words: its first form promised "every path verbatim (`&#44;` a comma)", an
+escape `testmap.h` does not emit — a path holding `,` is not grouped at all — and it never carried the rule
+that a `shown=`/`total=` over these rows counts test FILES, so a reader holding only the compact legend was
+told to undo an entity that is not there and disagreed with the full legend about what the pair counts. The
+term goes 99 → 194 B and is charged only on a document that carries a `<g>` row (measured on a fixture of six
+runner-less tests, `--affected --legend=compact` 501 → 596 B); no pin moves, on this tree or on any gate
+fixture, because every harness here has a runner and nothing groups. The two wordings cannot be one constant
+— the compact dialect exists to re-spell, not to quote — so `test/compactlegendcheck.sh` arm (R) pins them
+against each other, reading the phrases it requires out of `kRunHintLegendClause` itself rather than
+restating them, and fails the next release where either wording drops one or promises `&#44;` again (red on
+the parent commit's source). The MCP manifest ceiling moves 42,384 → 42,800 B
+(measured 42,777) for one 207-byte clause, plus the one-space separator that joins it to the sentence before
+it, spliced into each of the two tool descriptions that serve these rows as JSON (2 × 208 B):
+`situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
 reads `p` as a string has nowhere else to learn that it can be an array.
 The clause is rows-gated everywhere it is spliced — `--affected`, `--exercises`, `--pack-task`, the
 partitioned bundle, and `--pr-context`, whose legend precedes its files in the STREAM but is now decided
@@ -90,12 +102,16 @@ which `packtask.h` already had in its own spelling) that reports the failure, an
 fall back to streaming the level straight out: complete, correct bytes, a modelled estimate, and a
 `DEGRADED_PATH_ALERT` saying which — serialize.h's own degrade contract.
 
-Nine gates assert something about these rows, and each had its own reader: since a row can now name several
+Six gates read the PATHS out of these rows, and each had its own reader: since a row can now name several
 files, `grep -oE '"tests_to_run":\[[^]]*\]'` stopped at the first `]` (the end of the first group's path
 array, so three arms asserted over two and a half rows and passed vacuously), `sed`-based XML readers saw
 only the single rows, and the text reader took `$1` of a line that on a group line is `[hops=1]`. They all
-want the same thing — the files named, in emitted order — so they now all ask `test/testrowpaths.py`, one
-reader for all three dialects and both row shapes.
+want the same thing — the files named, in emitted order — so `test/affectedcheck.sh`,
+`test/impactpartitioncheck.sh`, `test/receiptpostcheck.sh`, `test/rootrelemitcheck.sh`,
+`test/selectorchaincheck.sh` and `test/testrowruncheck.sh` now all ask `test/testrowpaths.py`, one reader for
+all three dialects and both row shapes. Two more gates read these rows and keep their own readers, because
+neither asks for the paths: `test/listingpagingcheck.sh` sums `n=` over the group rows to prove the family
+never pages, and `test/w3fixlegendcheck.sh` counts path occurrences on a `--situ` line.
 
 ### Added — --for pages its answer one file per row, and says when to widen
 
