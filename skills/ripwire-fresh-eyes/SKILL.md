@@ -45,6 +45,20 @@ sections your question needs.
    high score on a `ppalt=`-heavy function can be the preprocessor fan-out, not the logic — read `ppalt=`
    before calling a row the worst in the file.
 
+1a. **"What changed recently / who touched this / what is moving here?"** — `ripwire <dir> --rank-by=churn-decay`
+   ```
+   <recent n="40" of="1857" merge_bombs_skipped="5"><rc p="src/graph.h" w="0.91" age="2"/> …
+   ```
+   The HISTORY question, not the working-tree one: `--situ` answers what *you* changed and have not
+   committed, this answers what the repository has been moving, newest-and-heaviest first.
+   **Scope it to a directory: `ripwire <dir> --rank-by=churn-decay --in=DIR`** (root-relative, and it must
+   exist under the root) — a second `<recent scope="DIR" …>` block follows the global
+   one and the symbol map collapses to a counted stub, so the answer is the window rather than a whole-repo
+   map. `merge_bombs_skipped="N"` is the disclosure that N commits touching more than 100 indexed files
+   were left out of the weighting — if the commit you are hunting is a giant rename, it is in that N and
+   not in the rows. `--since=REV|DATE` bounds the window; `--limit/--offset` page the scoped block.
+   `ripwire <dir> --help-task="what changed recently in DIR"` routes here on its own.
+
 1b. **What is BUILT but DARK here?** — `ripwire <dir> --flags` (`=SUBSTR` to narrow)
    ```
    <flags gates="98" dark_gates="90" compile="32" cmake="9" env="57"><gate name="X_HARMONY_SFX" kind="compile"
