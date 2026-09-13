@@ -1285,12 +1285,18 @@ $ ripwire . --test-gate          # exit code: 4
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
 whose stem matches the harness, or whose text names it. A row with none says so — `run_unknown="1"`,
-never a guessed suite command — and runner-less rows that share their evidence are served as one
-`<g hops="2" n="7" p="a,b,c" run_unknown="1"/>` row, every path verbatim, so the disclosure is paid
-once per group rather than once per row. `script_gates_unmodelled="332"` is the same discipline: script-to-binary is not
-a call edge, so those gates are invisible to this walk, and the number says so rather than letting
-`tests="2"` read as complete. The `<u>` rows are the untested blast radius: impacted symbols that no
-test in the corpus reaches.
+never a guessed suite command — and a `<t>` or `<g>` row carries one or the other, never neither. A
+`<g hops="2" n="7" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose
+attributes are byte-identical**, served as one: `n=` is how many, `p=` is their paths verbatim in list
+order, and the disclosure is paid once per group rather than once per row. Everything else stays its own
+row — a row with a `run=`, a row whose attributes differ from its neighbour's, and a path containing a
+comma, which is never grouped at all, so `p=` splits on `,` into exactly `n=` paths. A `shown=`/`total=`
+over these rows counts test FILES: a `<g>` row is `n=` of them.
+
+`script_gates_unmodelled="332"` is the same discipline: script-to-binary is not a call edge, so those
+gates are invisible to this walk, and the number says so rather than letting `tests="2"` read as
+complete. The `<u>` rows are the untested blast radius: impacted symbols that no test in the corpus
+reaches.
 
 </details>
 
