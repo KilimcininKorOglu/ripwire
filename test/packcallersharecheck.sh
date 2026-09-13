@@ -213,7 +213,12 @@ fi
 # section grew by a few dozen bytes and the callers quota moved with it. Swept 1225..1400 on the new binary:
 # section omitted <= 1235, shown="1" on 1240..1270, shown="2" on 1275..1300, fully fit from 1320. 1255 sits
 # mid-window; the PROPERTY (one row admitted, two withheld, no bytes spent on an uninformative shared="1") is unchanged.
-runB --pack-task="anchorSolo" --token-budget=1255 > "$TMP/b_tight.xml"
+# RE-PINNED 1255 -> 1235 (2026-09-12, row 6: sc= on the <d> rows — the path-repeating id= is gone, so the ranking
+# section shrank by a few dozen bytes on this fixture and the callers quota moved with it, the same way P7's
+# p= moved it the other way). Swept 1200..1340 on the new binary, step 5 then 2 at the edges: section omitted
+# <= 1215, shown="1" on 1220..1250, shown="2" from 1252, fully fit from 1290. 1235 sits mid-window; the
+# PROPERTY (one row admitted, two withheld, no bytes spent on an uninformative shared="1") is unchanged.
+runB --pack-task="anchorSolo" --token-budget=1235 > "$TMP/b_tight.xml"
 TIGHT_TAG="$( grep -o '<callers[^>]*>' "$TMP/b_tight.xml" )"
 [ "$TIGHT_TAG" = '<callers of_top="1" shown="1" total="3" capped="1">' ] \
     && ok "arm (4b) capped-budget single-anchor callers: shown=\"1\"/total=\"3\"/capped=\"1\" unchanged from the pre-lane rendering" \
