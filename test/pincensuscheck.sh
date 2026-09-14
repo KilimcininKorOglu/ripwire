@@ -49,14 +49,56 @@ echo "pincensuscheck: BIN=$BIN  CORPUS=$CORPUS"
 # not raise `amb=`. It is the documented S6-C contract; a change that alters it must come with its own
 # registered justification, and this arm is where that shows up.
 MAP="$( "$BIN" "$CORPUS" --no-cache 2>/dev/null )"
-RUN_ROW="$( printf '%s' "$MAP" | tr '<' '\n' | grep 'id="pinned.py::Alpha::run"' )"
-GO_ROW="$( printf '%s' "$MAP" | tr '<' '\n' | grep 'id="tied.py::Eps::go"' )"
+
+# ── THE LOOKUP IS BOUND TO ITS FILE (PR #215 review, CodeRabbit 5191303552) ────────────────────────
+# Row 6 (2026-09-12) replaced the row's path-repeating id="PATH::SCOPE::NAME" with sc="SCOPE" alone, and
+# these arms were re-keyed onto n= plus sc= over the WHOLE map. That reads the right row on this fixture
+# by LUCK — Alpha exists only in pinned.py and Eps only in tied.py, so nothing else can match — but it
+# stopped PROVING that Alpha::run belongs to pinned.py or Eps::go to tied.py, which is half of what the
+# subject of this census is. The canonical id composes as p::sc::n with p= coming from the enclosing
+# <f p=>, so the lookup composes it the same way: the row must sit inside THAT file's block and carry
+# THAT sc= and THAT n=. index() throughout, never a regex, so a '.' in a path is a '.'.
+fileBlock()   # $1=map  $2=path  ->  that file's <f p="…"> … </f> block, nothing else
+{
+    printf '%s' "$1" | awk -v p="$2" '
+        BEGIN { RS = "<"; ORS = "" }
+        index( $0, "f p=\"" ) == 1 { inf = ( index( $0, "f p=\"" p "\"" ) == 1 ) }
+        inf                         { print "<" $0 }
+        index( $0, "/f>" )   == 1   { inf = 0 }
+    '
+}
+fileScopedRow()   # $1=map  $2=path  $3=scope  $4=name  ->  the <s …> row(s) for p::sc::n, or empty
+{
+    fileBlock "$1" "$2" | awk -v sc="$3" -v n="$4" '
+        BEGIN { RS = "<" }
+        index( $0, "s " ) == 1 && index( $0, " n=\"" n "\"" ) > 0 && index( $0, " sc=\"" sc "\"" ) > 0 { print }
+    '
+}
+RUN_ROW="$( fileScopedRow "$MAP" "pinned.py" "Alpha" "run" )"
+GO_ROW="$(  fileScopedRow "$MAP" "tied.py"   "Eps"   "go"  )"
+[ "$( printf '%s\n' "$RUN_ROW" | grep -c 's ' )" = 1 ] \
+    && ok "(A) pinned.py::Alpha::run resolves to exactly ONE row, p= sc= and n= all read" \
+    || no "(A) pinned.py::Alpha::run does not resolve to one row inside <f p=\"pinned.py\">: $RUN_ROW"
+[ "$( printf '%s\n' "$GO_ROW" | grep -c 's ' )" = 1 ] \
+    && ok "(A) tied.py::Eps::go resolves to exactly ONE row, p= sc= and n= all read" \
+    || no "(A) tied.py::Eps::go does not resolve to one row inside <f p=\"tied.py\">: $GO_ROW"
+# …and the CONTROL that makes those two arms mean something: the same lookup with the WRONG p= must
+# find NOTHING. A whole-map grep on n=/sc= passes this fixture and can never fail it, which is exactly
+# why it stopped being evidence. If the composition ever loses its p= half, these two go red.
+[ -z "$( fileScopedRow "$MAP" "tied.py" "Alpha" "run" )" ] \
+    && ok "(A) control: Alpha::run is NOT found under p=\"tied.py\" — the arm reads the path, not the name alone" \
+    || no "(A) control: Alpha::run matched under the WRONG path — this lookup is not reading p="
+[ -z "$( fileScopedRow "$MAP" "pinned.py" "Eps" "go" )" ] \
+    && ok "(A) control: Eps::go is NOT found under p=\"pinned.py\"" \
+    || no "(A) control: Eps::go matched under the WRONG path — this lookup is not reading p="
+
 if printf '%s' "$RUN_ROW" | grep -q 'amb='; then
     no "(A) pinned.py::Alpha::run carries amb= — the locality pin is no longer silent: $RUN_ROW"
 else
     ok "(A) the locality pin is SILENT — pinned.py::Alpha::run carries no amb="
 fi
-N_HELPER="$( printf '%s' "$MAP" | tr '>' '\n' | awk '/id="pinned.py::Alpha::run"/{f=1} f{print} /\/s/{if(f)exit}' | grep -c 'n="helper"' )"
+# the edge walk starts from that same file-bound row, not from the first n="run" anywhere in the map
+N_HELPER="$( fileBlock "$MAP" "pinned.py" | tr '>' '\n' | awk '/n="run" sc="Alpha"/{f=1} f{print} /\/s/{if(f)exit}' | grep -c 'n="helper"' )"
 [ "$N_HELPER" = 1 ] && ok "(A) the pin emitted ONE confident edge (not a split)" \
     || no "(A) pinned.py::Alpha::run emitted $N_HELPER helper edges, want 1"
 printf '%s' "$GO_ROW" | grep -q 'amb="1"' && ok "(A) the tied control is HONEST — tied.py::Eps::go carries amb=\"1\"" \

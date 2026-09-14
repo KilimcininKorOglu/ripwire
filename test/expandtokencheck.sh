@@ -56,15 +56,23 @@ EXP_EST="$( est src --expand=buildGraph --top-k=200 )"
 #    blended byte proxy — an --expand payload is body-HEAVY, and code bodies tokenize LEANER (~3.8 B/tok:
 #    whitespace/braces merge) than the map's signature markup (~2.5), so the whole-output blends to ~2.85
 #    B/tok (MEASURED: 59.5KB → 19.3K real tokens = 3.08; 2.85 is a conservative floor). |est - truth| must
-#    be <= 15% of truth. Integer math on the byte path. ─────────────────────────────────────────────────
+#    be <= 15% of truth. Integer math on the byte path.
+#    RE-CALIBRATED 2026-09-13 (PR #215, sc= on the map rows): the proxy is 3.40, from the SAME instrument the
+#    2.85 came from — real o200k counts of this exact probe (`src --expand=buildGraph --top-k=200`) on the two
+#    binaries either side of the change: 94,702 B / 25,908 real tokens = 3.66 B/tok before, 90,338 B / 24,593
+#    = 3.67 after. The estimate tracks the real count on both (est/real 1.103 before, 1.090 after — the leaner
+#    row made it BETTER), and the 2.85 floor no longer tracks the bytes: it read the new output as 31,697 tokens
+#    against 24,593 real, and put the estimate 15.4% "under" a truth that was 29% too high. 3.40 keeps the same
+#    conservative posture 2.85 had against its own 3.08 (about 7% under the measured rate); the 15% band is
+#    unchanged. When tiktoken is installed the real path runs and this constant is not consulted. ────────────
 FULL_BYTES="$( "$BIN" src --expand=buildGraph --top-k=200 --no-cache 2>/dev/null | wc -c | tr -d ' ' )"
 if python3 -c 'import tiktoken' >/dev/null 2>&1; then
     "$BIN" src --expand=buildGraph --top-k=200 --no-cache 2>/dev/null >"$TMP/exp3.xml"
     TRUTH="$( python3 -c 'import sys,tiktoken; print(len(tiktoken.get_encoding("o200k_base").encode(open(sys.argv[1],encoding="utf-8",errors="replace").read())))' "$TMP/exp3.xml" )"
     LABEL="real o200k"
 else
-    TRUTH=$(( FULL_BYTES * 100 / 285 ))   # bytes / 2.85 blended proxy
-    LABEL="byte/2.85 proxy"
+    TRUTH=$(( FULL_BYTES * 100 / 340 ))   # bytes / 3.40 blended proxy (re-calibrated 2026-09-13, see above)
+    LABEL="byte/3.40 proxy"
 fi
 DIFF=$(( EXP_EST - TRUTH )); [ "$DIFF" -lt 0 ] && DIFF=$(( -DIFF ))
 LIM=$(( TRUTH * 15 / 100 ))

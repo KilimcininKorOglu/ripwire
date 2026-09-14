@@ -1720,7 +1720,10 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     if( page.limit > 0 || page.offset > 0 )
     {
         const ForFilePage filePage = computeForFilePage( ing, lensRank, mcpEvidence );
-        const std::string pageRootOpen = ctxRootOpen( task, noRoute ? std::string() : ( "routed: " + rc.reason + shapeDemotionNote( shape ) ), mcpRootArg );
+        // PR #215 review item 4: this page composed "routed: " + rc.reason by hand and so answered in a spelling
+        // row 6 retired everywhere else — a parity break with the CLI page AND with this server's own bundle two
+        // functions down. ONE producer (filter.h routeNoteOf), same call as every other site.
+        const std::string pageRootOpen = ctxRootOpen( task, routeNoteOf( rc, shape, noRoute ), mcpRootArg );
         return renderForFilePageXml( ing, filePage, ForPageRenderParts{ task, pageRootOpen, forCoveragePct( mcpEvidence, topLensId( lensRank ) ),
                                                                         page.limit, page.offset, mcpRootArg, /*compactLegend=*/false } );
     }
@@ -1804,7 +1807,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // §L10b + verify-wave2 F6: same trim as the CLI --for twin (verbs_for.h) — no leading " [" and no
     // trailing "]"; the value lands only in route=, where the attribute quote is the delimiter.
     const std::string mcpForAtAttrStr = gitstamp::atAttr( root );   // M10's at=, computed once: spliced onto the root AND exempted from the sigs charge below
-    std::string rootOpenStr = ctxRootOpen( task, noRoute ? std::string() : ( "routed: " + rc.reason + shapeDemotionNote( shape ) ),
+    std::string rootOpenStr = ctxRootOpen( task, routeNoteOf( rc, shape, noRoute ),   // row 6: the route CODE, ONE producer (filter.h)
                                            flRootArg );   // §B1.7: same root attrs as the CLI twin (no route= under no_route, as --no-route)
     if( !rootOpenStr.empty() && rootOpenStr.back() == '>' )
     {
@@ -1848,10 +1851,33 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         // the splice at the end of this function.
         rootOpenStr.insert( rootOpenStr.size() - 1, " lens=\"churn,amp,tested\"" );
     }
+    // Read off the BUILT root open, never re-derived from noRoute: the two must agree, and only one of them is
+    // what the caller actually receives.
+    const bool  mcpForRouteAttrOn = rootOpenStr.find( " route=\"" ) != std::string::npos;
+    // PRESENT-ONLY, ON BOTH DIALECTS (CodeRabbit, PR #215, second round). The CLI lens made both droppable
+    // readings present-only — sc= when a row this bundle could serve carries a scope, route= when the root
+    // carries the attribute — while this twin appended kForIdRouteLegend UNCONDITIONALLY, so a scope-free answer
+    // DEFINED an attribute that no row carried; and the exemption ledger below hand-built the same decision a
+    // second time, which is the four-sites-one-rule drift rw::forIdRouteLegendParts exists to close. Same rule
+    // and the same deliberate OVER-approximation as the CLI twin (verbs_for.h forScPresent): read off the RANKED
+    // SET, before the header is built, because the header built here is the one this dialect serves — the trim
+    // ladder may still drop the only scoped row, and a reading with nothing to define costs 29 B while the
+    // reverse costs a reader an attribute with no definition anywhere in the document.
+    bool mcpForScPresent = false;
+    for( std::size_t i = 0; i < ing.symbols.size() && !mcpForScPresent; ++i )
+    {
+        mcpForScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
+    }
+    // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
+    const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
-                            "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
+                          + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
+                          // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
+                          // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
+                          + std::string( mcpIdRouteParts.route )
+                          + "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
                           + std::string( mcpForConf.note )
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
                           // hyphen is ill-formed (G4), so the CLI verb is named without its dashes.
@@ -1893,7 +1919,13 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // ranked row the CLI still served (test/mcpforparitycheck.sh (2), two of four conceptual tasks). The
     // header bytes stay real downstream (the payload is what it is); only the sigs allowance stops paying.
     const std::size_t mcpConfidenceExemptBytes = mcpForConf.attrs.size() + mcpForConf.note.size() + mcpForAtAttrStr.size();
-    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes
+    // Row 6 (2026-09-12): the sc=/route= reading (kForIdRouteLegend, appended above) is exempt on the same contract —
+    // charged, it grew this header by 259 B and dropped one ranked row the CLI still served (mcpforparitycheck (2),
+    // two of four conceptual tasks: the exact regression the paragraph above records for the 125 B of 2026-09-04).
+    // …and the SAME decision the append made, so the ledger can never subtract a clause the header never wrote
+    // (the CLI twin's own idRouteParts ledger, verbs_for.h, for the identical reason).
+    const std::size_t mcpIdRouteExemptBytes = mcpIdRouteParts.bytes();
+    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes
                                  + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
     const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
 
@@ -3584,7 +3616,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     lr.rank      = ( rc.which == LexMode::NameExact ) ? lexicalScoresNameExactRanked( ing, task, &tierMul )
                                                        : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul );
     // §L10b + verify-wave2 F6: same trim as the other route= construction sites — neither bracket.
-    lr.routeNote = noRoute ? std::string() : ( "routed: " + rc.reason + shapeDemotionNote( shape ) );
+    lr.routeNote = routeNoteOf( rc, shape, noRoute );   // row 6: the route CODE, ONE producer (filter.h)
 
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {

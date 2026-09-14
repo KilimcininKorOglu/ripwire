@@ -221,7 +221,7 @@ inline constexpr const char* kPackTaskBundleLegendBody =
          // measured, not estimated. Every key is still named; the prose around them is what went.
          // deep-tail d1 (2026-08-29): r= joins the explicit dictionary — same trap-#8 terseness, one key
          // (the full deep-tail contract lives in the --for legend's own clause, docs/EVALS.md registration).
-         "Row keys: n=name (chain it), id=canonical(when scoped), in=reuse-count (absent = not measured, never a false 0)"
+         "Row keys: n=name (chain it), sc=enclosing scope (when scoped; the full id is p::sc::n), in=reuse-count (absent = not measured, never a false 0)"
          ", l=line, p=path, t=kind, cx=cyclomatic, ccx=cognitive, rel=caller|callee, r=rank in this ranking "
          "(rows in r= order); far=ranked but over 1 hop out; "
          "of_top denominator is per-section. "
@@ -1654,7 +1654,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // after the headroom factor, and is always the smaller of the two. Same expression as the XML line
         // below, so the two serializations cannot report different ceilings.
         { char b[ 128 ];  rw::formatTo( b, sizeof( b ), ",\"budget_tokens\":{},\"budget_bytes\":{},\"budget_ceiling_bytes\":{}",
-                                         budgetTokens, bundleBudget, std::size_t( double( budgetTokens ) * rw::kMinBytesPerToken )  );  j += b; }
+                                         budgetTokens, bundleBudget, rw::declaredByteCeiling( budgetTokens )  );  j += b; }
 
         // R2: the SAME distance mask the XML <sigs> used (eligibleIds only) — one eligibility decision, two shapes.
         j += std::string( ",\"ranking_capped\":" ) + ( sigsCapped ? "true" : "false" ) + ",\"ranking\":";
@@ -1771,7 +1771,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     };
     std::string report = "budget=";
     { char b[ 160 ];  rw::formatTo( b, sizeof( b ), "{} bytes ({}-token target, ceiling {}) | ",
-                                    bundleBudget, budgetTokens, std::size_t( double( budgetTokens ) * rw::kMinBytesPerToken )  );  report += b; }
+                                    bundleBudget, budgetTokens, rw::declaredByteCeiling( budgetTokens )  );  report += b; }
     report += std::string( "ranking: " ) + ( sigsCapped ? "capped" : "full" ) + " | ";
     report += "bodies: "  + listStatus( bodiesTotal,  bodiesStr,  bodiesKept )  + ( bodiesTotal > 0 && !bodiesStr.empty() && bodiesKept < bodiesTotal ? " (capped)" : "" ) + " | ";
     report += "callers: " + listStatus( callersTotal, callersStr, callersKept ) + " | ";
@@ -1886,6 +1886,15 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         const std::size_t             rootAttrsBound = rootAttrsFor( whole, /*lastRungFired=*/true ).size();
         const rw::CeilingLadderChoice chosen = climbCeilingLadder( buildHeader, headerStr,
                                                                    whole.size() - headerStr.size() + in.trailingSectionBytes + rootAttrsBound,
+                                                                   // TWO CEILINGS (PR #215 review item 1). This root labels itself
+                                                                   // over_ceiling="1" on `estTokens > budgetTokens` — priced at
+                                                                   // kBytesPerTokenDefault — while every rung was judged at
+                                                                   // kMinBytesPerToken x 1.15, so this lens had --for's defect in the
+                                                                   // same words: a bundle whose root will say it overflowed kept its
+                                                                   // verbatim task echo because the echo rung was against a ceiling
+                                                                   // 15% looser than the verdict. The free rungs now aim at what the
+                                                                   // root promises; route= and the label keep the tolerance.
+                                                                   rw::ceilingBytes( budgetTokens ),
                                                                    rw::ceilingAllowanceBytes( budgetTokens ),
                                                                    /*hasRouteAttr=*/!lr.routeNote.empty(), kNotes );
         if( chosen.header != headerStr )

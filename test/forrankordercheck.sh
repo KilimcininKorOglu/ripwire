@@ -128,7 +128,15 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # 10463 10337 10409 10431 9799 9726 10337 10399 10294 10468, i.e. +324..+329 B on every query = the coverage= root fact,
 # its legend clause (kForCoverageLegend, forpage.h) and the r=1 row's widening next= on a thin answer. Nothing else moved
 # (routecheck/anchorcheck's goldens re-pinned the same day with every other byte proven identical).
-REPO_BASE=( 10134 10029 10080 10102 9470 9397 10009 10070 9966 9861 )
+# q5 RE-PINNED 2026-09-13 (merge of lane/sc-legend and lane/for-widen), the q5 precedent above, third time on the same
+# query: 9,470 -> 9,880 B (+4.33%). ATTRIBUTED FOUR WAYS, which is what the precedent requires — main tree / main binary
+# 9,464 B, LANE tree / main binary 9,470 B (so corpus drift is +6 B, not the cause), main tree / lane binary 9,875 B,
+# lane tree / lane binary 9,880 B: the whole +410 B is the TOOL, and it is +410 B of ANSWER. Main serves this query
+# shown="20" of 40 ranked rows; this build serves shown="25". The sc= rows are ~20 B shorter than the id= rows they
+# replace, so the byte-shaped <sigs> section fits five more signature rows, and the legend that grew 154 B (the sc=
+# rule, the route= code's reading and the merged-callee reading) is paid for several times over in rows. The other
+# nine stay at their for-widen bases: -1.11%, +0.36%, -0.45%, +1.54%, +0.02%, +1.66%, +0.18%, -0.56%, +2.30%.
+REPO_BASE=( 10134 10029 10080 10102 9880 9397 10009 10070 9966 9861 )
 
 # ── (1)+(2) rank order + p= on every row, four dialects ───────────────────────────────────────────────────
 order_fail=0
