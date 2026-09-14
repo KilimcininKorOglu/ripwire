@@ -402,6 +402,10 @@ def failure_report(out, logpath):
 # CI/NDEBUG blindness is the same family).
 #
 # This used to read `"SKIP" in out[:400]` -- a ruler laid over the transcript, and the transcript's origin moves.
+# The ruler was 400 CHARACTERS, not bytes: run_gate hands back raw bytes, run() decodes them
+# (`out = raw.decode("utf-8", "replace")`) and the slice lands on the str, so it counted code points. This
+# suite prints box-drawing rules and em dashes liberally, so an offset quoted in bytes against that threshold
+# is a unit error -- which is why every offset below names its unit.
 # Gates open with a banner naming their own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) -- 515 of the 628
 # transcripts in one full run carry the crawl root in their first line -- so for those the window's CONTENTS are a
 # function of the checkout's pathname. Measured on w3fixlegendcheck, whose output is byte-identical after line 1:

@@ -18,7 +18,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 ### Fixed — the suite's `skip=` count stopped depending on where the checkout lives
 
 `test/pargates.py` decided whether a gate had SKIPPED — ran, but proved nothing — by looking for the word
-SKIP in the first 400 bytes of its transcript. That is a ruler laid over a document whose origin moves.
+SKIP in the first 400 characters of its transcript. Characters, not bytes: the harness decodes the capture
+and slices the decoded string, and this suite prints box-drawing rules and em dashes liberally, so every
+offset quoted against that threshold has to be in code points too. That is a ruler laid over a document whose origin moves.
 Gates open with a banner naming their own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) — 515 of the
 628 transcripts captured from one full suite run carry the crawl root in their first line — so for those
 the window's CONTENTS are a function of the checkout's pathname, and every offset after the banner travels
@@ -30,8 +32,9 @@ binary and byte-identical gate output therefore reported `skip=2` from a 137-cha
 400. That observation belongs to a named tree: commit `3c191bdf` on a feature branch, where
 `test/w3fixlegendcheck.sh`'s N=3 partition arm ties (`TIE 0.0928 vs 0.093`) and honestly skips near the
 top of its transcript. Re-run on that tree from two checkouts with the same binary and arm output
-byte-identical after line 1, the tie row starts at byte 308 from a 38-character root and 408 from a
-138-character one — it straddles the window by 8 bytes. On the merge base that arm does not tie, so the
+byte-identical after line 1, the tie row starts at character 302 from a 38-character root and 402 from a
+138-character one — it straddles the window by two characters. (In bytes those rows are at 308 and 408; the
+six is the box-drawing rule and em dash above them, and the window is in characters.) On the merge base that arm does not tie, so the
 symptom cannot be shown there at any path length, and an absolute offset is a property of a tree rather
 than of a gate. The suite's summary line is what a contributor reads before every push, so a count that moves with
 the pathname is not evidence.
@@ -40,9 +43,9 @@ The exposure was not one gate's, and the dangerous direction was the opposite on
 gate transcripts of one full suite run on this repository: 24 gates print a skip MARKER downstream of at
 least one absolute-root mention — 28 by the bare substring the old rule actually looked for, the four
 extra being gates that only narrate the word — so their classification travelled with the checkout. The nearest was a
-REAL standing skip — `test/editchecknotecheck.sh` declares its skip at byte 145, and 255 more characters
-of checkout path (a 342-character root, ordinary for a nested worktree or a CI runner) push that
-declaration out of the window, at which point a gate that proved nothing is counted as a pass. Which gates
+REAL standing skip — `test/editchecknotecheck.sh` declares its skip at character 145 — the same figure in
+bytes, since everything before it there is ASCII — and 255 more characters of checkout path (a 342-character
+root, ordinary for a nested worktree or a CI runner) push that declaration out of the window, at which point a gate that proved nothing is counted as a pass. Which gates
 are in range is a property of the machine rather than of the commit, so a wider window was never the
 answer.
 

@@ -13718,12 +13718,17 @@ one checkout and the other way in another.
 (`TIE 0.0928 vs 0.093`) and honestly skips, and the tie row is the third thing the gate prints. Running
 that tree's own gate from two checkouts with one binary, arm output byte-identical after line 1:
 
-| checkout root | banner | the tie row starts at | old rule's verdict |
-| --- | ---: | ---: | --- |
-| 38 characters | 168 B | 308 | SKIP |
-| 138 characters | 268 B | 408 | PASS |
+| checkout root | banner | the tie row starts at | (in bytes) | old rule's verdict |
+| --- | ---: | ---: | ---: | --- |
+| 38 characters | 168 | 302 | 308 | SKIP |
+| 138 characters | 268 | 402 | 408 | PASS |
 
-It straddles the 400-byte window by 8 bytes.
+It straddles the window by two characters. **The unit is load-bearing and it is characters, not bytes.**
+The harness decodes the capture and slices the decoded string — `out = raw.decode("utf-8", "replace")`
+then `out[:400]` — so the old ruler counted code points. The six-byte gap in the table is the box-drawing
+rule and the em dash on the two rows above the tie row, and this suite prints both liberally, so a byte
+offset compared against that threshold is a unit error even when it happens to land the same way (302 and
+402 fall either side of 400 exactly as 308 and 408 do).
 
 Those two offsets carry three conditions, and naming them is the same lesson one level down. The tree
 decides whether the arm ties at all. The ROOT length moves the row 1 B per character here, not the 2 B of
@@ -13775,6 +13780,10 @@ reachable direction is depth. The reachable case is `editchecknotecheck`, which 
 runner — to push that declaration out of a 400-byte window, at which point a gate that proved nothing is
 counted as a pass. Which gates are in range is a property of the machine rather than of the commit. A zero
 that names the range it covered is evidence; a zero that does not is unfalsifiable.
+
+Where an offset here is quoted without a unit note, bytes and characters agree because everything before
+the marker is ASCII — that is true of all three standing skips (`editchecknotecheck` at 145,
+`argvdiffcheck` at 15, `g1freshcheck` at 47) and therefore of the +255 reachability figure above.
 
 **Number 4 — the end-to-end property.** The full suite at the same commit, same binary, from two checkouts:
 

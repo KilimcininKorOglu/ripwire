@@ -8,7 +8,9 @@
 # — a fixed byte window over the transcript. Every gate in this tree opens with a banner naming its own
 # absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) — 515 of the 628 transcripts in one full run carry the
 # crawl root in their FIRST line — so for those the window's CONTENTS are a function of the checkout's
-# path length, and every offset after the banner moves with it. Measured on
+# path length, and every offset after the banner moves with it. The window was 400 CHARACTERS of decoded
+# text, not bytes: the harness decodes the capture (`raw.decode("utf-8","replace")`) and slices the str
+# afterwards, so any offset quoted against it has to be in code points too. Measured on
 # test/w3fixlegendcheck.sh, whose transcript is byte-identical after line 1 at both paths:
 #     an 87-char worktree root (a checkout nested under .claude/worktrees/)   banner 217 B
 #     a 12-char root (the same tree reached through a short symlink)         banner  67 B
@@ -110,8 +112,9 @@ TMP="$( mktemp -d )"
 # THE FIXTURE BRINGS ITS OWN PATH LENGTHS. Both roots below are built under a base of this gate's own
 # making, never under $TMPDIR, and the long one is padded to a computed total — because the property under
 # test IS path length, and a fixture that inherits it from the runner is a fixture that changes between
-# runners. Measured slope on this gate's probe: the skip row starts at 181 + 2*len(root) bytes (the root is
-# spelled twice in the banner), so the old 400 B boundary sits at a 110-character root. Inheriting $TMPDIR
+# runners. Measured slope on this gate's probe: the skip row starts at 177 + 2*len(root) CHARACTERS of decoded
+# text — 181 + 2*len(root) in bytes, the 4 being the box-drawing rule in the row above it (the root is
+# spelled twice in the banner), so the old 400-character boundary sits at a 112-character root. Inheriting $TMPDIR
 # would have put the short root at 22 characters on a Linux runner and 52 on a macOS one and the long root
 # at 153 and 183 — all four on the correct sides today, and all four a $TMPDIR change away from not being.
 SHORTBASE="$( mktemp -d /tmp/rwskipXXXXXX )" || { echo "cannot create a short fixture base under /tmp — this gate measures PATH LENGTH and cannot conclude without one"; exit 2; }
@@ -163,13 +166,17 @@ cmp -s "$SHORTROOT/test/probepathshiftgate.sh" "$LONGROOT/test/probepathshiftgat
     && ok "(0) the two probes are byte-identical — only the path they are RUN from differs" \
     || no "(0) the two probe scripts differ in content; the arms below could not attribute a difference to the path"
 
-skipoffset(){ bash "$1" 2>&1 | python3 -c 'import sys; print(sys.stdin.buffer.read().find(b"  SKIP  "))'; }
+# CHARACTERS, not bytes, and the distinction is load-bearing: the old classifier decoded the transcript and
+# THEN sliced it (`out = raw.decode("utf-8","replace")` followed by `out[:400]`), so its ruler was 400 code
+# points of decoded text. This suite prints box-drawing rules and em dashes liberally — this probe's own
+# leading rows carry 6 bytes of them — so a byte offset compared against that threshold is a unit error.
+skipoffset(){ bash "$1" 2>&1 | python3 -c 'import sys; print(sys.stdin.buffer.read().decode("utf-8","replace").find("  SKIP  "))'; }
 offShort="$( skipoffset "$SHORTROOT/test/probepathshiftgate.sh" )"
 offLong="$(  skipoffset "$LONGROOT/test/probepathshiftgate.sh" )"
 if [ "$offShort" -ge 0 ] && [ "$offShort" -lt 400 ] && [ "$offLong" -ge 400 ]; then
-    ok "(0) fixture contrast is real: the SAME probe's skip row starts at byte $offShort from the short root and $offLong from the long one — opposite sides of the old 400 B window"
+    ok "(0) fixture contrast is real: the SAME probe's skip row starts at character $offShort from the short root and $offLong from the long one — opposite sides of the old 400-CHARACTER window (decoded text, which is what out[:400] sliced)"
 else
-    no "(0) fixture does not straddle the old boundary (short=$offShort at a ${#SHORTROOT}-char root, long=$offLong at a ${#LONGROOT}-char one; want short<400<=long) — raise LONGTARGET above the boundary this gate computes (181 + 2*len(root) = 400 at 110 chars), or arm (A) proves nothing"
+    no "(0) fixture does not straddle the old boundary (short=$offShort chars at a ${#SHORTROOT}-char root, long=$offLong chars at a ${#LONGROOT}-char one; want short<400<=long) — raise LONGTARGET above the boundary this gate computes (177 + 2*len(root) characters = 400 at a 112-char root), or arm (A) proves nothing"
 fi
 
 # ── the harness's own answer, read machine-readably ──────────────────────────────────────────────────────
