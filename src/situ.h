@@ -462,6 +462,61 @@ inline bool isLexicalSiblingOf( std::string_view cand, std::string_view changed 
         || isTestPartnerOf( cand, changed ) || isTestPartnerOf( changed, cand );
 }
 
+// ── the directory index the two loops below became ───────────────────────────────────────────────────
+// Second review of #219 (scalability): lexicalSiblings was two nested loops — every candidate against every
+// changed path, with isLexicalSiblingOf re-splitting BOTH paths into directory and stem on each pair — and
+// the sibling ROW cap applies only after collection, so it bounded the ANSWER and never the work. That is
+// O( ( F + U ) x C ), and C is not small on the changes this block exists for. Measured on the function
+// itself, best of 3, on a real llvm-project path population grown to the 182,555-file rung by re-rooting
+// whole copies of the tree, interleaved, best of 5: C=500 2.20 s, C=2,000 9.10 s. A --situ that spends
+// nine seconds deciding which neighbours to NAME is not a mid-task report.
+//
+// SAME DIRECTORY is the rule's most selective clause, so the changed paths are indexed by directory once: a
+// sorted vector and a lower_bound, never a std::map or std::unordered_map (CONTRIBUTING's container rule).
+// Each candidate pays exactly one dirOf and one binary search, and a candidate in a directory nothing changed
+// in costs nothing beyond that. Both views point into ing.files[], which outlives the vector built from them.
+struct ChangedDirRow
+{
+    std::string_view dir;
+    std::string_view path;
+};
+
+// Sorted by ( dir, path ): the directory is the lookup key, and ordering within a directory keeps the scan
+// below deterministic without the caller having to think about it.
+inline std::vector<ChangedDirRow> changedRowsByDir( const IngestResult& ing, const std::vector<char>& changedFile )
+{
+    std::vector<ChangedDirRow> rows;
+    rows.reserve( 64 );
+    for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
+    {
+        if( changedFile[f] )
+        {
+            rows.push_back( { siblift_detail::dirOf( ing.files[f] ), ing.files[f] } );
+        }
+    }
+    std::sort( rows.begin(), rows.end(), []( const ChangedDirRow& a, const ChangedDirRow& b ) noexcept
+               { return a.dir != b.dir ? a.dir < b.dir : a.path < b.path; } );
+    return rows;
+}
+
+// Is any changed path in `cand`'s OWN directory a lexical sibling of it? This NARROWS the candidates by
+// binary search; the rule itself is still isLexicalSiblingOf, called rather than restated, so it cannot drift
+// from the paragraph that documents it.
+inline bool hasLexicalSiblingIn( const std::vector<ChangedDirRow>& changedByDir, std::string_view cand )
+{
+    const std::string_view candDir = siblift_detail::dirOf( cand );
+    const auto             first   = std::lower_bound( changedByDir.begin(), changedByDir.end(), candDir,
+                                                       []( const ChangedDirRow& row, std::string_view dir ) noexcept { return row.dir < dir; } );
+    for( auto it = first; it != changedByDir.end() && it->dir == candDir; ++it )
+    {
+        if( isLexicalSiblingOf( cand, it->path ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ADDITIVE, deliberately: a file may be BOTH a decl/def partner (symbol identity) and a lexical sibling
 // (name), and the header/implementation pair is the commonest case of exactly that. Suppressing the overlap
 // was tried and reverted — it removed `widget.h` from "the siblings of widget.cc", which is the one row a
@@ -470,27 +525,18 @@ inline bool isLexicalSiblingOf( std::string_view cand, std::string_view changed 
 inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<char>& changedFile )
 {
     SituSiblings out;
-    std::vector<std::string_view> changedPaths;
-    for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
-    {
-        if( changedFile[f] )
-        {
-            changedPaths.push_back( ing.files[f] );
-        }
-    }
-    if( changedPaths.empty() )
+    // The candidate order, the sort and the unique below are untouched by the directory index above, so the
+    // rows and their order are identical to the two-loop form's.
+    const std::vector<ChangedDirRow> changedByDir = changedRowsByDir( ing, changedFile );
+    if( changedByDir.empty() )
     {
         return out;
     }
     const auto consider = [ & ]( std::string_view cand )
     {
-        for( std::string_view c : changedPaths )
+        if( hasLexicalSiblingIn( changedByDir, cand ) )
         {
-            if( isLexicalSiblingOf( cand, c ) )
-            {
-                out.paths.emplace_back( cand );
-                return;
-            }
+            out.paths.emplace_back( cand );
         }
     };
     for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )

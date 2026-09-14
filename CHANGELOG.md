@@ -17,10 +17,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ### Fixed — a relative command with no anchor, and the roots that never declared themselves
 
-A second review of the three `--situ` entries below found ten defects, every one of them a document
-that could not be resolved by the reader holding it, and all ten are fixed here. A third review — of
-this entry's own fix rather than of the entries below it — found one more in the same relativizer, the
-filesystem root, and it is fixed here too.
+A second review of the three `--situ` entries below found twelve defects — counted one per
+independently described correction below, which is four surfaces that spelled a path or a command
+relative to a root they never declared, one in the shared path relativizer, three in the new
+lexical-siblings block and four disclosure readings dropped when sentences became attributes (4 + 1 + 3
++ 4) — every one of them a document that could not be resolved by the reader holding it, and all twelve
+are fixed here. The two byte ratchets named at the end moved with the fixes and are not counted among
+them: a pin is not a defect. A third review, of this entry's own fixes rather than of the entries below
+it, found two more — the filesystem root in that same relativizer, and a quadratic scan in the new
+lexical-siblings block — and both are fixed here too, for FOURTEEN in this entry.
 
 A RELATIVE COMMAND IS ONLY AS GOOD AS ITS ANCHOR. Making `run=` root-relative is what makes a change
 report independent of where the tree is checked out — and it makes every one of those commands useless
@@ -71,6 +76,31 @@ candidate printed nothing at all — a silent zero, which is the one thing METHO
 The floor is a property of the candidate list, not of the answer: it is recorded whenever that list was
 short, and the block speaks at zero. The MCP twin's `siblings_total` was the length of the array beside it
 — a tautology — and now states `siblings_capped` explicitly beside a population.
+
+A CAP THAT BOUNDED THE ANSWER AND NOT THE WORK. That same lexical-siblings block compared every
+unchanged indexed file and every unsupported crawl row against every changed path, and
+`isLexicalSiblingOf` re-split both paths into directory and stem on each pair; the sibling ROW cap
+applies only after collection, so it bounded what was printed and never what was computed —
+O( (F + U) x C ). SAME DIRECTORY is the rule's most selective clause, so the changed paths are now
+indexed by directory once (a sorted vector and a `lower_bound`, not a hash or tree map) and a candidate
+is compared only against the changed paths sharing its directory: one `dirOf` and one binary search per
+candidate, nothing more for a candidate whose directory nothing changed in. The predicate is still
+`isLexicalSiblingOf`, called on the narrowed range rather than restated, so the rule cannot drift from
+the prose that documents it. METHOD: the two implementations are timed on the function itself — its only
+inputs are `ing.files` and the changed-file bitmap — built `-O2` with the flags CMake gives the shipped
+binary, the two binaries interleaved, best of 5, two passes. The path population is a real
+`llvm-project` checkout (`4d5358b1`, clang+llvm, 8,856 paths) and `golang/go` (12,555 paths), plus that
+llvm population grown to the 182,555-file rung of `docs/EVALS.md` by re-rooting whole copies of the tree
+— synthetic in SIZE only, every path keeping a real directory shape and a real stem. The changed set is
+spread evenly rather than clustered, because a clustered one makes every candidate's FIRST comparison hit
+and understates the old cost. The host was at load average 38 on 18 cores (other work in flight), so the
+absolute figures are upper bounds and the interleaved RATIO is the measurement: at 182,555 files C=500
+2.20 s → 9.7 ms (226x) and C=2,000 9.10 s → 22.6 ms (403x); at the real 8,856-file rung C=2,000 333 ms →
+11.6 ms (29x); on `golang/go` C=2,000 449 ms → 42.8 ms (10x). The rows are unchanged and proven so: the
+emitted row list is byte-identical between the two implementations on all nine rungs measured (1,413 rows
+in total), and `test/situshapecheck.sh` arm (7) already pins the case this narrowing could break — a
+same-stem DECOY in another directory stays excluded, beside the same-directory-different-stem row, the
+test partner and the changed file itself. No timing gate is added; there are none here.
 
 AN ATTRIBUTE WITHOUT A READING IS A TOKEN, NOT A DISCLOSURE. The compression below shortened four
 sentences into attributes, and four readings went with them: what makes the counts a floor (call edges are
