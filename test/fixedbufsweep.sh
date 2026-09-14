@@ -166,7 +166,7 @@ TABLE = {
     ( "src/partition.h", "h" ):        ( 2, "safe",       "h[288] x2: <bundle role=\"%s\" ...>; role is the fixed 'core'/'slice' vocabulary, the rest %zu/%u/%d." ),
     ( "src/partition.h", "pb" ):       ( 1, "safe",       "pb[96]: the JSON part header; the %s is '' or ',' (the separator)." ),
     # ── src/prcontext.h ──────────────────────────────────────────────────────────────────────────────────
-    ( "src/prcontext.h", "tail" ):     ( 1, "latent",     "tail[256]: truncated=\"%s\" is ESCAPE-THEN-SNPRINTF in shape, but the value is bounded — kPrTrims[].dropped is a const table (longest 48 B) plus ';budget-floor-exceeded' (22 B), none of which escapes. Worst case 88 lit + 90 digits + 70 = 248 B + NUL against 256: SEVEN bytes of margin. A fifth trim level or one more attribute crosses it." ),
+    ( "src/prcontext.h", "tail" ):     ( 1, "latent",     "tail[320]: truncated=\"%s\" is ESCAPE-THEN-SNPRINTF in shape, but the value is bounded — kPrTrims[].dropped is a const table (longest 48 B) plus ';budget-floor-exceeded' (22 B) plus ';est-unmeasured' (15 B), none of which escapes, and the last two CAN co-occur (a small --max-tokens puts even the unmeasured empty-body envelope over budget). Worst case 88 lit + 90 digits + 85 label = 263 B + NUL against 320: 56 B of margin. WAS tail[256] at 248 B — SEVEN bytes — and the review of #214 spent 15 of them on est-unmeasured, which is the 'one more attribute crosses it' this row used to warn about; the buffer moved in the same commit as the label. formatTo was never the thing saving it: it truncates silently and its return is not read here, so an overrun drops the closing quote of truncated=\" and ships a malformed root (a G4 breach with no diagnostic). A sixth trim level or one more label needs this recomputed again." ),
     # ── src/quality.h ────────────────────────────────────────────────────────────────────────────────────
     ( "src/quality.h", "tail" ):       ( 2, "not-markup", "tail[96] in shaKeyedCachePath: the qsnap/qheadsnap cache FILENAME; family + two hex digests + %016llx, all fixed-width. tail[64] in rootKeyedCachePath: the lean/rich + mcp cache FILENAME, a literal prefix + the 16-hex root key + a literal suffix — every part a compile-time or fixed-width constant. Neither is emitted." ),
     # ── src/serialize.h ──────────────────────────────────────────────────────────────────────────────────
@@ -431,7 +431,15 @@ if not bad:
 #            format to derive a class from — the same reason nestAttr and escAttr are rows. mentions is +2 because
 #            the comment on that buffer names formatTo as well; arch.h's third mention, its emit.h include line,
 #            predates this change. The code it replaced wrote through emitRaw/emitTo, which this gate does not count.
-EXPECTED = { "mentions": 323, "calls": 219, "sites": 219, "rows": 92, "widthforms": 0 }
+#            2026-09-14 (review of #214, --pr-context's est-unmeasured disclosure): mentions 323 -> 324,
+#            calls/sites/rows/widthforms ALL UNCHANGED at 219/219/92/0 — re-read from `git diff` and not
+#            accepted from the delta. The single added line is a COMMENT, not a call: prBudgetTail's buffer
+#            grew 256 -> 320 for the new ';est-unmeasured' label (its TABLE row above carries the recomputed
+#            worst case, 248 -> 263 B, margin 7 -> 56) and the comment explaining the growth names formatTo,
+#            because formatTo's SILENT truncation is precisely what was not saving the old bound — it writes
+#            at most cap-1 and its return is not read there, so an overrun would have dropped the closing
+#            quote of truncated=" and shipped a malformed root. Same buffer, same one call, same one row.
+EXPECTED = { "mentions": 324, "calls": 219, "sites": 219, "rows": 92, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

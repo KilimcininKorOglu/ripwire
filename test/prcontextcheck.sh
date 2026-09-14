@@ -463,6 +463,26 @@ if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! 
     "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" 2>/dev/null | grep -aq '<f ' \
         || no "(F) precondition: --pr-context over the fixture repo names no changed file, so the emitter-throw arm asserts nothing"
 fi
+#
+# (F-legend) WHY THE est-unmeasured LABEL EXISTS, and what it costs a healthy document: NOTHING. The
+# degrade's only signal used to be DEGRADED_PATH_ALERT, which Diagnostics.h compiles to `do {} while (0)`
+# under NDEBUG — so the binary a user installs printed an est_tokens priced from an EMPTY body with nothing
+# at all saying the number was never measured (review of #214; non-negotiable #3). The fix discloses it in
+# truncated=, the attribute that already carries this class of fact, and DEFINES the label in the legend.
+#
+# The clause is gated on the label, exactly as E1 gated the run-hint clause on rows and for the same measured
+# reason: unconditional, its ~390 B put test/defaultceilingcheck.sh's fixture (7,989 of the 8,000 default,
+# 11 tokens spare) at 8,037 — over budget, on a document with nothing unmeasured about it. So this arm is
+# FLAVOUR-INDEPENDENT in the only form that is honest: a healthy document states no such fact and pays no
+# bytes for it, and (F6) below holds the defined-wherever-emitted rule that prbudgetcheck (#10) already
+# holds budget-floor-exceeded to.
+"$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$TMP/f_ctl_legend.out" 2>/dev/null
+if grep -aq 'est-unmeasured' "$TMP/f_ctl_legend.out"; then
+    no "(F-legend) an undegraded --pr-context document carries est-unmeasured — either a false disclosure or a clause charged to every reader who does not need it"
+else
+    ok "(F-legend) an undegraded document neither claims est-unmeasured nor pays for its definition (label-gated, like E1's run clause)"
+fi
+
 if [ "$PRC_ALERTS" -eq 0 ]; then
     # NO-ALERT FLAVOUR (NDEBUG). The fault switch is `constexpr false` here and the alert macro is compiled
     # out, so this arm cannot exercise the degrade at all and must not pretend to: the PLAIN build is what
@@ -491,6 +511,12 @@ if [ "$PRC_ALERTS" -eq 0 ]; then
     [ "${f_rel:-0}" -gt 0 ] \
         && ok "(F4) the document carries $f_rel <f> row(s) — the verb is intact on this flavour" \
         || no "(F4) the document carries NO <f> row over $PRC_FAULT_BASE"
+    # (F5) NO FALSE DISCLOSURE. Nothing degraded here (the switch is `constexpr false`), so the est-unmeasured
+    #      label must be ABSENT: a truncation notice on a document that measured its own price would be the
+    #      mirror-image defect of the silence it was added to end.
+    grep -ao 'truncated="[^"]*"' "$PRC_FAULT_OUT" | grep -aq 'est-unmeasured' \
+        && no "(F5) the document claims est-unmeasured on a flavour where the render fault is not compiled in — a disclosure with nothing behind it" \
+        || ok "(F5) truncated= carries no est-unmeasured where nothing was left unmeasured"
 elif ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
     no "(F) INFRA_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the seam regressed"
 else
@@ -531,6 +557,84 @@ else
     else
         no "(F4) the degraded document carries $f_files <f> row(s), FEWER than the control's $c_files — the degrade lost content, not just the charge"
     fi
+    # (F5) AND THE WRONG NUMBER IS NOW LABELLED. est_tokens= here is the price of an EMPTY body (the ladder
+    #      priced the failed probe and broke at level 0), while the bytes served are the untrimmed floor —
+    #      so the number is modelled, not this document's price. Before the fix the ONLY signal was the alert
+    #      above, which Release compiles out; truncated= is the channel that survives the flavour.
+    f_trunc="$( grep -ao 'truncated="[^"]*"' "$PRC_FAULT_OUT" | head -1 )"
+    if printf '%s' "$f_trunc" | grep -aq 'est-unmeasured'; then
+        ok "(F5) the degraded root DISCLOSES the unmeasured price in truncated= ($f_trunc) — the one channel a Release binary keeps"
+    else
+        no "(F5) the degraded root prints an est_tokens priced from an empty body with no est-unmeasured in truncated= ($f_trunc) — a wrong number, silently (non-negotiable #3)"
+    fi
+    # (F6) and the label is DEFINED on the document that carries it — prbudgetcheck #10's rule for
+    #      budget-floor-exceeded, applied to the label that now rides beside it.
+    grep -aq 'est-unmeasured means' "$PRC_FAULT_OUT" \
+        && ok "(F6) the degraded document ships the legend clause that defines est-unmeasured" \
+        || no "(F6) the degraded document emits est-unmeasured but its own legend never defines the term"
+fi
+
+# ── (G) THE FINAL COPY THROWS: renderToString's last statement was outside its own contract ───────────
+#
+# THE FINDING (review of #214, src/infra/emit.h:269). `out.text.assign( buf, sz )` is the one allocation on
+# the SUCCESS path, and it sat after the try/catch that arm (F) proves. A std::bad_alloc from it therefore
+# escaped renderToString — whose whole documented contract is that a failure is ALERTED and returned as
+# ok == false, never thrown — and, jumping over the `std::free( buf )` two lines below, LEAKED the memstream
+# buffer on the way out. A no-throw contract with a throwing last statement.
+#
+# Driven by INFRA_FAULT_RENDER_COPY_THROW=1, the twin of arm (F)'s switch and injected immediately before the
+# assign, where a real bad_alloc would land. Same flavour dependence as (F): the switch and the alert both
+# live only on the non-NDEBUG build, so the PLAIN-flavour leg is what proves the degrade and the NDEBUG leg
+# asserts only what is true there — exactly the structure (F) documents.
+PRC_COPY_OUT="$TMP/g_copy.out"; PRC_COPY_ERR="$TMP/g_copy.err"
+INFRA_FAULT_RENDER_COPY_THROW=1 "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$PRC_COPY_OUT" 2>"$PRC_COPY_ERR"
+prc_g_rc=$?
+if [ "$PRC_ALERTS" -eq 0 ]; then
+    printf '  INFO  (G) this binary emits no DEGRADED_PATH_ALERT (NDEBUG): the copy-throw degrade is unobservable BY DESIGN here, and the plain-flavour leg is what proves it\n'
+    if grep -aq 'renderToString: the final COPY' "$PRC_COPY_ERR"; then
+        no "(G) a binary that cannot emit the charge-buffer alert emitted the copy-throw one — the two disagree about this flavour"
+    else
+        ok "(G) consistency: no alert on a flavour that compiles them out"
+    fi
+    [ "$prc_g_rc" -eq 0 ] \
+        && ok "(G1) --pr-context exits 0 with the (compiled-out) copy fault requested" \
+        || no "(G1) --pr-context exited $prc_g_rc on a flavour where the copy fault is not even compiled in"
+    g_rel="$( grep -ao '<f ' "$PRC_COPY_OUT" | wc -l | tr -d ' ' )"
+    [ "${g_rel:-0}" -gt 0 ] \
+        && ok "(G2) the document carries $g_rel <f> row(s) — the verb is intact on this flavour" \
+        || no "(G2) the document carries NO <f> row over $PRC_FAULT_BASE"
+elif ! grep -aq 'renderToString: the final COPY' "$PRC_COPY_ERR"; then
+    no "(G) INFRA_FAULT_RENDER_COPY_THROW=1 produced no DEGRADED_PATH_ALERT on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the copy is still outside the no-throw contract"
+else
+    ok "(G) the final copy's throw is CAUGHT: the alert speaks instead of the exception escaping"
+    # (G0) the alert names the cause it HAD. degradeMsg says the BUFFER failed and (F)'s literal says the
+    #      EMITTER threw; here neither did — the copy out of a complete buffer did.
+    { grep -aq 'open_memstream failed' "$PRC_COPY_ERR" || grep -aq 'the emitter THREW' "$PRC_COPY_ERR"; } \
+        && no "(G0) the copy-throw alert blames the buffer or the emitter, neither of which failed on this path" \
+        || ok "(G0) the copy-throw alert names the copy, not the buffer and not the emitter"
+    [ "$prc_g_rc" -eq 0 ] \
+        && ok "(G1) --pr-context still exits 0 with every final copy throwing — the throw degraded instead of escaping" \
+        || no "(G1) --pr-context exited $prc_g_rc with the copy fault injected — the throw escaped renderToString's no-throw contract"
+    if grep -aq '</pr-context>' "$PRC_COPY_OUT" && grep -aq '<pr-context' "$PRC_COPY_OUT"; then
+        ok "(G2) the degraded document is CLOSED — a root, a body and a closing tag"
+    else
+        no "(G2) the degraded --pr-context document is not a closed <pr-context> root ($( wc -c <"$PRC_COPY_OUT" | tr -d ' ' ) B)"
+    fi
+    if command -v xmllint >/dev/null 2>&1; then
+        xmllint --noout "$PRC_COPY_OUT" 2>/dev/null \
+            && ok "(G3) the degraded document is well-formed XML (G4 holds through the degrade)" \
+            || no "(G3) the degraded --pr-context document does not parse — a degrade may not breach G4"
+    fi
+    # (G4) the same content-kept/estimate-lost contract arm (F) asserts for its flavour of failure: a failed
+    #      copy is a failed MEASUREMENT, so the floor level streams straight out and the price is disclosed.
+    g_files="$( grep -ao '<f ' "$PRC_COPY_OUT" | wc -l | tr -d ' ' )"
+    [ "${g_files:-0}" -gt 0 ] \
+        && ok "(G4) the degraded document carries $g_files <f> row(s) — content kept, estimate lost" \
+        || no "(G4) the degraded document carries NO <f> row — the degrade lost the content it exists to keep"
+    g_trunc="$( grep -ao 'truncated="[^"]*"' "$PRC_COPY_OUT" | head -1 )"
+    printf '%s' "$g_trunc" | grep -aq 'est-unmeasured' \
+        && ok "(G5) a failed copy is disclosed in truncated= too ($g_trunc) — one label for every unmeasured level" \
+        || no "(G5) the copy-degraded root prints an unmeasured est_tokens with no est-unmeasured in truncated= ($g_trunc)"
 fi
 
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
