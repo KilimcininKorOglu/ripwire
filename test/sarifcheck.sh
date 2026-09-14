@@ -112,8 +112,19 @@ PY
 }
 
 # Load one assignment into the global FLAG_WORDS array. Returns non-zero — and says so through no() — when
-# the parser REFUSED, which is the distinction the empty array cannot carry. `${FLAG_WORDS[@]+…}` because
-# this gate runs under `set -u` and bash 3.2 treats an empty array's expansion as unbound.
+# the parser REFUSED, which is the distinction the empty array cannot carry.
+#
+# EVERY ARRAY EXPANSION IN THIS FILE IS WRITTEN `${ARR[@]+"${ARR[@]}"}`, AS A POPULATION RULE. Under
+# `set -u` bash 3.2 treats an empty array's `"${ARR[@]}"` as an unbound variable and ABORTS the script —
+# verified on 3.2.57: `E=(); printf '%s\n' "${E[@]}"` reports `E[@]: unbound variable`, while the guarded
+# form prints nothing and continues. `${#ARR[@]}` is safe and is left alone.
+#
+# Third review of #219 found this at ONE site (arm 12d) and the same defect was at six more, because the
+# first pass guarded the three loader assignments it was looking at rather than every array the loader can
+# leave empty. Two of the seven mattered more than the named one: the arm-12 payload arrays, where an
+# abort would skip the 12c/12d rows that prove the injection is gone, and the arm-11 compile line, where
+# `${DIAG_LINK[@]}` is empty whenever diagnostics.cpp.o is absent — a live abort on any build tree without
+# that object, independent of any parser refusal. So the rule is the file's, not the three lines'.
 FLAG_WORDS=()
 loadFlagWords()   # $1 = flags.make path, $2 = assignment NAME
 {
@@ -444,8 +455,8 @@ CPP
     # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
     DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
     DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
-    if "$CXX" "${CXX_FLAGS[@]}" "${CXX_DEFINES[@]}" "${CXX_INCLUDES[@]}" -I"$ROOT/src" \
-         "$TMP/rooturi_unit.cpp" "${DIAG_LINK[@]}" -o "$TMP/rooturi_unit" >"$TMP/u_build.log" 2>&1; then
+    if "$CXX" ${CXX_FLAGS[@]+"${CXX_FLAGS[@]}"} ${CXX_DEFINES[@]+"${CXX_DEFINES[@]}"} ${CXX_INCLUDES[@]+"${CXX_INCLUDES[@]}"} -I"$ROOT/src" \
+         "$TMP/rooturi_unit.cpp" ${DIAG_LINK[@]+"${DIAG_LINK[@]}"} -o "$TMP/rooturi_unit" >"$TMP/u_build.log" 2>&1; then
         "$TMP/rooturi_unit" >"$TMP/u_run.log" 2>&1; urc=$?
         sed 's/^/        /' "$TMP/u_run.log"
         if [ "$urc" -eq 0 ] && grep -q '^UNIT ALL PASS$' "$TMP/u_run.log"; then
@@ -528,20 +539,20 @@ grep -q 'not parseable as shell words' "$INJ/unbal.err" \
 
 # (c) the payload survives as LITERAL argument text rather than vanishing — a parse that silently dropped
 #     it would look identical to (b) from the sentinel's point of view.
-printf '%s\n' "${INJ_WORDS[@]}" | grep -q '^\$(touch' \
+printf '%s\n' ${INJ_WORDS[@]+"${INJ_WORDS[@]}"} | grep -q '^\$(touch' \
     && ok "12c \$( ) comes back as a literal argument, not a command" \
     || no "12c the \$( ) payload is neither executed nor present — the parse dropped it silently"
-printf '%s\n' "${BQ_WORDS[@]}" | grep -q '^`touch' \
+printf '%s\n' ${BQ_WORDS[@]+"${BQ_WORDS[@]}"} | grep -q '^`touch' \
     && ok "12c backquotes come back as a literal argument, not a command" \
     || no "12c the backquote payload is neither executed nor present — the parse dropped it silently"
-printf '%s\n' "${SEMI_WORDS[@]}" | grep -qx ';touch' \
+printf '%s\n' ${SEMI_WORDS[@]+"${SEMI_WORDS[@]}"} | grep -qx ';touch' \
     && ok "12c a bare ';' comes back as a literal argument, not a separator" \
     || no "12c the ';' payload is neither executed nor present — the parse dropped it silently"
 
 # (d) QUOTING PRESERVED — the reason read -ra is not an acceptable fix.
-printf '%s\n' "${INJ_WORDS[@]}" | grep -qx -- '-I/path with spaces/inc' \
+printf '%s\n' ${INJ_WORDS[@]+"${INJ_WORDS[@]}"} | grep -qx -- '-I/path with spaces/inc' \
     && ok "12d a quoted path with spaces stays ONE argument (read -ra would have split it)" \
-    || no "12d the quoted path with spaces did not survive as one argument: $( printf '[%s]' "${INJ_WORDS[@]}" )"
+    || no "12d the quoted path with spaces did not survive as one argument: $( printf '[%s]' ${INJ_WORDS[@]+"${INJ_WORDS[@]}"} )"
 
 # (e) the real flags.make still parses to something usable — arm 11 above compiled with it, so this is a
 #     cheap non-emptiness guard against a parse that returns nothing and makes arm 11 silently trivial.

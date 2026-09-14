@@ -518,6 +518,54 @@ PYEOF
   fi
 fi
 
+# ── (12) THE [2] HEADING NAMES A ROOT ONLY WHEN THE REPORT DECLARES ONE ─────────────────────────────────
+# Third review of #219. The heading's trailing clause said "a (run: …) is relative to root:" whenever the
+# section had rows — including on a MULTI-root report, which emits no `root:` line at all and whose
+# TestRunnerIndex (correctly) keeps the absolute command. So that report pointed the reader at an anchor it
+# never printed: a wrong answer under the disclosure rule, not awkward phrasing. Both spellings now answer
+# to the one predicate that also decides the command (testmap.h runsAreRootRelative).
+#
+# Asserted in BOTH directions on ONE corpus, because a gate that only checked the multi-root form would
+# pass just as well against a heading that had stopped naming the root anywhere.
+MR="$TMP/mr"
+mkdir -p "$MR/core" "$MR/checks"
+printf 'int widget( int x ) { return x + 1; }\n'                                  > "$MR/core/widget.cpp"
+printf '#include "../core/widget.cpp"\nint main(){ return widget(1)==2?0:1; }\n'  > "$MR/checks/widget_test.cpp"
+for d in core checks; do
+    ( cd "$MR/$d" && git init -q -b main >/dev/null 2>&1 && git config user.email t@t && git config user.name t \
+      && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+done
+MULTI="$( "$BIN" "$MR/core" "$MR/checks" --situ=widget.cpp --no-cache 2>/dev/null )"
+SINGLE="$( "$BIN" "$MR" --situ=core/widget.cpp --no-cache 2>/dev/null )"
+
+# Guard first: both forms must actually HAVE rows, or the clause is absent and the two arms below are
+# vacuous rather than passing.
+if ! printf '%s\n' "$MULTI"  | grep -qE '^  \[2\] tests to run \([1-9]' \
+|| ! printf '%s\n' "$SINGLE" | grep -qE '^  \[2\] tests to run \([1-9]'; then
+    no "(12) the multi/single-root fixture produced no [2] rows — the heading clause is absent and both arms below would be vacuous"
+else
+    ok "(12) both the multi-root and single-root reports have [2] rows (the clause is live in each)"
+
+    # MULTI-ROOT: no root: line, so the clause must NOT name one.
+    printf '%s\n' "$MULTI" | grep -qE '^root:' \
+        && no "(12) the multi-root report printed a root: line — the fixture is not multi-root and the arm proves nothing" \
+        || ok "(12) the multi-root report declares no root: (the precondition the clause must respect)"
+    printf '%s\n' "$MULTI" | grep -q 'is relative to root:' \
+        && no "(12) the multi-root heading still says '(run: …) is relative to root:' while declaring no root — the reader cannot resolve it" \
+        || ok "(12) the multi-root heading does not claim relativity to a root it never declares"
+    printf '%s\n' "$MULTI" | grep -q 'is absolute: this report spans several roots' \
+        && ok "(12) the multi-root heading states the command is ABSOLUTE and why" \
+        || no "(12) the multi-root heading says nothing about how its (run: …) is spelled — an absent reading is the silent case"
+
+    # SINGLE-ROOT: the mutation control. The root IS declared, so the clause must still name it.
+    printf '%s\n' "$SINGLE" | grep -qE '^root:' \
+        && ok "(12) the single-root report declares root: (control precondition)" \
+        || no "(12) the single-root report declares no root: — the control arm below proves nothing"
+    printf '%s\n' "$SINGLE" | grep -q 'is relative to root:' \
+        && ok "(12) the single-root heading still says '(run: …) is relative to root:' — the fix gated the clause, it did not delete it" \
+        || no "(12) the single-root heading lost its 'relative to root:' clause — the fix over-reached"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "situshapecheck: ALL PASS"; else echo "situshapecheck: SOME FAILED"; fi
 exit "$fail"

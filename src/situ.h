@@ -784,10 +784,25 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // A5: order=evidence is the SAME attribute --affected's root carries for the same ordering, so the two
     // verbs name it identically; what follows is the reading of the tags the rows themselves print, which has
     // no attribute form and therefore stays as the shortest sentence that defines them.
-    rw::emitTo( out, "  [2] tests to run ({}){}", tests.size(),
-                  tests.empty() ? ": (none transitively reach these files)\n"
-                                : " order=evidence: [changed] you edited it, [partner] named after a changed file, then hops asc (1 = direct); "
-                                  "\"(n): a, b\" = n runner-less files sharing that evidence; a (run: …) is relative to root:\n" );
+    // A3 / third review of #219: the trailing clause named `root:` UNCONDITIONALLY. A multi-root report
+    // declares no `root:` at all (see situSingleRoot above, which gates that line) and TestRunnerIndex
+    // correctly keeps the absolute command there — so on that report the sentence pointed at an anchor the
+    // reader could not find. That is the same defect this lane fixed in the shared run-hint clause, having
+    // survived in this dialect's own heading because the heading is prose rather than the shared constant.
+    // Both spellings now answer to the ONE predicate that also decides how the command is spelled
+    // (testmap.h runsAreRootRelative, the same one TestRunnerIndex is constructed with), so the sentence and
+    // the command cannot disagree. The order half is shared between the two forms rather than duplicated,
+    // and the single-root form is byte-identical to what it was.
+    static constexpr std::string_view kSituRowsOrder =
+        " order=evidence: [changed] you edited it, [partner] named after a changed file, then hops asc (1 = direct); "
+        "\"(n): a, b\" = n runner-less files sharing that evidence; ";
+    static constexpr std::string_view kSituRunRootRel  = "a (run: …) is relative to root:\n";
+    static constexpr std::string_view kSituRunAbsolute = "a (run: …) is absolute: this report spans several roots, so there is no one root to be relative to:\n";
+    const std::string situRowsHeading =
+        tests.empty() ? std::string( ": (none transitively reach these files)\n" )
+                      : std::string( kSituRowsOrder )
+                            + std::string( rw::runsAreRootRelative( ing, root ) ? kSituRunRootRel : kSituRunAbsolute );
+    rw::emitTo( out, "  [2] tests to run ({}){}", tests.size(), situRowsHeading.c_str() );
     // §P11.4: this section says "tests to run" and named files that are not commands. The runner is appended
     // where one is DERIVABLE and omitted where it is not — see testmap.h; a guessed command is worse than none.
     // E1: runner-less rows with equal evidence are ONE `[hops=N] (n): a, b` line — testmap.h's seam, the multiset unchanged
