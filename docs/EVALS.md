@@ -13693,3 +13693,113 @@ ordering the code argues for on other grounds.
 - **One tgrep posture.** Index pre-built, server warm — the posture tgrep's own README advertises. A
   cold `tgrep serve` answers from an *empty* index and returns nothing until the first build publishes;
   tgrep documents that in `AGENTS.md` and it is not measured here.
+
+---
+
+## What `skip=` counts, and the corpus behind the skip-classification numbers (2026-09-14)
+
+`test/pargates.py`'s summary line is the thing a contributor reads before every push, and until this round
+its `skip=` count was a function of where the checkout sat on disk. This section pins the four numbers the
+change publishes, the corpus they were measured on, and how to rebuild that corpus from nothing. The rule
+itself is pinned by `test/skipclassifycheck.sh`; the classifier is `classify_skipped()` in
+`test/pargates.py`; the gate-side half of the contract is `test/gateexitcheck.sh` arm (D).
+
+**The defect, in one measurement.** A gate's transcript opens with a banner naming its own absolute paths.
+`test/w3fixlegendcheck.sh`'s transcript is byte-identical after line 1 at any checkout, so the banner is
+the only thing that moves:
+
+| checkout root | banner | first skip row starts at |
+| --- | ---: | ---: |
+| 87-character worktree root | 217 B | 3501 |
+| 12-character root (same tree via a symlink) | 67 B | 3351 |
+
+150 B of shift from a 75-character rename — about 2 B per character, because the root is spelled twice.
+The classifier's window was the first 400 bytes, so any gate whose skip marker sat near that offset was
+classified one way in one checkout and the other way in another. The originally reported symptom was
+`skip=2` from a 137-character worktree against `skip=3` from a 38-character one on commit `3c191bdf`, with
+byte-identical gate output; that observation is reported rather than re-measured here, and the
+reproduction below is the measured form of it.
+
+**Population.** One full suite run on main at `c1915d21` captures **628** transcripts. That is deliberately
+the suite BEFORE this change's own gate — the question is whether the new rule moves a verdict on the
+suite that already existed, so the new gate is not part of the population it is judged against. A capture
+taken on the branch yields 629 and answers a different question.
+
+**Number 1 — how many gates the window's contents actually depended on.** Counting transcripts whose FIRST
+line contains the crawl root: **515 of 628** (524 contain it anywhere). An earlier draft published 506,
+which came from grepping gate SOURCES for the banner assignment — a different population from the one the
+claim is about, and the reason this section states the recipe beside every figure.
+
+**Number 2 — the rule is behaviour-preserving.** Replaying both rules over all 628 transcripts: **zero**
+gates are classified differently, and the skip set is the same three either way (`argvdiffcheck`,
+`editchecknotecheck`, `g1freshcheck` — all three environmental, and all three absent a reference binary or
+a configured sanitizer tree rather than anything about the code).
+
+**Number 3 — which gates a rename can actually move, and in which direction.** Substituting the checkout
+root throughout each transcript is the only thing a rename changes:
+
+| substituted root | old rule moves | new rule moves |
+| --- | --- | --- |
+| a 2-character root | 0 | 0 |
+| a 39-character scratch clone | 0 | 0 |
+| a root 255 characters deeper | **1** — `editchecknotecheck` | 0 |
+
+**The zero in the first two rows is an artifact of the sample, and saying so is the point.** A first version
+of this measurement sampled only nearby-length paths, reported zero moves under both rules, and would have
+read as "the old rule was fine" inside the evidence for replacing it. Nothing is reachable by SHORTENING on
+this machine: the nearest candidate needs 148 characters removed from an 87-character root, so the only
+reachable direction is depth. The reachable case is `editchecknotecheck`, which declares its skip at byte
+145 and needs 255 more characters of path — a 342-character root, ordinary for a nested worktree or a CI
+runner — to push that declaration out of a 400-byte window, at which point a gate that proved nothing is
+counted as a pass. Which gates are in range is a property of the machine rather than of the commit. A zero
+that names the range it covered is evidence; a zero that does not is unfalsifiable.
+
+**Number 4 — the end-to-end property.** The full suite at the same commit, same binary, from two checkouts:
+
+| checkout root | summary line |
+| --- | --- |
+| 39 characters | `gates=629 pass=625 skip=3 fail=1` |
+| 87 characters | `gates=629 pass=626 skip=3 fail=0` |
+
+`skip=3` both ways, naming the same three gates. The single red in the short tree is environmental and
+unrelated: `test/clonededupcheck.sh` needs a second, golden binary for its byte-identity arm, defaults it
+to the tree's own build output, and correctly refuses when a scratch checkout has none.
+
+**Cost of reading verdicts instead of a fixed prefix.** Over the same 628 transcripts (1.6 MB),
+`classify_skipped()` costs 19 ms in total, 30 µs per gate, and 0.50 ms on the largest single transcript
+(46 KB, `mcpframehonestycheck`). The three linear scans are not measurable against the run they summarise.
+
+### Rebuilding the corpus and the replay from nothing
+
+Neither the corpus nor the replay script is committed: the corpus is 3.1 MB of transcripts, and a script
+without it is half a reproduction. Both are rebuilt from this repository in about twelve minutes.
+
+1. **Capture.** Check out the base commit the claim is about (`c1915d21` for the figures above) and build
+   it. Copy `test/pargates.py`, and immediately after its classification line insert a dump of each gate's
+   transcript, keyed by gate name:
+
+   ```python
+   try:
+       with open(os.path.join(OUTDIR, g + ".txt"), "w") as fh:
+           fh.write(out)
+   except OSError:
+       pass
+   ```
+
+   Run the full suite through that copy (`python3 <copy> . ./build/ripwire -j 6`). Nothing else is
+   instrumented, and `out` is the same string the classifier sees. On main at `c1915d21` this writes 628
+   files and the run itself reports `fail=0`, so every transcript in the corpus is an `rc == 0` one.
+
+2. **Replay.** Lift `_MARKER_RE`, `_SKIP_RE`, `_PASS_RE` and `classify_skipped` out of the branch's
+   `test/pargates.py` with `ast`, executing those four definitions and nothing else — importing the module
+   is not an option, because it reads its argument vector and crawls a tree at import time. Lifting rather
+   than reimplementing is what stops the replay from drifting away from the shipped rule. Classify every
+   transcript with `classify_skipped(0, out)` and, for the old rule, with the single line the change
+   replaced, quoted verbatim: `rc == 0 and "SKIP" in out[:400]`. Compare, and exit non-zero on any
+   disagreement — the replay is a check, not a report. For the rename table, substitute the detected root
+   with each alternate and re-classify under both rules.
+
+The detected root comes from the first transcript whose first line names it, which is why the detection
+scans until one matches instead of reading only the first file: 113 of the 628 do not name the absolute
+root on their first line — that is the complement of the 515 above, and it is not a claim that those 113
+print no banner, only that the root is not in it.
