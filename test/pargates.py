@@ -349,6 +349,7 @@ exclusive_gates = [g for g in gates if g in exclusive]
 #      hijack the selection; only if a gate produced none of those (it died before its own reporting)
 #      do the loose shapes -- `error:`, `fatal`, `Sanitizer`, a Python traceback, a missing binary --
 #      get a turn.
+REPORT_CHARS = 2000     # the stored report for a skipped gate -- see skip_report(), which keeps the declaration
 FAIL_TAIL_LINES = 5
 FAIL_MARK_LINES = 10
 # re.M because classify_skipped() matches this against a WHOLE transcript: without it `^` binds only to the start
@@ -478,6 +479,20 @@ def skip_reason(out):
     """The gate's own skip declaration, for the SKIPPED section -- the marker line itself, never a line that
     merely mentions the word."""
     return next((ln.strip() for ln in out.splitlines() if _SKIP_RE.search(ln)), "")
+
+
+def skip_report(out, limit=REPORT_CHARS):
+    """The report stored for a skipped gate: a bounded prefix of the transcript that is GUARANTEED to carry
+    the gate's own declaration. classify_skipped() reads the WHOLE transcript, so a declaration sitting past
+    `limit` would leave the SKIPPED section printing that gate with an EMPTY reason -- the one thing the
+    section exists to say. Carrying the declaration costs one line, never the transcript, and a gate whose
+    reason already falls inside the prefix gets a byte-identical report. Pinned by arm (H) of
+    test/skipclassifycheck.sh, whose probe declares at character 3221."""
+    head = out[:limit]
+    decl = skip_reason(out)
+    if decl and skip_reason(head) != decl:
+        return decl + "\n" + head
+    return head
 
 
 # --- a gate is its whole process group, and a stop signals all of it (2026-09-10) ---------------------------------
@@ -669,17 +684,7 @@ def run(g):
     skipped = classify_skipped(rc, out)
     report = ""
     if skipped:
-        # classify_skipped() read the WHOLE transcript; this report is a fixed PREFIX of it, and the two
-        # windows disagree for any gate whose declaration sits past the prefix. That gate is still counted
-        # correctly, and then listed under SKIPPED with an EMPTY reason -- the one thing that section exists
-        # to print. So carry the declaration explicitly whenever the prefix does not already hold it: the
-        # bound grows by one line, never by the transcript, and a gate whose reason is in the prefix is
-        # byte-identical to before. (Found by review on a4595e4f; arm (H) of test/skipclassifycheck.sh
-        # reds on a probe whose declaration sits at character 3221.)
-        report = out[:2000]
-        decl = skip_reason(out)
-        if decl and skip_reason(report) != decl:
-            report = decl + "\n" + report
+        report = skip_report(out)            # bounded, and guaranteed to carry the declaration itself
     elif rc != 0:
         # best-effort: a full-output write that fails must never turn the report into a second failure.
         logpath = "(not written)"
