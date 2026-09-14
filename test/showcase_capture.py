@@ -24,6 +24,78 @@ except ImportError as exc:
     sys.exit(f"showcase_capture: cannot import the export scrub from docs/docs_commands_build.py ({exc}) — "
              f"refusing to write an unscrubbed capture")
 
+# --- formatting (defined HERE, above the command table, because the --in=DIR case DERIVES its own
+# --since window from what the PUBLISHED block shows — see chooseInWindow below — and cannot do that
+# with the formatters defined after the table that needs them) ------------------------------------
+def explode(text):
+    """Re-wrap minified single-line XML/JSON at tag seams for display (real output is one line)."""
+    lines = []
+    exploded = False
+    for ln in text.split("\n"):
+        if len(ln) > 300 and ln.lstrip().startswith("<"):
+            lines.extend(ln.replace("><", ">\n<").split("\n"))
+            exploded = True
+        elif len(ln) > 300 and ln.lstrip().startswith("{"):
+            lines.extend(ln.replace("},{", "},\n{").replace('],"', '],\n"').split("\n"))
+            exploded = True
+        else:
+            lines.append(ln)
+    return lines, exploded
+
+def fmt_block(data):
+    text = data.decode("utf-8", "replace").rstrip("\n")
+    if not text:
+        return "(empty)"
+    total_bytes = len(data)
+    raw_line_count = len(text.split("\n"))
+    lines, exploded = explode(text)
+    shown = lines
+    marker = None
+    if len(lines) > 40:
+        shown = lines[:30]
+        if exploded:
+            marker = f"… [{len(lines)-30} more display lines; full output is {total_bytes} bytes on {raw_line_count} raw line(s)]"
+        else:
+            marker = f"… [{len(lines)-30} more lines, {total_bytes} bytes total]"
+    out = []
+    for ln in shown:
+        # §B11.2: header COMMENTS are exempt from the 300-byte display cut — the preamble promises they
+        # "appear in full", and the cut was truncating exactly the attribute-dictionary legends the capture
+        # exists to expose (76 of 131 commands last round: quality-delta lost 1544 bytes, doc-drift 2221).
+        # Ordinary long lines (row data) keep the cut; the preamble states both halves honestly.
+        # §B12.10: the marker says "bytes" (see the preamble below) so the cut and the count must be BYTES,
+        # not Python str CHARACTERS — len(ln)/ln[:300] on a str counts/slices codepoints, which undercounts
+        # every multi-byte UTF-8 character (this file's own doc-comments use em-dashes and arrows). Cut the
+        # UTF-8 ENCODING at 300 bytes, back off at most 3 bytes so a multi-byte sequence is never split, and
+        # report the TRUE remaining byte count via wc-c-equivalent len() on bytes, not on the decoded str.
+        ln_bytes = ln.encode("utf-8")
+        if len(ln_bytes) > 300 and not ln.lstrip().startswith("<!--"):
+            cut = ln_bytes[:300]
+            for _ in range(4):
+                try:
+                    shown_text = cut.decode("utf-8")
+                    break
+                except UnicodeDecodeError:
+                    cut = cut[:-1]
+            else:
+                shown_text = cut.decode("utf-8", "replace")
+            out.append(shown_text + f" … [line truncated: {len(ln_bytes)-len(cut)} more bytes on this line]")
+        else:
+            out.append(ln)
+    if marker:
+        out.append(marker)
+    return "\n".join(out)
+
+def publish_block(data):
+    """fmt_block, then the project's own rebrand rows withheld (exportscrub.withhold_rebrand_rows).
+
+    AFTER the display cut, deliberately: the window and its `… [N more display lines]` marker still describe
+    the real output, and the disclosure's count is exactly the rows taken out of what this block shows. So
+    rows shown + withheld + past the cut still equals the pairs= the tool reported — the sum
+    test/docscommandscheck.sh arm (E) checks on every capture."""
+    lines, _withheld = exportscrub.withhold_rebrand_rows(fmt_block(data).split("\n"))
+    return "\n".join(lines)
+
 # --- helper input files -------------------------------------------------
 
 def openBraceLine( lines, i ):
@@ -448,25 +520,67 @@ add(S6, f"{BIN} --scan-skills=skills", "Scan a whole skills directory (exit 2 = 
 
 S7 = "knobs / modes"
 add(S7, f"{BIN} . --rank-by=churn --top-k=5", "Rank by git change-frequency prior instead of PageRank.")
-# CHOOSING THE N IN --since=HEAD~N, because this demo's whole point is visible only inside a narrow band and
-# the band MOVES with the repository's own history. Too wide and the global block runs past the display cut, so
-# the reader never reaches the scoped one; too narrow and DIR has 3 or fewer touched files, --limit=3 does not
-# cut, and the block prints capped="0" with no paging half and no next= — the case showing none of what it
-# exists to show. The rule is therefore MEASURED, not remembered: take an N whose scoped of= exceeds the
-# --limit AND whose global block still fits the 30-line display cut, and take it with a margin of at least one
-# commit ON EITHER SIDE — because HEAD~N is relative, and the commit that lands the regenerated capture is
-# itself a commit, so a published HEAD~N evaluates one window wider the moment it is committed. An N chosen
-# with no margin demonstrates in the capture and stops demonstrating at the tip; this was not hypothetical,
-# it happened twice while writing this comment.
-# Measured 2026-09-13 at d48f6eaa: HEAD~3 of="1" capped="0"; HEAD~4..6 of="4"; HEAD~7 of="5" global n="13";
-# HEAD~8 of="5" global n="14"; HEAD~10 of="18" global n="32" (past the display cut). N=7 sits with both
-# neighbours capping and the global block at 12-14 rows. Re-measure the same way rather than assuming the N.
+# THE N IN --since=HEAD~N IS DERIVED, NOT PINNED, because this demo's whole point is visible only inside a
+# narrow band and the band MOVES with the repository's own history. Too wide and the global block runs past
+# fmt_block's display cut, so the reader never reaches the scoped one, its next= or the stub; too narrow and
+# DIR has --limit or fewer touched files, the page does not cut, and the block prints capped="0" with no
+# paging half and no next= — the case showing none of what it exists to show. A THIRD constraint squeezes
+# from the side: every --exclude lengthens the continuation the scoped page replays, and at
+# kNextAttrMaxBytes (120 B) that next= is DROPPED rather than truncated, so a narrower corpus buys global
+# rows and spends next= bytes.
 #
-# The --since/--exclude pair is not decoration: it narrows the mined window so the GLOBAL block is
-# under the 40-row display cut and the scoped block, its paging half and the stub are all VISIBLE in the
-# captured lines (at 40 global rows they sat past the cut, so the case showed none of what it exists to show),
-# and it makes next= replay two corpus/window flags, which is the fact the hand-spelled next= used to lose.
-add(S7, f"{BIN} . --rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs --in=src --limit=3", "Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope=\"src\"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped=\"1\" has_more=\"1\" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed=\"1\" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.")
+# Two hand-measured Ns have now rotted, so the literal is gone: HEAD~7 read of="5" with a 13-row global block
+# on 2026-09-12 and a 40-row one (everything cut) on 2026-09-14, because two merges of main landed in the
+# branch and HEAD~N is relative. chooseInWindow measures instead, at generation time, against the PUBLISHED
+# block — the same publish_block the document is written with, so what it checks is what a reader sees — and
+# it takes the smallest N where BOTH N and N-1 satisfy every promise. N-1 is the margin the old comment asked
+# for in words: the commit that lands the capture is itself a commit, so a published HEAD~N spans today's
+# HEAD~(N-1) plus that commit the moment it is committed, and an N with no margin demonstrates in the
+# document and stops demonstrating for anyone who pastes it. Nothing is pinned here but the corpus flags and
+# the page size; if no N in range works, the generator REFUSES rather than publish a block that shows
+# nothing, and the message says which half broke so the next person re-measures rather than re-guesses.
+_IN_DIR      = "src"
+_IN_LIMIT    = 3
+# The corpus flags are not decoration: they narrow the mined window so the GLOBAL block fits the display cut,
+# and they make next= replay real corpus/window flags, which is the fact a hand-spelled next= used to lose.
+# --exclude=skills joined them on 2026-09-14 (18 skills/ files in the window, and 17 of the ~24 bytes of
+# next= headroom); a fourth exclude costs more than the cap has left, which is why widening stops here.
+_IN_EXCLUDES = "--exclude=test --exclude=docs --exclude=skills"
+
+def inCaseCmd( n ):
+    return f"{BIN} . --rank-by=churn-decay --since=HEAD~{n} {_IN_EXCLUDES} --in={_IN_DIR} --limit={_IN_LIMIT}"
+
+def inCaseUnshown( n ):
+    """Which of the caption's promises the PUBLISHED block for HEAD~n does not keep ([] = keeps them all)."""
+    p = subprocess.run( inCaseCmd( n ), shell=True, cwd=REPO, capture_output=True )
+    if p.returncode != 0:
+        return [f"the run exited {p.returncode}"]
+    shown = publish_block( p.stdout )
+    scoped = re.search( r'<recent scope="[^"]*"[^>]*>', shown )
+    gone = []
+    if scoped is None:
+        gone.append( "the scoped <recent scope=> page itself (past the display cut: the global block is too wide)" )
+    else:
+        if 'capped="1"' not in scoped.group( 0 ):
+            gone.append( f'capped="1" (the window is too narrow for --limit={_IN_LIMIT} to cut)' )
+        if "next=" not in scoped.group( 0 ):
+            gone.append( "the scoped page's next= (dropped at kNextAttrMaxBytes: the flag set is too long)" )
+    if "<symbols stubbed=" not in shown:
+        gone.append( "the <symbols stubbed=> stub (past the display cut)" )
+    return gone
+
+def chooseInWindow( lo=2, hi=14 ):
+    tried = []
+    for n in range( lo + 1, hi + 1 ):
+        gone, goneMargin = inCaseUnshown( n ), inCaseUnshown( n - 1 )
+        tried.append( f"HEAD~{n}: {'; '.join(gone) or 'shows everything'} (margin HEAD~{n-1}: {'; '.join(goneMargin) or 'shows everything'})" )
+        if not gone and not goneMargin:
+            print( f"showcase_capture: --in= case window derived as HEAD~{n} (margin HEAD~{n-1} holds)", file=sys.stderr )
+            return n
+    sys.exit( "showcase_capture: refusing to write — no --since=HEAD~N in [%d,%d] shows what the --in=%s case promises:\n  %s"
+              % ( lo + 1, hi, _IN_DIR, "\n  ".join( tried ) ) )
+
+add(S7, inCaseCmd( chooseInWindow() ), "Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope=\"src\"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped=\"1\" has_more=\"1\" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed=\"1\" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.")
 add(S7, f"{BIN} . --rank-by=bogus --top-k=5", "An unknown value REFUSES (exit 1), NAMED, with the supported set listed.")
 add(S7, f"{BIN} . --callers=rankGraphTeleport --format=columnar", "Columnar output: paths table + parallel arrays, ~15-60% fewer tokens on MANY-row lists — small results can be LARGER (the columnar legend is a fixed cost).")
 add(S7, f'{BIN} . --for="cache invalidation" --format=candidates --top-k=5', "Flat top-K export for an external reranker.")
@@ -793,76 +907,6 @@ for r in results:
 if _strayBad:
     sys.exit("showcase_capture: refusing to write — a --stray-content block's output does not select what its heading names:\n  "
              + "\n  ".join(_strayBad))
-
-# --- formatting --------------------------------------------------------
-def explode(text):
-    """Re-wrap minified single-line XML/JSON at tag seams for display (real output is one line)."""
-    lines = []
-    exploded = False
-    for ln in text.split("\n"):
-        if len(ln) > 300 and ln.lstrip().startswith("<"):
-            lines.extend(ln.replace("><", ">\n<").split("\n"))
-            exploded = True
-        elif len(ln) > 300 and ln.lstrip().startswith("{"):
-            lines.extend(ln.replace("},{", "},\n{").replace('],"', '],\n"').split("\n"))
-            exploded = True
-        else:
-            lines.append(ln)
-    return lines, exploded
-
-def fmt_block(data):
-    text = data.decode("utf-8", "replace").rstrip("\n")
-    if not text:
-        return "(empty)"
-    total_bytes = len(data)
-    raw_line_count = len(text.split("\n"))
-    lines, exploded = explode(text)
-    shown = lines
-    marker = None
-    if len(lines) > 40:
-        shown = lines[:30]
-        if exploded:
-            marker = f"… [{len(lines)-30} more display lines; full output is {total_bytes} bytes on {raw_line_count} raw line(s)]"
-        else:
-            marker = f"… [{len(lines)-30} more lines, {total_bytes} bytes total]"
-    out = []
-    for ln in shown:
-        # §B11.2: header COMMENTS are exempt from the 300-byte display cut — the preamble promises they
-        # "appear in full", and the cut was truncating exactly the attribute-dictionary legends the capture
-        # exists to expose (76 of 131 commands last round: quality-delta lost 1544 bytes, doc-drift 2221).
-        # Ordinary long lines (row data) keep the cut; the preamble states both halves honestly.
-        # §B12.10: the marker says "bytes" (see the preamble below) so the cut and the count must be BYTES,
-        # not Python str CHARACTERS — len(ln)/ln[:300] on a str counts/slices codepoints, which undercounts
-        # every multi-byte UTF-8 character (this file's own doc-comments use em-dashes and arrows). Cut the
-        # UTF-8 ENCODING at 300 bytes, back off at most 3 bytes so a multi-byte sequence is never split, and
-        # report the TRUE remaining byte count via wc-c-equivalent len() on bytes, not on the decoded str.
-        ln_bytes = ln.encode("utf-8")
-        if len(ln_bytes) > 300 and not ln.lstrip().startswith("<!--"):
-            cut = ln_bytes[:300]
-            for _ in range(4):
-                try:
-                    shown_text = cut.decode("utf-8")
-                    break
-                except UnicodeDecodeError:
-                    cut = cut[:-1]
-            else:
-                shown_text = cut.decode("utf-8", "replace")
-            out.append(shown_text + f" … [line truncated: {len(ln_bytes)-len(cut)} more bytes on this line]")
-        else:
-            out.append(ln)
-    if marker:
-        out.append(marker)
-    return "\n".join(out)
-
-def publish_block(data):
-    """fmt_block, then the project's own rebrand rows withheld (exportscrub.withhold_rebrand_rows).
-
-    AFTER the display cut, deliberately: the window and its `… [N more display lines]` marker still describe
-    the real output, and the disclosure's count is exactly the rows taken out of what this block shows. So
-    rows shown + withheld + past the cut still equals the pairs= the tool reported — the sum
-    test/docscommandscheck.sh arm (E) checks on every capture."""
-    lines, _withheld = exportscrub.withhold_rebrand_rows(fmt_block(data).split("\n"))
-    return "\n".join(lines)
 
 ver = subprocess.run(f"{BIN} --version", shell=True, cwd=REPO, capture_output=True).stdout.decode().strip()
 # §B11.5: the --help line count is DERIVED at generation time — the hardcoded "543 lines" went stale
