@@ -812,9 +812,9 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 ## What it answers
 
 <details>
-<summary><b>179 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
+<summary><b>180 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
 
-Around the core sit 179 long flags advertised in `--help`, across seven families — plus an MCP
+Around the core sit 180 long flags advertised in `--help`, across seven families — plus an MCP
 server, so a coding agent can call any of them mid-task instead of grepping and reading whole files.
 `--help` prints one line per flag (~4.5K tokens); `--help=--FLAG` prints that flag's full entry with
 every caveat, `--help=SECTION` one family, and `--help=all` the whole catalog.
@@ -1204,7 +1204,7 @@ trailing `…`.
 </details>
 
 <details>
-<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="6"</code> ships labelled a floor</summary>
+<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="7"</code> ships labelled a floor</summary>
 
 **Ten seconds, no index server, no embeddings, no API key** — a parse and a call graph, built on the
 spot. The rows below are a real capture: the callers and their files are gate-held current
@@ -1213,13 +1213,14 @@ grow — nothing can keep a line number true in a document, so it is not claimed
 
 ```
 $ ripwire . --callers=rankGraphTeleport
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" counts_floor="1">
-<s t="fn" n="runEval" p="src/eval.h:169"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3115"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3664"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:995"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1120"/>
-<s t="fn" n="getIndex" p="src/mcpindex.h:1104"/>
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" counts_floor="1">
+<s t="fn" n="runEval" p="src/eval.h:171"/>
+<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
+<s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
 
@@ -1227,7 +1228,7 @@ $ ripwire . --callers=rankGraphTeleport
 dispatch contributes no edge (a call through a function pointer or callback is an edge only when
 ONE function is bound to that variable in scope and the variable never escapes — its address taken
 or reference-bound — and a macro-generated call site — tagged
-`role="macro"` — only when its function-like `#define` is indexed): `count="6"` is a **floor**,
+`role="macro"` — only when its function-like `#define` is indexed): `count="7"` is a **floor**,
 and the element says so before you read a single row.
 
 </details>
@@ -1804,9 +1805,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>615 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>616 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **615 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **616 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2355,7 +2356,7 @@ identity of the index, and says which one is at fault.
 
 ### 5. Command families
 
-The `--help` output groups 179 long flags advertised in `--help` into seven families. The `--help=`
+The `--help` output groups 180 long flags advertised in `--help` into seven families. The `--help=`
 column below is the argument that prints one family: `ripwire --help=navigate`. `ripwire
 --help=--FLAG` prints one flag's full text — the caveats, the units, what it refuses and why.
 `ripwire --help=all` is the whole catalog, about 46,000 tokens.
@@ -2398,12 +2399,13 @@ ripwire . --callers=rankGraphTeleport
 The leading legend comment is elided here; the line numbers are a capture and move as files grow:
 
 ```xml
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" graph_ambiguous="7801" graph_unresolved="4860" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="7827" graph_unresolved="4865" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
 <s t="fn" n="runEval" p="src/eval.h:171"/>
 <s t="fn" n="rankGraph" p="src/graph.h:3445"/>
 <s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:1031"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1156"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
 <s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
@@ -2541,7 +2543,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 210 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 211 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.

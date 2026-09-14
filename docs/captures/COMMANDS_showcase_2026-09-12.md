@@ -3375,6 +3375,43 @@ ripwire scan: 0 finding(s) total (26 skill file(s) scanned, 0 unscannable file(s
 </r>
 `````
 
+## `./build/ripwire . --rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs --in=src --limit=3`
+
+*Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope="src"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped="1" has_more="1" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed="1" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.*
+
+`````
+<!-- ripwire v1 t=fn|method|cls|struct|iface|var|sec|macro(#define;degraded:body-is-replacement-text,edges-cross-expansion) p=path layer=arch-layer(opt) n=name id=canonical(path::scope::name,when-scoped) k=rank c=call amb=ambiguous-calls(read-source) lpin=calls-pinned-by-locality-prior-alone(a-disclosed-guess;read-source;absent-if-0) overloads=N-same-name-defs-merged-into-this-row(absent-if-1;shown=counts-them-individually,so-rows+sum(overloads-1)=shown) prov=per-EDGE-confidence(orthogonal-to-k):scip(index-pinned;precise)|binding(cross-lang-FFI)|import(ES-named-import;module+export-named)|split(one-arm-of-a-k-way-pick;read-source;these-are-the-edges-amb=-counts)(absent=uniquely-resolved-name-based) hdr:unresolved=call-name-defined-only-in-a-lang-incompatible-file (edges heuristic) hdr:locality_pinned=sum-of-lpin(absent-if-0) hdr:external=calls-refused-as-bound-outside-the-tree(builtin/stdlib-name-without-in-repo-evidence,external-import,super-past-the-tree;no-edge;absent-if-0) r:est_tokens=hdr-copy(none-if-stable) -->
+<!-- r:root=crawl-root-every-p=-is-relative-to(single-root-only;absent=>p=is-the-raw-ingest-path) -->
+<!-- rank_by=churn-decay: k= is a TIME-DECAYED git change-frequency prior, not call-graph importance. Each commit is weighted 0.5^(age_days/half_life) with the half-life in window= (90d default, a conventional choice, not a measurement on this corpus); age is measured from HEAD commit timestamp, never the system clock, so the same tree at the same HEAD ranks identically on any day or machine. window= names the mined span (all-history by default: the decay is the window). k= is PageRank re-run with the teleport biased by this decayed prior instead of the uniform one rank_by=pagerank uses, or the undecayed one rank_by=churn uses; top ranks can coincide with either sibling when structure and recent churn agree, and diverge where a stale-but-central symbol meets a fresh, sparsely-called one. recent: the file-level answer to what changed recently, FIRST — the n= files the NEWEST commits touched, of the of= files any commit touched, as rc p= age_d= (days since the file's newest commit, at HEAD's clock) w= (its decayed weight), age_d asc then w desc then path; absent under multi-root. merge_bombs_skipped= counts the commits in the mined window that touched more than 100 INDEXED files (files this crawl holds, never the commit's raw file count) and were SKIPPED, uncounted (bulk sweeps, wide merges): a file only such a commit touched is absent from these rows and from the prior, so a 0 means no commit was skipped, never that none could be. It counts the WINDOW's commits, so it rides this block only -->
+<!-- in=DIR: recent scope=DIR is a SECOND recent block, riding exactly when the unchanged global one does, with DIR's files only — p= root-relative exactly as the global block spells them, same order; n= rows on this page of of= files under DIR any counted commit touched (of= IS this element's total, so the paging half below carries none); capped=1 means DIR has more rows than this page; has_more=1 that a next page exists, at next_offset=; offset=/limit= the window this page was cut by (limit=0 means no explicit limit was given). An absent block means no history was mined at all; n=0 means history was mined and no file under DIR was touched. merge_bombs_skipped= is NOT repeated here: it counts the window's skipped commits, not DIR's. next= is ONE pasteable follow-up — this tool's flags, or a shell line copied from a run= row — the call that ends this search; paste it as-is. symbols stubbed=1 would_show= next=: the symbol map this run did NOT ask for and did not render — would_show= is how many symbol ROWS the same run without in= would print (not the corpus total, which is this document's own symbols= header count), next= fetches them -->
+<!-- at= is the git commit these numbers were computed at; a trailing +shallow means the clone's history is truncated (a depth-limited clone: churn counts only the commits present), and a trailing +dirty means the working tree differed from that commit, so the numbers describe the tree, not the commit -->
+<!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->
+<!-- files=512 symbols=10486 edges=19387 shown=0 est_tokens=2352 ambiguous=7651 unresolved=2986 locality_pinned=4 external=1569 declined=5018 skipped_oversize=15 unindexed="tsv:42,txt:24,jsonl:23,scm:21,expected:15,lock:7" unindexed_exts=11 order=important-first -->
+<r at="f86bad879" root="." rank_by="churn-decay" window="HEAD~7 half-life=90d" est_tokens="2352">
+<recent n="13" of="13" merge_bombs_skipped="0">
+<rc p="CHANGELOG.md" age_d="0" w="6.99"/>
+<rc p="README.md" age_d="0" w="3.99"/>
+<rc p="src/main.cpp" age_d="0" w="3.99"/>
+<rc p="src/cli.h" age_d="0" w="3.99"/>
+<rc p="src/taskroute.h" age_d="0" w="2.99"/>
+<rc p="present/deck5_ripwire_build.js" age_d="0" w="2"/>
+<rc p="src/nextverb.h" age_d="0" w="1"/>
+<rc p="src/gitmine.h" age_d="0" w="0.999"/>
+<rc p="skills/ripwire-change-check/SKILL.md" age_d="0" w="0.997"/>
+<rc p="skills/ripwire-fresh-eyes/SKILL.md" age_d="0" w="0.997"/>
+<rc p="skills/ripwire-orient/SKILL.md" age_d="0" w="0.997"/>
+<rc p="skills/ripwire-orient/map-before-you-read.md" age_d="0" w="0.997"/>
+<rc p="bench/taskroute_eval.py" age_d="0" w="0.997"/>
+</recent>
+<recent scope="src" n="3" of="5" capped="1" has_more="1" next_offset="3" offset="0" limit="3" next="--rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs --in=src --offset=3 --limit=3">
+<rc p="src/main.cpp" age_d="0" w="3.99"/>
+<rc p="src/cli.h" age_d="0" w="3.99"/>
+<rc p="src/taskroute.h" age_d="0" w="2.99"/>
+</recent>
+<symbols stubbed="1" would_show="200" next="--rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs"/>
+</r>
+`````
+
 ## `./build/ripwire . --rank-by=bogus --top-k=5`
 
 *An unknown value REFUSES (exit 1), NAMED, with the supported set listed.*

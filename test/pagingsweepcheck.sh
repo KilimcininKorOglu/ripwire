@@ -710,6 +710,11 @@ TABLE = {
     # shown=/total=/capped= facts in its section headers. Parsing a root element out of it would fail for a
     # reason that has nothing to do with paging, so it is checked as prose below instead.
     "--situ":               ( [ "--situ=src/situ.h" ], "PROSE" ),
+    # 2026-09-12 (C1-b): --in=DIR pages the <recent scope=DIR> block of --rank-by=churn-decay — a CHILD of the map's <r>
+    # root, which carries no window of its own (the global <recent> block and the symbol stub are not paged), so the
+    # root is uncut by construction and the "cut nothing ⇒ quintet absent" branch applies; the child's own capped="1"
+    # + next= page is test/recentscopecheck.sh's arm 3.
+    "--in":                 ( [ "--rank-by=churn-decay", "--in=src" ], None ),
     # L-W (2026-09-12, forpage.h): --for joins for its FILE PAGE — --limit/--offset select a <files> document of
     # one row per file, NOT a window over the bundle. The bare --for root (<ctx>) is therefore uncut by
     # construction and carries no quintet; the page itself (test/forwidencheck.sh) carries the full quintet.

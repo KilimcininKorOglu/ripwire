@@ -95,11 +95,31 @@ inline std::string nextFieldJson( std::string_view invocation )
 // pastes into a terminal or an argv array verbatim (the gate splits it with shlex)
 inline std::string nextFlag( std::string_view flag, std::string_view value )
 {
+    // `~` IS SPECIAL ONLY WORD-INITIALLY, and "the word" is the whole argv element — not the part after `=`.
+    // Tilde expansion is defined for a word whose FIRST character is `~` (plus the `~user` form); anywhere
+    // else in the word it is an ordinary character. Treating every `~` as special quoted `HEAD~1` — the
+    // commonest git revision spelling there is — and this attribute is XML, so the escaper then turned the
+    // quotes into entities: `next="--since=&apos;HEAD~1&apos; …"`. A reader pasting that out of a raw document
+    // (a captured showcase, a doc, anything not rendered by an XML parser) gets a literal &apos; the shell does
+    // not decode, which is the whole job of a pasteable attribute lost on the most ordinary value it carries.
+    //
+    // `flag.empty()` IS THE WHOLE TEST (CodeRabbit, review of #212). `i == 0` alone asked "is this the first
+    // character of the VALUE", and a value is not a word: with a flag, the argv element begins `--exclude=`, so
+    // its first character is `-` and no shell expands the tilde — an argument is not an assignment. The guard
+    // emitted `--exclude='~tmp'`, which this attribute then rendered `--exclude=&apos;~tmp&apos;`, corrupting
+    // the replayed argument to protect against an expansion that cannot happen. Measured: `sh -c 'p ~root'`
+    // passes /var/root, `sh -c 'p --exclude=~root'` passes the literal `--exclude=~root`, in sh, bash and zsh
+    // alike. When `flag` IS empty the value is the whole word (editplan.h's `git -C <root>`), the tilde really
+    // is word-initial, and the quotes are load-bearing — which is why this is a narrowing and not a deletion.
+    // test/nextverbcheck.sh arm (9) pins the bare form, and a space-bearing value as the control that quoting
+    // still happens where a shell would really act.
     bool plain = !value.empty();
-    for( const char c : value )
+    for( std::size_t i = 0; i < value.size(); ++i )
     {
+        const char c = value[i];
         if( c == ' ' || c == '\t' || c == '\'' || c == '"' || c == '$' || c == '`' || c == '\\' || c == '|' || c == '&' || c == ';'
-            || c == '(' || c == ')' || c == '<' || c == '>' || c == '*' || c == '?' || c == '[' || c == ']' || c == '{' || c == '}' || c == '!' || c == '#' || c == '~' )
+            || c == '(' || c == ')' || c == '<' || c == '>' || c == '*' || c == '?' || c == '[' || c == ']' || c == '{' || c == '}' || c == '!' || c == '#'
+            || ( c == '~' && i == 0 && flag.empty() ) )
         {
             plain = false;
             break;

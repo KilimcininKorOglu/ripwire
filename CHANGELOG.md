@@ -15,6 +15,226 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--in=DIR` scopes the recent-changes block to a directory and stubs the map it was not asked for
+
+"What changed recently in DIR?" is six of the thirty questions in this project's frozen reference set (the
+RocksDB corpus pinned at `0e2801ac`, scored by the frozen-30 harness described in `docs/EVALS.md`), and
+`--rank-by=churn-decay` answered it with a whole-repository symbol map plus one global `<recent n="40">`
+block that a directory with more than 40 recently-touched files never fits into; nothing in the binary took
+a directory as a scope. `--in=DIR` (root-relative, an existing directory under the root; a trailing slash is
+ignored, absolute paths and `..` are refused) keeps the global block byte-identical — three of the six golds
+sit outside the named directory and complete only through it — and adds a second block
+`<recent scope="DIR" n= of= capped= …>` after it with DIR's files only, `p=` spelled root-relative exactly
+as the global block spells them, same order. That spelling is the whole of the retrieval result: scored by
+the same harness on the same 30 questions, the sub-root-relative spelling the obvious workaround produces
+completed 0 of 30 against 19 of 30 for the root-prefixed one, because every gold path in the set is written
+root-relative.
+
+The block pages the way every listing here pages, in `pageview.h`'s vocabulary: 40 rows by default, then
+`capped=` beside its `n=` on every page (rule 3), `has_more=`/`next_offset=`/`offset=`/`limit=` when the
+listing was cut or a window was asked for, and a pasteable `next=`. Its `of=` IS its total, so the paging
+half carries no `total=`: one number under two names is a shape this project has removed elsewhere, because a
+parser then has to know they are the same listing to avoid counting it twice. `next=` replays THIS
+run's own corpus and window flags (`--since`, `--exclude`, `--no-ignore`, `--ignore-tests`), so the page it
+names is a page of the same answer; a presentation flag is deliberately not replayed, because it cannot move
+`of=`. Past 120 bytes (`kNextAttrMaxBytes`, the ceiling every other `next=` in the tool already respected)
+the attribute is absent and `has_more=` still says the page exists — a hint that pastes wrong is worse than
+none. The replayed set is ENUMERATED against the flags that can ride beside `--in`, not hand-picked: it also
+carries `--max-file-size` when that run set one, because the crawl's size ceiling drops files out of the index
+and the rows are indexed files (a hint emitted under `--max-file-size=2K` named a page of `of="3"` where the
+run that emitted it saw `of="2"`), and `scopedMapNextInvocation` now lists every other rideable flag with the
+reason it is NOT replayed — a cache flag indexes the same files, `--refetch` would fetch a newer tree,
+`--scip` moves edges and not files, and the presentation flags cannot move `of=`. The scoped block rides
+exactly when the global one does: an absent block means no history was mined, `n="0"` means history was mined
+and no file under DIR was touched. That is a propagated FACT (`DecayedChurnMined::anyHistory`, carried through
+`ChurnRanking` to the serializer) rather than a reading of the rows: a window whose only commit touched no
+indexed file — the commit that deletes a file is the smallest one — has zero rows AND a mined history, and
+inferring the second from the first published it as "no history was mined".
+
+The symbol map collapses to a disclosed stub `<symbols stubbed="1" would_show=N next="…"/>` — the map was
+not asked for, so it is not ranked at all (no PageRank runs, and the header carries no `pr_iters=` for an
+iteration that did not happen), and `would_show=` is that same run's own `shown=`: the symbol DEFINITIONS it
+ranks, counted individually exactly as `shown=` counts them. The rows that run prints FOLLOW from the identity
+the map legend already publishes for `shown=` — `rows + sum(overloads-1) = shown`, since the print loop
+collapses a const/non-const overload pair into one row carrying `overloads="2"` (this repository: `shown="200"`
+over 193 rows, 7 of them at `overloads="2"`). The first wording said "how many symbol ROWS", which is a number
+the document does not contain. Reporting post-collapse rows there instead is not available at any price worth
+paying: WHICH definitions survive the top-K cut is a fact about the ranking, and not ranking is the whole point
+of the stub. It is named as the definition count it is rather than hedged as a ceiling, because a floor/ceiling
+marker in this tool means "we could not see everything" — `counts_floor="1"`, `_capped`, the truncation
+disclosures — while `would_show` is EXACT and only its UNIT differs from a reader's guess; spending an
+uncertainty marker on a unit difference would make "ceiling" mean "exact, but not in the unit you assumed" and
+weaken every honest use of the word elsewhere in the output. It deliberately borrows no paging attribute: `total=` is reserved for THE total (rule 2) and the stub's
+number is a page size, `shown=` would drag a `capped=` with it (rule 3), and rule 3's own sentence sanctions
+an element that carries neither.
+
+DIR is validated against the CRAWL and not only the filesystem — at least one indexed file must be spelled
+`DIR/`, byte-exact. The filesystem answers a different question: on a case-folding volume `--in=DB` is a
+directory, a symlink alias is a directory, and a subtree `--exclude` dropped is a directory, and all three
+would otherwise be answered with an empty block, which reads as "nothing changed there".
+
+REFUSED, exactly, and `--help` lists the same set: with any flag that answers instead of the scoped map,
+under multi-root, with `--top-k=N` for any N (the map it sizes is the stub), and with `--json`. The first of
+those is DERIVED from the flag tables rather than from a list of verbs — the shape `--html` already used —
+so `--map-diff`, `--expand`/`--outline`/`--pack-signatures`, `--doctor`, `--batch`, `--mcp` and the CLI edit
+bridge are covered by the same three lines that cover a report verb, and a flag added tomorrow refuses
+tomorrow with nobody editing the guard. `--in` is NOT a member of the paging verb set: it is a modifier of
+the default map, and membership made the shaping guard refuse every `--top-k`/`--max-tokens`/`--token-budget`
+beside it with a message naming verbs and claiming the default map honours the budgets it had just refused.
+`--limit`/`--offset` compose (they window the scoped element) and so do `--max-tokens`/`--token-budget` (they
+shape the document that is emitted). The MCP surface exposes no churn ranker, so there is no twin to extend.
+
+Two flags are refused for a DIFFERENT reason and now say so, and WHICH two is derived. `kMapShapingFlags` is
+the tool's own list of flags that shape the bare map without selecting a verb, so that table minus the
+ride-along table is exactly the residue a scoped run cannot compose with: `--no-redact`, `--metrics` and
+`--map-diff`. `--map-diff` is the one that genuinely answers instead — it takes its own ranking branch ahead of
+churn-decay, so no scoped block was ever going to be built — while the other two shape or un-redact a map this
+run replaces with the counted stub. `--metrics` decorates symbol rows the stub does not print, and it is
+refused as inert by table membership rather than by a hand-written case, so a shaping flag added tomorrow with
+no ride-along row gets the right sentence without anyone editing the guard. `--no-redact` selects no
+operation — it only stops
+body redaction — and a scoped run serves no bodies at all, because the symbol map is the counted stub. So the
+derived "answers instead" diagnostic stated a reason that was not this run's: the flag is INERT here, not
+overridden. It is refused ahead of that diagnostic, in the shape the bare map already uses for the same flag,
+pointing at both ways forward (drop it, or pass it to a body-serving verb). It is deliberately NOT added to the
+ride-along table: accepting an inert modifier silently is the other half of the same defect. The class was then measured — and the first
+measurement of it, published in this entry, was wrong. It said that of the flags the guard walks every one
+probed reaches its own pairing refusal before this line, with `--external-surface` the only other flag
+arriving here. Swept over the derived flag universe (`test/flaguniverse.py`) rather than a sample, 119 of the
+171 `kBoolFlags`/`kViewFlags` rows reach that line, and 43 of those answer when run alone — so neither
+"reaches the generic line" nor "answers alone" separates the class, because `--metrics` answers alone and what
+it answers IS the default map, decorated. Table membership separates it, which is why the refusal derives the
+set and `test/recentscopecheck.sh` arm 6s2e re-derives the same set from the same two tables on every run.
+`--external-surface` remains a correct competitor and stays the control arm. The guard on the new branch is `--in` AND `--no-redact`: written without the first
+half it refused every `--no-redact` run in the tool while quoting `--in=DIR` at it, which eight gates said in
+one suite and no arm added for the fix could, since every one of them passes `--in`.
+
+Measured on the RocksDB corpus at `0e2801ac` (`--rank-by=churn-decay`, warm cache, bytes on stdout via
+`wc -c`): 39,942 B bare → 10,601 B with `--in=db`, 10,525 B with `--in=util`, 11,071 B with `--in=table`.
+The saving is the stub (69 B in place of the 200-row map); the scoped block itself costs ~2.3–2.8 KB per
+answer, and the global block is unchanged. On this repository's own tree: 46,787 B → 9,629 B with
+`--in=src`; on llvm-project (183,835 tracked files) 48,150 B → 6,051 B with `--in=llvm/lib/Analysis`.
+Because the map is never ranked, sorted, bucketed or estimated under `--in`, the run is also cheaper, though
+only by the share of it that ranking was: user time, median of five interleaved warm samples with a scratch
+cache, 0.73 s → 0.71 s on RocksDB and 2.55 s → 2.37 s on llvm-project (~3% and ~7%). Ingest and the call
+graph dominate both, and that is the honest size of this win.
+
+Gate: `test/recentscopecheck.sh`, 99 arms on a 53-commit fixture with 45 files under `db/` (plus two
+fixtures of its own for the corpus arms) — the scoped rows
+are only DIR's and spelled as the global block spells them, the global block is byte-identical with and
+without the flag, page 2 (`--offset=40`) is the exact remainder with no overlap and the pasted `next=`
+reproduces it byte-for-byte, `next=` replays `--exclude` and the pasted page lands on the same `of=`, an
+over-120-byte `next=` is absent while `has_more="1"` remains, the stub carries no `total=`/`shown=`/`capped=`
+and no `pr_iters=` rides the stubbed header, a window that mined nothing prints NEITHER block, a case-folded
+name / a symlink alias / an excluded subtree each refuse naming the crawl, eight preemption arms sample the
+derived refusal (`--lint`, `--hotspots`, `--query`, `--map-diff`, `--expand`, `--pack-signatures`, `--doctor`,
+`--batch`), `--top-k` refuses with exactly one message where it used to print three, and `--max-tokens`/
+`--token-budget`/`--limit` compose with a clean stderr. Two arms cover the continuation's corpus directly:
+a run under `--max-file-size=2K` on a fixture holding one oversize file must replay the ceiling and the pasted
+page must land on the same `of=`, and a window whose only commit touched no indexed file must print `n="0"`
+where `--since=HEAD` (which reads no commit) still prints neither block. `perl` and `xmllint` are
+PREREQUISITES of the gate (exit 2, naming the tool) rather than arms: a missing tool is an environmental
+condition, and reporting it as a FAIL made `test/regression.sh` name this gate as a product regression for a
+tool the machine never had. Three arms cover the refusal wording: the inert `--no-redact` message, the
+`--external-surface` control that must keep the competing wording, and — the one that was missing — a
+`--no-redact` run with NO `--in` at all, which fails if the message so much as mentions the scoped flag.
+
+### Fixed — two generated documents published numbers and links nothing derived
+
+`docs/COMMANDS.md`'s table of contents is generated: one `[`--flag`](#anchor)` per entry, with the anchor
+derived from the flag's spec. The derivation replaced every run of non-alphanumeric characters with a hyphen
+and trimmed the ends (the `--in=DIR` heading became `#in-dir`), where the renderer's rule DELETES that
+punctuation instead of substituting it — the anchor it mints keeps the flag's own two leading dashes and loses
+the `=`. All 169 links in the document therefore resolved to nothing, and had done since it was first
+generated; markdownlint's MD051 had been reporting it 28 times on a single line. Fixed in the
+generator (`docs/docs_commands_build.py`), which now states the renderer's own rule — lower-case, drop every
+character that is not a word character, a hyphen or a space, then spaces to hyphens — and assigns anchors in
+emission order so a repeated heading would get the `-1` the renderer appends rather than two links to the
+first. Gate: `test/docscommandscheck.sh` arm (J), which audits every fragment against the headings (fenced
+sample output skipped — a `###` line inside a code block mints no anchor) and restates the renderer's rule
+instead of importing the generator's, because a gate that asks the generator what the anchor should be agrees
+with the generator's mistake. Arms (A)–(I) were all green throughout: (B) compares flag NAME sets and (G)
+compares bytes, and a document can be byte-reproducible with every link in it dead.
+
+`docs/TUNING.md`, likewise generated, asserted a sum instead of deriving one: "`112 + 12` accounts for the 128
+NAMES" is 124, four short of the distinct-name count in the table two lines above it — in the one paragraph
+whose subject is that quoting a wrong pair "would be wrong in both halves at once". Recounted from the same
+data the table is built from: `src/` declares 129 caps under 128 distinct names, of which 111 are tunable, 12
+must stay `constexpr`, and 5 were declared after the sweep was prepared and no measurement has touched
+(`kChurnMergeBombMaxFiles`, `kFieldIdCapacity`, `kForPageRowsDefault`, `kForPageUnionSymbolCap`,
+`kMaxBlockBytes`) — 111 + 12 + 5 = 128. Neither 112 nor 12 was wrong: they are the FROZEN classification in
+`bench/capsweep/tunable.tsv`, and the census beside them is re-read from `src/` on every run, so the two are
+different populations and the missing four were five new names minus one (`kSituTestRowsShown`) the sweep
+classified and `src/` no longer declares. The paragraph derives all three parts now, states that skew rather
+than hiding it, and `capsweep.py emit` REFUSES to render a partition that does not add up — a name classified
+in two lists at once, the shape an asserted sum cannot see, exits non-zero instead of publishing. Gate:
+`test/capsweepcheck.sh` arm (C) reproduces the document byte-for-byte through that refusal on every run.
+
+### Fixed — a scoped run said its ranking fell back, having run no ranking
+
+`--rank-by=churn-decay` discloses a window that mined no commits: the teleport prior is uniform, so the map is
+byte-identical to `--rank-by=pagerank`, and saying so is the difference between a degraded answer and a silent
+one. Under `--in=DIR` that same sentence was false three ways at once, on a real invocation
+(`--rank-by=churn-decay --in=src --since=HEAD`, a window that reads no commit). Nothing is ranked on a scoped
+run — the rank vector is default-constructed and zero-filled, which is exactly why the header carries no
+`pr_iters=` — so "using uniform (structural) ranking" named a computation that did not happen. "This map"
+named a document the run does not contain, since the symbol map IS the counted stub and, with no history
+mined, neither `<recent>` block rides at all. And the comparison it offered is unrunnable: `--rank-by=pagerank`
+is refused beside `--in`, so the reader was pointed at a command the tool rejects.
+
+The scoped branch now states what did happen — no block rides, the map is the stub, nothing was ranked, so
+there is no ranking to have fallen back — and keeps the pagerank equivalence where it is true, on the unscoped
+run a reader gets by dropping `--in`. The two sibling callers (the multi-root arm and undecayed
+`--rank-by=churn`) pass `stubbed=false` at the call site with the reason recorded: `--in` rides neither.
+Gate: `test/recentscopecheck.sh` arm 13e asserts all three claims are gone and that the notice says nothing was
+ranked, with 13f the control that the unscoped sentence survives unchanged.
+
+### Fixed — a pasteable `next=` quoted a tilde no shell expands
+
+Every `next=` in the tool is built by `nextFlag`, which quoted any value whose first character is `~`
+whether or not a flag name preceded it. So a run under `--exclude=~tmp` published `--exclude='~tmp'`, and
+because the attribute is XML the escaper rendered it `--exclude=&apos;~tmp&apos;` — a replayed argument
+corrupted to defend against an expansion that cannot happen. POSIX tilde expansion applies to a word whose
+FIRST character is `~`; the word here is the whole argv element and it begins `--exclude=`, and an argument is
+not an assignment. Measured on macOS, `sh`/`bash`/`zsh` alike: `sh -c 'p ~root'` passes `/var/root`,
+`sh -c 'p --exclude=~root'` passes the literal `--exclude=~root`. The guard is now "word-initial AND no flag
+name", a narrowing rather than a deletion — when the value IS the whole word (`src/editplan.h`'s rollback
+invocation) the tilde really is word-initial and the quotes are load-bearing.
+
+The worse half was the gate. `test/nextverbcheck.sh` arm (9) pinned the entity-quoted form and explained it as
+a shell expanding `~tmp`, which is wrong about POSIX twice over — the tilde is not word-initial there, and
+`~tmp` expands nowhere anyway, since `~user` is expanded only for a user that exists. A gate that pins a false
+belief does not merely miss the bug, it defends it against the next person to fix it, so the explanation is
+deleted rather than reworded and the measured rule stated in its place. The arm pins the bare form, asserts the
+invocation carries no `&apos;` anywhere, and gains a mutation control: a space-bearing value is still quoted,
+so the change narrowed the tilde case instead of disabling quoting.
+
+### Fixed — a churn window says how many commits it skipped as merge bombs
+
+The churn-decay miner behind `--rank-by=churn-decay` skips any commit touching more than 100 indexed
+files — bulk renames, reformats, wide merges — and counted nothing about it, so a `<recent>` block
+could silently omit the very commit a question was about: a held-out gold commit that touched 71
+source files (more than 100 in all) was invisible to the block, and nothing in the output said a commit
+had been dropped. The block now carries `merge_bombs_skipped="N"` on every run, `"0"` included, so its
+absence is never ambiguous; the full and compact legends define it and state the 100-file threshold
+(`kChurnMergeBombMaxFiles`, now a named constant in `src/gitmine.h`, listed in `docs/LIMITS.md`). On this
+repository's own tree the attribute reads `merge_bombs_skipped="5"` — five commits the map had been
+quietly built without. Gate: `test/churndecaycheck.sh` arm 7 builds a repository whose HEAD commit adds
+101 files and asserts the block reads `"1"`, that none of those files is a row, and that both legends
+define the attribute; red on the previous binary (no attribute anywhere), green now. Both legends say
+"more than 100 INDEXED files" — the rule counts the files this crawl HOLDS, never the commit's raw file
+count, so a commit of 120 `.txt` files and one `.py` is not skipped and the old wording described a
+different rule from the code's. The threshold is the named constant at all four call sites now; the two
+`--rank-by=churn` walks kept a literal `100` beside a comment claiming parity with it. `merge_bombs_skipped=`
+rides the GLOBAL block only: it counts the window's skipped commits, and stamping that number on a
+directory-scoped element read as "N commits under DIR were skipped", which is wrong for any DIR smaller than
+the repository. STILL UNDISCLOSED, and named here rather than left silent: `--cochange`, `--situ`'s co-change
+partners and `--pr-context` apply their own commit-size skip at a cap of 30 with no counter at all — the same
+class of silent drop, on three other verbs; disclosing those is a separate round. A window whose
+every commit was skipped — a shallow clone of a large tree is exactly this shape: llvm-project at depth
+1 is one 183,835-file commit — used to print no block at all, which reads as "no history mined"; it now
+prints `<recent n="0" of="0" merge_bombs_skipped="1"></recent>`, zero rows and the reason (arm 7h, red
+on the previous binary). A tree with no git history still prints no block.
 ### Fixed — `--expand` chose its serving mode on two different price lists
 
 `--expand`'s cheapest-complete-answer serving compares the default bundle against the whole file(s) the
