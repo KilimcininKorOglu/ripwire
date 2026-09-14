@@ -15,6 +15,637 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--expand` chose its serving mode on two different price lists
+
+`--expand`'s cheapest-complete-answer serving compares the default bundle against the whole file(s) the
+requested symbols live in and emits the smaller, disclosing both byte counts on the `<ctx>` root. The two
+candidates were priced by two hand-built counters. The bundle was charged the `<ctx>` envelope, the root
+attributes, the unproven residue, the ranked map and the rendered `<bodies>`; the file was charged
+`wf.rawBytes` plus its own legend — no envelope, no root attributes, no `</ctx>`, and the file's RAW bytes
+rather than the `<src p= sym=>` blocks that actually carry them. Measured with `wc -c` on a fixture whose one
+symbol sits in an 864 B file: the root said `reason="file 1100B &lt; bundle 1193B"` over a document that came
+out 1262 B, so the tool selected — and reported — the whole-file form while the bundle it rejected was the
+smaller document. This was the SECOND asymmetry found in this one comparison (the first, one review round
+earlier, was the whole-file legend), which is the tell that the bug is the two counters rather than the
+missing addends. Both candidates now describe themselves as an `ExpandServeDocument` and are priced by one
+`priceExpandServeDocument`, which charges the whole served document — envelope, every root attribute, the
+mode's legends, the map where it rides, the payload as emitted, the closing tag — and settles the
+self-referential `mode=`/`reason=` disclosure with the same ≤4-pass fixpoint `pricedRootAttr` uses for
+`est_tokens=`. The reported figures are that one function's return values, so each is now exactly the
+document it names. Gates, red first: `expandmodecheck` (4a)/(4b)/(4d) assert that `reason=`'s own byte count
+equals `wc -c` of the delivered document in whole-file mode, in bundle mode and in bundle-with-a-ranked-map
+mode, and (4c) sweeps seven file paddings across the decision boundary and asserts the served document is
+never larger than the candidate it rejected — 2 of those 7 and both identity arms FAIL against the previous
+build. `expandtopk0check` (G-b) moves with it: its priced-bundle identity now reads against the document that
+mode serves rather than against explicit `--top-k=0`'s undecorated root, which the old price matched only
+because price and document omitted the same decoration; it is red on the previous build too (2403 B priced
+against 2474 B served).
+
+Five more from the same review round. The MCP `for` twin appended the `sc=` reading unconditionally while the
+CLI lens made it present-only, so a scope-free answer defined an attribute no row carried, and the
+signatures-budget exemption hand-built the same decision a second time; both now ask `forIdRouteLegendParts`
+once, and `mcpforparitycheck` arm (7) pins the rule in both directions — absent on a scope-free corpus on
+BOTH dialects, present on `src` on both (CLI 0 / MCP 1 before the fix). `estchargecheck` arm #18 counted two
+of the three droppable legend clauses, so the `route=` reading was pinned in neither direction: with that
+clause removed from the binary the arm still reported `clauses=2/2` and PASS, and it is now counted in the
+wide run, the probe and the tight control that must have dropped it. `taskroutecheck`'s R-LEG arm ran every
+generated command under `eval … || true`, which discards every exit status; it now captures each one and
+reports anything that is not 0 (answered) or the documented empty-corpus 1 — measured over the whole corpus,
+34 distinct commands, 15 and 19 — and widens its stderr check from the single compact-legend refusal to any
+parse refusal. And the three route hooks' mirrored command-word rule asked the shell to split the line, which
+never separates a control operator from the word it is attached to: `true; ripwire .` split into `true;` and
+`ripwire` and read as not-a-call, as did every `a;ripwire` / `a&&ripwire` / `a|ripwire` / `(ripwire .)` shape.
+The rule now lexes the line itself, quote-aware and executing nothing; `routehookcheck` O9 grows to 28 shapes
+(19 calls, 9 appearances that run nothing), of which the five operator-attached calls answer 0 on the previous
+block, and its byte-identity arm still reports one 147-line text in all three hooks. Last, `docs/LINEAGE.md`
+claimed "no network" without qualification in the same sentence that already scopes its dependency clause with
+"for the map": `ripwire <git-url>` is a documented input form that shallow-clones before it maps (`src/cli.h`,
+and `--refetch` forces a fresh clone), so the clause now names that one exception in the sentence's own voice.
+
+### Changed — agent surfaces ask for the compact legend
+
+The commands ripwire writes for an agent — the `ripwire wrap` paste block, the skills under `skills/`,
+the `<run>` line `--help-task` hands the prompt router, and the runnable line the tool-call router
+injects — spelled every XML verb with the default legend, the ~3 KB posture the `--legend` help text
+itself tells repeated callers to leave: most of a small `--callers`/`--uses`/`--impact` answer, byte-
+identical rows either way. Every one of those commands now carries `--legend=compact` where the verb
+accepts it (the XML verbs); `--for` keeps the default legend (its compact legend is its own, and the
+first call of a session wants the full one), and the text, JSON and writer verbs the binary refuses
+the flag on are untouched. Counted on this commit: 158 `ripwire <dir>` verb commands in 17 skill
+files (bodies only — no description changed, so no skill's stop rules or boundaries moved), 9
+commands in the wrap paste block (its 10–20 line band unchanged), 26 `--help-task` routes and the 2
+tool-call routes. Humans running the bare CLI see no difference. Gates, red first: `wrapverbscheck`
+arm 7 asserts the flag on every blurb command for the ten XML verbs it spells and its absence on
+`--for` (10 FAIL against the previous build); `skilltruthcheck` asserts it on every skill command for
+the shipped verb list (152 of 154 missing before the transform) and its absence on `--for`. Each surface also
+says how to get the full legend back (owner question, 2026-09-13): the wrap paste block, the router skill's
+shared conventions, the three route hooks' injected context and the MCP schema's `legend` field each carry
+one sentence — add `--legend=full` when a definition's reasoning is needed (a term you do not recognise, a
+floor or cap you need explained, a map a human will read); `wrapverbscheck` arm 8 asserts the sentence on
+all four surfaces, red first.
+
+### Fixed — the route hooks counted a directory named ripwire as a ripwire call
+
+The `--observe` arm of `hooks/ripwire-claude-route.sh` and `hooks/ripwire-codex-route.sh` closes the
+adoption-within-two window by inspecting the next two ripwire calls after a recommendation. It
+recognised a call by any token ending in `/ripwire`, so `cd …/ripwire && git log --oneline` — the
+directory, in argument position — consumed a window slot, and a real adoption two commands later was
+logged as `missed` (found in the local routing analysis of 2026-09-12; the numbers stay local). A call
+is now counted only when the command word itself is the binary — `ripwire`, `./build/ripwire`, any
+path whose basename is `ripwire` in command position (at the start, after `;` `&` `|` `(` or `$(`,
+past leading `VAR=value` assignments) — never a directory argument or a bare word after `echo`.
+`test/routehookcheck.sh` O8 and `test/codexpromptroutecheck.sh` carry the regression shape (red on
+the previous hooks: rows=3 where 1 was wanted; the Codex twin's position-2 adoption read as missed).
+
+### Changed — `--for`'s compact legend is present-only, and pinned like every other verb's
+
+Under `--legend=compact` every other XML verb answers with a legend that defines only the terms its
+document carries, measured and pinned per schema in `test/compactlegendcheck.sh`; `--for` did not. Its
+native compact dialect was the default dialect's sentences with a schema id in front — 1,177 to 1,216
+bytes on that gate's own fixture — and it was exempt from the per-verb pin by name, so a call an agent
+makes more than any other paid the one legend the compact dialect exists to shrink. It now answers with
+one present-only comment: a reading for each row and root attribute the bundle actually prints
+(`cx`/`ccx`/`in`/`churn`/`amp`/`clone`/`tested`, `sc=` and the `route=` code, `bundle`/`bodies`/`reason`,
+the `total=`/`shown=`/`capped=` window, the hops or bodies clause of the serving shape, the tail and the
+confidence gauge), and the data notes keep their numbers without their sentences
+(`[floor: kept 7 of 40]`, `[doc mentions: 1 doc, 1 symbol; doc_mentions=]`); the three
+ceiling-droppable clauses still fall together under a tight `--token-budget` and the dropped note still
+names them. Measured with the gate's own splitter (comment bytes not present verbatim in the default
+dialect's document) on its fixture probe `--for=geometry`: 915 B on the pre-change binary → **654 B**
+here, pinned at **670** as the new `ripwire.for/v1` row (the table's own rule: the largest measured probe,
+up to the next 10 B, plus 10), the exemption gone. A1′ first pinned it at 500 from 494 with only its own
+clauses present; the merge with #213 put the `coverage=` reading on the same probe, and this round made
+the `sc=` and `route=` readings present-only, so the number was re-measured at each step rather than the
+clauses trimmed to hold a pin. Per call, default legend → `--legend=compact`, three tasks
+measured with `wc -c` on this repository at the lane's merge of `origin/main` 0e3573af:
+`pagerank power iteration` 9,875 → 9,338 B (−537, and 25 → 29 signature rows, because the bytes the legend
+gives back are spent on rows), `rank graph teleport` 10,121 → 9,812 B (−309, 22 → 25 rows), and the
+name-exact `escapeXml` 6,290 → 4,918 B (−1,372). The **delta** is the claim: the absolute bytes carry
+`churn=`/`amp=` readings derived from git history, so they move by a few bytes per commit landed. The MCP
+`for` twin declares no `legend` field and serves the default dialect only, so its bytes are unchanged. `legendcoveragecheck` holds:
+every attribute the compact document carries on its first screen has a `name=` definition in that one
+comment, with `next=`, `pure=` and `schema=` on the recorded floor exactly as before.
+
+### Changed — symbol rows carry a short id (`sc=`) instead of repeating their path
+
+Every scoped symbol row on the map and on the `--for`/`--pack-task`/`--from-trace`/`--pack-signatures`
+signature rows printed its canonical id in full — `id="src/mcpverbs.h::rw::applyCompactToBatchSubs"` on a
+row that already sits under `<f p="src/mcpverbs.h">` or carries `p="src/mcpverbs.h"` itself. On this
+repository's flagless map that was 137 of 137 scoped rows repeating the path the wrapper had just
+printed. The row now carries only the segment nothing else on the page holds, `sc=` (the enclosing scope),
+and the legend states the composition: the full id is `p::sc::n`, with `p=` taken from the row or its
+enclosing `<f>`. Nothing an agent could address before is unaddressable now — `--expand`, `--callers`,
+`--impact`, `--uses` and the MCP twins accept the composed `path::scope::name` exactly as they accepted
+the printed `id=`, and `test/scroundtripcheck.sh` proves it: the multiset of ids composed from the new
+rows is byte-identical to the multiset the previous binary printed on two fixtures, every composed id
+resolves through `--expand` to a body of that path and name, a mutated scope resolves to nothing, and the
+old spelling still resolves on input. Two smaller cuts ride the same rows: `route=` is a code
+(`name-exact(X)`, `subtoken+body`, `subtoken+body:broad`, `subtoken+body:declined(word;carriers,defs)`)
+with its reading in the legend instead of 107 bytes of prose per answer (23 bytes now; the `anchors:`
+evidence clause is unchanged), and a `--for` compact bundle merges the same-named callees of one `calls`
+block into one `<c n= l="70,69"/>` row (`shown=` still counts callees). Measured with `wc -c` against the
+build of `origin/main` (f6a27167) run on this same merged tree, so no corpus drift rides the numbers: the
+flagless map of this repository 26,449 → 22,407 B (−15.3%, the same rows), `test/cppqualfix` 2,935 →
+2,781 B, `test/nestedqualfix` 2,045 → 1,937 B; a fixture with four scoped rows (`test/accessshapefix`)
+grows 9 B, because the `sc=` reading is longer than the `id=canonical(…)` clause it replaces and four rows
+do not pay it back. On `--for` the bundle is byte-shaped, so the row savings became ROWS: three tasks on
+this tree, same tree and same day, main's binary → this one — `pagerank power iteration` 9,470 B at
+`shown="20"` → 9,880 B at `shown="25"`, `rank graph teleport` 10,134 B at 19 rows → 10,022 B at 22 rows,
+and the name-exact `escapeXml` 5,977 → 5,846 B. Five more ranked rows for 410 B on the first; three more
+for 112 fewer bytes on the second.
+The new legend is two clauses, both ceiling-droppable with the confidence clause and both exempt from the
+signature-trim charge like every other disclosure: the `sc=` composition rule (`; sc=scope (full id
+p::sc::n)`, 29 B) on every answer, and the `route=` code vocabulary (54 B) only on the answers whose root
+carries `route=` — the same present-only condition the compact dialect already used, and one shared
+spelling for both dialects so a code cannot acquire two readings. The route clause rides the document
+rather than living only in `--help`'s `--no-route` entry (where the fuller reading of each code still is)
+because a code with no reading anywhere in the answer is an undefined first-screen attribute:
+`test/legendcoverage_baseline.txt` is a ratchet that may only be edited downward, and dropping the clause
+opened two new lines in it. A 259 B first spelling grew a 2.9 KB fixture bundle by 10% and tripped
+`test/forrankordercheck.sh`'s 4% ratchet; the 83 B shipped here crosses it nowhere on the nine frozen
+fixture bundles (+0.5…+3.2%). The `--json`
+twins mirror the attribute (`"sc"`), so `mcpattrparity` holds without a rename. Pins moved with the
+bytes, every one of them RE-MEASURED on the merged tree rather than carried over from either lane's own:
+seven compact-legend schemas in `test/compactlegendcheck.sh` (map 810 → 920, map-diff 800 → 910,
+pack-signatures 680 → 780, metrics 720 → 820, query 630 → 730, pack-task 820 → 980, pack-top-n
+660 → 770) for the one new whole-document `sc=` reading; `ripwire.for/v1` 500 → 690 (measured 678 — A1′
+pinned that dialect at 500 from 494 with only its own clauses present, and the merge brought the
+`coverage=` reading onto the same probe); the ten-verb legend loop 4,900 → 4,700 B (measured 4,645 — DOWN,
+because A1′'s present-only `--for` legend outweighs what both lanes added); the MCP manifest ceiling
+42,200 → 42,900 (measured 42,820); `test/fixture`'s map `est_tokens` 884 → 894;
+`test/forrankordercheck.sh`'s q5 9,470 → 9,880, attributed four ways (main tree/main binary 9,464, this
+tree/main binary 9,470, so corpus drift is 6 B — the other 410 B is this change, and it is five more
+ranked rows); five goldens regenerated for the row shape and the clauses; the printf-parity manifest
+re-pinned for `help_all` alone at each of the lane's two merges with `main` (`UPDATE_GOLDEN_EXPECT`
+matched both times, 41 labels unchanged); across the whole lane seven of its 42 labels moved — six for the
+row-6 row shape and `help_all` for the merged `--help` text. The second merge (`origin/main` 0e3573af)
+also brought `help` and `expand`: `help` moved on main alone (#217 re-worded `--replace-symbol-body`'s
+summary line) and `expand` on this lane alone (the whole-file serving's `sc=`), so each was resolved to the
+side that moved it, while `help_all` — moved by BOTH — was re-measured against the merged build rather than
+picked from a parent that never produced that text.
+
+### Fixed — `--for`'s rung zero fires on the exact ceiling, not on the overshoot allowance
+
+Under an explicit `--token-budget`, `--for` prices its header against the delivered-byte allowance
+(budget × 2.36 × 1.15) and, when the document does not fit, first drops the three explanatory legend
+clauses whose loss costs no fact (confidence, tail, the `sc=` rule) before touching anything a reader
+would miss. The 1.15 tolerance exists for the residual a lens cannot trim — a first signature is not
+divisible — but it also gated that first drop, so a document 1–15% over its budget that still carried
+all three clauses shipped `over_ceiling="1"` with them riding: on a fixture whose path left a few dozen
+bytes of slack, `test/fornotesbudgetcheck.sh`'s 1640 rung measured est_tokens=1755 and
+`test/forrootlegendcheck.sh`'s 800 rung 831 (both CI, PR #215). The free drop is now tried against the
+number the root promises (budget × 2.36) and only what remains is judged by the tolerance. On the merged
+tree the same 1640 rung reads est_tokens=1515 with eight rows intact, and `forrootlegendcheck`'s arm 2
+(850 since lane for-widen re-anchored it) reads 832 with the root-relative clause surviving.
+`test/estchargecheck.sh`'s late-label sweep control is re-anchored to where that residual band now sits
+on its corpus (760..1500; hits at 780–810).
+### Changed — tests-to-run rows without a runner are grouped by hop distance
+
+Every tests-to-run row that had no derivable runner said so on the row — `run_unknown="1"` in XML,
+`"run_unknown":true` in JSON, `(run: not derivable)` in `--situ`'s text — and on a corpus where almost
+no harness has a runner that was the same 16 or 23 bytes repeated once per row: on the RocksDB tree,
+`--affected=db/write_batch.cc` listed 127 tests, 126 of them runner-less, and paid 2,016 B of XML and
+2,898 B of text for one fact. Rows already come in evidence order (changed, partner, hops ascending,
+path), so runner-less rows whose per-row attributes are byte-equal are now served as one row,
+`<g hops="2" n="17" p="a,b,c" run_unknown="1"/>` (JSON: `"p"` — or `"test"` — becomes an array beside
+`"n"`; text: `[hops=2] (17): a, b, c   (run: not derivable)`), emitted where its first member stood. Rows
+with a runner stay single, a group of one stays a `<t>` row, a path that contains a comma is never grouped
+at all (`p=` is a comma-separated list and every XML parser undoes an entity before a consumer splits on the
+delimiter, so an escaped comma would reappear as a separator and `n=` would disagree with what the reader
+counts — the text twin had no escape to undo), and every path is kept verbatim — the multiset of paths
+before and after is identical and so is their ORDER, which is what `test/testrowruncheck.sh` arm 12 proves
+on a fixture with three hop groups and a runner row
+in the middle of one of them, in all three dialects (red on the previous binary). All twelve emitters —
+`--affected`, `--exercises`, `--test-gate` XML and JSON, `--situ`, `--pr-context`, `--handoff`,
+`--flags --flip`, `--pack-task` XML and JSON, the MCP `situational_awareness` twin and the edit
+receipt — render through one seam in `testmap.h`, and the M21(b) rule keeps its meaning: a `<t>` or
+`<g>` row carries `run=` or `run_unknown="1"`, never neither. Measured on RocksDB (`wc -c`, same cache,
+same commit): `--affected=db/write_batch.cc` 10,668 → 6,992 B, `--test-gate=db/write_batch.cc` 13,242 →
+9,747 B (its JSON 11,055 → 7,163 B), `--situ=db/write_batch.cc` 11,769 → 7,357 B, and in the compact
+dialect 9,312 → 5,313 B and 11,223 → 7,596 B; 8 `<g>` rows replace 124 single rows (a group covers a
+contiguous run only, so the one runner row inside the hops=2 tier splits it in two — order is preserved by
+construction, `test/testrowruncheck.sh` arm 12 reads the paths back in emitted order) and the residual
+spent on the disclosure is 160 B (XML, 10 `run_unknown="1"`) and 230 B (text) per list.
+`--pack-task`'s tests section is byte-budgeted, so it CUTS over its own grouped, escaped rendering: it takes
+the largest prefix of the row list whose rendered `<tests>` body fits the section budget, found by bisection
+(the rendered size is monotone in the prefix length, so the bisection is exact), and counts `shown=`/`total=`
+in test files. Measured on RocksDB with `--pack-task="change WriteBatch::Put"` at the default 6,000-token
+budget, `wc -c`, same cache, same commit: `<tests shown="55" total="109">` where the pre-E1 bundle named 28,
+the whole bundle 11,993 → 12,490 B. On this tree every harness has a runner, so nothing groups and the only
+change is the legend that now defines `<g>`: the `--test-gate` legend pin moves 2,720 → 3,000 B (measured
+2,957) and the `ripwire.pack-task/v1` compact pin 820 → 880 B (measured 865), both because the compact
+dialect and every rows-bearing full legend now define `run_unknown=` and `<g n= p=>` — a definition
+`--affected` and the compact dialect never carried. That compact `<g>` term now says what the full clause
+says, in the full clause's own words: its first form promised "every path verbatim (`&#44;` a comma)", an
+escape `testmap.h` does not emit — a path holding `,` is not grouped at all — and it never carried the rule
+that a `shown=`/`total=` over these rows counts test FILES, so a reader holding only the compact legend was
+told to undo an entity that is not there and disagreed with the full legend about what the pair counts. The
+term goes 99 → 194 B and is charged only on a document that carries a `<g>` row (measured on a fixture of six
+runner-less tests, `--affected --legend=compact` 501 → 596 B); no pin moves, on this tree or on any gate
+fixture, because every harness here has a runner and nothing groups. The two wordings cannot be one constant
+— the compact dialect exists to re-spell, not to quote — so `test/compactlegendcheck.sh` arm (R) pins them
+against each other, reading the phrases it requires out of `kRunHintLegendClause` itself rather than
+restating them, and fails the next release where either wording drops one or promises `&#44;` again (red on
+the parent commit's source). The MCP manifest ceiling moves 42,384 → 42,800 B
+(measured 42,777) for one 207-byte clause, plus the one-space separator that joins it to the sentence before
+it, spliced into each of the two tool descriptions that serve these rows as JSON (2 × 208 B):
+`situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
+reads `p` as a string has nowhere else to learn that it can be an array.
+The clause is rows-gated everywhere it is spliced — `--affected`, `--exercises`, `--pack-task`, the
+partitioned bundle, and `--pr-context`, whose legend precedes its files in the STREAM but is now decided
+after them: the chosen body is rendered first, the pricer charges the clause per candidate trim level from
+that level's own body, and the form the chosen body was priced with is the form written, so the priced
+legend and the delivered legend cannot disagree. A corpus-level predicate over-approximated it — a test
+file outside the selected range, or a trim level whose `testCap` is 0, bought the clause for a document
+with no row — and both now pay nothing (measured on `test/defaultceilingcheck.sh`'s 120-file, no-test
+fixture: unconditional, the default bundle went 7,989 → 8,025 tokens over its 8,000 budget; gated, 7,989;
+`test/prcontextcheck.sh` pins all four sides, red first). The clause is gated on a COUNT the emitter
+reports with its rows, never on a search of the rendered bytes: `--pr-context` charges the trim level's own
+row count and the partitioned bundle sums what each slice kept. Asking the bytes was wrong twice — a
+`--pr-context` body and a `--pack-task` slice can both carry the literal text of the element inside CDATA,
+and `--pack-task="write_report" --partition=2` over a two-file corpus with no test at all bought the outer
+clause because one body prints `<tests n="%d">` (`test/testrowruncheck.sh` arm 15, red first). `--handoff`
+and `--flags --flip` spliced the clause unconditionally and now ask the same count; `--handoff` is
+byte-budgeted with heuristic rows dropped tail-first, so on a packet with no test row the 180 B it was
+paying could evict a real row (arm 14, red first).
+
+Two byte-accounting rules changed with it. `--pack-task`'s tests section used to group FIRST and cut the
+group rows with the generic list cutter under a per-row cap whose estimate was computed on UNESCAPED path
+bytes, so a corpus whose test paths hold `&` or `<` rendered wider than the cap admitted; the cutter breaks
+at the first over-budget entry, so the whole tail of the section went with it — `run=` singles included.
+Measured on a matched pair of ten-test fixtures differing in one byte per name (`&` against `_`) at
+`--token-budget=1440`: the control named 5 files and the `&` fixture named none. Cutting over the grouped,
+escaped rendering fixes it and is strictly better than cutting the single rows and grouping afterwards,
+which would have been safe but spends fewer of its bytes (2 files where grouping-first served 5); across
+budgets 1440–1860 the new cut names 6–11 files against the old 5–11, and the `&` fixture never empties
+(`test/testrowruncheck.sh` arm 13). And `--pr-context`, which must render a level to price it, rendered
+through a helper that returned an empty string on an `open_memstream` failure with no alert at all — a
+document could have shipped its legend, root and closing tag around an empty body claiming
+`truncated="none"`. Every such render now goes through one seam in `infra/emit.h` (`rw::renderToString`,
+which `packtask.h` already had in its own spelling) that reports the failure, and both `--pr-context` exits
+fall back to streaming the level straight out: complete, correct bytes, a modelled estimate, and a
+`DEGRADED_PATH_ALERT` saying which — serialize.h's own degrade contract.
+
+Six gates read the PATHS out of these rows, and each had its own reader: since a row can now name several
+files, `grep -oE '"tests_to_run":\[[^]]*\]'` stopped at the first `]` (the end of the first group's path
+array, so three arms asserted over two and a half rows and passed vacuously), `sed`-based XML readers saw
+only the single rows, and the text reader took `$1` of a line that on a group line is `[hops=1]`. They all
+want the same thing — the files named, in emitted order — so `test/affectedcheck.sh`,
+`test/impactpartitioncheck.sh`, `test/receiptpostcheck.sh`, `test/rootrelemitcheck.sh`,
+`test/selectorchaincheck.sh` and `test/testrowruncheck.sh` now all ask `test/testrowpaths.py`, one reader for
+all three dialects and both row shapes. Two more gates read these rows and keep their own readers, because
+neither asks for the paths: `test/listingpagingcheck.sh` sums `n=` over the group rows to prove the family
+never pages, and `test/w3fixlegendcheck.sh` counts path occurrences on a `--situ` line. That shared reader
+had two silences of its own, and both now fail loudly with a control in `test/testrowruncheck.sh` arm 16. Its
+JSON slicer returned the same nothing for a document with no `tests_to_run` field and for one whose array
+never closes, and the path reader turned that into an empty list at exit 0 — so a TRUNCATED document
+asserted over zero rows and passed, which is the defect the file was written to end. The two are different
+claims: no field is an answer (0 paths, exit 0), an unclosed list is exit 2 with a named reason. And the text
+dialect's single-row reader took `(\S+)`, which stops at the first space, so a test path holding one was
+reported truncated — a path that does not exist, produced silently. It now cuts the run suffix and the
+renderer's own attribute tail (`[changed] [partner] [hops=N]`, in that order and no other) and keeps
+everything between verbatim; what the text dialect still cannot resolve is a path holding the literal
+three-space `(run: ` opener, because that dialect carries no escaping at all — XML and JSON are exact.
+
+Three more things the row work left half-said. `rw::renderToString` asked `open_memstream` and then ignored
+what `fflush` and `fclose` answered, returning `ok=true` regardless: a memstream grows by `realloc`, so an
+allocation failure the per-row writes swallowed surfaces at the flush, and it is the close that publishes the
+buffer and its size at all. Reading them anyway is how a SHORT document passes for a whole one — the same
+defect as the empty body one size smaller. Both results are now checked, the alert fires, and `--pr-context`
+takes the streaming fallback it already documents. The MCP row-shape clause named the key `p`, and only one
+of its three producers spells it that way: `situational_awareness` emits `test`, `explore` and the edit
+receipt emit `p`. A clause naming the wrong key is worse than no clause, because a caller reads it as a
+contract, so it names both per producer while the rules they share are still stated once; the manifest
+ceiling moves 42,800 → 43,000 B for a measured 42,973 (the clause 207 → 305 B in each of the same two
+descriptions, 2 × 98 B). And `renderToString` called the emitter outside any handler: a throw from it —
+`std::bad_alloc` out of the `std::format` fallback is the reachable one, since the point of the seam is to
+buffer a document whose size is not known in advance — skipped the `fclose`, the `free`, the alert and the
+documented empty-result fallback in one jump, leaking the memstream and its buffer and handing the caller an
+exception where its contract says `ok == false`. Measured on this tree with the fault injected:
+`--pr-context` aborted at `rc=134` with **zero bytes** on stdout and `libc++abi: terminating due to uncaught
+exception of type std::bad_alloc` — the whole document lost, not just its estimate. The seam now catches at
+its own boundary, releases what it owns once, discloses, and returns the degraded value its callers already
+read, so the same run exits 0 with a complete 14,627-byte well-formed document carrying the same 20 `<f>`
+rows as the undegraded control. The alert names the throw rather than borrowing the buffer's message, which
+on that path would be a wrong cause attached to a right consequence. Because a throw path is otherwise
+unreachable from a gate, it is driven by an in-source fault switch in `serialize.h`'s
+`isChargeBufferFaultInjected` shape — non-NDEBUG only, read once per process, exact `"1"` the only ON value —
+and `test/prcontextcheck.sh` arm (F) asserts the whole contract with its own observability probe, red on the
+parent commit (`rc=134`, 0 B, no alert). That switch carries the `INFRA_` prefix rather than this project's:
+everything under `src/infra/` is built to travel to another repository, and `test/infraportcheck.sh` (C)
+refuses a layer file that names the host — it caught the switch's first spelling, which is the gate doing
+exactly what it exists for.
+
+### Fixed — an unmeasured `est_tokens` said nothing, a no-throw contract threw, and two test-row readers still went quiet
+
+Six defects from one review, each of them a surface that was silently wrong rather than loudly broken.
+**`--pr-context` shipped a wrong `est_tokens` with no disclosure.** When a trim level's measurement render
+fails, `prRenderLevel` returns an EMPTY body; the ladder priced that empty body, the price fit, and the root
+printed it — while `writePrContext` correctly streamed the complete untrimmed floor. The only signal was
+`DEGRADED_PATH_ALERT`, which `src/infra/Diagnostics.h` compiles to `do {} while (0)` under `NDEBUG`, so the
+binary a user installs printed a modelled number with nothing at all saying so (non-negotiable #3). The bytes
+were never the bug and are unchanged — a failed measurement may not decide what the answer contains — so the
+fact goes where this class of fact already lives: `truncated=` now carries `;est-unmeasured`, re-priced with
+the label in place, and the legend defines it in the same voice as `budget-floor-exceeded`. That label is 15
+bytes and can ride beside `budget-floor-exceeded`, which takes `prBudgetTail`'s worst case from 248 B to
+263 B: `tail[256]` (SEVEN bytes of margin, as `test/fixedbufsweep.sh` had warned in terms) becomes
+`tail[320]`, 56 B of margin, and the sweep's row moves with the measured recomputation. `rw::formatTo` was
+not what had been saving it — it truncates silently and its return is not read there, so an overrun would
+have dropped the closing quote of `truncated="` and shipped a malformed root with no diagnostic.
+**`renderToString`'s no-throw contract had a throwing last statement**: `out.text.assign( buf, sz )` is the
+one allocation on the success path and sat outside the handler, so a `std::bad_alloc` from it escaped a
+function documented to return `ok == false`, and jumped the `std::free( buf )` two lines below on the way
+out — leaking the memstream buffer. It is caught in its own handler (the two failures need different
+cleanup: the emitter's throw owns an open stream, this one owns only the buffer) with its own alert literal,
+and control falls through to the single `free()`, so the buffer is released exactly once on every path.
+Proved by `INFRA_FAULT_RENDER_COPY_THROW`, the twin of the emitter switch, in `test/prcontextcheck.sh` arm
+(G) — red on the parent commit, and honest in both flavours: the switch and the alert live only on the
+non-`NDEBUG` build, so the plain-flavour leg proves the degrade and the `NDEBUG` leg asserts only that the
+verb is intact and that no false disclosure appears. The `est-unmeasured` LEGEND definition is asserted on
+every flavour, which is the point of moving the disclosure off the alert. **The shared test-row reader's
+malformed-field detector had a hole of its own species**: `test/testrowpaths.py` found `"tests_to_run"` and
+then scanned arbitrarily far forward for a `[`, so `{"tests_to_run":null,"other":[{"p":"ghost.cpp"}]}`
+sliced the NEXT field's array and returned `ghost.cpp` at exit 0 — a foreign field's paths served as this
+field's answer, where the docstring already promised a `TestRowParseError`. The value is now read
+adjacently (past the key, a `:`, optional whitespace, then `[` or raise); `null`, a number, a string and an
+object all take the raise, in both `paths` and `jsonlist`, with a well-formed array and JSON whitespace as
+controls (`test/testrowruncheck.sh` arm 17). **And two path readers had never been converted.** A census of
+`test/` over the four shapes the reader was written to replace found `test/affectedcheck.sh`'s `tset()` —
+in the file the reader's own docstring names among those it converted, so that claim was false — splitting
+EVERY row's `p=` on `,` including a single row's, which turns a comma-bearing path (never grouped, by
+`testmap.h`'s refusal) into two names that name nothing; and `test/testgatecheck.sh`'s `tset()` matching
+`<t p=` singles only, which returned the EMPTY set on a two-runner-less-test fixture where the shared reader
+returns both paths. Both now route through the shared reader. Every other hit in the sweep either counts
+rows (`listingpagingcheck`, `w3fixlegendcheck`, `testgatepagecheck`, all group-aware in place) or pins one
+exact row spelling with a regex that fails loudly, and `deeptailcheck`'s `<t p=` rows are `--for`'s tail
+listing, a different element sharing the tag. Two documentation drifts close beside them: the
+`skills/ripwire-mcp/SKILL.md` verb table claimed `p` for `situational_awareness`, which emits `test` (the
+binary states the split at `src/mcp.h`'s `kTestRowJsonShapeClause` and is the authority), and
+`bench/arb/run_arb.py` decoded a `&#44;` the seam stopped emitting on 2026-09-13 while decoding none of the
+entities it does emit — so a path holding `&` was scored against a file name that does not exist. Both row
+shapes there now share one decode.
+
+### Added — the task router knows the recency question, and every new shape is named where an agent reads
+
+Two halves of one gap, both measured as absences rather than argued. **The router could not reach the
+history question at all**: `what changed recently in DIR`, `who touched this lately`, `the newest commits
+here` — every phrasing abstained with `score="0"`, so `--rank-by=churn-decay` and the `--in=DIR` scope
+beside it were unreachable from a task said in words. `ripwire <dir> --help-task="<task>"` now answers
+those with the `recency-window` intent under `ripwire-fresh-eyes`. The route is conjunctive in three
+parts, because two are not enough: a TIME word, a MOTION word, and a word naming the corpus (or a
+directory of it the task named) — a time word alone is usually part of a compound noun, and a time word
+plus a motion word is also a sentence about a supplier's terms last quarter. An explanatory question is
+never this route however many of the three it holds, and the working tree stays `--situ`'s question. A
+directory is composed into `--in=DIR` only when the corpus really holds it AND the running build ships the
+flag, read off the flag table itself: a router that recommends a flag its own parser has no row for hands
+back a command that exits non-zero on the first paste. Cues are matched WORD-BOUNDED, which is not a
+detail: with the substring spelling `here` occurred inside where/there, `source` inside outsource, `file`
+inside profile and `code` inside codec, and a sentence about a supplier revising their terms recommended
+the churn window at `confidence="high"`. That holds for the multi-word cues too, which delimit their own
+interior and nothing at their two ends — `show documentation` contains `how do` and `show issues` contains
+`how is`, so both of those questions about this repository's history tripped the explanatory guard and lost
+the route that answers them. The route also sits BELOW the weighted tier, which is how it
+reads a dirty worktree: on a dirty tree `is my diff safe to merge, i changed these files recently` is
+still the `review-diff` question, and that route wins before this one is consulted. Held out
+(`bench/taskroute_eval.py`, the committed 225-row corpus plus 24 rows for this round, split by its
+content-hash rule): accuracy 0.939 → **0.946** test, 0.946 → **0.950** dev, precision 1.000 and harmful
+0.000 unchanged. The 225 pre-existing rows score the same three numbers on the new binary — and, measured,
+**0 of them reach the new route at all**, so that identity is reported as the near-vacuous check it is
+rather than as evidence.
+
+**And the first call now names the widening step.** `--for`'s file-grain page was named only by a thin
+ANSWER's own `next=` — one call too late for an agent choosing what to run first — so every `--for`-shaped
+recommendation carries the page as its own `next=`, keyed off the INTENT (a task that merely quotes the
+flag inside another verb's argument gets none) and spelled by `forpage.h`'s own `forWidenNext`, so it
+obeys the same quoting and the same 120-byte ceiling every other `next=` obeys. The `--help-task` document
+also gains the LEGEND it never had in the default dialect: every attribute on its only screen was
+undefined, and it now joins `legendcoveragecheck`'s enumeration and `nextverbcheck`'s population.
+
+The shapes this release adds are also named where an agent actually reads them: the recency window with
+`--in=DIR` and `merge_bombs_skipped=` (ripwire-fresh-eyes), the thin-answer `coverage=` gauge and the
+`--for … --limit=40` page (ripwire-orient and its `map-before-you-read` companion), the `p::sc::n`
+composition of a row's identity, and the grouped `<g hops= n= p= run_unknown="1"/>` tests-to-run row
+(ripwire-change-check). **A new gate keeps it that way**: `test/agentsurfacecheck.sh` is a ratchet over all
+163 long flags `--help` advertises — each is named in a skill body or the `ripwire wrap` primer or recorded
+on a committed floor with the reason it is still a gap (5 lines today) — plus a per-shape arm that requires
+the term and its verb within five lines of one another on one surface, probing the binary first so a
+surface never promises what the build cannot parse. `docs/COMMANDS.md` is deliberately not an accepted
+surface: it names every flag by construction, and a gate a generated document satisfies for free cannot
+fail.
+
+### Fixed — the reference guide said things the binary does not
+
+@heliocipher's reference guide was verified claim by claim against a 0.6.0 build, and its flags held up: of the 82
+`--` tokens it named, the 72 that are ripwire flags all exist and are spelled as it spells them (the other ten
+belong to `cmake`, `xmllint`, `graphify`, `skills/install.sh`, or are anchor fragments). What it got wrong it
+mostly inherited from this repository.
+**"Dynamic dispatch contributes no edge"** was the opposite of the truth — a virtual call emits one edge per
+candidate in the receiver's inheritance cone, each `prov="split"` and counted in `amb=`; a four-class fixture
+returns three edges, not zero, with CHA-lite correctly dropping the same-name method of the unrelated class. The
+honesty section was understating the tool, which costs a reader's trust the way overstating it does.
+**`MSVC 19.36+`** was offered as a supported compiler beside an operating-system row naming only macOS and Linux;
+it is not a target, and the row now points Windows users at WSL2. **"18 task-shaped skill files"** was one of three
+defensible counts of one directory — 17 routable (`skills/*/SKILL.md`), 18 `SKILL.md` files in all
+(`skills/hermes/` holds a Hermes-native one), 16 activated for every agent (`ripwire-opt-remarks` carries
+`audience: contributor`) — and the README stated two of them, neither labelled. **"208 compile-time caps"** is 210
+by `docs/limits_build.py`'s own derivation from `src/`. **"Directory symlinks are not followed"** understated the
+limit: no symlink is followed, and a symlinked source file is not indexed at all, so a tree that reaches its
+sources through links reads as if they were not there. **Exit code 2 was missing** from the exit-code table, which
+is the one a CI script most needs — a policy gate fired (`--arch`, `--scan-skill`, `--quality-delta`), not an
+unknown failure. And one sentence sent a reader to `--scan-skills` to check a single file, which is the directory
+verb; the file verb is `--scan-skill=FILE`.
+
+Unstated, and now stated: `git` is a runtime dependency for the history-backed verbs, which refuse with exit 1 and
+a named reason rather than answering thin — `--map-diff` and `--rank-by=churn` answer and disclose the uniform
+fallback, `--dmm` and `--pr-context` return an explicit unavailable row. A git URL as the root is the one thing
+that touches the network. The write verbs return a receipt — region, `blob_sha`, contract check, tests to run —
+so an agent never re-reads the file, and their payload is a whole definition, signature included, not a braced
+body. Test coverage is read from call edges out of indexed test symbols, so a shell suite that runs a built binary
+as a subprocess is invisible to it (`harness=script`, `reaches=0`) — which is this repository's own shape. `--json`
+is an allow-list of nine verbs. `--quality-panel` has a `strict` preset that drops the two families which reshuffle
+on unchanged code. Several verbs stay single-root in a multi-root run. Section 3.2 now splits by why a reader is
+there — `scripts/pgobuild.sh` for a binary to use, the plain tree for work on the tool — and scopes the
+`NDEBUG`/`DEGRADED_PATH_ALERT` warning to the development tree, where it belongs.
+
+`--replace-symbol-body`'s one-line `--help` summary said it replaces a definition's *body*. It replaces the whole
+definition, signature included, as its own long help already said and as both insert verbs say. An agent that
+believed the summary sent a braced body and deleted the signature — disclosed in the receipt as
+`post_check_unavailable`, not refused.
+
+`test/readmedriftcheck.sh` gains three arms, so these counts cannot drift again: **(J)** the skills count, pinned to
+the routable set and to the install fold's "sixteen of the seventeen"; **(K)** the `--json` allow-list, harvested
+from `--help=--json` and required to match the guide in both directions, so a verb that gains `--json` support fails
+the gate until the guide is updated; **(L)** the cap inventory, pinned to `docs/limits_build.py`'s derivation. Each
+carries its own mutation control. Arm **(B)** took `head -1`, and so pinned one of the *two* sites stating the flag
+count — the reference guide's copy had been free to drift since it was written; it now checks every site and names
+the line that disagrees. `CONTRIBUTING.md` gains the rule those arms encode — an advertised count is an enumeration,
+and if a set can be counted more than one way the prose must say which set — and the stale-object build hazard,
+which until now lived only in `CLAUDE.md` ([#217](https://github.com/redhat-et/ripwire/pull/217)).
+
+### Added — --for pages its answer one file per row, and says when to widen
+
+On the pre-registered follow-up ladder (a 2,066-file C++ corpus pinned at one commit, the frozen 30
+questions, six deterministic steps per tool, no model in the loop), every ripwire follow-up completed 0
+answers through step 4: `--for`'s `next=` pointed at `--expand` (a body, not a wider list), `--top-k` was
+inert on `--for`, and `--format=candidates` is symbol-grain (40 symbols is about 18 files in 11 KB). The
+one follow-up that completed answers in that ladder was a file-grain page — one row per file, about 6 KB.
+Local telemetry had `--for` → `--expand` followed 0 of 259 times.
+
+`--for=TASK --limit=N` (`--offset=M` pages it) is now that page: a `<files>` document of one
+`<f p= score= n= sym=/>` row per positive-score file, `p=` spelled root-relative exactly as every other
+verb spells it, ranked file-first by `score=` — the IDF-weighted share of the query's subtokens the file's
+top 8 symbols cover between them (a term counts once however often it recurs, so one huge file cannot
+monopolise; ties by the best symbol's lens score, then path). The root carries the house paging vocabulary
+(`shown= total= capped= has_more= next_offset= offset= limit=`) and a `next=` naming the next page.
+When the answer is THIN — the top-ranked symbol's name, doc or body carries under 50% of the query's
+IDF-weighted subtokens (an unmatched subtoken weighs as the rarest, so a `(#12147)` token lowers the share
+honestly), or the ranked head spreads over fewer than 3 files — `--for`'s root carries `coverage=` (that
+share, whole percent) with its legend clause, and the r=1 row's `next=` names `--for=TASK --limit=40`
+instead of the body. A confident answer carries none of the three and is byte-identical to before; the
+`--json` and MCP twins follow the same present-only rule. The MCP `for` twin takes the same
+`limit`/`offset` and serves the same page through the same renderer. Beside the page every bundle-shaping flag is refused, never ignored (`--limit=0` and non-numeric
+values were already refused). `--top-k` stays inert on `--for` and `--help` now says which flag widens.
+
+Measured, on the ladder re-registered with the page as step 2 on the `--for` shapes: ripwire's
+complete@step row is unchanged at 14/14/14/14/17/17 — the page completed no question, because the seven
+misses it ran on hold 3–21 gold files each — while adding gold files on four of the seven (+2, +1, +3 and
++6 files) at 5,539–6,212 B per page (mean 5,841 B), and the thin rule named the page on 4 of those 7
+misses. The frozen-30 single-call instrument is unchanged at 14/30 complete and 42/129 gold files named;
+its median bytes-to-answer is 6,348 B (5,988 B before: 10 of the 12 `--for` questions on that instrument
+are thin — commit subjects with a `(#NNNN)` token, "how does A reach B" questions — and carry the clause;
+the 2 confident ones read the base again, and the 18 non-`--for` questions moved by the 2–4 B the git
+stamp moved on every verb). Gate: `test/forwidencheck.sh` — a generated 33-file fixture whose gold file sits at page rank 13
+and is absent from the default head and tail; one row per file, determinism, paging with no overlap,
+`coverage=` defined in both dialects, thin versus confident `next=`, the refusals, MCP parity — red on the
+pre-change binary. The byte pins that ride a thin `--for` header
+(forrankordercheck's fixture rows, forrootlegendcheck, compactlegendcheck's loop, the two `--no-route`
+goldens) were re-anchored with the measured number; the confident ones read the base again.
+
+### Fixed — the review round: a ceiling priced in the wrong unit, and a shape that outlived its output
+
+Twelve findings from the 2026-09-13 review of this lane, each reproduced before it was touched.
+
+The one that changed behaviour for every budgeted call: `--for` and `--pack-task` tested their ceiling
+rungs at `kMinBytesPerToken` (2.36) while `est_tokens=` and `over_ceiling=` price the delivered document
+at `kBytesPerTokenDefault` (2.50). A lens therefore spent rungs against a ceiling it was not measured
+against, and dropped legend clauses from documents its own root reports as conformant:
+`test/cppqualfix --for="widget ping make box" --token-budget=1200` printed `est_tokens="778"` with no
+`over_ceiling=` and had dropped all three droppable clauses "(ceiling)". `rw::ceilingBytes( budgetTokens )`
+is the one expression for what a root promises, and the ladder now takes two ceilings: the as-built and
+task-echo rungs (the echo is a byte-for-byte duplicate of `task=`, so spending it costs a reader nothing)
+aim at the exact ceiling, while dropping `route=` and labelling the bundle keep the 1.15 first-entry
+tolerance, which exists for a residual a lens cannot trim. The same query now reads `est_tokens="1146"`
+at `--token-budget=1200` with every clause riding. No tolerance was widened and no ceiling was raised.
+
+**And then the rung stopped being a byte test at all.** Getting the RATE right left the deeper half: a byte
+comparison cannot express this root's promise, because `est_tokens` is not bytes ÷ 2.50. It prices markup at
+`kBytesPerTokenDefault` and the `--detail` / auto bodies at `kBytesPerTokenBody` (3.80) — one rate per kind —
+so comparing the raw document total against `budget × 2.50` charged every body byte 1.52× what the root charges
+it. The same test also assembled its candidate from RESERVES and from the auto section whether or not that
+section was rendered, which is not the document stdout receives. Both errors point one way: a document its own
+root reports as conformant was judged not to fit, and three definitions a budgeted reader has no other source
+for were spent to buy headroom that was already there. Measured on a git-less five-symbol fixture at
+`--detail=1`: at every budget in **1069..1099** the kept document prices at `est_tokens="1069"` with no
+`over_ceiling=`, and the rung dropped all three clauses anyway and delivered `est_tokens="715"` — 354 tokens of
+headroom spent to buy nothing. At 1090..1099 even the raw byte total fitted (2,736 B of 2,737) and only the
+reserve-priced half vetoed. The exact ceiling is now the token comparison itself, asked once on the finished
+document, so there is no second expression to disagree with the first; the allowance rungs stay byte-based,
+which is their contract. Gate: `test/estchargecheck.sh` #18, which reads the price off a wide run and probes
+five tokens above it rather than pinning a budget — red on the pre-change binary at the probe arm, green at
+its control (the rung must still fire where the drop is real).
+
+**One correction to the record.** The residual this entry previously reported — `ripwire . --for="pagerank
+power iteration" --token-budget=2500` delivering 5,769 B against a 6,250 B ceiling with its clauses dropped —
+was not an instance of the defect above, and still behaves that way. The 481 B of headroom is the document
+AFTER the drop; the document that kept its clauses prices at `est_tokens="2684"` (measured at
+`--token-budget=2700`, the first budget at which the same query keeps everything), which does not fit 2,500.
+The rung was right there, and the leftover headroom is the granularity of an indivisible ~900 B clause trio.
+The real defect needed a body-rate document to show itself, which that bundle (`bodies="0"`) is not.
+
+Rung zero also stopped being byte-negative. It removed 110–164 bytes of clauses and spliced a 161-byte
+note naming them: on a route-less compact answer that is **+51 bytes**, a rung that made the document it
+was shrinking bigger and cost the reader three definitions to do it. The candidate is built and compared,
+and a drop that does not pay is not taken.
+
+The dropped-clause note itself described a different document. Four constants picked by one `coverage=`
+lookup: the thin spellings named neither `sc=` nor `route=` though rung zero clears that reading on a thin
+answer too, the default spelling claimed `route=` had been dropped under `--no-route` where it never rode,
+and the compact spellings named `sc=`, which that dialect defines in a clause rung zero does not touch.
+One assembler builds the note from the four facts that decide what was there to lose.
+
+Both identity readings are **present-only** now: `sc=` rides when a served row carries a scope, `route=`
+when the root carries the attribute — one decision (`rw::forIdRouteLegendParts`) shared by the append, the
+signature-charge exemption, the CLI lens and the MCP twin, which had been mirroring it by hand at four
+sites. A corpus of free functions pays nothing for the vocabulary of scope: `test/anchorfix`'s and
+`test/routefix`'s goldens are byte-identical to their pre-lane selves again.
+
+Three surfaces were answering in shapes the tool no longer produces. The MCP **file page** composed
+`"routed: " + reason` by hand, so one server answered its bundle `route="name-exact(pick)"` and its page
+`route="routed: name-exact(pick)"` — a spelling no legend defines; one producer (`routeNoteOf`) serves all
+four sites. `--expand`'s **whole-file** serving still printed `id="PATH::SCOPE::NAME"` inside a `<src
+p="PATH">` that had just printed the path, on a document carrying no legend at all; it prints `sc=` and the
+root states the composition, and the compact dialect gained the `ripwire.expand-file/v1` schema, because
+`--expand`'s two servings share no element and one purpose line had been describing the wrong one.
+`docs/COMMANDS.md` was rebuilt from a capture re-recorded on this binary in a **ref-clean clone** (96 `id=`
+rows → 26, all of them JSON-RPC and cluster ids; 19 `id=canonical(…)` legends → 1, the `--uses` row's
+`in_id=`, which names a different symbol and is correct). `bench/shotgun/cc_static.py` keyed on `id`, which
+is absent now, so it fell through to `path::name` and collapsed two same-named methods of one file into one
+key — a silent miscount in a benchmark; it composes `p::sc::n`.
+
+A cap could cut an answer it did not need to: a merged callee row was charged `name+16` while printing about
+four bytes, so a block of overloads exhausted its budget early and wrote `capped="1"` over a listing that
+would have fit. Charged at what it prints. And `l=` was appended in rank order, so one fact had two
+spellings between queries (`l="70,69"` / `l="69,70"`); sorted ascending.
+
+Three gates were enforcing or reporting the wrong thing. `attrvocabcheck` arm 8 matched map rows by the
+retired `id=` spelling, checked zero rows and printed a PASS; it is re-keyed and now fails on zero checks
+(six rows cross-checked). `skilltruthcheck` held a hand-typed list of sixty verb names that included `zoom`,
+so it enforced `--zoom --legend=compact --mermaid` — a command the binary refuses; the arm now RUNS each of
+the 43 distinct `--legend=compact` commands the skills spell against an empty directory and reads the
+refusal, which immediately found two more broken lines in `ripwire-quality-bar`. `taskroutecheck` gained the
+same probe over all 34 commands the router generates, and the router applies the posture once
+(`rw::legendCompactAppliesTo`) instead of in 26 hand-edited strings. `legendcoveragecheck`'s shared-name
+floor shrank by the four lines it had been reporting as no-longer-reproducing.
+
+The route hooks and their own meter disagreed about the same command line, and the substitution rate is a
+ratio of those counts. The observe regex missed every wrapped invocation an agent types (`time
+./build/ripwire`, `sudo`, `env X=1`, `xargs`, `exec`, `nohup`, `if ripwire`, `{ ripwire`) and still matched
+`git commit -m "fix; ripwire hook"`. `rw_is_ripwire_call` is the shell's own model — walk the words, ask
+whether any command-position word basenames to `ripwire` — mirrored byte-identical in the three hooks and
+asked by the meter too; `routehookcheck` O9 diffs the copies and reads 18 shapes.
+
+Pins moved, every number re-measured on this build: `test/compactlegendcheck.sh`'s table was re-derived from
+its own stated rule (largest measured probe, up to the next 10 bytes, plus 10), which seven rows had not been
+following — map 892 → pin 910, map-diff 885 → 900, pack-signatures 759 → 770, metrics 798 → 810, query
+707 → 720, around 760 → 770, pack-task 974 → 990, pack-top-n 745 → 760, `ripwire.for/v1` 654 → 670, and the
+new `ripwire.expand-file/v1` 230 → 240; the ten-verb loop reads 4,645 B under its 4,700 pin.
+
+The last two came in without review threads, and both were documents contradicting something the same
+repository already states. **The compact-legend policy was not being audited in the direction that matters.**
+Every verb command an agent-facing skill spells carries `--legend=compact` where the binary accepts
+it (`--for` exempt, its compact legend is its own), and `test/skilltruthcheck.sh` had two arms for it — but
+both start from a command that ALREADY carries the flag, so they can only catch a flag that does not belong.
+A command that should carry it and does not was invisible to the whole gate, which is how
+`ripwire <dir> --rank-by=churn-decay` shipped flagless in `ripwire-fresh-eyes`'s pass 1a. Seven spans across
+six skills are fixed (pass 1a and the `--help-task` route beside it, `--max-tokens=3000`, `--no-ignore`,
+`--pattern=`, `--run-trace=`, and the two `--grep-in=any` recipes in `ripwire-security-scan`), and the gate
+grew the missing direction: a flagless span must carry the flag when the bare command emits XML on an empty
+corpus AND appending `--legend=compact` is not refused — both halves asked of the binary, never of a list.
+The XML precondition is what makes it sound rather than noisy: 21 spans look like violations without it and
+6 were real, because a placeholder operand (`--arch=rules.txt`, `--scip=index.scip`) fails before the legend
+check is ever reached and its silence would otherwise read as consent. *Floor, stated rather than implied:*
+the arm skips every span whose operand cannot resolve on an empty corpus, so it is a floor on the policy and
+not a total — those spans are unproven in both directions, not proven exempt. A positive control (a flagless
+`--flags` must classify as a violation) keeps a green from being the classifier failing silently; red on the
+pre-fix tree named 5 of 33 flagless spans.
+
+**And the README contradicted its own dependency table.** The guide's opening said "It has no runtime
+dependencies" while the table ~120 lines below says "None for the map itself. The history-backed commands
+need `git` on the path, and a repository to read" — and names the twelve commands that do. The prose now
+scopes the claim the way the table does and names `git`; the no-API-key, no-embeddings, no-index-server and
+no-daemon claims are unchanged, because those are true unconditionally. `docs/LINEAGE.md`'s comparison bullet
+carried the same unscoped sentence and is scoped identically.
+
 ### Fixed — a header's declaration no longer widens to an internal-linkage definition (parser version 96)
 
 The decl-to-def widening behind every `file:name` selector (`--callers=api.h:helper`, `--impact`,

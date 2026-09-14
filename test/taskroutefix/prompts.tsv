@@ -224,3 +224,27 @@ test	clean	abstain	instrumented-cli	vet the candidate's onboarding plan with HR 
 test	clean	abstain	instrumented-cli	our team inherited the support queue from the old vendor
 dev	clean	abstain	instrumented-cli	the profiler vendor is offering licenses, should we buy a few seats?
 test	clean	abstain	instrumented-cli	write the quarterly summary for leadership and hand me a draft
+test	dirty	recency-window	handwritten-recency	which files have changed in this checkout recently
+dev	clean	recency-window	handwritten-recency	show me which files the team has been touching lately
+dev	clean	recency-window	handwritten-recency	i want the newest commits and the files they hit
+test	clean	recency-window	handwritten-recency	which files in storage have people modified recently
+test	clean	recency-window	handwritten-recency	what changed in storage over the last week
+test	clean	recency-window	handwritten-recency	who touched files in storage over the last few days
+test	clean	recency-window	handwritten-recency	which commits landed in storage this week
+dev	clean	recency-window	handwritten-recency	the repo feels busy, what is the recent churn here
+dev	clean	recency-window	handwritten-recency	give me the recently modified files under storage
+test	clean	recency-window	handwritten-recency	what has been edited here lately, file by file
+test	clean	abstain	handwritten-recency	how do we rebuild the list of recently changed files
+dev	clean	abstain	handwritten-recency	our storage vendor changed their pricing last month
+dev	clean	abstain	handwritten-recency	we recently agreed to move the announcement to friday
+dev	clean	abstain	handwritten-recency	write up the latest status for the release newsletter
+test	clean	abstain	handwritten-recency	our supplier changed their terms recently, where is that noted?
+test	clean	abstain	handwritten-recency	we outsource the icon work and that vendor changed their rates last week
+test	clean	abstain	handwritten-recency	the marketing profile was updated recently by the agency
+test	clean	abstain	handwritten-recency	the audio codec people changed their licence last month
+test	dirty	review-diff	instrumented-cli	is my diff safe to merge, i changed these files recently
+dev	clean	recency-window	handwritten-recency	what landed in storage this week
+test	clean	recency-window	handwritten-recency	commits since Monday under storage
+test	clean	recency-window	instrumented-cli	what is new in the storage directory
+test	clean	recency-window	handwritten-recency	show issues with the files in storage that changed recently
+test	clean	abstain	handwritten-recency	how do i see the files in storage that changed recently

@@ -59,6 +59,7 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include "query.h"
 #include "pattern.h"               // R2: the pattern surface's compiler + disclosures (the matcher runs inside the ingest walk)
 #include "verify.h"                // G4 verify-a-claim: the --verify closed claim grammar + verdict/limit vocabularies (runVerify below)
+#include "forpage.h"               // forWidenNext — the ONE spelling of the --for widening page, with its byte ceiling
 #include "taskroute.h"             // --help-task: deterministic task -> one safe CLI recommendation or abstention
 #include "quality.h"
 #include "cloneidiom.h"          // idiom-class demotion for clone findings — the closed 3-idiom shape classifier both --clones and the quality-delta duplication kind annotate rows with
@@ -1125,31 +1126,110 @@ struct ExpandServeChoice
     std::string ctxOpen;
 };
 
-inline ExpandServeChoice chooseExpandServe( std::size_t bundleBytes, const rw::WholeFileRender& wf, std::size_t budgetBytes )
+// The whole-file serving's own legend (PR #215 review item 9), as ONE constant: the bytes CHARGED in the
+// bundle-vs-file comparison below and the bytes APPENDED to the root in runDefaultMap are the same object, so
+// the choice cannot be made on a price the document does not pay. It carries no "--": it rides inside an XML
+// comment, where a double hyphen is ill-formed (G4).
+inline constexpr std::string_view kExpandWholeFileLegend =
+    "<!-- ripwire expand (whole file): <src p=file sym=\"name:line,...\"> wraps the file's own "
+    "text; an <s n= sc= l=/> row names each requested symbol that has an enclosing scope, and "
+    "its full id composes as p::sc::n from the src row's p=. -->";
+
+// ── ONE PRICE FOR BOTH SERVING CANDIDATES (CodeRabbit, PR #215, second round on this comparison) ─────
+// THE DEFECT was not a missing addend, it was two counters. The bundle candidate was priced to the byte
+// (envelope, root attributes, the unproven residue, the map, the rendered <bodies>, the closing tag) by the
+// arithmetic in runDefaultMap, while the file candidate was priced HERE as `wf.rawBytes + the legend` — no
+// `<ctx>` envelope, no root attributes, no `</ctx>`, and the file's RAW bytes instead of the <src p= sym=>
+// blocks that actually carry them. Measured on an 864 B file: reason= said "file 1100B" for a document that
+// came out 1263 B, and inside that 163 B band the tool chose — and DISCLOSED — the whole-file form while the
+// bundle it rejected was the smaller document (pre-fix binary: 1262 B served under
+// reason="file 1100B &lt; bundle 1193B"). The FIRST asymmetry in this same comparison, found one review round
+// earlier, was the whole-file legend; a second occurrence of one defect class means the comparison is being
+// built by hand on each side, which is the bug to fix.
+//
+// THE RULE APPLIED is the one src/prcontext.h states verbatim above its own estimator — "ONE estimator for
+// every root, never two counters (serialize.h's standing rule)". Each candidate DESCRIBES itself as an
+// ExpandServeDocument and both are priced by priceExpandServeDocument, so the comparison is symmetric by
+// construction: a field one side fills and the other forgets is the only way to reintroduce the defect, and a
+// third candidate is priced by the same function or not priced at all.
+struct ExpandServeDocument
 {
-    char open[ 160 ];
+    std::size_t payloadBytes  = 0;     // this mode's payload AS EMITTED: the <bodies> section, or the whole file's <src> blocks
+    std::size_t mapBytes      = 0;     // the ranked map, when this mode emits one (0 when it does not)
+    std::size_t rootAttrBytes = 0;     // <ctx> attributes only this mode carries (root=, topk_default=, a payload-priced est_tokens=)
+    std::size_t legendBytes   = 0;     // legend comments only this mode emits
+    double      selfPriceRate = 0.0;   // >0: this mode prices ITSELF on its <ctx> root (est_tokens=), at this B/token rate
+};
+
+// The whole served document, envelope included. `disclosureBytes` is the mode=/reason= attribute pair the
+// choice itself writes onto the root: it is self-referential — its digits ARE the numbers it reports — so the
+// caller solves it the way pricedRootAttr solves est_tokens, and hands the settled spelling's length back in.
+inline std::size_t priceExpandServeDocument( const ExpandServeDocument& doc, std::size_t sharedRootBytes, std::size_t disclosureBytes )
+{
+    std::size_t total = ( sizeof( "<ctx>" ) - 1 ) + sharedRootBytes + doc.rootAttrBytes + disclosureBytes
+                      + doc.legendBytes + doc.mapBytes + doc.payloadBytes + ( sizeof( "</ctx>" ) - 1 );
+    if( doc.selfPriceRate > 0.0 )
+    {
+        // …through pricedRootAttr itself, not a re-derived digit count: the attribute this charges is the one
+        // the emission path splices, from the same fixpoint over the same byte total (serialize.h).
+        std::size_t estTokens = 0;
+        total += rw::pricedRootAttr( total, doc.selfPriceRate, 0, &estTokens ).size();
+    }
+    return total;
+}
+
+inline ExpandServeChoice chooseExpandServe( const ExpandServeDocument& bundleDoc, const ExpandServeDocument& fileDoc,
+                                            std::size_t sharedRootBytes, const rw::WholeFileRender& wf, std::size_t budgetBytes )
+{
     ExpandServeChoice c;
-    if( wf.complete && wf.rawBytes > budgetBytes )
+    char              open[ 200 ];
+    if( !wf.complete )
+    {
+        rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file unavailable (file unreadable)\">" );
+        c.ctxOpen = open;
+        return c;
+    }
+    // The pack-budget ceiling is deliberately still read off wf.rawBytes: that question is about the FILE's own
+    // size against --pack-budget-bytes, not about which of two documents is cheaper to serve. No comparison is
+    // made on this path, so no price is claimed and none is charged.
+    if( wf.rawBytes > budgetBytes )
     {
         rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file {}B over pack-budget {}B\">",
                        wf.rawBytes, budgetBytes );
+        c.ctxOpen = open;
+        return c;
     }
-    else if( wf.complete && wf.rawBytes < bundleBytes )
+
+    // THE FIXPOINT. Each candidate carries its own mode=/reason= pair when it wins, so each is charged its own
+    // spelling: price, spell, re-price, at most four passes — pricedRootAttr's bound, for pricedRootAttr's
+    // reason. Digit counts are the only thing that can move, so it settles on pass two on every real input;
+    // a fourth pass that still disagrees keeps the last spelling, which is the one the document receives.
+    char        fileOpen[ 200 ]   = { 0 };
+    char        bundleOpen[ 200 ] = { 0 };
+    std::size_t fileBytes = 0, bundleBytes = 0, fileDisclosure = 0, bundleDisclosure = 0;
+    for( int pass = 0; pass < 4; ++pass )
     {
-        c.serveWholeFile = true;
-        rw::formatTo( open, sizeof( open ), "<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">",
-                       wf.rawBytes, bundleBytes );
+        fileBytes   = priceExpandServeDocument( fileDoc,   sharedRootBytes, fileDisclosure );
+        bundleBytes = priceExpandServeDocument( bundleDoc, sharedRootBytes, bundleDisclosure );
+        rw::formatTo( fileOpen, sizeof( fileOpen ), "<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">",
+                       fileBytes, bundleBytes );
+        rw::formatTo( bundleOpen, sizeof( bundleOpen ), "<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">",
+                       bundleBytes, fileBytes );
+        // the subtraction's precondition: both spellings begin with the literal "<ctx" and end with '>', so
+        // neither can be shorter than the envelope it is measured against (formatTo always NUL-terminates).
+        VERIFY( std::strlen( fileOpen ) >= ( sizeof( "<ctx>" ) - 1 ) && std::strlen( bundleOpen ) >= ( sizeof( "<ctx>" ) - 1 ) );
+        const std::size_t nextFile   = std::strlen( fileOpen ) - ( sizeof( "<ctx>" ) - 1 );
+        const std::size_t nextBundle = std::strlen( bundleOpen ) - ( sizeof( "<ctx>" ) - 1 );
+        if( nextFile == fileDisclosure && nextBundle == bundleDisclosure )
+        {
+            break;
+        }
+        fileDisclosure   = nextFile;
+        bundleDisclosure = nextBundle;
     }
-    else if( wf.complete )
-    {
-        rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">",
-                       bundleBytes, wf.rawBytes );
-    }
-    else
-    {
-        rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file unavailable (file unreadable)\">" );
-    }
-    c.ctxOpen = open;
+    // Ties still go to the bundle — the richer answer at equal cost.
+    c.serveWholeFile = fileBytes < bundleBytes;
+    c.ctxOpen        = c.serveWholeFile ? fileOpen : bundleOpen;
     return c;
 }
 
@@ -1811,11 +1891,25 @@ int runDefaultMap( const MainDispatch& d )
         // guarded siblings at the ceiling verdict and the topK>0 emission gate). Same guard here: a map
         // that will not be emitted must not be charged, exactly like every other measureEmittedMapBytes
         // call site in this function.
-        const std::size_t bundleBytes = ( sizeof( "<ctx>" ) - 1 ) + ctxRootBytesWhenNoMap + ctxUnprovenBytes   // H1: the root carries it in both modes
-                                      + ( mapTopK > 0 ? measureEmittedMapBytes( mapTopK, payloadTokens ) : 0 )
-                                      + bodiesSection.xml.size() + ( sizeof( "</ctx>" ) - 1 );
         wholeFile = rw::renderWholeFiles( ing, expandNodes, redactPtr, d.notesPtr, cfg.compress, mapRootArg );   // D2: shaped candidate (R-R: root-relative <src p=>)
-        ExpandServeChoice choice = chooseExpandServe( bundleBytes, wholeFile, cfg.packBudgetBytes );
+        // BOTH CANDIDATES, DESCRIBED IN THE SAME FIELDS (CodeRabbit, PR #215 — chooseExpandServe's own header
+        // carries the defect this replaced). The two documents differ by exactly what these fields say they
+        // differ by: the bundle rides a map (when one will be emitted) and the pre-rendered <bodies>; the file
+        // rides its <src p= sym=> blocks, its own legend, and an est_tokens= it prices ITSELF at the BODY rate
+        // because every byte on that path is raw code text — the same rate and the same pricedRootAttr fixpoint
+        // the whole-file emission below applies. topk_default="0" and the unproven residue ride BOTH openers, so
+        // the first is charged to both documents and the second is passed as the shared root bytes.
+        const std::size_t         topkDefaultBytes = exactNameExpandDefault ? ( sizeof( " topk_default=\"0\"" ) - 1 ) : 0;
+        ExpandServeDocument       bundleDoc;
+        bundleDoc.payloadBytes  = bodiesSection.xml.size();
+        bundleDoc.mapBytes      = mapTopK > 0 ? measureEmittedMapBytes( mapTopK, payloadTokens ) : 0;
+        bundleDoc.rootAttrBytes = ctxRootBytesWhenNoMap + topkDefaultBytes;   // root= and est_tokens= only where no map carries them
+        ExpandServeDocument       fileDoc;
+        fileDoc.payloadBytes  = wholeFile.xml.size();                         // as EMITTED, not the raw file bytes
+        fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes;        // whole-file mode always carries root= (no <r root=> rides with it)
+        fileDoc.legendBytes   = kExpandWholeFileLegend.size();
+        fileDoc.selfPriceRate = rw::kBytesPerTokenBody;
+        ExpandServeChoice choice = chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes );
         serveWholeFile = choice.serveWholeFile;
         ctxOpenStr     = std::move( choice.ctxOpen );
         if( exactNameExpandDefault )
@@ -1843,6 +1937,15 @@ int runDefaultMap( const MainDispatch& d )
         VERIFY( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
         ctxOpenStr.insert( 4, ctxUnprovenAttr );
         ctxOpenStr += ctxUnprovenLegend;
+    }
+
+    // PR #215 review item 9: the whole-file serving prints <s n= sc= l=/> anchor rows inside <src p=>, and
+    // carried NO legend at all — sc= (and id= before it) was an undefined first-screen attribute on the one
+    // --expand shape that has no other legend to read. One clause, on the shape that emits the rows. No "--"
+    // anywhere: it rides inside an XML comment, where a double hyphen is ill-formed (G4).
+    if( serveWholeFile )
+    {
+        ctxOpenStr += kExpandWholeFileLegend;   // …the SAME bytes chooseExpandServe charged the file candidate
     }
 
     // r27-emitters T2: the ride-along map. A bare `--expand=SYM` costs ~24 KB for a ~1.4 KB body because the
@@ -2546,11 +2649,30 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     const std::string stamp = rw::gitstamp::stampAt( root );
     const bool        git   = !stamp.empty();
     const bool        dirty = stamp.ends_with( "+dirty" );
-    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty );
+    // What this build can actually parse, read off the flag table itself (cli.h shipsViewFlag) rather than
+    // asserted here: the router composes the directory scope only on a binary that has the row for it.
+    rw::taskroute::RouterCaps caps;
+    caps.dirScope = rw::shipsViewFlag( rw::taskroute::kDirScopeFlag );
+    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty, caps );
 
     std::vector<char> esc;
     const auto ex = [&]( std::string_view s ) { return std::string( rw::escapeXml( s, esc ) ); };
-    std::string out = "<task-route status=\"";
+    // THE LEGEND. Until 2026-09-13 this document had none in the default dialect: every attribute a reader
+    // meets on its only screen was undefined, and the compact layer's present-only legend was the only
+    // place any of them was explained. One line, every attribute, no flag spelled (a literal double hyphen
+    // is ill-formed inside an XML comment — G4).
+    std::string out = "<!-- ripwire help-task: one task in, ONE safe command out, or an honest abstention. "
+                      "status=recommend|ambiguous|abstain and confidence=high|low|none track each other; "
+                      "score= is the winning card's evidence total and margin= its lead over the runner-up "
+                      "(100/100 on a structural route, one the shipped parser itself accepts). <facts> is the "
+                      "repository evidence the decision read: git= dirty= a git repo and an uncommitted diff, "
+                      "trace= a pasted stack/sanitizer shape, resolved_symbols= how many indexed names the task "
+                      "NAMES. <choice> is the recommendation: intent= the route, skill= the skill that owns it, "
+                      "reason= the evidence in words, and <run> the command, pasteable as is. This tool "
+                      "recommends only: it never runs what it names. ";
+    out += rw::kNextLegendClause;
+    out += "-->";
+    out += "<task-route status=\"";
     out += rw::taskroute::statusName( route.status );
     out += "\" confidence=\"";
     out += route.status == rw::taskroute::RouteStatus::Recommend ? "high" :
@@ -2562,7 +2684,15 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     for( const rw::taskroute::RouteChoice& choice : route.choices )
     {
         out += "<choice intent=\"" + ex( choice.id ) + "\" skill=\"" + ex( choice.skill ) + "\" reason=\"" + ex( choice.reason );
-        out += "\" score=\"" + std::to_string( choice.score ) + "\"><run>" + ex( choice.command ) + "</run></choice>";
+        out += "\" score=\"" + std::to_string( choice.score ) + "\"";
+        // present-only: the WIDENING follow-up of a --for-shaped recommendation, nothing on any other.
+        // Keyed off the INTENT, and spelled by forpage.h's own forWidenNext — the same quoting and the same
+        // kNextAttrMaxBytes ceiling the answer's next= obeys, so a task too long to paste emits nothing
+        // rather than a hint that pastes wrong.
+        const bool widens = rw::taskroute::isOneOf( choice.id, std::begin( rw::taskroute::kForShapedIntents ),
+                                                   std::size( rw::taskroute::kForShapedIntents ) );
+        out += rw::nextAttrXml( widens ? rw::forWidenNext( cfg.helpTask ) : std::string() );
+        out += "><run>" + ex( choice.command ) + "</run></choice>";
     }
     out += "</task-route>\n";
     std::fputs( out.c_str(), stdout );

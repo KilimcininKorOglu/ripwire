@@ -24,7 +24,7 @@
 # jsoncheck #8b and shapingflagcheck (F) use — so a verb added tomorrow is probed tomorrow. Each flag runs at
 # defaults on a tmp git fixture; whatever answers with an XML root is an XML verb and must honor compact,
 # everything else must refuse it, and each verb's prose legend fits its per-verb pin (pinFor). LOOP arm (L): the ten-verb
-# loop's compact legend bill ≤ 4,900 B (was 29,824 on the ripwire tree). MCP arm (M): edit_check with legend:"compact" answers
+# loop's compact legend bill ≤ 4,700 B (was 29,824 on the ripwire tree). MCP arm (M): edit_check with legend:"compact" answers
 # in ≤ 900 B on a clean tree, and five more MCP verbs' legends fit their per-verb pins.
 # CONDITIONAL arm (D): an absent-at-zero or form-conditional attribute (declined_calls=, unproven_defs=, bodyless_defs=,
 # the member form, the multi-root <root label=> rows, --lego's caveat=; on the map family and --impact: pr_iters=,
@@ -324,19 +324,48 @@ probeFor()
 # with attributes still undefined. Each schema's pin is its LARGEST measured (U) probe on this gate's fixture, rounded up to the
 # next multiple of 10 B, plus 10 B, so a verb whose legend grows is re-pinned in the commit that adds the bytes, with the bytes
 # attributed there. A schema with no row FAILS: a new XML verb is measured and pinned, never waved through under a default.
-# --for keeps its native dialect and is exempt (below).
+# --for's NATIVE compact legend joined the table 2026-09-12 (A1′, owner decision): pinned per the rule below, present-only
+# definitions — it used to spend 1,177–1,216 B on this fixture and was exempt by name (below).
 # ONE ROW PER SCHEMA: the pin, then the largest (U) probe it was measured from. Measured 2026-09-12 in the fourth sweep's last
 # pass, once every attribute the --impact, --safe-delete, --communities, --community and map-header answers print had a reading;
 # re-measured the same day after that sweep's design review corrected three readings, added the present-only <s tested=> reading
 # (no probe on this fixture prints one) and shortened fourteen readings without losing accuracy. Ten pins moved down.
 # Re-measured at the lane's end, (D36): pack-task 327 -> 804 B (its purpose line spells the bundle's own vocabulary, and the
 # <d r= cx= ccx= in=> and route= readings ride its rows) and from-trace 290 -> 445 B (the same four <d> readings); no other schema moved.
+# RE-PINNED 2026-09-12 (row 6, sc= — the short symbol id): seven schemas moved up by the ONE new whole-document reading
+# `sc=: enclosing scope; the full id is p::sc::n …` (~95 B) that every root printing <s>/<d> rows now carries, plus the
+# route= reading's growth on the bundle family (route= is a CODE now and the reading spells the codes): map 810 -> 920
+# (measured 908, the --rank-by=churn probe), map-diff 800 -> 910 (901), pack-signatures 680 -> 780 (775), metrics 720 -> 820
+# (814), query 630 -> 730 (723), pack-task 820 -> 980 (974), pack-top-n 660 -> 770 (761). The bytes the reading costs are the
+# bytes the rows save: 20 B per scoped row (this repo's flagless map, 137 scoped rows: -4,048 B, -15.3%).
+# RE-MEASURED 2026-09-13 (PR #215 review item 10). The table's own rule above is "the largest measured (U) probe,
+# rounded up to the next multiple of 10 B, plus 10", and seven rows did not follow it — pack-task sat at 980 over a
+# measured 974 where the rule says 990, and five others sat 10 B tight against numbers that had moved underneath
+# them. A rule stated in a comment and not applied by the table is not a rule. Every schema was re-probed on this
+# build and every pin recomputed from its own measurement, so the `pin` column is now derivable from the `measured`
+# column and a reader can check it: map 892 -> 910, map-diff 885 -> 900, pack-signatures 759 -> 770, metrics
+# 798 -> 810, query 707 -> 720, around 760 -> 770, pack-task 974 -> 990, pack-top-n 745 -> 760, for 654 -> 670.
+#
+# ripwire.for/v1 in particular: A1' pinned it at 500 from 494 with only its own clauses present; the merge with
+# #213 put the coverage= reading on the same probe (this gate's --for=geometry IS a thin answer), and this round
+# made the sc= and route= readings present-only. 654 B is the number on the tree that ships, measured three times
+# and never held to a pin by trimming a clause.
+# RE-MEASURED 2026-09-14 (MERGE of lane/sc-legend with main at 0b118ac1). Two rows conflicted and NEITHER SIDE
+# was accepted as the answer: this lane had 990/974 and 760/745 for pack-task and pack-top-n, main had 880/865
+# and 660/649, and both were right about their own tree — main's does not carry row 6's sc= reading or the
+# route= code growth. Re-probed on the MERGED tree: pack-task 974 B, pack-top-n 745 B, so the rule above gives
+# 990 and 760. Those equal this lane's side, and that is the outcome VERIFIED rather than the side picked —
+# #214's one new legend clause (';est-unmeasured', src/prcontext.h) is conditional on a --pr-context truncation
+# level and rides neither of these two probes, so it moves neither measurement. No other schema moved, and
+# ripwire.pr-context/v1 stays at 410/399 for the same reason: the clause is present-only and this fixture's
+# answer is not truncated.
+# ripwire.expand-file/v1 is NEW: --expand has two servings and they share no element (see compactlegend.h).
 # schema                      pin  measured
 PIN_TABLE='
-ripwire.map/v1                   810   799
-ripwire.map-diff/v1              800   789
-ripwire.pack-signatures/v1       680   663
-ripwire.metrics/v1               720   702
+ripwire.map/v1                   910   892
+ripwire.map-diff/v1              900   885
+ripwire.pack-signatures/v1       770   759
+ripwire.metrics/v1               810   798
 ripwire.deps/v1                  260   245
 ripwire.hotspots/v1              280   264
 ripwire.clones/v1                290   280
@@ -377,12 +406,12 @@ ripwire.mentions/v1              180   168
 ripwire.affected/v1              350   339
 ripwire.verify/v1                330   316
 ripwire.help-task/v1             170   153
-ripwire.query/v1                 630   611
+ripwire.query/v1                 720   707
 ripwire.grep/v1                  360   345
 ripwire.match/v1                 270   260
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1              250   232
-ripwire.around/v1                780   760
+ripwire.around/v1                770   760
 ripwire.callers/v1               330   317
 ripwire.callees/v1               380   369
 ripwire.uses/v1                  290   271
@@ -395,9 +424,11 @@ ripwire.merge-scout/v1           220   208
 ripwire.whereis/v1               240   223
 ripwire.community/v1             730   719
 ripwire.layout/v1                160   149
-ripwire.pack-task/v1             820   804
-ripwire.pack-top-n/v1            660   649
+ripwire.pack-task/v1             990   974
+ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
+ripwire.expand-file/v1           240   230
+ripwire.for/v1                   670   654
 '
 pinFor()
 {
@@ -430,15 +461,15 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
     schema="$( leg schema "$TMP/u.c" )"
     lb="$( leg prose "$TMP/u.c" "$TMP/u.full" )"; lball="$( leg bytes "$TMP/u.c" )"; lbfull="$( leg bytes "$TMP/u.full" )"
     case "$schema" in ripwire.*/v1) ;; *) no "(U) $probe compact root has no schema=\"ripwire.<key>/v1\" (got '$schema')" ;; esac
-    case "$flag" in
-        --for=) [ "$lb" -lt "$lbfull" ] || no "(U) --for compact legend ($lb B) did not shrink vs full ($lbfull B)" ;;   # native dialect, data in its comments (A10) — registered follow-up
-        *)      pin="$( pinFor "$schema" )"
-                if [ -z "$pin" ]; then
-                    no "(U) $probe answers $schema, which has no per-verb pin: measure its compact PROSE legend ($lb B here) and pin it in pinFor"
-                elif [ "$lb" -gt "$pin" ]; then
-                    no "(U) $probe compact PROSE legend is $lb B (> its $pin B pin for $schema; all comments $lball B, full $lbfull B): $( leg legend "$TMP/u.c" | head -c 200 )"
-                fi ;;
-    esac
+    # A1′ (2026-09-12): --for is pinned like every other verb now (the ripwire.for/v1 row) — its native compact
+    # legend defines only the terms the document carries; the "shrinks vs full" arm below still runs on it.
+    pin="$( pinFor "$schema" )"
+    if [ -z "$pin" ]; then
+        no "(U) $probe answers $schema, which has no per-verb pin: measure its compact PROSE legend ($lb B here) and pin it in pinFor"
+    elif [ "$lb" -gt "$pin" ]; then
+        no "(U) $probe compact PROSE legend is $lb B (> its $pin B pin for $schema; all comments $lball B, full $lbfull B): $( leg legend "$TMP/u.c" | head -c 200 )"
+    fi
+    [ "$flag" != "--for=" ] || [ "$lb" -lt "$lbfull" ] || no "(U) --for compact legend ($lb B) did not shrink vs full ($lbfull B)"
     [ "$lball" -lt "$lbfull" ] || [ "$lbfull" -eq 0 ] || no "(U) $probe compact comments ($lball B) are not smaller than the full dialect's ($lbfull B)"
     fa="$( leg rootattrs "$TMP/u.full" )"; ca="$( leg rootattrs "$TMP/u.c" )"
     [ "$fa" = "$ca" ] || no "(U) $probe root attribute set moved under compact: full=[$fa] compact=[$ca]"
@@ -459,8 +490,7 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
     # every completeness attribute the document carries is NAMED in the compact legend: the window names
     # (one reading tool-wide) anywhere in the payload; the head-scoped ones (at= on a nonlocal-state <cell>
     # row is a LINE, limit= on a skipped <f> row is a SIZE cap) on the root + first child only
-    legtxt="$( leg legend "$TMP/u.c" )"
-    [ "$flag" = "--for=" ] && legtxt="$legtxt $( leg legend "$TMP/u.full" )"   # --for keeps its native legend
+    legtxt="$( leg legend "$TMP/u.c" )"   # A1′: --for's compact legend stands alone here too — no union with the full one
     for a in capped shown total has_more next_offset; do
         if grep -q " $a=\"" "$TMP/u.cpay"; then
             case "$legtxt" in *"$a="*) ;; *) no "(U) $probe compact legend does not name $a= although the document carries it" ;; esac
@@ -508,10 +538,19 @@ echo
 # RE-ANCHORED 2026-09-12 (the fourth sweep's last pass): 4,400 → 4,900 B, measured 4,860 (from 4,392), by the same rule. Attributed
 # against the previous lane build: --impact 597 → 777 B (its <f lazy=> importer-row reading) and --safe-delete 424 → 712 B (t=/p=,
 # defs=, ambiguous_callers=, dead_code_candidate=); nothing else in the loop moved.
+# RE-ANCHORED 2026-09-12 (row 6, sc= — the short symbol id): 4,900 → 5,000 B, measured 4,946 (from 4,849), by the same rule. Attributed:
+# the one new whole-document reading `sc=: enclosing scope; the full id is p::sc::n …` rides every loop verb whose answer prints
+# a scoped symbol row (~95 B each where present) — the bytes the rows themselves give back at 20 B per scoped row.
 # RE-MEASURED 2026-09-12 (that sweep's design review): 4,849 B, the pin unchanged at 4,900. Attributed against the last-pass build:
 # --impact 777 → 770 B (the shorter <f lazy=> reading) and --safe-delete 712 → 708 B (t= reads a match, dead_code_candidate= says
 # outside); nothing else in the loop moved.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,900 B (29,824 B in full on the ripwire tree) ==="
+# RE-ANCHORED 2026-09-13 (merge of lane/sc-legend and lane/for-widen): 5,000 (sc-legend) / 5,100 (for-widen) → 4,700 B,
+# measured 4,645 on the MERGED tree — DOWN, not up, and re-measured rather than summed because neither lane could see
+# the other's arithmetic. Attributed per verb on this build: the loop's --for probe pays 916 B (it was ~1,120 before
+# A1' rebuilt --for's compact legend present-only, and it is a THIN answer here, so it also carries for-widen's
+# coverage= reading, +162 B); the other nine verbs are 317/770/271/425/212/400/339/708/287 B and did not move. Same
+# rule as every anchor above: the next multiple of 100 B over the measured total.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,700 B (29,824 B in full on the ripwire tree) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -520,8 +559,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 4900 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 4,900 B; full: $fullBytes B)"
+[ "$loopBytes" -le 4700 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 4,700 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -1704,6 +1743,43 @@ while IFS='|' read -r kind name where <&3; do
         *) no "(S) unreadable row from the source reader: $kind|$name|$where" ;;
     esac
 done 3<"$TMP/s.rows"
+
+# ── (R) THE COMPACT <g> TERM SAYS WHAT THE FULL CLAUSE SAYS ────────────────────────────────────────────
+#
+# THE FINDING (review of 6621370f). testmap.h stopped escaping a comma inside a grouped path — a path holding
+# ',' is not grouped at all now — and the FULL clause was rewritten to say so and to state that a shown=/total=
+# over these rows counts test FILES. The COMPACT twin of the same rule, compactlegend.h's <g> term, was not:
+# it still promised "every path verbatim (&#44; a comma)", an escape the body no longer emits, and it never
+# carried the counts-FILES rule. A reader holding only the compact legend was told to undo an entity that is
+# not there, and `--affected --legend=compact` on a comma-path corpus contradicted its own rows.
+#
+# WHY A GATE AND NOT ONE CONSTANT. Every other shared sentence in this tree is ONE constant spliced twice, and
+# that is the right shape — but the compact dialect exists precisely to RE-SPELL, not to quote: kRunHintLegendClause
+# is 350+ B and the compact term is a 194 B line in a table that is charged per verb. So the two are pinned
+# against each other instead, and the REQUIRED FACTS are derived from the full constant rather than typed here:
+# a fact is a distinctive phrase the full clause uses, and the compact term must use the same words for it.
+# Add a fact to the full clause and this arm fails until the compact term carries it too.
+RG_FULL="$( sed -n '/^inline constexpr std::string_view kRunHintLegendClause =/,/;$/p' "$ROOT/src/testmap.h" )"
+RG_COMPACT="$( grep -F '"<g n= p=a,b,c>' "$ROOT/src/compactlegend.h" )"
+if [ -z "$RG_FULL" ] || [ -z "$RG_COMPACT" ]; then
+    no "(R) could not read both wordings out of src/ (full=$( printf '%s' "$RG_FULL" | wc -c ) B, compact=$( printf '%s' "$RG_COMPACT" | wc -c ) B)"
+else
+    rgbad=""
+    # the two facts a <g> consumer cannot act without, in the FULL clause's own words
+    for fact in "verbatim" "a path holding ','" "splits into exactly n=" "counts test FILES"; do
+        printf '%s' "$RG_FULL"    | grep -qF "$fact" || rgbad="$rgbad [full clause lost the fact: $fact]"
+        printf '%s' "$RG_COMPACT" | grep -qF "$fact" || rgbad="$rgbad [compact term does not state: $fact]"
+    done
+    # and the escape neither may promise again: an XML parser undoes it BEFORE a consumer splits p= on ','
+    for w in "$RG_FULL" "$RG_COMPACT"; do
+        printf '%s' "$w" | grep -qF '&#44;' && rgbad="$rgbad [a wording still promises the &#44; escape testmap.h deleted]"
+    done
+    # the compact term stays qualified to <g> and present-only, or --flags' own <g> pays for it
+    printf '%s' "$RG_COMPACT" | grep -qF 'true, "g"' || rgbad="$rgbad [the compact <g> term lost its element qualifier / present-only flag]"
+    [ -z "$rgbad" ] \
+        && ok "(R) the compact <g> term states every fact the full run-hint clause states, in the same words, and neither promises the deleted &#44; escape" \
+        || no "(R) the compact and full readings of <g> have drifted:$rgbad"
+fi
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

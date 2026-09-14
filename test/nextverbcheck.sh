@@ -150,11 +150,14 @@ rrun --grep=zzqnothinghere >"$TMP/g4"; checkNext "grep zero-hit" "$TMP/g4" '^--f
 echo "=== (7) --for: the r=1 row carries --expand=FILE:NAME; every other row does not ==="
 rrun --for='geometry distance' >"$TMP/for"
 top="$( grep -o '<d [^>]*r="1"[^>]*>' "$TMP/for" | head -1 )"
-printf '%s' "$top" | grep -q 'next="--expand=' && ok "for: the r=1 row carries next= ($( printf '%s' "$top" | grep -o 'next="[^"]*"' ))" \
-                                                || no "for: the r=1 row has no next= — $( printf '%s' "$top" | cut -c1-160 )"
+# L-W (forpage.h, test/forwidencheck.sh pins the rule): on a THIN answer (coverage= under 50, or a head over
+# fewer than 3 files) the r=1 row hands over the FILE-GRAIN widening page instead of the body — either form
+# is the one pasteable follow-up this arm asserts; which form is right is forwidencheck's job, not this one's.
+printf '%s' "$top" | grep -Eq 'next="(--expand=|--for=)' && ok "for: the r=1 row carries next= ($( printf '%s' "$top" | grep -o 'next="[^"]*"' ))" \
+                                                        || no "for: the r=1 row has no next= — $( printf '%s' "$top" | cut -c1-160 )"
 others="$( grep -o '<d [^>]*next=' "$TMP/for" | grep -vc 'r="1"' || true )"
 if [ "$others" = 0 ]; then ok "for: next= rides the top row only"; else no "for: $others non-top row(s) carry next="; fi
-checkNext "for top row" "$TMP/for" '^--expand=[^ ]+:[A-Za-z_]+$' row
+checkNext "for top row" "$TMP/for" '^(--expand=[^ ]+:[A-Za-z_]+|--for=.* --limit=40)$' row
 
 echo "=== (8) well-formed + deterministic with the attribute in place ==="
 if command -v xmllint >/dev/null 2>&1; then
@@ -162,6 +165,19 @@ if command -v xmllint >/dev/null 2>&1; then
     ok "the twelve documents are well-formed"
 fi
 if rrun --grep=distance >"$TMP/g1b"; cmp -s "$TMP/g1" "$TMP/g1b"; then ok "grep next= is deterministic"; else no "grep next= differs between runs"; fi
+
+echo "=== (N) --help-task: a --for-shaped recommendation carries the WIDENING page as its next= ==="
+# 2026-09-13: the router's recommendation is a next=-carrying document like any other, and it was outside
+# this population — so nothing checked that the follow-up it hands an agent parses, runs, or fits the
+# ceiling. It is spelled by forpage.h's forWidenNext, the same function the --for ANSWER's own next= uses.
+rrun --help-task='find the code responsible for the area rounding bug' >"$TMP/ht"
+grep -q 'intent="locate-task"' "$TMP/ht" \
+    && checkNext "help-task locate" "$TMP/ht" '^--for=.* --limit=40$' "row" \
+    || no "fixture: --help-task did not route to locate-task ($( grep -o 'intent="[^"]*"' "$TMP/ht" | head -1 ))"
+# present-only: a recommendation that is not a --for bundle carries none at all
+rrun --help-task='where is the rot in code I did not write' >"$TMP/ht2"
+if [ -z "$( nexts "$TMP/ht2" )" ]; then ok "help-task non---for recommendation carries no next="
+else no "help-task non---for recommendation carries a next=: $( nexts "$TMP/ht2" )"; fi
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

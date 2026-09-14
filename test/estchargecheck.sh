@@ -501,7 +501,12 @@ for i in range( 4 ):
         fh.write( "\n".join( lines ) )
 PYG
 a7s_bad=""; a7s_badn=0; a7s_runs=0; a7s_inside_labelled=0
-for spec in "default:1200:1500:" "detail_graph:2880:3080:--detail=20 --with-graph"; do
+# RE-ANCHORED 2026-09-13 (PR #215): the default sweep starts at 760, not 1200. --for's rung zero now triggers on the
+# EXACT ceiling (verbs_for.h), so a document 1..15% over its budget drops its three explanatory clauses before the
+# allowance is consulted; on this corpus the late-label band (over_ceiling="1" INSIDE the allowance — the residual
+# after that drop) therefore sits at 780..810 instead of inside 1200..1500, and the control below would otherwise be
+# inert. Swept 700..3300 step 10 on the new binary: default hits at 780 790 800 810, none on the --detail=20 arm.
+for spec in "default:760:1500:" "detail_graph:2880:3080:--detail=20 --with-graph"; do
     s_label="${spec%%:*}"; s_rest="${spec#*:}"; s_from="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_to="${s_rest%%:*}"; s_args="${s_rest#*:}"
     for (( N = s_from; N <= s_to; N += 10 )); do
         # shellcheck disable=SC2086
@@ -520,7 +525,7 @@ for spec in "default:1200:1500:" "detail_graph:2880:3080:--detail=20 --with-grap
     done
 done
 [ "$a7s_badn" -eq 0 ] \
-    && ok "#11 A7 sweep: $a7s_runs budgets over a git-less corpus (default 1200..1500, --detail=20 --with-graph 2880..3080, step 10) — every document within N x 2.36 x 1.15 at exit 0, or on the ladder's disclosed last rung" \
+    && ok "#11 A7 sweep: $a7s_runs budgets over a git-less corpus (default 760..1500, --detail=20 --with-graph 2880..3080, step 10) — every document within N x 2.36 x 1.15 at exit 0, or on the ladder's disclosed last rung" \
     || no "#11 A7 sweep: $a7s_badn of $a7s_runs budgets deliver past the allowance with no ladder rung fired (first:$a7s_bad) — a byte spliced in after the ladder priced the document"
 # control: the sweep must cross the band the defect lives in — a root that says over_ceiling="1" while the document
 # still fits the allowance (est_tokens > N at 2.50 B/tok, bytes <= 2.714 B/tok). No such budget = inert, re-anchor.
@@ -1207,6 +1212,99 @@ if command -v xmllint >/dev/null 2>&1; then
     for f in c17_unindexed_0 c17_unindexed_1; do
         if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "#17 $f.xml is well-formed"; else no "#17 $f.xml FAILED xmllint"; fi
     done
+fi
+
+# ── #18 (PR #215 review): RUNG ZERO PRICES THE DOCUMENT IT WOULD EMIT, IN THE ROOT'S OWN MIXED RATE ────
+#
+# THE DEFECT. --for's ceiling ladder has a rung ZERO below its own three rungs: the droppable legend trio
+# (the confidence reading, the r=/<tail> reading, the sc=/route= reading). It fires when the header does not
+# fit "the ceiling the root promises", and it used to spell that ceiling in BYTES — the raw document total
+# against budget x 2.50 — while the promise itself, est_tokens <= budget_tokens, is a MIXED rate: markup at
+# 2.50 B/tok and the --detail / auto bodies at 3.80 B/tok (serialize.h, finishForLensHeader). Every body byte
+# was therefore charged 1.52x what the root charges it. The same test also priced the candidate through a sum
+# built from RESERVES and from the auto section whether or not that section was rendered — not the document
+# stdout receives. Both errors point one way: a document its own root says fits was judged not to, and three
+# definitions the reader has no other source for were spent to buy headroom that was already there.
+#
+# WHAT IS ASSERTED, and why it needs no magic budget. A document that prices at est_tokens=E fits EVERY budget
+# >= E, by the root's own arithmetic — so this arm READS E off a wide run where nothing is dropped and probes
+# just above it. No pinned byte count: if the corpus or the legend moves, E moves with it and the probe follows.
+# Both guards against an empty pass are asserted rather than assumed — the wide run must carry the clauses (else
+# there is no E), and the control below must still DROP them (else the rung is gone, not fixed).
+# GIT-LESS and relative, the #11 A7 sweep's discipline: no at=, no churn, a fixed root=, nothing from the live
+# repo. --detail=1 is what puts bytes at the BODY rate, which is the half of the defect a bodiless bundle cannot
+# see; the fixture's one long body exceeds the tight budget's residual, so the first-entry-whole floor emits a
+# truncated ~190 B of it at every budget in the band and the band's width is that floor x (1/2.50 - 1/3.80).
+# MEASURED on the c4478402 binary: the band is 1069..1099 — 31 budgets at which the kept document prices at
+# est_tokens=1069 with no over_ceiling=, and the pre-fix rung dropped all three clauses and delivered 715.
+RZ="$TMP/rungzero"
+mkdir -p "$RZ/corpus"
+python3 - "$RZ/corpus" <<'PYRZ'
+import os, sys
+out   = sys.argv[ 1 ]
+lines = [ "def widgetPingBoxRouter( alpha, beta ):",
+          '    """Widget ping box router: route every alpha reading onto the beta box."""',
+          "    total = 0" ]
+for j in range( 26 ):
+    lines.append( f"    total = total + alpha * {j} - beta * {j} + widgetPingStep{j % 4}( total, {j} )" )
+lines.append( "    return total" )
+with open( os.path.join( out, "router.py" ), "w" ) as fh:
+    fh.write( "\n".join( lines ) + "\n" )
+with open( os.path.join( out, "steps.py" ), "w" ) as fh:
+    for j in range( 4 ):
+        fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
+PYRZ
+rz_run(){ ( cd "$RZ" && "$BIN" corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache ) >"$RZ/o.xml" 2>/dev/null; }
+rz_est(){ grep -aoE 'est_tokens="[0-9]+"' "$RZ/o.xml" | head -1 | tr -dc '0-9'; }
+rz_note(){ grep -acF '[legend clauses:' "$RZ/o.xml"; }
+RZ_WIDE=1200
+rz_run "$RZ_WIDE"; RZ_E="$( rz_est )"; RZ_WIDE_NOTE="$( rz_note )"
+# THE CLAUSES THIS ARM COUNTS — all THREE of the droppable trio (CodeRabbit, PR #215). It counted two: the
+# confidence reading and the tail reading, but not the route= reading the arm's own paragraph above names.
+# A clause that is asserted in neither direction is not pinned, and the consequence is measured: with the
+# route= reading removed from the binary (forIdRouteLegendParts returning an empty route part), the wide
+# control still read clauses=2/2 and the whole arm reported PASS. Counted in all three runs now — the wide
+# control, the probe, and the tight control that must have dropped every one of them — so a clause can only
+# disappear by failing the wide run or by surviving the control.
+RZ_CLAUSE_ROUTE='route= name-exact(X)|subtoken+body'
+RZ_CLAUSES=0
+grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
+grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
+grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
+if [ -z "$RZ_E" ] || [ "$RZ_WIDE_NOTE" != "0" ] || [ "$RZ_CLAUSES" != "3" ]; then
+    no "#18 rung zero: the wide control (--token-budget=$RZ_WIDE) does not carry its legend (est='${RZ_E:-unreadable}' dropped-note=$RZ_WIDE_NOTE clauses=$RZ_CLAUSES/3) — there is no price to probe against; re-anchor the fixture"
+else
+    RZ_PROBE=$(( RZ_E + 5 ))
+    if [ "$RZ_PROBE" -ge "$RZ_WIDE" ]; then
+        no "#18 rung zero: the probe budget $RZ_PROBE is not strictly below the wide control $RZ_WIDE — the two runs are the same run and the arm proves nothing; raise RZ_WIDE"
+    else
+        rz_run "$RZ_PROBE"; RZ_PE="$( rz_est )"; RZ_PN="$( rz_note )"; RZ_PB="$( bytes_of "$RZ/o.xml" )"
+        RZ_PC=0
+        grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_PC=$(( RZ_PC + 1 ))
+        grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_PC=$(( RZ_PC + 1 ))
+        grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_PC=$(( RZ_PC + 1 ))
+        RZ_PO=0; grep -aqF 'over_ceiling="1"' "$RZ/o.xml" && RZ_PO=1
+        if [ "$RZ_PN" = "0" ] && [ "$RZ_PC" = "3" ] && [ -n "$RZ_PE" ] && [ "$RZ_PE" -le "$RZ_PROBE" ] && [ "$RZ_PO" = "0" ]; then
+            ok "#18 rung zero at --token-budget=$RZ_PROBE (5 tokens above the $RZ_E this document prices at): all three droppable clauses ride, est_tokens=$RZ_PE <= $RZ_PROBE, no over_ceiling=, $RZ_PB B"
+        else
+            no "#18 rung zero at --token-budget=$RZ_PROBE dropped a legend it could afford: dropped-note=$RZ_PN clauses=$RZ_PC/3 est_tokens=${RZ_PE:-unreadable} over_ceiling=$RZ_PO ($RZ_PB B) — the same document prices at $RZ_E at --token-budget=$RZ_WIDE, so it fits every budget >= $RZ_E"
+        fi
+    fi
+    # …and the rung must still FIRE where the kept document genuinely does not fit. Without this, deleting
+    # rung zero outright would turn the arm above green.
+    RZ_CTRL=$(( RZ_E - 200 ))
+    rz_run "$RZ_CTRL"; RZ_CN="$( rz_note )"; RZ_CE="$( rz_est )"
+    # …and the tight control asserts the ABSENCE of the same three, route= included: a present-in-wide /
+    # unchecked-in-tight assertion is the one-sided shape that let the missing clause through.
+    RZ_CC=0
+    grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CC=$(( RZ_CC + 1 ))
+    grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_CC=$(( RZ_CC + 1 ))
+    grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CC=$(( RZ_CC + 1 ))
+    if [ "$RZ_CN" != "0" ] && [ "$RZ_CC" = "0" ]; then
+        ok "#18 rung zero control at --token-budget=$RZ_CTRL (200 under the $RZ_E the full document prices at): all three clauses dropped and the note says so (est_tokens=$RZ_CE) — the rung still fires when the drop is real"
+    else
+        no "#18 rung zero control at --token-budget=$RZ_CTRL: dropped-note=$RZ_CN clauses still riding=$RZ_CC/3 (est_tokens=${RZ_CE:-unreadable}) — rung zero no longer fires at all, so the arm above is green for the wrong reason"
+    fi
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

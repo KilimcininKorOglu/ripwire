@@ -17,6 +17,7 @@
 #include "mention.h"       // B8: applyMentionBoost — the `for` verb's query-mention anchor (same default-on behavior as CLI --for)
 #include "filter.h"        // §P4: rankTierSymbolMultipliers — the fixture/present tier down-weight the CLI ranking lenses apply
 #include "redact.h"        // RedactCounts — the per-request redaction tally threaded through the body/doc verbs
+#include "forpage.h"    // L-W: the --for file page, coverage= and the thin rule — shared with the CLI twin
 #include "packtask.h"      // L4: the shared --pack-task / MCP explore+pack_task bundle assembler (packTaskBundleText)
 #include "partition.h"     // the explore verb's `partition` argument (packTaskPartitionText)
 #include "tracelocus.h"    // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
@@ -367,23 +368,13 @@ inline std::string mcpUnknownFieldRefusal( const std::string& scope, std::string
     return {};
 }
 
-// Capture one FILE*-writing renderer into a string. The three verbs below differ only in which writer they
-// run, so the open_memstream boilerplate lives here once instead of three times.
+// Capture one FILE*-writing renderer into a string — infra/emit.h's ONE renderToString seam with this
+// surface's own degrade wording. It kept its own copy of the memstream dance until the review of #214
+// gave the tree a single seam for it; the contract is unchanged (an allocation failure is an empty string,
+// never a NULL deref), and it now also ALERTS, which this copy never did.
 inline std::string captureXml( const std::function<void( std::FILE* )>& render )
 {
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
-    if( !mem )
-    {
-        return {}; // alloc failure → empty, never deref NULL
-    }
-    render( mem );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return rw::renderToString( render, "mcp: open_memstream failed — this verb answers empty" ).text;
 }
 
 // full pipeline on a dir → XML captured into a string (captureXml, above).
@@ -1330,18 +1321,8 @@ inline std::string situationDiffJson( const std::string& root, const std::string
     out += "]";
     out += graphCountFloorAttrJson( ix.g );   // H5/M15: blast_radius[].dependent_symbols is read off the name-based CSR — a floor, with the gauge
     out += ",\"tests_to_run\":[";
-    {
-        bool first = true;
-        for( std::uint32_t f : facts.tests )
-        {
-            if( !first )
-            {
-                out += ",";
-            }
-            first = false;
-            out += "{\"test\":\"" + mcpdetail::jsonEscape( std::string( situJPathRel( f ) ) ) + "\"" + runFieldJsonDisclosed( runners, f, jsonEsc ) + "}";
-        }
-    }
+    // E1: grouped where no runner is derivable — "test" is then an ARRAY of paths (testmap.h's seam)
+    out += testRowsJoined( runners, testRowsOutOf( facts.tests, situJPathRel ), TestRowShape{ RowDialect::Json, "test" }, jsonEsc, "," );
 
     // F3: the decl/def partners of the changed set — the header/impl relationship the blast_radius array
     // above cannot carry, because a header does not transitively depend on the source that implements it.
@@ -1567,7 +1548,8 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
 }
 
 inline std::string forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
-                                std::size_t budgetTokens = 0, bool noRoute = false )
+                                std::size_t budgetTokens = 0, bool noRoute = false,
+                                McpPageArgs page = {} )   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
 {
     const std::size_t forBudgetBytes = budgetTokens > 0 ? budgetBytesForTokens( budgetTokens )
                                                         : kForPayloadBudgetBytes;
@@ -1606,9 +1588,17 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // deep-tail: this bundle now serves the file-grain tail, a full-distribution consumer — the H2
     // MaxScore prune bound is 0 (exhaustive) here for the same reason the CLI --for passes
     // fullDistribution (a pruned tail would make total= mode-dependent and its order incomplete).
+    // L-W: the term evidence behind the subtoken pass rides out for coverage= and the file page — the CLI
+    // twin's computeLensRanking makes the same two calls (one exhaustive subtoken pass on the identifier route).
+    LexTermEvidence    mcpEvidence;
     std::vector<float> lensRank  = ( rc.which == LexMode::NameExact )
                                        ? lexicalScoresNameExactRanked( ing, task, &tierMul )
-                                       : lexicalScoresTiered( ing, ix.g.outOff, ix.g.outTargets, task, /*pruneTopK=*/0, &ifaceExact, &tierMul );
+                                       : lexicalScoresTiered( ing, ix.g.outOff, ix.g.outTargets, task, /*pruneTopK=*/0, &ifaceExact, &tierMul,
+                                                              0, 0, {}, &mcpEvidence );
+    if( rc.which == LexMode::NameExact )
+    {
+        lexicalScoresTiered( ing, ix.g.outOff, ix.g.outTargets, task, /*pruneTopK=*/0, nullptr, &tierMul, 0, 0, {}, &mcpEvidence );
+    }
 
     // B8 (query-mention anchoring): same default-on contract as the CLI --for — files / dotted modules /
     // Scope.symbols literally NAMED in the task text are lifted to just below the top hit (the measured #1
@@ -1690,18 +1680,54 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     auto [ flooredTopN, floorNote ] = relevanceFloorCut( lensRank, forTopN );
     forTopN = flooredTopN;
 
+    // L-W: the FILE PAGE — the same ranking, the same evidence, the same renderer as the CLI --for --limit=N
+    // (forpage.h), so the two dialects cannot serve a different page. Its own <files> root; nothing below runs.
+    const std::string_view mcpRootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();
+    if( page.limit > 0 || page.offset > 0 )
+    {
+        const ForFilePage filePage = computeForFilePage( ing, lensRank, mcpEvidence );
+        // PR #215 review item 4: this page composed "routed: " + rc.reason by hand and so answered in a spelling
+        // row 6 retired everywhere else — a parity break with the CLI page AND with this server's own bundle two
+        // functions down. ONE producer (filter.h routeNoteOf), same call as every other site.
+        const std::string pageRootOpen = ctxRootOpen( task, routeNoteOf( rc, shape, noRoute ), mcpRootArg );
+        return renderForFilePageXml( ing, filePage, ForPageRenderParts{ task, pageRootOpen, forCoveragePct( mcpEvidence, topLensId( lensRank ) ),
+                                                                        page.limit, page.offset, mcpRootArg, /*compactLegend=*/false } );
+    }
+
     // H14 (capture-audit 2026-09-04): the ROUTING TRUST GAUGE. The CLI --for root carries
     // confidence=/margin_pct= — "is this ranked head sharp, or is it flat and therefore a starting point
     // rather than an answer" — and this twin carried neither, on the surface whose whole job is to route an
     // agent. It is a pure function of the finished lensRank (lexical.h's adaptiveCut → deriveForConfidence,
     // the CLI's own call with the CLI's own arguments), so there was never a cost reason for the omission.
     const AdaptiveCut   mcpForCut = adaptiveCut( lensRank, 5, std::size_t( forTopN ), /*scanFullDistribution=*/true );
-    const ForConfidence mcpForConf = deriveForConfidence( mcpForCut, forTopN );
+    ForConfidence       mcpForConf = deriveForConfidence( mcpForCut, forTopN );
+    // THE BUNDLE'S RESOLVED SURFACE (top-N by lensRank — the set <sigs> selects), shared by the compose
+    // view, the B6.3 route view and (§P3) the <lego> scope filter. Same order the CLI --for uses. Hoisted
+    // above the header (L-W): the thin verdict reads it.
+    const std::size_t   S = ing.symbols.size();
+    std::vector<NodeId> lensSurfaceIds( S );
+    for( NodeId i = 0; i < NodeId( S ); ++i )
+    {
+        lensSurfaceIds[i] = i;
+    }
+    std::sort( lensSurfaceIds.begin(), lensSurfaceIds.end(),
+               [ &lensRank ]( NodeId a, NodeId b ) { return lensRank[a] != lensRank[b] ? lensRank[a] > lensRank[b] : a < b; } );   // id tiebreak → deterministic (most lens scores tie at 0)
+    lensSurfaceIds.resize( std::min<std::size_t>( std::size_t( forTopN ), S ) );
+    // L-W: coverage= joins the pair on this root on a THIN answer only (present-only, the CLI twin's rule in
+    // forpage.h) — same clause, same byte exemption (mcpConfidenceExemptBytes reads the sizes below); the same
+    // verdict puts the widening page on the r=1 row's next=.
+    const int         mcpCoverage   = forCoveragePct( mcpEvidence, topLensId( lensRank ) );
+    const bool        mcpThin       = forAnswerIsThin( mcpCoverage, distinctFilesOf( ing, lensSurfaceIds ) );
+    const std::string mcpTopRowNext = mcpThin ? forWidenNext( task ) : std::string();
+    if( mcpThin && mcpCoverage >= 0 )
+    {
+        mcpForConf.attrs += " coverage=\"" + std::to_string( mcpCoverage ) + "\"";
+        mcpForConf.note  += kForCoverageLegend;
+    }
 
     const std::vector<char>  impure    = computeImpure( ing, ix.g );
 
     // fan-in counts: in-degree per node (how many symbols call this one — the "reuse" metric)
-    const std::size_t S = ing.symbols.size();
     std::vector<std::uint32_t> fanIn( S, 0 );
     {
         const auto* ro = ix.g.inEdges.rowOffsets();
@@ -1747,7 +1773,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // §L10b + verify-wave2 F6: same trim as the CLI --for twin (verbs_for.h) — no leading " [" and no
     // trailing "]"; the value lands only in route=, where the attribute quote is the delimiter.
     const std::string mcpForAtAttrStr = gitstamp::atAttr( root );   // M10's at=, computed once: spliced onto the root AND exempted from the sigs charge below
-    std::string rootOpenStr = ctxRootOpen( task, noRoute ? std::string() : ( "routed: " + rc.reason + shapeDemotionNote( shape ) ),
+    std::string rootOpenStr = ctxRootOpen( task, routeNoteOf( rc, shape, noRoute ),   // row 6: the route CODE, ONE producer (filter.h)
                                            flRootArg );   // §B1.7: same root attrs as the CLI twin (no route= under no_route, as --no-route)
     if( !rootOpenStr.empty() && rootOpenStr.back() == '>' )
     {
@@ -1791,10 +1817,33 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         // the splice at the end of this function.
         rootOpenStr.insert( rootOpenStr.size() - 1, " lens=\"churn,amp,tested\"" );
     }
+    // Read off the BUILT root open, never re-derived from noRoute: the two must agree, and only one of them is
+    // what the caller actually receives.
+    const bool  mcpForRouteAttrOn = rootOpenStr.find( " route=\"" ) != std::string::npos;
+    // PRESENT-ONLY, ON BOTH DIALECTS (CodeRabbit, PR #215, second round). The CLI lens made both droppable
+    // readings present-only — sc= when a row this bundle could serve carries a scope, route= when the root
+    // carries the attribute — while this twin appended kForIdRouteLegend UNCONDITIONALLY, so a scope-free answer
+    // DEFINED an attribute that no row carried; and the exemption ledger below hand-built the same decision a
+    // second time, which is the four-sites-one-rule drift rw::forIdRouteLegendParts exists to close. Same rule
+    // and the same deliberate OVER-approximation as the CLI twin (verbs_for.h forScPresent): read off the RANKED
+    // SET, before the header is built, because the header built here is the one this dialect serves — the trim
+    // ladder may still drop the only scoped row, and a reading with nothing to define costs 29 B while the
+    // reverse costs a reader an attribute with no definition anywhere in the document.
+    bool mcpForScPresent = false;
+    for( std::size_t i = 0; i < ing.symbols.size() && !mcpForScPresent; ++i )
+    {
+        mcpForScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
+    }
+    // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
+    const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
-                            "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
+                          + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
+                          // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
+                          // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
+                          + std::string( mcpIdRouteParts.route )
+                          + "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
                           + std::string( mcpForConf.note )
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
                           // hyphen is ill-formed (G4), so the CLI verb is named without its dashes.
@@ -1810,16 +1859,6 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // function's own comment for why a shorter wording, not the shared 18-verb kRootRelPathsLegend, closes
     // this gap: this lens's ceiling is the one place the full 159 B clause measurably does not fit.
     const auto renderToString = [ ]( auto&& emitFn ) -> std::string { return captureXml( emitFn ); };
-    // THE BUNDLE'S RESOLVED SURFACE (top-N by lensRank — the set <sigs> selects), shared by the compose
-    // view, the B6.3 route view and (§P3) the <lego> scope filter. Same order the CLI --for uses.
-    std::vector<NodeId> lensSurfaceIds( S );
-    for( NodeId i = 0; i < NodeId( S ); ++i )
-    {
-        lensSurfaceIds[i] = i;
-    }
-    std::sort( lensSurfaceIds.begin(), lensSurfaceIds.end(),
-               [ &lensRank ]( NodeId a, NodeId b ) { return lensRank[a] != lensRank[b] ? lensRank[a] > lensRank[b] : a < b; } );   // id tiebreak → deterministic (most lens scores tie at 0)
-    lensSurfaceIds.resize( std::min<std::size_t>( std::size_t( forTopN ), S ) );
 
     // §P3: same scope + identity the CLI --for embeds — the MCP bundle must not carry wider scope (interfaces
     // this task never reached) or less identity (p= on every row) than its CLI twin.
@@ -1846,7 +1885,13 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // ranked row the CLI still served (test/mcpforparitycheck.sh (2), two of four conceptual tasks). The
     // header bytes stay real downstream (the payload is what it is); only the sigs allowance stops paying.
     const std::size_t mcpConfidenceExemptBytes = mcpForConf.attrs.size() + mcpForConf.note.size() + mcpForAtAttrStr.size();
-    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes
+    // Row 6 (2026-09-12): the sc=/route= reading (kForIdRouteLegend, appended above) is exempt on the same contract —
+    // charged, it grew this header by 259 B and dropped one ranked row the CLI still served (mcpforparitycheck (2),
+    // two of four conceptual tasks: the exact regression the paragraph above records for the 125 B of 2026-09-04).
+    // …and the SAME decision the append made, so the ledger can never subtract a clause the header never wrote
+    // (the CLI twin's own idRouteParts ledger, verbs_for.h, for the identical reason).
+    const std::size_t mcpIdRouteExemptBytes = mcpIdRouteParts.bytes();
+    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes
                                  + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
     const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
 
@@ -1873,7 +1918,8 @@ inline std::string forTaskText( const std::string& root, const std::string& task
                         /*hasRelevanceFloor=*/true,           // LB-A: shrink past the zero-score tail, never pad
                         &mcpDroppedPositive,                  // A2: exact count, see droppedPositiveCount (serialize.h)
                         &mcpShownIds,                         // lane 2: see verbs_for.h shownSigIds
-                        &mcpSigsCapped );                     // the ladder's own verdict — see the budget_bytes= splice below
+                        &mcpSigsCapped,                       // the ladder's own verdict — see the budget_bytes= splice below
+                        mcpTopRowNext );                      // L-W: the widening page on a thin answer, else the body
     } );
     // A2: same insert-before-"-->" splice as the CLI twin (verbs_for.h) — absent entirely on the (overwhelming)
     // no-drop path, so headerStr's bytes are unchanged there (byte-identical to the pre-A2 output). Bare
@@ -3536,7 +3582,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     lr.rank      = ( rc.which == LexMode::NameExact ) ? lexicalScoresNameExactRanked( ing, task, &tierMul )
                                                        : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul );
     // §L10b + verify-wave2 F6: same trim as the other route= construction sites — neither bracket.
-    lr.routeNote = noRoute ? std::string() : ( "routed: " + rc.reason + shapeDemotionNote( shape ) );
+    lr.routeNote = routeNoteOf( rc, shape, noRoute );   // row 6: the route CODE, ONE producer (filter.h)
 
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {
@@ -4676,7 +4722,7 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "for" ) );
         }
-        r.payload = forTaskText( root, task, redactPtr );
+        r.payload = forTaskText( root, task, redactPtr, 0, false, pageParse.page );   // L-W: the batch arm pages the file page too
         if( r.payload.empty() )
         {
             return bad( "no symbols found" );

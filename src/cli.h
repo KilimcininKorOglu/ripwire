@@ -3,12 +3,14 @@
 // cli.h — hand-rolled zero-dependency argument parser. Linear argv scan into one
 // POD Config; flags are additive; first non-flag positional is the root path.
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -783,7 +785,8 @@ inline constexpr char kHelpHead[] =
         "                               keep the N highest-ranked symbols (default 200) — applies to the default map,\n"
         "                               plain --query, and --format=candidates (incl. with --for). --for's OWN\n"
         "                               signature/lego/compose bundle self-limits via --pack-top-n instead — --top-k is\n"
-        "                               INERT there (documented, not fixed — a real fix is a behavior change).\n"
+        "                               INERT there (documented, not fixed — a real fix is a behavior change); to WIDEN a\n"
+        "                               --for answer use --limit=N, the file-grain page (one row per file), not --top-k.\n"
         "                               --pack-task/--from-trace/--run-trace self-budget via --token-budget, not --top-k.\n"
         "                               --top-k=0 emits NO ranked map at all — ONLY the payload you asked for\n"
         "                               (--expand/--outline/--pack-signatures/--pack-top-n). Use it when you want the\n"
@@ -908,7 +911,25 @@ inline constexpr char kHelpHead[] =
         "                               carries the same two keys). low means the ranking is FLAT (no material score cliff\n"
         "                               and more positive matches than the head shows) — treat the set as a starting point,\n"
         "                               not an answer; high means a material cliff inside the served head (margin_pct= is\n"
-        "                               that drop as a whole percent) or every positive match already shown\n"
+        "                               that drop as a whole percent) or every positive match already shown.\n"
+        "                               COVERAGE, and the widening page: on a THIN answer only, the root also carries\n"
+        "                               coverage=\"N\" — the IDF-weighted share (whole percent) of the task's subtokens found\n"
+        "                               in the top-ranked symbol's name, doc or body; an unmatched subtoken weighs as the\n"
+        "                               rarest, so a \"(#12147)\" token honestly lowers it. THIN = coverage under 50, or a ranked\n"
+        "                               head spread over fewer than 3 files: coverage= and its legend clause ride the root\n"
+        "                               (present-only: a confident answer carries neither) and the r=1 row's next= names\n"
+        "                               --for=TASK --limit=40 instead of --expand — the FILE-GRAIN WIDENING PAGE:\n"
+        "                               <files task= route= root= coverage= shown= total= capped= …><f p= score= n= sym=/>…,\n"
+        "                               ONE row per positive-score file (~100 B each), ranked file-first by score= = the\n"
+        "                               IDF-weighted share of the task's subtokens the file's top 8 symbols cover between\n"
+        "                               them (a term counts once however often it recurs, so one huge file cannot\n"
+        "                               monopolise; ties by the best symbol's lens score, then path), n= its positive-score\n"
+        "                               symbols, sym= its top symbols. --limit=N sets the rows, --offset=M pages (the house\n"
+        "                               quintet + next= on a cut page). The page takes NO bundle-shaping flag (--json,\n"
+        "                               --format=candidates, --detail, --signatures-only, --auto-bodies, --adaptive,\n"
+        "                               --token-budget, --top-k …): each is refused beside --limit, never ignored. Measured\n"
+        "                               on the routing-loop ladder (RocksDB, frozen 30): the follow-up that completes\n"
+        "                               answers where a body cannot.\n"
         "    --signatures-only          (with --for) signatures only: no automatic bodies in the bundle\n"
         "                               (with --for) opt out of the terminal-by-default bundle: no auto bodies, no bundle=\"auto\"\n"
         "                               attribute — the signatures-only lens exactly as before. Contradicts --detail=N (refused\n"
@@ -931,6 +952,12 @@ inline constexpr char kHelpHead[] =
         "                               down (repo meta-prose - issue templates, CONTRIBUTING, changelogs - twice as hard) and route= names the\n"
         "                               shape, its evidence and both factors. Demotion, never exclusion, and the mention anchor still lifts a\n"
         "                               document the task NAMES. --no-route has no route= to disclose it in, so it does not demote either.\n"
+        "                               route= is a CODE: name-exact(X) = the task names symbol X (the anchors: clause after it is the\n"
+        "                               evidence); subtoken+body = the conceptual ranker over names and bodies; subtoken+body:broad = a\n"
+        "                               one- or two-word query where plain rg may also win; subtoken+body:declined(word;N-carriers,M-defs)\n"
+        "                               = a name hit refused because the word is a common name (N names carry it, M definitions); a shape\n"
+        "                               demotion appends \"; doc tier demoted (...)\". On the rows, sc= is the enclosing scope and the full id\n"
+        "                               is p::sc::n (p= of the row or its <f>) - the spelling --expand/--callers/--impact/--uses accept.\n"
         "    --adaptive                 (with --for/--query) cut the result at the relevance cliff instead of at a fixed K\n"
         "                               (with --for/--query) cut the result at the relevance CLIFF — the largest relative score gap\n"
         "                               (Adaptive-k), floor 5, ceiling = the existing top-k; a sharp query returns few, a flat/broad one\n"
@@ -1213,7 +1240,7 @@ inline constexpr char kHelpHead[] =
         "                                 FILE:LINE:NAME      paste a row's p=\"path:line\" straight from --callers/--lint/--grep\n"
         "                                                     (NOT --hotspots: its p= is a BARE path — build FILE:LINE:NAME from its\n"
         "                                                      own p=/top_l=/top= instead, since top= is just the worst function's name)\n"
-        "                                 path::scope::name   the canonical id= --for/--pack-task emit\n"
+        "                                 path::scope::name   the id composed from a row's p= sc= n= (the map, --for, --pack-task)\n"
         "                                 Scope::name         the sym= spelling edit-check and grep's in= rows print — matches the name\n"
         "                                                     under any scope whose ::-boundary SUFFIX is Scope (Box::lid, deep::Box::lid);\n"
         "                                                     a wrong scope refuses, it never falls back to the bare-name union\n"
@@ -1662,7 +1689,7 @@ inline constexpr char kHelpHead[] =
         "                               on a payload that is unreadable, empty, oversize or NUL-bearing, on one whose splice raises\n"
         "                               the file's parse errors, on one that does not define SYM, and on a span the file's current\n"
         "                               bytes no longer fit. Single-root, and it previews a body REPLACEMENT only.\n"
-        "    --replace-symbol-body=TARGET   replace one definition's body atomically with the bytes from --edit-payload\n"
+        "    --replace-symbol-body=TARGET   replace one whole definition atomically with the bytes from --edit-payload\n"
         "                               atomically replace one uniquely-resolved definition with the bytes from --edit-payload=FILE|-\n"
         "                               (ONE trailing newline on the payload folds into the newline already after the span — a heredoc\n"
         "                               or echo always appends one the span never had; disclosed as trailing_newline_folded=true; a\n"
@@ -2378,7 +2405,7 @@ inline constexpr char kHelpTail[] =
         "                               --zoom --external-surface --dead-code --mentions --graph-query --stray-content\n"
         "                               --test-gate --readability --ensemble --quality-panel --context-ratio\n"
         "                               --nonlocal-state --comment-coherence --naming-consistency --safe-delete --pr-context\n"
-        "                               --edit-check --flags --situ.\n"
+        "                               --edit-check --flags --situ --for.\n"
         "                               Emit at most N rows, skipping the first M; N overrides the verb's own display cap\n"
         "                               (40 hotspot files, 30 co-change pairs, 60 whereis hits, 100 grep/match hits, 40\n"
         "                               impact rows, 20 seam pairs, 40 readability rows, 40 ensemble symbol rows, 40 context-ratio\n"
@@ -2394,7 +2421,10 @@ inline constexpr char kHelpTail[] =
         "                               default cap cut rows (capped=\"1\") carries the same limit=\"0\" and the whole\n"
         "                               paging block below, so you can page from the first answer without guessing.\n"
         "                               Deterministic seams (rows are already sorted) so --offset=N is the exact\n"
-        "                               continuation of the previous --limit=N page. The root element then carries\n"
+        "                               continuation of the previous --limit=N page. On --for, --limit=N/--offset=M do not\n"
+        "                               window the bundle: they select its FILE-GRAIN WIDENING PAGE instead (one <f p=\n"
+        "                               score= n= sym=> row per positive-score file, ranked file-first; see --for), the\n"
+        "                               answer to \"the head missed it, show me more files\". The root element then carries\n"
         "                               shown= capped= total= has_more= next_offset= offset= limit= — loop until\n"
         "                               has_more=\"0\". capped= compares the PAGE to the total (1 ⇔ shown < total), so a\n"
         "                               page past the end reads shown=\"0\" capped=\"1\" has_more=\"0\": nothing was cut,\n"
@@ -2412,9 +2442,11 @@ inline constexpr char kHelpTail[] =
         "                               status=/defs=/callers=/incompatible= are computed over the FULL caller set\n"
         "                               before any window, so a page can never make the verdict say less than it knows.\n"
         "                               Any verb NOT in that list REFUSES both flags (exit 1) rather than accepting and\n"
-        "                               ignoring them: budget/top-k verbs (--for/--recall/--pack-task/--from-trace/\n"
+        "                               ignoring them: budget/top-k verbs (--recall/--pack-task/--from-trace/\n"
         "                               --expand/--outline/--pack-signatures/--format=candidates) are shaped by\n"
-        "                               --top-k/--max-tokens/--token-budget, not a page; the rest (--path/--connect/\n"
+        "                               --top-k/--max-tokens/--token-budget, not a page (--for's bare bundle is shaped by\n"
+        "                               --token-budget the same way, and takes --limit/--offset only as its file page, where\n"
+        "                               the budget flags are refused in turn); the rest (--path/--connect/\n"
         "                               --around/--exemplar/--report/--mermaid/--map-diff/--metrics and the default map)\n"
         "                               answer with a single fixed-shape result that has no row list to window at all.\n"
         "    --exclude=SUBSTR           drop matching paths (repeatable)   --ignore-tests\n"
@@ -3079,6 +3111,15 @@ inline constexpr ViewFlag kViewFlags[] =
     { "--pack-task=",      &Config::packTask        , EmptyValue::HandlerRefuses, nullptr, nullptr, &Config::packTaskFlag },     // "--pack-task: a task string is required"
 };
 
+// Does THIS build ship the flag spelled `prefix`? Asked by the surfaces that COMPOSE a command for someone
+// else to run — the task router is the first — because a recommendation carrying a flag the parser it will
+// be handed to has no row for exits non-zero on the first paste. The table is the only honest answer: a
+// hand-kept list of "flags we have" is a second source that drifts, which is the disease §B5 above treats.
+inline constexpr bool shipsViewFlag( std::string_view prefix ) noexcept
+{
+    return std::ranges::any_of( kViewFlags, [prefix]( const ViewFlag& vf ) { return vf.prefix == prefix; } );
+}
+
 // §B5 - the column above is only a decision if the build enforces it. `needs`/`example` are the Refuse
 // sentence's two halves: a Refuse row without them would print "it needs (null)", and a Meaningful or
 // HandlerRefuses row that carries them is a row whose author wrote a refusal the scan will never print -
@@ -3415,7 +3456,7 @@ constexpr const char* kPagingHonoringVerbs =
     "--communities --community --whereis --grep/--regex --match --pattern --impact --uses --exercises "
     "--seams --zoom --external-surface --dead-code --mentions --graph-query --stray-content --test-gate "
     "--readability --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
-    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ";
+    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ --for";
 
 inline bool honorsPaging( const Config& c ) noexcept
 {
@@ -3429,7 +3470,12 @@ inline bool honorsPaging( const Config& c ) noexcept
         || c.namingConsistency || !c.safeDeleteSym.empty() || c.prContext   // P4 (L7): the changed-file window
         || !c.editCheckSym.empty()    // 2026-09-10: --edit-check windows its UNFLAGGED caller rows (editcheck.h)
         || c.darkFlags                // 2026-09-10 (C1 F-07): --flags' per-gate <read> sites, and --flip's six listings
-        || c.situ || !c.situFiles.empty();   // 2026-09-10 (C1 F-10): --situ sections [1] and [3] (section [2] is the answer)
+        || c.situ || !c.situFiles.empty()    // 2026-09-10 (C1 F-10): --situ sections [1] and [3] (section [2] is the answer)
+        // L-W (2026-09-12, forpage.h): --for joins ONLY when a window is asked for — --limit/--offset select its
+        // FILE-GRAIN widening page. Membership is conditional on purpose: the bare --for bundle keeps honoring
+        // --token-budget/--max-tokens/--format=candidates --top-k, which validateShapingFlagsHonored refuses on
+        // every paging member — and refuses beside the page too, where no byte ceiling exists to shape against.
+        || ( !c.forTask.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) );
 }
 
 // --limit/--offset on a verb that windows NOTHING. Same accept-then-silently-ignore class as every guard in
@@ -4397,6 +4443,30 @@ inline void validateConfig( Config& c ) noexcept
     }
 
     refuseAutoBodiesMisuse( c );   // the three --auto-bodies guards, out of line (see above validateConfig)
+
+    // L-W (forpage.h): `--for --limit/--offset` is the FILE PAGE, a document of its own with no bundle to shape —
+    // every bundle-shaping flag beside it would be accepted-and-ignored, the named failure family this file
+    // refuses everywhere else (§H4). Named one at a time, so the remedy is the flag to drop. --top-k,
+    // --max-tokens and --token-budget are refused by validateShapingFlagsHonored (the page is a paging member).
+    if( !c.forTask.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) )
+    {
+        struct PageShapeFlag { const char* name; bool set; };
+        const PageShapeFlag shapeFlags[] = {
+            { "--json",              c.json },            { "--format=candidates", c.candidates },
+            { "--detail=N",          c.detail > 0 },      { "--signatures-only",   c.signaturesOnly },
+            { "--auto-bodies",       c.autoBodies },      { "--adaptive",          c.adaptive },
+            { "--with-graph",        c.withGraph },       { "--compress",          c.compress },
+            { "--pack-top-n=N",      c.packTopN > 0 },    { "--anchor",            c.anchor },
+        };
+        for( const PageShapeFlag& f : shapeFlags )
+        {
+            if( f.set )
+            {
+                rw::emitTo( stderr, "ripwire: --for --limit/--offset is the file-grain widening page (one <f> row per file, its own <files> document) — it has no bundle for {} to shape, so the flag is refused rather than ignored: drop {} for the page, or drop --limit/--offset for the bundle\n", f.name, f.name );
+                c.ok = false;
+            }
+        }
+    }
 
     // §P6.4: --owners is ALSO a legal --detail=N companion (restores the full per-file listing instead of
     // the <uniform/> collapse) — stacked as its own `if` rather than folded into the && chain below so this

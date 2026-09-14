@@ -129,6 +129,26 @@ inline constexpr std::string_view kAtSeedShortClause = "@FILE:LINE line-seeds re
 // NAME, so a line-seed cannot narrow the scan — instead it REBINDS to the innermost enclosing definition
 // and the answer says so ('sym'), the one-step-smart-defaults posture: the call carries the answer, never
 // a pass-the-name-yourself retry.
+// E1 / review of #214: the tests_to_run ROW SHAPE, for the three tools that serve those rows as JSON. The
+// rows grew a second shape and these descriptions still promised the first — a caller reading `p` as a
+// string breaks on the array, and `run_unknown` appeared nowhere in this file at all. ONE wording, spliced,
+// never a fourth paraphrase; the manifest ceiling moves with it, measured, in the same commit.
+//
+// CodeRabbit on #214: the first wording named the key `p`, and only one of the three producers spells it
+// that way. situational_awareness emits "test" (mcpverbs.h, TestRowShape{ Json, "test" }); explore
+// (packtask.h) and the edit receipt (mcpedit.h) emit "p". So the clause told a situational_awareness caller
+// to read a key its answer does not carry — worse than the silence it replaced, because it reads as a
+// contract. Both spellings are named, per producer, in the SINGLE quotes kAtSeedRebindClause already uses
+// for a key: this string is spliced straight into the tools/list JSON, so a double quote here has to survive
+// a C++ literal AND JSON escaping to keep the manifest parseable — the first draft did not, and mcpmanifest-
+// check caught it as a JSONDecodeError rather than a byte count. The key is the ONLY thing that differs: the
+// string-or-array rule, the `n` beside an array, and the run/run_unknown obligation are one rule for all
+// three, and are stated once.
+inline constexpr std::string_view kTestRowJsonShapeClause =
+    "tests_to_run rows: the path key is 'test' on situational_awareness and 'p' on explore and the edit "
+    "receipts; its value is a path STRING, or an ARRAY of paths beside n when several runner-less tests share "
+    "their attributes and are served as ONE row; every row carries run (the command) or run_unknown:true. ";
+
 inline constexpr std::string_view kAtSeedRebindClause =
     "An @FILE:LINE line-seed rebinds to the innermost definition enclosing that line and answers for it, "
     "disclosing the rebound name as 'sym' (see find_symbol for the seed grammar).";
@@ -720,7 +740,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    // while the CLI --recall began honoring --top-k in this round's Wave 1.
                    "{\"name\":\"memory_recall\",\"description\":\"Most relevant memory notes / docs for a task, full text — the few that matter, not the whole corpus. path = docs/memory dir; task = what you're working on; top_k = docs to return, 1..1000 (default 8), refused outside that band, never clamped; budget_tokens = the body ceiling in tokens (default 8000) — it SHAPES to fit, the CLI --recall's --max-tokens, not --token-budget's refuse-if-over GATE, and the header discloses max_tokens= and every cut.\","
                    + mcprefuse::toolMetadataFor( "memory_recall", pathIsRequired ) + "},"
-                   "{\"name\":\"situational_awareness\",\"description\":\"The 5 things to know about a diff, as JSON: blast_radius, tests_to_run, forgotten (usual co-change partners missing from this diff), hotspot_alert, modules_touched. forgotten = the Shotgun Surgery check. diff/files optional — defaults to 'git diff HEAD'. files is a STRING of comma-separated paths (files=\\\"src/a.cpp,src/b.h\\\"), not an array; an array is refused rather than read as absent, which would answer about the working tree instead of the files you named. limit/offset page blast_radius and forgotten only; with no limit every row is served, as always.\","
+                   "{\"name\":\"situational_awareness\",\"description\":\"The 5 things to know about a diff, as JSON: blast_radius, tests_to_run, forgotten (usual co-change partners missing from this diff), hotspot_alert, modules_touched. forgotten = the Shotgun Surgery check. diff/files optional — defaults to 'git diff HEAD'. files is a STRING of comma-separated paths (files=\\\"src/a.cpp,src/b.h\\\"), not an array; an array is refused rather than read as absent, which would answer about the working tree instead of the files you named. limit/offset page blast_radius and forgotten only; with no limit every row is served, as always. " + std::string( kTestRowJsonShapeClause ) + "\","
                    + mcprefuse::toolMetadataFor( "situational_awareness", pathIsRequired ) + "},"
                    "{\"name\":\"mentions\",\"description\":\"Docs (markdown plans/designs) that name a code symbol in a backtick. symbol = the code symbol name; limit/offset page the files. " + std::string( kAtSeedRebindClause ) + "\","
                    + mcprefuse::toolMetadataFor( "mentions", pathIsRequired ) + "},"
@@ -764,7 +784,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    // L4 — the one-call orientation front door + B11 verb parity. `explore` is
                    // the SAME handler as the CLI --pack-task; the older name `pack_task` still dispatches (tools/call
                    // name=="pack_task" works) but is not separately advertised here — see mcp.h's kMcpVerbTable comment.
-                   "{\"name\":\"explore\",\"description\":\"ONE-call task orientation: the routed+anchored ranking, full bodies of the top hits, their 1-hop callers, field notes, and tests_to_run — ALL under one deterministic byte budget, in a fixed section order (ranking > bodies > callers > notes > tests) that degrades gracefully and reports every truncation. Replaces the for -> fetch_body -> find_referencing_symbols -> memory_recall dance when you want the whole orientation at once; for JUST the ranked inventory use 'for'. Same handler as the CLI --pack-task. ALIAS: tools/call name='pack_task' answers this exact tool with these exact arguments (it gets no separate tools/list entry). task = the task in plain words; budget_tokens = optional (default 6000); partition = optional 2..16, refused outside that band — FANNING OUT to N agents on ONE task? Ask for it and get one shared core plus N minimally-overlapping slices carved along the call graph's own communities, budget_tokens then meaning ONE agent's budget. Read overlap_max/split before trusting the slices.\","
+                   "{\"name\":\"explore\",\"description\":\"ONE-call task orientation: the routed+anchored ranking, full bodies of the top hits, their 1-hop callers, field notes, and tests_to_run — ALL under one deterministic byte budget, in a fixed section order (ranking > bodies > callers > notes > tests) that degrades gracefully and reports every truncation. Replaces the for -> fetch_body -> find_referencing_symbols -> memory_recall dance when you want the whole orientation at once; for JUST the ranked inventory use 'for'. Same handler as the CLI --pack-task. ALIAS: tools/call name='pack_task' answers this exact tool with these exact arguments (it gets no separate tools/list entry). task = the task in plain words; budget_tokens = optional (default 6000); partition = optional 2..16, refused outside that band — FANNING OUT to N agents on ONE task? Ask for it and get one shared core plus N minimally-overlapping slices carved along the call graph's own communities, budget_tokens then meaning ONE agent's budget. Read overlap_max/split before trusting the slices. " + std::string( kTestRowJsonShapeClause ) + "\","
                    + mcprefuse::toolMetadataFor( "explore", pathIsRequired ) + "},"
                    "{\"name\":\"from_trace\",\"description\":\"Paste a stack trace / sanitizer report / compiler error and get it mapped onto indexed symbols, ranked INNERMOST-first: the parsed <trace> frame map, the ranked suspects' signatures, and the innermost in-corpus symbol's FULL body. Out-of-corpus frames are listed and counted, never ranked, and the counters CLOSE (in_corpus = suspects + merged + unresolved). Each frame binds by its own NAME first, falling back to the def enclosing its line only when that name is absent or ambiguous — resolved_by= and any name-vs-line disagreement are disclosed, never silently rebound. Same handler as the CLI --from-trace. A failing-test trace also gets a test_hop block reaching the source symbols behind the assertion, labelled heuristic. trace = the raw trace TEXT (paste it, don't hand-translate it into a query); budget_tokens optional.\","
                    + mcprefuse::toolMetadataFor( "from_trace", pathIsRequired ) + "},"
@@ -1480,9 +1500,19 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 else if( name == "for" && !path.empty() && !task.empty() )
                 {
                     // M13: `budget_tokens` — the same knob the CLI --for takes, absent here until now.
-                    const std::string t = forTaskText( path, task, redactPtr,
-                                                       budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute );
-                    resp = t.empty() ? errResult( -32602, "no symbols found" ) : textResult( t );
+                    // L-W: limit/offset select the FILE PAGE (the CLI --for --limit=N twin), read by the same
+                    // mcpPageArgs every paging twin uses; a budget beside a page is refused, as the CLI refuses
+                    // --token-budget beside --limit — the page has no byte ceiling to shape against.
+                    resp = pagedResult( [ & ]( McpPageArgs pg )
+                    {
+                        if( ( pg.limit > 0 || pg.offset > 0 ) && budgetArg.isPresent )
+                        {
+                            return errResultMsg( -32602, "for: limit/offset select the file page, which has no token budget to shape against — drop budget_tokens, or drop limit/offset for the budgeted bundle" );
+                        }
+                        const std::string t = forTaskText( path, task, redactPtr,
+                                                           budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg );
+                        return t.empty() ? errResult( -32602, "no symbols found" ) : textResult( t );
+                    } );
                 }
                 else if( name == "lego" && !path.empty() && !type.empty() )
                 {

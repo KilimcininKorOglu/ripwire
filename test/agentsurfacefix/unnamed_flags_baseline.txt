@@ -1,0 +1,12 @@
+# unnamed_flags_baseline.txt — THE AGENT-SURFACE FLOOR (test/agentsurfacecheck.sh arm A).
+#
+# One line per long flag `--help` advertises that NO skill body and NO `ripwire wrap` primer line names.
+# Produced mechanically by the gate, which FAILS on any flag not recorded here — so this file is a
+# RATCHET: a new flag cannot ship with no way for an agent to hear about it, and this list may only be
+# edited DOWNWARD. Arm A also fails when a line here is no longer a gap, so a closure cannot be recorded
+# and forgotten.
+#
+# It is an INVENTORY OF KNOWN DEBT, not an approval. Every line carries the reason it is still here.
+--eval-skills        maintainer self-eval harness; the router skill names the --eval family as "not an agent moment"
+--eval-stray         maintainer self-eval harness, same class
+--max-file-size      a crawl ceiling, not a question an agent asks; --skipped is the surface that reports its effect

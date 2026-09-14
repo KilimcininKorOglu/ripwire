@@ -9,6 +9,13 @@
 # words never touch. This gate asserts:
 #   * GOLDEN NEUTRALITY — --for WITHOUT --anchor is byte-identical to the pre-change golden capture
 #     (test/anchorfix/golden_for.xml, captured from the pre---anchor binary).
+# NOT RE-PINNED 2026-09-13 (lane/sc-legend, PR #215), and the round trip is the point. The sc= composition rule
+# first joined this legend (+29 B, est_tokens 1349 -> 1361); the review round then made BOTH identity readings
+# present-only, and every row this fixture serves is a free function with no enclosing scope, so the reading has
+# nothing to define here and does not ride. The golden is byte-identical to its pre-lane self at 3,557 B. That is
+# the present-only rule working: a corpus with no scoped symbols pays nothing for the vocabulary of scope, and a
+# corpus with them pays 29 B once. This probe is also --no-route, so the route= reading is absent too -- the
+# control on the other half of the same rule.
 #   * the targeted expansion case — frobnicateWidgetCache (the lexical anchor) directly calls
 #     flushEvictionQueue, which shares NO token with the query: it must appear in the ANCHORED top-4
 #     and must NOT appear in the plain lexical top-4.

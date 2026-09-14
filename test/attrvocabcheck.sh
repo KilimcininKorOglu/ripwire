@@ -250,8 +250,13 @@ if not rows:
     print( "  ..    8) no safe-delete caller row carries amb= on this corpus — the value arm cannot run" ); sys.exit( 0 )
 checked = 0
 for name, path, line, k in rows[ :6 ]:
-    # map rows: <s t= n="NAME" id="PATH::…::NAME" … amb="K">, the id's file half being the same root-relative path
-    cands = re.findall( r'<s [^>]*n="' + re.escape( name ) + r'" id="' + re.escape( path ) + r'::[^"]*"[^>]*>', mp )
+    # ROW 6 (PR #215 review item 7): a map row is <s t= n="NAME" sc="SCOPE"> inside an <f p="PATH"> wrapper —
+    # the path-repeating id= this arm matched on is GONE, so the regex found nothing, `checked` stayed 0, and the
+    # arm printed a PASS line about 0 cross-checks. A gate that reports success for work it skipped is the
+    # harness trap this suite has a name for; the arm now fails on checked == 0 instead of congratulating itself.
+    # Matched by NAME within the <f p=PATH> block that owns it, which is how the composed id p::sc::n is spelled now.
+    block = re.search( r'<f p="' + re.escape( path ) + r'"[^>]*>(.*?)(?=<f p="|\Z)', mp, re.S )
+    cands = re.findall( r'<s [^>]*n="' + re.escape( name ) + r'"[^>]*>', block.group( 1 ) ) if block else []
     if not cands: continue
     checked += 1
     ks = { ( re.search( r' amb="(\d+)"', c ).group( 1 ) if re.search( r' amb="(\d+)"', c ) else "0" ) for c in cands }
@@ -259,8 +264,11 @@ for name, path, line, k in rows[ :6 ]:
         print( f"  ..    8) {name} @ {path}:{line}: safe-delete amb=\"{k}\" but the map row(s) say amb={sorted(ks)}" ); sys.exit( 1 )
     if k == "1" and all( x == "1" for x in ks ) and len( rows ) > 1:
         pass
+if not checked:
+    print( "  ..    8) 0 safe-delete caller rows could be matched to a map row — this arm proved NOTHING and is not a pass" )
+    sys.exit( 1 )
 print( f"  ..    8) {checked} safe-delete caller row(s) cross-checked against their map rows" )
-sys.exit( 0 if checked else 0 )
+sys.exit( 0 )
 PY8
 # the boolean spelling must be gone: a caller with SEVERAL ambiguous calls says so
 if grep -qE '<c [^>]* amb="([2-9]|[1-9][0-9]+)"' "$TMP/sd.xml"; then

@@ -62,6 +62,10 @@ unique costs you the whole map). That is the flow, and it is cheaper than the bo
 of the old bundle on conceptual queries, and the edges tell you which symbol is worth the second call.
 `--auto-bodies` restores inline bodies on that route if you want them; `--signatures-only` drops both
 shapes; `--detail=N` picks the body count explicitly.
+**Composing a selector out of a row** (the map's rows and `--for`'s alike): a scoped row carries `sc=`, its
+enclosing scope, instead of repeating its whole id — the canonical id is `p::sc::n`, assembled from the
+row's own `p=` (or the `<f p=>` it sits under), `sc=` and `n=`. Every selector (`--expand`, `--callers`,
+`--impact`, `--uses`) accepts that composed `path::scope::name`, so paste the three parts, not a bare name.
 `--for` **auto-routes** (default, no flag needed): a query that *names a symbol* (`--for="buildGraph"`) gets
 name-exact BM25 (recall@1 ~99% vs ~77% generic) — **know the name, query it verbatim**; a conceptual phrase
 uses subtoken+body BM25 instead. The header prints which ranker fired; `--no-route` forces the plain ranker.
@@ -70,21 +74,29 @@ gets lifted near the top (+4.9pp held-out; a task naming nothing indexed is byte
 `--no-mention-boost`. It also surfaces DOCS: a markdown design/plan doc that `backtick`-names one of the
 query's top-resolved symbols is lifted into the bundle too (strictly below that symbol's own score) — the
 doc explains it even when its own prose shares no words with your query; disable with `--no-doc-mention`.
+**When the answer comes back THIN, widen before you read.** A thin `--for` answer — the head spread over
+fewer than three files, or `coverage=` under 50 — says so on the root: `coverage="N"` is the IDF-weighted
+share (whole percent) of your query's subtokens found in the top-ranked symbol's name, doc or body, and it
+rides the root **only** on a thin answer (a confident one carries neither the attribute nor its clause).
+The step then is not a body, it is a wider net: `ripwire <dir> --for="<task>" --limit=40` serves the
+FILE-GRAIN page — one row per file holding any positive-score symbol, `score=`/`n=`/`sym=` per row,
+`--offset=M` for the next page. A thin answer's own `next=` names that page for you; reach for it on the
+FIRST call when the task is vague enough that one ranked head is unlikely to hold the answer.
 `--adaptive` cuts the result at the relevance cliff instead of a fixed top-k. Same
 routing in the MCP `for` verb. Orienting from a pasted issue/bug-report's own text? `--anchor` beats plain
 `--for` on Loc-Bench (n=560) — a mild win, not a default (`bench/locbench/README.md`). `--cochange-boost` is
 an experimental, off-by-default co-change prior — see `ripwire --help` before reaching for it.
 
-**3. File-by-file map** — `ripwire <dir> --tree` — each file with its top symbols, a quick "what's where".
+**3. File-by-file map** — `ripwire <dir> --tree --legend=compact` — each file with its top symbols, a quick "what's where".
 
-**4. Cohesive modules** — `ripwire <dir> --communities` — `<communities modules="N">`, each cluster with its
+**4. Cohesive modules** — `ripwire <dir> --communities --legend=compact` — `<communities modules="N">`, each cluster with its
 dominant directory and lead symbols; `<bridge>` edges show tight coupling between clusters. Use it to decide
 where a new feature belongs. Each row shows only its top five members — to see one module in full,
-`ripwire <dir> --community=ID` (the `id=` from a row, or from `--zoom`): its complete ranked member list
+`ripwire <dir> --community=ID --legend=compact` (the `id=` from a row, or from `--zoom`): its complete ranked member list
 (`--limit`/`--offset` page it) plus every bridge edge that module has. That is the call to make when a
 cluster looks like the one you'll be working in and five names aren't enough to judge it.
 
-**5. Maintenance pain** — `ripwire <dir> --hotspots` — files ranked by `score = churn × ccx`; `top=` names
+**5. Maintenance pain** — `ripwire <dir> --hotspots --legend=compact` — files ranked by `score = churn × ccx`; `top=` names
 the gnarliest function. Plan edits around this list.
 
 **6. Budget it** if the map is large — `--max-tokens=8000` or `--top-k=50`.
@@ -96,7 +108,7 @@ About to fan a single task out to several parallel agents? Do **not** let each o
 pay for the map N times. Run it **once**:
 
 ```bash
-ripwire <dir> --pack-task="<the task in words>" --partition=4
+ripwire <dir> --pack-task="<the task in words>" --legend=compact --partition=4
 ```
 
 You get one `<ctx-partitions>` document: a **shared common core** (the anchors the task is literally about,
@@ -117,7 +129,7 @@ boundary — one `--pack-task` and one agent is the honest answer there.
 
 ## When a flat module list is too coarse (big repos) — zoom out
 
-**7. Nested module hierarchy** — `ripwire <dir> --zoom` (`--zoom=DEPTH` to cap levels; the default prints the top 2
+**7. Nested module hierarchy** — `ripwire <dir> --zoom --legend=compact` (`--zoom=DEPTH` to cap levels; the default prints the top 2
 levels of the 40 largest modules — `levels_shown=`/`shown=` disclose it, `next=` pastes the next page, `--zoom-levels=0`
 prints every level): multi-level Louvain,
 `<module level=N id= size= dir=>`, indent = one level deeper, innermost `level="0"` lists top-ranked members.
@@ -141,9 +153,9 @@ a CodeCharta `cc.json` for its 3D city view; the ladder's visualization end-poin
 **Read the specific files ripwire surfaces** (god-files + hotspots first) — don't grep blindly. A symbol's
 `amb="K"` means K of its calls are ambiguous (the resolver guessed) → read the source if which-target
 matters. A map header showing `skipped_oversize=N` means N otherwise-indexable files were dropped for
-exceeding a size ceiling — they are absent from `files=` and every ranking; `ripwire <dir> --skipped`
+exceeding a size ceiling — they are absent from `files=` and every ranking; `ripwire <dir> --skipped --legend=compact`
 names them (path + bytes + the ceiling that dropped each), so you know what the index cannot show you
-before you trust a "not found". A git root also drops every `.gitignore`d path by default (header `ignored_files=N`, absent when 0; `--skipped` lists them); `ripwire <dir> --no-ignore` restores the full walk when the symbol you want lives in an ignored tree. Caveat: *broad, common-word* questions can still favor plain `rg` —
+before you trust a "not found". A git root also drops every `.gitignore`d path by default (header `ignored_files=N`, absent when 0; `--skipped` lists them); `ripwire <dir> --no-ignore --legend=compact` restores the full walk when the symbol you want lives in an ignored tree. Caveat: *broad, common-word* questions can still favor plain `rg` —
 ripwire shines on specific technical asks. CI-enforceable module boundaries graduate to
 `--arch=rules.txt` (see **ripwire-layers**).
 

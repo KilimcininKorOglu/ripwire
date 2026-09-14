@@ -48,8 +48,10 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 
 cd "$ROOT"
 
-python3 - "$BIN" <<'PY'
-import re, subprocess, sys
+ROOT="$ROOT" python3 - "$BIN" <<'PY'
+import os, re, subprocess, sys
+sys.path.insert(0, os.path.join(os.environ.get("ROOT", "."), "test"))
+import testrowpaths                                   # THE shared tests_to_run row reader
 
 BIN = sys.argv[1]
 fail = [0]
@@ -106,7 +108,11 @@ if dup_count:
     print("  INFO  --test-gate=%s: %d row(s) share a (name,file) key with another row (no line= on <u> to disambiguate) — collapses identically on both sides" % (SAMPLE_FILE, dup_count))
 ok("--test-gate=%s: parsed %d <u> rows into %d distinct (name,file) keys (shown_untested=%s)" % (SAMPLE_FILE, len(testgate_untested_raw), len(testgate_untested), tg_attrs.get("shown_untested")))
 
-testgate_testfiles = set(norm_path(m.group(1)) for m in re.finditer(r'<t p="([^"]+)"', tg))
+# E1 / review of #214: a tests_to_run row may name SEVERAL files (`<g … p="a,b,c" run_unknown="1"/>`),
+# and this set was built from the single rows alone — on a corpus where the rows group, a grouped test file
+# was missing from the set and its <s> row was then counted as an untested one. Read through the shared
+# reader (test/testrowpaths.py), which knows both shapes in every dialect.
+testgate_testfiles = set(norm_path(p) for p in testrowpaths.xml_paths(tg))
 
 # ── union every --impact=src/graph.h:SYM call's rows, keyed (name, normalized path) -> tested bool ─────
 impact_rows = {}          # key -> tested (bool)

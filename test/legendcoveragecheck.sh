@@ -144,6 +144,10 @@ ROSTER = [
     # with no row is a dialect where the ratchet cannot see a gap, and this one carries `schema=` that the
     # default dialect does not emit.
     ("for-budgeted-compact", [SMALL, "--legend=compact", "--for=rank symbols by pagerank", "--token-budget=1300"]),
+    # …and the FILE PAGE (L-W, forpage.h): --for --limit=N answers with its own <files> root and <f> rows, a
+    # first screen no other row here reaches; both dialects, since the compact one carries its own short legend.
+    ("for-page",           [SMALL, "--for=rank symbols by pagerank", "--limit=10"]),
+    ("for-page-compact",   [SMALL, "--legend=compact", "--for=rank symbols by pagerank", "--limit=10"]),
     ("pack-task",          [SMALL, "--pack-task=rank symbols by pagerank"]),
     ("exemplar",           [SMALL, "--exemplar=rank symbols"]),
     ("hotspots",           [ROOT,  "--hotspots"]),
@@ -196,6 +200,10 @@ ROSTER = [
     ("layout",             [SMALL, "--layout=MapAnnotations"]),
     ("notes",              [ROOT,  "--notes"]),
     ("scan-skills",        [ROOT,  "--scan-skills"]),
+    # 2026-09-13: the router's own document was outside this roster, and it was the one shape with NO
+    # legend in the default dialect at all — every attribute on its only screen undefined. The probe is a
+    # RECOMMEND, not an abstain: an abstain carries no <choice>, so half the vocabulary would be unseen.
+    ("help-task",          [SMALL, "--help-task=find the code responsible for this retry timeout bug"]),
 ]
 
 # the v1 core row keys, defined verbatim in every map legend and re-stated in the row dictionaries — excluded
@@ -209,7 +217,7 @@ def legendOf( doc ):
     m    = LEAD.match( doc )
     lead = m.group( 0 ) if m else b""
     rest = doc[ len( lead ): ]
-    m2   = re.match( rb'\A\s*<ctx\b[^>]*>((?:\s*<!--.*?-->)+)', rest, re.S )   # <ctx …><!-- legend --> wrappers
+    m2   = re.match( rb'\A\s*<(?:ctx|files)\b[^>]*>((?:\s*<!--.*?-->)+)', rest, re.S )   # <ctx …><!-- legend --> wrappers; <files> = the --for file page (forpage.h)
     if m2: lead += m2.group( 1 )
     return lead.decode( 'utf-8', 'replace' )
 
@@ -362,8 +370,13 @@ CORE = { "p", "n", "t", "id", "l", "k", "c" }
 # elements' trios are here because `defined` sees one name: <tail>'s three are what the note is ABOUT, <sigs>'s
 # three are legendOff's and are closed by the same three words. Do not add a line here to make a red go away
 # without saying, in the commit, which clause was dropped and why it is not worth a sentence of its own.
+# SHRUNK 2026-09-13 (PR #215 review item 10): the compact dialect's four lines stopped reproducing and the arm
+# had been printing "verify, then shrink the FLOOR in this file" for four runs without anyone shrinking it — a
+# floor that outlives its findings is a floor nobody reads. They are gone because this dialect's rung zero no
+# longer fires on these documents: it is taken only when the drop PAYS (verbs_for.h), and in the compact dialect
+# the note was longer than the clauses it replaced, so the readings ride and close their own attributes.
 FLOOR = { "default": { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
-          "compact": { "sigs@shown", "sigs@total", "tail@shown", "tail@total" } }
+          "compact": set() }
 
 LEAD = re.compile( rb'\A(?:\s*<!--.*?-->)+', re.S )
 ATTR = re.compile( rb'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>' )

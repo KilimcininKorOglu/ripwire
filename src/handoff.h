@@ -279,14 +279,12 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     // TestRunnerIndex is lazy: a packet with no test row reads no runner script.
     const rw::TestRunnerIndex hoRunners( ing );
     const auto                hoEsc = [ & ]( std::string_view t ) { return std::string( escapeXml( t, esc ) ); };
-    for( const std::uint32_t f : facts.tests )
-    {
-        v += "<t p=\"";
-        v += escapeXml( hoPathRel( f ), esc );
-        v += "\"";
-        v += rw::runAttrDisclosed( hoRunners, f, hoEsc );
-        v += "/>";
-    }
+    // E1: <g> where no runner is derivable. The seam returns the FILE count with the rows, and the legend
+    // below is gated on it — review of #214: this packet spliced the clause unconditionally, and it is
+    // BYTE-BUDGETED with heuristic rows dropped tail-first, so a packet with <tests n="0"> could evict a real
+    // row to pay 180 B for a rule about rows it has none of.
+    const rw::JoinedTestRows  hoTests = rw::testRowsList( hoRunners, rw::testRowsOutOf( facts.tests, hoPathRel ), rw::TestRowShape{ rw::RowDialect::Xml, "t" }, hoEsc );
+    v += hoTests.text;
     v += "</tests></verified>";
 
     // ── heuristic rows, priority order (dropped TAIL-FIRST under a budget) ───────────────────────────
@@ -388,7 +386,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     const auto assemble = [ & ]( std::size_t keepRows, std::size_t withheld )
     {
         std::string doc = kHandoffLegendHead;
-        doc += rw::kRunHintLegendClause;   // M21(b): the ONE wording, spliced — never a seventh paraphrase
+        doc += rw::runHintClauseIfRows( hoTests.files );   // M21(b): the ONE wording through the ONE gate — never a seventh paraphrase
         if( anySymsCapped ) { doc += handoffSymsCapClause(); }   // absent unless an <f> row was cut
         doc += kHandoffLegendTail;
         doc += "<handoff";

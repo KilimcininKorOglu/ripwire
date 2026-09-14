@@ -333,7 +333,7 @@ inline constexpr McpValueSpec kMcpValueFields[] = {
     // DESCRIPTIONS: mcpmanifestcheck's own registered rule is that the ceiling moves for a declared
     // argument's obliged description and never for prose, and prose there would cost ~680 B against 159 B
     // of headroom. The refusal example names the NON-default value, which is the one a caller has to type.
-    { "legend",        "a STRING legend posture: compact (the default) or full",                      "legend=\"full\"" },
+    { "legend",        "a STRING legend posture: compact (the default) or full (restores the full legend)", "legend=\"full\"" },
     // ── boolean ──
     // F-R1-07 (2026-09-10 audit): the CLI's own answer to a route MIS-FIRE is to re-run with --no-route,
     // and the MCP surface had no equivalent — an agent that reads route= and disagrees was told WHICH ranker
@@ -988,7 +988,7 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     { "memory_recall",            "path task top_k budget_tokens" },
     { "situational_awareness",    "path diff files limit offset" },
     { "mentions",                 "path paths symbol limit offset" },
-    { "for",                      "path paths task budget_tokens no_route" },
+    { "for",                      "path paths task budget_tokens no_route limit offset" },   // L-W: limit/offset = the file page
     { "lego",                     "path paths type legend" },
     { "owners",                   "path symbol limit offset legend" },
     { "fetch_body",               "path handle start_line end_line" },

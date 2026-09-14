@@ -157,16 +157,26 @@ GOT_T="$( jq_field tests_to_run < "$TMP/r1.json" )"
 if [ "$GOT_T" = "__ABSENT__" ]; then
     no "(3) the receipt carries no tests_to_run — the second call the stderr hint asks for"
 else
-    python3 - "$TMP/r1.json" "$AFF" <<'PY'
-import sys, json, re
+    ROOT="$ROOT" python3 - "$TMP/r1.json" "$AFF" <<'PY'
+import sys, os, json, re
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "test"))
+import testrowpaths                                   # THE shared tests_to_run row reader
 rows = json.load(open(sys.argv[1]))["tests_to_run"]
 aff  = sys.argv[2]
-want = []
-for m in re.finditer(r'<test p="([^"]*)"(?: (?:seed_kind|changed|partner|hops)="[^"]*")*(?: run="([^"]*)")?(?: run_unknown="1")?/>', aff):   # F1: evidence attrs ride between p= and run=
-    want.append((m.group(1), m.group(2)))
-got = [ (t["p"], t.get("run")) for t in rows ]
+# E1 / review of #214: a row may name SEVERAL files, in either dialect — `<g … p="a,b,c" run_unknown="1"/>`
+# in the XML and a "p" ARRAY in the JSON. This comparison read the XML's single rows only and assumed the
+# JSON's "p" was a string, so on a corpus where the rows group it compared a shorter list to a crashing
+# one. Both sides are now read the same way, through the shared reader: the FILES each names, in order.
+want = testrowpaths.xml_paths(aff)
+got  = testrowpaths.json_paths('{"tests_to_run":' + json.dumps(rows) + '}')
 assert got == want, "receipt tests_to_run %r != --affected rows %r" % (got, want)
 assert want, "the fixture reached no test file — the assertion would be vacuous"
+# the run recipe still has to agree, per SINGLE row (a group row carries run_unknown by construction and
+# has no per-path recipe to compare): key the XML singles by path and check the JSON's singles against them.
+xrun = dict((m.group(1), m.group(2)) for m in re.finditer(r'<test p="([^"]*)"[^>]*?(?: run="([^"]*)")?/>', aff))
+for t in rows:
+    if isinstance(t.get("p"), str) and t["p"] in xrun:
+        assert t.get("run") == xrun[t["p"]], "receipt run recipe for %s: %r != %r" % (t["p"], t.get("run"), xrun[t["p"]])
 print("OK")
 PY
     [ $? -eq 0 ] \
