@@ -419,6 +419,7 @@ struct BundleOut
     std::vector<NodeId> surface;
     std::uint32_t       assigned = 0;
     std::uint32_t       modules  = 0;
+    std::size_t         testsKept = 0;   // E1: test FILES this bundle's <tests> section kept — the outer legend's gate
 };
 
 // the fixed context every bundle render shares — grouped (not individual params) so renderMaskedBundle stays
@@ -449,7 +450,7 @@ inline BundleOut renderMaskedBundle( const BundleRenderCtx& ctx, const std::vect
     in.innerBundle    = true;   // P10 (L7): one outer legend for the whole document
     in.rankTopN       = std::min( std::size_t( kPackTaskRankTopN ), keep.size() );   // never widen the window past the slice
 
-    out.xml = packTaskBundleText( *ctx.ing, *ctx.g, *ctx.task, masked, in, ctx.wantJson ? &out.json : nullptr, &out.surface );
+    out.xml = packTaskBundleText( *ctx.ing, *ctx.g, *ctx.task, masked, in, ctx.wantJson ? &out.json : nullptr, &out.surface, &out.testsKept );
     std::sort( out.surface.begin(), out.surface.end() );
     out.surface.erase( std::unique( out.surface.begin(), out.surface.end() ), out.surface.end() );
     return out;
@@ -593,7 +594,23 @@ inline std::string packTaskPartitionText( const IngestResult& ing, const Graph& 
     whole += partitionSummaryAttrs( plan, sum, ov );
     whole += ">";
     whole += kPartitionLegend;
-    whole += "<!-- ripwire task bundle (every ctx below)";  whole += kPackTaskBundleLegendBody;  whole += " -->";   // P10 (L7): stated once
+    // M21(b)/E1: the <test>/<g> row rule rides the outer legend ONCE for every slice, and only when some slice
+    // kept a test row — the same rows-gating the single bundle applies to its own header; test/partitioncheck.sh
+    // P10 holds the two within 1.3x.
+    //
+    // Review of #214: this used to ASK the rendered bytes (`xml.find( "<tests " )`), and the bytes answer a
+    // different question — a bundle whose CDATA body quotes the literal text `<tests ` (any source file
+    // discussing this element does) charged the clause with zero rows. Repro before the fix, on this tree:
+    // `--pack-task="writeFlip tests n rows" --partition=2`. Each bundle now REPORTS its kept count and the
+    // counts are summed; never a grep over rendered output.
+    std::size_t sliceTests = core.testsKept;
+    for( const auto& part : parts )
+    {
+        sliceTests += part.testsKept;
+    }
+    whole += "<!-- ripwire task bundle (every ctx below)";  whole += kPackTaskBundleLegendBody;   // P10 (L7): stated once
+    whole += rw::runHintClauseIfRows( sliceTests );
+    whole += " -->";
     whole += bundleOpen( "core", -1, core );
     whole += core.xml;
     whole += "</bundle>";

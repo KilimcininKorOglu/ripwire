@@ -209,7 +209,26 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # this twin. Its description gained NO prose: a first draft named coverage= and the page there (+109 B) and was
 # removed rather than re-anchored around, the L7 precedent above — the schema properties are where a client renders
 # an argument, and the answer's own legend defines coverage= and the page. Headroom after this line: 23 B.
-CEILING = 42384
+# RE-ANCHORED 2026-09-13 (review of #214): 42,384 → 42,800 = +416 B, EXACTLY the one 207-byte clause plus the
+# single space that separates it from the sentence before it (208 B), spliced into EACH of the TWO tool
+# descriptions that serve tests_to_run rows as JSON — `situational_awareness` and `explore`; 2 × 208 = 416
+# (measured against a build of ff8d77a1: 42,361 B here, 23 B under the old ceiling). It is NOT the L7 case the
+# line above declines. That one removed prose describing an ARGUMENT, because the schema properties are where a
+# client renders an argument and the answer's own legend defines the rest. This clause describes the RESPONSE:
+# E1 made a tests_to_run row's `p` a path string OR an array of paths beside `n`, and these two answers carry
+# no legend of any kind — `situational_awareness` returns bare JSON with no vocabulary block — so a caller that
+# parses `p` as a string has nowhere else to learn otherwise before it breaks. ONE wording (mcp.h
+# kTestRowJsonShapeClause), spliced twice, never a third paraphrase. Headroom after this line: 23 B.
+# RE-ANCHORED 2026-09-13 (CodeRabbit on #214): 42,800 -> 43,000 = +200 B for a MEASURED +196, the clause 207
+# -> 305 B plus its one-space separator, in each of the same two descriptions (2 x 98). The first wording
+# named the key `p` and only one of the three producers spells it that way: situational_awareness emits
+# `test` (mcpverbs.h), explore (packtask.h) and the edit receipt (mcpedit.h) emit `p`. A clause that names
+# the wrong key is worse than no clause, because a caller reads it as a contract — so it now names both, per
+# producer, and everything the three DO share (string-or-array, `n` beside an array, run/run_unknown) is
+# still said once. The quotes around the two keys are SINGLE: this string is spliced straight into the
+# tools/list JSON, and the first draft's double quotes made the manifest unparseable — which this gate
+# caught as a JSONDecodeError, not as a byte count. Measured 42,973. Headroom after this line: 27 B.
+CEILING = 43000
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )
