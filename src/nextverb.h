@@ -95,11 +95,22 @@ inline std::string nextFieldJson( std::string_view invocation )
 // pastes into a terminal or an argv array verbatim (the gate splits it with shlex)
 inline std::string nextFlag( std::string_view flag, std::string_view value )
 {
+    // `~` IS SPECIAL ONLY WORD-INITIALLY, and that exception is load-bearing rather than a micro-optimisation.
+    // Tilde expansion is defined for a word-initial `~` and the `~user` form; a tilde anywhere else in a word
+    // is an ordinary character. Treating every `~` as special quoted `HEAD~1` — the commonest git revision
+    // spelling there is — and this attribute is XML, so the escaper then turned the quotes into entities:
+    // `next="--since=&apos;HEAD~1&apos; …"`. A reader pasting that out of a raw document (a captured showcase,
+    // a doc, anything not rendered by an XML parser) gets a literal &apos; the shell does not decode, which is
+    // the whole job of a pasteable attribute lost on the most ordinary value it carries. A LEADING `~` is still
+    // quoted — including for an empty `flag`, where `value` is the whole word (editplan.h's `git -C <root>`) —
+    // and so is every other character below. test/nextverbcheck.sh arm (9) pins both directions.
     bool plain = !value.empty();
-    for( const char c : value )
+    for( std::size_t i = 0; i < value.size(); ++i )
     {
+        const char c = value[i];
         if( c == ' ' || c == '\t' || c == '\'' || c == '"' || c == '$' || c == '`' || c == '\\' || c == '|' || c == '&' || c == ';'
-            || c == '(' || c == ')' || c == '<' || c == '>' || c == '*' || c == '?' || c == '[' || c == ']' || c == '{' || c == '}' || c == '!' || c == '#' || c == '~' )
+            || c == '(' || c == ')' || c == '<' || c == '>' || c == '*' || c == '?' || c == '[' || c == ']' || c == '{' || c == '}' || c == '!' || c == '#'
+            || ( c == '~' && i == 0 ) )
         {
             plain = false;
             break;
