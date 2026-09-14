@@ -281,7 +281,7 @@ OR="$( route 'clang says the inner loop was not vectorized - is that worth a dif
 case "$OR" in *'status="recommend"'*'intent="opt-remark"'*'skill="ripwire-opt-remarks"'*'--for='*) ok "a clang optimization remark -> the ranked lens, under the opt-remarks skill";; *) no "opt-remark route wrong: $OR";; esac
 # Execution check: the two catalog commands that carry a COMPOSED value are not placeholders. Unquote
 # what the router emitted and run it through the real verb, the same way the SYM:VAR arm above does.
-GQEXPR="$( printf '%s' "$GQ" | sed -n 's|.*--graph-query=&apos;\(.*\)&apos;</run>.*|\1|p' | sed 's/&quot;/"/g' )"
+GQEXPR="$( printf '%s' "$GQ" | sed -n 's|.*--graph-query=&apos;\(.*\)&apos;\( --legend=compact\)\{0,1\}</run>.*|\1|p' | sed 's/&quot;/"/g' )"
 GQRUN="$( "$BIN" "$REPO" --no-cache --graph-query="$GQEXPR" )"; rc=$?
 { [ $rc -eq 0 ] && printf '%s' "$GQRUN" | grep -q '<query expr='; } \
     && ok "the emitted --graph-query expression runs and returns a <query> root" \
@@ -542,6 +542,69 @@ for A in 'status=' 'confidence=' 'score=' 'margin=' 'git=' 'dirty=' 'trace=' 're
     case "$LG" in *"$A"*) ok "the legend defines '$A'";; *) no "the legend never mentions '$A' — a first-screen attribute with no definition";; esac
 done
 case "$LG" in *--*) no "the legend contains '--' — ill-formed inside an XML comment (G4)";; *) ok "the legend spells no '--' (XML-comment safe)";; esac
+
+# ── R-LEG: every command this router GENERATES is one the binary accepts (PR #215 review item 5) ───────────
+# A1-2 put --legend=compact on the route commands by editing 26 strings. That is 26 chances to be wrong and no
+# rule for the 27th, and the same hand-application shipped `--zoom --legend=compact --mermaid` into a skill —
+# a command the binary REFUSES. classify() applies the posture once now (rw::legendCompactAppliesTo), and this
+# arm is what makes that a fact rather than an intention: every <run> the router emits over the whole prompt
+# corpus is executed against an EMPTY directory, and the refusal line must never appear. The refusal is a
+# parse-time check, so an empty corpus answers in milliseconds and no operand can mask it.
+RLEG_EMPTY="$TMP/rleg_empty"; mkdir -p "$RLEG_EMPTY"
+cut -f5 "$ROOT/test/taskroutefix/prompts.tsv" 2>/dev/null | sed '1d' > "$TMP/rleg_tasks.txt"   # column 5 is the prompt
+: > "$TMP/rleg_cmds.txt"
+while IFS= read -r _t; do
+    [ -n "$_t" ] || continue
+    route "$_t" 2>/dev/null | grep -oE '<run>[^<]*' | sed 's/^<run>//' >> "$TMP/rleg_cmds.txt"
+done < "$TMP/rleg_tasks.txt"
+# the <run> line is XML-escaped; unescape the two entities the router can emit, then drop the leading `ripwire`
+sed -e "s/&apos;/'/g" -e 's/&quot;/"/g' -e 's/&amp;/\&/g' "$TMP/rleg_cmds.txt" | sort -u > "$TMP/rleg_u.txt"
+# THE STATUS, CAPTURED RATHER THAN SWALLOWED (CodeRabbit, PR #215). This ran each command under
+# `eval … || true`, which discards every exit status unconditionally: the arm could not tell a clean run from
+# a crash, and the only failure it could see was the one refusal string it greps for. Deleting the `|| true`
+# is not the fix either — most of these routes point at an EMPTY directory, where a nonzero exit is the
+# DOCUMENTED answer, not a defect. So each status is captured and compared against what a routed command may
+# legitimately return here:
+#   0  the verb answered;
+#   1  the verb's own documented "nothing in this corpus to answer" degrade — no symbol matched, no plan file
+#      to read, no ranked candidate; and for the --test-gate route, "no files given and no git diff".
+# MEASURED over the whole corpus on this binary (2026-09-14): 34 distinct commands, 15 exit 0 and 19 exit 1,
+# nothing else. Any OTHER status is reported: 2 is cannot-conclude, 3 a token-budget refusal, 4 a test-gate
+# blast radius, >=128 a signal — each one means the router emitted a command that neither answered nor
+# degraded, and `|| true` printed PASS for every one of them.
+# The stderr side widens for the same reason: the compact-legend refusal was the only parse refusal looked
+# for, so its siblings — an unknown flag, an unrecognised verb — were invisible. A command the parser refuses
+# is a wrong command whatever the wording, and a parse refusal is reported even when the status looks benign.
+rleg_n=0; rleg_bad=0; rleg_st_bad=0; rleg_st0=0; rleg_st1=0
+while IFS= read -r _c; do
+    [ -n "$_c" ] || continue
+    _args="${_c#ripwire }"
+    _args="${_args#\'*\' }"          # the quoted root the router spells; this arm supplies its own
+    rleg_n=$(( rleg_n + 1 ))
+    # shellcheck disable=SC2086
+    eval "\"\$BIN\" \"\$RLEG_EMPTY\" $_args" >/dev/null 2>"$TMP/rleg.err"
+    _st=$?
+    case "$_st" in
+        0) rleg_st0=$(( rleg_st0 + 1 )) ;;
+        1) rleg_st1=$(( rleg_st1 + 1 )) ;;
+        *) rleg_st_bad=$(( rleg_st_bad + 1 ))
+           if [ "$rleg_st_bad" -le 5 ]; then
+               printf '        EXIT %s (expected 0 or the documented 1): %s\n' "$_st" "$( printf '%s' "$_c" | head -c 140 )"
+               printf '                stderr: %s\n' "$( head -c 160 "$TMP/rleg.err" | tr '\n' ' ' )"
+           fi ;;
+    esac
+    if grep -qE 'applies to the XML verbs only|unknown flag|unknown verb|unrecognized' "$TMP/rleg.err"; then
+        rleg_bad=$(( rleg_bad + 1 ))
+        [ "$rleg_bad" -le 5 ] && printf '        REFUSED (exit %s): %s\n' "$_st" "$( printf '%s' "$_c" | head -c 140 )"
+    fi
+done < "$TMP/rleg_u.txt"
+[ "$rleg_n" -gt 0 ] || no "R-LEG: the prompt corpus produced no <run> command — this arm proved nothing"
+[ "$rleg_bad" -eq 0 ] \
+    && ok "R-LEG: all $rleg_n distinct generated commands are ACCEPTED by this binary (the router cannot emit a command its own binary refuses)" \
+    || no "R-LEG: $rleg_bad of $rleg_n generated commands are REFUSED by this binary (listed above)"
+[ "$rleg_st_bad" -eq 0 ] \
+    && ok "R-LEG: every generated command exited 0 (answered: $rleg_st0) or 1 (documented empty-corpus degrade: $rleg_st1) — no unexpected status, none swallowed" \
+    || no "R-LEG: $rleg_st_bad of $rleg_n generated commands exited with an unexpected status (listed above) — the old '|| true' reported PASS for these"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

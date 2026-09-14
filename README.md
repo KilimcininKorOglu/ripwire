@@ -735,15 +735,14 @@ call a CLI.
 <summary><b>What comes back</b> — real output from this repository, pretty-printed and trimmed (re-captured 2026-09-05; rows are served in rank order, each naming its file)</summary>
 
 ```xml
-<ctx task="incremental cache invalidation" route="routed: subtoken+body BM25 (--for's default) — no strong
-     name hit, multi-word conceptual query" confidence="high" margin_pct="20"
+<ctx task="incremental cache invalidation" route="subtoken+body" confidence="high" margin_pct="20"
      bundle="compact" bodies="0" reason="compact-route" est_tokens="3995">
   <sigs shown="23" total="40" capped="1">
     <d l="106" n="kCacheMagic" p="src/ingest_cache.h" cx="0" ccx="0" in="0" churn="11" amp="71" pure="1" r="1"
        next="--expand=src/ingest_cache.h:kCacheMagic"><doc>incremental cache (--cache): per-file content hash + raw facts so a re-run re-parses ONLY c…</doc>constexpr std::uint32_t kCacheMagic = 0x4b505443</d>
-    <d l="1307" n="spanTierMemoPath" id="src/ingest_astquery.h::rw::spanTierMemoPath" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
-    <d l="247" n="ingestCommitTree" id="src/dmm.h::rw::dmm::ingestCommitTree" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
-    <d l="841" n="mcpRefreshedThisRequest" id="src/mcpindex.h::rw::mcpRefreshedThisRequest" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
+    <d l="1307" n="spanTierMemoPath" sc="rw" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
+    <d l="247" n="ingestCommitTree" sc="rw::dmm" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
+    <d l="841" n="mcpRefreshedThisRequest" sc="rw" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
     …
   </sigs>
   <hops shown="2" total="6" capped="1" noedge="2">
@@ -1244,12 +1243,12 @@ $ ripwire . --top-k=3
      precise=… skipped_oversize=… order=important-first -->
 <r est_tokens="435">
 <f p="./src/infra/svector.h" layer="infra">
-<s t="method" n="size" id="./src/infra/svector.h::svector::size" k="…"></s>
-<s t="method" n="push_back" id="./src/infra/svector.h::svector::push_back" amb="2" k="…">
-<c n="buf"/><c n="buf"/><c n="grow"/></s>
+<s t="method" n="size" sc="svector" k="…"></s>
+<s t="method" n="push_back" sc="svector" amb="2" k="…">
+<c n="buf" l="…,…"/><c n="grow" l="…"/></s>
 </f>
 <f p="./src/scipoverlay.h">
-<s t="method" n="empty" id="./src/scipoverlay.h::ScipOverlay::empty" k="…"></s>
+<s t="method" n="empty" sc="ScipOverlay" k="…"></s>
 </f>
 </r>
 ```
@@ -1805,9 +1804,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>614 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>615 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **614 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **615 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2046,8 +2045,9 @@ Publication date: 2026-09-12. Every claim below re-verified against a 0.6.0 buil
 
 ripwire analyzes a source tree. The tool writes a ranked symbol map to standard output. The map
 shows the symbols that matter for a task, the callers of those symbols, and the tests that reach
-them. The tool is one binary. It has no runtime dependencies. No API key, no embeddings, no index
-server, no daemon. It uses a network only when you give it a git URL instead of a directory, which
+them. The tool is one binary. The map itself has no runtime dependencies: no API key, no embeddings,
+no index server, no daemon. The history-backed commands need `git` on the path and a repository
+to read. It uses a network only when you give it a git URL instead of a directory, which
 it shallow-clones into a cache.
 
 This guide tells you how to install, operate, and evaluate ripwire. Read `docs/COMMANDS.md` for the
