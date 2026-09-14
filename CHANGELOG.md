@@ -74,6 +74,19 @@ beside it with a message naming verbs and claiming the default map honours the b
 `--limit`/`--offset` compose (they window the scoped element) and so do `--max-tokens`/`--token-budget` (they
 shape the document that is emitted). The MCP surface exposes no churn ranker, so there is no twin to extend.
 
+One flag is refused for a DIFFERENT reason and now says so. `--no-redact` selects no operation — it only stops
+body redaction — and a scoped run serves no bodies at all, because the symbol map is the counted stub. So the
+derived "answers instead" diagnostic stated a reason that was not this run's: the flag is INERT here, not
+overridden. It is refused ahead of that diagnostic, in the shape the bare map already uses for the same flag,
+pointing at both ways forward (drop it, or pass it to a body-serving verb). It is deliberately NOT added to the
+ride-along table: accepting an inert modifier silently is the other half of the same defect. The class was then
+enumerated rather than sampled — of the 164 flags the guard walks, 149 are not ride-alongs, every one probed
+reaches its own pairing refusal before this line, and the only other flag that arrives here,
+`--external-surface`, really does compete (it emits its own answer), so its wording is correct and it is now
+the gate's control arm. The guard on the new branch is `--in` AND `--no-redact`: written without the first
+half it refused every `--no-redact` run in the tool while quoting `--in=DIR` at it, which eight gates said in
+one suite and no arm added for the fix could, since every one of them passes `--in`.
+
 Measured on the RocksDB corpus at `0e2801ac` (`--rank-by=churn-decay`, warm cache, bytes on stdout via
 `wc -c`): 39,942 B bare → 10,601 B with `--in=db`, 10,525 B with `--in=util`, 11,071 B with `--in=table`.
 The saving is the stub (69 B in place of the 200-row map); the scoped block itself costs ~2.3–2.8 KB per
@@ -84,7 +97,7 @@ only by the share of it that ranking was: user time, median of five interleaved 
 cache, 0.73 s → 0.71 s on RocksDB and 2.55 s → 2.37 s on llvm-project (~3% and ~7%). Ingest and the call
 graph dominate both, and that is the honest size of this win.
 
-Gate: `test/recentscopecheck.sh`, 96 arms on a 53-commit fixture with 45 files under `db/` (plus two
+Gate: `test/recentscopecheck.sh`, 99 arms on a 53-commit fixture with 45 files under `db/` (plus two
 fixtures of its own for the corpus arms) — the scoped rows
 are only DIR's and spelled as the global block spells them, the global block is byte-identical with and
 without the flag, page 2 (`--offset=40`) is the exact remainder with no overlap and the pasted `next=`
@@ -100,7 +113,9 @@ page must land on the same `of=`, and a window whose only commit touched no inde
 where `--since=HEAD` (which reads no commit) still prints neither block. `perl` and `xmllint` are
 PREREQUISITES of the gate (exit 2, naming the tool) rather than arms: a missing tool is an environmental
 condition, and reporting it as a FAIL made `test/regression.sh` name this gate as a product regression for a
-tool the machine never had.
+tool the machine never had. Three arms cover the refusal wording: the inert `--no-redact` message, the
+`--external-surface` control that must keep the competing wording, and — the one that was missing — a
+`--no-redact` run with NO `--in` at all, which fails if the message so much as mentions the scoped flag.
 
 ### Fixed — two generated documents published numbers and links nothing derived
 
@@ -132,6 +147,26 @@ classified and `src/` no longer declares. The paragraph derives all three parts 
 than hiding it, and `capsweep.py emit` REFUSES to render a partition that does not add up — a name classified
 in two lists at once, the shape an asserted sum cannot see, exits non-zero instead of publishing. Gate:
 `test/capsweepcheck.sh` arm (C) reproduces the document byte-for-byte through that refusal on every run.
+
+### Fixed — a pasteable `next=` quoted a tilde no shell expands
+
+Every `next=` in the tool is built by `nextFlag`, which quoted any value whose first character is `~`
+whether or not a flag name preceded it. So a run under `--exclude=~tmp` published `--exclude='~tmp'`, and
+because the attribute is XML the escaper rendered it `--exclude=&apos;~tmp&apos;` — a replayed argument
+corrupted to defend against an expansion that cannot happen. POSIX tilde expansion applies to a word whose
+FIRST character is `~`; the word here is the whole argv element and it begins `--exclude=`, and an argument is
+not an assignment. Measured on macOS, `sh`/`bash`/`zsh` alike: `sh -c 'p ~root'` passes `/var/root`,
+`sh -c 'p --exclude=~root'` passes the literal `--exclude=~root`. The guard is now "word-initial AND no flag
+name", a narrowing rather than a deletion — when the value IS the whole word (`src/editplan.h`'s rollback
+invocation) the tilde really is word-initial and the quotes are load-bearing.
+
+The worse half was the gate. `test/nextverbcheck.sh` arm (9) pinned the entity-quoted form and explained it as
+a shell expanding `~tmp`, which is wrong about POSIX twice over — the tilde is not word-initial there, and
+`~tmp` expands nowhere anyway, since `~user` is expanded only for a user that exists. A gate that pins a false
+belief does not merely miss the bug, it defends it against the next person to fix it, so the explanation is
+deleted rather than reworded and the measured rule stated in its place. The arm pins the bare form, asserts the
+invocation carries no `&apos;` anywhere, and gains a mutation control: a space-bearing value is still quoted,
+so the change narrowed the tilde case instead of disabling quoting.
 
 ### Fixed — a churn window says how many commits it skipped as merge bombs
 
