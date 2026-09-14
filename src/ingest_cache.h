@@ -45,9 +45,9 @@ struct RawDef
     std::uint8_t  arityExact = 0;  // B2.2: 1 ⇒ params is a fixed call-comparable arity (no variadic/default, not implicit-self)
     std::uint8_t  testScope = 0;   // L8: 1 ⇒ an IN-FILE test convention encloses this def (see inFileTestScope)
     std::uint8_t  recovered = 0;   // extent honesty (extentsuspect.h kRecovered*): the parse RECOVERED this def's container
-    std::uint8_t  internalLinkage = 0;   // C/C++: anonymous-namespace or namespace-scope `static` def (model.h Symbol::internalLinkage)
                                    //   (a class whose body holds an error, inside an ERROR region) or its kind (a scopeless
                                    //   C++ method inside one); 0 ⇒ no recovery claim. Feeds the `error` reason at load.
+    std::uint8_t  internalLinkage = 0;   // C/C++: anonymous-namespace or namespace-scope `static` def (model.h Symbol::internalLinkage)
     SymKind       kind      = SymKind::Other;
     Lang          lang      = Lang::Unknown;
     std::string   name;

@@ -254,8 +254,11 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
         s.ppAlt        = d.ppAlt;    // ppalt disclosure: preproc alternative branches in the body (model.h)
         s.params       = d.params;   // Q4: parameter count (fns/methods)
         s.arityExact   = d.arityExact;   // B2.2: params is a fixed call-comparable arity
-        s.testScope    = d.testScope;    // L8: an in-file test convention encloses this def
-        s.internalLinkage = d.internalLinkage;   // C/C++ anonymous-namespace or namespace-scope `static` def (model.h)
+        // Both are 1-bit fields on Symbol, so this assignment is where a RawDef byte gets TRUNCATED: a cached blob that
+        // carries 2 would read as 0. Coerce "any non-zero" to 1 here — testScope's reading has always been "non-zero
+        // means the convention encloses it" — so a corrupt or hand-edited record errs toward the claim, never past it.
+        s.testScope    = ( d.testScope != 0 ) ? 1 : 0;       // L8: an in-file test convention encloses this def
+        s.internalLinkage = ( d.internalLinkage != 0 ) ? 1 : 0;   // C/C++ anonymous-namespace or namespace-scope `static` def (model.h)
         s.maxNest      = d.maxNest;  // Q4: max control nesting (fns/methods)
         s.humps        = d.humps;   // nesting profile: regions reaching quality::kNestBar (model.h)
         s.deepLoc      = d.deepLoc; // nesting profile: lines inside them, a FLOOR (model.h)
