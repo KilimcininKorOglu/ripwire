@@ -1585,6 +1585,11 @@ struct MapAnnotations
     // slots 8 and 9 at main.cpp's mapAnn (seed below is filled by assignment, never positionally).
     const std::vector<RecentFile>* recent   = nullptr;
     std::size_t                    recentOf = 0;
+    // WAS HISTORY MINED, as a fact and not as a reading of the rows (CodeRabbit, review 5195637558). The block
+    // used to ride on `!recent->empty() || recentMergeBombsSkipped > 0`, which cannot tell a window that read
+    // no commit from one whose commits touched no indexed file: the first has no answer, the second answers
+    // n="0". main.cpp fills this from DecayedChurnMined::anyHistory. Filled by assignment, like seed.
+    bool                           recentMinedHistory = false;
     SeedDisclosure seed{};
     // merge_bombs_skipped= on <recent> (2026-09-12): commits in the mined window the >kChurnMergeBombMaxFiles rule
     // skipped, uncounted. Filled by assignment (after the positional slots), always emitted with the block.
@@ -1644,7 +1649,10 @@ inline void writeRecentRows( XmlWriter& w, const MapAnnotations& ann, const Path
     // The global block: absent only when there is NOTHING to say — no rows and no skipped commit. A window whose every
     // commit was a merge bomb prints <recent n="0" of="0" merge_bombs_skipped="N"></recent>: zero rows and the reason,
     // rather than an absent block a reader would take for "no history mined" (churndecaycheck arm 7h).
-    const bool hasGlobal = ann.recent != nullptr && ( !ann.recent->empty() || ann.recentMergeBombsSkipped > 0 );
+    // `recent` says the rows exist to be written; `recentMinedHistory` says a commit was READ. Both, and
+    // NEITHER inferred from the other: a mined window with no indexed path touched prints n="0" of="0" (an
+    // answer), and a window that mined nothing prints no block at all (no answer to give).
+    const bool hasGlobal = ann.recent != nullptr && ann.recentMinedHistory;
     if( hasGlobal )
     {
         std::string post = " merge_bombs_skipped=\"";

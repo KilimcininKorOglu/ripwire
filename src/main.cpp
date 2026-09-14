@@ -1014,6 +1014,13 @@ struct ChurnRanking
     std::vector<rw::RecentFile> recent;       // F3: churn-decay, single-root only — the map's <recent> rows
     std::size_t                 recentOf = 0; // files any mined commit touched (the of= the rows were cut from)
     std::uint32_t               mergeBombsSkipped = 0;   // commits the >kChurnMergeBombMaxFiles rule skipped in the window (<recent merge_bombs_skipped=>)
+    // WAS HISTORY MINED — the fact, carried, not re-derived (CodeRabbit, review 5195637558). It used to be read
+    // back off the output (`recent.empty() && mergeBombsSkipped == 0` ⇒ no block), and a window whose commits
+    // touch no INDEXED file — the commit that deletes a file is the smallest such window — has zero rows AND a
+    // mined history, so it was reported as "no history was mined". Different answers must not share a document.
+    // Only the decay pass sets it: it is the pass that builds <recent>, and a plain --rank-by=churn run has no
+    // block for the fact to be about (src/prcontext.h E1: gate on the count, never on a match over the body).
+    bool                        recentAnyHistory = false;
     // C1-b (2026-09-12): --in=DIR — ONE page of DIR's rows from the SAME mining pass (hasScoped ⇒ the block is emitted, even
     // empty); scopedOf = DIR's files any counted commit touched (its of=); scopedOffset = the row the page started at.
     std::vector<rw::RecentFile> scoped;
@@ -1054,17 +1061,43 @@ inline std::string churnDecayWindowLabel( std::string_view minedSpan )
 // THE SHAPE. One function, two callers, one cap. `withIn` picks the scoped page (--in=DIR carried, at the next
 // offset) or the stub's "same run without --in".
 //
-// WHAT IT REPLAYS, and the line: the flags that decide WHICH ROWS EXIST — the CORPUS (--exclude, --no-ignore,
-// --ignore-tests) and the WINDOW (--since, --limit/--offset) — and nothing else. A presentation flag
-// (--legend=compact, --max-tokens, --token-budget) changes how the same rows are rendered, never which rows
-// the page holds, so replaying it would spend the 120-byte budget on bytes that cannot make the pasted page
-// name a different answer. of= is the number this attribute is a page INTO, and of= moves only with the
-// corpus and the window.
+// WHAT IT REPLAYS, and the line: the flags that decide WHICH ROWS EXIST — the CORPUS (--exclude,
+// --max-file-size, --no-ignore, --ignore-tests) and the WINDOW (--since, --limit/--offset) — and nothing else.
+// A presentation flag (--legend=compact, --max-tokens, --token-budget) changes how the same rows are rendered,
+// never which rows the page holds, so replaying it would spend the 120-byte budget on bytes that cannot make
+// the pasted page name a different answer. of= is the number this attribute is a page INTO, and of= moves only
+// with the corpus and the window.
 //
 // They are named explicitly because they are parseArgs' hand-written arms (--exclude= is repeatable;
 // --limit/--offset/--rank-by are closed-value arms) and no table row can see them; the TABLE-ROW flags cannot
 // appear at all, because inPreemptedBy refuses every one that is not a ride-along before this run reaches the
 // map. Past the cap it returns "" — a hint that pastes wrong is worse than none.
+//
+// --max-file-size WAS MISSING (CodeRabbit, review 5195637558), and one miss is the evidence that the list was
+// hand-picked rather than enumerated against the flags that can ride here: the SIZE CEILING drops files out of
+// ing.files (ingest_crawl.h, why=oversize), so a hint emitted under --max-file-size=2K named a page of a
+// corpus three files wide where the run that emitted it had two — MEASURED of="2" against of="3"
+// (recentscopecheck arm 12). So the set is now ENUMERATED, and this is the enumeration. Everything that can be
+// set beside --in is either a table row on kInRideAlong or a member the firstFlagOutside walk cannot see
+// (a vector, an int, a size_t); each one is either replayed above or listed here with the reason it is not:
+//   --exclude / --max-file-size / --no-ignore / --ignore-tests  REPLAYED: each one decides which files the
+//       crawl indexes, and <recent>'s rows are indexed files.
+//   --since / --limit / --offset                                REPLAYED: the window and the page itself.
+//   --cache= / --no-cache    NOT corpus: the blob is keyed on realpath(root) + the lean/rich class and stores
+//       per-FILE parse records (ingest_cache.h v15); the CRAWL decides membership, and a subset run reads only
+//       its own records. Warm and cold index the same files.
+//   --refetch                NOT replayed, and deliberately the other way round: it re-clones a git-URL root,
+//       so replaying it could fetch a NEWER tree — omitting it is what keeps the page on the corpus this run
+//       cloned.
+//   --scip=                  NOT corpus: a precision overlay on call EDGES (prov="scip"); it adds and removes
+//       no file, and <recent> is a file-level answer.
+//   --max-tokens / --token-budget   NOT corpus: the first shapes the ranked map (which --in has already
+//       stubbed) and the second only asserts a ceiling; neither can move of=.
+//   --legend / --stable / --no-stable / --order aliases / --route / --no-route / --no-post-check / --compress
+//       / --pin-census / --json   NOT corpus: presentation, ranking posture or a side file. The rows' order is
+//       decayedRecentRowsSorted's (newest commit first) whatever these say. (--json is refused beside --in.)
+//   --top-k / --pack-top-n / --expand / --outline / --export=cc.json / a second root   cannot be here at all:
+//       inPreemptedBy and validateModifierGuards refuse each one before the map is built.
 inline std::string scopedMapNextInvocation( const rw::Config& cfg, std::string_view scopeDir, bool withIn, std::size_t nextOffset )
 {
     std::string inv = "--rank-by=churn-decay";
@@ -1075,6 +1108,13 @@ inline std::string scopedMapNextInvocation( const rw::Config& cfg, std::string_v
     for( const std::string& x : cfg.excludes )
     {
         inv += " " + rw::nextFlag( "--exclude=", x );
+    }
+    // The ceiling is replayed as the BYTE COUNT it resolved to, not as the caller's "2K": parseByteSize accepts
+    // plain digits, and the number is what shaped the crawl. Omitted at the default, so the common hint is
+    // unchanged to the byte.
+    if( cfg.maxFileBytes != rw::kDefaultMaxFileBytes )
+    {
+        inv += " --max-file-size=" + std::to_string( cfg.maxFileBytes );
     }
     if( cfg.noIgnore )     { inv += " --no-ignore"; }
     if( cfg.ignoreTests )  { inv += " --ignore-tests"; }
@@ -1182,6 +1222,7 @@ inline ChurnRanking churnDecayRanking( const MainDispatch& d, const rw::SinceSco
     const std::vector<rw::RecentFile> sorted = decayedRecentRowsSorted( d.root, d.ing, mined );
     cr.recent            = recentPageFromSorted( sorted, []( std::uint32_t ) { return true; }, kRecentRows, 0, &cr.recentOf );
     cr.mergeBombsSkipped = mined.mergeBombsSkipped;
+    cr.recentAnyHistory  = mined.anyHistory;   // the fact this pass learned, handed on rather than left to be guessed
     if( stubbed )
     {
         scopedRecentPage( d, sorted, cr );   // C1-b: --in=DIR's page, from the same pass and the same sort
@@ -1332,8 +1373,9 @@ int runDefaultMap( const MainDispatch& d )
     std::string        queryRouteNote;   // leading routed comment for --query (empty under --no-route)
     std::size_t        mapDiffChanged = 0;      // D6: teleport-seed file count, only meaningful when mapDiffActive
     bool               mapDiffActive  = false;  // true only under --map-diff — gates the header's changed= attribute
-    std::vector<rw::RecentFile> recentFiles;   // F3: rank-by=churn-decay's file-level <recent> rows (empty = absent, byte-free)
+    std::vector<rw::RecentFile> recentFiles;   // F3: rank-by=churn-decay's file-level <recent> rows (0 rows is an ANSWER, see recentAnyHistory)
     std::size_t                 recentOf = 0;
+    bool                        recentAnyHistory = false;      // did the decay pass READ a commit — the fact the block's presence is gated on
     std::uint32_t               recentMergeBombsSkipped = 0;   // <recent merge_bombs_skipped=>: the window's skipped >100-file commits
     std::vector<rw::RecentFile> scopedRecent;                  // C1-b: --in=DIR's page of rows (hasScopedRecent ⇒ the block is emitted)
     std::size_t                 scopedRecentOf = 0;
@@ -1422,6 +1464,7 @@ int runDefaultMap( const MainDispatch& d )
         recentFiles      = std::move( cr.recent );   // F3: the <recent> rows (churn-decay, single-root; empty otherwise)
         recentOf         = cr.recentOf;
         recentMergeBombsSkipped = cr.mergeBombsSkipped;
+        recentAnyHistory = cr.recentAnyHistory;   // B: propagated, never re-derived from the rows below
         scopedRecent     = std::move( cr.scoped );
         scopedRecentOf   = cr.scopedOf;
         scopedOffset     = cr.scopedOffset;
@@ -1515,10 +1558,14 @@ int runDefaultMap( const MainDispatch& d )
                                 cfg.maxTokens > 0 ? &maxTokensFit : nullptr,   // §B13.4
                                 rankByLabel,                                   // §B2.1
                                 rankDisclosure,                                // W2-F: pr_iters= / pr_converged=
-                                // F3: <recent> rows, churn-decay single-root only. An all-bomb window (a shallow clone of a large
-                                // tree: one 183,835-file commit) has zero rows AND a count to disclose, so the block rides then too.
-                                recentFiles.empty() && recentMergeBombsSkipped == 0 ? nullptr : &recentFiles,
+                                // F3: <recent> rows, churn-decay single-root only. The POINTER is the rows; whether the block RIDES is
+                                // decided by recentAnyHistory below — the mining fact, propagated. This slot used to carry the decision as
+                                // well ("empty rows and no skipped bomb ⇒ nullptr"), which inferred "no history was mined" from what
+                                // happened to be emitted: an all-bomb window (a shallow clone of a large tree: one 183,835-file commit) and
+                                // a window whose only commit touched no indexed file BOTH have zero rows, and only one of them read nothing.
+                                &recentFiles,
                                 recentOf };
+    mapAnn.recentMinedHistory = recentAnyHistory;   // the block rides on the FACT (serialize.h writeRecentRows)
     mapAnn.recentMergeBombsSkipped = recentMergeBombsSkipped;   // rides <recent> (the rows' own window), filled by assignment like seed
     // C1-b (2026-09-12): --in=DIR — the scoped block and the map stub, filled by assignment like seed. The two next= strings
     // outlive every serialize() call below (mapAnn holds views into them). The scoped next= is the SAME run at the next

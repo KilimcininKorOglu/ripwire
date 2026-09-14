@@ -16,11 +16,18 @@ to production at defaults; that control is what makes these numbers mean anythin
 | --- | --- | --- | --- | --- | --- |
 | 129 | 128 | 112 | 12 | **37** | 75 |
 
-The first two columns are not the same number, and the gap is not a rounding: `src/` holds
-**129 cap declarations** under **128 distinct names** (`kRowCap` declared in more than one file). The
-sweep patches by NAME, so `112 + 12` accounts for the 128 NAMES — not the 129 declarations. Quoting
-"113 of 129" would be wrong in both halves at once, which is exactly the shape of error a
-generated table exists to prevent.
+The first two columns are not the same number, and the gap is not a rounding: `src/` holds **129 cap
+declarations** under **128 distinct names** (`kRowCap` declared in more than one file). The sweep
+patches by NAME, so its own population is NAMES and not declarations — and the two columns beside
+those are frozen at the commit named under Provenance while this census is re-read from `src/` on
+every run, which makes them a third population again. Enumerated over the 128 names `src/` declares
+today: **111 tunable**, **12 must stay `constexpr`**, and **5 declared since the sweep was prepared,
+which no measurement has touched** (`kChurnMergeBombMaxFiles`, `kFieldIdCapacity`,
+`kForPageRowsDefault`, `kForPageUnionSymbolCap`, `kMaxBlockBytes`). 111 + 12 + 5 = 128, and `emit`
+refuses to render a partition that does not add up. The `tunable` column above reads 112 rather than
+111 because one name the sweep classified is no longer declared in `src/` at all:
+`kSituTestRowsShown`. Quoting "113 of 129" would be wrong in both halves at once, which is the shape
+of error a generated table exists to prevent.
 
 ## Read this ratio before the tables
 

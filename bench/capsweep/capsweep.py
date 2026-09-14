@@ -65,7 +65,7 @@ confidence="high" margin_pct="22" down to confidence="low" margin_pct="0" on thi
 bench/capsweep/sweep.json into the answer to a query about a cap. assert_corpus_clean below keeps the
 harness out of the frozen CORPUS; the file format keeps it out of the INDEX. Same rule, two surfaces.
 """
-import argparse, hashlib, os, pathlib, re, shlex, shutil, subprocess, sys, collections
+import argparse, hashlib, os, pathlib, re, shlex, shutil, subprocess, sys, textwrap, collections
 
 HERE  = pathlib.Path(__file__).resolve().parent
 REPO  = HERE.parent.parent
@@ -827,6 +827,61 @@ def cmd_sweep(a):
 
 kRowsPerCap = 12          # rows per cap table; a cap in a document ABOUT caps, so it discloses below
 
+def cap_partition(names, meta):
+    """The 128 distinct cap names, split three ways, with the sum CHECKED rather than claimed.
+
+    CodeRabbit #212. The published summary ASSERTED that tunable + constexpr-only accounted for the
+    distinct names, and it did not: tunable.tsv's classification is FROZEN at the commit under
+    Provenance while the census is re-read from `src/` on every run, so a cap declared since the sweep
+    was prepared is in neither list, and a classified name `src/` has since dropped is in one of them
+    without being a live name at all. `112 + 12 = 124` shipped beside "128 distinct names" — four
+    short, in the one paragraph whose subject is that a wrong pair is wrong in both halves at once.
+
+    So the three parts are derived from the same data the table is built from and the partition refuses
+    to render unless it adds up: a name classified in BOTH lists is exactly the shape an asserted sum
+    cannot see, and it exits non-zero here instead of being published. `gone` is the fourth fact — the
+    frozen classification's own residue — reported, never folded into the three.
+    """
+    tun, ce = meta['tunable'], meta['constexpr_only']
+    liveTun = [n for n in names if n in tun]
+    liveCe  = [n for n in names if n in ce]
+    unswept = [n for n in names if n not in tun and n not in ce]
+    gone    = sorted((set(tun) | set(ce)) - set(names))
+    if len(liveTun) + len(liveCe) + len(unswept) != len(names):
+        sys.exit('capsweep: the cap partition does not add up (%d tunable + %d constexpr-only + %d unswept '
+                 '!= %d distinct names) — refusing to emit a summary whose arithmetic is wrong'
+                 % (len(liveTun), len(liveCe), len(unswept), len(names)))
+    return liveTun, liveCe, unswept, gone
+
+def partition_prose(caps, names, meta):
+    """The paragraph that states the partition, with every number read from the partition itself.
+
+    WRAPPED, not hand-broken: every number in it is derived, so pinning the line breaks by hand would
+    make a rewrap a second place to get the paragraph wrong.
+    """
+    liveTun, liveCe, unswept, gone = cap_partition(names, meta)
+    dup     = sorted(n for n in names if sum(1 for c in caps if c[0] == n) > 1)
+    shown   = ', '.join('`%s`' % n for n in unswept[:6]) + ('' if len(unswept) <= 6 else ', +%d more' % (len(unswept) - 6))
+    frozen  = len(meta['tunable'])
+    goneSay = ('' if not gone else
+               ' The `tunable` column above reads %d rather than %d because %s no longer declared in `src/` at all: %s.'
+               % (frozen, len(liveTun),
+                  'one name the sweep classified is' if len(gone) == 1 else '%d names the sweep classified are' % len(gone),
+                  ', '.join('`%s`' % n for n in gone[:4])))
+    para = ('The first two columns are not the same number, and the gap is not a rounding: `src/` holds '
+            '**%d cap declarations** under **%d distinct names** (%s declared in more than one file). The sweep '
+            'patches by NAME, so its own population is NAMES and not declarations — and the two columns beside '
+            'those are frozen at the commit named under Provenance while this census is re-read from `src/` on '
+            'every run, which makes them a third population again. Enumerated over the %d names `src/` declares '
+            'today: **%d tunable**, **%d must stay `constexpr`**, and **%d declared since the sweep was prepared, '
+            'which no measurement has touched** (%s). %d + %d + %d = %d, and `emit` refuses to render a partition '
+            'that does not add up.%s Quoting "%d of %d" would be wrong in both halves at once, which is the shape '
+            'of error a generated table exists to prevent.'
+            % (len(caps), len(names), ', '.join('`%s`' % n for n in dup) or 'no name', len(names),
+               len(liveTun), len(liveCe), len(unswept), shown,
+               len(liveTun), len(liveCe), len(unswept), len(names), goneSay, frozen + 1, len(caps)))
+    return textwrap.fill(para, width=100)
+
 def render(sweep, meta, caps, disc):
     """docs/TUNING.md as a PURE FUNCTION of (frozen measurements, live cap census).
 
@@ -854,15 +909,7 @@ def render(sweep, meta, caps, disc):
     L.append('| --- | --- | --- | --- | --- | --- |')
     L.append('| %d | %d | %d | %d | **%d** | %d |\n'
              % (len(caps), len(names), len(tun), len(ce), len(sweep), len(tun) - len(sweep)))
-    dup = sorted(n for n in names if sum(1 for c in caps if c[0] == n) > 1)
-    L.append('The first two columns are not the same number, and the gap is not a rounding: `src/` holds')
-    L.append('**%d cap declarations** under **%d distinct names** (%s declared in more than one file). The'
-             % (len(caps), len(names), ', '.join('`%s`' % n for n in dup) or 'no name'))
-    L.append('sweep patches by NAME, so `%d + %d` accounts for the %d NAMES — not the %d declarations. Quoting'
-             % (len(tun), len(ce), len(names), len(caps)))
-    L.append('"%d of %d" would be wrong in both halves at once, which is exactly the shape of error a')
-    L.append('generated table exists to prevent.\n')
-    L[-2] = L[-2] % (len(tun) + 1, len(caps))
+    L.append(partition_prose(caps, names, meta) + '\n')
     L.append('## Read this ratio before the tables\n')
     L.append('**%d of %d tunable caps move any invocation at all. %d move nothing measurable.** That is the'
              % (len(sweep), len(tun), len(tun) - len(sweep)))

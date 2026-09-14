@@ -33,6 +33,12 @@
 #      control that proves the two "carries no capped=/next=" assertions can actually SEE those attributes.
 #   8  merge_bombs_skipped= rides BOTH blocks.
 #   9  determinism (two runs byte-identical), well-formed XML, both legends define scope= and the stub.
+#  10  next= names THIS run's corpus and window, or says nothing at all past 120 bytes.
+#  11  the scoped block's ABSENCE rule is the global block's: absent ⇒ no history mined.
+#  12  the crawl CEILING rides next= too: a hint emitted under --max-file-size=N replays N, so the page it
+#      names is a page of the same corpus (it dropped the flag and landed on of="3" against of="2").
+#  13  "history was mined" is propagated, not inferred from the rows: a window whose only commit touched no
+#      INDEXED file prints n="0", where it used to print no block and read as "no history mined".
 #
 # RED against the pre-change binary: `--in=` is an unknown flag, so every arm below fails.
 #
@@ -49,6 +55,13 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "recentscopecheck: git is required"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "recentscopecheck: python3 is required (shlex for the pasted next=)"; exit 2; }
+# A MISSING TOOL IS AN ENVIRONMENT, NOT A REGRESSION (CodeRabbit, review 5195637558). Both of these were
+# handled below the line instead of here, and each failed in a way that blamed the binary: without perl,
+# run() returned "" and nearly every arm reported the tool as broken; without xmllint, arm 9b printed FAIL
+# and test/regression.sh reported this gate as a product regression for a tool the machine never had.
+# Exit 2 is the house cannot-conclude, and it names WHICH tool so the reader does not have to guess.
+command -v perl    >/dev/null 2>&1 || { echo "recentscopecheck: perl is required (the per-run 60 s alarm in run())"; exit 2; }
+command -v xmllint >/dev/null 2>&1 || { echo "recentscopecheck: xmllint is required (arms 9b/9c verify well-formedness)"; exit 2; }
 
 WORK="$( mktemp -d )"; trap 'rm -rf "$WORK"' EXIT
 echo "recentscopecheck: BIN=$BIN"
@@ -91,7 +104,12 @@ commitOne "gold_outside.py" "gold_outside"
     && ok "arm 0b: db/ holds 45 tracked files (> the 40-row page)" \
     || no "arm 0b: db/ does not hold 45 tracked files"
 
-run(){ perl -e 'alarm 60; exec @ARGV' "$BIN" "$REPO" --no-cache "$@"; }
+runAt(){ local r="$1"; shift; perl -e 'alarm 60; exec @ARGV' "$BIN" "$r" --no-cache "$@"; }   # arms 12/13 bring their own repo
+run(){ runAt "$REPO" "$@"; }
+# THE PASTED next=, split the way a shell would — one copy, used by arms 3h, 10d and 12d. Three inline
+# copies of this python one-liner is the duplicate --exemplar would have found; it takes the repo because
+# the corpus arms below are measured on fixtures of their own.
+pasteNext(){ python3 -c 'import shlex,subprocess,sys; sys.stdout.write(subprocess.run([sys.argv[1],sys.argv[2],"--no-cache"]+shlex.split(sys.argv[3]),capture_output=True,text=True).stdout)' "$BIN" "$1" "$2"; }
 firstBlock(){  printf '%s' "$1" | grep -oE '<recent [^>]*>.*</recent>' | sed -E 's#</recent>.*##' | head -1; }   # the GLOBAL block, inner rows included
 scopedTag(){   printf '%s' "$1" | grep -oE '<recent scope="[^>]*>' | head -1; }   # the QUOTED attribute: the compact legend's prose spells <recent scope=DIR> bare
 scopedRows(){  printf '%s' "$1" | sed -E 's#.*(<recent scope="[^>]*>)#\1#' | sed -E 's#</recent>.*##' | grep -oE '<rc p="[^"]*"' | sed 's/<rc p="//;s/"$//'; }
@@ -180,7 +198,7 @@ printf '%s\n' "$rows2" | grep -qx 'db/f00.py' && ! printf '%s\n' "$rows1" | grep
     && ok "arm 3g: the oldest db file (row 45) is reachable on page 2 and absent from page 1" \
     || no "arm 3g: db/f00.py is not exactly on page 2 (page1: $( printf '%s\n' "$rows1" | grep -c 'db/f00.py' ), page2: $( printf '%s\n' "$rows2" | grep -c 'db/f00.py' ))"
 # the pasted next=, split the way a shell would, reproduces page 2 byte for byte
-PASTED="$( python3 -c 'import shlex,subprocess,sys; sys.stdout.write(subprocess.run([sys.argv[1],sys.argv[2],"--no-cache"]+shlex.split(sys.argv[3]),capture_output=True,text=True).stdout)' "$BIN" "$REPO" "$next1" )"
+PASTED="$( pasteNext "$REPO" "$next1" )"
 [ -n "$PASTED" ] && [ "$PASTED" = "$P2" ] \
     && ok "arm 3h: the pasted next= reproduces page 2 byte-for-byte" \
     || no "arm 3h: the pasted next= does not reproduce page 2"
@@ -382,18 +400,16 @@ IN2="$( run --rank-by=churn-decay --in=db 2>/dev/null )"
 [ -n "$IN" ] && [ "$IN" = "$IN2" ] \
     && ok "arm 9a: two --in=db runs are byte-identical ($inBytes B)" \
     || no "arm 9a: two --in=db runs differ"
-if command -v xmllint >/dev/null 2>&1; then
-    if printf '%s' "$IN" | xmllint --noout - 2>"$WORK/xl"; then
-        ok "arm 9b: --in=db output is well-formed XML"
-    else
-        no "arm 9b: xmllint rejected --in=db output"; head -3 "$WORK/xl" | sed 's/^/    /'
-    fi
-    printf '%s' "$SP" | xmllint --noout - 2>/dev/null \
-        && ok "arm 9c: --in='my dir' output is well-formed XML" \
-        || no "arm 9c: xmllint rejected --in='my dir' output"
+# xmllint's presence is a PREREQUISITE (checked at the top, exit 2): an absent tool cannot make these two
+# arms fail, and the `else no "xmllint missing"` that used to sit here reported the environment as a defect.
+if printf '%s' "$IN" | xmllint --noout - 2>"$WORK/xl"; then
+    ok "arm 9b: --in=db output is well-formed XML"
 else
-    no "arm 9b: xmllint missing — cannot verify well-formedness"
+    no "arm 9b: xmllint rejected --in=db output"; head -3 "$WORK/xl" | sed 's/^/    /'
 fi
+printf '%s' "$SP" | xmllint --noout - 2>/dev/null \
+    && ok "arm 9c: --in='my dir' output is well-formed XML" \
+    || no "arm 9c: xmllint rejected --in='my dir' output"
 printf '%s' "$IN" | grep -q 'scope=DIR' && printf '%s' "$IN" | grep -q 'symbols stubbed=1 would_show=' \
     && ok "arm 9d: the full legend defines scope= and the stubbed=/would_show= symbols stub" \
     || no "arm 9d: the full legend does not define scope= / the stub"
@@ -439,7 +455,7 @@ case "$stubEx" in
     *)                 no "arm 10c: the stub's next= drops --exclude: '$stubEx'" ;;
 esac
 # and the pasted page must reproduce the page it names, on the same corpus
-P2EX="$( python3 -c 'import shlex,subprocess,sys; sys.stdout.write(subprocess.run([sys.argv[1],sys.argv[2],"--no-cache"]+shlex.split(sys.argv[3]),capture_output=True,text=True).stdout)' "$BIN" "$REPO" "$nextEx" )"
+P2EX="$( pasteNext "$REPO" "$nextEx" )"
 ofP2="$( scopedTag "$P2EX" | grep -oE 'of="[0-9]+"' | head -1 | tr -dc '0-9' )"
 [ -n "$ofP2" ] && [ "$ofP2" = "$ofEx" ] \
     && ok "arm 10d: the pasted next= lands on the SAME corpus (of=\"$ofP2\" both sides)" \
@@ -475,6 +491,97 @@ EMPTYD="$( run --rank-by=churn-decay --in=util 2>/dev/null )"
 printf '%s' "$( scopedTag "$EMPTYD" )" | grep -q '^<recent scope="util" n="3" of="3" ' \
     && ok "arm 11c guard: a directory WITH history prints its rows (n=\"3\" of=\"3\") — 11a is about absence, not emptiness" \
     || no "arm 11c guard: --in=util did not print 3 rows: $( scopedTag "$EMPTYD" )"
+
+# ── arm 12: the corpus flag the continuation DROPPED — --max-file-size (CodeRabbit, review 5195637558) ──
+# next= replays --exclude / --no-ignore / --ignore-tests / --since, and omitted the crawl's SIZE CEILING. A
+# caller who pasted the hint re-crawled at the default 4 MB, indexed the files the run that emitted it had
+# dropped as oversize, and landed on a page of a different answer: MEASURED of="2" on the run against of="3"
+# on the page it named. Its own fixture, because the main one holds no oversize file and adding one there
+# would move every of= above.
+CEIL="$WORK/ceil"; mkdir -p "$CEIL/d"
+git -C "$CEIL" init -q 2>/dev/null
+git -C "$CEIL" config user.email rw@example.invalid
+git -C "$CEIL" config user.name  ripwire-gate
+ceilCommit(){ git -C "$CEIL" add -A >/dev/null 2>&1; git -C "$CEIL" commit -q -m "$1" >/dev/null 2>&1; }
+printf 'def s1():\n    return 1\n' > "$CEIL/d/s1.py"; ceilCommit d/s1.py
+printf 'def s2():\n    return 2\n' > "$CEIL/d/s2.py"; ceilCommit d/s2.py
+{ printf 'def big():\n    return 0\n'; i=0; while [ "$i" -lt 200 ]; do printf '# filler %d — this file exists to exceed the 2K probe ceiling\n' "$i"; i=$(( i + 1 )); done; } > "$CEIL/d/big.py"
+ceilCommit d/big.py
+bigB="$( wc -c < "$CEIL/d/big.py" | tr -d ' ' )"
+[ "$bigB" -gt 2048 ] \
+    && ok "arm 12 guard: d/big.py is $bigB B, past the 2K ceiling the arms below crawl under" \
+    || no "arm 12 guard: d/big.py is only $bigB B — arms 12a-12d are vacuous"
+C1="$( runAt "$CEIL" --rank-by=churn-decay --in=d --max-file-size=2K --limit=1 2>/dev/null )"
+tagC="$( scopedTag "$C1" )"
+ofC="$( printf '%s' "$tagC" | grep -oE 'of="[0-9]+"' | head -1 | tr -dc '0-9' )"
+[ "$ofC" = 2 ] \
+    && ok "arm 12a guard: --max-file-size=2K really shrinks the corpus (of=\"2\" of d/'s 3 files) — the arms below can fail" \
+    || no "arm 12a guard: --max-file-size=2K gave of='$ofC', expected 2 — arms 12b/12d are vacuous"
+nextC="$( printf '%s' "$tagC" | grep -oE 'next="[^"]*"' | sed 's/^next="//;s/"$//' )"
+case "$nextC" in
+    *--max-file-size=*) ok "arm 12b: the scoped next= replays the crawl ceiling: $nextC" ;;
+    *)                  no "arm 12b: the scoped next= drops --max-file-size — it names a DIFFERENT corpus: '$nextC'" ;;
+esac
+stubC="$( printf '%s' "$C1" | grep -oE '<symbols [^>]*/>' | head -1 | grep -oE 'next="[^"]*"' | sed 's/^next="//;s/"$//' )"
+case "$stubC" in
+    *--max-file-size=*) ok "arm 12c: the stub's next= replays the crawl ceiling: $stubC" ;;
+    *)                  no "arm 12c: the stub's next= drops --max-file-size: '$stubC'" ;;
+esac
+PC="$( pasteNext "$CEIL" "$nextC" )"
+ofPC="$( scopedTag "$PC" | grep -oE 'of="[0-9]+"' | head -1 | tr -dc '0-9' )"
+[ -n "$ofPC" ] && [ "$ofPC" = "$ofC" ] \
+    && ok "arm 12d: the pasted next= lands on the SAME corpus (of=\"$ofPC\" both sides)" \
+    || no "arm 12d: the pasted next= sees of=\"$ofPC\" where the page it came from saw of=\"$ofC\""
+# and the hint stays SHORT at the default: a flag that did not shape THIS crawl is not replayed, because the
+# 120-byte budget is spent on the flags that can move of=.
+nextDflt="$( scopedTag "$( runAt "$CEIL" --rank-by=churn-decay --in=d --limit=1 2>/dev/null )" | grep -oE 'next="[^"]*"' | sed 's/^next="//;s/"$//' )"
+[ "$nextDflt" = "--rank-by=churn-decay --in=d --offset=1 --limit=1" ] \
+    && ok "arm 12e: at the DEFAULT ceiling the hint carries no --max-file-size ($nextDflt)" \
+    || no "arm 12e: the default-ceiling hint is '$nextDflt', expected '--rank-by=churn-decay --in=d --offset=1 --limit=1'"
+
+# ── arm 13: "history was mined" is a FACT that travels, not one read back off the rows ──────────────
+# A window can hold commits none of whose paths are INDEXED — the commit that DELETES a file is the smallest
+# case, and a window of --exclude'd paths is the next. The annotation used to be inferred from what was
+# emitted (no rows and no skipped merge bomb ⇒ no block), so that run was byte-indistinguishable from
+# --since=HEAD, which reads no commit at all. Arm 11a's promise — "absent ⇒ no history mined" — was
+# therefore FALSE in exactly this case. mined.anyHistory travels through ChurnRanking now and both blocks
+# ride on the fact (src/prcontext.h's E1 rule: gate on the count, never on a match over the body).
+MINED="$WORK/mined"; mkdir -p "$MINED/d"
+git -C "$MINED" init -q 2>/dev/null
+git -C "$MINED" config user.email rw@example.invalid
+git -C "$MINED" config user.name  ripwire-gate
+printf 'def keep():\n    return 1\n' > "$MINED/d/keep.py"; git -C "$MINED" add -A >/dev/null 2>&1; git -C "$MINED" commit -q -m c1 >/dev/null 2>&1
+printf 'def gone():\n    return 2\n' > "$MINED/gone.py";   git -C "$MINED" add -A >/dev/null 2>&1; git -C "$MINED" commit -q -m c2 >/dev/null 2>&1
+SINCE="$( git -C "$MINED" rev-parse HEAD )"
+rm -f "$MINED/gone.py"; git -C "$MINED" add -A >/dev/null 2>&1; git -C "$MINED" commit -q -m c3 >/dev/null 2>&1
+wCommits="$( git -C "$MINED" rev-list --count "$SINCE"..HEAD 2>/dev/null )"
+wTouched="$( git -C "$MINED" log --name-only --format= "$SINCE"..HEAD 2>/dev/null | grep -c . )"
+[ "$wCommits" = 1 ] && [ "$wTouched" = 1 ] && [ -z "$( git -C "$MINED" ls-files gone.py )" ] \
+    && ok "arm 13 guard: the window holds 1 commit touching 1 path (gone.py), and gone.py is NOT in the index" \
+    || no "arm 13 guard: window has $wCommits commit(s)/$wTouched path(s), gone.py tracked='$( git -C "$MINED" ls-files gone.py )' — arms 13a-13d are vacuous"
+M1="$( runAt "$MINED" --rank-by=churn-decay --since="$SINCE" 2>/dev/null )"
+gTag="$( printf '%s' "$M1" | grep -oE '<recent [^>]*>' | head -1 )"
+printf '%s' "$gTag" | grep -q '^<recent n="0" of="0" merge_bombs_skipped="0">' \
+    && ok "arm 13a: a window that MINED a commit but touched no indexed file says n=\"0\" of=\"0\" ($gTag)" \
+    || no "arm 13a: mined-but-zero-rows printed '$gTag', expected <recent n=\"0\" of=\"0\" merge_bombs_skipped=\"0\">"
+M2="$( runAt "$MINED" --rank-by=churn-decay --in=d --since="$SINCE" 2>/dev/null )"
+sTag="$( scopedTag "$M2" )"
+printf '%s' "$sTag" | grep -q '^<recent scope="d" n="0" of="0" capped="0"' \
+    && ok "arm 13b: the scoped block rides it too — <recent scope=\"d\" n=\"0\" of=\"0\" capped=\"0\" …>" \
+    || no "arm 13b: the scoped block on a mined-but-empty window is '$sTag'"
+printf '%s' "$sTag" | grep -qE 'next=' \
+    && no "arm 13c: an empty scoped page must carry no next= ($sTag)" \
+    || ok "arm 13c: an empty scoped page carries no next= (there is no page to fetch)"
+# THE CONTRAST, and the whole point: a window that read NOTHING still prints neither block, so the two
+# answers no longer look the same.
+M3="$( runAt "$MINED" --rank-by=churn-decay --in=d --since=HEAD 2>/dev/null )"
+if printf '%s' "$M3" | grep -q '<recent '; then
+    no "arm 13d: --since=HEAD mines no commit, so it must print NEITHER block (got: $( printf '%s' "$M3" | grep -oE '<recent [^>]*>' | head -2 | tr '\n' ' ' ))"
+elif printf '%s' "$M2" | grep -q '<recent '; then
+    ok "arm 13d: mined-with-zero-rows (a block) and mined-nothing (no block) are now DIFFERENT documents"
+else
+    no "arm 13d: both windows print no block — the two answers are still indistinguishable"
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

@@ -39,8 +39,17 @@ run's own corpus and window flags (`--since`, `--exclude`, `--no-ignore`, `--ign
 names is a page of the same answer; a presentation flag is deliberately not replayed, because it cannot move
 `of=`. Past 120 bytes (`kNextAttrMaxBytes`, the ceiling every other `next=` in the tool already respected)
 the attribute is absent and `has_more=` still says the page exists — a hint that pastes wrong is worse than
-none. The scoped block rides exactly when the global one does: an absent block means no history was mined,
-`n="0"` means history was mined and no file under DIR was touched.
+none. The replayed set is ENUMERATED against the flags that can ride beside `--in`, not hand-picked: it also
+carries `--max-file-size` when that run set one, because the crawl's size ceiling drops files out of the index
+and the rows are indexed files (a hint emitted under `--max-file-size=2K` named a page of `of="3"` where the
+run that emitted it saw `of="2"`), and `scopedMapNextInvocation` now lists every other rideable flag with the
+reason it is NOT replayed — a cache flag indexes the same files, `--refetch` would fetch a newer tree,
+`--scip` moves edges and not files, and the presentation flags cannot move `of=`. The scoped block rides
+exactly when the global one does: an absent block means no history was mined, `n="0"` means history was mined
+and no file under DIR was touched. That is a propagated FACT (`DecayedChurnMined::anyHistory`, carried through
+`ChurnRanking` to the serializer) rather than a reading of the rows: a window whose only commit touched no
+indexed file — the commit that deletes a file is the smallest one — has zero rows AND a mined history, and
+inferring the second from the first published it as "no history was mined".
 
 The symbol map collapses to a disclosed stub `<symbols stubbed="1" would_show=N next="…"/>` — the map was
 not asked for, so it is not ranked at all (no PageRank runs, and the header carries no `pr_iters=` for an
@@ -75,7 +84,8 @@ only by the share of it that ranking was: user time, median of five interleaved 
 cache, 0.73 s → 0.71 s on RocksDB and 2.55 s → 2.37 s on llvm-project (~3% and ~7%). Ingest and the call
 graph dominate both, and that is the honest size of this win.
 
-Gate: `test/recentscopecheck.sh`, 85 arms on a 53-commit fixture with 45 files under `db/` — the scoped rows
+Gate: `test/recentscopecheck.sh`, 96 arms on a 53-commit fixture with 45 files under `db/` (plus two
+fixtures of its own for the corpus arms) — the scoped rows
 are only DIR's and spelled as the global block spells them, the global block is byte-identical with and
 without the flag, page 2 (`--offset=40`) is the exact remainder with no overlap and the pasted `next=`
 reproduces it byte-for-byte, `next=` replays `--exclude` and the pasted page lands on the same `of=`, an
@@ -84,7 +94,44 @@ and no `pr_iters=` rides the stubbed header, a window that mined nothing prints 
 name / a symlink alias / an excluded subtree each refuse naming the crawl, eight preemption arms sample the
 derived refusal (`--lint`, `--hotspots`, `--query`, `--map-diff`, `--expand`, `--pack-signatures`, `--doctor`,
 `--batch`), `--top-k` refuses with exactly one message where it used to print three, and `--max-tokens`/
-`--token-budget`/`--limit` compose with a clean stderr.
+`--token-budget`/`--limit` compose with a clean stderr. Two arms cover the continuation's corpus directly:
+a run under `--max-file-size=2K` on a fixture holding one oversize file must replay the ceiling and the pasted
+page must land on the same `of=`, and a window whose only commit touched no indexed file must print `n="0"`
+where `--since=HEAD` (which reads no commit) still prints neither block. `perl` and `xmllint` are
+PREREQUISITES of the gate (exit 2, naming the tool) rather than arms: a missing tool is an environmental
+condition, and reporting it as a FAIL made `test/regression.sh` name this gate as a product regression for a
+tool the machine never had.
+
+### Fixed — two generated documents published numbers and links nothing derived
+
+`docs/COMMANDS.md`'s table of contents is generated: one `[`--flag`](#anchor)` per entry, with the anchor
+derived from the flag's spec. The derivation replaced every run of non-alphanumeric characters with a hyphen
+and trimmed the ends (the `--in=DIR` heading became `#in-dir`), where the renderer's rule DELETES that
+punctuation instead of substituting it — the anchor it mints keeps the flag's own two leading dashes and loses
+the `=`. All 169 links in the document therefore resolved to nothing, and had done since it was first
+generated; markdownlint's MD051 had been reporting it 28 times on a single line. Fixed in the
+generator (`docs/docs_commands_build.py`), which now states the renderer's own rule — lower-case, drop every
+character that is not a word character, a hyphen or a space, then spaces to hyphens — and assigns anchors in
+emission order so a repeated heading would get the `-1` the renderer appends rather than two links to the
+first. Gate: `test/docscommandscheck.sh` arm (J), which audits every fragment against the headings (fenced
+sample output skipped — a `###` line inside a code block mints no anchor) and restates the renderer's rule
+instead of importing the generator's, because a gate that asks the generator what the anchor should be agrees
+with the generator's mistake. Arms (A)–(I) were all green throughout: (B) compares flag NAME sets and (G)
+compares bytes, and a document can be byte-reproducible with every link in it dead.
+
+`docs/TUNING.md`, likewise generated, asserted a sum instead of deriving one: "`112 + 12` accounts for the 128
+NAMES" is 124, four short of the distinct-name count in the table two lines above it — in the one paragraph
+whose subject is that quoting a wrong pair "would be wrong in both halves at once". Recounted from the same
+data the table is built from: `src/` declares 129 caps under 128 distinct names, of which 111 are tunable, 12
+must stay `constexpr`, and 5 were declared after the sweep was prepared and no measurement has touched
+(`kChurnMergeBombMaxFiles`, `kFieldIdCapacity`, `kForPageRowsDefault`, `kForPageUnionSymbolCap`,
+`kMaxBlockBytes`) — 111 + 12 + 5 = 128. Neither 112 nor 12 was wrong: they are the FROZEN classification in
+`bench/capsweep/tunable.tsv`, and the census beside them is re-read from `src/` on every run, so the two are
+different populations and the missing four were five new names minus one (`kSituTestRowsShown`) the sweep
+classified and `src/` no longer declares. The paragraph derives all three parts now, states that skew rather
+than hiding it, and `capsweep.py emit` REFUSES to render a partition that does not add up — a name classified
+in two lists at once, the shape an asserted sum cannot see, exits non-zero instead of publishing. Gate:
+`test/capsweepcheck.sh` arm (C) reproduces the document byte-for-byte through that refusal on every run.
 
 ### Fixed — a churn window says how many commits it skipped as merge bombs
 
