@@ -315,18 +315,39 @@ def trace_files(bin_path, snap, trace_text):
 
 
 TEST_RE = re.compile(r'<test p="([^"]+)"')
-# E1 (2026-09-12): runner-less rows sharing their evidence ride ONE <g … p="a,b,c"/> row; split its p= and
-# undo the &#44; comma escape so every path is read verbatim, as it was on the single rows.
+# E1 (2026-09-12): runner-less rows sharing their evidence ride ONE <g … p="a,b,c"/> row, so a group's p= is
+# split on ','. THE CONTRACT, as testmap.h states it: a path containing ',' is NEVER grouped — it is served
+# as a single row — so splitting a group's p= cannot split a path in half, and there is no comma escape to
+# undo. This adapter used to undo a `&#44;` that the seam stopped spelling on 2026-09-13 while decoding NONE
+# of the entities it does emit, so `src/a&amp;b.cpp` was scored against a file name that does not exist.
+# Both row shapes now go through one decode, and therefore have one path contract.
 GROUP_RE = re.compile(r'<g [^>]*?\bp="([^"]+)"')
+
+# The five XML attribute entities plus numeric references — test/testrowpaths.py's xml_unescape, in a file
+# that may not import from test/. Local and small on purpose: an XML parser is not a dependency this bench
+# adapter is allowed to grow for five substitutions.
+_ARB_ENT = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'"}
+
+
+def xml_unescape(s):
+    def one(m):
+        body = m.group(1)
+        if body.startswith("#"):
+            try:
+                return chr(int(body[2:], 16) if body[1:2].lower() == "x" else int(body[1:], 10))
+            except ValueError:
+                return m.group(0)
+        return _ARB_ENT.get(body, m.group(0))
+    return re.sub(r"&([#0-9A-Za-z]+);", one, s)
 
 
 def affected_tests(bin_path, snap, changed_file):
     out = run_bin_or_none(bin_path, snap, ["--affected=%s" % changed_file])
     if out is None:
         return []
-    paths = TEST_RE.findall(out)
+    paths = [xml_unescape(p) for p in TEST_RE.findall(out)]
     for grp in GROUP_RE.findall(out):
-        paths += [p.replace("&#44;", ",") for p in grp.split(",")]
+        paths += [xml_unescape(p) for p in grp.split(",") if p != ""]
     return [norm_path(m, snap) for m in paths]
 
 

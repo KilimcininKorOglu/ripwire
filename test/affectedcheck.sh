@@ -69,9 +69,14 @@ printf 'void unrelated_helper() { }\n'                             > "$R/test/de
 
 run(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache 2>/dev/null; }
 runec(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache >/dev/null 2>"$TMP/err.txt"; }
-# extract the basenames of the emitted test rows, sorted. E1 (2026-09-12): a runner-less row may ride a
-# <g … n= p="a,b,c"/> GROUP row (testmap.h), so the p= value is split on ',' — every path is still verbatim.
-tset(){ printf '%s' "$1" | grep -oE '<(test|g) [^>]*/>' | grep -oE ' p="[^"]*"' | sed 's/^ p="//; s/"$//' | tr ',' '\n' | sed 's|.*/||' | sort | tr '\n' ','; }
+# The basenames of the emitted test rows, sorted — through test/testrowpaths.py, THE shared reader, like
+# tord() below. This helper was the LAST private reader left in the file the shared reader's own docstring
+# names among the six it converted (review of #214), so that claim was false while it stood. It split EVERY
+# row's p= on ',' — including a single <test> row's — and a path containing ',' is never grouped (testmap.h
+# refuses to, so that p= is one path, not a list), which turned such a row into two names that name nothing.
+# The shared reader splits only a QUALIFIED group row and decodes entities, so the two helpers in this file
+# can no longer disagree about what a row is.
+tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | sort | tr '\n' ','; }
 cnt(){  printf '%s' "$1" | grep -oE 'tests="[0-9]+"' | head -1 | grep -oE '[0-9]+'; }
 
 # ── 1) change core.cpp → exactly the two tests that reach its symbols ────────────────────────────────

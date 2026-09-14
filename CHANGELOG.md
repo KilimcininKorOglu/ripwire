@@ -352,6 +352,55 @@ everything under `src/infra/` is built to travel to another repository, and `tes
 refuses a layer file that names the host — it caught the switch's first spelling, which is the gate doing
 exactly what it exists for.
 
+### Fixed — an unmeasured `est_tokens` said nothing, a no-throw contract threw, and two test-row readers still went quiet
+
+Six defects from one review, each of them a surface that was silently wrong rather than loudly broken.
+**`--pr-context` shipped a wrong `est_tokens` with no disclosure.** When a trim level's measurement render
+fails, `prRenderLevel` returns an EMPTY body; the ladder priced that empty body, the price fit, and the root
+printed it — while `writePrContext` correctly streamed the complete untrimmed floor. The only signal was
+`DEGRADED_PATH_ALERT`, which `src/infra/Diagnostics.h` compiles to `do {} while (0)` under `NDEBUG`, so the
+binary a user installs printed a modelled number with nothing at all saying so (non-negotiable #3). The bytes
+were never the bug and are unchanged — a failed measurement may not decide what the answer contains — so the
+fact goes where this class of fact already lives: `truncated=` now carries `;est-unmeasured`, re-priced with
+the label in place, and the legend defines it in the same voice as `budget-floor-exceeded`. That label is 15
+bytes and can ride beside `budget-floor-exceeded`, which takes `prBudgetTail`'s worst case from 248 B to
+263 B: `tail[256]` (SEVEN bytes of margin, as `test/fixedbufsweep.sh` had warned in terms) becomes
+`tail[320]`, 56 B of margin, and the sweep's row moves with the measured recomputation. `rw::formatTo` was
+not what had been saving it — it truncates silently and its return is not read there, so an overrun would
+have dropped the closing quote of `truncated="` and shipped a malformed root with no diagnostic.
+**`renderToString`'s no-throw contract had a throwing last statement**: `out.text.assign( buf, sz )` is the
+one allocation on the success path and sat outside the handler, so a `std::bad_alloc` from it escaped a
+function documented to return `ok == false`, and jumped the `std::free( buf )` two lines below on the way
+out — leaking the memstream buffer. It is caught in its own handler (the two failures need different
+cleanup: the emitter's throw owns an open stream, this one owns only the buffer) with its own alert literal,
+and control falls through to the single `free()`, so the buffer is released exactly once on every path.
+Proved by `INFRA_FAULT_RENDER_COPY_THROW`, the twin of the emitter switch, in `test/prcontextcheck.sh` arm
+(G) — red on the parent commit, and honest in both flavours: the switch and the alert live only on the
+non-`NDEBUG` build, so the plain-flavour leg proves the degrade and the `NDEBUG` leg asserts only that the
+verb is intact and that no false disclosure appears. The `est-unmeasured` LEGEND definition is asserted on
+every flavour, which is the point of moving the disclosure off the alert. **The shared test-row reader's
+malformed-field detector had a hole of its own species**: `test/testrowpaths.py` found `"tests_to_run"` and
+then scanned arbitrarily far forward for a `[`, so `{"tests_to_run":null,"other":[{"p":"ghost.cpp"}]}`
+sliced the NEXT field's array and returned `ghost.cpp` at exit 0 — a foreign field's paths served as this
+field's answer, where the docstring already promised a `TestRowParseError`. The value is now read
+adjacently (past the key, a `:`, optional whitespace, then `[` or raise); `null`, a number, a string and an
+object all take the raise, in both `paths` and `jsonlist`, with a well-formed array and JSON whitespace as
+controls (`test/testrowruncheck.sh` arm 17). **And two path readers had never been converted.** A census of
+`test/` over the four shapes the reader was written to replace found `test/affectedcheck.sh`'s `tset()` —
+in the file the reader's own docstring names among those it converted, so that claim was false — splitting
+EVERY row's `p=` on `,` including a single row's, which turns a comma-bearing path (never grouped, by
+`testmap.h`'s refusal) into two names that name nothing; and `test/testgatecheck.sh`'s `tset()` matching
+`<t p=` singles only, which returned the EMPTY set on a two-runner-less-test fixture where the shared reader
+returns both paths. Both now route through the shared reader. Every other hit in the sweep either counts
+rows (`listingpagingcheck`, `w3fixlegendcheck`, `testgatepagecheck`, all group-aware in place) or pins one
+exact row spelling with a regex that fails loudly, and `deeptailcheck`'s `<t p=` rows are `--for`'s tail
+listing, a different element sharing the tag. Two documentation drifts close beside them: the
+`skills/ripwire-mcp/SKILL.md` verb table claimed `p` for `situational_awareness`, which emits `test` (the
+binary states the split at `src/mcp.h`'s `kTestRowJsonShapeClause` and is the authority), and
+`bench/arb/run_arb.py` decoded a `&#44;` the seam stopped emitting on 2026-09-13 while decoding none of the
+entities it does emit — so a path holding `&` was scored against a file name that does not exist. Both row
+shapes there now share one decode.
+
 ### Added — the task router knows the recency question, and every new shape is named where an agent reads
 
 Two halves of one gap, both measured as absences rather than argued. **The router could not reach the

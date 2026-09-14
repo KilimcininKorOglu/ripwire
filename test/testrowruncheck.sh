@@ -577,5 +577,45 @@ e16='test/with space.cpp|test/two words.cpp|test/a b c.cpp|test/g one.cpp|test/g
     || no "(16) the shared reader is still silent where it should fail:$r16bad"
 
 
+# ── ARM 17 — THE THIRD SILENCE: "tests_to_run" PRESENT BUT NOT A LIST (review of #214) ────────────────
+# json_list_slice found the key and then ran `doc.find( "[", i )` — an UNBOUNDED forward scan. So a document
+# spelling `"tests_to_run":null` was not read as "the field is not a list"; the scan walked PAST the value,
+# found the NEXT '[' anywhere in the document, and sliced THAT. Measured on the reader as it stood at
+# c9d6d4e8: `{"tests_to_run":null,"other":[{"p":"ghost.cpp"}]}` returned ghost.cpp at rc=0 — a foreign
+# field's paths served as the tests_to_run answer, which is the same species of defect arm 16 closed and one
+# step worse, because the caller is handed rows rather than silence. The docstring already promised the
+# raise ("is followed by no '[' — not a list at all"); only the code disagreed.
+#
+# The fix reads the value ADJACENTLY: past the key, a ':', optional whitespace, and then the very next
+# character must be '['. Every non-array value is exit 2; a well-formed array still parses, which is what
+# the controls below hold.
+r17bad=""
+# (a) every non-array value raises — and the decoy '[' that used to be sliced names a path that would be
+#     served as a test row. null, a number, a string and an OBJECT all take this leg.
+for d17 in '{"tests_to_run":null,"other":[]}' \
+           '{"tests_to_run":null,"other":[{"p":"ghost.cpp"}]}' \
+           '{"tests_to_run":7,"other":[{"p":"ghost.cpp"}]}' \
+           '{"tests_to_run":"nope","other":[{"p":"ghost.cpp"}]}' \
+           '{"tests_to_run":{"a":[{"p":"ghost.cpp"}]}}'; do
+    o17="$( printf '%s' "$d17" | python3 "$ROWPATHS" paths json 2>/dev/null )"; o17rc=$?
+    { [ "$o17rc" -eq 2 ] && [ -z "$o17" ]; } \
+        || r17bad="$r17bad [$d17 -> rc=$o17rc paths='$( printf '%s' "$o17" | tr '\n' ' ' )', want rc=2 and no rows]"
+    # the jsonlist mode shares the slicer, so it owes the same answer
+    printf '%s' "$d17" | python3 "$ROWPATHS" jsonlist >/dev/null 2>&1
+    [ $? -eq 2 ] || r17bad="$r17bad [jsonlist swallows the same non-list value: $d17]"
+done
+# (b) the CONTROLS: a well-formed array still parses, whitespace between ':' and '[' is legal JSON, and a
+#     group row's nested array is still sliced by depth rather than by the first ']'.
+c17="$( printf '%s' '{"tests_to_run":[{"p":"ok.cpp"}]}' | python3 "$ROWPATHS" paths json 2>/dev/null )"; c17rc=$?
+{ [ "$c17rc" -eq 0 ] && [ "$c17" = "ok.cpp" ]; } \
+    || r17bad="$r17bad [the well-formed control no longer parses: rc=$c17rc paths='$c17']"
+w17="$( printf '%s' '{"tests_to_run"  :  [{"p":["a","b"],"n":2},{"p":"c"}]}' | python3 "$ROWPATHS" paths json 2>/dev/null | tr '\n' '|' )"; w17rc=$?
+{ [ "$w17rc" -eq 0 ] && [ "$w17" = "a|b|c|" ]; } \
+    || r17bad="$r17bad [whitespace around the ':' must stay legal: rc=$w17rc paths='$w17']"
+[ -z "$r17bad" ] \
+    && ok "(17) a present-but-not-a-list tests_to_run is exit 2, never a slice of the NEXT field's array — the value is read adjacently" \
+    || no "(17) the slicer still scans past its own field:$r17bad"
+
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

@@ -225,6 +225,15 @@ inline bool isRenderEmitThrowFaultInjected() noexcept
     return isOn;
 }
 
+// The SECOND throwing site, and its own switch for the same reason the first has one: the name is what a
+// reader greps for. The emitter is not the only allocation here — the final copy out of the memstream buffer
+// is one too, and it sat outside the handler that the emitter's throw takes.
+inline bool isRenderCopyThrowFaultInjected() noexcept
+{
+    static const bool isOn = faultSwitchOn( "INFRA_FAULT_RENDER_COPY_THROW" );
+    return isOn;
+}
+
 template<class Emit>
 inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
 {
@@ -266,7 +275,31 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
     out.ok             = flushed && closed && buf != nullptr;
     if( out.ok )
     {
-        out.text.assign( buf, sz );
+        // THE LAST ALLOCATION IS STILL AN ALLOCATION. This copy is the one throwing statement on the success
+        // path, and it used to stand outside every handler: a std::bad_alloc here escaped a function whose
+        // contract is that a failure is ALERTED and returned as ok == false, and it jumped the free() below
+        // on the way out, leaking the memstream buffer. Caught here rather than in one handler around the
+        // whole body, because the two failures need different cleanup: the emitter's throw owns an OPEN
+        // stream (fclose + free, in the catch above), while by this point the stream is already closed and
+        // only `buf` is left — and control falls THROUGH to the single free() below, so buf is released
+        // exactly once on every path, success and failure alike.
+        try
+        {
+            // The injected fault stands exactly where a real std::bad_alloc would: the buffer is complete
+            // and closed, and the copy of it is what fails.
+            if( isRenderCopyThrowFaultInjected() ) { throw std::bad_alloc(); }
+            out.text.assign( buf, sz );
+        }
+        catch( ... )
+        {
+            out.ok = false;
+            out.text.clear();
+            // NOT degradeMsg, and not the emitter's literal either: the buffer did not fail and the emitter
+            // did not throw — the copy out of a complete buffer did. Same reasoning as the catch above, so
+            // the caller reads which of the three failures it actually hit.
+            DEGRADED_PATH_ALERT( "renderToString: the final COPY out of the buffer THREW — nothing was "
+                                 "measured, the caller takes its documented fallback" );
+        }
     }
     else
     {

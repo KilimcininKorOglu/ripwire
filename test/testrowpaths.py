@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """testrowpaths.py — THE tests_to_run row reader every gate shares.
 
-WHY THIS FILE EXISTS. Six gates read the PATHS out of the tests_to_run row family — affectedcheck,
-impactpartitioncheck, receiptpostcheck, rootrelemitcheck, selectorchaincheck, testrowruncheck — and each one
-had grown its own reader: `grep -oE '<t p="[^"]*"'`, `sed -n 's/.*<test p="\\([^"]*\\)".*/\\1/p'`,
+WHY THIS FILE EXISTS. Seven gates read the PATHS out of the tests_to_run row family — affectedcheck,
+impactpartitioncheck, receiptpostcheck, rootrelemitcheck, selectorchaincheck, testgatecheck, testrowruncheck
+— and each one had grown its own reader: `grep -oE '<t p="[^"]*"'`, `sed -n 's/.*<test p="\\([^"]*\\)".*/\\1/p'`,
 `grep -oE '"tests_to_run":\\[[^]]*\\]'`, `awk '{print $1}'`. Every one of them was written when a row was
 one path, and E1 (2026-09-12) made a row possibly be SEVERAL — `<g n="3" p="a,b,c"/>` in XML, a `"p"`
 ARRAY in JSON, `[hops=2] (3): a, b, c` in the text dialect. The private readers did not fail; they went
@@ -16,10 +16,21 @@ QUIET or, worse, wrong:
 
 The invariant all six actually want is THE FILES NAMED, in emitted order. That is one question, so it is
 answered in one place, for every dialect, and a gate that adds a new assertion gets the group shapes for
-free instead of re-deriving them. Two further gates read these rows and are NOT converted, because neither
+free instead of re-deriving them. Three further gates read these rows and are NOT converted, because none
 asks for the paths: test/listingpagingcheck.sh sums `n=` over the <g> rows to prove the family never pages,
-and test/w3fixlegendcheck.sh counts path occurrences on a --situ line. Both were made group-aware in place
-(E1) and stay that way — routing a COUNT through a path reader would only add a dialect hop.
+test/w3fixlegendcheck.sh counts path occurrences on a --situ line, and test/testgatepagecheck.sh adds the
+singles to the groups' `n=` to check shown_tests=. All three were made group-aware in place (E1) and stay
+that way — routing a COUNT through a path reader would only add a dialect hop.
+
+THE CLAIM ABOVE WAS ONCE HALF TRUE, WHICH IS WHY THE CENSUS IS RECORDED HERE. The review of #214 found TWO
+path readers still private: affectedcheck's own tset() (in the file this docstring already named — it split
+EVERY row's p= on ',', including a single row's, so a comma-bearing path became two names that name nothing)
+and testgatecheck's tset() (matched `<t p=` singles only and returned the EMPTY set on a two-runner-less-test
+fixture where this reader returns both paths). Both are converted. The rest of test/ was swept for the same
+four shapes — a `tr ',' '\\n'` over a p=, a `grep -oE '<test p='`, a `'"tests_to_run":\\[[^]]*\\]'`, an `awk
+'{print $1}'` on a --situ line — and every other hit either COUNTS rows (the three above) or pins one exact
+row's spelling with a regex that fails loudly rather than going quiet (flipcheck's <t> pin, handoffcheck's
+run= check). deeptailcheck's `<t p=` rows are --for's TAIL listing, a different element that shares the tag.
 
     python3 test/testrowpaths.py paths xml|json|text  [FILE]   # one path per line, emitted order
     python3 test/testrowpaths.py jsonlist             [FILE]   # the balanced "tests_to_run":[...] slice
@@ -105,13 +116,30 @@ def json_list_slice( doc ):
     first ']' is not the end of the list) and string-aware (a ']' inside a path is not a bracket).
 
     Returns None when the document has no "tests_to_run" field at all. Raises TestRowParseError when it has
-    one that this reader cannot slice — see that class for why the two are not the same answer."""
+    one that this reader cannot slice — see that class for why the two are not the same answer.
+
+    The value is read ADJACENTLY. `doc.find( "[", i )` was an unbounded forward scan, so a document spelling
+    `"tests_to_run":null` was not read as "not a list": the scan walked past the value and sliced the NEXT
+    '[' anywhere in the document. `{"tests_to_run":null,"other":[{"p":"ghost.cpp"}]}` returned ghost.cpp at
+    exit 0 — a foreign field's paths served as this field's answer, which is the hole of arm 16's own species
+    one step worse, because the caller is handed rows instead of silence. Past the key, a ':', optional
+    whitespace, and the very next character must be '['; anything else is the raise the docstring promised."""
     i = doc.find( '"tests_to_run"' )
     if i < 0:
         return None
-    i = doc.find( "[", i )
-    if i < 0:
-        raise TestRowParseError( '"tests_to_run" is present but is followed by no "[" — not a list at all' )
+    j = i + len( '"tests_to_run"' )
+    while j < len( doc ) and doc[j].isspace():                  # JSON allows whitespace on both sides of ':'
+        j += 1
+    if j >= len( doc ) or doc[j] != ":":
+        raise TestRowParseError( '"tests_to_run" is present but is followed by no ":" — not a field at all' )
+    j += 1
+    while j < len( doc ) and doc[j].isspace():
+        j += 1
+    if j >= len( doc ) or doc[j] != "[":
+        got = doc[ j:j + 12 ] if j < len( doc ) else "end of document"
+        raise TestRowParseError( '"tests_to_run" is present but its value does not open with "[" — not a list '
+                                 'at all (value begins %r)' % got )
+    i = j
     depth = 0
     instr = False
     esc = False
