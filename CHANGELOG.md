@@ -290,7 +290,7 @@ goldens) were re-anchored with the measured number; the confident ones read the 
 
 ### Fixed — the review round: a ceiling priced in the wrong unit, and a shape that outlived its output
 
-Ten findings from the 2026-09-13 review of this lane, each reproduced before it was touched.
+Twelve findings from the 2026-09-13 review of this lane, each reproduced before it was touched.
 
 The one that changed behaviour for every budgeted call: `--for` and `--pack-task` tested their ceiling
 rungs at `kMinBytesPerToken` (2.36) while `est_tokens=` and `over_ceiling=` price the delivered document
@@ -386,6 +386,32 @@ its own stated rule (largest measured probe, up to the next 10 bytes, plus 10), 
 following — map 892 → pin 910, map-diff 885 → 900, pack-signatures 759 → 770, metrics 798 → 810, query
 707 → 720, around 760 → 770, pack-task 974 → 990, pack-top-n 745 → 760, `ripwire.for/v1` 654 → 670, and the
 new `ripwire.expand-file/v1` 230 → 240; the ten-verb loop reads 4,645 B under its 4,700 pin.
+
+The last two came in without review threads, and both were documents contradicting something the same
+repository already states. **The compact-legend policy was not being audited in the direction that matters.**
+Every verb command an agent-facing skill spells carries `--legend=compact` where the binary accepts
+it (`--for` exempt, its compact legend is its own), and `test/skilltruthcheck.sh` had two arms for it — but
+both start from a command that ALREADY carries the flag, so they can only catch a flag that does not belong.
+A command that should carry it and does not was invisible to the whole gate, which is how
+`ripwire <dir> --rank-by=churn-decay` shipped flagless in `ripwire-fresh-eyes`'s pass 1a. Seven spans across
+six skills are fixed (pass 1a and the `--help-task` route beside it, `--max-tokens=3000`, `--no-ignore`,
+`--pattern=`, `--run-trace=`, and the two `--grep-in=any` recipes in `ripwire-security-scan`), and the gate
+grew the missing direction: a flagless span must carry the flag when the bare command emits XML on an empty
+corpus AND appending `--legend=compact` is not refused — both halves asked of the binary, never of a list.
+The XML precondition is what makes it sound rather than noisy: 21 spans look like violations without it and
+6 were real, because a placeholder operand (`--arch=rules.txt`, `--scip=index.scip`) fails before the legend
+check is ever reached and its silence would otherwise read as consent. *Floor, stated rather than implied:*
+the arm skips every span whose operand cannot resolve on an empty corpus, so it is a floor on the policy and
+not a total — those spans are unproven in both directions, not proven exempt. A positive control (a flagless
+`--flags` must classify as a violation) keeps a green from being the classifier failing silently; red on the
+pre-fix tree named 5 of 33 flagless spans.
+
+**And the README contradicted its own dependency table.** The guide's opening said "It has no runtime
+dependencies" while the table ~120 lines below says "None for the map itself. The history-backed commands
+need `git` on the path, and a repository to read" — and names the twelve commands that do. The prose now
+scopes the claim the way the table does and names `git`; the no-API-key, no-embeddings, no-index-server and
+no-daemon claims are unchanged, because those are true unconditionally. `docs/LINEAGE.md`'s comparison bullet
+carried the same unscoped sentence and is scoped identically.
 
 ### Added — Elixir module and arity resolution (parser version 95)
 

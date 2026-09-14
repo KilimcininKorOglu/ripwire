@@ -353,7 +353,7 @@ Nothing in the tables above. The parts that are not borrowed are the constraints
 - **Determinism as a contract, not a tendency.** Two runs byte-identical, and a warm run byte-identical to a cold one, gated on every push.
 - **Every count that cannot be proven total says so, in the output.** `counts_floor=`, `shown_*`, `*_capped=`, `amb=` — the vocabulary is defined by a legend the document carries with it.
 - **An advertised number is an enumerated, gated number.** Including the three in this document's own header.
-- **One compiled binary, no runtime dependencies, no embeddings, no server, no network.** Each of those is a thing several tools above have and this one does not, which is a trade and is described as one.
+- **One compiled binary, no runtime dependencies for the map, no embeddings, no server, no network.** Each of those is a thing several tools above have and this one does not, which is a trade and is described as one.
 - **The process that keeps the other four true.** Every document that makes claims — the tool's own output included — is treated as a claims corpus and adversarially audited; a gate must be shown able to fail before its green is trusted; and eighteen consecutive audit rounds have each found real defects, including in this document. The method ships as [`METHODOLOGY.md`](METHODOLOGY.md), and a paper writing it up as transferable method is in preparation — the working draft lives in [`paper/`](../paper/).
 
 The combination is the contribution. The pieces are everybody's.

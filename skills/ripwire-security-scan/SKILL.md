@@ -52,7 +52,7 @@ the security semantics of an MCP stanza. Retrieval is automated; the semantic de
 
 **Step 1 — locate and read the config** with ripwire or the shell + Read tool:
 ```
-ripwire <dir> --grep-in=any --grep='"command"' --grep-context=6
+ripwire <dir> --grep-in=any --grep='"command"' --grep-context=6 --legend=compact
 ls <dir>/.mcp.json ~/.claude/mcp.json ~/.cursor/mcp.json 2>/dev/null
 find <dir> -maxdepth 3 \( -name ".mcp.json" -o -name "mcp*.json" \) 2>/dev/null
 ```
@@ -126,7 +126,7 @@ available.
    that shows up as an untested seam is doubly worth attention: it's both attack-surface-adjacent and has
    no regression net if you (or an attacker-triggered path) breaks it.
 
-4. **Find the sinks and their call sites** — `ripwire <dir> --grep-in=any --grep=STR` (literal, e.g.
+4. **Find the sinks and their call sites** — `ripwire <dir> --grep-in=any --grep=STR --legend=compact` (literal, e.g.
    `system(`, `eval`, `exec`, `pickle.loads`, `deserialize`) for a quick census, or `ripwire <dir> --uses=SYM --legend=compact` (e.g.
    `--uses=deserialize`) once you know the exact symbol name — gives the statically-resolvable call/read/write sites by role (a floor: dynamic dispatch/callbacks/macros are unmodelled — counts_floor=) and
    file:line, and flags `external="1"` when the sink is a stdlib/third-party name with no in-corpus

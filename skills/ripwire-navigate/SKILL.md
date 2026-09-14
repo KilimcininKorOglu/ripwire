@@ -124,7 +124,7 @@ two hops away, a read/write that never calls SYM, or an `#include` that pulls it
   `ripwire <dir> --grep=STR --legend=compact` (literal + enclosing symbol) ·
   `ripwire <dir> --regex=PAT --legend=compact` ·
   `ripwire <dir> --match='(<tree-sitter query>)' --legend=compact` (e.g. `(call_expression function: (identifier) @c)`) ·
-  **`ripwire <dir> --pattern='foo($X, ...)'`** — the same structural search written in CODE instead of in
+  **`ripwire <dir> --pattern='foo($X, ...)' --legend=compact`** — the same structural search written in CODE instead of in
   node kinds, so you do not have to know whether this grammar calls it `call_expression`, `call`,
   `method_invocation` or `invocation_expression`. `$NAME` binds one node (repeat it and both sites must
   match), `$_` binds nothing, `...` (or `$$$`) is an ellipsis over siblings. ONE pattern searches every

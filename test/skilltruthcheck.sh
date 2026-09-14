@@ -223,4 +223,57 @@ done <<<"$( grep -rhoE --include='*.md' -- "ripwire <dir> --for=[^$BT]*--legend=
     && ok "skills compact policy: no --for command carries --legend=compact (its compact legend is its own)" \
     || no "skills compact policy: $sc_for --for command(s) carry --legend=compact"
 
+# A1-2b (PR #215 review 5192692319): …AND THE OMISSION, which is the direction the two arms above cannot
+# see. Both of them start from a command that ALREADY carries --legend=compact, so a command that should
+# carry it and does not was invisible to every arm in this gate: skills/ripwire-fresh-eyes/SKILL.md's
+# pass 1a spelled `ripwire <dir> --rank-by=churn-decay` with no flag from #218 until this arm existed, and
+# five more spans across four other skills fell out of the same sweep. A policy gate that only audits the
+# commands that obey it is not auditing the policy.
+#
+# THE PREDICATE, both halves asked of the BINARY and not of a list (the A1-2 argument, unchanged). A
+# flagless span is REQUIRED to carry the flag when (a) the bare command EMITS XML on the probe corpus —
+# stdout's first byte is '<' — and (b) appending --legend=compact is not refused.
+# (a) IS WHAT KEEPS THE ARM SOUND, and it is not decoration: a span carrying a placeholder operand
+# (`--arch=rules.txt`, `--scip=index.scip`, `--export=cc.json[:FILE]`) or a writer/non-XML flag fails
+# before the legend check is ever reached, so its silence on the refusal line would otherwise read as
+# "the flag belongs here". Measured on the pre-fix tree: 21 spans looked like violations without (a) and
+# 6 were real.
+# FLOOR, stated because silence here would read as a guarantee: (a) excludes every span whose operand
+# cannot resolve against an empty corpus, so this arm is a FLOOR on the policy, never a total. The spans
+# it skips are unproven in both directions — not proven exempt.
+sc_classify(){                      # 0 = must carry the flag and does not; 1 = not required (skip/exempt)
+    local args="$1"
+    # shellcheck disable=SC2086
+    "$BIN" "$SKILL_EMPTY" $args >"$SKILL_TMP/bare.out" 2>/dev/null || true
+    [ "$( head -c 1 "$SKILL_TMP/bare.out" 2>/dev/null )" = '<' ] || return 1   # (a) not an XML run here
+    # shellcheck disable=SC2086
+    "$BIN" "$SKILL_EMPTY" $args --legend=compact >/dev/null 2>"$SKILL_TMP/omit.err" || true
+    grep -q 'applies to the XML verbs only' "$SKILL_TMP/omit.err" && return 1  # (b) the binary refuses it
+    return 0
+}
+# POSITIVE CONTROL FIRST, so a green below is never the classifier quietly failing every span. `--flags`
+# is an XML verb the binary accepts the flag on, so a flagless `--flags` MUST classify as a violation.
+if sc_classify "--flags"; then
+    ok "skills compact policy (omission) control: the classifier marks a flagless XML verb (--flags) as a violation — it can go red"
+else
+    no "skills compact policy (omission) control: a flagless --flags did NOT classify as a violation — the classifier is inert and the sweep below proves nothing"
+fi
+sc_swept=0; sc_xml=0; sc_missing=0
+grep -rhoE --include='*.md' -- "ripwire <dir> --[a-z0-9-]+[^$BT]*" "$ROOT/skills" \
+    | sed 's/[[:space:]]*$//' | sort -u \
+    | grep -v -F -- '--legend=compact' | grep -vE '^ripwire <dir> --for' > "$SKILL_TMP/skill_flagless.txt"
+while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    sc_swept=$(( sc_swept + 1 ))
+    args="${cmd#ripwire <dir> }"
+    if sc_classify "$args"; then
+        sc_xml=$(( sc_xml + 1 )); sc_missing=$(( sc_missing + 1 ))
+        [ "$sc_missing" -le 6 ] && printf '        MISSING --legend=compact: %s\n' "$( printf '%s' "$cmd" | head -c 140 )"
+    fi
+done < "$SKILL_TMP/skill_flagless.txt"
+[ "$sc_swept" -gt 0 ] || no "skills compact policy (omission): no flagless skill command was found at all — the sweep inspected nothing"
+[ "$sc_missing" -eq 0 ] \
+    && ok "skills compact policy (omission): $sc_swept flagless span(s) swept, none both emits XML and accepts --legend=compact (floor: placeholder operands are unprovable on an empty corpus)" \
+    || no "skills compact policy (omission): $sc_missing of $sc_swept flagless span(s) emit XML and accept --legend=compact but do not carry it (listed above) — the policy requires it"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

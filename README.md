@@ -2037,8 +2037,9 @@ Publication date: 2026-09-12. Every claim below re-verified against a 0.6.0 buil
 
 ripwire analyzes a source tree. The tool writes a ranked symbol map to standard output. The map
 shows the symbols that matter for a task, the callers of those symbols, and the tests that reach
-them. The tool is one binary. It has no runtime dependencies. No API key, no embeddings, no index
-server, no daemon. It uses a network only when you give it a git URL instead of a directory, which
+them. The tool is one binary. The map itself has no runtime dependencies: no API key, no embeddings,
+no index server, no daemon. The history-backed commands need `git` on the path and a repository
+to read. It uses a network only when you give it a git URL instead of a directory, which
 it shallow-clones into a cache.
 
 This guide tells you how to install, operate, and evaluate ripwire. Read `docs/COMMANDS.md` for the

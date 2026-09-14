@@ -45,7 +45,7 @@ sections your question needs.
    high score on a `ppalt=`-heavy function can be the preprocessor fan-out, not the logic — read `ppalt=`
    before calling a row the worst in the file.
 
-1a. **"What changed recently / who touched this / what is moving here?"** — `ripwire <dir> --rank-by=churn-decay`
+1a. **"What changed recently / who touched this / what is moving here?"** — `ripwire <dir> --rank-by=churn-decay --legend=compact`
    ```
    <recent n="40" of="1857" merge_bombs_skipped="5"><rc p="src/graph.h" w="0.91" age="2"/> …
    ```
@@ -57,7 +57,7 @@ sections your question needs.
    map. `merge_bombs_skipped="N"` is the disclosure that N commits touching more than 100 indexed files
    were left out of the weighting — if the commit you are hunting is a giant rename, it is in that N and
    not in the rows. `--since=REV|DATE` bounds the window; `--limit/--offset` page the scoped block.
-   `ripwire <dir> --help-task="what changed recently in DIR"` routes here on its own.
+   `ripwire <dir> --help-task="what changed recently in DIR" --legend=compact` routes here on its own.
 
 1b. **What is BUILT but DARK here?** — `ripwire <dir> --flags --legend=compact` (`=SUBSTR` to narrow)
    ```
