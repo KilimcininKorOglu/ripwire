@@ -375,7 +375,19 @@ while IFS= read -r v; do
     # still diffs.
     sed -E 's/\((main\.cpp|verbs_[a-z]+\.h):[0-9]+,/(MAINTU:LINE,/g; s/\.(cpp|h):[0-9]+,/.\1:LINE,/g' "$TMP/e.base" > "$TMP/e.base.n"
     sed -E 's/\((main\.cpp|verbs_[a-z]+\.h):[0-9]+,/(MAINTU:LINE,/g; s/\.(cpp|h):[0-9]+,/.\1:LINE,/g' "$TMP/e.new"  > "$TMP/e.new.n"
-    if [ "$rcb" != "$rcn" ] || ! cmp -s "$TMP/o.base" "$TMP/o.new" || ! cmp -s "$TMP/e.base.n" "$TMP/e.new.n"; then
+    # --version intentionally embeds the source revision. A differential check compares behavior, not the
+    # revision metadata that must change between BASE and BIN; keep every other stdout byte-exact.
+    case "$v" in
+        --version|*" --version")
+            sed -E 's/built_from=[^)]*/built_from=REVISION/' "$TMP/o.base" > "$TMP/o.base.n"
+            sed -E 's/built_from=[^)]*/built_from=REVISION/' "$TMP/o.new"  > "$TMP/o.new.n"
+            ;;
+        *)
+            cp "$TMP/o.base" "$TMP/o.base.n"
+            cp "$TMP/o.new"  "$TMP/o.new.n"
+            ;;
+    esac
+    if [ "$rcb" != "$rcn" ] || ! cmp -s "$TMP/o.base.n" "$TMP/o.new.n" || ! cmp -s "$TMP/e.base.n" "$TMP/e.new.n"; then
         diffs=$(( diffs + 1 ))
         # The default 5 keeps a normal run terse. A FIX ROUND must classify EVERY diff, and capping the list
         # at 5 previously forced an agent to make a throwaway copy of this gate in test/ just to read its own
