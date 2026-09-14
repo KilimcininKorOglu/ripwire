@@ -9,8 +9,8 @@
 # absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`, 506 gates print one), so the window's CONTENTS are a
 # function of the checkout's path length, and every offset after the banner moves with it. Measured on
 # test/w3fixlegendcheck.sh, whose transcript is byte-identical after line 1 at both paths:
-#     root=/Users/…/worktrees/adoring-khorana-bddb57  (87 chars)  banner 217 B
-#     root=/tmp/rwshort                               (12 chars)  banner  67 B
+#     an 87-char worktree root (a checkout nested under .claude/worktrees/)   banner 217 B
+#     a 12-char root (the same tree reached through a short symlink)         banner  67 B
 # — a 150 B shift from a 75-char rename, ~2 B per character, because the root is spelled twice. A gate
 # whose first skip row lands near byte 400 is therefore classified one way in one checkout and the other
 # way in another, on the SAME commit, with the SAME binary and byte-identical gate output. That is what
