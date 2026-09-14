@@ -54,6 +54,43 @@ fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
+# ── reading CMake's generated flags.make WITHOUT executing it (CWE-78) ───────────────────────────────
+# `flags.make` is a GENERATED file: its contents follow from CMakeLists.txt and the compile flags, which a
+# pull request may edit. This gate runs on CI through pargates.py against the runner's own build tree, so
+# `eval` on a value out of that file executes whatever a PR can persuade CMake to write into a compile
+# flag — on the runner. Measured on a scratch flags.make before this fix: a CXX_FLAGS line carrying
+# $(touch <sentinel>) created the sentinel AND left no trace in the parsed argument list, so the execution
+# was invisible as well as real. Arm 12 below pins that it cannot happen again, with the eval as its own
+# positive control.
+#
+# `read -ra` is NOT the fix: it splits on IFS, so -I"/path with spaces/inc" becomes three arguments, and
+# real CXX_INCLUDES carry exactly that shape. shlex.split implements POSIX word-splitting-with-quotes and
+# EXECUTES NOTHING — $( … ) and ` … ` come back as literal argument text. Seven gates in this suite already
+# shell out to python3, so this is the suite's existing dependency rather than a new one.
+#
+# NUL-terminated per word, because a path may contain a newline and this must not be the place that
+# silently drops one; read -r -d '' rather than `mapfile -d` because macOS ships bash 3.2. Process
+# substitution, not a pipe, so the arrays are filled in THIS shell (the pipeline-subshell trap).
+cmakeFlagWords()   # $1 = flags.make path, $2 = the assignment NAME; writes NUL-terminated words
+{
+    RW_FLAGS_FILE="$1" RW_FLAGS_KEY="$2" python3 - <<'PY'
+import os, re, shlex, sys
+
+key  = os.environ[ "RW_FLAGS_KEY" ]
+want = re.compile( r"^" + re.escape( key ) + r"\s*=\s*(.*)$" )
+try:
+    with open( os.environ[ "RW_FLAGS_FILE" ], encoding = "utf-8", errors = "replace" ) as handle:
+        for line in handle:
+            matched = want.match( line )
+            if matched:
+                for word in shlex.split( matched.group( 1 ) ):
+                    sys.stdout.write( word + "\0" )
+                break
+except OSError:
+    pass   # an unreadable flags.make is the caller's "no flags" case, and its own arm reports it
+PY
+}
+
 [ -x "$BIN" ]    || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 [ -d "$CORPUS" ] || { echo "no test/lintfix dir — fixture missing"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "sarifcheck: python3 missing (gate cannot run)"; exit 2; }
@@ -363,9 +400,9 @@ CPP
     # The compiler CMake drove (link.txt's first token), never a guess — jsonwalkcheck.sh's recipe and reason.
     CXX="$( awk 'NR==1{ print $1; exit }' "$LINK_TXT" )"
     [ -n "$CXX" ] && command -v "$CXX" >/dev/null 2>&1 || CXX="$( command -v c++ || command -v clang++ )"
-    eval "CXX_FLAGS=(    $( grep -m1 '^CXX_FLAGS ='    "$FLAGS_MK" | sed 's/^CXX_FLAGS =//' ) )"
-    eval "CXX_DEFINES=(  $( grep -m1 '^CXX_DEFINES ='  "$FLAGS_MK" | sed 's/^CXX_DEFINES =//' ) )"
-    eval "CXX_INCLUDES=( $( grep -m1 '^CXX_INCLUDES =' "$FLAGS_MK" | sed 's/^CXX_INCLUDES =//' ) )"
+    CXX_FLAGS=();    while IFS= read -r -d '' w; do CXX_FLAGS+=(    "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_FLAGS )
+    CXX_DEFINES=();  while IFS= read -r -d '' w; do CXX_DEFINES+=(  "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_DEFINES )
+    CXX_INCLUDES=(); while IFS= read -r -d '' w; do CXX_INCLUDES+=( "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_INCLUDES )
     # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
     DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
     DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
@@ -381,6 +418,72 @@ CPP
     else
         no "11. the root-uri unit driver does not compile:"; grep -m4 -E 'error' "$TMP/u_build.log" | sed 's/^/          /'
     fi
+fi
+
+# ── 12. the flags.make parse EXECUTES NOTHING (CWE-78 regression arm) ───────────────────────────────
+# Arm 11 compiles a driver with flags read out of a GENERATED file, on CI, against the runner's build tree.
+# This arm is the one that says the read cannot become a shell. It is a difference test, not an absence
+# test: the same payload is run through BOTH parses, and the eval is required to fire. An arm that only
+# checked our parse would pass just as well against a payload that never worked.
+INJ="$TMP/inj"; mkdir -p "$INJ"
+SENTINEL="$INJ/executed"
+# ONE PAYLOAD SHAPE PER LINE, and that separation is a finding rather than tidiness. The first version of
+# this arm put all three on one CXX_FLAGS line and its own control went red: `NAME=( … ;touch … )` is a
+# bash SYNTAX error, so the eval aborted before running the $( ) ahead of it and executed nothing. Sharing
+# a line makes the shapes mask each other, so each gets its own key and its own control, and the honest
+# reading of the third shape is recorded below rather than asserted away.
+cat > "$INJ/flags.make" <<MK
+CXX_SUBST = -O2 \$(touch $SENTINEL) "-I/path with spaces/inc"
+CXX_BQ = -O2 \`touch $SENTINEL\`
+CXX_SEMI = -O2 ;touch $SENTINEL
+MK
+
+# (a) POSITIVE CONTROLS — the eval this arm exists to have removed must actually execute, per shape, or
+#     the assertions below prove nothing about a payload that never worked.
+for shape in CXX_SUBST CXX_BQ; do
+    rm -f "$SENTINEL"
+    ( evilRaw="$( grep -m1 "^$shape =" "$INJ/flags.make" | sed "s/^$shape =//" )"; eval "EVIL=( $evilRaw )" ) >/dev/null 2>&1
+    [ -e "$SENTINEL" ] && ok "12a control [$shape]: the eval spelling DOES execute the payload — the fix arm is not vacuous" \
+                       || no "12a control [$shape]: the eval spelling executed nothing, so this arm proves nothing about the fix"
+done
+# The third shape, stated as measured rather than claimed: a bare ';' inside NAME=( … ) is a syntax error,
+# so it never was an injection in THIS spelling. Recorded so a later reader does not add it as a vector.
+rm -f "$SENTINEL"
+( evilRaw="$( grep -m1 '^CXX_SEMI =' "$INJ/flags.make" | sed 's/^CXX_SEMI =//' )"; eval "EVIL=( $evilRaw )" ) >/dev/null 2>&1
+[ -e "$SENTINEL" ] && ok "12a control [CXX_SEMI]: a bare ';' also executes under eval" \
+                   || ok "12a control [CXX_SEMI]: a bare ';' is a SYNTAX error inside NAME=( … ), so it was never a vector here — recorded, not asserted away"
+
+# (b) THE FIX — every shape, through cmakeFlagWords, must execute nothing.
+rm -f "$SENTINEL"
+INJ_WORDS=(); while IFS= read -r -d '' w; do INJ_WORDS+=( "$w" ); done < <( cmakeFlagWords "$INJ/flags.make" CXX_SUBST )
+BQ_WORDS=();  while IFS= read -r -d '' w; do BQ_WORDS+=(  "$w" ); done < <( cmakeFlagWords "$INJ/flags.make" CXX_BQ )
+SEMI_WORDS=(); while IFS= read -r -d '' w; do SEMI_WORDS+=( "$w" ); done < <( cmakeFlagWords "$INJ/flags.make" CXX_SEMI )
+[ -e "$SENTINEL" ] && no "12b the shlex parse EXECUTED a payload — $SENTINEL exists" \
+                   || ok "12b the shlex parse executes nothing, across all three payload shapes"
+
+# (c) the payload survives as LITERAL argument text rather than vanishing — a parse that silently dropped
+#     it would look identical to (b) from the sentinel's point of view.
+printf '%s\n' "${INJ_WORDS[@]}" | grep -q '^\$(touch' \
+    && ok "12c \$( ) comes back as a literal argument, not a command" \
+    || no "12c the \$( ) payload is neither executed nor present — the parse dropped it silently"
+printf '%s\n' "${BQ_WORDS[@]}" | grep -q '^`touch' \
+    && ok "12c backquotes come back as a literal argument, not a command" \
+    || no "12c the backquote payload is neither executed nor present — the parse dropped it silently"
+printf '%s\n' "${SEMI_WORDS[@]}" | grep -qx ';touch' \
+    && ok "12c a bare ';' comes back as a literal argument, not a separator" \
+    || no "12c the ';' payload is neither executed nor present — the parse dropped it silently"
+
+# (d) QUOTING PRESERVED — the reason read -ra is not an acceptable fix.
+printf '%s\n' "${INJ_WORDS[@]}" | grep -qx -- '-I/path with spaces/inc' \
+    && ok "12d a quoted path with spaces stays ONE argument (read -ra would have split it)" \
+    || no "12d the quoted path with spaces did not survive as one argument: $( printf '[%s]' "${INJ_WORDS[@]}" )"
+
+# (e) the real flags.make still parses to something usable — arm 11 above compiled with it, so this is a
+#     cheap non-emptiness guard against a parse that returns nothing and makes arm 11 silently trivial.
+if [ -f "$FLAGS_MK" ]; then
+    REAL_WORDS=(); while IFS= read -r -d '' w; do REAL_WORDS+=( "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_FLAGS )
+    [ "${#REAL_WORDS[@]}" -gt 0 ] && ok "12e the real flags.make parses to ${#REAL_WORDS[@]} argument(s)" \
+                                  || no "12e the real flags.make parsed to ZERO arguments — arm 11 would compile with no flags"
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

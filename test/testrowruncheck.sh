@@ -224,8 +224,19 @@ fi
 SITU="$( rw --situ )"
 # A5 (2026-09-13): the section's closing script-gate disclosure is now the attribute line
 # `script_gates_unmodelled=N — …` rather than a parenthesised sentence, so "starts with (" no longer
-# excludes it. A ROW's first token is a path, and a path never contains "=" — that is the discriminator.
-SITU_ROWS="$( printf '%s\n' "$SITU" | sed -n '/tests to run/,/^  \[3\]/p' | grep -E '^        [^ (]' | grep -vE '^        [a-z_]+=' )"
+# excludes it.
+#
+# Review of #219: the discriminator used to be "a path never contains '='", which is FALSE — `test=smoke.sh`
+# is a legal filename. Any row whose path carried '=' was filed as an attribute line and dropped, so arm 8
+# skipped its `(run: …)` validation entirely and could pass while that row shipped a broken recipe. Same
+# species as everything else this round: an arm passing over a row it silently discarded. The filter now
+# names the ONE disclosure line this section emits, so a row can never be mistaken for it — and arm 8b
+# below feeds this same function a '='-bearing path to prove it.
+situRowsOf()   # $1 = a --situ text report; prints the tests-to-run ROWS only
+{
+    printf '%s\n' "$1" | sed -n '/tests to run/,/^  \[3\]/p' | grep -E '^        [^ (]' | grep -vE '^        script_gates_unmodelled='
+}
+SITU_ROWS="$( situRowsOf "$SITU" )"
 if [ -z "$SITU_ROWS" ]; then
     no "(8) --situ: fixture produced no 'tests to run' rows — the arm cannot bite"; printf '%s\n' "$SITU" | head -30
 else
@@ -234,6 +245,27 @@ else
         && ok "(8) --situ text: all $( printf '%s\n' "$SITU_ROWS" | grep -c . ) test line(s) carry a (run: …) recipe or its not-derivable form" \
         || { no "(8) --situ text: a tests-to-run line carries no run recipe and no disclosure"; printf '%s\n' "$SITU_BAD"; }
 fi
+# ── ARM 8b — the row/disclosure DISCRIMINATOR itself, on a path arm 8 would have dropped ───────────────
+# Fed to situRowsOf above, not to a copy of its expression, so the two cannot drift. A synthetic block
+# rather than a fixture: the defect is in the filter, and a filename with '=' in a crawled corpus would be
+# testing the crawl instead. Both directions are asserted — the '='-bearing ROW survives AND the
+# disclosure line is still removed — because a filter that kept everything would pass the first alone.
+SYNTH_SITU="$( printf '%s\n' \
+    '  [2] tests to run (2):' \
+    '        test=smoke.sh (run: bash test=smoke.sh)' \
+    '        test/plaincheck.sh (run: bash test/plaincheck.sh)' \
+    '        script_gates_unmodelled=672 — test/*.sh gates never appear above' \
+    '  [3] co-change' )"
+SYNTH_ROWS="$( situRowsOf "$SYNTH_SITU" )"
+printf '%s\n' "$SYNTH_ROWS" | grep -q 'test=smoke.sh' \
+    && ok "(8b) a tests-to-run row whose PATH contains '=' is kept, not filed as an attribute line" \
+    || no "(8b) a '='-bearing path row was dropped by the row filter — arm 8 would skip validating its (run: …)"
+printf '%s\n' "$SYNTH_ROWS" | grep -q 'script_gates_unmodelled=' \
+    && no "(8b) the script_gates_unmodelled= disclosure leaked into the ROW set — arm 8 would demand a run recipe from a disclosure" \
+    || ok "(8b) the script_gates_unmodelled= disclosure is still excluded from the row set"
+[ "$( printf '%s\n' "$SYNTH_ROWS" | grep -c . )" = 2 ] \
+    && ok "(8b) exactly the 2 synthetic rows survive the filter" \
+    || no "(8b) filter kept $( printf '%s\n' "$SYNTH_ROWS" | grep -c . ) line(s), expected 2: $( printf '[%s]' "$SYNTH_ROWS" )"
 # ── ARM 9 — MCP situational_awareness (mcpverbs.h) ─────────────────────────────────────────────────────
 MCPOUT="$( printf '%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
