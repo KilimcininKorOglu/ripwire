@@ -13743,7 +13743,7 @@ the binary at a 101-character path outside the tree. On the merge base `c1915d21
 passes — so w3fixlegendcheck's only skip marker there is the NDEBUG degrade row about 3 KB in, and the
 symptom cannot be shown on that tree at any path length. This is why an absolute byte offset in this
 section always names the tree it was taken on: the offsets are a property of a gate's output on a
-particular corpus, and only the banner arithmetic and the 400-byte boundary are constants.
+particular corpus, and only the banner arithmetic and the 400-character boundary are constants.
 
 **Population.** One full suite run on main at `c1915d21` captures **628** transcripts. That is deliberately
 the suite BEFORE this change's own gate — the question is whether the new rule moves a verdict on the
@@ -13777,9 +13777,30 @@ read as "the old rule was fine" inside the evidence for replacing it. Nothing is
 this machine: the nearest candidate needs 148 characters removed from an 87-character root, so the only
 reachable direction is depth. The reachable case is `editchecknotecheck`, which declares its skip at byte
 145 and needs 255 more characters of path — a 342-character root, ordinary for a nested worktree or a CI
-runner — to push that declaration out of a 400-byte window, at which point a gate that proved nothing is
+runner — to push that declaration out of a 400-character window, at which point a gate that proved nothing is
 counted as a pass. Which gates are in range is a property of the machine rather than of the commit. A zero
 that names the range it covered is evidence; a zero that does not is unfalsifiable.
+
+Better than conditioning that row is publishing its FORM, because the offset is linear in the invocation.
+On that tree the tie row is exactly:
+
+    banner  = 22 + len(BIN) + 7 + len(ROOT)
+    tie row = banner + 134 characters   (= banner + 140 bytes)
+            = 163 + len(BIN) + len(ROOT) characters   (169 + … in bytes)
+
+where **22** is `w3fixlegendcheck: BIN=`, **7** is `  ROOT=`, and the tail is everything between the banner
+and the tie row: one newline, the section line `── 1. partition root counters` (29 characters, 33 bytes),
+another newline, the N=2 PASS row (102 characters, 104 bytes), and a third newline. Characters is the unit
+that matters, because the old classifier decoded the capture and sliced the decoded string, so its 400
+counted code points; the two path lengths are ASCII and contribute equally either way, and the whole
+six-unit gap is that multibyte prefix. Dirtiness is not a term in either form.
+
+It was validated by PREDICTION rather than by fit. Four measured points (roots 37/38/38/138 against binary
+paths 101/101/33/101) all satisfy it — but four points fitted is not four points predicted, so a root
+length never run, 65 characters, was computed in advance as 163 + 101 + 65 = **329 characters** (335 bytes)
+and then measured at exactly 329 characters and 335 bytes. A reader who measures a different number can
+therefore decompose the difference instead of doubting the row, and the first thing to check is which unit
+they counted in: 302 against 308 on one run is the same row counted two ways, not two different rows.
 
 Where an offset here is quoted without a unit note, bytes and characters agree because everything before
 the marker is ASCII — that is true of all three standing skips (`editchecknotecheck` at 145,

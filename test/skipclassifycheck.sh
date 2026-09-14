@@ -58,7 +58,7 @@
 # house pattern: run the REAL pargates.py over a synthetic corpus, never a reimplementation of its logic.
 #
 # ARMS
-#   (0) FIXTURE CONTRAST — the two corpus roots really do straddle the old 400 B boundary: the SAME probe
+#   (0) FIXTURE CONTRAST — the two corpus roots really do straddle the old 400-character boundary: the SAME
 #       gate's first skip row lands under 400 at the short root and over it at the long one. Without this
 #       the path-independence arm below is a control whose two halves differ in nothing (CONTRIBUTING's
 #       shape 5), and would pass on a classifier that never looked at the output at all.
@@ -156,7 +156,7 @@ printf '  SKIP  no RIPWIRE_BASE reference binary — nothing was compared\n'
 printf '  (set RIPWIRE_BASE=build_base/ripwire after building the pre-change source to activate)\n'
 BODY
 
-# ── (0) FIXTURE CONTRAST: the two roots straddle the old 400 B boundary ──────────────────────────────────
+# ── (0) FIXTURE CONTRAST: the two roots straddle the old 400-character boundary ──────────────────────────
 SHORTROOT="$SHORTBASE/s"
 LONGROOT="$SHORTBASE/$PAD"
 mkprobe "$SHORTROOT" probepathshiftgate "$TMP/body_passfirst"
@@ -204,7 +204,7 @@ PYEOF
 vShort="$( classify "$SHORTROOT" probepathshiftgate )"
 vLong="$(  classify "$LONGROOT"  probepathshiftgate )"
 if [ "$vShort" = "$vLong" ]; then
-    ok "(A) byte-identical output, two checkout paths, ONE verdict: $vShort both times (skip row at $offShort B / $offLong B)"
+    ok "(A) byte-identical output, two checkout paths, ONE verdict: $vShort both times (skip row at $offShort / $offLong characters)"
 else
     no "(A) the SAME gate output is classified '$vShort' from a $( printf '%s' "$SHORTROOT" | wc -c | tr -d ' ' )-char root and '$vLong' from a $( printf '%s' "$LONGROOT" | wc -c | tr -d ' ' )-char one — the verdict is a function of the pathname, not of what the gate proved"
 fi
