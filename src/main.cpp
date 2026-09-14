@@ -1180,10 +1180,29 @@ inline bool inDirMatchesCrawl( const rw::Config& cfg, const rw::IngestResult& in
 // NOTHING is byte-identical to --rank-by=pagerank, and this stderr line is the only place that fact appears.
 // A free function rather than the capturing lambda it was, because the decay arm is its own function now
 // (churnDecayRanking) and a lambda cannot be shared across the two without being handed to it.
-inline void discloseUniformChurnFallback( bool hasChurnEvidence, const char* verbLabel, const std::string& windowStamp )
+// THE SCOPED RUN RANKS NOTHING, so it cannot have fallen back to a ranking (CodeRabbit, review of #212). The
+// no-evidence notice said three things that are false under --in=DIR, on a real path
+// (`--rank-by=churn-decay --in=src --since=HEAD`, a window that reads no commit): "using uniform (structural)
+// ranking" names a computation that did not run — the stub default-constructs the rank vector and zero-fills
+// it, which is why no pr_iters= rides the header; "this map" names a document the run does not contain, since
+// the map IS the counted stub and the <recent> blocks are both absent; and the comparison it offers,
+// --rank-by=pagerank, is REFUSED beside --in, so the reader was pointed at a command this tool rejects.
+// One wrong sentence, three ways, in shipped output — the disclosure rule's own subject.
+//
+// The scoped branch states what actually happened and keeps the pagerank equivalence where it IS true: on the
+// unscoped run the reader gets by dropping --in.
+inline void discloseUniformChurnFallback( bool hasChurnEvidence, bool stubbed, const char* verbLabel, const std::string& windowStamp )
 {
     if( hasChurnEvidence )
     {
+        return;
+    }
+    if( stubbed )
+    {
+        rw::emitTo( stderr, "ripwire: {} found no commits in its window, so NEITHER <recent> block rides this run and the symbol map is the "
+                              "counted stub — nothing was ranked at all, so there is no ranking to have fallen back (header: window=\"{}\"). "
+                              "Widen the window (--since), or drop --in=DIR for the map, which is then byte-identical to --rank-by=pagerank\n",
+                    verbLabel, windowStamp.c_str() );
         return;
     }
     rw::emitTo( stderr, "ripwire: {} found no commits in its window; using uniform (structural) ranking — this map is "
@@ -1216,7 +1235,7 @@ inline ChurnRanking churnDecayRanking( const MainDispatch& d, const rw::SinceSco
     }
     std::string window = churnWindowStamp( churnDecayWindowLabel( isScoped ? std::string_view( d.cfg.since ) : std::string_view( "all-history" ) ),
                                            mined.anyHistory );
-    discloseUniformChurnFallback( mined.anyHistory, verbLabel, window );
+    discloseUniformChurnFallback( mined.anyHistory, stubbed, verbLabel, window );
     ChurnRanking cr{ std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, !stubbed } };
     // ONE build + ONE sort of the decayed rows, shared by both blocks (gitmine.h decayedRecentRowsSorted).
     const std::vector<rw::RecentFile> sorted = decayedRecentRowsSorted( d.root, d.ing, mined );
@@ -1247,7 +1266,9 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
         rw::RankedGraph    ranked = isDecay ? rankGraphTeleport( d.g, churnDecayTeleportWorkspace( rootDirs, d.ing, &hasChurnEvidence ) )
                                             : rankGraphTeleport( d.g, churnTeleportWorkspace( rootDirs, d.ing, "18 months ago", &hasChurnEvidence ) );
         std::string        window = churnWindowStamp( isDecay ? churnDecayWindowLabel( "all-history" ) : rw::defaultWindowLabel( d.root, "18mo" ), hasChurnEvidence );
-        discloseUniformChurnFallback( hasChurnEvidence, verbLabel, window );
+        // stubbed=false: the workspace (multi-root) arm cannot be scoped — --in=DIR is refused under multi-root
+        // and outside --rank-by=churn-decay — so this arm always ranked, and the uniform wording is correct here.
+        discloseUniformChurnFallback( hasChurnEvidence, false, verbLabel, window );
         return { std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, true } };
     }
 
@@ -1262,7 +1283,9 @@ inline ChurnRanking churnRankedGraph( const MainDispatch& d )
     // the user's own value and is stamped verbatim, exactly as before.
     const std::string  defaultWindow = rw::defaultWindowLabel( d.root, "18mo" );
     std::string        window = churnWindowStamp( isScoped ? std::string_view( d.cfg.since ) : std::string_view( defaultWindow ), hasChurnEvidence );
-    discloseUniformChurnFallback( hasChurnEvidence, verbLabel, window );
+    // stubbed=false: this is the undecayed --rank-by=churn arm, which --in=DIR does not ride (it is refused
+    // outside churn-decay), so a ranking really did run and the uniform sentence is the true one.
+    discloseUniformChurnFallback( hasChurnEvidence, false, verbLabel, window );
     return { std::move( ranked.rank ), std::move( window ), { ranked.iterationCount, ranked.hasConverged, true } };
 }
 

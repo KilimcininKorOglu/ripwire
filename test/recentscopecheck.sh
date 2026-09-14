@@ -104,12 +104,27 @@ commitOne "gold_outside.py" "gold_outside"
     && ok "arm 0b: db/ holds 45 tracked files (> the 40-row page)" \
     || no "arm 0b: db/ does not hold 45 tracked files"
 
+# EVERY RUN OF THE BINARY IN THIS GATE GOES THROUGH HERE, and that is a population rule, not a style one
+# (CodeRabbit, review of #212, on the continuation replay below). A hang in an unbounded probe does not fail
+# an arm: it burns the whole gate budget and pargates kills the gate with NO verdict row, which reads as a
+# broken gate rather than a hung product. The review named one site; swept, this file had NINE that bypassed
+# this helper — refuses(), composes(), the replayed next=, the derived shaper loop, --top-k=0, the case-fold
+# and empty-value arms, and both runs inside wsFor() — two of them added by the very commits that fixed the
+# earlier findings. They all route through runAt (or carry their own timeout, for the python replay) now, so
+# a new arm inherits the bound by using the helper every other arm uses.
 runAt(){ local r="$1"; shift; perl -e 'alarm 60; exec @ARGV' "$BIN" "$r" --no-cache "$@"; }   # arms 12/13 bring their own repo
 run(){ runAt "$REPO" "$@"; }
 # THE PASTED next=, split the way a shell would — one copy, used by arms 3h, 10d and 12d. Three inline
 # copies of this python one-liner is the duplicate --exemplar would have found; it takes the repo because
 # the corpus arms below are measured on fixtures of their own.
-pasteNext(){ python3 -c 'import shlex,subprocess,sys; sys.stdout.write(subprocess.run([sys.argv[1],sys.argv[2],"--no-cache"]+shlex.split(sys.argv[3]),capture_output=True,text=True).stdout)' "$BIN" "$1" "$2"; }
+# BOUNDED like every other run here (see the sweep note above runAt): a replayed next= is a command this
+# gate did not write, so it is exactly the invocation that could hang, and an unbounded subprocess.run would
+# hang the whole gate with no row rather than failing this arm.
+pasteNext(){ python3 -c 'import shlex,subprocess,sys
+try:
+    sys.stdout.write(subprocess.run([sys.argv[1],sys.argv[2],"--no-cache"]+shlex.split(sys.argv[3]),capture_output=True,text=True,timeout=60).stdout)
+except subprocess.TimeoutExpired:
+    sys.exit("pasteNext: the replayed continuation did not finish in 60s: " + sys.argv[3])' "$BIN" "$1" "$2"; }
 firstBlock(){  printf '%s' "$1" | grep -oE '<recent [^>]*>.*</recent>' | sed -E 's#</recent>.*##' | head -1; }   # the GLOBAL block, inner rows included
 scopedTag(){   printf '%s' "$1" | grep -oE '<recent scope="[^>]*>' | head -1; }   # the QUOTED attribute: the compact legend's prose spells <recent scope=DIR> bare
 scopedRows(){  printf '%s' "$1" | sed -E 's#.*(<recent scope="[^>]*>)#\1#' | sed -E 's#</recent>.*##' | grep -oE '<rc p="[^"]*"' | sed 's/<rc p="//;s/"$//'; }
@@ -259,7 +274,7 @@ inBytes="$( printf '%s' "$IN" | wc -c | tr -d ' ' )"; bareBytes="$( printf '%s' 
 # ── arm 6: refusals — exit 1, empty stdout, a message that names the remedy ─────────────────────────
 refuses(){   # $1 = label, $2 = expected stderr substring, $3.. = argv
     local label="$1" want="$2"; shift 2
-    "$BIN" "$REPO" --no-cache "$@" >"$WORK/r.out" 2>"$WORK/r.err" </dev/null; local rc=$?
+    runAt "$REPO" "$@" >"$WORK/r.out" 2>"$WORK/r.err" </dev/null; local rc=$?
     if [ "$rc" != 1 ]; then
         no "$label: exit $rc, expected 1 ($( head -c 160 "$WORK/r.err" ))"
     elif [ -s "$WORK/r.out" ]; then
@@ -309,7 +324,7 @@ refuses "arm 6s2: --in= with --no-redact says INERT, not answers-instead" "has n
 refuses "arm 6s2b control: a real competitor keeps answers-instead"       "answers instead"          --rank-by=churn-decay --in=db --external-surface
 # AND THE ARM THAT WAS MISSING. Both arms above pass --in, so neither could see that the new branch had no
 # --in guard at all: it refused a plain `--no-redact` run while quoting --in=DIR at it. This one has no --in.
-nr="$( "$BIN" "$REPO" --no-cache --no-redact --expand=db_0 2>&1 >/dev/null | head -1 )"
+nr="$( runAt "$REPO" --no-redact --expand=db_0 2>&1 >/dev/null | head -1 )"
 case "$nr" in
     *"--in=DIR"*) no "arm 6s2c: a run with NO --in was refused by the --in=DIR branch: $nr" ;;
     *)            ok "arm 6s2c: --no-redact without --in is untouched by the scoped refusal (stderr: ${nr:-clean})" ;;
@@ -348,7 +363,7 @@ if [ -z "$shapers" ]; then
 else
     bad=""
     for f in $shapers; do
-        "$BIN" "$REPO" --no-cache --rank-by=churn-decay --in=db "$f" >/dev/null 2>"$WORK/shaper.err" </dev/null
+        runAt "$REPO" --rank-by=churn-decay --in=db "$f" >/dev/null 2>"$WORK/shaper.err" </dev/null
         grep -qF -- "inert here" "$WORK/shaper.err" || bad="$bad $f($( head -c 60 "$WORK/shaper.err" ))"
     done
     [ -z "$bad" ] && ok "arm 6s2e: every map-shaping flag that cannot ride along refuses as INERT, derived from the tables: $shapers" \
@@ -363,13 +378,13 @@ fi
 # IS emitted.
 refuses "arm 6t: --in= with --top-k=5"  "--top-k=N sizes exactly the rows the stub does not print" --rank-by=churn-decay --in=db --top-k=5
 refuses "arm 6u: --in= with --top-k=0"  "--top-k=N sizes exactly the rows the stub does not print" --rank-by=churn-decay --in=db --top-k=0
-"$BIN" "$REPO" --no-cache --rank-by=churn-decay --in=db --top-k=0 >/dev/null 2>"$WORK/tk0.err" </dev/null
+runAt "$REPO" --rank-by=churn-decay --in=db --top-k=0 >/dev/null 2>"$WORK/tk0.err" </dev/null
 [ "$( grep -c 'ripwire:' "$WORK/tk0.err" )" = 1 ] \
     && ok "arm 6v: --in= --top-k=0 prints exactly ONE refusal (it used to print three)" \
     || no "arm 6v: --in= --top-k=0 printed $( grep -c 'ripwire:' "$WORK/tk0.err" ) refusals: $( tr '\n' '|' <"$WORK/tk0.err" | head -c 300 )"
 composes(){   # $1 = label, $2.. = argv — exit 0, a scoped block, stderr carries no refusal
     local label="$1"; shift
-    "$BIN" "$REPO" --no-cache "$@" >"$WORK/c.out" 2>"$WORK/c.err" </dev/null; local rc=$?
+    runAt "$REPO" "$@" >"$WORK/c.out" 2>"$WORK/c.err" </dev/null; local rc=$?
     if [ "$rc" != 0 ]; then
         no "$label: exit $rc, expected 0 ($( head -c 200 "$WORK/c.err" ))"
     elif ! grep -q '<recent scope=' "$WORK/c.out"; then
@@ -395,13 +410,13 @@ refuses "arm 6z2: --in=DIR through a symlink alias" "no indexed file is under" -
 if [ -d "$REPO/DB" ]; then   # only on a case-folding volume (APFS): elsewhere the fs check refuses first, which is also correct
     refuses "arm 6z3: --in=DIR case-folded by the volume" "no indexed file is under" --rank-by=churn-decay --in=DB
 else
-    "$BIN" "$REPO" --no-cache --rank-by=churn-decay --in=DB >"$WORK/cf.out" 2>"$WORK/cf.err" </dev/null; cfrc=$?
+    runAt "$REPO" --rank-by=churn-decay --in=DB >"$WORK/cf.out" 2>"$WORK/cf.err" </dev/null; cfrc=$?
     [ "$cfrc" = 1 ] && [ ! -s "$WORK/cf.out" ] \
         && ok "arm 6z3: --in=DB refused (this volume is case-SENSITIVE, so the filesystem check refuses first — also correct)" \
         || no "arm 6z3: --in=DB exit $cfrc with $( wc -c <"$WORK/cf.out" | tr -d ' ' ) B on stdout"
 fi
 rm -f "$REPO/dblink"
-"$BIN" "$REPO" --no-cache --rank-by=churn-decay --in= >"$WORK/r.out" 2>"$WORK/r.err" </dev/null; rc=$?
+runAt "$REPO" --rank-by=churn-decay --in= >"$WORK/r.out" 2>"$WORK/r.err" </dev/null; rc=$?
 [ "$rc" = 1 ] && [ ! -s "$WORK/r.out" ] \
     && ok "arm 6k: --in= with an empty value is refused" \
     || no "arm 6k: --in= (empty) exit $rc"
@@ -640,26 +655,56 @@ else
 fi
 
 
+# THE NO-EVIDENCE NOTICE CANNOT CLAIM A RANKING THE SCOPED RUN NEVER RAN (CodeRabbit, review of #212). With no
+# commits in the window the unscoped map really does fall back to the uniform prior, and the notice says so.
+# Under --in=DIR nothing is ranked at all -- the rank vector is default-constructed and zero-filled, which is
+# why no pr_iters= rides the header -- so the same sentence said three false things at once: it named a
+# "uniform (structural) ranking" that did not run, called the document "this map" when the map is the counted
+# stub and both <recent> blocks are absent, and offered --rank-by=pagerank as the byte-identical comparison
+# when that flag is REFUSED beside --in. This arm pins all three, and 13f is the control: the unscoped
+# no-evidence run must KEEP the uniform sentence, since there it is true.
+nev="$( runAt "$REPO" --rank-by=churn-decay --in=db --since=HEAD 2>&1 >/dev/null | grep 'found no commits' | head -1 )"
+if [ -z "$nev" ]; then
+    no "arm 13e: a scoped run whose window mines nothing printed no no-evidence notice at all"
+else
+    bad=""
+    case "$nev" in *"uniform (structural) ranking"*) bad="$bad claims-a-ranking-it-did-not-run" ;; esac
+    case "$nev" in *"this map is"*)                  bad="$bad calls-the-stub-a-map" ;; esac
+    case "$nev" in *"--rank-by=pagerank (header"*)   bad="$bad offers-a-comparison---in-refuses" ;; esac
+    case "$nev" in *"nothing was ranked"*)           ;; *) bad="$bad does-not-say-nothing-was-ranked" ;; esac
+    [ -z "$bad" ] && ok "arm 13e: the scoped no-evidence notice states what happened — nothing ranked, no block, the stub — and offers no refused comparison"                   || no "arm 13e: the scoped no-evidence notice is still wrong:$bad ($nev)"
+fi
+nevU="$( runAt "$REPO" --rank-by=churn-decay --since=HEAD 2>&1 >/dev/null | grep 'found no commits' | head -1 )"
+case "$nevU" in
+    *"uniform (structural) ranking"*"--rank-by=pagerank"*)
+        ok "arm 13f control: the UNSCOPED no-evidence run keeps the uniform-fallback sentence, where it is true" ;;
+    "") no "arm 13f control: the unscoped no-evidence run printed no notice — arm 13e could be passing on a deleted sentence" ;;
+    *)  no "arm 13f control: the unscoped notice lost the uniform-fallback wording: $nevU" ;;
+esac
+
 # WHAT would_show= COUNTS, pinned against the run it names (CodeRabbit, review of #212). The stub's number is
 # `keep`, which is the un-stubbed header's own shown=, and shown= counts symbol DEFINITIONS individually --
-# the print loop collapses a const/non-const overload pair into ONE row carrying overloads=2. So would_show is
-# a CEILING on the rows the unscoped document prints, and the legend used to call it "how many symbol ROWS the
-# same run without in= would print", which is a number that document does not contain: measured on this repo,
-# shown=200 over 193 rows with 7 rows at overloads=2.
+# the print loop collapses a const/non-const overload pair into ONE row carrying overloads=2. So the rows the
+# unscoped document prints FOLLOW from would_show rather than equalling it, and the legend used to call it
+# "how many symbol ROWS the same run without in= would print", which is a number that document does not
+# contain: measured on this repo, shown=200 over 193 rows with 7 rows at overloads=2.
 #
-# It cannot be made exact in the stub: which definitions make the top-K cut is a fact about the RANKING, and
-# the ranking is exactly what the stub skips (no pr_iters= rides its header). So the arms pin the IDENTITY the
-# map legend already publishes for shown= -- rows + sum(overloads-1) = shown = would_show -- rather than
-# demanding an equality that would cost the stub its reason to exist.
+# Post-collapse rows are not available in the stub: which definitions make the top-K cut is a fact about the
+# RANKING, and the ranking is exactly what the stub skips (no pr_iters= rides its header). So the arms pin the
+# IDENTITY the map legend already publishes for shown= -- rows + sum(overloads-1) = shown = would_show --
+# rather than demanding an equality that would cost the stub its reason to exist. It is named as the DEFINITION
+# COUNT it is and NOT labelled a ceiling (owner decision 2026-09-14): a floor/ceiling marker in this tool means
+# "we could not see everything", while would_show is exact and only its UNIT differs from a reader's guess, so
+# spending the marker here would weaken it everywhere it is used honestly.
 #
 # 14a runs on a corpus that HAS overloads in the cut, so the two numbers genuinely differ and an arm asserting
 # plain equality would fail; 14b is the no-overload control, where the identity degenerates to equality, so a
-# fix that quietly replaced the ceiling with the row count could not pass both.
+# fix that quietly replaced the definition count with the row count could not pass both.
 wsFor(){   # $1 = corpus dir -> "would_show rows surplus"
     local dir="$1"
     local ws rows surplus
-    ws="$( "$BIN" "$dir" --no-cache --rank-by=churn-decay --in="$2" 2>/dev/null | sed -n 's/.*would_show="\([0-9]*\)".*/\1/p' )"
-    "$BIN" "$dir" --no-cache --rank-by=churn-decay >"$WORK/uns.xml" 2>/dev/null
+    ws="$( runAt "$dir" --rank-by=churn-decay --in="$2" 2>/dev/null | sed -n 's/.*would_show="\([0-9]*\)".*/\1/p' )"
+    runAt "$dir" --rank-by=churn-decay >"$WORK/uns.xml" 2>/dev/null
     rows="$( grep -o '<s ' "$WORK/uns.xml" | wc -l | tr -d ' ' )"
     surplus="$( grep -o 'overloads="[0-9]*"' "$WORK/uns.xml" | grep -o '[0-9]*' | awk '{s+=$1-1} END{print s+0}' )"
     printf '%s %s %s\n' "${ws:-NONE}" "$rows" "$surplus"
@@ -672,7 +717,7 @@ if [ "$ws" = "NONE" ]; then
     no "arm 14a: the stub printed no would_show= at all on the gate fixture"
 elif [ "$(( rows + surplus ))" = "$ws" ]; then
     if [ "$surplus" -gt 0 ]; then
-        ok "arm 14a: would_show= is the unscoped run's shown= exactly, over a cut that DOES collapse overloads: rows=$rows + sum(overloads-1)=$surplus = would_show=$ws"
+        ok "arm 14a: would_show= is the unscoped run's shown= exactly, counting definitions over a cut that DOES collapse overloads: rows=$rows + sum(overloads-1)=$surplus = would_show=$ws"
     else
         ok "arm 14a: would_show=$ws matches rows=$rows with no overloads in the cut on this fixture (the identity holds; 14b is the corpus that exercises the collapse)"
     fi
@@ -703,9 +748,9 @@ if [ "$ws2" = "NONE" ]; then
 elif [ "$surplus2" -lt 1 ]; then
     no "arm 14b control: the overload corpus printed NO collapsed row (surplus=$surplus2) — the fixture no longer exercises the collapse, so 14a's equality could be passing vacuously"
 elif [ "$(( rows2 + surplus2 ))" = "$ws2" ] && [ "$ws2" -gt "$rows2" ]; then
-    ok "arm 14b control: on a corpus whose cut collapses an overload pair, would_show=$ws2 EXCEEDS the $rows2 row(s) by the surplus $surplus2 — the ceiling is a ceiling, and the identity still holds"
+    ok "arm 14b control: on a corpus whose cut collapses an overload pair, would_show=$ws2 EXCEEDS the $rows2 row(s) by exactly the surplus $surplus2 — a definition count, and the published identity still yields the rows"
 else
-    no "arm 14b control: would_show=$ws2, rows=$rows2, surplus=$surplus2 — identity or ceiling broken"
+    no "arm 14b control: would_show=$ws2, rows=$rows2, surplus=$surplus2 — the identity does not hold"
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

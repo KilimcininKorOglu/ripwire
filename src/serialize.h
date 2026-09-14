@@ -1927,9 +1927,8 @@ inline constexpr const char* kRecentScopeLegendOpen =
     "the window's skipped commits, not DIR's. ";
 inline constexpr const char* kRecentScopeLegendClose =
     "symbols stubbed=1 would_show= next=: the symbol map this run did NOT ask for and did not render — would_show= is that "
-    "run's own shown=: DEFINITIONS ranked into its top-K, counted individually, so a CEILING on its <s> rows "
-    "(rows+sum(overloads-1)=shown, as the shown= legend says), never the row count and never the corpus total (symbols=); "
-    "the stub does not rank, so which definitions make that cut is unknown here. next= fetches them -->";
+    "run's own shown=: DEFINITIONS, counted individually exactly as shown= counts them, so that run's <s> row count follows "
+    "from rows+sum(overloads-1)=shown; never the corpus total, which is this document's symbols=. next= fetches them -->";
 
 // Which churn legend belongs to which churn ranker — the table-driven form the sibling rankBy lookup uses,
 // so a third churn variant adds a row and not a branch.
@@ -2701,18 +2700,25 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // so the one number it carried was the one number it was not allowed to mean. The stub is not a page of the map
     // and it must not borrow the page vocabulary to say so. It says what it IS instead:
     //   stubbed="1"     the symbol map was not rendered at all (the <f> loop walks an empty order below)
-    //   would_show="N"  `keep` — the un-stubbed header's own shown=, which counts symbol DEFINITIONS and not
-    //                   printed rows: the print loop runs collapseOverloadRows() over each file bucket, so a
-    //                   const/non-const pair that both make the top-K cut prints ONE row carrying overloads=2.
-    //                   would_show is therefore a CEILING on the rows, exact under the identity the map legend
-    //                   already publishes for shown= (rows+sum(overloads-1)=shown). Measured on this repo
-    //                   2026-09-14: shown=200, 193 <s> rows, 7 rows at overloads=2, and 193+7=200.
-    //                   IT CANNOT BE MADE EXACT HERE, and that is the reason it is labelled instead: which
-    //                   definitions make the cut is a fact about the RANKING, and the ranking is precisely what
-    //                   this stub does not run (no pr_iters= rides the header). Ranking it to sharpen one
-    //                   attribute would spend the whole saving the stub exists for. Not the corpus total
-    //                   either (that is the header's symbols=), and named so the three cannot be read as each
-    //                   other. test/recentscopecheck.sh arms 14a/14b pin both halves.
+    //   would_show="N"  `keep` — the un-stubbed header's own shown=, and shown= counts symbol DEFINITIONS
+    //                   individually, not printed rows: the print loop runs collapseOverloadRows() per file
+    //                   bucket, so a const/non-const pair that both make the top-K cut prints ONE row carrying
+    //                   overloads=2. The row count therefore FOLLOWS from the identity the map legend already
+    //                   publishes for shown= — rows+sum(overloads-1)=shown — rather than being reported here.
+    //                   Measured on this repo 2026-09-14: shown=200, 193 <s> rows, 7 at overloads=2, 193+7=200.
+    //                   IT IS A DEFINITION COUNT AND NOT A CEILING, by owner decision 2026-09-14, and the
+    //                   reason is vocabulary: in this tool a floor/ceiling marker means "we could not see
+    //                   everything" (counts_floor=, _capped, the truncation disclosures). would_show is EXACT;
+    //                   what differs from a reader's guess is the UNIT. Spending an uncertainty marker on a
+    //                   unit difference would make "ceiling" mean "exact, but not in the unit you assumed" and
+    //                   weaken every honest use of the word elsewhere in the output. Naming the quantity is
+    //                   also the stronger claim: a ceiling cannot be inverted, while a definition count plus
+    //                   the published identity yields the rows. Reporting post-collapse rows instead — the
+    //                   review's original ask — is not available at this site for any price worth paying:
+    //                   which definitions survive the cut is a fact about the RANKING, and not ranking is the
+    //                   whole point of the stub (no pr_iters= rides its header). Not the corpus total either
+    //                   (that is symbols=), so the three cannot be read as each other.
+    //                   test/recentscopecheck.sh arms 14a/14b pin the arithmetic.
     // Rule 3's own sentence sanctions the shape: "If a verb emits no shown=, it emits no capped= either."
     if( ann.stubSymbols )
     {

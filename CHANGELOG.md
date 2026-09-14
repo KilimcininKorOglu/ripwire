@@ -54,15 +54,17 @@ inferring the second from the first published it as "no history was mined".
 The symbol map collapses to a disclosed stub `<symbols stubbed="1" would_show=N next="…"/>` — the map was
 not asked for, so it is not ranked at all (no PageRank runs, and the header carries no `pr_iters=` for an
 iteration that did not happen), and `would_show=` is that same run's own `shown=`: the symbol DEFINITIONS it
-ranks into its top-K, counted individually. It is therefore a CEILING on the `<s>` rows that run prints rather
-than the row count — the print loop collapses a const/non-const overload pair into one row carrying
-`overloads="2"`, so the identity is the one the map legend already publishes for `shown=`,
-`rows + sum(overloads-1) = shown` (this repository: `shown="200"` over 193 rows, 7 of them at `overloads="2"`).
-The first wording said "how many symbol ROWS", which is a number the document does not contain, and it cannot
-be made exact where it is emitted: WHICH definitions make the cut is a fact about the ranking, and the ranking
-is precisely what the stub does not run — sharpening one attribute that way would spend the entire saving the
-stub exists for. Labelled, therefore, rather than guessed or quietly rounded. It deliberately borrows no paging
-attribute: `total=` is reserved for THE total (rule 2) and the stub's
+ranks, counted individually exactly as `shown=` counts them. The rows that run prints FOLLOW from the identity
+the map legend already publishes for `shown=` — `rows + sum(overloads-1) = shown`, since the print loop
+collapses a const/non-const overload pair into one row carrying `overloads="2"` (this repository: `shown="200"`
+over 193 rows, 7 of them at `overloads="2"`). The first wording said "how many symbol ROWS", which is a number
+the document does not contain. Reporting post-collapse rows there instead is not available at any price worth
+paying: WHICH definitions survive the top-K cut is a fact about the ranking, and not ranking is the whole point
+of the stub. It is named as the definition count it is rather than hedged as a ceiling, because a floor/ceiling
+marker in this tool means "we could not see everything" — `counts_floor="1"`, `_capped`, the truncation
+disclosures — while `would_show` is EXACT and only its UNIT differs from a reader's guess; spending an
+uncertainty marker on a unit difference would make "ceiling" mean "exact, but not in the unit you assumed" and
+weaken every honest use of the word elsewhere in the output. It deliberately borrows no paging attribute: `total=` is reserved for THE total (rule 2) and the stub's
 number is a page size, `shown=` would drag a `capped=` with it (rule 3), and rule 3's own sentence sanctions
 an element that carries neither.
 
@@ -167,6 +169,25 @@ classified and `src/` no longer declares. The paragraph derives all three parts 
 than hiding it, and `capsweep.py emit` REFUSES to render a partition that does not add up — a name classified
 in two lists at once, the shape an asserted sum cannot see, exits non-zero instead of publishing. Gate:
 `test/capsweepcheck.sh` arm (C) reproduces the document byte-for-byte through that refusal on every run.
+
+### Fixed — a scoped run said its ranking fell back, having run no ranking
+
+`--rank-by=churn-decay` discloses a window that mined no commits: the teleport prior is uniform, so the map is
+byte-identical to `--rank-by=pagerank`, and saying so is the difference between a degraded answer and a silent
+one. Under `--in=DIR` that same sentence was false three ways at once, on a real invocation
+(`--rank-by=churn-decay --in=src --since=HEAD`, a window that reads no commit). Nothing is ranked on a scoped
+run — the rank vector is default-constructed and zero-filled, which is exactly why the header carries no
+`pr_iters=` — so "using uniform (structural) ranking" named a computation that did not happen. "This map"
+named a document the run does not contain, since the symbol map IS the counted stub and, with no history
+mined, neither `<recent>` block rides at all. And the comparison it offered is unrunnable: `--rank-by=pagerank`
+is refused beside `--in`, so the reader was pointed at a command the tool rejects.
+
+The scoped branch now states what did happen — no block rides, the map is the stub, nothing was ranked, so
+there is no ranking to have fallen back — and keeps the pagerank equivalence where it is true, on the unscoped
+run a reader gets by dropping `--in`. The two sibling callers (the multi-root arm and undecayed
+`--rank-by=churn`) pass `stubbed=false` at the call site with the reason recorded: `--in` rides neither.
+Gate: `test/recentscopecheck.sh` arm 13e asserts all three claims are gone and that the notice says nothing was
+ranked, with 13f the control that the unscoped sentence survives unchanged.
 
 ### Fixed — a pasteable `next=` quoted a tilde no shell expands
 
