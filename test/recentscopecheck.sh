@@ -299,6 +299,15 @@ refuses "arm 6q: --in= voided by --pack-signatures"           "--pack-signatures
 refuses "arm 6r: --in= voided by --doctor"                    "--doctor"   --rank-by=churn-decay --in=db --doctor
 refuses "arm 6s: --in= voided by --batch"                     "--batch"    --rank-by=churn-decay --in=db --batch=-
 
+# INERT IS NOT COMPETING (CodeRabbit, review of #212). firstFlagOutside answers "which set flag is not a
+# ride-along", and the generic refusal then says that flag "answers instead". For --no-redact that was FALSE:
+# it selects no operation, it only stops body redaction, and a scoped run serves no bodies at all (the symbol
+# map is the counted stub). It is refused ahead of the generic diagnostic now, saying exactly that. Arm 6s2b is
+# the control: a flag that really does emit its own answer must KEEP the generic wording, or this fix would
+# have replaced one wrong sentence with another.
+refuses "arm 6s2: --in= with --no-redact says INERT, not answers-instead" "has nothing to un-redact" --rank-by=churn-decay --in=db --no-redact
+refuses "arm 6s2b control: a real competitor keeps answers-instead"       "answers instead"          --rank-by=churn-decay --in=db --external-surface
+
 # THE SHAPING FLAGS — one refusal per bad combination, and the composers really compose. --in used to be a row in
 # kPagingHonoringVerbs, which is a VERB list: membership made validateShapingFlagsHonored refuse all three budget
 # flags with a message that hands the caller a list of verbs and claims the default map honours the budgets it had

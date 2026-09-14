@@ -3376,6 +3376,28 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     // verb — because those dispatch before the default map and would leave the flag accepted and ignored. The
     // answer is derived from the flag tables (inPreemptedBy), not from a list of verbs; cli.h already refused
     // the cases it can see on its own (no host, multi-root, --top-k).
+    // INERT IS NOT COMPETING, and the generic sentence below cannot tell them apart (CodeRabbit, review of
+    // #212). firstFlagOutside answers "which set flag is not a ride-along", which for --no-redact was reported
+    // as "--no-redact answers instead" — false, because --no-redact selects no operation at all: it only stops
+    // body redaction, and a scoped run serves no bodies (the symbol map is the counted stub). --no-redact is
+    // deliberately NOT added to kInRideAlong: that would accept an inert modifier silently, which is the defect
+    // this refusal exists to prevent. It is named HERE instead, ahead of the generic line, in the shape
+    // refuseInertMainModifiers already uses for the same flag on the bare map.
+    //
+    // AUDITED for siblings, since one wrong reason suggests the class was never enumerated: of the 164 flags
+    // firstFlagOutside walks, 149 are not ride-alongs, and every one tested reaches its OWN pairing refusal
+    // before this line (--signatures-only/--auto-bodies/--adaptive/--no-mention-boost/--no-doc-mention/
+    // --with-graph name --for, --handles/--no-prefilter name --grep, --sarif names --lint, --anchor and
+    // --cochange-boost demand RIPWIRE_DEV). Exactly one other flag reaches this diagnostic, --external-surface,
+    // and for it the wording is CORRECT: it emits its own <external-surface> answer, so it really does compete.
+    if( cfg.noRedact )
+    {
+        rw::emitRaw( stderr, "ripwire: --in=DIR scopes the recent-changes block and collapses the symbol map to a counted stub, so this run "
+                              "serves no bodies and --no-redact has nothing to un-redact — it is inert here, not overridden. Drop it for the "
+                              "scoped block (ripwire <dir> --rank-by=churn-decay --in=src), or pass it to a body-serving verb "
+                              "(ripwire <dir> --expand=SYM --no-redact)\n" );
+        return 1;
+    }
     if( const std::string_view answered = inPreemptedBy( cfg ); !answered.empty() )
     {
         rw::emitTo( stderr, "ripwire: --in=DIR scopes the recent-changes block of the DEFAULT churn-decay map, and {} answers instead — "

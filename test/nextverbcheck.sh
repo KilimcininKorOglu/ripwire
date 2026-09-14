@@ -214,12 +214,33 @@ else
     esac
 fi
 
+# THE RULE, because this arm used to assert the opposite and explain it wrongly: tilde expansion applies to a
+# word whose FIRST character is `~`. In `--exclude=~tmp` the word begins with `--exclude=`, so no shell expands
+# it — an argument is not an assignment. Measured on this machine: `sh -c 'p ~root'` -> /var/root, while
+# `sh -c 'p --exclude=~root'` -> the literal `--exclude=~root` (sh, bash and zsh alike). The gate previously
+# pinned `--exclude=&apos;~tmp&apos;` and called the quotes "the correct answer here", which would have
+# defended the corrupted argument against anyone who fixed it.
 q2="$( qnext --exclude='~tmp' )"
-if [ -z "$q2" ]; then no "(9) the --exclude arm produced no next= — the leading-~ control proves nothing"
+if [ -z "$q2" ]; then no "(9) the --exclude arm produced no next= — the tilde row below proves nothing"
 else
     case "$q2" in
-        *"--exclude=&apos;~tmp&apos;"*) ok "(9) a LEADING ~ is still quoted: next= carries --exclude=&apos;~tmp&apos; (a shell would expand ~tmp, so the quotes are the correct answer here)" ;;
-        *)                              no "(9) a leading ~ lost its quoting — ~tmp would tilde-expand when pasted: $q2" ;;
+        *"--exclude=~tmp"*) ok "(9) a ~ after --flag= is NOT quoted: next= carries --exclude=~tmp bare, which is what a shell passes through" ;;
+        *)                  no "(9) next= does not carry a bare --exclude=~tmp — the value was quoted for an expansion no shell performs: $q2" ;;
+    esac
+    case "$q2" in
+        *"&apos;"*) no "(9) next= still carries &apos; — quoting a value no shell would expand, and the XML escaper then made it an entity no shell decodes: $q2" ;;
+        *)          ok "(9) the --exclude=~tmp invocation carries no &apos; entity at all" ;;
+    esac
+fi
+
+# MUTATION CONTROL for the row above: narrowing the tilde case must not have disabled quoting generally. A
+# value with a space still needs it, and still gets it.
+q3="$( qnext --exclude='a b' )"
+if [ -z "$q3" ]; then no "(9) the space-value arm produced no next= — the control below proves nothing"
+else
+    case "$q3" in
+        *"--exclude=&apos;a b&apos;"*) ok "(9) control: a value a shell WOULD split is still quoted (--exclude=&apos;a b&apos;), so only the tilde case narrowed" ;;
+        *)                             no "(9) control: a space-bearing value lost its quoting — the fix disabled quoting instead of narrowing it: $q3" ;;
     esac
 fi
 
