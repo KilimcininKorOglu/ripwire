@@ -350,6 +350,15 @@ probeFor()
 # #213 put the coverage= reading on the same probe (this gate's --for=geometry IS a thin answer), and this round
 # made the sc= and route= readings present-only. 654 B is the number on the tree that ships, measured three times
 # and never held to a pin by trimming a clause.
+# RE-MEASURED 2026-09-14 (MERGE of lane/sc-legend with main at 0b118ac1). Two rows conflicted and NEITHER SIDE
+# was accepted as the answer: this lane had 990/974 and 760/745 for pack-task and pack-top-n, main had 880/865
+# and 660/649, and both were right about their own tree — main's does not carry row 6's sc= reading or the
+# route= code growth. Re-probed on the MERGED tree: pack-task 974 B, pack-top-n 745 B, so the rule above gives
+# 990 and 760. Those equal this lane's side, and that is the outcome VERIFIED rather than the side picked —
+# #214's one new legend clause (';est-unmeasured', src/prcontext.h) is conditional on a --pr-context truncation
+# level and rides neither of these two probes, so it moves neither measurement. No other schema moved, and
+# ripwire.pr-context/v1 stays at 410/399 for the same reason: the clause is present-only and this fixture's
+# answer is not truncated.
 # ripwire.expand-file/v1 is NEW: --expand has two servings and they share no element (see compactlegend.h).
 # schema                      pin  measured
 PIN_TABLE='
@@ -1734,6 +1743,43 @@ while IFS='|' read -r kind name where <&3; do
         *) no "(S) unreadable row from the source reader: $kind|$name|$where" ;;
     esac
 done 3<"$TMP/s.rows"
+
+# ── (R) THE COMPACT <g> TERM SAYS WHAT THE FULL CLAUSE SAYS ────────────────────────────────────────────
+#
+# THE FINDING (review of 6621370f). testmap.h stopped escaping a comma inside a grouped path — a path holding
+# ',' is not grouped at all now — and the FULL clause was rewritten to say so and to state that a shown=/total=
+# over these rows counts test FILES. The COMPACT twin of the same rule, compactlegend.h's <g> term, was not:
+# it still promised "every path verbatim (&#44; a comma)", an escape the body no longer emits, and it never
+# carried the counts-FILES rule. A reader holding only the compact legend was told to undo an entity that is
+# not there, and `--affected --legend=compact` on a comma-path corpus contradicted its own rows.
+#
+# WHY A GATE AND NOT ONE CONSTANT. Every other shared sentence in this tree is ONE constant spliced twice, and
+# that is the right shape — but the compact dialect exists precisely to RE-SPELL, not to quote: kRunHintLegendClause
+# is 350+ B and the compact term is a 194 B line in a table that is charged per verb. So the two are pinned
+# against each other instead, and the REQUIRED FACTS are derived from the full constant rather than typed here:
+# a fact is a distinctive phrase the full clause uses, and the compact term must use the same words for it.
+# Add a fact to the full clause and this arm fails until the compact term carries it too.
+RG_FULL="$( sed -n '/^inline constexpr std::string_view kRunHintLegendClause =/,/;$/p' "$ROOT/src/testmap.h" )"
+RG_COMPACT="$( grep -F '"<g n= p=a,b,c>' "$ROOT/src/compactlegend.h" )"
+if [ -z "$RG_FULL" ] || [ -z "$RG_COMPACT" ]; then
+    no "(R) could not read both wordings out of src/ (full=$( printf '%s' "$RG_FULL" | wc -c ) B, compact=$( printf '%s' "$RG_COMPACT" | wc -c ) B)"
+else
+    rgbad=""
+    # the two facts a <g> consumer cannot act without, in the FULL clause's own words
+    for fact in "verbatim" "a path holding ','" "splits into exactly n=" "counts test FILES"; do
+        printf '%s' "$RG_FULL"    | grep -qF "$fact" || rgbad="$rgbad [full clause lost the fact: $fact]"
+        printf '%s' "$RG_COMPACT" | grep -qF "$fact" || rgbad="$rgbad [compact term does not state: $fact]"
+    done
+    # and the escape neither may promise again: an XML parser undoes it BEFORE a consumer splits p= on ','
+    for w in "$RG_FULL" "$RG_COMPACT"; do
+        printf '%s' "$w" | grep -qF '&#44;' && rgbad="$rgbad [a wording still promises the &#44; escape testmap.h deleted]"
+    done
+    # the compact term stays qualified to <g> and present-only, or --flags' own <g> pays for it
+    printf '%s' "$RG_COMPACT" | grep -qF 'true, "g"' || rgbad="$rgbad [the compact <g> term lost its element qualifier / present-only flag]"
+    [ -z "$rgbad" ] \
+        && ok "(R) the compact <g> term states every fact the full run-hint clause states, in the same words, and neither promises the deleted &#44; escape" \
+        || no "(R) the compact and full readings of <g> have drifted:$rgbad"
+fi
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

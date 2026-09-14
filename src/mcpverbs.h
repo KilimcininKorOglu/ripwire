@@ -368,23 +368,13 @@ inline std::string mcpUnknownFieldRefusal( const std::string& scope, std::string
     return {};
 }
 
-// Capture one FILE*-writing renderer into a string. The three verbs below differ only in which writer they
-// run, so the open_memstream boilerplate lives here once instead of three times.
+// Capture one FILE*-writing renderer into a string — infra/emit.h's ONE renderToString seam with this
+// surface's own degrade wording. It kept its own copy of the memstream dance until the review of #214
+// gave the tree a single seam for it; the contract is unchanged (an allocation failure is an empty string,
+// never a NULL deref), and it now also ALERTS, which this copy never did.
 inline std::string captureXml( const std::function<void( std::FILE* )>& render )
 {
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
-    if( !mem )
-    {
-        return {}; // alloc failure → empty, never deref NULL
-    }
-    render( mem );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return rw::renderToString( render, "mcp: open_memstream failed — this verb answers empty" ).text;
 }
 
 // full pipeline on a dir → XML captured into a string (captureXml, above).
@@ -1331,18 +1321,8 @@ inline std::string situationDiffJson( const std::string& root, const std::string
     out += "]";
     out += graphCountFloorAttrJson( ix.g );   // H5/M15: blast_radius[].dependent_symbols is read off the name-based CSR — a floor, with the gauge
     out += ",\"tests_to_run\":[";
-    {
-        bool first = true;
-        for( std::uint32_t f : facts.tests )
-        {
-            if( !first )
-            {
-                out += ",";
-            }
-            first = false;
-            out += "{\"test\":\"" + mcpdetail::jsonEscape( std::string( situJPathRel( f ) ) ) + "\"" + runFieldJsonDisclosed( runners, f, jsonEsc ) + "}";
-        }
-    }
+    // E1: grouped where no runner is derivable — "test" is then an ARRAY of paths (testmap.h's seam)
+    out += testRowsJoined( runners, testRowsOutOf( facts.tests, situJPathRel ), TestRowShape{ RowDialect::Json, "test" }, jsonEsc, "," );
 
     // F3: the decl/def partners of the changed set — the header/impl relationship the blast_radius array
     // above cannot carry, because a header does not transitively depend on the source that implements it.
