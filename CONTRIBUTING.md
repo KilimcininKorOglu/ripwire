@@ -520,11 +520,26 @@ Release CI job covered it.
 **The gate count is a build product.** It is stated in `README.md`, `docs/EVALS.md` and
 `present/deck5_ripwire_build.js` — eight sites — and every one of them is written by
 `docs/gatecount_build.py` from the single absorb loop in `test/regression.sh`, then gated by
-`test/gatecountcheck.sh`. Hand-writing it is not a style preference: two lanes that each add one gate
-both write N+1, git auto-merges the **identical** text clean, and the tree publishes N+1 against a loop
-of N+2 with every existing check green (each branch's count matches its own loop, and the merged loop
-matches main's — the member *sets* differ at the same number). That collided seven times in one night
-on 2026-09-10. The merge recipe is therefore: **union the `for _g in …` sets, run the generator, done.**
+`test/gatecountcheck.sh`. Hand-writing it is not a style preference. Two lanes that each add one gate
+both write N+1, and git auto-merges that **identical** text clean in all three files — only the
+`for _g in …` loop conflicts, so the loop is the only place anyone is forced to look. That collided
+seven times in one night on 2026-09-10. The merge recipe is therefore: **union the `for _g in …` sets,
+run the generator (no `--check`, so it WRITES), then `--check` it. Never hand-write the number and
+never trust the clean auto-merge of the three published files.**
+
+WHAT CATCHES A BOTCHED RESOLUTION, measured on this tree 2026-09-13 rather than assumed, because the two
+ways to botch it are caught by *different* gates and neither is caught by both:
+
+| botched how | the tree then has | red on |
+| --- | --- | --- |
+| loop unioned, generator not re-run | loop N+2, the eight sites N+1 | `gatecountcheck` (B), `manifestcheck`, `readmedriftcheck` (F2) — `deckclaimcheck` passes, but the deck's three sites are three of the eight `gatecountcheck` owns |
+| one side of the loop taken instead of the union | loop N+1 and self-consistent, but a gate FILE present that the loop never names | `manifestcheck` only (`gatecountcheck` passes: the count really is consistent, and the generator has nothing to say) |
+
+So the count is fail-closed **provided the full suite runs** — which is why the suite before every push
+is not negotiable. An earlier revision of this paragraph claimed the first row went green on every
+existing check; that was true when it was written and is not true now, and a stale claim that a defect
+is ungated costs more than the defect, because it sends people to build process around something three
+gates already cover.
 
 **An advertised count is an enumeration, not a sentence.** Every number this project prints about
 itself — flags, gates, skills, folded repositories, orchestrator prompts — is derived from something
