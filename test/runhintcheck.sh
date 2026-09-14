@@ -214,5 +214,61 @@ else
     printf '  SKIP  --pr-context run= arms (no git)\n'
 fi
 
+# ── (5) A run= IS A COMMAND, SO A HOSTILE PATH MUST NOT BECOME SHELL SYNTAX (CWE-78) ──────────────────
+# Security review of #219. The path inside a run= comes from the CRAWLED CORPUS, so a repository decides
+# those bytes. `check;touch PWNED.sh` is a legal filename, and plain concatenation emitted
+# `bash test/check;touch PWNED.sh` — a command this tool hands an agent to paste, which runs `touch PWNED`
+# in the reader's shell. The fix quotes any path outside a conservative allowlist.
+#
+# This arm EXECUTES the emitted command in a scratch directory and asserts the side effect did not happen,
+# because "the string looks quoted" is a weaker claim than "pasting it does not run the payload".
+if command -v git >/dev/null 2>&1; then
+    HOSTILE="$TMP/hostile"
+    mkdir -p "$HOSTILE/test"
+    # A C++ harness, deliberately: a .py or .sh harness is its own derivable runner (stem beats mention,
+    # and its stem matches itself), so the hostile script could never win the election. A .cpp harness has
+    # no runner verb of its own, so the ONLY runner is a script whose TEXT names it — the MENTION rule.
+    printf 'int area( int b, int h )\n{\n    return b * h / 2;\n}\n' > "$HOSTILE/geo.cpp"
+    printf '#include "../geo.cpp"\nint main()\n{\n    return area( 2, 2 ) == 2 ? 0 : 1;\n}\n' > "$HOSTILE/test/area_harness.cpp"
+    # The payload is INERT on disk — a filename is not a command. It only becomes one if run= is unquoted.
+    # `;touch PWNED.sh` is what a shell would run after the injected separator, so PWNED.sh is the sentinel.
+    printf '#!/usr/bin/env bash\n# drives test/area_harness.cpp\ntrue\n' > "$HOSTILE/test/check;touch PWNED.sh"
+    chmod +x "$HOSTILE/test/check;touch PWNED.sh"
+    ( cd "$HOSTILE" && git init -q && git config user.email t@t && git config user.name t && git add -A >/dev/null 2>&1 \
+      && git commit -qm init >/dev/null 2>&1 )
+    HOUT="$( cd "$HOSTILE" && "$BIN" . --affected=geo.cpp --no-cache 2>/dev/null )"
+    HRUN="$( printf '%s' "$HOUT" | grep -oE 'run="[^"]*"' | head -1 )"
+    if [ -z "$HRUN" ]; then
+        printf '  SKIP  (5) the hostile-path fixture derived no run= (nothing to quote-test)\n'
+    else
+        # The payload must be INSIDE one quoted argument, never bare after a ';'. This is the XML dialect,
+        # so a literal ' is emitted as &apos; — accept either spelling, because the quoting is the claim and
+        # the escaping is the dialect's own business.
+        printf '%s' "$HRUN" | grep -qE "'|&apos;" \
+            && ok "(5) a hostile runner path is emitted quoted: $HRUN" \
+            || no "(5) a hostile runner path is emitted UNQUOTED — pasting it would run the payload: $HRUN"
+        # EXECUTE it, and let the filesystem be the judge — but UN-ESCAPE the XML entities first. Writing
+        # this arm found its own false pass: `eval` on the raw attribute ran `bash &apos;test/check;` and
+        # then `touch PWNED.sh&apos;`, which creates a DIFFERENTLY named file, so the sentinel check passed
+        # while the string had never been the command a consumer would run. An arm that executes a mangled
+        # command is testing the mangling.
+        HCMD="$( printf '%s' "$HRUN" | sed -e 's/^run="//' -e 's/"$//' \
+                   -e 's/&apos;/'"'"'/g' -e 's/&quot;/"/g' -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g' )"
+        ( cd "$HOSTILE" && eval "$HCMD" ) >/dev/null 2>&1
+        [ -e "$HOSTILE/PWNED.sh" ] \
+            && no "(5) executing the emitted run= CREATED $HOSTILE/PWNED.sh — the command injected" \
+            || ok "(5) executing the emitted run= ran the harness and created no PWNED file"
+        # CONTROL: the unquoted spelling this arm exists to forbid really does inject, so the row above is
+        # not passing against a payload that never worked.
+        rm -f "$HOSTILE/PWNED.sh"
+        ( cd "$HOSTILE" && eval "bash test/check;touch PWNED.sh" ) >/dev/null 2>&1
+        [ -e "$HOSTILE/PWNED.sh" ] \
+            && ok "(5) control: the UNQUOTED spelling does inject (PWNED.sh created), so the arm above is not vacuous" \
+            || no "(5) control: the unquoted spelling injected nothing — this arm proves nothing about quoting"
+    fi
+else
+    printf '  SKIP  (5) hostile-path run= arm (no git)\n'
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

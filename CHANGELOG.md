@@ -25,7 +25,25 @@ lexical-siblings block and four disclosure readings dropped when sentences becam
 are fixed here. The two byte ratchets named at the end moved with the fixes and are not counted among
 them: a pin is not a defect. A third review, of this entry's own fixes rather than of the entries below
 it, found two more — the filesystem root in that same relativizer, and a quadratic scan in the new
-lexical-siblings block — and both are fixed here too, for FOURTEEN in this entry.
+lexical-siblings block — and both are fixed here too. A fourth review found a FIFTEENTH in shipped
+output: a `run=` command did not shell-quote its path. Separately, this lane's own new cap left two
+published counts stale (README's cap total and `docs/TUNING.md`); both were republished by their
+generators rather than edited, and they are drift this entry caused rather than a sixteenth defect.
+
+A run= IS A COMMAND, AND ITS PATH COMES FROM THE CORPUS. `testmap.h`'s `spell()` concatenated the
+runner verb and the path, so a repository containing the legal filename `test/check;touch PWNED.sh`
+made the tool emit `run="bash test/check;touch PWNED.sh"` — a command this tool hands an agent to
+paste, which runs `touch PWNED.sh` in the reader's shell (CWE-78, external reachability). The path is
+now always one shell argument. It is quoted only when it is not provably safe, and that is measured
+rather than preferred: `shSingleQuote` always wraps, so quoting unconditionally would move the `run=`
+bytes of every test row in eight emitters — 13 literal command assertions across 7 gates,
+`docs/COMMANDS.md`, 15 committed capture snapshots, README and the `printf_parity` pins. Every path
+`git ls-files` tracks here is inside the safe allowlist (`[A-Za-z0-9._/-]`, never a leading `-`, which
+a shell reads as a flag), measured at 0 outside it, so the conditional form is byte-identical on every
+real corpus while a hostile name is still quoted — `printffmtparitycheck` needed no re-pin. The
+predicate is an allowlist, so an unenumerated byte is quoted by default. `test/runhintcheck.sh` arm (5)
+EXECUTES the emitted command in a scratch corpus and asserts the payload did not fire, with the
+unquoted spelling as its control. Red before the fix: the emitted command created the sentinel file.
 
 A RELATIVE COMMAND IS ONLY AS GOOD AS ITS ANCHOR. Making `run=` root-relative is what makes a change
 report independent of where the tree is checked out — and it makes every one of those commands useless

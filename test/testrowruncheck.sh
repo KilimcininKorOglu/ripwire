@@ -232,9 +232,14 @@ SITU="$( rw --situ )"
 # species as everything else this round: an arm passing over a row it silently discarded. The filter now
 # names the ONE disclosure line this section emits, so a row can never be mistaken for it — and arm 8b
 # below feeds this same function a '='-bearing path to prove it.
+# Second review of #219: `script_gates_unmodelled=` alone is still a PREFIX, and isTestPath accepts
+# `*_test.*`, so a legal row for a file literally named `script_gates_unmodelled=123 — …` would match it and
+# be dropped — the same over-broad-filter defect one notch narrower. The filter now matches the disclosure's
+# COMPLETE fixed text anchored to end of line, so only the disclosure can satisfy it.
 situRowsOf()   # $1 = a --situ text report; prints the tests-to-run ROWS only
 {
-    printf '%s\n' "$1" | sed -n '/tests to run/,/^  \[3\]/p' | grep -E '^        [^ (]' | grep -vE '^        script_gates_unmodelled='
+    printf '%s\n' "$1" | sed -n '/tests to run/,/^  \[3\]/p' | grep -E '^        [^ (]' \
+        | grep -vE '^        script_gates_unmodelled=[0-9]+ — test/\*\.sh gates never appear above: script-to-binary edges are not call edges \(a path count\)$'
 }
 SITU_ROWS="$( situRowsOf "$SITU" )"
 if [ -z "$SITU_ROWS" ]; then
@@ -250,22 +255,31 @@ fi
 # rather than a fixture: the defect is in the filter, and a filename with '=' in a crawled corpus would be
 # testing the crawl instead. Both directions are asserted — the '='-bearing ROW survives AND the
 # disclosure line is still removed — because a filter that kept everything would pass the first alone.
+# The disclosure line here is the emitter's COMPLETE text, taken from a live run rather than abbreviated:
+# an abbreviated copy would be excluded by a prefix filter and kept by the anchored one, so a truncated
+# fixture would test the fixture instead of the filter. The third row is the ADVERSARY the second review
+# named — a legal filename that BEGINS with the disclosure's key, which the prefix form dropped and the
+# anchored form must keep.
 SYNTH_SITU="$( printf '%s\n' \
-    '  [2] tests to run (2):' \
+    '  [2] tests to run (3):' \
     '        test=smoke.sh (run: bash test=smoke.sh)' \
     '        test/plaincheck.sh (run: bash test/plaincheck.sh)' \
-    '        script_gates_unmodelled=672 — test/*.sh gates never appear above' \
+    '        script_gates_unmodelled=9_test.sh (run: bash script_gates_unmodelled=9_test.sh)' \
+    '        script_gates_unmodelled=672 — test/*.sh gates never appear above: script-to-binary edges are not call edges (a path count)' \
     '  [3] co-change' )"
 SYNTH_ROWS="$( situRowsOf "$SYNTH_SITU" )"
 printf '%s\n' "$SYNTH_ROWS" | grep -q 'test=smoke.sh' \
     && ok "(8b) a tests-to-run row whose PATH contains '=' is kept, not filed as an attribute line" \
     || no "(8b) a '='-bearing path row was dropped by the row filter — arm 8 would skip validating its (run: …)"
-printf '%s\n' "$SYNTH_ROWS" | grep -q 'script_gates_unmodelled=' \
+printf '%s\n' "$SYNTH_ROWS" | grep -q 'script_gates_unmodelled=9_test.sh' \
+    && ok "(8b) a legal path that BEGINS with 'script_gates_unmodelled=' is kept — the filter matches the disclosure's whole text, not its prefix" \
+    || no "(8b) a path beginning with the disclosure's key was dropped — the filter is still a prefix match"
+printf '%s\n' "$SYNTH_ROWS" | grep -q 'are not call edges (a path count)$' \
     && no "(8b) the script_gates_unmodelled= disclosure leaked into the ROW set — arm 8 would demand a run recipe from a disclosure" \
     || ok "(8b) the script_gates_unmodelled= disclosure is still excluded from the row set"
-[ "$( printf '%s\n' "$SYNTH_ROWS" | grep -c . )" = 2 ] \
-    && ok "(8b) exactly the 2 synthetic rows survive the filter" \
-    || no "(8b) filter kept $( printf '%s\n' "$SYNTH_ROWS" | grep -c . ) line(s), expected 2: $( printf '[%s]' "$SYNTH_ROWS" )"
+[ "$( printf '%s\n' "$SYNTH_ROWS" | grep -c . )" = 3 ] \
+    && ok "(8b) exactly the 3 synthetic rows survive the filter" \
+    || no "(8b) filter kept $( printf '%s\n' "$SYNTH_ROWS" | grep -c . ) line(s), expected 3: $( printf '[%s]' "$SYNTH_ROWS" )"
 # ── ARM 9 — MCP situational_awareness (mcpverbs.h) ─────────────────────────────────────────────────────
 MCPOUT="$( printf '%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \

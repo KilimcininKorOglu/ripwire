@@ -27,6 +27,7 @@
 #include "mention.h"      // mention_detail::baseNameOf + stripExt — the ONE basename/stem pair binstale.h/gitmine.h reuse
 #include "infra/namesplit.h" // namesplit::isIdentChar — the canonical ASCII identifier-byte predicate
 #include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
+#include "infra/jsonesc.h" // rw::shSingleQuote — the ONE shell quoter; run= is a COMMAND, see spell() below
 
 #include <algorithm>
 #include <cstdio>
@@ -612,13 +613,45 @@ private:
     // Spelled against the ON-DISK path (diskPath), so a multi-root `<label>/<rel>` identity spelling — which
     // is a label, not a directory — can never leak into something a shell would mis-resolve. A leading "./"
     // is dropped for readability; the result is pasteable from the repo root.
+    // CWE-78, security review of #219. A run= is a COMMAND, and the path inside it comes from the CRAWLED
+    // CORPUS, so the corpus decides its bytes. `test/check;touch PWNED.sh` is a legal filename, and plain
+    // concatenation emitted `bash test/check;touch PWNED.sh` — a command this tool tells an agent to paste,
+    // which would run `touch PWNED` in the reader's shell. The path is now always emitted as ONE argument.
+    //
+    // QUOTED WHEN NOT PROVABLY SAFE, rather than unconditionally, and the difference is measured rather than
+    // preferred. shSingleQuote always wraps, so quoting unconditionally would move the run= bytes of every
+    // row in eight emitters: 13 literal command assertions across 7 gates, docs/COMMANDS.md, 15 committed
+    // capture snapshots, README, and the printf_parity pins — a documented output-format change for every
+    // user. Every path `git ls-files` tracks in this repo, and every runner path under test/, is in the safe
+    // set (measured: 0 of either outside it), so the conditional form is byte-identical on every real corpus
+    // while a hostile name is still quoted. The predicate is an ALLOWLIST, so a byte nobody enumerated is
+    // quoted by default instead of passed through — which is the direction a quoting bug should fail in.
+    static bool isShellSafePath( std::string_view p ) noexcept
+    {
+        if( p.empty() || p.front() == '-' )   // a leading '-' is read as a FLAG, not a path
+        {
+            return false;
+        }
+        for( const char c : p )
+        {
+            const bool isSafeByte = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' )
+                                    || c == '.' || c == '_' || c == '/' || c == '-';
+            if( !isSafeByte )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::string spell( std::uint32_t runnerFile ) const
     {
         const std::string& disk = diskPath( *ing_, runnerFile );
         // A3: root-relative, like every p= beside it. rootRelativeUri strips a leading "./" unconditionally,
         // so the readability strip the pre-A3 code did by hand is the SAME call now, not a second rule.
         std::string_view p = rw::sarif::rootRelativeUri( disk, rootPrefix_ );
-        return std::string( runnerVerb( p ) ) + " " + std::string( p );
+        return std::string( runnerVerb( p ) ) + " "
+             + ( isShellSafePath( p ) ? std::string( p ) : rw::shSingleQuote( std::string( p ) ) );
     }
 
     const IngestResult*                         ing_;

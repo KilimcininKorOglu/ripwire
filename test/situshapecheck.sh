@@ -356,10 +356,24 @@ if sibs is None:
 print(" ".join(sorted(s.get("file", "") for s in sibs)))
 PYEOF
 )"
+  # Second review of #219: this used to accept any MROWS CONTAINING core/widget.h, so an MCP twin that
+  # dropped every other sibling still passed a gate whose subject is parity. The comparison is now
+  # EQUALITY against the CLI's own list, normalised the same way (sorted, space-joined). The CLI rows are
+  # re-extracted here rather than read from arm (7)'s sib_rows, because that helper is defined inside arm
+  # (7)'s else-branch and would be undefined on exactly the run where arm (7) already failed.
+  CROWS="$( sed -n '/lexical siblings/,/^  \[2\]/p' "$OUT" \
+            | awk '/^        [^ (]/ && NF == 1 && $1 !~ /=/ { print $1 }' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ *$//' )"
   case "$MROWS" in
     __MISSING__|__NONE__) no "(7d) the MCP situational_awareness twin carries no siblings list ($MROWS)" ;;
-    *core/widget.h*)      ok "(7d) the MCP twin carries the same siblings ($MROWS)" ;;
-    *)                    no "(7d) the MCP twin's siblings disagree with the CLI report: $MROWS" ;;
+    *)
+      if [ -z "$CROWS" ]; then
+          no "(7d) the CLI report listed no siblings, so the parity comparison would be vacuous"
+      elif [ "$MROWS" = "$CROWS" ]; then
+          ok "(7d) the MCP twin's siblings EQUAL the CLI's, set for set ($CROWS)"
+      else
+          no "(7d) the MCP twin's siblings differ from the CLI's — MCP=[$MROWS] CLI=[$CROWS]"
+      fi
+      ;;
   esac
 fi
 
