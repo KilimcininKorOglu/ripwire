@@ -448,11 +448,25 @@ add(S6, f"{BIN} --scan-skills=skills", "Scan a whole skills directory (exit 2 = 
 
 S7 = "knobs / modes"
 add(S7, f"{BIN} . --rank-by=churn --top-k=5", "Rank by git change-frequency prior instead of PageRank.")
-# The --since=HEAD~1 --exclude pair is not decoration: it narrows the mined window so the GLOBAL block is
+# CHOOSING THE N IN --since=HEAD~N, because this demo's whole point is visible only inside a narrow band and
+# the band MOVES with the repository's own history. Too wide and the global block runs past the display cut, so
+# the reader never reaches the scoped one; too narrow and DIR has 3 or fewer touched files, --limit=3 does not
+# cut, and the block prints capped="0" with no paging half and no next= — the case showing none of what it
+# exists to show. The rule is therefore MEASURED, not remembered: take an N whose scoped of= exceeds the
+# --limit AND whose global block still fits the 30-line display cut, and take it with a margin of at least one
+# commit ON EITHER SIDE — because HEAD~N is relative, and the commit that lands the regenerated capture is
+# itself a commit, so a published HEAD~N evaluates one window wider the moment it is committed. An N chosen
+# with no margin demonstrates in the capture and stops demonstrating at the tip; this was not hypothetical,
+# it happened twice while writing this comment.
+# Measured 2026-09-13 at d48f6eaa: HEAD~3 of="1" capped="0"; HEAD~4..6 of="4"; HEAD~7 of="5" global n="13";
+# HEAD~8 of="5" global n="14"; HEAD~10 of="18" global n="32" (past the display cut). N=7 sits with both
+# neighbours capping and the global block at 12-14 rows. Re-measure the same way rather than assuming the N.
+#
+# The --since/--exclude pair is not decoration: it narrows the mined window so the GLOBAL block is
 # under the 40-row display cut and the scoped block, its paging half and the stub are all VISIBLE in the
 # captured lines (at 40 global rows they sat past the cut, so the case showed none of what it exists to show),
 # and it makes next= replay two corpus/window flags, which is the fact the hand-spelled next= used to lose.
-add(S7, f"{BIN} . --rank-by=churn-decay --since=HEAD~1 --exclude=test --exclude=docs --in=src --limit=3", "Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope=\"src\"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped=\"1\" has_more=\"1\" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed=\"1\" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.")
+add(S7, f"{BIN} . --rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs --in=src --limit=3", "Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope=\"src\"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped=\"1\" has_more=\"1\" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed=\"1\" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.")
 add(S7, f"{BIN} . --rank-by=bogus --top-k=5", "An unknown value REFUSES (exit 1), NAMED, with the supported set listed.")
 add(S7, f"{BIN} . --callers=rankGraphTeleport --format=columnar", "Columnar output: paths table + parallel arrays, ~15-60% fewer tokens on MANY-row lists — small results can be LARGER (the columnar legend is a fixed cost).")
 add(S7, f'{BIN} . --for="cache invalidation" --format=candidates --top-k=5', "Flat top-K export for an external reranker.")
