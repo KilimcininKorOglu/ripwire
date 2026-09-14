@@ -89,7 +89,21 @@ command -v python3 >/dev/null || { echo "python3 required"; exit 2; }
 
 echo "skipclassifycheck: PARGATES=$PARGATES"
 
-TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+TMP="$( mktemp -d )"
+# THE FIXTURE BRINGS ITS OWN PATH LENGTHS. Both roots below are built under a base of this gate's own
+# making, never under $TMPDIR, and the long one is padded to a computed total — because the property under
+# test IS path length, and a fixture that inherits it from the runner is a fixture that changes between
+# runners. Measured slope on this gate's probe: the skip row starts at 181 + 2*len(root) bytes (the root is
+# spelled twice in the banner), so the old 400 B boundary sits at a 110-character root. Inheriting $TMPDIR
+# would have put the short root at 22 characters on a Linux runner and 52 on a macOS one and the long root
+# at 153 and 183 — all four on the correct sides today, and all four a $TMPDIR change away from not being.
+SHORTBASE="$( mktemp -d /tmp/rwskipXXXXXX )"        # ~17 chars on every platform this builds on
+trap 'rm -rf "$TMP" "$SHORTBASE"' EXIT
+LONGTARGET=200                                       # comfortably past the 110-character boundary
+padLen=$(( LONGTARGET - ${#SHORTBASE} - 1 ))
+[ "$padLen" -lt 1 ] && padLen=1
+[ "$padLen" -gt 200 ] && padLen=200                  # stay inside the 255-byte single-component limit
+PAD="$( printf 'd%.0s' $( seq 1 "$padLen" ) )"
 FAKEBIN="$TMP/fakebin"; printf '#!/usr/bin/env bash\ntrue\n' > "$FAKEBIN"; chmod +x "$FAKEBIN"
 
 # ── the probes ───────────────────────────────────────────────────────────────────────────────────────────
@@ -122,9 +136,8 @@ printf '  (set RIPWIRE_BASE=build_base/ripwire after building the pre-change sou
 BODY
 
 # ── (0) FIXTURE CONTRAST: the two roots straddle the old 400 B boundary ──────────────────────────────────
-SHORTROOT="$TMP/s"
-LONGDIR="$( printf 'deeply_nested_checkout_directory_%.0s' 1 2 3 4 )"      # ~132 chars of path
-LONGROOT="$TMP/$LONGDIR"
+SHORTROOT="$SHORTBASE/s"
+LONGROOT="$SHORTBASE/$PAD"
 mkprobe "$SHORTROOT" probepathshiftgate "$TMP/body_passfirst"
 mkprobe "$LONGROOT"  probepathshiftgate "$TMP/body_passfirst"
 
@@ -138,7 +151,7 @@ offLong="$(  skipoffset "$LONGROOT/test/probepathshiftgate.sh" )"
 if [ "$offShort" -ge 0 ] && [ "$offShort" -lt 400 ] && [ "$offLong" -ge 400 ]; then
     ok "(0) fixture contrast is real: the SAME probe's skip row starts at byte $offShort from the short root and $offLong from the long one — opposite sides of the old 400 B window"
 else
-    no "(0) fixture does not straddle the old boundary (short=$offShort, long=$offLong; want short<400<=long) — lengthen the long root or widen the probe's leading rows, or arm (A) proves nothing"
+    no "(0) fixture does not straddle the old boundary (short=$offShort at a ${#SHORTROOT}-char root, long=$offLong at a ${#LONGROOT}-char one; want short<400<=long) — raise LONGTARGET above the boundary this gate computes (181 + 2*len(root) = 400 at 110 chars), or arm (A) proves nothing"
 fi
 
 # ── the harness's own answer, read machine-readably ──────────────────────────────────────────────────────

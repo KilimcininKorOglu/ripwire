@@ -49,6 +49,17 @@ instrument arm's pass rows, and `test/argvdiffcheck.sh`'s skip is its opening li
 is unchanged where it was already right: replayed over those same 628 transcripts, the new rule and the
 old one disagree on ZERO gates, and a full suite run reports the same three environmental skips as before.
 
+The same failure family turned up one level down, inside the fix, and the review caught it. The rule
+counts a FAIL as a verdict, but the shared failure-marker expression was compiled without `re.M` and the
+classifier matches it against a WHOLE transcript — so `^` bound only to the start of the string, every
+anchored alternative in it was dead below line 1, and the only one that could still fire was the single
+unanchored one. A gate that printed a FAIL row, then a SKIP row, and exited 0 therefore read as having
+proved nothing, when it had claimed a verdict before it skipped. It is now compiled with `re.M`, which is a
+no-op for the other caller: that one searches a line at a time, and a single line has no newline for `^` to
+find. The arm that pins it, (D2), deliberately does NOT print the one unanchored alternative — a probe
+carrying it would be matched by accident and the arm would pass while asserting nothing, which is the
+difference between a test and a demonstration.
+
 `test/skipclassifycheck.sh` is the gate, and it drives the real `test/pargates.py` rather than a
 reimplementation of it: one probe gate, byte-identical, classified from two corpus roots about 130
 characters apart, after a presence guard proves that the same probe's skip row really does land on
