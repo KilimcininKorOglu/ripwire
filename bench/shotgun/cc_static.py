@@ -14,7 +14,12 @@ syms = []                              # (file, name, key, kind, [callee names])
 for f in root.iter('f'):
     fp = f.get('p')
     for s in f.findall('s'):
-        key = s.get('id') or f"{fp}::{s.get('n')}"
+        # ROW 6 (PR #215 review item 9): the map row carries sc= (the enclosing scope), not the path-repeating
+        # id=. s.get('id') is None on every row now, so this fell through to f"{fp}::{name}" and COLLAPSED two
+        # same-named methods of different classes in one file into one key — a silent miscount in a benchmark.
+        # The canonical id is composed the way the legend says: p::sc::n.
+        sc  = s.get('sc')
+        key = s.get('id') or (f"{fp}::{sc}::{s.get('n')}" if sc else f"{fp}::{s.get('n')}")
         if s.get('t') in ('fn', 'method', 'macro'):
             defs[s.get('n')].append((fp, key, s.get('t')))
         syms.append((fp, s.get('n'), key, s.get('t'), [c.get('n') for c in s.findall('c')]))

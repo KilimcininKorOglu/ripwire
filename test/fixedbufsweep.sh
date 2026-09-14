@@ -149,6 +149,8 @@ TABLE = {
     # ── src/lanes.h — THE REFERENCE SAFE SHAPE ───────────────────────────────────────────────────────────
     ( "src/lanes.h", "buf" ): ( 10, "safe",       "buf[640] x3: snprintf-THEN-escape. :723 interpolates an UNBOUNDED file path and is still safe for exactly that reason — the warning text is escaped downstream, so a cut shortens prose and can never land inside markup. This is the shape §B14's six were not." ),
     # ── src/main.cpp ─────────────────────────────────────────────────────────────────────────────────────
+    ( "src/main.cpp", "fileOpen" ): ( 1, "safe", "fileOpen[200] in chooseExpandServe (PR #215 review): '<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">' — 53 B of literal and TWO std::size_t byte counts, 20 digits each at absolute most, so 93 B against 199 usable + NUL: 106 B of margin. No string interpolation at all, so no escaper can sit on either side of the buffer; the &lt; is written as an entity IN THE LITERAL, not produced by escapeXml. The bound matters twice here, because the caller reads std::strlen of this buffer back as the disclosure's own byte length — a truncated write would make the price it charges wrong as well as the document malformed, which is why the row states the margin rather than just the class. It is a TABLE row and not NUMERIC_ONLY for arch.h hex[17]'s reason: a buffer that never existed before the std::print conversion has no pre-conversion format to derive a class from." ),
+    ( "src/main.cpp", "bundleOpen" ): ( 1, "safe", "bundleOpen[200] in chooseExpandServe (PR #215 review): '<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">' — fileOpen's exact twin, the same two std::size_t and no string: 50 B of literal + 40 digits = 90 B against 199 usable + NUL, 109 B of margin. Same strlen-read-back, same reason for being a row rather than a derivation." ),
     ( "src/main.cpp", "tail" ): ( 1, "not-markup", "tail[48]: the shallow-clone cache DIR suffix (\"/ripwire-remote-\" + a fixed-width 16-hex). Bounded and never emitted. Was 2 sites: defaultCachePath's cache FILENAME left this buffer when the root-key unification moved its assembly into quality.h::rootKeyedCachePath, which is where its row now lives." ),
     ( "src/verbs_for.h", "nb" ): ( 14, "safe",       "nb[160] x2: the mention/doc-mention/siblift/expand header notes. Every %s is the plural '' or 's'; everything else is %u." ),
     ( "src/verbs_report.h", "exemptAttr" ): ( 1, "safe",       "exemptAttr[40]: ' exempt=\"%s\"' with groupExemptKind's fixed vocabulary (longest 'fixture' = 7 B, total 19 B)." ),
@@ -218,7 +220,7 @@ NUMERIC_ONLY = {
     ( "src/ingest_docpass.h", "blobName" ): 1,
     ( "src/main.cpp", "hdr" ): 1,
     ( "src/main.cpp", "nb" ): 4,
-    ( "src/main.cpp", "open" ): 4,
+    ( "src/main.cpp", "open" ): 2,   # PR #215 review: chooseExpandServe's four openers became two early-return refusals plus the two rowed buffers above
     ( "src/mcp.h", "buf" ): 1,
     ( "src/mcpedit.h", "name" ): 1,
     ( "src/mcpedit.h", "oldStamp" ): 1,
@@ -248,9 +250,14 @@ NUMERIC_ONLY = {
     ( "src/serialize.h", "gfb" ): 1,
     ( "src/serialize.h", "inAttr" ): 1,
     ( "src/serialize.h", "kbuf" ): 1,
-    ( "src/serialize.h", "lb" ): 2,
+    ( "src/serialize.h", "lb" ): 4,   # row 6 (2026-09-12): collectCalleeNameRow's line buffer (the merged <c n= l=> row) joined the two
+                                      #   …and a FOURTH (2026-09-13, PR #215 item 8): appendMergedCalleeNameRows joins the row's
+                                      #   line numbers itself now, because l= is sorted ASCENDING at append time rather than
+                                      #   accumulated as text in walk order. Same shape as the site three lines above it —
+                                      #   "{}" of one std::uint32_t, ten digits worst case against 15 usable + NUL, no %s and
+                                      #   nothing escaped, so it does not join the string-interpolating population
     ( "src/serialize.h", "lineAttr" ): 1,
-    ( "src/serialize.h", "nb" ): 2,
+    ( "src/serialize.h", "nb" ): 1,   # row 6 (2026-09-12): appendCalleeNameRow's `"\" l=\"{}\"/>"` buffer went with the merge
     ( "src/serialize.h", "precAttr" ): 1,
     ( "src/serialize.h", "rankAttr" ): 1,
     ( "src/serialize.h", "rc" ): 1,
@@ -431,6 +438,27 @@ if not bad:
 #            format to derive a class from — the same reason nestAttr and escAttr are rows. mentions is +2 because
 #            the comment on that buffer names formatTo as well; arch.h's third mention, its emit.h include line,
 #            predates this change. The code it replaced wrote through emitRaw/emitTo, which this gate does not count.
+#            2026-09-13 (PR #215 review item 8, the merged <c n= l=> row's ascending l=): +1 call/+1 mention,
+#            +1 site, rows/widthforms UNMOVED — re-derived from `git diff 6e8dd75a -- src/`, not accepted from
+#            the delta. The one new call is serialize.h appendMergedCalleeNameRows' `char lb[16]`, which joins
+#            the EXISTING ( serialize.h, lb ) row above (3 -> 4 sites) rather than opening a new one: the row
+#            now holds four buffers of that name in that file. MergedCalleeNameRow stopped carrying its lines
+#            as accumulated text — the walk pushes uint32 line numbers and the append sorts them ascending, so
+#            one fact stopped having two spellings between queries — and the digits are formatted here instead.
+#            "{}" of one std::uint32_t: no %s, nothing escaped, ten digits worst case against 15 usable + NUL,
+#            so it does not join the string-interpolating population and rows is unmoved.
+#            2026-09-14 (PR #215 review, --expand serving priced by ONE function): mentions 323 -> 324, rows
+#            92 -> 94, calls/sites/widthforms UNMOVED at 219/219/0 — re-derived by reading every site, not
+#            accepted from the delta. chooseExpandServe used to write its four `<ctx mode= reason=>` openers
+#            into one `open[160]`; the comparison is now made by a fixpoint that must charge each candidate
+#            the spelling IT would carry, so the two COMPARED openers moved into their own buffers
+#            (`fileOpen[200]`, `bundleOpen[200]`, both NEW TABLE rows above) and `open[200]` kept only the two
+#            refusal paths that make no comparison — 4 sites - 2 + 1 + 1 = 219, which is why the call and site
+#            totals do not move while rows gains exactly the two new buffers. Every one of the four formats
+#            interpolates std::size_t byte counts and nothing else: no %s, no path, no name, nothing that has
+#            been through escapeXml, so none of them is the escape-then-buffer shape this gate exists to catch.
+#            mentions is +1 and not +2 because the two new buffers are written by two formatTo calls on lines
+#            that already carried one between them.
 #            2026-09-14 (review of #214, --pr-context's est-unmeasured disclosure): mentions 323 -> 324,
 #            calls/sites/rows/widthforms ALL UNCHANGED at 219/219/92/0 — re-read from `git diff` and not
 #            accepted from the delta. The single added line is a COMMENT, not a call: prBudgetTail's buffer
@@ -451,7 +479,29 @@ if not bad:
 #            the merged tree, so every one of the 220 sites is classified, no TABLE row is stale, and no new row
 #            is owed: only the counts moved. A pin two lanes raised to the same number from the same base is the
 #            case where neither side is correct (memory: trap-neither-side-of-a-pin-conflict-is-correct).
-EXPECTED = { "mentions": 326, "calls": 220, "sites": 220, "rows": 92, "widthforms": 0 }
+#            2026-09-14 (MERGE of lane/sc-legend with main at 0b118ac1 — NEITHER SIDE'S NUMBER WAS RIGHT):
+#            mentions 326, calls 220, sites 220, rows 94. Both sides of this line said 324, and both were
+#            correct about their own tree: this lane re-derived 323 -> 324 for the chooseExpandServe split,
+#            and #214 re-derived 323 -> 324 for the prBudgetTail comment. They are not the same +1, the two
+#            lanes did not share a base (#214's diff shows 322/218/218/92 as ITS base), and main also carried
+#            packtask.h's `open` row from 2 sites to 3 — so the merged total is neither 324 nor the 325 that
+#            adding the two deltas would give. It was DERIVED by running the gate on the merged tree, which is
+#            the only method this file accepts, and the derivation is corroborated rather than assumed: (S1)
+#            classifies all 220 sites and (S2) reports no stale or miscounted row, so every member is
+#            accounted for and every row's multiplicity already matches source — the two new TABLE rows of
+#            this lane (fileOpen[200], bundleOpen[200]), `main.cpp open` at 2, and packtask.h's `open` at 3
+#            among them. Only the totals line moved.
+#            2026-09-14 (MERGE with #215, and the THIRD lane to raise this pin to the same number from a
+#            different base): main before #215 stood at 324/219/219; this lane derived 326/220/220 from it and
+#            #215 independently derived 326/220/220 from it, each +2 mentions and +1 call/site for unrelated
+#            reasons — so for the third time the two sides agree on a value that describes NEITHER merged tree,
+#            and git auto-merges everything except the rows field. #215 landed first, so its delta is in the
+#            baseline and this lane's has to be added on top: 324+2+2 = 328 mentions, 219+1+1 = 221 calls and
+#            sites. Re-derived from the merged source by the gate itself rather than accepted as arithmetic, and
+#            (S1) confirms the MEMBER SET behind the numbers: 221 sites over 35 hand-classified TABLE rows (33
+#            plus #215's two new ones) and 59 derived NUMERIC_ONLY rows, with (S2) reporting no stale row and
+#            (S1b) nothing breaching. rows is 94 from #215's two additions, which this lane does not touch.
+EXPECTED = { "mentions": 328, "calls": 221, "sites": 221, "rows": 94, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

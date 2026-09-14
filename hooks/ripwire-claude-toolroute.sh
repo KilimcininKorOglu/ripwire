@@ -399,13 +399,14 @@ fi
 #      never from repository content. Quoting is for DISPLAY only; nothing here is ever executed. ----
 runCmd=""
 case "$recommended" in
-    --grep)   runCmd="ripwire $cwd --grep=$grepPattern" ;;
-    --expand) runCmd="ripwire $cwd --expand=$resolvedSym" ;;
+    # A1-2 (2026-09-12): the XML verbs ask for the compact legend; --for keeps the full one (its compact legend is its own)
+    --grep)   runCmd="ripwire $cwd --grep=$grepPattern --legend=compact" ;;
+    --expand) runCmd="ripwire $cwd --expand=$resolvedSym --legend=compact" ;;
     --for)    runCmd="ripwire $cwd --for=\"$file_path\"" ;;
 esac
 [ -n "$runCmd" ] || exit 0
 
-context="$( printf '%s\n%s' 'Ripwire produced a confidence-gated CLI recommendation from the shape of this tool call, before it ran. Prefer it when it answers the need; continue with the original call when more evidence is still required.' "$runCmd" )"
+context="$( printf '%s\n%s' 'Ripwire produced a confidence-gated CLI recommendation from the shape of this tool call, before it ran. Prefer it when it answers the need (add --legend=full if a definition is unclear); continue with the original call when more evidence is still required.' "$runCmd" )"
 jq -cn --arg context "$context" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow",additionalContext:$context}}' \
     2>/dev/null || exit 0

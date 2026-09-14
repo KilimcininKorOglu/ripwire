@@ -219,13 +219,15 @@ grep -q $'n="CRLF Heading\r' "$MAP" && no "a CR byte survived into a CRLF headin
     || ok "CRLF heading name carries no CR byte"
 
 echo "--- hierarchy: a section's scope is its parent heading (canonical id path::Parent::Child) ---"
-grep -qF '::Orientation Guide::Cache Warm Path"' "$MAP" \
+# row 6 (2026-09-12): the row prints n= then sc= (the scope CHAIN, e.g. sc="Deployment Rollout Setext::Rollback Plan");
+# the canonical id composes as <f p=>::sc::n, so "scoped under X" is "sc= ends with X" on the row named n=.
+grep -qE 'n="Cache Warm Path" sc="([^"]*::)?Orientation Guide"' "$MAP" \
     && ok "Cache Warm Path is scoped under Orientation Guide" \
     || no "Cache Warm Path carries no Orientation Guide scope (heading hierarchy missing)"
-grep -qF '::Deployment Rollout Setext::Rollback Plan"' "$MAP" \
+grep -qE 'n="Rollback Plan" sc="([^"]*::)?Deployment Rollout Setext"' "$MAP" \
     && ok "Rollback Plan (setext H2) is scoped under Deployment Rollout Setext (setext H1)" \
     || no "setext hierarchy missing (Rollback Plan not scoped under the setext H1)"
-grep -qF '::Rollback Plan::Deep Appendix"' "$MAP" \
+grep -qE 'n="Deep Appendix" sc="([^"]*::)?Rollback Plan"' "$MAP" \
     && ok "Deep Appendix (H3) is scoped under Rollback Plan (the nearest shallower heading)" \
     || no "Deep Appendix is not scoped under Rollback Plan"
 
