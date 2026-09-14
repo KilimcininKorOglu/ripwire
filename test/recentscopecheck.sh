@@ -672,7 +672,11 @@ else
     case "$nev" in *"this map is"*)                  bad="$bad calls-the-stub-a-map" ;; esac
     case "$nev" in *"--rank-by=pagerank (header"*)   bad="$bad offers-a-comparison---in-refuses" ;; esac
     case "$nev" in *"nothing was ranked"*)           ;; *) bad="$bad does-not-say-nothing-was-ranked" ;; esac
-    [ -z "$bad" ] && ok "arm 13e: the scoped no-evidence notice states what happened — nothing ranked, no block, the stub — and offers no refused comparison"                   || no "arm 13e: the scoped no-evidence notice is still wrong:$bad ($nev)"
+    if [ -z "$bad" ]; then
+        ok "arm 13e: the scoped no-evidence notice states what happened — nothing ranked, no block, the stub — and offers no refused comparison"
+    else
+        no "arm 13e: the scoped no-evidence notice is still wrong:$bad ($nev)"
+    fi
 fi
 nevU="$( runAt "$REPO" --rank-by=churn-decay --since=HEAD 2>&1 >/dev/null | grep 'found no commits' | head -1 )"
 case "$nevU" in
