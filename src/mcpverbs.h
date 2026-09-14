@@ -1840,13 +1840,29 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // Read off the BUILT root open, never re-derived from noRoute: the two must agree, and only one of them is
     // what the caller actually receives.
     const bool  mcpForRouteAttrOn = rootOpenStr.find( " route=\"" ) != std::string::npos;
+    // PRESENT-ONLY, ON BOTH DIALECTS (CodeRabbit, PR #215, second round). The CLI lens made both droppable
+    // readings present-only — sc= when a row this bundle could serve carries a scope, route= when the root
+    // carries the attribute — while this twin appended kForIdRouteLegend UNCONDITIONALLY, so a scope-free answer
+    // DEFINED an attribute that no row carried; and the exemption ledger below hand-built the same decision a
+    // second time, which is the four-sites-one-rule drift rw::forIdRouteLegendParts exists to close. Same rule
+    // and the same deliberate OVER-approximation as the CLI twin (verbs_for.h forScPresent): read off the RANKED
+    // SET, before the header is built, because the header built here is the one this dialect serves — the trim
+    // ladder may still drop the only scoped row, and a reading with nothing to define costs 29 B while the
+    // reverse costs a reader an attribute with no definition anywhere in the document.
+    bool mcpForScPresent = false;
+    for( std::size_t i = 0; i < ing.symbols.size() && !mcpForScPresent; ++i )
+    {
+        mcpForScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
+    }
+    // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
+    const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
-                          + std::string( rw::kForIdRouteLegend )   // row 6: sc= — the CLI twin's exact clause
+                          + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
                           // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
-                          + std::string( mcpForRouteAttrOn ? rw::kForRouteCodeLegend : std::string_view() )
+                          + std::string( mcpIdRouteParts.route )
                           + "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
                           + std::string( mcpForConf.note )
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
@@ -1892,7 +1908,9 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // Row 6 (2026-09-12): the sc=/route= reading (kForIdRouteLegend, appended above) is exempt on the same contract —
     // charged, it grew this header by 259 B and dropped one ranked row the CLI still served (mcpforparitycheck (2),
     // two of four conceptual tasks: the exact regression the paragraph above records for the 125 B of 2026-09-04).
-    const std::size_t mcpIdRouteExemptBytes = rw::kForIdRouteLegend.size() + ( mcpForRouteAttrOn ? rw::kForRouteCodeLegend.size() : 0u );
+    // …and the SAME decision the append made, so the ledger can never subtract a clause the header never wrote
+    // (the CLI twin's own idRouteParts ledger, verbs_for.h, for the identical reason).
+    const std::size_t mcpIdRouteExemptBytes = mcpIdRouteParts.bytes();
     const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes
                                  + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
     const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"

@@ -15,6 +15,53 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--expand` chose its serving mode on two different price lists
+
+`--expand`'s cheapest-complete-answer serving compares the default bundle against the whole file(s) the
+requested symbols live in and emits the smaller, disclosing both byte counts on the `<ctx>` root. The two
+candidates were priced by two hand-built counters. The bundle was charged the `<ctx>` envelope, the root
+attributes, the unproven residue, the ranked map and the rendered `<bodies>`; the file was charged
+`wf.rawBytes` plus its own legend — no envelope, no root attributes, no `</ctx>`, and the file's RAW bytes
+rather than the `<src p= sym=>` blocks that actually carry them. Measured with `wc -c` on a fixture whose one
+symbol sits in an 864 B file: the root said `reason="file 1100B &lt; bundle 1193B"` over a document that came
+out 1262 B, so the tool selected — and reported — the whole-file form while the bundle it rejected was the
+smaller document. This was the SECOND asymmetry found in this one comparison (the first, one review round
+earlier, was the whole-file legend), which is the tell that the bug is the two counters rather than the
+missing addends. Both candidates now describe themselves as an `ExpandServeDocument` and are priced by one
+`priceExpandServeDocument`, which charges the whole served document — envelope, every root attribute, the
+mode's legends, the map where it rides, the payload as emitted, the closing tag — and settles the
+self-referential `mode=`/`reason=` disclosure with the same ≤4-pass fixpoint `pricedRootAttr` uses for
+`est_tokens=`. The reported figures are that one function's return values, so each is now exactly the
+document it names. Gates, red first: `expandmodecheck` (4a)/(4b)/(4d) assert that `reason=`'s own byte count
+equals `wc -c` of the delivered document in whole-file mode, in bundle mode and in bundle-with-a-ranked-map
+mode, and (4c) sweeps seven file paddings across the decision boundary and asserts the served document is
+never larger than the candidate it rejected — 2 of those 7 and both identity arms FAIL against the previous
+build. `expandtopk0check` (G-b) moves with it: its priced-bundle identity now reads against the document that
+mode serves rather than against explicit `--top-k=0`'s undecorated root, which the old price matched only
+because price and document omitted the same decoration; it is red on the previous build too (2403 B priced
+against 2474 B served).
+
+Five more from the same review round. The MCP `for` twin appended the `sc=` reading unconditionally while the
+CLI lens made it present-only, so a scope-free answer defined an attribute no row carried, and the
+signatures-budget exemption hand-built the same decision a second time; both now ask `forIdRouteLegendParts`
+once, and `mcpforparitycheck` arm (7) pins the rule in both directions — absent on a scope-free corpus on
+BOTH dialects, present on `src` on both (CLI 0 / MCP 1 before the fix). `estchargecheck` arm #18 counted two
+of the three droppable legend clauses, so the `route=` reading was pinned in neither direction: with that
+clause removed from the binary the arm still reported `clauses=2/2` and PASS, and it is now counted in the
+wide run, the probe and the tight control that must have dropped it. `taskroutecheck`'s R-LEG arm ran every
+generated command under `eval … || true`, which discards every exit status; it now captures each one and
+reports anything that is not 0 (answered) or the documented empty-corpus 1 — measured over the whole corpus,
+34 distinct commands, 15 and 19 — and widens its stderr check from the single compact-legend refusal to any
+parse refusal. And the three route hooks' mirrored command-word rule asked the shell to split the line, which
+never separates a control operator from the word it is attached to: `true; ripwire .` split into `true;` and
+`ripwire` and read as not-a-call, as did every `a;ripwire` / `a&&ripwire` / `a|ripwire` / `(ripwire .)` shape.
+The rule now lexes the line itself, quote-aware and executing nothing; `routehookcheck` O9 grows to 28 shapes
+(19 calls, 9 appearances that run nothing), of which the five operator-attached calls answer 0 on the previous
+block, and its byte-identity arm still reports one 147-line text in all three hooks. Last, `docs/LINEAGE.md`
+claimed "no network" without qualification in the same sentence that already scopes its dependency clause with
+"for the map": `ripwire <git-url>` is a documented input form that shallow-clones before it maps (`src/cli.h`,
+and `--refetch` forces a fresh clone), so the clause now names that one exception in the sentence's own voice.
+
 ### Changed — agent surfaces ask for the compact legend
 
 The commands ripwire writes for an agent — the `ripwire wrap` paste block, the skills under `skills/`,

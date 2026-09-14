@@ -546,14 +546,31 @@ o9 1 '{ ripwire . ; }'
 o9 1 'cd /tmp && ripwire .'
 o9 1 'rtk proxy ripwire .'
 o9 1 'git log --oneline && ripwire .'
+# ROUND 2 (CodeRabbit, PR #215): a CONTROL OPERATOR ATTACHED TO A WORD. The rule used to ask the shell to
+# split the line, and word splitting does not lex operators: `true; ripwire .` split into `true;` + `ripwire`,
+# `true;` read as an ordinary command word, and the call behind it was no longer in command position. RED on
+# the round-1 block, measured while writing this: all five of these answered 0.
+o9 1 'true; ripwire .'
+o9 1 'echo hi;ripwire .'
+o9 1 'false||ripwire .'
+o9 1 '(ripwire .)'
+o9 1 'git log --oneline&&ripwire .'
+o9 1 'ripwire . 2>&1 | head'
 # NOT CALLS — the word appears, nothing runs
 o9 0 'git commit -m "fix; ripwire hook"'
 o9 0 'cd /opt/src/ripwire && git log --oneline'
 o9 0 'ls /opt/ripwire'
 o9 0 'grep -r ripwire src/'
 o9 0 'echo ripwire'
+# …and the three the lexer answers for a REASON rather than by accident: a `;` inside quotes is not an
+# operator (round 1 got this right only because `-m "fix;` happened not to end a command), a `#` at the start
+# of a word begins a comment, and a redirection TARGET is not a command word.
+o9 0 "grep -r 'ripwire;' src/"
+o9 0 'echo "a; ripwire b"'
+o9 0 '# ripwire .'
+o9 0 'echo hi > ripwire'
 [ "$o9_bad" -eq 0 ] \
-    && ok "O9 command-word rule: $o9_n shapes read correctly (13 wrapped/sequenced calls, 5 appearances that run nothing)" \
+    && ok "O9 command-word rule: $o9_n shapes read correctly (19 wrapped/sequenced/operator-attached calls, 9 appearances that run nothing)" \
     || no "O9 command-word rule: $o9_bad of $o9_n shapes read WRONG (listed above)"
 
 echo

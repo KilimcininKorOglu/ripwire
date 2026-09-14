@@ -149,6 +149,8 @@ TABLE = {
     # ── src/lanes.h — THE REFERENCE SAFE SHAPE ───────────────────────────────────────────────────────────
     ( "src/lanes.h", "buf" ): ( 10, "safe",       "buf[640] x3: snprintf-THEN-escape. :723 interpolates an UNBOUNDED file path and is still safe for exactly that reason — the warning text is escaped downstream, so a cut shortens prose and can never land inside markup. This is the shape §B14's six were not." ),
     # ── src/main.cpp ─────────────────────────────────────────────────────────────────────────────────────
+    ( "src/main.cpp", "fileOpen" ): ( 1, "safe", "fileOpen[200] in chooseExpandServe (PR #215 review): '<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">' — 53 B of literal and TWO std::size_t byte counts, 20 digits each at absolute most, so 93 B against 199 usable + NUL: 106 B of margin. No string interpolation at all, so no escaper can sit on either side of the buffer; the &lt; is written as an entity IN THE LITERAL, not produced by escapeXml. The bound matters twice here, because the caller reads std::strlen of this buffer back as the disclosure's own byte length — a truncated write would make the price it charges wrong as well as the document malformed, which is why the row states the margin rather than just the class. It is a TABLE row and not NUMERIC_ONLY for arch.h hex[17]'s reason: a buffer that never existed before the std::print conversion has no pre-conversion format to derive a class from." ),
+    ( "src/main.cpp", "bundleOpen" ): ( 1, "safe", "bundleOpen[200] in chooseExpandServe (PR #215 review): '<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">' — fileOpen's exact twin, the same two std::size_t and no string: 50 B of literal + 40 digits = 90 B against 199 usable + NUL, 109 B of margin. Same strlen-read-back, same reason for being a row rather than a derivation." ),
     ( "src/main.cpp", "tail" ): ( 1, "not-markup", "tail[48]: the shallow-clone cache DIR suffix (\"/ripwire-remote-\" + a fixed-width 16-hex). Bounded and never emitted. Was 2 sites: defaultCachePath's cache FILENAME left this buffer when the root-key unification moved its assembly into quality.h::rootKeyedCachePath, which is where its row now lives." ),
     ( "src/verbs_for.h", "nb" ): ( 14, "safe",       "nb[160] x2: the mention/doc-mention/siblift/expand header notes. Every %s is the plural '' or 's'; everything else is %u." ),
     ( "src/verbs_report.h", "exemptAttr" ): ( 1, "safe",       "exemptAttr[40]: ' exempt=\"%s\"' with groupExemptKind's fixed vocabulary (longest 'fixture' = 7 B, total 19 B)." ),
@@ -218,7 +220,7 @@ NUMERIC_ONLY = {
     ( "src/ingest_docpass.h", "blobName" ): 1,
     ( "src/main.cpp", "hdr" ): 1,
     ( "src/main.cpp", "nb" ): 4,
-    ( "src/main.cpp", "open" ): 4,
+    ( "src/main.cpp", "open" ): 2,   # PR #215 review: chooseExpandServe's four openers became two early-return refusals plus the two rowed buffers above
     ( "src/mcp.h", "buf" ): 1,
     ( "src/mcpedit.h", "name" ): 1,
     ( "src/mcpedit.h", "oldStamp" ): 1,
@@ -445,7 +447,19 @@ if not bad:
 #            one fact stopped having two spellings between queries — and the digits are formatted here instead.
 #            "{}" of one std::uint32_t: no %s, nothing escaped, ten digits worst case against 15 usable + NUL,
 #            so it does not join the string-interpolating population and rows is unmoved.
-EXPECTED = { "mentions": 323, "calls": 219, "sites": 219, "rows": 92, "widthforms": 0 }
+#            2026-09-14 (PR #215 review, --expand serving priced by ONE function): mentions 323 -> 324, rows
+#            92 -> 94, calls/sites/widthforms UNMOVED at 219/219/0 — re-derived by reading every site, not
+#            accepted from the delta. chooseExpandServe used to write its four `<ctx mode= reason=>` openers
+#            into one `open[160]`; the comparison is now made by a fixpoint that must charge each candidate
+#            the spelling IT would carry, so the two COMPARED openers moved into their own buffers
+#            (`fileOpen[200]`, `bundleOpen[200]`, both NEW TABLE rows above) and `open[200]` kept only the two
+#            refusal paths that make no comparison — 4 sites - 2 + 1 + 1 = 219, which is why the call and site
+#            totals do not move while rows gains exactly the two new buffers. Every one of the four formats
+#            interpolates std::size_t byte counts and nothing else: no %s, no path, no name, nothing that has
+#            been through escapeXml, so none of them is the escape-then-buffer shape this gate exists to catch.
+#            mentions is +1 and not +2 because the two new buffers are written by two formatTo calls on lines
+#            that already carried one between them.
+EXPECTED = { "mentions": 324, "calls": 219, "sites": 219, "rows": 94, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

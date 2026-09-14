@@ -1259,11 +1259,20 @@ rz_est(){ grep -aoE 'est_tokens="[0-9]+"' "$RZ/o.xml" | head -1 | tr -dc '0-9'; 
 rz_note(){ grep -acF '[legend clauses:' "$RZ/o.xml"; }
 RZ_WIDE=1200
 rz_run "$RZ_WIDE"; RZ_E="$( rz_est )"; RZ_WIDE_NOTE="$( rz_note )"
+# THE CLAUSES THIS ARM COUNTS — all THREE of the droppable trio (CodeRabbit, PR #215). It counted two: the
+# confidence reading and the tail reading, but not the route= reading the arm's own paragraph above names.
+# A clause that is asserted in neither direction is not pinned, and the consequence is measured: with the
+# route= reading removed from the binary (forIdRouteLegendParts returning an empty route part), the wide
+# control still read clauses=2/2 and the whole arm reported PASS. Counted in all three runs now — the wide
+# control, the probe, and the tight control that must have dropped every one of them — so a clause can only
+# disappear by failing the wide run or by surviving the control.
+RZ_CLAUSE_ROUTE='route= name-exact(X)|subtoken+body'
 RZ_CLAUSES=0
 grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
 grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
-if [ -z "$RZ_E" ] || [ "$RZ_WIDE_NOTE" != "0" ] || [ "$RZ_CLAUSES" != "2" ]; then
-    no "#18 rung zero: the wide control (--token-budget=$RZ_WIDE) does not carry its legend (est='${RZ_E:-unreadable}' dropped-note=$RZ_WIDE_NOTE clauses=$RZ_CLAUSES/2) — there is no price to probe against; re-anchor the fixture"
+grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
+if [ -z "$RZ_E" ] || [ "$RZ_WIDE_NOTE" != "0" ] || [ "$RZ_CLAUSES" != "3" ]; then
+    no "#18 rung zero: the wide control (--token-budget=$RZ_WIDE) does not carry its legend (est='${RZ_E:-unreadable}' dropped-note=$RZ_WIDE_NOTE clauses=$RZ_CLAUSES/3) — there is no price to probe against; re-anchor the fixture"
 else
     RZ_PROBE=$(( RZ_E + 5 ))
     if [ "$RZ_PROBE" -ge "$RZ_WIDE" ]; then
@@ -1273,24 +1282,28 @@ else
         RZ_PC=0
         grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_PC=$(( RZ_PC + 1 ))
         grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_PC=$(( RZ_PC + 1 ))
+        grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_PC=$(( RZ_PC + 1 ))
         RZ_PO=0; grep -aqF 'over_ceiling="1"' "$RZ/o.xml" && RZ_PO=1
-        if [ "$RZ_PN" = "0" ] && [ "$RZ_PC" = "2" ] && [ -n "$RZ_PE" ] && [ "$RZ_PE" -le "$RZ_PROBE" ] && [ "$RZ_PO" = "0" ]; then
-            ok "#18 rung zero at --token-budget=$RZ_PROBE (5 tokens above the $RZ_E this document prices at): both droppable clauses ride, est_tokens=$RZ_PE <= $RZ_PROBE, no over_ceiling=, $RZ_PB B"
+        if [ "$RZ_PN" = "0" ] && [ "$RZ_PC" = "3" ] && [ -n "$RZ_PE" ] && [ "$RZ_PE" -le "$RZ_PROBE" ] && [ "$RZ_PO" = "0" ]; then
+            ok "#18 rung zero at --token-budget=$RZ_PROBE (5 tokens above the $RZ_E this document prices at): all three droppable clauses ride, est_tokens=$RZ_PE <= $RZ_PROBE, no over_ceiling=, $RZ_PB B"
         else
-            no "#18 rung zero at --token-budget=$RZ_PROBE dropped a legend it could afford: dropped-note=$RZ_PN clauses=$RZ_PC/2 est_tokens=${RZ_PE:-unreadable} over_ceiling=$RZ_PO ($RZ_PB B) — the same document prices at $RZ_E at --token-budget=$RZ_WIDE, so it fits every budget >= $RZ_E"
+            no "#18 rung zero at --token-budget=$RZ_PROBE dropped a legend it could afford: dropped-note=$RZ_PN clauses=$RZ_PC/3 est_tokens=${RZ_PE:-unreadable} over_ceiling=$RZ_PO ($RZ_PB B) — the same document prices at $RZ_E at --token-budget=$RZ_WIDE, so it fits every budget >= $RZ_E"
         fi
     fi
     # …and the rung must still FIRE where the kept document genuinely does not fit. Without this, deleting
     # rung zero outright would turn the arm above green.
     RZ_CTRL=$(( RZ_E - 200 ))
     rz_run "$RZ_CTRL"; RZ_CN="$( rz_note )"; RZ_CE="$( rz_est )"
+    # …and the tight control asserts the ABSENCE of the same three, route= included: a present-in-wide /
+    # unchecked-in-tight assertion is the one-sided shape that let the missing clause through.
     RZ_CC=0
     grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CC=$(( RZ_CC + 1 ))
     grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_CC=$(( RZ_CC + 1 ))
+    grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CC=$(( RZ_CC + 1 ))
     if [ "$RZ_CN" != "0" ] && [ "$RZ_CC" = "0" ]; then
-        ok "#18 rung zero control at --token-budget=$RZ_CTRL (200 under the $RZ_E the full document prices at): both clauses dropped and the note says so (est_tokens=$RZ_CE) — the rung still fires when the drop is real"
+        ok "#18 rung zero control at --token-budget=$RZ_CTRL (200 under the $RZ_E the full document prices at): all three clauses dropped and the note says so (est_tokens=$RZ_CE) — the rung still fires when the drop is real"
     else
-        no "#18 rung zero control at --token-budget=$RZ_CTRL: dropped-note=$RZ_CN clauses still riding=$RZ_CC/2 (est_tokens=${RZ_CE:-unreadable}) — rung zero no longer fires at all, so the arm above is green for the wrong reason"
+        no "#18 rung zero control at --token-budget=$RZ_CTRL: dropped-note=$RZ_CN clauses still riding=$RZ_CC/3 (est_tokens=${RZ_CE:-unreadable}) — rung zero no longer fires at all, so the arm above is green for the wrong reason"
     fi
 fi
 

@@ -559,23 +559,52 @@ while IFS= read -r _t; do
 done < "$TMP/rleg_tasks.txt"
 # the <run> line is XML-escaped; unescape the two entities the router can emit, then drop the leading `ripwire`
 sed -e "s/&apos;/'/g" -e 's/&quot;/"/g' -e 's/&amp;/\&/g' "$TMP/rleg_cmds.txt" | sort -u > "$TMP/rleg_u.txt"
-rleg_n=0; rleg_bad=0
+# THE STATUS, CAPTURED RATHER THAN SWALLOWED (CodeRabbit, PR #215). This ran each command under
+# `eval … || true`, which discards every exit status unconditionally: the arm could not tell a clean run from
+# a crash, and the only failure it could see was the one refusal string it greps for. Deleting the `|| true`
+# is not the fix either — most of these routes point at an EMPTY directory, where a nonzero exit is the
+# DOCUMENTED answer, not a defect. So each status is captured and compared against what a routed command may
+# legitimately return here:
+#   0  the verb answered;
+#   1  the verb's own documented "nothing in this corpus to answer" degrade — no symbol matched, no plan file
+#      to read, no ranked candidate; and for the --test-gate route, "no files given and no git diff".
+# MEASURED over the whole corpus on this binary (2026-09-14): 34 distinct commands, 15 exit 0 and 19 exit 1,
+# nothing else. Any OTHER status is reported: 2 is cannot-conclude, 3 a token-budget refusal, 4 a test-gate
+# blast radius, >=128 a signal — each one means the router emitted a command that neither answered nor
+# degraded, and `|| true` printed PASS for every one of them.
+# The stderr side widens for the same reason: the compact-legend refusal was the only parse refusal looked
+# for, so its siblings — an unknown flag, an unrecognised verb — were invisible. A command the parser refuses
+# is a wrong command whatever the wording, and a parse refusal is reported even when the status looks benign.
+rleg_n=0; rleg_bad=0; rleg_st_bad=0; rleg_st0=0; rleg_st1=0
 while IFS= read -r _c; do
     [ -n "$_c" ] || continue
     _args="${_c#ripwire }"
     _args="${_args#\'*\' }"          # the quoted root the router spells; this arm supplies its own
     rleg_n=$(( rleg_n + 1 ))
     # shellcheck disable=SC2086
-    eval "\"\$BIN\" \"\$RLEG_EMPTY\" $_args" >/dev/null 2>"$TMP/rleg.err" || true
-    if grep -q 'applies to the XML verbs only' "$TMP/rleg.err"; then
+    eval "\"\$BIN\" \"\$RLEG_EMPTY\" $_args" >/dev/null 2>"$TMP/rleg.err"
+    _st=$?
+    case "$_st" in
+        0) rleg_st0=$(( rleg_st0 + 1 )) ;;
+        1) rleg_st1=$(( rleg_st1 + 1 )) ;;
+        *) rleg_st_bad=$(( rleg_st_bad + 1 ))
+           if [ "$rleg_st_bad" -le 5 ]; then
+               printf '        EXIT %s (expected 0 or the documented 1): %s\n' "$_st" "$( printf '%s' "$_c" | head -c 140 )"
+               printf '                stderr: %s\n' "$( head -c 160 "$TMP/rleg.err" | tr '\n' ' ' )"
+           fi ;;
+    esac
+    if grep -qE 'applies to the XML verbs only|unknown flag|unknown verb|unrecognized' "$TMP/rleg.err"; then
         rleg_bad=$(( rleg_bad + 1 ))
-        [ "$rleg_bad" -le 5 ] && printf '        REFUSED: %s\n' "$( printf '%s' "$_c" | head -c 140 )"
+        [ "$rleg_bad" -le 5 ] && printf '        REFUSED (exit %s): %s\n' "$_st" "$( printf '%s' "$_c" | head -c 140 )"
     fi
 done < "$TMP/rleg_u.txt"
 [ "$rleg_n" -gt 0 ] || no "R-LEG: the prompt corpus produced no <run> command — this arm proved nothing"
 [ "$rleg_bad" -eq 0 ] \
     && ok "R-LEG: all $rleg_n distinct generated commands are ACCEPTED by this binary (the router cannot emit a command its own binary refuses)" \
     || no "R-LEG: $rleg_bad of $rleg_n generated commands are REFUSED by this binary (listed above)"
+[ "$rleg_st_bad" -eq 0 ] \
+    && ok "R-LEG: every generated command exited 0 (answered: $rleg_st0) or 1 (documented empty-corpus degrade: $rleg_st1) — no unexpected status, none swallowed" \
+    || no "R-LEG: $rleg_st_bad of $rleg_n generated commands exited with an unexpected status (listed above) — the old '|| true' reported PASS for these"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

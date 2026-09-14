@@ -294,5 +294,50 @@ else
     printf '  SKIP  xmllint (not installed)\n'
 fi
 
+
+# ── (7) THE sc= READING IS PRESENT-ONLY ON BOTH DIALECTS (CodeRabbit, PR #215) ───────────────────────────
+# THE DEFECT. The CLI lens made both droppable readings present-only — the sc= clause rides only when a row
+# this bundle could serve actually carries a scope (verbs_for.h forScPresent), the route= code only when the
+# root carries route= — while this twin appended kForIdRouteLegend UNCONDITIONALLY. On a scope-free corpus the
+# MCP answer therefore DEFINED an attribute no row carried, and the signatures-budget exemption a few lines
+# below hand-built the same decision a second time, so the bytes emitted and the bytes exempted could disagree.
+# Both surfaces now ask rw::forIdRouteLegendParts once and use `.sc`/`.route` to append and `.bytes()` to
+# exempt: four sites, one rule.
+#
+# WHY BOTH DIRECTIONS. A one-sided pin (absent on a flat corpus) would pass on a binary that never emits the
+# clause at all, which is the opposite defect — a first-screen attribute with no definition anywhere in the
+# document. So the arm reads the same rule twice: the scope-free fixture must have it on NEITHER dialect, and
+# the scoped corpus must have it on BOTH. RED on the pre-fix binary: flat corpus, CLI 0, MCP 1.
+SC_CLAUSE='sc=scope (full id p::sc::n)'
+FLAT="$TMP/flatcorpus"
+mkdir -p "$FLAT"
+cat > "$FLAT/flat.c" <<'FLATSRC'
+int widgetPingRouteAlpha( int a ) { return a + 1; }
+int widgetPingRouteBeta( int a ) { return widgetPingRouteAlpha( a ) + 2; }
+int widgetPingRouteGamma( int a ) { return widgetPingRouteBeta( a ) + 3; }
+FLATSRC
+mcp_for_at(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s"}}}\n' \
+                     "$1" "$2" | "$BIN" --mcp 2>/dev/null | python3 "$TMP/mcptext.py"; }
+FLAT_Q="widget ping route"
+"$BIN" "$FLAT" --for="$FLAT_Q" --no-cache >"$TMP/sc_flat_cli.xml" 2>/dev/null
+mcp_for_at "$FLAT" "$FLAT_Q"                >"$TMP/sc_flat_mcp.xml"
+cli_for "$INERT_Q" >"$TMP/sc_scoped_cli.xml"
+mcp_for "$INERT_Q" >"$TMP/sc_scoped_mcp.xml"
+sc_has(){ grep -qF "$SC_CLAUSE" "$1" && echo 1 || echo 0; }
+# the premise: both fixtures must have produced a bundle with a header at all
+if ! grep -q '<sigs' "$TMP/sc_flat_cli.xml" || ! grep -q '<sigs' "$TMP/sc_flat_mcp.xml" \
+   || ! grep -q '<sigs' "$TMP/sc_scoped_cli.xml" || ! grep -q '<sigs' "$TMP/sc_scoped_mcp.xml"; then
+    no "(7) one of the four runs served no <sigs> bundle — the sc= presence arm measured nothing"
+else
+    flatC="$( sc_has "$TMP/sc_flat_cli.xml" )"; flatM="$( sc_has "$TMP/sc_flat_mcp.xml" )"
+    scopC="$( sc_has "$TMP/sc_scoped_cli.xml" )"; scopM="$( sc_has "$TMP/sc_scoped_mcp.xml" )"
+    { [ "$flatC" = 0 ] && [ "$flatM" = 0 ]; } \
+        && ok "(7) scope-free corpus: NEITHER dialect defines sc= (CLI=$flatC MCP=$flatM) — no reading for an attribute no row carries" \
+        || no "(7) scope-free corpus: the sc= reading is present-only on one dialect and unconditional on the other (CLI=$flatC MCP=$flatM) — the parity gap"
+    { [ "$scopC" = 1 ] && [ "$scopM" = 1 ]; } \
+        && ok "(7) scoped corpus ($CORPUS): BOTH dialects define sc= (CLI=$scopC MCP=$scopM) — the attribute a reader meets has a definition" \
+        || no "(7) scoped corpus ($CORPUS): sc= rides the rows but only $((scopC + scopM)) of 2 dialects define it (CLI=$scopC MCP=$scopM)"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

@@ -1135,39 +1135,101 @@ inline constexpr std::string_view kExpandWholeFileLegend =
     "text; an <s n= sc= l=/> row names each requested symbol that has an enclosing scope, and "
     "its full id composes as p::sc::n from the src row's p=. -->";
 
-inline ExpandServeChoice chooseExpandServe( std::size_t bundleBytes, const rw::WholeFileRender& wf, std::size_t budgetBytes )
+// ── ONE PRICE FOR BOTH SERVING CANDIDATES (CodeRabbit, PR #215, second round on this comparison) ─────
+// THE DEFECT was not a missing addend, it was two counters. The bundle candidate was priced to the byte
+// (envelope, root attributes, the unproven residue, the map, the rendered <bodies>, the closing tag) by the
+// arithmetic in runDefaultMap, while the file candidate was priced HERE as `wf.rawBytes + the legend` — no
+// `<ctx>` envelope, no root attributes, no `</ctx>`, and the file's RAW bytes instead of the <src p= sym=>
+// blocks that actually carry them. Measured on an 864 B file: reason= said "file 1100B" for a document that
+// came out 1263 B, and inside that 163 B band the tool chose — and DISCLOSED — the whole-file form while the
+// bundle it rejected was the smaller document (pre-fix binary: 1262 B served under
+// reason="file 1100B &lt; bundle 1193B"). The FIRST asymmetry in this same comparison, found one review round
+// earlier, was the whole-file legend; a second occurrence of one defect class means the comparison is being
+// built by hand on each side, which is the bug to fix.
+//
+// THE RULE APPLIED is the one src/prcontext.h states verbatim above its own estimator — "ONE estimator for
+// every root, never two counters (serialize.h's standing rule)". Each candidate DESCRIBES itself as an
+// ExpandServeDocument and both are priced by priceExpandServeDocument, so the comparison is symmetric by
+// construction: a field one side fills and the other forgets is the only way to reintroduce the defect, and a
+// third candidate is priced by the same function or not priced at all.
+struct ExpandServeDocument
 {
-    char open[ 160 ];
+    std::size_t payloadBytes  = 0;     // this mode's payload AS EMITTED: the <bodies> section, or the whole file's <src> blocks
+    std::size_t mapBytes      = 0;     // the ranked map, when this mode emits one (0 when it does not)
+    std::size_t rootAttrBytes = 0;     // <ctx> attributes only this mode carries (root=, topk_default=, a payload-priced est_tokens=)
+    std::size_t legendBytes   = 0;     // legend comments only this mode emits
+    double      selfPriceRate = 0.0;   // >0: this mode prices ITSELF on its <ctx> root (est_tokens=), at this B/token rate
+};
+
+// The whole served document, envelope included. `disclosureBytes` is the mode=/reason= attribute pair the
+// choice itself writes onto the root: it is self-referential — its digits ARE the numbers it reports — so the
+// caller solves it the way pricedRootAttr solves est_tokens, and hands the settled spelling's length back in.
+inline std::size_t priceExpandServeDocument( const ExpandServeDocument& doc, std::size_t sharedRootBytes, std::size_t disclosureBytes )
+{
+    std::size_t total = ( sizeof( "<ctx>" ) - 1 ) + sharedRootBytes + doc.rootAttrBytes + disclosureBytes
+                      + doc.legendBytes + doc.mapBytes + doc.payloadBytes + ( sizeof( "</ctx>" ) - 1 );
+    if( doc.selfPriceRate > 0.0 )
+    {
+        // …through pricedRootAttr itself, not a re-derived digit count: the attribute this charges is the one
+        // the emission path splices, from the same fixpoint over the same byte total (serialize.h).
+        std::size_t estTokens = 0;
+        total += rw::pricedRootAttr( total, doc.selfPriceRate, 0, &estTokens ).size();
+    }
+    return total;
+}
+
+inline ExpandServeChoice chooseExpandServe( const ExpandServeDocument& bundleDoc, const ExpandServeDocument& fileDoc,
+                                            std::size_t sharedRootBytes, const rw::WholeFileRender& wf, std::size_t budgetBytes )
+{
     ExpandServeChoice c;
-    // WHAT THE FILE CANDIDATE ACTUALLY COSTS (CodeRabbit, PR #215). This compared wf.rawBytes against a
-    // bundleBytes that is priced to the byte — root attrs, the unproven residue, the map, the bodies section —
-    // while the whole-file candidate's own legend is appended AFTER this decision and only in that mode. The
-    // file side was therefore under-priced by exactly this constant, so inside that band the tool chose, and
-    // REPORTED, the whole-file form as smaller while the bundle it rejected was the smaller document. The
-    // pack-budget arm above is deliberately left on rawBytes: that ceiling is about the FILE's own size
-    // against --pack-budget, not about which of two candidates is cheaper to serve.
-    const std::size_t wholeFileBytes = wf.rawBytes + kExpandWholeFileLegend.size();
-    if( wf.complete && wf.rawBytes > budgetBytes )
+    char              open[ 200 ];
+    if( !wf.complete )
+    {
+        rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file unavailable (file unreadable)\">" );
+        c.ctxOpen = open;
+        return c;
+    }
+    // The pack-budget ceiling is deliberately still read off wf.rawBytes: that question is about the FILE's own
+    // size against --pack-budget-bytes, not about which of two documents is cheaper to serve. No comparison is
+    // made on this path, so no price is claimed and none is charged.
+    if( wf.rawBytes > budgetBytes )
     {
         rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file {}B over pack-budget {}B\">",
                        wf.rawBytes, budgetBytes );
+        c.ctxOpen = open;
+        return c;
     }
-    else if( wf.complete && wholeFileBytes < bundleBytes )
+
+    // THE FIXPOINT. Each candidate carries its own mode=/reason= pair when it wins, so each is charged its own
+    // spelling: price, spell, re-price, at most four passes — pricedRootAttr's bound, for pricedRootAttr's
+    // reason. Digit counts are the only thing that can move, so it settles on pass two on every real input;
+    // a fourth pass that still disagrees keeps the last spelling, which is the one the document receives.
+    char        fileOpen[ 200 ]   = { 0 };
+    char        bundleOpen[ 200 ] = { 0 };
+    std::size_t fileBytes = 0, bundleBytes = 0, fileDisclosure = 0, bundleDisclosure = 0;
+    for( int pass = 0; pass < 4; ++pass )
     {
-        c.serveWholeFile = true;
-        rw::formatTo( open, sizeof( open ), "<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">",
-                       wholeFileBytes, bundleBytes );
+        fileBytes   = priceExpandServeDocument( fileDoc,   sharedRootBytes, fileDisclosure );
+        bundleBytes = priceExpandServeDocument( bundleDoc, sharedRootBytes, bundleDisclosure );
+        rw::formatTo( fileOpen, sizeof( fileOpen ), "<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">",
+                       fileBytes, bundleBytes );
+        rw::formatTo( bundleOpen, sizeof( bundleOpen ), "<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">",
+                       bundleBytes, fileBytes );
+        // the subtraction's precondition: both spellings begin with the literal "<ctx" and end with '>', so
+        // neither can be shorter than the envelope it is measured against (formatTo always NUL-terminates).
+        VERIFY( std::strlen( fileOpen ) >= ( sizeof( "<ctx>" ) - 1 ) && std::strlen( bundleOpen ) >= ( sizeof( "<ctx>" ) - 1 ) );
+        const std::size_t nextFile   = std::strlen( fileOpen ) - ( sizeof( "<ctx>" ) - 1 );
+        const std::size_t nextBundle = std::strlen( bundleOpen ) - ( sizeof( "<ctx>" ) - 1 );
+        if( nextFile == fileDisclosure && nextBundle == bundleDisclosure )
+        {
+            break;
+        }
+        fileDisclosure   = nextFile;
+        bundleDisclosure = nextBundle;
     }
-    else if( wf.complete )
-    {
-        rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">",
-                       bundleBytes, wholeFileBytes );
-    }
-    else
-    {
-        rw::formatTo( open, sizeof( open ), "<ctx mode=\"bundle\" reason=\"whole-file unavailable (file unreadable)\">" );
-    }
-    c.ctxOpen = open;
+    // Ties still go to the bundle — the richer answer at equal cost.
+    c.serveWholeFile = fileBytes < bundleBytes;
+    c.ctxOpen        = c.serveWholeFile ? fileOpen : bundleOpen;
     return c;
 }
 
@@ -1829,11 +1891,25 @@ int runDefaultMap( const MainDispatch& d )
         // guarded siblings at the ceiling verdict and the topK>0 emission gate). Same guard here: a map
         // that will not be emitted must not be charged, exactly like every other measureEmittedMapBytes
         // call site in this function.
-        const std::size_t bundleBytes = ( sizeof( "<ctx>" ) - 1 ) + ctxRootBytesWhenNoMap + ctxUnprovenBytes   // H1: the root carries it in both modes
-                                      + ( mapTopK > 0 ? measureEmittedMapBytes( mapTopK, payloadTokens ) : 0 )
-                                      + bodiesSection.xml.size() + ( sizeof( "</ctx>" ) - 1 );
         wholeFile = rw::renderWholeFiles( ing, expandNodes, redactPtr, d.notesPtr, cfg.compress, mapRootArg );   // D2: shaped candidate (R-R: root-relative <src p=>)
-        ExpandServeChoice choice = chooseExpandServe( bundleBytes, wholeFile, cfg.packBudgetBytes );
+        // BOTH CANDIDATES, DESCRIBED IN THE SAME FIELDS (CodeRabbit, PR #215 — chooseExpandServe's own header
+        // carries the defect this replaced). The two documents differ by exactly what these fields say they
+        // differ by: the bundle rides a map (when one will be emitted) and the pre-rendered <bodies>; the file
+        // rides its <src p= sym=> blocks, its own legend, and an est_tokens= it prices ITSELF at the BODY rate
+        // because every byte on that path is raw code text — the same rate and the same pricedRootAttr fixpoint
+        // the whole-file emission below applies. topk_default="0" and the unproven residue ride BOTH openers, so
+        // the first is charged to both documents and the second is passed as the shared root bytes.
+        const std::size_t         topkDefaultBytes = exactNameExpandDefault ? ( sizeof( " topk_default=\"0\"" ) - 1 ) : 0;
+        ExpandServeDocument       bundleDoc;
+        bundleDoc.payloadBytes  = bodiesSection.xml.size();
+        bundleDoc.mapBytes      = mapTopK > 0 ? measureEmittedMapBytes( mapTopK, payloadTokens ) : 0;
+        bundleDoc.rootAttrBytes = ctxRootBytesWhenNoMap + topkDefaultBytes;   // root= and est_tokens= only where no map carries them
+        ExpandServeDocument       fileDoc;
+        fileDoc.payloadBytes  = wholeFile.xml.size();                         // as EMITTED, not the raw file bytes
+        fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes;        // whole-file mode always carries root= (no <r root=> rides with it)
+        fileDoc.legendBytes   = kExpandWholeFileLegend.size();
+        fileDoc.selfPriceRate = rw::kBytesPerTokenBody;
+        ExpandServeChoice choice = chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes );
         serveWholeFile = choice.serveWholeFile;
         ctxOpenStr     = std::move( choice.ctxOpen );
         if( exactNameExpandDefault )
