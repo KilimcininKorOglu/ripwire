@@ -1140,8 +1140,11 @@ inline constexpr const char* kFlipRowLegend =
 
 // The doc comment, the `<flip …>` header attributes, and the four situational rows that qualify them
 // (already-lit / also / parent / capped) plus the family roll-up.
+// `testFilesRendered` is the count testmap.h's seam returns for the <t> listing this header introduces —
+// review of #214: the run-hint clause was spliced unconditionally, so a flip with <tests n="0"> paid 180 B
+// for a rule about rows it has none of. The caller renders the rows first and passes the count it got.
 inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEscaper& ex,
-                             const std::string& nextInvocation = std::string() )
+                             const std::string& nextInvocation, std::size_t testFilesRendered )
 {
     rw::emitTo( out, "<!-- ripwire flip: the blast radius of turning ONE gate ON. lights = the code that becomes live: r rows "
                        "are #if regions, b rows are C++ branch sites (a gate read as a VALUE through a constexpr bool, via= names "
@@ -1159,8 +1162,9 @@ inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEsc
                        "UNIT: untested= here counts HOSTS (indexed defs this gate lights that no test reaches). The test gate "
                        "verb spells untested= over impacted SYMBOLS and the seams verb over cross-directory call EDGES, so the "
                        "three numbers count three different things and must never be compared or summed across verbs. {}-->",
-                       // M21(b): the run=/run_unknown= rule, from testmap.h's ONE constant.
-                       std::string( rw::kRunHintLegendClause ).c_str(), kFlipRowLegend );
+                       // M21(b): the run=/run_unknown= rule, from testmap.h's ONE constant — rows-gated, through
+                       // the ONE gate every other legend asks (runHintClauseIfRows).
+                       std::string( rw::runHintClauseIfRows( testFilesRendered ) ).c_str(), kFlipRowLegend );
 
     rw::emitTo( out, "<flip gate=\"{}\" kind=\"{}\" default=\"{}\" dark=\"{}\" runtime=\"{}\" p=\"{}\" l=\"{}\""
                        " family=\"{}\" regions=\"{}\" loc=\"{}\" branches=\"{}\" bindings=\"{}\""
@@ -1232,7 +1236,14 @@ inline void writeFlip( std::FILE* out, const FlipResult& res, const IngestResult
     const auto        rel = [ & ]( std::uint32_t fileId ) { return std::string( relForHash( ing.files[ fileId ], root ) ); };
     const auto        isTested = [ & ]( NodeId n ) { return n < res.testReach.size() && res.testReach[n]; };
 
-    writeFlipHeader( out, res, ex, flipNextInvocation( res, maxRows, pageOffset ) );
+    // E1 / review of #214: the <t> listing is rendered HERE, before the header, so the header's run-hint clause
+    // can be gated on the rows this document will actually carry. TestRunnerIndex stays lazy — it reads a runner
+    // script only when asked about a file, and an empty res.tests asks about none.
+    const rw::TestRunnerIndex flipRunners( ing );
+    const rw::JoinedTestRows  flipTests = rw::testRowsList( flipRunners, rw::testRowsOutOf( res.tests, rel ),
+                                                            rw::TestRowShape{ rw::RowDialect::Xml, "t" }, ex );
+
+    writeFlipHeader( out, res, ex, flipNextInvocation( res, maxRows, pageOffset ), flipTests.files );
     writeFlipLights( out, res, ing, ex, maxRows, pageOffset );
 
     for( const ValueBinding& b : res.bindings )
@@ -1261,11 +1272,12 @@ inline void writeFlip( std::FILE* out, const FlipResult& res, const IngestResult
     // with 26 reachable tests named 25 of them and dropped the 26th because it sorted last. --test-gate's
     // own <t> listing has never been windowed for exactly this reason; this listing is the same obligation
     // read from a different seed, so it is served whole on every page. SIZE_MAX, not maxRows.
-    const rw::TestRunnerIndex flipRunners( ing );
-    writeCappedList( out, "tests", res.tests, SIZE_MAX, [ & ]( std::uint32_t f )
-    {
-        rw::emitTo( out, "<t p=\"{}\"{}/>", ex( rel( f ) ).c_str(), rw::runAttrDisclosed( flipRunners, f, ex ).c_str() );
-    } );
+    // E1: rows without a runner are grouped (testmap.h's seam), so the listing is rendered whole and wrapped here
+    // exactly as writeCappedList wraps an uncut list — `<tests n="N">` with no cut attributes, n= the FILE count,
+    // which is the same number the header's clause was gated on (flipTests.files, rendered above).
+    rw::emitTo( out, "<tests n=\"{}\">", res.tests.size() );
+    rw::emitRaw( out, flipTests.text.c_str() );
+    rw::emitRaw( out, "</tests>" );
     writeCappedList( out, "untested", res.untested, maxRows, [ & ]( NodeId u )
     {
         const Symbol& s = ing.symbols[u];

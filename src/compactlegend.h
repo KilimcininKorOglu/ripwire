@@ -289,6 +289,28 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --uses=Owner.field's member form (fielduses.h appends kUsesFieldLegend to that answer alone). owner_candidates= is a
     // row attribute that exists only beside member=, so one head term defines the whole form.
     { "member",            "member=Owner.field: rows use that field; pinned=/amb_sites= rows with one owner/with owner_candidates=K; owners_of_name= fields so named" },
+    // M21(b) / E1 (2026-09-12): the tests_to_run family's not-derivable disclosure, and the <g> group row it rides
+    // once per group. Row-level (every dialect puts it on the row), present-only; the <g> reading is qualified
+    // to that element so a document of single rows never pays for it, and a --flags document's own <g> never
+    // triggers it (that element carries no run_unknown=).
+    //
+    // THE COMPACT TERM SAYS WHAT THE FULL CLAUSE SAYS (review of 6621370f). This row is the compact dialect's
+    // ONLY reading of <g>, so a reader holding it and nothing else must be able to act on p=. It promised
+    // "every path verbatim (&#44; a comma)" — an escape testmap.h no longer emits, because a path holding ','
+    // is not grouped at all now — and it never carried the counts-FILES rule the full clause gained with it.
+    // So on a comma-path corpus `--affected --legend=compact` told its reader to undo an entity that is not
+    // there, and disagreed with the full legend about what a section's shown=/total= counts.
+    // The two facts a <g> consumer cannot act without are now stated here in the FULL CLAUSE'S OWN WORDS: a
+    // path holding ',' is never grouped, so p= splits into exactly n=; and a shown=/total= over these rows
+    // counts test FILES. The compact dialect re-spells rather than quotes — that is what makes it compact, and
+    // kRunHintLegendClause is 350+ B against this table's per-verb charge — so the two cannot be ONE constant.
+    // test/compactlegendcheck.sh (R) pins them against each other instead: it reads the required phrases OUT
+    // OF kRunHintLegendClause and fails the next release where either wording drops one or promises &#44;
+    // again. Cost of saying it: the term goes 99 -> 194 B, charged ONLY on a document that carries a <g> row —
+    // measured on a six-runner-less-test fixture, `--affected --legend=compact` 501 -> 596 B, and no pinned
+    // legend on this tree or on any gate fixture moves at all, because every harness here has a runner.
+    { "run_unknown",       "run_unknown=1: no runner derivable (a guess would be worse)", true },
+    { "run_unknown",       "<g n= p=a,b,c>: n runner-less rows with equal attrs as ONE row, paths verbatim; a path holding ',' is never grouped, so p= splits into exactly n=; shown=/total= over these rows counts test FILES", true, "g" },
     { "hits_capped",       "hits_capped=1: hits= is a floor" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
     // under max-tokens. Same number, same reading, so one row reads both places.

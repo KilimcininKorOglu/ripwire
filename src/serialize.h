@@ -1205,22 +1205,15 @@ struct ChargedSection
 // and sidecar paths, which confounds the very assertion that matters ("the bytes are still complete and
 // correct"); and it fights the ASan runtime, which this gate must also run under. Scoping the fault to the
 // est_tokens family is what keeps the assertions clean, so the in-source switch wins on honesty, not effort.
-#ifndef NDEBUG
+// CA4 w1fix2-verifier G4: this once read `value[0] == '1'`, so `=10`, `=1x` and `=1000000` all injected the
+// fault — a prefix test where the contract is a switch. That rule now lives in ONE place, rw::faultSwitchOn
+// (infra/emit.h), which every fault switch reads through, so the next one cannot get it wrong again; the
+// once-per-process `static` stays here, where determinism needs it.
 inline bool isChargeBufferFaultInjected() noexcept
 {
-    static const bool isOn = []() noexcept
-    {
-        // CA4 w1fix2-verifier G4: this read `value[0] == '1'`, so `=10`, `=1x` and `=1000000` all injected the
-        // fault — a prefix test where the contract is a switch. EXACT "1" is the only ON value; anything else,
-        // including "0", "true" and the empty string, is OFF.
-        const char* value = std::getenv( "RIPWIRE_FAULT_CHARGE_BUFFER" );
-        return value != nullptr && std::strcmp( value, "1" ) == 0;
-    }();
+    static const bool isOn = rw::faultSwitchOn( "RIPWIRE_FAULT_CHARGE_BUFFER" );
     return isOn;
 }
-#else
-inline constexpr bool isChargeBufferFaultInjected() noexcept { return false; }
-#endif
 
 // Drop-in for `open_memstream` at every est_tokens-family measurement buffer. nullptr ⇒ the caller takes its
 // own documented degrade path; this function never reports a failure it did not have.

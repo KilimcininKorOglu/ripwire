@@ -159,6 +159,191 @@ every commit was skipped — a shallow clone of a large tree is exactly this sha
 1 is one 183,835-file commit — used to print no block at all, which reads as "no history mined"; it now
 prints `<recent n="0" of="0" merge_bombs_skipped="1"></recent>`, zero rows and the reason (arm 7h, red
 on the previous binary). A tree with no git history still prints no block.
+### Changed — tests-to-run rows without a runner are grouped by hop distance
+
+Every tests-to-run row that had no derivable runner said so on the row — `run_unknown="1"` in XML,
+`"run_unknown":true` in JSON, `(run: not derivable)` in `--situ`'s text — and on a corpus where almost
+no harness has a runner that was the same 16 or 23 bytes repeated once per row: on the RocksDB tree,
+`--affected=db/write_batch.cc` listed 127 tests, 126 of them runner-less, and paid 2,016 B of XML and
+2,898 B of text for one fact. Rows already come in evidence order (changed, partner, hops ascending,
+path), so runner-less rows whose per-row attributes are byte-equal are now served as one row,
+`<g hops="2" n="17" p="a,b,c" run_unknown="1"/>` (JSON: `"p"` — or `"test"` — becomes an array beside
+`"n"`; text: `[hops=2] (17): a, b, c   (run: not derivable)`), emitted where its first member stood. Rows
+with a runner stay single, a group of one stays a `<t>` row, a path that contains a comma is never grouped
+at all (`p=` is a comma-separated list and every XML parser undoes an entity before a consumer splits on the
+delimiter, so an escaped comma would reappear as a separator and `n=` would disagree with what the reader
+counts — the text twin had no escape to undo), and every path is kept verbatim — the multiset of paths
+before and after is identical and so is their ORDER, which is what `test/testrowruncheck.sh` arm 12 proves
+on a fixture with three hop groups and a runner row
+in the middle of one of them, in all three dialects (red on the previous binary). All twelve emitters —
+`--affected`, `--exercises`, `--test-gate` XML and JSON, `--situ`, `--pr-context`, `--handoff`,
+`--flags --flip`, `--pack-task` XML and JSON, the MCP `situational_awareness` twin and the edit
+receipt — render through one seam in `testmap.h`, and the M21(b) rule keeps its meaning: a `<t>` or
+`<g>` row carries `run=` or `run_unknown="1"`, never neither. Measured on RocksDB (`wc -c`, same cache,
+same commit): `--affected=db/write_batch.cc` 10,668 → 6,992 B, `--test-gate=db/write_batch.cc` 13,242 →
+9,747 B (its JSON 11,055 → 7,163 B), `--situ=db/write_batch.cc` 11,769 → 7,357 B, and in the compact
+dialect 9,312 → 5,313 B and 11,223 → 7,596 B; 8 `<g>` rows replace 124 single rows (a group covers a
+contiguous run only, so the one runner row inside the hops=2 tier splits it in two — order is preserved by
+construction, `test/testrowruncheck.sh` arm 12 reads the paths back in emitted order) and the residual
+spent on the disclosure is 160 B (XML, 10 `run_unknown="1"`) and 230 B (text) per list.
+`--pack-task`'s tests section is byte-budgeted, so it CUTS over its own grouped, escaped rendering: it takes
+the largest prefix of the row list whose rendered `<tests>` body fits the section budget, found by bisection
+(the rendered size is monotone in the prefix length, so the bisection is exact), and counts `shown=`/`total=`
+in test files. Measured on RocksDB with `--pack-task="change WriteBatch::Put"` at the default 6,000-token
+budget, `wc -c`, same cache, same commit: `<tests shown="55" total="109">` where the pre-E1 bundle named 28,
+the whole bundle 11,993 → 12,490 B. On this tree every harness has a runner, so nothing groups and the only
+change is the legend that now defines `<g>`: the `--test-gate` legend pin moves 2,720 → 3,000 B (measured
+2,957) and the `ripwire.pack-task/v1` compact pin 820 → 880 B (measured 865), both because the compact
+dialect and every rows-bearing full legend now define `run_unknown=` and `<g n= p=>` — a definition
+`--affected` and the compact dialect never carried. That compact `<g>` term now says what the full clause
+says, in the full clause's own words: its first form promised "every path verbatim (`&#44;` a comma)", an
+escape `testmap.h` does not emit — a path holding `,` is not grouped at all — and it never carried the rule
+that a `shown=`/`total=` over these rows counts test FILES, so a reader holding only the compact legend was
+told to undo an entity that is not there and disagreed with the full legend about what the pair counts. The
+term goes 99 → 194 B and is charged only on a document that carries a `<g>` row (measured on a fixture of six
+runner-less tests, `--affected --legend=compact` 501 → 596 B); no pin moves, on this tree or on any gate
+fixture, because every harness here has a runner and nothing groups. The two wordings cannot be one constant
+— the compact dialect exists to re-spell, not to quote — so `test/compactlegendcheck.sh` arm (R) pins them
+against each other, reading the phrases it requires out of `kRunHintLegendClause` itself rather than
+restating them, and fails the next release where either wording drops one or promises `&#44;` again (red on
+the parent commit's source). The MCP manifest ceiling moves 42,384 → 42,800 B
+(measured 42,777) for one 207-byte clause, plus the one-space separator that joins it to the sentence before
+it, spliced into each of the two tool descriptions that serve these rows as JSON (2 × 208 B):
+`situational_awareness` and `explore` return bare JSON with no legend of any kind, so a caller that
+reads `p` as a string has nowhere else to learn that it can be an array.
+The clause is rows-gated everywhere it is spliced — `--affected`, `--exercises`, `--pack-task`, the
+partitioned bundle, and `--pr-context`, whose legend precedes its files in the STREAM but is now decided
+after them: the chosen body is rendered first, the pricer charges the clause per candidate trim level from
+that level's own body, and the form the chosen body was priced with is the form written, so the priced
+legend and the delivered legend cannot disagree. A corpus-level predicate over-approximated it — a test
+file outside the selected range, or a trim level whose `testCap` is 0, bought the clause for a document
+with no row — and both now pay nothing (measured on `test/defaultceilingcheck.sh`'s 120-file, no-test
+fixture: unconditional, the default bundle went 7,989 → 8,025 tokens over its 8,000 budget; gated, 7,989;
+`test/prcontextcheck.sh` pins all four sides, red first). The clause is gated on a COUNT the emitter
+reports with its rows, never on a search of the rendered bytes: `--pr-context` charges the trim level's own
+row count and the partitioned bundle sums what each slice kept. Asking the bytes was wrong twice — a
+`--pr-context` body and a `--pack-task` slice can both carry the literal text of the element inside CDATA,
+and `--pack-task="write_report" --partition=2` over a two-file corpus with no test at all bought the outer
+clause because one body prints `<tests n="%d">` (`test/testrowruncheck.sh` arm 15, red first). `--handoff`
+and `--flags --flip` spliced the clause unconditionally and now ask the same count; `--handoff` is
+byte-budgeted with heuristic rows dropped tail-first, so on a packet with no test row the 180 B it was
+paying could evict a real row (arm 14, red first).
+
+Two byte-accounting rules changed with it. `--pack-task`'s tests section used to group FIRST and cut the
+group rows with the generic list cutter under a per-row cap whose estimate was computed on UNESCAPED path
+bytes, so a corpus whose test paths hold `&` or `<` rendered wider than the cap admitted; the cutter breaks
+at the first over-budget entry, so the whole tail of the section went with it — `run=` singles included.
+Measured on a matched pair of ten-test fixtures differing in one byte per name (`&` against `_`) at
+`--token-budget=1440`: the control named 5 files and the `&` fixture named none. Cutting over the grouped,
+escaped rendering fixes it and is strictly better than cutting the single rows and grouping afterwards,
+which would have been safe but spends fewer of its bytes (2 files where grouping-first served 5); across
+budgets 1440–1860 the new cut names 6–11 files against the old 5–11, and the `&` fixture never empties
+(`test/testrowruncheck.sh` arm 13). And `--pr-context`, which must render a level to price it, rendered
+through a helper that returned an empty string on an `open_memstream` failure with no alert at all — a
+document could have shipped its legend, root and closing tag around an empty body claiming
+`truncated="none"`. Every such render now goes through one seam in `infra/emit.h` (`rw::renderToString`,
+which `packtask.h` already had in its own spelling) that reports the failure, and both `--pr-context` exits
+fall back to streaming the level straight out: complete, correct bytes, a modelled estimate, and a
+`DEGRADED_PATH_ALERT` saying which — serialize.h's own degrade contract.
+
+Six gates read the PATHS out of these rows, and each had its own reader: since a row can now name several
+files, `grep -oE '"tests_to_run":\[[^]]*\]'` stopped at the first `]` (the end of the first group's path
+array, so three arms asserted over two and a half rows and passed vacuously), `sed`-based XML readers saw
+only the single rows, and the text reader took `$1` of a line that on a group line is `[hops=1]`. They all
+want the same thing — the files named, in emitted order — so `test/affectedcheck.sh`,
+`test/impactpartitioncheck.sh`, `test/receiptpostcheck.sh`, `test/rootrelemitcheck.sh`,
+`test/selectorchaincheck.sh` and `test/testrowruncheck.sh` now all ask `test/testrowpaths.py`, one reader for
+all three dialects and both row shapes. Two more gates read these rows and keep their own readers, because
+neither asks for the paths: `test/listingpagingcheck.sh` sums `n=` over the group rows to prove the family
+never pages, and `test/w3fixlegendcheck.sh` counts path occurrences on a `--situ` line. That shared reader
+had two silences of its own, and both now fail loudly with a control in `test/testrowruncheck.sh` arm 16. Its
+JSON slicer returned the same nothing for a document with no `tests_to_run` field and for one whose array
+never closes, and the path reader turned that into an empty list at exit 0 — so a TRUNCATED document
+asserted over zero rows and passed, which is the defect the file was written to end. The two are different
+claims: no field is an answer (0 paths, exit 0), an unclosed list is exit 2 with a named reason. And the text
+dialect's single-row reader took `(\S+)`, which stops at the first space, so a test path holding one was
+reported truncated — a path that does not exist, produced silently. It now cuts the run suffix and the
+renderer's own attribute tail (`[changed] [partner] [hops=N]`, in that order and no other) and keeps
+everything between verbatim; what the text dialect still cannot resolve is a path holding the literal
+three-space `(run: ` opener, because that dialect carries no escaping at all — XML and JSON are exact.
+
+Three more things the row work left half-said. `rw::renderToString` asked `open_memstream` and then ignored
+what `fflush` and `fclose` answered, returning `ok=true` regardless: a memstream grows by `realloc`, so an
+allocation failure the per-row writes swallowed surfaces at the flush, and it is the close that publishes the
+buffer and its size at all. Reading them anyway is how a SHORT document passes for a whole one — the same
+defect as the empty body one size smaller. Both results are now checked, the alert fires, and `--pr-context`
+takes the streaming fallback it already documents. The MCP row-shape clause named the key `p`, and only one
+of its three producers spells it that way: `situational_awareness` emits `test`, `explore` and the edit
+receipt emit `p`. A clause naming the wrong key is worse than no clause, because a caller reads it as a
+contract, so it names both per producer while the rules they share are still stated once; the manifest
+ceiling moves 42,800 → 43,000 B for a measured 42,973 (the clause 207 → 305 B in each of the same two
+descriptions, 2 × 98 B). And `renderToString` called the emitter outside any handler: a throw from it —
+`std::bad_alloc` out of the `std::format` fallback is the reachable one, since the point of the seam is to
+buffer a document whose size is not known in advance — skipped the `fclose`, the `free`, the alert and the
+documented empty-result fallback in one jump, leaking the memstream and its buffer and handing the caller an
+exception where its contract says `ok == false`. Measured on this tree with the fault injected:
+`--pr-context` aborted at `rc=134` with **zero bytes** on stdout and `libc++abi: terminating due to uncaught
+exception of type std::bad_alloc` — the whole document lost, not just its estimate. The seam now catches at
+its own boundary, releases what it owns once, discloses, and returns the degraded value its callers already
+read, so the same run exits 0 with a complete 14,627-byte well-formed document carrying the same 20 `<f>`
+rows as the undegraded control. The alert names the throw rather than borrowing the buffer's message, which
+on that path would be a wrong cause attached to a right consequence. Because a throw path is otherwise
+unreachable from a gate, it is driven by an in-source fault switch in `serialize.h`'s
+`isChargeBufferFaultInjected` shape — non-NDEBUG only, read once per process, exact `"1"` the only ON value —
+and `test/prcontextcheck.sh` arm (F) asserts the whole contract with its own observability probe, red on the
+parent commit (`rc=134`, 0 B, no alert). That switch carries the `INFRA_` prefix rather than this project's:
+everything under `src/infra/` is built to travel to another repository, and `test/infraportcheck.sh` (C)
+refuses a layer file that names the host — it caught the switch's first spelling, which is the gate doing
+exactly what it exists for.
+
+### Fixed — an unmeasured `est_tokens` said nothing, a no-throw contract threw, and two test-row readers still went quiet
+
+Six defects from one review, each of them a surface that was silently wrong rather than loudly broken.
+**`--pr-context` shipped a wrong `est_tokens` with no disclosure.** When a trim level's measurement render
+fails, `prRenderLevel` returns an EMPTY body; the ladder priced that empty body, the price fit, and the root
+printed it — while `writePrContext` correctly streamed the complete untrimmed floor. The only signal was
+`DEGRADED_PATH_ALERT`, which `src/infra/Diagnostics.h` compiles to `do {} while (0)` under `NDEBUG`, so the
+binary a user installs printed a modelled number with nothing at all saying so (non-negotiable #3). The bytes
+were never the bug and are unchanged — a failed measurement may not decide what the answer contains — so the
+fact goes where this class of fact already lives: `truncated=` now carries `;est-unmeasured`, re-priced with
+the label in place, and the legend defines it in the same voice as `budget-floor-exceeded`. That label is 15
+bytes and can ride beside `budget-floor-exceeded`, which takes `prBudgetTail`'s worst case from 248 B to
+263 B: `tail[256]` (SEVEN bytes of margin, as `test/fixedbufsweep.sh` had warned in terms) becomes
+`tail[320]`, 56 B of margin, and the sweep's row moves with the measured recomputation. `rw::formatTo` was
+not what had been saving it — it truncates silently and its return is not read there, so an overrun would
+have dropped the closing quote of `truncated="` and shipped a malformed root with no diagnostic.
+**`renderToString`'s no-throw contract had a throwing last statement**: `out.text.assign( buf, sz )` is the
+one allocation on the success path and sat outside the handler, so a `std::bad_alloc` from it escaped a
+function documented to return `ok == false`, and jumped the `std::free( buf )` two lines below on the way
+out — leaking the memstream buffer. It is caught in its own handler (the two failures need different
+cleanup: the emitter's throw owns an open stream, this one owns only the buffer) with its own alert literal,
+and control falls through to the single `free()`, so the buffer is released exactly once on every path.
+Proved by `INFRA_FAULT_RENDER_COPY_THROW`, the twin of the emitter switch, in `test/prcontextcheck.sh` arm
+(G) — red on the parent commit, and honest in both flavours: the switch and the alert live only on the
+non-`NDEBUG` build, so the plain-flavour leg proves the degrade and the `NDEBUG` leg asserts only that the
+verb is intact and that no false disclosure appears. The `est-unmeasured` LEGEND definition is asserted on
+every flavour, which is the point of moving the disclosure off the alert. **The shared test-row reader's
+malformed-field detector had a hole of its own species**: `test/testrowpaths.py` found `"tests_to_run"` and
+then scanned arbitrarily far forward for a `[`, so `{"tests_to_run":null,"other":[{"p":"ghost.cpp"}]}`
+sliced the NEXT field's array and returned `ghost.cpp` at exit 0 — a foreign field's paths served as this
+field's answer, where the docstring already promised a `TestRowParseError`. The value is now read
+adjacently (past the key, a `:`, optional whitespace, then `[` or raise); `null`, a number, a string and an
+object all take the raise, in both `paths` and `jsonlist`, with a well-formed array and JSON whitespace as
+controls (`test/testrowruncheck.sh` arm 17). **And two path readers had never been converted.** A census of
+`test/` over the four shapes the reader was written to replace found `test/affectedcheck.sh`'s `tset()` —
+in the file the reader's own docstring names among those it converted, so that claim was false — splitting
+EVERY row's `p=` on `,` including a single row's, which turns a comma-bearing path (never grouped, by
+`testmap.h`'s refusal) into two names that name nothing; and `test/testgatecheck.sh`'s `tset()` matching
+`<t p=` singles only, which returned the EMPTY set on a two-runner-less-test fixture where the shared reader
+returns both paths. Both now route through the shared reader. Every other hit in the sweep either counts
+rows (`listingpagingcheck`, `w3fixlegendcheck`, `testgatepagecheck`, all group-aware in place) or pins one
+exact row spelling with a regex that fails loudly, and `deeptailcheck`'s `<t p=` rows are `--for`'s tail
+listing, a different element sharing the tag. Two documentation drifts close beside them: the
+`skills/ripwire-mcp/SKILL.md` verb table claimed `p` for `situational_awareness`, which emits `test` (the
+binary states the split at `src/mcp.h`'s `kTestRowJsonShapeClause` and is the authority), and
+`bench/arb/run_arb.py` decoded a `&#44;` the seam stopped emitting on 2026-09-13 while decoding none of the
+entities it does emit — so a path holding `&` was scored against a file name that does not exist. Both row
+shapes there now share one decode.
 
 ### Added — the task router knows the recency question, and every new shape is named where an agent reads
 

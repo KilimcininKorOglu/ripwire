@@ -69,8 +69,14 @@ printf 'void unrelated_helper() { }\n'                             > "$R/test/de
 
 run(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache 2>/dev/null; }
 runec(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache >/dev/null 2>"$TMP/err.txt"; }
-# extract the basenames of the emitted <test p="..."/> entries, sorted
-tset(){ printf '%s' "$1" | grep -oE '<test p="[^"]*"' | grep -oE '[^/"]*"$' | sed 's/"$//' | sort | tr '\n' ','; }
+# The basenames of the emitted test rows, sorted — through test/testrowpaths.py, THE shared reader, like
+# tord() below. This helper was the LAST private reader left in the file the shared reader's own docstring
+# names among the six it converted (review of #214), so that claim was false while it stood. It split EVERY
+# row's p= on ',' — including a single <test> row's — and a path containing ',' is never grouped (testmap.h
+# refuses to, so that p= is one path, not a list), which turned such a row into two names that name nothing.
+# The shared reader splits only a QUALIFIED group row and decodes entities, so the two helpers in this file
+# can no longer disagree about what a row is.
+tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | sort | tr '\n' ','; }
 cnt(){  printf '%s' "$1" | grep -oE 'tests="[0-9]+"' | head -1 | grep -oE '[0-9]+'; }
 
 # ── 1) change core.cpp → exactly the two tests that reach its symbols ────────────────────────────────
@@ -268,7 +274,9 @@ done
 
 # ── 7) H2H-Graft F1: rows in EVIDENCE order, stem partner first, hops= disclosed ──────────────────────
 # Ordered basenames (NOT sorted — the order IS the claim).
-tord(){ printf '%s' "$1" | grep -oE '<test p="[^"]*"' | grep -oE '[^/"]*"$' | sed 's/"$//' | tr '\n' ','; }
+# E1: the files named, in EMITTED order (a <g> row contributes its members in place) — through the shared
+# reader, so this gate and the eight others that ask the same question cannot disagree about what a row is.
+tord(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | tr '\n' ','; }
 D="$( run --affected=src/deep.cpp )"
 [ "$( tord "$D" )" = "deep_test.cpp,test_zdirect.cpp,test_afar.cpp," ] && [ "$( cnt "$D" )" = 3 ] \
     && ok "(7a) --affected=src/deep.cpp: partner first, then hops asc — deep_test, test_zdirect(1), test_afar(2); tests=3" \
@@ -285,7 +293,10 @@ printf '%s' "$D" | grep -q '<affected [^>]*order="evidence"' && printf '%s' "$D"
 # negative: no stem partner exists for core.cpp, so no row may claim one
 printf '%s' "$A" | grep -q 'partner="1"' && no "(7f) core.cpp has no *_test partner yet a row claims partner=\"1\"" \
     || ok "(7f) partner= never fires without a stem match"
-printf '%s' "$A" | grep -q '<test p="test/test_leaf.cpp" hops="1"' && ok "(7g) core.cpp's direct test row carries hops=\"1\"" \
+# E1 (2026-09-12): with no derivable runner the direct test rides a <g hops="1" n= p="…"/> group row when a
+# sibling shares its evidence, and a single <test p= hops="1"> row otherwise — hops="1" is asserted either way.
+printf '%s' "$A" | grep -qE '<test p="test/test_leaf\.cpp" hops="1"|<g hops="1" n="[0-9]+" p="([^"]*,)?test/test_leaf\.cpp(,[^"]*)?"' \
+    && ok "(7g) core.cpp's direct test row carries hops=\"1\"" \
     || no "(7g) core.cpp rows lack hops="
 
 # ── 6) xml well-formed ───────────────────────────────────────────────────────────────────────────────

@@ -51,8 +51,14 @@ printf 'int user() { return uncovered(); }\n'                > "$R/src/user.cpp"
 run(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache 2>/dev/null; }
 rc(){  perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache >/dev/null 2>&1; echo $?; }
 attr(){ printf '%s' "$1" | grep -oE "$2=\"[0-9]+\"" | head -1 | grep -oE '[0-9]+'; }
-# basenames of the emitted <t p="..."/> test rows, sorted
-tset(){ printf '%s' "$1" | grep -oE '<t p="[^"]*"' | grep -oE '[^/"]*"$' | sed 's/"$//' | sort | tr '\n' ','; }
+# Basenames of the emitted test rows, sorted — through test/testrowpaths.py, THE shared reader.
+# The census the review of #214 ran over test/ found this the last private reader in the tests_to_run family
+# that could still go QUIET: it matched `<t p=` singles only, so every <g … n= p="a,b,c" run_unknown="1"/>
+# group row (testmap.h's E1 shape, emitted whenever two runner-less tests share their evidence) was skipped
+# without a word. Measured on a two-runner-less-test fixture: this helper returned the EMPTY set where the
+# shared reader returned both paths. Only the one-test fixture below kept the arms honest, which is a
+# property of the fixture and not of the reader.
+tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | sort | tr '\n' ','; }
 # names of the emitted <u sym="..."/> untested rows, sorted
 uset(){ printf '%s' "$1" | grep -oE '<u sym="[^"]*"' | sed -E 's/<u sym="([^"]*)"/\1/' | sort | tr '\n' ','; }
 
