@@ -669,7 +669,17 @@ def run(g):
     skipped = classify_skipped(rc, out)
     report = ""
     if skipped:
-        report = out[:2000]                      # enough for the caller to quote the SKIP's own reason
+        # classify_skipped() read the WHOLE transcript; this report is a fixed PREFIX of it, and the two
+        # windows disagree for any gate whose declaration sits past the prefix. That gate is still counted
+        # correctly, and then listed under SKIPPED with an EMPTY reason -- the one thing that section exists
+        # to print. So carry the declaration explicitly whenever the prefix does not already hold it: the
+        # bound grows by one line, never by the transcript, and a gate whose reason is in the prefix is
+        # byte-identical to before. (Found by review on a4595e4f; arm (H) of test/skipclassifycheck.sh
+        # reds on a probe whose declaration sits at character 3221.)
+        report = out[:2000]
+        decl = skip_reason(out)
+        if decl and skip_reason(report) != decl:
+            report = decl + "\n" + report
     elif rc != 0:
         # best-effort: a full-output write that fails must never turn the report into a second failure.
         logpath = "(not written)"
@@ -860,8 +870,8 @@ if dirt_seen:
     print("***   name -- never build/, __pycache__/ or node_modules/); only then triage the arms above.")
 if skips:
     print("\nSKIPPED (ran, but proved nothing — not counted as passing):")
-    for g, rc, dt, out, _ in skips:
-        why = skip_reason(out)
+    for g, rc, dt, report, _ in skips:       # the 4th field is the stored REPORT, not the full transcript
+        why = skip_reason(report)
         print(f"  {g}  {why}")
 print(f"bin={binp}")
 print("\nslowest:")

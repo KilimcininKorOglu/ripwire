@@ -271,6 +271,41 @@ vFailFirst="$( classify "$ORDERROOT" probefailthenskipgate )"
     && ok "(D2) a FAIL row on a later line is seen: a gate that claimed a verdict before it skipped is not counted as having proved nothing" \
     || no "(D2) a gate whose first verdict is a FAIL row was classified '$vFailFirst' — the failure marker is being matched against the whole transcript as ONE line, so any FAIL below the first is invisible to the rule"
 
+# ── (H) THE SKIP'S REASON SURVIVES THE STORED REPORT ─────────────────────────────────────────────────────
+# Classification reads the WHOLE transcript; the report kept for the SKIPPED section is a fixed prefix of it
+# (`out[:2000]`). Those two windows disagree for any gate whose declaration sits past that prefix: the gate
+# is correctly counted as skipped, and then listed with NO reason, which is the one thing the SKIPPED
+# section exists to print. "ran, but proved nothing" with the why missing is a row nobody can act on.
+#
+# This arm reads pargates' OWN SKIPPED section rather than the --json verdict, because the verdict is right
+# in both worlds and only the printed row is wrong. The probe pads with narration carrying no verdict marker
+# — not a PASS row, not "SOME CHECKS FAILED" — so the first marker in its transcript really is the SKIP.
+python3 - "$ORDERROOT" <<'PYMAKE'
+import os, sys
+root = sys.argv[ 1 ]
+os.makedirs( os.path.join( root, "test" ), exist_ok=True )
+pad = "\n".join( "probelatereason: narration line %03d, carrying no verdict marker of any kind" % i for i in range( 40 ) )
+body = ( '#!/usr/bin/env bash\n'
+         'PROOT="$( cd "$( dirname "$0" )/.." && pwd )"\n'
+         'printf "probelatereason: BIN=%s/build/ripwire  ROOT=%s\\n" "$PROOT" "$PROOT"\n'
+         "cat <<'NARRATION'\n" + pad + "\nNARRATION\n"
+         "printf '  SKIP  no RIPWIRE_BASE reference binary — this is the declaration the summary must quote\\n'\n" )
+path = os.path.join( root, "test", "probelatereason.sh" )
+open( path, "w" ).write( body )
+os.chmod( path, 0o755 )
+PYMAKE
+lateOff="$( bash "$ORDERROOT/test/probelatereason.sh" 2>&1 | python3 -c 'import sys; print(sys.stdin.buffer.read().decode("utf-8","replace").find("  SKIP  "))' )"
+if [ "$lateOff" -gt 2000 ]; then
+    ok "(H) fixture is real: the probe's declaration sits at character $lateOff, past the 2000-character report window"
+else
+    no "(H) probe declaration at $lateOff is INSIDE the 2000-character report window — lengthen the narration or this arm proves nothing"
+fi
+lateOut="$( python3 "$PARGATES" "$ORDERROOT" "$FAKEBIN" --only probelatereason 2>&1 )"
+lateRow="$( printf '%s\n' "$lateOut" | grep -A2 '^SKIPPED' | grep 'probelatereason' || true )"
+printf '%s' "$lateRow" | grep -q 'no RIPWIRE_BASE reference binary' \
+    && ok "(H) the SKIPPED row quotes the gate's own declaration even though it sits past the stored report's window" \
+    || no "(H) the SKIPPED row lost its reason (row: '$lateRow') — the gate is counted as having proved nothing, with nothing said about why"
+
 # ── (E) THE SANCTIONED SKIPS STILL SKIP ──────────────────────────────────────────────────────────────────
 # argvdiffcheck's shape: the skip is the opening line and nothing else runs.
 cat > "$TMP/body_argvshape" <<'BODY'
