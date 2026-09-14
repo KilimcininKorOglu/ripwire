@@ -30,6 +30,16 @@
 #  10. MUTATION CONTROL for 8+9 — the unfiltered run over a C-family corpus must show the negative of
 #      both: no rule disabled, and the C-family rules applicable. Without it, a serializer that hard-coded
 #      enabled:false / applicable:false everywhere would pass arms 8 and 9.
+#  11. THE FILESYSTEM ROOT (U) — arm 6 above proves no URI starts with '/' for the roots a gate can hand a
+#      BINARY, and `/` is not one of them: a corpus at the filesystem root means crawling the whole machine,
+#      so no end-to-end arm can ever reach it. The defect lives in a pure function, so the arm is a unit
+#      driver over that function instead — the recipe extentcheck.sh (U) and jsonwalkcheck.sh already use,
+#      compiled with the exact flags CMake gave $BIN. It pins BOTH halves of the contract together: the
+#      predicate the document's envelope claims (testmap.h runsAreRootRelative, TRUE for any single
+#      non-empty root, "/" included) and the URI the relativizer actually returns. A root of "/" IS its own
+#      separator, so the general prefix+'/' shape could not match it and an absolute path shipped inside a
+#      document declaring its rows root-relative. Regression rows for every non-root prefix are in the same
+#      table, so a fix that over-strips fails here rather than on a consumer's machine.
 #
 #   RIPWIRE_BIN=build/ripwire bash test/sarifcheck.sh
 #   RIPWIRE_BIN=asan/ripwire  bash test/sarifcheck.sh
@@ -254,6 +264,124 @@ printf '%s' "$MUT" | grep -q '^CFAMILY_INERT 0$' \
 printf '%s' "$MUT" | grep -q '"selected"' \
     && no "10. an unfiltered run still emits a selected= mirror — absent must mean no selection was given" \
     || ok "10. no selection mirror on an unfiltered run (absent = nothing to say)"
+
+# ── 11. the filesystem root, through a unit driver over the relativizer itself ──────────────────────
+# See the header note: `/` is the one root no binary arm can reach, and the answer is a pure function, so
+# this arm compiles that function with $BIN's own CMake flags rather than inventing a second toolchain.
+BUILD_DIR="$( cd "$( dirname "$BIN" )" && pwd )"
+FLAGS_MK="$BUILD_DIR/CMakeFiles/ripwire.dir/flags.make"
+LINK_TXT="$BUILD_DIR/CMakeFiles/ripwire.dir/link.txt"
+if [ ! -f "$FLAGS_MK" ] || [ ! -f "$LINK_TXT" ]; then
+    no "11. cannot find CMake flags under $BUILD_DIR — the unit arm needs a CMake-built binary"
+else
+    cat >"$TMP/rooturi_unit.cpp" <<'CPP'
+// The root-relative URI contract, at the granularity of the function that decides it. Every p=/uri=
+// emitter in the tool routes through this ONE pair (sarif.h rootPrefixOf + rootRelativeUri), so a row
+// here is a statement about the whole emission surface, not about SARIF alone.
+#include "sarif.h"
+#include "testmap.h"
+
+#include <cstdio>
+#include <string>
+#include <string_view>
+
+namespace
+{
+
+int g_failCount = 0;
+
+void check( bool cond, const std::string& what )
+{
+    std::printf( "  %s  %s\n", cond ? "PASS" : "FAIL", what.c_str() );
+    if( !cond )
+    {
+        ++g_failCount;
+    }
+}
+
+// One row of the contract: the spelling ing.files[] stores, the raw root ARGUMENT (normalized through
+// rootPrefixOf exactly as every emitter does), and the URI the document must carry. `underRoot` is the
+// honesty half — when the path really does lie under the declared root, a leading '/' in the answer is
+// not a cosmetic blemish but a row contradicting its own envelope.
+struct UriCase
+{
+    const char* file;
+    const char* rootArg;
+    const char* want;
+    bool        underRoot;
+};
+
+}   // namespace
+
+int main()
+{
+    // The predicate the envelope claims. An empty realPaths means one root, so any non-empty root —
+    // "/" included — makes the document say "every path below is relative to root=".
+    const rw::IngestResult ing;
+    check(  rw::runsAreRootRelative( ing, "/" ), "runsAreRootRelative( single root, \"/\" ) is TRUE — root=\"/\" declares its rows relative" );
+    check( !rw::runsAreRootRelative( ing, "" ),  "runsAreRootRelative( single root, \"\" ) is FALSE — no root declared, no claim made" );
+
+    // rootPrefixOf keeps "/" (the one root whose trailing slash IS the whole path) and still strips
+    // a trailing slash from every other spelling.
+    check( rw::sarif::rootPrefixOf( "/" )     == "/",    "rootPrefixOf( \"/\" ) == \"/\"" );
+    check( rw::sarif::rootPrefixOf( "//" )    == "/",    "rootPrefixOf( \"//\" ) == \"/\"" );
+    check( rw::sarif::rootPrefixOf( "/abs/" ) == "/abs", "rootPrefixOf( \"/abs/\" ) == \"/abs\"" );
+
+    static constexpr UriCase kCases[] =
+    {
+        // THE DEFECT — root "/" is its own separator, so the general prefix+'/' shape never matched it
+        { "/test/check.sh",         "/",         "test/check.sh",         true  },
+        { "/a.cpp",                 "/",         "a.cpp",                 true  },
+        { "//a.cpp",                "/",         "a.cpp",                 true  },
+        { "/",                      "/",         "/",                     false },   // the root itself: a path, never an empty URI
+        { "a.cpp",                  "/",         "a.cpp",                 true  },   // already relative: nothing to strip
+        // REGRESSION GUARDS — every non-root prefix keeps the exact answer it gave before
+        { "./bad.cpp",              ".",         "bad.cpp",               true  },
+        { "./corp/test/x.sh",       "./corp",    "test/x.sh",             true  },
+        { "/abs/repo/src/main.cpp", "/abs/repo", "src/main.cpp",          true  },
+        { "/other/x.cpp",           "/abs/repo", "/other/x.cpp",          false },   // outside the root: unrelativizable, unchanged
+        { "/abs/repository/x.cpp",  "/abs/repo", "/abs/repository/x.cpp", false },   // separator guard: a sibling prefix steals nothing
+    };
+
+    for( const UriCase& c : kCases )
+    {
+        const std::string      prefix = rw::sarif::rootPrefixOf( c.rootArg );
+        const std::string_view got    = rw::sarif::rootRelativeUri( c.file, prefix );
+        check( got == std::string_view( c.want ),
+               std::string( "rootRelativeUri( \"" ) + c.file + "\", root \"" + c.rootArg + "\" ) == \"" + c.want + "\" (got \"" + std::string( got ) + "\")" );
+        if( c.underRoot )
+        {
+            check( !got.empty() && got.front() != '/',
+                   std::string( "\"" ) + c.file + "\" under root \"" + c.rootArg + "\" emits a RELATIVE uri, as the envelope claims" );
+        }
+    }
+
+    std::printf( g_failCount == 0 ? "UNIT ALL PASS\n" : "UNIT FAILURES: %d\n", g_failCount );
+    return g_failCount == 0 ? 0 : 1;
+}
+CPP
+    # The compiler CMake drove (link.txt's first token), never a guess — jsonwalkcheck.sh's recipe and reason.
+    CXX="$( awk 'NR==1{ print $1; exit }' "$LINK_TXT" )"
+    [ -n "$CXX" ] && command -v "$CXX" >/dev/null 2>&1 || CXX="$( command -v c++ || command -v clang++ )"
+    eval "CXX_FLAGS=(    $( grep -m1 '^CXX_FLAGS ='    "$FLAGS_MK" | sed 's/^CXX_FLAGS =//' ) )"
+    eval "CXX_DEFINES=(  $( grep -m1 '^CXX_DEFINES ='  "$FLAGS_MK" | sed 's/^CXX_DEFINES =//' ) )"
+    eval "CXX_INCLUDES=( $( grep -m1 '^CXX_INCLUDES =' "$FLAGS_MK" | sed 's/^CXX_INCLUDES =//' ) )"
+    # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
+    DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
+    DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
+    if "$CXX" "${CXX_FLAGS[@]}" "${CXX_DEFINES[@]}" "${CXX_INCLUDES[@]}" -I"$ROOT/src" \
+         "$TMP/rooturi_unit.cpp" "${DIAG_LINK[@]}" -o "$TMP/rooturi_unit" >"$TMP/u_build.log" 2>&1; then
+        "$TMP/rooturi_unit" >"$TMP/u_run.log" 2>&1; urc=$?
+        sed 's/^/        /' "$TMP/u_run.log"
+        if [ "$urc" -eq 0 ] && grep -q '^UNIT ALL PASS$' "$TMP/u_run.log"; then
+            ok "11. root-uri unit driver: $( grep -c '  PASS  ' "$TMP/u_run.log" | tr -d ' ' ) cases hold, root \"/\" included"
+        else
+            no "11. root-uri unit driver reported failures (rc=$urc)"
+        fi
+    else
+        no "11. the root-uri unit driver does not compile:"; grep -m4 -E 'error' "$TMP/u_build.log" | sed 's/^/          /'
+    fi
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

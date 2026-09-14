@@ -18,7 +18,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 ### Fixed — a relative command with no anchor, and the roots that never declared themselves
 
 A second review of the three `--situ` entries below found ten defects, every one of them a document
-that could not be resolved by the reader holding it, and all ten are fixed here.
+that could not be resolved by the reader holding it, and all ten are fixed here. A third review — of
+this entry's own fix rather than of the entries below it — found one more in the same relativizer, the
+filesystem root, and it is fixed here too.
 
 A RELATIVE COMMAND IS ONLY AS GOOD AS ITS ANCHOR. Making `run=` root-relative is what makes a change
 report independent of where the tree is checked out — and it makes every one of those commands useless
@@ -42,6 +44,22 @@ corp/test/x.sh` — rc 127. Both sides now drop the optional `./` first and comp
 leaves the one case the early return got right byte-identical. `test/rootrelemitcheck.sh` ARM 9b turns
 the old spelling pair into a matrix: `.`, `corp`, `./corp`, `corp/`, an absolute path and a symlink all
 print the SAME command, and each printed command is EXECUTED from the root it names.
+
+AND THE ONE ROOT THAT IS ITS OWN SEPARATOR. That same relativizer then matched a prefix only when the
+byte after it was a `/`, which the filesystem root can never satisfy: under `ripwire /` the stored
+spelling is `/test/check.sh`, the byte after the prefix is `t`, and the ABSOLUTE path was emitted into a
+document whose `root="/"` declares every path relative to it — `testmap.h runsAreRootRelative` is true
+for any single non-empty root, `/` included, so the envelope's claim and its own rows disagreed. This is
+every `p=`/`uri=` emitter in the tool, not SARIF alone: all of them route through this one pair. The
+added clause strips the single leading slash, runs AFTER the general shape so no other prefix changes by
+a byte, and is guarded on length so a file spelled `/` stays `/` rather than becoming an empty URI. A
+corpus at the filesystem root means crawling the whole machine, so no end-to-end arm can reach it;
+`test/sarifcheck.sh` arm 11 is a unit driver over the function itself, compiled with the flags CMake
+gave the binary under test (the recipe `extentcheck.sh` (U) and `jsonwalkcheck.sh` already use). Its 22
+rows pin both halves together — the predicate the envelope claims and the URI the relativizer returns —
+and the non-root prefixes sit in the same table, so an over-stripping fix fails there rather than on a
+consumer's machine. Red before the change: 4 of the 22 failed, including `rootRelativeUri(
+"/test/check.sh", "/" )` returning `/test/check.sh`.
 
 A SMALL BLOCK PAGED WITH SOMEONE ELSE'S WINDOW. The new lexical-siblings block honoured `page.offset` —
 which is section `[1]`'s blast-radius offset. `--situ=F --offset=20` printed `shown=0 total=9 capped=1`

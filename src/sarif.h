@@ -133,6 +133,16 @@ inline const char* sarifLevel( std::string_view sev )
 // sides carry the same optional "./", so both sides drop it FIRST and the prefix comparison runs on what is
 // left. Root "." then normalizes to "." , matches no path, and the answer is the "./"-stripped file exactly
 // as before — the one case the old early return got right is the one case this keeps byte-identical.
+// Second review of #219: the filesystem root is the ONE prefix that IS its own separator, so the shape
+// below cannot match it. Under `ripwire /` the stored spelling is "/test/check.sh" and the byte at
+// f[ r.size() ] is 't', not '/', so the comparison failed and the ABSOLUTE path was emitted into a
+// document whose root= declares every path relative to it — testmap.h's runsAreRootRelative is true for
+// any single non-empty root, "/" included, so the document's own claim and its rows disagreed. The extra
+// clause strips the single leading slash: the same one-past-the-prefix rule, with the prefix and the
+// separator being the same byte. It runs AFTER the general shape, so a non-root prefix keeps exactly the
+// behaviour it had, and the "//x" spelling (prefix "/" followed by a real separator) is still answered by
+// the general clause. Guarded on size > 1 so a file spelled "/" alone stays "/" and never becomes an
+// empty URI — a path that is nothing at all would be a wrong answer, not a shorter one.
 inline std::string_view rootRelativeUri( std::string_view file, std::string_view rootPrefix )
 {
     const auto dropLeadingDot = []( std::string_view p ) noexcept
@@ -142,6 +152,10 @@ inline std::string_view rootRelativeUri( std::string_view file, std::string_view
     if( !r.empty() && f.size() > r.size() + 1 && f.compare( 0, r.size(), r ) == 0 && f[ r.size() ] == '/' )
     {
         return f.substr( r.size() + 1 );
+    }
+    if( r == "/" && f.size() > 1 && f.front() == '/' )
+    {
+        return f.substr( 1 );
     }
     return f;
 }
