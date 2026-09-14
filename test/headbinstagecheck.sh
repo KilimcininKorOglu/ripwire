@@ -55,7 +55,8 @@ echo "headbinstagecheck: BIN=$BIN  LIB=$LIB  TMP=$TMP"
 # ── (C, first half) the callers, derived from the tree — (A) needs their names ────────────────────────────────────
 # A call is `ripwire_head_binary "` on a line that is not a comment; the statement is that line plus every line a
 # trailing backslash continues onto. OK means its failure branch hands `$?` to headbin_refusal. BARE means it does
-# not, and a bare `|| skip` is the silent hole: pargates counts a SKIP printed after the first 400 bytes as a PASS.
+# not, and a bare `|| skip` is the silent hole: a skip printed after this gate has already claimed a verdict is an
+# ARM-level skip, and pargates counts the gate as a PASS (classify_skipped() in test/pargates.py).
 CALLSCAN="$TMP/callscan.py"
 cat > "$CALLSCAN" <<'PYEOF'
 import io, os, re, sys

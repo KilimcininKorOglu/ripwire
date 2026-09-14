@@ -15,6 +15,46 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — the suite's `skip=` count stopped depending on where the checkout lives
+
+`test/pargates.py` decided whether a gate had SKIPPED — ran, but proved nothing — by looking for the word
+SKIP in the first 400 bytes of its transcript. That is a ruler laid over a document whose origin moves.
+Every gate opens with a banner naming its own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`), so the
+window's CONTENTS are a function of the checkout's pathname, and every offset after the banner travels
+with it. Measured on `test/w3fixlegendcheck.sh`, whose transcript is byte-identical after line 1: the
+banner is 217 B from an 87-character worktree root and 67 B from a 12-character one — a 150 B shift from a
+75-character rename, about 2 B per character because the root is spelled twice. The same commit, the same
+binary and byte-identical gate output therefore reported `skip=2` from a 137-character checkout and
+`skip=3` from a 38-character one, differing only in how one honest arm-level SKIP fell relative to byte
+400. The suite's summary line is what a contributor reads before every push, so a count that moves with
+the pathname is not evidence.
+
+The exposure was not one gate's, and the dangerous direction was the opposite one. Measured over all 628
+gate transcripts of one full suite run on this repository: 28 gates print their skip marker downstream of
+at least one absolute-root mention, so their classification travelled with the checkout. The nearest was a
+REAL standing skip — `test/editchecknotecheck.sh` declares its skip at byte 145, and 255 more characters
+of checkout path (a 342-character root, ordinary for a nested worktree or a CI runner) push that
+declaration out of the window, at which point a gate that proved nothing is counted as a pass. Which gates
+are in range is a property of the machine rather than of the commit, so a wider window was never the
+answer.
+
+The rule is now written down instead of measured in bytes: **a gate that proves nothing says so before it
+claims anything.** The first verdict marker in the transcript decides — a SKIP ahead of every PASS and
+FAIL marker is a whole-gate skip, while a SKIP that follows one is an arm-level skip inside a gate that
+did prove something, and that gate is a pass. It reads verdict markers rather than a bare substring,
+because five gates narrate the word SKIPPED in prose and prove plenty. This is what the tree already did
+on purpose — `test/namingcalibrationcheck.sh` runs its live arm first so its skip banner precedes its
+instrument arm's pass rows, and `test/argvdiffcheck.sh`'s skip is its opening line — so the classification
+is unchanged where it was already right: replayed over those same 628 transcripts, the new rule and the
+old one disagree on ZERO gates, and a full suite run reports the same three environmental skips as before.
+
+`test/skipclassifycheck.sh` is the gate, and it drives the real `test/pargates.py` rather than a
+reimplementation of it: one probe gate, byte-identical, classified from two corpus roots about 130
+characters apart, after a presence guard proves that the same probe's skip row really does land on
+opposite sides of the old boundary — without that contrast the arm would pass against a classifier that
+never read the output at all. It reds on the byte-window classifier at four arms and greens on the rule.
+The gate side of the same contract is `test/gateexitcheck.sh` arm (D).
+
 ### Added — the task router knows the recency question, and every new shape is named where an agent reads
 
 Two halves of one gap, both measured as absences rather than argued. **The router could not reach the
