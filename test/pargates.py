@@ -392,6 +392,64 @@ def failure_report(out, logpath):
     return "\n".join(block)
 
 
+# --- SKIPPED vs PASSED: a gate's FIRST verdict decides (2026-09-13) ----------------------------------------------
+# A gate that SKIPS is not a gate that PASSED. argvdiffcheck skips without a RIPWIRE_BASE reference binary, and
+# reporting that as a pass is exactly the green-while-inert failure this suite exists to catch elsewhere (the
+# CI/NDEBUG blindness is the same family).
+#
+# This used to read `"SKIP" in out[:400]` -- a ruler laid over the transcript, and the transcript's origin moves.
+# Every gate opens with a banner naming its own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`; 506 gates print
+# one), so the window's CONTENTS are a function of the checkout's pathname. Measured on w3fixlegendcheck, whose
+# output is byte-identical after line 1: the banner is 217 B from an 87-char root and 67 B from a 12-char one, and
+# every offset after it moves by that 150 B -- about 2 B per character of path, because the root is spelled twice.
+# The same commit, the same binary and byte-identical gate output then reported `skip=2` from a 137-char checkout
+# and `skip=3` from a 38-char one, differing only in how one honest arm-level SKIP fell relative to byte 400.
+# `skip=` is read before every push; a count that moves with the pathname is not evidence.
+#
+# AND THE EXPOSURE IS NOT ONE GATE'S. Measured over all 628 transcripts of one full run: 28 gates print their skip
+# marker downstream of at least one absolute-root mention, so their classification moves with the checkout. The
+# nearest is a REAL standing skip -- editchecknotecheck declares its skip at byte 145, and 255 more characters of
+# checkout path (a 342-char root: ordinary for a nested worktree or a CI runner) push that declaration out of the
+# window, at which point the suite reports a gate that proved nothing as a PASS. Which gates are in range is a
+# property of the MACHINE, not of the commit, so the answer is not a wider window.
+#
+# THE RULE: a gate that proves nothing says so BEFORE it claims anything. The FIRST verdict marker in the
+# transcript decides -- a SKIP ahead of every PASS and FAIL marker is a WHOLE-GATE skip ("ran, but proved
+# nothing"); a SKIP that follows one is an ARM-level skip inside a gate that did prove something, and the gate is
+# a pass. That is what this tree already did on purpose -- namingcalibrationcheck runs its live arm FIRST "so that
+# its SKIP banner lands inside the first bytes of output", argvdiffcheck's skip is its opening line -- now written
+# down and free of the offsets. Measured over one full run's 628 transcripts, the new rule and the old one
+# disagree on ZERO gates: it reproduces today's answers on this tree and stops needing the pathname to do it.
+#
+# MARKERS, NOT SUBSTRINGS. Five gates NARRATE the word SKIPPED (doctorcheck, formatgatecheck, headbinstagecheck,
+# mcpreadloopcheck, releaseinstallcheck) and prove plenty, so a verdict must be a row this tree's helpers actually
+# print -- `  SKIP  x` from skip(), `<name>: SKIP ...`, `SKIP: ...`, `...; SKIP` -- never a bare mention of the
+# word. The GATE side of this contract is test/gateexitcheck.sh arm (D) ("a skip prints a skip marker and a reason
+# and NO failure marker"); this harness side is pinned by test/skipclassifycheck.sh.
+_SKIP_RE = re.compile(r"^[ \t]*SKIP\b|^\S+:[ \t]*SKIP\b|;[ \t]*SKIP[ \t]*$", re.M)
+_PASS_RE = re.compile(r"^[ \t]*PASS\b|^[ \t]*ALL PASS\b|^\S+:[ \t]*ALL PASS\b", re.M)
+
+
+def classify_skipped(rc, out):
+    """True when the gate RAN BUT PROVED NOTHING: it exited 0, and the FIRST verdict marker in its output is a
+    SKIP. A SKIP marker that follows a PASS or FAIL marker is an arm-level skip inside a gate that proved
+    something, and is not counted. A function of the verdicts alone -- the same output is classified the same way
+    from every checkout, whatever its pathname costs the transcript in leading bytes."""
+    if rc != 0:
+        return False            # a red is a FAILURE however it narrated itself: rc outranks every marker
+    skip = _SKIP_RE.search(out)
+    if skip is None:
+        return False
+    claims = [m.start() for m in (_PASS_RE.search(out), _MARKER_RE.search(out)) if m is not None]
+    return all(skip.start() < c for c in claims)
+
+
+def skip_reason(out):
+    """The gate's own skip declaration, for the SKIPPED section -- the marker line itself, never a line that
+    merely mentions the word."""
+    return next((ln.strip() for ln in out.splitlines() if _SKIP_RE.search(ln)), "")
+
+
 # --- a gate is its whole process group, and a stop signals all of it (2026-09-10) ---------------------------------
 # A gate's work runs in its children -- ripwire over whole trees, and on the unstaged path headbinlib.sh's parallel
 # `cmake --build`. The budget used to be subprocess.run(timeout=), which expires into Popen.kill(): SIGKILL to the
@@ -576,10 +634,9 @@ def run(g):
         # the budget expired, and while its group was being stopped, is kept ahead of it: a gate killed at
         # 300 s that had already announced a failing arm used to report ONLY the word TIMEOUT.
         out += f"\nTIMEOUT after {limit}s (declared budget={limit}s{scaled})"
-    # A gate that SKIPS is not a gate that PASSED. argvdiffcheck skips without a RIPWIRE_BASE
-    # reference binary, and reporting that as a pass is exactly the green-while-inert failure this
-    # suite exists to catch elsewhere (the CI/NDEBUG blindness is the same family).
-    skipped = rc == 0 and "SKIP" in out[:400]
+    # SKIPPED vs PASSED -- the gate's first verdict decides; see classify_skipped() for the rule and the red
+    # that produced it (a byte window over a transcript whose origin moves with the checkout's pathname).
+    skipped = classify_skipped(rc, out)
     report = ""
     if skipped:
         report = out[:2000]                      # enough for the caller to quote the SKIP's own reason
@@ -774,7 +831,7 @@ if dirt_seen:
 if skips:
     print("\nSKIPPED (ran, but proved nothing — not counted as passing):")
     for g, rc, dt, out, _ in skips:
-        why = next((ln.strip() for ln in out.splitlines() if "SKIP" in ln), "")
+        why = skip_reason(out)
         print(f"  {g}  {why}")
 print(f"bin={binp}")
 print("\nslowest:")
