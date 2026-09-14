@@ -41,6 +41,12 @@
 #       once (both derive from parse_help), so the sets stay equal and (B) stays green while the flag
 #       is absent from the shipped document. This arm imports parse_help and judges it directly,
 #       against a pinned ledger of the losses that already exist plus synthetic seam fixtures
+#   (J) CONTENTS LINKS RESOLVE — every generated `](#anchor)` must name a heading anchor the RENDERER
+#       mints. The anchor derivation substituted punctuation where the renderer deletes it, so all 169
+#       links in the table of contents were dead and no arm above could see it: (B) compares flag name
+#       sets and (G) compares bytes, and a document can be byte-reproducible with every link broken.
+#       The rule is restated here rather than imported from the generator — importing it would agree
+#       with the generator's own mistake — and a control breaks one fragment in a copy
 #   (I) SMELL-NAME FINDABILITY — the help entries that measure Fowler's Shotgun Surgery must NAME it,
 #       because COMMANDS.md is generated from --help and a hand-edit of the document alone is undone
 #       by the next regen; a control strips the name from a copy of the same text and must go red
@@ -613,6 +619,65 @@ elif [ -n "$( smellEntries "$smellMut" )" ]; then
 else
     ok "(I) mutation control — stripping the name from a copy of --help loses both entries (the arm can fail)"
 fi
+
+# ── (J) CONTENTS LINKS RESOLVE — to the anchor the RENDERER mints, not the one we would prefer ─────
+# WHY. The table of contents is generated: one `[`--flag`](#anchor)` per entry, derived from the flag's
+# spec. The derivation replaced every RUN of non-alphanumerics with a hyphen (`--in=DIR` -> `#in-dir`)
+# where the renderer's own rule DELETES that punctuation instead of substituting it (`#--indir`), so
+# all 169 links pointed at nothing and had done since this document was first generated. CodeRabbit
+# reported it on the --in row; markdownlint's MD051 had been reporting it 28 times on one line.
+# Nothing in the suite had ever looked at a link, which is how a whole table of contents came to be
+# dead inside a gated, byte-reproduced document.
+#
+# The renderer's rule is stated HERE rather than imported from the generator, deliberately: a gate that
+# asks the generator what the anchor should be agrees with whatever the generator says (the
+# self-referential-baseline trap). Fenced sample output is skipped — a `###` line inside a ``` block is
+# code and mints no anchor, and this document's --recall sample quotes its own headings.
+anchorAudit() {   # $1 = markdown file -> "<links> <unresolved> [sample...]"
+    python3 - "$1" <<'ANCHORPY'
+import collections, re, sys
+
+def slug( text ):                                        # GitHub's heading slug: lower-case, drop every
+    s = re.sub( r'[^\w\- ]', '', text.strip().lower() )   # char that is not word/-/space, spaces -> '-'
+    return s.replace( ' ', '-' )
+
+lines, fence, heads = open( sys.argv[ 1 ] ).read().split( '\n' ), False, []
+for line in lines:
+    if line.startswith( '```' ):
+        fence = not fence
+    elif not fence and re.match( r'^#{1,6} ', line ):
+        heads.append( line.split( ' ', 1 )[ 1 ] )
+seen, anchors = collections.Counter(), set()
+for h in heads:
+    b = slug( h )
+    seen[ b ] += 1
+    anchors.add( b if seen[ b ] == 1 else '%s-%d' % ( b, seen[ b ] - 1 ) )
+frags = re.findall( r'\]\(#([^)]+)\)', '\n'.join( lines ) )
+bad   = sorted( { f for f in frags if f not in anchors } )
+print( '%d %d %s' % ( len( frags ), len( bad ), ' '.join( bad[ :4 ] ) ) )
+ANCHORPY
+}
+aud="$( anchorAudit "$DOC" )"
+aLinks="$( printf '%s' "$aud" | cut -d' ' -f1 )"; aBad="$( printf '%s' "$aud" | cut -d' ' -f2 )"
+if [ -z "$aLinks" ] || [ "$aLinks" -lt 100 ]; then
+    no "(J) the audit found only '$aLinks' contents links in docs/COMMANDS.md — the arm has no target (vacuous)"
+elif [ "$aBad" = 0 ]; then
+    ok "(J) all $aLinks contents links resolve to an anchor the renderer mints"
+else
+    no "(J) $aBad of $aLinks contents links resolve to no heading: $( printf '%s' "$aud" | cut -d' ' -f3- ) — fix anchor_of in docs/docs_commands_build.py and regenerate"
+fi
+# mutation control: break ONE fragment in a copy, and the same audit must report exactly one dead link
+cp "$DOC" "$TMP/anchor.md"
+python3 - "$TMP/anchor.md" <<'ANCHORMUT'
+import sys
+p = sys.argv[ 1 ]
+s = open( p ).read().replace( '](#', '](#zzz-no-such-heading-', 1 )
+open( p, 'w' ).write( s )
+ANCHORMUT
+mAud="$( anchorAudit "$TMP/anchor.md" )"
+[ "$( printf '%s' "$mAud" | cut -d' ' -f2 )" = 1 ] \
+    && ok "(J) mutation control — one broken fragment in a copy audits as exactly one dead link" \
+    || no "(J) mutation control is inert: a copy with one broken fragment audits as '$mAud'"
 
 if [ "$fail" = 0 ]; then printf 'ALL PASS\n'; else printf 'FAILURES ABOVE\n'; fi
 exit "$fail"

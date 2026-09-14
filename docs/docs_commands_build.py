@@ -562,8 +562,39 @@ def shaped_by( entry, sections ):
 
 # ── rendering ─────────────────────────────────────────────────────────────────────────────────────
 
-def anchor_of( spec ):
-    return re.sub( r'[^a-z0-9]+', '-', spec.lower() ).strip( '-' )
+# THE ANCHOR THE HEADING ACTUALLY MINTS, which is not the one this function used to compute. Every
+# section is rendered as ``### `SPEC` ``, and the renderer (GitHub's slugger, and markdownlint's MD051
+# with it) lower-cases the heading text, DELETES every character that is not a word character, a hyphen
+# or a space, then turns the spaces into hyphens. Nothing is substituted and nothing is trimmed, so
+# `--in=DIR` becomes `--indir`: the two leading dashes survive and the `=` is gone.
+#
+# The old spelling replaced every RUN of non-alphanumerics with a hyphen and stripped the ends
+# (`--in=DIR` -> `in-dir`) — a plausible slug, and not this document's. CodeRabbit named it on the --in
+# row; the real count is the whole table of contents (all 169 links resolved to nothing), which is also
+# why the report arrived as 28 MD051 warnings on a single line. Gate: docscommandscheck arm (J), which
+# states the renderer's rule INDEPENDENTLY rather than importing this function — a gate that asks the
+# generator what the anchor should be agrees with whatever the generator says.
+def anchor_of( heading_text ):
+    return re.sub( r'[^\w\- ]', '', heading_text.strip().lower() ).replace( ' ', '-' )
+
+
+def assign_anchors( sections ):
+    """Give every entry the anchor its own heading will mint, in DOCUMENT order.
+
+    Per ENTRY and not per spec, because the renderer's rule for a repeated heading is to append `-1`
+    to the second one, and only a walk in emission order can know which one IS the repeat. No spec
+    repeats today (measured: 176 entries, 180 headings, no duplicate slug), so the suffix branch is
+    dormant — what it buys is that a repeat lands as TWO anchors the renderer agrees with, instead of
+    two contents links pointing at the first section. Recomputing from the spec in the contents loop
+    cannot do that, and the wrong link it would emit resolves, so no anchor gate would see it.
+    """
+    seen = {}
+    for _title, entries in sections:
+        for entry in entries:
+            base = anchor_of( '`%s`' % entry[ 'spec' ] )   # backticks fall to the same rule that drops `=`
+            n    = seen.get( base, 0 )
+            seen[ base ]      = n + 1
+            entry[ 'anchor' ] = base if n == 0 else '%s-%d' % ( base, n )
 
 
 # The --recall FLAG's own --help text says nothing about pointing it at a directory that is not a
@@ -697,12 +728,13 @@ def render( name, preamble, sections, captures, capturePath ):
     w( '' )
 
     # ── table of contents ──
+    assign_anchors( sections )   # in emission order: the anchors below are read, never recomputed
     w( '## Contents' )
     w( '' )
     for title, entries in sections:
         if not entries:
             continue
-        w( '**%s** — %s' % ( title, ' · '.join( '[`%s`](#%s)' % ( e[ 'flags' ][ 0 ], anchor_of( e[ 'spec' ] ) )
+        w( '**%s** — %s' % ( title, ' · '.join( '[`%s`](#%s)' % ( e[ 'flags' ][ 0 ], e[ 'anchor' ] )
                                                 for e in entries ) ) )
         w( '' )
 

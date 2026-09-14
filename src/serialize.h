@@ -1671,28 +1671,112 @@ struct MapAnnotations
     // slots 8 and 9 at main.cpp's mapAnn (seed below is filled by assignment, never positionally).
     const std::vector<RecentFile>* recent   = nullptr;
     std::size_t                    recentOf = 0;
+    // WAS HISTORY MINED, as a fact and not as a reading of the rows (CodeRabbit, review 5195637558). The block
+    // used to ride on `!recent->empty() || recentMergeBombsSkipped > 0`, which cannot tell a window that read
+    // no commit from one whose commits touched no indexed file: the first has no answer, the second answers
+    // n="0". main.cpp fills this from DecayedChurnMined::anyHistory. Filled by assignment, like seed.
+    bool                           recentMinedHistory = false;
     SeedDisclosure seed{};
+    // merge_bombs_skipped= on <recent> (2026-09-12): commits in the mined window the >kChurnMergeBombMaxFiles rule
+    // skipped, uncounted. Filled by assignment (after the positional slots), always emitted with the block.
+    std::uint32_t                  recentMergeBombsSkipped = 0;
+    // C1-b (2026-09-12): in=DIR. scopedRecent != nullptr ⇒ a SECOND <recent scope=> block follows the global one (even with
+    // zero rows: of="0" is "none found"); stubSymbols ⇒ the <f> groups collapse to <symbols total= shown="0" next=/>. Views
+    // point into main.cpp runDefaultMap locals that outlive every serialize() call. Filled by assignment, like seed.
+    const std::vector<RecentFile>* scopedRecent   = nullptr;
+    std::string_view               scopeDir;            // DIR as typed, trailing '/' stripped — the scope= value
+    std::size_t                    scopedRecentOf = 0;  // DIR's files any counted commit touched — the block's of=
+    std::size_t                    scopedOffset   = 0;  // the row this page starts at — the window's offset
+    int                            scopedLimit    = 0;  // the run's own --limit (0 = none), for the paging half's limit=
+    std::string_view               scopedNext;          // the next page's invocation; empty ⇒ no next page fits or exists
+    bool                           stubSymbols    = false;
+    std::string_view               stubNext;            // the same run without in= — the map the stub stands for
 };
 
 // F3: the <recent> element — rank_by=churn-decay's file-level answer FIRST, paths + age in days at HEAD's clock +
 // decayed weight — written before the first <f> group so "what changed recently" is answered before the symbol
 // map, not buried behind it. Absent (byte-free) on every other map and under multi-root.
 template <typename PathRel>
-inline void writeRecentRows( XmlWriter& w, const MapAnnotations& ann, const PathRel& pathRel, std::vector<char>& esc )
+inline void writeRcRows( XmlWriter& w, const std::vector<RecentFile>& rows, const PathRel& pathRel, std::vector<char>& esc )
 {
-    if( !ann.recent || ann.recent->empty() )
-    {
-        return;
-    }
     char rc[ 64 ];
-    rw::formatTo( rc, sizeof rc, "<recent n=\"{}\" of=\"{}\">", ann.recent->size(), ann.recentOf );
-    w.write( rc );
-    for( const RecentFile& r : *ann.recent )
+    for( const RecentFile& r : rows )
     {
         rw::formatTo( rc, sizeof rc, "\" age_d=\"{}\" w=\"{:.3g}\"/>", r.ageDays, r.weight );
         w.write( "<rc p=\"" );  w.write( escapeXml( pathRel( r.fileId ), esc ) );  w.write( rc );
     }
+}
+
+// ONE emitter for BOTH <recent> blocks — the global one and in=DIR's scoped twin. They differ only in the
+// attributes around the shared n=/of= count spelling, so they take them as parameters rather than as a second
+// copy of the tag: `pre` is the tag's subject (scope="DIR"), `post` the disclosure that follows the counts
+// (the global block's merge_bombs_skipped=, the scoped block's cap + paging half + next=). Composed on
+// std::string, never a fixed char[] — the rule above escapeXml (fixedbufsweep): `pre` carries ESCAPED text
+// and `post` carries already-markup, and a cut in either's escaped form is the defect that rule forbids.
+template <typename PathRel>
+inline void writeRecentBlock( XmlWriter& w, std::string_view pre, const std::vector<RecentFile>& rows, std::size_t of,
+                              std::string_view post, const PathRel& pathRel, std::vector<char>& esc )
+{
+    std::string open = "<recent";
+    open += pre;
+    open += " n=\"";   open += std::to_string( rows.size() );
+    open += "\" of=\""; open += std::to_string( of );
+    open += "\"";
+    open += post;
+    open += ">";
+    w.write( open );
+    writeRcRows( w, rows, pathRel, esc );
     w.write( "</recent>" );
+}
+
+template <typename PathRel>
+inline void writeRecentRows( XmlWriter& w, const MapAnnotations& ann, const PathRel& pathRel, std::vector<char>& esc )
+{
+    // The global block: absent only when there is NOTHING to say — no rows and no skipped commit. A window whose every
+    // commit was a merge bomb prints <recent n="0" of="0" merge_bombs_skipped="N"></recent>: zero rows and the reason,
+    // rather than an absent block a reader would take for "no history mined" (churndecaycheck arm 7h).
+    // `recent` says the rows exist to be written; `recentMinedHistory` says a commit was READ. Both, and
+    // NEITHER inferred from the other: a mined window with no indexed path touched prints n="0" of="0" (an
+    // answer), and a window that mined nothing prints no block at all (no answer to give).
+    const bool hasGlobal = ann.recent != nullptr && ann.recentMinedHistory;
+    if( hasGlobal )
+    {
+        std::string post = " merge_bombs_skipped=\"";
+        post += std::to_string( ann.recentMergeBombsSkipped );
+        post += "\"";
+        writeRecentBlock( w, {}, *ann.recent, ann.recentOf, post, pathRel, esc );
+    }
+    // C1-b: the directory-scoped block, AFTER the global one and additive to it (three of the six reference questions have
+    // their gold outside the named directory). n=/of= are this element's own count spelling (pageview.h, THE TRUNCATION
+    // VOCABULARY rule 2), so the paging half rides WITHOUT total= — of= already is it (pagingDisclosure's emitTotal=false).
+    //
+    // ABSENCE MATCHES THE GLOBAL BLOCK'S, deliberately. The legend promises "a SECOND recent block, after the unchanged
+    // global one", and a run that mined nothing (an unreachable --since) printed no global block and a scoped
+    // n="0" of="0" anyway — a block claiming to have looked under DIR when no commit was read at all. Now the scoped
+    // block rides exactly when the global one does: absent ⇒ no history was mined; n="0" ⇒ history was mined and
+    // nothing under DIR was touched. Those are different answers and they now look different.
+    //
+    // merge_bombs_skipped= is deliberately NOT repeated here. It counts the WINDOW's skipped commits, not DIR's, and
+    // stamping the window's number on a directory-scoped element reads as "N commits under DIR were skipped" — a
+    // wrong answer for any DIR smaller than the repository. It stays on the global block, which is the window's own.
+    if( ann.scopedRecent && hasGlobal )
+    {
+        const std::size_t windowEnd = ann.scopedOffset + ann.scopedRecent->size();
+        char              pd[ kPageDisclosureCap ];
+        rw::pagingDisclosure( pd, sizeof pd, ann.scopedRecentOf, windowEnd, ann.scopedLimit, int( ann.scopedOffset ),
+                              rw::kXmlPageSyntax, /*emitTotal=*/false );
+
+        std::string pre = " scope=\"";
+        pre += escapeXml( ann.scopeDir, esc );
+        pre += "\"";
+
+        // Rule 3: capped= is ALWAYS emitted beside the shown= it qualifies (here n=), never left absent for
+        // "nothing was cut" — a reader must not have to read a missing attribute as a guarantee.
+        std::string post = ann.scopedRecent->size() < ann.scopedRecentOf ? std::string( " capped=\"1\"" ) : std::string( " capped=\"0\"" );
+        post += pd;
+        post += nextAttrXml( ann.scopedNext );
+        writeRecentBlock( w, pre, *ann.scopedRecent, ann.scopedRecentOf, post, pathRel, esc );
+    }
 }
 
 // ---- C2 (harvest B): the seeded map's BITE disclosure, attribute half and legend half -------------------
@@ -1824,7 +1908,27 @@ inline constexpr const char* kChurnDecayRankLegend =
     "sibling when structure and recent churn agree, and diverge where a stale-but-central symbol meets a "
     "fresh, sparsely-called one. recent: the file-level answer to what changed recently, FIRST — the n= files the "
     "NEWEST commits touched, of the of= files any commit touched, as rc p= age_d= (days since the file's newest "
-    "commit, at HEAD's clock) w= (its decayed weight), age_d asc then w desc then path; absent under multi-root -->";
+    "commit, at HEAD's clock) w= (its decayed weight), age_d asc then w desc then path; absent under multi-root. "
+    "merge_bombs_skipped= counts the commits in the mined window that touched more than 100 INDEXED files (files this "
+    "crawl holds, never the commit's raw file count) and were SKIPPED, uncounted (bulk sweeps, wide merges): a file only "
+    "such a commit touched is absent from these rows and from the prior, so a 0 means no commit was skipped, never that "
+    "none could be. It counts the WINDOW's commits, so it rides this block only -->";
+static_assert( kChurnMergeBombMaxFiles == 100, "kChurnDecayRankLegend spells the merge-bomb threshold as 100 — move both together" );
+
+// C1-b (2026-09-12): the in=DIR clause, spliced only when the scoped block is present (zero bytes elsewhere). Two halves around
+// kNextLegendClause, the ONE definition of next= every legend that meets it splices. No "--" inside a comment (G4).
+inline constexpr const char* kRecentScopeLegendOpen =
+    "<!-- in=DIR: recent scope=DIR is a SECOND recent block, riding exactly when the unchanged global one does, with DIR's "
+    "files only — p= root-relative exactly as the global block spells them, same order; n= rows on this page of of= files "
+    "under DIR any counted commit touched (of= IS this element's total, so the paging half below carries none); capped=1 "
+    "means DIR has more rows than this page; has_more=1 that a next page exists, at next_offset=; offset=/limit= the window "
+    "this page was cut by (limit=0 means no explicit limit was given). An absent block means no history was mined at all; "
+    "n=0 means history was mined and no file under DIR was touched. merge_bombs_skipped= is NOT repeated here: it counts "
+    "the window's skipped commits, not DIR's. ";
+inline constexpr const char* kRecentScopeLegendClose =
+    "symbols stubbed=1 would_show= next=: the symbol map this run did NOT ask for and did not render — would_show= is that "
+    "run's own shown=: DEFINITIONS, counted individually exactly as shown= counts them, so that run's <s> row count follows "
+    "from rows+sum(overloads-1)=shown; never the corpus total, which is this document's symbols=. next= fetches them -->";
 
 // Which churn legend belongs to which churn ranker — the table-driven form the sibling rankBy lookup uses,
 // so a third churn variant adds a row and not a branch.
@@ -2184,22 +2288,32 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         return rootArg.empty() ? std::string_view( ing.files[ fileId ] ) : rw::sarif::rootRelativeUri( ing.files[ fileId ], rootPrefix );
     };
 
-    // rank order: (rank desc, id asc) — the id tie-break makes the top-K deterministic.
-    std::vector<NodeId> order( S );
-    for( NodeId i = 0; i < S; ++i )
-    {
-        order[i] = i;
-    }
-    sortutil::radixSortByScoreDescId( order, rank );
-
+    // C1-b: `keep` is the row count the map WOULD print, and it depends on topK and S alone — never on the
+    // ranking. So under in=DIR's stub it is still the honest would_show=, and every step that exists only to
+    // ORDER and BUCKET rows nobody prints is skipped: the radix sort over S symbols, the files-sized bucket
+    // allocation, and the fill loop. (The <f> loop below already walked an empty order; this is the work that
+    // ran to feed it.)
     const std::size_t keep = std::min<std::size_t>( topK > 0 ? std::size_t( topK ) : S, S );
+    const bool        stubbed = ann.stubSymbols;
+
+    // rank order: (rank desc, id asc) — the id tie-break makes the top-K deterministic.
+    std::vector<NodeId> order;
+    if( !stubbed )
+    {
+        order.resize( S );
+        for( NodeId i = 0; i < S; ++i )
+        {
+            order[i] = i;
+        }
+        sortutil::radixSortByScoreDescId( order, rank );
+    }
 
     // bucket the kept symbols by file, files ordered by their best (first-seen) rank.
-    std::vector<std::vector<NodeId>> buckets( ing.files.size() );
+    std::vector<std::vector<NodeId>> buckets( stubbed ? 0 : ing.files.size() );
     std::vector<std::uint32_t>       fileOrder;
-    std::vector<char>                seen( ing.files.size(), 0 );
+    std::vector<char>                seen( stubbed ? 0 : ing.files.size(), 0 );
 
-    for( std::size_t k = 0; k < keep; ++k )
+    for( std::size_t k = 0; !stubbed && k < keep; ++k )
     {
         const NodeId        id = order[k];
         const Symbol&       s  = ing.symbols[id];
@@ -2217,7 +2331,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // T3 note: the auto-order decision keys off the MAP's own estimate, NOT the payload — the fill-order
     // heuristic reasons about the map that gets reordered; the appended <bodies>/<sigs>/<src> blocks are
     // emitted after and cannot be reordered, so they must not shift the map's primacy/recency decision.
-    const TokenEstimate mapEst      = estimateTokens( ing, order, keep, outOff, outTargets );
+    // C1-b: under the stub the map prints NO symbol rows, so the estimate is taken over none of them. It used
+    // to be taken over `keep` rows the document does not contain, which put an est_tokens= in the header for a
+    // payload that was not there — and paid a per-symbol pass to compute it.
+    const TokenEstimate mapEst      = estimateTokens( ing, order, stubbed ? 0 : keep, outOff, outTargets );
     const std::size_t   mapEstTokens = mapEst.tokens;
 
     // T3: fill-aware auto important-last. A PURE function of estTokens (itself a pure function of the
@@ -2298,6 +2415,12 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     if( churnWindow != nullptr )
     {
         legend += churnRankLegendFor( ann.churnRankLabel ); // §A9.6 / P0-4, churn-only (see the constants)
+        if( ann.scopedRecent != nullptr )
+        {
+            legend += kRecentScopeLegendOpen;   // C1-b: in=DIR — the scoped block, its page, and the map stub (present-only)
+            legend += kNextLegendClause;
+            legend += kRecentScopeLegendClose;
+        }
     }
     // §B2.1: the same treatment for authority/hub/rrf. Mutually exclusive with the churn arm by construction
     // (main.cpp fills exactly one of the two fields), and null on the default pagerank map ⇒ zero bytes there.
@@ -2438,7 +2561,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         stats += std::to_string( ing.files.size() );
         stats += " symbols=";    stats += std::to_string( S );
         stats += " edges=";      stats += std::to_string( outTargets.size() );
-        stats += " shown=";      stats += std::to_string( keep );
+        stats += " shown=";      stats += std::to_string( ann.stubSymbols ? std::size_t( 0 ) : keep );   // C1-b: the stub prints no row
         stats += " est_tokens="; stats += std::to_string( estTokens );
         stats += " ambiguous=";  stats += std::to_string( ambTotal );
         stats += " unresolved="; stats += std::to_string( unresolvedTotal );
@@ -2568,7 +2691,46 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         }
     }
     writeRecentRows( w, ann, pathRel, esc );   // F3: rank_by=churn-decay's file-level answer, before the symbol map
-    for( std::uint32_t f : fileOrder )
+    // C1-b: under in=DIR the symbol map is a DISCLOSED stub (docs/METHODOLOGY.md §9.3) — the caller asked for DIR's
+    // recent files, not the map.
+    //
+    // NOT total=/shown=, which is what this first shipped as. Under pageview.h's vocabulary total= is THE TOTAL
+    // (rule 2) and capped= always rides beside a shown= (rule 3), and the stub had neither property: it printed
+    // total="200" — the --top-k PAGE SIZE — on a document whose own header says symbols="18457", with no capped=,
+    // so the one number it carried was the one number it was not allowed to mean. The stub is not a page of the map
+    // and it must not borrow the page vocabulary to say so. It says what it IS instead:
+    //   stubbed="1"     the symbol map was not rendered at all (the <f> loop walks an empty order below)
+    //   would_show="N"  `keep` — the un-stubbed header's own shown=, and shown= counts symbol DEFINITIONS
+    //                   individually, not printed rows: the print loop runs collapseOverloadRows() per file
+    //                   bucket, so a const/non-const pair that both make the top-K cut prints ONE row carrying
+    //                   overloads=2. The row count therefore FOLLOWS from the identity the map legend already
+    //                   publishes for shown= — rows+sum(overloads-1)=shown — rather than being reported here.
+    //                   Measured on this repo 2026-09-14: shown=200, 193 <s> rows, 7 at overloads=2, 193+7=200.
+    //                   IT IS A DEFINITION COUNT AND NOT A CEILING, by owner decision 2026-09-14, and the
+    //                   reason is vocabulary: in this tool a floor/ceiling marker means "we could not see
+    //                   everything" (counts_floor=, _capped, the truncation disclosures). would_show is EXACT;
+    //                   what differs from a reader's guess is the UNIT. Spending an uncertainty marker on a
+    //                   unit difference would make "ceiling" mean "exact, but not in the unit you assumed" and
+    //                   weaken every honest use of the word elsewhere in the output. Naming the quantity is
+    //                   also the stronger claim: a ceiling cannot be inverted, while a definition count plus
+    //                   the published identity yields the rows. Reporting post-collapse rows instead — the
+    //                   review's original ask — is not available at this site for any price worth paying:
+    //                   which definitions survive the cut is a fact about the RANKING, and not ranking is the
+    //                   whole point of the stub (no pr_iters= rides its header). Not the corpus total either
+    //                   (that is symbols=), so the three cannot be read as each other.
+    //                   test/recentscopecheck.sh arms 14a/14b pin the arithmetic.
+    // Rule 3's own sentence sanctions the shape: "If a verb emits no shown=, it emits no capped= either."
+    if( ann.stubSymbols )
+    {
+        std::string stub = "<symbols stubbed=\"1\" would_show=\"";   // std::string, not a char[]: next= is already-markup (fixedbufsweep's rule)
+        stub += std::to_string( keep );   // `keep` is computed above from topK and S alone — the count with no ranking behind it
+        stub += "\"";
+        stub += nextAttrXml( ann.stubNext );
+        stub += "/>";
+        w.write( stub );
+    }
+    static const std::vector<std::uint32_t> kNoFiles;
+    for( std::uint32_t f : ann.stubSymbols ? kNoFiles : fileOrder )
     {
         w.write( "<f p=\"" );  w.write( escapeXml( pathRel( f ), esc ) );  w.write( "\"" );
         if( const char* fl = builtinLayer( ing.files[f] ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }   // P3

@@ -161,7 +161,7 @@ TABLE = {
     ( "src/verbs_report.h", "row" ): ( 5, "safe",       "row[96] + row[192], runSkipped's two row emitters (§L1). row[96] at the <f> drop row: '\" why=\"%s\" bytes=\"%llu\" ext=\"' where %s is the CLOSED vocabulary {oversize, excluded, unsupported-ext, ignored, ignored-dir, nest-refused, escaped-root} (15 B longest, still unsupported-ext; escaped-root is 12) = ~60 B. row[192] at the <h> parse-health row: three %s from the closed why= vocabulary (31 B for the joined 'degraded-parse,minified-suspect'), one %u, two %.3f of ratios that are <=1.0 by construction (errBytes sums DISJOINT top-most ERROR spans, ws sample is its own denominator) and 14 B even if a future edit broke that, one %u = ~131 B. Both p= values are written by escapeXml OUTSIDE the buffer." ),
     # ── src/mcpverbs.h ───────────────────────────────────────────────────────────────────────────────────
     ( "src/mcpverbs.h", "nb" ): ( 7, "safe",       "nb[160] x4: the CLI notes' MCP twins, byte-identical format. Plural '' / 's' only." ),
-    ( "src/pageview.h", "buf + written" ): ( 1, "safe",   "pageDisclosure's H8 floor marker (capture-audit L4): the %s is syn.floor, one of TWO fixed literals (' counts_floor=\"1\"' 17 B, or its JSON twin ',\"counts_floor\":true' 20 B), appended AFTER the paging snprintf into the SAME caller buffer with the remaining capacity (bufCap - written) as its size, guarded by written < bufCap. Every caller's buffer is sized against kPageDisclosureCap, which the floor literal is part of by construction; nothing user-supplied, nothing escaped." ),
+    ( "src/pageview.h", "buf + written" ): ( 3, "safe",   "THREE appends into the TAIL of a caller buffer, all bounded by (bufCap - written) and guarded by a written-versus-bufCap test, and all three sized against kPageDisclosureCap by construction. (1) pageDisclosure's H8 floor marker (capture-audit L4): the %s is syn.floor, one of TWO fixed literals. (2,3) pagingDisclosure's two dialect arms (C1-b, 2026-09-13): the paging half is written after an OPTIONAL leading total=, so an element that already spells its total under its own name (the map's <recent of=>) can skip it — the arms interpolate counts and the syntax table's boolean literals only, nothing user-supplied and nothing escaped." ),
     # ── src/packtask.h ───────────────────────────────────────────────────────────────────────────────────
     ( "src/packtask.h", "open" ):      ( 3, "safe",       "open[160] (`%.*s` x2, so INVISIBLE to the pre-wave-3 population, and it is an XML OPEN TAG — the shape §B14 is about): packTaskListSection's '<TAG EXTRA shown=\"%zu\" total=\"%zu\" capped=\"%d\">'. Safe by ARITHMETIC, not by shape. 30 B of literal ('<' 1 + ' shown=\"' 8 + '\" total=\"' 9 + '\" capped=\"' 10 + '\">' 2). tag comes from the THREE call sites (:901 'far', :1385 'callers', :1452 'notes' — 'tests' left this helper in the review of #214, see the third site below) ⇒ 7 B. extraAttr is farAttr[32]/callersAttr[32] or the empty literal, and those two are themselves ' of_top=\"%zu\"' snprintf'd into a char[32] ⇒ 31 B at most. Two %zu ⇒ 20 digits each, %d ⇒ 1. Worst case 30+7+31+20+20+1 = 109 B + NUL against 160: 50 B of margin. NOTE both `.*` precisions are int( v.size() ) — they print a string_view, they do not clamp it; the bound is the caller vocabulary and the char[32] feeding extraAttr. SECOND SITE (review of #214, :420): packTaskTestsSection writes the <tests> open tag itself, because that section cuts over its own GROUPED rendering rather than over independent entries. Its own open[160], and the narrowest of the three: the tag is the LITERAL 'tests' (no %.*s at all), so the format is a fixed 35 B ('<tests shown=\"' 14 + '\" total=\"' 9 + '\" capped=\"' 10 + '\">' 2) plus two %zu at 20 digits and one %d at 1 — worst case 76 B + NUL against 160, 83 B of margin. All-numeric, no caller vocabulary to bound. THIRD SITE (2026-08-28 serving-shape round, :1091): restatePackTaskBodiesWrapper restates the bodies open tag into its own open[112] — two %zu at 20 digits, a fixed capped literal, and a %s that is the 13 B compress literal or empty, ~35 B of literal in total, worst case 88 B against 111 usable. All-numeric/fixed-vocab, same class as the first site." ),
     # ── src/partition.h ──────────────────────────────────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ NUMERIC_ONLY = {
     ( "src/serialize.h", "nb" ): 1,   # row 6 (2026-09-12): appendCalleeNameRow's `"\" l=\"{}\"/>"` buffer went with the merge
     ( "src/serialize.h", "precAttr" ): 1,
     ( "src/serialize.h", "rankAttr" ): 1,
-    ( "src/serialize.h", "rc" ): 2,
+    ( "src/serialize.h", "rc" ): 1,
     ( "src/serialize.h", "rootsAttr" ): 1,
     ( "src/serialize.h", "sh" ): 1,
     ( "src/serialize.h", "skippedAttr" ): 1,
@@ -467,6 +467,18 @@ if not bad:
 #            because formatTo's SILENT truncation is precisely what was not saving the old bound — it writes
 #            at most cap-1 and its return is not read there, so an overrun would have dropped the closing
 #            quote of truncated=" and shipped a malformed root. Same buffer, same one call, same one row.
+#            2026-09-14 (MERGE of lane/recent-scope with #214, and the reason this pin is re-derived rather
+#            than resolved): BOTH sides moved this pin from the SAME base 49220049 — mentions 322 -> 324,
+#            calls/sites 218 -> 219 — for DIFFERENT reasons (this lane: --in=DIR's scoped-recent emitters,
+#            pageview.h's `buf + written` tail going one entry to three and serialize.h's `rc` re-derived;
+#            #214: prcontext's est-unmeasured label and the tail[256] -> tail[320] growth). Identical text on
+#            both sides means git auto-merges the line CLEAN at 324/219/219, and that value describes NEITHER
+#            tree: the merged population carries both sets of additions. Re-derived from the merged source by
+#            the gate's own arithmetic — mentions 326, calls 220, sites 220 — and cross-checked against the two
+#            deltas summing (322+2+2, 218+1+1). rows/widthforms UNCHANGED at 92/0, and (S1)/(S2)/(S1b) pass on
+#            the merged tree, so every one of the 220 sites is classified, no TABLE row is stale, and no new row
+#            is owed: only the counts moved. A pin two lanes raised to the same number from the same base is the
+#            case where neither side is correct (memory: trap-neither-side-of-a-pin-conflict-is-correct).
 #            2026-09-14 (MERGE of lane/sc-legend with main at 0b118ac1 — NEITHER SIDE'S NUMBER WAS RIGHT):
 #            mentions 326, calls 220, sites 220, rows 94. Both sides of this line said 324, and both were
 #            correct about their own tree: this lane re-derived 323 -> 324 for the chooseExpandServe split,
@@ -479,7 +491,17 @@ if not bad:
 #            accounted for and every row's multiplicity already matches source — the two new TABLE rows of
 #            this lane (fileOpen[200], bundleOpen[200]), `main.cpp open` at 2, and packtask.h's `open` at 3
 #            among them. Only the totals line moved.
-EXPECTED = { "mentions": 326, "calls": 220, "sites": 220, "rows": 94, "widthforms": 0 }
+#            2026-09-14 (MERGE with #215, and the THIRD lane to raise this pin to the same number from a
+#            different base): main before #215 stood at 324/219/219; this lane derived 326/220/220 from it and
+#            #215 independently derived 326/220/220 from it, each +2 mentions and +1 call/site for unrelated
+#            reasons — so for the third time the two sides agree on a value that describes NEITHER merged tree,
+#            and git auto-merges everything except the rows field. #215 landed first, so its delta is in the
+#            baseline and this lane's has to be added on top: 324+2+2 = 328 mentions, 219+1+1 = 221 calls and
+#            sites. Re-derived from the merged source by the gate itself rather than accepted as arithmetic, and
+#            (S1) confirms the MEMBER SET behind the numbers: 221 sites over 35 hand-classified TABLE rows (33
+#            plus #215's two new ones) and 59 derived NUMERIC_ONLY rows, with (S2) reporting no stale row and
+#            (S1b) nothing breaching. rows is 94 from #215's two additions, which this lane does not touch.
+EXPECTED = { "mentions": 328, "calls": 221, "sites": 221, "rows": 94, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

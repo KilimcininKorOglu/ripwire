@@ -374,26 +374,50 @@ inline std::string secondaryCutAttrs( const char* noun, std::size_t shown, std::
 // five facts too, and a second body with the quotes moved around is exactly the clone that lets the two
 // dialects drift. XML callers keep the default and are byte-identical (syn.yes/no are "1"/"0", which is what
 // the old "%u" printed).
+// `emitTotal=false` drops the leading total= for an element that ALREADY carries the row total under its own
+// name — the same judgement secondaryCutAttrs' `totalAttr = nullptr` makes one paragraph above, and for the
+// same reason §P8/N4 dropped the bare shown= beside a noun-prefixed pair: stating one fact twice under two
+// names forces a parser to know they are the same number to avoid double-counting it. The map's <recent>
+// blocks spell their total as of= (rule 2's "the report's own count attribute"), so they pass false; every
+// pre-existing caller keeps the default and is byte-identical.
 inline const char* pagingDisclosure( char* buf, std::size_t bufCap, std::size_t rowTotal,
                                      std::size_t windowEnd, int limit, int offset,
-                                     const PageSyntax& syn = kXmlPageSyntax ) noexcept
+                                     const PageSyntax& syn = kXmlPageSyntax, bool emitTotal = true ) noexcept
 {
     // M2: a CUT primary listing (windowEnd < rowTotal — the caller's own <noun>_capped="1") carries the
     // paging half on a bare run too, for the same reason pageDisclosure's cap half now does.
     const bool hasMore = windowEnd < rowTotal;
     if( limit <= 0 && offset <= 0 && !hasMore ) { buf[0] = '\0';  return buf; }
 
+    // The four rendered VALUES are decided once, above both dialects, instead of being re-derived inside each
+    // arm's argument list — which is what this function used to do, four ternaries per arm. total= is then
+    // written separately when the element wants it, so the optional attribute costs one branch rather than a
+    // second copy of the whole format string. (The format string itself must stay a LITERAL per arm: rw::formatTo
+    // takes a consteval std::format_string, so a PageSyntax row cannot carry it — see the table's own note.)
+    const char* const hasMoreOut = hasMore ? syn.yes : syn.no;
+    const std::size_t nextOrTotal = hasMore ? windowEnd : rowTotal;
+    const int         offsetOut  = offset > 0 ? offset : 0;
+    const int         limitOut   = limit  > 0 ? limit  : 0;
+
+    std::size_t written = 0;
+    if( emitTotal )
+    {
+        written = syn.json ? rw::formatTo( buf, bufCap, ",\"total\":{}", rowTotal )
+                           : rw::formatTo( buf, bufCap, " total=\"{}\"", rowTotal );
+    }
+    if( written >= bufCap )
+    {
+        return buf;
+    }
     if( syn.json )
     {
-        rw::formatTo( buf, bufCap, ",\"total\":{},\"has_more\":{},\"next_offset\":{},\"offset\":{},\"limit\":{}",
-                      rowTotal, hasMore ? syn.yes : syn.no,
-                      hasMore ? windowEnd : rowTotal, offset > 0 ? offset : 0, limit > 0 ? limit : 0 );
+        rw::formatTo( buf + written, bufCap - written, ",\"has_more\":{},\"next_offset\":{},\"offset\":{},\"limit\":{}",
+                      hasMoreOut, nextOrTotal, offsetOut, limitOut );
     }
     else
     {
-        rw::formatTo( buf, bufCap, " total=\"{}\" has_more=\"{}\" next_offset=\"{}\" offset=\"{}\" limit=\"{}\"",
-                      rowTotal, hasMore ? syn.yes : syn.no,
-                      hasMore ? windowEnd : rowTotal, offset > 0 ? offset : 0, limit > 0 ? limit : 0 );
+        rw::formatTo( buf + written, bufCap - written, " has_more=\"{}\" next_offset=\"{}\" offset=\"{}\" limit=\"{}\"",
+                      hasMoreOut, nextOrTotal, offsetOut, limitOut );
     }
     return buf;
 }
