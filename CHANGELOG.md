@@ -27,12 +27,19 @@ banner is 217 B from an 87-character worktree root and 67 B from a 12-character 
 75-character rename, about 2 B per character because the root is spelled twice. The same commit, the same
 binary and byte-identical gate output therefore reported `skip=2` from a 137-character checkout and
 `skip=3` from a 38-character one, differing only in how one honest arm-level SKIP fell relative to byte
-400. The suite's summary line is what a contributor reads before every push, so a count that moves with
+400. That observation belongs to a named tree: commit `3c191bdf` on a feature branch, where
+`test/w3fixlegendcheck.sh`'s N=3 partition arm ties (`TIE 0.0928 vs 0.093`) and honestly skips near the
+top of its transcript. Re-run on that tree from two checkouts with the same binary and arm output
+byte-identical after line 1, the tie row starts at byte 308 from a 38-character root and 408 from a
+138-character one — it straddles the window by 8 bytes. On the merge base that arm does not tie, so the
+symptom cannot be shown there at any path length, and an absolute offset is a property of a tree rather
+than of a gate. The suite's summary line is what a contributor reads before every push, so a count that moves with
 the pathname is not evidence.
 
 The exposure was not one gate's, and the dangerous direction was the opposite one. Measured over all 628
-gate transcripts of one full suite run on this repository: 28 gates print their skip marker downstream of
-at least one absolute-root mention, so their classification travelled with the checkout. The nearest was a
+gate transcripts of one full suite run on this repository: 24 gates print a skip MARKER downstream of at
+least one absolute-root mention — 28 by the bare substring the old rule actually looked for, the four
+extra being gates that only narrate the word — so their classification travelled with the checkout. The nearest was a
 REAL standing skip — `test/editchecknotecheck.sh` declares its skip at byte 145, and 255 more characters
 of checkout path (a 342-character root, ordinary for a nested worktree or a CI runner) push that
 declaration out of the window, at which point a gate that proved nothing is counted as a pass. Which gates
@@ -59,6 +66,15 @@ no-op for the other caller: that one searches a line at a time, and a single lin
 find. The arm that pins it, (D2), deliberately does NOT print the one unanchored alternative — a probe
 carrying it would be matched by accident and the arm would pass while asserting nothing, which is the
 difference between a test and a demonstration.
+
+One direction is newly open and is disclosed rather than left to be discovered. A whole-gate skip that
+prints any PASS row BEFORE its skip marker now counts as a pass, because in a transcript it is
+indistinguishable from a gate that proved an arm and then skipped one. No gate in the suite does this
+today — the replay above is the evidence — and it is the convention both sanctioned skips already follow,
+but nothing enforces it: a gate that grew a fixture-present PASS row above its skip banner would go from
+skip to pass silently. Enforcing it needs a static sweep of every gate's skip path, which belongs beside
+`test/gateexitcheck.sh` arm (D); that arm flags an `exit 0` only where a skip word and `ALL PASS` appear
+within three lines of each other, so it does not police marker order and never did.
 
 `test/skipclassifycheck.sh` is the gate, and it drives the real `test/pargates.py` rather than a
 reimplementation of it: one probe gate, byte-identical, classified from two corpus roots about 130

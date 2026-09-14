@@ -404,15 +404,24 @@ def failure_report(out, logpath):
 # This used to read `"SKIP" in out[:400]` -- a ruler laid over the transcript, and the transcript's origin moves.
 # Gates open with a banner naming their own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) -- 515 of the 628
 # transcripts in one full run carry the crawl root in their first line -- so for those the window's CONTENTS are a
-# function of the checkout's pathname. Measured on w3fixlegendcheck, whose
-# output is byte-identical after line 1: the banner is 217 B from an 87-char root and 67 B from a 12-char one, and
-# every offset after it moves by that 150 B -- about 2 B per character of path, because the root is spelled twice.
-# The same commit, the same binary and byte-identical gate output then reported `skip=2` from a 137-char checkout
-# and `skip=3` from a 38-char one, differing only in how one honest arm-level SKIP fell relative to byte 400.
+# function of the checkout's pathname. Measured on w3fixlegendcheck, whose output is byte-identical after line 1:
+# the banner is 217 B from an 87-char root and 67 B from a 12-char one, and every offset after it moves by that
+# 150 B -- about 2 B per character of path, because the root is spelled twice.
+#
+# REPRODUCED, and the tree matters. The reported symptom was `skip=2` from a 137-char checkout against `skip=3`
+# from a 38-char one on 3c191bdf -- a commit on lane/recent-scope, NOT on main. On that tree w3fixlegendcheck's
+# N=3 partition arm TIES (`TIE 0.0928 vs 0.093`) and honestly skips, and that tie row is the third thing the gate
+# prints. Running that tree's gate from two checkouts, same binary, arm output byte-identical after line 1:
+#     38-char root    banner 168 B    tie row starts at 308    -> old rule: SKIP
+#    138-char root    banner 268 B    tie row starts at 408    -> old rule: PASS
+# It straddles the window by 8 bytes. On main (c1915d21) that arm does NOT tie -- N=3 passes -- so its only skip
+# marker is the NDEBUG degrade row about 3 KB in, and the symptom does not reproduce there at any path length.
+# An absolute offset in this comment is therefore a property of a named tree, never a constant of the gate.
 # `skip=` is read before every push; a count that moves with the pathname is not evidence.
 #
-# AND THE EXPOSURE IS NOT ONE GATE'S. Measured over all 628 transcripts of one full run: 28 gates print their skip
-# marker downstream of at least one absolute-root mention, so their classification moves with the checkout. The
+# AND THE EXPOSURE IS NOT ONE GATE'S. Measured over all 628 transcripts of one full run: 24 gates print a skip
+# MARKER downstream of at least one absolute-root mention (28 by the bare substring the old rule actually looked
+# for, the extra four being gates that only narrate the word), so their classification moves with the checkout. The
 # nearest is a REAL standing skip -- editchecknotecheck declares its skip at byte 145, and 255 more characters of
 # checkout path (a 342-char root: ordinary for a nested worktree or a CI runner) push that declaration out of the
 # window, at which point the suite reports a gate that proved nothing as a PASS. Which gates are in range is a
@@ -421,18 +430,30 @@ def failure_report(out, logpath):
 # THE RULE: a gate that proves nothing says so BEFORE it claims anything. The FIRST verdict marker in the
 # transcript decides -- a SKIP ahead of every PASS and FAIL marker is a WHOLE-GATE skip ("ran, but proved
 # nothing"); a SKIP that follows one is an ARM-level skip inside a gate that did prove something, and the gate is
-# a pass. That is what this tree already did on purpose -- namingcalibrationcheck runs its live arm FIRST "so that
-# its SKIP banner lands inside the first bytes of output", argvdiffcheck's skip is its opening line -- now written
-# down and free of the offsets. Measured over one full run's 628 transcripts, the new rule and the old one
+# a pass. That is what this tree already did on purpose -- namingcalibrationcheck runs its live arm FIRST so that
+# its skip banner precedes the instrument arm's pass rows, argvdiffcheck's skip is its opening line -- now written
+# down and free of the offsets. (That gate's comment used to justify the order by byte offset; this same change
+# rewrote it, so there is no longer a sentence there to quote.) Measured over one full run's 628 transcripts, the new rule and the old one
 # disagree on ZERO gates: it reproduces today's answers on this tree and stops needing the pathname to do it.
 #
 # MARKERS, NOT SUBSTRINGS. Five gates NARRATE the word SKIPPED (doctorcheck, formatgatecheck, headbinstagecheck,
 # mcpreadloopcheck, releaseinstallcheck) and prove plenty, so a verdict must be a row this tree's helpers actually
 # print -- `  SKIP  x` from skip(), `<name>: SKIP ...`, `SKIP: ...`, `...; SKIP` -- never a bare mention of the
-# word. The GATE side of this contract is test/gateexitcheck.sh arm (D) ("a skip prints a skip marker and a reason
-# and NO failure marker"); this harness side is pinned by test/skipclassifycheck.sh.
+# word. The nearest gate-side contract is test/gateexitcheck.sh arm (D), but it holds LESS than the rule above: it
+# flags an `exit 0` only where both a skip word and "ALL PASS" appear within three lines of it, so it does not
+# police marker ORDER at all. This harness side is pinned by test/skipclassifycheck.sh.
+#
+# THE DIRECTION THIS RULE OPENS, disclosed rather than discovered later. A WHOLE-GATE skip that prints any PASS row
+# BEFORE its skip marker is now counted as a PASS -- it looks exactly like a gate that proved something and then
+# skipped an arm, and no transcript can tell the two apart. No gate in the suite does this today (the 628-transcript
+# replay is the evidence) and the convention "announce the skip before you claim anything" is what the two
+# sanctioned skips already follow, but NOTHING ENFORCES IT: a gate that grew a `  PASS  fixture present` row above
+# its skip banner would go from skip to pass silently. That is the green-while-inert direction this count exists to
+# refuse, so it is stated here as an unenforced convention and is the obvious next arm for gateexitcheck.
 _SKIP_RE = re.compile(r"^[ \t]*SKIP\b|^\S+:[ \t]*SKIP\b|;[ \t]*SKIP[ \t]*$", re.M)
-_PASS_RE = re.compile(r"^[ \t]*PASS\b|^[ \t]*ALL PASS\b|^\S+:[ \t]*ALL PASS\b", re.M)
+# The `<name>: PASS` form is real: 15 gates print it, w3fixlegendcheck among them. Widening to it changes 0 of the
+# 628 (no gate that prints it also prints a skip marker), so this is a latent hole closed, not a behaviour change.
+_PASS_RE = re.compile(r"^[ \t]*PASS\b|^[ \t]*ALL PASS\b|^\S+:[ \t]*(?:ALL )?PASS\b", re.M)
 
 
 def classify_skipped(rc, out):

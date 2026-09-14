@@ -13704,21 +13704,29 @@ change publishes, the corpus they were measured on, and how to rebuild that corp
 itself is pinned by `test/skipclassifycheck.sh`; the classifier is `classify_skipped()` in
 `test/pargates.py`; the gate-side half of the contract is `test/gateexitcheck.sh` arm (D).
 
-**The defect, in one measurement.** A gate's transcript opens with a banner naming its own absolute paths.
-`test/w3fixlegendcheck.sh`'s transcript is byte-identical after line 1 at any checkout, so the banner is
-the only thing that moves:
+**The defect, in one measurement.** A gate's transcript opens with a banner naming its own absolute paths,
+and `test/w3fixlegendcheck.sh`'s transcript is byte-identical after line 1 at any checkout, so the banner
+is the only thing that moves: **217 B** from an 87-character worktree root against **67 B** from a
+12-character one. That is 150 B of shift from a 75-character rename — about 2 B per character, because the
+root is spelled twice. Any gate whose skip marker sat near byte 400 was therefore classified one way in
+one checkout and the other way in another.
 
-| checkout root | banner | first skip row starts at |
-| --- | ---: | ---: |
-| 87-character worktree root | 217 B | 3501 |
-| 12-character root (same tree via a symlink) | 67 B | 3351 |
+**The reported symptom, reproduced — and it belongs to a named tree.** The original observation was
+`skip=2` from a 137-character worktree against `skip=3` from a 38-character one, on commit `3c191bdf`
+(a feature branch, not the merge base). On that tree w3fixlegendcheck's N=3 partition arm ties
+(`TIE 0.0928 vs 0.093`) and honestly skips, and the tie row is the third thing the gate prints. Running
+that tree's own gate from two checkouts with one binary, arm output byte-identical after line 1:
 
-150 B of shift from a 75-character rename — about 2 B per character, because the root is spelled twice.
-The classifier's window was the first 400 bytes, so any gate whose skip marker sat near that offset was
-classified one way in one checkout and the other way in another. The originally reported symptom was
-`skip=2` from a 137-character worktree against `skip=3` from a 38-character one on commit `3c191bdf`, with
-byte-identical gate output; that observation is reported rather than re-measured here, and the
-reproduction below is the measured form of it.
+| checkout root | banner | the tie row starts at | old rule's verdict |
+| --- | ---: | ---: | --- |
+| 38 characters | 168 B | 308 | SKIP |
+| 138 characters | 268 B | 408 | PASS |
+
+It straddles the 400-byte window by 8 bytes. On the merge base `c1915d21` that arm does **not** tie — N=3
+passes — so w3fixlegendcheck's only skip marker there is the NDEBUG degrade row about 3 KB in, and the
+symptom cannot be shown on that tree at any path length. This is why an absolute byte offset in this
+section always names the tree it was taken on: the offsets are a property of a gate's output on a
+particular corpus, and only the banner arithmetic and the 400-byte boundary are constants.
 
 **Population.** One full suite run on main at `c1915d21` captures **628** transcripts. That is deliberately
 the suite BEFORE this change's own gate — the question is whether the new rule moves a verdict on the
@@ -13726,7 +13734,9 @@ suite that already existed, so the new gate is not part of the population it is 
 taken on the branch yields 629 and answers a different question.
 
 **Number 1 — how many gates the window's contents actually depended on.** Counting transcripts whose FIRST
-line contains the crawl root: **515 of 628** (524 contain it anywhere). An earlier draft published 506,
+line contains the crawl root: **515 of 628** (524 contain it anywhere). Of those, **24** print a skip
+MARKER downstream of a root mention — the population whose classification could move — against **28** by
+the bare substring the old classifier actually looked for; the four extra only narrate the word. An earlier draft published 506,
 which came from grepping gate SOURCES for the banner assignment — a different population from the one the
 claim is about, and the reason this section states the recipe beside every figure.
 
@@ -13764,6 +13774,16 @@ that names the range it covered is evidence; a zero that does not is unfalsifiab
 `skip=3` both ways, naming the same three gates. The single red in the short tree is environmental and
 unrelated: `test/clonededupcheck.sh` needs a second, golden binary for its byte-identity arm, defaults it
 to the tree's own build output, and correctly refuses when a scratch checkout has none.
+
+**What the rule does not hold, stated as a limit.** A whole-gate skip that prints any PASS row before its
+skip marker now counts as a pass — in a transcript it is indistinguishable from a gate that proved an arm
+and then skipped one. Measured: no gate in the 628 does this, and both sanctioned skips already follow the
+convention (announce the skip before claiming anything). But nothing enforces it. `test/gateexitcheck.sh`
+arm (D) is the nearest gate-side contract and holds less than this: it flags an `exit 0` only where a skip
+word and `ALL PASS` fall within three lines of each other, so it does not police marker order. Enforcing
+the convention needs a static sweep of every gate's skip path; until that exists the convention is
+unenforced, and a gate that grew a fixture-present PASS row above its skip banner would move from skip to
+pass silently.
 
 **Cost of reading verdicts instead of a fixed prefix.** Over the same 628 transcripts (1.6 MB),
 `classify_skipped()` costs 19 ms in total, 30 µs per gate, and 0.50 ms on the largest single transcript

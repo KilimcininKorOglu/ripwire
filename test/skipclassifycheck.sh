@@ -15,12 +15,18 @@
 # — a 150 B shift from a 75-char rename, ~2 B per character, because the root is spelled twice. A gate
 # whose first skip row lands near byte 400 is therefore classified one way in one checkout and the other
 # way in another, on the SAME commit, with the SAME binary and byte-identical gate output. That is what
-# was observed: `skip=2` from a 137-char worktree and `skip=3` from a 38-char checkout, differing only in
-# how w3fixlegendcheck's honest arm-level tie SKIP fell relative to the window.
+# was observed: `skip=2` from a 137-char worktree and `skip=3` from a 38-char checkout on 3c191bdf, a
+# commit on lane/recent-scope and NOT on main, differing only in how w3fixlegendcheck's honest arm-level
+# tie SKIP fell relative to the window. Reproduced on that tree, same binary, arm output byte-identical
+# after line 1: at a 38-char root the tie row starts at 308 and the old rule called it SKIP; at a 138-char
+# root it starts at 408 and the old rule called it PASS — it straddles the window by 8 bytes. On main the
+# same arm does NOT tie (N=3 passes), so the symptom cannot be shown there at any path length, and an
+# absolute offset quoted anywhere in this file belongs to a NAMED tree rather than to the gate.
 #
 # It is not one gate's curiosity, and the dangerous direction is the other one. Measured over all 628
-# transcripts of one full suite run on this tree: 28 gates print their skip marker downstream of at least
-# one absolute-root mention, so their classification moves with the checkout. The nearest is a REAL
+# transcripts of one full suite run on main: 24 gates print a skip MARKER downstream of at least one
+# absolute-root mention — 28 by the bare substring the old rule actually looked for, the four extra being
+# gates that only narrate the word — so their classification moves with the checkout. The nearest is a REAL
 # standing skip — editchecknotecheck declares its skip at byte 145, and 255 more characters of checkout
 # path (a 342-char root, ordinary for a nested worktree or a CI runner) push that declaration out of the
 # window, at which point a gate that proved nothing is reported as a PASS. Which gates are in range is a
@@ -73,8 +79,17 @@
 #       it, which is the green-while-inert failure this whole mechanism exists to prevent.
 #   (F) DETERMINISM — the same corpus classified twice is classified the same way.
 #   (G) STATIC: NO RULER — the classification is a named function of (rc, out), and no fixed-size prefix
-#       slice survives anywhere in it. A window reintroduced as out[:800] would pass every arm above on
-#       this fixture and red here.
+#       slice survives in it OR AT ITS CALL SITE. A window reintroduced as out[:800] would pass every arm
+#       above on this fixture and red here. The call site is checked because scoping the rule to the
+#       function's own body leaves `classify_skipped(rc, out[:800])` passing a gate that claims no ruler
+#       survives anywhere.
+#
+# WHAT THIS GATE DOES NOT HOLD. The rule counts a WHOLE-GATE skip that prints any PASS row before its skip
+# marker as a PASS — it is indistinguishable in a transcript from a gate that proved an arm and then skipped
+# one. No gate does that today and arm (E) pins the two sanctioned shapes, but nothing ENFORCES the
+# convention: a gate that grew a `  PASS  fixture present` row above its skip banner would flip from skip to
+# pass silently. Enforcing it needs a static sweep of every gate's skip path, which belongs in
+# test/gateexitcheck.sh beside arm (D) rather than here; until then the convention is unenforced and said so.
 #
 # Usage: bash test/skipclassifycheck.sh   (no ripwire binary needed — this tests test/pargates.py)
 set -u
@@ -97,7 +112,8 @@ TMP="$( mktemp -d )"
 # spelled twice in the banner), so the old 400 B boundary sits at a 110-character root. Inheriting $TMPDIR
 # would have put the short root at 22 characters on a Linux runner and 52 on a macOS one and the long root
 # at 153 and 183 — all four on the correct sides today, and all four a $TMPDIR change away from not being.
-SHORTBASE="$( mktemp -d /tmp/rwskipXXXXXX )"        # ~17 chars on every platform this builds on
+SHORTBASE="$( mktemp -d /tmp/rwskipXXXXXX )" || { echo "cannot create a short fixture base under /tmp — this gate measures PATH LENGTH and cannot conclude without one"; exit 2; }
+[ -d "$SHORTBASE" ] || { echo "mktemp reported success but $SHORTBASE is not a directory — cannot conclude"; exit 2; }
 trap 'rm -rf "$TMP" "$SHORTBASE"' EXIT
 LONGTARGET=200                                       # comfortably past the 110-character boundary
 padLen=$(( LONGTARGET - ${#SHORTBASE} - 1 ))
@@ -297,7 +313,21 @@ if rulers:
 if not ast.get_docstring( fn ):
     print( "  FAIL  (G) classify_skipped() states no rule — the reader of skip= has nowhere to learn what it counts" )
     sys.exit( 1 )
-print( "  PASS  (G) classify_skipped() is a documented function of (rc, out) with no fixed-size prefix slice in it" )
+
+# The CALL SITE too. A body with no slice in it still gets a ruler if its caller hands it one, so scoping this
+# arm to the function would leave `classify_skipped( rc, out[ : 800 ] )` passing a gate whose own header claims
+# no fixed-size prefix survives ANYWHERE. Every argument of every call must be a bare name, never a subscript.
+calls = [ n for n in ast.walk( tree )
+          if isinstance( n, ast.Call ) and isinstance( n.func, ast.Name ) and n.func.id == "classify_skipped" ]
+if not calls:
+    print( "  FAIL  (G) nothing calls classify_skipped() — the rule is defined but unreachable, so no arm above tested the shipped path" )
+    sys.exit( 1 )
+sliced = sorted( { ast.get_source_segment( src, a ) or "<arg>"
+                   for c in calls for a in c.args if isinstance( a, ast.Subscript ) } )
+if sliced:
+    print( "  FAIL  (G) a call to classify_skipped() slices its argument (%s) — the ruler moved from the function to its caller" % ", ".join( sliced ) )
+    sys.exit( 1 )
+print( "  PASS  (G) classify_skipped() is a documented function of (rc, out) with no fixed-size prefix slice in it, and its %d call site(s) hand it the transcript whole" % len( calls ) )
 PYEOF
 [ $? -eq 0 ] || fail=1
 
