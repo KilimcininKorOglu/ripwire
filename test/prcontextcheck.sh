@@ -377,14 +377,71 @@ fi
 # this arm establishes that flavour with its OWN probe rather than assuming it, and must never pass for lack
 # of an alert it could not have seen.
 #
-# THE BASE REF IS NOT OPTIONAL. A bare `--pr-context` reads `git diff HEAD`, so on a CLEAN checkout the
-# change set is empty, prcontext takes its empty-diff branch, no trim level is ever RENDERED, and
-# renderToString is never called — the arm then finds no alert and blames the seam for a fixture that asked
-# it nothing. (Written against a dirty tree, it passed; the first clean run after a merge is what exposed
-# it — test/gatecheck's "the fixture is the live repo" trap.) A committed range is deterministic here and
-# depends on nothing the working tree happens to hold.
+# THE ARM BRINGS ITS OWN REPOSITORY, because every anchor into the live one is a property of the BRANCH.
+# A bare `--pr-context` reads `git diff HEAD`, so on a clean checkout the change set is empty, no trim level
+# is ever RENDERED, renderToString is never called, and the arm finds no alert and blames the seam for a
+# fixture that asked it nothing. Anchoring at HEAD~3 fixed that locally and broke on CI, which checks out the
+# PR's MERGE ref: there HEAD~1 is main's tip and three back is a different set of commits entirely, one that
+# named no file this verb reports. Both spellings were the same mistake — test/gatecheck's "the gate fixture
+# is the live repo" trap — and counting commits differently would only move it.
+#
+# So the fixture is BUILT here: a throwaway repo, two commits, one edited file. It is identical on a clean
+# checkout, a dirty tree, a merge ref and a shallow clone, because none of those are inputs to it. (The live
+# repo is still used for the charge-buffer probe below, which asks the BINARY a question and reads no git
+# history at all.)
 PRC_FAULT_OUT="$TMP/f_dg.out"; PRC_FAULT_ERR="$TMP/f_dg.err"
-PRC_FAULT_BASE="HEAD~3"
+PRC_FIX="$TMP/f_repo"
+mkdir -p "$PRC_FIX/src"
+cat > "$PRC_FIX/src/core.cpp" <<'PRCEOF'
+int coreHelper( int y )
+{
+    return y + 1;
+}
+
+int coreCompute( int x )
+{
+    return coreHelper( x ) * 2;
+}
+PRCEOF
+cat > "$PRC_FIX/src/caller.cpp" <<'PRCEOF'
+int coreCompute( int x );
+
+int callerEntry( int n )
+{
+    return coreCompute( n ) + coreCompute( n + 1 );
+}
+PRCEOF
+cat > "$PRC_FIX/src/other.cpp" <<'PRCEOF'
+int unrelatedLeaf( int z )
+{
+    return z - 1;
+}
+PRCEOF
+(
+    cd "$PRC_FIX" \
+    && git init -q \
+    && git config user.email gate@example.invalid \
+    && git config user.name gate \
+    && git add -A \
+    && git commit -qm base
+) >/dev/null 2>&1
+PRC_FAULT_BASE="$( cd "$PRC_FIX" && git rev-parse HEAD 2>/dev/null )"
+# the second commit: ONE file changes, so the range names exactly the file whose <f> row the rows below count
+cat > "$PRC_FIX/src/core.cpp" <<'PRCEOF'
+int coreHelper( int y )
+{
+    return y + 2;
+}
+
+int coreCompute( int x )
+{
+    return coreHelper( x ) * 3;
+}
+PRCEOF
+( cd "$PRC_FIX" && git add -A && git commit -qm edit ) >/dev/null 2>&1
+if [ -z "$PRC_FAULT_BASE" ]; then
+    no "(F) could not build the throwaway git fixture (no base sha) — the emitter-throw arm cannot run"
+fi
 #
 # WHICH FLAVOUR IS THIS BINARY? ASK IT, WITH AN ALERT IT IS KNOWN TO EMIT.
 # Both the fault switch and DEGRADED_PATH_ALERT exist only on the non-NDEBUG flavour, so on a Release build
@@ -399,12 +456,12 @@ PRC_FAULT_BASE="HEAD~3"
 INFRA_PROBE_ERR="$TMP/f_probe.err"
 RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$ROOT/src" --top-k=5 --pack-signatures --no-cache >/dev/null 2>"$INFRA_PROBE_ERR"
 if grep -aq 'open_memstream failed' "$INFRA_PROBE_ERR"; then PRC_ALERTS=1; else PRC_ALERTS=0; fi
-INFRA_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
+INFRA_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
 prc_f_rc=$?
 # and the range must actually name a file, or every assertion below is vacuous
 if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! grep -aq 'THREW' "$PRC_FAULT_ERR"; then
-    "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" 2>/dev/null | grep -aq '<f ' \
-        || no "(F) precondition: --pr-context=$PRC_FAULT_BASE names no changed file, so the emitter-throw arm asserts nothing"
+    "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" 2>/dev/null | grep -aq '<f ' \
+        || no "(F) precondition: --pr-context over the fixture repo names no changed file, so the emitter-throw arm asserts nothing"
 fi
 if [ "$PRC_ALERTS" -eq 0 ]; then
     # NO-ALERT FLAVOUR (NDEBUG). The fault switch is `constexpr false` here and the alert macro is compiled
@@ -418,7 +475,7 @@ if [ "$PRC_ALERTS" -eq 0 ]; then
         ok "(F) consistency: no alert on a flavour that compiles them out"
     fi
     [ "$prc_f_rc" -eq 0 ] \
-        && ok "(F1) --pr-context=$PRC_FAULT_BASE exits 0 with the (compiled-out) fault requested" \
+        && ok "(F1) --pr-context over the fixture repo exits 0 with the (compiled-out) fault requested" \
         || no "(F1) --pr-context exited $prc_f_rc on a flavour where the fault is not even compiled in"
     if grep -aq '</pr-context>' "$PRC_FAULT_OUT" && grep -aq '<pr-context' "$PRC_FAULT_OUT"; then
         ok "(F2) the document is CLOSED — a root, a body and a closing tag"
@@ -446,7 +503,7 @@ else
     # (F1) THE DOCUMENT STILL SHIPS. The whole point of the degrade: the caller loses the ESTIMATE, never the
     #      content. prcontext.h streams the floor level straight out when no level could be measured.
     [ "$prc_f_rc" -eq 0 ] \
-        && ok "(F1) --pr-context=$PRC_FAULT_BASE still exits 0 with every render throwing" \
+        && ok "(F1) --pr-context over the fixture repo still exits 0 with every render throwing" \
         || no "(F1) --pr-context exited $prc_f_rc with the emitter-throw fault injected — the throw escaped instead of degrading"
     if grep -aq '</pr-context>' "$PRC_FAULT_OUT" && grep -aq '<pr-context' "$PRC_FAULT_OUT"; then
         ok "(F2) the degraded document is CLOSED — a root, a body and a closing tag, never an empty element"
@@ -465,7 +522,7 @@ else
     #      loses is the ESTIMATE; what it must never lose is content, and "same count" would assert the wrong
     #      invariant and fail on any tree whose control trims. Compared by ELEMENT COUNT, not bytes.
     f_files="$( grep -ao '<f ' "$PRC_FAULT_OUT" | wc -l | tr -d ' ' )"
-    "$BIN" "$ROOT" --pr-context="$PRC_FAULT_BASE" >"$TMP/f_ctl.out" 2>/dev/null
+    "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$TMP/f_ctl.out" 2>/dev/null
     c_files="$( grep -ao '<f ' "$TMP/f_ctl.out" | wc -l | tr -d ' ' )"
     if [ "${f_files:-0}" -eq 0 ]; then
         no "(F4) the degraded document carries NO <f> row — the degrade lost the content it exists to keep"
