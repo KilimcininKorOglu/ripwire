@@ -304,15 +304,30 @@ aim at the exact ceiling, while dropping `route=` and labelling the bundle keep 
 tolerance, which exists for a residual a lens cannot trim. The same query now reads `est_tokens="1146"`
 at `--token-budget=1200` with every clause riding. No tolerance was widened and no ceiling was raised.
 
-**Not fully closed, and measured rather than assumed.** The same rung still fires on some documents that fit:
-`ripwire . --for="pagerank power iteration" --token-budget=2500` delivers 5,769 B against the 6,250 B its root
-promises — 481 B of headroom, `bodies="0"`, no `over_ceiling=` — and has still dropped its legend clauses and
-spliced the 193-byte note. So `fitsExactCeiling` is rejecting documents that fit: the rate is right now, the
-bytes it prices are not (the ladder charges a payload the finished document does not carry). The remaining
-error is a fraction of the original one and in the same direction — a lens trimming an explanation it could
-have afforded, never a document over its budget — and it is stated here rather than left for a reader to find,
-because a fix that closes most of a defect and is written up as closing all of it is worth less than the
-measurement. The residual is its own round.
+**And then the rung stopped being a byte test at all.** Getting the RATE right left the deeper half: a byte
+comparison cannot express this root's promise, because `est_tokens` is not bytes ÷ 2.50. It prices markup at
+`kBytesPerTokenDefault` and the `--detail` / auto bodies at `kBytesPerTokenBody` (3.80) — one rate per kind —
+so comparing the raw document total against `budget × 2.50` charged every body byte 1.52× what the root charges
+it. The same test also assembled its candidate from RESERVES and from the auto section whether or not that
+section was rendered, which is not the document stdout receives. Both errors point one way: a document its own
+root reports as conformant was judged not to fit, and three definitions a budgeted reader has no other source
+for were spent to buy headroom that was already there. Measured on a git-less five-symbol fixture at
+`--detail=1`: at every budget in **1069..1099** the kept document prices at `est_tokens="1069"` with no
+`over_ceiling=`, and the rung dropped all three clauses anyway and delivered `est_tokens="715"` — 354 tokens of
+headroom spent to buy nothing. At 1090..1099 even the raw byte total fitted (2,736 B of 2,737) and only the
+reserve-priced half vetoed. The exact ceiling is now the token comparison itself, asked once on the finished
+document, so there is no second expression to disagree with the first; the allowance rungs stay byte-based,
+which is their contract. Gate: `test/estchargecheck.sh` #18, which reads the price off a wide run and probes
+five tokens above it rather than pinning a budget — red on the pre-change binary at the probe arm, green at
+its control (the rung must still fire where the drop is real).
+
+**One correction to the record.** The residual this entry previously reported — `ripwire . --for="pagerank
+power iteration" --token-budget=2500` delivering 5,769 B against a 6,250 B ceiling with its clauses dropped —
+was not an instance of the defect above, and still behaves that way. The 481 B of headroom is the document
+AFTER the drop; the document that kept its clauses prices at `est_tokens="2684"` (measured at
+`--token-budget=2700`, the first budget at which the same query keeps everything), which does not fit 2,500.
+The rung was right there, and the leftover headroom is the granularity of an indivisible ~900 B clause trio.
+The real defect needed a body-rate document to show itself, which that bundle (`bodies="0"`) is not.
 
 Rung zero also stopped being byte-negative. It removed 110–164 bytes of clauses and spliced a 161-byte
 note naming them: on a route-less compact answer that is **+51 bytes**, a rung that made the document it

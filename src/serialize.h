@@ -755,7 +755,10 @@ struct CeilingLadderChoice
 };
 
 // TWO CEILINGS, ONE LADDER (2026-09-13, PR #215 review item 1). `fitsExact` is the ceiling the root PROMISES
-// (ceilingBytes: est_tokens <= budget_tokens); `fitsAllowance` is that ceiling plus the first-entry tolerance.
+// (est_tokens <= budget_tokens); `fitsAllowance` is that ceiling plus the first-entry tolerance. Each caller
+// decides how to SPELL them: the fixed-payload wrapper below has one rate and compares bytes, while --for's
+// lens prices markup and bodies at different rates and so asks its exact question in TOKENS, on the finished
+// document (verbs_for.h fitsExactCeiling). This template never assumes bytes — it only asks "does it fit".
 // Which rung is judged by which is the whole design:
 //   (a) as built is judged by fitsExact — a document that already fits what its root PROMISES keeps everything,
 //       and rung zero (the caller's droppable legend clauses, above this function in --for) is entered on the

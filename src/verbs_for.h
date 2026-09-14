@@ -1164,7 +1164,20 @@ struct ForLensRootFinish
     bool             bodyCeiling          = false;
 };
 
-inline std::string finishForLensHeader( std::string header, const ForLensRootFinish& f )
+// PR #215 review: the finished header AND the number it prints, handed back together. finishForLensHeader
+// below is this function's header half and stays the name every emit site calls; the ceiling ladder's exact-
+// ceiling test needs the OTHER half, because "does this document fit what its root promises" is the question
+// `est_tokens <= budget_tokens` asks and nothing else answers it. Computing it a second time beside this
+// fixpoint is how the two came to disagree on the RATE in the first place, so there is one fixpoint and two
+// readers of it. `estTokens` is the number the document will actually carry — the second-stage value when
+// over_ceiling="1" rides, since those bytes are part of the document the number prices.
+struct ForLensPricedHeader
+{
+    std::string header;
+    std::size_t estTokens = 0;   // 0 on the unmeasured degrade path (`f.measured` false — no number is printed there)
+};
+
+inline ForLensPricedHeader finishForLensHeaderPriced( std::string header, const ForLensRootFinish& f )
 {
     // T3: the bundle=auto disclosure attributes, then budget_bytes= (its presence is decided by the sigs render),
     // then the INDEXING-cap attributes (root facts of the RANKING, so on the root est_tokens prices rather than in
@@ -1188,7 +1201,7 @@ inline std::string finishForLensHeader( std::string header, const ForLensRootFin
     spliceBefore( header, " -->", /*fromEnd=*/true, f.capNote );
     if( !f.measured )
     {
-        return header;
+        return { std::move( header ), 0 };
     }
 
     // N1: the legend clause defining est_tokens= goes into the LAST comment first, so header.size() below
@@ -1239,7 +1252,12 @@ inline std::string finishForLensHeader( std::string header, const ForLensRootFin
     // N1: onto the <ctx> root — the same "><!--" boundary the bundle= attributes above use — where --pack-task /
     // --from-trace / --handoff / --expand put theirs (M11), not inside the comment.
     spliceBefore( header, "><!--", /*fromEnd=*/false, priced.second + overAttr );
-    return header;
+    return { std::move( header ), priced.first };
+}
+
+inline std::string finishForLensHeader( std::string header, const ForLensRootFinish& f )
+{
+    return finishForLensHeaderPriced( std::move( header ), f ).header;
 }
 
 // DEEP-TAIL d2, JSON dialect — the tail stanza and its explicit-regime fit, as a free function over
@@ -2873,11 +2891,13 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                  + tailStr.size()                               // deep-tail: the tail is priced like every other section
                                                  + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve;   // + "</ctx>" + the header splices below (autoAttr exact-counted; A2's own reserve is exact too)
             const std::size_t ladderCeiling      = rw::ceilingAllowanceBytes( cfg.tokenBudget );
-            // PR #135: a shape FITS when the reserve-priced header above does AND the header it would emit does —
-            // finishForLensHeader's output plus every other byte stdout receives (the body section is --detail's, else
-            // the rendered auto one). The first half is the pre-#135 test verbatim, so a bundle that was inside its
-            // allowance picks the same shape byte for byte. The second half is what the reserve cannot see:
-            // over_ceiling="1" and its legend clause (70 B), owed whenever est_tokens exceeds budget_tokens.
+            // PR #135: the ALLOWANCE shape FITS when the reserve-priced header above does AND the header it would
+            // emit does — finishForLensHeader's output plus every other byte stdout receives (the body section is
+            // --detail's, else the rendered auto one). The first half is the pre-#135 test verbatim, so a bundle
+            // that was inside its allowance picks the same shape byte for byte. The second half is what the reserve
+            // cannot see: over_ceiling="1" and its legend clause (70 B), owed whenever est_tokens exceeds
+            // budget_tokens. Both halves are BYTES, because the allowance is a byte bound; the exact ceiling below
+            // is a token comparison and shares neither sum.
             const std::size_t emittedNonHeaderBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + tailStr.size()
                                                     + detailSection.xml.size() + ( autoSection.isRendered ? autoSection.xml.size() : 0u )
                                                     + graphSection.xml.size() + 6;   // + "</ctx>"
@@ -2891,18 +2911,38 @@ std::optional<int> runForLens( const MainDispatch& d )
             // ladder has not answered yet. M3's first version passed the candidate's rung in and set the flag from
             // `rung == OverCeiling`, which no call could ever satisfy — the terminal rung is the branch that never
             // asks `fits` — so the flag was invariantly false while a comment claimed it was doing the pricing.
-            // ONE fit test, parameterised by the ceiling it is against (PR #215 review: this was two lambdas
-            // spelling the same two comparisons, which is how they came to disagree on the RATE).
-            const auto fitsWithin = [ & ]( std::size_t ceiling )
+            // THE ALLOWANCE test — raw bytes, which is its contract: ceilingAllowanceBytes is a BYTE bound
+            // (budget x 2.36 x 1.15), the widest thing this lens may deliver, and rungs (b)/(c)/(d) are judged
+            // by it (serialize.h climbCeilingLadderBy). Both halves: the reserve-priced sum above AND the header
+            // that will actually be emitted, because the reserve cannot see over_ceiling="1" and its clause (70 B),
+            // owed whenever est_tokens exceeds budget_tokens and priced by finishForLensHeader's own fixpoint.
+            const auto fitsCeiling = [ & ]( std::string_view candidate )
             {
-                return [ &, ceiling ]( std::string_view candidate )
-                {
-                    return candidate.size() + ladderPayloadBytes <= ceiling
-                        && finishForLensHeader( std::string( candidate ), rootFinish ).size() + emittedNonHeaderBytes <= ceiling;
-                };
+                return candidate.size() + ladderPayloadBytes <= ladderCeiling
+                    && finishForLensHeader( std::string( candidate ), rootFinish ).size() + emittedNonHeaderBytes <= ladderCeiling;
             };
-            const auto fitsCeiling      = fitsWithin( ladderCeiling );
-            const auto fitsExactCeiling = fitsWithin( rw::ceilingBytes( cfg.tokenBudget ) );
+            // …AND THE EXACT CEILING IS NOT A BYTE TEST AT ALL (PR #215 review: "use mixed-rate accounting for the
+            // exact-ceiling test"). What the root PROMISES is `est_tokens <= budget_tokens`, and est_tokens is not
+            // bytes/2.50: finishForLensHeader prices MARKUP at kBytesPerTokenDefault and the --detail / auto BODIES
+            // at kBytesPerTokenBody (3.80), one rate per kind. Comparing the raw byte total against
+            // ceilingBytes( budget ) charges every body byte at 2.50, i.e. 1.52x what the root charges it, and it
+            // also re-prices the candidate through `ladderPayloadBytes` — a sum built from RESERVES and from the
+            // auto section whether or not that section is rendered, so it is not the document stdout receives.
+            // Both errors point the same way: a document whose root says it fits was judged not to. MEASURED on a
+            // git-less 5-symbol fixture at --detail=1 (test/estchargecheck.sh #18): at every budget in 1069..1099
+            // the kept document priced at est_tokens=1069 with no over_ceiling=, and rung zero dropped all three
+            // clauses anyway and delivered est_tokens=715 — 354 tokens of headroom spent to buy nothing, and three
+            // definitions the reader no longer has. At 1090..1099 even the raw byte total fitted (2 736 B of 2 737)
+            // and only the reserve-priced half vetoed.
+            // ONE QUESTION, ASKED ONCE: build the candidate's FINAL document and read the number it will print.
+            // No second fixpoint, no second rate — the disagreement is only possible while two expressions exist.
+            // The maxTokens/--detail body ceiling is deliberately NOT folded in: this rung has always been about
+            // the --token-budget ceiling, forLensOverCeiling answers the wider question on the finished document,
+            // and widening a rung is a change to what it drops, not a fix to how it prices.
+            const auto fitsExactCeiling = [ & ]( std::string_view candidate )
+            {
+                return finishForLensHeaderPriced( std::string( candidate ), rootFinish ).estTokens <= cfg.tokenBudget;
+            };
             // RUNG ZERO — the confidence LEGEND clause, before any of the ladder's own rungs: it is the one
             // header string whose loss costs NO unique information (confidence=/margin_pct= stay on the root
             // as facts; only their explanation goes), so it must fall before the verbatim task echo does —
@@ -2925,8 +2965,9 @@ std::optional<int> runForLens( const MainDispatch& d )
             // kMinBytesPerToken(2.36) while est_tokens=/over_ceiling= price at kBytesPerTokenDefault(2.50), so the rung
             // fired on documents 6% INSIDE the budget their root reports: `test/cppqualfix --for="widget ping make box"
             // --token-budget=1200` printed est_tokens="778", no over_ceiling=, and had dropped all three clauses.
-            // rw::ceilingBytes is the one expression that answers "what does this root promise", and the ladder below
-            // takes it for rungs (a)/(b) for the same reason.
+            // …AND THE RATE WAS ONLY HALF OF IT: a BYTE ceiling cannot express this root's promise at all, because
+            // est_tokens is two rates (markup 2.50, bodies 3.80) over a document the byte sum also mis-assembles
+            // from reserves. fitsExactCeiling above is the token comparison itself now; see its own note.
             //
             // ONE DROPPABLE BIT. These three fields moved in lock step at every read and write, and the guard that used
             // to test all three was true whenever any clause remained, which is the only state this branch is reached
