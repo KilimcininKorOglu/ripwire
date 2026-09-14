@@ -69,8 +69,24 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 # shell out to python3, so this is the suite's existing dependency rather than a new one.
 #
 # NUL-terminated per word, because a path may contain a newline and this must not be the place that
-# silently drops one; read -r -d '' rather than `mapfile -d` because macOS ships bash 3.2. Process
-# substitution, not a pipe, so the arrays are filled in THIS shell (the pipeline-subshell trap).
+# silently drops one; read -r -d '' rather than `mapfile -d` because macOS ships bash 3.2.
+#
+# THE EXIT STATUS IS PART OF THE CONTRACT — second review of #219, the same finding CodeRabbit raised on
+# #227's test/lib/cxxflags.sh. shlex.split REFUSES an unbalanced quote rather than guessing, and a refusal
+# that reaches the caller as an empty word list is indistinguishable from a file that had no flags. The
+# first version of this fix read the words through `< <( cmakeFlagWords … )`, and a process substitution's
+# status is not reachable in $? at ALL: after the loop $? is `read`'s, the redirection's status is
+# discarded, and bash 3.2 sets no $! for it to be waited on. Measured on `CXX_FLAGS = -O2 -I"/unbalanced`:
+#
+#     producer alone            rc=1, 0 bytes of stdout, ValueError: No closing quotation
+#     through < <( … )          caller $? = 0, array length 0
+#
+# So the callers use a plain redirection into a scratch FILE, where $? really is this function's, and
+# refuse loudly on non-zero. Command substitution cannot replace it: a shell variable cannot hold NUL, and
+# NUL is what keeps a path containing a newline intact.
+#
+# Both failure classes exit with their own code and one line of their own on stderr, rather than a raw
+# traceback on a stream the gate discards.
 cmakeFlagWords()   # $1 = flags.make path, $2 = the assignment NAME; writes NUL-terminated words
 {
     RW_FLAGS_FILE="$1" RW_FLAGS_KEY="$2" python3 - <<'PY'
@@ -86,9 +102,30 @@ try:
                 for word in shlex.split( matched.group( 1 ) ):
                     sys.stdout.write( word + "\0" )
                 break
-except OSError:
-    pass   # an unreadable flags.make is the caller's "no flags" case, and its own arm reports it
+except ValueError as exc:
+    sys.stderr.write( "cmakeFlagWords: %s is not parseable as shell words: %s\n" % ( key, exc ) )
+    sys.exit( 3 )
+except OSError as exc:
+    sys.stderr.write( "cmakeFlagWords: cannot read %s: %s\n" % ( os.environ[ "RW_FLAGS_FILE" ], exc ) )
+    sys.exit( 4 )
 PY
+}
+
+# Load one assignment into the global FLAG_WORDS array. Returns non-zero — and says so through no() — when
+# the parser REFUSED, which is the distinction the empty array cannot carry. `${FLAG_WORDS[@]+…}` because
+# this gate runs under `set -u` and bash 3.2 treats an empty array's expansion as unbound.
+FLAG_WORDS=()
+loadFlagWords()   # $1 = flags.make path, $2 = assignment NAME
+{
+    FLAG_WORDS=()
+    cmakeFlagWords "$1" "$2" > "$TMP/flagwords.out" 2>"$TMP/flagwords.err"
+    flagRc=$?
+    if [ "$flagRc" -ne 0 ]; then
+        no "flags.make: the $2 parse REFUSED with exit $flagRc — $( tail -1 "$TMP/flagwords.err" )"
+        return 1
+    fi
+    while IFS= read -r -d '' w; do FLAG_WORDS+=( "$w" ); done < "$TMP/flagwords.out"
+    return 0
 }
 
 [ -x "$BIN" ]    || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
@@ -400,9 +437,10 @@ CPP
     # The compiler CMake drove (link.txt's first token), never a guess — jsonwalkcheck.sh's recipe and reason.
     CXX="$( awk 'NR==1{ print $1; exit }' "$LINK_TXT" )"
     [ -n "$CXX" ] && command -v "$CXX" >/dev/null 2>&1 || CXX="$( command -v c++ || command -v clang++ )"
-    CXX_FLAGS=();    while IFS= read -r -d '' w; do CXX_FLAGS+=(    "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_FLAGS )
-    CXX_DEFINES=();  while IFS= read -r -d '' w; do CXX_DEFINES+=(  "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_DEFINES )
-    CXX_INCLUDES=(); while IFS= read -r -d '' w; do CXX_INCLUDES+=( "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_INCLUDES )
+    CXX_FLAGS=(); CXX_DEFINES=(); CXX_INCLUDES=()
+    loadFlagWords "$FLAGS_MK" CXX_FLAGS    && CXX_FLAGS=(    ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
+    loadFlagWords "$FLAGS_MK" CXX_DEFINES  && CXX_DEFINES=(  ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
+    loadFlagWords "$FLAGS_MK" CXX_INCLUDES && CXX_INCLUDES=( ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
     # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
     DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
     DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
@@ -454,12 +492,39 @@ rm -f "$SENTINEL"
                    || ok "12a control [CXX_SEMI]: a bare ';' is a SYNTAX error inside NAME=( … ), so it was never a vector here — recorded, not asserted away"
 
 # (b) THE FIX — every shape, through cmakeFlagWords, must execute nothing.
+#
+# AND must actually have PARSED. "No sentinel" is satisfied perfectly by a parser that refused and returned
+# nothing, so on its own this arm cannot tell a working fix from a broken one — the positive-control hole,
+# in the arm written to close a positive-control hole (CodeRabbit on #227's twin of this loader). Each
+# shape therefore goes through loadFlagWords, which fails the gate on a non-zero parser status, and the
+# word count is asserted non-zero beside the sentinel.
 rm -f "$SENTINEL"
-INJ_WORDS=(); while IFS= read -r -d '' w; do INJ_WORDS+=( "$w" ); done < <( cmakeFlagWords "$INJ/flags.make" CXX_SUBST )
-BQ_WORDS=();  while IFS= read -r -d '' w; do BQ_WORDS+=(  "$w" ); done < <( cmakeFlagWords "$INJ/flags.make" CXX_BQ )
-SEMI_WORDS=(); while IFS= read -r -d '' w; do SEMI_WORDS+=( "$w" ); done < <( cmakeFlagWords "$INJ/flags.make" CXX_SEMI )
+INJ_WORDS=();  loadFlagWords "$INJ/flags.make" CXX_SUBST && INJ_WORDS=(  ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
+BQ_WORDS=();   loadFlagWords "$INJ/flags.make" CXX_BQ    && BQ_WORDS=(   ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
+SEMI_WORDS=(); loadFlagWords "$INJ/flags.make" CXX_SEMI  && SEMI_WORDS=( ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
 [ -e "$SENTINEL" ] && no "12b the shlex parse EXECUTED a payload — $SENTINEL exists" \
                    || ok "12b the shlex parse executes nothing, across all three payload shapes"
+if [ "${#INJ_WORDS[@]}" -gt 0 ] && [ "${#BQ_WORDS[@]}" -gt 0 ] && [ "${#SEMI_WORDS[@]}" -gt 0 ]; then
+    ok "12b the parse RETURNED words for all three shapes (${#INJ_WORDS[@]}/${#BQ_WORDS[@]}/${#SEMI_WORDS[@]}) — the no-sentinel result above is not a silent refusal"
+else
+    no "12b a shape parsed to ZERO words (${#INJ_WORDS[@]}/${#BQ_WORDS[@]}/${#SEMI_WORDS[@]}) — 'executed nothing' is then indistinguishable from 'parsed nothing'"
+fi
+
+# (b2) THE REFUSAL ITSELF REACHES THE CALLER. An unbalanced quote is the one input shlex rejects, and the
+# whole point of the scratch-file redirection is that its status survives. Asserted in BOTH directions:
+# the parser must exit non-zero, and loadFlagWords must return non-zero rather than an empty success.
+printf 'CXX_UNBAL = -O2 -I"/unbalanced/path\n' > "$INJ/unbal.make"
+cmakeFlagWords "$INJ/unbal.make" CXX_UNBAL > "$INJ/unbal.out" 2>"$INJ/unbal.err"; unbalRc=$?
+[ "$unbalRc" -ne 0 ] && ok "12b2 an unbalanced quote makes the parser exit non-zero ($unbalRc), not return empty at 0" \
+                     || no "12b2 an unbalanced quote exited 0 — a refusal is arriving as 'no flags'"
+grep -q 'not parseable as shell words' "$INJ/unbal.err" \
+    && ok "12b2 the refusal carries one line of its own on stderr, not a raw traceback" \
+    || no "12b2 the refusal has no message of its own: $( tail -1 "$INJ/unbal.err" )"
+# loadFlagWords reports through no(), so its refusal path is exercised in a subshell to read the STATUS
+# without failing this gate for a deliberately malformed fixture.
+( loadFlagWords "$INJ/unbal.make" CXX_UNBAL ) >/dev/null 2>&1
+[ "$?" -ne 0 ] && ok "12b2 loadFlagWords propagates the refusal to its caller (non-zero return)" \
+               || no "12b2 loadFlagWords returned success for a parse that refused — the status is being swallowed again"
 
 # (c) the payload survives as LITERAL argument text rather than vanishing — a parse that silently dropped
 #     it would look identical to (b) from the sentinel's point of view.
@@ -480,8 +545,10 @@ printf '%s\n' "${INJ_WORDS[@]}" | grep -qx -- '-I/path with spaces/inc' \
 
 # (e) the real flags.make still parses to something usable — arm 11 above compiled with it, so this is a
 #     cheap non-emptiness guard against a parse that returns nothing and makes arm 11 silently trivial.
+#     THIS is the arm the OSError branch of cmakeFlagWords points at: a flags.make that exists but cannot
+#     be read exits 4, loadFlagWords reports it through no(), and this row then fails rather than skipping.
 if [ -f "$FLAGS_MK" ]; then
-    REAL_WORDS=(); while IFS= read -r -d '' w; do REAL_WORDS+=( "$w" ); done < <( cmakeFlagWords "$FLAGS_MK" CXX_FLAGS )
+    REAL_WORDS=(); loadFlagWords "$FLAGS_MK" CXX_FLAGS && REAL_WORDS=( ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
     [ "${#REAL_WORDS[@]}" -gt 0 ] && ok "12e the real flags.make parses to ${#REAL_WORDS[@]} argument(s)" \
                                   || no "12e the real flags.make parsed to ZERO arguments — arm 11 would compile with no flags"
 fi
