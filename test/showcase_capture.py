@@ -550,9 +550,23 @@ _IN_EXCLUDES = "--exclude=test --exclude=docs --exclude=skills"
 def inCaseCmd( n ):
     return f"{BIN} . --rank-by=churn-decay --since=HEAD~{n} {_IN_EXCLUDES} --in={_IN_DIR} --limit={_IN_LIMIT}"
 
+# The probe runs at MODULE INITIALISATION, before the capture loop below and therefore before the per-case
+# timeout that loop applies. A non-terminating run here would hang the generator with nothing on stderr and no
+# partial document — stalling a release capture with no diagnostic at all — so the budget is explicit and a
+# timeout is a REFUSAL, never a silently-skipped window. 120 s is ~200x the measured probe (0.2-0.3 s warm on
+# this repo, ~2 s cold) and well under the capture loop's own 600 s cases.
+_IN_PROBE_TIMEOUT_S = 120
+
 def inCaseUnshown( n ):
     """Which of the caption's promises the PUBLISHED block for HEAD~n does not keep ([] = keeps them all)."""
-    p = subprocess.run( inCaseCmd( n ), shell=True, cwd=REPO, capture_output=True )
+    try:
+        p = subprocess.run( inCaseCmd( n ), shell=True, cwd=REPO, capture_output=True,
+                            timeout=_IN_PROBE_TIMEOUT_S, stdin=subprocess.DEVNULL )
+    except subprocess.TimeoutExpired:
+        sys.exit( f"showcase_capture: refusing to write — the --in= window probe did not terminate within "
+                  f"{_IN_PROBE_TIMEOUT_S}s and the window cannot be measured:\n  {inCaseCmd( n )}\n"
+                  f"  run that command by hand; this probe precedes the per-case timeout, so a hang here has "
+                  f"no other diagnostic" )
     if p.returncode != 0:
         return [f"the run exited {p.returncode}"]
     shown = publish_block( p.stdout )

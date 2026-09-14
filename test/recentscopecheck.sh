@@ -315,6 +315,46 @@ case "$nr" in
     *)            ok "arm 6s2c: --no-redact without --in is untouched by the scoped refusal (stderr: ${nr:-clean})" ;;
 esac
 
+# AND THE MEMBER THE FIRST AUDIT MISSED, plus the derivation that makes a third impossible to miss
+# (CodeRabbit, review of #212). The first audit of this class reported "every other flag hits its own pairing
+# refusal first, and --external-surface is the only one reaching the generic diagnostic". That predicate was
+# measured this time, over the derived universe (test/flaguniverse.py) rather than a sample: 119 of the 171
+# bool/view rows firstFlagOutside walks reach the generic line, and 43 of them answer when run alone. So
+# "answers alone" is not the predicate either -- --metrics answers alone, and what it answers IS the default
+# map, decorated. The predicate is STRUCTURAL and already in main.cpp: a flag in kMapShapingFlags SHAPES the
+# default map instead of answering instead of it, and kMapShapingFlags minus kInRideAlong is exactly
+# {--no-redact, --metrics, --map-diff}. --map-diff is the one that genuinely preempts (it takes its own
+# ranking branch ahead of churn-decay), so the inert set is the other two.
+#
+# Arm 6s2e derives that set HERE, from the two tables, and asserts every member says "inert" -- so a flag
+# added to kMapShapingFlags tomorrow without a kInRideAlong row is caught tomorrow by this arm rather than by
+# the next review. The set is re-read from source on every run; nothing about it is pinned in this file.
+refuses "arm 6s2d: --in= with --metrics says INERT, not answers-instead" "inert here" --rank-by=churn-decay --in=db --metrics
+refuses "arm 6s2d2 control: --map-diff really does preempt, so it keeps answers-instead" "answers instead" --rank-by=churn-decay --in=db --map-diff
+
+shapers="$( python3 - "$ROOT/src/main.cpp" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+def table(name):
+    body = src[src.index("kMapShapingFlags[] =" if name == "shape" else "kInRideAlong[] ="):]
+    body = body[:body.index("};")]
+    return set(re.findall(r'"(--[a-z0-9-]+)"', body))
+inert = sorted(table("shape") - table("ride") - {"--map-diff"})
+print(" ".join(inert))
+PYEOF
+)"
+if [ -z "$shapers" ]; then
+    no "arm 6s2e: derived the inert-shaper set as EMPTY -- the scrape of kMapShapingFlags/kInRideAlong broke, and an empty set would pass every assertion below vacuously"
+else
+    bad=""
+    for f in $shapers; do
+        "$BIN" "$REPO" --no-cache --rank-by=churn-decay --in=db "$f" >/dev/null 2>"$WORK/shaper.err" </dev/null
+        grep -qF -- "inert here" "$WORK/shaper.err" || bad="$bad $f($( head -c 60 "$WORK/shaper.err" ))"
+    done
+    [ -z "$bad" ] && ok "arm 6s2e: every map-shaping flag that cannot ride along refuses as INERT, derived from the tables: $shapers" \
+                  || no "arm 6s2e: derived inert shapers whose refusal does NOT say inert:$bad"
+fi
+
 # THE SHAPING FLAGS — one refusal per bad combination, and the composers really compose. --in used to be a row in
 # kPagingHonoringVerbs, which is a VERB list: membership made validateShapingFlagsHonored refuse all three budget
 # flags with a message that hands the caller a list of verbs and claims the default map honours the budgets it had
@@ -597,6 +637,75 @@ elif printf '%s' "$M2" | grep -q '<recent '; then
     ok "arm 13d: mined-with-zero-rows (a block) and mined-nothing (no block) are now DIFFERENT documents"
 else
     no "arm 13d: both windows print no block — the two answers are still indistinguishable"
+fi
+
+
+# WHAT would_show= COUNTS, pinned against the run it names (CodeRabbit, review of #212). The stub's number is
+# `keep`, which is the un-stubbed header's own shown=, and shown= counts symbol DEFINITIONS individually --
+# the print loop collapses a const/non-const overload pair into ONE row carrying overloads=2. So would_show is
+# a CEILING on the rows the unscoped document prints, and the legend used to call it "how many symbol ROWS the
+# same run without in= would print", which is a number that document does not contain: measured on this repo,
+# shown=200 over 193 rows with 7 rows at overloads=2.
+#
+# It cannot be made exact in the stub: which definitions make the top-K cut is a fact about the RANKING, and
+# the ranking is exactly what the stub skips (no pr_iters= rides its header). So the arms pin the IDENTITY the
+# map legend already publishes for shown= -- rows + sum(overloads-1) = shown = would_show -- rather than
+# demanding an equality that would cost the stub its reason to exist.
+#
+# 14a runs on a corpus that HAS overloads in the cut, so the two numbers genuinely differ and an arm asserting
+# plain equality would fail; 14b is the no-overload control, where the identity degenerates to equality, so a
+# fix that quietly replaced the ceiling with the row count could not pass both.
+wsFor(){   # $1 = corpus dir -> "would_show rows surplus"
+    local dir="$1"
+    local ws rows surplus
+    ws="$( "$BIN" "$dir" --no-cache --rank-by=churn-decay --in="$2" 2>/dev/null | sed -n 's/.*would_show="\([0-9]*\)".*/\1/p' )"
+    "$BIN" "$dir" --no-cache --rank-by=churn-decay >"$WORK/uns.xml" 2>/dev/null
+    rows="$( grep -o '<s ' "$WORK/uns.xml" | wc -l | tr -d ' ' )"
+    surplus="$( grep -o 'overloads="[0-9]*"' "$WORK/uns.xml" | grep -o '[0-9]*' | awk '{s+=$1-1} END{print s+0}' )"
+    printf '%s %s %s\n' "${ws:-NONE}" "$rows" "$surplus"
+}
+
+read -r ws rows surplus <<EOF
+$( wsFor "$REPO" db )
+EOF
+if [ "$ws" = "NONE" ]; then
+    no "arm 14a: the stub printed no would_show= at all on the gate fixture"
+elif [ "$(( rows + surplus ))" = "$ws" ]; then
+    if [ "$surplus" -gt 0 ]; then
+        ok "arm 14a: would_show= is the unscoped run's shown= exactly, over a cut that DOES collapse overloads: rows=$rows + sum(overloads-1)=$surplus = would_show=$ws"
+    else
+        ok "arm 14a: would_show=$ws matches rows=$rows with no overloads in the cut on this fixture (the identity holds; 14b is the corpus that exercises the collapse)"
+    fi
+else
+    no "arm 14a: would_show=$ws is not the unscoped run's shown=: rows=$rows + sum(overloads-1)=$surplus = $(( rows + surplus ))"
+fi
+
+# 14b: the CONTROL, on a corpus built to hold a const/non-const overload pair -- the shape the identity exists
+# for. Both members must be printed (they are the only two symbols), so the surplus is 1 and would_show is
+# strictly greater than the row count: an implementation that emitted rows instead of definitions reds here,
+# and one that emitted the corpus total reds on the arithmetic.
+OVL="$WORK/ovl"
+mkdir -p "$OVL/lib"
+cat > "$OVL/lib/dup.h" <<'CPPEOF'
+struct Holder
+{
+    int  value() const { return v; }
+    int& value()       { return v; }
+    int  v = 0;
+};
+CPPEOF
+( cd "$OVL" && git init -q . && git add -A && git -c user.name=gate -c user.email=gate@gate commit -qm ovl ) >/dev/null 2>&1
+read -r ws2 rows2 surplus2 <<EOF
+$( wsFor "$OVL" lib )
+EOF
+if [ "$ws2" = "NONE" ]; then
+    no "arm 14b control: no would_show= on the overload corpus"
+elif [ "$surplus2" -lt 1 ]; then
+    no "arm 14b control: the overload corpus printed NO collapsed row (surplus=$surplus2) — the fixture no longer exercises the collapse, so 14a's equality could be passing vacuously"
+elif [ "$(( rows2 + surplus2 ))" = "$ws2" ] && [ "$ws2" -gt "$rows2" ]; then
+    ok "arm 14b control: on a corpus whose cut collapses an overload pair, would_show=$ws2 EXCEEDS the $rows2 row(s) by the surplus $surplus2 — the ceiling is a ceiling, and the identity still holds"
+else
+    no "arm 14b control: would_show=$ws2, rows=$rows2, surplus=$surplus2 — identity or ceiling broken"
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

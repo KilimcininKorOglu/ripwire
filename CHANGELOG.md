@@ -53,8 +53,16 @@ inferring the second from the first published it as "no history was mined".
 
 The symbol map collapses to a disclosed stub `<symbols stubbed="1" would_show=N next="…"/>` — the map was
 not asked for, so it is not ranked at all (no PageRank runs, and the header carries no `pr_iters=` for an
-iteration that did not happen), and `would_show=` is how many symbol ROWS the same run without `--in=` would
-print. It deliberately borrows no paging attribute: `total=` is reserved for THE total (rule 2) and the stub's
+iteration that did not happen), and `would_show=` is that same run's own `shown=`: the symbol DEFINITIONS it
+ranks into its top-K, counted individually. It is therefore a CEILING on the `<s>` rows that run prints rather
+than the row count — the print loop collapses a const/non-const overload pair into one row carrying
+`overloads="2"`, so the identity is the one the map legend already publishes for `shown=`,
+`rows + sum(overloads-1) = shown` (this repository: `shown="200"` over 193 rows, 7 of them at `overloads="2"`).
+The first wording said "how many symbol ROWS", which is a number the document does not contain, and it cannot
+be made exact where it is emitted: WHICH definitions make the cut is a fact about the ranking, and the ranking
+is precisely what the stub does not run — sharpening one attribute that way would spend the entire saving the
+stub exists for. Labelled, therefore, rather than guessed or quietly rounded. It deliberately borrows no paging
+attribute: `total=` is reserved for THE total (rule 2) and the stub's
 number is a page size, `shown=` would drag a `capped=` with it (rule 3), and rule 3's own sentence sanctions
 an element that carries neither.
 
@@ -74,16 +82,28 @@ beside it with a message naming verbs and claiming the default map honours the b
 `--limit`/`--offset` compose (they window the scoped element) and so do `--max-tokens`/`--token-budget` (they
 shape the document that is emitted). The MCP surface exposes no churn ranker, so there is no twin to extend.
 
-One flag is refused for a DIFFERENT reason and now says so. `--no-redact` selects no operation — it only stops
+Two flags are refused for a DIFFERENT reason and now say so, and WHICH two is derived. `kMapShapingFlags` is
+the tool's own list of flags that shape the bare map without selecting a verb, so that table minus the
+ride-along table is exactly the residue a scoped run cannot compose with: `--no-redact`, `--metrics` and
+`--map-diff`. `--map-diff` is the one that genuinely answers instead — it takes its own ranking branch ahead of
+churn-decay, so no scoped block was ever going to be built — while the other two shape or un-redact a map this
+run replaces with the counted stub. `--metrics` decorates symbol rows the stub does not print, and it is
+refused as inert by table membership rather than by a hand-written case, so a shaping flag added tomorrow with
+no ride-along row gets the right sentence without anyone editing the guard. `--no-redact` selects no
+operation — it only stops
 body redaction — and a scoped run serves no bodies at all, because the symbol map is the counted stub. So the
 derived "answers instead" diagnostic stated a reason that was not this run's: the flag is INERT here, not
 overridden. It is refused ahead of that diagnostic, in the shape the bare map already uses for the same flag,
 pointing at both ways forward (drop it, or pass it to a body-serving verb). It is deliberately NOT added to the
-ride-along table: accepting an inert modifier silently is the other half of the same defect. The class was then
-enumerated rather than sampled — of the 164 flags the guard walks, 149 are not ride-alongs, every one probed
-reaches its own pairing refusal before this line, and the only other flag that arrives here,
-`--external-surface`, really does compete (it emits its own answer), so its wording is correct and it is now
-the gate's control arm. The guard on the new branch is `--in` AND `--no-redact`: written without the first
+ride-along table: accepting an inert modifier silently is the other half of the same defect. The class was then measured — and the first
+measurement of it, published in this entry, was wrong. It said that of the flags the guard walks every one
+probed reaches its own pairing refusal before this line, with `--external-surface` the only other flag
+arriving here. Swept over the derived flag universe (`test/flaguniverse.py`) rather than a sample, 119 of the
+171 `kBoolFlags`/`kViewFlags` rows reach that line, and 43 of those answer when run alone — so neither
+"reaches the generic line" nor "answers alone" separates the class, because `--metrics` answers alone and what
+it answers IS the default map, decorated. Table membership separates it, which is why the refusal derives the
+set and `test/recentscopecheck.sh` arm 6s2e re-derives the same set from the same two tables on every run.
+`--external-surface` remains a correct competitor and stays the control arm. The guard on the new branch is `--in` AND `--no-redact`: written without the first
 half it refused every `--no-redact` run in the tool while quoting `--in=DIR` at it, which eight gates said in
 one suite and no arm added for the fix could, since every one of them passes `--in`.
 

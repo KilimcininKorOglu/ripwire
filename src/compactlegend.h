@@ -401,7 +401,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // C1-b (2026-09-12): in=DIR — the scoped block (ELEMENT-qualified: scope= rides only a <recent>) and the map stub (total= on
     // <symbols> alone; the paging window clause above already reads shown=/capped=). Both present-only.
     { "scope",             "<recent scope=DIR>: a second block riding when the global one does, DIR's files only (p= root-relative); of= is its total; capped=/has_more=/next_offset=/offset=/limit= page it, next= is that page", true, "recent" },
-    { "stubbed",           "<symbols stubbed=1 would_show=N next=>: the symbol map in= did not ask for was not rendered; N rows the same run without in= would print (not the header's symbols= corpus count); next= fetches it", true, "symbols" },
+    { "stubbed",           "<symbols stubbed=1 would_show=N next=>: the symbol map in= did not ask for was not rendered; N is that run's own shown= — definitions ranked into its top-K, a ceiling on its rows since overload pairs collapse (not the header's symbols= corpus count); next= fetches it", true, "symbols" },
     // The map's ROW fields that are absent at their default, defined only inside the always-on `<!-- ripwire v1` legend (prose):
     // lpin= and overloads= on <s>, prov= on <c>. Row-level, because each has one meaning tool-wide and the map emitter is its one
     // XML writer. test/compactlegendcheck.sh (S) population 4 reads that legend's absence-marked row fields from source.

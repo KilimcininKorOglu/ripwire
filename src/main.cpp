@@ -2799,6 +2799,38 @@ std::string_view inPreemptedBy( const rw::Config& c )
     return firstFlagOutside( c, {}, kInRideAlong );
 }
 
+// THE SEPARATING FACT IS TABLE MEMBERSHIP, NOT BEHAVIOUR, and it is derived here rather than listed.
+// inPreemptedBy answers "which set flag is not a ride-along"; the generic diagnostic below then says that
+// flag "answers instead", which is false for a flag that SHAPES the default map rather than replacing it.
+// kMapShapingFlags is exactly "shapes the bare map without selecting a verb", so kMapShapingFlags minus
+// kInRideAlong is the residue that cannot compose: { --no-redact, --metrics, --map-diff }. --map-diff is the
+// one that genuinely does answer instead — it takes its own ranking branch ahead of churn-decay, so no scoped
+// block was ever going to be built — and it is named below for that reason. The other two decorate or
+// un-redact a map this run replaces with the counted stub, so for them the sentence described a mechanism that
+// did not happen.
+//
+// The FIRST audit of this class (this lane, review 5195637558) sampled and generalised: it reported that every
+// other walked flag hits its own pairing refusal first and that --external-surface was the only one reaching
+// the generic line. Measured over the derived universe (test/flaguniverse.py) it is 119 of the 171 bool/view
+// rows, and the predicate that separates them is not "does it answer when run alone" either — --metrics
+// answers alone, and what it answers IS the default map, decorated. Membership is the fact, so a shaping flag
+// added tomorrow with no kInRideAlong row gets the right sentence tomorrow with nobody editing this function.
+// test/recentscopecheck.sh arm 6s2e re-derives the same set from these two tables and asserts it.
+inline constexpr std::string_view kInPreemptsWithOwnBranch[] = { "--map-diff" };
+
+// the map-shaping flag that is INERT beside --in (shapes a map this run does not print), or empty
+std::string_view inInertShaper( const rw::Config& c )
+{
+    const std::string_view outside = inPreemptedBy( c );      // empty when --in is absent or honoured
+    if( outside.empty()
+        || std::ranges::find( kMapShapingFlags, outside ) == std::ranges::end( kMapShapingFlags )
+        || std::ranges::find( kInPreemptsWithOwnBranch, outside ) != std::ranges::end( kInPreemptsWithOwnBranch ) )
+    {
+        return {};
+    }
+    return outside;
+}
+
 // the verb that answered instead of the default map, or empty when --html is honoured on this run
 std::string_view htmlPreemptedBy( const rw::Config& c )
 {
@@ -3503,6 +3535,18 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                               "serves no bodies and --no-redact has nothing to un-redact — it is inert here, not overridden. Drop it for the "
                               "scoped block (ripwire <dir> --rank-by=churn-decay --in=src), or pass it to a body-serving verb "
                               "(ripwire <dir> --expand=SYM --no-redact)\n" );
+        return 1;
+    }
+    // Every OTHER shaping flag that cannot ride along (derived: see inInertShaper). --no-redact keeps its own
+    // message above because its mechanism is bodies, not row decoration, and a reader needs the body-serving
+    // verb named. This branch covers the rest of the residue by table membership.
+    if( const std::string_view inert = inInertShaper( cfg ); !inert.empty() )
+    {
+        rw::emitTo( stderr, "ripwire: --in=DIR scopes the recent-changes block and collapses the symbol map to a counted stub, so {} shapes a map "
+                              "this run does not print — it is inert here, not overridden. Drop it for the scoped block "
+                              "(ripwire <dir> --rank-by=churn-decay --in=src), or drop --in to get the map it shapes "
+                              "(ripwire <dir> --rank-by=churn-decay {})\n",
+                    std::string_view( inert.data(), inert.size() ), std::string_view( inert.data(), inert.size() ) );
         return 1;
     }
     if( const std::string_view answered = inPreemptedBy( cfg ); !answered.empty() )
