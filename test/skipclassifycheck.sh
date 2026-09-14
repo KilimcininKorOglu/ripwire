@@ -6,8 +6,9 @@
 # The harness classified a gate as skipped with
 #     skipped = rc == 0 and "SKIP" in out[:400]
 # — a fixed byte window over the transcript. Every gate in this tree opens with a banner naming its own
-# absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`, 506 gates print one), so the window's CONTENTS are a
-# function of the checkout's path length, and every offset after the banner moves with it. Measured on
+# absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) — 515 of the 628 transcripts in one full run carry the
+# crawl root in their FIRST line — so for those the window's CONTENTS are a function of the checkout's
+# path length, and every offset after the banner moves with it. Measured on
 # test/w3fixlegendcheck.sh, whose transcript is byte-identical after line 1 at both paths:
 #     an 87-char worktree root (a checkout nested under .claude/worktrees/)   banner 217 B
 #     a 12-char root (the same tree reached through a short symlink)         banner  67 B
@@ -62,6 +63,9 @@
 #       are PASS rows, is a pass. The substring test counts it as having proved nothing.
 #   (D) A FAILING GATE IS NEVER A SKIP — rc != 0 outranks any marker (a red that printed a skip row is a
 #       FAILURE, and must appear under FAILURES with its report).
+#  (D2) A FAIL MARKER IS A VERDICT TOO, WHEREVER IT SITS — a gate that prints a FAIL row, then a SKIP row,
+#       and still exits 0 claimed a verdict before it skipped, so it is not "proved nothing". Reds when the
+#       failure marker is matched against the whole transcript as one line instead of per line.
 #   (E) THE SANCTIONED SKIPS STILL SKIP — the two shapes this tree actually ships must not regress:
 #       argvdiffcheck's (the skip is the opening line, nothing else runs) and namingcalibrationcheck's
 #       (a skip banner up front, then an instrument arm that still prints PASS rows). The second is the
@@ -208,6 +212,26 @@ vRed="$( classify "$ORDERROOT" probeskipthenfailgate )"
 [ "$vRed" = "fail:1" ] \
     && ok "(D) a gate that exited non-zero is a FAILURE however it narrated itself — rc outranks every marker" \
     || no "(D) a red gate was classified '$vRed'"
+
+# ── (D2) A FAIL MARKER IS A VERDICT TOO, WHEREVER IT SITS ──────────────────────────────────
+# The rule says the first verdict decides, and FAIL is a verdict. (D) covers the rc != 0 case; this arm
+# covers the one that hides: a gate that prints a FAIL row, then a SKIP row, and still exits 0. That gate
+# is broken in the way test/gateexitcheck.sh exists to catch, but the classifier must not ALSO mislabel it
+# as "proved nothing" — it claimed a verdict before it skipped, and its transcript says so.
+#
+# The probe deliberately does NOT print "SOME CHECKS FAILED": that is the one alternative in the shared
+# failure-marker expression which carries no anchor, so a probe that printed it would be matched by
+# accident and this arm would pass without testing anything (CONTRIBUTING shape 5, no contrast). What is
+# left is a bare `  FAIL  ` row on a later line — visible only if that expression matches per LINE.
+cat > "$TMP/body_failthenskip" <<'BODY'
+printf '  FAIL  (3) the assertion that matters did not hold\n'
+printf '  SKIP  an optional arm did not run here\n'
+BODY
+mkprobe "$ORDERROOT" probefailthenskipgate "$TMP/body_failthenskip"
+vFailFirst="$( classify "$ORDERROOT" probefailthenskipgate )"
+[ "$vFailFirst" = "pass" ] \
+    && ok "(D2) a FAIL row on a later line is seen: a gate that claimed a verdict before it skipped is not counted as having proved nothing" \
+    || no "(D2) a gate whose first verdict is a FAIL row was classified '$vFailFirst' — the failure marker is being matched against the whole transcript as ONE line, so any FAIL below the first is invisible to the rule"
 
 # ── (E) THE SANCTIONED SKIPS STILL SKIP ──────────────────────────────────────────────────────────────────
 # argvdiffcheck's shape: the skip is the opening line and nothing else runs.

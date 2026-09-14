@@ -351,7 +351,11 @@ exclusive_gates = [g for g in gates if g in exclusive]
 #      get a turn.
 FAIL_TAIL_LINES = 5
 FAIL_MARK_LINES = 10
-_MARKER_RE = re.compile(r"^\s*FAIL\b|^FAILURES ABOVE|SOME CHECKS FAILED|^\s*TIMEOUT after")
+# re.M because classify_skipped() matches this against a WHOLE transcript: without it `^` binds only to the start
+# of the string, every anchored alternative here is dead below line 1, and the only one that would still fire is the
+# unanchored "SOME CHECKS FAILED" -- so a gate that printed a FAIL row and then a SKIP row read as "proved nothing".
+# A no-op for failure_lines(), which searches one line at a time: a single line has no newline for `^` to find.
+_MARKER_RE = re.compile(r"^\s*FAIL\b|^FAILURES ABOVE|SOME CHECKS FAILED|^\s*TIMEOUT after", re.M)
 _LOOSE_RE = re.compile(r"error:|fatal|Sanitizer|Traceback|command not found|no ripwire binary|required$")
 
 
@@ -398,8 +402,9 @@ def failure_report(out, logpath):
 # CI/NDEBUG blindness is the same family).
 #
 # This used to read `"SKIP" in out[:400]` -- a ruler laid over the transcript, and the transcript's origin moves.
-# Every gate opens with a banner naming its own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`; 506 gates print
-# one), so the window's CONTENTS are a function of the checkout's pathname. Measured on w3fixlegendcheck, whose
+# Gates open with a banner naming their own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) -- 515 of the 628
+# transcripts in one full run carry the crawl root in their first line -- so for those the window's CONTENTS are a
+# function of the checkout's pathname. Measured on w3fixlegendcheck, whose
 # output is byte-identical after line 1: the banner is 217 B from an 87-char root and 67 B from a 12-char one, and
 # every offset after it moves by that 150 B -- about 2 B per character of path, because the root is spelled twice.
 # The same commit, the same binary and byte-identical gate output then reported `skip=2` from a 137-char checkout

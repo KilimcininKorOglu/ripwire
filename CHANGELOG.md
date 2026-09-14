@@ -19,8 +19,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 `test/pargates.py` decided whether a gate had SKIPPED — ran, but proved nothing — by looking for the word
 SKIP in the first 400 bytes of its transcript. That is a ruler laid over a document whose origin moves.
-Every gate opens with a banner naming its own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`), so the
-window's CONTENTS are a function of the checkout's pathname, and every offset after the banner travels
+Gates open with a banner naming their own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) — 515 of the
+628 transcripts captured from one full suite run carry the crawl root in their first line — so for those
+the window's CONTENTS are a function of the checkout's pathname, and every offset after the banner travels
 with it. Measured on `test/w3fixlegendcheck.sh`, whose transcript is byte-identical after line 1: the
 banner is 217 B from an 87-character worktree root and 67 B from a 12-character one — a 150 B shift from a
 75-character rename, about 2 B per character because the root is spelled twice. The same commit, the same
