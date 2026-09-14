@@ -3492,7 +3492,12 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     // --with-graph name --for, --handles/--no-prefilter name --grep, --sarif names --lint, --anchor and
     // --cochange-boost demand RIPWIRE_DEV). Exactly one other flag reaches this diagnostic, --external-surface,
     // and for it the wording is CORRECT: it emits its own <external-surface> answer, so it really does compete.
-    if( cfg.noRedact )
+    // The --in GUARD is load-bearing here and was missing on first write: this block runs for EVERY invocation
+    // (inPreemptedBy below self-guards on inDir, this branch did not), so an unconditional cfg.noRedact
+    // refused a plain `--no-redact --top-k=1` while talking about --in=DIR — a wrong statement in output, the
+    // very defect being fixed, inverted. Eight gates caught it (shapingflag, modifierguard, editroundtrip,
+    // showcasecapture and all four redact gates); every arm added for the fix had passed --in and so could not.
+    if( !cfg.inDir.empty() && cfg.noRedact )
     {
         rw::emitRaw( stderr, "ripwire: --in=DIR scopes the recent-changes block and collapses the symbol map to a counted stub, so this run "
                               "serves no bodies and --no-redact has nothing to un-redact — it is inert here, not overridden. Drop it for the "

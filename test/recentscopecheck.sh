@@ -307,6 +307,13 @@ refuses "arm 6s: --in= voided by --batch"                     "--batch"    --ran
 # have replaced one wrong sentence with another.
 refuses "arm 6s2: --in= with --no-redact says INERT, not answers-instead" "has nothing to un-redact" --rank-by=churn-decay --in=db --no-redact
 refuses "arm 6s2b control: a real competitor keeps answers-instead"       "answers instead"          --rank-by=churn-decay --in=db --external-surface
+# AND THE ARM THAT WAS MISSING. Both arms above pass --in, so neither could see that the new branch had no
+# --in guard at all: it refused a plain `--no-redact` run while quoting --in=DIR at it. This one has no --in.
+nr="$( "$BIN" "$REPO" --no-cache --no-redact --expand=db_0 2>&1 >/dev/null | head -1 )"
+case "$nr" in
+    *"--in=DIR"*) no "arm 6s2c: a run with NO --in was refused by the --in=DIR branch: $nr" ;;
+    *)            ok "arm 6s2c: --no-redact without --in is untouched by the scoped refusal (stderr: ${nr:-clean})" ;;
+esac
 
 # THE SHAPING FLAGS — one refusal per bad combination, and the composers really compose. --in used to be a row in
 # kPagingHonoringVerbs, which is a VERB list: membership made validateShapingFlagsHonored refuse all three budget
