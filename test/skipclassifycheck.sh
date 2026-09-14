@@ -48,8 +48,10 @@
 # 628 transcripts, the new rule and the old one disagree on ZERO gates — it reproduces today's answers on
 # this tree exactly, and stops depending on the tree's pathname to do it.
 #
-# The gate side of the same contract is test/gateexitcheck.sh arm (D) ("skip is not pass": a skip prints a
-# skip marker and a reason and NO failure marker). This is the harness side of it. The sibling gate for
+# The nearest gate-side contract is test/gateexitcheck.sh arm (D) ("skip is not pass": a skip prints a skip
+# marker and a reason and NO failure marker) — but it holds LESS than the rule above, because it flags an
+# `exit 0` only where both a skip word and "ALL PASS" appear within three lines of it, and so does not police
+# marker ORDER at all. This is the harness side of it. The sibling gate for
 # test/pargates.py's budget/stop/stdout mechanisms is test/pargatescheck.sh, and this gate follows its
 # house pattern: run the REAL pargates.py over a synthetic corpus, never a reimplementation of its logic.
 #

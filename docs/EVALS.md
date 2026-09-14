@@ -13702,7 +13702,8 @@ ordering the code argues for on other grounds.
 its `skip=` count was a function of where the checkout sat on disk. This section pins the four numbers the
 change publishes, the corpus they were measured on, and how to rebuild that corpus from nothing. The rule
 itself is pinned by `test/skipclassifycheck.sh`; the classifier is `classify_skipped()` in
-`test/pargates.py`; the gate-side half of the contract is `test/gateexitcheck.sh` arm (D).
+`test/pargates.py`; the nearest gate-side contract is `test/gateexitcheck.sh` arm (D), which holds less than
+this rule does — see "What the rule does not hold" below.
 
 **The defect, in one measurement.** A gate's transcript opens with a banner naming its own absolute paths,
 and `test/w3fixlegendcheck.sh`'s transcript is byte-identical after line 1 at any checkout, so the banner
@@ -13722,7 +13723,18 @@ that tree's own gate from two checkouts with one binary, arm output byte-identic
 | 38 characters | 168 B | 308 | SKIP |
 | 138 characters | 268 B | 408 | PASS |
 
-It straddles the 400-byte window by 8 bytes. On the merge base `c1915d21` that arm does **not** tie — N=3
+It straddles the 400-byte window by 8 bytes.
+
+Those two offsets carry three conditions, and naming them is the same lesson one level down. The tree
+decides whether the arm ties at all. The ROOT length moves the row 1 B per character here, not the 2 B of
+the fixture measurement above, because this gate's banner spells the root once — it reaches 2 B per
+character only when the binary also sits under that root, which is the posture the original report was in.
+And the BINARY path is in the same banner, so how it is spelled moves the row too: measured on the same
+clean checkout at a 38-character root, the tie row starts at 308 with the binary named at a 101-character
+absolute path and at 240 with the same binary named at 33 characters. What does NOT move it is whether the
+tree is dirty: clean and dirty both give 308 and 240 respectively, because the row's offset is the gate's
+own printed rows and no git stamp appears among them. The figures above were taken on a clean checkout with
+the binary at a 101-character path outside the tree. On the merge base `c1915d21` that arm does **not** tie — N=3
 passes — so w3fixlegendcheck's only skip marker there is the NDEBUG degrade row about 3 KB in, and the
 symptom cannot be shown on that tree at any path length. This is why an absolute byte offset in this
 section always names the tree it was taken on: the offsets are a property of a gate's output on a
