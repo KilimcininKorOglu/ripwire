@@ -3375,7 +3375,7 @@ ripwire scan: 0 finding(s) total (26 skill file(s) scanned, 0 unscannable file(s
 </r>
 `````
 
-## `./build/ripwire . --rank-by=churn-decay --since=HEAD~1 --exclude=test --exclude=docs --in=src --limit=3`
+## `./build/ripwire . --rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs --in=src --limit=3`
 
 *Scope the recent-changes answer to ONE directory. The global <recent> block stays byte-identical, a second <recent scope="src"> page follows it — n=/of= are its counts (of= IS the total, so the paging half carries no total=), capped="1" has_more="1" next_offset= offset= limit= page it, and next= replays THIS run's own corpus flags (--since/--exclude) so the page it names is a page of the same answer. The symbol map collapses to a disclosed <symbols stubbed="1" would_show= next=/> stub — the map was not asked for and was not ranked at all, which is why the header carries no pr_iters=. merge_bombs_skipped= stays on the global block: it counts the window's skipped commits, not the directory's.*
 
@@ -3386,36 +3386,29 @@ ripwire scan: 0 finding(s) total (26 skill file(s) scanned, 0 unscannable file(s
 <!-- in=DIR: recent scope=DIR is a SECOND recent block, riding exactly when the unchanged global one does, with DIR's files only — p= root-relative exactly as the global block spells them, same order; n= rows on this page of of= files under DIR any counted commit touched (of= IS this element's total, so the paging half below carries none); capped=1 means DIR has more rows than this page; has_more=1 that a next page exists, at next_offset=; offset=/limit= the window this page was cut by (limit=0 means no explicit limit was given). An absent block means no history was mined at all; n=0 means history was mined and no file under DIR was touched. merge_bombs_skipped= is NOT repeated here: it counts the window's skipped commits, not DIR's. next= is ONE pasteable follow-up — this tool's flags, or a shell line copied from a run= row — the call that ends this search; paste it as-is. symbols stubbed=1 would_show= next=: the symbol map this run did NOT ask for and did not render — would_show= is how many symbol ROWS the same run without in= would print (not the corpus total, which is this document's own symbols= header count), next= fetches them -->
 <!-- at= is the git commit these numbers were computed at; a trailing +shallow means the clone's history is truncated (a depth-limited clone: churn counts only the commits present), and a trailing +dirty means the working tree differed from that commit, so the numbers describe the tree, not the commit -->
 <!-- hdr:declined=calls-tier-3-declined(two-or-more-same-language-defs,none-in-the-callers-file-or-dir,none-pinned-by-a-qualifier/receiver/include;no-edge,no-guess;absent-if-0;callers/callees/impact-answers-carry-declined_calls=) -->
-<!-- files=512 symbols=10467 edges=19325 shown=0 est_tokens=2479 ambiguous=7635 unresolved=2989 locality_pinned=4 external=1560 declined=5017 skipped_oversize=15 unindexed="tsv:42,txt:24,jsonl:23,scm:21,expected:15,lock:7" unindexed_exts=11 order=important-first -->
-<r at="516d7c4d7+dirty" root="." rank_by="churn-decay" window="HEAD~1 half-life=90d" est_tokens="2479">
-<recent n="20" of="20" merge_bombs_skipped="0">
-<rc p="CHANGELOG.md" age_d="0" w="2.99"/>
-<rc p="src/cli.h" age_d="0" w="2.99"/>
-<rc p="README.md" age_d="0" w="2"/>
+<!-- files=512 symbols=10486 edges=19387 shown=0 est_tokens=2352 ambiguous=7651 unresolved=2986 locality_pinned=4 external=1569 declined=5018 skipped_oversize=15 unindexed="tsv:42,txt:24,jsonl:23,scm:21,expected:15,lock:7" unindexed_exts=11 order=important-first -->
+<r at="f86bad879" root="." rank_by="churn-decay" window="HEAD~7 half-life=90d" est_tokens="2352">
+<recent n="13" of="13" merge_bombs_skipped="0">
+<rc p="CHANGELOG.md" age_d="0" w="6.99"/>
+<rc p="README.md" age_d="0" w="3.99"/>
+<rc p="src/main.cpp" age_d="0" w="3.99"/>
+<rc p="src/cli.h" age_d="0" w="3.99"/>
+<rc p="src/taskroute.h" age_d="0" w="2.99"/>
 <rc p="present/deck5_ripwire_build.js" age_d="0" w="2"/>
-<rc p="src/serialize.h" age_d="0" w="2"/>
-<rc p="src/forpage.h" age_d="0" w="1.99"/>
-<rc p="src/mcpverbs.h" age_d="0" w="1.99"/>
-<rc p="src/verbs_for.h" age_d="0" w="1.99"/>
-<rc p="bench/agentloop/grade_answers.py" age_d="0" w="1.99"/>
-<rc p="src/lexical.h" age_d="0" w="0.996"/>
-<rc p="src/mcp.h" age_d="0" w="0.996"/>
-<rc p="src/mcprefusal.h" age_d="0" w="0.996"/>
-<rc p="src/packtask.h" age_d="0" w="0.996"/>
-<rc p=".github/workflows/ci.yml" age_d="0" w="0.994"/>
-<rc p="bench/agentloop/README.md" age_d="0" w="0.994"/>
-<rc p="bench/agentloop/run_agentloop.py" age_d="0" w="0.994"/>
-<rc p="bench/agentloop/run_editsuite.py" age_d="0" w="0.994"/>
-<rc p="src/qualitypanel.h" age_d="0" w="0.994"/>
-<rc p="src/renamemine.h" age_d="0" w="0.994"/>
-<rc p="src/verbs_lint.h" age_d="0" w="0.994"/>
+<rc p="src/nextverb.h" age_d="0" w="1"/>
+<rc p="src/gitmine.h" age_d="0" w="0.999"/>
+<rc p="skills/ripwire-change-check/SKILL.md" age_d="0" w="0.997"/>
+<rc p="skills/ripwire-fresh-eyes/SKILL.md" age_d="0" w="0.997"/>
+<rc p="skills/ripwire-orient/SKILL.md" age_d="0" w="0.997"/>
+<rc p="skills/ripwire-orient/map-before-you-read.md" age_d="0" w="0.997"/>
+<rc p="bench/taskroute_eval.py" age_d="0" w="0.997"/>
 </recent>
-<recent scope="src" n="3" of="12" capped="1" has_more="1" next_offset="3" offset="0" limit="3" next="--rank-by=churn-decay --since=&apos;HEAD~1&apos; --exclude=test --exclude=docs --in=src --offset=3 --limit=3">
-<rc p="src/cli.h" age_d="0" w="2.99"/>
-<rc p="src/serialize.h" age_d="0" w="2"/>
-<rc p="src/forpage.h" age_d="0" w="1.99"/>
+<recent scope="src" n="3" of="5" capped="1" has_more="1" next_offset="3" offset="0" limit="3" next="--rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs --in=src --offset=3 --limit=3">
+<rc p="src/main.cpp" age_d="0" w="3.99"/>
+<rc p="src/cli.h" age_d="0" w="3.99"/>
+<rc p="src/taskroute.h" age_d="0" w="2.99"/>
 </recent>
-<symbols stubbed="1" would_show="200" next="--rank-by=churn-decay --since=&apos;HEAD~1&apos; --exclude=test --exclude=docs"/>
+<symbols stubbed="1" would_show="200" next="--rank-by=churn-decay --since=HEAD~7 --exclude=test --exclude=docs"/>
 </r>
 `````
 
