@@ -115,6 +115,7 @@ EXEMPT = {
     "releaseinstallcheck.sh":    "tests install.sh against a FABRICATED release asset/stub server; independent of build/ripwire",
     "reusefirstworkflowcheck.sh":"checks skills/ripwire-reuse-first/SKILL.md content; pure file check",
     "ripwirepubliccheck.sh":     "checks git-tracked files for leaked private content; pure file/grep check",
+    "skipclassifycheck.sh":      "meta-check of test/pargates.py's SKIPPED-vs-PASSED classification: it drives pargates.py over synthetic probe corpora with a fake binary it writes itself, so build/ripwire is never bound or executed — the file contains neither RIPWIRE_BIN nor $BIN (so (2b)'s static tell needs no exemption row for it), the same shape as pargatescheck above",
     "svectorcheck.sh":           "compiles isolated $CXX probes for the svector container; never invokes build/ripwire",
     "timsortcheck.sh":           "compiles isolated $CXX harnesses for the vendored timsort header (correctness, determinism and the zero-allocation workspace property); never invokes build/ripwire",
     "worktreeleakcheck.sh":      "kills COPIES of the gates that check out a commit of the repository (and headbinlib's HEAD-binary builder) inside throwaway repositories, against a stub ripwire and a cmake shim it writes itself; the subject is what a killed gate leaves in the shared .git, so build/ripwire is never bound or executed -- the file contains no $BIN (verified by reading it), so (2b)'s static tell needs no exemption for it",
