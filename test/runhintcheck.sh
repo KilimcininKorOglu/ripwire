@@ -232,7 +232,13 @@ if command -v git >/dev/null 2>&1; then
     printf '#include "../geo.cpp"\nint main()\n{\n    return area( 2, 2 ) == 2 ? 0 : 1;\n}\n' > "$HOSTILE/test/area_harness.cpp"
     # The payload is INERT on disk — a filename is not a command. It only becomes one if run= is unquoted.
     # `;touch PWNED.sh` is what a shell would run after the injected separator, so PWNED.sh is the sentinel.
-    printf '#!/usr/bin/env bash\n# drives test/area_harness.cpp\ntrue\n' > "$HOSTILE/test/check;touch PWNED.sh"
+    #
+    # THE SCRIPT EXITS 7, and the odd status is the point. This arm has to prove the emitted command RAN,
+    # not merely that nothing bad happened, and `exit 0` cannot carry that: a malformed command, a missing
+    # file, an empty string — all of them also fail to create the sentinel, and some of them exit 0. A
+    # status no other outcome produces makes "this script executed" a positive observation instead of an
+    # inference from silence.
+    printf '#!/usr/bin/env bash\n# drives test/area_harness.cpp\nexit 7\n' > "$HOSTILE/test/check;touch PWNED.sh"
     chmod +x "$HOSTILE/test/check;touch PWNED.sh"
     ( cd "$HOSTILE" && git init -q && git config user.email t@t && git config user.name t && git add -A >/dev/null 2>&1 \
       && git commit -qm init >/dev/null 2>&1 )
@@ -254,17 +260,40 @@ if command -v git >/dev/null 2>&1; then
         # command is testing the mangling.
         HCMD="$( printf '%s' "$HRUN" | sed -e 's/^run="//' -e 's/"$//' \
                    -e 's/&apos;/'"'"'/g' -e 's/&quot;/"/g' -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g' )"
-        ( cd "$HOSTILE" && eval "$HCMD" ) >/dev/null 2>&1
-        [ -e "$HOSTILE/PWNED.sh" ] \
-            && no "(5) executing the emitted run= CREATED $HOSTILE/PWNED.sh — the command injected" \
-            || ok "(5) executing the emitted run= ran the harness and created no PWNED file"
-        # CONTROL: the unquoted spelling this arm exists to forbid really does inject, so the row above is
+        # TWO conditions, and the second is the one the previous version of this arm was missing. Third
+        # review of #219: it discarded the command's exit status, so a MALFORMED quoted command — one that
+        # bash refuses, runs nothing, and creates no sentinel — was reported as "the harness ran". That is
+        # the same defect as sarifcheck arm 12b's, and the fifth instance of the shape in one day: an arm
+        # concluding "nothing bad happened" must separately prove the thing RAN, because absence of a bad
+        # outcome and absence of execution are indistinguishable from the outcome alone. A gate that can
+        # certify a hostile path is handled WITHOUT executing it is worse than no gate, because it reads as
+        # proof. So the status is asserted to be the harness's own 7 — not merely zero, not merely non-zero.
+        rm -f "$HOSTILE/PWNED.sh"
+        ( cd "$HOSTILE" && eval "$HCMD" ) >/dev/null 2>&1; hrc=$?
+        if [ "$hrc" -ne 7 ]; then
+            no "(5) the emitted run= did not RUN the harness (exit $hrc, expected the harness's own 7) — the sentinel check below would prove nothing: $HCMD"
+        elif [ -e "$HOSTILE/PWNED.sh" ]; then
+            no "(5) executing the emitted run= CREATED $HOSTILE/PWNED.sh — the command injected"
+        else
+            ok "(5) the emitted run= RAN the harness (exit 7) and created no PWNED file — handled, and observed to have executed"
+        fi
+        # CONTROL A: the unquoted spelling this arm exists to forbid really does inject, so the row above is
         # not passing against a payload that never worked.
         rm -f "$HOSTILE/PWNED.sh"
         ( cd "$HOSTILE" && eval "bash test/check;touch PWNED.sh" ) >/dev/null 2>&1
         [ -e "$HOSTILE/PWNED.sh" ] \
             && ok "(5) control: the UNQUOTED spelling does inject (PWNED.sh created), so the arm above is not vacuous" \
             || no "(5) control: the unquoted spelling injected nothing — this arm proves nothing about quoting"
+        # CONTROL B: the status check must DISCRIMINATE. A deliberately malformed quoted command creates no
+        # sentinel either, so under the old spelling it read as a pass; here it must fail the status test.
+        rm -f "$HOSTILE/PWNED.sh"
+        ( cd "$HOSTILE" && eval "bash 'test/check;touch PWNED.sh" ) >/dev/null 2>&1; mrc=$?
+        if [ "$mrc" -ne 7 ] && [ ! -e "$HOSTILE/PWNED.sh" ]; then
+            ok "(5) control: a MALFORMED quoted command exits $mrc (not 7) and creates no sentinel — so the status test is what rejects it, not the sentinel"
+        else
+            no "(5) control: a malformed quoted command was indistinguishable from the harness running (exit $mrc) — the status test does not discriminate"
+        fi
+        rm -f "$HOSTILE/PWNED.sh"
     fi
 else
     printf '  SKIP  (5) hostile-path run= arm (no git)\n'
