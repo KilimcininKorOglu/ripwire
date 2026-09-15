@@ -662,10 +662,18 @@ inline constexpr std::string_view kPrEstUnmeasuredLegendClause =
 // decided by different facts — the chosen body's test-row COUNT, and whether that body could be measured at
 // all. Both are gated for the same measured reason (see kPrEstUnmeasuredLegendClause): a clause that states a
 // rule about something this document does not contain is bytes every reader pays for and no reader needs.
+// MERGE of #214 and #219, and the third field is why this is a union and not a choice. #214 replaced two
+// bare bools with this struct; #219 (A3) had made the run clause's ROOT-RELATIVE sentence conditional, so the
+// clause is no longer the constant kRunHintLegendClause but whatever testmap.h's runHintClauseIfRows returns
+// for this run. Taking either side whole drops the other's fact: main's spelling loses the root sentence,
+// ours loses the est-unmeasured clause. `rootRelativeRuns` is not a third GATE — it selects which run clause
+// is spliced once runHint has already decided that one is — and it answers to the SAME predicate that spells
+// run= itself (testmap.h runsAreRootRelative), so the sentence and the spelling still cannot disagree.
 struct PrLegendClauses
 {
-    bool runHint       = false;   // M21(b)/E1: testmap.h's run=/run_unknown=/<g> rule — rides a rows-bearing body
-    bool estUnmeasured = false;   // review of #214: the est-unmeasured label's definition — rides a document carrying the label
+    bool runHint          = false;   // M21(b)/E1: testmap.h's run=/run_unknown=/<g> rule — rides a rows-bearing body
+    bool estUnmeasured    = false;   // review of #214: the est-unmeasured label's definition — rides a document carrying the label
+    bool rootRelativeRuns = false;   // A3 / review of #219: the run clause's root-relative SENTENCE — one declared root, or the command stays absolute
 };
 
 inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, const PrLegendClauses& clauses )
@@ -696,7 +704,9 @@ inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindex
                  // --impact reports, so the same floor applies to hundreds of attributes in this one document.
                  // The shared constants, never a pr-context wording — that is the §B4 echo-site rule.
                  + rw::graphCountDisclosure( hasUnindexed )
-                 + std::string( clauses.runHint ? rw::kRunHintLegendClause : std::string_view() )   // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
+                 // Rows-gated through testmap.h's OWN seam rather than its bare constant: runHintClauseIfRows is
+                 // what appends the root-relative sentence, so #219's A3 fix survives #214's struct.
+                 + rw::runHintClauseIfRows( clauses.runHint ? 1 : 0, clauses.rootRelativeRuns )
                  + std::string( clauses.estUnmeasured ? kPrEstUnmeasuredLegendClause : std::string_view() )   // review of #214: the est-unmeasured label's definition — label-gated, same reason
                  + "-->";
 }
@@ -992,12 +1002,16 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
 
     // E1: both legend forms are built now and ONE is written later, once the body is known — writeHead takes
     // that body's own PrTrimRender::testFiles count. The envelope is priced without the clause and the pricer
-    // adds runClauseBytes for a rows-bearing body.
-    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, PrLegendClauses{} );
+    // adds runClauseBytes for a rows-bearing body. A3 / review of #219: the run clause's ROOT-RELATIVE
+    // sentence is conditional too, so every form is built with the one predicate that also decides the run=
+    // spelling — carried in the clause struct rather than as a second bare bool.
+    const bool        prRootRelRuns  = rw::runsAreRootRelative( ing, root );
+    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, PrLegendClauses{ .rootRelativeRuns = prRootRelRuns } );
     const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
     // The clause-bearing form is built ONCE, and only if it is the form that gets written — the difference
-    // between the two is exactly kRunHintLegendClause (prLegendText splices that constant and nothing else),
-    // so the pricer reads the constant's size rather than a second rendering's.
+    // between the two is exactly what testmap.h's runHintClauseIfRows returns for this run (prLegendText
+    // splices that and the est-unmeasured clause, nothing else), so the pricer below asks that same seam for
+    // its size rather than measuring a second rendering.
     // Review of #214: `unmeasured` is the SECOND rows-style gate — the est-unmeasured clause rides only the
     // document whose chosen level could not be measured, and the pricer charged it on exactly that fact
     // (PrTrimRender::rendered), so the written legend and the priced legend are the same bytes.
@@ -1005,7 +1019,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     {
         const std::string legend = ( testFiles > 0 || unmeasured )
                                        ? prLegendText( escBase, g.unindexedFiles > 0,
-                                                       PrLegendClauses{ .runHint = testFiles > 0, .estUnmeasured = unmeasured } )
+                                                       PrLegendClauses{ .runHint = testFiles > 0, .estUnmeasured = unmeasured, .rootRelativeRuns = prRootRelRuns } )
                                        : legendText;
         std::fwrite( legend.data(), 1, legend.size(), out );
         std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
@@ -1019,7 +1033,9 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // R2/N4: the price context (see prPriceDocument) — the envelope and every root attribute that does not
     // vary per candidate trim level, gathered once.
     const PrPriceCtx priceCtx{ .g = &g, .sharedAttrs = &sharedAttrs, .anchor = &anchor, .baseEscaped = &escBase, .atAttrs = &atAttrStr,
-                               .envelopeBytes = envelopeBytes, .runClauseBytes = rw::kRunHintLegendClause.size(),
+                               // #219: the run clause is priced through the SAME seam that writes it, so the root
+                               // sentence is charged exactly when it is emitted — never the bare constant's size.
+                               .envelopeBytes = envelopeBytes, .runClauseBytes = rw::runHintClauseIfRows( 1, prRootRelRuns ).size(),
                                .estUnmeasuredClauseBytes = kPrEstUnmeasuredLegendClause.size(),
                                .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
                                .budgetTokens = budgetTokens, .isDefaultBudget = budget.isDefault };
@@ -1056,7 +1072,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     const auto allOwners = gitFileAuthors( root, ing, UINT32_MAX, 182.5, onlyRoot );
 
     // §A9.5 / §P11.4: run= on the named test rows, from the SAME index --affected/--situ/--test-gate read.
-    const TestRunnerIndex prRunners( ing );   // built once, like coSets/allOwners — the bundle re-renders
+    const TestRunnerIndex prRunners( ing, root );   // built once, like coSets/allOwners — the bundle re-renders
 
     // One-time file→defined-symbols index (in id order == file/line order), so each changed file reads its
     // symbols in O(1) instead of re-scanning all N symbols (A4-P10). Buckets fill in ascending id order.

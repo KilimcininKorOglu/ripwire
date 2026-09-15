@@ -168,12 +168,24 @@ inline std::string graphCountFloorBrief( bool hasUnindexed )
     return std::string( kGraphCountFloorBriefLegend ) + graphUnindexedLegend( hasUnindexed );
 }
 
-// The same two facts as PROSE, for the one graph-count report that is text (--situ's [1] blast radius).
-// The trailing %s is the #66 gauge's prose clause — EMPTY when nothing went unindexed, so this dialect
-// keeps the same omit-at-zero reading as the XML/JSON attribute rather than printing a bare "0" the other
-// two dialects never print. Rendered through graphUnindexedTextClause() below, never spelled at the site.
+// The same facts for the one graph-count report that is TEXT (--situ's [1] blast radius) — as ATTRIBUTES,
+// not as a paragraph. A5 (2026-09-13, PLAN_OUTPUT_ROUTING_LOOP §1.5): this line ran 601 B on every --situ
+// answer to say four things that are names with values — counts_floor, the two resolver gauges and, when a
+// file could not be read at all, the third — plus the two readings a consumer cannot supply for itself:
+// that the counts are floors, and how to read a zero. The names are now spelled exactly as the XML/JSON
+// dialects spell them (graph_ambiguous=/graph_unresolved=/graph_unindexed=, counts_floor=1), so the three
+// dialects share one vocabulary, and the two readings stay as the short clause after them. Nothing was
+// dropped: METHODOLOGY §9 puts honesty in the attributes, and the sentence was never the honest part.
+// The trailing {} is the #66 gauge — EMPTY when nothing went unindexed, so this dialect keeps the same
+// omit-at-zero reading as the attribute rather than printing a bare "0" the other two never print.
+// Review of #219: an attribute with no reading is a token, not a disclosure — and this is the ONE dialect
+// with no legend to look a token up in (--situ refuses --legend=compact; compactlegendcheck (R)). So the
+// floor's CAUSE (a name-based call graph) and what an unindexed file IS stay on the line. They are the
+// price of having no legend, not prose the compression was entitled to.
+// Gate: test/situshapecheck.sh (1) and (8); test/floormarkcheck.sh (9) keeps the two anchor phrases.
 inline constexpr const char* kGraphCountFloorTextLine =
-    "        counts_floor=1: every count above is a FLOOR, never a total (call edges are name-based; dynamic dispatch, callbacks and macros can be missing) — read a zero as \"none found\", never as \"none exists\"; graph_ambiguous={} graph_unresolved={} is the whole graph's resolver gauge (calls split over several defs / calls whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved={}\n"; // std::format FORMAT: two gauge totals + the clause
+    "        counts_floor=1 graph_ambiguous={} graph_unresolved={}{} (the map header's own gauges) — every count above is a FLOOR, never a total: "
+    "call edges are name-based, so dynamic dispatch, callbacks and macros can be missing; a zero is \"none found\", never \"none exists\"\n"; // std::format FORMAT: two gauge totals + the clause
 
 // The #66 clause for the prose dialect. "" at zero — the absence IS the confident case, same as the attribute.
 inline std::string graphUnindexedTextClause( std::size_t unindexedFiles )
@@ -182,10 +194,8 @@ inline std::string graphUnindexedTextClause( std::size_t unindexedFiles )
     {
         return {};
     }
-    char buf[256]; // literal ~180 B + one %zu at 20 digits = ~198 B worst case; snprintf truncates regardless
-    rw::formatTo( buf, sizeof( buf ),
-                  "; graph_unindexed={} is a third gauge — files no grammar in this build could read at all (the map header's unindexed=), whose calls produce no reference and so raise neither gauge above",
-                  unindexedFiles );
+    char buf[128]; // literal 63 B + one size_t at 20 digits = 83 B worst case; snprintf truncates regardless
+    rw::formatTo( buf, sizeof( buf ), " graph_unindexed={} (files no grammar in this build could read at all)", unindexedFiles );
     return buf;
 }
 

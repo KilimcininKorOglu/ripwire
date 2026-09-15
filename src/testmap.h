@@ -26,6 +26,8 @@
 #include "docparse.h"     // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
 #include "mention.h"      // mention_detail::baseNameOf + stripExt — the ONE basename/stem pair binstale.h/gitmine.h reuse
 #include "infra/namesplit.h" // namesplit::isIdentChar — the canonical ASCII identifier-byte predicate
+#include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
+#include "infra/jsonesc.h" // rw::shSingleQuote — the ONE shell quoter; run= is a COMMAND, see spell() below
 
 #include <algorithm>
 #include <cstdio>
@@ -486,10 +488,25 @@ inline std::vector<NodeId> exercisedSymbols( const IngestResult& ing, const Grap
 //
 // COST: the candidate scripts' texts are read at most ONCE per invocation and only LAZILY — nothing is read
 // until a row actually asks for a hint, so every verb that emits no test row pays nothing at all.
+// A3 / review of #219: run= is spelled relative to root= exactly when the run HAS one root and declares it.
+// A multi-root run's disk path lies under no single root, so its command must stay absolute — and the legend
+// sentence below is gated on this SAME predicate, so the spelling and the claim cannot disagree.
+inline bool runsAreRootRelative( const IngestResult& ing, std::string_view root ) noexcept
+{
+    return ing.realPaths.empty() && !root.empty();
+}
+
 class TestRunnerIndex
 {
 public:
-    explicit TestRunnerIndex( const IngestResult& ing ) : ing_( &ing )
+    // A3 (one absolute root per document): `root` is the run's own crawl root, and its ONLY use is to spell
+    // the command below relative to it — the same rootPrefixOf/rootRelativeUri pair every p= emitter uses.
+    // Defaulted to "" so a caller that has no root (or a multi-root run, where the disk path is not under any
+    // single root) keeps the absolute spelling: an unrelativizable command must stay pasteable, never become
+    // a path relative to a root that does not contain it.
+    explicit TestRunnerIndex( const IngestResult& ing, std::string_view root = {} )
+        : ing_( &ing ),
+          rootPrefix_( runsAreRootRelative( ing, root ) ? rw::sarif::rootPrefixOf( root ) : std::string() )
     {
         for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
         {
@@ -517,6 +534,10 @@ public:
         return cache_.emplace( fileId, derive( fileId ) ).first->second;
     }
 
+    // Whether the commands this index spells are relative to a root — the SAME fact the legend sentence
+    // is gated on, read off the index rather than re-derived at each legend site.
+    bool rootRelative() const noexcept { return !rootPrefix_.empty(); }
+
     std::string commandForScript( std::uint32_t fileId ) const
     { return fileId < ing_->files.size() && runnerVerb( ing_->files[fileId] ) != nullptr ? spell( fileId ) : std::string(); }
 
@@ -540,8 +561,7 @@ private:
     // primitives binstale.h, gitmine.h and docdrift.h already stem paths with. Re-rolling them here is
     // exactly the new-clone-of-a-reused-helper --quality-delta reports, and it would also fork the
     // "strip the LAST dot" convention that every other stemming call site in this repo shares.
-    static std::string_view stemOf( std::string_view p ) noexcept
-    { return mention_detail::stripExt( mention_detail::baseNameOf( p ) ); }
+    static std::string_view stemOf( std::string_view p ) noexcept { return mention_detail::pathStem( p ); }
 
     void loadTexts() const
     {
@@ -593,17 +613,72 @@ private:
     // Spelled against the ON-DISK path (diskPath), so a multi-root `<label>/<rel>` identity spelling — which
     // is a label, not a directory — can never leak into something a shell would mis-resolve. A leading "./"
     // is dropped for readability; the result is pasteable from the repo root.
+    // CWE-78, security review of #219. A run= is a COMMAND, and the path inside it comes from the CRAWLED
+    // CORPUS, so the corpus decides its bytes. `test/check;touch PWNED.sh` is a legal filename, and plain
+    // concatenation emitted `bash test/check;touch PWNED.sh` — a command this tool tells an agent to paste,
+    // which would run `touch PWNED` in the reader's shell. The path is now always emitted as ONE argument.
+    //
+    // QUOTED WHEN NOT PROVABLY SAFE, rather than unconditionally, and the difference is measured rather than
+    // preferred. shSingleQuote always wraps, so quoting unconditionally would move the run= bytes of every
+    // row in eight emitters: 13 literal command assertions across 7 gates, docs/COMMANDS.md, 15 committed
+    // capture snapshots, README, and the printf_parity pins — a documented output-format change for every
+    // user. Every path `git ls-files` tracks in this repo, and every runner path under test/, is in the safe
+    // set (measured: 0 of either outside it), so the conditional form is byte-identical on every real corpus
+    // while a hostile name is still quoted. The predicate is an ALLOWLIST, so a byte nobody enumerated is
+    // quoted by default instead of passed through — which is the direction a quoting bug should fail in.
+    static bool isShellSafePath( std::string_view p ) noexcept
+    {
+        if( p.empty() || p.front() == '-' )   // a leading '-' is read as a FLAG, not a path
+        {
+            return false;
+        }
+        for( const char c : p )
+        {
+            const bool isSafeByte = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' )
+                                    || c == '.' || c == '_' || c == '/' || c == '-';
+            if( !isSafeByte )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::string spell( std::uint32_t runnerFile ) const
     {
-        std::string_view p = diskPath( *ing_, runnerFile );
-        if( p.rfind( "./", 0 ) == 0 )
+        const std::string& disk = diskPath( *ing_, runnerFile );
+        // A3: root-relative, like every p= beside it. rootRelativeUri strips a leading "./" unconditionally,
+        // so the readability strip the pre-A3 code did by hand is the SAME call now, not a second rule.
+        std::string_view p = rw::sarif::rootRelativeUri( disk, rootPrefix_ );
+        if( isShellSafePath( p ) )
         {
-            p = p.substr( 2 );
+            return std::string( runnerVerb( p ) ) + " " + std::string( p );
         }
-        return std::string( runnerVerb( p ) ) + " " + std::string( p );
+        // QUOTING WAS NECESSARY AND NOT SUFFICIENT — third review of #219, a bypass of the fix above. The
+        // quoted form hands the path to the shell as ONE argument, which is the whole point, and then the
+        // INTERPRETER parses it: a root-level `-cimport os;open("PWNED","w")#_test.py` passes isTestPath,
+        // keeps its leading dash through normalisation, survives quoting intact — and `python3` reads `-c`
+        // as "execute this code". The path never reaches the shell as code; it reaches the interpreter as an
+        // OPTION. Same trust boundary as the injection above: corpus filename → run= → a reader pastes it.
+        //
+        // MEASURED, both directions, on the two verbs runnerVerb can emit (there are exactly two —
+        // kRunnerKinds is .sh→bash and .py→python3, so this is the whole population, not a sample):
+        //   python3 '<-c…#_test.py>'     rc=0, created the payload file   — bypass reproduced
+        //   python3 -- '<same path>'     rc=7 (the file's own status), no side effect
+        //   bash    -- '<-c…#_test.sh>'  rc=7, no side effect
+        // bash did NOT reproduce the bypass with the equivalent payload (it rejected the combined -c form,
+        // rc=1), so the confirmed case is python3; `--` is emitted for both because both honour it and the
+        // cost is zero on every real path. If a third interpreter is ever added here, check its `--` before
+        // relying on this line — a hopeful `--` on a verb that ignores it would be worse than none.
+        //
+        // Conditional for the same measured reason as the quoting: a leading '-' is already outside
+        // isShellSafePath, so `--` costs bytes only where the path is hostile and every real corpus stays
+        // byte-identical (printffmtparitycheck needs no re-pin).
+        return std::string( runnerVerb( p ) ) + " -- " + rw::shSingleQuote( std::string( p ) );
     }
 
     const IngestResult*                         ing_;
+    std::string                                 rootPrefix_;   // A3: "" ⇒ the command keeps its stored spelling
     std::vector<std::uint32_t>                  runners_;
     mutable std::vector<std::string>            texts_;
     mutable bool                                textsLoaded_ = false;
@@ -955,12 +1030,23 @@ inline constexpr std::string_view kRunHintLegendClause =
     "verbatim in list order — a path holding ',' is never grouped, so p= splits into exactly n= paths. A "
     "shown=/total= over these rows counts test FILES: a <g> row is n= of them. ";
 
+// A3 / review of #219: the ROOT-RELATIVE half of the rule, and it is CONDITIONAL. Spliced unconditionally —
+// as the first cut of A3 did — this sentence told a multi-root reader, in a document carrying no root= at
+// all, that its absolute command was relative to something. runsAreRootRelative (above) decides BOTH the
+// spelling and the sentence, so the two cannot disagree. Gate: rootrelemitcheck ARM 9c, runhintcheck 2d.
+inline constexpr std::string_view kRunRootRelSentence =
+    "A run= command is relative to root=: run it from there. ";
+
 // The clause is a rule about ROWS, so a legend splices it only when the document actually renders one — a
 // tests="0" answer pays nothing for it. THE gate, taking the count testRowsList returns (or, for a section
 // that cut its own rows, that section's kept count): one rule, one spelling, asked by all eight sites.
-inline std::string_view runHintClauseIfRows( std::size_t testFilesRendered ) noexcept
+inline std::string runHintClauseIfRows( std::size_t testFilesRendered, bool rootRelativeRuns )
 {
-    return testFilesRendered == 0 ? std::string_view() : kRunHintLegendClause;
+    if( testFilesRendered == 0 )
+    {
+        return {};
+    }
+    return std::string( kRunHintLegendClause ) + ( rootRelativeRuns ? std::string( kRunRootRelSentence ) : std::string() );
 }
 
 // ── P9 (capture-audit 2026-09-04) — the tests_to_run row set for ONE changed file ────────────────────
@@ -1202,7 +1288,7 @@ inline std::vector<std::string> suiteMemberStems( const std::vector<std::string>
     for( const std::string& token : tokens )
     {
         if( token.find( '/' ) == std::string::npos ) { continue; }
-        const std::string_view stem = mention_detail::stripExt( mention_detail::baseNameOf( token ) );
+        const std::string_view stem = mention_detail::pathStem( token );
         if( !stem.empty() ) { stems.emplace_back( stem ); }
     }
     appendForListStems( tokens, stems );
@@ -1263,7 +1349,7 @@ inline ShellGateIndex buildShellGateIndex( const IngestResult& ing, const std::v
     {
         const std::string_view path = ing.files[f];
         if( !isTestPath( path ) || !path.ends_with( ".sh" ) || mention_detail::baseNameOf( path ) == "regression.sh" ) { continue; }
-        const std::string_view stem = mention_detail::stripExt( mention_detail::baseNameOf( path ) );
+        const std::string_view stem = mention_detail::pathStem( path );
         if( std::find( registeredTokens.begin(), registeredTokens.end(), stem ) == registeredTokens.end() ) { continue; }
         addRegisteredShellGate( ing, changedFiles, f, index );
     }

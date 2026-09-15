@@ -1031,7 +1031,7 @@ namespace mcpedit
         // The SAME answer --affected=<this file> gives, through the SAME function — see
         // testmap.h::affectedAnswerForFile for why this used to be a private walk and what that cost.
         const AffectedAnswer  ans = rw::affectedAnswerForFile( ing, g, fileId );
-        const TestRunnerIndex runners( ing );
+        const TestRunnerIndex runners( ing, root );
         const auto            jesc   = []( std::string_view t ) { return mcpdetail::jsonEscape( std::string( t ) ); };
         const std::string     prefix = rw::sarif::rootPrefixOf( root );
         std::string           out    = ",\"tests_to_run\":[";
@@ -1129,7 +1129,17 @@ namespace mcpedit
             if( nextOut != nullptr ) { *nextOut = nextFlag( "--test-gate=", fileIdentity ); }
             return ",\"post_check_unavailable\":\"the edited file is not in the refreshed index\"";
         }
+        // Review of #219 (A3): every path this receipt hands back — "file", each tests_to_run[].run recipe and
+        // the stderr "next:" — is spelled RELATIVE to the crawl root, and the receipt named no root at all.
+        // An MCP client runs in its own working directory, so a relative command it cannot anchor is a
+        // command it cannot paste. The receipt's JSON siblings (--test-gate --json, situational_awareness)
+        // have carried "root" all along; this is the surface that least afforded to omit it. Single-root
+        // only, the same condition every other root= keeps. Gate: test/receiptpostcheck.sh (18).
         std::string out;
+        if( ing.realPaths.empty() && !root.empty() )
+        {
+            out += ",\"root\":\"" + mcpdetail::jsonEscape( root ) + "\"";
+        }
         if( focus == kNoNode )
         {
             // Honest, and it happens: a replace whose payload defines a DIFFERENT name leaves no definition
@@ -1150,7 +1160,7 @@ namespace mcpedit
             // evidence order now, so next= suggests the changed/partner test ahead of a deeper graph hop
             const std::uint32_t firstTest = withTests ? rw::firstTestFileForFile( ing, g, editedFile ) : rw::kNoFile;
             *nextOut = receiptNextFor( fileIdentity, symbolName, out,
-                                       firstTest == rw::kNoFile ? std::string() : TestRunnerIndex( ing ).commandFor( firstTest ) );
+                                       firstTest == rw::kNoFile ? std::string() : TestRunnerIndex( ing, root ).commandFor( firstTest ) );
         }
         return out;
     }

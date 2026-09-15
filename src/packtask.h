@@ -1504,7 +1504,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     }
     // E1 / review of #214: the section cuts over its own GROUPED, ESCAPED rendering — see packTaskTestsSection
     // above for the defect that forced it and for why a bisection answers it exactly.
-    const rw::TestRunnerIndex runners( ing );
+    const rw::TestRunnerIndex runners( ing, in.rootArg );   // A3: root-relative run=, same root the p= above are relative to
     PackTaskSection   tests       = packTaskTestsSection( runners, ptRows, testsBudget, kPackTaskWrapReserve, ex, &testPartition );
     const std::size_t testsTotal  = ptRows.size();
     const MonotoneRoll testsRoll  = monotoneRoll( tests.kept < testsTotal, testsBudget, tests.xml.size() );
@@ -1734,7 +1734,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         { char b[ 96 ];  rw::formatTo( b, sizeof( b ), ",\"tests_total\":{},\"tests_kept\":{},\"tests_to_run\":[", testsTotal, testsKept );  j += b; }
         // §A9.5: the JSON sibling of the XML run= above — situ's tests_to_run already carries it, and one
         // computation path must not serialize two different obligations.
-        const rw::TestRunnerIndex   jsonRunners( ing );
+        const rw::TestRunnerIndex   jsonRunners( ing, in.rootArg );
         const auto                  jrun = [ & ]( std::string_view s ) { return jsonStr( s ); };
         const std::vector<rw::TestRowOut> jKeptRows = rw::testRowsOutOf( std::span( testFiles ).first( std::min( testsKept, testFiles.size() ) ), jPathRel );
         bool jFirstTest = true;
@@ -1808,9 +1808,15 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // mcpattrparitycheck still sees one spelling on every root.
     droppedPositiveAttr += lr.capAttrs;
 
+    // The clause is now BUILT (the root-relative sentence is conditional, so the seam composes a string
+    // rather than handing back one of two constants), and PackTaskHeaderParts holds VIEWS — so it is owned
+    // by a named local here, like report and droppedPositiveAttr above it. Binding the view straight to the
+    // returned temporary is a dangling read the moment the full expression ends, and it showed as exactly
+    // that: packtaskcheck's bundle was both malformed and non-deterministic (two runs, two sha256s).
+    const std::string runClauseStr = rw::runHintClauseIfRows( tests.kept, rw::runsAreRootRelative( ing, in.rootArg ) );   // the ONE gate: the section's own kept count
     const PackTaskHeaderParts headerParts{ task, rootOpenStr, taskNote, mentionNote, boostNote,
                                             docMentionNote, sibliftNote, expandNote, report, droppedPositiveAttr, in.rootArg,
-                                            rw::runHintClauseIfRows( tests.kept ) };   // the ONE gate: the section's own kept count
+                                            runClauseStr };
     const auto buildHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
     {
         if( in.innerBundle )   // P10 (L7): a partition slice — the outer <ctx-partitions> legend speaks once for all of them

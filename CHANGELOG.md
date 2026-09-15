@@ -15,6 +15,237 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a relative command with no anchor, and the roots that never declared themselves
+
+A second review of the three `--situ` entries below found twelve defects — counted one per
+independently described correction below, which is four surfaces that spelled a path or a command
+relative to a root they never declared, one in the shared path relativizer, three in the new
+lexical-siblings block and four disclosure readings dropped when sentences became attributes (4 + 1 + 3
++ 4) — every one of them a document that could not be resolved by the reader holding it, and all twelve
+are fixed here. The two byte ratchets named at the end moved with the fixes and are not counted among
+them: a pin is not a defect. A third review, of this entry's own fixes rather than of the entries below
+it, found two more — the filesystem root in that same relativizer, and a quadratic scan in the new
+lexical-siblings block — and both are fixed here too. A fourth review found a FIFTEENTH in shipped
+output: a `run=` command did not shell-quote its path. Separately, this lane's own new cap left two
+published counts stale (README's cap total and `docs/TUNING.md`); both were republished by their
+generators rather than edited, and they are drift this entry caused rather than a sixteenth defect.
+
+A run= IS A COMMAND, AND ITS PATH COMES FROM THE CORPUS. `testmap.h`'s `spell()` concatenated the
+runner verb and the path, so a repository containing the legal filename `test/check;touch PWNED.sh`
+made the tool emit `run="bash test/check;touch PWNED.sh"` — a command this tool hands an agent to
+paste, which runs `touch PWNED.sh` in the reader's shell (CWE-78, external reachability). The path is
+now always one shell argument. It is quoted only when it is not provably safe, and that is measured
+rather than preferred: `shSingleQuote` always wraps, so quoting unconditionally would move the `run=`
+bytes of every test row in eight emitters — 13 literal command assertions across 7 gates,
+`docs/COMMANDS.md`, 15 committed capture snapshots, README and the `printf_parity` pins. Every path
+`git ls-files` tracks here is inside the safe allowlist (`[A-Za-z0-9._/-]`, never a leading `-`, which
+a shell reads as a flag), measured at 0 outside it, so the conditional form is byte-identical on every
+real corpus while a hostile name is still quoted — `printffmtparitycheck` needed no re-pin. The
+predicate is an allowlist, so an unenumerated byte is quoted by default. `test/runhintcheck.sh` arm (5)
+EXECUTES the emitted command in a scratch corpus and asserts the payload did not fire, with the
+unquoted spelling as its control. Red before the fix: the emitted command created the sentinel file.
+
+AND QUOTING WAS NOT SUFFICIENT — the same trust boundary, one layer in. A root-level
+`-cimport os;open("PWNED","w")#_test.py` passes `isTestPath`, keeps its leading dash, survives quoting
+intact, and then `python3` reads `-c` as "execute this code": the path reaches the INTERPRETER as an
+option rather than the shell as code. Measured, both directions, over the whole population of verbs
+`runnerVerb` can emit (exactly two — `.sh`→`bash`, `.py`→`python3`): `python3 '<path>'` exited 0 and
+created the payload file, `python3 -- '<path>'` exited the file's own 7 and did nothing, and
+`bash -- '<path>'` likewise. `bash` did not reproduce the bypass with the equivalent payload (it
+rejected the combined `-c` form, rc=1), so the confirmed case is `python3`; `--` is emitted for both
+because both honour it. An option terminator now precedes any path that is not provably safe — a
+leading `-` is already outside the allowlist, so this too is byte-identical on every real corpus and
+`printffmtparitycheck` still needs no re-pin. `runhintcheck` arm (6) pins it, with the
+quoted-but-unterminated spelling as the control that proves quoting alone was not the fix.
+
+A RELATIVE COMMAND IS ONLY AS GOOD AS ITS ANCHOR. Making `run=` root-relative is what makes a change
+report independent of where the tree is checked out — and it makes every one of those commands useless
+to a reader who cannot tell what they are relative to. Four surfaces had exactly that hole. The shared
+run-hint clause claimed "relative to root=" unconditionally, including on a MULTI-root run, which
+declares no `root=` at all and (correctly) keeps the absolute command: the spelling and the sentence now
+answer to one predicate, `testmap.h runsAreRootRelative`, so they cannot disagree. `--flags --flip`
+spelled every `p=` relative to the crawl root and declared no root either; `<flip>` now carries `root=`
+with the one sentence that defines it, like every other verb. The MCP edit receipt — the surface that
+hands a caller a command to paste — spelled `file`, every `tests_to_run[].run` and its stderr `next:`
+relative to a root it never named; it now carries `"root"`, single-root only, the same condition every
+other `root=` keeps. And `--help` still told the reader `run=` was "spelled with the same root you
+scanned", which stopped being true in this lane; `--help` and `docs/COMMANDS.md` now say what the code
+does.
+
+A "./" THAT RETURNED TOO EARLY. `sarif.h rootRelativeUri` stripped a stored path's leading `./` and
+RETURNED, before the root prefix was ever tried. That is right for the root `.` and wrong for every
+other relative spelling: `ripwire ./corp` stores `./corp/test/x.sh`, the early return yielded
+`corp/test/x.sh`, and pasting that from the root the document declares is `cd ./corp && bash
+corp/test/x.sh` — rc 127. Both sides now drop the optional `./` first and compare what is left, which
+leaves the one case the early return got right byte-identical. `test/rootrelemitcheck.sh` ARM 9b turns
+the old spelling pair into a matrix: `.`, `corp`, `./corp`, `corp/`, an absolute path and a symlink all
+print the SAME command, and each printed command is EXECUTED from the root it names.
+
+AND THE ONE ROOT THAT IS ITS OWN SEPARATOR. That same relativizer then matched a prefix only when the
+byte after it was a `/`, which the filesystem root can never satisfy: under `ripwire /` the stored
+spelling is `/test/check.sh`, the byte after the prefix is `t`, and the ABSOLUTE path was emitted into a
+document whose `root="/"` declares every path relative to it — `testmap.h runsAreRootRelative` is true
+for any single non-empty root, `/` included, so the envelope's claim and its own rows disagreed. This is
+every `p=`/`uri=` emitter in the tool, not SARIF alone: all of them route through this one pair. The
+added clause strips the single leading slash, runs AFTER the general shape so no other prefix changes by
+a byte, and is guarded on length so a file spelled `/` stays `/` rather than becoming an empty URI. A
+corpus at the filesystem root means crawling the whole machine, so no end-to-end arm can reach it;
+`test/sarifcheck.sh` arm 11 is a unit driver over the function itself, compiled with the flags CMake
+gave the binary under test (the recipe `extentcheck.sh` (U) and `jsonwalkcheck.sh` already use). Its 22
+rows pin both halves together — the predicate the envelope claims and the URI the relativizer returns —
+and the non-root prefixes sit in the same table, so an over-stripping fix fails there rather than on a
+consumer's machine. Red before the change: 4 of the 22 failed, including `rootRelativeUri(
+"/test/check.sh", "/" )` returning `/test/check.sh`.
+
+A SMALL BLOCK PAGED WITH SOMEONE ELSE'S WINDOW. The new lexical-siblings block honoured `page.offset` —
+which is section `[1]`'s blast-radius offset. `--situ=F --offset=20` printed `shown=0 total=9 capped=1`
+with a `next:` offering `--limit=9`, relief that cannot restore rows an OFFSET removed, and `--offset=7`
+dropped six rows silently. It is a small fixed block with a cap, like the decl/def partner rows above it:
+cap and `--limit`, no offset. In the same family, `unindexed_rows_floor` was computed only for a NON-EMPTY
+list and the emitter suppressed the empty one, so the case where the crawl's 500-row cut removed the only
+candidate printed nothing at all — a silent zero, which is the one thing METHODOLOGY §9 forbids outright.
+The floor is a property of the candidate list, not of the answer: it is recorded whenever that list was
+short, and the block speaks at zero. The MCP twin's `siblings_total` was the length of the array beside it
+— a tautology — and now states `siblings_capped` explicitly beside a population.
+
+A CAP THAT BOUNDED THE ANSWER AND NOT THE WORK. That same lexical-siblings block compared every
+unchanged indexed file and every unsupported crawl row against every changed path, and
+`isLexicalSiblingOf` re-split both paths into directory and stem on each pair; the sibling ROW cap
+applies only after collection, so it bounded what was printed and never what was computed —
+O( (F + U) x C ). SAME DIRECTORY is the rule's most selective clause, so the changed paths are now
+indexed by directory once (a sorted vector and a `lower_bound`, not a hash or tree map) and a candidate
+is compared only against the changed paths sharing its directory: one `dirOf` and one binary search per
+candidate, nothing more for a candidate whose directory nothing changed in. The predicate is still
+`isLexicalSiblingOf`, called on the narrowed range rather than restated, so the rule cannot drift from
+the prose that documents it. METHOD: the two implementations are timed on the function itself — its only
+inputs are `ing.files` and the changed-file bitmap — built `-O2` with the flags CMake gives the shipped
+binary, the two binaries interleaved, best of 5, two passes. The path population is a real
+`llvm-project` checkout (`4d5358b1`, clang+llvm, 8,856 paths) and `golang/go` (12,555 paths), plus that
+llvm population grown to the 182,555-file rung of `docs/EVALS.md` by re-rooting whole copies of the tree
+— synthetic in SIZE only, every path keeping a real directory shape and a real stem. The changed set is
+spread evenly rather than clustered, because a clustered one makes every candidate's FIRST comparison hit
+and understates the old cost. The host was at load average 38 on 18 cores (other work in flight), so the
+absolute figures are upper bounds and the interleaved RATIO is the measurement: at 182,555 files C=500
+2.20 s → 9.7 ms (226x) and C=2,000 9.10 s → 22.6 ms (403x); at the real 8,856-file rung C=2,000 333 ms →
+11.6 ms (29x); on `golang/go` C=2,000 449 ms → 42.8 ms (10x). The rows are unchanged and proven so: the
+emitted row list is byte-identical between the two implementations on all nine rungs measured (1,413 rows
+in total), and `test/situshapecheck.sh` arm (7) already pins the case this narrowing could break — a
+same-stem DECOY in another directory stays excluded, beside the same-directory-different-stem row, the
+test partner and the changed file itself. No timing gate is added; there are none here.
+
+AN ATTRIBUTE WITHOUT A READING IS A TOKEN, NOT A DISCLOSURE. The compression below shortened four
+sentences into attributes, and four readings went with them: what makes the counts a floor (call edges are
+name-based), what an unindexed file IS, which header the resolver gauges come from, and whose cap
+`prcontext_cap=` is. `--situ` is the one dialect with no legend anywhere to look a name up in — it refuses
+`--legend=compact` — so each gauge keeps a short gloss, and `test/situshapecheck.sh` arm (8) asserts the
+READING, not the token. Two byte ratchets moved with them (floor 200 → 360, partner 140 → 220): a ratchet
+that forbids a restored disclosure is a ratchet aimed at the wrong thing.
+
+Measured with `wc -c`, this lane's base binary (`6621370f`) against this one over the SAME tree, so the
+pair carries all three `--situ` entries below together. On this repo (root 131 chars):
+`--situ=src/graph.h` 4,448 → 2,955 B, `--situ=src/situ.h` 2,332 → 2,040 B, `--situ=src/testmap.h`
+2,325 → 2,033 B, `--test-gate=src/testmap.h` 5,455 → 5,247 B. On RocksDB @0e2801ac (root 66 chars):
+`--situ=db/write_batch.cc` 7,489 → 7,376 B, `--test-gate=db/write_batch.cc` 9,946 → 9,868 B,
+`--affected=db/write_batch.cc` 7,124 → 7,113 B. Gates: `test/situshapecheck.sh` (17 rows red on that base
+binary, arms (8)–(11) new), `test/rootrelemitcheck.sh` ARM 9b/9c/9d, `test/runhintcheck.sh` 2c/2d,
+`test/receiptpostcheck.sh` (18). Two gate self-checks were wrong in the same way the code was — an empty
+`run=` made `eval ""` succeed, and an empty `next=` fell out of an if/elif chain printing neither PASS nor
+FAIL — so each now reds on the outcome it exists to forbid. `situStemOf` was a fourth spelling of
+`stripExt( baseNameOf( p ) )`; one `mention.h pathStem` now serves all four call sites. Pins moved:
+`test/testgatelegendbudgetcheck.sh` 3,000 → 3,070 B for the 56 B conditional root sentence (measured
+2,957 → 3,013 B on its `src/model.h` fixture), and `test/printf_parity.manifest` for `pack_task` and
+`help_all`, the two labels whose text this round changed. The cap inventory is 211, not the 210 the
+reference-guide entry below records: this PR's own sibling-row cap is the 211th, and `README.md` and
+`docs/TUNING.md` were regenerated to say so (`test/readmedriftcheck.sh` (L2), `test/capsweepcheck.sh` (C)).
+
+### Added — `--situ` lists a changed file's lexical siblings
+
+The files that move WITH a changed file are usually its neighbours by name, and the caller walk can reach
+none of them: a header does not call the source that implements it, an `.inl` is not indexed by any grammar
+in any build, and a harness the graph cannot link — a fixture-built test, a generated `main` — is reached by
+nothing. A byte-and-answer attribution over a frozen 30-question set found two answers incomplete for
+exactly that reason. Section `[1]` of `--situ` now lists them, under the decl/def partners and the floor
+clause: `lexical siblings (N) not_dependents=1 — same directory and stem as a changed file (its header/impl
+partner, its test, its .inl): NOT transitive dependents, so they are absent from the list below; lexical and
+static, never a graph result`, then one root-relative path per row. The rule is the
+dumbest one that is always right — same directory, and the same filename stem or the stem-partner convention
+the tests-to-run rows already use (`<stem>_test`, `test_<stem>`, `<Stem>Test`, `_unittest`, `_spec`). Same
+directory is load-bearing rather than a speed trick: a same-stem file in another directory is a namesake, not
+a partner, and listing namesakes would make the block noise on exactly the large trees it is for. The
+candidate population is the CRAWL's, not the index's, so an `.inl`/`.ipp`/`.tcc` partner — the sibling a C++
+change most often has to edit, and one no grammar can read — is named; the crawl's unsupported-extension row
+list is itself capped, and the one case where that can shorten this list is disclosed as
+`unindexed_rows_floor=1` — on the EMPTY list too, because a cut that removes the only candidate is exactly
+the case a silent zero would hide. The block is capped at 8 rows with `shown=`/`total=`/`capped=1` and a
+pasteable `next:`, and `--limit=N` raises it like the report's other two listings; it does NOT take section
+`[1]`'s `--offset`, which is the blast-radius window's, so no offset can empty it. The MCP
+`situational_awareness` twin carries the same list as `siblings` with `siblings_total`, `siblings_capped`
+(always emitted: that payload serves every row, and an absent flag would be the silence this rule forbids)
+and `siblings_unindexed_rows_floor`. It costs what it lists: the block's own rendered lines on RocksDB
+@0e2801ac at `--situ=db/write_batch.cc` are 276 B — a 244 B header and one 30 B row naming
+`db/write_batch_test.cc`, which no other section of that report reaches; on this repo, where every source
+file is a lone `.h`, no file has a lexical sibling and the block prints nothing at all. Gate:
+`test/situshapecheck.sh` arms (7)–(7d) on a fixture with a `.h`/`.cc`/`_test.cc`/`.inl` quadruple, a
+same-stem DECOY in another directory and a same-directory file with a different stem — both must be absent —
+plus a nine-sibling stem for the cap and its disclosure, a no-git copy of the same tree proving the block is
+static (and therefore cannot leak), and the MCP twin agreeing row for row. All four arms red on the previous
+binary.
+
+### Changed — `--situ`'s disclosures are attributes
+
+`--situ` is the only report with no XML root to hang attributes on, so every disclosure it owed was written
+as a sentence, and the sentences grew: the graph-count floor clause ran 601 B, the decl/def partner header
+228 B, the tests-to-run header 233 B and the script-gate caveat 167 B — 1,229 B of prose on every call,
+carrying facts a reader can only act on once they are named. They are now named, and the four lines together
+are 905 B. The floor line is `counts_floor=1 graph_ambiguous=N graph_unresolved=N graph_unindexed=N (the map
+header's own gauges) — every count above is a FLOOR, never a total: call edges are name-based, so dynamic
+dispatch, callbacks and macros can be missing; a zero is "none found", never "none exists"` (601 → 344 B),
+using the same attribute spellings the XML and JSON dialects already use, so the three share one vocabulary.
+The partner header carries `not_dependents=1` (228 → 209 B), section `[1]` carries `prcontext_cap=20` where
+it used to spell `--pr-context`'s own cap as an aside, section `[2]` carries `order=evidence` — the attribute
+`--affected`'s root already carries for the same ordering (233 → 220 B) — and the script-gate blind spot is
+`script_gates_unmodelled=N`, the same counter `--affected` publishes, with its cause kept (167 → 132 B). An
+attribute is shorter than a sentence; it is not shorter than the FACT, so every gauge keeps a short gloss —
+this is the one dialect with no legend anywhere to look a name up in (`--situ` refuses `--legend=compact`).
+Nothing was dropped: every floor, cap and caveat survives, and the readings that have no attribute form (how
+to read a zero; what `[changed]`/`[partner]`/`hops` mean on a row) stay as the shortest sentence that defines
+them. The four line lengths above are the gate's own `${#line}`, measured on this repo at
+`--situ=src/graph.h` (the partner header on the gate's fixture at `--situ=core/widget.cc`, since this repo
+has no decl/def partner for `graph.h`), against the binary this lane branched from (`6621370f`) over the same
+tree — one number, one corpus, and the gate's header carries the same table. The whole-report numbers for
+this lane are in the review entry above, where they belong: the same pair of binaries also carries the
+relativized `run=` and the new sibling block, so no single entry owns them. The gate is the new
+`test/situshapecheck.sh`: one arm per converted disclosure, each
+asserting the attribute is present, that its value agrees with the XML sibling's where one exists
+(`graph_unindexed=`, `script_gates_unmodelled=`), that the reading survives, and a per-line byte ratchet so
+the prose cannot creep back; 10 of its rows are red on the previous binary. `test/floormarkcheck.sh` keeps
+the two anchor phrases it matches — `counts_floor=1` and "is a FLOOR, never a total" — and situshapecheck
+mirrors them, so a regression reds in both.
+
+### Changed — one absolute root per change report
+
+`--test-gate`, `--situ` and `--affected` state the crawl root once, in the envelope (`root=` in XML and
+JSON, the `root:` line in `--situ`'s text), and every path below it is relative to that root — which is
+what makes the document independent of where the tree is checked out. One emitter never joined: the
+`run=` command. It pasted the stored disk path verbatim, so on an absolute root `--test-gate` printed
+the checkout prefix three times (the anchor, `next=`, and every `<t>` row's `run=`) and `--situ` once per
+runnable test line: a per-row cost against a per-document fact. The runner index now takes the run's root
+and spells the command through the same relativizer every `p=` beside it uses, at all fourteen sites that
+build one, so the twelve emitters sharing it cannot disagree; a multi-root run, whose disk path lies under
+no single root, keeps the absolute command rather than become relative to a root that does not contain it.
+The rule is stated where it is consumed: the shared run-hint clause gains "A run= command is relative to
+root=: run it from there." (56 B, emitted only on a document that has rows AND a single root — a multi-root
+run declares no `root=` and keeps the absolute command, so the sentence would be a false claim there) and
+`--situ`'s `[2]` header says "a (run: …) is relative to root:". The saving is one root spelling per echo
+less that clause, so it grows with checkout depth and with how many rows have a runner at all; the
+whole-report numbers for this lane are in the review entry above, measured against the binary it branched
+from over one tree. The gate is a new
+ARM 9 in `test/rootrelemitcheck.sh`: a fixture carrying a real runner script, at two checkout depths, over
+the eight verbs that echo a command — one anchor per document, no absolute path anywhere else,
+byte-identical documents at both depths, and the printed `run=` actually executed from the declared root.
+Red first on the unchanged binary (8 FAIL rows); `test/runhintcheck.sh`'s pins move with the contract, and
+`test/printf_parity.manifest` moves for `--pack-task` alone, the one verb whose legend text changed.
+
 ### Added — `--in=DIR` scopes the recent-changes block to a directory and stubs the map it was not asked for
 
 "What changed recently in DIR?" is six of the thirty questions in this project's frozen reference set (the

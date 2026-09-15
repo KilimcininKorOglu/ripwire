@@ -277,7 +277,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     // SAME facts — carried run="bash test/…" for those same files. The packet whose whole purpose is to be
     // read by the NEXT session was the one that said least. Built here, inside the section's scope, because
     // TestRunnerIndex is lazy: a packet with no test row reads no runner script.
-    const rw::TestRunnerIndex hoRunners( ing );
+    const rw::TestRunnerIndex hoRunners( ing, root );
     const auto                hoEsc = [ & ]( std::string_view t ) { return std::string( escapeXml( t, esc ) ); };
     // E1: <g> where no runner is derivable. The seam returns the FILE count with the rows, and the legend
     // below is gated on it — review of #214: this packet spliced the clause unconditionally, and it is
@@ -386,7 +386,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     const auto assemble = [ & ]( std::size_t keepRows, std::size_t withheld )
     {
         std::string doc = kHandoffLegendHead;
-        doc += rw::runHintClauseIfRows( hoTests.files );   // M21(b): the ONE wording through the ONE gate — never a seventh paraphrase
+        doc += rw::runHintClauseIfRows( hoTests.files, rw::runsAreRootRelative( ing, root ) );   // M21(b): the ONE wording through the ONE gate — never a seventh paraphrase
         if( anySymsCapped ) { doc += handoffSymsCapClause(); }   // absent unless an <f> row was cut
         doc += kHandoffLegendTail;
         doc += "<handoff";

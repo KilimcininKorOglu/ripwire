@@ -128,7 +128,7 @@ std::optional<int> runAffected( const MainDispatch& d )
         // run=/run_unknown=/<g> clause only when there are rows for it to be a rule about — a tests="0" answer,
         // the common clean case, pays nothing for it. The index is constructed here (not hoisted into
         // MainDispatch) because it is lazy — a run with no test row reads no script.
-        const rw::TestRunnerIndex   runners( ing );
+        const rw::TestRunnerIndex   runners( ing, d.root );
         std::vector<rw::TestRowOut> afRows;
         afRows.reserve( answer.rows.size() );
         for( rw::TestRow row : answer.rows )   // by value: a matched test file's changed= is spelled seed_kind="test" on this verb
@@ -150,7 +150,7 @@ std::optional<int> runAffected( const MainDispatch& d )
                      "{}"     // H2H-Graft F1: the evidence-order clause, testmap.h's ONE wording (changed= is spelled seed_kind="test" here: the argument matched it)
                      "order=evidence says so on the root; partners= counts the partner rows. "
                      "{}"     // M21(b)/E1: the run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
-                     "{}{}-->{}", rw::kTestRowEvidenceLegend, rw::runHintClauseIfRows( afRowsXml.files ),
+                     "{}{}-->{}", rw::kTestRowEvidenceLegend, rw::runHintClauseIfRows( afRowsXml.files, rw::runsAreRootRelative( ing, d.root ) ),
                      // H1: the decl→def residue resolveAffectedSeeds summed over the symbol items. A file:name item whose
                      // definitions were dropped seeded the walk with declarations alone, which reached the reader as a bare
                      // tests="0" — on the verb whose answer is the list of tests to run. Exactly when the root carries it.
@@ -240,7 +240,7 @@ std::optional<int> runExercises( const MainDispatch& d )
     const std::string harnessAttr = exercisesHarnessAttr( ing, sel.testFiles );   // §A9.1, empty for a .cpp/.py harness
     // §P11.4 / E1: the seed rows are the tests you are about to re-run — rendered before the legend so the
     // run=/run_unknown=/<g> clause rides only a document that has rows (testmap.h's seam; grouped where no runner is derivable)
-    const rw::TestRunnerIndex     runners( ing );
+    const rw::TestRunnerIndex     runners( ing, d.root );
     const auto                    exPathRel = [ & ]( std::uint32_t f ) -> std::string_view
     {
         return exSingleRoot ? rw::sarif::rootRelativeUri( ing.files[f], exRootPrefix ) : std::string_view( ing.files[f] );
@@ -252,7 +252,7 @@ std::optional<int> runExercises( const MainDispatch& d )
                  "<t> = the seed test files the pattern matched; <s> = the covered symbols, PageRank desc. "
                  "harness=script|mixed says the seed set contains shell gates, whose subprocess coverage this walk cannot see. "
                  "{}"     // M21(b)/E1: the run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
-                 "{}{}-->{}", rw::runHintClauseIfRows( exRowsXml.files ), rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( exSingleRoot ) );
+                 "{}{}-->{}", rw::runHintClauseIfRows( exRowsXml.files, rw::runsAreRootRelative( ing, d.root ) ), rw::graphCountFloorBrief( g.unindexedFiles > 0 ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( exSingleRoot ) );
     const std::string exRootAttr = exSingleRoot ? ( " root=\"" + ex( cfg.roots[0] ) + "\"" ) : std::string();
     rw::emitTo( stdout, "<exercises of=\"{}\" seed_files=\"{}\" shown_seed_files=\"{}\" seed_files_capped=\"{}\" test_symbols=\"{}\" reaches=\"{}\"{}{}{}{}>",
                  ex( cfg.exercisesFile ).c_str(), sel.testFiles.size(), shownSeed,

@@ -589,5 +589,76 @@ else
                                                || no "(17) the wrap blurb neither prescribes nor mentions the receipt's edit_check"
 fi
 
+# ── ARM 18 — the receipt's own ROOT, so its root-relative echoes can be resolved ───────────────────────
+# Review of #219 (A3): the receipt's "file", its tests_to_run[].run recipes and its stderr "next:" are all
+# spelled RELATIVE to the crawl root — which is right, and useless on its own: an MCP client runs in its own
+# working directory and the receipt named no root at all. Its JSON siblings (--test-gate --json, the
+# situational_awareness payload) have carried "root" all along; the receipt is the one that hands the caller
+# a command to paste, so it is the one that least afforded to omit it.
+R18="$( cd "$TMP/w" && "$BIN" . --insert-before-symbol=report --edit-payload="$TMP/insert.py" 2>/dev/null )"
+if [ -z "$R18" ]; then
+    no "(18) the edit verb produced no receipt — the arm would be a false green"
+else
+    # Third review of #219: this arm checked `root` and then `file`, but read the file as
+    # `r.get( "file", "" )` — and "" does not start with "/", so an ABSENT or EMPTY file passed. It also
+    # validated none of the things the receipt actually hands a caller to paste: the nested
+    # tests_to_run[].run recipes and the top-level next command. So the arm could pass while exactly the
+    # values it exists to protect were missing or absolute. Every reference the receipt emits is now
+    # checked, each row according to its OWN shape (run or run_unknown, never neither), and the row list is
+    # asserted non-empty first so the per-row loop cannot be vacuous on this fixture.
+    R18OUT="$( printf '%s' "$R18" | python3 -c '
+import sys, json
+
+r     = json.load( sys.stdin )
+fails = []
+
+def need( cond, msg ):
+    if not cond:
+        fails.append( msg )
+
+root = r.get( "root" )
+need( isinstance( root, str ) and root != "", "no non-empty \"root\" key, so nothing relative in the receipt resolves" )
+
+# file: present, non-empty, and RELATIVE. The empty default was the hole — "" is not absolute either.
+f = r.get( "file" )
+need( isinstance( f, str ) and f != "", "\"file\" is absent or empty: %r" % ( f, ) )
+if isinstance( f, str ) and f != "":
+    need( not f.startswith( "/" ), "file=%r is absolute; the root key exists to make it relative" % ( f, ) )
+
+# next: a successful edit always emits one, and it is a COMMAND — no absolute path may ride in it.
+nxt = r.get( "next" )
+need( isinstance( nxt, str ) and nxt != "", "\"next\" is absent or empty: %r" % ( nxt, ) )
+if isinstance( nxt, str ):
+    need( not [ t for t in nxt.split() if t.startswith( "/" ) ],
+          "next=%r carries an absolute path token" % ( nxt, ) )
+
+# tests_to_run: a list, non-empty on THIS fixture (test/area_spec.sh gives a derivable runner), and every
+# row carries p plus exactly one of run / run_unknown.
+rows = r.get( "tests_to_run" )
+need( isinstance( rows, list ), "\"tests_to_run\" is not a list: %r" % ( type( rows ).__name__, ) )
+if isinstance( rows, list ):
+    need( len( rows ) > 0, "tests_to_run is EMPTY on a fixture built to produce a row — the per-row checks would be vacuous" )
+    for i, row in enumerate( rows ):
+        need( isinstance( row, dict ), "tests_to_run[%d] is not an object" % i )
+        if not isinstance( row, dict ):
+            continue
+        p = row.get( "p" )
+        need( isinstance( p, str ) and p != "",       "tests_to_run[%d].p is absent or empty" % i )
+        need( isinstance( p, str ) and not p.startswith( "/" ), "tests_to_run[%d].p=%r is absolute" % ( i, p ) )
+        hasRun     = isinstance( row.get( "run" ), str ) and row.get( "run" ) != ""
+        hasUnknown = row.get( "run_unknown" ) in ( 1, "1", True )
+        need( hasRun != hasUnknown, "tests_to_run[%d] carries %s — a row takes run OR run_unknown, never neither and never both"
+                                    % ( i, "both run and run_unknown" if hasRun and hasUnknown else "neither run nor run_unknown" ) )
+        if hasRun:
+            need( not [ t for t in row[ "run" ].split() if t.startswith( "/" ) ],
+                  "tests_to_run[%d].run=%r carries an absolute path token" % ( i, row[ "run" ] ) )
+
+print( "OK" if not fails else "FAIL " + " | ".join( fails ) )' 2>&1 )"
+    case "$R18OUT" in
+        OK) ok "(18) every reference the receipt emits is present and root-relative: root, non-empty file, each tests_to_run row's p + run/run_unknown, and next" ;;
+        *)  no "(18) the receipt's references do not validate: $R18OUT" ;;
+    esac
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
