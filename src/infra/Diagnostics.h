@@ -197,6 +197,21 @@ uint64_t currentThreadId() noexcept;
 // --------------------------------------------------------------------------
 // 5. Convenience shorthands
 // --------------------------------------------------------------------------
+// VERIFY_DEBUG_ONLY — the same check as VERIFY in debug, and NOTHING in release: no code, and no
+// promise either. Use it where the predicate is worth checking but the release-mode assumption would
+// be worth more than it is true: a floating-point identity (an assumption the optimizer may act on in
+// the one translation unit whose contract is reproducible arithmetic), or an internal structural
+// invariant whose corruption is not impossible — the mid-build `sizeof( Symbol )` hazard in CLAUDE.md
+// produces exactly a corrupt CSR, and under a plain VERIFY the bounds reasoning that would have caught
+// it has already been optimized away on the strength of the promise. VERIFY stays the default: a
+// precondition this code GUARANTEES is worth stating to the optimizer. This is for the ones it does not.
+#if !defined(NDEBUG)
+  #define VERIFY_DEBUG_ONLY_TEXT(expr, msg)   VERIFY_TEXT(expr, msg)
+#else
+  #define VERIFY_DEBUG_ONLY_TEXT(expr, msg)   do { } while (0)
+#endif
+#define VERIFY_DEBUG_ONLY(expr)   VERIFY_DEBUG_ONLY_TEXT(expr, "")
+
 #define VERIFY(expr)              VERIFY_TEXT(expr, "")
 #define VERIFY_NOT_REACHED()      VERIFY_NOT_REACHED_TEXT("")
 #define VERIFY_SAME_THREAD()      VERIFY_SAME_THREAD_TEXT("")
