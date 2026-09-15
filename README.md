@@ -837,9 +837,10 @@ the recommendation — and abstains honestly when the evidence is too thin to na
 <summary>Which surface is the authority — <code>--help</code> vs <code>docs/COMMANDS.md</code> — and the four reflex verbs worth memorising</summary>
 
 `./build/ripwire --help` is generated from the binary's own flag table and is always the authority;
-[`docs/COMMANDS.md`](docs/COMMANDS.md) documents every one of the 145 documented flags — 94 of them
-with a real invocation and its recorded output (counts re-derived 2026-08-23; `test/docscommandscheck.sh`
-fails if that documented set and the binary's own flag table ever disagree). Each family below links there.
+[`docs/COMMANDS.md`](docs/COMMANDS.md) documents every one of the 176 documented flags — 162 of them
+with a real invocation and its recorded output (both counts are reported by the generator that writes the
+document, `docs/docs_commands_build.py`, and were re-derived from it on 2026-09-14;
+`test/docscommandscheck.sh` fails if that documented set and the binary's own flag table ever disagree). Each family below links there.
 
 Four reflexes worth wiring into muscle memory: `--from-trace=FILE` for an error you have in hand,
 `--edit-check=SYM` right after an edit (did the contract change, and which callers are now provably
