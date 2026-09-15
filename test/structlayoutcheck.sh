@@ -112,8 +112,17 @@ check_doctor(){
 check_doctor plain "$BIN"
 
 # ── D: Release/NDEBUG+LTO carries the same records when a reference binary is supplied ─────────────
-if [ -z "$REL" ] || [ ! -x "$REL" ]; then
-    skip "Release binary not supplied (set RIPWIRE_RELEASE_BIN=build_rel/ripwire)"
+# The Release matrix sets RIPWIRE_RELEASE_REQUIRED so this arm cannot quietly disappear from CI. A
+# local run without a second build keeps the original explicit SKIP, while an explicitly supplied but
+# unusable path is always a configuration failure rather than a covered check.
+if [ -z "$REL" ]; then
+    if [ "${RIPWIRE_RELEASE_REQUIRED:-0}" = 1 ]; then
+        no "Release binary is required but RIPWIRE_RELEASE_BIN is unset"
+    else
+        skip "Release binary not supplied (set RIPWIRE_RELEASE_BIN=build_rel/ripwire)"
+    fi
+elif [ ! -x "$REL" ]; then
+    no "Release binary is not executable: $REL"
 else
     check_doctor release "$REL"
 fi

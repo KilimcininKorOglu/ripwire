@@ -201,6 +201,10 @@ jobs:
     # deployment target, the default's does not. An empty DEVELOPER_DIR on the Linux legs is inert.
     env:
       DEVELOPER_DIR: ${{ matrix.os == 'macos-14' && '/Applications/Xcode_16.2.app/Contents/Developer' || '' }}
+      # Release legs use their just-built binary as structlayoutcheck's Release reference. Plain legs
+      # retain the gate's explicit local-style SKIP; they must not relabel an NDEBUG-off binary as Release.
+      RIPWIRE_RELEASE_BIN: ${{ matrix.flavor == 'Release' && 'build/ripwire' || '' }}
+      RIPWIRE_RELEASE_REQUIRED: ${{ matrix.flavor == 'Release' && '1' || '0' }}
     steps:
       # L4 (Linux probe): checkout@v4 defaults to a --depth 1 clone, which leaves ONE commit of history
       # in the tree. The churn / co-change / ownership gates (churnjoincheck, hotspots, --owners, the
@@ -260,6 +264,15 @@ jobs:
 
       - name: Build
         run: cmake --build build -j
+
+      # This is after Build and before the gate suite: the Release leg's own binary is the reference,
+      # and the required flag makes a missing/invalid path fail instead of turning the arm into a green
+      # SKIP. The plain leg does not run this arm because its binary is intentionally NDEBUG-off.
+      - name: Stage the Release binary for structlayoutcheck
+        if: matrix.flavor == 'Release'
+        run: |
+          test -x "$RIPWIRE_RELEASE_BIN"
+          "$RIPWIRE_RELEASE_BIN" --version
 
       # The floor this matrix exists to hold, read off the BINARY rather than inferred from the compiler
       # version: emit= names the emitter that compiled in (src/infra/emit.h). A leg whose standard library
