@@ -1807,7 +1807,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
 // `static_assert` — this lane's file boundary forbade editing those files.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 97;   // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 98;   // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 98 = 2026-09-15 (Java Type::method review, issue #74):
+                                                          //    Java shadow binds carry lexical spans and inferred
+                                                          //    lambda parameters are captured. See ingest_cache.h.
                                                           // 97 = 2026-09-15 (Java Type::method candidates, issue #74):
                                                           //    method_reference member capture plus indexed-class +
                                                           //    no-shadow resolver gating. #216 spent 96, so this

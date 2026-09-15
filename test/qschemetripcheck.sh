@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-15, JAVA TYPE::METHOD REVIEW (test/javamethodrefcheck.sh, issue #74): parserVer and its quality mirror
+#   move 97 -> 98 — Java shadow binds gain lexical spans and inferred lambda parameters are captured. Extracted bind
+#   facts change; kCacheVersion stays 22 and kQSnapCacheScheme stays 11 (Binding already has spans, RecvKind unchanged).
 # 2026-09-15, JAVA TYPE::METHOD (test/javamethodrefcheck.sh, issue #74): parserVer and its quality mirror
 #   move 96 -> 97 — method_reference member names after `::` plus declaration-aware resolver gating. #216 already
 #   spent 96 on internalLinkage, so this RE-BUMPS (never-reuse). kCacheVersion stays 22 and kQSnapCacheScheme stays 11:

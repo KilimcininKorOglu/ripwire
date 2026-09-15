@@ -36,6 +36,43 @@ public class A extends Base {
         return Widget::localShadowFn;
     }
 
+    public Function<Object, String> localDeclaredAfter() {
+        Function<Object, String> ref = Widget::afterLocalFn;
+        Widget Widget = null;
+        return ref;
+    }
+
+    public Function<Object, String> siblingBlockLocal() {
+        if (true) {
+            Widget Widget = null;
+        }
+        return Widget::siblingFn;
+    }
+
+    public List<String> packageQualified(List<Object> in) {
+        return in.stream().map(com.example.Widget::pkgFn).toList();
+    }
+
+    public List<String> nestedInnerLocal(List<Object> in) {
+        Object Inner = null;
+        return in.stream().map(Outer.Inner::nestedInnerFn).toList();
+    }
+
+    public List<String> nestedLeadingShadow(List<Object> in) {
+        Outer Outer = null;
+        return in.stream().map(Outer.Inner::leadingShadowFn).toList();
+    }
+
+    public Function<Object, String> inferredLambdaParam() {
+        Function<Object, String> ignore = Widget -> Widget::lambdaInfFn;
+        return ignore;
+    }
+
+    public Function<Object, String> inferredParenLambdaParam() {
+        Function<Object, String> ignore = (Widget) -> Widget::lambdaParenFn;
+        return ignore;
+    }
+
     public Function<Object, String> thisMethod() {
         return this::thisFn;
     }

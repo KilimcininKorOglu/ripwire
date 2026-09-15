@@ -57,13 +57,23 @@ echo "javamethodrefcheck: BIN=$BIN  FIX=$FIX"
 # ── fixture presence (source text, never tool output) ─────────────────────────
 for spelling in \
     'item -> Widget.makeFn(item)' 'Widget::makeFn' 'Outer.Inner::makeFn' \
-    'Widget::<Object>makeFn' 'widget::instanceFn' 'widget::makeFn' 'Widget::instanceFn' \
+    'Widget::<Object>makeFn' 'com.example.Widget::pkgFn' \
+    'widget::instanceFn' 'widget::makeFn' 'Widget::instanceFn' \
     'this::thisFn' 'this::makeFn' 'super::superFn' 'super::makeFn' 'Widget::new' \
-    'Widget::localShadowFn' 'Widget::fieldShadowFn'; do
+    'Widget::localShadowFn' 'Widget::fieldShadowFn' \
+    'Widget::afterLocalFn' 'Widget::siblingFn' \
+    'Outer.Inner::nestedInnerFn' 'Outer.Inner::leadingShadowFn' \
+    'Widget -> Widget::lambdaInfFn' '(Widget) -> Widget::lambdaParenFn'; do
     grep -qF "$spelling" "$FIX/A.java" \
         && ok "fixture still spells $spelling" \
         || no "fixture no longer spells $spelling — the matrix is vacuous"
 done
+grep -qF 'Object Inner = null' "$FIX/A.java" \
+    && ok "fixture still declares an unrelated local named Inner" \
+    || no "fixture no longer declares local Inner — nested-segment shadow is vacuous"
+grep -qF 'Outer Outer = null' "$FIX/A.java" \
+    && ok "fixture still declares a leading-segment local named Outer" \
+    || no "fixture no longer declares local Outer — leading-segment shadow is vacuous"
 
 # ── extract caller / use-site sets ────────────────────────────────────────────
 # JSON --callers: one name per callers[].n. SET comparison, never a count.
@@ -81,15 +91,22 @@ print(" ".join(names))
 '
 }
 
-# --uses in_id values for role=call sites of conv (default XML).
+# --uses in_id values for role=call sites of a named symbol (default XML).
 uses_in_ids() {
-    "$BIN" "$1" --no-cache --uses=conv 2>/dev/null \
+    "$BIN" "$1" --no-cache --uses="$2" 2>/dev/null \
         | python3 -c '
 import re, sys
 xml = sys.stdin.read()
 ids = sorted(set(re.findall(r"in_id=\"([^\"]+)\"", xml)))
 print(" ".join(ids))
 '
+}
+
+contains_id() {
+    case " $1 " in
+        *" $2 "*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 expect_callers() {
@@ -105,6 +122,26 @@ expect_callers() {
 # same-name expression/this/super controls below must not enlarge this set.
 expect_callers makeFn "genericTypeMethod lambdaForm nestedTypeMethod typeMethod"
 
+# Package-qualified type receiver (grammar: field_access, last segment is the class).
+expect_callers pkgFn "packageQualified"
+
+# Nested type whose trailing segment is an unrelated local name: Inner is not the
+# receiver. Leading Outer is the type, so the site must still resolve.
+expect_callers nestedInnerFn "nestedInnerLocal"
+
+# A local named Outer *is* the leading receiver: expression Outer.Inner, not a type.
+expect_callers leadingShadowFn ""
+
+# Lexical shadowing: a local after the site, or in a sibling block, is not in
+# scope at the method-reference. A local before the site, a parameter, a class
+# field, and an inferred lambda parameter are.
+expect_callers afterLocalFn "localDeclaredAfter"
+expect_callers siblingFn "siblingBlockLocal"
+expect_callers localShadowFn ""
+expect_callers fieldShadowFn ""
+expect_callers lambdaInfFn ""
+expect_callers lambdaParenFn ""
+
 # Precision: expression receivers and constructors mint no ordinary call edge.
 expect_callers instanceFn ""
 expect_callers thisFn ""
@@ -113,11 +150,6 @@ expect_callers Widget ""
 
 # The receiver identifier itself is not the call target.
 expect_callers widget ""
-
-# Shadowing negatives: a parameter, local, or field named like the type is a
-# value receiver. The grammar cannot tell, so the resolver must refuse.
-expect_callers localShadowFn ""
-expect_callers fieldShadowFn ""
 
 # ── mutation: rewrite the method-ref spelling; the caller set MUST move ───────
 MUT="$TMP/mut"
@@ -140,6 +172,25 @@ echo "callers_set(makeFn) after mutation = [${S1}]"
 [ "$S1" = "genericTypeMethod lambdaForm nestedTypeMethod" ] \
     && ok "mutating Widget::makeFn removes only typeMethod" \
     || no "mutation expected [genericTypeMethod lambdaForm nestedTypeMethod], got [$S1]"
+
+# --uses=makeFn must name the Type::method callers (not just well-formed XML).
+U0="$( uses_in_ids "$FIX" makeFn )" || U0=""
+echo "uses_in_ids(makeFn) = [${U0}]"
+for id in typeMethod nestedTypeMethod genericTypeMethod lambdaForm; do
+    contains_id "$U0" "$id" \
+        && ok "--uses=makeFn includes $id" \
+        || no "--uses=makeFn missing $id (got [$U0])"
+done
+U1="$( uses_in_ids "$MUT" makeFn )" || U1=""
+echo "uses_in_ids(makeFn) after mutation = [${U1}]"
+contains_id "$U1" typeMethod \
+    && no "mutation still lists typeMethod in --uses=makeFn (got [$U1])" \
+    || ok "mutating Widget::makeFn drops typeMethod from --uses=makeFn"
+for id in nestedTypeMethod genericTypeMethod lambdaForm; do
+    contains_id "$U1" "$id" \
+        && ok "mutation kept $id in --uses=makeFn" \
+        || no "mutation dropped $id from --uses=makeFn (got [$U1])"
+done
 
 # ── determinism on the unmodified fixture ─────────────────────────────────────
 A="$( "$BIN" "$FIX" --no-cache --callers=makeFn --json 2>/dev/null || true )"
