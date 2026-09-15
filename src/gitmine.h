@@ -370,7 +370,17 @@ inline std::string sinceLogArgs( const SinceScope& scope, const char* fallbackSi
         // The RESOLVED commit, never the caller's string: this is a positional argv entry, and a bare sha cannot
         // begin with '-', so it can only ever be read as a revision range (sincecheck.sh S2). resolveSinceScope is
         // the one producer of an active REV scope and stores nothing but a bare sha there.
-        VERIFY( isBareCommitSha( scope.baselineSha ) );
+        //
+        // CHECKED, not asserted, and this is the one site here where that distinction is load-bearing: the value
+        // originates OUTSIDE this process (a --since argument, or git's own output), so a VERIFY would hand the
+        // optimizer the promise that external data is well formed — and under NDEBUG that promise is all that
+        // would be left of the check. A malformed baseline degrades to the caller's own fallback window, which is
+        // exactly what an inactive scope yields, rather than reaching `git log` as a positional argument.
+        if( !isBareCommitSha( scope.baselineSha ) )
+        {
+            DEGRADED_PATH_ALERT( "sinceLogArgs: the baseline is not a bare object name — falling back to the caller's window" );
+            return "--since=" + shSingleQuote( fallbackSince ) + " ";
+        }
         return shSingleQuote( scope.baselineSha + ".." ) + " ";   // positional rev-range, not a --since flag
     }
     return "--since=" + shSingleQuote( scope.sinceDate ) + " ";
