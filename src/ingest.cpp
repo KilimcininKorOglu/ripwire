@@ -218,8 +218,20 @@ const char* cacheArtifactVerdict( const std::string& path, bool captureValueUses
 }
 
 IngestResult ingest( const char* rootDir, const std::vector<std::string>& excludeSubstr, std::string_view cacheFile,
-                     std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore )
+                     std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore,
+                     std::string_view cacheDir )
 {
+#if defined( _WIN32 )
+    std::string nativeRoot = rw::compat::rw_windows_path_from_msys( rootDir == nullptr ? std::string_view( "." ) : std::string_view( rootDir ) );
+    // Keep the root spelling in the same generic form as the logical paths emitted by the crawl.  The
+    // filesystem APIs still receive this native Windows path; forward slashes are accepted by Win32 and
+    // prevent a platform-only separator from leaking into cache keys, XML, MCP handles and sidecars.
+    for( char& c : nativeRoot )
+    {
+        if( c == '\\' ) { c = '/'; }
+    }
+    rootDir = nativeRoot.c_str();
+#endif
     PROFILE_SCOPE_DESCRIBE( "ingest: total (crawl + parse + model)" );
     // Cheap (a handful of bytes serialized twice) and runs once per invocation — catches a
     // writeDef/writeRef field added without updating kMinDefRecordBytesLean/kMinRefRecordBytes immediately
@@ -301,7 +313,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     // ── doc post-pass (P1-B): every collected document file (notebook/html/csv/…) becomes a docText
     //    override + one whole-file Section node — parallel extract, deterministic ascending-fileId merge
     //    (ingest_docpass.h, with the markitdown-bridge byte cache).
-    runDocPostPass( result, raw.defs, !cacheFile.empty(), captureValueUses );
+    runDocPostPass( result, raw.defs, !cacheFile.empty(), captureValueUses, cacheDir );
 
     PROFILE_SCOPE_DESCRIBE( "ingest: build model (dedup + symbols/refs)" );
 

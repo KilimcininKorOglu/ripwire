@@ -536,7 +536,7 @@ for dirpath, dirnames, names in os.walk(root):
         if name.endswith(('.h', '.hpp', '.hh', '.cpp', '.cc', '.cxx', '.inc', '.ipp')):
             paths.append(os.path.join(dirpath, name))
 for path in paths:
-    for finding in scan_file(path, os.path.relpath(path, os.path.dirname(root))):
+    for finding in scan_file(path, os.path.relpath(path, os.path.dirname(root)).replace(chr( 92 ), '/')):
         print(finding)
 PY
 if ! command -v python3 >/dev/null 2>&1; then

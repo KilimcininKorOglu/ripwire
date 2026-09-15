@@ -1774,7 +1774,8 @@ inline std::string reAbsolutize( std::string_view rel, std::string_view root )
 {
     std::string_view rootTrim = root;
 #if defined( _WIN32 )
-    constexpr char separator = '\\';
+    // collectSources() stores p.generic_string() and ingest() normalizes the root to forward slashes.
+    constexpr char separator = '/';
 #else
     constexpr char separator = '/';
 #endif
@@ -2555,7 +2556,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // (src/mcp.h): check the write byte-count AND fclose's return, and on any failure unlink the temp
     // and leave the prior on-disk cache (if any) untouched.
     const std::string tmp = path + "." + std::to_string( getpid() ) + ".tmp";
-    std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
+    std::FILE* fp = rw::compat::rw_fopen_utf8( tmp.c_str(), "wb" );
     if( !fp )
     {
         DEGRADED_PATH_ALERT( "ingest: saveCache could not open temp file for write — cache left unchanged" );
@@ -2567,22 +2568,22 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;
     if( wErr )
     {
-        std::remove( tmp.c_str() );   // never rename a short/torn write over a good cache
+        rw::compat::rw_remove_utf8( tmp.c_str() );   // never rename a short/torn write over a good cache
         DEGRADED_PATH_ALERT( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
 #if defined(_WIN32)
-    if( !MoveFileExA( tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED ) )
+    if( rw::compat::rw_rename( tmp.c_str(), path.c_str() ) != 0 )
     {
-        std::remove( tmp.c_str() );
+        rw::compat::rw_remove_utf8( tmp.c_str() );
         DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         return;
     }
 #else
     if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
     {
-        std::remove( tmp.c_str() );   // clean up on failure
+        rw::compat::rw_remove_utf8( tmp.c_str() );   // clean up on failure
         DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot replace ({}) — old cache kept, this run was parsed from source\n",
                       path.c_str(), std::strerror( errno ) );

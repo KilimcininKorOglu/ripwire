@@ -14,7 +14,7 @@ namespace rw::infra
 {
 
 // A stable lockfile whose inode survives cache publishes. The kernel releases the lock when the owning
-// process exits, so a crashed ripwire cannot leave a stale lock that blocks future runs.
+// process exits, so a crashed caller cannot leave a stale lock that blocks future runs.
 class ProcessLock
 {
 public:
@@ -23,8 +23,8 @@ public:
         fd_ = ::open( lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600 );
         if( fd_ < 0 )
         {
-            DEGRADED_PATH_ALERT( "ripwire: process lockfile open failed; continuing without cross-process serialization" );
-            std::fprintf( stderr, "ripwire: process lock unavailable; continuing without cross-process serialization\n" );
+            DEGRADED_PATH_ALERT( "process lockfile open failed; continuing without cross-process serialization" );
+            std::fprintf( stderr, "process lock unavailable; continuing without cross-process serialization\n" );
             return;
         }
 
@@ -37,8 +37,8 @@ public:
             }
             if( errno != EINTR )
             {
-                DEGRADED_PATH_ALERT( "ripwire: process lock acquire failed; continuing without cross-process serialization" );
-                std::fprintf( stderr, "ripwire: process lock acquire failed; continuing without cross-process serialization\n" );
+                DEGRADED_PATH_ALERT( "process lock acquire failed; continuing without cross-process serialization" );
+                std::fprintf( stderr, "process lock acquire failed; continuing without cross-process serialization\n" );
                 return;
             }
         }

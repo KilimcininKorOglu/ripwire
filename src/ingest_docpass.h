@@ -4,6 +4,8 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/platform_compat.h"
+#include "infra/text.h" // presentation/index text uses one LF spelling across native platforms
 
 // ingest_docpass.h — the P1-B doc post-pass, moved VERBATIM out of ingest() in the 2026-08-30
 // decomposition: the markitdown-bridge byte cache and the parallel extract + deterministic merge
@@ -30,7 +32,8 @@ namespace rw
 // not the bytes. cacheEnabled=false (--no-cache) bypasses the sidecars entirely. tmpKey keeps concurrent workers'
 // unpublished temp files distinct; the publish itself is a whole-file rename, so a concurrent
 // reader sees every byte or none.
-inline std::string docTextViaBridgeCache( const std::string& path, const std::string& ext, bool cacheEnabled, std::uint32_t tmpKey )
+inline std::string docTextViaBridgeCache( const std::string& path, const std::string& ext, bool cacheEnabled,
+                                          const std::string& cacheDir, std::uint32_t tmpKey )
 {
     std::string text;
     std::string textBlobPath;
@@ -52,7 +55,7 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
                 rw::formatTo( blobName, sizeof( blobName ), "ripwire-doctxt-1-{:016x}.bin",
                                static_cast<unsigned long long>( fnv1a64( *docBytes ) ) );
             }
-            textBlobPath = quality::resolveCacheBlobPath( quality::cacheDirLadder(), blobName );
+            textBlobPath = quality::resolveCacheBlobPath( cacheDir, blobName );
             text = docparse::detail::readWholeFile( textBlobPath ).value_or( std::string() );   // miss ⇒ text stays empty
         }
     }
@@ -62,18 +65,19 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
         if( !text.empty() && !textBlobPath.empty() )
         {
             const std::string tmp = textBlobPath + ".tmp" + std::to_string( tmpKey );
-            std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
+            std::FILE* fp = rw::compat::rw_fopen_utf8( tmp.c_str(), "wb" );
             if( fp != nullptr )
             {
                 const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
                 std::fclose( fp );
                 if( !wroteAll || std::rename( tmp.c_str(), textBlobPath.c_str() ) != 0 )
                 {
-                    std::remove( tmp.c_str() );
+                    rw::compat::rw_remove_utf8( tmp.c_str() );
                 }
             }
         }
     }
+    normalizeCrlfInPlace( text );
     return text;
 }
 
@@ -84,7 +88,8 @@ namespace
 //    record it as the docText override + add ONE whole-file Section node so the doc is rankable + recall-
 //    able. Runs OUTSIDE the parse cache (after saveCache, before id-assignment) and is a pure function of
 //    the bytes, so a WARM run reproduces it byte-for-byte — the determinism contract holds for docs too.
-inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, bool cacheEnabled, bool captureValueUses )
+inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, bool cacheEnabled, bool captureValueUses,
+                            std::string_view cacheDirOverride = {} )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest: doc post-pass (extract notebooks/html/csv)" );
 
@@ -110,13 +115,14 @@ inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, 
     std::vector<std::string> docTextOut( ndocs );
     std::vector<char>        docHasText( ndocs, 0 );
     std::vector<RawDefLex>   docLex( ndocs );        // B0.2: per-doc Section stats (rich only), own slot per worker
+    std::string cacheDir( cacheDirOverride );
+    if( cacheEnabled && ndocs > 0 && cacheDir.empty() )
+    {
+        cacheDir = quality::cacheDirLadder();
+    }
     if( ndocs > 0 )
     {
-        unsigned hwDoc = std::thread::hardware_concurrency();
-        if( hwDoc == 0 )
-        {
-            hwDoc = 1;
-        }
+        const unsigned hwDoc = rw::compat::rw_effective_hardware_concurrency();
         const unsigned nDocThreads = static_cast<unsigned>( std::min<std::size_t>( hwDoc, ndocs ) );
         std::atomic<std::size_t> nextDoc{ 0 };
         std::vector<std::thread> docPool;
@@ -145,7 +151,7 @@ inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, 
                         const std::uint32_t fid = docIds[ di ];
                         const std::string   ext = lowerExtensionOf( result.files[ fid ] );
 
-                        std::string text = docTextViaBridgeCache( result.files[ fid ], ext, cacheEnabled, fid );
+                        std::string text = docTextViaBridgeCache( result.files[ fid ], ext, cacheEnabled, cacheDir, fid );
                         if( !text.empty() )
                         {
                             if( captureValueUses )

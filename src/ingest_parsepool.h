@@ -738,11 +738,7 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         // Entries pre-filled by the prewarm miss-detection pass (cache-present files that were read+hashed
         // there) stay as-is. Workers fill the remaining 0-valued entries for files they process.
         VERIFY( scan.hash.size() == nfiles );
-        unsigned hw = std::thread::hardware_concurrency();
-        if( hw == 0 )
-        {
-            hw = 1;
-        }
+        const unsigned hw = rw::compat::rw_effective_hardware_concurrency();
         const unsigned nthreads = static_cast<unsigned>( std::min<std::size_t>( hw, nfiles ) );
 
         std::vector<RawFacts>   tFacts( nthreads );

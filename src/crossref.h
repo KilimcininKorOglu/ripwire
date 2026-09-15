@@ -479,7 +479,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
 
     const std::string listPath = quality::cacheDirLadder() + "/ripwire-crossref-" + std::to_string( ::getpid() ) + ".shas";
     {
-        std::FILE* lf = std::fopen( listPath.c_str(), "wb" );
+        std::FILE* lf = rw::compat::rw_fopen_utf8( listPath.c_str(), "wb" );
         if( !lf )
         {
             st.startFailed = true;
@@ -493,13 +493,8 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         std::fclose( lf );
     }
 
-#ifdef _WIN32
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
-                          + " cat-file --batch < " + rw_short_path( listPath ) + " 2>/dev/null";
-#else
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
                           + " cat-file --batch < " + shSingleQuote( listPath ) + " 2>/dev/null";
-#endif
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe )
     {
@@ -699,11 +694,7 @@ struct RefInfo
 inline std::vector<RefInfo> enumerateRefs( const std::string& root, std::string_view filter, const std::string& headSha,
                                            std::size_t* filterNameHits = nullptr )
 {
-#ifdef _WIN32
-    const std::string raw = gitCapture( root, "for-each-ref --sort=refname --format=^%(refname:short^)^|^%(objectname^)^|^%(committerdate:short^) refs/heads 2>/dev/null" );
-#else
     const std::string raw = gitCapture( root, "for-each-ref --sort=refname --format='%(refname:short)|%(objectname)|%(committerdate:short)' refs/heads 2>/dev/null" );
-#endif
     std::vector<RefInfo> out;
     for( std::string_view line : splitLines( raw ) )
     {
@@ -825,11 +816,7 @@ inline void parallelIndexed( std::size_t count, Body body )
         return;
     }
 
-    std::size_t hwThreadCount = std::thread::hardware_concurrency();
-    if( hwThreadCount == 0 )
-    {
-        hwThreadCount = 1;
-    }
+    const std::size_t hwThreadCount = rw::compat::rw_effective_hardware_concurrency();
     const std::size_t workerCount = std::min( { hwThreadCount, count, kMaxGitWorkers } );
     if( workerCount <= 1 )
     {
@@ -1789,7 +1776,7 @@ inline EvalReport evalStray( const std::string& root, const std::string& labelsP
 
     std::string bytes;
     {
-        std::FILE* fp = std::fopen( labelsPath.c_str(), "rb" );
+        std::FILE* fp = rw::compat::rw_fopen_utf8( labelsPath.c_str(), "rb" );
         if( !fp ) { rep.ok = false; return rep; }
         char        buf[ 65536 ];
         std::size_t n = 0;

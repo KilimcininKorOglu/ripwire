@@ -476,11 +476,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Configure (portable — clang + ninja)
-        run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+        shell: bash
+        run: cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DRIPWIRE_LTO=OFF
 
       - name: Build
         run: cmake --build build -j
+
+      # Build the HEAD comparison binary once, before the suite. The monotonicity gates use it in staged
+      # mode; building it inside a gate would multiply the Windows compile cost and can race the gate budget.
+      - name: Stage the HEAD comparison binary (once before the Windows suite)
+        shell: bash
+        run: |
+          export TMPDIR="$( cygpath -u "$RUNNER_TEMP" )"
+          export RIPWIRE_HEADBIN_BUILD_LOG="$TMPDIR/headbin-build.log"
+          . test/lib/headbinlib.sh
+          hb="$( ripwire_head_binary "$PWD" "$TMPDIR" )" || { echo "HEAD binary build failed; last 80 lines of its log:"; tail -n 80 "$RIPWIRE_HEADBIN_BUILD_LOG"; exit 1; }
+          ripwire_headbin_verify "$hb" "$( git rev-parse HEAD )"
+          "$hb" --version
+          echo "RIPWIRE_HEADBIN=$hb" >> "$GITHUB_ENV"
 
       - name: Doctor check
         run: .\build\ripwire.exe . --doctor
@@ -498,6 +520,10 @@ jobs:
       - name: Determinism gate (test/det-gate.sh)
         shell: bash
         run: bash test/det-gate.sh build/ripwire.exe
+
+      - name: Full native Windows gate suite
+        shell: bash
+        run: python test/pargates.py . build/ripwire.exe -j 6 --budget-scale 4
 
   asan:
     name: asan (${{ matrix.os }})

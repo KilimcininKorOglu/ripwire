@@ -300,11 +300,7 @@ inline RenameHarvest mineRenamePairs( const std::string& root )
 
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
                           + " log --no-merges --no-color --no-ext-diff --no-textconv --no-renames"
-#ifdef _WIN32
-                            " ^\"--format=^%x01^%H^\" -p -U0 2>/dev/null";
-#else
                             " --format='%x01%H' -p -U0 2>/dev/null";
-#endif
 
     HashMap<std::string, std::uint32_t> votes;
     detail::HunkBuffer                  hunk;

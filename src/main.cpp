@@ -202,9 +202,9 @@ using rw::quality::deadCodeEligibleKind;
 // TABLE, so a run deserialises only the records for the files it actually crawled, and a save carries
 // over verbatim the records for files it did not crawl — so a narrower configuration is cheap to load
 // and can no longer truncate the shared blob. Gate: test/cacheoffsetcheck.sh.
-std::string defaultCachePath( const std::string& root, bool captureValueUses )
+std::string defaultCachePath( const std::string& root, bool captureValueUses, std::string_view cacheDir = {} )
 {
-    return rw::quality::rootKeyedCachePath( root, "ripwire-", captureValueUses ? "-rich.bin" : "-lean.bin" );
+    return rw::quality::rootKeyedCachePath( root, "ripwire-", captureValueUses ? "-rich.bin" : "-lean.bin", cacheDir );
 }
 
 std::string canonicalProcessLockPart( std::string_view path )
@@ -215,12 +215,12 @@ std::string canonicalProcessLockPart( std::string_view path )
     return ec ? std::string( path ) : canonical.generic_string();
 }
 
-std::string ingestProcessLockPath( std::string_view identity )
+std::string ingestProcessLockPath( std::string_view identity, std::string_view cacheDir = {} )
 {
     char name[ 64 ];
     std::snprintf( name, sizeof( name ), "ripwire-ingest-%016llx.lock",
                    static_cast<unsigned long long>( rw::fnv1a64( identity ) ) );
-    const std::string lockDir = cacheDirLadder() + "/locks";
+    const std::string lockDir = ( cacheDir.empty() ? cacheDirLadder() : std::string( cacheDir ) ) + "/locks";
     std::error_code  ec;
     std::filesystem::create_directories( std::filesystem::path( lockDir ), ec );
     return lockDir + "/" + name;
@@ -1893,7 +1893,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             // open the target file for writing; report failure and exit cleanly
             const std::string htmlPath( cfg.htmlFile );
-            htmlOut = std::fopen( htmlPath.c_str(), "wb" );
+            htmlOut = rw::compat::rw_fopen_utf8( htmlPath.c_str(), "wb" );
             if( !htmlOut )
             {
                 DEGRADED_PATH_ALERT( "writeHtml: could not open output file" );
@@ -2091,7 +2091,8 @@ int runDefaultMap( const MainDispatch& d )
         bodiesSection = rw::chargeSection( [ & ]( std::FILE* f )
             { packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                           expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                          /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); },   // V1: octocode F2 sibs=/inc=
+                          /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, nullptr,
+                          /*preserveSourceNewlines=*/true ); },   // V1: octocode F2 sibs=/inc=
             rw::kBytesPerTokenBody );
     }
     if( !outlineNodes.empty() )
@@ -2107,7 +2108,7 @@ int runDefaultMap( const MainDispatch& d )
     const std::size_t payloadTokens = sigsSection.tokens + srcSection.tokens + outlineSection.tokens
         + ( ( !expandNodes.empty() && !bodiesSection.isRendered )
                 ? estimateExpandBodyTokens( ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress,
-                                            expandRanges.empty() ? nullptr : &expandRanges )
+                                            expandRanges.empty() ? nullptr : &expandRanges, /*preserveSourceNewlines=*/true )
                 : bodiesSection.tokens )
         + ( ctxUnprovenBytes > 0 ? rw::tokensForEmittedBytes( ctxUnprovenBytes, rw::kBytesPerTokenDefault ) : 0 );   // H1: charged at the markup rate
 
@@ -2164,7 +2165,8 @@ int runDefaultMap( const MainDispatch& d )
         // guarded siblings at the ceiling verdict and the topK>0 emission gate). Same guard here: a map
         // that will not be emitted must not be charged, exactly like every other measureEmittedMapBytes
         // call site in this function.
-        wholeFile = rw::renderWholeFiles( ing, expandNodes, redactPtr, d.notesPtr, cfg.compress, mapRootArg );   // D2: shaped candidate (R-R: root-relative <src p=>)
+        wholeFile = rw::renderWholeFiles( ing, expandNodes, redactPtr, d.notesPtr, cfg.compress, mapRootArg,
+                                          /*preserveSourceNewlines=*/true );   // D2: shaped candidate (R-R: root-relative <src p=>)
         // BOTH CANDIDATES, DESCRIBED IN THE SAME FIELDS (CodeRabbit, PR #215 — chooseExpandServe's own header
         // carries the defect this replaced). The two documents differ by exactly what these fields say they
         // differ by: the bundle rides a map (when one will be emitted) and the pre-rendered <bodies>; the file
@@ -2356,7 +2358,8 @@ int runDefaultMap( const MainDispatch& d )
     {
         emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                                                        expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
-                                                       /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
+                                                       /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, nullptr,
+                                                       /*preserveSourceNewlines=*/true ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
     }
     if( !outlineNodes.empty() )
     { // resolved (and refused on a miss) above, before the first stdout byte
@@ -3494,6 +3497,8 @@ int main( int argc, char** argv )
 {
     using namespace rw;
 
+    rw::compat::rw_set_stdout_binary();
+
     if( argc >= 2 && std::string_view( argv[1] ) == "wrap" )
     { // adoption recipe (subcommand, not a flag)
         return runWrap( argc, argv, selfExecutablePath( argv[0] ) );
@@ -3885,25 +3890,37 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         else
         {
             addDir( ".agents/skills" );
-            const char* homeEnv        = std::getenv( "HOME" );
-            const char* claudeConfigEnv = std::getenv( "CLAUDE_CONFIG_DIR" );
-            if( claudeConfigEnv && *claudeConfigEnv )
+            const auto nativeEnvPath = []( const char* value )
             {
-                addDir( std::string( claudeConfigEnv ) + "/skills" );
+                if( value == nullptr || *value == 0 )
+                {
+                    return std::string{};
+                }
+#if defined( _WIN32 )
+                return rw::compat::rw_windows_path_from_msys( value );
+#else
+                return std::string( value );
+#endif
+            };
+            const std::string homeEnv         = nativeEnvPath( std::getenv( "HOME" ) );
+            const std::string claudeConfigEnv = nativeEnvPath( std::getenv( "CLAUDE_CONFIG_DIR" ) );
+            if( !claudeConfigEnv.empty() )
+            {
+                addDir( claudeConfigEnv + "/skills" );
             }
-            else if( homeEnv && *homeEnv )
+            else if( !homeEnv.empty() )
             {
-                addDir( std::string( homeEnv ) + "/.claude/skills" );
+                addDir( homeEnv + "/.claude/skills" );
             }
 
-            const char* codexHomeEnv = std::getenv( "CODEX_HOME" );
-            if( codexHomeEnv && *codexHomeEnv )
+            const std::string codexHomeEnv = nativeEnvPath( std::getenv( "CODEX_HOME" ) );
+            if( !codexHomeEnv.empty() )
             {
-                addDir( std::string( codexHomeEnv ) + "/skills" );
+                addDir( codexHomeEnv + "/skills" );
             }
-            else if( homeEnv && *homeEnv )
+            else if( !homeEnv.empty() )
             {
-                addDir( std::string( homeEnv ) + "/.codex/skills" );
+                addDir( homeEnv + "/.codex/skills" );
             }
         }
 
@@ -4049,7 +4066,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         else
         {
             const std::string bf( cfg.batchFile );
-            std::FILE* f = std::fopen( bf.c_str(), "rb" );
+            std::FILE* f = rw::compat::rw_fopen_utf8( bf.c_str(), "rb" );
             if( !f ) { rw::emitTo( stderr, "ripwire: --batch: cannot open '{}'\n", bf.c_str() ); return 1; }
             char buf[ 4096 ]; std::size_t n;
             while( ( n = std::fread( buf, 1, sizeof buf, f ) ) > 0 )
@@ -4122,11 +4139,17 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     std::vector<std::string> resolvedRoots;
     for( const std::string_view rootArg : cfg.roots )
     {
-        const auto [ resolvedRoot, cloneOk ] = resolveRemoteRoot( std::string( rootArg ), cfg.refetch );
+        const auto [ resolvedRootArg, cloneOk ] = resolveRemoteRoot( std::string( rootArg ), cfg.refetch );
         if( !cloneOk )
         {
             return 1;
         }
+        const std::string resolvedRoot =
+#if defined( _WIN32 )
+            rw::compat::rw_windows_path_from_msys( resolvedRootArg );
+#else
+            resolvedRootArg;
+#endif
 
         // a root that does not EXIST is caller error (a typo'd path), not a degradable runtime condition —
         // exit 1 with empty stdout so agent pipelines can detect it. A readable-but-empty directory still
@@ -4288,7 +4311,8 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     {
         ingestLockIdentity = canonicalProcessLockPart( root );
     }
-    const rw::infra::ProcessLock ingestProcessLock( ingestProcessLockPath( ingestLockIdentity ) );
+    const std::string            processCacheDir = cacheDirLadder();
+    const rw::infra::ProcessLock ingestProcessLock( ingestProcessLockPath( ingestLockIdentity, processCacheDir ) );
 
     // --index-out=BASE (both-families amendment): the CI generate-and-exit path.
     // Cold-parse the tree TWICE — once lean, once rich — writing BASE.lean.ripwirecache and
@@ -4310,9 +4334,9 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         for( const Family& fam : families )
         {
             const std::string path = base + fam.suffix;
-            std::remove( path.c_str() );                     // force-rebuild: a stale warm file must not shadow the generate
+            rw::compat::rw_remove_utf8( path.c_str() );                     // force-rebuild: a stale warm file must not shadow the generate
 
-            IngestResult r = ingest( root.c_str(), cfg.excludes, path, cfg.maxFileBytes, fam.rich );
+            IngestResult r = ingest( root.c_str(), cfg.excludes, path, cfg.maxFileBytes, fam.rich, {}, !cfg.noIgnore, processCacheDir );
             (void)r;
 
             std::error_code       ec;
@@ -4355,10 +4379,10 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             std::string cachePath;
             if( !cfg.noCache )
             {
-                cachePath = defaultCachePath( r.arg, needsValueUses );
+                cachePath = defaultCachePath( r.arg, needsValueUses, processCacheDir );
             }
             parts.push_back( ingest( r.arg.c_str(), cfg.excludes, cachePath, cfg.maxFileBytes, needsValueUses,
-                                     /*excludeLabel=*/r.label, /*respectGitignore=*/!cfg.noIgnore ) );
+                                     /*excludeLabel=*/r.label, /*respectGitignore=*/!cfg.noIgnore, processCacheDir ) );
         }
         ing = mergeWorkspaceIngests( ws, parts );
     }
@@ -4368,11 +4392,11 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         std::string_view cacheArg = cfg.cacheFile;
         if( cacheArg.empty() && !cfg.noCache )
         {
-            autoCache = defaultCachePath( root, needsValueUses );
+            autoCache = defaultCachePath( root, needsValueUses, processCacheDir );
             cacheArg  = autoCache;
         }
         ing = ingest( root.c_str(), cfg.excludes, cacheArg, cfg.maxFileBytes, needsValueUses,
-                      /*excludeLabel=*/{}, /*respectGitignore=*/!cfg.noIgnore );
+                      /*excludeLabel=*/{}, /*respectGitignore=*/!cfg.noIgnore, processCacheDir );
     }
     if( cfg.ignoreTests )
     {

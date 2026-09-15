@@ -170,7 +170,7 @@
 #include "infra/platform_compat.h"  // Windows handle/CRT bridge for the same no-follow contract
 
 #if defined( _WIN32 )
-  #include <windows.h>               // CreateFileA + FILE_FLAG_OPEN_REPARSE_POINT — Windows' atomic no-follow open
+  #include <windows.h>               // CreateFileW + FILE_FLAG_OPEN_REPARSE_POINT — Windows' atomic no-follow open
   #include <io.h>                    // _open_osfhandle / _chsize_s / _write / _close
 #else
   #include <fcntl.h>                 // ::open + O_NOFOLLOW + O_NONBLOCK — the whole mechanism, in one syscall
@@ -205,7 +205,9 @@ inline bool isSymlink( const std::string& path ) noexcept
     // Windows calls these reparse points. Treat every final reparse point as link-like: opening it with
     // FILE_FLAG_OPEN_REPARSE_POINT is the kernel-enforced no-follow equivalent of POSIX O_NOFOLLOW, and
     // refusing junctions as well as symbolic links avoids a directory redirection through the same seam.
-    const HANDLE handle = ::CreateFileA( path.c_str(), 0,
+    const std::string nativePath = rw::compat::rw_windows_path_from_msys( path );
+    const std::wstring widePath = rw::compat::rw_utf8_to_wide( nativePath );
+    const HANDLE handle = widePath.empty() ? INVALID_HANDLE_VALUE : ::CreateFileW( widePath.c_str(), 0,
                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                          FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_OPEN_NO_RECALL | FILE_FLAG_BACKUP_SEMANTICS,
                                          nullptr );
@@ -267,6 +269,50 @@ inline bool winHandleInfo( HANDLE handle, BY_HANDLE_FILE_INFORMATION& info ) noe
 
 inline constexpr DWORD kNoFollowOpenFlags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
                                            | FILE_FLAG_OPEN_NO_RECALL | FILE_FLAG_BACKUP_SEMANTICS;
+
+inline bool windowsPathHasIntermediateReparse( const std::wstring& path ) noexcept
+{
+    std::wstring absolute( 32768, L'\0' );
+    const DWORD fullLength = ::GetFullPathNameW( path.c_str(), static_cast<DWORD>( absolute.size() ), absolute.data(), nullptr );
+    if( fullLength == 0 || fullLength >= absolute.size() )
+    {
+        return false;
+    }
+    absolute.resize( fullLength );
+
+    wchar_t volume[ 32768 ]{};
+    const DWORD volumeLength = ::GetVolumePathNameW( absolute.c_str(), volume, static_cast<DWORD>( std::size( volume ) ) );
+    if( volumeLength == 0 || volumeLength >= std::size( volume ) )
+    {
+        return false;
+    }
+
+    const std::size_t sidecarSeparator = absolute.find_last_of( L"\\/" );
+    if( sidecarSeparator == std::wstring::npos || sidecarSeparator == 0 )
+    {
+        return false;
+    }
+    std::size_t separator = absolute.find_first_of( L"\\/", volumeLength );
+    while( separator != std::wstring::npos && separator <= sidecarSeparator )
+    {
+        const std::wstring component = absolute.substr( 0, separator );
+        const HANDLE handle = ::CreateFileW( component.c_str(), FILE_READ_ATTRIBUTES,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                              FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr );
+        if( handle != INVALID_HANDLE_VALUE )
+        {
+            FILE_ATTRIBUTE_TAG_INFO tagInfo{};
+            const BOOL inspected = ::GetFileInformationByHandleEx( handle, FileAttributeTagInfo, &tagInfo, sizeof( tagInfo ) );
+            ::CloseHandle( handle );
+            if( inspected != 0 && ( tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT ) != 0 )
+            {
+                return true;
+            }
+        }
+        separator = absolute.find_first_of( L"\\/", separator + 1 );
+    }
+    return false;
+}
 #endif
 
 // Create-or-truncate `path` for writing WITHOUT following a symlink at the final component, and tell the
@@ -294,7 +340,15 @@ inline constexpr DWORD kNoFollowOpenFlags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OP
 inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string& path )
 {
 #if defined( _WIN32 )
-    const HANDLE handle = ::CreateFileA( path.c_str(), GENERIC_WRITE,
+    const std::string nativePath = rw::compat::rw_windows_path_from_msys( path );
+    const std::wstring widePath = rw::compat::rw_utf8_to_wide( nativePath );
+    if( windowsPathHasIntermediateReparse( widePath ) )
+    {
+        errno = ELOOP;
+        rw::emitTo( stderr, "ripwire: refusing to write {} at '{}': an intermediate directory is a reparse point. Nothing was written.\n", what, path );
+        return { -1, ELOOP };
+    }
+    const HANDLE handle = widePath.empty() ? INVALID_HANDLE_VALUE : ::CreateFileW( widePath.c_str(), GENERIC_WRITE,
                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                                          kNoFollowOpenFlags, nullptr );
     if( handle == INVALID_HANDLE_VALUE )
@@ -347,12 +401,13 @@ inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string
     }
     if( ( info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) != 0 || ::GetFileType( handle ) != FILE_TYPE_DISK )
     {
+        const char* kind = ( info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) != 0 ? "a directory" : "a FIFO, for example";
         ::CloseHandle( handle );
         errno = EINVAL;
         rw::emitTo( stderr,
-                    "ripwire: refusing to write {} at '{}': that path is not a regular file (a FIFO, for example), so there is no\n"
+                    "ripwire: refusing to write {} at '{}': that path is not a regular file ({}), so there is no\n"
                     "  sidecar there to write. Nothing was written. Remove it and re-run.\n",
-                    what, path );
+                    what, path, kind );
         return { -1, EINVAL };
     }
 
@@ -557,6 +612,11 @@ struct NoFollowRead
                 readPos  = 0;
                 if( readSize == 0 )
                 {
+                    if( std::ferror( file ) != 0 )
+                    {
+                        line.clear();
+                        return false;
+                    }
                     return !line.empty();
                 }
             }
@@ -600,7 +660,16 @@ inline NoFollowRead openNoFollowRead( std::string_view what, const std::string& 
 {
     NoFollowRead result;
 #if defined( _WIN32 )
-    const HANDLE handle = ::CreateFileA( path.c_str(), GENERIC_READ,
+    const std::string nativePath = rw::compat::rw_windows_path_from_msys( path );
+    const std::wstring widePath = rw::compat::rw_utf8_to_wide( nativePath );
+    if( windowsPathHasIntermediateReparse( widePath ) )
+    {
+        result.err = ELOOP;
+        errno = result.err;
+        rw::emitTo( stderr, "ripwire: refusing to read {} at '{}': an intermediate directory is a reparse point. Nothing was read.\n", what, path );
+        return result;
+    }
+    const HANDLE handle = widePath.empty() ? INVALID_HANDLE_VALUE : ::CreateFileW( widePath.c_str(), GENERIC_READ,
                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                          kNoFollowOpenFlags, nullptr );
     if( handle == INVALID_HANDLE_VALUE )
