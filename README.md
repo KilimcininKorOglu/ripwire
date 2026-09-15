@@ -1659,7 +1659,7 @@ timing-only, and `pmccheck`'s inactive arm now proves that was truly the case.
 ## Standing on the whole field
 
 <details>
-<summary>43 repositories, 69 papers and a 237-tool survey — and the study where search over a pre-built index beats a delegating planner <b>65.2% to 46.2%</b>, at under half the cost</summary>
+<summary>49 repositories, 71 papers and a 237-tool survey — and the study where search over a pre-built index beats a delegating planner <b>65.2% to 46.2%</b>, at under half the cost</summary>
 
 Almost none of the ideas here are new; the combination and the constraints are. Lessons folded from
 **49 repositories and 71 papers** into one deterministic executable, alongside a labelled
