@@ -650,8 +650,31 @@ private:
         // A3: root-relative, like every p= beside it. rootRelativeUri strips a leading "./" unconditionally,
         // so the readability strip the pre-A3 code did by hand is the SAME call now, not a second rule.
         std::string_view p = rw::sarif::rootRelativeUri( disk, rootPrefix_ );
-        return std::string( runnerVerb( p ) ) + " "
-             + ( isShellSafePath( p ) ? std::string( p ) : rw::shSingleQuote( std::string( p ) ) );
+        if( isShellSafePath( p ) )
+        {
+            return std::string( runnerVerb( p ) ) + " " + std::string( p );
+        }
+        // QUOTING WAS NECESSARY AND NOT SUFFICIENT — third review of #219, a bypass of the fix above. The
+        // quoted form hands the path to the shell as ONE argument, which is the whole point, and then the
+        // INTERPRETER parses it: a root-level `-cimport os;open("PWNED","w")#_test.py` passes isTestPath,
+        // keeps its leading dash through normalisation, survives quoting intact — and `python3` reads `-c`
+        // as "execute this code". The path never reaches the shell as code; it reaches the interpreter as an
+        // OPTION. Same trust boundary as the injection above: corpus filename → run= → a reader pastes it.
+        //
+        // MEASURED, both directions, on the two verbs runnerVerb can emit (there are exactly two —
+        // kRunnerKinds is .sh→bash and .py→python3, so this is the whole population, not a sample):
+        //   python3 '<-c…#_test.py>'     rc=0, created the payload file   — bypass reproduced
+        //   python3 -- '<same path>'     rc=7 (the file's own status), no side effect
+        //   bash    -- '<-c…#_test.sh>'  rc=7, no side effect
+        // bash did NOT reproduce the bypass with the equivalent payload (it rejected the combined -c form,
+        // rc=1), so the confirmed case is python3; `--` is emitted for both because both honour it and the
+        // cost is zero on every real path. If a third interpreter is ever added here, check its `--` before
+        // relying on this line — a hopeful `--` on a verb that ignores it would be worse than none.
+        //
+        // Conditional for the same measured reason as the quoting: a leading '-' is already outside
+        // isShellSafePath, so `--` costs bytes only where the path is hostile and every real corpus stays
+        // byte-identical (printffmtparitycheck needs no re-pin).
+        return std::string( runnerVerb( p ) ) + " -- " + rw::shSingleQuote( std::string( p ) );
     }
 
     const IngestResult*                         ing_;

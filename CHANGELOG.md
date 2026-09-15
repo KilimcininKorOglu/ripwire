@@ -45,6 +45,19 @@ predicate is an allowlist, so an unenumerated byte is quoted by default. `test/r
 EXECUTES the emitted command in a scratch corpus and asserts the payload did not fire, with the
 unquoted spelling as its control. Red before the fix: the emitted command created the sentinel file.
 
+AND QUOTING WAS NOT SUFFICIENT — the same trust boundary, one layer in. A root-level
+`-cimport os;open("PWNED","w")#_test.py` passes `isTestPath`, keeps its leading dash, survives quoting
+intact, and then `python3` reads `-c` as "execute this code": the path reaches the INTERPRETER as an
+option rather than the shell as code. Measured, both directions, over the whole population of verbs
+`runnerVerb` can emit (exactly two — `.sh`→`bash`, `.py`→`python3`): `python3 '<path>'` exited 0 and
+created the payload file, `python3 -- '<path>'` exited the file's own 7 and did nothing, and
+`bash -- '<path>'` likewise. `bash` did not reproduce the bypass with the equivalent payload (it
+rejected the combined `-c` form, rc=1), so the confirmed case is `python3`; `--` is emitted for both
+because both honour it. An option terminator now precedes any path that is not provably safe — a
+leading `-` is already outside the allowlist, so this too is byte-identical on every real corpus and
+`printffmtparitycheck` still needs no re-pin. `runhintcheck` arm (6) pins it, with the
+quoted-but-unterminated spelling as the control that proves quoting alone was not the fix.
+
 A RELATIVE COMMAND IS ONLY AS GOOD AS ITS ANCHOR. Making `run=` root-relative is what makes a change
 report independent of where the tree is checked out — and it makes every one of those commands useless
 to a reader who cannot tell what they are relative to. Four surfaces had exactly that hole. The shared

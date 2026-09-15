@@ -299,5 +299,60 @@ else
     printf '  SKIP  (5) hostile-path run= arm (no git)\n'
 fi
 
+# ── (6) QUOTING IS NOT ENOUGH: THE INTERPRETER PARSES THE PATH TOO ───────────────────────────────────
+# Third review of #219, a BYPASS of arm (5)'s fix. Arm (5) makes the path one shell argument, which is
+# correct and does nothing here: a root-level `-cimport os;…#_test.py` passes isTestPath, keeps its leading
+# dash, survives quoting intact, and then `python3` reads `-c` as "execute this code". The path reaches the
+# INTERPRETER as an option rather than the shell as code — same trust boundary, one layer in. The fix emits
+# `--` before a path that is not provably safe, so option parsing ends before the path is read.
+#
+# Armed the way arm (5) is, which is the house pattern: the expected outcome is a value only the intended
+# path can produce. The runner's own file exits 7, so "the command reached the harness" is a positive
+# observation; "no payload file" alone would also be true of a command that never ran.
+if command -v git >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    DASH="$TMP/dash"
+    mkdir -p "$DASH/test"
+    printf 'int area( int b, int h )\n{\n    return b * h / 2;\n}\n' > "$DASH/geo.cpp"
+    printf '#include "../geo.cpp"\nint main()\n{\n    return area( 2, 2 ) == 2 ? 0 : 1;\n}\n' > "$DASH/test/area_harness.cpp"
+    # The runner lives at the ROOT (isTestPath accepts the *_test.py name there) and its basename BEGINS
+    # with -c. Its TEXT names the harness, so the MENTION rule elects it. The trailing '#' comments out the
+    # '_test.py' suffix, which is what makes the payload valid Python rather than a SyntaxError — the first
+    # version of this fixture was a syntax error and the bypass did not fire, which would have read as safe.
+    DASHRUNNER='-cimport os;open("PWNED_PY","w")#_test.py'
+    printf '# drives test/area_harness.cpp\nimport sys\nsys.exit(7)\n' > "$DASH/$DASHRUNNER"
+    ( cd "$DASH" && git init -q && git config user.email t@t && git config user.name t && git add -A >/dev/null 2>&1 \
+      && git commit -qm init >/dev/null 2>&1 )
+    DOUT="$( cd "$DASH" && "$BIN" . --affected=geo.cpp --no-cache 2>/dev/null )"
+    DRUN="$( printf '%s' "$DOUT" | grep -oE 'run="[^"]*"' | head -1 )"
+    if [ -z "$DRUN" ]; then
+        printf '  SKIP  (6) the leading-dash fixture derived no run= (nothing to terminate)\n'
+    else
+        printf '%s' "$DRUN" | grep -q ' -- ' \
+            && ok "(6) a leading-dash runner path is emitted after an option terminator: $DRUN" \
+            || no "(6) a leading-dash runner path is emitted with NO '--' — the interpreter will read it as an option: $DRUN"
+        DCMD="$( printf '%s' "$DRUN" | sed -e 's/^run="//' -e 's/"$//' \
+                   -e 's/&apos;/'"'"'/g' -e 's/&quot;/"/g' -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g' )"
+        rm -f "$DASH/PWNED_PY"
+        ( cd "$DASH" && eval "$DCMD" ) >/dev/null 2>&1; drc=$?
+        if [ "$drc" -ne 7 ]; then
+            no "(6) the emitted run= did not REACH the harness (exit $drc, expected its own 7) — the payload check below would prove nothing: $DCMD"
+        elif [ -e "$DASH/PWNED_PY" ]; then
+            no "(6) executing the emitted run= created $DASH/PWNED_PY — the interpreter executed the FILENAME as code"
+        else
+            ok "(6) the emitted run= reached the harness (exit 7) and the interpreter executed no code from the filename"
+        fi
+        # CONTROL A: the pre-fix spelling — quoted, but with no terminator — really does execute the
+        # filename as code, so the row above is not passing against a payload that never worked.
+        rm -f "$DASH/PWNED_PY"
+        ( cd "$DASH" && eval "python3 $( printf '%s' "$DASHRUNNER" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/" )" ) >/dev/null 2>&1
+        [ -e "$DASH/PWNED_PY" ] \
+            && ok "(6) control: QUOTED-but-unterminated does execute the filename as code (PWNED_PY created) — quoting alone is not the fix" \
+            || no "(6) control: the quoted-but-unterminated spelling executed nothing — this arm proves nothing about the terminator"
+        rm -f "$DASH/PWNED_PY"
+    fi
+else
+    printf '  SKIP  (6) leading-dash run= arm (needs git and python3)\n'
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
