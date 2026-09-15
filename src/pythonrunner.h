@@ -21,6 +21,8 @@ extern "C"
 namespace rw::pythonrunner
 {
 
+/// Parse source with the supplied grammar and return whether a top-level child satisfies predicate.
+/// Reject oversized input, parse failures and syntax errors; predicate must not throw or retain nodes.
 template<class Predicate>
 inline bool topLevelEvidence( std::string_view source, const TSLanguage* language, const Predicate& predicate )
 {
@@ -62,6 +64,8 @@ inline bool topLevelEvidence( std::string_view source, const TSLanguage* languag
     return found;
 }
 
+/// Recognize a plain __name__ == "__main__" comparison in either operand order.
+/// condition must belong to source; comments, chains and other spellings are conservatively rejected.
 inline bool mainComparison( TSNode condition, std::string_view source )
 {
     if( ts_node_is_null( condition ) || std::string_view( ts_node_type( condition ) ) != "comparison_operator"
@@ -80,6 +84,8 @@ inline bool mainComparison( TSNode condition, std::string_view source )
         || ( mainLiteral( spelling( 0 ) ) && spelling( 2 ) == "__name__" ) );
 }
 
+/// Return whether valid Python source contains a recognized top-level main guard.
+/// Nested guards and examples inside comments or strings do not establish script entry-point evidence.
 inline bool hasMainGuard( std::string_view source )
 {
     return topLevelEvidence( source, tree_sitter_python(), [ & ]( TSNode node )
@@ -92,6 +98,8 @@ inline bool hasMainGuard( std::string_view source )
     } );
 }
 
+/// Find the exact tool.pytest.ini_options table key in valid TOML source.
+/// String contents are not tables; quoted or differently spaced key spellings are not recognized.
 inline bool hasPytestTable( std::string_view source )
 {
     return topLevelEvidence( source, tree_sitter_toml(), [ & ]( TSNode node )
@@ -107,6 +115,8 @@ inline bool hasPytestTable( std::string_view source )
     } );
 }
 
+/// Find a standalone [tool:pytest] section in setup.cfg text.
+/// Track value indentation so section-looking continuation lines cannot establish pytest evidence.
 inline bool hasPytestSection( std::string_view source )
 {
     std::size_t valueIndent = std::string_view::npos;
@@ -141,6 +151,8 @@ inline bool hasPytestSection( std::string_view source )
     return false;
 }
 
+/// Check one directory for regular, non-symlink pytest configuration files.
+/// pytest.ini or conftest.py suffices; pyproject.toml and setup.cfg require a recognized pytest section.
 inline bool pytestConfigAt( const std::filesystem::path& dir )
 {
     // Do not follow a config symlink out of the scanned project.
@@ -160,6 +172,8 @@ inline bool pytestConfigAt( const std::filesystem::path& dir )
     return regular( "setup.cfg" ) && hasPytestSection( docparse::detail::readWholeFile( ( dir / "setup.cfg" ).string() ).value_or( "" ) );
 }
 
+/// Search from file's parent through root, inclusive, for pytest configuration.
+/// Paths are normalized lexically; an absent root, path error or file outside root yields no evidence.
 inline bool hasPytestProject( const std::string& file, std::string_view root )
 {
     namespace fs = std::filesystem;

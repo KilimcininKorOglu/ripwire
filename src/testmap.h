@@ -505,6 +505,8 @@ public:
     // Defaulted to "" so a caller that has no root (or a multi-root run, where the disk path is not under any
     // single root) keeps the absolute spelling: an unrelativizable command must stay pasteable, never become
     // a path relative to a root that does not contain it.
+    /// Index candidate test scripts in path order without reading their contents.
+    /// ing must outlive the index; root controls single-root evidence boundaries and command spelling.
     explicit TestRunnerIndex( const IngestResult& ing, std::string_view root = {} )
         : ing_( &ing ),
           rootPrefix_( runsAreRootRelative( ing, root ) ? rw::sarif::rootPrefixOf( root ) : std::string() )
@@ -539,11 +541,15 @@ public:
     // is gated on, read off the index rather than re-derived at each legend site.
     bool rootRelative() const noexcept { return !rootPrefix_.empty(); }
 
+    /// Return this file's own validated script command, or empty for an invalid ID or unknown runner.
+    /// Unlike commandFor, this does not search for another script that drives the file.
     std::string commandForScript( std::uint32_t fileId ) const
     { return fileId < ing_->files.size() && runnerVerb( ing_->files[fileId] ) != nullptr ? spell( fileId ) : std::string(); }
 
 private:
     // Candidate script kinds. Python's verb is provisional until spellUncached verifies runner evidence.
+    /// Return the extension-based candidate interpreter, or nullptr for an unsupported script kind.
+    /// A Python candidate still needs main-guard or pytest evidence before a command can be emitted.
     static const char* runnerVerb( std::string_view path ) noexcept
     {
         struct RunnerRow { std::string_view ext; const char* verb; };
@@ -564,11 +570,13 @@ private:
     // "strip the LAST dot" convention that every other stemming call site in this repo shares.
     static std::string_view stemOf( std::string_view p ) noexcept { return mention_detail::pathStem( p ); }
 
+    /// Return whether two valid file IDs belong to the same crawl root; single-root files always do.
     bool sameRoot( std::uint32_t a, std::uint32_t b ) const noexcept
     {
         return ing_->realPaths.empty() || ing_->fileRoot[a] == ing_->fileRoot[b];
     }
 
+    /// Read candidate script contents once, aligned with runners_; unreadable files supply no mentions.
     void loadTexts() const
     {
         if( textsLoaded_ )
@@ -583,6 +591,8 @@ private:
         }
     }
 
+    /// Prefer the file's own command, then a same-root stem match, then a same-root text mention.
+    /// fileId must be valid; return empty when none of those candidates has a supported runner.
     std::string derive( std::uint32_t fileId ) const
     {
         const std::string& target = ing_->files[ fileId ];
@@ -608,6 +618,8 @@ private:
     }
 
     // Stem first, then mention; skip candidates that have no runnable command. Both passes are path-sorted.
+    /// Return the first runnable same-root match in path order, or empty if there is none.
+    /// fileId must be valid; byStem selects stem matching, otherwise loadTexts must have run first.
     std::string matchingRunner( std::uint32_t fileId, bool byStem ) const
     {
         const std::string_view target = ing_->files[fileId];
@@ -665,6 +677,8 @@ private:
         return true;
     }
 
+    /// Cache a candidate file's command, including an empty result, to avoid repeated evidence reads.
+    /// runnerFile must identify an indexed file with a supported script extension.
     std::string spell( std::uint32_t runnerFile ) const
     {
         if( scriptCache_.empty() )
@@ -679,6 +693,9 @@ private:
         return entry->second;
     }
 
+    /// Validate a candidate script and format its disk path as one shell argument.
+    /// runnerFile must have a supported extension; Python without main-guard or pytest evidence yields empty.
+    /// Commands are root-relative only for single-root scans, with quoting and option separation as needed.
     std::string spellUncached( std::uint32_t runnerFile ) const
     {
         const std::string& disk = diskPath( *ing_, runnerFile );

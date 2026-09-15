@@ -15,6 +15,11 @@ test_source = "def test_answer():\n    assert 6 * 7 == 42\n"
 
 
 def check(name, files, expected, target="tests/test_answer.py"):
+    """Create a fixture and check its runner across JSON, XML and text output.
+
+    expected=None requires unknown-runner disclosure. Collect mismatches in failures,
+    raise on scan errors, and return the fixture root for optional command execution.
+    """
     root = scratch / name
     for path, content in files.items():
         dest = root / path
