@@ -1112,8 +1112,7 @@ A symlink inside the crawl root whose target resolves outside that root is not f
 skips it and lists it on `--skipped` in a new `escaped` class. It is counted as `escaped_root=` on the map header (XML and
 JSON), `<flags>` and `<doc-drift>`. The attribute is absent at zero, so a tree without such a link gives byte-identical
 output, and a symlink that stays inside its root is indexed as before
-([#179](https://github.com/redhat-et/ripwire/pull/179)). Reported by @skeletonsec, with additional paths documented
-independently by @dpfkdlemtp.
+([#179](https://github.com/redhat-et/ripwire/pull/179)).
 
 ### Fixed — the suite's `skip=` count stopped depending on where the checkout lives
 
