@@ -27,6 +27,25 @@
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
 
 set -u
+PYTHON3="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python3 2>/dev/null || command -v python 2>/dev/null || true )}}"
+if [ -z "$PYTHON3" ] || ! "$PYTHON3" -c 'import sys' >/dev/null 2>&1; then
+    echo "portablebuildcheck.sh: native Python is required" >&2
+    exit 2
+fi
+python3()
+{
+    local arg
+    local -a mapped=()
+    for arg in "$@"; do
+        case "$arg" in
+            /*)
+                if command -v cygpath >/dev/null 2>&1; then mapped+=( "$( cygpath -w "$arg" )" ); else mapped+=( "$arg" ); fi
+                ;;
+            *) mapped+=( "$arg" ) ;;
+        esac
+    done
+    "$PYTHON3" "${mapped[@]}"
+}
 ROOT="$( cd "$( dirname "$0" )/.." && ( pwd -W 2>/dev/null || pwd ) )"
 MODULE="$ROOT/cmake/PortableFlags.cmake"
 CMAKE_TOP="$ROOT/CMakeLists.txt"
