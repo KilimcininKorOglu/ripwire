@@ -201,6 +201,9 @@ jobs:
     # deployment target, the default's does not. An empty DEVELOPER_DIR on the Linux legs is inert.
     env:
       DEVELOPER_DIR: ${{ matrix.os == 'macos-14' && '/Applications/Xcode_16.2.app/Contents/Developer' || '' }}
+      # Keep CXX at job scope, not only on Configure: pargates.py launches the gates in a later step,
+      # and structlayoutcheck must compile its fixture with this matrix leg's front end.
+      CXX: ${{ matrix.cc == 'clang' && 'clang++' || matrix.cc == 'gcc' && 'g++-14' || 'c++' }}
       # Release legs use their just-built binary as structlayoutcheck's Release reference. Plain legs
       # retain the gate's explicit local-style SKIP; they must not relabel an NDEBUG-off binary as Release.
       RIPWIRE_RELEASE_BIN: ${{ matrix.flavor == 'Release' && 'build/ripwire' || '' }}
