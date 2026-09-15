@@ -530,6 +530,154 @@ meter_log()
 meter_w1=""
 meter_w2=""
 meter_arg1=""
+# ---- BEGIN MIRRORED BLOCK rw_is_ripwire_call (PR #215 review item 6) -------------------------------------
+# KEEP BYTE-IDENTICAL in hooks/ripwire-claude-route.sh, hooks/ripwire-codex-route.sh and hooks/ripwire-nudge.sh.
+# test/routehookcheck.sh extracts the three copies and diffs them, the kIngestParserVerMirror pattern: three
+# files answering one question must answer it in one text, or the meter and the hooks disagree about the very
+# same command line — which is exactly what happened, and it makes the adoption numbers unreadable.
+#
+# WHAT ROUND 1 REPLACED. A regex that looked for `ripwire` after a separator. It said NO to every WRAPPED
+# invocation an agent actually types — `time ./build/ripwire .`, `sudo ripwire`, `env RIPWIRE_BIN=x ripwire`,
+# `xargs ripwire`, `exec ripwire`, `nohup ripwire`, `if ripwire … ; then`, `{ ripwire … ; }` — and still said
+# YES to `git commit -m "fix; ripwire hook"`, where the word sits inside a quoted string and no ripwire runs.
+# Both errors corrupt the same measurement in opposite directions.
+#
+# WHAT ROUND 2 REPLACES (CodeRabbit, PR #215). Round 1 asked the SHELL to split the line — `set -- $1` with
+# globbing off — and then walked the words. Word splitting is not lexing: it never separates a control
+# operator from the word it is attached to. `true; ripwire .` split into `true;` and `ripwire`; `true;` was
+# read as an ordinary command word, so the `ripwire` behind it was no longer in command position and the call
+# was missed. Every `a; ripwire`, `a&&ripwire`, `a|ripwire`, `(ripwire .)` shape went the same way — and
+# those are the shapes an agent's one-liner is actually made of. Round 1 also got the quoted-string case
+# right for the WRONG reason (`-m "fix;` happened not to end a command), which is not a property to rest a
+# published ratio on.
+#
+# WHAT IT DOES NOW. It LEXES the line itself, one character at a time, and never expands, evaluates or
+# executes any part of it: backslash escapes, 'single' and "double" quotes, and the unquoted control
+# operators `;` `&` `|` `(` `)` and newline, each of which ends the current word AND puts the next word in
+# command position. An unquoted `#` starting a word ends the scan — the rest is a comment. `<` and `>` end a
+# word and consume the next one as a redirection target, leaving command position where it was. On top of
+# that sits the same command-position rule round 1 used: the wrapper words below do not consume the command,
+# `cd DIR`, `rtk proxy` and `VAR=value` prefixes are stepped over with their operand, and the word is
+# basename'd, so `./build/ripwire` and `/opt/rw/ripwire` count while `/opt/ripwire/bin/other` does not.
+# Quoted text can no longer reach command position by construction, so `git commit -m "fix; ripwire hook"`
+# and `grep -r 'ripwire;' src/` read as what they are: appearances that run nothing.
+#
+# KNOWN LIMIT, disclosed rather than papered over: a redirection written `2>&1` sends its `&` through the
+# control-operator branch, so the digit behind it is read as a command word. That can only ever cost a
+# MISSED call, in a line where `ripwire` sits in exactly that position, and never a false one.
+#
+# POSIX sh only, no bashisms: routehookcheck.sh extracts this block and runs it under `sh`.
+rw_cmd_word()
+{
+    # One completed word, offered to the command-position rule. Returns 0 only for a call.
+    if [ "$rw_rtk" = 1 ]
+    then
+        rw_rtk=0
+        if [ "$1" = "proxy" ]; then return 1; fi
+    fi
+    if [ "$rw_skip" -gt 0 ]
+    then
+        rw_skip=$(( rw_skip - 1 ))
+        return 1
+    fi
+    if [ "$rw_at_cmd" != 1 ]
+    then
+        return 1
+    fi
+    case "$1" in
+        if|while|until|do|then|else|elif|done|fi|esac|'!'|'{'|'}')  return 1 ;;
+        *=*)                                                        return 1 ;;
+        sudo|command|env|time|nice|nohup|exec|builtin|xargs)         return 1 ;;
+        cd|pushd)                                        rw_skip=1; return 1 ;;
+        rtk)                                             rw_rtk=1;  return 1 ;;
+    esac
+    rw_word="${1##*/}"
+    if [ "$rw_word" = "ripwire" ]; then return 0; fi
+    rw_at_cmd=0
+    return 1
+}
+
+rw_is_ripwire_call()
+{
+    rw_nl='
+'
+    rw_tab="$( printf '\t' )"
+    rw_line="$1"
+    rw_cur=''
+    rw_quote=''
+    rw_esc=0
+    rw_at_cmd=1
+    rw_skip=0
+    rw_rtk=0
+    while [ -n "$rw_line" ]
+    do
+        rw_c="${rw_line%"${rw_line#?}"}"
+        rw_line="${rw_line#?}"
+        if [ "$rw_esc" = 1 ]
+        then
+            rw_esc=0
+            rw_cur="$rw_cur$rw_c"
+            continue
+        fi
+        if [ "$rw_quote" = "'" ]
+        then
+            if [ "$rw_c" = "'" ]; then rw_quote=''; else rw_cur="$rw_cur$rw_c"; fi
+            continue
+        fi
+        if [ "$rw_quote" = '"' ]
+        then
+            case "$rw_c" in
+                '\') rw_esc=1 ;;
+                '"') rw_quote='' ;;
+                *)   rw_cur="$rw_cur$rw_c" ;;
+            esac
+            continue
+        fi
+        case "$rw_c" in
+            '\')  rw_esc=1;      continue ;;
+            "'")  rw_quote="'";  continue ;;
+            '"')  rw_quote='"';  continue ;;
+        esac
+        case "$rw_c" in
+            ' '|"$rw_tab")
+                if [ -n "$rw_cur" ]
+                then
+                    if rw_cmd_word "$rw_cur"; then return 0; fi
+                    rw_cur=''
+                fi
+                continue ;;
+            ';'|'&'|'|'|'('|')'|"$rw_nl")
+                if [ -n "$rw_cur" ]
+                then
+                    if rw_cmd_word "$rw_cur"; then return 0; fi
+                    rw_cur=''
+                fi
+                rw_at_cmd=1
+                rw_skip=0
+                continue ;;
+            '<'|'>')
+                if [ -n "$rw_cur" ]
+                then
+                    if rw_cmd_word "$rw_cur"; then return 0; fi
+                    rw_cur=''
+                fi
+                rw_skip=1
+                continue ;;
+            '#')
+                if [ -z "$rw_cur" ]; then rw_line=''; continue; fi
+                rw_cur="$rw_cur$rw_c"
+                continue ;;
+        esac
+        rw_cur="$rw_cur$rw_c"
+    done
+    if [ -n "$rw_cur" ]
+    then
+        if rw_cmd_word "$rw_cur"; then return 0; fi
+    fi
+    return 1
+}
+# ---- END MIRRORED BLOCK rw_is_ripwire_call ---------------------------------------------------------------
+
 meter_lead()
 {
     set -f
@@ -719,9 +867,15 @@ meter_classify_head()
     _blead="$meter_w1"
     _bsub="$meter_w2"
     mclass=""
+    # PR #215 review item 6: the ripwire decision is rw_is_ripwire_call's, not a second opinion about the lead
+    # word. meter_lead stops at the first command word, so `time ./build/ripwire .` classified as `time` here
+    # while the route hooks (once they were fixed) counted it as a call — one line, two answers, and the
+    # substitution rate is a ratio of the two counts. One block, mirrored, asked by both.
+    if rw_is_ripwire_call "$_bc"
+    then
+        mclass="ripwire-cli"; return 0
+    fi
     case "$_blead" in
-        ripwire)
-            mclass="ripwire-cli"; return 0 ;;
         grep|egrep|fgrep|zgrep|rg|ag|ack|ack-grep|ugrep)
             # A COUNT-ONLY or QUIET grep is a POLL, not a search (2026-09-02, from mining the log for
             # the A/B readout: ~14% of that window's grep-class rows were these). `grep -c Building

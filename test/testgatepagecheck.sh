@@ -145,9 +145,16 @@ S="$( run "$SITU" --situ=src/target.cpp )"
 # §B12.1 PIN UPDATE: "(showing 8" carried no UNIT and no remainder, so the disclosure did not say what 8
 # counted. The pin now asserts the two MEANING halves — the count is qualified by its unit AND by the total
 # it is 8 of — instead of the old bare literal.
-printf '%s' "$S" | grep -qE 'across [0-9]+ files transitively depend on these changes \(showing 8 of [0-9]+ files; --pr-context' \
-    && ok "(c) --situ discloses the 8-row cap with its UNIT and remainder (\"showing 8 of N files\")" \
-    || no "(c) --situ's blast-radius header does not disclose the cap: $( printf '%s' "$S" | sed -n '2p' )"
+# A5 PIN UPDATE (2026-09-13): --pr-context's own cap was a trailing SENTENCE inside this parenthetical and is
+# now the attribute prcontext_cap=20, spelled beside pageview.h's shown=/total=/capped= triple. The MEANING
+# this arm pins is unchanged — the unit, the remainder, and the fact that the sibling verb is capped too — so
+# the pattern follows the attribute rather than the sentence.
+if printf '%s' "$S" | grep -qE 'across [0-9]+ files transitively depend on these changes \(showing 8 of [0-9]+ files — shown=8 total=[0-9]+ capped=1 prcontext_cap=[0-9]+'
+then
+    ok "(c) --situ discloses the 8-row cap with its UNIT, remainder and the sibling verb's own cap (prcontext_cap=)"
+else
+    no "(c) --situ's blast-radius header does not disclose the cap: $( printf '%s' "$S" | grep -m1 '\[1\] blast radius' )"
+fi
 S2="$( run "$R" --situ=src/lib.cpp )"
 printf '%s' "$S2" | grep -qE 'across (0|[1-8]) files transitively depend on these changes$' \
     && ok "(c') --situ omits the cap note when files <= 8 (byte-neutral small case)" \
@@ -202,7 +209,9 @@ printf 'int lib0() { return 0; }\nint lib1() { return 1; }\nint lib2() { return 
 printf '#include "../src/lib.cpp"\nint test_lib0() { return lib0(); }\n' > "$TG/test/lib0_test.cpp"
 printf '#include "../src/lib.cpp"\nint test_lib1() { return lib1(); }\n' > "$TG/test/lib1_test.cpp"
 D="$( run "$TG" --test-gate=src/lib.cpp )"
-DTROWS="$( printf '%s' "$D" | grep -o '<t ' | wc -l | tr -d ' ' )"
+# E1 (2026-09-12): runner-less rows sharing their evidence ride ONE <g … n= p="a,b"/> row, so the emitted
+# count is FILES: the single <t> rows plus every <g> row's n= — shown_tests= must still equal that number.
+DTROWS="$( { printf '%s' "$D" | grep -o '<t ' | wc -l | tr -d ' '; printf '%s' "$D" | grep -oE '<g [^>]*/>' | grep -oE ' n="[0-9]+"' | grep -oE '[0-9]+'; } | awk '{ s += $1 } END { print s + 0 }' )"
 DSHOWN="$( attr "$D" shown_tests )"; DTOTAL="$( attr "$D" tests )"; DCAP="$( attr "$D" tests_capped )"
 DWANT=0; [ "${DSHOWN:-0}" -lt "${DTOTAL:-0}" ] && DWANT=1
 { [ -n "$DSHOWN" ] && [ "$DSHOWN" = "$DTROWS" ] && [ "$DCAP" = "$DWANT" ]; } \

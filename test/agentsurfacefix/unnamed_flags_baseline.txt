@@ -10,5 +10,3 @@
 --eval-skills        maintainer self-eval harness; the router skill names the --eval family as "not an agent moment"
 --eval-stray         maintainer self-eval harness, same class
 --max-file-size      a crawl ceiling, not a question an agent asks; --skipped is the surface that reports its effect
---pin-census         eval-only (CARD-1 phase 2), written beside the map and never into it
---sarif              an export dialect for CI consumers of --lint, not a mid-task agent verb

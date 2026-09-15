@@ -21,7 +21,7 @@ when to reach for each command.
 **Want every detail?** [The reference guide](#reference-guide) near the bottom covers install, commands, output
 format, exit codes and limits. You do not need it to get started.
 
-<p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/daily?language=C%2B%2B" alt="Trendshift: C++ Repository of the Day badge for redhat-et/ripwire" width="250" height="55"></a></p>
+<p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
 <summary><b>Fifty years of software-engineering results, and research from last month.</b> 49 repositories and 70 papers folded — McCabe (1976) through to <b>seven published in the last two months</b> — each row in <a href="docs/LINEAGE.md"><b>docs/LINEAGE.md</b></a> naming the lesson taken and the file it lives in</summary>
@@ -735,15 +735,14 @@ call a CLI.
 <summary><b>What comes back</b> — real output from this repository, pretty-printed and trimmed (re-captured 2026-09-05; rows are served in rank order, each naming its file)</summary>
 
 ```xml
-<ctx task="incremental cache invalidation" route="routed: subtoken+body BM25 (--for's default) — no strong
-     name hit, multi-word conceptual query" confidence="high" margin_pct="20"
+<ctx task="incremental cache invalidation" route="subtoken+body" confidence="high" margin_pct="20"
      bundle="compact" bodies="0" reason="compact-route" est_tokens="3995">
   <sigs shown="23" total="40" capped="1">
     <d l="106" n="kCacheMagic" p="src/ingest_cache.h" cx="0" ccx="0" in="0" churn="11" amp="71" pure="1" r="1"
        next="--expand=src/ingest_cache.h:kCacheMagic"><doc>incremental cache (--cache): per-file content hash + raw facts so a re-run re-parses ONLY c…</doc>constexpr std::uint32_t kCacheMagic = 0x4b505443</d>
-    <d l="1307" n="spanTierMemoPath" id="src/ingest_astquery.h::rw::spanTierMemoPath" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
-    <d l="247" n="ingestCommitTree" id="src/dmm.h::rw::dmm::ingestCommitTree" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
-    <d l="841" n="mcpRefreshedThisRequest" id="src/mcpindex.h::rw::mcpRefreshedThisRequest" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
+    <d l="1307" n="spanTierMemoPath" sc="rw" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
+    <d l="247" n="ingestCommitTree" sc="rw::dmm" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
+    <d l="841" n="mcpRefreshedThisRequest" sc="rw" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
     …
   </sigs>
   <hops shown="2" total="6" capped="1" noedge="2">
@@ -813,9 +812,9 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 ## What it answers
 
 <details>
-<summary><b>179 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
+<summary><b>180 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
 
-Around the core sit 179 long flags advertised in `--help`, across seven families — plus an MCP
+Around the core sit 180 long flags advertised in `--help`, across seven families — plus an MCP
 server, so a coding agent can call any of them mid-task instead of grepping and reading whole files.
 `--help` prints one line per flag (~4.5K tokens); `--help=--FLAG` prints that flag's full entry with
 every caveat, `--help=SECTION` one family, and `--help=all` the whole catalog.
@@ -1205,7 +1204,7 @@ trailing `…`.
 </details>
 
 <details>
-<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="6"</code> ships labelled a floor</summary>
+<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="7"</code> ships labelled a floor</summary>
 
 **Ten seconds, no index server, no embeddings, no API key** — a parse and a call graph, built on the
 spot. The rows below are a real capture: the callers and their files are gate-held current
@@ -1214,13 +1213,14 @@ grow — nothing can keep a line number true in a document, so it is not claimed
 
 ```
 $ ripwire . --callers=rankGraphTeleport
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" counts_floor="1">
-<s t="fn" n="runEval" p="src/eval.h:169"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3115"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3664"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:995"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1120"/>
-<s t="fn" n="getIndex" p="src/mcpindex.h:1104"/>
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" counts_floor="1">
+<s t="fn" n="runEval" p="src/eval.h:171"/>
+<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
+<s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
 
@@ -1228,7 +1228,7 @@ $ ripwire . --callers=rankGraphTeleport
 dispatch contributes no edge (a call through a function pointer or callback is an edge only when
 ONE function is bound to that variable in scope and the variable never escapes — its address taken
 or reference-bound — and a macro-generated call site — tagged
-`role="macro"` — only when its function-like `#define` is indexed): `count="6"` is a **floor**,
+`role="macro"` — only when its function-like `#define` is indexed): `count="7"` is a **floor**,
 and the element says so before you read a single row.
 
 </details>
@@ -1244,12 +1244,12 @@ $ ripwire . --top-k=3
      precise=… skipped_oversize=… order=important-first -->
 <r est_tokens="435">
 <f p="./src/infra/svector.h" layer="infra">
-<s t="method" n="size" id="./src/infra/svector.h::svector::size" k="…"></s>
-<s t="method" n="push_back" id="./src/infra/svector.h::svector::push_back" amb="2" k="…">
-<c n="buf"/><c n="buf"/><c n="grow"/></s>
+<s t="method" n="size" sc="svector" k="…"></s>
+<s t="method" n="push_back" sc="svector" amb="2" k="…">
+<c n="buf" l="…,…"/><c n="grow" l="…"/></s>
 </f>
 <f p="./src/scipoverlay.h">
-<s t="method" n="empty" id="./src/scipoverlay.h::ScipOverlay::empty" k="…"></s>
+<s t="method" n="empty" sc="ScipOverlay" k="…"></s>
 </f>
 </r>
 ```
@@ -1276,7 +1276,7 @@ $ ripwire . --test-gate          # exit code: 4
 <test-gate changed="1" impacted="80" tests="2" untested="76" shown_tests="2" tests_capped="0"
            shown_untested="25" untested_capped="1" script_gates_unmodelled="332" at="9cf0b16f3+dirty">
 <t p="./test/adaptivecutshapefix/adaptive_cut_shape_test.cpp" run="bash test/adaptivecutshapecheck.sh"/>
-<t p="./test/verify_radix.cpp"/>
+<t p="./test/verify_radix.cpp" run_unknown="1"/>
 <u sym="buildGraph" p="./src/graph.h" ccx="712"/>
 <u sym="dispatchMcpLine" p="./src/mcp.h" ccx="428"/>
 …
@@ -1284,11 +1284,19 @@ $ ripwire . --test-gate          # exit code: 4
 ```
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
-whose stem matches the harness, or whose text names it. No `run=` means *not derivable*, never a
-guessed suite command. `script_gates_unmodelled="332"` is the same discipline: script-to-binary is not
-a call edge, so those gates are invisible to this walk, and the number says so rather than letting
-`tests="2"` read as complete. The `<u>` rows are the untested blast radius: impacted symbols that no
-test in the corpus reaches.
+whose stem matches the harness, or whose text names it. A row with none says so — `run_unknown="1"`,
+never a guessed suite command — and a `<t>` or `<g>` row carries one or the other, never neither. A
+`<g hops="2" n="3" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose
+attributes are byte-identical**, served as one: `n=` is how many, `p=` is their paths verbatim in list
+order, and the disclosure is paid once per group rather than once per row. Everything else stays its own
+row — a row with a `run=`, a row whose attributes differ from its neighbour's, and a path containing a
+comma, which is never grouped at all, so `p=` splits on `,` into exactly `n=` paths. A `shown=`/`total=`
+over these rows counts test FILES: a `<g>` row is `n=` of them.
+
+`script_gates_unmodelled="332"` is the same discipline: script-to-binary is not a call edge, so those
+gates are invisible to this walk, and the number says so rather than letting `tests="2"` read as
+complete. The `<u>` rows are the untested blast radius: impacted symbols that no test in the corpus
+reaches.
 
 </details>
 
@@ -1797,9 +1805,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>615 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>618 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **615 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **618 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2038,8 +2046,9 @@ Publication date: 2026-09-12. Every claim below re-verified against a 0.6.0 buil
 
 ripwire analyzes a source tree. The tool writes a ranked symbol map to standard output. The map
 shows the symbols that matter for a task, the callers of those symbols, and the tests that reach
-them. The tool is one binary. It has no runtime dependencies. No API key, no embeddings, no index
-server, no daemon. It uses a network only when you give it a git URL instead of a directory, which
+them. The tool is one binary. The map itself has no runtime dependencies: no API key, no embeddings,
+no index server, no daemon. The history-backed commands need `git` on the path and a repository
+to read. It uses a network only when you give it a git URL instead of a directory, which
 it shallow-clones into a cache.
 
 This guide tells you how to install, operate, and evaluate ripwire. Read `docs/COMMANDS.md` for the
@@ -2347,7 +2356,7 @@ identity of the index, and says which one is at fault.
 
 ### 5. Command families
 
-The `--help` output groups 179 long flags advertised in `--help` into seven families. The `--help=`
+The `--help` output groups 180 long flags advertised in `--help` into seven families. The `--help=`
 column below is the argument that prints one family: `ripwire --help=navigate`. `ripwire
 --help=--FLAG` prints one flag's full text — the caveats, the units, what it refuses and why.
 `ripwire --help=all` is the whole catalog, about 46,000 tokens.
@@ -2390,12 +2399,13 @@ ripwire . --callers=rankGraphTeleport
 The leading legend comment is elided here; the line numbers are a capture and move as files grow:
 
 ```xml
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" graph_ambiguous="7801" graph_unresolved="4860" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="7827" graph_unresolved="4865" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
 <s t="fn" n="runEval" p="src/eval.h:171"/>
 <s t="fn" n="rankGraph" p="src/graph.h:3445"/>
 <s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:1031"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1156"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
 <s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
@@ -2533,7 +2543,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 210 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 212 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.

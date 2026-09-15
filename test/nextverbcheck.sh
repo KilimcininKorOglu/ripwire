@@ -179,5 +179,70 @@ rrun --help-task='where is the rot in code I did not write' >"$TMP/ht2"
 if [ -z "$( nexts "$TMP/ht2" )" ]; then ok "help-task non---for recommendation carries no next="
 else no "help-task non---for recommendation carries a next=: $( nexts "$TMP/ht2" )"; fi
 
+echo '=== (9) next= quoting: a tilde is shell-special only WORD-INITIALLY, and the attribute is XML ==='
+# CodeRabbit on #212 (review 5192382995), against the captured showcase: the scoped block's next= read
+#     next="--rank-by=churn-decay --since=&apos;HEAD~1&apos; …"
+# nextFlag quoted HEAD~1 because the value contains `~`, and then the XML escaper turned the single quotes
+# into &apos; — which a reader pasting the raw text out of a Markdown capture does not decode. The attribute
+# exists to be pasted, so that is the whole of its job lost, on the most ordinary git revision spelling there
+# is. Tilde expansion is defined for a WORD-INITIAL `~` (and the ~user form) and for nothing else, so HEAD~1
+# was never special and never needed the quotes.
+#
+# THE TWO ROWS ARE EACH OTHER'S CONTROL, which is why neither needs a planted mutation: a rule that quoted
+# nothing would red the ~tmp row, and a rule that quoted everything (the defect) reds the HEAD~1 row. Only the
+# position-aware rule passes both.
+QREPO="$TMP/qrepo"; mkdir -p "$QREPO/sub"
+( cd "$QREPO" && git init -q && git config user.email "t@example.com" && git config user.name "t" \
+  && printf 'int qa(){return 1;}\n' > sub/a.cpp && printf 'int qb(){return 2;}\n' > sub/b.cpp \
+  && git add -A && git commit -q -m one \
+  && printf 'int qa(){return 11;}\n' > sub/a.cpp && printf 'int qb(){return 22;}\n' > sub/b.cpp \
+  && git add -A && git commit -q -m two ) || { echo "(9) qrepo setup failed"; exit 2; }
+
+qnext(){ "$BIN" "$QREPO" --rank-by=churn-decay --since="HEAD~1" --in=sub --limit=1 "$@" 2>/dev/null \
+         | grep -o '<recent scope="sub"[^>]*>' | head -1 | grep -o 'next="[^"]*"' | head -1; }
+
+q1="$( qnext )"
+if [ -z "$q1" ]; then no "(9) the scoped block carried no next= at all — the fixture stopped capping, so neither row below is evidence"
+else
+    case "$q1" in
+        *"--since=HEAD~1"*) ok "(9) a non-word-initial ~ is NOT quoted: next= carries --since=HEAD~1 bare, so it pastes from raw Markdown" ;;
+        *)                  no "(9) next= does not carry a bare --since=HEAD~1: $q1" ;;
+    esac
+    case "$q1" in
+        *"&apos;"*) no "(9) next= still carries &apos; — the value was quoted and the XML escaper turned the quotes into entities no shell decodes: $q1" ;;
+        *)          ok "(9) next= carries no &apos; entity — nothing in this invocation needed quoting" ;;
+    esac
+fi
+
+# THE RULE, because this arm used to assert the opposite and explain it wrongly: tilde expansion applies to a
+# word whose FIRST character is `~`. In `--exclude=~tmp` the word begins with `--exclude=`, so no shell expands
+# it — an argument is not an assignment. Measured on this machine: `sh -c 'p ~root'` -> /var/root, while
+# `sh -c 'p --exclude=~root'` -> the literal `--exclude=~root` (sh, bash and zsh alike). The gate previously
+# pinned `--exclude=&apos;~tmp&apos;` and called the quotes "the correct answer here", which would have
+# defended the corrupted argument against anyone who fixed it.
+q2="$( qnext --exclude='~tmp' )"
+if [ -z "$q2" ]; then no "(9) the --exclude arm produced no next= — the tilde row below proves nothing"
+else
+    case "$q2" in
+        *"--exclude=~tmp"*) ok "(9) a ~ after --flag= is NOT quoted: next= carries --exclude=~tmp bare, which is what a shell passes through" ;;
+        *)                  no "(9) next= does not carry a bare --exclude=~tmp — the value was quoted for an expansion no shell performs: $q2" ;;
+    esac
+    case "$q2" in
+        *"&apos;"*) no "(9) next= still carries &apos; — quoting a value no shell would expand, and the XML escaper then made it an entity no shell decodes: $q2" ;;
+        *)          ok "(9) the --exclude=~tmp invocation carries no &apos; entity at all" ;;
+    esac
+fi
+
+# MUTATION CONTROL for the row above: narrowing the tilde case must not have disabled quoting generally. A
+# value with a space still needs it, and still gets it.
+q3="$( qnext --exclude='a b' )"
+if [ -z "$q3" ]; then no "(9) the space-value arm produced no next= — the control below proves nothing"
+else
+    case "$q3" in
+        *"--exclude=&apos;a b&apos;"*) ok "(9) control: a value a shell WOULD split is still quoted (--exclude=&apos;a b&apos;), so only the tilde case narrowed" ;;
+        *)                             no "(9) control: a space-bearing value lost its quoting — the fix disabled quoting instead of narrowing it: $q3" ;;
+    esac
+fi
+
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

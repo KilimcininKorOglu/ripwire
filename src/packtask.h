@@ -148,6 +148,10 @@ inline constexpr int kPackTaskQuotaTestsPct   = 10;   // the cascaded remainder 
 static_assert( kPackTaskQuotaRankingPct + kPackTaskQuotaBodiesPct + kPackTaskQuotaCallersPct
              + kPackTaskQuotaNotesPct + kPackTaskQuotaTestsPct == 100, "pack-task section quotas must sum to 100%" );
 
+// E1 / review of #214: one entry, one unit again. The <tests> section is CUT over single rows — one row per
+// test file, whose rendered bytes are exactly what the cut measures — and only the KEPT prefix is grouped
+// afterwards (see the tests section below), so shown=/total= count rows and test files at the same time and
+// the per-entry `units` arithmetic this struct carried for one release is gone with the estimate that needed it.
 struct PackTaskSection { std::string xml; std::size_t kept = 0; };
 
 // W3FIX H2/M1 — the pieces the header comment is made of, so the header can be REBUILT in three shapes (as
@@ -169,6 +173,8 @@ struct PackTaskHeaderParts
     std::string_view rootArg;          // R-E (2026-08-17): the single-root run's own root= — the ladder's
                                         // route-dropped rebuild below calls ctxRootOpen a second time and
                                         // must carry the SAME root as the pre-built rootOpenStr did.
+    std::string_view runClause;        // M21(b)/E1: testmap.h's run=/run_unknown=/<g> clause — ROWS-GATED (empty when
+                                        // the tests section kept no row), so a bundle that omits tests pays nothing
 };
 
 // P10 (L7): the bundle legend's BODY, one constant, spliced by the standalone header (packTaskHeaderText) and
@@ -215,7 +221,7 @@ inline constexpr const char* kPackTaskBundleLegendBody =
          // measured, not estimated. Every key is still named; the prose around them is what went.
          // deep-tail d1 (2026-08-29): r= joins the explicit dictionary — same trap-#8 terseness, one key
          // (the full deep-tail contract lives in the --for legend's own clause, docs/EVALS.md registration).
-         "Row keys: n=name (chain it), id=canonical(when scoped), in=reuse-count (absent = not measured, never a false 0)"
+         "Row keys: n=name (chain it), sc=enclosing scope (when scoped; the full id is p::sc::n), in=reuse-count (absent = not measured, never a false 0)"
          ", l=line, p=path, t=kind, cx=cyclomatic, ccx=cognitive, rel=caller|callee, r=rank in this ranking "
          "(rows in r= order); far=ranked but over 1 hop out; "
          "of_top denominator is per-section. "
@@ -280,6 +286,7 @@ inline std::string packTaskHeaderText( const PackTaskHeaderParts& p, bool withRo
     h.append( p.expandNote );
     h.append( p.docMentionNote );
     h += kPackTaskBundleLegendBody;   // P10 (L7): the body is ONE constant — the partitioned document states it once for all slices
+    h.append( p.runClause );          // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
     h.append( p.report );
     h.append( extraNotes );
     h += " -->";
@@ -331,6 +338,88 @@ inline PackTaskSection packTaskListSection( std::string_view tag, std::string_vi
         out.xml += entries[i];
     }
     out.xml += "</";  out.xml.append( tag );  out.xml += ">";
+    return out;
+}
+
+// ── THE <tests> SECTION — the one list whose entries are not independent ────────────────────────────────
+// Every other section here is a list of rows the budget can cut anywhere: entry i costs entry i's bytes,
+// whatever its neighbours are. Test rows are not like that. E1 serves a run of runner-less rows with equal
+// attributes as ONE <g> row, so admitting one more FILE can cost a whole new row or just `,path` on the row
+// already there — the cost of the k-th file depends on the k-1 before it, and packTaskListSection's
+// "used += e.size()" has no way to say that.
+//
+// The first attempt grouped FIRST and handed the group rows to that helper under a per-row byte cap, with a
+// cap estimate of `attrs + 48 + Σ( path + 1 )` computed on UNESCAPED paths. Review of #214: a corpus whose
+// test paths hold '&' or '<' renders wider than the estimate admitted, the helper broke at the first
+// over-budget entry, and the whole tail of the section went with it — `run=` singles included. Measured on a
+// ten-test fixture at --token-budget=1440, `_`-named paths served 5 files and the same fixture with `&` in
+// every name served NONE: the section vanished rather than shrank.
+//
+// So this section CUTS WHERE THE BYTES ARE. It asks the only question that matters — what is the largest
+// PREFIX of the row list whose GROUPED, ESCAPED rendering fits the budget — and answers it by rendering
+// candidate prefixes and measuring them. Cutting a prefix and grouping it afterwards would also have been
+// safe (grouping only shrinks), but it cuts over the single rows' bytes and then spends fewer of them: on
+// that same fixture it served 2 files where grouping-first served 5, which throws away the win E1 exists for.
+//
+// The search is a bisection, which is exact because `bodyOf` is monotone in k: extending the prefix by one
+// row either appends a row or extends the last group by `,path` (a group of one is rendered as a single
+// <test> row, and the two-member <g> that replaces it is strictly wider), so the rendered size never falls
+// as k rises. ~log2(n) renders of an O(n) body, against a list that is a few hundred rows at most.
+//
+// shown=/total= therefore count test FILES — one qualifying file, one entry, on both sides of the cut — and
+// a <g n="N"> row carries N of them, which is exactly what the bundle legend now says.
+template<class EscapeFn>
+inline PackTaskSection packTaskTestsSection( const rw::TestRunnerIndex& runners, std::span<const rw::TestRowOut> rows,
+                                             std::size_t budget, std::size_t wrapReserve, EscapeFn esc,
+                                             std::vector<std::vector<std::uint32_t>>* partitionOut )
+{
+    PackTaskSection out;
+    if( partitionOut )
+    {
+        partitionOut->clear();
+    }
+    const auto bodyOf = [ & ]( std::size_t k, std::vector<std::vector<std::uint32_t>>* keepPart ) -> std::string
+    {
+        const std::span<const rw::TestRowOut>   prefix( rows.data(), k );
+        std::vector<std::vector<std::uint32_t>> part = rw::partitionTestRows( runners, prefix );
+        std::string                             body;
+        for( const rw::RenderedTestRow& r : rw::testRowsRendered( runners, prefix, rw::TestRowShape{ rw::RowDialect::Xml, "test" }, esc, &part ) )
+        {
+            body += r.text;
+        }
+        if( keepPart )
+        {
+            *keepPart = std::move( part );
+        }
+        return body;
+    };
+    if( rows.empty() || budget <= wrapReserve )
+    {
+        return out;
+    }
+    std::size_t lo = 0;              // always fits (an empty body is wrapReserve alone)
+    std::size_t hi = rows.size();    // may not
+    while( lo < hi )
+    {
+        const std::size_t mid = lo + ( hi - lo + 1 ) / 2;   // lo < mid <= hi
+        if( wrapReserve + bodyOf( mid, nullptr ).size() <= budget )
+        {
+            lo = mid;
+        }
+        else
+        {
+            hi = mid - 1;
+        }
+    }
+    out.kept = lo;
+    if( out.kept == 0 )
+    {
+        return out;
+    }
+    const std::string body = bodyOf( out.kept, partitionOut );
+    char              open[ 160 ];
+    rw::formatTo( open, sizeof( open ), "<tests shown=\"{}\" total=\"{}\" capped=\"{}\">", out.kept, rows.size(), out.kept < rows.size() ? 1 : 0 );
+    out.xml = std::string( open ) + body + "</tests>";
     return out;
 }
 
@@ -747,18 +836,14 @@ inline std::vector<float> buildMaskedRank( const IngestResult& ing, const std::v
     return masked;
 }
 
-// a generic "render into a memstream, DEGRADED_PATH_ALERT + \"\" on failure" wrapper — shared by every
-// packTaskBundleText section (and renderRankingWithFar below) so none of them hand-roll the memstream dance.
+// every packTaskBundleText section (and renderRankingWithFar below) renders through infra/emit.h's ONE
+// renderToString seam, with this file's own degrade wording. It keeps the name it had: a section that
+// degrades is SKIPPED from the budget (empty string, the caller's documented path), so the `ok` flag the
+// seam returns has no second reading here and the call sites stay one expression long.
 template<class Emit>
 inline std::string packTaskRenderToString( Emit&& emit )
 {
-    char* buf = nullptr;  std::size_t sz = 0;
-    std::FILE* m = open_memstream( &buf, &sz );
-    if( !m ) { DEGRADED_PATH_ALERT( "pack-task: open_memstream failed — section skipped from the budget" ); return {}; }
-    emit( m );
-    std::fflush( m );  std::fclose( m );
-    std::string s;  if( buf ) { s.assign( buf, sz );  std::free( buf ); }
-    return s;
+    return rw::renderToString( std::forward<Emit>( emit ), "pack-task: open_memstream failed — section skipped from the budget" ).text;
 }
 
 // R2: section 1 as ONE cohesive unit — the distance-masked packSignatures call (eligibleIds only) PLUS the
@@ -1130,7 +1215,8 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
 // PRE-budget-trim surface (a trimmed tail names slightly fewer) — an honest ceiling, documented as one.
 inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, const std::string& task,
                                        const LensRanking& lr, const PackTaskInputs& inArg,
-                                       std::string* jsonOut = nullptr, std::vector<NodeId>* surfaceOut = nullptr )
+                                       std::string* jsonOut = nullptr, std::vector<NodeId>* surfaceOut = nullptr,
+                                       std::size_t* testsKeptOut = nullptr )
 {
     // P2.4 — reuse-count self-supply. --pack-task's CLI/MCP call-sites only compute fan-in when --for or
     // --metrics was ALSO given, so the bundle used to print in="0" on every row while --for reported the real
@@ -1371,8 +1457,10 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     remaining = remaining > notesRoll.charge ? remaining - notesRoll.charge : 0;
 
     // ── section 5 — tests_to_run for the top files (the --affected mining: tests that transitively reach) ───
-    std::vector<std::string>   testRows;
-    std::vector<std::uint32_t> testFiles;   // hoisted for the L2 --json tail below
+    std::vector<std::uint32_t>              testFiles;      // hoisted for the L2 --json tail below
+    std::vector<rw::TestRowOut>             ptRows;         // the seam's row values — one per test FILE, the unit the section cuts in
+    std::vector<std::vector<std::uint32_t>> testPartition;  // E1: the KEPT prefix's single/group partition, reused by the JSON tail so both dialects serve the same rows
+    std::size_t       testsBudget = sectionBudget( kPackTaskQuotaTestsPct, carry );
     {
         std::vector<NodeId> testSeeds;
         for( NodeId b : bodyIds )
@@ -1406,23 +1494,19 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // §A9.5 / §P11.4: the one-call bundle names the tests you owe; it now also names how to RUN them,
         // from the same TestRunnerIndex --affected / --situ / --test-gate / --exercises read. Built here,
         // inside the section's scope, because it is lazy — a bundle with no test row reads no runner script.
-        const rw::TestRunnerIndex runners( ing );
-        for( std::uint32_t f : testFiles )
+        // §B14 — std::string rows, not char[512]: a row carries TWO unbounded interpolands (the test path AND
+        // the runner command), so it was the widest of the six breaching sites.
+        const std::string ptPrefix = in.rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( in.rootArg );
+        ptRows = rw::testRowsOutOf( testFiles, [ & ]( std::uint32_t f ) -> std::string_view
         {
-            // §B14 — std::string, not char[512]. This row carried TWO unbounded interpolands (the test path
-            // AND the runner command), so it was the widest of the six breaching sites.
-            const std::string_view rp = in.rootArg.empty() ? std::string_view( ing.files[f] ) : rw::sarif::rootRelativeUri( ing.files[f], rw::sarif::rootPrefixOf( in.rootArg ) );
-            std::string row = "<test p=\"";
-            row += ex( rp );
-            row += "\"";
-            row += rw::runAttrDisclosed( runners, f, ex );
-            row += "/>";
-            testRows.emplace_back( std::move( row ) );
-        }
+            return in.rootArg.empty() ? std::string_view( ing.files[f] ) : rw::sarif::rootRelativeUri( ing.files[f], ptPrefix );
+        } );
     }
-    std::size_t       testsBudget = sectionBudget( kPackTaskQuotaTestsPct, carry );
-    PackTaskSection   tests       = packTaskListSection( "tests", "", testRows, testsBudget, kPackTaskWrapReserve );
-    const std::size_t testsTotal  = testRows.size();
+    // E1 / review of #214: the section cuts over its own GROUPED, ESCAPED rendering — see packTaskTestsSection
+    // above for the defect that forced it and for why a bisection answers it exactly.
+    const rw::TestRunnerIndex runners( ing, in.rootArg );   // A3: root-relative run=, same root the p= above are relative to
+    PackTaskSection   tests       = packTaskTestsSection( runners, ptRows, testsBudget, kPackTaskWrapReserve, ex, &testPartition );
+    const std::size_t testsTotal  = ptRows.size();
     const MonotoneRoll testsRoll  = monotoneRoll( tests.kept < testsTotal, testsBudget, tests.xml.size() );
     carry     = testsRoll.carry;
     remaining = remaining > testsRoll.charge ? remaining - testsRoll.charge : 0;
@@ -1494,7 +1578,14 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     }
     reflow = reflowListSection( callers, "callers", callersAttr, callerRows, callersBudget, kPackTaskWrapReserveWide, reflow );
     reflow = reflowListSection( notes,   "notes",   "",          noteEntries, notesBudget,   kPackTaskWrapReserve,     reflow );
-    reflow = reflowListSection( tests,   "tests",   "",          testRows,    testsBudget,   kPackTaskWrapReserve,     reflow );
+    // The tests section's own reflow lap — reflowListSection's rule (top up a section the first lap capped,
+    // once, and pass nothing further on) over packTaskTestsSection's cut. It is the LAST section to reflow, so
+    // its leftover goes nowhere and is not computed.
+    if( reflow > 0 && tests.kept < testsTotal )
+    {
+        testsBudget += reflow;
+        tests = packTaskTestsSection( runners, ptRows, testsBudget, kPackTaskWrapReserve, ex, &testPartition );
+    }
 
     const std::string& callersStr = callers.xml;
     const std::size_t  callersKept = callers.kept;
@@ -1563,7 +1654,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // after the headroom factor, and is always the smaller of the two. Same expression as the XML line
         // below, so the two serializations cannot report different ceilings.
         { char b[ 128 ];  rw::formatTo( b, sizeof( b ), ",\"budget_tokens\":{},\"budget_bytes\":{},\"budget_ceiling_bytes\":{}",
-                                         budgetTokens, bundleBudget, std::size_t( double( budgetTokens ) * rw::kMinBytesPerToken )  );  j += b; }
+                                         budgetTokens, bundleBudget, rw::declaredByteCeiling( budgetTokens )  );  j += b; }
 
         // R2: the SAME distance mask the XML <sigs> used (eligibleIds only) — one eligibility decision, two shapes.
         j += std::string( ",\"ranking_capped\":" ) + ( sigsCapped ? "true" : "false" ) + ",\"ranking\":";
@@ -1637,16 +1728,20 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         }
         j += "]";
 
-        const std::size_t testsShown = std::min( testsKept, testFiles.size() );
-        { char b[ 96 ];  rw::formatTo( b, sizeof( b ), ",\"tests_total\":{},\"tests_kept\":{},\"tests_to_run\":[", testsTotal, testsShown );  j += b; }
+        // E1: tests_total/tests_kept count test FILES exactly as the XML section's total=/shown= do — one entry
+        // per file on both sides of the cut. The JSON tail renders the SAME kept prefix through the SAME
+        // partition the XML body was grouped by, so the two dialects cannot list different rows.
+        { char b[ 96 ];  rw::formatTo( b, sizeof( b ), ",\"tests_total\":{},\"tests_kept\":{},\"tests_to_run\":[", testsTotal, testsKept );  j += b; }
         // §A9.5: the JSON sibling of the XML run= above — situ's tests_to_run already carries it, and one
         // computation path must not serialize two different obligations.
-        const rw::TestRunnerIndex jsonRunners( ing );
-        const auto                 jrun = [ & ]( std::string_view s ) { return jsonStr( s ); };
-        for( std::size_t i = 0; i < testsShown; ++i )
+        const rw::TestRunnerIndex   jsonRunners( ing, in.rootArg );
+        const auto                  jrun = [ & ]( std::string_view s ) { return jsonStr( s ); };
+        const std::vector<rw::TestRowOut> jKeptRows = rw::testRowsOutOf( std::span( testFiles ).first( std::min( testsKept, testFiles.size() ) ), jPathRel );
+        bool jFirstTest = true;
+        for( const rw::RenderedTestRow& r : rw::testRowsRendered( jsonRunners, jKeptRows, rw::TestRowShape{ rw::RowDialect::Json, "p" }, jrun, &testPartition ) )
         {
-            j += std::string( i == 0 ? "" : "," ) + "{\"p\":\"" + jsonStr( std::string( jPathRel( testFiles[i] ) ) ) + "\""
-               + rw::runFieldJsonDisclosed( jsonRunners, testFiles[i], jrun ) + "}";
+            j += std::string( jFirstTest ? "" : "," ) + r.text;
+            jFirstTest = false;
         }
         j += "]";
 
@@ -1676,12 +1771,12 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     };
     std::string report = "budget=";
     { char b[ 160 ];  rw::formatTo( b, sizeof( b ), "{} bytes ({}-token target, ceiling {}) | ",
-                                    bundleBudget, budgetTokens, std::size_t( double( budgetTokens ) * rw::kMinBytesPerToken )  );  report += b; }
+                                    bundleBudget, budgetTokens, rw::declaredByteCeiling( budgetTokens )  );  report += b; }
     report += std::string( "ranking: " ) + ( sigsCapped ? "capped" : "full" ) + " | ";
     report += "bodies: "  + listStatus( bodiesTotal,  bodiesStr,  bodiesKept )  + ( bodiesTotal > 0 && !bodiesStr.empty() && bodiesKept < bodiesTotal ? " (capped)" : "" ) + " | ";
     report += "callers: " + listStatus( callersTotal, callersStr, callersKept ) + " | ";
     report += "notes: "   + listStatus( notesTotal,   notesStr,   notesKept )   + " | ";
-    report += "tests: "   + listStatus( testsTotal,   testsStr,   testsKept );
+    report += "tests: "   + listStatus( testsTotal, testsStr, testsKept );   // E1: test files, as the section's shown=/total= say
     report += " | far: "  + listStatus( farTotal,      rankOut.farXml, farKept );   // R2: d2plus name-only tier (nested in <sigs>)
     // A2 (survey card, 2026-09-03) — the pack-task twin of --for's dropped_positive= root fact: how many
     // rank>0 eligibleIds the section-1 ladder cut. Emitted ONLY when nonzero (the pr_converged precedent,
@@ -1713,8 +1808,15 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     // mcpattrparitycheck still sees one spelling on every root.
     droppedPositiveAttr += lr.capAttrs;
 
+    // The clause is now BUILT (the root-relative sentence is conditional, so the seam composes a string
+    // rather than handing back one of two constants), and PackTaskHeaderParts holds VIEWS — so it is owned
+    // by a named local here, like report and droppedPositiveAttr above it. Binding the view straight to the
+    // returned temporary is a dangling read the moment the full expression ends, and it showed as exactly
+    // that: packtaskcheck's bundle was both malformed and non-deterministic (two runs, two sha256s).
+    const std::string runClauseStr = rw::runHintClauseIfRows( tests.kept, rw::runsAreRootRelative( ing, in.rootArg ) );   // the ONE gate: the section's own kept count
     const PackTaskHeaderParts headerParts{ task, rootOpenStr, taskNote, mentionNote, boostNote,
-                                            docMentionNote, sibliftNote, expandNote, report, droppedPositiveAttr, in.rootArg };
+                                            docMentionNote, sibliftNote, expandNote, report, droppedPositiveAttr, in.rootArg,
+                                            runClauseStr };
     const auto buildHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
     {
         if( in.innerBundle )   // P10 (L7): a partition slice — the outer <ctx-partitions> legend speaks once for all of them
@@ -1784,6 +1886,15 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         const std::size_t             rootAttrsBound = rootAttrsFor( whole, /*lastRungFired=*/true ).size();
         const rw::CeilingLadderChoice chosen = climbCeilingLadder( buildHeader, headerStr,
                                                                    whole.size() - headerStr.size() + in.trailingSectionBytes + rootAttrsBound,
+                                                                   // TWO CEILINGS (PR #215 review item 1). This root labels itself
+                                                                   // over_ceiling="1" on `estTokens > budgetTokens` — priced at
+                                                                   // kBytesPerTokenDefault — while every rung was judged at
+                                                                   // kMinBytesPerToken x 1.15, so this lens had --for's defect in the
+                                                                   // same words: a bundle whose root will say it overflowed kept its
+                                                                   // verbatim task echo because the echo rung was against a ceiling
+                                                                   // 15% looser than the verdict. The free rungs now aim at what the
+                                                                   // root promises; route= and the label keep the tolerance.
+                                                                   rw::ceilingBytes( budgetTokens ),
                                                                    rw::ceilingAllowanceBytes( budgetTokens ),
                                                                    /*hasRouteAttr=*/!lr.routeNote.empty(), kNotes );
         if( chosen.header != headerStr )
@@ -1805,6 +1916,14 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
 
     // §6 --partition: the bundle's own surface (see the contract above). topRanked already contains bodyIds
     // (bodies are the positive-score head of the SAME order), so the union is topRanked ∪ d2plus ∪ d1.
+    // E1 / review of #214: the number of test FILES this bundle's <tests> section actually kept. A caller
+    // that must gate the run-hint clause for SEVERAL bundles at once (partition.h's outer legend) needs the
+    // count, not a substring search over the rendered bytes — `<tests ` occurs in this document's own legend
+    // and can occur inside a CDATA body, and a grep for it charged the clause with zero rows.
+    if( testsKeptOut )
+    {
+        *testsKeptOut = testsKept;
+    }
     if( surfaceOut )
     {
         surfaceOut->clear();

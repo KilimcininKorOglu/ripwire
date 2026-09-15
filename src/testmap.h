@@ -26,6 +26,8 @@
 #include "docparse.h"     // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
 #include "mention.h"      // mention_detail::baseNameOf + stripExt — the ONE basename/stem pair binstale.h/gitmine.h reuse
 #include "infra/namesplit.h" // namesplit::isIdentChar — the canonical ASCII identifier-byte predicate
+#include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
+#include "infra/jsonesc.h" // rw::shSingleQuote — the ONE shell quoter; run= is a COMMAND, see spell() below
 
 #include <algorithm>
 #include <cstdio>
@@ -486,10 +488,25 @@ inline std::vector<NodeId> exercisedSymbols( const IngestResult& ing, const Grap
 //
 // COST: the candidate scripts' texts are read at most ONCE per invocation and only LAZILY — nothing is read
 // until a row actually asks for a hint, so every verb that emits no test row pays nothing at all.
+// A3 / review of #219: run= is spelled relative to root= exactly when the run HAS one root and declares it.
+// A multi-root run's disk path lies under no single root, so its command must stay absolute — and the legend
+// sentence below is gated on this SAME predicate, so the spelling and the claim cannot disagree.
+inline bool runsAreRootRelative( const IngestResult& ing, std::string_view root ) noexcept
+{
+    return ing.realPaths.empty() && !root.empty();
+}
+
 class TestRunnerIndex
 {
 public:
-    explicit TestRunnerIndex( const IngestResult& ing ) : ing_( &ing )
+    // A3 (one absolute root per document): `root` is the run's own crawl root, and its ONLY use is to spell
+    // the command below relative to it — the same rootPrefixOf/rootRelativeUri pair every p= emitter uses.
+    // Defaulted to "" so a caller that has no root (or a multi-root run, where the disk path is not under any
+    // single root) keeps the absolute spelling: an unrelativizable command must stay pasteable, never become
+    // a path relative to a root that does not contain it.
+    explicit TestRunnerIndex( const IngestResult& ing, std::string_view root = {} )
+        : ing_( &ing ),
+          rootPrefix_( runsAreRootRelative( ing, root ) ? rw::sarif::rootPrefixOf( root ) : std::string() )
     {
         for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
         {
@@ -517,6 +534,10 @@ public:
         return cache_.emplace( fileId, derive( fileId ) ).first->second;
     }
 
+    // Whether the commands this index spells are relative to a root — the SAME fact the legend sentence
+    // is gated on, read off the index rather than re-derived at each legend site.
+    bool rootRelative() const noexcept { return !rootPrefix_.empty(); }
+
     std::string commandForScript( std::uint32_t fileId ) const
     { return fileId < ing_->files.size() && runnerVerb( ing_->files[fileId] ) != nullptr ? spell( fileId ) : std::string(); }
 
@@ -540,8 +561,7 @@ private:
     // primitives binstale.h, gitmine.h and docdrift.h already stem paths with. Re-rolling them here is
     // exactly the new-clone-of-a-reused-helper --quality-delta reports, and it would also fork the
     // "strip the LAST dot" convention that every other stemming call site in this repo shares.
-    static std::string_view stemOf( std::string_view p ) noexcept
-    { return mention_detail::stripExt( mention_detail::baseNameOf( p ) ); }
+    static std::string_view stemOf( std::string_view p ) noexcept { return mention_detail::pathStem( p ); }
 
     void loadTexts() const
     {
@@ -593,17 +613,72 @@ private:
     // Spelled against the ON-DISK path (diskPath), so a multi-root `<label>/<rel>` identity spelling — which
     // is a label, not a directory — can never leak into something a shell would mis-resolve. A leading "./"
     // is dropped for readability; the result is pasteable from the repo root.
+    // CWE-78, security review of #219. A run= is a COMMAND, and the path inside it comes from the CRAWLED
+    // CORPUS, so the corpus decides its bytes. `test/check;touch PWNED.sh` is a legal filename, and plain
+    // concatenation emitted `bash test/check;touch PWNED.sh` — a command this tool tells an agent to paste,
+    // which would run `touch PWNED` in the reader's shell. The path is now always emitted as ONE argument.
+    //
+    // QUOTED WHEN NOT PROVABLY SAFE, rather than unconditionally, and the difference is measured rather than
+    // preferred. shSingleQuote always wraps, so quoting unconditionally would move the run= bytes of every
+    // row in eight emitters: 13 literal command assertions across 7 gates, docs/COMMANDS.md, 15 committed
+    // capture snapshots, README, and the printf_parity pins — a documented output-format change for every
+    // user. Every path `git ls-files` tracks in this repo, and every runner path under test/, is in the safe
+    // set (measured: 0 of either outside it), so the conditional form is byte-identical on every real corpus
+    // while a hostile name is still quoted. The predicate is an ALLOWLIST, so a byte nobody enumerated is
+    // quoted by default instead of passed through — which is the direction a quoting bug should fail in.
+    static bool isShellSafePath( std::string_view p ) noexcept
+    {
+        if( p.empty() || p.front() == '-' )   // a leading '-' is read as a FLAG, not a path
+        {
+            return false;
+        }
+        for( const char c : p )
+        {
+            const bool isSafeByte = ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' )
+                                    || c == '.' || c == '_' || c == '/' || c == '-';
+            if( !isSafeByte )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::string spell( std::uint32_t runnerFile ) const
     {
-        std::string_view p = diskPath( *ing_, runnerFile );
-        if( p.rfind( "./", 0 ) == 0 )
+        const std::string& disk = diskPath( *ing_, runnerFile );
+        // A3: root-relative, like every p= beside it. rootRelativeUri strips a leading "./" unconditionally,
+        // so the readability strip the pre-A3 code did by hand is the SAME call now, not a second rule.
+        std::string_view p = rw::sarif::rootRelativeUri( disk, rootPrefix_ );
+        if( isShellSafePath( p ) )
         {
-            p = p.substr( 2 );
+            return std::string( runnerVerb( p ) ) + " " + std::string( p );
         }
-        return std::string( runnerVerb( p ) ) + " " + std::string( p );
+        // QUOTING WAS NECESSARY AND NOT SUFFICIENT — third review of #219, a bypass of the fix above. The
+        // quoted form hands the path to the shell as ONE argument, which is the whole point, and then the
+        // INTERPRETER parses it: a root-level `-cimport os;open("PWNED","w")#_test.py` passes isTestPath,
+        // keeps its leading dash through normalisation, survives quoting intact — and `python3` reads `-c`
+        // as "execute this code". The path never reaches the shell as code; it reaches the interpreter as an
+        // OPTION. Same trust boundary as the injection above: corpus filename → run= → a reader pastes it.
+        //
+        // MEASURED, both directions, on the two verbs runnerVerb can emit (there are exactly two —
+        // kRunnerKinds is .sh→bash and .py→python3, so this is the whole population, not a sample):
+        //   python3 '<-c…#_test.py>'     rc=0, created the payload file   — bypass reproduced
+        //   python3 -- '<same path>'     rc=7 (the file's own status), no side effect
+        //   bash    -- '<-c…#_test.sh>'  rc=7, no side effect
+        // bash did NOT reproduce the bypass with the equivalent payload (it rejected the combined -c form,
+        // rc=1), so the confirmed case is python3; `--` is emitted for both because both honour it and the
+        // cost is zero on every real path. If a third interpreter is ever added here, check its `--` before
+        // relying on this line — a hopeful `--` on a verb that ignores it would be worse than none.
+        //
+        // Conditional for the same measured reason as the quoting: a leading '-' is already outside
+        // isShellSafePath, so `--` costs bytes only where the path is hostile and every real corpus stays
+        // byte-identical (printffmtparitycheck needs no re-pin).
+        return std::string( runnerVerb( p ) ) + " -- " + rw::shSingleQuote( std::string( p ) );
     }
 
     const IngestResult*                         ing_;
+    std::string                                 rootPrefix_;   // A3: "" ⇒ the command keeps its stored spelling
     std::vector<std::uint32_t>                  runners_;
     mutable std::vector<std::string>            texts_;
     mutable bool                                textsLoaded_ = false;
@@ -674,11 +749,305 @@ inline std::string runSuffixTextDisclosed( const TestRunnerIndex& idx, std::uint
     return suffix.empty() ? std::string( "   (run: not derivable)" ) : suffix;
 }
 
+// ── E1 / A4-2 (output-routing loop, 2026-09-12, owner call) — runner-less rows GROUPED, the disclosure once ──
+// On a corpus where almost no harness has a derivable runner (rocksdb: 126 of 127 rows), every row paid the
+// same 16 bytes of `run_unknown="1"` (23 in --situ's text) — 2.0–2.5 KB per answer for one fact said 127
+// times. The rows come in EVIDENCE order (changed, partner, hops asc, path), so consecutive runner-less rows
+// share their attributes; those are served as ONE row:
+//
+//     <g hops="2" n="7" p="a,b,c" run_unknown="1"/>                 XML   (the per-row attrs, then n= p=)
+//     {"p":["a","b","c"],"hops":2,"n":7,"run_unknown":true}          JSON  ("p" — or "test" — becomes an ARRAY)
+//     [hops=2] (7): a, b, c   (run: not derivable)                   text
+//
+// What the grouping may never change — test/testrowruncheck.sh arm 12 proves it on every dialect — is the
+// MULTISET of paths: every path verbatim (a reader's grep for a file name still hits; E3's brace-grouped
+// directories were disqualified on exactly that), each exactly once, in the order the single rows had. The
+// rules, stated once here because they decide every emitter:
+//   * a row WITH a runner stays a single <t>/<test> row exactly as before — run= is per row;
+//   * only rows whose remaining per-row attributes are BYTE-EQUAL group (hops=, partner=, changed=,
+//     seed_kind= — the `attrs` string is the key), so a group never blurs two kinds of evidence;
+//   * a group is emitted where its FIRST member stood, its members in list order; a single row with a
+//     runner in the middle of a group stays where it was, so evidence order is preserved row for row;
+//   * a group of ONE is a single row (the <t> spelling is shorter and a consumer has one less shape);
+//   * a path containing a ',' is NEVER grouped — it is served as a single row. p= is a comma-separated list
+//     and every XML parser undoes an entity BEFORE a consumer splits on the delimiter, so an escaped comma
+//     (this seam spelled &#44; until 2026-09-13) reappears as a separator and n= then disagrees with what
+//     the reader counts; the text twin had no escape at all. Refusing to group the row is the only spelling
+//     that is right in all three dialects at once, it costs one row on a path shape that is vanishingly
+//     rare, and the legend clause says so rather than describing an escape.
+// The ""-means-not-derivable test stays in runHint alone: the single rows below go through the Disclosed
+// wrappers, and a group exists only where commandFor is empty — one seam, one rule.
+//
+// The byte cap this seam used to carry (`maxGroupBytes`, a pre-escape estimate of a group's rendered size)
+// is GONE, and with it its 48-byte overhead constant and pack-task's per-row units arithmetic. It was the
+// wrong depth: the estimate counted UNESCAPED path bytes, so a list of paths holding '&' or '<' rendered
+// wider than the cap admitted and packTaskListSection — which breaks at the first over-budget entry — then
+// dropped the whole tail of the section, run= singles included. pack-task now CUTS first and GROUPS second
+// (packtask.h): the section is cut over single rows, whose rendered bytes are exactly what it measures, and
+// the kept prefix is grouped afterwards. Grouping a run of N≥2 rows is strictly smaller than the N single
+// rows it replaces (it drops N-1 tag+attribute+disclosure repeats and adds only ` n="N"`), so it can never
+// breach a cut that already held.
+struct TestRowOut
+{
+    std::uint32_t fileId = 0;
+    std::string   path;    // as the verb spells it (root-relative or not), UNESCAPED
+    std::string   attrs;   // the per-row attributes in the dialect's spelling (testRowEvidence + seed_kind=), possibly empty — the group key
+};
+
+enum class RowDialect : std::uint8_t { Xml, Json, Text };
+
+struct TestRowShape
+{
+    RowDialect       dialect = RowDialect::Xml;
+    std::string_view tag     = "t";   // XML element name ("t" | "test") or JSON key ("p" | "test")
+    std::string_view indent  = "";    // text dialect: the line prefix
+};
+
+// One rendered row: the text, and how many test FILES it carries (1 for a single row, n for a group), so a
+// caller counting files (pack-task's kept/shown arithmetic) never mistakes rows for tests.
+struct RenderedTestRow
+{
+    std::string   text;
+    std::uint32_t files = 1;
+};
+
+// The partition: index lists into `rows`, a run of one for a single row, a run of ≥2 for a group.
+//
+// A group covers a CONTIGUOUS run only: the scan stops at the first row that is not a groupable row with the
+// same attrs. The rows arrive in evidence order, so equal-attribute groupable rows are already adjacent and
+// the only things that can interrupt a run are a same-attribute row WITH a runner and a path carrying a ',';
+// hoisting the rows after it into a group in FRONT of it would move them ahead of it (review of #214:
+// A, B(run), A became G(A,A), B). Stopping instead costs one more <g> per interruption and makes order
+// preservation true by construction — test/testrowruncheck.sh arm 12 reads the paths back in emitted order
+// and asserts they are the single rows' order. Linear: `i` advances to the end of the run it just closed, so
+// every row is visited exactly once and no `taken` bookkeeping is needed to find the next unconsumed row.
+inline std::vector<std::vector<std::uint32_t>> partitionTestRows( const TestRunnerIndex& idx, std::span<const TestRowOut> rows )
+{
+    std::vector<std::vector<std::uint32_t>> groups;
+    // The two disqualifications, in one place: a derivable runner (run= is per row) and a ',' in the path
+    // (p= is a comma-separated list — see the seam's header comment for why no escape can rescue it).
+    const auto groupable = [ & ]( std::uint32_t i ) noexcept
+    {
+        return idx.commandFor( rows[i].fileId ).empty() && rows[i].path.find( ',' ) == std::string::npos;
+    };
+    for( std::uint32_t i = 0; i < rows.size(); )
+    {
+        std::uint32_t end = i + 1;
+        if( groupable( i ) )
+        {
+            while( end < rows.size() && groupable( end ) && rows[end].attrs == rows[i].attrs )
+            {
+                ++end;
+            }
+        }
+        std::vector<std::uint32_t> members;
+        members.reserve( end - i );
+        for( std::uint32_t k = i; k < end; ++k )
+        {
+            members.push_back( k );
+        }
+        groups.push_back( std::move( members ) );
+        i = end;
+    }
+    return groups;
+}
+
+// A single row, in the dialect — the disclosure through the Disclosed wrappers above, never re-spelled.
+template<class EscapeFn>
+inline std::string renderSingleTestRow( const TestRunnerIndex& idx, const TestRowOut& r, const TestRowShape& shape, EscapeFn esc )
+{
+    std::string s;
+    switch( shape.dialect )
+    {
+        case RowDialect::Xml:
+            s += "<";  s.append( shape.tag );  s += " p=\"";  s += esc( r.path );  s += "\"";  s += r.attrs;  s += runAttrDisclosed( idx, r.fileId, esc );  s += "/>";
+            break;
+        case RowDialect::Json:
+            s += "{\"";  s.append( shape.tag );  s += "\":\"";  s += esc( r.path );  s += "\"";  s += r.attrs;  s += runFieldJsonDisclosed( idx, r.fileId, esc );  s += "}";
+            break;
+        case RowDialect::Text:
+            s.append( shape.indent );  s += r.path;  s += r.attrs;  s += runSuffixTextDisclosed( idx, r.fileId );  s += "\n";
+            break;
+    }
+    return s;
+}
+
+// A group row (≥2 members, no runner by construction), in the dialect.
+template<class EscapeFn>
+inline std::string renderTestRowGroup( std::span<const TestRowOut> rows, std::span<const std::uint32_t> members, const TestRowShape& shape, EscapeFn esc )
+{
+    VERIFY( members.size() >= 2 );
+    const TestRowOut& first = rows[ members[0] ];
+    std::string       s;
+    switch( shape.dialect )
+    {
+        case RowDialect::Xml:
+        {
+            s += "<g";  s += first.attrs;  s += " n=\"";  s += std::to_string( members.size() );  s += "\" p=\"";
+            for( std::size_t k = 0; k < members.size(); ++k )
+            {
+                if( k ) { s += ','; }
+                s += esc( rows[ members[k] ].path );   // no path here holds a ',' — partitionTestRows refuses to group one
+            }
+            s += "\" run_unknown=\"1\"/>";
+            break;
+        }
+        case RowDialect::Json:
+        {
+            s += "{\"";  s.append( shape.tag );  s += "\":[";
+            for( std::size_t k = 0; k < members.size(); ++k )
+            {
+                if( k ) { s += ','; }
+                s += '"';  s += esc( rows[ members[k] ].path );  s += '"';
+            }
+            s += "]";  s += first.attrs;  s += ",\"n\":";  s += std::to_string( members.size() );  s += ",\"run_unknown\":true}";
+            break;
+        }
+        case RowDialect::Text:
+        {
+            s.append( shape.indent );
+            // attrs are built with a LEADING space so every other dialect can append them straight after a
+            // tag name; this dialect STARTS a line with them, so that one space is dropped. A view, not a
+            // substr copy. (Deliberately not lintrules.h's ltrim: that header is the --lint verb's rule table
+            // and pulls ingest.h in with it — this shared emit seam must not depend on a verb.)
+            if( !first.attrs.empty() )
+            {
+                std::string_view a( first.attrs );
+                if( a.front() == ' ' ) { a.remove_prefix( 1 ); }
+                s.append( a );  s += ' ';   // " [hops=2]" -> "[hops=2] "
+            }
+            s += '(';  s += std::to_string( members.size() );  s += "): ";
+            for( std::size_t k = 0; k < members.size(); ++k )
+            {
+                if( k ) { s += ", "; }
+                s += rows[ members[k] ].path;
+            }
+            s += "   (run: not derivable)\n";
+            break;
+        }
+    }
+    return s;
+}
+
+// The two ways a caller has its rows: a bare file list (--exercises' seeds, --pr-context, --handoff, --flags
+// --flip, --pack-task, situational_awareness — no per-row attributes), or rankTestRows' evidence rows
+// (--situ's three dialects). ONE builder each, so six sites do not carry six copies of the same loop.
+template<class PathFn>
+inline std::vector<TestRowOut> testRowsOutOf( std::span<const std::uint32_t> files, PathFn pathRel )
+{
+    std::vector<TestRowOut> rows;
+    rows.reserve( files.size() );
+    for( std::uint32_t f : files )
+    {
+        rows.push_back( { f, std::string( pathRel( f ) ), {} } );
+    }
+    return rows;
+}
+
+template<class PathFn>
+inline std::vector<TestRowOut> evidenceRowsOut( std::span<const TestRow> rows, EvDialect d, PathFn pathRel )
+{
+    std::vector<TestRowOut> out;
+    out.reserve( rows.size() );
+    for( const TestRow& r : rows )
+    {
+        out.push_back( { r.fileId, std::string( pathRel( r.fileId ) ), testRowEvidence( r, d ) } );
+    }
+    return out;
+}
+
+// THE SEAM every tests_to_run emitter calls (test/testrowruncheck.sh arm 0 censuses its call sites): the
+// partition and the rows, in the order the reader gets them. A caller that needs two dialects of ONE
+// partition (pack-task's XML section and its JSON tail) passes the partition it already has.
+template<class EscapeFn>
+inline std::vector<RenderedTestRow> testRowsRendered( const TestRunnerIndex& idx, std::span<const TestRowOut> rows, const TestRowShape& shape, EscapeFn esc,
+                                                      const std::vector<std::vector<std::uint32_t>>* partition = nullptr )
+{
+    const std::vector<std::vector<std::uint32_t>> own = partition ? std::vector<std::vector<std::uint32_t>>{} : partitionTestRows( idx, rows );
+    const std::vector<std::vector<std::uint32_t>>& groups = partition ? *partition : own;
+    std::vector<RenderedTestRow>                   out;
+    out.reserve( groups.size() );
+    for( const std::vector<std::uint32_t>& members : groups )
+    {
+        if( members.size() == 1 )
+        {
+            out.push_back( { renderSingleTestRow( idx, rows[ members[0] ], shape, esc ), 1 } );
+        }
+        else
+        {
+            out.push_back( { renderTestRowGroup( rows, members, shape, esc ), std::uint32_t( members.size() ) } );
+        }
+    }
+    return out;
+}
+
+// The joined form AND the number of test FILES it names, as ONE value.
+//
+// Review of #214: eight legends gate the run-hint clause below, and each one asked its own question — "is the
+// rendered string empty", "does the document contain `<tests `", nothing at all. Two of them were wrong (a
+// CDATA body carrying the literal text `<tests ` charged the clause with zero rows; --handoff and --flags
+// --flip charged it unconditionally, and --handoff is byte-budgeted, so `<tests n="0">` could evict a real
+// row to pay for a rule about rows it has none of). The seam that renders the rows is the only thing that
+// KNOWS how many there are, so it returns the count with them and every legend asks that one count.
+// `files` is the number of test FILES (a <g n="N"> row contributes N), and it is 0 exactly when `text` is.
+struct JoinedTestRows
+{
+    std::string text;
+    std::size_t files = 0;
+};
+
+template<class EscapeFn>
+inline JoinedTestRows testRowsList( const TestRunnerIndex& idx, std::span<const TestRowOut> rows, const TestRowShape& shape, EscapeFn esc, std::string_view sep = {} )
+{
+    JoinedTestRows out;
+    bool           first = true;
+    for( const RenderedTestRow& r : testRowsRendered( idx, rows, shape, esc ) )
+    {
+        if( !first ) { out.text.append( sep ); }
+        first = false;
+        out.text  += r.text;
+        out.files += r.files;
+    }
+    return out;
+}
+
+// The joined form alone, for the emitters that print the list in one go and count their files elsewhere
+// (`sep` between rows: "," for JSON, "" else).
+template<class EscapeFn>
+inline std::string testRowsJoined( const TestRunnerIndex& idx, std::span<const TestRowOut> rows, const TestRowShape& shape, EscapeFn esc, std::string_view sep = {} )
+{
+    return testRowsList( idx, rows, shape, esc, sep ).text;
+}
+
 // The ONE sentence every legend that carries a tests_to_run row splices, so the seven cannot drift into
 // seven wordings of one rule. Deliberately short: it rides on --test-gate's own byte ratchets.
+// E1 (2026-09-12): the <g> row is defined in the same sentence, because it is the same rule said once per
+// group — and legendcoveragecheck wants n= defined wherever a document carries it.
 inline constexpr std::string_view kRunHintLegendClause =
     "run= is the command that discharges a test row; run_unknown=\"1\" means none is derivable for that "
-    "harness (a guess would be worse than none) — a row carries one or the other, never neither. ";
+    "harness (a guess would be worse than none) — a <t> or <g> row carries one or the other, never neither. "
+    "<g n= p=a,b,c> is 2+ runner-less rows with equal attributes served as ONE row: n= how many, p= their paths "
+    "verbatim in list order — a path holding ',' is never grouped, so p= splits into exactly n= paths. A "
+    "shown=/total= over these rows counts test FILES: a <g> row is n= of them. ";
+
+// A3 / review of #219: the ROOT-RELATIVE half of the rule, and it is CONDITIONAL. Spliced unconditionally —
+// as the first cut of A3 did — this sentence told a multi-root reader, in a document carrying no root= at
+// all, that its absolute command was relative to something. runsAreRootRelative (above) decides BOTH the
+// spelling and the sentence, so the two cannot disagree. Gate: rootrelemitcheck ARM 9c, runhintcheck 2d.
+inline constexpr std::string_view kRunRootRelSentence =
+    "A run= command is relative to root=: run it from there. ";
+
+// The clause is a rule about ROWS, so a legend splices it only when the document actually renders one — a
+// tests="0" answer pays nothing for it. THE gate, taking the count testRowsList returns (or, for a section
+// that cut its own rows, that section's kept count): one rule, one spelling, asked by all eight sites.
+inline std::string runHintClauseIfRows( std::size_t testFilesRendered, bool rootRelativeRuns )
+{
+    if( testFilesRendered == 0 )
+    {
+        return {};
+    }
+    return std::string( kRunHintLegendClause ) + ( rootRelativeRuns ? std::string( kRunRootRelSentence ) : std::string() );
+}
 
 // ── P9 (capture-audit 2026-09-04) — the tests_to_run row set for ONE changed file ────────────────────
 // The FILE reading of --affected, seeded by file id rather than by a path pattern, for callers that already
@@ -919,7 +1288,7 @@ inline std::vector<std::string> suiteMemberStems( const std::vector<std::string>
     for( const std::string& token : tokens )
     {
         if( token.find( '/' ) == std::string::npos ) { continue; }
-        const std::string_view stem = mention_detail::stripExt( mention_detail::baseNameOf( token ) );
+        const std::string_view stem = mention_detail::pathStem( token );
         if( !stem.empty() ) { stems.emplace_back( stem ); }
     }
     appendForListStems( tokens, stems );
@@ -980,7 +1349,7 @@ inline ShellGateIndex buildShellGateIndex( const IngestResult& ing, const std::v
     {
         const std::string_view path = ing.files[f];
         if( !isTestPath( path ) || !path.ends_with( ".sh" ) || mention_detail::baseNameOf( path ) == "regression.sh" ) { continue; }
-        const std::string_view stem = mention_detail::stripExt( mention_detail::baseNameOf( path ) );
+        const std::string_view stem = mention_detail::pathStem( path );
         if( std::find( registeredTokens.begin(), registeredTokens.end(), stem ) == registeredTokens.end() ) { continue; }
         addRegisteredShellGate( ing, changedFiles, f, index );
     }
