@@ -4,6 +4,7 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 // verbs_for.h — the QUERY family (§A2's contiguous dispatch block), moved VERBATIM from main.cpp in
@@ -136,7 +137,16 @@ rw::LensRanking computeLensRanking( const MainDispatch& d, std::string_view task
     if( routeOn )
     {
         lensRank      = ( rc.which == LexMode::NameExact ) ? lexicalScoresNameExactRanked( ing, task, &tierMul )
-                                                           : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, forPruneK, ifaceExactPtr, &tierMul );
+                                                           : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, forPruneK, ifaceExactPtr, &tierMul,
+                                                                                  0, 0, {}, &out.evidence );   // L-W: the term evidence rides out
+        if( rc.which == LexMode::NameExact )
+        {
+            // L-W: the name-exact ranker scores WHOLE names, so the subtoken evidence coverage= and the file page
+            // read comes from one exhaustive subtoken pass whose scores are discarded — pure lookups over the
+            // persisted statistics (lexindex.h), a small fraction of a --for call (measured ~520 ms warm on a
+            // 2,000-file C++ tree, most of it the cache load), paid on the identifier route only.
+            lexicalScoresTiered( ing, g.outOff, g.outTargets, task, /*pruneTopK=*/0, nullptr, &tierMul, 0, 0, {}, &out.evidence );
+        }
         // §L10b + verify-wave2 F6: no leading space+"[" AND no trailing "]". This string lands ONLY in the
         // route= attribute value (and its JSON "route" twin) now, never spliced into free comment prose, so
         // the brackets that used to demarcate it inside a sentence just left the value opening with a stray
@@ -145,14 +155,14 @@ rw::LensRanking computeLensRanking( const MainDispatch& d, std::string_view task
         // QUOTE is the delimiter here. The two stop-anchor helpers that grepped `routed: [^]]*`
         // (test/adaptivecheck.sh routeof(), test/routecheck.sh reasonOf()) are re-pinned to `[^"]*` in the
         // same commit — the quote is the real end of the value and was all along.
-        out.routeNote  = "routed: " + rc.reason + shapeDemotionNote( shape );
+        out.routeNote  = routeNoteOf( rc, shape, /*noRoute=*/false );   // row 6: the code itself, no "routed: " prose prefix — ONE producer (filter.h)
         out.docTierTag = shapeDocTierTag( shape );   // §A4f: the machine form of the same fact, for --format=candidates
         out.routeTag   = ( rc.which == LexMode::NameExact ) ? "name-exact" : "subtoken+body";   // §A4f: the machine form of the same fact
         out.anchorDefs = std::move( const_cast<RouteChoice&>( rc ).anchorDefs );   // empty unless the route was DECIDED by names (lexical.h)
     }
     else
     {
-        lensRank = lexicalScoresTiered( ing, g.outOff, g.outTargets, task, forPruneK, ifaceExactPtr, &tierMul );
+        lensRank = lexicalScoresTiered( ing, g.outOff, g.outTargets, task, forPruneK, ifaceExactPtr, &tierMul, 0, 0, {}, &out.evidence );
     }
 
     // R4: capture the RAW routed lexical score's max BEFORE --anchor/mention/cochange reshape lensRank — the
@@ -408,6 +418,7 @@ struct ForLensNotes
     // real keys here rather than a string spliced somewhere JSON cannot reach).
     const char*        confidence;  // "high" | "low"
     int                marginPct;   // the whole-percent relative drop the confidence derives from (0 = none)
+    int                coveragePct; // L-W: the XML root's coverage= (-1 = absent: nothing scored)
     bool               weak;
     // M10: gitstamp::stampAt(root) — the raw sha[+dirty] value, "" on multi-root/non-git (never "null" as
     // a STRING; the JSON emitter below distinguishes empty-string-absent from a real value the same way
@@ -469,6 +480,9 @@ struct ForLensHeaderParts
                                               //   the facts (r= attrs, the <tail> element) survive, only the
                                               //   explainer goes — the L1 "first rung that costs no unique
                                               //   information" ordering.
+    bool             idRouteLegend = true;    // row 6 (2026-09-12): the sc=/route= readings (graphlegend.h
+                                              //   kForIdRouteLegend) — ceiling-droppable exactly like the two
+                                              //   above; rung zero clears all three and the note names them
     bool             legendDropped = false;   // …and rung zero SAYS SO: set with the two clears above, it splices
                                               //   kForLegendDroppedNote. A field rather than a note the rung
                                               //   appends once, because the ladder rebuilds this header up to
@@ -477,6 +491,29 @@ struct ForLensHeaderParts
     std::string_view rootArg;              // R-E (2026-08-17): the single-root run's own root= — the ladder's
                                             // route-dropped rebuild below calls ctxRootOpen a second time and
                                             // must carry the SAME root as the pre-built rootOpenStr did.
+    bool             scPresent = true;      // PR #215 review: does any row this bundle serves carry sc=? The two
+                                            // dialects' sc= readings are present-only on it, and the dropped-legend
+                                            // note names sc= only when it had something to define. Defaults TRUE —
+                                            // an over-approximation costs a reader nothing but a clause, while an
+                                            // under-approximation is an undefined first-screen attribute.
+
+    // ── THE DROPPABLE LEGEND, as ONE bit ──────────────────────────────────────────────────────────────
+    // confidenceNote / tailLegend / idRouteLegend moved in lock step at every read and every write, and the
+    // guard that used to spell all three was true in the only state rung zero can be reached in. One question,
+    // asked once; one clear, spelled once. legendDropped is the disclosure and is set by the same call, so a
+    // future clear cannot forget it (which is exactly how a silent drop ships).
+    bool legendDroppable() const noexcept
+    {
+        return !confidenceNote.empty() || tailLegend || idRouteLegend;
+    }
+    void dropDroppableLegend() noexcept
+    {
+        confidenceNote = {};
+        tailLegend     = false;   // deep-tail: the explainer falls with the confidence clause — the r= attrs
+                                  //   and the <tail> element (the facts) survive
+        idRouteLegend  = false;   // row 6: the sc=/route= readings fall with them — the attributes stay
+        legendDropped  = true;    // …and this is the sentence that says so, naming exactly what fell
+    }
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -536,11 +573,6 @@ inline std::string rootOpenWithSchema( std::string rootOpen, std::string_view sc
 using rw::ForConfidence;
 using rw::deriveForConfidence;
 
-// P1 (L7): the compact dialect's confidence clause — ONE constant, because runForLens exempts its bytes from the sig
-// trim by size (the full dialect exempts forConf.note the same way); a second spelling would desynchronize the ledger.
-inline constexpr std::string_view kForCompactConfidenceClause =
-    " [confidence=/margin_pct=: the ranked head's largest relative score drop; low = flat ranking, a starting point]";
-
 // L1 — RUNG ZERO'S OWN DISCLOSURE. The ceiling ladder's rung zero (runForLens, below) buys header bytes back by
 // dropping the two clauses whose loss costs no UNIQUE information: the confidence=/margin_pct= +
 // budget_tokens=/max_tokens= sentence and the r=/tail sentence. Every fact they describe stays on the document;
@@ -581,49 +613,204 @@ inline constexpr std::string_view kForCompactConfidenceClause =
 // a bundle that had fitted 3.9% past the ceiling it names. METHODOLOGY §9 is the tie-breaker: the smaller document
 // inside the budget beats the larger one past it. Two honest spellings were available and the shorter was taken;
 // that is not the same as trimming a disclosure until a pin goes green, and the day it is, the pin moves instead.
-inline constexpr std::string_view kForLegendDroppedNote =
-    " [legend clauses: confidence=/margin_pct=, budget_tokens=/max_tokens= and r=/tail (total= shown= capped=) "
-    "dropped (ceiling) - the attributes stay; a wider token-budget defines them]";
-
-// …and the COMPACT DIALECT's spelling, which names two fewer attributes because that dialect never had them.
-// The full dialect's confidence sentence carries "[budget_tokens=/max_tokens=: the token ceiling this bundle was
-// shaped against]" appended to it (runForLens), so rung zero really does take those definitions down with it
-// there. The compact dialect emits kForCompactConfidenceClause instead, which defines confidence= and
-// margin_pct= and nothing else — budget_tokens= has never been defined in it at any budget. Telling a compact
-// reader it was "dropped (ceiling)" would be the exact error this note exists to prevent, pointed the other way:
-// a feature that is missing, reported as a cut. Two constants rather than one assembled at runtime, for the
-// reason kForCompactConfidenceClause is one constant — the byte ledgers that exempt and charge these strings
-// read their sizes, and a string built at runtime has no size to read at compile time.
-inline constexpr std::string_view kForLegendDroppedNoteCompact =
-    " [legend clauses: confidence=/margin_pct= and r=/tail (total= shown= capped=) dropped (ceiling) - "
-    "the attributes stay; a wider token-budget defines them]";
-
-inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p, std::string_view extraNotes )
+// RUNG ZERO'S OWN DISCLOSURE, ASSEMBLED FROM WHAT ACTUALLY FELL (PR #215 review item 2).
+//
+// WHAT WAS WRONG. This was four constants — full/thin x default/compact — chosen by one `coverage=` lookup, and
+// three of the four were wrong about the document they described:
+//   * the THIN spellings named neither sc= nor route=, although rung zero clears idRouteLegend on a thin answer
+//     exactly as it does on any other. MEASURED on the pre-fix binary: `test/cppqualfix --for='mutex and pick
+//     overloads' --token-budget=300` served two <d sc=> rows, mentioned sc= nowhere in its legend, and its note
+//     named neither — an attribute with no reading and no disclosure that it had lost one.
+//   * the non-thin default spelling named route= unconditionally, so a --no-route run was told a definition had
+//     been "dropped (ceiling)" for an attribute that never rode. That is the error this note exists to prevent,
+//     pointed the other way: a feature that is absent, reported as a cut.
+//   * the compact spellings named sc=, which that dialect defines in its always-on rows clause and rung zero
+//     does not take down.
+// A note about a cut is worth nothing if it is not about THIS document, so it is built from this document: the
+// four booleans are the four facts that decide what the clauses defined.
+//
+// ASSEMBLED AT RUNTIME, deliberately. The older comment here argued for constants because "the byte ledgers that
+// exempt and charge these strings read their sizes"; no ledger does — this note is spliced into the header and
+// priced by finishForLensHeader's own fixpoint, like every other late splice. Nothing reads its size at compile
+// time, and the four constants bought only the drift above.
+//
+// No "--" anywhere: it rides inside an XML comment, where a double hyphen is ill-formed (G4).
+//
+//   compact      the compact dialect, whose confidence clause defines confidence=/margin_pct= and NOTHING else
+//                (budget_tokens= has never been defined there at any budget, so naming it as dropped would be
+//                the same lie in miniature), and whose sc= reading rides the un-droppable rows clause.
+//   thin         the root carries coverage= (L-W present-only), whose clause rode the confidence sentence.
+//   routeWasOn   route= rode this answer, so its reading was there to lose.
+//   scWasOn      a served row carries sc=, so the sc= reading was there to lose (default dialect only).
+inline std::string legendDroppedNote( bool compact, bool thin, bool routeWasOn, bool scWasOn )
 {
-    h += "<!-- ripwire for ripwire.for/v1: task/route/root and bundle/bodies/reason are root facts; "
-         "sigs and hops use total/requested, shown/printed and capped=1 for truncation; cx/ccx/in/churn/amp/clone/tested "
-         "are the quality/reuse lens; calls are resolved callees and counts remain floors where stated";
-    h.append( p.adaptiveNote );
-    h.append( p.mentionNote );
-    h.append( p.boostNote );
-    h.append( p.sibliftNote );
-    h.append( p.expandNote );
-    h.append( p.docMentionNote );
-    h.append( p.floorNote );
-    // P1 (L7): the compact dialect's reader meets the same two root facts (confidence=/margin_pct=) — in the
-    // SHORT form; the full sentence rides the default dialect only (forcompresscheck/mcpclidiffcheck pin it there).
+    std::string note = " [legend clauses: confidence=/margin_pct=";
+    if( thin )
+    {
+        note += "/coverage=";
+    }
+    if( !compact )
+    {
+        note += ", budget_tokens=/max_tokens=";
+    }
+    std::string identity;   // the sc= / route= readings, named only where they actually rode
+    if( !compact && scWasOn )
+    {
+        identity = "sc=";
+    }
+    if( routeWasOn )
+    {
+        identity += identity.empty() ? "route=" : "/route=";
+    }
+    if( !identity.empty() )
+    {
+        note += ", " + identity;
+    }
+    note += " and r=/tail (total= shown= capped=) dropped (ceiling) - the attributes stay; a wider token-budget defines them]";
+    return note;
+}
+
+// A1′ (owner decision 2026-09-12): --for's COMPACT legend, pinned like every other verb's (test/compactlegendcheck.sh, the
+// ripwire.for/v1 row) and PRESENT-ONLY — every clause below is emitted only when the document carries the
+// attribute it defines, and every reading is the shortest honest one. It used to spend 1,177–1,216 B here
+// (the same sentences as the default dialect with a schema id in front) and was exempt from the per-verb
+// pin by name; a compact dialect exempt from being compact is not one. The data notes (relevance floor,
+// doc mentions, mention anchor, co-change boost) keep their NUMBERS and lose their explanation
+// (compactForNote below); adaptive/siblift/expansion notes are kept verbatim — their text IS the data
+// (cliff rank, drop, the env knob). No "--" anywhere: an XML comment (G4).
+//
+// WHAT RIDES WHERE. Root facts that the root's own attributes state (bundle=/bodies=/reason=) get one
+// clause; the lens columns one clause (cx/ccx/in/churn/amp/clone/tested are always computed on this
+// surface, clone=/tested= appear only where 1); sc= and next= ride the <d> clause; route= only when the
+// root carries it (the ladder's rung (c) drops the attribute, and then its reading goes with it); the
+// confidence, sc=/route= and tail clauses are the ceiling-droppable trio (rung zero, kForLegendDroppedNoteCompact
+// names them); the compact bundle's hops/calls/noedge clause and the auto bundle's bodies clause are
+// mutually exclusive by construction (planForEnrichment).
+inline constexpr std::string_view kForCompactLegendRoot =
+    "bundle=/bodies=/reason= the body posture; ";
+inline constexpr std::string_view kForCompactLegendRows =
+    "d: cx= ccx= complexity, in= callers, churn= amp= change, clone= tested= 1, sc= scope, id=p::sc::n; "
+    "total= shown= capped=1 if cut";
+// …and the same clause for a bundle whose served rows carry NO scope (a corpus of free functions, a markdown
+// tree): 22 B of sc= reading removed, nothing else. Two constants rather than one built at runtime because this
+// dialect's whole contract is a pinned byte count per schema, and a pin reads a constant.
+inline constexpr std::string_view kForCompactLegendRowsNoScope =
+    "d: cx= ccx= complexity, in= callers, churn= amp= change, clone= tested= 1; "
+    "total= shown= capped=1 if cut";
+// ONE spelling for both dialects (graphlegend.h kForRouteCodeLegend): the compact dialect and the default one
+// say the same thing about route=, so they cannot drift into two readings of one code.
+inline constexpr std::string_view kForCompactLegendRoute = rw::kForRouteCodeLegend;
+inline constexpr std::string_view kForCompactLegendConfidence =
+    "; confidence=/margin_pct= head score drop (low=flat)";
+inline constexpr std::string_view kForCompactLegendHops =
+    "; h l= p= n=, c n= l= (joined for same-named callees, shown= counts them), noedge= no callee resolved";
+inline constexpr std::string_view kForCompactLegendBodies =
+    "; b t= n= p= l= full bodies, c n= l= callee signatures";
+inline constexpr std::string_view kForCompactLegendTail =
+    "; t p= file outside sigs (weaker), r= rank (gap = trimmed)";
+
+// The data notes in their compact spelling: the numbers stay, the sentence goes. Unknown shapes pass
+// through VERBATIM — a note this table does not know is never shortened into something it did not say.
+inline std::string compactForNote( std::string_view note )
+{
+    // " [relevance floor: kept 7 of 40 - the other 33 scored zero…]" → " [floor: kept 7 of 40]"
+    if( note.starts_with( " [relevance floor: kept " ) )
+    {
+        const std::size_t cut = note.find( " - " );
+        return cut == std::string_view::npos ? std::string( note ) : " [floor: kept " + std::string( note.substr( 24, cut - 24 ) ) + "]";
+    }
+    // " [doc mentions: 2 docs discussing 1 top-ranked symbol surfaced; doc_mentions= …]" → " [doc mentions: 2 docs, 1 symbol; doc_mentions=]"
+    if( note.starts_with( " [doc mentions: " ) )
+    {
+        const std::size_t disc = note.find( " discussing " );
+        const std::size_t top  = note.find( " top-ranked symbol" );
+        if( disc != std::string_view::npos && top != std::string_view::npos && top > disc )
+        {
+            return " [doc mentions: " + std::string( note.substr( 16, disc - 16 ) ) + ", " + std::string( note.substr( disc + 12, top - disc - 12 ) )
+                 + " symbol" + ( note.substr( top + 18 ).starts_with( "s" ) ? "s" : "" ) + "; doc_mentions=]";
+        }
+        return std::string( note );
+    }
+    // " [mention anchor: 1 file + 2 symbols named in the task, …; mention_anchored= …]" → " [mention anchor: 1 file + 2 symbols; mention_anchored=]"
+    if( note.starts_with( " [mention anchor: " ) )
+    {
+        const std::size_t cut = note.find( " named in the task" );
+        return cut == std::string_view::npos ? std::string( note ) : std::string( note.substr( 0, cut ) ) + "; mention_anchored=]";
+    }
+    // " [cochange boost: promoted N symbols in M files that historically …]" → " [cochange boost: promoted N symbols in M files]"
+    if( note.starts_with( " [cochange boost: promoted " ) )
+    {
+        const std::size_t cut = note.find( " that " );
+        return cut == std::string_view::npos ? std::string( note ) : std::string( note.substr( 0, cut ) ) + "]";
+    }
+    return std::string( note );
+}
+
+// Does THIS answer's root carry route=? The reading of a code is present-only in both dialects, so both ask the
+// question the same way: the ladder's rung (c) may have dropped the attribute (withRouteAttr), and a run the
+// router never ran for (no-route, or a verb with no route at all) never had one. Read off the built root open
+// rather than re-derived from the route reason, so the clause can only appear beside the attribute it defines.
+inline bool forRouteAttrPresent( const ForLensHeaderParts& p, bool withRouteAttr ) noexcept
+{
+    return withRouteAttr && p.rootOpenStr.find( " route=\"" ) != std::string_view::npos;
+}
+
+// …and the THIN question, asked the same way: does this root carry L-W's coverage=? Four sites spelled the
+// same find() (two legend appends and two dropped-note selections), which is three chances to change it in two.
+inline bool forCoverageAttrPresent( const ForLensHeaderParts& p ) noexcept
+{
+    return p.confidenceAttrs.find( " coverage=\"" ) != std::string_view::npos;
+}
+
+inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p, bool withRouteAttr, std::string_view extraNotes )
+{
+    h += "<!-- ripwire for ripwire.for/v1: ";
+    h += kForCompactLegendRoot;
+    // PR #215 review: the rows clause is present-only on sc= like every other clause in this dialect. Its 22 B of
+    // "sc= scope, id=p::sc::n" rode a bundle whose rows carried no scope at all (a corpus of free functions) —
+    // a present-only dialect that defines an attribute nothing printed is the same waste it exists to remove.
+    h += p.scPresent ? kForCompactLegendRows : kForCompactLegendRowsNoScope;
+    // the ceiling-droppable trio — rung zero clears confidenceNote/tailLegend/idRouteLegend together and splices the note below
+    if( p.idRouteLegend && forRouteAttrPresent( p, withRouteAttr ) )
+    {
+        h += kForCompactLegendRoute;
+    }
     if( !p.confidenceNote.empty() )
     {
-        h += kForCompactConfidenceClause;
+        h += kForCompactLegendConfidence;
+        if( forCoverageAttrPresent( p ) )
+        {
+            h += rw::kForCompactCoverageClause;   // L-W: defined where the root carries it, in this dialect's short form
+        }
+    }
+    if( p.compactBundle )
+    {
+        h += kForCompactLegendHops;
+    }
+    else if( p.autoBundle )
+    {
+        h += kForCompactLegendBodies;
     }
     if( p.tailLegend )
     {
-        h += rw::kForFileTailLegendCompact;   // deep-tail: r= + <tail> definitions ride the compact legend too, short form
+        h += kForCompactLegendTail;
     }
     if( p.legendDropped )
     {
-        h += kForLegendDroppedNoteCompact;   // L1: the two clauses above went to the ceiling — in THIS dialect's inventory
+        // L1: the droppable clauses went to the ceiling — the attributes stay, and the note names exactly the
+        // ones THIS document had readings for. scWasOn is false here on purpose: this dialect defines sc= in its
+        // rows clause, which rung zero does not take down.
+        h += legendDroppedNote( /*compact=*/true, forCoverageAttrPresent( p ),
+                                forRouteAttrPresent( p, withRouteAttr ), /*scWasOn=*/false );
     }
+    // the data notes, numbers kept — see compactForNote
+    h += compactForNote( p.adaptiveNote );
+    h += compactForNote( p.mentionNote );
+    h += compactForNote( p.boostNote );
+    h += compactForNote( p.sibliftNote );
+    h += compactForNote( p.expandNote );
+    h += compactForNote( p.docMentionNote );
+    h += compactForNote( p.floorNote );
     h.append( extraNotes );
     h += " -->";
     // M10: at= folded into the SAME trailing comment as root= (one wrapper, not two) — the
@@ -659,7 +846,7 @@ inline constexpr std::string_view kForAutoBundleLegend =
 inline constexpr std::string_view kForCompactBundleLegend =
     "; bundle=compact: conceptual query, so this map ships one-hop EDGE context, no bodies (bodies=0, "
     "reason=compact-route or no_candidates). hops rows are h l=line p=file n=name, and a row's calls "
-    "child names its callees (c n= l=). hops and calls disclose total=requested shown=printed capped=1 "
+    "child names its callees (c n= l=; l= comma-joins the lines of same-named callees, shown= counts callees). hops and calls disclose total=requested shown=printed capped=1 "
     "when the BUDGET cut a listing; noedge=N counts ranked symbols with no RESOLVED callee found (never "
     "none exists). For a body: expand=p:n pasted off a row; the auto-bodies flag puts the bodies back";
 
@@ -681,7 +868,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
                              p.compactLegend ? "ripwire.for/v1" : std::string_view() );
     if( p.compactLegend )
     {
-        appendCompactForLegend( h, p, extraNotes );
+        appendCompactForLegend( h, p, withRouteAttr, extraNotes );
         return h;
     }
     h += "<!-- ripwire lens for ";
@@ -711,6 +898,16 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h += ": reusable building blocks + quality facts for what you're about to touch "
          "(cx=complexity ccx=cognitive in=reuse-count churn=recent-commits amp=change-amplification clone=1(duplicated) tested=1) "
          "— prefer composing/reusing these; watch the high-churn/high-amp/cloned ones";
+    // BOTH readings are present-only (PR #215 review): sc= when a served row carries one, route= when the root
+    // carries the attribute. A reading with nothing to define is bytes the bundle could have spent on a row, and
+    // it is what made the dropped-legend note name attributes that never rode. ONE decision, shared with the MCP
+    // twin and with the exemption ledger below: rw::forIdRouteLegendParts.
+    {
+        const rw::ForIdRouteLegendParts idRoute =
+            rw::forIdRouteLegendParts( p.idRouteLegend, p.scPresent, forRouteAttrPresent( p, withRouteAttr ) );
+        h.append( idRoute.sc );
+        h.append( idRoute.route );
+    }
     // P3 (L7): the r=1 <d> row carries next= (nextverb.h). NOT defined here on purpose: every byte of this header
     // is un-charged by the token ladder, and fornotesbudgetcheck's tight rungs leave it ~0 tokens of headroom
     // (V1 N1) — a 115 B clause blew --token-budget=950 by 29 tokens. The definition lives in --help (--for) and
@@ -729,7 +926,11 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     }
     if( p.legendDropped )
     {
-        h.append( kForLegendDroppedNote );   // L1: the confidence and tail clauses went to the ceiling — say so, and name what they defined
+        // L1: the droppable clauses went to the ceiling — say so, and name exactly the ones THIS document had
+        // readings for (PR #215 review item 2: a thin answer used to be told about neither sc= nor route=, and a
+        // no-route answer used to be told route= had been dropped when it never rode).
+        h.append( legendDroppedNote( /*compact=*/false, forCoverageAttrPresent( p ),
+                                     forRouteAttrPresent( p, withRouteAttr ), p.scPresent ) );
     }
     h.append( extraNotes );
     h += " -->";
@@ -826,6 +1027,10 @@ inline std::string forLensJsonHeader( std::string_view task, const ForLensNotes&
     h += ",\"confidence\":\"";
     h += notes.confidence;
     h += "\",\"margin_pct\":" + std::to_string( notes.marginPct );
+    if( notes.coveragePct >= 0 )
+    {
+        h += ",\"coverage\":" + std::to_string( notes.coveragePct );   // L-W: the XML root's third ranking fact, same presence rule
+    }
     // the adaptive cut's own counts — the abstention round-2 instrumentation described on ForLensNotes.
     // ALWAYS present (a count of zero is a measurement: "nothing scored", never "the field was dropped"),
     // and JSON-only BY DESIGN, which the struct's comment states in full rather than repeating here.
@@ -959,7 +1164,20 @@ struct ForLensRootFinish
     bool             bodyCeiling          = false;
 };
 
-inline std::string finishForLensHeader( std::string header, const ForLensRootFinish& f )
+// PR #215 review: the finished header AND the number it prints, handed back together. finishForLensHeader
+// below is this function's header half and stays the name every emit site calls; the ceiling ladder's exact-
+// ceiling test needs the OTHER half, because "does this document fit what its root promises" is the question
+// `est_tokens <= budget_tokens` asks and nothing else answers it. Computing it a second time beside this
+// fixpoint is how the two came to disagree on the RATE in the first place, so there is one fixpoint and two
+// readers of it. `estTokens` is the number the document will actually carry — the second-stage value when
+// over_ceiling="1" rides, since those bytes are part of the document the number prices.
+struct ForLensPricedHeader
+{
+    std::string header;
+    std::size_t estTokens = 0;   // 0 on the unmeasured degrade path (`f.measured` false — no number is printed there)
+};
+
+inline ForLensPricedHeader finishForLensHeaderPriced( std::string header, const ForLensRootFinish& f )
 {
     // T3: the bundle=auto disclosure attributes, then budget_bytes= (its presence is decided by the sigs render),
     // then the INDEXING-cap attributes (root facts of the RANKING, so on the root est_tokens prices rather than in
@@ -983,7 +1201,7 @@ inline std::string finishForLensHeader( std::string header, const ForLensRootFin
     spliceBefore( header, " -->", /*fromEnd=*/true, f.capNote );
     if( !f.measured )
     {
-        return header;
+        return { std::move( header ), 0 };
     }
 
     // N1: the legend clause defining est_tokens= goes into the LAST comment first, so header.size() below
@@ -1034,7 +1252,12 @@ inline std::string finishForLensHeader( std::string header, const ForLensRootFin
     // N1: onto the <ctx> root — the same "><!--" boundary the bundle= attributes above use — where --pack-task /
     // --from-trace / --handoff / --expand put theirs (M11), not inside the comment.
     spliceBefore( header, "><!--", /*fromEnd=*/false, priced.second + overAttr );
-    return header;
+    return { std::move( header ), priced.first };
+}
+
+inline std::string finishForLensHeader( std::string header, const ForLensRootFinish& f )
+{
+    return finishForLensHeaderPriced( std::move( header ), f ).header;
 }
 
 // DEEP-TAIL d2, JSON dialect — the tail stanza and its explicit-regime fit, as a free function over
@@ -1843,6 +2066,20 @@ std::optional<int> runForLens( const MainDispatch& d )
         // §P12.2 fix: --adaptive used to no-op here (this block returned before the cliff-cut logic below ever
         // ran). emitCandidates() now cuts BEFORE the bypass, full-distribution scan like --for's own
         // default-map cut (the ceiling is --top-k, not the 40-row lens cap).
+        // L-W: `--for=TASK --limit=N` (offset=M pages it) is the FILE-GRAIN WIDENING PAGE — one <f> row per
+        // positive-score file, ranked file-first (forpage.h says how), the follow-up the routing-loop ladder
+        // showed completes answers where a body cannot. It owns its own <files> root, so it bypasses the whole
+        // <ctx> bundle below; cli.h refuses every bundle-shaping flag beside it rather than ignoring one.
+        if( cfg.pageLimit > 0 || cfg.pageOffset > 0 )
+        {
+            const ForFilePage page    = computeForFilePage( ing, lensRank, lr.evidence );
+            const std::string pageXml = renderForFilePageXml( ing, page, ForPageRenderParts{ cfg.forTask, ctxRootOpen( cfg.forTask, routeNoteRaw, flRootArg ),
+                                                                                              forCoveragePct( lr.evidence, topLensId( lensRank ) ),
+                                                                                              cfg.pageLimit, cfg.pageOffset, flRootArg, cfg.legend == "compact" } );
+            std::fwrite( pageXml.data(), 1, pageXml.size(), stdout );
+            return 0;
+        }
+
         if( cfg.candidates )
         {
             // §A4e/§A4f: the export carries the ranking's provenance — which ranker ran, how many mention
@@ -1927,12 +2164,48 @@ std::optional<int> runForLens( const MainDispatch& d )
         // the mapping, the two derived strings, and the reasoning behind both live ONCE in
         // deriveForConfidence (above runForLens) — forTopN is final here (floor cut applied), which is
         // what the completeness ground needs.
+        // THE BUNDLE'S RESOLVED SURFACE: the top-N ids by lensRank — the exact set <sigs> selects. Three
+        // consumers now: the S5-E HAS-A compose view, the B6.3 route view, and (§P3) the <lego> scope
+        // filter, which keeps only interfaces this surface actually reaches. §B1.4 (capture-audit-4):
+        // HOISTED above the --json branch — both dialects need it now, XML to RENDER lego/compose/routes,
+        // JSON to COUNT them without rendering (see below). Computed once, kept alive for the
+        // direct-emission degrade paths further down too.
+        std::vector<NodeId> lensSurfaceIds;
+        {
+            const std::size_t S = ing.symbols.size();
+            lensSurfaceIds.resize( S );
+            for( NodeId i = 0; i < S; ++i )
+            {
+                lensSurfaceIds[i] = i;
+            }
+            // A4-F23c: score-only sort left ties straddling the cut stdlib-dependent. Use the (score desc, id
+            // asc) total order (same key packSignatures selects with) so the surface set is deterministic.
+            rw::sortutil::radixSortByScoreDescId( lensSurfaceIds, lensRank );
+            const std::size_t cap = std::min<std::size_t>( std::size_t( forTopN ), S );
+            lensSurfaceIds.resize( cap );
+        }
+
         ForConfidence forConf = deriveForConfidence( forCut, forTopN );
+        // L-W: coverage= rides the SAME sentence and the SAME byte exemption as confidence=/margin_pct= — but ONLY
+        // on a THIN answer (owner decision 2026-09-12: present-only). The thin verdict is decided HERE, from the
+        // resolved surface above and the top symbol's term share, and it drives three things at once: the
+        // attribute, its legend clause (present-only, so the clause never explains an absent attribute) and the
+        // r=1 row's next= (the widening page instead of the body). A confident answer carries none of them and is
+        // byte-identical to the pre-L-W bundle. Nothing scored ⇒ no top symbol ⇒ thin by the files clause, and no
+        // coverage= to print (a fabricated 0 is what non-negotiable #3 forbids).
+        const int  forCoverage   = forCoveragePct( lr.evidence, topLensId( lensRank ) );
+        const bool forThin       = forAnswerIsThin( forCoverage, distinctFilesOf( ing, lensSurfaceIds ) );
+        const bool forCoverageOn = forThin && forCoverage >= 0;
+        if( forCoverageOn )
+        {
+            forConf.attrs += " coverage=\"" + std::to_string( forCoverage ) + "\"";
+            forConf.note  += kForCoverageLegend;
+        }
         // The confidence pair's own bytes, captured BEFORE the budget clause below is appended — see the
         // charging note there for why the two disclosures are charged differently.
         const std::size_t confidenceOwnBytes = forConf.attrs.size() + forConf.note.size();
         // P1 (L7): the two halves separately, captured at the SAME early point — the compact dialect emits its own
-        // short clause (kForCompactConfidenceClause) in place of the early note, and the exemption below must
+        // short clause (kForCompactLegendConfidence) in place of the early note, and the exemption below must
         // subtract what that dialect emitted, never the appended budget clause (which is charged, see below).
         const std::size_t confidenceEarlyAttrsBytes = forConf.attrs.size();
         const std::size_t confidenceEarlyNoteBytes  = forConf.note.size();
@@ -2024,11 +2297,23 @@ std::optional<int> runForLens( const MainDispatch& d )
         // degrade (surfaceOff — no attribute either) and an exhausted explicit ceiling (legendOff — the
         // root ATTRIBUTE is kept, paid for out of its own reserve). A tight explicit budget no longer
         // turns the disclosure off on EITHER serving shape — test/fordisclosurecheck.sh.
+        // PR #215 review: does any row this bundle could serve carry sc=? Both dialects' sc= readings are
+        // present-only on this, and the dropped-legend note names sc= only when there was a reading to lose.
+        // Decided from the RANKED SET and before the header is built, because the un-budgeted path ships the
+        // header built here and never rebuilds it. Deliberately an OVER-approximation: the byte ladder may still
+        // trim the only scoped row, and a reading with nothing to define costs 29 B, while the reverse costs a
+        // reader an attribute with no definition anywhere in the document.
+        bool forScPresent = false;
+        for( std::size_t i = 0; i < ing.symbols.size() && !forScPresent; ++i )
+        {
+            forScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
+        }
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
-                                        /*tailLegend=*/true, /*legendDropped=*/false, flRootArg };
+                                        /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
+                                        forScPresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -2054,32 +2339,16 @@ std::optional<int> runForLens( const MainDispatch& d )
             }
         }
 
-        // THE BUNDLE'S RESOLVED SURFACE: the top-N ids by lensRank — the exact set <sigs> selects. Three
-        // consumers now: the S5-E HAS-A compose view, the B6.3 route view, and (§P3) the <lego> scope
-        // filter, which keeps only interfaces this surface actually reaches. §B1.4 (capture-audit-4):
-        // HOISTED above the --json branch — both dialects need it now, XML to RENDER lego/compose/routes,
-        // JSON to COUNT them without rendering (see below). Computed once, kept alive for the
-        // direct-emission degrade paths further down too.
-        std::vector<NodeId> lensSurfaceIds;
-        {
-            const std::size_t S = ing.symbols.size();
-            lensSurfaceIds.resize( S );
-            for( NodeId i = 0; i < S; ++i )
-            {
-                lensSurfaceIds[i] = i;
-            }
-            // A4-F23c: score-only sort left ties straddling the cut stdlib-dependent. Use the (score desc, id
-            // asc) total order (same key packSignatures selects with) so the surface set is deterministic.
-            rw::sortutil::radixSortByScoreDescId( lensSurfaceIds, lensRank );
-            const std::size_t cap = std::min<std::size_t>( std::size_t( forTopN ), S );
-            lensSurfaceIds.resize( cap );
-        }
         // IS-A: socket → bricks — for the interfaces THIS task actually reaches (§P3: the implementors map is
         // pre-scoped to lensSurfaceIds; withPaths keeps two same-named impls apart, exactly as --lego=TYPE
         // spells them). No interface reached ⇒ no <lego> element. Kept alive for the §P3×§P4 narrowing below
         // (XML render) and the §B1.4 count (JSON) — this is pure membership bookkeeping, never a redacting
         // seam, so hoisting it above the --json branch changes no dialect's redaction tally.
         std::vector<std::vector<NodeId>> legoScoped = legoImplementorsOnSurface( ing, g.implementors, lensSurfaceIds );
+
+        // L-W (L-N): the r=1 row's next= names the file-grain widening page on the THIN verdict decided beside the
+        // header above, and the body otherwise; "" keeps the --expand hint.
+        const std::string forTopRowNext = forThin ? forWidenNext( cfg.forTask ) : std::string();
 
         // DEEP-TAIL d2: the file-grain tail candidates — one shared walk (serialize.h computeFileTail) for
         // both dialects, computed from the SAME resolved surface <sigs> selects, so the two dialects (and
@@ -2151,7 +2420,7 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                                                               docMentionNote, lr.anchorLifts, lr.docMentionCount,
                                                                                               adaptiveNote, floorNote,
                                                                                               forConf.level,
-                                                                                              forConf.marginPct, forWeak,
+                                                                                              forConf.marginPct, forCoverageOn ? forCoverage : -1, forWeak,
                                                                                               forAtStamp,
                                                                                               // abstention round 2: forCut is the SAME
                                                                                               // cut the confidence facts above derive
@@ -2276,16 +2545,29 @@ std::optional<int> runForLens( const MainDispatch& d )
         // (appendCompactForLegend), so the exemption must subtract what was emitted — the full constants left the
         // ledger 64 B short and the subtraction below underflowed (UBSan: "297 - 361 cannot be represented").
         const bool        compactLegendOn      = cfg.legend == "compact";
-        const std::size_t confidenceEmitted    = compactLegendOn ? ( confidenceEarlyNoteBytes == 0 ? 0 : kForCompactConfidenceClause.size() )
+        const std::size_t confidenceEmitted    = compactLegendOn ? ( confidenceEarlyNoteBytes == 0 ? 0 : kForCompactLegendConfidence.size() + ( forCoverageOn ? kForCompactCoverageClause.size() : 0 ) )
                                                                  : confidenceEarlyNoteBytes;
         const std::size_t confidenceExemptBytes = confidenceEarlyAttrsBytes + confidenceEmitted + forAtAttrStr.size();   // == confidenceOwnBytes + at= in the full dialect
-        const std::size_t tailLegendEmitted    = compactLegendOn ? rw::kForFileTailLegendCompact.size() : rw::kForFileTailLegend.size();
+        const std::size_t tailLegendEmitted    = compactLegendOn ? kForCompactLegendTail.size() : rw::kForFileTailLegend.size();
         // DEEP-TAIL: the tail legend's bytes are exempt from the sig-trim charge in BOTH regimes, the
         // confidence-disclosure precedent verbatim — the tail's contract is that the ranked head is
         // byte-identical with and without it, and charging the clause here would shrink <sigs> to pay for
         // a disclosure. The bytes stay real everywhere downstream: est_tokens measures the emitted header,
         // and the explicit regime's tail rows are funded from the RESIDUAL (below), never from the sigs.
-        const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted;
+        // Row 6 (2026-09-12): the sc=/route= reading (graphlegend.h kForIdRouteLegend) joins the exemption on the
+        // same contract — disclosure only; charging it shrank the explicit-ceiling sig section below the default's
+        // (forbudgetmonotoncheck #1/#5 caught it, 6507 B against 6141 B at --token-budget=8000). Subtract what was
+        // EMITTED in this dialect, exactly as the confidence and tail clauses above do.
+        // A1′: the compact dialect emits ONLY the route clause here (sc= rides its always-on row clause), and only when
+        // the root carries route= — subtract exactly what appendCompactForLegend appended. The DEFAULT dialect emits the
+        // sc= rule always and the same route clause under the same present-only condition (forRouteAttrPresent).
+        // …and the SAME decision the append made (rw::forIdRouteLegendParts), so the ledger cannot subtract a
+        // clause the header never wrote. The compact dialect emits only the route reading here — its sc= reading
+        // rides the always-on rows clause — so it exempts only that part.
+        const rw::ForIdRouteLegendParts idRouteParts =
+            rw::forIdRouteLegendParts( headerParts.idRouteLegend, headerParts.scPresent, !routeNoteRaw.empty() );
+        const std::size_t idRouteLegendEmitted = compactLegendOn ? idRouteParts.route.size() : idRouteParts.bytes();
+        const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
             DEGRADED_PATH_ALERT( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
@@ -2355,7 +2637,8 @@ std::optional<int> runForLens( const MainDispatch& d )
                                 /*hasRelevanceFloor=*/true,                  // LB-A: shrink past the zero-score tail, never pad
                                 &forDroppedPositive,                         // A2: exact count, see droppedPositiveCount
                                 &shownSigIds,                                // lane 2: the rows actually emitted — the tail excludes THESE files
-                                &forSigsCapped );                            // did the ladder fire? — the budget_bytes= clause rides only then
+                                &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
+                                forTopRowNext );                             // L-W: the widening page on a thin answer, else the body
                 std::fflush( sm );  std::fclose( sm );
                 if( sbuf ) { sigsStr.assign( sbuf, ssz );  std::free( sbuf ); }
                 sigsPreRendered = true;
@@ -2608,11 +2891,13 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                  + tailStr.size()                               // deep-tail: the tail is priced like every other section
                                                  + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve;   // + "</ctx>" + the header splices below (autoAttr exact-counted; A2's own reserve is exact too)
             const std::size_t ladderCeiling      = rw::ceilingAllowanceBytes( cfg.tokenBudget );
-            // PR #135: a shape FITS when the reserve-priced header above does AND the header it would emit does —
-            // finishForLensHeader's output plus every other byte stdout receives (the body section is --detail's, else
-            // the rendered auto one). The first half is the pre-#135 test verbatim, so a bundle that was inside its
-            // allowance picks the same shape byte for byte. The second half is what the reserve cannot see:
-            // over_ceiling="1" and its legend clause (70 B), owed whenever est_tokens exceeds budget_tokens.
+            // PR #135: the ALLOWANCE shape FITS when the reserve-priced header above does AND the header it would
+            // emit does — finishForLensHeader's output plus every other byte stdout receives (the body section is
+            // --detail's, else the rendered auto one). The first half is the pre-#135 test verbatim, so a bundle
+            // that was inside its allowance picks the same shape byte for byte. The second half is what the reserve
+            // cannot see: over_ceiling="1" and its legend clause (70 B), owed whenever est_tokens exceeds
+            // budget_tokens. Both halves are BYTES, because the allowance is a byte bound; the exact ceiling below
+            // is a token comparison and shares neither sum.
             const std::size_t emittedNonHeaderBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + tailStr.size()
                                                     + detailSection.xml.size() + ( autoSection.isRendered ? autoSection.xml.size() : 0u )
                                                     + graphSection.xml.size() + 6;   // + "</ctx>"
@@ -2626,10 +2911,37 @@ std::optional<int> runForLens( const MainDispatch& d )
             // ladder has not answered yet. M3's first version passed the candidate's rung in and set the flag from
             // `rung == OverCeiling`, which no call could ever satisfy — the terminal rung is the branch that never
             // asks `fits` — so the flag was invariantly false while a comment claimed it was doing the pricing.
+            // THE ALLOWANCE test — raw bytes, which is its contract: ceilingAllowanceBytes is a BYTE bound
+            // (budget x 2.36 x 1.15), the widest thing this lens may deliver, and rungs (b)/(c)/(d) are judged
+            // by it (serialize.h climbCeilingLadderBy). Both halves: the reserve-priced sum above AND the header
+            // that will actually be emitted, because the reserve cannot see over_ceiling="1" and its clause (70 B),
+            // owed whenever est_tokens exceeds budget_tokens and priced by finishForLensHeader's own fixpoint.
             const auto fitsCeiling = [ & ]( std::string_view candidate )
             {
                 return candidate.size() + ladderPayloadBytes <= ladderCeiling
                     && finishForLensHeader( std::string( candidate ), rootFinish ).size() + emittedNonHeaderBytes <= ladderCeiling;
+            };
+            // …AND THE EXACT CEILING IS NOT A BYTE TEST AT ALL (PR #215 review: "use mixed-rate accounting for the
+            // exact-ceiling test"). What the root PROMISES is `est_tokens <= budget_tokens`, and est_tokens is not
+            // bytes/2.50: finishForLensHeader prices MARKUP at kBytesPerTokenDefault and the --detail / auto BODIES
+            // at kBytesPerTokenBody (3.80), one rate per kind. Comparing the raw byte total against
+            // ceilingBytes( budget ) charges every body byte at 2.50, i.e. 1.52x what the root charges it, and it
+            // also re-prices the candidate through `ladderPayloadBytes` — a sum built from RESERVES and from the
+            // auto section whether or not that section is rendered, so it is not the document stdout receives.
+            // Both errors point the same way: a document whose root says it fits was judged not to. MEASURED on a
+            // git-less 5-symbol fixture at --detail=1 (test/estchargecheck.sh #18): at every budget in 1069..1099
+            // the kept document priced at est_tokens=1069 with no over_ceiling=, and rung zero dropped all three
+            // clauses anyway and delivered est_tokens=715 — 354 tokens of headroom spent to buy nothing, and three
+            // definitions the reader no longer has. At 1090..1099 even the raw byte total fitted (2 736 B of 2 737)
+            // and only the reserve-priced half vetoed.
+            // ONE QUESTION, ASKED ONCE: build the candidate's FINAL document and read the number it will print.
+            // No second fixpoint, no second rate — the disagreement is only possible while two expressions exist.
+            // The maxTokens/--detail body ceiling is deliberately NOT folded in: this rung has always been about
+            // the --token-budget ceiling, forLensOverCeiling answers the wider question on the finished document,
+            // and widening a rung is a change to what it drops, not a fix to how it prices.
+            const auto fitsExactCeiling = [ & ]( std::string_view candidate )
+            {
+                return finishForLensHeaderPriced( std::string( candidate ), rootFinish ).estTokens <= cfg.tokenBudget;
             };
             // RUNG ZERO — the confidence LEGEND clause, before any of the ladder's own rungs: it is the one
             // header string whose loss costs NO unique information (confidence=/margin_pct= stay on the root
@@ -2644,17 +2956,47 @@ std::optional<int> runForLens( const MainDispatch& d )
             // kForLegendDroppedNote, naming the attributes whose definitions just went. Silence here was the
             // reader seeing confidence= margin_pct= budget_tokens= r= and the <tail> counts with nothing in the
             // legend about any of them and no way to tell a budget cut from a feature that does not exist.
-            if( !fitsCeiling( headerStr ) && ( !headerParts.confidenceNote.empty() || headerParts.tailLegend ) )
+            // RUNG ZERO TRIGGERS ON THE EXACT CEILING, not on the 1.15 allowance rungs (c)/(d) are judged by
+            // (2026-09-13, PR #215). kCeilingFirstEntryTolerance exists for the residual a lens cannot trim — a first
+            // signature that is not divisible — and it was also gating this rung, so a document 1..15% over its budget
+            // that STILL carried three droppable clauses shipped over_ceiling=1 with all three riding
+            // (fornotesbudgetcheck's 1640 rung at est_tokens=1755, forrootlegendcheck's 800 rung at 831, both CI).
+            // …AND "EXACT" IS THE ROOT'S OWN RATE, not the densest-language one (review item 1). This test priced at
+            // kMinBytesPerToken(2.36) while est_tokens=/over_ceiling= price at kBytesPerTokenDefault(2.50), so the rung
+            // fired on documents 6% INSIDE the budget their root reports: `test/cppqualfix --for="widget ping make box"
+            // --token-budget=1200` printed est_tokens="778", no over_ceiling=, and had dropped all three clauses.
+            // …AND THE RATE WAS ONLY HALF OF IT: a BYTE ceiling cannot express this root's promise at all, because
+            // est_tokens is two rates (markup 2.50, bodies 3.80) over a document the byte sum also mis-assembles
+            // from reserves. fitsExactCeiling above is the token comparison itself now; see its own note.
+            //
+            // ONE DROPPABLE BIT. These three fields moved in lock step at every read and write, and the guard that used
+            // to test all three was true whenever any clause remained, which is the only state this branch is reached
+            // in — an always-true condition documenting itself as a check. legendDroppable() asks the one question.
+            //
+            // AND THE DROP MUST PAY (review item 3). Rung zero removes readings and splices the note that names
+            // them, and in the COMPACT dialect the note is longer than the clauses: measured on the pre-fix binary,
+            // 110-164 B of clauses went out and a 161 B note came in — +51 B net on a route-less answer, so the rung
+            // made the very document it was trying to shrink BIGGER while costing the reader three definitions. The
+            // candidate is built and compared; a drop that does not pay is not taken, and the readings simply ride.
+            // This is the assertion, not a comment about one: there is no shape in which the byte-negative branch
+            // can be reached, because the branch is the comparison.
+            if( headerParts.legendDroppable() && !fitsExactCeiling( headerStr ) )
             {
-                headerParts.confidenceNote = {};
-                headerParts.tailLegend     = false;   // deep-tail: the explainer falls with the confidence clause —
-                                                      //   the r= attrs and the <tail> element (the facts) survive
-                headerParts.legendDropped  = true;    // …and this is the sentence that says both of them fell
-                headerStr                  = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                const ForLensHeaderParts keptParts = headerParts;
+                headerParts.dropDroppableLegend();
+                std::string droppedHeader = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                if( droppedHeader.size() < headerStr.size() )
+                {
+                    headerStr = std::move( droppedHeader );
+                }
+                else
+                {
+                    headerParts = keptParts;   // byte-negative: keep the readings and say nothing
+                }
             }
             // M3: the ladder hands back the rung it took. That value — never a search of the emitted text — is
             // what puts over_ceiling="1" on the root below.
-            rw::CeilingLadderChoice chosen = rw::climbCeilingLadderBy( buildForHeader, headerStr, fitsCeiling,
+            rw::CeilingLadderChoice chosen = rw::climbCeilingLadderBy( buildForHeader, headerStr, fitsExactCeiling, fitsCeiling,
                                                                        /*hasRouteAttr=*/!routeNoteRaw.empty(), kNotes );
             headerStr                = std::move( chosen.header );
             rootFinish.lastRungFired = ( chosen.rung == rw::CeilingRung::OverCeiling );
@@ -2670,7 +3012,8 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             packSignatures( stdout, ing, lensRank, forTopN, cfg.packBudgetBytes, true, fanInPtr, impurePtr, redactPtr,
                             &forChurn, &forClone, testedPtr, ampPtr, /*rankAdaptivePayload=*/true, sigsBudget, notesPtr, flRootArg,
-                            /*hasRelevanceFloor=*/true );   // LB-A: the direct-emission degrade path selects identically
+                            /*hasRelevanceFloor=*/true, nullptr, nullptr, nullptr,   // LB-A: the direct-emission degrade path selects identically
+                            forTopRowNext );                                         // L-W: same next= rule on the degrade path
         }
         if( legoPreRendered )
         {

@@ -131,8 +131,11 @@ printf '%s' "$CTX1" | grep -Fq -- '--expand' && printf '%s' "$CTX1" | grep -Fq '
 printf '%s' "$OUT1" | grep -qi 'permissionDecision\|"deny"' \
     && no "R5 route: output carries a permission decision (must never — deny BLOCKS the prompt)" \
     || ok "R5 route: no permission decision anywhere in the output"
-# ONE recommendation, not a catalogue: exactly one <run> element reaches the agent.
-RUNS="$( printf '%s' "$CTX1" | grep -o '<run>' | wc -l | tr -d ' ' )"
+# ONE recommendation, not a catalogue: exactly one <run> element reaches the agent. Counted in the DATA:
+# the document's legend names the elements it defines (2026-09-13), and a legend that says the word is not
+# a second recommendation — the same reason taskroutecheck reads every arm off the comment-stripped body.
+RUNS="$( printf '%s' "$CTX1" | python3 -c 'import sys,re
+sys.stdout.write( re.sub( r"<!--.*?-->", "", sys.stdin.read(), flags=re.S ) )' | grep -o '<run>' | wc -l | tr -d ' ' )"
 [ "$RUNS" = "1" ] && ok "R6 route: exactly ONE paste-ready command is injected" \
     || no "R6 route: injected $RUNS <run> elements, expected 1"
 
@@ -262,6 +265,24 @@ observe "$( bashcall adopt3 'ripwire . --expand=targetSymbol' )" "$H9"
 [ "$( rowget "$H9/routing.jsonl" 3 outcome )" = "missed" ] && [ "$( rows "$H9/routing.jsonl" )" = "3" ] \
     && ok "O3 observe: a third call is OUTSIDE the window — the second non-adoption closes it as missed" \
     || no "O3 observe: rows=$( rows "$H9/routing.jsonl" ) third=[$( rowget "$H9/routing.jsonl" 3 outcome )]"
+
+# O8 (2026-09-12, the local routing analysis's instrument bug): a DIRECTORY named ripwire is not a ripwire call.
+# `cd /x/ripwire && git log --oneline` carries a token ending in /ripwire in ARGUMENT position; the observer
+# counted it as a call, burned a window slot, and a real adoption two commands later read as `missed`. Only the
+# COMMAND word counts — `ripwire`, `./build/ripwire`, any path whose basename is ripwire in command position
+# (after ^ ; & | ( or $( and any leading VAR=value assignments) — never an argument.
+H13="$TMP/h13"; mkdir -p "$H13"
+route_run "$H13" "$WITH_RIPWIRE" "$( promptjson adopt7 "$REPO" "$RECPROMPT" )" RIPWIRE_METER_ARM=treatment >/dev/null 2>&1
+observe "$( bashcall adopt7 'cd /tmp/x/ripwire && git log --oneline' )" "$H13"
+observe "$( bashcall adopt7 'ls -la /opt/ripwire' )" "$H13"
+observe "$( bashcall adopt7 'echo ripwire' )" "$H13"
+[ "$( rows "$H13/routing.jsonl" )" = 1 ] \
+    && ok "O8 observe: a directory argument ending in /ripwire (and a bare word in argument position) consumes no window slot" \
+    || no "O8 observe: a non-call consumed a window slot — rows=$( rows "$H13/routing.jsonl" ) (want 1: the prompt row only)"
+observe "$( bashcall adopt7 'cd /tmp/x/repo && ./build/ripwire . --expand=targetSymbol' )" "$H13"
+[ "$( rowget "$H13/routing.jsonl" 2 outcome )" = adopted ] && [ "$( rowget "$H13/routing.jsonl" 2 position )" = 1 ] \
+    && ok "O8 observe: the real call after them (a path in command position after &&) still adopts at position 1" \
+    || no "O8 observe: row 2 = outcome=[$( rowget "$H13/routing.jsonl" 2 outcome )] position=[$( rowget "$H13/routing.jsonl" 2 position )] (want adopted at 1)"
 
 # The CONTROL arm's adoption is observed identically. Without this the band has one arm.
 H10="$TMP/h10"; mkdir -p "$H10"
@@ -477,6 +498,80 @@ done
 [ -z "$PMISS" ] \
     && ok "P1 docs: EVALS.md carries the pre-registered metric and band this hook is the instrument for" \
     || no "P1 docs: EVALS.md is missing:$PMISS"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# O9 — rw_is_ripwire_call: ONE block, three files, and the shapes an agent actually types (PR #215 item 6)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# The regex this replaced said NO to every WRAPPED invocation (`time ./build/ripwire`, `sudo`, `env X=1`,
+# `xargs`, `exec`, `nohup`, `if ripwire`, `{ ripwire`) and YES to a quoted string in a git message. Worse, the
+# nudge hook's own meter kept a THIRD opinion, so the two counts whose ratio is the published substitution rate
+# were taken with different instruments. The block is mirrored; these arms assert the copies are identical
+# (the kIngestParserVerMirror pattern) and that the rule answers each shape correctly.
+echo
+echo "=== O9: the command-word rule is one text in three files, and reads the wrapped shapes ==="
+extract_block(){ awk '/^# ---- BEGIN MIRRORED BLOCK rw_is_ripwire_call/,/^# ---- END MIRRORED BLOCK rw_is_ripwire_call/' "$1"; }
+B_CLAUDE="$TMP/b_claude.sh"; B_CODEX="$TMP/b_codex.sh"; B_NUDGE="$TMP/b_nudge.sh"
+extract_block "$ROOT/hooks/ripwire-claude-route.sh" > "$B_CLAUDE"
+extract_block "$ROOT/hooks/ripwire-codex-route.sh"  > "$B_CODEX"
+extract_block "$ROOT/hooks/ripwire-nudge.sh"        > "$B_NUDGE"
+if [ ! -s "$B_CLAUDE" ]; then
+    no "O9 the mirrored block is absent from hooks/ripwire-claude-route.sh (the arm below would prove nothing)"
+elif diff -q "$B_CLAUDE" "$B_CODEX" >/dev/null && diff -q "$B_CLAUDE" "$B_NUDGE" >/dev/null; then
+    ok "O9 rw_is_ripwire_call is byte-identical in the three hooks ($( wc -l < "$B_CLAUDE" | tr -d ' ' ) lines)"
+else
+    no "O9 the three copies of rw_is_ripwire_call have DRIFTED — the hooks and the meter will disagree on the same command line"
+fi
+
+# The rule itself, sourced from the claude hook's copy so the arm tests what ships.
+cat "$B_CLAUDE" > "$TMP/rule.sh"
+printf 'if rw_is_ripwire_call "$1"; then echo 1; else echo 0; fi\n' >> "$TMP/rule.sh"
+o9_bad=0; o9_n=0
+o9(){   # $1 = expected (1/0), $2 = command line
+    o9_n=$(( o9_n + 1 ))
+    got="$( sh "$TMP/rule.sh" "$2" 2>/dev/null )"
+    [ "$got" = "$1" ] || { o9_bad=$(( o9_bad + 1 )); printf '        want=%s got=%s  %s\n' "$1" "$got" "$2"; }
+}
+# CALLS — every one of these runs ripwire, and every one of them read as "not a call" before this change
+o9 1 'ripwire . --for=x'
+o9 1 './build/ripwire .'
+o9 1 'time ./build/ripwire .'
+o9 1 'sudo ripwire .'
+o9 1 'env RIPWIRE_BIN=x ripwire .'
+o9 1 'xargs ripwire'
+o9 1 'exec ripwire .'
+o9 1 'nohup ripwire . &'
+o9 1 'if ripwire . --for=x; then echo y; fi'
+o9 1 '{ ripwire . ; }'
+o9 1 'cd /tmp && ripwire .'
+o9 1 'rtk proxy ripwire .'
+o9 1 'git log --oneline && ripwire .'
+# ROUND 2 (CodeRabbit, PR #215): a CONTROL OPERATOR ATTACHED TO A WORD. The rule used to ask the shell to
+# split the line, and word splitting does not lex operators: `true; ripwire .` split into `true;` + `ripwire`,
+# `true;` read as an ordinary command word, and the call behind it was no longer in command position. RED on
+# the round-1 block, measured while writing this: all five of these answered 0.
+o9 1 'true; ripwire .'
+o9 1 'echo hi;ripwire .'
+o9 1 'false||ripwire .'
+o9 1 '(ripwire .)'
+o9 1 'git log --oneline&&ripwire .'
+o9 1 'ripwire . 2>&1 | head'
+# NOT CALLS — the word appears, nothing runs
+o9 0 'git commit -m "fix; ripwire hook"'
+o9 0 'cd /opt/src/ripwire && git log --oneline'
+o9 0 'ls /opt/ripwire'
+o9 0 'grep -r ripwire src/'
+o9 0 'echo ripwire'
+# …and the three the lexer answers for a REASON rather than by accident: a `;` inside quotes is not an
+# operator (round 1 got this right only because `-m "fix;` happened not to end a command), a `#` at the start
+# of a word begins a comment, and a redirection TARGET is not a command word.
+o9 0 "grep -r 'ripwire;' src/"
+o9 0 'echo "a; ripwire b"'
+o9 0 '# ripwire .'
+o9 0 'echo hi > ripwire'
+[ "$o9_bad" -eq 0 ] \
+    && ok "O9 command-word rule: $o9_n shapes read correctly (19 wrapped/sequenced/operator-attached calls, 9 appearances that run nothing)" \
+    || no "O9 command-word rule: $o9_bad of $o9_n shapes read WRONG (listed above)"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

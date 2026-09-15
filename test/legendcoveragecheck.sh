@@ -135,15 +135,28 @@ ROSTER = [
     # Rung zero drops the confidence=/margin_pct=/budget_tokens= clause and the r=/tail clause to buy the
     # bytes back, which is the right trade (METHODOLOGY §9: inside the budget beats over it) and was
     # entirely silent: the attributes stayed on the root with nothing defining them and nothing saying so.
-    # 1300 sits well inside the measured rung-zero band on this tree (rung zero fires from ~1100 to ~1340),
-    # so the row keeps exercising the rung under ordinary drift; if the band moves off it, the row degrades
-    # into an ordinary budgeted --for and arm (A) still holds — it just stops proving this particular thing.
-    ("for-budgeted",       [SMALL, "--for=rank symbols by pagerank", "--token-budget=1300"]),
+    # THE BUDGET IS 900, AND THE OLD 1300 WAS A KNIFE-EDGE. The band recorded here was "~1100 to ~1340",
+    # measured only on a developer worktree — and the rung's top edge is a function of the CHECKOUT PATH
+    # LENGTH, because the document charges its own `root="…"` bytes. Measured on this tree at two roots:
+    # a 38-character root fires rung zero at 1287 and NOT at 1288; a 137-character root fires at 1323 and not
+    # at 1324 (bisected, same commit and binary). CI checks the tree out into the runner's work directory,
+    # which is 33 characters on the Linux
+    # runners and 34 on the macOS ones (this file may not spell either path: ripwirepubliccheck arm 2 refuses
+    # an absolute home path in a tracked file, and it is right to, since it cannot tell a runner's home from
+    # a person's). So 1300 was INSIDE the band on a long local path and OUTSIDE it on every CI runner — green
+    # here, red on three shards. The band's floor is flat: from 100 up to the top edge the note's text and arm
+    # (F)'s census are byte-identical, so 900 is mid-rung by ~390 tokens of headroom rather than a widened
+    # tolerance, and arm (E) now GATES that headroom instead of trusting a comment (see MARGIN below).
+    ("for-budgeted",       [SMALL, "--for=rank symbols by pagerank", "--token-budget=900"]),
     # …and the same rung in the COMPACT DIALECT, which has its own legend strings for every clause the rung
     # drops (kForCompactConfidenceClause, kForFileTailLegendCompact) and had no roster row at all. A dialect
     # with no row is a dialect where the ratchet cannot see a gap, and this one carries `schema=` that the
     # default dialect does not emit.
-    ("for-budgeted-compact", [SMALL, "--legend=compact", "--for=rank symbols by pagerank", "--token-budget=1300"]),
+    ("for-budgeted-compact", [SMALL, "--legend=compact", "--for=rank symbols by pagerank", "--token-budget=900"]),
+    # …and the FILE PAGE (L-W, forpage.h): --for --limit=N answers with its own <files> root and <f> rows, a
+    # first screen no other row here reaches; both dialects, since the compact one carries its own short legend.
+    ("for-page",           [SMALL, "--for=rank symbols by pagerank", "--limit=10"]),
+    ("for-page-compact",   [SMALL, "--legend=compact", "--for=rank symbols by pagerank", "--limit=10"]),
     ("pack-task",          [SMALL, "--pack-task=rank symbols by pagerank"]),
     ("exemplar",           [SMALL, "--exemplar=rank symbols"]),
     ("hotspots",           [ROOT,  "--hotspots"]),
@@ -196,6 +209,10 @@ ROSTER = [
     ("layout",             [SMALL, "--layout=MapAnnotations"]),
     ("notes",              [ROOT,  "--notes"]),
     ("scan-skills",        [ROOT,  "--scan-skills"]),
+    # 2026-09-13: the router's own document was outside this roster, and it was the one shape with NO
+    # legend in the default dialect at all — every attribute on its only screen undefined. The probe is a
+    # RECOMMEND, not an abstain: an abstain carries no <choice>, so half the vocabulary would be unseen.
+    ("help-task",          [SMALL, "--help-task=find the code responsible for this retry timeout bug"]),
 ]
 
 # the v1 core row keys, defined verbatim in every map legend and re-stated in the row dictionaries — excluded
@@ -209,7 +226,7 @@ def legendOf( doc ):
     m    = LEAD.match( doc )
     lead = m.group( 0 ) if m else b""
     rest = doc[ len( lead ): ]
-    m2   = re.match( rb'\A\s*<ctx\b[^>]*>((?:\s*<!--.*?-->)+)', rest, re.S )   # <ctx …><!-- legend --> wrappers
+    m2   = re.match( rb'\A\s*<(?:ctx|files)\b[^>]*>((?:\s*<!--.*?-->)+)', rest, re.S )   # <ctx …><!-- legend --> wrappers; <files> = the --for file page (forpage.h)
     if m2: lead += m2.group( 1 )
     return lead.decode( 'utf-8', 'replace' )
 
@@ -354,7 +371,19 @@ import subprocess, re, sys, os
 BIN, ROOT, TMP = sys.argv[1:4]
 SMALL = os.path.join( ROOT, "src" )
 QUERY = "--for=rank symbols by pagerank"
-TIGHT, WIDE = "--token-budget=1300", "--token-budget=8000"
+# TIGHT is MID-RUNG, and MARGIN is what proves it. The rung-zero band's top edge moves with the length of
+# the checkout path, because the document charges its own `root="…"` bytes. Bisected on this tree, same commit
+# and binary, only the root differing: a 38-character root fires rung zero at 1287 and NOT at 1288; a
+# 137-character root fires at 1323 and not at 1324. The old TIGHT of 1300 sat BETWEEN those two numbers, so
+# this arm was green on a developer worktree and red on every CI runner (CI checks out at 33-34 characters).
+# A budget that only fires on the machine that chose it is not a probe. TIGHT=900 sits 387 tokens below the
+# SHORTEST measured edge, and the band is flat beneath it — from 100 up to the edge the note's text and arm
+# (F)'s census do not change — so this is mid-rung, not a tolerance. Both edges move when src/ changes (this
+# lane re-measured them across a merge that added a 385-line file, and the short one moved by a single token),
+# which is the other reason the headroom is gated below rather than trusted here.
+# MARGIN re-runs the same query 200 tokens ABOVE TIGHT and requires the note there too, which turns "the
+# probe has headroom" from a claim in this comment into a row that fails when it stops being true.
+TIGHT, MARGIN, WIDE = "--token-budget=900", "--token-budget=1100", "--token-budget=8000"
 CORE = { "p", "n", "t", "id", "l", "k", "c" }
 
 # The (F) floor: keys whose ONLY definition on the budgeted document is the rung-zero note, AND whose attribute
@@ -362,8 +391,13 @@ CORE = { "p", "n", "t", "id", "l", "k", "c" }
 # elements' trios are here because `defined` sees one name: <tail>'s three are what the note is ABOUT, <sigs>'s
 # three are legendOff's and are closed by the same three words. Do not add a line here to make a red go away
 # without saying, in the commit, which clause was dropped and why it is not worth a sentence of its own.
+# SHRUNK 2026-09-13 (PR #215 review item 10): the compact dialect's four lines stopped reproducing and the arm
+# had been printing "verify, then shrink the FLOOR in this file" for four runs without anyone shrinking it — a
+# floor that outlives its findings is a floor nobody reads. They are gone because this dialect's rung zero no
+# longer fires on these documents: it is taken only when the drop PAYS (verbs_for.h), and in the compact dialect
+# the note was longer than the clauses it replaced, so the readings ride and close their own attributes.
 FLOOR = { "default": { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
-          "compact": { "sigs@shown", "sigs@total", "tail@shown", "tail@total" } }
+          "compact": set() }
 
 LEAD = re.compile( rb'\A(?:\s*<!--.*?-->)+', re.S )
 ATTR = re.compile( rb'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>' )
@@ -400,6 +434,13 @@ for dialect, extra in ( ( "default", [] ), ( "compact", [ "--legend=compact" ] )
         continue
     if mw:
         bad.append( f"{dialect}: the dropped-legend note is STILL THERE at {WIDE} — 'a wider token-budget' is not wide enough to be the control, so nothing below is evidence" )
+        continue
+    # HEADROOM, gated rather than asserted in a comment: the same query 200 tokens above TIGHT must still
+    # climb rung zero. This is the arm that would have caught the old 1300 on the machine that chose it —
+    # a probe one step from the rung's top edge passes locally and fails wherever the charged bytes differ,
+    # and the checkout path length alone is enough to move them.
+    if not NOTE.search( legendOf( doc( [ SMALL, QUERY, MARGIN ] + extra ) ) ):
+        bad.append( f"{dialect}: the note is present at {TIGHT} but ABSENT at {MARGIN} — the probe is within 200 tokens of the rung's TOP edge, so it no longer fires on a document any smaller (a shorter checkout path is enough). Re-anchor TIGHT to the middle of the measured band, do not widen a tolerance" )
         continue
     names = sorted( set( NAME.findall( mt.group( 0 ) ) ) )
     if not names:

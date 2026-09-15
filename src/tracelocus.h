@@ -1043,7 +1043,7 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         // §B7.5 (CA4): the <sigs> rows this verb emits carry the same ranking-row vocabulary --pack-task
         // spells out, and this legend defined only the frame half — a reader met cx=/ccx=/in= on the
         // signature rows with nothing to read them against, the identical gap on the identical rows.
-        h += "On a <sigs> row (rows in r= order): n=name, id=canonical(when scoped), p=file, t=kind, cx=cyclomatic complexity, "
+        h += "On a <sigs> row (rows in r= order): n=name, sc=enclosing scope (when scoped; the full id is p::sc::n), p=file, t=kind, cx=cyclomatic complexity, "
              "ccx=cognitive complexity, in=reuse-count (absent = not measured, never a false 0). ";
         h += "rank 1 = the innermost in-corpus frame; its FULL body follows, other suspects as signatures. ";
         h += hopLegendOf( hop );                      // LB-A: empty unless the hop fired (byte-identical otherwise)
@@ -1175,6 +1175,12 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         const CeilingLadderChoice chosen = climbCeilingLadder( [ & ]( bool, bool withSrcEcho, std::string_view extra )
                                                                { return buildTraceHeader( withSrcEcho, extra ); },
                                                                headerStr, pricedBytesOf( whole.size() ) - headerStr.size() + rootAttrsBound,
+                                                               // ONE ceiling twice: this lens states its ceiling in BYTES and labels
+                                                               // over_ceiling= against `namedCeiling`, so it has no token-rate
+                                                               // mismatch for the two-ceiling ladder to resolve (PR #215 item 1 names
+                                                               // --for and --pack-task). Passing the same predicate for both rungs
+                                                               // reproduces the pre-#215 single-ceiling climb exactly.
+                                                               ceilingAllowanceFromBudgetBytes( bundleBudget ),
                                                                ceilingAllowanceFromBudgetBytes( bundleBudget ),
                                                                /*hasRouteAttr=*/false, kNotes );
         if( chosen.header != headerStr )

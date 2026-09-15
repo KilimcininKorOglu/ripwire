@@ -21,7 +21,7 @@ when to reach for each command.
 **Want every detail?** [The reference guide](#reference-guide) near the bottom covers install, commands, output
 format, exit codes and limits. You do not need it to get started.
 
-<p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/daily?language=C%2B%2B" alt="Trendshift: C++ Repository of the Day badge for redhat-et/ripwire" width="250" height="55"></a></p>
+<p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
 <summary><b>Fifty years of software-engineering results, and research from last month.</b> 49 repositories and 70 papers folded — McCabe (1976) through to <b>seven published in the last two months</b> — each row in <a href="docs/LINEAGE.md"><b>docs/LINEAGE.md</b></a> naming the lesson taken and the file it lives in</summary>
@@ -735,15 +735,14 @@ call a CLI.
 <summary><b>What comes back</b> — real output from this repository, pretty-printed and trimmed (re-captured 2026-09-05; rows are served in rank order, each naming its file)</summary>
 
 ```xml
-<ctx task="incremental cache invalidation" route="routed: subtoken+body BM25 (--for's default) — no strong
-     name hit, multi-word conceptual query" confidence="high" margin_pct="20"
+<ctx task="incremental cache invalidation" route="subtoken+body" confidence="high" margin_pct="20"
      bundle="compact" bodies="0" reason="compact-route" est_tokens="3995">
   <sigs shown="23" total="40" capped="1">
     <d l="106" n="kCacheMagic" p="src/ingest_cache.h" cx="0" ccx="0" in="0" churn="11" amp="71" pure="1" r="1"
        next="--expand=src/ingest_cache.h:kCacheMagic"><doc>incremental cache (--cache): per-file content hash + raw facts so a re-run re-parses ONLY c…</doc>constexpr std::uint32_t kCacheMagic = 0x4b505443</d>
-    <d l="1307" n="spanTierMemoPath" id="src/ingest_astquery.h::rw::spanTierMemoPath" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
-    <d l="247" n="ingestCommitTree" id="src/dmm.h::rw::dmm::ingestCommitTree" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
-    <d l="841" n="mcpRefreshedThisRequest" id="src/mcpindex.h::rw::mcpRefreshedThisRequest" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
+    <d l="1307" n="spanTierMemoPath" sc="rw" p="src/ingest_astquery.h" cx="1" ccx="0" in="2" churn="5" amp="44" r="2"><doc>Composed exactly the way every OTHER blob family is (quality.h): one fixed-width identity hex pe…</doc>inline std::string spanTierMemoPath( const std::string&amp; diskPath )</d>
+    <d l="247" n="ingestCommitTree" sc="rw::dmm" p="src/dmm.h" cx="6" ccx="5" in="1" churn="6" amp="27" r="3"><doc>Ingest the tree at `sha`, materialized out of `root`&apos;s object store. …</doc>inline bool ingestCommitTree( const std::string&amp; root, const std::string&amp; sha, … )</d>
+    <d l="841" n="mcpRefreshedThisRequest" sc="rw" p="src/mcpindex.h" cx="1" ccx="0" in="2" churn="20" amp="43" r="4"><doc>P1-15 — the `_reingest` envelope field for a response whose handling ran an INCREMENTAL pass, …</doc>inline bool mcpRefreshedThisRequest( std::uint64_t passesAtEntry )</d>
     …
   </sigs>
   <hops shown="2" total="6" capped="1" noedge="2">
@@ -813,9 +812,9 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 ## What it answers
 
 <details>
-<summary><b>179 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
+<summary><b>180 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
 
-Around the core sit 179 long flags advertised in `--help`, across seven families — plus an MCP
+Around the core sit 180 long flags advertised in `--help`, across seven families — plus an MCP
 server, so a coding agent can call any of them mid-task instead of grepping and reading whole files.
 `--help` prints one line per flag (~4.5K tokens); `--help=--FLAG` prints that flag's full entry with
 every caveat, `--help=SECTION` one family, and `--help=all` the whole catalog.
@@ -889,7 +888,7 @@ cmake -S . -B build && cmake --build build -j
 <summary>Why there is no download step — vendored grammars, the offline-build proof, the languages parsed, and putting it on <code>PATH</code></summary>
 
 **Or build from source.** Requirements: CMake 3.24+ and a C++23 compiler — that means clang 16+ /
-AppleClang 15+ (Xcode 15) / gcc 13+ / MSVC 19.36+, and if your distro's CMake is older than 3.24,
+AppleClang 15+ (Xcode 15) / gcc 13+, and if your distro's CMake is older than 3.24,
 `pip install cmake` or `brew install cmake` gets a current one everywhere. Nothing else —
 tree-sitter's core, the grammars listed in [THIRD_PARTY.md](THIRD_PARTY.md) and the test framework are vendored under `third_party/deps`,
 so there is no download step and no package manager to satisfy. Prove that with the network off:
@@ -1205,7 +1204,7 @@ trailing `…`.
 </details>
 
 <details>
-<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="6"</code> ships labelled a floor</summary>
+<summary><code>--callers</code> — a call graph built on the spot, and why <code>count="7"</code> ships labelled a floor</summary>
 
 **Ten seconds, no index server, no embeddings, no API key** — a parse and a call graph, built on the
 spot. The rows below are a real capture: the callers and their files are gate-held current
@@ -1214,13 +1213,14 @@ grow — nothing can keep a line number true in a document, so it is not claimed
 
 ```
 $ ripwire . --callers=rankGraphTeleport
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" counts_floor="1">
-<s t="fn" n="runEval" p="src/eval.h:169"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3115"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3664"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:995"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1120"/>
-<s t="fn" n="getIndex" p="src/mcpindex.h:1104"/>
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" counts_floor="1">
+<s t="fn" n="runEval" p="src/eval.h:171"/>
+<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
+<s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
 
@@ -1228,7 +1228,7 @@ $ ripwire . --callers=rankGraphTeleport
 dispatch contributes no edge (a call through a function pointer or callback is an edge only when
 ONE function is bound to that variable in scope and the variable never escapes — its address taken
 or reference-bound — and a macro-generated call site — tagged
-`role="macro"` — only when its function-like `#define` is indexed): `count="6"` is a **floor**,
+`role="macro"` — only when its function-like `#define` is indexed): `count="7"` is a **floor**,
 and the element says so before you read a single row.
 
 </details>
@@ -1244,12 +1244,12 @@ $ ripwire . --top-k=3
      precise=… skipped_oversize=… order=important-first -->
 <r est_tokens="435">
 <f p="./src/infra/svector.h" layer="infra">
-<s t="method" n="size" id="./src/infra/svector.h::svector::size" k="…"></s>
-<s t="method" n="push_back" id="./src/infra/svector.h::svector::push_back" amb="2" k="…">
-<c n="buf"/><c n="buf"/><c n="grow"/></s>
+<s t="method" n="size" sc="svector" k="…"></s>
+<s t="method" n="push_back" sc="svector" amb="2" k="…">
+<c n="buf" l="…,…"/><c n="grow" l="…"/></s>
 </f>
 <f p="./src/scipoverlay.h">
-<s t="method" n="empty" id="./src/scipoverlay.h::ScipOverlay::empty" k="…"></s>
+<s t="method" n="empty" sc="ScipOverlay" k="…"></s>
 </f>
 </r>
 ```
@@ -1276,7 +1276,7 @@ $ ripwire . --test-gate          # exit code: 4
 <test-gate changed="1" impacted="80" tests="2" untested="76" shown_tests="2" tests_capped="0"
            shown_untested="25" untested_capped="1" script_gates_unmodelled="332" at="9cf0b16f3+dirty">
 <t p="./test/adaptivecutshapefix/adaptive_cut_shape_test.cpp" run="bash test/adaptivecutshapecheck.sh"/>
-<t p="./test/verify_radix.cpp"/>
+<t p="./test/verify_radix.cpp" run_unknown="1"/>
 <u sym="buildGraph" p="./src/graph.h" ccx="712"/>
 <u sym="dispatchMcpLine" p="./src/mcp.h" ccx="428"/>
 …
@@ -1284,11 +1284,19 @@ $ ripwire . --test-gate          # exit code: 4
 ```
 
 A `run=` attribute appears only when a runner is derivable from real evidence — a test-dir script
-whose stem matches the harness, or whose text names it. No `run=` means *not derivable*, never a
-guessed suite command. `script_gates_unmodelled="332"` is the same discipline: script-to-binary is not
-a call edge, so those gates are invisible to this walk, and the number says so rather than letting
-`tests="2"` read as complete. The `<u>` rows are the untested blast radius: impacted symbols that no
-test in the corpus reaches.
+whose stem matches the harness, or whose text names it. A row with none says so — `run_unknown="1"`,
+never a guessed suite command — and a `<t>` or `<g>` row carries one or the other, never neither. A
+`<g hops="2" n="3" p="a,b,c" run_unknown="1"/>` row is **two or more contiguous runner-less rows whose
+attributes are byte-identical**, served as one: `n=` is how many, `p=` is their paths verbatim in list
+order, and the disclosure is paid once per group rather than once per row. Everything else stays its own
+row — a row with a `run=`, a row whose attributes differ from its neighbour's, and a path containing a
+comma, which is never grouped at all, so `p=` splits on `,` into exactly `n=` paths. A `shown=`/`total=`
+over these rows counts test FILES: a `<g>` row is `n=` of them.
+
+`script_gates_unmodelled="332"` is the same discipline: script-to-binary is not a call edge, so those
+gates are invisible to this walk, and the number says so rather than letting `tests="2"` read as
+complete. The `<u>` rows are the untested blast radius: impacted symbols that no test in the corpus
+reaches.
 
 </details>
 
@@ -1797,9 +1805,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>612 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>617 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **612 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **617 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -1898,9 +1906,9 @@ socket instead of stdio, `ripwire --listen=HOST:PORT` serves the same verbs.
 ### 2. Install the skills
 
 <details>
-<summary>Eighteen task-shaped skills, every install mode, and the <code>--scan-skills</code> verdict to read first</summary>
+<summary>Seventeen task-shaped skills, every install mode, and the <code>--scan-skills</code> verdict to read first</summary>
 
-`skills/` ships **eighteen task-shaped skills** that tell an agent *which* verb answers the moment it
+`skills/` ships **seventeen task-shaped skills** that tell an agent *which* verb answers the moment it
 is in — orienting cold, tracing a call, sizing a refactor, checking a diff, hunting a bug, writing
 tests, reviewing security. Without them an agent has 31 verbs and no map of when each applies; the skills name the moment
 each verb is for. Install as symlinks back into this repo, so edits here take effect
@@ -2034,15 +2042,17 @@ tier: it parses with its own vendored grammar, so its headings are symbols, not 
 > there. Come here when you want to know exactly what a command does, what its output means, or where the tool stops
 > being right.
 
-Publication date: 2026-09-12
+Publication date: 2026-09-12. Every claim below re-verified against a 0.6.0 build on 2026-09-13.
 
 ripwire analyzes a source tree. The tool writes a ranked symbol map to standard output. The map
 shows the symbols that matter for a task, the callers of those symbols, and the tests that reach
-them. The tool is one binary. It has no runtime dependencies. It does not use a network and it does
-not use a background service.
+them. The tool is one binary. The map itself has no runtime dependencies: no API key, no embeddings,
+no index server, no daemon. The history-backed commands need `git` on the path and a repository
+to read. It uses a network only when you give it a git URL instead of a directory, which
+it shallow-clones into a cache.
 
 This guide tells you how to install, operate, and evaluate ripwire. Read `docs/COMMANDS.md` for the
-full command reference. Run `./build/ripwire --help` for the current flag list. The binary generates
+full command reference. Run `ripwire --help` for the current flag list. The binary generates
 `--help` from its own flag table, so `--help` is the authority. If this guide disagrees with
 `--help`, report this guide as a defect.
 
@@ -2057,18 +2067,21 @@ The counts come from `docs/LINEAGE.md`. Counts are current as of 2026-09-08. Sev
 
 ### 1. Purpose and function
 
-ripwire reads a source tree and answers these questions:
+ripwire reads a source tree, answers these questions about it, and can apply whole-symbol edits
+to it:
 
 **Orient**
 
 - Which symbols matter most in this tree? (`ripwire .`)
 - Where do I start on this task, and which code does it touch? (`--for`)
 - Can I get the ranking, the key function bodies, their callers and the tests to run in one bounded bundle? (`--pack-task`)
+- How do I split this work across several agents without them colliding? (`--partition`, `--plan-lanes`)
 - What does the tree look like, directory by directory? (`--tree`)
 - Which command answers my question? (`--help-task`)
 - What do the project's notes and docs already say about this task? (`--recall`, `--notes`)
 - Which existing code should new code imitate? (`--exemplar`)
 - What must a new implementation of this interface provide, and who implements it already? (`--lego`)
+- Which names does this repo use but never define — its standard library and third-party surface? (`--external-surface`)
 
 **Navigate**
 
@@ -2076,8 +2089,8 @@ ripwire reads a source tree and answers these questions:
 - What does this symbol call? (`--callees`)
 - Where is this symbol read, written or imported, not only called? (`--uses`)
 - What does a change to this symbol affect, transitively? (`--impact`)
-- How does one symbol reach another? (`--path`)
-- How do several symbols connect? (`--connect`)
+- How does one symbol reach another, following the direction of the calls? (`--path`)
+- How do several symbols connect, in any direction? (`--connect`)
 - What sits around this symbol in the graph? (`--around`)
 - What does this function's body say, with its callees' signatures inline? (`--expand`)
 - Where does this text appear, and in which function? (`--grep`)
@@ -2086,11 +2099,14 @@ ripwire reads a source tree and answers these questions:
 - Which branch's tree defines or mentions this symbol? (`--whereis`)
 - Which frames of this stack trace, sanitizer report or compiler error are in my code? (`--from-trace`)
 - Is this claim about the code true? (`--verify`)
+- Can I ask the call graph a question these commands do not phrase? (`--graph-query`)
+- Can I run several of these lookups in one turn? (`--batch`)
 
 **Change it safely**
 
 - Is it safe to delete this symbol? (`--safe-delete`)
 - Did my edit change a function's contract, and which callers does that break? (`--edit-check`)
+- Can I replace one function's body without reading the whole file? (`--replace-symbol-body`, `--insert-before-symbol`, `--insert-after-symbol`)
 - Which tests must run for this change, and what does no test reach? (`--test-gate`)
 - Which tests reach these changed files? (`--affected`)
 - What is my change's blast radius, and which files usually change with these that I haven't touched? (`--situ`)
@@ -2100,21 +2116,25 @@ ripwire reads a source tree and answers these questions:
 
 **Quality and structure**
 
+- Which quality problems does this tree have at all, in one ranked report? (`--quality-panel`)
 - Where is the risk: complex code that changes often? (`--hotspots`)
 - Did my change make the code worse? (`--quality-delta`)
 - Where is code duplicated? (`--clones`)
 - What does the linter flag? (`--lint`)
+- Which cross-module call seams does no test reach? (`--seams`)
+- What is built but switched off in this repo? (`--flags`)
 - How do the modules depend on each other? (`--deps`)
 - Does the code follow our layering rules? (`--arch`)
 - Which clusters of code belong together? (`--communities`)
 - Who knows this code, and where is that knowledge concentrated in one person? (`--owners`)
 - Which documented claims are no longer true? (`--doc-drift`)
-- Which files did ripwire skip, and why? (`--skipped`)
+- Which files did ripwire skip, why, and which indexed files can it therefore not vouch for? (`--skipped`)
 
 **Setup and safety**
 
 - Is my install working? (`--doctor`)
 - Is this agent skill file safe to install? (`--scan-skill`)
+- Is this whole skills directory safe to install? (`--scan-skills`)
 
 The tool performs five steps in a fixed order:
 
@@ -2125,8 +2145,8 @@ The tool performs five steps in a fixed order:
 3. **Rank.** The tool ranks the symbols with Personalized PageRank.
 4. **Serialize.** The tool writes a minified XML map. The output is deterministic. Section 8 states
    the determinism rules.
-5. **Serve.** The command line reads the map. An optional MCP server exposes the same computation
-   to a coding agent.
+5. **Serve.** Two front doors run that map: the command line, and an optional MCP server that a
+   coding agent starts on demand.
 
 Every command is a different view of the same graph. The command line and the MCP server use the
 same renderer. One computation has one output shape.
@@ -2135,16 +2155,26 @@ same renderer. One computation has one output shape.
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64) |
-| Prebuilt Linux floor | RHEL 8 or later |
-| Prebuilt x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later) |
+| Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). On Windows, use WSL2. |
+| Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
+| Prebuilt macOS floor | macOS 14 or later |
+| x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |
 | Build tools | CMake 3.24 or later, and a C++23 compiler |
-| Compilers | clang 16+, AppleClang 15+, gcc 13+, or MSVC 19.36+ |
-| Dependencies | None outside the source tree. Every dependency is vendored. |
-| Network | Not required for a build or for a run. |
+| Compilers | clang 16+, AppleClang 15+, or gcc 13+ |
+| Build dependencies | None outside the source tree. Every dependency is vendored. |
+| Runtime dependencies | None for the map itself. The history-backed commands need `git` on the path, and a repository to read. |
+| Network | Not required for a build or for a run. A git URL as the root is the one exception: ripwire shallow-clones it into a cache. |
 
-The build completes with the network off. Use `-DFETCHCONTENT_FULLY_DISCONNECTED=ON` to prove this
-condition.
+The history-backed commands are `--hotspots`, `--owners`, `--cochange`, `--quality-delta`, `--dmm`,
+`--map-diff`, `--whereis`, `--stray-content`, `--merge-scout`, `--pr-context`, `--situ` and
+`--rank-by=churn`. Without git, or outside a repository, none of them returns a thin answer: most
+refuse with exit 1 and a named reason, `--dmm` and `--pr-context` return an explicit unavailable
+row, and `--map-diff` and `--rank-by=churn` still answer but disclose that the ranking fell back to
+uniform.
+
+The build completes with the network off, and `test/dependencypincheck.sh` proves it on every
+commit: it runs a real disconnected configure — the step at which FetchContent would fetch — with
+`-DFETCHCONTENT_FULLY_DISCONNECTED=ON`.
 
 ### 3. Installation
 
@@ -2183,35 +2213,62 @@ your shell profile. It does not register hooks. To register hooks, run
    cd ripwire
    ```
 
-2. Configure and build the development binary:
+2. Build. Which build you want depends on why you are here.
+
+   **To use the tool**, build the fast binary the released one is built as. `scripts/pgobuild.sh`
+   instruments, trains and re-optimizes in one command, into `build_pgo/` — Release, plus link-time
+   optimization, plus profile-guided optimization, which is 14-25% faster cold than the default
+   build and byte-identical in output:
+
+   ```bash
+   scripts/pgobuild.sh
+   ```
+
+   A plain Release build is the shorter path if you would rather skip the training run. It still
+   gets link-time optimization; it does not get PGO:
+
+   ```bash
+   cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+   cmake --build build-release -j
+   ```
+
+   **To work on the tool**, build the development tree, with no build type at all:
 
    ```bash
    cmake -S . -B build
    cmake --build build -j
    ```
 
-3. Test the binary:
+3. Test the binary you built:
 
    ```bash
-   ./build/ripwire .
+   ./build_pgo/ripwire .               # or ./build-release/ripwire . or ./build/ripwire .
    ```
 
-**Note:** Do not configure the development tree with `-DCMAKE_BUILD_TYPE=Release`. Release defines
+**Note:** do not add `-DCMAKE_BUILD_TYPE=Release` to the *development* tree. Release defines
 `NDEBUG`. `NDEBUG` removes the `DEGRADED_PATH_ALERT` diagnostics at compile time. A gate that
-asserts a degrade path then passes without evidence. Use a separate tree for a release build:
-
-```bash
-cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release -j
-```
+asserts a degrade path then passes without evidence. That is why the two builds above write to two
+trees, and why `scripts/pgobuild.sh` writes to a third: CMakeLists refuses a profile-guided build in
+`build/` or `asan/` by name, because every gate and bench number in this repository is measured
+against those trees.
 
 The continuous-integration pipeline builds both flavors. The plain build proves the degrade paths.
 The release build proves the optimizer-visible invariants. Neither flavor replaces the other.
 
+**Note:** make decides what to rebuild by comparing timestamps, so a source that changes *while* a
+build runs — most often a `git checkout` under a build in flight — leaves object files that are
+newer than the sources they disagree with, and no later incremental build repairs them. After a
+branch switch, or whenever sources may have moved under a build, use `cmake --build build
+--clean-first -j`. CONTRIBUTING.md records the three ways this has been hit and what each looked
+like.
+
 #### 3.3 Install the agent skills
 
-The `skills/` directory holds 18 task-shaped skill files. The skills tell an agent which command is
-correct for each situation. Install the skills with the script:
+The `skills/` directory holds 17 routable skills, one directory each, holding a `SKILL.md`. The
+skills tell an agent which command is correct for each situation. Sixteen are for using the tool;
+`ripwire-opt-remarks` is `audience: contributor` and installs only with `--contributor`.
+`skills/hermes/` holds one more, Hermes-native, which is why a `find` for `SKILL.md` returns 18.
+Install the skills with the script:
 
 ```bash
 skills/install.sh
@@ -2221,13 +2278,19 @@ skills/install.sh --contributor
 
 The script links the skills into the configuration directory of the agent. The `--contributor` mode
 adds the skill for compiling ripwire itself. Read the header of `skills/install.sh` for all modes.
-To check a skill file before installation, run `ripwire --scan-skills`.
+To check one file before installing it, run `ripwire --scan-skill=FILE`; for a whole directory, run
+`ripwire --scan-skills=DIR`. `ripwire wrap` runs that scan itself and refuses to wire an agent when
+it finds a CRITICAL, unless you pass `--force`.
 
 #### 3.4 Register the MCP server (optional)
 
 The command line is the primary interface. The MCP server is the optional second interface. The MCP
 server exposes 31 MCP verbs. The verb schemas reside in the agent context for every session. For
 this reason, register the MCP server only when you need it.
+
+`ripwire wrap <agent>` prints the recipe for one agent — `claude`, `cursor`, `codex`, `aider` and
+others — and `ripwire wrap --all` prints one for every agent it detects. For Claude Code it
+recommends the command line over the server, for the reason above.
 
 The server is a standard input and output MCP process. The complete configuration is:
 
@@ -2255,12 +2318,17 @@ every request cross the network in the clear: put a TLS-terminating reverse prox
 Change to the repository. Run the following command:
 
 ```bash
-./build/ripwire . --max-tokens=3000   # start here on an unfamiliar repository
+ripwire . --max-tokens=3000   # start here on an unfamiliar repository
 ```
 
 The command writes the top of the ranked map within the token budget. Remove `--max-tokens=3000`
 for the complete map. The complete map is larger. On a large tree, use `--top-k=N` to limit the row
 count.
+
+The first call on a tree parses it; every call after that reads a cache and answers in a fraction of
+the time. Judge the cost of the tool by the second call, not the first. If the first call fails, or
+looks wrong, run `ripwire . --doctor`: it checks the binary, the grammars, the cache and the git
+identity of the index, and says which one is at fault.
 
 #### 4.2 Use the common commands
 
@@ -2268,33 +2336,43 @@ count.
 | --- | --- |
 | Orient in a new tree | `ripwire . --max-tokens=3000` |
 | Prepare for a task | `ripwire . --for="<task description>"` |
+| Get everything for one task in a single call | `ripwire . --pack-task="<task description>"` |
+| Ask which command to run | `ripwire . --help-task="<task description>"` |
 | Find a symbol's callers | `ripwire . --callers=SYM` |
 | Find the callees | `ripwire . --callees=SYM` |
 | Measure the blast radius | `ripwire . --impact=SYM` |
 | List the use sites | `ripwire . --uses=SYM` |
 | Read one function body | `ripwire . --expand=SYM` |
 | Find the tests for a change | `ripwire . --test-gate` |
+| Check an edit's contract | `ripwire . --edit-check=SYM` |
+| Check what a change made worse | `ripwire . --quality-delta` |
+| Find the pattern to imitate before writing | `ripwire . --exemplar="<what you are writing>"` |
 | Review the current diff | `ripwire . --situ` |
-| Review a branch | `ripwire . --pr-context=REF` |
+| Review a branch against a base | `ripwire . --pr-context=BASEREF` |
 | Read a stack trace | `ripwire . --from-trace=FILE` |
 | Inspect code quality | `ripwire . --quality-panel` |
-| Locate a pattern | `ripwire . --grep=PATTERN` |
+| Locate a literal, or a regex | `ripwire . --grep=STRING`, `ripwire . --regex=PAT` |
 | Search the documents | `ripwire . --recall="<task>"` |
 
 ### 5. Command families
 
-The `--help` output groups 179 long flags advertised in `--help` into seven families. Run
-`./build/ripwire --help=all` for the complete catalog.
+The `--help` output groups 180 long flags advertised in `--help` into seven families. The `--help=`
+column below is the argument that prints one family: `ripwire --help=navigate`. `ripwire
+--help=--FLAG` prints one flag's full text — the caveats, the units, what it refuses and why.
+`ripwire --help=all` is the whole catalog, about 46,000 tokens.
 
-| Family | Purpose | Representative flags |
-| --- | --- | --- |
-| Understand a codebase cold | What is this repository, and what matters? | `--for`, `--help-task`, `--tree`, `--lego`, `--exemplar`, `--recall`, `--top-k`, `--token-budget`, `--max-tokens` |
-| Navigate and answer a question | Who calls this, and is it safe to change? | `--callers`, `--callees`, `--uses`, `--impact`, `--path`, `--connect`, `--situ`, `--test-gate`, `--grep` |
-| Zoom the detail ladder | Show more detail only where it pays | `--detail`, `--pack-signatures`, `--outline`, `--expand`, `--compress` |
-| Assess quality and structure | Where is the risk, and did a change add risk? | `--quality-panel`, `--hotspots`, `--clones`, `--metrics`, `--deps`, `--lint`, `--quality-delta`, `--edit-check`, `--pr-context`, `--merge-scout` |
-| Self-diagnosis | Is the setup correct? | `--doctor` |
-| Security | Is this agent skill file safe to install? | `--scan-skill`, `--scan-skills` |
-| Knobs and modes | Shape, format, cache, and budget | `--json`, `--format`, `--mcp` |
+| Family | `--help=` | Purpose | Representative flags |
+| --- | --- | --- | --- |
+| Understand a codebase cold | `understand` | What is this repository, and what matters? | `--for`, `--help-task`, `--tree`, `--lego`, `--exemplar`, `--recall`, `--top-k`, `--token-budget`, `--max-tokens` |
+| Navigate and answer a question | `navigate` | Who calls this, and is it safe to change? | `--callers`, `--callees`, `--uses`, `--impact`, `--path`, `--connect`, `--situ`, `--test-gate`, `--grep` |
+| Zoom the detail ladder | `zoom` | Show more detail only where it pays | `--detail`, `--pack-signatures`, `--outline`, `--expand`, `--compress` |
+| Assess quality and structure | `quality` | Where is the risk, and did a change add risk? | `--quality-panel`, `--hotspots`, `--clones`, `--metrics`, `--deps`, `--lint`, `--quality-delta`, `--edit-check`, `--pr-context`, `--merge-scout` |
+| Self-diagnosis | `self-diagnosis` | Is the setup correct? | `--doctor` |
+| Security | `security` | Is this agent skill file safe to install? | `--scan-skill`, `--scan-skills` |
+| Knobs and modes | `knobs` | Shape, format, cache, and budget | `--json`, `--format`, `--mcp` |
+
+The `--help=` argument matches on a substring of the family's own name, so the family titles in the
+first column are not themselves valid arguments.
 
 Not sure which command answers the task? Run `ripwire . --help-task="<task in words>"`. The command
 returns one recommended command, or it abstains when the evidence is thin. The command gives advice
@@ -2302,82 +2380,87 @@ only. It does not run the recommendation.
 
 ### 6. Output format
 
-> **Written for an agent.** ripwire is AI-driven today: the default output described here is compact XML sized for a coding
-> agent to read, not for a person scanning a terminal. Human-friendly use is on the roadmap: output a person can
-> read, and more convenient input for common coding cases.
+**You do not have to learn the schema, because the document carries it.** Every answer opens with a
+legend comment defining each attribute it uses, including what each count does and does not include.
+The map is `<r>` root, `<f p="PATH">` files, `<s t n k>` symbols, `<c n>` call edges; each answering
+command wraps its rows in an element named for the verb — `<callers>`, `<uses>`, `<pr-context>`,
+`<dmm>`, `<skillscan>`.
 
-The default output is minified XML. One comment line at the top holds the legend. The legend defines
-every attribute that the document uses. The elements are:
-
-| Element | Meaning |
-| --- | --- |
-| `<r>` | The map root |
-| `<f p="PATH">` | One source file |
-| `<s t="KIND" n="NAME" k="RANK">` | One symbol |
-| `<c n="CALLEE">` | One resolved call edge |
-
-The tool escapes `&`, `<`, `>`, `"`, and `'` in every attribute value and text node. C++ identifiers,
-such as `operator<`, and paths that contain `&` round-trip correctly.
-
-Two runs over one tree produce the same bytes. The output is streamed through a 64 KB buffer. The
-tool does not materialize the document in memory.
+Two runs over one tree produce the same bytes, and every attribute and text node is XML-escaped, so
+`operator<` and a path containing `&` round-trip: `ripwire . | xmllint --noout -` is a gate here.
+`docs/ARCHITECTURE.md` has the schema and the streaming writer behind it.
 
 #### 6.1 Output example
-
-The following command lists the callers of one function:
 
 ```bash
 ripwire . --callers=rankGraphTeleport
 ```
 
-The output has this shape. The line numbers are a capture and can move as the files grow.
+The leading legend comment is elided here; the line numbers are a capture and move as files grow:
 
 ```xml
-<callers of="rankGraphTeleport" defs="1" count="6" root="." hop_tested="0" hop_untested="6" graph_ambiguous="7601" graph_unresolved="4206" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
+<callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="7827" graph_unresolved="4865" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
 <s t="fn" n="runEval" p="src/eval.h:171"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3398"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3948"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:998"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1123"/>
+<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
 <s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
 </callers>
 ```
 
+`counts_floor="1"` says every count on that row is a floor, never a total. `next=` is the one
+follow-up command worth pasting.
+
 #### 6.2 Exit codes
+
+This is the part to wire into a script.
 
 | Code | Meaning |
 | --- | --- |
 | 0 | The command completed. |
-| 1 | The command refused the request. A refusal names the reason. |
+| 1 | The command refused the request. A refusal names the reason on stderr. |
+| 2 | A policy gate fired: `--arch` found a layering violation, `--scan-skill` found a CRITICAL, `--quality-delta` found new debt. |
 | 3 | The output exceeded the token budget that you set. |
 | 4 | `--test-gate` found an open obligation. |
 
 #### 6.3 JSON output
 
-Add `--json` to a supported read command to select JSON instead of XML. The JSON carries the same
-attributes with the same meaning. Run `--json` only with the verbs that support it. The binary
-refuses the combination when a verb does not support it.
+`--json` emits JSON instead of XML, with keys mirroring the XML attribute names one to one. It is an
+allow-list: the default map, `--for`, `--pack-task`, `--callers`, `--callees`, `--impact`,
+`--quality-delta`, `--test-gate`, `--metrics`, and `--plan-lanes`, which is JSON-native. Every other
+verb refuses on stderr with exit 1 rather than silently falling back to XML, so a verb added tomorrow
+refuses by default.
 
 ### 7. Accuracy and disclosure rules
 
 The call graph is extracted from source text by name. The tool does not have a type system or a
 compiler. These limits follow:
 
-- Dynamic dispatch contributes no edge.
+- A virtual call produces one edge per candidate in the receiver's inheritance cone — its static
+  type, that type's ancestors and its descendants — and not one edge to the target it dispatches to
+  at run time. Each such edge carries `prov="split"`. When the receiver's static type is unknown,
+  the candidate set is not narrowed at all.
 - A callback through a function pointer contributes an edge in one case. One function must be bound
-  to the variable in scope. The variable must not escape.
+  to the variable in scope, the variable must not escape, and the variable's type must be provably a
+  function pointer: a typedef or declarator in the same file proves it, a typedef in a header is
+  missed, and an `auto` or template type is read as unpinned and kept.
 - A macro-generated call site contributes an edge only when the tool indexes the function-like
   `#define`.
 - A name that has several definitions at the same resolution tier produces one edge per candidate.
   Each edge carries the weight `1/k`. The symbol carries `amb="K"`. The header totals the events in
   `ambiguous=`.
+- Two further gauges sit beside `ambiguous=`. `unresolved=` counts calls whose in-repo definitions
+  were all language-filtered. `unindexed=` counts files no grammar could read, whose calls raise
+  neither of the other two.
 
 The output uses these disclosure rules without exception:
 
 - **A zero is a measurement.** A zero means "none found". A zero never means "none exists".
 - **A floor is labelled.** A count that cannot be a total carries `counts_floor="1"`.
-- **A truncation is disclosed.** A header carries `total=`, `shown=`, and `capped=`. A document that
-  a budget cut carries its own marker and a `next=` step.
+- **A truncation is disclosed.** The element that truncated carries `total=`, `shown=` and
+  `capped=`. A document that a budget cut carries its own marker and a `next=` step.
 - **A refusal is not a zero.** A selector that names nothing indexed refuses with a did-you-mean
   suggestion computed from an edit distance. A query that resolves and selects nothing reports
   `count="0"`.
@@ -2388,9 +2471,12 @@ The output uses these disclosure rules without exception:
 
 Use these methods when a disclosure says the answer is incomplete:
 
-1. Use `--expand=SYM` to read the body.
-2. Use `--uses=SYM` and `--impact=SYM` to measure the blast radius.
-3. Use `--scip=FILE` to supply a compiler-grade index. A precise index replaces the name-based edges
+1. Use `--skipped` to see which files are missing from the index, and which indexed answers it
+   therefore cannot vouch for.
+2. Use `--expand=SYM` to read the body.
+3. Use `--uses=SYM` and `--impact=SYM` to measure the blast radius.
+4. Use `--verify="CLAIM"` to test one claim about the code: confirmed, refuted, or not-established.
+5. Use `--scip=FILE` to supply a compiler-grade index. A precise index replaces the name-based edges
    and marks the affected edges with `prov="scip"`. A path that is missing, empty or not a regular file
    causes a refusal (exit 1). A corrupt index causes a fallback to the name-based edges and a warning on
    standard error. Neither case is silent.
@@ -2403,21 +2489,29 @@ contract holds under four rules:
 1. The crawl sorts all candidate paths before it assigns symbol identifiers.
 2. Every global reduction folds fixed contiguous blocks in index order. No reduction uses an atomic
    floating-point add.
-3. The rank vector uses type `double`.
-4. The PageRank translation unit compiles without floating-point reassociation.
+3. The rank vector uses type `double`. Edges stay `float`; the multiplication and the accumulation
+   promote to `double`.
+4. The PageRank translation unit compiles without floating-point reassociation: `-fno-fast-math`,
+   set on `src/pagerank.cpp` alone.
 
-Thread count and thread timing never change the output.
+Thread count and thread timing never change the output. Neither does the output emitter: the
+`std::print` build and the `std::format` fallback emit the same bytes, which
+`test/printffmtparitycheck.sh` asserts directly — the two disagree on float formatting by default,
+and nothing else in the suite would see it.
 
-To verify the contract on your tree, run these commands:
+Continuous integration runs the two-run byte diff on every leg — macOS on both architectures, Linux,
+a RHEL 9 userland, both build flavours, and the fallback-emitter build — so the contract is checked
+on every commit, not only when you check it. To re-check it on your own tree:
 
 ```bash
 ripwire . > a
 ripwire . > b
-diff -q a b
+diff -q a b              # two runs, byte-identical
+ripwire . --no-cache > c
+diff -q a c              # and the warm run equals the cold one
 ```
 
-The diff must report no difference. The cached run must equal the uncached run. Use `--no-cache` for
-the uncached run.
+Neither diff may report a difference.
 
 ### 9. Verification and quality control
 
@@ -2425,13 +2519,20 @@ the uncached run.
 
 **The gate scripts** hold five contracts that a unit test cannot hold.
 
-1. Two runs over one tree are byte-identical.
-2. A warm run equals a cold run.
+1. Two runs over one tree are byte-identical — the determinism gate of section 8, run on every CI leg.
+2. A warm run equals a cold run — the cache-transparency gates.
 3. Every XML output is well-formed. The verification command is `xmllint --noout`.
-4. The sanitizer build uses `-fno-sanitize-recover=all`. AddressSanitizer, UndefinedBehaviorSanitizer,
-   and LeakSanitizer are part of the guardrails.
-5. A differential harness runs a reference binary and the candidate binary over every argument vector.
-   Standard output, standard error, and the exit code must match for each vector.
+4. The sanitizer build uses `-fno-sanitize-recover=all`, without which a run with undefined behaviour
+   still exits 0. AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer are part of the
+   guardrails:
+
+   ```bash
+   cmake -S . -B asan -DRIPWIRE_ASAN=ON && cmake --build asan -j
+   LSAN_OPTIONS=suppressions=lsan_suppressions.txt ./asan/ripwire <dir> >/dev/null
+   ```
+
+5. `test/argvdiffcheck.sh` runs a reference binary and the candidate binary over an argument matrix.
+   Standard output, standard error, and the exit code must match for every vector.
 
 Run the full gate suite in the foreground:
 
@@ -2442,9 +2543,10 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 208 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 212 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
-fires. `docs/TUNING.md` lists the measured cost of each cap.
+fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
+lists the measured cost of each cap.
 
 ### 10. Quality evaluation
 
@@ -2462,6 +2564,12 @@ fires. `docs/TUNING.md` lists the measured cost of each cap.
 The panel ranks a row by the count of families that agree. It does not blend the families into one
 score. A row appears at an agreement count of two or more.
 
+That is the default preset. `--quality-panel=strict` keeps only the four families measured steadily
+enough to gate on, still at two: historical and colocation are out because each is a fixed-size
+worst-40 cut over a ranking whose population moves, so both re-shuffle on code that did not change.
+`--quality-panel=lenient` takes all six at one, which is a reading order rather than a verdict. A
+family that could not be measured on this tree reports UNAVAILABLE, never "did not fire".
+
 `--quality-delta` reports only the properties that the working tree made worse against a baseline.
 `--test-gate` names the tests that must run. `--edit-check` compares an edited symbol against git
 HEAD. `--safe-delete=SYM` composes the callers, the blast radius, the use sites, and the dead-code
@@ -2474,7 +2582,8 @@ registration. The installer adds the skills. The skills teach the agent when to 
 
 `ripwire wrap <agent>` prints the wiring recipe for one agent. The command prints the recipe. It
 does not edit a configuration file. Run `ripwire wrap --all` to detect every installed agent and to
-print each recipe.
+print each recipe. The recipe differs by agent, and `wrap` decides which interface to recommend: an
+agent that can run shell commands gets the command line, and one that cannot gets the MCP server.
 
 ```bash
 ripwire wrap claude
@@ -2490,7 +2599,23 @@ ripwire wrap aider
 
 The write verbs are `--replace-symbol-body=SYM`, `--insert-before-symbol=SYM`, and
 `--insert-after-symbol=SYM`. Supply the new text with `--edit-payload=FILE` or `--edit-payload=-`
-for standard input. The CLI write verbs and the MCP write verbs use the same safety contract:
+for standard input.
+
+**The payload replaces the whole definition, signature included — not the braced body.** A payload
+that carries only `{ … }` deletes the signature. The tool discloses that in the receipt, as
+`post_check_unavailable`, rather than refusing. One trailing newline on the payload folds into the
+newline already after the span, which a heredoc or `echo` always adds; a second newline is kept and
+is reported as `trailing_newline_folded`.
+
+**Every write returns a receipt, so an agent never re-reads the file.** The receipt carries the
+edited region with surrounding context, the new `blob_sha`, the contract check against the edited
+symbol, the tests to run, and one `next=` step:
+
+```
+ripwire edit: applied atomically; receipt carries region, blob_sha, edit_check, tests_to_run; next: --test-gate=t.cpp
+```
+
+The CLI write verbs and the MCP write verbs use the same safety contract:
 
 - A stale file hash causes a refusal.
 - An ambiguous selector causes a refusal.
@@ -2513,7 +2638,7 @@ file, and one row in the extension table.
 | Metal (MSL) | `.metal` | Indexed with the C++ grammar. |
 | CUDA | `.cu`, `.cuh` | `<<<>>>` launch sites are call edges. |
 | Python | `.py` | |
-| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx` | Named imports and default imports resolve. |
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx` | Named imports and default imports resolve. One vendored dependency supplies two of the 24 grammars, `typescript` and `tsx`. |
 | Java | `.java` | Qualified `new` calls resolve in a precise tier. |
 | Kotlin | `.kt` | Shares one call graph with Java. A file with string templates past 128 levels is refused and listed by `--skipped`. |
 | Ruby | `.rb` | Superclasses, mixins, `autoload`, and constant receivers are read. |
@@ -2537,9 +2662,12 @@ Notebooks, HTML, and CSV files are indexed as documents for `--recall` and `--me
 
 | Operation | Scale | Measured result |
 | --- | --- | --- |
-| Cold parse and answer | This repository | See [Where its own cycles go](#where-its-own-cycles-go--hardware-counters-per-scope) |
-| Warm run | The same tree | See [Where its own cycles go](#where-its-own-cycles-go--hardware-counters-per-scope) |
-| Cache load | The same tree | About 167 times fewer instructions than a cold parse |
+| Cold parse | llvm-project, 182,555 files | 194.1 s to 155.6 s of CPU, measured 2026-08-08, before the performance work in 0.6.0 |
+| Cold parse and answer | This repository | Parse and query retire 3.2 to 3.5 instructions per cycle |
+| Warm run, cache load | The same tree | 52.3 M instructions in place of the cold run's dominant 8.74 B phase: about 167 times fewer |
+
+The per-scope hardware-counter table behind these rows is in
+[Where its own cycles go](#where-its-own-cycles-go--hardware-counters-per-scope).
 
 One process answers a query. The tool starts no daemon and holds no server connection. The parse
 cache is keyed by file content hash and a parser version. An extraction change bumps the version and
@@ -2551,38 +2679,48 @@ graphify 0.9.34 with `--code-only --no-cluster`. The measurement is in `bench/he
 
 ### 14. Known limits
 
-- The call graph is name-based. Dynamic dispatch, callbacks, and macro expansion can hide an edge.
-  Section 7 states the disclosure rules.
-- Multi-file localization is hard. The tool finds one gold file more often than it finds all gold
-  files of one task.
-- Churn measurements need real git history. A shallow clone reports every file as one commit.
-- The tool skips files over 4 MB. Use `--max-file-size=N` to change the limit.
-- The JSON lane skips files over 256 KB. The YAML lane skips files over 512 KB.
-- Directory symlinks are not followed.
-- The default crawl honors `.gitignore`. Use `--no-ignore` to disable this behavior.
+**What the analysis cannot see**
+
+- The call graph is name-based, with no type system and no compiler. A virtual call resolves to every
+  candidate in the receiver's inheritance cone rather than to the one target it dispatches to at run
+  time, and a callback, a macro expansion or a duck-typed call can produce no edge at all. Section 7
+  states the disclosure rules; `--scip=FILE` supplies a compiler-grade index where precision matters.
+- Test coverage is read from call edges out of indexed test symbols, so a shell or command-line test
+  that runs a built binary as a subprocess is invisible, and a repository tested that way reads as
+  untested. Such a harness is labelled `harness=script` with `reaches=0`, which is a stated limit
+  rather than a measurement. This repository's own gate suite has exactly that shape.
+- Multi-file localization is the weakest measured result. The published metric is Strict@k — every
+  gold file of a task inside the top k — and the tool finds one gold file far more often than it
+  finds all of them. `docs/EVALS.md` carries the numbers, the 560-instance dataset and the split.
+- The config and prose lanes index symbols but emit no call edges: JSON, TOML, YAML and Markdown, and
+  the notebooks, HTML and CSV files read as documents for `--recall` and `--mentions`. They answer
+  retrieval questions and never appear in a call-graph answer.
+- Churn, ownership and co-change need real git history. A shallow clone reports every file as one
+  commit.
 - PHP dynamic dispatch and Lua metatable inheritance are floors, not complete answers.
-- The `--grep` view can cost more tokens than a plain grep on a small result set.
+
+**What the crawl skips, and how to change it**
+
+- Files over 4 MB: `--max-file-size=N[K|M|G]`.
+- JSON files over 256 KB, and YAML files over 512 KB.
+- Paths covered by `.gitignore`: `--no-ignore`.
+- Every symlink, whether it points at a file or a directory. A symlinked source file is not indexed
+  at all, so a tree that reaches its sources through symlinks reads as if they were not there.
+- `--skipped` names every file that was skipped, why, and which indexed answers cannot vouch for it.
+
+**When a verb is not the right tool**
+
+- `--grep` can cost more tokens than a plain grep on a small result set.
 - `--pack-signatures` can be larger than the body when a symbol is short.
+- A multi-root run merges 2 to 16 checkouts into one graph, but `--quality-delta`, `--test-gate`,
+  `--arch` baselines, `--pr-context` and the evaluation verbs stay single-root. Run those per root.
 
 ### 15. Documentation
 
-| Need | File |
-| --- | --- |
-| Every flag, with an invocation and a recorded output | `docs/COMMANDS.md` |
-| The authoritative flag list, always current | `./build/ripwire --help` |
-| Pipeline, data model, determinism contract, disclosure contract | `docs/ARCHITECTURE.md` |
-| Every published number, its instrument, and its counterexamples | `docs/EVALS.md` |
-| The build method as a transferable process | `docs/METHODOLOGY.md` |
-| The compile-time cap inventory | `docs/LIMITS.md` |
-| The measured cost of each cap | `docs/TUNING.md` |
-| The origin of every folded idea | `docs/LINEAGE.md` |
-| C++ style, the guardrails, and the submission checklist | `CONTRIBUTING.md` |
-| Installation and removal procedures | `INSTALL.md` |
-| Orientation for a coding agent that works on this repository | `AGENTS.md`, `CLAUDE.md` |
-| User-visible changes and known limits | `CHANGELOG.md` |
-| Vendored dependencies and their licenses | `THIRD_PARTY.md` |
-| Skill-file security checks | [security](docs/COMMANDS.md#--scan-skillsdir) |
-| The whole tool in 33 slides | `present/ripwire-showcase.pdf` |
+Every document this project publishes is listed under [Documentation](#documentation) below, with
+the question each one answers. Two of them matter while you are reading this guide: `docs/COMMANDS.md`
+gives every flag a real invocation and its recorded output, and `ripwire --help` is the authority
+whenever a document disagrees with it.
 
 The presentation rebuilds from `present/deck5_ripwire_build.js`. The preprint draft is in
 `paper/PREPRINT.md`. The method is not submitted for peer review. Its tables name the measurement
@@ -2618,7 +2756,7 @@ terms.
 | Need | File |
 | --- | --- |
 | Every flag, with a real invocation and its recorded output | [`docs/COMMANDS.md`](docs/COMMANDS.md) |
-| The authoritative flag list, always current | `./build/ripwire --help` |
+| The authoritative flag list, always current | `ripwire --help` |
 | Pipeline, data model, determinism contract, output-honesty contract | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Every published number, its instrument, and what is *not* published | [`docs/EVALS.md`](docs/EVALS.md) |
 | Compiler optimization remarks: the triage, and the two opt-in faster builds | [`docs/OPTREMARKS.md`](docs/OPTREMARKS.md) |
@@ -2628,6 +2766,10 @@ terms.
 | Orientation for a coding agent working *on* this repository | [`CLAUDE.md`](CLAUDE.md) / [`AGENTS.md`](AGENTS.md) |
 | User-visible capabilities, behaviour changes, known limits | [`CHANGELOG.md`](CHANGELOG.md) |
 | Vendored dependencies and their licences | [`THIRD_PARTY.md`](THIRD_PARTY.md) |
+| Installation and removal procedures | [`INSTALL.md`](INSTALL.md) |
+| The compile-time cap inventory | [`docs/LIMITS.md`](docs/LIMITS.md) |
+| The measured cost of each cap | [`docs/TUNING.md`](docs/TUNING.md) |
+| Skill-file security checks | [`docs/COMMANDS.md`](docs/COMMANDS.md#--scan-skillsdir) |
 | The whole tool in 33 slides — the showcase deck | [`present/ripwire-showcase.pdf`](present/ripwire-showcase.pdf) ([pptx](present/ripwire-showcase.pptx), rebuilt by [`present/deck5_ripwire_build.js`](present/deck5_ripwire_build.js)) |
 
 If a document disagrees with `--help`, the document is the bug.

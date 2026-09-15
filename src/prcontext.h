@@ -522,6 +522,8 @@ struct PrTrimRender
     std::size_t estTokens   = 0;
     std::size_t level       = 0;
     std::string truncated   = "none";
+    std::size_t testFiles   = 0;      // E1: test FILES this level's body actually rendered — 0 ⇒ no <test>/<g> row
+    bool        rendered    = true;   // false ⇒ the measurement buffer failed; `body` is empty and means nothing
 };
 
 // ONE estimator for every --pr-context root, never two counters (serialize.h's standing rule, the one
@@ -533,6 +535,25 @@ struct PrTrimRender
 // The floor-exceeded suffix feeds back into the price (it lengthens truncated=, hence the root tag), so it
 // is applied and RE-PRICED: monotone, since adding bytes to a document already over budget cannot bring it
 // under, so one re-price is the fixpoint and the printed number is the document's real price either way.
+// One level's body, plus the two facts a caller cannot recover from the bytes: how many test FILES it
+// rendered (E1 — the run-hint clause is gated on that count, never on a string match over the body) and
+// whether the measurement buffer opened at all. Through infra/emit.h's ONE renderToString seam, so a failure
+// is ALERTED rather than returned as an indistinguishable empty body.
+template< typename EmitFn >
+inline PrTrimRender prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
+{
+    PrTrimRender out;
+    const rw::Rendered r = rw::renderToString( [ & ]( std::FILE* ms ) { emitFiles( ms, trim, &out.testFiles ); },
+                                                "pr-context: open_memstream failed — this level was not measured" );
+    out.body     = r.text;
+    out.rendered = r.ok;
+    if( !r.ok )
+    {
+        out.testFiles = 0;
+    }
+    return out;
+}
+
 template< typename EmitFn, typename PriceFn >
 inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budgetTokens, const PriceFn& price,
                                      const std::string& windowAttrs )
@@ -541,24 +562,30 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
     PrTrimRender out;
     for( std::size_t li = 0; li < nLevels; ++li )
     {
-        char*       buf = nullptr;
-        std::size_t sz  = 0;
-        std::string rendered;
-        if( std::FILE* ms = open_memstream( &buf, &sz ) )
-        {
-            emitFiles( ms, kPrTrims[li] );
-            std::fflush( ms );
-            std::fclose( ms );
-            if( buf )
-            {
-                rendered.assign( buf, sz );
-            }
-        }
-        std::free( buf );
+        const PrTrimRender probe = prRenderLevel( emitFiles, kPrTrims[li] );
+        out.body      = probe.body;
+        out.testFiles = probe.testFiles;
+        out.rendered  = probe.rendered;
         out.level     = li;
         out.truncated = li > 0 ? std::string( kPrTrims[li].dropped ) : std::string( "none" );
-        out.body      = std::move( rendered );
-        out.estTokens = price( out.body.size(), li, out.truncated, windowAttrs );
+        out.estTokens = price( out.body, out.testFiles, li, out.truncated, windowAttrs );
+        if( !probe.rendered )
+        {
+            // THIS LEVEL WAS NOT MEASURED, AND THE DOCUMENT MUST SAY SO. A failed render leaves probe.body
+            // EMPTY, the price of an empty body fits any budget, and the ladder therefore breaks here with a
+            // root that prints est_tokens = the price of nothing while writePrContext streams the COMPLETE
+            // floor level. The bytes are the right answer — cutting rows because a measurement buffer failed
+            // would make a cap decide the content, which is the one thing a cap may never do — but the
+            // NUMBER is modelled, and until now its only signal was DEGRADED_PATH_ALERT, which Diagnostics.h
+            // compiles to `do {} while (0)` under NDEBUG. So the shipped binary printed a wrong est_tokens
+            // with no disclosure at all (review of #214). truncated= is the attribute that already carries
+            // exactly this class of fact, so the fact goes there and survives the flavour.
+            //
+            // Re-priced after the label is appended, for the same reason the budget-floor rung below
+            // re-prices: the label lengthens the root tag, so a number printed beside it must include it.
+            out.truncated += ";est-unmeasured";
+            out.estTokens = price( out.body, out.testFiles, li, out.truncated, windowAttrs );
+        }
         if( out.estTokens <= budgetTokens )
         {
             break;
@@ -566,7 +593,7 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
         if( li + 1 == nLevels )
         {
             out.truncated += ";budget-floor-exceeded";   // even the floor render is over budget
-            out.estTokens = price( out.body.size(), li, out.truncated, windowAttrs );
+            out.estTokens = price( out.body, out.testFiles, li, out.truncated, windowAttrs );
         }
     }
     return out;
@@ -577,7 +604,14 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
 inline std::string prBudgetTail( std::size_t changedFiles, std::uint32_t skippedModeOnly, std::size_t budgetTokens,
                                  const PrTrimRender& chosen, const std::string& truncatedEscaped )
 {
-    char tail[ 256 ];
+    // 320, not 256: test/fixedbufsweep.sh measured this buffer's worst case at 248 B of 256 — SEVEN bytes of
+    // margin — and warned that "one more attribute crosses it". ';est-unmeasured' is 15 more and CAN ride
+    // beside ';budget-floor-exceeded' (a small --max-tokens puts even the empty-body envelope over budget),
+    // so the worst case is 88 lit + 90 digits + 85 label = 263 B. formatTo is not what was saving it: it
+    // truncates SILENTLY and its return is not read here, so an overrun would have dropped the closing quote
+    // of truncated=" and shipped a malformed root — a G4 breach with no diagnostic. The sweep's row moves in
+    // the same commit with the recomputed number.
+    char tail[ 320 ];
     rw::formatTo( tail, sizeof( tail ), " files=\"{}\" skipped_mode_only=\"{}\" budget_tokens=\"{}\" est_tokens=\"{}\" trim_level=\"{}\" truncated=\"{}\"",
                    changedFiles, skippedModeOnly, budgetTokens, chosen.estTokens, chosen.level, truncatedEscaped.c_str() );
     return tail;
@@ -597,7 +631,52 @@ inline std::string prBudgetTail( std::size_t changedFiles, std::uint32_t skipped
 // this comment IS ~91% of that document. Same bytes in the same order; they are simply measured before
 // they are written, the way every other priced root measures itself (serialize.h §H7). File scope, beside
 // kPrEmptyDiffBody, so the emitter reads as the decisions it makes rather than as the prose it ships.
-inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed )
+// E1 (2026-09-12): `withRunClause` splices testmap.h's run=/run_unknown=/<g> clause. The clause is a rule about
+// rows, so it rides only a document whose chosen body renders a <test>/<g> row — decided by the COUNT that
+// body's own emitter reported (PrTrimRender::testFiles), never by a search of the rendered bytes. The writer
+// builds both forms, the pricer charges runClauseBytes per candidate level from that level's own body, and the
+// form matching the chosen body is written — after the choice, since the legend precedes the root in the
+// stream but not in the decision. A corpus-level predicate ("the corpus holds a test file") over-approximated
+// (CodeRabbit on #214): a test elsewhere in the corpus, or a testCap=0 level, bought the clause for a document
+// with no row. Measured on test/defaultceilingcheck.sh's 120-file, no-test fixture: unconditional, 7,989 ->
+// 8,025 tokens, over the 8,000 default budget; gated, 7,989.
+// Review of #214: the est-unmeasured label's definition, and the ONE wording that defines it — the legend
+// clause for the disclosure that replaces an alert the release build compiles out.
+//
+// CHARGED LIKE kRunHintLegendClause, AND FOR THE SAME REASON. This is a rule about a label, so it rides only
+// a document whose chosen level actually carries that label — decided by the FACT the ladder recorded
+// (PrTrimRender::rendered), never by a search of the rendered bytes. Unconditional, it cost the
+// test/defaultceilingcheck.sh fixture its whole remaining headroom: that 120-file tree prices at 7,989 of
+// the 8,000 default (11 tokens spare, as E1 measured when it gated the run clause for the same reason) and
+// went to 8,037 — over budget, on a document with nothing unmeasured about it. Gated, it is 0 B there and
+// the pricer charges it exactly on the level that states it, so the priced and the delivered legend cannot
+// disagree. Defined-wherever-emitted is the rule prbudgetcheck (#10) already holds budget-floor-exceeded to;
+// test/prcontextcheck.sh (F6) holds this one to it.
+inline constexpr std::string_view kPrEstUnmeasuredLegendClause =
+    "truncated= carrying est-unmeasured means the chosen level could not be MEASURED (its measurement buffer, or the copy out of it, failed), so est_tokens= is a MODELLED "
+    "number and not this document's own price — recounting the delivered bytes will NOT reproduce it. The BYTES are unaffected: the complete untrimmed level is served, "
+    "because a failed measurement may not decide what the answer contains. ";
+
+// The two CONDITIONAL clauses of this legend, named instead of passed as a pair of bare bools: the call site
+// `prLegendText( escBase, unindexed, true, false )` says nothing about which clause is which, and the two are
+// decided by different facts — the chosen body's test-row COUNT, and whether that body could be measured at
+// all. Both are gated for the same measured reason (see kPrEstUnmeasuredLegendClause): a clause that states a
+// rule about something this document does not contain is bytes every reader pays for and no reader needs.
+// MERGE of #214 and #219, and the third field is why this is a union and not a choice. #214 replaced two
+// bare bools with this struct; #219 (A3) had made the run clause's ROOT-RELATIVE sentence conditional, so the
+// clause is no longer the constant kRunHintLegendClause but whatever testmap.h's runHintClauseIfRows returns
+// for this run. Taking either side whole drops the other's fact: main's spelling loses the root sentence,
+// ours loses the est-unmeasured clause. `rootRelativeRuns` is not a third GATE — it selects which run clause
+// is spliced once runHint has already decided that one is — and it answers to the SAME predicate that spells
+// run= itself (testmap.h runsAreRootRelative), so the sentence and the spelling still cannot disagree.
+struct PrLegendClauses
+{
+    bool runHint          = false;   // M21(b)/E1: testmap.h's run=/run_unknown=/<g> rule — rides a rows-bearing body
+    bool estUnmeasured    = false;   // review of #214: the est-unmeasured label's definition — rides a document carrying the label
+    bool rootRelativeRuns = false;   // A3 / review of #219: the run clause's root-relative SENTENCE — one declared root, or the command stays absolute
+};
+
+inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindexed, const PrLegendClauses& clauses )
 {
     return std::string(
                  "<!-- ripwire pr-context: no-LLM review-evidence bundle per changed file — defined symbols, their callers, blast radius (transitive dependents), affected tests, co-change partners not in the diff, and owners. "
@@ -624,7 +703,12 @@ inline std::string prLegendText( const std::string& baseEscaped, bool hasUnindex
                  // from the in-edge CSR --callers reads, and <impact dependents=> is the same transitive reach
                  // --impact reports, so the same floor applies to hundreds of attributes in this one document.
                  // The shared constants, never a pr-context wording — that is the §B4 echo-site rule.
-                 + rw::graphCountDisclosure( hasUnindexed ) + "-->";
+                 + rw::graphCountDisclosure( hasUnindexed )
+                 // Rows-gated through testmap.h's OWN seam rather than its bare constant: runHintClauseIfRows is
+                 // what appends the root-relative sentence, so #219's A3 fix survives #214's struct.
+                 + rw::runHintClauseIfRows( clauses.runHint ? 1 : 0, clauses.rootRelativeRuns )
+                 + std::string( clauses.estUnmeasured ? kPrEstUnmeasuredLegendClause : std::string_view() )   // review of #214: the est-unmeasured label's definition — label-gated, same reason
+                 + "-->";
 }
 
 inline constexpr std::string_view kPrEmptyDiffBody =
@@ -658,13 +742,13 @@ inline std::string prEmptyRootTail( std::uint32_t skippedModeOnly, std::size_t b
 template< typename PriceFn >
 inline std::pair<std::size_t, std::string> prEmptyRootPrice( const PriceFn& price, std::size_t budgetTokens )
 {
-    const std::size_t plain = price( kPrEmptyDiffBody.size(), 0, std::string( "none" ), std::string() );
+    const std::size_t plain = price( kPrEmptyDiffBody, 0, 0, std::string( "none" ), std::string() );
     if( budgetTokens == 0 || plain <= budgetTokens )
     {
         return { plain, std::string( "none" ) };
     }
     const std::string labelled( "budget-floor-exceeded" );
-    return { price( kPrEmptyDiffBody.size(), 0, labelled, std::string() ), labelled };
+    return { price( kPrEmptyDiffBody, 0, 0, labelled, std::string() ), labelled };
 }
 
 // Open the <pr-context> root: the attributes EVERY form shares, this site's own tail, and the one remark row
@@ -702,7 +786,9 @@ struct PrPriceCtx
     const PrContextMask* anchor          = nullptr;
     const std::string*   baseEscaped     = nullptr;
     const std::string*   atAttrs         = nullptr;   // gitstamp::atAttr, appended past every tail attribute
-    std::size_t          envelopeBytes   = 0;         // legend + anchoring note + closing tag (never the root tag)
+    std::size_t          envelopeBytes   = 0;         // legend (WITHOUT the run clause) + anchoring note + closing tag (never the root tag)
+    std::size_t          runClauseBytes  = 0;         // E1: testmap.h's run=/run_unknown=/<g> clause, charged only for a body that renders a test row
+    std::size_t          estUnmeasuredClauseBytes = 0;   // review of #214: the est-unmeasured clause, charged only for a level that could not be measured
     std::size_t          changedFiles    = 0;
     std::uint32_t        skippedModeOnly = 0;
     std::size_t          budgetTokens    = 0;
@@ -722,10 +808,25 @@ struct PrPriceCtx
 //
 // The attribute is part of the document it prices, so its own digits are converged in ≤4 passes exactly as
 // pricedRootAttr converges them.
-inline std::size_t prPriceDocument( const PrPriceCtx& c, std::size_t bodyBytes, std::size_t level,
+// E1 (review of #214): the run clause is charged for a level exactly when that level's body RENDERED a test
+// row, and the count comes from the emitter that wrote it (PrTrimRender::testFiles), never from a string
+// match over the rendered bytes — a body can carry the literal text of a tag inside CDATA or an attribute,
+// and a predicate that greps for one is answering a different question than the emitter did. The pricer and
+// the writer read the SAME count, so the priced legend and the delivered legend cannot disagree.
+inline std::size_t prPriceDocument( const PrPriceCtx& c, std::string_view body, std::size_t testFiles, std::size_t level,
                                     const std::string& truncatedEscaped, const std::string& windowAttrs )
 {
-    std::size_t est = 0;
+    // Review of #214: the est-unmeasured clause is charged off the LABEL this document will print, read from
+    // the truncated= value the caller already hands in — not off a parallel boolean beside it. The label is
+    // the fact (pickPrTrimLevel appends it from PrTrimRender::rendered before it prices, wherever it prices),
+    // so charging on its presence makes the priced legend and the delivered legend impossible to disagree:
+    // one condition decides both. This is NOT the E1 objection to grepping rendered bytes — truncated= is the
+    // ladder's own decision string, never emitter output, and the vocabulary that may appear in it is a
+    // closed const table plus these two labels.
+    const bool        unmeasured = truncatedEscaped.find( "est-unmeasured" ) != std::string::npos;
+    const std::size_t bodyBytes  = body.size() + ( testFiles > 0 ? c.runClauseBytes : 0 )                     // E1: the clause rides only a rows-bearing document
+                                   + ( unmeasured ? c.estUnmeasuredClauseBytes : 0 );                          // review of #214: and this one only a level that was not measured
+    std::size_t       est       = 0;
     for( int pass = 0; pass < 4; ++pass )
     {
         PrTrimRender probe;
@@ -899,11 +1000,30 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     }
     std::sort( changed.begin(), changed.end(), [ & ]( std::uint32_t a, std::uint32_t b ) { return ing.files[a] < ing.files[b]; } );
 
-    const std::string legendText = prLegendText( escBase, g.unindexedFiles > 0 );
-    std::fwrite( legendText.data(), 1, legendText.size(), out );
-
+    // E1: both legend forms are built now and ONE is written later, once the body is known — writeHead takes
+    // that body's own PrTrimRender::testFiles count. The envelope is priced without the clause and the pricer
+    // adds runClauseBytes for a rows-bearing body. A3 / review of #219: the run clause's ROOT-RELATIVE
+    // sentence is conditional too, so every form is built with the one predicate that also decides the run=
+    // spelling — carried in the clause struct rather than as a second bare bool.
+    const bool        prRootRelRuns  = rw::runsAreRootRelative( ing, root );
+    const std::string legendText     = prLegendText( escBase, g.unindexedFiles > 0, PrLegendClauses{ .rootRelativeRuns = prRootRelRuns } );
     const std::string anchorNoteText = prAnchorNoteText( anchorAttr );
-    std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
+    // The clause-bearing form is built ONCE, and only if it is the form that gets written — the difference
+    // between the two is exactly what testmap.h's runHintClauseIfRows returns for this run (prLegendText
+    // splices that and the est-unmeasured clause, nothing else), so the pricer below asks that same seam for
+    // its size rather than measuring a second rendering.
+    // Review of #214: `unmeasured` is the SECOND rows-style gate — the est-unmeasured clause rides only the
+    // document whose chosen level could not be measured, and the pricer charged it on exactly that fact
+    // (PrTrimRender::rendered), so the written legend and the priced legend are the same bytes.
+    const auto        writeHead      = [ & ]( std::size_t testFiles, bool unmeasured )
+    {
+        const std::string legend = ( testFiles > 0 || unmeasured )
+                                       ? prLegendText( escBase, g.unindexedFiles > 0,
+                                                       PrLegendClauses{ .runHint = testFiles > 0, .estUnmeasured = unmeasured, .rootRelativeRuns = prRootRelRuns } )
+                                       : legendText;
+        std::fwrite( legend.data(), 1, legend.size(), out );
+        std::fwrite( anchorNoteText.data(), 1, anchorNoteText.size(), out );
+    };
 
     // R2/N4: the fixed, non-body envelope of every root this emitter writes — the legend, the anchoring
     // note, and the closing tag. The root's OWN start tag varies with the tail it carries, so it is
@@ -913,10 +1033,14 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // R2/N4: the price context (see prPriceDocument) — the envelope and every root attribute that does not
     // vary per candidate trim level, gathered once.
     const PrPriceCtx priceCtx{ .g = &g, .sharedAttrs = &sharedAttrs, .anchor = &anchor, .baseEscaped = &escBase, .atAttrs = &atAttrStr,
-                               .envelopeBytes = envelopeBytes, .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
+                               // #219: the run clause is priced through the SAME seam that writes it, so the root
+                               // sentence is charged exactly when it is emitted — never the bare constant's size.
+                               .envelopeBytes = envelopeBytes, .runClauseBytes = rw::runHintClauseIfRows( 1, prRootRelRuns ).size(),
+                               .estUnmeasuredClauseBytes = kPrEstUnmeasuredLegendClause.size(),
+                               .changedFiles = changed.size(), .skippedModeOnly = skippedModeOnly,
                                .budgetTokens = budgetTokens, .isDefaultBudget = budget.isDefault };
-    const auto priceOf = [ & ]( std::size_t bodyBytes, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )
-    { return prPriceDocument( priceCtx, bodyBytes, level, ex( truncatedRaw ), windowAttrs ); };
+    const auto priceOf = [ & ]( std::string_view body, std::size_t testFiles, std::size_t level, const std::string& truncatedRaw, const std::string& windowAttrs )
+    { return prPriceDocument( priceCtx, body, testFiles, level, ex( truncatedRaw ), windowAttrs ); };
 
     if( changed.empty() )
     {
@@ -924,6 +1048,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
         const std::string rootOpen = prRootOpenText( g, sharedAttrs,
                                                      prEmptyRootTail( skippedModeOnly, budgetTokens, budget.isDefault, emptyEst, ex( emptyTruncated ) ) + atAttrStr,
                                                      anchor, escBase );
+        writeHead( 0, false );   // the empty-diff body is a fixed comment: no changed file, so no test row and nothing to measure
         std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
         std::fwrite( kPrEmptyDiffBody.data(), 1, kPrEmptyDiffBody.size(), out );
         std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
@@ -947,7 +1072,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     const auto allOwners = gitFileAuthors( root, ing, UINT32_MAX, 182.5, onlyRoot );
 
     // §A9.5 / §P11.4: run= on the named test rows, from the SAME index --affected/--situ/--test-gate read.
-    const TestRunnerIndex prRunners( ing );   // built once, like coSets/allOwners — the bundle re-renders
+    const TestRunnerIndex prRunners( ing, root );   // built once, like coSets/allOwners — the bundle re-renders
 
     // One-time file→defined-symbols index (in id order == file/line order), so each changed file reads its
     // symbols in O(1) instead of re-scanning all N symbols (A4-P10). Buckets fill in ascending id order.
@@ -959,7 +1084,10 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // The per-file body emitter, parameterized by a trim level so the budget path can render it at several
     // depths into a memstream to measure, then re-render the chosen one to `out`. At the deepest trim it is
     // still one <file> element PER changed file (counts intact) — files are never dropped, only detail is.
-    const auto emitFilesRange = [ & ]( std::FILE* o, const PrTrim& trim, std::size_t begin, std::size_t end )
+    // `testFilesOut` (optional): the number of test FILES the rows below actually rendered, accumulated over
+    // the range — E1's ONE gate for the run-hint clause, reported BY the emitter instead of grepped back out
+    // of its bytes. nullptr on the streaming degrade path, which has no legend left to decide.
+    const auto emitFilesRange = [ & ]( std::FILE* o, const PrTrim& trim, std::size_t begin, std::size_t end, std::size_t* testFilesOut )
     {
         for( std::size_t ci = begin; ci < end; ++ci )
         {
@@ -1044,11 +1172,12 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
             if( trim.testCap > 0 )
             {
                 rw::emitTo( o, "<tests count=\"{}\" shown=\"{}\" capped=\"{}\">", testFiles.size(), tSc.shown, tSc.capped );
-                for( std::size_t i = 0; i < tSc.shown; ++i )
-                {
-                    rw::emitTo( o, "<test p=\"{}\"{}/>", ex( prPathRel( testFiles[i] ) ).c_str(), runAttrDisclosed( prRunners, testFiles[i], ex ).c_str() );   // §A9.5
-                }
+                // §A9.5 / E1: the shown window, grouped where no runner is derivable (testmap.h's seam), which
+                // returns the FILE count with the rows — the number the legend's clause is gated on.
+                const JoinedTestRows tRows = testRowsList( prRunners, testRowsOutOf( std::span( testFiles ).first( tSc.shown ), prPathRel ), TestRowShape{ RowDialect::Xml, "test" }, ex );
+                rw::emitRaw( o, tRows.text.c_str() );
                 rw::emitRaw( o, "</tests>" );
+                if( testFilesOut ) { *testFilesOut += tRows.files; }
             }
             else
             {
@@ -1172,14 +1301,28 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // P4 (L7): the changed-file WINDOW — --limit/--offset when given, else every file (the budget may still cut it below)
     const PageWindow  filePw    = pageWindow( changed.size(), budget.pageLimit, budget.pageOffset );
     std::size_t       fileEnd   = filePw.end;
-    const auto        emitFiles = [ & ]( std::FILE* o, const PrTrim& trim ) { emitFilesRange( o, trim, filePw.begin, fileEnd ); };
+    const auto        emitFiles = [ & ]( std::FILE* o, const PrTrim& trim, std::size_t* testFilesOut ) { emitFilesRange( o, trim, filePw.begin, fileEnd, testFilesOut ); };
 
     // NO budget at all (only a multi-root sub-bundle handed 0): level 0, no budget attributes.
     if( budgetTokens == 0 )
     {
         const std::string rootOpen = prRootOpenText( g, sharedAttrs, " files=\"" + std::to_string( changed.size() ) + "\" skipped_mode_only=\"" + std::to_string( skippedModeOnly ) + "\"" + atAttrStr, anchor, escBase );
+        // E1: the head carries a rule about rows, so it follows the body's DECISION even though it precedes
+        // the body in the stream — the level is rendered into a measurement buffer first and its row count
+        // decides the legend form. DEGRADE (infra/emit.h renderToString, which alerts): if that buffer cannot
+        // be opened there is no count, so the clause-less legend is written and the body is STREAMED straight
+        // to `out` exactly as it was before E1. Complete, correct bytes either way — never an empty body.
+        const PrTrimRender flat = prRenderLevel( emitFiles, kPrTrims[0] );
+        writeHead( flat.testFiles, false );   // this root carries no est_tokens/truncated= at all, so it has no unmeasured price to disclose
         std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
-        emitFiles( out, kPrTrims[0] );
+        if( flat.rendered )
+        {
+            std::fwrite( flat.body.data(), 1, flat.body.size(), out );
+        }
+        else
+        {
+            emitFiles( out, kPrTrims[0], nullptr );
+        }
         std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
         return 0;
     }
@@ -1221,8 +1364,20 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
                                                  prBudgetTail( changed.size(), skippedModeOnly, budgetTokens, chosen, ex( chosen.truncated ) )
                                                      + ( budget.isDefault ? " budget_default=\"1\"" : "" ) + windowAttrs + atAttrStr,
                                                  anchor, escBase );
+    writeHead( chosen.testFiles, !chosen.rendered );   // E1 / review of #214: the legend form the chosen body was priced with, from the same count and the same rendered fact
     std::fwrite( rootOpen.data(), 1, rootOpen.size(), out );
-    std::fwrite( chosen.body.data(), 1, chosen.body.size(), out );
+    if( chosen.rendered )
+    {
+        std::fwrite( chosen.body.data(), 1, chosen.body.size(), out );
+    }
+    else
+    {
+        // DEGRADE (renderToString alerted): no level could be measured, so est_tokens= is the modelled number
+        // for an empty body — but the document still owes its bytes. Stream the floor level straight out, the
+        // same contract serialize.h's ChargedSection degrade keeps: complete, correct bytes, a wrong estimate,
+        // and an alert saying which. Never an empty <pr-context>.
+        emitFiles( out, kPrTrims[0], nullptr );
+    }
     std::fwrite( kPrCloseTag.data(), 1, kPrCloseTag.size(), out );
     return 0;
 }

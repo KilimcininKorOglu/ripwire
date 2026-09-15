@@ -36,6 +36,38 @@
 namespace rw
 {
 
+// THE SAME QUESTION, ASKED OF A COMMAND STRING (PR #215 review item 5). The list below refuses --legend on a
+// parsed Config; the generators — the prompt router's <run> line, the tool-call router, `ripwire wrap`'s paste
+// block — hold a command STRING and had no way to ask it, so the posture was applied by editing each string and
+// a skill shipped `--zoom --legend=compact --mermaid`, which this very function refuses. One list, two callers.
+//
+// The flags named here are exactly the `nonXml` arms below, plus --for, which is exempt by POLICY rather than by
+// refusal (the binary compacts --for perfectly well; A1-2's decision is that the first call of a session wants
+// the full legend, and --for's compact legend is its own dialect). A command that already states a posture is
+// left alone, so applying this twice cannot produce two --legend= flags.
+// Gate: test/taskroutecheck.sh runs every command the router generates and asserts the binary never refuses it;
+// test/skilltruthcheck.sh does the same for every command the skills spell.
+inline bool legendCompactAppliesTo( std::string_view command )
+{
+    static constexpr std::string_view kNotCompactable[] = {
+        "--legend=",                                                              // already stated
+        "--for=",                                                                 // policy exemption, not a refusal
+        "--situ", "--recall=", "--report", "--mermaid", "--html", "--plan-lanes", "--sarif", "--eval",
+        "--export", "--note-add=", "--quality-baseline", "--quality-ack", "--index-out=", "--pin-census=",
+        "--baseline", "--replace-symbol-body", "--insert-before-symbol", "--insert-after-symbol", "--edit-plan=",
+        "--mcp", "--listen=",
+    };
+    for( std::string_view flag : kNotCompactable )
+    {
+        if( command.find( flag ) != std::string_view::npos )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+
 // One entry per XML root the tool emits. `key` is the schema id stem (ripwire.<key>/v1); `purpose` is the reading
 // of the verb and of the root vocabulary EVERY answer of that root carries. Its bytes count against the verb's
 // per-verb pin in test/compactlegendcheck.sh, and that pin is measured from the definitions, never the reverse.
@@ -52,25 +84,30 @@ struct CompactLegendSpec
 inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
 {
     // ── the ranked-map family (root <r>) — hinted by the map-shaping flag that rode along ──
-    { "r",   "map",        "ranked symbol map: <f p= layer=> groups <s t= n= id= k= amb=> rows (k= rank), <c n=> resolved callees; the header comment is data" },
+    { "r",   "map",        "ranked symbol map: <f p= layer=> groups <s t= n= sc= k= amb=> rows (k= rank), <c n=> resolved callees; the header comment is data" },
     { "r",   "map-diff",   "the ranked map anchored at at=: what the diff touched, the map's row vocabulary" },
     { "r",   "metrics",    "the ranked map with per-symbol metrics: in/out, cx/ccx, loc, params, nest, humps/deep, locals, cbo, amp, tested, ev" },
     { "r",   "around",     "call neighbourhood of of=: depth= hops, fanout= kept per hop; absent rows lie outside that boundary" },
     { "r",   "query",      "lexical-rank map for the query term, the map's row vocabulary" },
     // ── the bundle family (root <ctx>) ──
-    { "ctx", "pack-signatures", "the ranked map plus <sigs><d l= n= id= pure=> signature rows" },
+    { "ctx", "pack-signatures", "the ranked map plus <sigs><d l= n= sc= pure=> signature rows" },
     { "ctx", "pack-top-n", "the ranked map plus <src p=> bodies of the top-N symbols" },
     { "ctx", "skipped",    "why the index lacks a file <f p= why= bytes= limit= ext=>; indexed but unvouched <h p= why= err= err_ratio=>; <lang> census" },
     { "ctx", "notes",      "field notes by target: <target id= dangling=> holds <note d= sha= branch=>; counts = the rows" },
     { "ctx", "lego",       "ONE interface/base type: <iface n= p= defs= implementors=>, its <m> method contract, every implementor" },
     { "ctx", "expand",     "full bodies: <bodies shown= total= capped=> of <b t= l= p= n= sibs= sibs_total= sibs_capped= inc=>; <calls><c n= l=> resolved callees" },
+    // PR #215 review item 9: --expand has TWO servings and they share no element. The line above describes the
+    // BUNDLE serving; the whole-file serving is <src p= sym=> with <s n= sc= l=/> anchor rows and no <bodies> at
+    // all, so that line described a shape the document does not contain — and was LONGER than the full dialect's
+    // own clause, which compactlegendcheck's "compact must shrink" arm reads as the contradiction it is.
+    { "ctx", "expand-file", "the file's own text: <src p= sym=>; <s n= sc= l=/> per scoped symbol; full id = p::sc::n" },
     // pack-task (2026-09-12, the lane's end): the bundle's own vocabulary reads here, checked against packtask.h. task= is the task
     // text (a bare --pack-task refuses); <far> is the ranked name-only tier inside <sigs> (renderNameOnlyRows: t= n= p=), of_top=
     // there the ranked rows it was cut from (topRanked); <calls><c> are a body's callee signatures; <callers> rows are the bodies'
     // 1-hop neighbours in either direction, rel= which one, of_top= there the bodies that qualified (bodiesTotal), shared= how many
     // of them a row neighbours (emitted above 1); run= rides a <test> row only when a runner is derivable (testmap.h runHint). The
     // <d> lens facts and route= ride only some answers and are present-only terms below. compactlegendcheck (D36).
-    { "ctx", "pack-task",  "one-call task bundle for task= under budget_tokens=: <sigs><d n= id= l= p=> ranking, <far><s t= n= p=> ranked but over 1 hop out (of_top= ranked rows) > <bodies><b t= n= p= l=> with <calls><c n= l=> callees > <callers><s rel=caller|callee shared=> 1-hop from the bodies (of_top= bodies; shared= bodies reached, absent at 1) > notes > <tests><test p= run=> (run= when derivable)" },
+    { "ctx", "pack-task",  "one-call task bundle for task= under budget_tokens=: <sigs><d n= sc= l= p=> ranking, <far><s t= n= p=> ranked but over 1 hop out (of_top= ranked rows) > <bodies><b t= n= p= l=> with <calls><c n= l=> callees > <callers><s rel=caller|callee shared=> 1-hop from the bodies (of_top= bodies; shared= bodies reached, absent at 1) > notes > <tests><test p= run=> (run= when derivable)" },
     { "ctx", "from-trace", "trace frames mapped to indexed symbols, innermost first; the innermost in-corpus body included" },
     { "ctx", "exemplar",   "the best-in-class instance of kind= for the task, chosen by role: <exemplar n= p= in= ccx= tested=>, <bodies><b> to imitate" },
     { "ctx-partitions", "pack-task", "N minimally overlapping agent bundles carved along call-graph communities plus one shared core; each <bundle> wraps a <ctx>" },
@@ -193,6 +230,10 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- r:root=",                    // the map header's terse spelling of the same block
     "<!-- pr_iters=",                  // the PageRank convergence block on map-family roots
     "<!-- at= is the git commit",      // the churn/quality provenance block
+    "<!-- in=DIR: ",                   // C1-b's scoped-block clause (serialize.h kRecentScopeLegendOpen/Close). Without
+                                       // this row the ~640 B prose survived BESIDE the compact terms that restate it,
+                                       // and was charged into est_tokens — the same defect the graph_unindexed= row
+                                       // above was added for, on the newest conditional clause.
     "<!-- metrics: ",                  // --metrics' per-symbol attribute block
     "<!-- of= is the resolved SEED",   // --around's boundary block
     "<!-- anchoring: ",                // --pr-context=REF's merge-base block
@@ -285,6 +326,28 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --uses=Owner.field's member form (fielduses.h appends kUsesFieldLegend to that answer alone). owner_candidates= is a
     // row attribute that exists only beside member=, so one head term defines the whole form.
     { "member",            "member=Owner.field: rows use that field; pinned=/amb_sites= rows with one owner/with owner_candidates=K; owners_of_name= fields so named" },
+    // M21(b) / E1 (2026-09-12): the tests_to_run family's not-derivable disclosure, and the <g> group row it rides
+    // once per group. Row-level (every dialect puts it on the row), present-only; the <g> reading is qualified
+    // to that element so a document of single rows never pays for it, and a --flags document's own <g> never
+    // triggers it (that element carries no run_unknown=).
+    //
+    // THE COMPACT TERM SAYS WHAT THE FULL CLAUSE SAYS (review of 6621370f). This row is the compact dialect's
+    // ONLY reading of <g>, so a reader holding it and nothing else must be able to act on p=. It promised
+    // "every path verbatim (&#44; a comma)" — an escape testmap.h no longer emits, because a path holding ','
+    // is not grouped at all now — and it never carried the counts-FILES rule the full clause gained with it.
+    // So on a comma-path corpus `--affected --legend=compact` told its reader to undo an entity that is not
+    // there, and disagreed with the full legend about what a section's shown=/total= counts.
+    // The two facts a <g> consumer cannot act without are now stated here in the FULL CLAUSE'S OWN WORDS: a
+    // path holding ',' is never grouped, so p= splits into exactly n=; and a shown=/total= over these rows
+    // counts test FILES. The compact dialect re-spells rather than quotes — that is what makes it compact, and
+    // kRunHintLegendClause is 350+ B against this table's per-verb charge — so the two cannot be ONE constant.
+    // test/compactlegendcheck.sh (R) pins them against each other instead: it reads the required phrases OUT
+    // OF kRunHintLegendClause and fails the next release where either wording drops one or promises &#44;
+    // again. Cost of saying it: the term goes 99 -> 194 B, charged ONLY on a document that carries a <g> row —
+    // measured on a six-runner-less-test fixture, `--affected --legend=compact` 501 -> 596 B, and no pinned
+    // legend on this tree or on any gate fixture moves at all, because every harness here has a runner.
+    { "run_unknown",       "run_unknown=1: no runner derivable (a guess would be worse)", true },
+    { "run_unknown",       "<g n= p=a,b,c>: n runner-less rows with equal attrs as ONE row, paths verbatim; a path holding ',' is never grouped, so p= splits into exactly n=; shown=/total= over these rows counts test FILES", true, "g" },
     { "hits_capped",       "hits_capped=1: hits= is a floor" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
     // under max-tokens. Same number, same reading, so one row reads both places.
@@ -332,6 +395,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // of= on the map root is --around's seed, and n= is a name on every <s> row.
     { "children",          "children=K: K child modules below the levels_shown= cut, unprinted", true, "module" },
     { "of",                "<recent n= of=>: the n= newest-touched of of= touched files; <rc age_d=> days since its last commit, w= decayed weight", true, "recent" },
+    // merge_bombs_skipped= (2026-09-12): the cut the churn-decay miner makes, disclosed on the block it shapes (gitmine.h
+    // kChurnMergeBombMaxFiles). Always on <recent>, "0" included, so the term rides every churn-decay map.
+    { "merge_bombs_skipped", "merge_bombs_skipped=N: N commits touching more than 100 INDEXED files skipped, uncounted; a file only they touched is absent; the window's count, so the global block only", true, "recent" },
+    // C1-b (2026-09-12): in=DIR — the scoped block (ELEMENT-qualified: scope= rides only a <recent>) and the map stub (total= on
+    // <symbols> alone; the paging window clause above already reads shown=/capped=). Both present-only.
+    { "scope",             "<recent scope=DIR>: a second block riding when the global one does, DIR's files only (p= root-relative); of= is its total; capped=/has_more=/next_offset=/offset=/limit= page it, next= is that page", true, "recent" },
+    { "stubbed",           "<symbols stubbed=1 would_show=N next=>: the symbol map in= did not ask for was not rendered; N is that run's own shown= — definitions counted individually as shown= counts them, so its rows follow from rows+sum(overloads-1)=shown (not the header's symbols= corpus count); next= fetches it", true, "symbols" },
     // The map's ROW fields that are absent at their default, defined only inside the always-on `<!-- ripwire v1` legend (prose):
     // lpin= and overloads= on <s>, prov= on <c>. Row-level, because each has one meaning tool-wide and the map emitter is its one
     // XML writer. test/compactlegendcheck.sh (S) population 4 reads that legend's absence-marked row fields from source.
@@ -423,7 +493,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "ccx",               "<d cx= ccx=>: cyclomatic/cognitive complexity", true, "d" },
     { "in",                "<d in=N>: N callers in the index (absent: not measured)", true, "d" },
     { "amp",               "<d amp=N>: direct callers + files sharing a commit with its file (absent at 0)", true, "d" },
-    { "route",             "route=: the ranker the task was routed to, and why", true, "ctx" },
+    { "route",             "route=: the ranker: name-exact(X) = the task names symbol X (anchors: its evidence), subtoken+body = conceptual BM25 (:broad = 1-2 plain words, plain rg may also win; :declined(...) = a name hit refused as a common name)", true, "ctx" },
+    // row 6 (2026-09-12): the SHORT id on symbol rows. A map <s> row and a lens <d> row carry sc= (the enclosing
+    // scope) instead of the path-repeating id=; the reading spells the composition once for every root that
+    // prints the rows, since the shared purposes above only name the attribute.
+    { "sc",                "sc=: enclosing scope; the full id is p::sc::n (p= of the row or its <f>) and selectors take it", true },
     { "parse_degraded",    "parse_degraded=1: ERROR nodes in that parse", true },
     { "tier_partial",      "tier_partial=1: tier elected under a partial classification" },
     { "dangling",          "dangling=1: matches nothing indexed", true },
@@ -829,7 +903,23 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
 {
     const CompactRootInfo root = findCompactRoot( doc );
     if( root.tag.empty() ) { return CompactOutcome::NotXml; }
-    const CompactLegendSpec* spec = findCompactSpec( root.tag, hint );
+    // …and the ROOT says which serving this is, for the one verb that has two (see the expand rows above).
+    //
+    // THE ROOT TAG, NOT THE DOCUMENT (CodeRabbit 5216..., PR #215). This searched the WHOLE document, and an
+    // --expand BUNDLE carries its bodies as CDATA: any body that merely MENTIONS the literal `mode="whole-file"`
+    // — a gate script that greps for it, a doc that quotes it, this repository's own test/scroundtripcheck.sh —
+    // selected the expand-file legend for a document made of <bodies>/<b>/<calls>. REPRODUCED on a 400-function
+    // Python fixture whose first body holds the string: the root printed mode="bundle" reason="bundle 1957B <=
+    // file 11844B" and served <bodies>, under a legend reading `<src p= sym=>; <s n= sc= l=/>`. That is the very
+    // defect the expand-file row exists to fix, pointed the other way — a legend describing a shape the document
+    // does not contain. The serving mode is a ROOT ATTRIBUTE and is read only there.
+    std::string_view       effectiveHint = hint;
+    const std::string_view rootOpen      = std::string_view( doc ).substr( root.openBegin, root.openEnd - root.openBegin );
+    if( hint == "expand" && rootOpen.find( " mode=\"whole-file\"" ) != std::string_view::npos )
+    {
+        effectiveHint = "expand-file";
+    }
+    const CompactLegendSpec* spec = findCompactSpec( root.tag, effectiveHint );
     if( spec == nullptr ) { return root.hasSchema ? CompactOutcome::AlreadyCompact : CompactOutcome::UnknownRoot; }
 
     // pass 1: the legend text is computed from the ORIGINAL document (payload attributes are unchanged by the

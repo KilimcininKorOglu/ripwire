@@ -315,6 +315,63 @@ done
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo
+echo "=== 7. agent surfaces ask for the compact legend (A1-2, owner decision 2026-09-12) ==="
+# Every command the blurb spells for an XML verb carries --legend=compact (the legend is most of a small
+# --callers/--uses/--impact answer, and byte-identical rows either way); --for never does (its compact legend is its
+# own, and the first call of a session wants the full one). The verb list is the shipped policy, spelled here so a
+# blurb edit that drops the flag on one of them is red, not a judgement call.
+COMPACT_VERBS="callers impact uses expand exemplar quality-delta test-gate pack-task from-trace edit-check"
+BT='`'
+"$BIN" wrap claude 2>/dev/null | blurb_body >"$TMP/blurb7"
+[ -s "$TMP/blurb7" ] || no "7 presence: no blurb body to inspect"
+for _v in $COMPACT_VERBS; do
+    _spans="$( grep -oE -- '`[^`]*`' "$TMP/blurb7" | grep -E -- "--$_v(=|$BT| )" )"
+    [ -n "$_spans" ] || { no "7 presence: the blurb no longer spells --$_v — re-author this arm"; continue; }
+    if printf '%s\n' "$_spans" | grep -vq -- '--legend=compact'; then
+        no "7: a blurb command for --$_v lacks --legend=compact: $( printf '%s\n' "$_spans" | grep -v -- '--legend=compact' | head -1 )"
+    else
+        ok "7: every blurb command for --$_v carries --legend=compact"
+    fi
+done
+if grep -oE -- '`[^`]*`' "$TMP/blurb7" | grep -E -- '--for=' | grep -q -- '--legend=compact'; then
+    no "7: a --for command in the blurb carries --legend=compact (the first call wants the full legend; --for's compact legend is its own)"
+else
+    ok "7: no --for command in the blurb carries --legend=compact"
+fi
+
+echo
+echo "=== 8. every agent surface also says how to get the FULL legend back (owner question, 2026-09-13) ==="
+# Compact is what the generated commands ask for; an agent must also know when and how to ask for the full
+# legend (a term it does not recognise, a floor or cap it needs explained, a map a human will read). Four
+# surfaces, one sentence each — the wrap blurb (the session-start primer extracts it), the router skill (the
+# skills' shared conventions, not seventeen bodies), the prompt router's injected context, and the MCP
+# schema's `legend` field. The phrase asserted is the one the four surfaces share; a surface that drops it
+# is red, not a judgement call.
+FULL_PHRASE='--legend=full'
+if grep -qF -- "$FULL_PHRASE" "$TMP/blurb7" && grep -qiF 'definition' "$TMP/blurb7"; then
+    ok "8: the wrap blurb says when to add --legend=full"
+else
+    no "8: the wrap blurb never says how to get the full legend back (no --legend=full line)"
+fi
+if grep -qF -- "$FULL_PHRASE" "$ROOT/skills/ripwire-router/SKILL.md"; then
+    ok "8: skills/ripwire-router/SKILL.md carries the --legend=full convention"
+else
+    no "8: skills/ripwire-router/SKILL.md never mentions --legend=full"
+fi
+for _h in ripwire-claude-route.sh ripwire-claude-toolroute.sh ripwire-codex-route.sh; do
+    if grep -q -- "add --legend=full" "$ROOT/hooks/$_h"; then
+        ok "8: hooks/$_h's injected context says to add --legend=full when a definition is unclear"
+    else
+        no "8: hooks/$_h's injected context never mentions --legend=full"
+    fi
+done
+if printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | "$BIN" --mcp 2>/dev/null | grep -q 'restores the full legend'; then
+    ok "8: the MCP schema's legend field says \"full\" restores the full legend"
+else
+    no "8: the MCP schema's legend field does not say that \"full\" restores the full legend"
+fi
+
+echo
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"
     exit 0

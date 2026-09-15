@@ -78,6 +78,39 @@ inline void subtokens( std::string_view id, std::vector<std::string>& out )
     } );
 }
 
+// ── L-W (routing-loop round 2026-09-12): what the BM25 pass saw, read back out ──────────────────────────
+// Per symbol, which of the query's unique terms it matched, and per term, how many symbols matched it — the
+// integers lexicalScoresTiered accumulates anyway, exposed rather than re-derived by a second tokenizer that
+// could drift from this one. Read by forpage.h (coverage= on the --for root; the --for --limit=N file page).
+// Filled only when a caller passes it; a null caller's scores are byte-identical to before the parameter.
+//   terms[u]    the u-th unique query term (the tf row it owns after the LB-3 fold)
+//   df[u]       symbols with tf > 0 for terms[u] in any field — the document frequency the idf reads
+//   nameMask    per symbol, bit u set iff its NAME field alone carried terms[u] (captured inside pass 1,
+//               before the callee-name, path, doc and body fields land in the same row)
+//   anyMask     per symbol, bit u set iff it carried terms[u] in any field (the final row, after the fold)
+// Masks are maskWords 64-bit words per symbol (maskWords = ceil(terms/64)): a pasted stack trace with a
+// hundred unique terms is tracked in full, nothing silently dropped from the share.
+struct LexTermEvidence
+{
+    std::vector<std::string>   terms;
+    std::vector<std::uint32_t> df;
+    std::vector<std::uint64_t> nameMask;   // symbolCount × maskWords
+    std::vector<std::uint64_t> anyMask;    // symbolCount × maskWords
+    std::size_t                maskWords   = 0;
+    std::size_t                symbolCount = 0;
+
+    const std::uint64_t* anyMaskOf( std::size_t sym ) const noexcept { return anyMask.data() + sym * maskWords; }
+    static bool          hasBit( const std::uint64_t* mask, std::size_t u ) noexcept { return ( mask[ u / 64 ] >> ( u % 64 ) ) & 1u; }
+
+    // BM25's own idf for term u over `symbolCount` symbols — the exact expression both scoring branches use,
+    // so an absent term (df 0) weighs as the rarest possible term and never as nothing.
+    double idf( std::size_t u ) const noexcept
+    {
+        const double n = double( df[u] );
+        return std::log( ( double( symbolCount ) - n + 0.5 ) / ( n + 0.5 ) + 1.0 );
+    }
+};
+
 // docCommentStart moved to lexindex.h (B0.2): the index-time stats builder must scan the EXACT spans this
 // header's Pass 2 scans, so the span logic lives beside the shared tokenizer. Still visible here (include).
 
@@ -359,7 +392,8 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
                                                const std::vector<NodeId>& outTargets, std::string_view query,
                                                std::size_t pruneTopK, const std::vector<char>* alwaysExact,
                                                const std::vector<float>* symbolScoreMul, int pathFieldDefaultW = 0,
-                                               int basenameFieldDefaultW = 0, std::string_view pathRootPrefix = {} )
+                                               int basenameFieldDefaultW = 0, std::string_view pathRootPrefix = {},
+                                               LexTermEvidence* evidenceOut = nullptr )   // L-W: the term evidence, read back out (see the struct)
 {
     PROFILE_SCOPE_DESCRIBE( "lexical: lexicalScores (BM25 over symbols)" );
     const std::size_t S = ing.symbols.size();
@@ -370,6 +404,11 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
     subtokens( query, qToks );
     if( qToks.empty() )
     {
+        if( evidenceOut )
+        {
+            *evidenceOut             = LexTermEvidence{};
+            evidenceOut->symbolCount = S;
+        }
         return std::vector<float>( S, 0.f );
     }
 
@@ -574,11 +613,31 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
     // body, path and basename fields that follow — and because pass 1 runs before the pass-2 branch
     // split, so the scan and persisted-stats paths read the identical integers.
     std::vector<int> nameDf( marginArmed ? matchCount : 0, 0 );
+    // L-W: the name-field mask is separable ONLY here — the callee, path, doc and body fields land in the
+    // same tf row from the next statement on (the nameDf comment below says the same thing for its count).
+    const std::size_t evidenceWords = ( uniqueCount + 63 ) / 64;
+    if( evidenceOut )
+    {
+        evidenceOut->maskWords = evidenceWords;
+        evidenceOut->nameMask.assign( S * evidenceWords, 0u );
+    }
 
     // pass 1 — name (×kwName) + callee-name (×kwCallee) fields need no file text
     for( std::size_t i = 0; i < S; ++i )
     {
         scanField( i, ing.symbols[i].name, kwName );
+        if( evidenceOut )
+        {
+            const int* const nameRow = tfFlat.data() + i * matchCount;   // name field only: nothing else has run
+            std::uint64_t*   words   = evidenceOut->nameMask.data() + i * evidenceWords;
+            for( std::size_t u = 0; u < uniqueCount; ++u )
+            {
+                if( nameRow[u] > 0 )
+                {
+                    words[ u / 64 ] |= std::uint64_t( 1 ) << ( u % 64 );
+                }
+            }
+        }
         if( marginArmed )
         {
             const int* const nameRow = tfFlat.data() + i * matchCount;   // name field only: nothing else has run
@@ -975,6 +1034,29 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
                 if( dfVariant[v] <= variantCap )
                 {
                     nameDf[ matchToks[ uniqueCount + v ].u ] += nameDf[ uniqueCount + v ];
+                }
+            }
+        }
+    }
+
+    // ── L-W: the term evidence, read off the FINAL tf rows (uniqueCount stride, every field, the fold applied)
+    // — one S×U integer scan, the same "tf > 0" fact dfreq counts in both scoring branches below.
+    if( evidenceOut )
+    {
+        evidenceOut->terms.assign( uniqueToks.begin(), uniqueToks.end() );
+        evidenceOut->df.assign( uniqueCount, 0u );
+        evidenceOut->anyMask.assign( S * evidenceWords, 0u );
+        evidenceOut->symbolCount = S;
+        for( std::size_t i = 0; i < S; ++i )
+        {
+            const int* const row   = tfFlat.data() + i * uniqueCount;
+            std::uint64_t*   words = evidenceOut->anyMask.data() + i * evidenceWords;
+            for( std::size_t u = 0; u < uniqueCount; ++u )
+            {
+                if( row[u] > 0 )
+                {
+                    ++evidenceOut->df[u];
+                    words[ u / 64 ] |= std::uint64_t( 1 ) << ( u % 64 );
                 }
             }
         }
@@ -2021,9 +2103,10 @@ inline void noteAnchorPlausibility( ImplausibleAnchor& imp, std::string_view low
 // phrase as a name-exact marker).
 inline std::string declinedRouteReason( const ImplausibleAnchor& imp )
 {
-    return "subtoken+body BM25 — name-exact declined: anchor '" + imp.word + "' is a common name ("
-         + std::to_string( imp.carriers ) + " name-carriers, " + std::to_string( imp.defs )
-         + " defs); conceptual ranker used";
+    // row 6 (2026-09-12): a CODE with the evidence in parentheses — the word that was refused, how many names
+    // carry it and how many definitions it has; the legend's route= reading spells what :declined means.
+    return "subtoken+body:declined(" + imp.word + ";" + std::to_string( imp.carriers ) + "-carriers,"
+         + std::to_string( imp.defs ) + "-defs)";
 }
 
 // split a query on whitespace into raw words (case preserved — camelCase detection needs it)
@@ -2141,7 +2224,7 @@ inline RouteChoice chooseForRanker( const IngestResult& ing, std::string_view qu
     if( nameExact )
     {
         rc.which  = LexMode::NameExact;
-        rc.reason = "name-exact BM25 — query names a symbol (" + identifierHit + ")";
+        rc.reason = "name-exact(" + identifierHit + ")";   // row 6: a CODE; the reading lives in the legend (route=)
         // The evidence, appended and never substituted: downstream readers (test/taskechocheck.sh) parse the
         // clause above out of this same string. A subtoken+body route names no anchors because nothing
         // anchored it — an anchors list on a route the names did not decide would be evidence after the fact.
@@ -2156,12 +2239,12 @@ inline RouteChoice chooseForRanker( const IngestResult& ing, std::string_view qu
     else if( nWords >= 3 )
     {
         rc.which  = LexMode::SubtokenBody;
-        rc.reason = "subtoken+body BM25 (--for's default) — no strong name hit, multi-word conceptual query";
+        rc.reason = "subtoken+body";   // row 6: the conceptual ranker, as a code — see the route= legend reading
     }
     else
     {
         rc.which  = LexMode::SubtokenBody;
-        rc.reason = "subtoken+body BM25 (--for's default) — no strong name hit; broad query, plain rg may also win";
+        rc.reason = "subtoken+body:broad";   // row 6: 1-2 plain words — the legend says plain rg may also win
     }
     return rc;
 }

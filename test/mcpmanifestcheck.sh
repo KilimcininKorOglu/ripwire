@@ -202,7 +202,53 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 #   TOTAL             41,220 -> 42,084 B on the merged tree, attributed tool by tool against main's binary
 #                      (both lanes had re-anchored alone — 41,650 and 42,000 — and the sum is what ships).
 # Headroom after this line: 116 B, less than one declared argument, which is rule 5 above working.
-CEILING = 42200
+# RE-ANCHORED 2026-09-12 (lane for-widen, L-W): 42,200 → 42,384 = +184 B, EXACTLY the two declared optional arguments
+# `limit`/`offset` on `for` (the `for` schema 525 → 709 B in this arm's own json.dumps metric: the envelope plus the
+# description the contract obliges each property to carry), measured against a build of the lane's base (1cf3086e:
+# 42,177 B here, 23 B under the old ceiling) — the file-grain widening page (forpage.h) joins the paging family on
+# this twin. Its description gained NO prose: a first draft named coverage= and the page there (+109 B) and was
+# removed rather than re-anchored around, the L7 precedent above — the schema properties are where a client renders
+# an argument, and the answer's own legend defines coverage= and the page. Headroom after this line: 23 B.
+#   RE-ANCHORED 2026-09-13 (PR #215, owner question "how does an agent ask for the longer answer"): 42,200 -> 42,700,
+#   measured 42,636 B. The `legend` field's description gains one clause — "full (restores the full legend)",
+#   +32 B on each of the 17 tools that declare the field (+544 B) — so the schema an agent reads when choosing the
+#   argument's value says what "full" does. This is PROSE on a declared argument, which rule 5 above does not move
+#   the ceiling for; the owner asked for exactly this clause and authorized moving the pin with the measured number
+#   (2026-09-13 06:30), and that authority and this attribution are the whole justification. Headroom after: 64 B.
+#   MERGED 2026-09-13 (lane/sc-legend + lane/for-widen): both anchors above are real and they add. 42,200 -> 42,900,
+#   RE-MEASURED on the merged tree at 42,820 B (descriptions 19,967, schemas 18,426, 31 tools), not summed from the two
+#   lanes' separate anchors (42,384 and 42,700), because neither lane could see the other's bytes. Headroom after this
+#   line: 80 B, less than one declared argument, which is rule 5 above working.
+# RE-ANCHORED 2026-09-13 (review of #214): 42,384 → 42,800 = +416 B, EXACTLY the one 207-byte clause plus the
+# single space that separates it from the sentence before it (208 B), spliced into EACH of the TWO tool
+# descriptions that serve tests_to_run rows as JSON — `situational_awareness` and `explore`; 2 × 208 = 416
+# (measured against a build of ff8d77a1: 42,361 B here, 23 B under the old ceiling). It is NOT the L7 case the
+# line above declines. That one removed prose describing an ARGUMENT, because the schema properties are where a
+# client renders an argument and the answer's own legend defines the rest. This clause describes the RESPONSE:
+# E1 made a tests_to_run row's `p` a path string OR an array of paths beside `n`, and these two answers carry
+# no legend of any kind — `situational_awareness` returns bare JSON with no vocabulary block — so a caller that
+# parses `p` as a string has nowhere else to learn otherwise before it breaks. ONE wording (mcp.h
+# kTestRowJsonShapeClause), spliced twice, never a third paraphrase. Headroom after this line: 23 B.
+# RE-ANCHORED 2026-09-13 (CodeRabbit on #214): 42,800 -> 43,000 = +200 B for a MEASURED +196, the clause 207
+# -> 305 B plus its one-space separator, in each of the same two descriptions (2 x 98). The first wording
+# named the key `p` and only one of the three producers spells it that way: situational_awareness emits
+# `test` (mcpverbs.h), explore (packtask.h) and the edit receipt (mcpedit.h) emit `p`. A clause that names
+# the wrong key is worse than no clause, because a caller reads it as a contract — so it now names both, per
+# producer, and everything the three DO share (string-or-array, `n` beside an array, run/run_unknown) is
+# still said once. The quotes around the two keys are SINGLE: this string is spliced straight into the
+# tools/list JSON, and the first draft's double quotes made the manifest unparseable — which this gate
+# caught as a JSONDecodeError, not as a byte count. Measured 42,973. Headroom after this line: 27 B.
+# MERGED 2026-09-14 (lane/sc-legend + main at 0b118ac1): 43,000 -> 43,500, RE-MEASURED on the merged tree at
+# 43,432 B (descriptions 20,579, schemas 18,426, 31 tools). NEITHER side's ceiling holds and neither is wrong:
+# this lane re-anchored to 42,900 from a measurement of 42,820, #214 re-anchored to 43,000 from 42,973, and
+# the two clauses are DIFFERENT bytes in different stanzas, so they add. Not summed from the two anchors —
+# the lanes did not share a base and neither could see the other's bytes — and not derived from the deltas
+# either; measured on the tree that ships, the 2026-09-10 two-lane precedent above verbatim. No NEW allowance
+# is taken here: both adds were justified where they landed (this lane's is prose on a declared argument the
+# owner authorized on 2026-09-13 with the measured number; #214's names the response shape for two answers
+# that carry no legend at all), and the merge only makes them visible together. Headroom after this line:
+# 68 B, again less than one declared argument, which is rule 5 above working.
+CEILING = 43500
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )

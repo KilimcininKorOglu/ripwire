@@ -168,12 +168,24 @@ inline std::string graphCountFloorBrief( bool hasUnindexed )
     return std::string( kGraphCountFloorBriefLegend ) + graphUnindexedLegend( hasUnindexed );
 }
 
-// The same two facts as PROSE, for the one graph-count report that is text (--situ's [1] blast radius).
-// The trailing %s is the #66 gauge's prose clause — EMPTY when nothing went unindexed, so this dialect
-// keeps the same omit-at-zero reading as the XML/JSON attribute rather than printing a bare "0" the other
-// two dialects never print. Rendered through graphUnindexedTextClause() below, never spelled at the site.
+// The same facts for the one graph-count report that is TEXT (--situ's [1] blast radius) — as ATTRIBUTES,
+// not as a paragraph. A5 (2026-09-13, PLAN_OUTPUT_ROUTING_LOOP §1.5): this line ran 601 B on every --situ
+// answer to say four things that are names with values — counts_floor, the two resolver gauges and, when a
+// file could not be read at all, the third — plus the two readings a consumer cannot supply for itself:
+// that the counts are floors, and how to read a zero. The names are now spelled exactly as the XML/JSON
+// dialects spell them (graph_ambiguous=/graph_unresolved=/graph_unindexed=, counts_floor=1), so the three
+// dialects share one vocabulary, and the two readings stay as the short clause after them. Nothing was
+// dropped: METHODOLOGY §9 puts honesty in the attributes, and the sentence was never the honest part.
+// The trailing {} is the #66 gauge — EMPTY when nothing went unindexed, so this dialect keeps the same
+// omit-at-zero reading as the attribute rather than printing a bare "0" the other two never print.
+// Review of #219: an attribute with no reading is a token, not a disclosure — and this is the ONE dialect
+// with no legend to look a token up in (--situ refuses --legend=compact; compactlegendcheck (R)). So the
+// floor's CAUSE (a name-based call graph) and what an unindexed file IS stay on the line. They are the
+// price of having no legend, not prose the compression was entitled to.
+// Gate: test/situshapecheck.sh (1) and (8); test/floormarkcheck.sh (9) keeps the two anchor phrases.
 inline constexpr const char* kGraphCountFloorTextLine =
-    "        counts_floor=1: every count above is a FLOOR, never a total (call edges are name-based; dynamic dispatch, callbacks and macros can be missing) — read a zero as \"none found\", never as \"none exists\"; graph_ambiguous={} graph_unresolved={} is the whole graph's resolver gauge (calls split over several defs / calls whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved={}\n"; // std::format FORMAT: two gauge totals + the clause
+    "        counts_floor=1 graph_ambiguous={} graph_unresolved={}{} (the map header's own gauges) — every count above is a FLOOR, never a total: "
+    "call edges are name-based, so dynamic dispatch, callbacks and macros can be missing; a zero is \"none found\", never \"none exists\"\n"; // std::format FORMAT: two gauge totals + the clause
 
 // The #66 clause for the prose dialect. "" at zero — the absence IS the confident case, same as the attribute.
 inline std::string graphUnindexedTextClause( std::size_t unindexedFiles )
@@ -182,10 +194,8 @@ inline std::string graphUnindexedTextClause( std::size_t unindexedFiles )
     {
         return {};
     }
-    char buf[256]; // literal ~180 B + one %zu at 20 digits = ~198 B worst case; snprintf truncates regardless
-    rw::formatTo( buf, sizeof( buf ),
-                  "; graph_unindexed={} is a third gauge — files no grammar in this build could read at all (the map header's unindexed=), whose calls produce no reference and so raise neither gauge above",
-                  unindexedFiles );
+    char buf[128]; // literal 63 B + one size_t at 20 digits = 83 B worst case; snprintf truncates regardless
+    rw::formatTo( buf, sizeof( buf ), " graph_unindexed={} (files no grammar in this build could read at all)", unindexedFiles );
     return buf;
 }
 
@@ -276,6 +286,57 @@ inline constexpr const char* kForRootRelAtLegendShort =
 
 // `rootOn` is the emitter's own root=-present condition; `atOn` is its at=-present condition (gitAtAttr
 // non-empty) — never re-derived from each other, since a non-git single-root run has rootOn without atOn.
+// Row 6 (2026-09-12): the sc= and route= readings on a --for bundle, ONE spelling for the CLI lens and the MCP
+// `for` twin. sc= is the short id (the enclosing scope; a row's full id composes as p::sc::n — see
+// serialize.h writeScopeAttr) and route= is a CODE now, not prose: name-exact(X) / subtoken+body[:broad|
+// :declined(word;carriers,defs)], with the anchors: clause riding after it on a name-exact route. On the CLI
+// lens this clause is CEILING-DROPPABLE (verbs_for.h rung zero, with the confidence and tail clauses): the
+// attributes stay on every rung, only the reading goes, and kForLegendDroppedNote names it. No "--" anywhere:
+// it rides inside an XML comment, where a double hyphen is ill-formed (G4).
+// TERSE ON PURPOSE, and measured four times. These clauses ride EVERY default --for answer, so their bytes are
+// bounded by what the same change SAVED on that header: the route= code replaces 84 B of prose on a conceptual
+// route and 32 B on a name-exact one. A 259 B first spelling (2026-09-12) grew a 2.9 KB fixture bundle by 10%
+// and tripped forrankordercheck's 4% ratchet; a 123 B second spelling still left the header 39 B heavier than
+// before on a conceptual route and tipped two rungs that sat at zero slack on main (forrootlegendcheck arm2,
+// est_tokens 798 of 800; fornotesbudgetcheck 1640) — the ladder's first-entry tolerance let a document ship
+// over_ceiling="1" without reaching rung zero, so a droppable clause was no protection at those rungs (fixed
+// in verbs_for.h: rung zero now fires on the EXACT ceiling).
+// SPLIT IN TWO, present-only, 2026-09-13. The sc= rule rides every answer, because every scoped row carries
+// sc=. The route= code rides only the answers whose root carries route=, exactly as the compact dialect's
+// kForCompactLegendRoute does — and it RIDES, rather than living only in the help text, because a code with no
+// reading anywhere in the document is an undefined first-screen attribute: dropping it opened two new
+// legendcoverage_baseline lines (for-auto, for-budgeted | ctx@route) and that file may only be edited DOWNWARD.
+// The fuller reading of each code (what :broad and :declined(word;carriers,defs) weigh, where the anchors are)
+// still lives once in the help text's no-route entry, the next=/help precedent verbs_for.h records.
+// 29 B + 54 B. No "--" in either clause: they ride inside an XML comment, where a double hyphen is ill-formed (G4).
+inline constexpr std::string_view kForIdRouteLegend =
+    "; sc=scope (full id p::sc::n)";
+inline constexpr std::string_view kForRouteCodeLegend =
+    "; route= name-exact(X)|subtoken+body[:broad|:declined]";
+
+// ONE decision about what these two readings ARE for a given answer. Two surfaces APPEND them (the CLI lens's
+// forLensHeaderText, the MCP `for` twin) and both must then EXEMPT exactly those bytes from the signature-trim
+// charge — four sites mirroring one rule by hand, which is the shape that ships a ledger 64 B short and
+// underflows a subtraction (verbs_for.h records that exact incident for the confidence clause). The caller asks
+// once and uses `.sc`/`.route` to append and `.bytes()` to exempt, so the two can only ever agree.
+struct ForIdRouteLegendParts
+{
+    std::string_view sc; // "" when no served row carries a scope
+    std::string_view route; // "" when this root carries no route=
+
+    std::size_t bytes() const noexcept { return sc.size() + route.size(); }
+};
+
+inline ForIdRouteLegendParts forIdRouteLegendParts( bool legendOn, bool scPresent, bool routePresent ) noexcept
+{
+    if( !legendOn )
+    {
+        return {}; // rung zero took the readings; the attributes stay and the dropped note names them
+    }
+    return { scPresent ? kForIdRouteLegend : std::string_view(),
+             routePresent ? kForRouteCodeLegend : std::string_view() };
+}
+
 inline const char* forRootRelPathsLegendShort( bool rootOn, bool atOn = false ) noexcept
 {
     if( !rootOn )

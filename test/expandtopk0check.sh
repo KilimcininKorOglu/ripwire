@@ -145,15 +145,27 @@ diff -q "$TMP/real_default_body.xml" "$TMP/real_tk0_body.xml" >/dev/null \
     && ok "(G-a) default's served body is byte-identical to explicit --top-k=0's" \
     || no "(G-a) default's served body diverges from explicit --top-k=0's — the estimator or the emitter disagree on what mapTopK==0 means"
 
-# (G-b) when topk_default="0" is in effect and a reason= fires, the bundle byte count it PRICES must be
-#       the REAL served size (== the --top-k=0 byte count), never a phantom map-inclusive estimate. This
-#       is the precise, load-bearing number the V1 defect corrupted.
+# (G-b) when topk_default="0" is in effect and a reason= fires, the bundle byte count it PRICES must be the
+#       REAL served size, never a phantom map-inclusive estimate. This is the precise, load-bearing number
+#       the V1 defect corrupted.
+#
+#       WHAT THE COMPARISON IS, and why it moved (CodeRabbit, PR #215). It used to read the priced number
+#       against EXPLICIT --top-k=0's byte count. Those two documents carry the same payload but not the same
+#       root: the auto form is decorated with topk_default= and the mode=/reason= disclosure, the explicit
+#       override is deliberately undecorated ((G-a) strips the opener for exactly that reason). The old
+#       equality held only because the price omitted that decoration too — two omissions cancelling, which is
+#       how the file candidate came to be compared against the bundle on different accounting in the first
+#       place. Both candidates are now priced as the complete document they would serve, so the identity is
+#       the stronger and more direct one: the priced bundle IS the bundle document. The anti-phantom property
+#       the arm exists for is unweakened — (G-a) already proves this document's payload is byte-identical to
+#       explicit --top-k=0's, and a phantom whole-repo map would blow the identity here by ~1 MB.
 pricedBundle=$( grep -oE 'reason="bundle [0-9]+B' "$TMP/real_default.xml" | grep -oE '[0-9]+' )
+realDefaultBytes=$( wc -c < "$TMP/real_default.xml" | tr -d ' ' )
 if [ -n "$pricedBundle" ]; then
-    if [ "$pricedBundle" = "$realTk0Bytes" ]; then
-        ok "(G-b) reason= prices the bundle at exactly the --top-k=0 byte count (${pricedBundle}B) — no phantom map"
+    if [ "$pricedBundle" = "$realDefaultBytes" ]; then
+        ok "(G-b) reason= prices the bundle at exactly the bytes it serves (${pricedBundle}B; explicit --top-k=0 serves the same payload under an undecorated root, ${realTk0Bytes}B) — no phantom map"
     else
-        no "(G-b) reason= priced the bundle at ${pricedBundle}B but --top-k=0 actually serves ${realTk0Bytes}B — the reason= string still prices a map that mapTopK==0 will never emit"
+        no "(G-b) reason= priced the bundle at ${pricedBundle}B but the document it served is ${realDefaultBytes}B — the whole-file candidate is being compared against a bundle price that is not the bundle document"
     fi
 else
     no "(G-b) no reason=\"bundle NNNB ...\" clause found on the real-repo default root — unexpected mode, see (G) above: $( grep -oE '<ctx[^>]*>' "$TMP/real_default.xml" )"

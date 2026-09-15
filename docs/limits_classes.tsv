@@ -24,6 +24,7 @@
 # these OUTPUT would ask for a disclosure that could never fire, which is a different kind of dishonesty
 # from the silent cut this register was built to find.
 kChaConeCap	INDEXING
+kChurnMergeBombMaxFiles	INDEXING
 kCoBoostMaxFilesPerCommit	INDEXING
 kCoBoostMaxPartnerFiles	INDEXING
 kCoBoostMaxSymbolsPerFile	INDEXING
@@ -35,6 +36,8 @@ kEvidenceCap	OUTPUT
 kExpandMaxPer	OUTPUT
 kExpandMaxSeeds	OUTPUT
 kFieldWalkCap	INDEXING
+kForPageRowsDefault	OUTPUT
+kForPageUnionSymbolCap	INDEXING
 kHandoffCochangeRows	OUTPUT
 kHandoffDocRows	OUTPUT
 kHandoffNoteRows	OUTPUT

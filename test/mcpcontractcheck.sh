@@ -360,6 +360,12 @@ TWIN = {
     # the CLI report's is 8: the payload is machine-read and has always served every row, so limit there is
     # relief for a caller who wants less, never a new cut.
     "--flags": "flags", "--situ": "situational_awareness",
+    # 2026-09-12 (C1-b): --in=DIR joined the paging set for its <recent scope=DIR> page (--offset=N). The MCP server
+    # exposes no churn ranker at all (no rank_by argument on any tool), so there is nothing for it to twin: CLI-only.
+    "--in": "",
+    # L-W (2026-09-12, forpage.h): --for joined the paging set for its FILE PAGE (--limit/--offset select the
+    # one-row-per-file widening document); its twin takes the same limit/offset through mcpPageArgs.
+    "--for": "for",
 }
 unmapped = sorted( v for v in pagingCli if v not in TWIN )
 check( not unmapped, "(G) every paging CLI verb is classified twin-or-not (%s)" % ( ",".join( unmapped ) or "none unmapped" ) )
