@@ -193,6 +193,36 @@ inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
     return rs;
 }
 
+// Java method references are not ordinary member-access nodes. The pinned grammar's first named
+// child is the receiver and deliberately uses the SAME `identifier` node for a simple type and a
+// variable. Preserve that uncertainty for graph.h: simple and dotted type candidates are retained;
+// `this`, `super`, arbitrary expressions, and `Type::new` remain unresolved here. The resolver
+// requires every dotted segment to be an indexed class name with no declaration shadow.
+// The member-name query already excludes `new`.
+inline RecvShape javaMethodReferenceReceiver( TSNode roleNode, std::string_view src )
+{
+    RecvShape out;
+    if( ts_node_is_null( roleNode ) || !kindIs( ts_node_type( roleNode ), "method_reference" ) )
+    {
+        return out;
+    }
+    out.kind = RecvKind::JavaTypeCandidate;
+    if( ts_node_named_child_count( roleNode ) == 0 )
+    {
+        return out;
+    }
+    const TSNode receiver = ts_node_named_child( roleNode, 0 );
+    if( kindIs( ts_node_type( receiver ), "identifier" ) )
+    {
+        out.var = std::string( nodeTextOf( receiver, src ) );
+    }
+    else if( kindIs( ts_node_type( receiver ), "field_access" ) )
+    {
+        out.var = std::string( nodeTextOf( receiver, src ) );
+    }
+    return out;
+}
+
 // ── P2-D Rule 2 LOCAL-VARIABLE TYPE BINDING capture (`Foo x;` → x:Foo) ───────────────────────────────
 // Walk a node subtree and emit one RawBind per local variable whose TYPE is syntactically decidable, so a
 // later `x.m()`/`x->m()` can narrow to `typeName::m`. Pure-syntactic, deterministic, allocation-light:
@@ -1434,6 +1464,20 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
                 }
                 emitBind( fileId, lang, src.substr( a, b - a ), std::move( type ), ts_node_start_byte( n ), binds );
             }
+        }
+    }
+    // Java declarations are resolver veto evidence for `Identifier::method`. Tree-sitter cannot
+    // distinguish a type receiver from a value receiver, so a parameter/local/field with the same
+    // spelling must prevent the class-name proof. Empty spans are intentional: this evidence is
+    // consumed only by buildFieldNarrowTables' per-enclosing-symbol name set.
+    else if( lang == Lang::Java && ( kindIs( t, "formal_parameter" ) || kindIs( t, "spread_parameter" )
+                                  || kindIs( t, "variable_declarator" ) ) )
+    {
+        const TSNode nameNode = fieldChild( n, NodeField::Name );
+        if( !ts_node_is_null( nameNode ) && kindIs( ts_node_type( nameNode ), "identifier" ) )
+        {
+            pushRawBind( fileId, lang, nodeTextOf( nameNode, src ), std::string{},
+                         BindSite{ ts_node_start_byte( nameNode ), 0u, 0u }, LocalBindKind::VarDecl, binds );
         }
     }
     // TypeScript `const x = new Foo();` · `let y: Bar = ...;` — variable_declarator.

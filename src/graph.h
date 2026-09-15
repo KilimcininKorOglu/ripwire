@@ -1131,6 +1131,39 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         key.append( b.var );
         t.localNameSet.try_emplace( key, 1 );
     }
+    // Java fields attribute to the class symbol; method-reference sites attribute to the
+    // method. Copy class-scope names onto every contained method so a field named like a
+    // type vetoes Identifier::method the same way a parameter or local does.
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
+        {
+            continue;
+        }
+        const Symbol& owner = ing.symbols[ b.fromSymbol ];
+        if( owner.lang != Lang::Java
+            || ( owner.kind != SymKind::Class && owner.kind != SymKind::Interface
+                 && owner.kind != SymKind::Struct ) )
+        {
+            continue;
+        }
+        for( const Symbol& s : ing.symbols )
+        {
+            if( s.fileId != owner.fileId
+                || ( s.kind != SymKind::Method && s.kind != SymKind::Function )
+                || s.sigStartByte < owner.sigStartByte
+                || s.endByte > owner.endByte
+                || s.id == owner.id )
+            {
+                continue;
+            }
+            key.clear();
+            Narrower::appendUint( key, s.id );
+            key.push_back( '#' );
+            key.append( b.var );
+            t.localNameSet.try_emplace( key, 1 );
+        }
+    }
     return t;
 }
 
@@ -2168,6 +2201,43 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( cb != ce )
             {
                 scipPinned = true;
+            }
+        }
+
+        // Java issue #74: the grammar labels both `Widget::makeFn` and `widget::makeFn`
+        // with an identifier receiver. A method-reference capture is therefore admitted only when
+        // repository evidence proves every receiver segment is a class name and no declaration in the
+        // caller shadows it. Every other receiver is a known callback expression: stop before the
+        // bare-name ladder, which would otherwise manufacture an ordinary call edge by member spelling.
+        if( !scipPinned && r.recv == RecvKind::JavaTypeCandidate )
+        {
+            bool typeProven = !r.recvVar.empty() && r.fromSymbol != kNoNode;
+            if( typeProven )
+            {
+                std::size_t begin = 0;
+                while( typeProven && begin < r.recvVar.size() )
+                {
+                    const std::size_t end = r.recvVar.find( '.', begin );
+                    const std::string_view segment( r.recvVar.data() + begin,
+                                                    ( end == std::string::npos ? r.recvVar.size() : end ) - begin );
+                    typeProven = !segment.empty() && classNames.find( std::string( segment ) ) != classNames.end();
+                    if( typeProven )
+                    {
+                        qkey.clear();
+                        Narrower::appendUint( qkey, r.fromSymbol );
+                        qkey.push_back( '#' );
+                        qkey.append( segment );
+                        typeProven = fieldNarrow.localNameSet.find( qkey ) == fieldNarrow.localNameSet.end();
+                    }
+                    if( end == std::string::npos ) { break; }
+                    begin = end + 1;
+                }
+            }
+            if( !typeProven )
+            {
+                ++g.unresolvedOut[r.fromSymbol];
+                disposition = CallDisposition::Unresolved;
+                continue;
             }
         }
 
@@ -4763,6 +4833,10 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         {
             case RecvKind::ElixirModule:
             case RecvKind::ElixirSelfModule:
+            case RecvKind::JavaTypeCandidate:
+            {
+                // Call-only ingest stamp; read/write field collection can never own this site.
+            }
             break; // module receivers name callables, not instance fields
             case RecvKind::None:
             {
