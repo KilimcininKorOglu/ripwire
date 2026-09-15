@@ -201,9 +201,10 @@ uint64_t currentThreadId() noexcept;
 // promise either. Use it where the predicate is worth checking but the release-mode assumption would
 // be worth more than it is true: a floating-point identity (an assumption the optimizer may act on in
 // the one translation unit whose contract is reproducible arithmetic), or an internal structural
-// invariant whose corruption is not impossible — the mid-build `sizeof( Symbol )` hazard in CLAUDE.md
-// produces exactly a corrupt CSR, and under a plain VERIFY the bounds reasoning that would have caught
-// it has already been optimized away on the strength of the promise. VERIFY stays the default: a
+// invariant whose corruption is not impossible — the mid-build struct-size hazard CLAUDE.md documents
+// (half the objects compiled against one layout of a host record, half against another) produces exactly
+// a corrupt CSR, and under a plain VERIFY the bounds reasoning that would have caught it has already been
+// optimized away on the strength of the promise. VERIFY stays the default: a
 // precondition this code GUARANTEES is worth stating to the optimizer. This is for the ones it does not.
 #if !defined(NDEBUG)
   #define VERIFY_DEBUG_ONLY_TEXT(expr, msg)   VERIFY_TEXT(expr, msg)

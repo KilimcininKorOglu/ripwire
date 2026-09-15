@@ -96,7 +96,7 @@ PageRankRun pageRankDouble( const sparseCsr<float>& inEdges, std::span<const dou
                             std::span<const double> teleport, std::span<double> rank, PageRankConfig config )
 {
     const std::size_t nodeCount = inEdges.rows();
-    VERIFY_DEBUG_ONLY( verifyCsr( inEdges, nodeCount ) );   // a corrupt CSR is not impossible; do not let the promise delete the bounds reasoning
+    VERIFY_DEBUG_ONLY( verifyCsr( inEdges, nodeCount ) ); // a corrupt CSR is not impossible; do not let the promise delete the bounds reasoning
     VERIFY( weightedOutDegree.size() == nodeCount );
     VERIFY( teleport.size() == nodeCount );
     VERIFY( rank.size() == nodeCount );

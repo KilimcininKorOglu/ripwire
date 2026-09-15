@@ -417,7 +417,7 @@ function storyCards(s, { kick, head, stories, footText }){
 
   listCard(s, X2, 1.72, CW, CH, "it says what it could not prove", AMBER, [
     ["89 of 4,322",   "answers shrank over every file:name selector on ripwire's own tree that selects only declarations — and NONE grew. A header selector kept a definition only when its file is the header or includes it, resolved path-precisely (#173)", AMBER],
-    ["9 verbs",       "now count what the proof dropped as unproven_defs=; all but two had answered from the declaration alone and printed a clean zero (#190, #195)", AMBER],
+    ["nine listing verbs", "now count what the proof dropped as unproven_defs=; all but two had answered from the declaration alone and printed a clean zero (#190, #195)", AMBER],
     ["not a safe edit", "an incompatible=\"0\" beside unproven_defs= is now STATED to be an incomplete read, on every verb that resolves a focus symbol, --edit-check included (#210)", AMBER],
   ], { bigW: 1.75 });
 
@@ -442,7 +442,7 @@ function storyCards(s, { kick, head, stories, footText }){
     "IT SAYS WHAT IT COULD NOT PROVE",
     "- 89 of 4,322: #173. 'On ripwire's own tree, over every file:name selector whose selection is all declarations, the binary after #173 shrank 89 of 4,322 answers compared with the one before it, and grew none.' The population is the whole selector set, not a sample, which is why the claim can be one-directional.",
     "- The defect #173 fixed: the widening matched on the name and the enclosing scope, and that scope drops namespaces, so --callers=a/Store.h:putObject counted callB in b/Store.cpp, a caller of a DIFFERENT Store, and a free function matched on its name alone.",
-    "- 9 verbs: #190, #195 — unproven_defs= on --callers, --callees, --impact, --safe-delete, --path, --uses, --mentions, --verify and --affected. 'all but the first two had answered from the declaration alone and printed a clean zero'.",
+    "- nine listing verbs: #190, #195 — unproven_defs= on --callers, --callees, --impact, --safe-delete, --path, --uses, --mentions, --verify and --affected. 'all but the first two had answered from the declaration alone and printed a clean zero'.",
     "- incompatible=\"0\": #210 — 'on every verb that resolves a focus symbol at all, --edit-check included, where an incompatible=\"0\" beside unproven_defs= is now stated to be an incomplete read rather than a safe edit'.",
     "EVERY NUMBER CARRIES ITS DEFINITION",
     "- graph_unindexed=: #169 — shipped in 0.6.0 with no definition on --lego, --verify and --nonlocal-state, and under --legend=compact on every XML verb except --connect.",
