@@ -269,6 +269,11 @@ def _msys_path(path):
     """Convert an absolute Windows path to the spelling consumed by Git Bash."""
     if not windows:
         return path
+    # Git Bash already uses /d/... for a native path on drive D:. Do not let
+    # ntpath.abspath reinterpret that spelling as C:\\d\\..., which breaks
+    # RIPWIRE_HEADBIN when the runner's TEMP directory is on another drive.
+    if len(path) >= 3 and path[0] == "/" and path[1].isalpha() and path[2] == "/":
+        return path.replace( "\\", "/" )
     drive, tail = os.path.splitdrive(os.path.abspath(path))
     if drive:
         return "/" + drive[0].lower() + tail.replace("\\", "/")

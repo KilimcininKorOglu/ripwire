@@ -805,8 +805,41 @@ std::string runCaptureText( RunCapture& cap )
 }
 
 // fork/exec `sh -c CMD` in its own process group, drain the pipe under a poll() deadline, SIGKILL the whole
-// group at the cap, and decode the exit honestly. Zero new dependencies — POSIX only (G3/G5).
+// group at the cap, and decode the exit honestly. Windows uses the Git-for-Windows `sh.exe` when available so
+// the command contract stays `sh -c` on both platforms; cmd.exe is only the explicit fallback when no POSIX shell
+// can be found.
 /// Captures a bounded subprocess run while killing its complete process tree on timeout.
+#if defined( _WIN32 )
+std::string quoteWindowsProcessArg( std::string_view arg )
+{
+    std::string quoted;
+    quoted.reserve( arg.size() + 2 );
+    quoted.push_back( '"' );
+    std::size_t backslashes = 0;
+    for( const char c : arg )
+    {
+        if( c == '\\' )
+        {
+            ++backslashes;
+            continue;
+        }
+        if( c == '"' )
+        {
+            quoted.append( backslashes * 2 + 1, '\\' );
+            quoted.push_back( '"' );
+            backslashes = 0;
+            continue;
+        }
+        quoted.append( backslashes, '\\' );
+        backslashes = 0;
+        quoted.push_back( c );
+    }
+    quoted.append( backslashes * 2, '\\' );
+    quoted.push_back( '"' );
+    return quoted;
+}
+#endif
+
 RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
 {
 #if defined(_WIN32)
@@ -838,14 +871,32 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
     si.hStdOutput = hWrite;
     si.hStdError = hWrite;
 
-    char sysDir[ MAX_PATH ];
-    const UINT sysDirLen = GetSystemDirectoryA( sysDir, MAX_PATH );
-    const std::string cmdExePath = ( sysDirLen > 0 && sysDirLen < MAX_PATH )
-                                       ? std::string( sysDir ) + "\\cmd.exe"
-                                       : "C:\\Windows\\System32\\cmd.exe";
+    char shellPath[ MAX_PATH ]{};
+    DWORD shellPathLength = SearchPathA( nullptr, "sh.exe", nullptr, MAX_PATH, shellPath, nullptr );
+    if( shellPathLength == 0 || shellPathLength >= MAX_PATH )
+    {
+        shellPathLength = SearchPathA( nullptr, "bash.exe", nullptr, MAX_PATH, shellPath, nullptr );
+    }
+    const bool hasPosixShell = shellPathLength > 0 && shellPathLength < MAX_PATH;
+    if( !hasPosixShell )
+    {
+        char sysDir[ MAX_PATH ]{};
+        const UINT sysDirLen = GetSystemDirectoryA( sysDir, MAX_PATH );
+        if( sysDirLen == 0 || sysDirLen >= MAX_PATH )
+        {
+            CloseHandle( hRead );
+            if( hJob ) CloseHandle( hJob );
+            cap.isSpawnFailed = true;
+            return cap;
+        }
+        std::snprintf( shellPath, sizeof( shellPath ), "%s\\cmd.exe", sysDir );
+    }
 
     PROCESS_INFORMATION pi{};
-    std::string fullCmd = "\"" + cmdExePath + "\" /d /c " + cmd;
+    const std::string shell = shellPath;
+    const std::string fullCmd = hasPosixShell
+                                    ? quoteWindowsProcessArg( shell ) + " -c " + quoteWindowsProcessArg( cmd )
+                                    : quoteWindowsProcessArg( shell ) + " /d /c " + cmd;
     std::vector<char> cmdBuf( fullCmd.begin(), fullCmd.end() );
     cmdBuf.push_back( '\0' );
 
@@ -854,7 +905,7 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
     { return std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - t0 ).count(); };
 
     BOOL ok = CreateProcessA(
-        cmdExePath.c_str(),
+        shell.c_str(),
         cmdBuf.data(),
         NULL,
         NULL,
@@ -1246,7 +1297,7 @@ std::optional<int> runRunTrace( const MainDispatch& d )
     RunCapture cap = runCommandCapture( cmd, timeoutSec );
     if( cap.isSpawnFailed )
     {
-        rw::emitRaw( stderr, "ripwire: --run-trace: cannot spawn '/bin/sh -c' (pipe/fork failed) — nothing was executed\n" );
+        rw::emitRaw( stderr, "ripwire: --run-trace: cannot spawn 'sh -c' (pipe/process creation failed) — nothing was executed\n" );
         return 1;
     }
     if( cap.isTimedOut )

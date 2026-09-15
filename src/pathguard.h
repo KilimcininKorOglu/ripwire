@@ -33,10 +33,10 @@
 //     ::open( path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666 )   (round 4: O_NONBLOCK, then fstat, then ftruncate
 //                                                                          in place of the O_TRUNC it once carried)
 //
-// O_NOFOLLOW makes the KERNEL refuse a final component that is a symlink, at the instant of resolution.
-// There is no window because there is no second resolution — whatever the entry is when the kernel looks
-// is what the kernel acts on. POSIX, and present on both targets (macOS, Linux). MSVC is explicitly not a
-// target for this project, so there is no portability scaffolding here and none is wanted.
+// O_NOFOLLOW makes the KERNEL refuse a final component that is a symlink, at the instant of resolution on POSIX.
+// There is no window because there is no second resolution — whatever the entry is when the kernel looks is what
+// the kernel acts on. The Windows branch below uses the equivalent atomic CreateFileW flags plus the intermediate
+// reparse preflight, so the shared sidecar contract remains fail-closed on both targets.
 //
 // WHERE lstat SURVIVES, AND WHY THAT IS NOT A RELAPSE. isSymlink stays, for two callers that are not the
 // sidecar guard:
@@ -270,13 +270,15 @@ inline bool winHandleInfo( HANDLE handle, BY_HANDLE_FILE_INFORMATION& info ) noe
 inline constexpr DWORD kNoFollowOpenFlags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
                                            | FILE_FLAG_OPEN_NO_RECALL | FILE_FLAG_BACKUP_SEMANTICS;
 
-inline bool windowsPathHasIntermediateReparse( const std::wstring& path ) noexcept
+enum class WindowsPathInspection { Clear, Reparse, Error };
+
+inline WindowsPathInspection windowsPathHasIntermediateReparse( const std::wstring& path ) noexcept
 {
     std::wstring absolute( 32768, L'\0' );
     const DWORD fullLength = ::GetFullPathNameW( path.c_str(), static_cast<DWORD>( absolute.size() ), absolute.data(), nullptr );
     if( fullLength == 0 || fullLength >= absolute.size() )
     {
-        return false;
+        return WindowsPathInspection::Error;
     }
     absolute.resize( fullLength );
 
@@ -284,13 +286,13 @@ inline bool windowsPathHasIntermediateReparse( const std::wstring& path ) noexce
     const DWORD volumeLength = ::GetVolumePathNameW( absolute.c_str(), volume, static_cast<DWORD>( std::size( volume ) ) );
     if( volumeLength == 0 || volumeLength >= std::size( volume ) )
     {
-        return false;
+        return WindowsPathInspection::Error;
     }
 
     const std::size_t sidecarSeparator = absolute.find_last_of( L"\\/" );
     if( sidecarSeparator == std::wstring::npos || sidecarSeparator == 0 )
     {
-        return false;
+        return WindowsPathInspection::Clear;
     }
     std::size_t separator = absolute.find_first_of( L"\\/", volumeLength );
     while( separator != std::wstring::npos && separator <= sidecarSeparator )
@@ -304,14 +306,22 @@ inline bool windowsPathHasIntermediateReparse( const std::wstring& path ) noexce
             FILE_ATTRIBUTE_TAG_INFO tagInfo{};
             const BOOL inspected = ::GetFileInformationByHandleEx( handle, FileAttributeTagInfo, &tagInfo, sizeof( tagInfo ) );
             ::CloseHandle( handle );
-            if( inspected != 0 && ( tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT ) != 0 )
+            if( inspected == 0 )
             {
-                return true;
+                return WindowsPathInspection::Error;
             }
+            if( ( tagInfo.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT ) != 0 )
+            {
+                return WindowsPathInspection::Reparse;
+            }
+        }
+        else
+        {
+            return WindowsPathInspection::Error;
         }
         separator = absolute.find_first_of( L"\\/", separator + 1 );
     }
-    return false;
+    return WindowsPathInspection::Clear;
 }
 #endif
 
@@ -324,9 +334,10 @@ inline bool windowsPathHasIntermediateReparse( const std::wstring& path ) noexce
 // does not — a committed baseline that is actually absent reads as "no debt", which is a worse answer than
 // an error. So this always emits on failure, and every caller turns it into a non-zero exit.
 //
-// O_NOFOLLOW constrains the FINAL component only; an intermediate symlinked directory is still traversed.
-// That is the same reach the lstat check had, so nothing regressed with the change — and widening it would
-// mean refusing every repository that lives under a symlinked path, which is most of them.
+// O_NOFOLLOW constrains the FINAL component only. On POSIX, an intermediate symlinked directory is still traversed,
+// which is the historical reach of the shared open. On Windows, the preflight above inspects every existing
+// intermediate component with FILE_FLAG_OPEN_REPARSE_POINT and refuses both a reparse point and an inspection error;
+// the final CreateFileW call therefore never relies on the final-component flag as the only boundary.
 //
 // NOT A REGULAR FILE (round 4). O_NONBLOCK lets the open return for a FIFO instead of waiting for a reader:
 // with nobody reading, it fails at once with ENXIO and takes the plain-errno branch below. The fstat then
@@ -342,11 +353,20 @@ inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string
 #if defined( _WIN32 )
     const std::string nativePath = rw::compat::rw_windows_path_from_msys( path );
     const std::wstring widePath = rw::compat::rw_utf8_to_wide( nativePath );
-    if( windowsPathHasIntermediateReparse( widePath ) )
+    const WindowsPathInspection inspection = windowsPathHasIntermediateReparse( widePath );
+    if( inspection != WindowsPathInspection::Clear )
     {
-        errno = ELOOP;
-        rw::emitTo( stderr, "ripwire: refusing to write {} at '{}': an intermediate directory is a reparse point. Nothing was written.\n", what, path );
-        return { -1, ELOOP };
+        const int err = inspection == WindowsPathInspection::Reparse ? ELOOP : EIO;
+        errno = err;
+        if( inspection == WindowsPathInspection::Reparse )
+        {
+            rw::emitTo( stderr, "ripwire: refusing to write {} at '{}': an intermediate directory is a reparse point. Nothing was written.\n", what, path );
+        }
+        else
+        {
+            rw::emitTo( stderr, "ripwire: could not inspect intermediate directories for {} at '{}'. Nothing was written.\n", what, path );
+        }
+        return { -1, err };
     }
     const HANDLE handle = widePath.empty() ? INVALID_HANDLE_VALUE : ::CreateFileW( widePath.c_str(), GENERIC_WRITE,
                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
@@ -662,11 +682,19 @@ inline NoFollowRead openNoFollowRead( std::string_view what, const std::string& 
 #if defined( _WIN32 )
     const std::string nativePath = rw::compat::rw_windows_path_from_msys( path );
     const std::wstring widePath = rw::compat::rw_utf8_to_wide( nativePath );
-    if( windowsPathHasIntermediateReparse( widePath ) )
+    const WindowsPathInspection inspection = windowsPathHasIntermediateReparse( widePath );
+    if( inspection != WindowsPathInspection::Clear )
     {
-        result.err = ELOOP;
+        result.err = inspection == WindowsPathInspection::Reparse ? ELOOP : EIO;
         errno = result.err;
-        rw::emitTo( stderr, "ripwire: refusing to read {} at '{}': an intermediate directory is a reparse point. Nothing was read.\n", what, path );
+        if( inspection == WindowsPathInspection::Reparse )
+        {
+            rw::emitTo( stderr, "ripwire: refusing to read {} at '{}': an intermediate directory is a reparse point. Nothing was read.\n", what, path );
+        }
+        else
+        {
+            rw::emitTo( stderr, "ripwire: could not inspect intermediate directories for {} at '{}'. Nothing was read.\n", what, path );
+        }
         return result;
     }
     const HANDLE handle = widePath.empty() ? INVALID_HANDLE_VALUE : ::CreateFileW( widePath.c_str(), GENERIC_READ,
