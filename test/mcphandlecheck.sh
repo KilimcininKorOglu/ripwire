@@ -30,6 +30,11 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+MCP_HOME="$TMP/mcp-home"; mkdir -p "$MCP_HOME"
+case "$( uname -s )" in
+    MINGW*|MSYS*|CYGWIN*) MCP_HOME="$( cygpath -w "$MCP_HOME" )";;
+esac
+export HOME="$MCP_HOME"
 fail=0
 
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
@@ -49,6 +54,20 @@ SRCFILE="$CORPUS/core/engine.cpp"
 
 # Send JSON-RPC messages to a fresh MCP server process; print all output lines.
 mcp_call() { printf '%s\n' "$@" | "$BIN" --mcp 2>/dev/null; }
+mcp_call_in_cwd() {
+    local cwd="$1"
+    case "$( uname -s )" in
+        MINGW*|MSYS*|CYGWIN*)
+            local cwdNative="$( cygpath -w "$cwd" )"
+            local binNative="$( cygpath -w "$BIN" )"
+            MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+                cmd.exe /d /c "cd /d $cwdNative && $binNative --mcp" 2>/dev/null
+            ;;
+        *)
+            ( cd "$cwd" && "$BIN" --mcp 2>/dev/null )
+            ;;
+    esac
+}
 
 # Extract the `handle` field of the top-level `symbol` from a find_symbol response line-stream on stdin.
 handle_of_symbol() {
@@ -294,6 +313,10 @@ echo "=== 6c. RN1: a handle that failed only because the request omitted \`path\
 # 6c-2 is that guard, because a clause pasted onto every refusal explains nothing.
 ELSEWHERE="$( cd "$TMP" && mkdir -p elsewhere && cd elsewhere && pwd -P )"
 printf 'int unrelatedLeaf( void ) { return 0; }\n' > "$ELSEWHERE/unrelated.c"
+ELSEWHERE_NATIVE="$ELSEWHERE"
+case "$( uname -s )" in
+    MINGW*|MSYS*|CYGWIN*) ELSEWHERE_NATIVE="$( cygpath -w "$ELSEWHERE" )";;
+esac
 
 # The REALPATH of the corpus, because that is what the server assumes for an omitted `path` (the launch
 # cwd, canonicalized). On macOS $TMPDIR is a /var -> /private/var symlink, so minting the handle against
@@ -317,7 +340,7 @@ else
 printf '%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_body","arguments":{"handle":"'"$H3"'"}}}' \
-    | ( cd "$ELSEWHERE" && "$BIN" --mcp 2>/dev/null ) | tail -1 > "$TMP/nopath"
+    | mcp_call_in_cwd "$ELSEWHERE" | tail -1 > "$TMP/nopath"
 python3 -c '
 import sys, json
 r = json.load(open(sys.argv[1]))
@@ -327,9 +350,9 @@ low = m.lower()
 problems = []
 if r.get("error", {}).get("code") != -32602: problems.append("wrong error code")
 if "path" not in low:                        problems.append("the refusal never names the `path` argument")
-if sys.argv[2] not in m:                     problems.append("the refusal never says which root answered")
+if not any(root and root in m for root in sys.argv[2:]): problems.append("the refusal never says which root answered")
 print("NOPATH_OK" if not problems else "NOPATH_BAD:" + "; ".join(problems) + " || " + m[:220])
-' "$TMP/nopath" "$ELSEWHERE" > "$TMP/nopathchk"
+' "$TMP/nopath" "$ELSEWHERE" "$ELSEWHERE_NATIVE" > "$TMP/nopathchk"
 grep -q NOPATH_OK "$TMP/nopathchk" \
     && ok "(6c-1) [red] omitted-path handle failure names \`path\` and the root that answered" \
     || no "(6c-1) [red] $(cat "$TMP/nopathchk")"
@@ -339,7 +362,7 @@ grep -q NOPATH_OK "$TMP/nopathchk" \
 printf '%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_body","arguments":{"path":"'"$ELSEWHERE"'","handle":"'"$H3"'"}}}' \
-    | ( cd "$ELSEWHERE" && "$BIN" --mcp 2>/dev/null ) | tail -1 > "$TMP/withpath"
+    | mcp_call_in_cwd "$ELSEWHERE" | tail -1 > "$TMP/withpath"
 python3 -c '
 import sys, json
 r = json.load(open(sys.argv[1]))
@@ -358,7 +381,7 @@ grep -q WITHPATH_OK "$TMP/withpathchk" \
 printf '%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_body","arguments":{"handle":"'"$H3"'"}}}' \
-    | ( cd "$CORPUS_REAL" && "$BIN" --mcp 2>/dev/null ) | tail -1 > "$TMP/nopath_ok"
+    | mcp_call_in_cwd "$CORPUS_REAL" | tail -1 > "$TMP/nopath_ok"
 python3 -c '
 import sys, json
 r = json.load(open(sys.argv[1]))

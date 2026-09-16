@@ -1,6 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
-#include "infra/platform_compat.h"
+#include "infra/platform.h"
 #include <limits>
 
 #if !defined( RIPWIRE_INGEST_TU )
@@ -1243,20 +1243,19 @@ constexpr std::size_t kMaxIgnoreProbeBytes = 64ull * 1024ull * 1024ull;
 // directory-ness; the walk stops at the filesystem root.
 bool underGitRoot( const char* rootDir )
 {
-    std::string dir = rootDir == nullptr ? std::string( "." ) : std::string( rootDir );
+    std::string dir = rw::compat::rw_native_path( rootDir == nullptr ? std::string_view( "." ) : std::string_view( rootDir ) );
     char        resolved[ PATH_MAX ];
-    if( ::realpath( dir.c_str(), resolved ) != nullptr )
+    if( rw::compat::rw_realpath( dir.c_str(), resolved ) != nullptr )
     {
         dir = resolved;
     }
     for( ;; )
     {
-        struct stat st;
-        if( ::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
+        if( rw::compat::rw_path_exists( dir + "/.git" ) )
         {
             return true;
         }
-        const std::size_t slash = dir.find_last_of( '/' );
+        const std::size_t slash = ::infra::platform::lastPathSeparator( dir );
         if( slash == std::string::npos || slash == 0 )
         {
             return false;
@@ -1272,35 +1271,21 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     {
         return out;
     }
-    const std::string cmd = "git -C " + shSingleQuote( rootDir == nullptr ? std::string( "." ) : std::string( rootDir ) )
-                          + " -c core.quotepath=false ls-files --others --ignored --exclude-standard --directory -z 2>/dev/null";
-    std::FILE* pipe = ::popen( cmd.c_str(), "r" );
-    if( pipe == nullptr )
+    std::string buf;
+    const int rc = rw::compat::rw_git_ignore_probe( rootDir == nullptr ? std::string_view( "." ) : std::string_view( rootDir ),
+                                                     buf, kMaxIgnoreProbeBytes );
+    if( rc == -1 )
     {
         DEGRADED_PATH_ALERT( "ingest: cannot run git for the ignore probe — full walk" );
         return out;
     }
-    std::string buf;
-    char        chunk[ 8192 ];
-    bool        overflowed = false;
-    for( std::size_t n = std::fread( chunk, 1, sizeof( chunk ), pipe ); n > 0; n = std::fread( chunk, 1, sizeof( chunk ), pipe ) )
-    {
-        if( buf.size() + n > kMaxIgnoreProbeBytes )
-        {
-            overflowed = true;
-            break;
-        }
-        buf.append( chunk, n );
-    }
-    const int rc = ::pclose( pipe );
     if( rc != 0 )
     {
+        if( rc == -2 )
+        {
+            DEGRADED_PATH_ALERT( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
+        }
         return out;   // not a git work tree, or no git binary — the DESIGNED degrade, silent by contract
-    }
-    if( overflowed )
-    {
-        DEGRADED_PATH_ALERT( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
-        return out;
     }
 
     for( std::size_t i = 0; i < buf.size(); )
@@ -1412,6 +1397,19 @@ void finalizeCrawlSkips( CrawlSkips& skips, const HashMap<std::string, std::uint
     std::sort( skips.unindexedExts.begin(), skips.unindexedExts.end(), lessUnindexedExt );
 }
 
+struct StatInfo
+{
+    long long mtimeNs;
+    long long sizeBytes;
+    long long ctimeNs;
+};
+
+inline StatInfo statSizeTimes( const std::string& path ) noexcept
+{
+    const rw::compat::RwFileTimes times = rw::compat::rw_file_times_of( path );
+    return { times.mtimeNs, times.sizeBytes, times.changeTimeNs };
+}
+
 // §L1: the same walk now also reports the OTHER two ways a file leaves the corpus — an --exclude hit and
 // an extension with no grammar — plus the unindexed-extension histogram the map header rolls up. Nothing
 // new is dropped here: every one of those files was already absent, it was merely absent ANONYMOUSLY, so
@@ -1430,7 +1428,6 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
     std::vector<SkippedOversize> skipped;
     CrawlSkips                   skips;
     HashMap<std::string, std::uint64_t> extTally;   // unindexed source/text-looking ext -> file count
-
     // §N6-C: the mode is set before ANY early return, so a single-file root, an unopenable root and a
     // refused probe all report what was consulted rather than inheriting a default that implies more.
     skips.ignoreMode = respectGitignore ? IgnoreMode::Unavailable : IgnoreMode::Off;
@@ -1701,30 +1698,18 @@ bool readFile( const std::string& path, std::string& out )
         return false;
     }
 
-#if defined( _WIN32 )
-    if( ::_fseeki64( fp, 0, SEEK_END ) != 0 )
-#else
-    if( std::fseek( fp, 0, SEEK_END ) != 0 )
-#endif
+    if( rw::compat::rw_fseek( fp, 0, SEEK_END ) != 0 )
     {
         std::fclose( fp );
         return false;
     }
-#if defined( _WIN32 )
-    const long long len = ::_ftelli64( fp );
-#else
-    const long len = std::ftell( fp );
-#endif
+    const std::int64_t len = rw::compat::rw_ftell( fp );
     if( len < 0 )
     {
         std::fclose( fp );
         return false;
     }
-#if defined( _WIN32 )
-    if( ::_fseeki64( fp, 0, SEEK_SET ) != 0 )
-#else
-    if( std::fseek( fp, 0, SEEK_SET ) != 0 )
-#endif
+    if( rw::compat::rw_fseek( fp, 0, SEEK_SET ) != 0 )
     {
         std::fclose( fp );
         return false;
@@ -1795,32 +1780,6 @@ bool readFilePrefix( const std::string& path, std::string& out, std::size_t maxB
 // nanoseconds, HFS+/some network mounts only whole seconds (the sub-ns field reads 0). The racy-git
 // rule makes coarse granularity SAFE rather than merely lossy: any file whose mtime lands in the same
 // granule as the cache write is force-re-hashed, so a same-granule post-hash edit can never be trusted.
-struct StatInfo { long long mtimeNs; long long sizeBytes; long long ctimeNs; };   // all -1 if the path cannot be stat'd
-inline StatInfo statSizeTimes( const std::string& path ) noexcept
-{
-#if defined( _WIN32 )
-    const rw::compat::RwFileTimes times = rw::compat::rw_file_times_of( path );
-    return { times.mtimeNs, times.sizeBytes, times.changeTimeNs };
-#else
-    struct stat st;
-    if( ::stat( path.c_str(), &st ) != 0 )
-    {
-        return { -1, -1, -1 };
-    }
-#if defined( __APPLE__ )
-    const long long m = (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
-    const long long c = (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
-#elif defined( __linux__ )
-    const long long m = (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
-    const long long c = (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
-#else
-    const long long m = (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
-    const long long c = (long long)st.st_ctime * 1000000000LL;
-#endif
-    return { m, (long long)st.st_size, c };
-#endif
-}
-
 // L1 (Linux runtime probe) — what KIND of thing is at `path`? The cache seams need all three answers, so
 // this is a tri-state and not a bool: absent is a silent miss, regular is the only usable shape, and
 // anything else (directory, fifo, socket, device) is an unexpected shape worth disclosing once.

@@ -13,9 +13,10 @@
 // CRITICAL → stderr warning + return 1 (unless --force in argv). WARN → print + continue.
 
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
-#include <unistd.h>   // wrapCommandToken (2026-09-06)
 #include "skillscan.h"
 #include "infra/tablelookup.h"   // findByField — shared with ingest's lookupLang
+#include "infra/jsonesc.h"       // escapeMcp — JSON strings must remain valid on Windows paths
+#include "infra/platform.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -207,11 +208,7 @@ inline void wrapPrintSkillsLine( std::FILE* out, const std::string_view agent, c
 
     // (b) prebuilt install — the staged copy next to the binary's prefix
     ec.clear();
-#if defined( _WIN32 )
-    const fs::path executableFsPath( rw::compat::rw_utf8_to_wide( executablePath ) );
-#else
-    const fs::path executableFsPath( executablePath );
-#endif
+    const fs::path executableFsPath = ::infra::platform::filesystemPath( executablePath );
     const fs::path stagedInstaller = executableFsPath.parent_path().parent_path() / "share" / "ripwire" / "skills" / "install.sh";
     if( !executablePath.empty() && fs::is_regular_file( stagedInstaller, ec ) && !ec )
     {
@@ -354,24 +351,9 @@ inline std::string wrapTomlString( const std::string_view value )
 // gates that pin the recipe's shape run with a PATH copy present.
 inline std::string wrapCommandToken( const std::string_view executablePath )
 {
-    namespace fs = std::filesystem;
-    const char* pathEnv = std::getenv( "PATH" );
-    std::string_view path( pathEnv ? pathEnv : "" );
-    while( !path.empty() )
+    if( ::rw::compat::rw_command_available( "ripwire" ) )
     {
-        const std::size_t    colon = path.find( ':' );
-        const std::string_view dir = path.substr( 0, colon );
-        path = ( colon == std::string_view::npos ) ? std::string_view() : path.substr( colon + 1 );
-        if( dir.empty() )
-        {
-            continue;
-        }
-        std::error_code ec;
-        const fs::path  candidate = fs::path( std::string( dir ) ) / "ripwire";
-        if( fs::is_regular_file( candidate, ec ) && !ec && ::access( candidate.string().c_str(), X_OK ) == 0 )
-        {
-            return "ripwire";
-        }
+        return "ripwire";
     }
     return executablePath.empty() ? std::string( "ripwire" ) : std::string( executablePath );
 }
@@ -388,13 +370,14 @@ inline void wrapPrintPathNote( const std::string& token )
 inline void wrapMcpJson( const char* configPath, const std::string& token )
 {
     wrapPrintPathNote( token );
+    const std::string escapedToken = rw::jsonesc::escapeMcp( token );
     rw::emitTo( stdout,
         "# ripwire -> add to {}\n"
         "{{\n"
         "  \"mcpServers\": {{\n"
         "    \"ripwire\": {{ \"command\": \"{}\", \"args\": [\"--mcp\"] }}\n"
         "  }}\n"
-        "}}\n", configPath, token.c_str() );
+        "}}\n", configPath, escapedToken.c_str() );
 }
 
 // opencode's config is a DIFFERENT shape, not a different path: the top-level key is `mcp` (not
@@ -406,13 +389,14 @@ inline void wrapMcpJson( const char* configPath, const std::string& token )
 // additionalProperties:false); test/opencodewrapcheck.sh checks this against the pinned copy.
 inline void wrapMcpJsonOpencode( const std::string& token )
 {
+    const std::string escapedToken = rw::jsonesc::escapeMcp( token );
     rw::emitTo( stdout,
         "{{\n"
         "  \"$schema\": \"https://opencode.ai/config.json\",\n"
         "  \"mcp\": {{\n"
         "    \"ripwire\": {{ \"type\": \"local\", \"command\": [\"{}\", \"--mcp\"] }}\n"
         "  }}\n"
-        "}}\n", token.c_str() );
+        "}}\n", escapedToken.c_str() );
 }
 
 // Agent configuration: name, config directory path (using ~ for home), and a lambda to

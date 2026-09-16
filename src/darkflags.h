@@ -969,7 +969,15 @@ inline FlagsResult computeFlags( const IngestResult& ing, const std::string& roo
         {
             return;
         }
-        std::string rel( relForHash( full, root ) );
+        std::string normalizedFull = full;
+        for( char& c : normalizedFull )
+        {
+            if( c == '\\' )
+            {
+                c = '/';
+            }
+        }
+        std::string rel( relForHash( normalizedFull, root ) );
         FileHarvest fh = harvestFile( *bytes, full, isCMake );
         harvest.push_back( Harvested{ std::move( rel ), std::move( fh ) } );
     };

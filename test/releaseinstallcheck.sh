@@ -515,7 +515,16 @@ g_install g15 Linux x86_64 RIPWIRE_CPUINFO="$GDIR/cpuinfo-both-v3"
     || no "(G15) processors that each carry v3 were refused: $( g_said g15 ) (rc=$G_RC)"
 
 if [ "${1:-}" != "--isolation-child" ]; then
-    python3 "$ROOT/test/installer_isolation.py" "${RIPWIRE_BIN:-$ROOT/build/ripwire}" \
+    INSTALLER_PYTHON="${RIPWIRE_PYTHON:-python3}"
+    INSTALLER_SCRIPT="$ROOT/test/installer_isolation.py"
+    INSTALLER_BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
+    case "$( uname -s 2>/dev/null )" in
+        MINGW*|MSYS*|CYGWIN*)
+            INSTALLER_SCRIPT="$( cygpath -w "$INSTALLER_SCRIPT" )"
+            INSTALLER_BIN="$( cygpath -w "$INSTALLER_BIN" )"
+            ;;
+    esac
+    "$INSTALLER_PYTHON" "$INSTALLER_SCRIPT" "$INSTALLER_BIN" \
         || no "installer gates escaped their fixture homes or failed with inherited overrides"
 fi
 

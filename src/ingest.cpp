@@ -41,6 +41,7 @@
 #include <cstdio>
 #include <cstdlib>             // std::getenv — RIPWIRE_CACHE_STATS drift observable
 #include <cstring>
+#include <exception>
 #include <sys/stat.h>          // A4-P7: stat() for the (size,mtime) warm-run shortcut
 #include <fcntl.h>             // v15: ::open( O_RDONLY ) — the cache blob's own read descriptor (ingest_cache.h)
 #include <unistd.h>            // getpid — unique per-process cache temp name; ::pread — the offset-table record reads
@@ -221,17 +222,11 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
                      std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore,
                      std::string_view cacheDir )
 {
-#if defined( _WIN32 )
-    std::string nativeRoot = rw::compat::rw_windows_path_from_msys( rootDir == nullptr ? std::string_view( "." ) : std::string_view( rootDir ) );
-    // Keep the root spelling in the same generic form as the logical paths emitted by the crawl.  The
-    // filesystem APIs still receive this native Windows path; forward slashes are accepted by Win32 and
-    // prevent a platform-only separator from leaking into cache keys, XML, MCP handles and sidecars.
-    for( char& c : nativeRoot )
-    {
-        if( c == '\\' ) { c = '/'; }
-    }
+    std::string nativeRoot = rw::compat::rw_native_path( rootDir == nullptr ? std::string_view( "." ) : std::string_view( rootDir ) );
+    // Keep the root spelling in the same generic form as the logical paths emitted by the crawl. The
+    // compatibility layer accepts Git-Bash drive paths and normalizes Windows separators; POSIX returns
+    // its original byte path unchanged.
     rootDir = nativeRoot.c_str();
-#endif
     PROFILE_SCOPE_DESCRIBE( "ingest: total (crawl + parse + model)" );
     // Cheap (a handful of bytes serialized twice) and runs once per invocation — catches a
     // writeDef/writeRef field added without updating kMinDefRecordBytesLean/kMinRefRecordBytes immediately
@@ -300,8 +295,69 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
 
     // 2) the parallel parse pool — per-thread accumulators, cache-hit reuse, hostile-input guards,
     //    the pending-parsed-tree overlap with the async query compile, the install/gate-open moment,
-    //    the deterministic merge, and the dirty-gated saveCache (ingest_parsepool.h).
-    RawFacts raw = runParsePool( result, rootDir, cacheFile, captureValueUses, cache, cacheStats, scan, prewarm );
+    //    the deterministic merge, and the dirty-gated saveCache (ingest_parsepool.h). Document extraction
+    //    is independent of the code facts and runs beside this pool; its merge stays below in fileId order.
+    IngestResult        docResult;
+    std::vector<RawDef> docDefs;
+    std::thread         docThread;
+    std::exception_ptr  docError;
+    bool hasDocFiles = false;
+    for( const std::string& path : result.files )
+    {
+        if( docparse::isDocExtension( lowerExtensionOf( path ) ) )
+        {
+            hasDocFiles = true;
+            break;
+        }
+    }
+    const unsigned hardwareWorkers = rw::compat::rw_effective_hardware_concurrency();
+    const unsigned reservedDocWorkers = ::infra::platform::kWindows && hasDocFiles
+                                      ? std::max( 1u, hardwareWorkers / 4u ) : 0u;
+    if( hasDocFiles )
+    {
+        docResult.files = result.files;
+        docThread = std::thread( [ & ]()
+        {
+            try
+            {
+                runDocPostPass( docResult, docDefs, !cacheFile.empty(), captureValueUses, cacheDir, reservedDocWorkers );
+            }
+            catch( ... )
+            {
+                docError = std::current_exception();
+            }
+        } );
+    }
+
+    RawFacts raw;
+    try
+    {
+        raw = runParsePool( result, rootDir, cacheFile, captureValueUses, cache, cacheStats, scan, prewarm, reservedDocWorkers );
+    }
+    catch( ... )
+    {
+        if( docThread.joinable() )
+        {
+            docThread.join();
+        }
+        throw;
+    }
+    if( docThread.joinable() )
+    {
+        docThread.join();
+        if( docError )
+        {
+            std::rethrow_exception( docError );
+        }
+        for( RawDef& docDef : docDefs )
+        {
+            if( const auto it = docResult.docText.find( docDef.fileId ); it != docResult.docText.end() )
+            {
+                result.docText.emplace( docDef.fileId, std::move( it->second ) );
+            }
+            raw.defs.push_back( std::move( docDef ) );
+        }
+    }
 
     // Cache facts are only needed by the parse pool. Release their map and bucket storage before the model tail
     // creates symbols/references, so a warm run does not carry the cache and the assembled model at once.
@@ -312,8 +368,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
 
     // ── doc post-pass (P1-B): every collected document file (notebook/html/csv/…) becomes a docText
     //    override + one whole-file Section node — parallel extract, deterministic ascending-fileId merge
-    //    (ingest_docpass.h, with the markitdown-bridge byte cache).
-    runDocPostPass( result, raw.defs, !cacheFile.empty(), captureValueUses, cacheDir );
+    //    (ingest_docpass.h, with the markitdown-bridge byte cache). It was started beside the parse pool above.
 
     PROFILE_SCOPE_DESCRIBE( "ingest: build model (dedup + symbols/refs)" );
 

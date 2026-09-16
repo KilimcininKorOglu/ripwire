@@ -92,8 +92,10 @@ CPP
 corpusHash()
 {
     local d="$1"
-    if command -v shasum >/dev/null 2>&1; then ( cd "$d" && find . -type f | LC_ALL=C sort | xargs shasum -a 256 ) | shasum -a 256
-    else ( cd "$d" && find . -type f | LC_ALL=C sort | xargs sha256sum ) | sha256sum
+    if command -v shasum >/dev/null 2>&1; then
+        ( cd "$d" && while IFS= read -r file; do shasum -a 256 "$file"; done < <( find . -type f | LC_ALL=C sort ) ) | shasum -a 256
+    else
+        ( cd "$d" && while IFS= read -r file; do sha256sum "$file"; done < <( find . -type f | LC_ALL=C sort ) ) | sha256sum
     fi
 }
 

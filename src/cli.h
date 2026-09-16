@@ -3326,13 +3326,11 @@ inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
             continue;
         }
         const std::string_view value = arg.substr( vf.prefix.size() );
-#if defined( _WIN32 )
         if( isPathValuePrefix( vf.prefix ) )
         {
             // argv storage is mutable and Config deliberately borrows it as a view.
             rw::compat::rw_normalize_msys_drive_paths_in_place( const_cast<char*>( value.data() ) );
         }
-#endif
         // §B5: the EMPTY-value decision is the row's, never this loop's. Refuse prints here; Meaningful and
         // HandlerRefuses both fall through to the assignment — the difference between them is which code
         // OWNS the refusal, and the row records it (the consteval floor beside the table pins the columns).

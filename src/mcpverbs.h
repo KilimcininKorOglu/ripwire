@@ -261,13 +261,7 @@ inline McpObjectArg mcpObjectArg( const std::string& scope, const char* field )
 inline std::string mcpRootDirRefusal( const std::string& dir )
 {
     std::error_code                     ec;
-    const std::string                   nativeDir =
-#if defined( _WIN32 )
-        rw::compat::rw_windows_path_from_msys( dir );
-#else
-        dir;
-#endif
-    const std::filesystem::file_status  st = std::filesystem::status( std::filesystem::path( nativeDir ), ec );
+    const std::filesystem::file_status  st = std::filesystem::status( ::infra::platform::filesystemPath( dir ), ec );
     if( ec || !std::filesystem::exists( st ) )
     {
         return mcprefuse::rootRefusal( mcprefuse::RootFault::Missing, dir );

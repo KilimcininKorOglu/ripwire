@@ -6,10 +6,21 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 REGRESSION="$ROOT/test/regression.sh"
 EVALS="$ROOT/docs/EVALS.md"
 fail=0
-if [ -n "${RIPWIRE_PYTHON:-}" ]; then
-    PYTHON3="$RIPWIRE_PYTHON"
+WINDOWS_GATE=0
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+case "$( uname -s 2>/dev/null || true )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+if [ "$WINDOWS_GATE" -eq 1 ]; then
+    # Prefer a real native interpreter over the WindowsApps python3 alias, which exists on PATH even
+    # when it only prints the Microsoft Store message and cannot execute a script.
+    PYTHON3="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
 else
-    PYTHON3="$( command -v python3 2>/dev/null || command -v python 2>/dev/null || true )"
+    if [ -n "${RIPWIRE_PYTHON:-}" ]; then
+        PYTHON3="$RIPWIRE_PYTHON"
+    else
+        PYTHON3="$( command -v python3 2>/dev/null || command -v python 2>/dev/null || true )"
+    fi
 fi
 if [ -z "$PYTHON3" ] || ! "$PYTHON3" -c 'import sys' >/dev/null 2>&1; then
     printf 'FAIL: native Python is required by manifestcheck.sh\n'

@@ -27,6 +27,10 @@ import time
 root = os.path.abspath(sys.argv[1])
 binp = os.path.abspath(sys.argv[2])
 windows = os.name == "nt"
+if windows and not os.path.isfile( binp ) and os.path.isfile( binp + ".exe" ):
+    # Git Bash accepts an extensionless native executable, but subprocess/CreateProcessW does not.
+    # Resolve the documented `./build/ripwire` spelling once at the native harness boundary.
+    binp += ".exe"
 
 if windows:
     import ctypes
@@ -662,8 +666,8 @@ WINDOWS_GATE_ENV, GATE_SHELL = _windows_gate_environment()
 WINDOWS_MSYS_SHELL = windows and "\\git\\" in os.path.normcase( os.path.abspath( GATE_SHELL ) )
 FIFO_GATES = {
     "freshnesscheck.sh", "mcpeditcheck.sh", "mcpincrementalcheck.sh",
-    "mcpreloadcheck.sh", "mcpeditracecheck.sh", "mcpstalecheck.sh", "mcpwatchercheck.sh",
-    "qsnapprefetchcheck.sh",
+    "mcpreloadcheck.sh", "mcpeditracecheck.sh", "mcpstalecheck.sh",
+    "mcpwatchercheck.sh", "qsnapprefetchcheck.sh",
 }
 jobs = 6
 only = None

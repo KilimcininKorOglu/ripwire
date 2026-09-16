@@ -360,56 +360,7 @@ inline bool scipDecodeIndex( const std::uint8_t* data, std::size_t size, std::ve
 // fopen gave — the same size bound, the same short-read rule — even on a filesystem that honours O_NONBLOCK for a file.
 inline std::vector<std::uint8_t> scipReadFile( const char* path )
 {
-#if defined( _WIN32 )
-    // The Windows CRT accepts the initial _open/fstat probe above, but its fcntl flags are not a
-    // portable POSIX stream contract: F_GETFL/F_SETFL can make fdopen fail even for a regular UTF-8
-    // path. Reopen through the wide CRT so non-ASCII paths and the bounded read keep the same behavior.
-    std::FILE* f = rw::compat::rw_fopen_utf8( path, "rb" );
-    if( f == nullptr )
-    {
-        return {};
-    }
-    if( std::fseek( f, 0, SEEK_END ) != 0 ) { std::fclose( f ); return {}; }
-    const long sz = std::ftell( f );
-    if( sz <= 0 || sz > ( 256L << 20 ) ) { std::fclose( f ); return {}; }
-    std::rewind( f );
-    std::vector<std::uint8_t> bytes;
-    bytes.resize( static_cast<std::size_t>( sz ) );
-    const std::size_t got = std::fread( bytes.data(), 1, bytes.size(), f );
-    std::fclose( f );
-    if( got != bytes.size() )
-    {
-        bytes.clear();
-    }
-    return bytes;
-#else
-    std::vector<std::uint8_t> bytes;
-    const int indexFd = ::open( path, O_RDONLY | O_NONBLOCK | O_CLOEXEC );
-    if( indexFd < 0 )
-    {
-        return bytes;
-    }
-    struct stat indexStat;
-    const int   statusFlags = ( ::fstat( indexFd, &indexStat ) == 0 && S_ISREG( indexStat.st_mode ) ) ? ::fcntl( indexFd, F_GETFL ) : -1;
-    std::FILE*  f           = ( statusFlags >= 0 && ::fcntl( indexFd, F_SETFL, statusFlags & ~O_NONBLOCK ) == 0 ) ? ::fdopen( indexFd, "rb" ) : nullptr;
-    if( !f )
-    {
-        ::close( indexFd );   // not a regular file, or fcntl/fdopen failed — stdio never adopted the descriptor
-        return bytes;
-    }
-    if( std::fseek( f, 0, SEEK_END ) != 0 ) { std::fclose( f ); return bytes; }
-    const long sz = std::ftell( f );
-    if( sz <= 0 || sz > ( 256L << 20 ) ) { std::fclose( f ); return bytes; }
-    std::rewind( f );
-    bytes.resize( std::size_t( sz ) );
-    const std::size_t got = std::fread( bytes.data(), 1, bytes.size(), f );
-    std::fclose( f );
-    if( got != bytes.size() )
-    {
-        bytes.clear();
-    }
-    return bytes;
-#endif
+    return rw::compat::rw_read_regular_file( path == nullptr ? std::string_view() : std::string_view( path ), 256u << 20 );
 }
 
 // ---- map decoded SCIP → ripwire node ids (the overlay) ---------------------------------------------

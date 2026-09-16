@@ -123,6 +123,12 @@ else()
 endif()
 if(RIPWIRE_LTO)
   include(CheckIPOSupported)
+  if(WIN32 AND CMAKE_EXE_LINKER_FLAGS)
+    # ClangCL + lld-link does not inherit the SDK /libpath entries from the parent configure during
+    # check_ipo_supported()'s try_compile. Propagate the explicitly selected linker flags so the LTO
+    # capability check exercises the same Windows CRT/toolchain that the real targets will link against.
+    list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES CMAKE_EXE_LINKER_FLAGS)
+  endif()
   check_ipo_supported(RESULT _ripwire_ipo_ok OUTPUT _ripwire_ipo_why LANGUAGES C CXX)
   if(NOT _ripwire_ipo_ok)
     # Fail loudly. A silently-ignored LTO request produces a normal binary that someone then benchmarks

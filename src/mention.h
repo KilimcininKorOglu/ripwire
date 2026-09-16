@@ -30,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "infra/platform.h"
 
 #include "model.h"
 #include "infra/namesplit.h"   // isIdentChar — the ONE ASCII identifier-character predicate
@@ -247,11 +248,10 @@ inline std::pair<std::size_t, std::size_t> parseCappedCsvPair( std::string_view 
 namespace mention_detail
 {
 
-#if defined( _WIN32 )
-inline bool isPathSeparator( char c ) noexcept { return c == '/' || c == static_cast<char>( 0x5C ); }
-#else
-inline bool isPathSeparator( char c ) noexcept { return c == '/'; }
-#endif
+inline bool isPathSeparator( char c ) noexcept
+{
+    return c == '/' || ( ::infra::platform::kWindows && c == static_cast<char>( 0x5C ) );
+}
 
 struct RawMention
 {
@@ -269,11 +269,7 @@ inline bool isTokenChar( char c ) noexcept { return isIdentChar( c ) || c == '.'
 // basename of an indexed path, and the same with its extension stripped ("src/a/b.py" → "b.py", "b")
 inline std::string_view baseNameOf( std::string_view path ) noexcept
 {
-#if defined( _WIN32 )
-    const std::size_t slash = path.find_last_of( "/\\" );
-#else
-    const std::size_t slash = path.rfind( '/' );
-#endif
+    const std::size_t slash = ::infra::platform::lastPathSeparator( path );
     return slash == std::string_view::npos ? path : path.substr( slash + 1 );
 }
 inline std::string_view stripExt( std::string_view name ) noexcept

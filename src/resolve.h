@@ -50,6 +50,7 @@
 #include "smallvec.h"
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
+#include "infra/platform.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -727,19 +728,11 @@ inline bool pathIsUnder( std::string_view abs, std::string_view root ) noexcept
 {
     const auto isSeparator = []( char c ) noexcept
     {
-#if defined( _WIN32 )
-        return c == '/' || c == '\\';
-#else
-        return c == '/';
-#endif
+        return c == '/' || ( ::infra::platform::kWindows && c == '\\' );
     };
     const auto fold = []( char c ) noexcept
     {
-#if defined( _WIN32 )
-        return ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
-#else
-        return c;
-#endif
+        return ::infra::platform::kWindows && c >= 'A' && c <= 'Z' ? char( c - 'A' + 'a' ) : c;
     };
     const auto samePrefix = [ & ]( std::string_view left, std::string_view right, std::size_t count ) noexcept
     {
@@ -766,11 +759,7 @@ inline bool pathIsUnder( std::string_view abs, std::string_view root ) noexcept
     }
     if( rootLength == 1 && isSeparator( root.front() ) )
     {
-#if defined( _WIN32 )
         return !abs.empty() && isSeparator( abs.front() );
-#else
-        return !abs.empty() && abs.front() == '/';
-#endif
     }
     if( abs.size() < rootLength || !samePrefix( abs, root, rootLength ) )
     {

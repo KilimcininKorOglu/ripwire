@@ -104,9 +104,15 @@ HOOK_STATUS=$?
 # this arm exists to catch. Binding BIN here is also what makes this gate answerable to
 # test/binoverridecheck.sh — arms 1-5 are about skills/install.sh alone, and a gate that never
 # invokes the binary it is handed stays GREEN against a binary that is entirely broken.
+EXPLICIT_BIN=0
+[ -n "${1:-}" ] || [ -n "${RIPWIRE_BIN:-}" ] && EXPLICIT_BIN=1
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative RIPWIRE_BIN
-[ -x "$BIN" ] || BIN="$( command -v ripwire 2>/dev/null || true )"
+if [ "$EXPLICIT_BIN" -eq 1 ]; then
+    [ -f "$BIN" ] || { no "explicit RIPWIRE_BIN is not a readable binary path: $BIN"; BIN=""; }
+else
+    [ -x "$BIN" ] || BIN="$( command -v ripwire 2>/dev/null || true )"
+fi
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
     echo "  SKIP  wrap-recipe arm (no ripwire binary found via RIPWIRE_BIN / build/ripwire / PATH)"
 else

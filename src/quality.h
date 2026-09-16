@@ -42,11 +42,6 @@
 #include <cerrno>      // EWOULDBLOCK — the LOCK_NB retry predicate
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
-#if defined(_WIN32)
-#include <aclapi.h>
-#include <sddl.h>
-#endif
-
 #include <algorithm>
 #include <atomic>       // Phase-M: the tmp-name sequence counter (atomicWriteFile); also the A5 process-once cache-sweep guard
 #include <cctype>       // std::isxdigit/std::isdigit — B10.2d churn-blame porcelain parsing
@@ -1359,197 +1354,7 @@ inline ContentIdIndex contentIdsBySym( const IngestResult& ing, const Graph& g, 
 /// Selects and validates the per-user cache directory, using a fail-closed path on ownership errors.
 inline std::string cacheDirLadder()
 {
-#if defined(_WIN32)
-    std::string d;
-    const char* tmpDir = std::getenv( "TMPDIR" );
-    const char* localAppData = std::getenv( "LOCALAPPDATA" );
-    const char* tempDir = std::getenv( "TEMP" );
-    if( !tempDir ) tempDir = std::getenv( "TMP" );
-
-    // XDG_CACHE_HOME is the explicit cache root when a caller supplies one. TMPDIR is the per-process fallback
-    // used by the harness and by callers that need isolation. Either may arrive as a Git-Bash /tmp spelling even
-    // though this binary is native, so normalize it once before the Win32 directory/security checks below.
-    if( const char* xdgCache = std::getenv( "XDG_CACHE_HOME" ); xdgCache && *xdgCache )
-    {
-        d = rw::compat::rw_windows_path_from_msys( xdgCache );
-    }
-    else if( tmpDir && *tmpDir )
-    {
-        d = rw::compat::rw_windows_path_from_msys( tmpDir );
-    }
-    else if( localAppData && *localAppData )
-    {
-        d = localAppData;
-    }
-    else if( tempDir && *tempDir )
-    {
-        d = tempDir;
-    }
-    else
-    {
-        d = "C:/Windows/Temp";
-    }
-    while( d.size() > 1 && ( d.back() == '/' || d.back() == '\\' ) )
-    {
-        d.pop_back();
-    }
-    d += "/ripwire";
-
-    const std::wstring wideDir = rw::compat::rw_utf8_to_wide( d );
-    if( wideDir.empty() )
-    {
-        return "NUL";
-    }
-
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof( sa );
-    sa.bInheritHandle = FALSE;
-    PSECURITY_DESCRIPTOR pSD = nullptr;
-    if( !ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            L"D:P(A;OICI;GA;;;OW)(A;OICI;GA;;;BA)",
-            SDDL_REVISION_1,
-            &pSD,
-            nullptr ) )
-    {
-        return "NUL";
-    }
-    sa.lpSecurityDescriptor = pSD;
-
-    const BOOL created = CreateDirectoryW( wideDir.c_str(), &sa );
-    const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
-    if( !created && createError != ERROR_ALREADY_EXISTS )
-    {
-        LocalFree( pSD );
-        return "NUL";
-    }
-
-    if( !created )
-    {
-        PACL existingDacl = nullptr;
-        BOOL daclPresent = FALSE;
-        BOOL daclDefaulted = FALSE;
-        if( !GetSecurityDescriptorDacl( pSD, &daclPresent, &existingDacl, &daclDefaulted ) || !daclPresent || !existingDacl
-            || SetNamedSecurityInfoW( const_cast<LPWSTR>( wideDir.c_str() ),
-                                       SE_FILE_OBJECT,
-                                       DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                                       nullptr,
-                                       nullptr,
-                                       existingDacl,
-                                       nullptr ) != ERROR_SUCCESS )
-        {
-            LocalFree( pSD );
-            return "NUL";
-        }
-    }
-    LocalFree( pSD );
-
-    const DWORD attrs = GetFileAttributesW( wideDir.c_str() );
-    if( attrs == INVALID_FILE_ATTRIBUTES || !( attrs & FILE_ATTRIBUTE_DIRECTORY ) )
-    {
-        return "NUL";
-    }
-
-    HANDLE hToken = NULL;
-    if( !OpenProcessToken( GetCurrentProcess(), TOKEN_QUERY, &hToken ) )
-    {
-        return "NUL";
-    }
-
-    DWORD tokenLen = 0;
-    GetTokenInformation( hToken, TokenUser, nullptr, 0, &tokenLen );
-    if( tokenLen == 0 )
-    {
-        CloseHandle( hToken );
-        return "NUL";
-    }
-    std::vector<BYTE> tokenBuf( tokenLen );
-    if( !GetTokenInformation( hToken, TokenUser, tokenBuf.data(), tokenLen, &tokenLen ) )
-    {
-        CloseHandle( hToken );
-        return "NUL";
-    }
-    const TOKEN_USER* pTokenUser = reinterpret_cast<const TOKEN_USER*>( tokenBuf.data() );
-    const PSID userSid = pTokenUser->User.Sid;
-
-    PSID pSidOwner = nullptr;
-    PSECURITY_DESCRIPTOR pSDGet = nullptr;
-    const DWORD res = GetNamedSecurityInfoW(
-        wideDir.c_str(),
-        SE_FILE_OBJECT,
-        OWNER_SECURITY_INFORMATION,
-        &pSidOwner,
-        nullptr,
-        nullptr,
-        nullptr,
-        &pSDGet );
-
-    bool ownerMatch = false;
-    if( res == ERROR_SUCCESS && pSidOwner && userSid )
-    {
-        if( EqualSid( pSidOwner, userSid ) )
-        {
-            ownerMatch = true;
-        }
-        else
-        {
-            SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
-            PSID adminSid = nullptr;
-            if( AllocateAndInitializeSid( &ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminSid ) )
-            {
-                if( EqualSid( pSidOwner, adminSid ) )
-                {
-                    ownerMatch = true;
-                }
-                FreeSid( adminSid );
-            }
-        }
-    }
-
-    if( pSDGet )
-    {
-        LocalFree( pSDGet );
-    }
-    CloseHandle( hToken );
-
-    if( ownerMatch )
-    {
-        return d;
-    }
-    return "NUL";
-#else
-    std::string d;
-    const char* tmpDir = std::getenv( "TMPDIR" );
-    if( tmpDir && *tmpDir )
-    {
-        d = tmpDir;
-        while( d.size() > 1 && d.back() == '/' )
-        {
-            d.pop_back();
-        }
-        d += "/ripwire";
-    }
-    else if( const char* xdgCache = std::getenv( "XDG_CACHE_HOME" ); xdgCache && *xdgCache )
-    {
-        d = std::string( xdgCache ) + "/ripwire";
-    }
-    else
-    {
-        d = "/tmp/ripwire-" + std::to_string( static_cast<unsigned long long>( ::getuid() ) );
-    }
-
-    const int mkdirRc = ::mkdir( d.c_str(), 0700 );
-    struct stat st {};
-    if( mkdirRc == 0 || ( ::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == ::getuid() ) )
-    {
-        if( ::chmod( d.c_str(), 0700 ) == 0
-            && ::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == ::getuid()
-            && ( st.st_mode & 0777 ) == 0700 )
-        {
-            return d;
-        }
-    }
-    return "/dev/null/ripwire-cache-unavailable";   // unsafe/unusable candidate: make cache I/O fail closed
-#endif
+    return rw::compat::rw_cache_dir_ladder( "ripwire" );
 }
 
 // popen a shell command and return its trimmed stdout ("" on any failure — never crashes). THE one copy of
@@ -1780,11 +1585,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
                           + " merge-base --is-ancestor " + shSingleQuote( ancestor ) + " " + shSingleQuote( descendant )
                           + " >/dev/null 2>&1";
-#if defined( _WIN32 )
     return rw::compat::rw_system( cmd.c_str() ) == 0;
-#else
-    return std::system( cmd.c_str() ) == 0;
-#endif
 }
 
 // Signal-to-noise round — the CHURN-WINDOW reference commit: the newest commit STRICTLY OLDER than the
@@ -3170,11 +2971,7 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // bytes here: normalizing HEAD to CRLF would make a clean LF working tree look like a quality regression.
     const std::string extract      = "git -c core.autocrlf=false -c core.quotepath=false -C " + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( shellTmpRoot ) + " 2>/dev/null";
-#if defined( _WIN32 )
     const int extractStatus = rw::compat::rw_system( extract.c_str() );
-#else
-    const int extractStatus = std::system( extract.c_str() );
-#endif
     if( extractStatus != 0 )
     {
         DEGRADED_PATH_ALERT( "quality: git archive failed — committed tree unavailable" );

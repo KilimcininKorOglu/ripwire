@@ -79,7 +79,10 @@ endif()
 if(RIPWIRE_NATIVE)
   if(MSVC)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      set(RIPWIRE_ARCH_FLAGS /O3 /clang:-march=native /fp:precise /permissive- /utf-8)
+      # ClangCL accepts the LLVM architecture flag through /clang:, but /O3 is a GCC/Clang
+      # driver spelling and is ignored by its MSVC frontend. Keep the Windows native arm
+      # genuinely optimized even when the build type is empty.
+      set(RIPWIRE_ARCH_FLAGS /O2 /clang:-march=native /fp:precise /permissive- /utf-8)
     else()
       set(RIPWIRE_ARCH_FLAGS /O2 /fp:precise /permissive- /utf-8)
     endif()

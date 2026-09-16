@@ -111,6 +111,9 @@ fi
 
 # ── (D) the document names the binary it was generated from ───────────────────────────────────────
 binName="$( basename "$BIN" )"
+case "${binName,,}" in
+    *.exe|*.com|*.cmd|*.bat) binName="${binName%????}" ;;
+esac
 docName="$( head -1 "$DOC" | sed -n 's/^# \([^ ]*\) .*/\1/p' )"
 if [ -n "$docName" ] && [ "$docName" = "$binName" ]; then
     ok "(D) document title names the binary it documents ($docName)"

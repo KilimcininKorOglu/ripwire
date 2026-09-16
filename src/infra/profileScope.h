@@ -41,6 +41,7 @@
 
 #pragma once
 #include "emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "platform.h"
 
 
 // ---- configuration (override by #define-ing before the include) -------------
@@ -81,28 +82,10 @@
 #include <mutex>
 #include <vector>
 #include <algorithm>
-#if !defined(_WIN32)
-#include <pthread.h>
-#endif
-
 #include "fastmath.h"              // ALWAYS_INLINE + cache-line size (via platform.h), fastmath::min/max (integral)
 #include "profilePmc.h"            // prof::pmc — optional Apple Silicon HW counters
 
-#if !( defined( __aarch64__ ) || defined( __arm64__ ) )
-  #include <chrono>               // portable fallback clock for non-ARM dev/CI
-#endif
-
-// Thread IDENTITY — the numeric tid and "am I the process's initial thread" — has no portable spelling.
-// This file was written against Darwin's pthread_threadid_np / pthread_main_np extensions; on Linux NEITHER
-// is declared, which is exactly where the first public CI run stopped on both ubuntu legs. See
-// detail::threadIdNumeric() / detail::isInitialThread() below for the three branches.
-#if defined( __linux__ )
-  #include <sys/syscall.h>        // SYS_gettid — the kernel task id pthread_threadid_np returns on Darwin
-  #include <unistd.h>             // ::syscall, ::getpid
-#elif !defined( __APPLE__ )
-  #include <functional>           // std::hash<std::thread::id> — the last-resort numeric id
-  #include <thread>               // std::this_thread::get_id
-#endif
+#include <chrono>                  // portable fallback clock for non-ARM targets
 
 namespace prof
 {
@@ -389,19 +372,11 @@ private:
 namespace detail
 {
 
-// Darwin's pthread_threadid_np returns the 64-bit kernel thread id. Linux's equivalent is the tid
-// SYS_gettid yields (what gdb/htop/perf show), so a report row can still be matched against a tracer.
+// The platform header owns the Darwin/Linux/portable thread-id selection; the profiler only consumes the
+// stable registration-time values.
 inline uint64_t threadIdNumeric() noexcept
 {
-#if defined( __APPLE__ )
-    uint64_t tid = 0;
-    pthread_threadid_np( nullptr, &tid );
-    return tid;
-#elif defined( __linux__ )
-    return (uint64_t) ::syscall( SYS_gettid );
-#else
-    return (uint64_t) std::hash<std::thread::id>{}( std::this_thread::get_id() );
-#endif
+    return rw::compat::rw_profile_thread_id();
 }
 
 // Am I the process's initial thread? Linux: the initial thread is the one whose tid EQUALS the pid — the
@@ -411,14 +386,7 @@ inline uint64_t threadIdNumeric() noexcept
 // first profiled thread" otherwise. Wrong only mislabels one report row.
 inline bool isInitialThread() noexcept
 {
-#if defined( __APPLE__ )
-    return pthread_main_np() != 0;
-#elif defined( __linux__ )
-    return ::getpid() == (pid_t) ::syscall( SYS_gettid );
-#else
-    static const std::thread::id firstCaller = std::this_thread::get_id();
-    return std::this_thread::get_id() == firstCaller;
-#endif
+    return rw::compat::rw_profile_is_initial_thread();
 }
 
 // pthread_getname_np is a *_np extension too, but unlike the other two it exists with this exact
@@ -426,13 +394,7 @@ inline bool isInitialThread() noexcept
 // the report already prints "unnamed" for that case.
 inline void copyThreadName( char* buffer, std::size_t bufferCount ) noexcept
 {
-    VERIFY( buffer != nullptr && bufferCount > 0 );
-    buffer[ 0 ] = '\0';
-#if defined( __APPLE__ ) || defined( __linux__ )
-    pthread_getname_np( pthread_self(), buffer, bufferCount );
-#else
-    (void) bufferCount;
-#endif
+    rw::compat::rw_profile_copy_thread_name( buffer, bufferCount );
 }
 
 }   // namespace detail
@@ -930,11 +892,23 @@ inline void print_tree_node( const ThreadSnap& s, const std::vector<std::vector<
     const bool multiParent = parentTotal && r.total > parentTotal;
 
     char indented[ 208 ];
-    const int pad = depth * 2;
-    // %*s -> {:{}}: std::format takes the VALUE first and the width as the following argument, where
-    // printf takes the width first. Proven byte-identical across pad 0..16.
-    rw::formatTo( indented, sizeof( indented ), "{:{}}{}{}", "", pad, rw::cstr( nameBuf ),
-                  multiParent ? " *" : "" );
+    // Keep this report-only path independent of the MSVC formatter's dynamic-width runtime handling. The
+    // bounded copy is the exact `%*s` + `%s` + optional suffix shape, including snprintf-style truncation.
+    std::size_t written = 0;
+    const std::size_t padding = std::min<std::size_t>( static_cast<std::size_t>( depth ) * 2, sizeof( indented ) - 1 );
+    std::memset( indented, ' ', padding );
+    written = padding;
+    const auto append = [ & ]( const char* text, std::size_t length )
+    {
+        const std::size_t available = sizeof( indented ) - 1 - written;
+        const std::size_t copied = std::min( length, available );
+        std::memcpy( indented + written, text, copied );
+        written += copied;
+    };
+    append( nameBuf, std::strlen( nameBuf ) );
+    const char* suffix = multiParent ? " *" : "";
+    append( suffix, std::strlen( suffix ) );
+    indented[ written ] = '\0';
 
     // Percentage is share of the thread's top-level time (a fixed, bounded denominator),
     // not child/parent -- the latter is meaningless once a child aggregates many callers.

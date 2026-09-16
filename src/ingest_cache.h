@@ -1773,12 +1773,8 @@ inline RawRouteUse readRouteUse( ByteR& r ) { RawRouteUse u; u.startByte = r.u32
 inline std::string reAbsolutize( std::string_view rel, std::string_view root )
 {
     std::string_view rootTrim = root;
-#if defined( _WIN32 )
-    // collectSources() stores p.generic_string() and ingest() normalizes the root to forward slashes.
+    // collectSources() stores p.generic_string(); the shared path layer keeps the cache key in generic form.
     constexpr char separator = '/';
-#else
-    constexpr char separator = '/';
-#endif
     while( rootTrim.size() > 1 && ( rootTrim.back() == '/' || rootTrim.back() == '\\' ) )
     {
         rootTrim.remove_suffix( 1 );
@@ -2573,15 +2569,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
-#if defined(_WIN32)
     if( rw::compat::rw_rename( tmp.c_str(), path.c_str() ) != 0 )
-    {
-        rw::compat::rw_remove_utf8( tmp.c_str() );
-        DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
-        return;
-    }
-#else
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
     {
         rw::compat::rw_remove_utf8( tmp.c_str() );   // clean up on failure
         DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
@@ -2589,7 +2577,6 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
                       path.c_str(), std::strerror( errno ) );
         return;
     }
-#endif
 
     // A5 (cache-dir hygiene): --doctor measured ~11,914 ripwire-* blobs / 2.4 GB accumulating in the cache-ladder
     // dir because only the qsnap/qheadsnap families ever evicted — this main parse-cache family (this very

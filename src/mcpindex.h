@@ -26,7 +26,7 @@
 #include "quality.h"            // computeSnapshot/computeDelta + writeBaseline + gitHeadSha/computeHeadSnapshot — the quality_delta/quality_baseline verbs reuse the exact CLI logic
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — no-op in release; the visible line on a watcher-degrade path
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
-#include "infra/platform_compat.h"
+#include "infra/platform.h"
 
 #include <sys/stat.h>
 #include <sys/time.h>  // struct timespec for a non-blocking kevent poll
@@ -34,40 +34,21 @@
 #include <unistd.h>    // close()
 #include <sys/file.h>  // flock(LOCK_EX|LOCK_NB) — the ripwire-vs-ripwire edit serializer (F1); POSIX-wide, incl. glibc
 
-// kqueue/kevent is a BSD interface: <sys/event.h> does not exist on Linux at all, which is where the first
-// public CI run stopped ("fatal error: sys/event.h: No such file or directory", both ubuntu legs). It powers
-// ONE optimisation — eliding the directory-mtime sweep on a settled tree — and the watcher already has a
-// fully-specified degrade path for "kqueue unavailable" (see FsWatcher below): stay unhealthy, and getIndex()
-// runs the full stat/mtime sweep on every request, i.e. the exact pre-Feature-1 behaviour. A platform without
-// kqueue takes that same path, so the MCP staleness CONTRACT is unchanged — a stale index is still detected
-// on request, by the per-file mtime+size loop that runs regardless of the watcher. FUTURE UPGRADE: inotify
-// (Linux) / FSEvents would restore the elision; that is new code with its own event-semantics bug surface and
-// is deliberately not attempted here, because the poll fallback is already correct.
-//
-// The `#ifndef` is a deliberate override seam, not decoration: `-DRIPWIRE_HAS_KQUEUE=0` compiles the Linux
-// path on a Mac, so the fallback can be built and RUN here instead of being first discovered by a CI leg
-// nobody can reproduce locally.
+// kqueue/kevent is a BSD interface: the single platform header owns its feature detection and conditional
+// include. It powers ONE optimisation — eliding the directory-mtime sweep on a settled tree — and the watcher
+// already has a fully-specified degrade path for "kqueue unavailable" (see FsWatcher below): stay unhealthy,
+// and getIndex() runs the full stat/mtime sweep on every request, i.e. the exact pre-Feature-1 behaviour.
+// The `-DRW_PLATFORM_HAS_KQUEUE=0` override remains available through platform.h for reproducible fallback builds.
 //
 // L2 (Linux runtime probe) — why FsWatcher::arm's no-kqueue branch is SILENT while its kqueue()-failed
 // branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something that normally
 // works did not, this run. On a build with no kqueue at all (every Linux build, and any
-// -DRIPWIRE_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has,
+// -DRW_PLATFORM_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has,
 // taken on every arm() call for the life of the process, forever. Alerting on it made every Linux MCP run
 // emit a degrade line nobody can act on, and reddened the stderr-clean gates that correctly read an alert as
 // a signal. The freshness CONTRACT is identical either way, which is precisely why that branch has nothing
 // to report. A RUNTIME kqueue() failure on a kqueue platform is the opposite event — the fast path exists
 // and did not come up — so it keeps its alert.
-#ifndef RIPWIRE_HAS_KQUEUE
-  #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ ) || defined( __DragonFly__ )
-    #define RIPWIRE_HAS_KQUEUE 1
-  #else
-    #define RIPWIRE_HAS_KQUEUE 0
-  #endif
-#endif
-#if RIPWIRE_HAS_KQUEUE
-#include <sys/event.h>     // kqueue / kevent — the FS-event freshness watcher (macOS/BSD; Feature-1 hot-reload)
-#endif
-
 #include <algorithm>    // std::sort — the card-A3 content-change merge-walk over two path lists
 #include <atomic>       // RIPWIRE_MCP_TIMINGS rebuild-count observable (env-gated stderr timing; off → untouched)
 #include <cctype>
@@ -90,50 +71,10 @@ namespace rw
 
 namespace mcpdetail
 {
-    // nanosecond mtime out of a filled `struct stat`. The sub-second field is spelled DIFFERENTLY per
-    // platform — st_mtimespec on Darwin/BSD, st_mtim on Linux (POSIX.1-2008) — and neither name exists on
-    // the other, so this is a compile error, not a portability nicety. Same ladder (and same whole-second
-    // last resort) as ingest.cpp's statSizeTimes; kept local rather than shared because that one lives in a
-    // .cpp and hoisting it would move ingest internals into a header for two call sites.
-    inline long long mtimeNsOf( const struct stat& st ) noexcept
-    {
-#if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
-#elif defined( __linux__ )
-        return (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
-#else
-        return (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
-#endif
-    }
-
     // nanosecond mtime of a path, or -1 if it can't be stat'd. The staleness signal for the in-memory index.
     inline long long mtimeOf( const std::string& p )
     {
-#if defined( _WIN32 )
         return rw::compat::rw_file_times_of( p ).mtimeNs;
-#else
-        struct stat st;
-        if( ::stat( p.c_str(), &st ) != 0 )
-        {
-            return -1;
-        }
-        return mtimeNsOf( st );
-#endif
-    }
-
-    // ctime-ns out of a filled `struct stat`, spelled per platform exactly like mtimeNsOf above. POSIX
-    // st_ctime is the inode CHANGE time, not a creation time: it moves on any write to the file and on any
-    // metadata change, INCLUDING the utimes() that a `touch -r` / `cp -p` / mtime-preserving editor performs.
-    // There is no POSIX interface for setting it, so an unprivileged writer cannot restore it.
-    inline long long ctimeNsOf( const struct stat& st ) noexcept
-    {
-#if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
-#elif defined( __linux__ )
-        return (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
-#else
-        return (long long)st.st_ctime * 1000000000LL;   // whole-second fallback
-#endif
     }
 
     // (mtime-ns, size, ctime-ns) of a path in ONE stat(), or (-1,-1,-1) if it can't be stat'd. mcpStale()
@@ -142,17 +83,8 @@ namespace mcpdetail
     struct FileStat { long long mtimeNs; long long sizeBytes; long long ctimeNs; };
     inline FileStat statOf( const std::string& p )
     {
-#if defined( _WIN32 )
         const rw::compat::RwFileTimes times = rw::compat::rw_file_times_of( p );
         return { times.mtimeNs, times.sizeBytes, times.changeTimeNs };
-#else
-        struct stat st;
-        if( ::stat( p.c_str(), &st ) != 0 )
-        {
-            return { -1, -1, -1 };
-        }
-        return { mtimeNsOf( st ), (long long)st.st_size, ctimeNsOf( st ) };
-#endif
     }
 
     // ALL directories under root (root itself included) → their mtimes, pruning the same noise/vendor/build
@@ -226,135 +158,25 @@ namespace mcpdetail
     //
     // DETERMINISM CONTRACT — the load-bearing invariant. The watcher affects ONLY *which redundant work is
     //   elided*, NEVER the bytes any verb returns for a given tree state:
-    //     • The PER-FILE mtime+size loop (the S1 content-staleness authority — catches a content-only,
-    //       mtime-preserved edit via the size discriminator; see mcpstalecheck) ALWAYS runs, watcher or not.
-    //       So a given tree state always produces byte-identical answers, and two processes agree: neither the
-    //       kqueue fd nor any timing leaks into one output byte.
-    //     • The watcher can only make us skip work it has ITSELF covered (structural changes) — it never lets a
-    //       real change go unseen. Unhealthy watcher OR any pending event → the FULL dir sweep runs (the exact
-    //       pre-Feature-1 path). No TTL, no clock: the skip decision is a pure function of the event queue.
+    //     • The per-file mtime+size+ctime loop remains the authority on every fallback path. Windows' recursive
+    //       ReadDirectoryChangesW watcher may skip it only after a healthy no-event poll; it reports file writes,
+    //       renames, creates and deletes, including a content-only edit whose timestamp is restored afterwards.
+    //       An overflow, failed poll or unhealthy watcher forces the complete stat path, never a guessed clean result.
+    //     • The watcher can only make us skip work it has ITSELF covered — it never lets a real change go unseen.
+    //       No TTL, no clock: the skip decision is a pure function of the event queue, and a given tree state
+    //       therefore produces the same bytes whether the watcher is available or not.
     //
-    // WHY dir-watch, not file-watch:
-    //   kqueue's EVFILT_VNODE needs one open fd PER watched node. Watching every FILE would exhaust the fd
-    //   table on a large tree, so we watch DIRECTORIES only (bounded = dir count, small). A dir NOTE_WRITE fires
-    //   on add / delete / rename inside it — but a CONTENT-ONLY edit to an existing file fires NO dir event
-    //   (verified empirically). That is exactly why the per-file loop is NEVER gated by the watcher: the
-    //   watcher covers structural changes, the always-run file loop covers content edits — together they are
-    //   complete, and neither is timing-dependent.
+    // WHY the watcher is recursive:
+    //   kqueue's EVFILT_VNODE needs one open fd PER watched node, so its implementation watches DIRECTORIES
+    //   only and deliberately leaves the file loop enabled: a directory NOTE_WRITE does not cover every content
+    //   edit. Windows' ReadDirectoryChangesW accepts one subtree handle and requests both name and content
+    //   notifications, so its healthy no-event poll covers the file loop as well. A workspace with unrelated
+    //   roots cannot be represented by one handle and therefore uses the conservative stat-sweep fallback.
     //
-    // DEGRADE, never throw: if kqueue()/open() fail (fd pressure, an OS without kqueue), the watcher is simply
-    //   marked unhealthy — getIndex() then always runs the full dir sweep, i.e. the exact pre-Feature-1 path.
-    struct FsWatcher
-    {
-        int              kq       = -1;      // the kqueue fd, or -1 if unavailable (→ unhealthy → always sweep)
-        std::vector<int> dirFds;             // one open fd per watched directory (registered EVFILT_VNODE)
-        bool             healthy  = false;   // true only when kq is open AND every dir fd registered cleanly
-
-        FsWatcher() = default;
-        FsWatcher( const FsWatcher& ) = delete;
-        FsWatcher& operator=( const FsWatcher& ) = delete;
-        ~FsWatcher() { reset(); }
-
-        // release every fd (symmetric teardown; called on rebuild before re-arming and at destruction).
-        void reset() noexcept
-        {
-            for( int fd : dirFds )
-            {
-                if( fd >= 0 )
-                {
-                    ::close( fd );
-                }
-            }
-            dirFds.clear();
-            if( kq >= 0 )
-            {
-                ::close( kq );
-            }
-            kq = -1;
-            healthy = false;
-        }
-
-        // arm the watcher over `dirs` (the McpIndex dirMtime key set). ALL-OR-NOTHING (A3-F4): `healthy`
-        // becomes true ONLY when kqueue() succeeded AND every dir registered cleanly — the field's contract.
-        // An unregistered dir produces NO events, so a partially-armed watcher that claimed health would let
-        // getIndex() skip the dir-mtime sweep (the only detector of file ADDITIONS) for exactly the dirs it
-        // cannot see: a permanent new-file blind spot, violating "the watcher can only make us skip work it
-        // has ITSELF covered". One fd per dir with no cap means fd exhaustion past RLIMIT_NOFILE is the
-        // COMMON failure past a few hundred dirs — on the FIRST failure, stop and release every watcher fd
-        // (relieving the very pressure we created) and stay unhealthy: getIndex() then always runs the full
-        // dir sweep (the exact pre-Feature-1 path). If kqueue() is unavailable, same degrade. L2: the
-        // no-kqueue-at-all arm is SILENT, the runtime-failure arm alerts — see the L2 note in this file's
-        // kqueue preamble for why those are different events.
-        void arm( const std::vector<std::string>& dirs )
-        {
-            reset();
-#if !RIPWIRE_HAS_KQUEUE                                             // the DESIGNED path here (no watcher exists) — unhealthy → getIndex() always sweeps, silently
-            (void) dirs; return;
-#else
-            kq = ::kqueue();
-            if( kq < 0 ) { DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
-
-            dirFds.reserve( dirs.size() );
-            for( const std::string& d : dirs )
-            {
-                const int fd = ::open( d.c_str(), O_RDONLY | O_CLOEXEC );
-                bool isRegistered = fd >= 0;
-                if( isRegistered )
-                {
-                    struct kevent ev;
-                    EV_SET( &ev, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
-                            NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND, 0, nullptr );
-                    struct timespec zero = { 0, 0 };
-                    if( ::kevent( kq, &ev, 1, nullptr, 0, &zero ) < 0 ) { ::close( fd ); isRegistered = false; }
-                }
-                if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
-                {
-                    DEGRADED_PATH_ALERT( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
-                    reset();
-                    return;
-                }
-                dirFds.push_back( fd );
-            }
-            healthy = true;                                             // kq live AND every dir registered → the fast path is available
-#endif
-        }
-
-        // drain all pending events (EV_CLEAR → edge-triggered, so this both reports AND resets them). Returns
-        // true if ANY event was pending since the last poll (a structural change under a watched dir). A poll
-        // failure degrades to `true` (assume changed → force a sweep — never skip on uncertainty).
-        bool drainHadEvent() noexcept
-        {
-            if( kq < 0 )
-            {
-                return true; // unhealthy (incl. every non-kqueue platform, where arm() never opens kq) → force the sweep
-            }
-#if RIPWIRE_HAS_KQUEUE
-            struct kevent out[ 32 ];
-            struct timespec zero = { 0, 0 };
-            bool any = false;
-            for( ;; )
-            {
-                const int n = ::kevent( kq, nullptr, 0, out, 32, &zero );
-                if( n < 0 )
-                {
-                    return true; // poll error → conservative: assume changed
-                }
-                if( n == 0 )
-                {
-                    break;
-                }
-                any = true;
-                if( n < 32 )
-                {
-                    break; // fewer than the batch cap → queue drained
-                }
-            }
-            return any;
-#else
-            return true;
-#endif
-        }
-    };
+    // DEGRADE, never throw: if kqueue()/ReadDirectoryChangesW/open() fail (fd pressure, an OS without a watcher,
+    //   an unrelated workspace root or a lost overlapped request), the watcher is simply marked unhealthy —
+    //   getIndex() then always runs the full stat-sweep path.
+    using FsWatcher = rw::compat::RwFsWatcher;
 
     // read a whole file into a string; empty string (and readOk=false) on any open/read failure — the caller
     // treats a read failure as "content unknown", which the edit verbs turn into a refusal (degrade, never
@@ -363,12 +185,7 @@ namespace mcpdetail
     inline std::string readFileBytes( const std::string& path, bool& readOk )
     {
         readOk = false;
-        std::FILE* in = nullptr;
-#if defined( _WIN32 )
-        in = rw::compat::rw_fopen_utf8( path, "rb" );
-#else
-        in = rw::compat::rw_fopen_utf8( path.c_str(), "rb" );
-#endif
+        std::FILE* in = rw::compat::rw_fopen_utf8( path, "rb" );
         if( !in )
         {
             return {};
@@ -529,8 +346,9 @@ namespace mcpdetail
 // = any source file's mtime OR the mtime of ANY directory under root (walked at index time with the same
 // denylist pruning as ingest — not just parents of ingested files, so the first source file added to a
 // previously file-less directory is caught too: the new file bumps its dir, a new subdir bumps its watched
-// parent — modifications, additions, AND deletions all bubble into a watched dir). When stale, the rebuild
-// is WARM — it goes through the file content-hash cache, so only changed files re-parse.
+// parent — modifications, additions, AND deletions all bubble into a watched dir). A healthy native watcher
+// can prove the no-change case without repeating those stats; its failure/overflow path runs the full sweep.
+// When stale, the rebuild is WARM — it goes through the file content-hash cache, so only changed files re-parse.
 struct McpIndex
 {
     std::string                       root;
@@ -699,11 +517,9 @@ inline std::uint64_t workingSetHashOf( const std::vector<char>& changed )
 // the state changed even where this check degrades.
 // `skipDirSweep` — Feature 1 fast path: when the kqueue watcher has proven NO structural event fired since
 // the last check, the directory-mtime loop (which catches adds/deletes/renames bubbling into a watched dir)
-// is provably redundant and may be skipped. The PER-FILE mtime+size loop is ALWAYS run regardless: it is the
-// S1 staleness authority (a content-only, mtime-preserved edit is caught by the size discriminator — see
-// mcpstalecheck), and the watcher does NOT catch content-only edits, so skipping it would reopen the S1 hole
-// AND make results timing-dependent. So the fast path only ever elides work the watcher has already covered;
-// the answer for a given tree state is byte-identical whether or not the dir loop ran.
+// is provably redundant and may be skipped. Windows' recursive ReadDirectoryChangesW watcher also reports
+// file edits, so its healthy/no-event path is selected by getIndex() before this fallback runs. Any unhealthy
+// watcher or pending/overflowed event takes the complete stat path, so uncertainty never changes the answer.
 inline bool mcpStale( const McpIndex& ix, bool skipDirSweep = false )
 {
     if( !ix.valid )
@@ -724,7 +540,7 @@ inline bool mcpStale( const McpIndex& ix, bool skipDirSweep = false )
         }
     }
 
-    // per-file mtime+size+ctime loop — ALWAYS run (the content-staleness authority; never gated by the watcher).
+    // Per-file mtime+size+ctime is the content-staleness authority on this fallback path.
     for( std::size_t i = 0; i < ix.ing.files.size(); ++i )
     {
         const auto [ mtime, size, ctime ] = mcpdetail::statOf( diskPath( ix.ing, std::uint32_t( i ) ) );   // one stat() → all three signals
@@ -983,12 +799,12 @@ inline std::size_t mcpPrefetchMinFiles()
 inline std::uint64_t gitHeadMoveToken( const std::string& root )
 {
     std::string gitDir = root + "/.git";
-    struct stat st;
-    if( ::stat( gitDir.c_str(), &st ) != 0 )
+    const auto gitDirStat = mcpdetail::statOf( gitDir );
+    if( gitDirStat.mtimeNs < 0 )
     {
         return 0; // not a git working tree we track
     }
-    if( ( st.st_mode & S_IFMT ) == S_IFREG )
+    if( rw::compat::rw_is_regular_file( gitDir ) )
     {
         // ".git" is a FILE ("gitdir: <path>") for worktrees / submodules — resolve one hop, cheaply.
         bool        ok = false;
@@ -1013,7 +829,7 @@ inline std::uint64_t gitHeadMoveToken( const std::string& root )
         {
             return 0;
         }
-        if( gd.front() != '/' )
+        if( !::infra::platform::isAbsolutePath( gd ) )
         {
             gd = root + "/" + gd; // relative gitdir → resolve against root
         }
@@ -1131,18 +947,32 @@ inline const McpIndex& getIndex( const std::string& root )
     McpIndex& ix = mcpIndexSlot();
 
     // hot path. The FS-event watcher (Feature 1) lets us SKIP the directory-mtime sweep when it proves no
-    // structural change occurred — a single kevent poll instead of a stat() per watched dir. The PER-FILE
-    // mtime+size loop still runs (the S1 content-staleness authority, deterministic), so the answer for any
-    // tree state is byte-identical to the pre-watcher server: the watcher only elides work it has itself
-    // covered. If the watcher is unhealthy (kqueue unavailable) OR reports an event, the FULL sweep runs —
-    // the exact pre-Feature-1 lazy path. drainHadEvent() degrades to "assume changed" on any poll error, so
-    // uncertainty never skips the dir sweep.
+    // structural change occurred — a single kevent/ReadDirectoryChangesW poll instead of a stat() per watched
+    // entry. On Windows the same healthy no-event proof covers the per-file mtime+size+ctime loop because the
+    // recursive notify filter includes writes, creates, deletes and renames; kqueue keeps the file loop because
+    // its directory events do not cover content-only edits. If the watcher is unhealthy OR reports an event,
+    // the FULL sweep runs — the exact pre-Feature-1 lazy path. drainHadEvent() degrades to "assume changed" on
+    // any poll error or buffer overflow, so uncertainty never skips freshness checks.
     if( ix.valid && ix.root == root )
     {
         const bool watcherClean = ix.watcher.healthy && !ix.watcher.drainHadEvent();
-        if( !mcpStale( ix, /*skipDirSweep=*/watcherClean ) )
+        const bool observeHead = !::infra::platform::kWindows || !ix.watcher.healthy || ix.watcher.lastEvent
+                              || mcpPrefetchLastToken().load( std::memory_order_relaxed ) == 0;
+        bool stale = false;
+        if constexpr( ::infra::platform::kWindows )
         {
-            maybePrefetchHeadSnapshot( root, ix.ing.files.size() );        // Phase-M: observe HEAD move on the warm path (a bare commit does not rebuild)
+            stale = watcherClean ? false : mcpStale( ix );
+        }
+        else
+        {
+            stale = mcpStale( ix, watcherClean );
+        }
+        if( !stale )
+        {
+            if( observeHead )
+            {
+                maybePrefetchHeadSnapshot( root, ix.ing.files.size() );    // Phase-M: observe HEAD only on startup or a watcher event
+            }
             return ix;                                                     // warm reuse (no rebuild, no popen)
         }
     }

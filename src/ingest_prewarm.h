@@ -123,6 +123,7 @@ struct QueryPrewarm
     std::vector<const LangEntry*> toCompile;         // distinct grammars the miss set needs
     std::vector<TSQuery*>         compiledQueries;   // 1:1 with toCompile — filled by the async pool
     std::vector<std::thread>      compilePool;       // the ts_query_new workers
+    std::atomic<std::size_t>      nextCompile{ 0 };
     std::atomic<bool>             ready{ true };     // true ⇒ compiledQueryCache() is safe to read
     std::mutex                    mutex;
     std::condition_variable       cv;
@@ -419,14 +420,29 @@ inline void prewarmTagsQueries( const std::vector<std::string>& files, const Has
     // Compile distinct grammars IN PARALLEL (ts_query_new is compute-bound — PMC IPC 4.0) and install
     // into the shared cache single-threaded after the join. Query sources are immutable embedded views.
     prewarm.compiledQueries.assign( prewarm.toCompile.size(), nullptr );
+    prewarm.nextCompile.store( 0, std::memory_order_relaxed );
     prewarm.compilePool.reserve( prewarm.toCompile.size() );
     prewarm.ready.store( prewarm.toCompile.empty(), std::memory_order_release );
     {
         PROFILE_SCOPE_DESCRIBE( "ingest/compile-queries: launch ts_query_new async" );
 
-        for( std::size_t i = 0; i < prewarm.toCompile.size(); ++i )
+        const unsigned hardware = rw::compat::rw_effective_hardware_concurrency();
+        const unsigned compileBudget = ::infra::platform::kWindows ? std::max( 1u, hardware / 4u ) : hardware;
+        const unsigned compileThreads = static_cast<unsigned>( std::min<std::size_t>( prewarm.toCompile.size(), compileBudget ) );
+        for( unsigned t = 0; t < compileThreads; ++t )
         {
-            prewarm.compilePool.emplace_back( [ &prewarm, i ]() { prewarm.compiledQueries[ i ] = compileQueryStandalone( *prewarm.toCompile[ i ] ); } );
+            prewarm.compilePool.emplace_back( [ &prewarm ]()
+            {
+                for( ;; )
+                {
+                    const std::size_t i = prewarm.nextCompile.fetch_add( 1, std::memory_order_relaxed );
+                    if( i >= prewarm.toCompile.size() )
+                    {
+                        break;
+                    }
+                    prewarm.compiledQueries[ i ] = compileQueryStandalone( *prewarm.toCompile[ i ] );
+                }
+            } );
         }
     }
 }

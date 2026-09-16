@@ -167,16 +167,7 @@
 // round-4 arms were observed RED against the round-3 binary and source.
 
 #include "infra/emit.h"             // rw::emitTo — the refusal goes to stderr through THE emitter, not fprintf
-#include "infra/platform_compat.h"  // Windows handle/CRT bridge for the same no-follow contract
-
-#if defined( _WIN32 )
-  #include <windows.h>               // CreateFileW + FILE_FLAG_OPEN_REPARSE_POINT — Windows' atomic no-follow open
-  #include <io.h>                    // _open_osfhandle / _chsize_s / _write / _close
-#else
-  #include <fcntl.h>                 // ::open + O_NOFOLLOW + O_NONBLOCK — the whole mechanism, in one syscall
-  #include <sys/stat.h>              // ::lstat + S_ISLNK (mcpedit, and the post-ELOOP wording); ::fstat + S_ISREG (round 4)
-  #include <unistd.h>                // ::write / ::close — the descriptor the writers hold instead of a stream
-#endif
+#include "infra/platform.h"          // the single Windows/POSIX compatibility boundary
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>         // std::FILE / ::fdopen / ::getline / std::fclose — the read half's line stream
@@ -184,9 +175,6 @@
 #include <cstring>        // std::strerror — an honest reason for a failure that is not a link
 #include <string>
 #include <string_view>
-#if !defined( _WIN32 )
-  #include <sys/types.h>              // ssize_t
-#endif
 
 namespace rw::pathguard
 {
@@ -199,35 +187,10 @@ namespace rw::pathguard
 // THIS IS NOT A WRITE GUARD and must never be used as one again: between its answer and any subsequent open
 // the entry can change, which is the CWE-367 finding this header's round 2 closes. It answers a question
 // (mcpedit, which never opens the destination) and it words an error (openNoFollowTruncate, after the fact).
-#if defined( _WIN32 )
 inline bool isSymlink( const std::string& path ) noexcept
 {
-    // Windows calls these reparse points. Treat every final reparse point as link-like: opening it with
-    // FILE_FLAG_OPEN_REPARSE_POINT is the kernel-enforced no-follow equivalent of POSIX O_NOFOLLOW, and
-    // refusing junctions as well as symbolic links avoids a directory redirection through the same seam.
-    const std::string nativePath = rw::compat::rw_windows_path_from_msys( path );
-    const std::wstring widePath = rw::compat::rw_utf8_to_wide( nativePath );
-    const HANDLE handle = widePath.empty() ? INVALID_HANDLE_VALUE : ::CreateFileW( widePath.c_str(), 0,
-                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                                         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_OPEN_NO_RECALL | FILE_FLAG_BACKUP_SEMANTICS,
-                                         nullptr );
-    if( handle == INVALID_HANDLE_VALUE )
-    {
-        return false;
-    }
-    BY_HANDLE_FILE_INFORMATION info{};
-    const bool reparse = ::GetFileInformationByHandle( handle, &info ) != 0
-                      && ( info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT ) != 0;
-    ::CloseHandle( handle );
-    return reparse;
+    return rw::compat::rw_is_symlink( path );
 }
-#else
-inline bool isSymlink( const std::string& path ) noexcept
-{
-    struct stat linkSt{};
-    return ::lstat( path.c_str(), &linkSt ) == 0 && S_ISLNK( linkSt.st_mode );
-}
-#endif
 
 // What the atomic open produced: a descriptor, or the errno that explains why there is none. Both are
 // returned rather than left in `errno`, because the refusal is emitted before the caller looks and an
@@ -525,13 +488,7 @@ inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
     std::size_t off   = 0;
     while( off < bytes.size() )
     {
-#if defined( _WIN32 )
-        const std::size_t remaining = bytes.size() - off;
-        const unsigned int toWrite = remaining > ( 1u << 20 ) ? ( 1u << 20 ) : static_cast<unsigned int>( remaining );
-        const int n = ::_write( fd, bytes.data() + off, toWrite );
-#else
-        const ssize_t n = ::write( fd, bytes.data() + off, bytes.size() - off );
-#endif
+        const std::int64_t n = rw::compat::rw_write_fd( fd, bytes.data() + off, bytes.size() - off );
         if( n > 0 )
         {
             off += static_cast<std::size_t>( n );
@@ -544,11 +501,7 @@ inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
         wrote = false;
         break;
     }
-#if defined( _WIN32 )
-    if( ::_close( fd ) != 0 )
-#else
-    if( ::close( fd ) != 0 )
-#endif
+    if( rw::compat::rw_close_fd( fd ) != 0 )
     {
         wrote = false;
     }

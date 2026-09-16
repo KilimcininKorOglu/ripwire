@@ -16,7 +16,7 @@
 #include "infra/stdinline.h"     // readByteSafeLine — THE line reader (R4); no fixed buffer to split a long path on
 #include "infra/jsonesc.h"       // A4-F27 residual: rw::shSingleQuote lives here (lightest shared header) —
                                  // gitmine.h no longer carries its own copy; see jsonesc.h for the dedup rationale
-#include "infra/platform_compat.h"
+#include "infra/platform.h"
 
 #include <algorithm>
 #include <atomic>       // the join's once-per-process disclosure flags
@@ -523,20 +523,11 @@ inline bool gitPathPrefixMatches( std::string_view path, std::string_view prefix
     }
     for( std::size_t i = 0; i < prefix.size(); ++i )
     {
-#if defined( _WIN32 )
-        const bool driveLetter = i == 0 && prefix.size() >= 2 && path.size() >= 2 && path[1] == ':' && prefix[1] == ':'
-                               && ( ( path[0] >= 'A' && path[0] <= 'Z' ) || ( path[0] >= 'a' && path[0] <= 'z' ) )
-                               && ( ( prefix[0] >= 'A' && prefix[0] <= 'Z' ) || ( prefix[0] >= 'a' && prefix[0] <= 'z' ) );
+        const bool driveLetter = i == 0 && rw::compat::rw_drive_letter_matches( path, prefix );
         if( driveLetter )
         {
-            const char pathDrive   = path[0] >= 'a' && path[0] <= 'z' ? char( path[0] - 'a' + 'A' ) : path[0];
-            const char prefixDrive = prefix[0] >= 'a' && prefix[0] <= 'z' ? char( prefix[0] - 'a' + 'A' ) : prefix[0];
-            if( pathDrive == prefixDrive )
-            {
-                continue;
-            }
+            continue;
         }
-#endif
         if( path[i] != prefix[i] )
         {
             return false;
@@ -638,18 +629,11 @@ inline std::string normalizeJoinPath( std::string_view path )
 {
     std::string out;
     out.reserve( path.size() );
-#if defined( _WIN32 )
-    static constexpr char kWindowsSeparator = static_cast<char>( 0x5C );
-#endif
     for( std::size_t i = 0; i < path.size(); )
     {
         const auto isSlashAt = [ & ]( std::size_t index )
         {
-#if defined( _WIN32 )
-            return index < path.size() && ( path[index] == '/' || path[index] == kWindowsSeparator );
-#else
-            return index < path.size() && path[index] == '/';
-#endif
+            return index < path.size() && ( path[index] == '/' || ( ::infra::platform::kWindows && path[index] == '\\' ) );
         };
         if( i + 2 < path.size() && isSlashAt( i ) && path[i + 1] == '.' && isSlashAt( i + 2 ) )
         {
@@ -662,11 +646,7 @@ inline std::string normalizeJoinPath( std::string_view path )
             i += 2;
             continue;
         }
-#if defined( _WIN32 )
-        out.push_back( path[i] == kWindowsSeparator ? '/' : path[i] );
-#else
-        out.push_back( path[i] );
-#endif
+        out.push_back( ::infra::platform::kWindows && path[i] == '\\' ? '/' : path[i] );
         ++i;
     }
     return out;
@@ -2960,9 +2940,8 @@ inline std::vector<CoPartner> cochangePartners( const std::string& root, const I
 // no-subprocess fast path. Pure filesystem reads; never spawns anything.
 inline bool hasEnclosingGitRepo( const std::string& root )
 {
-#if defined( _WIN32 ) || defined( _MSC_VER )
     std::error_code ec;
-    std::filesystem::path dir = std::filesystem::absolute( rw::compat::rw_windows_path_from_msys( root ), ec );
+    std::filesystem::path dir = std::filesystem::absolute( ::infra::platform::filesystemPath( root ), ec );
     if( ec )
     {
         return false; // unresolvable root → treat as no repo (degrade)
@@ -2982,35 +2961,6 @@ inline bool hasEnclosingGitRepo( const std::string& root )
         dir = parent;
     }
     return false;
-#else
-    char resolved[ PATH_MAX ];
-    if( !::realpath( root.c_str(), resolved ) )
-    {
-        return false; // unresolvable root → treat as no repo (degrade)
-    }
-    std::string dir{ resolved };   // brace-init: dir( resolved ) parses as a function declarator (vexing-parse lookalike) and would pollute the symbol map
-
-    // walk up at most 64 levels (any real path is far shallower; the bound is a hostile-symlink guard)
-    for( int levelIndex = 0; levelIndex < 64 && !dir.empty(); ++levelIndex )
-    {
-        struct stat st;
-        if( ::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
-        {
-            return true;
-        }
-        if( dir == "/" )
-        {
-            break;
-        }
-        const std::size_t slash = dir.rfind( '/' );
-        if( slash == std::string::npos )
-        {
-            break;
-        }
-        dir.resize( slash == 0 ? 1 : slash );   // parent dir; "/" is its own parent → loop exit above
-    }
-    return false;
-#endif
 }
 
 // ── co-change prior boost on the --for lens rank (B3) ───────────────────────────────────────────────

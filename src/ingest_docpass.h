@@ -89,7 +89,7 @@ namespace
 //    able. Runs OUTSIDE the parse cache (after saveCache, before id-assignment) and is a pure function of
 //    the bytes, so a WARM run reproduces it byte-for-byte — the determinism contract holds for docs too.
 inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, bool cacheEnabled, bool captureValueUses,
-                            std::string_view cacheDirOverride = {} )
+                            std::string_view cacheDirOverride = {}, unsigned workerLimit = 0 )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest: doc post-pass (extract notebooks/html/csv)" );
 
@@ -123,7 +123,8 @@ inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, 
     if( ndocs > 0 )
     {
         const unsigned hwDoc = rw::compat::rw_effective_hardware_concurrency();
-        const unsigned nDocThreads = static_cast<unsigned>( std::min<std::size_t>( hwDoc, ndocs ) );
+        const unsigned budgetedHw = workerLimit == 0 ? hwDoc : std::min( hwDoc, workerLimit );
+        const unsigned nDocThreads = rw::compat::rw_document_worker_count( budgetedHw, ndocs );
         std::atomic<std::size_t> nextDoc{ 0 };
         std::vector<std::thread> docPool;
         docPool.reserve( nDocThreads );

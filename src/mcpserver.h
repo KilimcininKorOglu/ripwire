@@ -23,6 +23,7 @@
 // includes this header and picks stdio (runMcp) vs HTTP (runMcpHttp) — mcp.h itself never learns about HTTP.
 
 #include "mcp.h"
+#include "infra/platform.h"
 
 #include <string>
 #include <string_view>
@@ -133,13 +134,7 @@ inline bool sendAll( socket_t fd, const std::string& data ) noexcept
         const ssize_t n = ::send( fd, data.data() + sent, toSend, sendFlags );
         if( n <= 0 )
         {
-            std::fprintf( stderr, "ripwire-mcp: send failed n=%zd err=%d\n", n,
-#ifdef _WIN32
-                          WSAGetLastError()
-#else
-                          errno
-#endif
-            );
+            std::fprintf( stderr, "ripwire-mcp: send failed n=%zd err=%d\n", n, rw::compat::rw_socket_last_error() );
             return false;
         }
         sent += static_cast<std::size_t>( n );

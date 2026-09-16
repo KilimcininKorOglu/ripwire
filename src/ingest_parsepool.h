@@ -706,7 +706,7 @@ inline RawFacts mergeThreadFacts( std::vector<RawFacts>& tFacts )
 //    the dirty-gated saveCache — everything between the prewarm launch and the doc post-pass.
 inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::string_view cacheFile, bool captureValueUses,
                               HashMap<std::string, FileFacts>& cache, const CacheLoadStats& cacheStats,
-                              IngestFileScan& scan, QueryPrewarm& prewarm )
+                              IngestFileScan& scan, QueryPrewarm& prewarm, unsigned reservedWorkers = 0 )
 {
     RawFacts raw;
     const bool needsCacheHash = !cacheFile.empty();
@@ -739,7 +739,10 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         // there) stay as-is. Workers fill the remaining 0-valued entries for files they process.
         VERIFY( scan.hash.size() == nfiles );
         const unsigned hw = rw::compat::rw_effective_hardware_concurrency();
-        const unsigned nthreads = static_cast<unsigned>( std::min<std::size_t>( hw, nfiles ) );
+        const unsigned reserved = ::infra::platform::kWindows
+                                ? static_cast<unsigned>( prewarm.compilePool.size() ) + reservedWorkers : 0u;
+        const unsigned available = hw > reserved ? hw - reserved : 1u;
+        const unsigned nthreads = static_cast<unsigned>( std::min<std::size_t>( { hw, available, nfiles } ) );
 
         std::vector<RawFacts>   tFacts( nthreads );
         std::vector<FileFacts*> cacheCandidateFacts( nfiles, nullptr );

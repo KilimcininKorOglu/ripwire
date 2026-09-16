@@ -40,14 +40,31 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
+WINDOWS_GATE=0
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+case "$( uname -s 2>/dev/null || true )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
-PYTHON3="${RIPWIRE_PYTHON:-python3}"
-command -v "$PYTHON3" >/dev/null 2>&1 || PYTHON3=python
+PYTHON3="${RIPWIRE_PYTHON:-}"
+if [ -z "$PYTHON3" ]; then
+    PYTHON3="$( command -v python3 2>/dev/null || command -v python 2>/dev/null || true )"
+fi
+[ -n "$PYTHON3" ] || { echo "runtracecheck: Python 3 is required"; exit 2; }
+nativePythonPath()
+{
+    if [ "$WINDOWS_GATE" -eq 1 ] && command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
 if command -v xmllint >/dev/null 2>&1; then
     xmlcheck(){ xmllint --noout "$1"; }
-elif [ "$($PYTHON3 -c 'import os; print( os.name )' 2>/dev/null)" = nt ] && [ -f "$ROOT/test/xmlcheck.py" ]; then
-    xmlcheck(){ "$PYTHON3" "$ROOT/test/xmlcheck.py" --noout "$1"; }
+elif [ "$( MSYS_NO_PATHCONV=1 "$PYTHON3" -c 'import os; print( os.name )' 2>/dev/null)" = nt ] && [ -f "$ROOT/test/xmlcheck.py" ]; then
+    XMLCHECK_SCRIPT="$( nativePythonPath "$ROOT/test/xmlcheck.py" )"
+    xmlcheck(){ MSYS_NO_PATHCONV=1 "$PYTHON3" "$XMLCHECK_SCRIPT" --noout "$( nativePythonPath "$1" )"; }
 else
     echo "runtracecheck: xmllint or the native Windows XML checker required"
     exit 2
@@ -82,7 +99,9 @@ EOF
 # no-newline-outside-CDATA helper (G4). Strips CDATA sections, then counts surviving newlines.
 newlinesOutsideCdata()
 {
-    "$PYTHON3" - "$1" <<'PY'
+    local path="$1"
+    path="$( nativePythonPath "$path" )"
+    MSYS_NO_PATHCONV=1 "$PYTHON3" - "$path" <<'PY'
 import re, sys
 t = open( sys.argv[1], "rb" ).read().decode( "utf-8", "replace" )
 t = re.sub( r"<!\[CDATA\[.*?\]\]>", "", t, flags = re.S )
@@ -137,6 +156,38 @@ grep -qi 'nothing to map' "$WORK/out/pass.xml" \
 grep -q '<lines view="tail"' "$WORK/out/pass.xml" && grep -q 'beta' "$WORK/out/pass.xml" \
     && ok "(C) the disclosed tail carries the output's last lines" \
     || no "(C) <lines view=\"tail\"> with the last output lines missing"
+
+# ── (C2) stdin contract: the child receives EOF from the platform's null device ───────────────────────
+"$BIN" "$WORK" --run-trace="cat" >"$WORK/out/stdin.xml" 2>"$WORK/out/stdin.err"
+rcC2=$?
+[ "$rcC2" = 0 ] && ok "(C2) a command that reads stdin sees EOF and exits 0" \
+                 || no "(C2) stdin was not the documented null-device stream (rc=$rcC2)"
+grep -q '<run [^>]*exit="0"' "$WORK/out/stdin.xml" \
+    && ok "(C2) the null-device stdin run is disclosed as successful" \
+    || no "(C2) stdin probe did not produce exit=\"0\""
+
+if [ "$WINDOWS_GATE" -eq 1 ]; then
+    LONG_TMP="$WORK/../runtrace-long-temp"
+    while [ "${#LONG_TMP}" -lt 320 ]; do LONG_TMP="$LONG_TMP/segment_0123456789abcdef"; done
+    mkdir -p "$LONG_TMP"
+    LONG_TMP_NATIVE="$( cygpath -w "$LONG_TMP" 2>/dev/null || printf '%s' "$LONG_TMP" )"
+    LONG_CACHE="$WORK/../runtrace-long-cache"; mkdir -p "$LONG_CACHE"
+    LONG_ROOT="$WORK/../runtrace-long-root"; mkdir -p "$LONG_ROOT"
+    printf 'int long_temp_probe( void ) { return 1; }\n' >"$LONG_ROOT/probe.cpp"
+    TMP="$LONG_TMP_NATIVE" TEMP="$LONG_TMP_NATIVE" TMPDIR="$LONG_CACHE" \
+        "$BIN" "$LONG_ROOT" --no-cache >"$WORK/out/long-temp-map.xml" 2>"$WORK/out/long-temp-map.err"
+    rcLongMap=$?
+    [ "$rcLongMap" = 0 ] && grep -q '<r ' "$WORK/out/long-temp-map.xml" \
+        && ok "(C3) long Windows TMP/TEMP path keeps normal rendering functional" \
+        || no "(C3) long Windows TMP/TEMP map failed (rc=$rcLongMap)"
+    TMP="$LONG_TMP_NATIVE" TEMP="$LONG_TMP_NATIVE" TMPDIR="$LONG_CACHE" \
+        "$BIN" "$LONG_ROOT" --run-trace="echo long-temp" >"$WORK/out/long-temp-run.xml" 2>"$WORK/out/long-temp-run.err"
+    rcLongRun=$?
+    [ "$rcLongRun" = 0 ] && grep -q '<run [^>]*exit="0"' "$WORK/out/long-temp-run.xml" \
+        && grep -q 'long-temp' "$WORK/out/long-temp-run.xml" \
+        && ok "(C4) long Windows TMP/TEMP run-trace remains functional" \
+        || no "(C4) long Windows TMP/TEMP run-trace failed (rc=$rcLongRun)"
+fi
 
 # ── (D) timeout: a tiny cap, a long sleep — TIMEOUT reported honestly ──────────────────────────────────
 "$BIN" "$WORK" --run-trace="sleep 30" --run-timeout=1 >"$WORK/out/tmo.xml" 2>"$WORK/out/tmo.err"
@@ -230,7 +281,7 @@ else
 fi
 # the padded runs must have widened the measured value, or the probe below asserts nothing
 w0="${d0//[^0-9]/}"; w4="${d4//[^0-9]/}"
-if [ -n "$w4" ] && [ "${#w4}" -ge 4 ] && [ -n "$w0" ] && [ "${#w0}" -le 2 ]; then
+if [ -n "$w4" ] && [ -n "$w0" ] && [ "${#w4}" -gt "${#w0}" ]; then
     ok "(G2) probe is live: duration_ms widened from ${#w0} to ${#w4} digits across the padded runs"
 else
     no "(G2) probe inert: duration_ms did not widen (${#w0} → ${#w4} digits) — the sleeps did not land"

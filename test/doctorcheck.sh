@@ -25,6 +25,11 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
+WINDOWS_GATE=0
+case "$( uname -s 2>/dev/null )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
@@ -124,10 +129,25 @@ EMITTED="$(  echo "$OUT" | grep -o '<c n=' | wc -l | tr -d ' ' )"
 # ── (B) unwritable cache dir → cache-dir row ok="0", overall exit 1 ────────────────────────────
 CACHEDIR="$TMP/cachedir"
 mkdir -p "$CACHEDIR"
-chmod 0500 "$CACHEDIR"
+ACL_SET=0
+if [ "$WINDOWS_GATE" -eq 1 ]; then
+    WINDOWS_CACHEDIR="$CACHEDIR"
+    command -v cygpath >/dev/null 2>&1 && WINDOWS_CACHEDIR="$( cygpath -m "$WINDOWS_CACHEDIR" )"
+    if MSYS_NO_PATHCONV=1 icacls.exe "$WINDOWS_CACHEDIR" /deny '*S-1-1-0:(W)' >/dev/null 2>&1; then
+        ACL_SET=1
+    else
+        no "could not deny write access to the cache directory on Windows"
+    fi
+else
+    chmod 0500 "$CACHEDIR"
+fi
 UOUT="$( TMPDIR="$CACHEDIR" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null )"
 URC=$?
-chmod 0700 "$CACHEDIR"   # restore before any cleanup/trap touches it
+if [ "$WINDOWS_GATE" -eq 1 ]; then
+    [ "$ACL_SET" -eq 1 ] && MSYS_NO_PATHCONV=1 icacls.exe "$WINDOWS_CACHEDIR" /remove:d '*S-1-1-0' >/dev/null 2>&1 || true
+else
+    chmod 0700 "$CACHEDIR"   # restore before any cleanup/trap touches it
+fi
 
 echo "unwritable-cache output:"; echo "$UOUT"; echo "(exit=$URC)"; echo
 
@@ -250,7 +270,11 @@ echo "$SOUT" | grep -oE '<c n="binary-path" ok="0"[^<]*/>' | grep -q 'hint="STAL
     && ok "genuine-stale binary -> binary-path row carries hint=\"STALE: ...\"" \
     || no "genuine-stale binary: binary-path row has no hint="
 STALEHINT="$( echo "$SOUT" | grep -oE 'hint="STALE:[^"]*"' )"
-echo "$STALEHINT" | grep -qF "$STALEDIR/ripwire" \
+STALE_PATH="$STALEDIR/ripwire"
+if [ "$WINDOWS_GATE" -eq 1 ] && command -v cygpath >/dev/null 2>&1; then
+    STALE_PATH="$( cygpath -w "$STALE_PATH" )"
+fi
+echo "$STALEHINT" | grep -qF "$STALE_PATH" \
     && ok "hint= correctly names the OLDER (staledir) binary as stale, not the newer one" \
     || no "hint= did not name the older binary: $STALEHINT"
 

@@ -27,6 +27,10 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+# This gate assigns TMPDIR per fixture to prove the first cache-ladder rung. A suite runner may inject
+# XDG_CACHE_HOME for its own isolation; leave it unset here or the product correctly chooses XDG before
+# TMPDIR and the blob lands outside the directory this gate inspects.
+unset XDG_CACHE_HOME
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }

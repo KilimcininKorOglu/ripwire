@@ -289,7 +289,6 @@ inline std::string overwriteChildXml( const std::string& src, std::size_t a, std
     const std::string_view      rawSpan = std::string_view( src ).substr( a, b - a );
     const mcpedit::LineRange    lines   = mcpedit::lineRangeOf( src, a, b );
     std::string                 spanText( rawSpan );
-    normalizeCrlfInPlace( spanText );
     const std::string_view      span = spanText;
     std::size_t                 shown = span.size();
     std::uint32_t               elidedLines = 0;

@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstring>
 #include <string>
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -23,6 +24,8 @@
 
 namespace rw::compat
 {
+
+static std::atomic<std::uint64_t> s_temp_file_counter{ 0 };
 
 /// Maps POSIX advisory locking flags to Win32 byte-range locks and reports failures through errno.
 int rw_flock( int fd, int operation ) noexcept
@@ -160,25 +163,30 @@ char* rw_realpath( const char* path, char* resolved_path ) noexcept
 namespace
 {
 
+bool usableWindowsBashPath( const std::string& path )
+{
+    const std::wstring widePath = rw_utf8_to_wide( path );
+    if( widePath.empty() || ::GetFileAttributesW( widePath.c_str() ) == INVALID_FILE_ATTRIBUTES )
+    {
+        return false;
+    }
+    std::string lower = path;
+    for( char& c : lower )
+    {
+        if( c == '/' )
+        {
+            c = '\\';
+        }
+        if( c >= 'A' && c <= 'Z' )
+        {
+            c = static_cast<char>( c - 'A' + 'a' );
+        }
+    }
+    return lower.find( "\\windows\\system32\\bash.exe" ) == std::string::npos;
+}
+
 std::string windowsBashPath()
 {
-    auto usable = []( const std::string& path )
-    {
-        if( path.empty() || GetFileAttributesA( path.c_str() ) == INVALID_FILE_ATTRIBUTES )
-        {
-            return false;
-        }
-        std::string lower = path;
-        for( char& c : lower )
-        {
-            if( c >= 'A' && c <= 'Z' )
-            {
-                c = static_cast<char>( c - 'A' + 'a' );
-            }
-        }
-        return lower.find( "\\windows\\system32\\bash.exe" ) == std::string::npos;
-    };
-
     const char* envBash = std::getenv( "RW_BASH" );
     const char* programFiles = std::getenv( "ProgramFiles" );
     const char* programW6432  = std::getenv( "ProgramW6432" );
@@ -194,12 +202,104 @@ std::string windowsBashPath()
     };
     for( const std::string& choice : choices )
     {
-        if( usable( choice ) )
+        if( usableWindowsBashPath( choice ) )
         {
             return choice;
         }
     }
     return {};
+}
+
+std::wstring windowsEnvironmentValue( const wchar_t* name )
+{
+    std::wstring value( 32768, L'\0' );
+    DWORD length = ::GetEnvironmentVariableW( name, value.data(), static_cast<DWORD>( value.size() ) );
+    if( length == 0 )
+    {
+        return {};
+    }
+    if( length >= value.size() )
+    {
+        value.resize( static_cast<std::size_t>( length ) + 1 );
+        length = ::GetEnvironmentVariableW( name, value.data(), static_cast<DWORD>( value.size() ) );
+        if( length == 0 || length >= value.size() )
+        {
+            return {};
+        }
+    }
+    value.resize( length );
+    return value;
+}
+
+std::wstring windowsTempDirectory()
+{
+    for( const wchar_t* name : { L"TMP", L"TEMP" } )
+    {
+        if( std::wstring value = windowsEnvironmentValue( name ); !value.empty() )
+        {
+            return value;
+        }
+    }
+    std::wstring value( 32768, L'\0' );
+    const DWORD length = ::GetTempPathW( static_cast<DWORD>( value.size() ), value.data() );
+    if( length == 0 || length >= value.size() )
+    {
+        return {};
+    }
+    value.resize( length );
+    return value;
+}
+
+std::wstring windowsExtendedPath( std::wstring path )
+{
+    for( wchar_t& c : path )
+    {
+        if( c == L'/' )
+        {
+            c = L'\\';
+        }
+    }
+    if( path.rfind( L"\\\\?\\", 0 ) == 0 )
+    {
+        return path;
+    }
+    if( path.rfind( L"\\\\", 0 ) == 0 )
+    {
+        return L"\\\\?\\UNC\\" + path.substr( 2 );
+    }
+    return L"\\\\?\\" + path;
+}
+
+bool windowsCreateUniqueTempFile( const wchar_t* prefix, std::wstring& path, HANDLE& handle, bool deleteOnClose )
+{
+    std::wstring directory = windowsTempDirectory();
+    if( directory.empty() )
+    {
+        return false;
+    }
+    if( directory.back() != L'\\' && directory.back() != L'/' )
+    {
+        directory.push_back( L'\\' );
+    }
+    directory = windowsExtendedPath( std::move( directory ) );
+    for( unsigned attempt = 0; attempt < 64; ++attempt )
+    {
+        const std::uint64_t sequence = s_temp_file_counter.fetch_add( 1, std::memory_order_relaxed );
+        path = directory + prefix + std::to_wstring( static_cast<unsigned long long>( ::GetCurrentProcessId() ) )
+             + L"-" + std::to_wstring( static_cast<unsigned long long>( sequence ) ) + L".tmp";
+        const DWORD flags = FILE_ATTRIBUTE_TEMPORARY | ( deleteOnClose ? FILE_FLAG_DELETE_ON_CLOSE : 0 );
+        handle = ::CreateFileW( path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW, flags, nullptr );
+        if( handle != INVALID_HANDLE_VALUE )
+        {
+            return true;
+        }
+        if( ::GetLastError() != ERROR_FILE_EXISTS )
+        {
+            return false;
+        }
+    }
+    return false;
 }
 
 std::vector<wchar_t> windowsGitEnvironment( const std::string& bash )
@@ -215,7 +315,6 @@ std::vector<wchar_t> windowsGitEnvironment( const std::string& bash )
         entries.emplace_back( p );
     }
     ::FreeEnvironmentStringsW( raw );
-
     std::wstring bashWide = rw_utf8_to_wide( bash );
     for( wchar_t& c : bashWide )
     {
@@ -374,14 +473,8 @@ std::string windowsShortPath( const std::string& path )
     return path;
 }
 
-bool writeCommandScript( const std::string& path, const std::string& command )
+bool writeCommandScript( HANDLE hFile, const std::string& command )
 {
-    const std::wstring widePath = rw_utf8_to_wide( path );
-    if( widePath.empty() )
-    {
-        return false;
-    }
-    HANDLE hFile = CreateFileW( widePath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr );
     if( hFile == INVALID_HANDLE_VALUE )
     {
         return false;
@@ -390,15 +483,327 @@ bool writeCommandScript( const std::string& path, const std::string& command )
 )" + command + std::string( 1, char( 10 ) );
     DWORD written = 0;
     const BOOL ok = WriteFile( hFile, script.data(), static_cast<DWORD>( script.size() ), &written, nullptr );
-    CloseHandle( hFile );
     return ok && written == script.size();
+}
+
+std::wstring windowsShortTemporaryDirectory()
+{
+    for( const wchar_t* rootName : { L"LOCALAPPDATA", L"WINDIR" } )
+    {
+        std::wstring root = windowsEnvironmentValue( rootName );
+        if( root.empty() )
+        {
+            continue;
+        }
+        while( root.size() > 1 && ( root.back() == L'\\' || root.back() == L'/' ) )
+        {
+            root.pop_back();
+        }
+        root += L"\\Temp";
+        const DWORD attributes = ::GetFileAttributesW( root.c_str() );
+        if( attributes != INVALID_FILE_ATTRIBUTES && ( attributes & FILE_ATTRIBUTE_DIRECTORY ) != 0 )
+        {
+            return root;
+        }
+    }
+    return {};
 }
 
 } // namespace
 
+namespace
+{
+std::wstring quoteWindowsProcessArg( const std::wstring& value );
+}
+
+bool rw_windows_temporary_environment_is_long() noexcept
+{
+    for( const wchar_t* name : { L"TMP", L"TEMP", L"TMPDIR" } )
+    {
+        if( windowsEnvironmentValue( name ).size() >= 240 )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+namespace
+{
+
+std::mutex s_temporary_environment_mutex;
+
+struct RwWindowsTemporaryEnvironmentScopeImpl
+{
+    std::unique_lock<std::mutex> lock;
+    std::wstring                  oldValues[ 3 ];
+    bool                          hadValues[ 3 ] = {};
+    bool                          isActive       = false;
+};
+
+constexpr const wchar_t* kTemporaryEnvironmentNames[] = { L"TMP", L"TEMP", L"TMPDIR" };
+
+} // namespace
+
+RwWindowsTemporaryEnvironmentScope::RwWindowsTemporaryEnvironmentScope()
+{
+    if( !rw_windows_temporary_environment_is_long() )
+    {
+        return;
+    }
+    auto* state = new RwWindowsTemporaryEnvironmentScopeImpl();
+    state->lock = std::unique_lock<std::mutex>( s_temporary_environment_mutex );
+    const std::wstring shortTemp = windowsShortTemporaryDirectory();
+    if( shortTemp.empty() )
+    {
+        delete state;
+        return;
+    }
+    for( std::size_t i = 0; i < 3; ++i )
+    {
+        state->oldValues[ i ] = windowsEnvironmentValue( kTemporaryEnvironmentNames[ i ] );
+        state->hadValues[ i ] = !state->oldValues[ i ].empty();
+        if( !::SetEnvironmentVariableW( kTemporaryEnvironmentNames[ i ], shortTemp.c_str() ) )
+        {
+            for( std::size_t j = 0; j <= i; ++j )
+            {
+                ::SetEnvironmentVariableW( kTemporaryEnvironmentNames[ j ],
+                                            state->hadValues[ j ] ? state->oldValues[ j ].c_str() : nullptr );
+            }
+            delete state;
+            return;
+        }
+    }
+    state->isActive = true;
+    impl           = state;
+}
+
+RwWindowsTemporaryEnvironmentScope::~RwWindowsTemporaryEnvironmentScope()
+{
+    auto* state = static_cast<RwWindowsTemporaryEnvironmentScopeImpl*>( impl );
+    if( state == nullptr )
+    {
+        return;
+    }
+    for( std::size_t i = 0; i < 3; ++i )
+    {
+        ::SetEnvironmentVariableW( kTemporaryEnvironmentNames[ i ], state->hadValues[ i ] ? state->oldValues[ i ].c_str() : nullptr );
+    }
+    delete state;
+    impl = nullptr;
+}
+
+bool RwWindowsTemporaryEnvironmentScope::active() const noexcept
+{
+    const auto* state = static_cast<const RwWindowsTemporaryEnvironmentScopeImpl*>( impl );
+    return state != nullptr && state->isActive;
+}
+
+std::string rw_posix_shell_path()
+{
+    return windowsBashPath();
+}
+
 std::string rw_windows_path_from_msys( std::string_view path )
 {
     return windowsPathFromMsys( path );
+}
+
+namespace
+{
+
+std::wstring quoteWindowsProcessArg( const std::wstring& value )
+{
+    std::wstring quoted;
+    quoted.reserve( value.size() + 2 );
+    quoted.push_back( L'"' );
+    std::size_t backslashes = 0;
+    for( const wchar_t c : value )
+    {
+        if( c == L'\\' )
+        {
+            ++backslashes;
+            continue;
+        }
+        if( c == L'"' )
+        {
+            quoted.append( backslashes * 2 + 1, L'\\' );
+            quoted.push_back( c );
+        }
+        else
+        {
+            quoted.append( backslashes, L'\\' );
+            quoted.push_back( c );
+        }
+        backslashes = 0;
+    }
+    quoted.append( backslashes * 2, L'\\' );
+    quoted.push_back( L'"' );
+    return quoted;
+}
+
+std::vector<std::string> parseDirectGitCommand( const char* command )
+{
+    if( command == nullptr )
+    {
+        return {};
+    }
+    std::string text( command );
+    constexpr std::string_view kRedirects[] = { " 2>/dev/null", " >/dev/null 2>&1" };
+    for( const std::string_view redirect : kRedirects )
+    {
+        if( text.size() >= redirect.size() && text.compare( text.size() - redirect.size(), redirect.size(), redirect ) == 0 )
+        {
+            text.erase( text.size() - redirect.size() );
+            break;
+        }
+    }
+
+    std::vector<std::string> tokens;
+    std::string              token;
+    bool                     singleQuoted = false;
+    bool                     doubleQuoted = false;
+    bool                     escaped      = false;
+    for( const char c : text )
+    {
+        if( escaped )
+        {
+            token.push_back( c );
+            escaped = false;
+            continue;
+        }
+        if( singleQuoted )
+        {
+            if( c == '\'' )
+            {
+                singleQuoted = false;
+            }
+            else
+            {
+                token.push_back( c );
+            }
+            continue;
+        }
+        if( doubleQuoted )
+        {
+            if( c == '"' )
+            {
+                doubleQuoted = false;
+            }
+            else if( c == '\\' )
+            {
+                escaped = true;
+            }
+            else if( c == '$' || c == '`' )
+            {
+                return {};
+            }
+            else
+            {
+                token.push_back( c );
+            }
+            continue;
+        }
+        if( c == '\'' )
+        {
+            singleQuoted = true;
+        }
+        else if( c == '"' )
+        {
+            doubleQuoted = true;
+        }
+        else if( c == '\\' )
+        {
+            escaped = true;
+        }
+        else if( c == ' ' || c == '\t' || c == 13 || c == '\n' )
+        {
+            if( !token.empty() )
+            {
+                tokens.push_back( std::move( token ) );
+                token.clear();
+            }
+        }
+        else if( c == ';' || c == '|' || c == '&' || c == '<' || c == '>' || c == '$' || c == '`' )
+        {
+            return {};
+        }
+        else
+        {
+            token.push_back( c );
+        }
+    }
+    if( escaped || singleQuoted || doubleQuoted )
+    {
+        return {};
+    }
+    if( !token.empty() )
+    {
+        tokens.push_back( std::move( token ) );
+    }
+    if( tokens.empty() || tokens.front() != "git" )
+    {
+        return {};
+    }
+    tokens.erase( tokens.begin() );
+    return tokens;
+}
+
+} // namespace
+
+int rw_git_ignore_probe( std::string_view root_dir, std::string& output, std::size_t max_bytes )
+{
+    output.clear();
+    const auto quote = []( std::string_view value )
+    {
+        std::string result;
+        result.reserve( value.size() + 2 );
+        result.push_back( '\'' );
+        for( const char c : value )
+        {
+            if( c == '\'' )
+            {
+                result += "'\\''";
+            }
+            else
+            {
+                result.push_back( c );
+            }
+        }
+        result.push_back( '\'' );
+        return result;
+    };
+    const std::string command = "git -C " + quote( root_dir.empty() ? std::string_view( "." ) : root_dir )
+                              + " -c core.quotepath=false ls-files --others --ignored --exclude-standard --directory -z 2>/dev/null";
+    std::FILE* pipe = rw_popen( command.c_str(), "r" );
+    if( pipe == nullptr )
+    {
+        return -1;
+    }
+    bool overflowed = false;
+    char chunk[ 8192 ];
+    for( std::size_t n = std::fread( chunk, 1, sizeof( chunk ), pipe ); n > 0;
+         n = std::fread( chunk, 1, sizeof( chunk ), pipe ) )
+    {
+        if( !overflowed )
+        {
+            if( n > max_bytes || output.size() > max_bytes - n )
+            {
+                overflowed = true;
+            }
+            else
+            {
+                output.append( chunk, n );
+            }
+        }
+    }
+    const bool readFailed = std::ferror( pipe ) != 0;
+    const int status = rw_pclose( pipe );
+    if( readFailed || status < 0 )
+    {
+        return -1;
+    }
+    return overflowed ? -2 : status;
 }
 
 struct ChildPipeRecord
@@ -418,6 +823,12 @@ std::FILE* rw_popen( const char* command, const char* mode )
     {
         return nullptr;
     }
+    RwWindowsTemporaryEnvironmentScope temporaryEnvironment;
+    if( rw_windows_temporary_environment_is_long() && !temporaryEnvironment.active() )
+    {
+        errno = ENAMETOOLONG;
+        return nullptr;
+    }
     const std::string bash = windowsBashPath();
     if( bash.empty() )
     {
@@ -425,47 +836,31 @@ std::FILE* rw_popen( const char* command, const char* mode )
         return nullptr;
     }
 
-    std::wstring tempDir( 32768, L'\0' );
-    const DWORD tempLength = ::GetTempPathW( static_cast<DWORD>( tempDir.size() ), tempDir.data() );
-    if( tempLength == 0 || tempLength >= tempDir.size() )
-    {
-        return nullptr;
-    }
-    tempDir.resize( tempLength );
-    std::wstring scriptWide( 32768, L'\0' );
-    if( ::GetTempFileNameW( tempDir.c_str(), L"rwc", 0, scriptWide.data() ) == 0 )
-    {
-        return nullptr;
-    }
-    scriptWide.resize( std::wcslen( scriptWide.c_str() ) );
-    const std::string script = rw_wide_to_utf8( scriptWide );
-    if( script.empty() )
-    {
-        ::DeleteFileW( scriptWide.c_str() );
-        errno = EILSEQ;
-        return nullptr;
-    }
-    if( !writeCommandScript( script, command ) )
-    {
-        ::DeleteFileW( scriptWide.c_str() );
-        return nullptr;
-    }
-
-    std::string winMode = mode;
-    if( winMode == "r" )
-    {
-        winMode = "rb";
-    }
-    else if( winMode == "w" )
-    {
-        winMode = "wb";
-    }
-
-    // rw_system and popenTrimmed only need a read pipe. Keep the legacy write mode for callers that use it.
     if( mode[ 0 ] != 'r' )
     {
+        // Preserve the legacy write-mode contract. Current callers use read mode; this path still
+        // publishes a self-deleting script for callers that need a writable popen stream.
+        std::wstring scriptWide;
+        HANDLE scriptHandle = INVALID_HANDLE_VALUE;
+        if( !windowsCreateUniqueTempFile( L"rw-cmd-", scriptWide, scriptHandle, false ) )
+        {
+            return nullptr;
+        }
+        const bool wroteScript = writeCommandScript( scriptHandle, command );
+        ::CloseHandle( scriptHandle );
+        const std::string script = rw_wide_to_utf8( scriptWide );
+        if( script.empty() || !wroteScript )
+        {
+            ::DeleteFileW( scriptWide.c_str() );
+            return nullptr;
+        }
+        std::string winMode = mode;
+        if( winMode == "w" )
+        {
+            winMode = "wb";
+        }
         const std::string launch = windowsShortPath( bash ) + " " + windowsToMsysPath( windowsShortPath( script ) );
-        std::FILE*       pipe = _popen( launch.c_str(), winMode.c_str() );
+        std::FILE* pipe = _popen( launch.c_str(), winMode.c_str() );
         if( pipe == nullptr )
         {
             ::DeleteFileW( scriptWide.c_str() );
@@ -473,19 +868,20 @@ std::FILE* rw_popen( const char* command, const char* mode )
         return pipe;
     }
 
+    // Read mode is the hot path for git probes. Pass the command directly to Bash instead of creating,
+    // writing and deleting one temporary script per invocation; the inherited pipe and environment contract
+    // stay identical.
     SECURITY_ATTRIBUTES security{ sizeof( SECURITY_ATTRIBUTES ), nullptr, TRUE };
-    HANDLE               readHandle = nullptr;
-    HANDLE               writeHandle = nullptr;
+    HANDLE readHandle = nullptr;
+    HANDLE writeHandle = nullptr;
     if( !::CreatePipe( &readHandle, &writeHandle, &security, 0 ) )
     {
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
     if( !::SetHandleInformation( readHandle, HANDLE_FLAG_INHERIT, 0 ) )
     {
         ::CloseHandle( readHandle );
         ::CloseHandle( writeHandle );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
 
@@ -495,10 +891,8 @@ std::FILE* rw_popen( const char* command, const char* mode )
     {
         ::CloseHandle( readHandle );
         ::CloseHandle( writeHandle );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
-
     HANDLE childStderr = nullptr;
     const HANDLE parentStderr = ::GetStdHandle( STD_ERROR_HANDLE );
     if( parentStderr != nullptr && parentStderr != INVALID_HANDLE_VALUE )
@@ -516,7 +910,6 @@ std::FILE* rw_popen( const char* command, const char* mode )
         ::CloseHandle( childStdin );
         ::CloseHandle( readHandle );
         ::CloseHandle( writeHandle );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
 
@@ -532,45 +925,76 @@ std::FILE* rw_popen( const char* command, const char* mode )
     auto* attributes = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>( ::HeapAlloc( ::GetProcessHeap(), 0, attributeBytes ) );
     if( attributes == nullptr || !::InitializeProcThreadAttributeList( attributes, 1, 0, &attributeBytes ) )
     {
-        if( attributes != nullptr )
-        {
-            ::HeapFree( ::GetProcessHeap(), 0, attributes );
-        }
+        if( attributes != nullptr ) { ::HeapFree( ::GetProcessHeap(), 0, attributes ); }
         ::CloseHandle( childStderr );
         ::CloseHandle( childStdin );
         ::CloseHandle( readHandle );
         ::CloseHandle( writeHandle );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
-
     HANDLE inheritedHandles[] = { childStdin, writeHandle, childStderr };
     const BOOL handlesUpdated = ::UpdateProcThreadAttribute( attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                                               inheritedHandles, sizeof( inheritedHandles ), nullptr, nullptr );
     startup.lpAttributeList = attributes;
 
-    const std::wstring bashWide = rw_utf8_to_wide( windowsShortPath( bash ) );
-    const std::wstring scriptArgument = rw_utf8_to_wide( windowsToMsysPath( windowsShortPath( script ) ) );
-    std::wstring       launch = L"\"" + bashWide + L"\" \"" + scriptArgument + L"\"";
+    const std::wstring bashWide = rw_utf8_to_wide( bash );
+    const std::wstring commandWide = rw_utf8_to_wide( command );
+    const std::vector<std::string> directGitArgs = parseDirectGitCommand( command );
+    const std::string directGitPath = directGitArgs.empty() ? std::string() : rw_resolve_executable( "git" );
+    const bool directGitIsNativeExe = directGitPath.size() >= 4
+                                   && ( directGitPath[ directGitPath.size() - 4 ] | 0x20 ) == '.'
+                                   && ( directGitPath[ directGitPath.size() - 3 ] | 0x20 ) == 'e'
+                                   && ( directGitPath[ directGitPath.size() - 2 ] | 0x20 ) == 'x'
+                                   && ( directGitPath[ directGitPath.size() - 1 ] | 0x20 ) == 'e';
+
+    std::wstring programWide = bashWide;
+    std::wstring launch = quoteWindowsProcessArg( bashWide ) + L" -c " + quoteWindowsProcessArg( commandWide );
+    if( directGitIsNativeExe )
+    {
+        const std::wstring directProgram = rw_utf8_to_wide( directGitPath );
+        std::wstring directLaunch = quoteWindowsProcessArg( directProgram );
+        bool directArgsValid = !directProgram.empty();
+        for( std::size_t i = 0; directArgsValid && i < directGitArgs.size(); ++i )
+        {
+            std::string argument = directGitArgs[ i ];
+            if( i > 0 && directGitArgs[ i - 1 ] == "-C" )
+            {
+                argument = rw_native_path( argument );
+            }
+            const std::wstring wideArgument = rw_utf8_to_wide( argument );
+            if( wideArgument.empty() )
+            {
+                directArgsValid = false;
+                break;
+            }
+            directLaunch += L" ";
+            directLaunch += quoteWindowsProcessArg( wideArgument );
+        }
+        if( directArgsValid )
+        {
+            programWide = directProgram;
+            launch = std::move( directLaunch );
+        }
+    }
     std::vector<wchar_t> commandLine( launch.begin(), launch.end() );
     commandLine.push_back( L'\0' );
     std::vector<wchar_t> childEnvironment = windowsGitEnvironment( bash );
     PROCESS_INFORMATION processInfo{};
-    const BOOL processCreated = handlesUpdated && !bashWide.empty() && !scriptArgument.empty()
-                              && ::CreateProcessW( bashWide.c_str(), commandLine.data(), nullptr, nullptr, TRUE,
-                                                   EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                                                   childEnvironment.empty() ? nullptr : childEnvironment.data(), nullptr,
+    const DWORD processFlags = EXTENDED_STARTUPINFO_PRESENT
+                             | ( childEnvironment.empty() ? 0u : CREATE_UNICODE_ENVIRONMENT );
+    const BOOL processCreated = handlesUpdated && !programWide.empty() && !commandWide.empty()
+                              && ::CreateProcessW( programWide.c_str(), commandLine.data(), nullptr, nullptr, TRUE,
+                                                   processFlags, childEnvironment.empty() ? nullptr : childEnvironment.data(), nullptr,
                                                    &startup.StartupInfo, &processInfo );
+
     ::DeleteProcThreadAttributeList( attributes );
     ::HeapFree( ::GetProcessHeap(), 0, attributes );
     ::CloseHandle( childStdin );
     ::CloseHandle( writeHandle );
     ::CloseHandle( childStderr );
-
     if( !processCreated )
     {
         ::CloseHandle( readHandle );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
     ::CloseHandle( processInfo.hThread );
@@ -582,7 +1006,6 @@ std::FILE* rw_popen( const char* command, const char* mode )
         ::WaitForSingleObject( processInfo.hProcess, INFINITE );
         ::CloseHandle( processInfo.hProcess );
         ::CloseHandle( readHandle );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
     std::FILE* pipe = ::_fdopen( fd, "rb" );
@@ -592,13 +1015,11 @@ std::FILE* rw_popen( const char* command, const char* mode )
         ::TerminateProcess( processInfo.hProcess, ERROR_OPERATION_ABORTED );
         ::WaitForSingleObject( processInfo.hProcess, INFINITE );
         ::CloseHandle( processInfo.hProcess );
-        ::DeleteFileW( scriptWide.c_str() );
         return nullptr;
     }
-
     {
         std::lock_guard<std::mutex> lock( s_child_pipe_mutex );
-        s_child_pipes.push_back( ChildPipeRecord{ pipe, processInfo.hProcess, scriptWide } );
+        s_child_pipes.push_back( ChildPipeRecord{ pipe, processInfo.hProcess, {} } );
     }
     return pipe;
 }
@@ -610,21 +1031,20 @@ std::string rw_short_path( const std::string& path )
     {
         return path;
     }
-    std::string winPath = path;
-    for( char& c : winPath )
+    const std::wstring widePath = rw_utf8_to_wide( rw_windows_path_from_msys( path ) );
+    if( widePath.empty() )
     {
-        if( c == '/' )
-        {
-            c = '\\';
-        }
+        return path;
     }
-    char buf[MAX_PATH];
-    const DWORD len = GetShortPathNameA( winPath.c_str(), buf, MAX_PATH );
-    if( len > 0 && len < MAX_PATH )
+    std::wstring buffer( 32768, L'\0' );
+    const DWORD length = ::GetShortPathNameW( widePath.c_str(), buffer.data(), static_cast<DWORD>( buffer.size() ) );
+    if( length > 0 && length < buffer.size() )
     {
-        return std::string( buf, len );
+        buffer.resize( length );
+        const std::string utf8 = rw_wide_to_utf8( buffer );
+        return utf8.empty() ? path : utf8;
     }
-    return winPath;
+    return path;
 }
 
 /// Closes a command pipe opened by rw_popen and returns the child-process status.
@@ -662,7 +1082,10 @@ int rw_pclose( std::FILE* stream )
         ::GetExitCodeProcess( record.process, &exitCode );
     }
     ::CloseHandle( record.process );
-    ::DeleteFileW( record.script.c_str() );
+    if( !record.script.empty() )
+    {
+        ::DeleteFileW( record.script.c_str() );
+    }
     return waitResult == WAIT_OBJECT_0 ? static_cast<int>( exitCode ) : -1;
 }
 
@@ -778,6 +1201,7 @@ struct MemStreamRecord
 static std::mutex                   s_memstream_mutex;
 static std::vector<MemStreamRecord> s_memstreams;
 
+
 /// Creates a temporary-file-backed stream with the open_memstream ownership contract.
 std::FILE* rw_open_memstream( char** bufloc, std::size_t* sizeloc )
 {
@@ -787,28 +1211,9 @@ std::FILE* rw_open_memstream( char** bufloc, std::size_t* sizeloc )
         return nullptr;
     }
 
-    char tempPath[MAX_PATH];
-    if( GetTempPathA( MAX_PATH, tempPath ) == 0 )
-    {
-        return nullptr;
-    }
-
-    char tempFileName[MAX_PATH];
-    if( GetTempFileNameA( tempPath, "rwm", 0, tempFileName ) == 0 )
-    {
-        return nullptr;
-    }
-
-    HANDLE hFile = CreateFileA(
-        tempFileName,
-        GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-        nullptr
-    );
-    if( hFile == INVALID_HANDLE_VALUE )
+    std::wstring tempFileName;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    if( !windowsCreateUniqueTempFile( L"rw-mem-", tempFileName, hFile, true ) )
     {
         return nullptr;
     }

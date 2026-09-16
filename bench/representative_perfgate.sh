@@ -12,10 +12,15 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 RUNS="${RIPWIRE_REP_PERF_RUNS:-5}"
-FIXTURE_HASH="08352db35d9c93c4fc7e3af7f38469af8f8b86d1"
+FIXTURE_HASH="0483a5f28e453395817098316798df66592608d0"
 PROFILE_MD="$ROOT/bench/PROFILE.md"
 PREFLIGHT_ONLY=0
 WRITE_LEDGER=1
+PYTHON3="${RIPWIRE_PYTHON:-}"
+if [ -z "$PYTHON3" ]; then
+    PYTHON3="$( command -v python3 2>/dev/null || command -v python 2>/dev/null || true )"
+fi
+[ -n "$PYTHON3" ] || { echo "representative_perfgate: Python 3 is required"; exit 2; }
 case "${1:-}" in
     "") ;;
     --preflight-only) PREFLIGHT_ONLY=1 ;;
@@ -29,7 +34,15 @@ CORPUS="$TMP/corpus"
 case "$RUNS" in *[!0-9]*|'') echo "representative_perfgate: RUNS must be numeric"; exit 2;; esac
 [ "$RUNS" -ge 5 ] || { echo "representative_perfgate: RUNS must be at least 5"; exit 2; }
 
-actualHash="$( cd "$ROOT/test/fixture" && find . -type f -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}' )"
+actualHash="$(
+    cd "$ROOT/test/fixture"
+    {
+        while IFS= read -r -d '' file; do
+            digest="$( shasum "$file" | awk '{print $1}' )"
+            printf '%s  %s\n' "$digest" "${file#./}"
+        done < <( find . -type f -print0 | sort -z )
+    } | shasum | awk '{print $1}'
+)"
 [ "$actualHash" = "$FIXTURE_HASH" ] || {
     echo "representative_perfgate: fixture drifted ($actualHash != $FIXTURE_HASH); review shape and update the pin"
     exit 2
@@ -46,7 +59,7 @@ fileCount="$( find "$CORPUS" -type f | wc -l | tr -d ' ' )"
 # this preflight exited 2 on every Linux CI runner (the flavour trap the cache gates document).
 byteCount="$( find "$CORPUS" -type f -exec cat {} + | wc -c | tr -d ' ' )"
 [ "$fileCount" = 480 ] || { echo "representative_perfgate: corpus shape mismatch: files=$fileCount"; exit 2; }
-[ "$byteCount" = 183040 ] || { echo "representative_perfgate: corpus shape mismatch: bytes=$byteCount"; exit 2; }
+[ "$byteCount" = 188640 ] || { echo "representative_perfgate: corpus shape mismatch: bytes=$byteCount"; exit 2; }
 "$BIN" "$CORPUS" --no-cache > "$TMP/default.out" 2>/dev/null || { echo "representative_perfgate: default preflight failed"; exit 1; }
 grep -q 'files=480 symbols=1120 edges=320 ' "$TMP/default.out" \
     || { echo "representative_perfgate: semantic corpus shape drifted (expected files=480 symbols=1120 edges=320)"; exit 2; }
@@ -107,7 +120,14 @@ retrievalMs="$( median_ms "$BIN" "$CORPUS" --for=distance --cache="$INDEX.rich.r
 reportMs="$( median_ms "$BIN" "$CORPUS" --report --no-cache )" || exit 1
 qualityMs="$( median_ms sh -c 'cd "$1" && "$2" . --quality-delta --no-cache' sh "$CORPUS" "$BIN" )" || exit 1
 deadMs="$( median_ms "$BIN" "$CORPUS" --dead-code --no-cache )" || exit 1
-mcpMs="$( python3 "$ROOT/bench/mcp_session_timing.py" "$BIN" "$CORPUS" "$RUNS" )" || exit 1
+if case "$( uname -s 2>/dev/null || true )" in MINGW*|MSYS*|CYGWIN*) true ;; *) [ "${OS:-}" = Windows_NT ] ;; esac; then
+    MCP_TIMING_SCRIPT="$( cygpath -w "$ROOT/bench/mcp_session_timing.py" 2>/dev/null || printf '%s' "$ROOT/bench/mcp_session_timing.py" )"
+    MCP_TIMING_BIN="$( cygpath -w "$BIN" 2>/dev/null || printf '%s' "$BIN" )"
+    MCP_TIMING_CORPUS="$( cygpath -w "$CORPUS" 2>/dev/null || printf '%s' "$CORPUS" )"
+    mcpMs="$( MSYS_NO_PATHCONV=1 "$PYTHON3" "$MCP_TIMING_SCRIPT" "$MCP_TIMING_BIN" "$MCP_TIMING_CORPUS" "$RUNS" )" || exit 1
+else
+    mcpMs="$( "$PYTHON3" "$ROOT/bench/mcp_session_timing.py" "$BIN" "$CORPUS" "$RUNS" )" || exit 1
+fi
 
 printf 'representative_perfgate: machine=%s/%s fixture=%s copies=80 files=%s bytes=%s runs=%s\n' \
        "$( uname -s )" "$( uname -m )" "$FIXTURE_HASH" "$fileCount" "$byteCount" "$RUNS"

@@ -20,6 +20,7 @@
 #include "nextverb.h"         // E2: ONE next= on the receipt (nextFlag / nextFieldJson)
 #include "redact.h"           // R1 (V3): kRedactRules — the marker table the write gate's predicate is derived FROM
 #include "pathguard.h"        // A4-F14: rw::pathguard::isSymlink — THE symlink predicate, shared with the sidecar writers
+#include "infra/platform.h"
 
 #include <climits>            // PATH_MAX — the POSIX AbsHintFrame realpath/getcwd buffers (A2)
 #include <filesystem>
@@ -267,10 +268,9 @@ namespace mcpedit
 
         explicit AbsHintFrame( const std::string& pathHint )
         {
-#if defined( _WIN32 )
-            const std::string nativeHint = rw::compat::rw_windows_path_from_msys( pathHint );
-            std::error_code  ec;
-            const std::filesystem::path hintPath( nativeHint );
+            const std::string nativeHint = rw::compat::rw_native_path( pathHint );
+            std::error_code   ec;
+            const std::filesystem::path hintPath = ::infra::platform::filesystemPath( nativeHint );
             if( !hintPath.is_absolute() )
             {
                 return;
@@ -293,15 +293,6 @@ namespace mcpedit
             }
             const std::filesystem::path canonicalCurrent = std::filesystem::weakly_canonical( current, ec );
             cwd = ( ec ? current.lexically_normal() : canonicalCurrent ).generic_string();
-#else
-            if( pathHint.empty() || pathHint.front() != '/' )
-            {
-                return;
-            }
-            char buf[ PATH_MAX ];
-            hint = ::realpath( pathHint.c_str(), buf ) != nullptr ? std::string( buf ) : pathHint;
-            cwd  = ::getcwd( buf, sizeof( buf ) ) != nullptr ? std::string( buf ) : std::string();
-#endif
         }
 
         bool matches( const IngestResult& ing, std::uint32_t fileId ) const
@@ -310,20 +301,15 @@ namespace mcpedit
             {
                 return false;
             }
-#if defined( _WIN32 )
-            const std::string diskNative = rw::compat::rw_windows_path_from_msys( diskPath( ing, fileId ) );
-            std::error_code    ec;
-            std::filesystem::path candidate( diskNative );
+            const std::string diskNative = rw::compat::rw_native_path( diskPath( ing, fileId ) );
+            std::error_code   ec;
+            std::filesystem::path candidate = ::infra::platform::filesystemPath( diskNative );
             if( !candidate.is_absolute() )
             {
-                candidate = std::filesystem::path( cwd ) / candidate;
+                candidate = ::infra::platform::filesystemPath( cwd ) / candidate;
             }
             const std::filesystem::path absolute = std::filesystem::weakly_canonical( candidate, ec );
             const std::string           abs = ( ec ? candidate.lexically_normal() : absolute ).generic_string();
-#else
-            const std::string& disk = diskPath( ing, fileId );   // the on-disk spelling, never the label
-            const std::string  abs  = !disk.empty() && disk.front() == '/' ? disk : cwd + "/" + disk;
-#endif
             return abs.find( hint ) != std::string::npos;
         }
     };
@@ -682,10 +668,7 @@ namespace mcpedit
     // had 45,765 of these before that; a possibly-live (held, or fresh) lock inode is still never removed.
     inline std::string editLockPath( const std::string& targetPath )
     {
-        std::string lockKey = targetPath;
-#if defined( _WIN32 )
-        std::replace( lockKey.begin(), lockKey.end(), '\\', '/' );
-#endif
+        const std::string lockKey = rw::compat::rw_native_path( targetPath );
         std::uint64_t h = 1469598103934665603ULL;      // FNV-1a-64 of the target path → a stable per-file lock name
         for( char c : lockKey ) { h ^= static_cast<unsigned char>( c ); h = hashutil::fnv1aMultiply( h ); }
         char name[ 64 ];
@@ -772,10 +755,7 @@ namespace mcpedit
         const bool  haveOrig = ( ::stat( path.c_str(), &orig ) == 0 );
 
         const std::string tmp = path + "." + std::to_string( ::getpid() ) + ".tmp";
-        int               openFlags = O_WRONLY | O_CREAT | O_TRUNC;
-#if defined( _WIN32 )
-        openFlags |= O_BINARY;
-#endif
+        const int         openFlags = rw::compat::rw_binary_open_flags( O_WRONLY | O_CREAT | O_TRUNC );
         const int fd = ::open( tmp.c_str(), openFlags, 0644 );
         if( fd < 0 )
         {

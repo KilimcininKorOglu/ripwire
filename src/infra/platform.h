@@ -28,6 +28,16 @@
 #pragma once
 
 #include <cstddef>       // std::size_t for the hardware-interference-size constants
+#include <cstdint>       // std::uint8_t for the compile-time platform traits
+#include <filesystem>
+#include <string>
+#include <string_view>
+
+// This is the single compile-time OS boundary for owned code. The compatibility header contains the
+// platform-specific implementation of the POSIX-shaped APIs; including it here makes those APIs and the
+// target traits available from one stable inline header instead of requiring every consumer to repeat an
+// operating-system switch.
+#include "platform_compat.h"
 
 // ==========================================================================
 // Compiler attributes
@@ -53,6 +63,101 @@
 
 namespace infra::platform
 {
+
+enum class OperatingSystem : std::uint8_t
+{
+    Windows,
+    Posix,
+};
+
+#if defined( _WIN32 ) || defined( _MSC_VER )
+inline constexpr OperatingSystem kOperatingSystem = OperatingSystem::Windows;
+#else
+inline constexpr OperatingSystem kOperatingSystem = OperatingSystem::Posix;
+#endif
+
+inline constexpr bool kWindows = kOperatingSystem == OperatingSystem::Windows;
+inline constexpr bool kPosix   = !kWindows;
+
+#if defined( __APPLE__ )
+inline constexpr bool kApple = true;
+#else
+inline constexpr bool kApple = false;
+#endif
+
+#if defined( __linux__ )
+inline constexpr bool kLinux = true;
+#else
+inline constexpr bool kLinux = false;
+#endif
+
+inline constexpr bool kHasKqueue = RW_PLATFORM_HAS_KQUEUE != 0;
+
+inline bool isAbsolutePath( std::string_view path ) noexcept
+{
+    if( path.empty() || path.front() == '/' )
+    {
+        return !path.empty();
+    }
+    return kWindows && ( path.front() == '\\' || ( path.size() >= 2 && path[ 1 ] == ':' ) );
+}
+
+inline std::string normalizeDriveLetter( std::string path )
+{
+    if( kWindows && path.size() >= 2 && path[ 1 ] == ':' && path[ 0 ] >= 'a' && path[ 0 ] <= 'z' )
+    {
+        path[ 0 ] = static_cast<char>( path[ 0 ] - 'a' + 'A' );
+    }
+    return path;
+}
+
+inline bool isFilesystemRoot( std::string_view path ) noexcept
+{
+    if( path == "/" )
+    {
+        return true;
+    }
+    if( !kWindows )
+    {
+        return false;
+    }
+    if( path == "\\" )
+    {
+        return true;
+    }
+    return path.size() == 3 && path[ 1 ] == ':' && ( path[ 2 ] == '/' || path[ 2 ] == '\\' )
+        && ( ( path[ 0 ] >= 'A' && path[ 0 ] <= 'Z' ) || ( path[ 0 ] >= 'a' && path[ 0 ] <= 'z' ) );
+}
+
+inline std::size_t lastPathSeparator( std::string_view path ) noexcept
+{
+    return kWindows ? path.find_last_of( "/\\" ) : path.find_last_of( '/' );
+}
+
+inline std::filesystem::path filesystemPath( std::string_view path )
+{
+    const std::string native = rw::compat::rw_native_path( path );
+    const std::u8string utf8( reinterpret_cast<const char8_t*>( native.data() ), native.size() );
+    return std::filesystem::path( utf8 );
+}
+
+inline std::string canonicalPath( std::string_view path )
+{
+    std::error_code    ec;
+    const std::filesystem::path absolute = std::filesystem::absolute( filesystemPath( path ), ec );
+    if( ec )
+    {
+        return {};
+    }
+    const std::filesystem::path canonical = std::filesystem::canonical( absolute, ec );
+    if( !ec )
+    {
+        return canonical.generic_string();
+    }
+    ec.clear();
+    const std::filesystem::path weak = std::filesystem::weakly_canonical( absolute, ec );
+    return ec ? std::string() : weak.generic_string();
+}
 
 // Cache-line size constants — follow the C++17 std::hardware_*_interference_size
 // naming convention. Provided here as project-owned constexpr values because

@@ -20,6 +20,7 @@
 #include "mcpverbs.h"      // the read/flagship verb builders runMcp dispatches to (pulls mcpindex.h → mcpjson.h)
 #include "compactlegend.h"   // P1 (L7): the legend:"compact" rewrite applied in textResult
 #include "mcpedit.h"       // the edit verbs + runEditVerb runMcp dispatches to
+#include "infra/platform.h"
 
 #include "infra/stdinline.h"     // R4: readByteSafeLine — the byte-safe stdin line reader the request loop runs on
 #include "infra/blanktext.h"     // §S3: hasVisibleContent / blankPayloadSpelling + the derived kBlankRanges table
@@ -344,49 +345,22 @@ struct McpDispatchPolicy
 inline std::string mcpCanonRoot( const std::string& root )
 {
     char buf[ PATH_MAX ];
-    if( ::realpath( root.c_str(), buf ) )
+    const std::string native = rw::compat::rw_native_path( root );
+    if( rw::compat::rw_realpath( native.c_str(), buf ) )
     {
-        std::string canonical( buf );
-#if defined( _WIN32 )
-        if( canonical.size() >= 2 && canonical[ 1 ] == ':'
-            && canonical[ 0 ] >= 'a' && canonical[ 0 ] <= 'z' )
-        {
-            canonical[ 0 ] = static_cast< char >( canonical[ 0 ] - 'a' + 'A' );
-        }
-#endif
-        return canonical;
+        return ::infra::platform::normalizeDriveLetter( std::string( buf ) );
     }
     return root;
 }
 
 inline bool mcpIsFilesystemRoot( const std::string& path )
 {
-    if( path == "/" || path == "\\" )
-    {
-        return true;
-    }
-#if defined( _WIN32 )
-    const bool driveLetter = path.size() == 3
-                           && ( ( path[ 0 ] >= 'A' && path[ 0 ] <= 'Z' ) || ( path[ 0 ] >= 'a' && path[ 0 ] <= 'z' ) )
-                           && path[ 1 ] == ':'
-                           && ( path[ 2 ] == '/' || path[ 2 ] == '\\' );
-    if( driveLetter )
-    {
-        return true;
-    }
-#endif
-    return false;
+    return ::infra::platform::isFilesystemRoot( path );
 }
 
 inline std::string mcpNormalizeDriveLetter( std::string path )
 {
-#if defined( _WIN32 )
-    if( path.size() >= 2 && path[ 1 ] == ':' && path[ 0 ] >= 'a' && path[ 0 ] <= 'z' )
-    {
-        path[ 0 ] = static_cast< char >( path[ 0 ] - 'a' + 'A' );
-    }
-#endif
-    return path;
+    return ::infra::platform::normalizeDriveLetter( rw::compat::rw_native_path( path ) );
 }
 
 // R2a: resolve the launch cwd as the bare stdio server's assumed root — see McpDispatchPolicy::
@@ -906,12 +880,10 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             };
 
             std::string       path    = strArg( "path" );     // may be REBOUND to a workspace key by `paths` below (A11)
-#if defined( _WIN32 )
             if( !path.empty() )
             {
-                path = mcpNormalizeDriveLetter( rw::compat::rw_windows_path_from_msys( path ) );
+                path = mcpNormalizeDriveLetter( path );
             }
-#endif
             std::string       assumedRootNote;                // R2a: non-empty ⇒ path was defaulted to the launch cwd; disclosed by textResult (declared here so the lambda captures it)
             const std::string symbol  = strArg( "symbol" );
             const std::string pattern = strArg( "pattern" );
@@ -1246,6 +1218,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     pathsUsageError = true;   // reuse the skip-flag: no dispatch, no getIndex(), no byte written
                 }
             }
+            const std::string rootThatAnswered = path.empty() ? policy.assumedRoot : path;
 
             // ── W3FIX M4: an argument this verb does not DECLARE refuses, with a near-miss ──────────────────
             // `explore` honored budget_tokens while token_budget / max_tokens were dropped in silence. Checked
@@ -1836,7 +1809,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // V3/RN1: withHandleRootProvenance owns the omitted-`path`-vs-rename fork.
                     resp = fo.ok ? textResult( fo.resultJson )
                                  : errResultMsg( fo.errCode, mcprefuse::withHandleRootProvenance(
-                                       fo.message, fo.unresolvedHandle && !rootFromCaller, path ) );
+                                       fo.message, fo.unresolvedHandle && !rootFromCaller, rootThatAnswered ) );
                 }
                 // A4-R3 batch verb: N read sub-queries over `path` in one round-trip. A malformed/empty
                 // `queries` array is a whole-request error; a bad SUB-query (unknown verb, missing arg, not

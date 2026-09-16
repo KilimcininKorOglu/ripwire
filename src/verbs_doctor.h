@@ -53,72 +53,11 @@ extern "C"
     const TSLanguage* tree_sitter_kotlin( void );
 }
 
-// This process's own executable path, realpath'd. macOS uses _NSGetExecutablePath and Linux uses
-// /proc/self/exe because argv[0] is often just "ripwire" after shell PATH resolution. Other platforms
-// fall back to realpath(argv0), then an explicit PATH search. Never crashes: failure degrades to "".
+// This process's own executable path, realpath'd. The platform header owns the OS-specific API selection;
+// this verb only keeps the diagnostic-facing name and contract.
 inline std::string selfExecutablePath( const char* argv0 )
 {
-#if defined( __APPLE__ )
-    char          buf[ PATH_MAX ];
-    std::uint32_t size = sizeof( buf );
-    if( _NSGetExecutablePath( buf, &size ) == 0 )
-    {
-        char resolved[ PATH_MAX ];
-        if( ::realpath( buf, resolved ) )
-        {
-            return std::string( resolved );
-        }
-        return std::string( buf );
-    }
-#elif defined( __linux__ )
-    char          buf[ PATH_MAX ];
-    const ssize_t byteCount = ::readlink( "/proc/self/exe", buf, sizeof( buf ) - 1 );
-    if( byteCount > 0 )
-    {
-        buf[ byteCount ] = '\0';
-        char resolved[ PATH_MAX ];
-        if( ::realpath( buf, resolved ) )
-        {
-            return std::string( resolved );
-        }
-        return std::string( buf );
-    }
-#elif defined( _WIN32 )
-    const std::string self = rw::compat::rw_self_exe_path();
-    if( !self.empty() )
-    {
-        return self;
-    }
-#endif
-    char resolved[ PATH_MAX ];
-    if( argv0 && ::realpath( argv0, resolved ) )
-    {
-        return std::string( resolved );
-    }
-
-    // Last-resort PATH search for platforms without a process-executable API. Returning a bare argv0
-    // would recreate the exact Codex Desktop failure this path is used to prevent.
-    if( argv0 && *argv0 && !std::strchr( argv0, '/' ) )
-    {
-        const char* pathEnv = std::getenv( "PATH" );
-        std::string_view remaining = pathEnv ? std::string_view( pathEnv ) : std::string_view();
-        while( !remaining.empty() )
-        {
-            const std::size_t split = remaining.find( ':' );
-            const std::string_view dir = remaining.substr( 0, split );
-            const std::string candidate = std::string( dir.empty() ? "." : dir ) + "/" + argv0;
-            if( ::realpath( candidate.c_str(), resolved ) && ::access( resolved, X_OK ) == 0 )
-            {
-                return std::string( resolved );
-            }
-            if( split == std::string_view::npos )
-            {
-                break;
-            }
-            remaining.remove_prefix( split + 1 );
-        }
-    }
-    return {};
+    return rw::compat::rw_self_executable_path( argv0 );
 }
 
 // popen a shell command, return its trimmed stdout ("" on any failure — never crashes). One shared copy
@@ -201,13 +140,14 @@ inline std::string doctorNotOnPathHint( const std::string& selfPath, std::vector
 }
 
 inline std::string doctorBinaryPathVerdictAttr( bool copied, const std::string& selfPath, const std::string& whichPath,
-                                                const struct stat& selfSt, const struct stat& whichSt, std::vector<char>& esc )
+                                                const rw::compat::RwFileIdentity& selfId,
+                                                const rw::compat::RwFileIdentity& whichId, std::vector<char>& esc )
 {
     if( copied )
     {
         return " copied=\"1\"";
     }
-    const bool        selfIsOlder = selfSt.st_mtime < whichSt.st_mtime;
+    const bool        selfIsOlder = selfId.mtimeSeconds < whichId.mtimeSeconds;
     const std::string olderPath   = selfIsOlder ? selfPath : whichPath;
     const std::string newerPath   = selfIsOlder ? whichPath : selfPath;
     return " hint=\"" + std::string( rw::escapeXml( std::string_view(
@@ -677,15 +617,11 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // `which ripwire`'s) ----
     {
         const std::string selfPath  = selfExecutablePath( argv0 );
-#if defined(_WIN32)
-        const std::string whichPath = codexdoctor::resolveExecutable( "ripwire" );
-#else
-        const std::string whichPath = doctorPopenTrim( "which ripwire 2>/dev/null" );
-#endif
-        struct stat        selfSt {};
-        struct stat         whichSt {};
-        const bool haveSelf  = !selfPath.empty()  && ::stat( selfPath.c_str(),  &selfSt )  == 0;
-        const bool haveWhich = !whichPath.empty() && ::stat( whichPath.c_str(), &whichSt ) == 0;
+        const std::string whichPath = rw::compat::rw_resolve_executable( "ripwire" );
+        const rw::compat::RwFileIdentity selfId  = rw::compat::rw_file_identity_of( selfPath );
+        const rw::compat::RwFileIdentity whichId = rw::compat::rw_file_identity_of( whichPath );
+        const bool haveSelf  = !selfPath.empty()  && selfId.valid;
+        const bool haveWhich = !whichPath.empty() && whichId.valid;
 
         bool        ok    = true;
         std::string attrs = "self=\"" + std::string( escapeXml( selfPath, esc ) ) + "\"";
@@ -702,7 +638,9 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
         }
         else if( haveSelf )
         {
-            const bool sameFile = ( selfSt.st_dev == whichSt.st_dev && selfSt.st_ino == whichSt.st_ino );
+            const bool sameFile = ( selfPath == whichPath )
+                               || ( selfId.volumeId == whichId.volumeId && selfId.fileId != 0
+                                 && selfId.fileId == whichId.fileId );
             attrs += " on_path=\"1\" same_file=\"" + std::string( sameFile ? "1" : "0" ) + "\"";
             if( !sameFile )
             {
@@ -711,18 +649,18 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
                 // Cheap content-equality fallback (degrade, don't crash): equal mtime AND equal size is the
                 // sanctioned proxy for "copied but identical" — a genuine stale shadow almost always differs
                 // in at least one. Only a real mismatch still flags ok=false.
-                const bool sameBytes = ( selfSt.st_size == whichSt.st_size ) && doctorSameFileBytes( selfPath, whichPath );
+                const bool sameBytes = ( selfId.sizeBytes == whichId.sizeBytes ) && doctorSameFileBytes( selfPath, whichPath );
                 const bool copied    = sameBytes;   // content equality, not the mtime proxy (see doctorSameFileBytes)
                 ok = copied;   // this exact failure bit the LocBench round — stale PATH binary shadows a freshly built one
                 attrs += " same_bytes=\"" + std::string( sameBytes ? "1" : "0" ) + "\"";
-                attrs += " self_mtime=\""  + std::to_string( (long long)selfSt.st_mtime )  + "\"";
-                attrs += " self_size=\""   + std::to_string( (long long)selfSt.st_size )    + "\"";
-                attrs += " which_mtime=\"" + std::to_string( (long long)whichSt.st_mtime ) + "\"";
-                attrs += " which_size=\""  + std::to_string( (long long)whichSt.st_size )   + "\"";
+                attrs += " self_mtime=\""  + std::to_string( selfId.mtimeSeconds )  + "\"";
+                attrs += " self_size=\""   + std::to_string( selfId.sizeBytes )    + "\"";
+                attrs += " which_mtime=\"" + std::to_string( whichId.mtimeSeconds ) + "\"";
+                attrs += " which_size=\""  + std::to_string( whichId.sizeBytes )   + "\"";
                 // §P11 doctor item: a raw ok="0" with four raw timestamps made the reader do the
                 // subtraction themselves — name which of the two IS the stale one (older mtime) and the
                 // fix, so the LocBench-round failure this check exists for reads as a VERDICT.
-                attrs += doctorBinaryPathVerdictAttr( copied, selfPath, whichPath, selfSt, whichSt, esc );
+                attrs += doctorBinaryPathVerdictAttr( copied, selfPath, whichPath, selfId, whichId, esc );
             }
         }
         else

@@ -426,7 +426,7 @@ _cxxflags_real_arm()
 
     # CXX_FLAGS is deliberately NOT pattern-checked: it legitimately carries bare VALUE words beside their
     # flags (`-arch arm64`, `-isysroot /path`), so "every word starts with -" is false on a healthy file and
-    # such an arm would red every arm64 build. Its -std= is checked by name below instead.
+    # such an arm would red every arm64 build. Its language-standard spelling is checked by name below instead.
     _cxxflags_words_match CXX_DEFINES  '^-D'                 'no define was split' \
         ${CXX_DEFINES[@]+"${CXX_DEFINES[@]}"}   || _bad=1
     _cxxflags_words_match CXX_INCLUDES '^(-I|-isystem$|/)'   'no include was split off its path' \
@@ -434,8 +434,8 @@ _cxxflags_real_arm()
 
     # the one flag the drivers cannot compile without, named rather than assumed present
     case " ${CXX_FLAGS[*]-} " in
-        *" -std="*) printf 'PASS (R) CXX_FLAGS carries the -std= the drivers need\n' ;;
-        *)          printf 'FAIL (R) no -std= among the %s parsed CXX_FLAGS -- the drivers cannot compile with these\n' "$_nf"; _bad=1 ;;
+        *" -std="*|*" -clang:-std="*|*" /std:"*) printf 'PASS (R) CXX_FLAGS carries the language standard the drivers need\n' ;;
+        *)          printf 'FAIL (R) no language-standard flag among the %s parsed CXX_FLAGS -- the drivers cannot compile with these\n' "$_nf"; _bad=1 ;;
     esac
 
     return "$_bad"

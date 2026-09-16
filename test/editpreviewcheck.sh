@@ -333,8 +333,11 @@ body = b.group( 1 ).replace( "]]]]><![CDATA[>", "]]>" )
 assert text == body, "overwrite CDATA is not the span's bytes on disk:\n%r\n!=\n%r" % ( text, body )
 for k in ( "l", "end", "bytes" ): assert k in attrs, "overwrite lacks %s= (has %r)" % ( k, sorted( attrs ) )
 assert int( attrs["bytes"] ) == len( body.encode() ), "bytes=%s but the span is %d bytes" % ( attrs["bytes"], len( body.encode() ) )
-lines = open( path ).read().split( "\n" )
-assert "\n".join( lines[ int( attrs["l"] ) - 1 : int( attrs["end"] ) ] ) == body, "l=/end= do not bracket the span on disk"
+diskLines = open( path, newline = '' ).read().splitlines( keepends = True )
+diskSpan = ''.join( diskLines[ int( attrs["l"] ) - 1 : int( attrs["end"] ) ] )
+if diskSpan.endswith( chr( 13 ) + chr( 10 ) ): diskSpan = diskSpan[ : -2 ]
+elif diskSpan.endswith( chr( 10 ) ) or diskSpan.endswith( chr( 13 ) ): diskSpan = diskSpan[ : -1 ]
+assert diskSpan == body, "l=/end= do not bracket the span on disk"
 assert "capped" not in attrs, "a %d-byte span must not be capped" % len( body )
 print( "OK <overwrite l=%s end=%s bytes=%s> == the span on disk" % ( attrs["l"], attrs["end"], attrs["bytes"] ) )
 PY
@@ -358,7 +361,7 @@ assert a.get( "capped" ) == "1", "a %s-byte span was not capped (attrs %r)" % ( 
 assert "shown" in a and int( a["shown"] ) < int( a["bytes"] ), "capped without shown= < bytes="
 assert int( a["shown"] ) == len( m.group( 2 ).encode() ), "shown=%s but the CDATA is %d bytes" % ( a["shown"], len( m.group( 2 ) ) )
 assert "elided_lines" in a and int( a["elided_lines"] ) > 0, "capped without elided_lines="
-assert m.group( 2 ).startswith( "int huge( int x )\n{" ), "the head is not the span's start"
+assert m.group( 2 ).replace( "\r\n", "\n" ).startswith( "int huge( int x )\n{" ), "the head is not the span's start"
 print( "OK capped: shown=%s of bytes=%s, elided_lines=%s" % ( a["shown"], a["bytes"], a["elided_lines"] ) )
 PY
 if [ $? -eq 0 ]; then ok "(O3) an oversize span is budgeted and disclosed: $( cat "$WORK/o3.res" )"; else no "(O3) $( tail -1 "$WORK/o3.res" )"; fi

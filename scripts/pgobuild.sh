@@ -31,6 +31,23 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 GEN="$ROOT/build_pgogen"
 OPT="$ROOT/build_pgo"
 PROFILE="$GEN/ripwire.profdata"
+WINDOWS_GATE=0
+case "$( uname -s 2>/dev/null || printf '%s' unknown )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+ROOT_NATIVE="$ROOT"
+GEN_NATIVE="$GEN"
+OPT_NATIVE="$OPT"
+PROFILE_NATIVE="$PROFILE"
+GENERATOR_ARGS=()
+if [ "$WINDOWS_GATE" = 1 ] && command -v cygpath >/dev/null 2>&1; then
+    ROOT_NATIVE="$( cygpath -w "$ROOT" )"
+    GEN_NATIVE="$( cygpath -w "$GEN" )"
+    OPT_NATIVE="$( cygpath -w "$OPT" )"
+    PROFILE_NATIVE="$( cygpath -w "$PROFILE" )"
+    GENERATOR_ARGS=( -G Ninja )
+fi
 JOBS="${RIPWIRE_PGO_JOBS:-6}"
 CORPUS="$ROOT"
 reuse=0
@@ -65,11 +82,11 @@ if [ "$reuse" -eq 0 ]; then
     # ── phase 1: instrumented build ────────────────────────────────────────────────────────────────
     echo "pgobuild: [1/4] configuring the instrumented tree ($GEN)"
     rm -rf "$GEN"
-    cmake -S "$ROOT" -B "$GEN" -DRIPWIRE_LTO=ON -DRIPWIRE_PGO=generate ${cmake_extra[@]+"${cmake_extra[@]}"} >"$GEN.cfg.log" 2>&1 || {
+    MSYS_NO_PATHCONV= cmake -S "$ROOT_NATIVE" -B "$GEN_NATIVE" "${GENERATOR_ARGS[@]}" -DRIPWIRE_LTO=ON -DRIPWIRE_PGO=generate ${cmake_extra[@]+"${cmake_extra[@]}"} >"$GEN.cfg.log" 2>&1 || {
         echo "configure failed — see $GEN.cfg.log" >&2; tail -20 "$GEN.cfg.log" >&2; exit 1; }
     rm -f "$GEN.cfg.log"
     echo "pgobuild: [2/4] building instrumented (this binary is SLOW by design — counters on every edge)"
-    cmake --build "$GEN" -j "$JOBS" --target ripwire >"$GEN/build.log" 2>&1 || {
+    MSYS_NO_PATHCONV= cmake --build "$GEN_NATIVE" -j "$JOBS" --target ripwire >"$GEN/build.log" 2>&1 || {
         echo "instrumented build failed — see $GEN/build.log" >&2; tail -20 "$GEN/build.log" >&2; exit 1; }
 
     # ── phase 2: train ─────────────────────────────────────────────────────────────────────────────
@@ -77,15 +94,19 @@ if [ "$reuse" -eq 0 ]; then
     BIN="$GEN/ripwire"
     [ -f "$BIN.exe" ] && BIN="$BIN.exe"
     TRAIN="$( mktemp -d )"
+    TRAIN_NATIVE="$TRAIN"
+    if [ "$WINDOWS_GATE" = 1 ] && command -v cygpath >/dev/null 2>&1; then
+        TRAIN_NATIVE="$( cygpath -w "$TRAIN" )"
+    fi
     run(){ "$BIN" "$@" >/dev/null 2>&1 || echo "pgobuild: training run returned non-zero (continuing): $*" >&2; }
     run "$CORPUS" --no-cache
     run "$CORPUS/src" --no-cache
-    run "$CORPUS" --cache="$TRAIN/c.bin"
-    run "$CORPUS" --cache="$TRAIN/c.bin"
-    run "$CORPUS" --for="resolve references into the call graph" --cache="$TRAIN/c.bin"
-    run "$CORPUS" --pack-task="add a new language grammar" --cache="$TRAIN/c.bin"
-    run "$CORPUS" --callers=ingest --cache="$TRAIN/c.bin"
-    run "$CORPUS" --impact=buildGraph --cache="$TRAIN/c.bin"
+    run "$CORPUS" --cache="$TRAIN_NATIVE/c.bin"
+    run "$CORPUS" --cache="$TRAIN_NATIVE/c.bin"
+    run "$CORPUS" --for="resolve references into the call graph" --cache="$TRAIN_NATIVE/c.bin"
+    run "$CORPUS" --pack-task="add a new language grammar" --cache="$TRAIN_NATIVE/c.bin"
+    run "$CORPUS" --callers=ingest --cache="$TRAIN_NATIVE/c.bin"
+    run "$CORPUS" --impact=buildGraph --cache="$TRAIN_NATIVE/c.bin"
     run "$CORPUS/test" --no-cache
     rm -rf "$TRAIN"
 
@@ -94,7 +115,7 @@ if [ "$reuse" -eq 0 ]; then
     # perfectly ordinary binary, and the next person benchmarks it as "PGO bought nothing".
     [ "$raw" -gt 0 ] || { echo "pgobuild: training produced NO .profraw files — the instrumented binary wrote no counters" >&2; exit 1; }
     echo "pgobuild: $raw raw profile(s) collected"
-    "$PROFDATA" merge -output="$PROFILE" "$GEN"/prof/*.profraw || { echo "llvm-profdata merge failed" >&2; exit 1; }
+    MSYS_NO_PATHCONV=1 "$PROFDATA" merge -output="$PROFILE_NATIVE" "$GEN_NATIVE"/prof/*.profraw || { echo "llvm-profdata merge failed" >&2; exit 1; }
 fi
 
 [ -s "$PROFILE" ] || { echo "no profile at $PROFILE — run without --reuse-profile" >&2; exit 2; }
@@ -102,14 +123,14 @@ fi
 # ── phase 3: the optimized build ───────────────────────────────────────────────────────────────────
 echo "pgobuild: [4/4] configuring + building the optimized tree ($OPT)"
 rm -rf "$OPT"
-cmake -S "$ROOT" -B "$OPT" -DRIPWIRE_LTO=ON -DRIPWIRE_PGO=use -DRIPWIRE_PGO_PROFILE="$PROFILE" ${cmake_extra[@]+"${cmake_extra[@]}"} >"$OPT.cfg.log" 2>&1 || {
+MSYS_NO_PATHCONV= cmake -S "$ROOT_NATIVE" -B "$OPT_NATIVE" "${GENERATOR_ARGS[@]}" -DRIPWIRE_LTO=ON -DRIPWIRE_PGO=use -DRIPWIRE_PGO_PROFILE="$PROFILE_NATIVE" ${cmake_extra[@]+"${cmake_extra[@]}"} >"$OPT.cfg.log" 2>&1 || {
     echo "configure failed — see $OPT.cfg.log" >&2; tail -20 "$OPT.cfg.log" >&2; exit 1; }
 rm -f "$OPT.cfg.log"
 # The optimized tree builds EVERY target, not just `ripwire`. The instrumented phase above needs only
 # the one binary it trains, but this tree has to be runnable against the full suite, and several gates
 # shell out to ripwire_probe — with only `ripwire` built they exit 2 ("no ripwire_probe … build first")
 # and are counted as harness errors rather than as evidence about the PGO binary.
-cmake --build "$OPT" -j "$JOBS" >"$OPT/build.log" 2>&1 || {
+MSYS_NO_PATHCONV= cmake --build "$OPT_NATIVE" -j "$JOBS" >"$OPT/build.log" 2>&1 || {
     echo "optimized build failed — see $OPT/build.log" >&2; tail -20 "$OPT/build.log" >&2; exit 1; }
 
 echo "pgobuild: done — $OPT/ripwire (profile: $PROFILE)"

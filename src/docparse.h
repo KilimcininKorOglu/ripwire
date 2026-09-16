@@ -544,6 +544,10 @@ inline std::string shellQuote( const std::string& s )
 // NOTE: this performs a subprocess call — used only for binary doc formats, only when they are ingested.
 inline std::string runMarkitdown( const std::string& path )
 {
+    if( !rw::compat::rw_command_available( "markitdown" ) )
+    {
+        return {};
+    }
     const std::string cmd = "markitdown " + detail::shellQuote( path ) + " 2>/dev/null";
     std::FILE* pipe = ::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )

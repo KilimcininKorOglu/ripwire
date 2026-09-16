@@ -145,7 +145,7 @@ TABLE = {
     # here shortens one line of a developer's timing table. It cannot land inside a tag.
     ( "src/infra/profileScope.h", "nameBuf" ):  ( 2, "not-markup", "nameBuf[160] x2 at :721/:723: '%s [%s]' over trim_pretty's fn[96] plus Site::description, a compile-time string literal from the PROFILE_SCOPE_DESCRIBE call site. Printed as a timing-table row, never emitted as a document." ),
     ( "src/infra/profileScope.h", "locBuf" ):   ( 1, "not-markup", "locBuf[64] at :724: '%s:%d' over Site::file (__FILE__, a compile-time literal) and Site::line. Same timing table; a truncated path costs a developer legibility, nothing else." ),
-    ( "src/infra/profileScope.h", "indented" ): ( 1, "not-markup", "indented[208] at :759: '%*s%s%s' — a width-form pad (depth*2, and depth is capped at 64 by print_tree_node's own guard) over nameBuf[160] plus the literal ' *'. Same timing table." ),
+
     # ── src/lanes.h — THE REFERENCE SAFE SHAPE ───────────────────────────────────────────────────────────
     ( "src/lanes.h", "buf" ): ( 10, "safe",       "buf[640] x3: snprintf-THEN-escape. :723 interpolates an UNBOUNDED file path and is still safe for exactly that reason — the warning text is escaped downstream, so a cut shortens prose and can never land inside markup. This is the shape §B14's six were not." ),
     # ── src/main.cpp ─────────────────────────────────────────────────────────────────────────────────────
@@ -217,10 +217,11 @@ NUMERIC_ONLY = {
     ( "src/infra/jsonesc.h", "b" ): 1,
     ( "src/infra/profileScope.h", "buf" ): 5,
     ( "src/ingest_astquery.h", "suffix" ): 1,
-    ( "src/ingest_docpass.h", "blobName" ): 1,
+    ( "src/ingest_docpass.h", "blobName" ): 2,
     ( "src/main.cpp", "hdr" ): 1,
     ( "src/main.cpp", "nb" ): 4,
     ( "src/main.cpp", "open" ): 2,   # PR #215 review: chooseExpandServe's four openers became two early-return refusals plus the two rowed buffers above
+    ( "src/main.cpp", "name" ): 1,
     ( "src/mcp.h", "buf" ): 1,
     ( "src/mcpedit.h", "name" ): 1,
     ( "src/mcpedit.h", "oldStamp" ): 1,
@@ -501,7 +502,7 @@ if not bad:
 #            (S1) confirms the MEMBER SET behind the numbers: 221 sites over 35 hand-classified TABLE rows (33
 #            plus #215's two new ones) and 59 derived NUMERIC_ONLY rows, with (S2) reporting no stale row and
 #            (S1b) nothing breaching. rows is 94 from #215's two additions, which this lane does not touch.
-EXPECTED = { "mentions": 328, "calls": 221, "sites": 221, "rows": 94, "widthforms": 0 }
+EXPECTED = { "mentions": 330, "calls": 222, "sites": 222, "rows": 94, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,

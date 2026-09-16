@@ -324,17 +324,9 @@ inline bool withinCanonicalRoot( std::string_view real, std::string_view rootRea
 inline std::string canonicalCrawlRoot( std::string_view rootDir )
 {
     const std::string requested( rootDir.empty() ? std::string_view( "." ) : rootDir );
-#if defined( _WIN32 )
-    const std::string dir = rw::compat::rw_windows_path_from_msys( requested );
-#else
-    const std::string& dir = requested;
-#endif
+    const std::string dir = rw::compat::rw_native_path( requested );
     char              resolved[ PATH_MAX ];
-#if defined( _WIN32 )
     return rw::compat::rw_realpath( dir.c_str(), resolved ) != nullptr ? std::string( resolved ) : dir;
-#else
-    return ::realpath( dir.c_str(), resolved ) != nullptr ? std::string( resolved ) : dir;
-#endif
 }
 
 // Does `path` (as the walk spelled it) still live inside `rootReal` once every link on it is resolved?

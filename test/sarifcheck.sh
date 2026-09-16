@@ -353,9 +353,71 @@ printf '%s' "$MUT" | grep -q '"selected"' \
 # ── 11. the filesystem root, through a unit driver over the relativizer itself ──────────────────────
 # See the header note: `/` is the one root no binary arm can reach, and the answer is a pure function, so
 # this arm compiles that function with $BIN's own CMake flags rather than inventing a second toolchain.
+makeNinjaUnitInputs()
+{
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+build_text = Path( sys.argv[ 1 ] ).read_text( encoding = "utf-8", errors = "replace" )
+rules_text = Path( sys.argv[ 2 ] ).read_text( encoding = "utf-8", errors = "replace" )
+fields = {}
+lines = build_text.splitlines()
+for index, line in enumerate( lines ):
+    if not ( line.startswith( "build CMakeFiles" ) and "ripwire.dir" in line and "main.cpp.obj:" in line ):
+        continue
+    for candidate in lines[ index + 1: ]:
+        if not candidate.startswith( "  " ):
+            break
+        match = re.match( r"  (DEFINES|FLAGS|INCLUDES) = (.*)$", candidate )
+        if match:
+            fields[ match.group( 1 ) ] = match.group( 2 ).replace( "\\", "/" )
+    break
+if set( fields ) != { "DEFINES", "FLAGS", "INCLUDES" }:
+    raise SystemExit( "Ninja main.cpp rule has no complete DEFINES/FLAGS/INCLUDES set" )
+
+compiler = ""
+for line in rules_text.splitlines():
+    if not line.startswith( "  command = " ) or "clang-cl.exe" not in line:
+        continue
+    match = re.search( r"((?:[A-Za-z]:|/)[^\s]*clang-cl\.exe)\s+/nologo", line )
+    if match:
+        compiler = match.group( 1 ).replace( "\\", "/" )
+        break
+if not compiler:
+    raise SystemExit( "Ninja CXX rule has no clang-cl compiler path" )
+if len( compiler ) >= 3 and compiler[ 1 ] == ":" and compiler[ 2 ] == "/":
+    compiler = "/" + compiler[ 0 ].lower() + compiler[ 2:]
+if re.search( r"clang-cl\.exe\s+[^\n]*-TP\s+\$DEFINES", rules_text ):
+    fields[ "FLAGS" ] += " -TP"
+if "lld-link.exe" in rules_text:
+    fields[ "FLAGS" ] += " -fuse-ld=lld"
+
+Path( sys.argv[ 3 ] ).write_text(
+    "CXX_FLAGS = {FLAGS}\nCXX_DEFINES = {DEFINES}\nCXX_INCLUDES = {INCLUDES}\n".format( **fields ),
+    encoding = "utf-8",
+)
+Path( sys.argv[ 4 ] ).write_text( compiler + " /nologo\n", encoding = "utf-8" )
+PY
+}
+
 BUILD_DIR="$( cd "$( dirname "$BIN" )" && pwd )"
 FLAGS_MK="$BUILD_DIR/CMakeFiles/ripwire.dir/flags.make"
 LINK_TXT="$BUILD_DIR/CMakeFiles/ripwire.dir/link.txt"
+NINJA_UNIT=0
+if [ ! -f "$FLAGS_MK" ] || [ ! -f "$LINK_TXT" ]; then
+    if [ -f "$BUILD_DIR/build.ninja" ] && [ -f "$BUILD_DIR/CMakeFiles/rules.ninja" ]; then
+        NINJA_UNIT=1
+        FLAGS_MK="$TMP/ninja.flags.make"
+        LINK_TXT="$TMP/ninja.link.txt"
+        if makeNinjaUnitInputs "$BUILD_DIR/build.ninja" "$BUILD_DIR/CMakeFiles/rules.ninja" "$FLAGS_MK" "$LINK_TXT"; then
+            ok "11. Ninja build metadata mapped to the unit driver's flag interface"
+        else
+            no "11. cannot extract Ninja compiler flags for the unit driver"
+        fi
+    fi
+fi
 if [ ! -f "$FLAGS_MK" ] || [ ! -f "$LINK_TXT" ]; then
     no "11. cannot find CMake flags under $BUILD_DIR — the unit arm needs a CMake-built binary"
 else
@@ -454,10 +516,23 @@ CPP
     loadFlagWords "$FLAGS_MK" CXX_INCLUDES && CXX_INCLUDES=( ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
     # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
     DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
+    [ -f "$DIAG_OBJ" ] || DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.obj"
     DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
-    if "$CXX" ${CXX_FLAGS[@]+"${CXX_FLAGS[@]}"} ${CXX_DEFINES[@]+"${CXX_DEFINES[@]}"} ${CXX_INCLUDES[@]+"${CXX_INCLUDES[@]}"} -I"$ROOT/src" \
-         "$TMP/rooturi_unit.cpp" ${DIAG_LINK[@]+"${DIAG_LINK[@]}"} -o "$TMP/rooturi_unit" >"$TMP/u_build.log" 2>&1; then
-        "$TMP/rooturi_unit" >"$TMP/u_run.log" 2>&1; urc=$?
+    UNIT_SOURCE="$TMP/rooturi_unit.cpp"
+    UNIT_OUTPUT="$TMP/rooturi_unit"
+    UNIT_INCLUDE="$ROOT/src"
+    if [ "$NINJA_UNIT" -eq 1 ] && command -v cygpath >/dev/null 2>&1; then
+        UNIT_SOURCE="$( cygpath -w "$UNIT_SOURCE" )"
+        UNIT_OUTPUT="$( cygpath -w "$UNIT_OUTPUT" )"
+        UNIT_INCLUDE="$( cygpath -w "$UNIT_INCLUDE" )"
+        if [ "${#DIAG_LINK[@]}" -gt 0 ]; then
+            DIAG_LINK=( "$( cygpath -w "$DIAG_OBJ" )" )
+        fi
+    fi
+    if MSYS_NO_PATHCONV="$([ "$NINJA_UNIT" -eq 1 ] && printf 1 || printf 0)" \
+        "$CXX" ${CXX_FLAGS[@]+"${CXX_FLAGS[@]}"} ${CXX_DEFINES[@]+"${CXX_DEFINES[@]}"} ${CXX_INCLUDES[@]+"${CXX_INCLUDES[@]}"} -I"$UNIT_INCLUDE" \
+         "$UNIT_SOURCE" ${DIAG_LINK[@]+"${DIAG_LINK[@]}"} -o "$UNIT_OUTPUT" >"$TMP/u_build.log" 2>&1; then
+        "$UNIT_OUTPUT" >"$TMP/u_run.log" 2>&1; urc=$?
         sed 's/^/        /' "$TMP/u_run.log"
         if [ "$urc" -eq 0 ] && grep -q '^UNIT ALL PASS$' "$TMP/u_run.log"; then
             ok "11. root-uri unit driver: $( grep -c '  PASS  ' "$TMP/u_run.log" | tr -d ' ' ) cases hold, root \"/\" included"

@@ -130,15 +130,8 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include <climits>
 #include <sys/stat.h>
 #include <unistd.h>           // getpid — unique temp-dir suffix for the HEAD-snapshot path (T0.1)
-#include <chrono>             // VT-1 --run-trace: the wall clock behind duration_ms/timeout (steady_clock)
-#include <csignal>            // VT-1 --run-trace: SIGKILL for the timeout's process-group kill
 #include <fcntl.h>            // VT-1 --run-trace: /dev/null for the child's stdin
-#include <poll.h>             // VT-1 --run-trace: the capture loop's deadline wait
-#include <sys/wait.h>         // VT-1 --run-trace: waitpid — the command's exit status, honestly decoded
 #include <tree_sitter/api.h>  // --doctor's grammar-probe check (ts_query_new against each grammar's tags.scm)
-#if defined( __APPLE__ )
-#include <mach-o/dyld.h>       // --doctor's self-exe-path check (_NSGetExecutablePath)
-#endif
 
 namespace
 {
@@ -3258,7 +3251,7 @@ static bool cachePathIsDirectory( const std::string& cachePath )
 {
     namespace fs = std::filesystem;
     std::error_code ec;
-    if( !fs::is_directory( fs::path( cachePath ), ec ) || ec )
+    if( !fs::is_directory( ::infra::platform::filesystemPath( cachePath ), ec ) || ec )
     {
         return false;
     }
@@ -3896,11 +3889,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 {
                     return std::string{};
                 }
-#if defined( _WIN32 )
-                return rw::compat::rw_windows_path_from_msys( value );
-#else
-                return std::string( value );
-#endif
+                return rw::compat::rw_native_path( value );
             };
             const std::string homeEnv         = nativeEnvPath( std::getenv( "HOME" ) );
             const std::string claudeConfigEnv = nativeEnvPath( std::getenv( "CLAUDE_CONFIG_DIR" ) );
@@ -4144,12 +4133,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             return 1;
         }
-        const std::string resolvedRoot =
-#if defined( _WIN32 )
-            rw::compat::rw_windows_path_from_msys( resolvedRootArg );
-#else
-            resolvedRootArg;
-#endif
+        const std::string resolvedRoot = rw::compat::rw_native_path( resolvedRootArg );
 
         // a root that does not EXIST is caller error (a typo'd path), not a degradable runtime condition —
         // exit 1 with empty stdout so agent pipelines can detect it. A readable-but-empty directory still
@@ -4157,7 +4141,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         {
             namespace fs = std::filesystem;
             std::error_code rootEc;
-            if( !fs::exists( fs::path( resolvedRoot ), rootEc ) || rootEc )
+            if( !fs::exists( ::infra::platform::filesystemPath( resolvedRoot ), rootEc ) || rootEc )
             {
                 // If the path looks like a flag (contains '='), suggest the flag spelling
                 if( resolvedRoot.find( '=' ) != std::string::npos )
@@ -4276,11 +4260,11 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     if( !cfg.cacheFile.empty() )
     {
         namespace fs = std::filesystem;
-        const std::string cachePath( cfg.cacheFile );
+        const std::string cachePath = rw::compat::rw_native_path( cfg.cacheFile );
         std::error_code   cacheEc;
         // The file need not EXIST — a cold first run is the normal case — but the directory that would hold
         // it must, or the write at the end of the run silently does nothing.
-        const fs::path    cacheDir = fs::path( cachePath ).parent_path();
+        const fs::path    cacheDir = ::infra::platform::filesystemPath( cachePath ).parent_path();
         if( cachePathIsDirectory( cachePath ) )
         {
             return 1;   // the refusal is on stderr (cachePathIsDirectory)
@@ -4333,14 +4317,14 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         int rc = 0;
         for( const Family& fam : families )
         {
-            const std::string path = base + fam.suffix;
+            const std::string path = rw::compat::rw_native_path( base + fam.suffix );
             rw::compat::rw_remove_utf8( path.c_str() );                     // force-rebuild: a stale warm file must not shadow the generate
 
             IngestResult r = ingest( root.c_str(), cfg.excludes, path, cfg.maxFileBytes, fam.rich, {}, !cfg.noIgnore, processCacheDir );
             (void)r;
 
             std::error_code       ec;
-            const std::uintmax_t  sz = std::filesystem::file_size( std::filesystem::path( path ), ec );
+            const std::uintmax_t  sz = std::filesystem::file_size( ::infra::platform::filesystemPath( path ), ec );
             if( ec || sz == 0 )
             {
                 rw::emitTo( stderr, "ripwire: --index-out: failed to write {}\n", path.c_str() );
@@ -4389,7 +4373,13 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     else
     {
         std::string      autoCache;
+        std::string      explicitCache;
         std::string_view cacheArg = cfg.cacheFile;
+        if( !cacheArg.empty() )
+        {
+            explicitCache = rw::compat::rw_native_path( cacheArg );
+            cacheArg      = explicitCache;
+        }
         if( cacheArg.empty() && !cfg.noCache )
         {
             autoCache = defaultCachePath( root, needsValueUses, processCacheDir );

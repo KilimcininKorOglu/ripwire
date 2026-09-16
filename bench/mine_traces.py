@@ -59,7 +59,9 @@ _SKELETON_STOPWORDS = {
 # ── §1: locate the session transcripts for `repo` ───────────────────────────────────────────────────
 def project_slug(repo_abspath: str) -> str:
     # Claude Code's own project-dir naming: the absolute repo path with every '/' and '.' → '-'.
-    return re.sub(r"[/.]", "-", repo_abspath)
+    # Windows native paths add backslashes and a drive colon; normalize those too or `Path.home() /
+    # '.claude/projects' / slug` sees the slug as an absolute `C:\...` path and escapes the selected HOME.
+    return re.sub(r"[/\\.:]", "-", repo_abspath)
 
 
 def project_dir(repo_abspath: str) -> pathlib.Path:
@@ -100,8 +102,8 @@ def norm_rel(repo_root: str, file_path):
     # works identically for real sessions and hand-authored fixtures whose paths don't exist on disk.
     if not file_path:
         return None
-    ap = os.path.normpath(file_path)
-    root = os.path.normpath(repo_root)
+    ap = os.path.abspath(os.path.normpath(file_path))
+    root = os.path.abspath(os.path.normpath(repo_root))
     if ap == root or not ap.startswith(root + os.sep):
         return None
     rel = os.path.relpath(ap, root)

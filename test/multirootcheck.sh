@@ -64,11 +64,11 @@ initrepo "$WS/cli" "cli@example.com" || { echo "git init failed"; exit 2; }
 
 # isolate the auto-cache: everything below writes its warm blobs into OUR scratch TMPDIR only.
 CACHE="$TMP/cache"; mkdir -p "$CACHE"
-run(){ TMPDIR="$CACHE" "$BIN" "$@"; }
+run(){ env -u XDG_CACHE_HOME TMPDIR="$CACHE" "$BIN" "$@"; }
 
 # ── G-solo: the N=1 quarantine — single-root output byte-identical to today's committed golden ──────
 # (relative root spelling, from $ROOT — the golden's paths are crawl-arg-prefixed `test/fixture/...`)
-( cd "$ROOT" && TMPDIR="$CACHE" "$BIN" test/fixture ) >"$TMP/solo.xml" 2>/dev/null
+( cd "$ROOT" && env -u XDG_CACHE_HOME TMPDIR="$CACHE" "$BIN" test/fixture ) >"$TMP/solo.xml" 2>/dev/null
 if diff -q "$TMP/solo.xml" "$ROOT/test/golden.xml" >/dev/null; then ok "G-solo: N=1 byte-identical to test/golden.xml"
 else no "G-solo: N=1 output diverged from test/golden.xml"; fi
 
@@ -104,7 +104,7 @@ grep -q 'p="svc/include/svc_api.h"' "$TMP/m1.xml" && grep -q 'p="cli/src/cli_mai
   || no "paths: labeled spelling missing from the merged map"
 # the point of the spelling: strip the label and you have the single-root spelling verbatim
 run "$WS/svc" >"$TMP/solosvc.xml" 2>/dev/null
-( cd "$WS/svc" && TMPDIR="$CACHE" "$BIN" . ) >"$TMP/solosvc2.xml" 2>/dev/null
+( cd "$WS/svc" && env -u XDG_CACHE_HOME TMPDIR="$CACHE" "$BIN" . ) >"$TMP/solosvc2.xml" 2>/dev/null
 # The PROPERTY this arm pins: the workspace id ends with the single-root id at a '/' boundary — still true,
 # now by plain concatenation (`<label>/` + the single-root spelling) rather than by a `/./` seam.
 solo_p="$( grep -o 'p="[^"]*svc_api\.h"' "$TMP/solosvc2.xml" | head -1 )"
@@ -254,18 +254,22 @@ cmp -s "$TMP/seam.plain" "$TMP/seam.churn" \
 
 # ── G-cache: per-root blobs + drift-proportional incrementality (RIPWIRE_CACHE_STATS) ───────────────
 GC="$TMP/gcache"; mkdir -p "$GC"
-TMPDIR="$GC" "$BIN" "$WS/svc" "$WS/cli" >/dev/null 2>"$TMP/cold.err"        # cold: writes one blob per root
-TMPDIR="$GC" RIPWIRE_CACHE_STATS=1 "$BIN" "$WS/svc" "$WS/cli" >/dev/null 2>"$TMP/warm.err"
+env -u XDG_CACHE_HOME TMPDIR="$GC" "$BIN" "$WS/svc" "$WS/cli" >/dev/null 2>"$TMP/cold.err"        # cold: writes one blob per root
+env -u XDG_CACHE_HOME TMPDIR="$GC" RIPWIRE_CACHE_STATS=1 "$BIN" "$WS/svc" "$WS/cli" >/dev/null 2>"$TMP/warm.err"
 warm_lines="$( grep -c 'cache-stats' "$TMP/warm.err" || true )"
 warm_zero="$( grep -c 'reparsed=0' "$TMP/warm.err" || true )"
 if [ "$warm_lines" = "2" ] && [ "$warm_zero" = "2" ]; then ok "G-cache: warm run reparses nothing in either root"
 else no "G-cache: warm run stats unexpected: $( tr '\n' ';' <"$TMP/warm.err" )"; fi
 # identify svc's blob: only two blobs exist; snapshot both, then dirty ONE cli file.
 # Private-root + shard-aware lookup: $GC/ripwire/<xx>/blob.
-blobsum(){ find "$GC" -maxdepth 3 -type f -name 'ripwire-*.bin' 2>/dev/null | sort | xargs -I{} md5 -q {} 2>/dev/null || find "$GC" -maxdepth 3 -type f -name 'ripwire-*.bin' 2>/dev/null | sort | xargs md5sum; }
+blobsum(){
+  while IFS= read -r blob; do
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$blob"; else shasum -a 256 "$blob"; fi
+  done < <( find "$GC" -maxdepth 3 -type f -name 'ripwire-*.bin' 2>/dev/null | sort )
+}
 blobsum >"$TMP/blobs.before"
 printf '\n// dirty\n' >> "$WS/cli/src/cli_helper.cpp"
-TMPDIR="$GC" RIPWIRE_CACHE_STATS=1 "$BIN" "$WS/svc" "$WS/cli" >/dev/null 2>"$TMP/dirty.err"
+env -u XDG_CACHE_HOME TMPDIR="$GC" RIPWIRE_CACHE_STATS=1 "$BIN" "$WS/svc" "$WS/cli" >/dev/null 2>"$TMP/dirty.err"
 blobsum >"$TMP/blobs.after"
 dirty_zero="$( grep -c 'reparsed=0' "$TMP/dirty.err" || true )"
 dirty_one="$( grep -c 'reparsed=1' "$TMP/dirty.err" || true )"
@@ -351,7 +355,7 @@ grep -qE '<root label=|roots="' "$TMP/prc_solo_new.xml" \
   || ok "G-pr N=1: single-root carries no multi-root root-table/roots= disclosure"
 REF="$ROOT/build/ripwire"
 if [ -x "$REF" ] && [ "$REF" != "$BIN" ]; then
-  TMPDIR="$CACHE" "$REF" "$PRW/svc" --pr-context >"$TMP/prc_solo_ref.xml" 2>/dev/null
+  env -u XDG_CACHE_HOME TMPDIR="$CACHE" "$REF" "$PRW/svc" --pr-context >"$TMP/prc_solo_ref.xml" 2>/dev/null
   diff -q "$TMP/prc_solo_new.xml" "$TMP/prc_solo_ref.xml" >/dev/null \
     && ok "G-pr N=1: single-root --pr-context byte-identical to committed build/ripwire" \
     || no "G-pr N=1: single-root --pr-context diverged from committed build/ripwire"
@@ -529,9 +533,19 @@ case "$rF2" in *'1..16'*) ok "F-LOW-3: an EMPTY paths[] refuses and states 1..16
 # R2a: an omitted `path` on a workspace-launched bare server now ANSWERS (assumed launch cwd), so the
 # missing-path refusal under test here is reached from a launch the server cannot assume a root for
 # (cwd=/ — the startup guard). The arm's subject — the stated paths bound — is unchanged.
-rF3="$( cd / && printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_symbol","arguments":{"symbol":"x"}}}' \
-  | "$BIN" --mcp 2>/dev/null )"
+case "$( uname -s )" in
+  MINGW*|MSYS*|CYGWIN*)
+    BIN_NATIVE="$( cygpath -w "$BIN" )"
+    rF3="$( printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' \
+      '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_symbol","arguments":{"symbol":"x"}}}' \
+      | MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe /d /c "cd /d C:\\ && $BIN_NATIVE --mcp" 2>/dev/null )"
+    ;;
+  *)
+    rF3="$( cd / && printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' \
+      '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_symbol","arguments":{"symbol":"x"}}}' \
+      | "$BIN" --mcp 2>/dev/null )"
+    ;;
+esac
 case "$rF3" in
     *'2..16'*) no "F-LOW-3: the missing-path refusal still says 2..16 while the schema and enforcement say 1..16" ;;
     *'1..16'*) ok "F-LOW-3: the missing-path refusal now states the SAME bound as the schema and the enforcement" ;;

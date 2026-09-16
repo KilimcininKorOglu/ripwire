@@ -34,16 +34,46 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 echo "traceminecheck: BIN=$BIN  MINER=$MINER"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+# Native Windows Python resolves pathlib.Path.home() through USERPROFILE rather than HOME. Keep the
+# synthetic Claude project tree in the gate's own temp directory on both runtimes.
+MINE_HOME="$TMP/home"
+NATIVE_MINE_HOME="$MINE_HOME"
+case "$( uname -s 2>/dev/null )" in
+    MINGW*|MSYS*|CYGWIN*)
+        command -v cygpath >/dev/null 2>&1 && NATIVE_MINE_HOME="$( cygpath -w "$MINE_HOME" )"
+        export USERPROFILE="$NATIVE_MINE_HOME"
+        export HOMEDRIVE="${NATIVE_MINE_HOME:0:2}"
+        export HOMEPATH="${NATIVE_MINE_HOME:2}"
+        ;;
+esac
+export HOME="$NATIVE_MINE_HOME"
+
+session_dir_for(){
+    MSYS_NO_PATHCONV=1 python3 - "$1" "$ROOT/bench" <<'PYSESSION'
+import os
+import sys
+sys.path.insert( 0, sys.argv[ 2 ] )
+from mine_traces import project_dir
+print( project_dir( os.path.abspath( sys.argv[ 1 ] ) ) )
+PYSESSION
+}
+shell_path(){
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
 
 # ── Gate 1: miner determinism + exact structural assertions on the checked-in fixture ──────────────────
 REPO="/repo"                                    # a purely-STRING repo root — the fixture's file_paths
-SLUG="$( printf '%s' "$REPO" | sed -e 's/[/.]/-/g' )"
-SESSDIR="$TMP/home/.claude/projects/$SLUG"
+SESSDIR_NATIVE="$( session_dir_for "$REPO" | tr -d '\015' )"
+SESSDIR="$( shell_path "$SESSDIR_NATIVE" )"
 mkdir -p "$SESSDIR"
 cp "$ROOT/test/traceminefix/sample_session.jsonl" "$SESSDIR/sample_session.jsonl"
 
-HOME="$TMP/home" python3 "$MINER" --repo "$REPO" --out "$TMP/mined1.jsonl" >/dev/null 2>&1; rc1=$?
-HOME="$TMP/home" python3 "$MINER" --repo "$REPO" --out "$TMP/mined2.jsonl" >/dev/null 2>&1; rc2=$?
+HOME="$NATIVE_MINE_HOME" MSYS_NO_PATHCONV=1 python3 "$MINER" --repo "$REPO" --out "$TMP/mined1.jsonl" >/dev/null 2>&1; rc1=$?
+HOME="$NATIVE_MINE_HOME" MSYS_NO_PATHCONV=1 python3 "$MINER" --repo "$REPO" --out "$TMP/mined2.jsonl" >/dev/null 2>&1; rc2=$?
 
 if { [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]; }; then ok "miner runs cleanly (exit 0 both runs)"; else no "miner exit != 0 (rc1=$rc1 rc2=$rc2)"; fi
 diff -q "$TMP/mined1.jsonl" "$TMP/mined2.jsonl" >/dev/null 2>&1 && ok "miner determinism (byte-identical, no wall-clock)" \
@@ -53,7 +83,7 @@ NPAIRS="$( wc -l < "$TMP/mined1.jsonl" | tr -d ' ' )"
 [ "$NPAIRS" = "2" ] && ok "exactly 2 mined pairs (2-edit segment + follow-up segment; reverted/scratchpad/read excluded)" \
                      || no "expected 2 mined pairs, got $NPAIRS"
 
-PY_ASSERT="$( python3 - "$TMP/mined1.jsonl" <<'PYEOF'
+PY_ASSERT="$( MSYS_NO_PATHCONV=1 python3 - "$TMP/mined1.jsonl" <<'PYEOF'
 import json, sys
 recs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 if len(recs) != 2:
@@ -93,8 +123,8 @@ fi
 # ── Gate 2: privacy — refuse in-repo without --export-sanitized; succeed + redact with it ──────────────
 REPO2="$TMP/repo2"
 mkdir -p "$REPO2"
-SLUG2="$( printf '%s' "$REPO2" | sed -e 's/[/.]/-/g' )"
-SESSDIR2="$TMP/home/.claude/projects/$SLUG2"
+SESSDIR2_NATIVE="$( session_dir_for "$REPO2" | tr -d '\015' )"
+SESSDIR2="$( shell_path "$SESSDIR2_NATIVE" )"
 mkdir -p "$SESSDIR2"
 QTEXT="a distinctive verbatim probe phrase that must never leak into a sanitized export"
 cat > "$SESSDIR2/s1.jsonl" <<EOF
@@ -102,13 +132,13 @@ cat > "$SESSDIR2/s1.jsonl" <<EOF
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"$REPO2/x.py","old_string":"a","new_string":"b"}},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"$REPO2/y.py","old_string":"a","new_string":"b"}}]}}
 EOF
 
-HOME="$TMP/home" python3 "$MINER" --repo "$REPO2" --out "$REPO2/mined.jsonl" >/dev/null 2>"$TMP/priv1.err"
+HOME="$NATIVE_MINE_HOME" MSYS_NO_PATHCONV=1 python3 "$MINER" --repo "$REPO2" --out "$REPO2/mined.jsonl" >/dev/null 2>"$TMP/priv1.err"
 rc_priv1=$?
 { [ "$rc_priv1" -ne 0 ] && [ ! -e "$REPO2/mined.jsonl" ]; } \
     && ok "privacy gate: --out <in-repo> without --export-sanitized refuses (exit=$rc_priv1, no file created)" \
     || no "privacy gate: expected non-zero exit AND no file (exit=$rc_priv1, exists=$( [ -e "$REPO2/mined.jsonl" ] && echo y || echo n ))"
 
-HOME="$TMP/home" python3 "$MINER" --repo "$REPO2" --export-sanitized "$REPO2/mined.jsonl" >/dev/null 2>"$TMP/priv2.err"
+HOME="$NATIVE_MINE_HOME" MSYS_NO_PATHCONV=1 python3 "$MINER" --repo "$REPO2" --export-sanitized "$REPO2/mined.jsonl" >/dev/null 2>"$TMP/priv2.err"
 rc_priv2=$?
 { [ "$rc_priv2" -eq 0 ] && [ -e "$REPO2/mined.jsonl" ]; } \
     && ok "privacy gate: --export-sanitized to an in-repo path succeeds" \

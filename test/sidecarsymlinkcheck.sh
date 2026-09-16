@@ -185,6 +185,23 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -f "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 
+WINDOWS_GATE=0
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+case "$( uname -s 2>/dev/null || true )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+if [ "$WINDOWS_GATE" = 1 ]; then
+    PYTHON_NATIVE="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
+    [ -n "$PYTHON_NATIVE" ] || { echo "sidecarsymlinkcheck: native Python is required on Windows"; exit 2; }
+    PYTHON_SCRIPT="$ROOT/test/sidecarsymlinkcheck_windows.py"
+    BIN_NATIVE="$BIN"
+    if command -v cygpath >/dev/null 2>&1; then
+        PYTHON_NATIVE="$( cygpath -w "$PYTHON_NATIVE" )"
+        PYTHON_SCRIPT="$( cygpath -w "$PYTHON_SCRIPT" )"
+        BIN_NATIVE="$( cygpath -w "$BIN" )"
+    fi
+    MSYS_NO_PATHCONV=1 exec "$PYTHON_NATIVE" "$PYTHON_SCRIPT" "$BIN_NATIVE"
+fi
 PYTHON3="${RIPWIRE_PYTHON:-python3}"
 command -v "$PYTHON3" >/dev/null 2>&1 || PYTHON3=python
 if [ "$($PYTHON3 -c 'import os; print( os.name )' 2>/dev/null)" = nt ]; then

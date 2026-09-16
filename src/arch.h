@@ -558,13 +558,7 @@ inline std::string_view relForHash( std::string_view path, std::string_view root
 {
     const auto samePathChar = []( char a, char b ) noexcept
     {
-        if( a == '\\' ) { a = '/'; }
-        if( b == '\\' ) { b = '/'; }
-#if defined( _WIN32 )
-        if( a >= 'A' && a <= 'Z' ) { a = char( a - 'A' + 'a' ); }
-        if( b >= 'A' && b <= 'Z' ) { b = char( b - 'A' + 'a' ); }
-#endif
-        return a == b;
+        return rw::compat::rw_path_char_equal( a, b );
     };
 
     // 1) strip the ingest-root prefix if present (allow one optional trailing '/' on the root).
@@ -594,7 +588,7 @@ inline std::string_view relForHash( std::string_view path, std::string_view root
     {
         path.remove_prefix( 2 );
     }
-    while( !path.empty() && path.front() == '/' )
+    while( !path.empty() && ( path.front() == '/' || path.front() == '\\' ) )
     {
         path.remove_prefix( 1 );
     }

@@ -458,6 +458,14 @@ The three write verbs — `replace_symbol_body`, `insert_before_symbol` and `ins
 staleness hash, symlink refusal, mode preservation and atomic-write transaction. CLI is the preferred
 zero-standing-schema path; MCP is the warm-index alternative.
 
+MCP freshness is platform-aware but conservative. The portable fallback checks every indexed file and
+watched directory with the mtime/size/ctime tuple on each request. macOS/BSD kqueue watches directories
+and therefore leaves the per-file check enabled because a directory event does not cover every content
+edit. Native Windows uses one recursive `ReadDirectoryChangesW` request for a single-root session; its
+healthy no-event poll covers file writes, creates, deletes and renames, so it can skip the repeated stat
+sweep. A buffer overflow, failed overlapped poll, unrelated workspace roots or any unarmed watcher falls
+back to the complete stat path. The watcher changes only when work is skipped, never result bytes.
+
 ---
 
 ## 2. Data model
