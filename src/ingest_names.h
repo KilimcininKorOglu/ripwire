@@ -25,10 +25,53 @@ namespace
 // scope component ("A", or "B" from `A::B::b`). enclosingScopeOf walks ancestors to the nearest
 // class/struct/namespace and returns its name (for in-class method DEFS). Both "" when absent → caller
 // falls back to bare-name resolution (so non-C++ langs and unqualified calls are unaffected).
+//
+// The C++ `template` DISAMBIGUATOR is a KEYWORD, never part of a name. `X::template make<int>()` and
+// `X::template Rebind<int>::f()` spell it in front of a dependent template name, and tree-sitter-cpp keeps it
+// inside the dependent_name node whose TEXT the reference path reads. Returns `text` past one leading
+// `template` token and the whitespace/comments after it, or `text` unchanged when it does not start with
+// that token — the keyword must be followed by a separator, so `templateFn` stays a plain identifier.
+// Measured before this existed (test/cppqualcheck.sh §12 (c)/(d)): `X::template tqDepQualTmpl<int>()` minted
+// a reference NAMED `template tqDepQualTmpl`, which resolves to nothing, and
+// `X::template TqRebind<int>::tqScopedFn()` keyed its qualifier as `template TqRebind`, so the canonical tier
+// missed and the call split over a same-named decoy in another scope.
+inline std::string_view skipTemplateDisambiguator( std::string_view text ) noexcept
+{
+    constexpr std::string_view kKeyword = "template";
+    if( !text.starts_with( kKeyword ) )
+    {
+        return text;
+    }
+    std::string_view rest = text.substr( kKeyword.size() );
+    while( !rest.empty() )
+    {
+        if( std::isspace( static_cast<unsigned char>( rest.front() ) ) )
+        {
+            rest.remove_prefix( 1 );
+        }
+        else if( rest.starts_with( "/*" ) )
+        {
+            const std::size_t close = rest.find( "*/", 2 );
+            rest.remove_prefix( close == std::string_view::npos ? rest.size() : close + 2 );
+        }
+        else if( rest.starts_with( "//" ) )
+        {
+            const std::size_t eol = rest.find( '\n' );
+            rest.remove_prefix( eol == std::string_view::npos ? rest.size() : eol + 1 );
+        }
+        else
+        {
+            break;
+        }
+    }
+    const bool separated = rest.size() < text.size() - kKeyword.size();
+    return separated && !rest.empty() ? rest : text;
+}
+
 inline std::string immediateScope( std::string_view full )
 {
     const std::size_t cc = full.rfind( "::" );
-    return std::string( cc == std::string_view::npos ? full : full.substr( cc + 2 ) );
+    return std::string( skipTemplateDisambiguator( cc == std::string_view::npos ? full : full.substr( cc + 2 ) ) );
 }
 
 // ── H4 qualified-call re-split helpers ───────────────────────────────────────────────────────────────────
@@ -162,6 +205,52 @@ inline std::size_t lastTopLevelScopeSep( std::string_view text ) noexcept
         }
     }
     return std::string_view::npos;
+}
+
+// H4 RE-SPLIT of a C++ call reference's (name, qualifier), moved out of captureTagsFacts (whose complexity is
+// measured). The widened qualified-call pattern binds the INNER node, so a 3+-segment call's captured text
+// still carries scope (`inner::targetFn`). Recover the pair the canonical tier keys on — name = the final
+// segment, qualifier = the IMMEDIATE scope — from the text itself. This must run AFTER the reference's
+// finalSegment() name and qualifierOf() qualifier are set, and overwrites both when it splits: finalSegment
+// truncates at the first '<', which would name `numeric_limits<std::size_t>::max` as `numeric_limits` and mint
+// an edge to the wrong symbol. Inert for every 2-segment call (`rw::midFn` binds a bare identifier — no
+// top-level `::` in the text) and for `ns::tmplFn<int>()` (whose captured text is just `tmplFn<int>`), so
+// those keep their qualifierOf() result untouched.
+//
+// An OPERATOR tail is recognised first: its `<`/`>` are part of the NAME, so handing it to the angle-depth
+// scan binds the wrong scope for the whole `>` family. See operatorNameStart. When the operator spelling
+// starts at index 0 the capture IS the bare operator name, its parent is the qualified_identifier, and
+// qualifierOf() already put the immediate scope in r.qualifier — nothing to re-split.
+//
+// The `template` disambiguator (see skipTemplateDisambiguator) is stepped over on the NAME half here — at
+// 2 segments too, where the capture is the dependent_name itself (`template make<int>`) and nothing splits —
+// and on the QUALIFIER half inside immediateScope.
+inline void cppResplitRefName( RawRef& r, std::string_view nameTxt )
+{
+    const std::size_t opStart  = operatorNameStart( nameTxt );
+    const bool        opScoped = opStart != std::string_view::npos && opStart >= 2 && nameTxt[ opStart - 1 ] == ':' && nameTxt[ opStart - 2 ] == ':';
+    if( opScoped )
+    {
+        r.name      = finalSegment( nameTxt.substr( opStart ) );                                  // `operator>` verbatim
+        r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, opStart - 2 ) ) );
+        return;
+    }
+    if( opStart != std::string_view::npos )
+    {
+        return;
+    }
+    const std::size_t      sep    = lastTopLevelScopeSep( nameTxt );
+    const bool             hasSep = sep != std::string_view::npos;
+    const std::string_view tail   = hasSep ? nameTxt.substr( sep + 2 ) : nameTxt;
+    const std::string_view bare   = skipTemplateDisambiguator( tail );
+    if( hasSep || bare.size() != tail.size() )   // neither a split nor a keyword: finalSegment( nameTxt ) already named it
+    {
+        r.name = finalSegment( bare );
+    }
+    if( hasSep )
+    {
+        r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, sep ) ) );
+    }
 }
 // True when a qualified_identifier's `::` separator is a MISSING node — a zero-width token tree-sitter
 // INSERTED during error recovery, not one that is written in the source. Recovery reaches for this shape

@@ -231,7 +231,18 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 96;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 99;           // bump on any grammar/.scm/extraction change
+                                                      // 99 = 2026-09-16 (member template calls, test/cppqualcheck.sh
+                                                      //    §12): a C++ member call with explicit template arguments
+                                                      //    (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) mints a
+                                                      //    call reference with its receiver, where it minted none;
+                                                      //    a `template` disambiguator no longer leaks into a qualified
+                                                      //    call's name (`template f`) or qualifier (`template Rebind`).
+                                                      //    The extracted SET and names change; no record changes shape
+                                                      //    (kCacheVersion stays 22). Takes 99, not 97: open PRs #235
+                                                      //    (97, 98) and #233 (98) hold those numbers in flight — the
+                                                      //    78/80/88/91 next-free rule. quality.h's
+                                                      //    kIngestParserVerMirror bumped in the SAME commit.
                                                       // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm
                                                       //    B2): every C/C++ def carries a new syntactic
                                                       //    `internalLinkage` bit — inside an anonymous namespace at any

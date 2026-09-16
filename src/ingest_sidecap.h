@@ -2072,44 +2072,11 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( le.lang == Lang::Cpp )
                 {
                     r.qualifier = qualifierOf( nameNode, src ); // `A::b()` → "A" (E#4 canonical resolve)
+                    cppResplitRefName( r, nameTxt );            // H4 RE-SPLIT at 3+ segments, operator tails, `template` disambiguator
                 }
                 else if( le.lang == Lang::Rust )
                 {
                     r.qualifier = rustQualifierOf( nameNode, src ); // H4: `Widget::new()` → "Widget"
-                }
-
-                // H4 RE-SPLIT: the widened qualified-call pattern binds the INNER node, so a 3+-segment call's
-                // captured text still carries scope (`inner::targetFn`). Recover the pair the canonical tier
-                // keys on — name = the final segment, qualifier = the IMMEDIATE scope — from the text itself.
-                // This must run INSTEAD OF the finalSegment() above (it overwrites both fields): finalSegment
-                // truncates at the first '<', which would name `numeric_limits<std::size_t>::max` as
-                // `numeric_limits` and mint an edge to the wrong symbol. Inert for every 2-segment call
-                // (`rw::midFn` binds a bare identifier — no top-level `::` in the text) and for
-                // `ns::tmplFn<int>()` (whose `::` sits inside no group but whose captured text is just
-                // `tmplFn<int>`), so those keep their qualifierOf() result untouched.
-                if( le.lang == Lang::Cpp )
-                {
-                    // An OPERATOR tail is recognised first: its `<`/`>` are part of the NAME, so handing it to
-                    // the angle-depth scan below binds the wrong scope for the whole `>` family. See
-                    // operatorNameStart. When the operator spelling starts at index 0 the capture IS the bare
-                    // operator name, its parent is the qualified_identifier, and qualifierOf() already put the
-                    // immediate scope in r.qualifier — nothing to re-split.
-                    const std::size_t opStart = operatorNameStart( nameTxt );
-                    const bool        opScoped = opStart != std::string_view::npos && opStart >= 2
-                                              && nameTxt[ opStart - 1 ] == ':' && nameTxt[ opStart - 2 ] == ':';
-                    if( opScoped )
-                    {
-                        r.name      = finalSegment( nameTxt.substr( opStart ) );                                  // `operator>` verbatim
-                        r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, opStart - 2 ) ) );
-                    }
-                    else if( opStart == std::string_view::npos )
-                    {
-                        if( const std::size_t sep = lastTopLevelScopeSep( nameTxt ); sep != std::string_view::npos )
-                        {
-                            r.name      = finalSegment( nameTxt.substr( sep + 2 ) );
-                            r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, sep ) ) );
-                        }
-                    }
                 }
 
                 if( !isImportRef && le.lang != Lang::Elixir )                             // an import site has no receiver and no argument list —

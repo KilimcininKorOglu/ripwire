@@ -15,6 +15,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a C++ member call with explicit template arguments is a call (parser version 99)
+
+`r.get<K>( 1 )`, `p->get<K>( 1 )` and `x.template get<K>()` minted no reference at all. Their callee parses as a
+`template_method` under the member access — inside a `dependent_name` when the `template` keyword is spelled — and no
+C++ reference pattern bound either shape, so the call was dropped at extraction, before `ambiguous=`/`unresolved=`
+could count it: a four-line repro answered `--callers=get` count="0" beside count="1" for `r.plain( 1 )`,
+`--callers`/`--uses`/`--impact`/`--safe-delete` under-counted every such call, and `--quality-delta` could report a
+method reached only this way as `kind="dead-code"`. A new `queries/cpp/tags.scm` pattern binds both shapes, and the
+receiver reader now steps over the wrapper — without that step `other.pick<int>()` reads as a bare call and the
+enclosing-class rule binds it to the caller's own same-named method. The qualified dependent spelling had the same
+defect family in another place: `X::template make<int>()` was extracted under the NAME `template make`, which
+resolves to nothing, and `X::template Rebind<int>::f()` keyed its qualifier as `template Rebind`, so a same-named
+definition in another scope split the call. The keyword is now stepped over in both halves. Free `f<T>( x )` and
+qualified `ns::f<T>( x )` (the `std::get<0>( t )` shape) were already bound and are unchanged.
+
+Measured with the pre-fix and fixed binaries on this repository's `src/` (169 files, `--no-cache`): references
+168,457 → 168,463 and edges 18,308 → 18,309, with `ambiguous=` and `unresolved=` unchanged. The six new references are
+exactly the `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod` goes 1 → 7 and `--callers=pod`
+names `loadOracleCache`. `test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per
+spelling plus receiver, arity and qualifier decoys: 19 of its 24 new checks fail on the pre-fix binary, and a
+mutation build that reverts each of the three mechanisms (the receiver step, the keyword skip, `callArity`'s hop
+bound) turns that mechanism's own arms red. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was
+pinned as documented-absent at literal 0 and now pins 1.
+
+Two wrong answers remain, both on main before this change and both shared by the plain member call, so the gate
+routes around them rather than pinning them: Rule 2 narrows a receiver by a local variable's type but reads no
+parameter type, so `other.pick( 1 )` on a `Target&` parameter inside a class with its own `pick` binds the enclosing
+class's method; and a typed receiver splits over a same-class overload set with no arity prune.
+
+`kParserVer` 96 → 99 with `quality.h`'s `kIngestParserVerMirror` in the same commit — 97 and 98 are held by open
+pull requests, per the next-free rule in `src/ingest_cache.h`; `kCacheVersion` stays 22, and `test/qschemetrip.hash`
+is re-pinned with a RE-PIN LOG line.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

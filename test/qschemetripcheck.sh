@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, MEMBER TEMPLATE CALLS (lane/template-call-edges; test/cppqualcheck.sh §12): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
+#   kParserVer 96 -> 99 and kIngestParserVerMirror -> 99; kCacheVersion STAYS 22. A C++ member call with explicit
+#   template arguments (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) now mints a call reference, and the `template`
+#   disambiguator no longer leaks into a qualified call's name or qualifier, so the extracted SET and names change and
+#   only the parser version can reject a v96 blob; no record changes shape. 99, not 97: open PRs #235 (97, 98) and
+#   #233 (98) hold those numbers in flight. No manifest function changed.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.
