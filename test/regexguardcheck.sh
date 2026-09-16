@@ -40,6 +40,12 @@
 #       template that passes the screen, and on an edge whose FROM captured "1" it becomes `a{2,1}`, an invalid
 #       interval on every standard library. That rule used to be skipped silently for the edge (exit 0, violations
 #       unreported); it must refuse by name, quoting the substituted text, with the other edges' rules still judged.
+#   (f) THE SKILL SCANNER READS UNTRUSTED FILES, so its constant patterns go through the same boundary: (f1) the
+#       linear EXFILTRATE:net-exfil decision agrees line for line with the regex it replaced, over generated lines
+#       judged by an independent oracle (python's re, with `.` spelled [^\r\n] as ECMAScript reads it); (f2) a 200,000-byte
+#       fenced `curl curl …` line scans in bounded time (the regex was quadratic: >60 s); (f3) an abandoned match
+#       fails CLOSED — a CRITICAL SCAN-INCOMPLETE:regex-abandoned finding at exit 2, never a clean exit 0 and never an
+#       abort inside wrap's noexcept scan.
 #   (g) THE STACK BOUND — std::regex compiles by recursion, and a 20,000-byte literal --regex died with SIGBUS in a
 #       512 KiB grep worker. A pattern over kRegexMaxPatternBytes (2,048) or nesting groups deeper than
 #       kRegexMaxGroupDepth (64) is refused by name; exactly at each limit it still compiles.
@@ -238,7 +244,6 @@ root, tmp = sys.argv[1], sys.argv[2]
 OWNER = "src/regexguard.h"
 ALLOW = {
     "src/redact.h":    "the secret-redaction rule table: constant patterns compiled ONCE into a static array on the redaction hot path; never user text",
-    "src/skillscan.h": "the skill-scanner rule table: constant injection/exfiltration patterns written in this file; never user text",
 }
 TOKENS = re.compile(r"\bstd::(?:w?regex|basic_regex)\b|\b(?:regex_(?:search|match|replace|iterator|token_iterator|error|constants|traits)|[cs]regex_(?:token_)?iterator|w[cs]?regex_(?:token_)?iterator|[cs]match|w[cs]match|[cs]sub_match|w[cs]sub_match|sub_match|match_results)\b")
 INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[ \t]*<regex>", re.M)
@@ -362,6 +367,66 @@ if grep -q '<arch ' "$TMP/e.out"; then no "(e) an <arch> answer was printed besi
 rc="$( capRun 20 "$TMP/e2.out" "$TMP/e2.err" "$FIX" --no-cache --arch="$TMP/arch_subst_ok.txt" )"
 if [ "$rc" != 1 ] && [ "$rc" != TIMEOUT ] && grep -q '<arch ' "$TMP/e2.out"; then ok "(e) control: a{1,\\1} substitutes to a valid a{1,1} and the rule is judged (exit $rc)"
 else no "(e) control: exit $rc — $( head -c 200 "$TMP/e2.err" )"; fi
+
+# ── (f) the skill scanner: linear net-exfil agrees with its regex, bounded time, and undecided fails closed ───────
+SK="$TMP/skills"; mkdir -p "$SK"
+python3 - "$SK" <<'PY'
+import random, re, sys
+sk = sys.argv[1]
+oracle = re.compile(r"(\b(curl|wget|nc)\b[^\r\n]*(\$[A-Za-z_][A-Za-z0-9_]*|base64))|((\$[A-Za-z_][A-Za-z0-9_]*|base64)[^\r\n]*\b(curl|wget|nc)\b)", re.ASCII)
+tokens = ["curl", "wget", "nc", "ncx", "xnc", "curl_", "_wget", "$A", "$_b", "$1", "$", "$$x", "base64", "xbase64y", "base6",
+          " ", " ", "|", "-", "\r", "a", "_", "0", "=", "'", '"', "$nc", "nc$", "base64nc", "c\rurl", "\t"]
+rng = random.Random(20260916)
+expected = []
+for chunk in range(8):
+    lines = []
+    while len(lines) < 150:
+        line = "".join(rng.choice(tokens) for _ in range(rng.randint(1, 9)))
+        if "\n" in line or line.strip() in ("", "```") or line.lstrip(" \t").startswith(("```", "~~~")):
+            continue
+        lines.append(line)
+    # every generated line sits inside one bash fence; line numbers start at 3 (heading, fence)
+    with open(f"{sk}/chunk{chunk}.md", "w", newline="") as fh:
+        fh.write("# probe\n```bash\n" + "\n".join(lines) + "\n```\n")
+    for i, line in enumerate(lines):
+        if oracle.search(line):
+            expected.append(f"chunk{chunk}.md:{i + 3}")
+with open(f"{sk}/expected.txt", "w") as fh:
+    fh.write("\n".join(sorted(expected)) + "\n")
+PY
+: >"$SK/got.txt"
+for f in "$SK"/chunk*.md; do
+    "$BIN" --scan-skill="$f" 2>/dev/null | grep -o '<f p="[^"]*" rule="EXFILTRATE:net-exfil"' | sed -E 's#<f p="[^"]*/([^/"]*)" rule=.*#\1#' >>"$SK/got.txt"
+done
+sort -o "$SK/got.txt" "$SK/got.txt"
+expectedCount="$( grep -c . "$SK/expected.txt" )"; gotCount="$( grep -c . "$SK/got.txt" )"
+if [ "$expectedCount" -ge 100 ] && cmp -s "$SK/expected.txt" "$SK/got.txt"; then
+    ok "(f1) net-exfil agrees with the regex oracle on all 1,200 generated fenced lines ($expectedCount positives)"
+else
+    no "(f1) net-exfil disagrees with the regex oracle: expected $expectedCount positives, got $gotCount — $( diff "$SK/expected.txt" "$SK/got.txt" | head -4 | tr '\n' ' ' )"
+fi
+python3 -c "import sys; sys.stdout.write('# probe\n\x60\x60\x60bash\n' + 'curl ' * 40000 + '\n\x60\x60\x60\n')" >"$SK/dos.md"
+python3 -c "import sys; sys.stdout.write('# probe\n\x60\x60\x60bash\n' + 'curl ' * 40000 + '\$SECRET\n\x60\x60\x60\n')" >"$SK/dos_hit.md"
+rc="$( capRun 20 "$TMP/f2.out" "$TMP/f2.err" --scan-skill="$SK/dos.md" )"
+if [ "$rc" = 0 ]; then ok "(f2) a 200,000-byte fenced curl-run line scans clean within 20 s (the quadratic regex ran past 60 s)"
+else no "(f2) the 200,000-byte curl-run line: exit $rc (TIMEOUT means the scan is still quadratic)"; fi
+rc="$( capRun 20 "$TMP/f2h.out" "$TMP/f2h.err" --scan-skill="$SK/dos_hit.md" )"
+if [ "$rc" = 2 ] && grep -q 'rule="EXFILTRATE:net-exfil"' "$TMP/f2h.out"; then ok "(f2) the same line ending in \$SECRET is still caught as net-exfil (exit 2), bounded"
+else no "(f2) the long net-exfil line: exit $rc, finding $( grep -o 'rule="[^"]*"' "$TMP/f2h.out" | head -1 )"; fi
+printf '# probe\n\nplain prose line\n' >"$SK/clean.md"
+if [ "$FAULTS" -eq 1 ]; then
+    rc="$( RIPWIRE_FAULT_REGEX_MATCH=1 capRun 20 "$TMP/f3.out" "$TMP/f3.err" --scan-skill="$SK/clean.md" )"
+    if [ "$rc" = 2 ] && grep -q 'rule="SCAN-INCOMPLETE:regex-abandoned" sev="critical"' "$TMP/f3.out"; then
+        ok "(f3) an abandoned match fails closed: CRITICAL SCAN-INCOMPLETE:regex-abandoned, exit 2"
+    else
+        no "(f3) an abandoned match in the skill scanner: exit $rc, $( head -c 200 "$TMP/f3.out" )"
+    fi
+    rc="$( capRun 20 "$TMP/f3c.out" "$TMP/f3c.err" --scan-skill="$SK/clean.md" )"
+    if [ "$rc" = 0 ] && grep -q 'verdict="clean"' "$TMP/f3c.out"; then ok "(f3) control: the same file without the fault scans clean at exit 0"
+    else no "(f3) control: exit $rc"; fi
+else
+    printf '  INFO  (f3) fault switches compiled out (NDEBUG): the fail-closed path is proved on the plain-flavour leg\n'
+fi
 
 # ── (g) the stack bound: a pattern too long or too deeply nested is refused by name, the limit itself still compiles ──
 LIT2048="$( python3 -c "print('a' * 2048)" )"; LIT2049="$( python3 -c "print('a' * 2049)" )"

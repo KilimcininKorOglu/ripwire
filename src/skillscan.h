@@ -15,9 +15,12 @@
 // No tree-sitter — ripwire has no markdown grammar. Pure line-iteration, PLUS a second pass inside
 // `scanSkillText` over a whitespace-normalized join of the body (INJECTION only) to catch a phrase
 // split across a newline.
-// Pattern matching: std::regex throughout (ECMAScript, icase where relevant); INJECTION patterns
+// Pattern matching: guarded regexes (src/regexguard.h — ECMAScript, icase where relevant); INJECTION patterns
 // are word-boundary-anchored phrases, not bare substrings (a bare substring like "disregard"
-// false-positives on "disregarding", and "new persona" on "new personal").
+// false-positives on "disregarding", and "new persona" on "new personal"). A skill file is UNTRUSTED input, so a
+// match the engine abandons can neither terminate the process (wrap.h's scan is noexcept) nor pass as "no match":
+// the line gets a CRITICAL SCAN-INCOMPLETE:regex-abandoned finding, failing closed. EXFILTRATE:net-exfil is decided
+// by hasNetExfilShape, a linear scan, because its regex was quadratic in the line (see there).
 // Findings sorted by (line, rule) for determinism, then deduped on (line, rule) — the per-line and
 // joined-body passes can both find the same phrase (byte-identical output across runs).
 //
@@ -30,7 +33,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -38,6 +40,7 @@
 #include <vector>
 
 #include "infra/Diagnostics.h"
+#include "regexguard.h"        // every pattern here is compiled and matched through the one regex boundary
 
 namespace rw
 {
@@ -97,7 +100,7 @@ struct InjectionPattern
     const char*   regexSrc;   // ECMAScript regex source (compiled case-insensitive)
     const char*   rule;       // stable rule name emitted in findings
     SkillSeverity sev;        // CRITICAL for an anchored imperative, WARN for a bare generic word
-    std::regex    re;
+    RegexCompile  re;         // a refusal (never expected for a constant) reads as undecided on every line: loud, fail-closed
 };
 
 // Keep entries in stable order (deterministic table iteration → deterministic findings order
@@ -109,7 +112,7 @@ inline std::vector<InjectionPattern> buildInjectionPatterns()
     std::vector<InjectionPattern> v;
     const auto add = [ & ]( const char* src, const char* rule, SkillSeverity sev )
     {
-        v.push_back( { src, rule, sev, std::regex( src, std::regex::ECMAScript | std::regex::icase ) } );
+        v.push_back( { src, rule, sev, compileGuardedRegex( src, kRegexEcmaScript | kRegexIcase ) } );
     };
 
     add( R"(\bignore\s+(all\s+|the\s+)?previous\s+instructions\b)", "INJECTION:ignore-prev",     SkillSeverity::Critical );
@@ -139,13 +142,90 @@ inline std::vector<InjectionPattern> buildInjectionPatterns()
 // (`… | base64 | nc host port` included) — is covered by EXFIL-NETEXFIL.
 struct ExfilPattern
 {
-    const char* rule;
-    std::regex  re;
-    bool        requiresCmdContext;   // true ⇒ fires only in a fence OR alongside a transmit verb elsewhere on
-                                       // the line (see hasTransmitVerb) — a bare prose mention is documentation.
-    bool        fenceOnly;            // true ⇒ fires only inside a fenced code block (see net-exfil below).
-    // std::regex is NOT trivially copyable → we build these at runtime once.
+    const char*  rule;
+    RegexCompile re;                    // empty (and unused) when `shape` decides the rule instead
+    bool         ( *shape )( std::string_view line ) noexcept;   // non-null ⇒ a linear decision replaces the regex
+    bool         requiresCmdContext;  // true ⇒ fires only in a fence OR alongside a transmit verb elsewhere on
+                                      // the line (see hasTransmitVerb) — a bare prose mention is documentation.
+    bool         fenceOnly;           // true ⇒ fires only inside a fenced code block (see net-exfil below).
+    // a compiled regex is NOT trivially copyable → we build these at runtime once.
 };
+
+// EXFILTRATE:net-exfil in ONE pass over the line, replacing the regex
+//
+//     (\b(curl|wget|nc)\b.*(\$[A-Za-z_][A-Za-z0-9_]*|base64))|((\$[A-Za-z_][A-Za-z0-9_]*|base64).*\b(curl|wget|nc)\b)
+//
+// WHY. The `.*` between two alternations made that regex QUADRATIC in the line on both standard libraries: a fenced
+// line of "curl curl curl …" with no variable after it backtracks the whole remainder from every "curl". Measured on
+// the release binary: 20,000 bytes took 5.9 s and 200,000 bytes was still running at 60 s — a skill file is exactly
+// the untrusted input a scanner must not hang on. (On libstdc++ a long enough `.*` also overflows the stack.)
+//
+// EQUIVALENCE, derived from the regex rather than approximated, and gated differentially against it
+// (test/regexguardcheck.sh arm (f)): `.` matches any byte but '\n' and '\r' (the terminators both engines exclude
+// for char), so both tokens must sit in one '\r'-free segment. A TOOL is a maximal word run ([A-Za-z0-9_]+, the
+// \b rule in the "C" locale) equal to curl, wget or nc. A VAR is '$' followed by [A-Za-z_] — the regex's trailing
+// [A-Za-z0-9_]* can always backtrack to empty, so that is its shortest form — or the substring "base64", which needs
+// no boundary. The first alternative holds iff some tool ENDS at or before some var STARTS; the second iff some var's
+// shortest END is at or before some tool STARTS. So one pass keeps four numbers per segment.
+inline bool hasNetExfilShape( std::string_view line ) noexcept
+{
+    const auto isWordByte  = []( char c ) noexcept { return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' ) || c == '_'; };
+    const auto isVarLead   = []( char c ) noexcept { return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || c == '_'; };
+    constexpr std::size_t kNone = std::string_view::npos;
+
+    std::size_t segBegin = 0;
+    for( ;; )
+    {
+        const std::size_t cr     = line.find( '\r', segBegin );
+        const std::size_t segEnd = ( cr == kNone ) ? line.size() : cr;
+        std::size_t earliestToolEnd = kNone, latestToolStart = 0, earliestVarEnd = kNone, latestVarStart = 0;
+        bool        hasTool = false, hasVar = false;
+        const auto  noteVar = [ & ]( std::size_t start, std::size_t shortestEnd ) noexcept
+        {
+            hasVar         = true;
+            latestVarStart = std::max( latestVarStart, start );
+            earliestVarEnd = std::min( earliestVarEnd, shortestEnd );
+        };
+        for( std::size_t i = segBegin; i < segEnd; )
+        {
+            if( !isWordByte( line[i] ) )
+            {
+                if( line[i] == '$' && i + 1 < segEnd && isVarLead( line[ i + 1 ] ) )
+                {
+                    noteVar( i, i + 2 );
+                }
+                ++i;
+                continue;
+            }
+            std::size_t runEnd = i;
+            while( runEnd < segEnd && isWordByte( line[runEnd] ) )
+            {
+                ++runEnd;
+            }
+            const std::string_view word = line.substr( i, runEnd - i );
+            if( word == "curl" || word == "wget" || word == "nc" )
+            {
+                hasTool         = true;
+                earliestToolEnd = std::min( earliestToolEnd, runEnd );
+                latestToolStart = std::max( latestToolStart, i );
+            }
+            for( std::size_t at = word.find( "base64" ); at != kNone; at = word.find( "base64", at + 1 ) )
+            {
+                noteVar( i + at, i + at + 6 );
+            }
+            i = runEnd;
+        }
+        if( hasTool && hasVar && ( earliestToolEnd <= latestVarStart || earliestVarEnd <= latestToolStart ) )
+        {
+            return true;
+        }
+        if( segEnd == line.size() )
+        {
+            return false;
+        }
+        segBegin = segEnd + 1;
+    }
+}
 
 inline std::vector<ExfilPattern> buildExfilPatterns()
 {
@@ -156,7 +236,7 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
     // run-block or a co-occurring transmit verb on the line). See scanSkillText's cmdContext gate.
     v.push_back( {
         "EXFILTRATE:api-key",
-        std::regex( R"(\$ANTHROPIC_API_KEY)", std::regex::ECMAScript | std::regex::icase ),
+        compileGuardedRegex( R"(\$ANTHROPIC_API_KEY)", kRegexEcmaScript | kRegexIcase ), nullptr,
         /*requiresCmdContext=*/true, /*fenceOnly=*/false
     } );
 
@@ -164,7 +244,7 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
     // documentation; `cat ~/.ssh/id_rsa | base64 | nc …` in a fenced block is the real thing.
     v.push_back( {
         "EXFILTRATE:ssh-aws-creds",
-        std::regex( R"((\$HOME/\.ssh|~/\.ssh|~/\.aws))", std::regex::ECMAScript ),
+        compileGuardedRegex( R"((\$HOME/\.ssh|~/\.ssh|~/\.aws))", kRegexEcmaScript ), nullptr,
         /*requiresCmdContext=*/true, /*fenceOnly=*/false
     } );
 
@@ -179,10 +259,11 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
     // prose like "use curl to fetch $VARIABLE from the API" (no fence, no pipe, just an explanatory
     // sentence) matches the pattern and would fire CRITICAL. Requiring the line to be inside a fenced code
     // block is what actually distinguishes a documented/live command from a prose mention.
+    //
+    // Decided by hasNetExfilShape (below), not by its regex — see there for why and for the exact equivalence.
     v.push_back( {
         "EXFILTRATE:net-exfil",
-        std::regex( R"((\b(curl|wget|nc)\b.*(\$[A-Za-z_][A-Za-z0-9_]*|base64))|((\$[A-Za-z_][A-Za-z0-9_]*|base64).*\b(curl|wget|nc)\b))",
-                     std::regex::ECMAScript ),
+        RegexCompile{}, &hasNetExfilShape,
         /*requiresCmdContext=*/false, /*fenceOnly=*/true
     } );
 
@@ -192,11 +273,24 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
 // A "command context" for an exfil pattern: the line is inside a fenced code block (where run-commands
 // live) OR it carries a transmit/encode verb (the credential is actually being read + shipped, not merely
 // named in prose). This is what separates a malicious skill from one that documents the attack.
-inline bool hasTransmitVerb( std::string_view line ) noexcept
+inline RegexVerdict hasTransmitVerb( std::string_view line ) noexcept
 {
-    static const std::regex kVerb( R"(\b(base64|curl|wget|nc|scp|cat|openssl)\b)", std::regex::ECMAScript );
-    return std::regex_search( std::string( line ), kVerb );
+    static const RegexCompile kVerb = compileGuardedRegex( R"(\b(base64|curl|wget|nc|scp|cat|openssl)\b)", kRegexEcmaScript );
+    return kVerb.refusal ? RegexVerdict::Exhausted : kVerb.regex.search( line );
 }
+
+// A skill pattern matched through the one regex boundary. Undecided — the engine abandoned the match, or the constant
+// was refused, which no test tree has ever seen — reads Exhausted, and the caller records a fail-closed finding.
+inline RegexVerdict skillSearch( const RegexCompile& pattern, std::string_view line, RegexCaptures* captures = nullptr ) noexcept
+{
+    if( pattern.refusal )
+    {
+        return RegexVerdict::Exhausted;
+    }
+    return captures != nullptr ? pattern.regex.search( line, *captures ) : pattern.regex.search( line );
+}
+
+static constexpr const char* kScanIncompleteRule = "SCAN-INCOMPLETE:regex-abandoned";
 
 // True if the byte at [pos] on `line` falls inside a BALANCED inline-code span (`…`) or a balanced
 // double-quoted ("…") span — i.e. the matched text is being SHOWN AS DATA / an example, not stated as an
@@ -286,8 +380,8 @@ inline bool isShownAsData( std::string_view line, std::size_t pos, bool quotesCo
 // The scanner tracks frontmatter state.
 struct FrontmatterPattern
 {
-    const char* rule;
-    std::regex  re;
+    const char*  rule;
+    RegexCompile re;
 };
 
 inline std::vector<FrontmatterPattern> buildFrontmatterPatterns()
@@ -297,19 +391,19 @@ inline std::vector<FrontmatterPattern> buildFrontmatterPatterns()
     // model: something (attempting to override the model at the harness level)
     v.push_back( {
         "FRONTMATTER:model-override",
-        std::regex( R"(^\s*model\s*:)", std::regex::ECMAScript )
+        compileGuardedRegex( R"(^\s*model\s*:)", kRegexEcmaScript )
     } );
 
     // system: something (attempting to inject a system prompt above the harness)
     v.push_back( {
         "FRONTMATTER:system-override",
-        std::regex( R"(^\s*system\s*:)", std::regex::ECMAScript )
+        compileGuardedRegex( R"(^\s*system\s*:)", kRegexEcmaScript )
     } );
 
     // temperature: (attempting to override inference parameters)
     v.push_back( {
         "FRONTMATTER:temperature-override",
-        std::regex( R"(^\s*temperature\s*:)", std::regex::ECMAScript )
+        compileGuardedRegex( R"(^\s*temperature\s*:)", kRegexEcmaScript )
     } );
 
     return v;
@@ -453,6 +547,16 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         if( excerpt.size() > 120 ) { excerpt.resize( 117 ); excerpt += "..."; }
         findings.push_back( { sev, lineNum, rule, std::move( excerpt ) } );
     };
+    // helper: the regex boundary's answer as a plain hit, failing CLOSED on an undecided match — the line gets a
+    // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean"
+    const auto isHit = [ & ]( RegexVerdict verdict, int lineNum, std::string_view lineText )
+    {
+        if( verdict == RegexVerdict::Exhausted )
+        {
+            addFinding( SkillSeverity::Critical, lineNum, kScanIncompleteRule, lineText );
+        }
+        return verdict == RegexVerdict::Hit;
+    };
 
     // ── fenced-block injection suppression policy ─────────────────────────────────────────────────
     //
@@ -550,7 +654,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             // ── FRONTMATTER checks ────────────────────────────────────────────────────────────────
             for( const FrontmatterPattern& p : frontPats )
             {
-                if( std::regex_search( ln, p.re ) )
+                if( isHit( skillSearch( p.re, ln ), lineNum, ln ) )
                 {
                     addFinding( SkillSeverity::Warn, lineNum, p.rule, ln );
                     break;   // one finding per line per category
@@ -563,8 +667,8 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             // quotes are value syntax, not a shown-as-data marker, so only backtick spans suppress here.
             for( const InjectionPattern& p : injPats )
             {
-                std::smatch m;
-                if( std::regex_search( ln, m, p.re ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ), /*quotesCountAsData=*/false ) )
+                RegexCaptures m;
+                if( isHit( skillSearch( p.re, ln, &m ), lineNum, ln ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ), /*quotesCountAsData=*/false ) )
                 {
                     addFinding( p.sev, lineNum, p.rule, ln );
                     break;   // one INJECTION finding per line
@@ -589,8 +693,8 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             {
                 for( const InjectionPattern& p : injPats )
                 {
-                    std::smatch m;
-                    if( std::regex_search( ln, m, p.re ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ) ) )
+                    RegexCaptures m;
+                    if( isHit( skillSearch( p.re, ln, &m ), lineNum, ln ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ) ) )
                     {
                         addFinding( p.sev, lineNum, p.rule, ln );
                         break;   // one INJECTION finding per line (highest-priority match)
@@ -645,7 +749,8 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             // fenceOnly patterns (net-exfil) fire only inside a fenced code block — see buildExfilPatterns().
             for( const ExfilPattern& p : exfilPats )
             {
-                if( !std::regex_search( ln, p.re ) )
+                const bool matched = ( p.shape != nullptr ) ? p.shape( ln ) : isHit( skillSearch( p.re, ln ), lineNum, ln );
+                if( !matched )
                 {
                     continue;
                 }
@@ -653,7 +758,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
                 {
                     continue;
                 }
-                if( p.requiresCmdContext && !( lineInFence || hasTransmitVerb( ln ) ) )
+                if( p.requiresCmdContext && !( lineInFence || isHit( hasTransmitVerb( ln ), lineNum, ln ) ) )
                 {
                     continue;
                 }
@@ -673,11 +778,12 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
                 //   1. Inside a fenced ```bash / ```sh / ```shell block header
                 //   2. Line starts with $ (interactive-shell style)
                 //   3. Line contains curl/wget/nc (network tools — likely a shell instruction)
-                static const std::regex kBashFenceRe( R"(^```\s*(bash|sh|shell|zsh)\s*$)", std::regex::ECMAScript );
-                static const std::regex kNetToolRe( R"(\b(curl|wget|nc)\b)", std::regex::ECMAScript );
-                const bool isShellFence   = std::regex_match( std::string( lv ), kBashFenceRe );
+                // ^…$ with a search is the whole-string match the old regex_match asked for: `lv` holds one line, no '\n'.
+                static const RegexCompile kBashFenceRe = compileGuardedRegex( R"(^```\s*(bash|sh|shell|zsh)\s*$)", kRegexEcmaScript );
+                static const RegexCompile kNetToolRe   = compileGuardedRegex( R"(\b(curl|wget|nc)\b)", kRegexEcmaScript );
+                const bool isShellFence     = isHit( skillSearch( kBashFenceRe, lv ), lineNum, ln );
                 const bool startsWithDollar = !lv.empty() && lv[0] == '$';
-                const bool hasNetTool     = std::regex_search( std::string( lv ), kNetToolRe );
+                const bool hasNetTool       = isHit( skillSearch( kNetToolRe, lv ), lineNum, ln );
                 if( isShellFence || startsWithDollar || hasNetTool )
                 {
                     addFinding( SkillSeverity::Warn, lineNum, kScopeCreepRule, ln );
@@ -695,8 +801,16 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
     // below collapses the case where the same instance was already found per-line.
     for( const InjectionPattern& p : injPats )
     {
-        std::smatch m;
-        if( !std::regex_search( joinedBody, m, p.re ) )
+        RegexCaptures      m;
+        const RegexVerdict verdict = skillSearch( p.re, joinedBody, &m );
+        if( verdict == RegexVerdict::Exhausted )
+        {
+            // the joined body has no one line to blame: attribute the unscannable pass to the first body line recorded
+            addFinding( SkillSeverity::Critical, joinedLineOffsets.empty() ? 0 : joinedLineOffsets.front().second, kScanIncompleteRule,
+                        "the whitespace-joined body (cross-line injection pass)" );
+            continue;
+        }
+        if( verdict != RegexVerdict::Hit )
         {
             continue;
         }
