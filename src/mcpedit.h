@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os — the edit lockfile (open/flock/close), the atomic write (open/write/fchmod/fsync/rename/unlink), realpath/getcwd
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -299,8 +300,8 @@ namespace mcpedit
                 return;
             }
             char buf[ PATH_MAX ];
-            hint = ::realpath( pathHint.c_str(), buf ) != nullptr ? std::string( buf ) : pathHint;
-            cwd  = ::getcwd( buf, sizeof( buf ) ) != nullptr ? std::string( buf ) : std::string();
+            hint = os::realpath( pathHint.c_str(), buf ) != nullptr ? std::string( buf ) : pathHint;
+            cwd  = os::getcwd( buf, sizeof( buf ) ) != nullptr ? std::string( buf ) : std::string();
 #endif
         }
 
@@ -691,8 +692,8 @@ namespace mcpedit
         char name[ 64 ];
         rw::formatTo( name, sizeof( name ), "ripwire-edit-{:016x}.lock", (unsigned long long)h );
         const std::string lockDir = quality::cacheDirLadder() + "/locks";
-        ::mkdir( lockDir.c_str(), 0700 );
-        ::chmod( lockDir.c_str(), 0700 );
+        os::mkdir( lockDir.c_str(), 0700 );
+        os::chmod( lockDir.c_str(), 0700 );
         return quality::resolveCacheBlobPath( lockDir, name );
     }
 
@@ -715,20 +716,20 @@ namespace mcpedit
         explicit EditLock( const std::string& targetPath )
         {
             const std::string lockPath = editLockPath( targetPath );
-            fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
+            fd = os::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
             if( fd < 0 ) { DEGRADED_PATH_ALERT( "edit lockfile open failed; refusing the edit" ); return; }
 
             // ~200 ms bounded acquire: 20 tries × 10 ms. If a peer holds it longer, refuse rather than hang or
             // proceed lock-free — the latter can lose a cooperating writer's committed update.
             for( int attempt = 0; attempt < 20; ++attempt )
             {
-                if( ::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
+                if( os::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
                 if( errno != EWOULDBLOCK )
                 {
                     break;
                 }
                 struct timespec ts{ 0, 10 * 1000 * 1000 };   // 10 ms
-                ::nanosleep( &ts, nullptr );
+                os::nanosleep( &ts, nullptr );
             }
             if( !locked )
             {
@@ -742,9 +743,9 @@ namespace mcpedit
             {
                 if( locked )
                 {
-                    ::flock( fd, LOCK_UN );
+                    os::flock( fd, LOCK_UN );
                 }
-                ::close( fd );
+                os::close( fd );
             }
         }
 
@@ -768,15 +769,15 @@ namespace mcpedit
     inline bool atomicWrite( const std::string& path, const std::string& bytes )
     {
         // capture the original's mode (if it exists) so we can restore it onto the fresh temp inode.
-        struct stat orig{};
-        const bool  haveOrig = ( ::stat( path.c_str(), &orig ) == 0 );
+        os::stat_t orig{};
+        const bool  haveOrig = ( os::stat( path.c_str(), &orig ) == 0 );
 
-        const std::string tmp = path + "." + std::to_string( ::getpid() ) + ".tmp";
+        const std::string tmp = path + "." + std::to_string( os::getpid() ) + ".tmp";
         int               openFlags = O_WRONLY | O_CREAT | O_TRUNC;
 #if defined( _WIN32 )
         openFlags |= O_BINARY;
 #endif
-        const int fd = ::open( tmp.c_str(), openFlags, 0644 );
+        const int fd = os::open( tmp.c_str(), openFlags, 0644 );
         if( fd < 0 )
         {
             return false;
@@ -787,7 +788,7 @@ namespace mcpedit
         std::size_t off  = 0;
         while( off < bytes.size() )
         {
-            const ssize_t n = ::write( fd, bytes.data() + off, bytes.size() - off );
+            const os::ssize_t n = os::write( fd, bytes.data() + off, bytes.size() - off );
             if( n <= 0 ) { wErr = true; break; }
             off += (std::size_t)n;
         }
@@ -796,24 +797,24 @@ namespace mcpedit
         // (no original) keeps the umask default. fchmod failure is non-fatal — degrade to the default mode.
         if( !wErr && haveOrig )
         {
-            if( ::fchmod( fd, orig.st_mode & 07777 ) != 0 )
+            if( os::fchmod( fd, orig.st_mode & 07777 ) != 0 )
             {
                 DEGRADED_PATH_ALERT( "atomicWrite: could not restore original file mode; wrote with default mode" );
             }
         }
 
         // A3-F7: fsync the data to disk BEFORE the atomic rename so a crash can't leave a renamed-but-empty file.
-        if( !wErr && ::fsync( fd ) != 0 )
+        if( !wErr && os::fsync( fd ) != 0 )
         {
             DEGRADED_PATH_ALERT( "atomicWrite: fsync failed; proceeding (bytes may not be durable across a crash)" );
         }
 
-        if( ::close( fd ) != 0 )
+        if( os::close( fd ) != 0 )
         {
             wErr = true;
         }
-        if( wErr ) { ::unlink( tmp.c_str() ); return false; }
-        if( std::rename( tmp.c_str(), path.c_str() ) != 0 ) { ::unlink( tmp.c_str() ); return false; }
+        if( wErr ) { os::unlink( tmp.c_str() ); return false; }
+        if( os::rename( tmp.c_str(), path.c_str() ) != 0 ) { os::unlink( tmp.c_str() ); return false; }
         return true;
     }
 

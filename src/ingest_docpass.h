@@ -70,9 +70,9 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
             {
                 const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
                 std::fclose( fp );
-                if( !wroteAll || std::rename( tmp.c_str(), textBlobPath.c_str() ) != 0 )
+                if( !wroteAll || os::rename( tmp.c_str(), textBlobPath.c_str() ) != 0 )
                 {
-                    rw::compat::rw_remove_utf8( tmp.c_str() );
+                    os::remove( tmp.c_str() );
                 }
             }
         }

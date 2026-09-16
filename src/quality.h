@@ -35,10 +35,8 @@
 #include "btree.hpp"              // gtl btree_map — sorted like std::map, cache-friendly nodes (house rule: never std::map)
 #include "infra/dynamic_map.hpp"  // S+tree scratch maps — bounded, no per-operation allocation in hot seen-set paths
 
-#include <sys/stat.h>  // ::mkdir — the per-user cache-dir ladder (cacheDirLadder)
-#include <sys/file.h>  // ::flock — F-04: the ack ledger's cross-process write lock (SidecarWriteLock)
-#include <fcntl.h>     // ::open — same
-#include <unistd.h>    // ::getpid — unique HEAD-snapshot temp-dir suffix; ::close/::getuid
+#include "infra/os.h"  // rw::os — mkdir/lstat/chmod/getuid for the per-user cache-dir ladder (cacheDirLadder); open/flock/close for
+                       // F-04, the ack ledger's cross-process write lock (SidecarWriteLock); getpid for the HEAD-snapshot temp-dir suffix
 #include <cerrno>      // EWOULDBLOCK — the LOCK_NB retry predicate
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
@@ -1534,15 +1532,15 @@ inline std::string cacheDirLadder()
     }
     else
     {
-        d = "/tmp/ripwire-" + std::to_string( static_cast<unsigned long long>( ::getuid() ) );
+        d = "/tmp/ripwire-" + std::to_string( static_cast<unsigned long long>( os::getuid() ) );
     }
 
-    const int mkdirRc = ::mkdir( d.c_str(), 0700 );
-    struct stat st {};
-    if( mkdirRc == 0 || ( ::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == ::getuid() ) )
+    const int mkdirRc = os::mkdir( d.c_str(), 0700 );
+    os::stat_t st {};
+    if( mkdirRc == 0 || ( os::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == os::getuid() ) )
     {
-        if( ::chmod( d.c_str(), 0700 ) == 0
-            && ::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == ::getuid()
+        if( os::chmod( d.c_str(), 0700 ) == 0
+            && os::lstat( d.c_str(), &st ) == 0 && S_ISDIR( st.st_mode ) && st.st_uid == os::getuid()
             && ( st.st_mode & 0777 ) == 0700 )
         {
             return d;
@@ -1780,11 +1778,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
                           + " merge-base --is-ancestor " + shSingleQuote( ancestor ) + " " + shSingleQuote( descendant )
                           + " >/dev/null 2>&1";
-#if defined( _WIN32 )
-    return rw::compat::rw_system( cmd.c_str() ) == 0;
-#else
-    return std::system( cmd.c_str() ) == 0;
-#endif
+    return os::system( cmd.c_str() ) == 0;
 }
 
 // Signal-to-noise round — the CHURN-WINDOW reference commit: the newest commit STRICTLY OLDER than the
@@ -1907,7 +1901,7 @@ inline constexpr std::uint64_t kCacheRootKeySeed = 1469598103934665603ull;
 inline std::string cacheRootKeyHex( const std::string& root )
 {
     char        resolved[ PATH_MAX ];
-    const char* rp = ::realpath( root.c_str(), resolved );
+    const char* rp = os::realpath( root.c_str(), resolved );
     std::string absRoot;
     if( rp != nullptr )
     {
@@ -2653,17 +2647,17 @@ inline void sweepStaleEditLocks( const std::string& dir )
 {
     for( const std::string& path : staleEditLockPaths( dir ) )
     {
-        const int fd = ::open( path.c_str(), O_RDWR );
+        const int fd = os::open( path.c_str(), O_RDWR );
         if( fd < 0 )
         {
             continue;
         }
-        const bool reclaimable = ::flock( fd, LOCK_EX | LOCK_NB ) == 0;
+        const bool reclaimable = os::flock( fd, LOCK_EX | LOCK_NB ) == 0;
         if( reclaimable )
         {
-            (void)::flock( fd, LOCK_UN );
+            (void)os::flock( fd, LOCK_UN );
         }
-        ::close( fd );
+        os::close( fd );
         if( reclaimable )
         {
             std::error_code ec;
@@ -3047,8 +3041,8 @@ inline std::optional<std::string> readQSnapBlob( const std::string& path )
     // (atomicWriteFile renames one into place); every other shape is a miss on every platform, which is
     // exactly what this function's nullopt already means, so it stays silent and the caller recomputes.
     {
-        struct stat probe;
-        if( ::stat( path.c_str(), &probe ) != 0 || !S_ISREG( probe.st_mode ) )
+        os::stat_t probe;
+        if( os::stat( path.c_str(), &probe ) != 0 || !S_ISREG( probe.st_mode ) )
         {
             return std::nullopt;
         }
@@ -3103,7 +3097,7 @@ inline std::mutex& headSnapshotIngestMutex()
 inline bool atomicWriteFile( const std::string& path, const std::string& blob )
 {
     static std::atomic<std::uint64_t> seq{ 0 };
-    const std::string tmp = path + ".tmp." + std::to_string( ::getpid() )
+    const std::string tmp = path + ".tmp." + std::to_string( os::getpid() )
                           + "." + std::to_string( seq.fetch_add( 1, std::memory_order_relaxed ) );
     {
         std::ofstream of( tmp, std::ios::binary | std::ios::trunc );
@@ -3115,7 +3109,7 @@ inline bool atomicWriteFile( const std::string& path, const std::string& blob )
         of.flush();
         if( !of ) { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
     }
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
+    if( os::rename( tmp.c_str(), path.c_str() ) != 0 )
     { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
     return true;
 }
@@ -3160,7 +3154,7 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     { DEGRADED_PATH_ALERT( "quality: commit-tree revision does not resolve to a commit — refusing to archive" ); return {}; }
 
     std::error_code ec;
-    std::string tmpRoot = cacheDirLadder() + "/ripwire-" + tag + "-" + std::to_string( ::getpid() );   // not const: moved out on return
+    std::string tmpRoot = cacheDirLadder() + "/ripwire-" + tag + "-" + std::to_string( os::getpid() );   // not const: moved out on return
     fs::remove_all( fs::path( tmpRoot ), ec );                 // stale leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     { DEGRADED_PATH_ALERT( "quality: cannot create commit-tree temp dir" ); return {}; }
@@ -3170,11 +3164,7 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // bytes here: normalizing HEAD to CRLF would make a clean LF working tree look like a quality regression.
     const std::string extract      = "git -c core.autocrlf=false -c core.quotepath=false -C " + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( shellTmpRoot ) + " 2>/dev/null";
-#if defined( _WIN32 )
-    const int extractStatus = rw::compat::rw_system( extract.c_str() );
-#else
-    const int extractStatus = std::system( extract.c_str() );
-#endif
+    const int extractStatus = os::system( extract.c_str() );
     if( extractStatus != 0 )
     {
         DEGRADED_PATH_ALERT( "quality: git archive failed — committed tree unavailable" );
@@ -4387,7 +4377,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
     const std::string cmd = "git -c core.quotepath=false" + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
                           + " blame --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
                           + " HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return;
@@ -4419,7 +4409,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
             }
         }
     }
-    pclose( pipe );
+    os::pclose( pipe );
 }
 
 // One zero-context unified-diff hunk, in the two coordinate systems the SELF test needs: the OLD-side range
@@ -4460,7 +4450,7 @@ inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const 
     std::vector<DiffHunk> hunks;
     const std::string cmd = "git -c core.quotepath=false -c diff.algorithm=myers -C " + shSingleQuote( root )
                           + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe ) { DEGRADED_PATH_ALERT( "quality: churn hunk diff could not be spawned" ); return hunks; }
 
     char buf[ 4096 ];
@@ -4487,7 +4477,7 @@ inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const 
         hunks.push_back( DiffHunk{ std::uint32_t( oldStart ), std::uint32_t( oldCount ),
                                    std::uint32_t( newStart ), std::uint32_t( newCount ) } );
     }
-    pclose( pipe );
+    os::pclose( pipe );
     return hunks;
 }
 
@@ -5206,11 +5196,11 @@ struct SidecarWriteLock
         rw::formatTo( name, sizeof( name ), "ripwire-sidecar-{:016x}.lock",
                        static_cast<unsigned long long>( fnv1a64( identity ) ) );
         const std::string lockDir = cacheDirLadder() + "/locks";
-        ::mkdir( lockDir.c_str(), 0700 );
-        ::chmod( lockDir.c_str(), 0700 );
+        os::mkdir( lockDir.c_str(), 0700 );
+        os::chmod( lockDir.c_str(), 0700 );
         const std::string lockPath = resolveCacheBlobPath( lockDir, name );
 
-        fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
+        fd = os::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
         if( fd < 0 )
         {
             DEGRADED_PATH_ALERT( "quality: ack-ledger lockfile open failed; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
@@ -5218,13 +5208,13 @@ struct SidecarWriteLock
         }
         for( int waitedMs = 0; ; waitedMs += 10 )
         {
-            if( ::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
+            if( os::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
             if( errno != EWOULDBLOCK || waitedMs >= maxWaitMs )
             {
                 break;
             }
             struct timespec ts{ 0, 10 * 1000 * 1000 };   // 10 ms
-            ::nanosleep( &ts, nullptr );
+            os::nanosleep( &ts, nullptr );
         }
         if( !locked )
         {
@@ -5238,9 +5228,9 @@ struct SidecarWriteLock
         {
             if( locked )
             {
-                ::flock( fd, LOCK_UN );
+                os::flock( fd, LOCK_UN );
             }
-            ::close( fd );
+            os::close( fd );
         }
     }
 

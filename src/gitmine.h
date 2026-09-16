@@ -35,7 +35,7 @@
 #include <vector>
 
 #include <limits.h>    // PATH_MAX (hasEnclosingGitRepo realpath buffer)
-#include <sys/stat.h>  // stat() — the zero-popen .git walk-up pre-check
+#include "infra/os.h"  // rw::os::stat — the zero-popen .git walk-up pre-check; popen/pclose/realpath/localtime_r
 
 namespace rw
 {
@@ -222,7 +222,7 @@ inline std::string sinceUnresolvedRefusal( std::string_view value )
 // '\n' the reader consumed, so multi-line callers (crossref.h, the rename map) read exactly what fgets gave them.
 inline std::string popenTrimmed( const std::string& cmd )
 {
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return {};
@@ -234,7 +234,7 @@ inline std::string popenTrimmed( const std::string& cmd )
         out += line;
         out += '\n';
     }
-    pclose( pipe );
+    os::pclose( pipe );
     while( !out.empty() && ( out.back() == '\n' || out.back() == '\r' || out.back() == ' ' ) )
     {
         out.pop_back();
@@ -372,7 +372,17 @@ inline std::string sinceLogArgs( const SinceScope& scope, const char* fallbackSi
         // The RESOLVED commit, never the caller's string: this is a positional argv entry, and a bare sha cannot
         // begin with '-', so it can only ever be read as a revision range (sincecheck.sh S2). resolveSinceScope is
         // the one producer of an active REV scope and stores nothing but a bare sha there.
-        VERIFY( isBareCommitSha( scope.baselineSha ) );
+        //
+        // CHECKED, not asserted, and this is the one site here where that distinction is load-bearing: the value
+        // originates OUTSIDE this process (a --since argument, or git's own output), so a VERIFY would hand the
+        // optimizer the promise that external data is well formed — and under NDEBUG that promise is all that
+        // would be left of the check. A malformed baseline degrades to the caller's own fallback window, which is
+        // exactly what an inactive scope yields, rather than reaching `git log` as a positional argument.
+        if( !isBareCommitSha( scope.baselineSha ) )
+        {
+            DEGRADED_PATH_ALERT( "sinceLogArgs: the baseline is not a bare object name — falling back to the caller's window" );
+            return "--since=" + shSingleQuote( fallbackSince ) + " ";
+        }
         return shSingleQuote( scope.baselineSha + ".." ) + " ";   // positional rev-range, not a --since flag
     }
     return "--since=" + shSingleQuote( scope.sinceDate ) + " ";
@@ -688,7 +698,7 @@ struct GitCommandLines
 inline GitCommandLines gitCommandLines( const std::string& cmd )
 {
     GitCommandLines out;
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return out;
@@ -721,7 +731,7 @@ inline GitCommandLines gitCommandLines( const std::string& cmd )
             out.lines.push_back( line );
         }
     }
-    out.status = pclose( pipe );
+    out.status = os::pclose( pipe );
     return out;
 }
 
@@ -753,7 +763,7 @@ inline std::string gitRepoToplevel( const std::string& absDir )
         if( probe.isStarted && probe.status == 0 && !probe.lines.empty() )
         {
             char resolved[ PATH_MAX ];
-            top = ::realpath( probe.lines.front().c_str(), resolved ) ? std::string{ resolved } : probe.lines.front();
+            top = os::realpath( probe.lines.front().c_str(), resolved ) ? std::string{ resolved } : probe.lines.front();
         }
     }
 
@@ -1033,7 +1043,7 @@ inline GitPathOffset deriveGitPathOffset( const IngestResult& ing, std::uint32_t
         const std::size_t  slash    = disk.rfind( '/' );
         const std::string  probeDir = ( slash == std::string::npos ) ? std::string{ "." } : ( slash == 0 ? std::string{ "/" } : disk.substr( 0, slash ) );
         char               resolvedDir[ PATH_MAX ];
-        if( !::realpath( probeDir.c_str(), resolvedDir ) )
+        if( !os::realpath( probeDir.c_str(), resolvedDir ) )
         {
             continue; // this probe is unreadable — try the next file
         }
@@ -1494,7 +1504,7 @@ inline std::vector<std::vector<std::uint32_t>> gitLogFileSets( const std::string
     const GitPathIndex byGitPath = gitPathIndexOfFiles( ing, onlyRoot );
 
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root ) + " log " + kMergeDiffArgs + windowArgs + "--name-only --format=tformat:__C__ 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return sets;
@@ -1521,7 +1531,7 @@ inline std::vector<std::vector<std::uint32_t>> gitLogFileSets( const std::string
         }
     }
     flush();
-    pclose( pipe );
+    os::pclose( pipe );
     return sets;
 }
 
@@ -1559,7 +1569,7 @@ inline std::int64_t approxMonthsAgoEpoch( unsigned months )
 {
     const std::time_t now = std::time( nullptr );
     std::tm           tmv{};
-    localtime_r( &now, &tmv );
+    os::localtime_r( &now, &tmv );
     tmv.tm_mon -= int( months );                   // calendar-month subtraction (git approxidate semantics)
     return std::int64_t( std::mktime( &tmv ) );    // mktime normalizes the month/year underflow, like git
 }
@@ -1585,7 +1595,7 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
                           + " log " + kMergeDiffArgs + "--since=" + shSingleQuote( defaultWindowSince( root, coSince ) )   // F1: HEAD-anchored when `coSince` is a default month window
                           + " --name-only --format=tformat:__C__%x20%ct 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return out;
@@ -1614,7 +1624,7 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
         }
         out.commits.back().paths.push_back( std::move( s ) );   // readByteSafeLine clear()s its buffer first, so moving out of it is safe
     }
-    pclose( pipe );
+    os::pclose( pipe );
     return out;
 }
 
@@ -1800,7 +1810,7 @@ inline std::vector<std::uint32_t> gitFileCommitCountsInDayWindow( const std::str
     // A commit counts once per file it touches, iff its epoch is within [cutoff, headEpoch].
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
                           + " log " + kMergeDiffArgs + "--name-only --format=tformat:__C__%x20%ct 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return counts;
@@ -1846,7 +1856,7 @@ inline std::vector<std::uint32_t> gitFileCommitCountsInDayWindow( const std::str
         }
     }
     flush();
-    pclose( pipe );
+    os::pclose( pipe );
     return counts;
 }
 
@@ -2029,7 +2039,7 @@ inline DecayedChurnMined gitLogDecayedFileMining( const std::string& root, const
 
     const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root ) + " log " + kMergeDiffArgs + windowArgs
                           + "--name-only --format=tformat:__C__%x20%ct 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return m;
@@ -2085,7 +2095,7 @@ inline DecayedChurnMined gitLogDecayedFileMining( const std::string& root, const
         }
     }
     flush();
-    pclose( pipe );
+    os::pclose( pipe );
     m.anyHistory = anyCommit;
     return m;
 }
@@ -2394,7 +2404,7 @@ inline std::vector<FileOwnership> gitFileAuthors(
     }
     cmd += " 2>/dev/null";
 
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return {};
@@ -2448,7 +2458,7 @@ inline std::vector<FileOwnership> gitFileAuthors(
             newest = curTs;
         }
     }
-    pclose( pipe );
+    os::pclose( pipe );
 
     std::vector<FileOwnership> result;
     result.reserve( perFile.size() );
@@ -2984,7 +2994,7 @@ inline bool hasEnclosingGitRepo( const std::string& root )
     return false;
 #else
     char resolved[ PATH_MAX ];
-    if( !::realpath( root.c_str(), resolved ) )
+    if( !os::realpath( root.c_str(), resolved ) )
     {
         return false; // unresolvable root → treat as no repo (degrade)
     }
@@ -2993,8 +3003,8 @@ inline bool hasEnclosingGitRepo( const std::string& root )
     // walk up at most 64 levels (any real path is far shallower; the bound is a hostile-symlink guard)
     for( int levelIndex = 0; levelIndex < 64 && !dir.empty(); ++levelIndex )
     {
-        struct stat st;
-        if( ::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
+        os::stat_t st;
+        if( os::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
         {
             return true;
         }

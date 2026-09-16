@@ -1215,9 +1215,9 @@ struct ReadFd
     ReadFd( const ReadFd& )            = delete;
     ReadFd& operator=( const ReadFd& ) = delete;
     ReadFd( ReadFd&& other ) noexcept : fd( other.fd ) { other.fd = -1; }
-    ~ReadFd() { if( fd >= 0 ) { ::close( fd ); } }
+    ~ReadFd() { if( fd >= 0 ) { os::close( fd ); } }
     /// Releases the descriptor early so Windows can publish a replacement cache file.
-    void close() noexcept { if( fd >= 0 ) { ::close( fd ); fd = -1; } }
+    void close() noexcept { if( fd >= 0 ) { os::close( fd ); fd = -1; } }
 
     // openOnce, not a move-assignment: the only mutation this type needs is "fill an empty guard", and
     // a move-assign operator here would be a byte-for-byte clone of ingest_sidecap.h's TreeGuard one
@@ -1225,7 +1225,7 @@ struct ReadFd
     bool openOnce( const std::string& path ) noexcept
     {
         VERIFY( fd < 0 );
-        fd = ::open( path.c_str(), O_RDONLY | O_CLOEXEC );
+        fd = os::open( path.c_str(), O_RDONLY | O_CLOEXEC );
         return fd >= 0;
     }
     bool valid() const noexcept { return fd >= 0; }
@@ -1293,7 +1293,7 @@ inline bool preadExact( int fd, void* dst, std::size_t n, std::uint64_t off ) no
     char* out = static_cast<char*>( dst );
     while( n > 0 )
     {
-        const ssize_t got = ::pread( fd, out, n, ::off_t( off ) );
+        const os::ssize_t got = os::pread( fd, out, n, os::off_t( off ) );
         if( got <= 0 )
         {
             return false;
@@ -1326,8 +1326,8 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
         return frame;
     }
 
-    struct stat st;
-    if( ::fstat( frame.blob.fd, &st ) != 0 || !S_ISREG( st.st_mode ) )
+    os::stat_t st;
+    if( os::fstat( frame.blob.fd, &st ) != 0 || !S_ISREG( st.st_mode ) )
     {
         frame.reason = CacheReject::NotRegular;
         return frame;
@@ -2555,7 +2555,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // cache should never be clobbered without a peep). Mirrors mcpedit::atomicWrite's discipline
     // (src/mcp.h): check the write byte-count AND fclose's return, and on any failure unlink the temp
     // and leave the prior on-disk cache (if any) untouched.
-    const std::string tmp = path + "." + std::to_string( getpid() ) + ".tmp";
+    const std::string tmp = path + "." + std::to_string( os::getpid() ) + ".tmp";
     std::FILE* fp = rw::compat::rw_fopen_utf8( tmp.c_str(), "wb" );
     if( !fp )
     {
@@ -2568,28 +2568,19 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;
     if( wErr )
     {
-        rw::compat::rw_remove_utf8( tmp.c_str() );   // never rename a short/torn write over a good cache
+        os::remove( tmp.c_str() );   // never rename a short/torn write over a good cache
         DEGRADED_PATH_ALERT( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
-#if defined(_WIN32)
-    if( rw::compat::rw_rename( tmp.c_str(), path.c_str() ) != 0 )
+    if( os::rename( tmp.c_str(), path.c_str() ) != 0 )
     {
-        rw::compat::rw_remove_utf8( tmp.c_str() );
-        DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
-        return;
-    }
-#else
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
-    {
-        rw::compat::rw_remove_utf8( tmp.c_str() );   // clean up on failure
+        os::remove( tmp.c_str() );   // clean up on failure
         DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot replace ({}) — old cache kept, this run was parsed from source\n",
                       path.c_str(), std::strerror( errno ) );
         return;
     }
-#endif
 
     // A5 (cache-dir hygiene): --doctor measured ~11,914 ripwire-* blobs / 2.4 GB accumulating in the cache-ladder
     // dir because only the qsnap/qheadsnap families ever evicted — this main parse-cache family (this very

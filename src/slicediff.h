@@ -34,6 +34,7 @@
 // makes one level up: a number that cannot be a total must not be printed as one.
 
 #include "slice.h"          // SliceScan / SliceOcc / sliceFoldOcc / the rung-3 reach table / sliceScanDefinition
+#include "infra/os.h"   // rw::os::getpid — the per-process slice temp root
 #include "editpreview.h"    // editpreview::ingestOneFile — the ONE single-file parse path (self-contained by its own header note)
 #include "gitmine.h"        // looksLikeDate — the ONE approxidate-garbage gate --hotspots --since already uses
 #include "quality.h"        // gitRepoHasHistory / gitResolveCommitSha / gitOneLine / gitRenameMap / cacheDirLadder / TmpTreeGuard
@@ -374,7 +375,7 @@ inline RevSide sliceAtRev( const std::string& root, const std::string& sha, cons
     r.path = pathAtRev;
 
     std::error_code   ec;
-    const std::string tmpRoot = quality::cacheDirLadder() + "/ripwire-slicediff-" + std::to_string( ::getpid() );
+    const std::string tmpRoot = quality::cacheDirLadder() + "/ripwire-slicediff-" + std::to_string( os::getpid() );
     fs::remove_all( fs::path( tmpRoot ), ec );                   // a leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     {

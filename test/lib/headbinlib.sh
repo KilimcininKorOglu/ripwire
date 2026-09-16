@@ -145,8 +145,8 @@ ripwire_headbin_verify()
 
 # headbin_refusal RC CONTEXT — the verdict on a failed ripwire_head_binary, rendered in the CALLER's shell: it calls
 # the gate's own no()/skip(), so it belongs in the `||` branch and never inside $( ). RC 3 is a staged binary that is
-# missing or wrong — a broken pipeline — and that FAILS: test/pargates.py counts a SKIP printed past a gate's first
-# 400 bytes as a pass, so a skip here would hide it. Any other RC is the unstaged build failing, which keeps its skip.
+# missing or wrong — a broken pipeline — and that FAILS: test/pargates.py counts a skip printed AFTER a gate has
+# already claimed a verdict as an arm-level skip, leaving the gate a pass, so a skip here would hide it. Any other RC is the unstaged build failing, which keeps its skip.
 headbin_refusal()
 {
     if [ "$1" -eq 3 ]; then

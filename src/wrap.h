@@ -13,7 +13,7 @@
 // CRITICAL → stderr warning + return 1 (unless --force in argv). WARN → print + continue.
 
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
-#include <unistd.h>   // wrapCommandToken (2026-09-06)
+#include "infra/os.h"  // rw::os::access — wrapCommandToken (2026-09-06)
 #include "skillscan.h"
 #include "infra/tablelookup.h"   // findByField — shared with ingest's lookupLang
 
@@ -368,7 +368,7 @@ inline std::string wrapCommandToken( const std::string_view executablePath )
         }
         std::error_code ec;
         const fs::path  candidate = fs::path( std::string( dir ) ) / "ripwire";
-        if( fs::is_regular_file( candidate, ec ) && !ec && ::access( candidate.string().c_str(), X_OK ) == 0 )
+        if( fs::is_regular_file( candidate, ec ) && !ec && os::access( candidate.c_str(), X_OK ) == 0 )
         {
             return "ripwire";
         }

@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::open_memstream — the trace render buffers
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -778,7 +779,7 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  m   = open_memstream( &buf, &sz );
+    std::FILE*  m   = os::open_memstream( &buf, &sz );
     if( !m )
     {
         DEGRADED_PATH_ALERT( "renderTestHopBlock: open_memstream failed — hop block omitted" );
@@ -817,7 +818,7 @@ inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameForm
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  m   = open_memstream( &buf, &sz );
+    std::FILE*  m   = os::open_memstream( &buf, &sz );
     if( !m )
     {
         DEGRADED_PATH_ALERT( "renderTraceBlock: open_memstream failed — trace block omitted" );
@@ -1085,7 +1086,7 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
     if( !part.suspects.empty() )
     {
         char*       buf = nullptr;  std::size_t sz = 0;
-        std::FILE*  m   = open_memstream( &buf, &sz );
+        std::FILE*  m   = os::open_memstream( &buf, &sz );
         if( m )
         {
             packSignatures( m, ing, rank, int( servedOrder.size() ), in.sigLadderBudgetBytes, /*metrics=*/true,

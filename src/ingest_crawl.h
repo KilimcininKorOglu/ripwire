@@ -1245,14 +1245,14 @@ bool underGitRoot( const char* rootDir )
 {
     std::string dir = rootDir == nullptr ? std::string( "." ) : std::string( rootDir );
     char        resolved[ PATH_MAX ];
-    if( ::realpath( dir.c_str(), resolved ) != nullptr )
+    if( os::realpath( dir.c_str(), resolved ) != nullptr )
     {
         dir = resolved;
     }
     for( ;; )
     {
-        struct stat st;
-        if( ::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
+        os::stat_t st;
+        if( os::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
         {
             return true;
         }
@@ -1274,7 +1274,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     }
     const std::string cmd = "git -C " + shSingleQuote( rootDir == nullptr ? std::string( "." ) : std::string( rootDir ) )
                           + " -c core.quotepath=false ls-files --others --ignored --exclude-standard --directory -z 2>/dev/null";
-    std::FILE* pipe = ::popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
         DEGRADED_PATH_ALERT( "ingest: cannot run git for the ignore probe — full walk" );
@@ -1292,7 +1292,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
         }
         buf.append( chunk, n );
     }
-    const int rc = ::pclose( pipe );
+    const int rc = os::pclose( pipe );
     if( rc != 0 )
     {
         return out;   // not a git work tree, or no git binary — the DESIGNED degrade, silent by contract
@@ -1802,21 +1802,13 @@ inline StatInfo statSizeTimes( const std::string& path ) noexcept
     const rw::compat::RwFileTimes times = rw::compat::rw_file_times_of( path );
     return { times.mtimeNs, times.sizeBytes, times.changeTimeNs };
 #else
-    struct stat st;
-    if( ::stat( path.c_str(), &st ) != 0 )
+    os::stat_t st;
+    if( os::stat( path.c_str(), &st ) != 0 )
     {
         return { -1, -1, -1 };
     }
-#if defined( __APPLE__ )
-    const long long m = (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
-    const long long c = (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
-#elif defined( __linux__ )
-    const long long m = (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
-    const long long c = (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
-#else
-    const long long m = (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
-    const long long c = (long long)st.st_ctime * 1000000000LL;
-#endif
+    const long long m = (long long)os::st_mtim( st ).tv_sec * 1000000000LL + os::st_mtim( st ).tv_nsec;
+    const long long c = (long long)os::st_ctim( st ).tv_sec * 1000000000LL + os::st_ctim( st ).tv_nsec;
     return { m, (long long)st.st_size, c };
 #endif
 }
@@ -1840,8 +1832,8 @@ enum class PathShape : std::uint8_t { Absent, RegularFile, Other };
 
 inline PathShape shapeOfPath( const std::string& path ) noexcept
 {
-    struct stat st;
-    const bool  isStatable = ::stat( path.c_str(), &st ) == 0;
+    os::stat_t st;
+    const bool  isStatable = os::stat( path.c_str(), &st ) == 0;
     return !isStatable ? PathShape::Absent : ( S_ISREG( st.st_mode ) ? PathShape::RegularFile : PathShape::Other );
 }
 

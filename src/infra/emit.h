@@ -22,6 +22,7 @@
 // copy would be a G3 regression.
 
 #include "Diagnostics.h"   // DEGRADED_PATH_ALERT — renderToString's open_memstream degrade, below
+#include "os.h"            // rw::os::open_memstream — renderToString's buffer
 
 #include <cstddef>
 #include <cstdlib>
@@ -240,7 +241,7 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
     Rendered    out;
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  m   = open_memstream( &buf, &sz );
+    std::FILE*  m   = os::open_memstream( &buf, &sz );
     if( !m )
     {
         DEGRADED_PATH_ALERT( degradeMsg );

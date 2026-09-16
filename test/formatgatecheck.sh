@@ -12,9 +12,9 @@
 # run reports false drift on a correctly-formatted tree). clang-format is NOT a build dependency of this
 # repo (G3: no host-installed dependencies), so a developer machine legitimately may not have major 22.
 # When it does not, this gate prints a `SKIP` line naming BOTH the version it needs and the version it
-# found, and exits 0 — pargates.py counts an rc=0 run whose first 400 chars contain "SKIP" as a SKIP, not
-# as a pass ("A gate that SKIPS is not a gate that PASSED"), so an absent clang-format can never be read as
-# a clean style leg. The pin itself is read out of formatcheck.sh (WANT_MAJOR), never hardcoded here, so
+# found, and exits 0 — and prints NO verdict before it, so pargates.py reads it as a whole-gate skip ("A
+# gate that SKIPS is not a gate that PASSED"; the rule is classify_skipped() in test/pargates.py: the first
+# verdict marker decides), and an absent clang-format can never be read as a clean style leg. The pin itself is read out of formatcheck.sh (WANT_MAJOR), never hardcoded here, so
 # the two cannot drift apart.
 #
 # ARMS
@@ -81,7 +81,7 @@ have="${PICKED#*|}"
 # every candidate and the major found at it, so a SKIP says what the machine actually has and where
 CANDS="CLANG_FORMAT=[${CAND_ENV:-unset}${MAJ_ENV:+ major $MAJ_ENV}] PATH=[${CAND_PATH:-none}${MAJ_PATH:+ major $MAJ_PATH}] homebrew=[${CAND_BREW:-none}${MAJ_BREW:+ major $MAJ_BREW}]"
 
-# ── the SKIP, with the reason spelled out (pargates.py reads "SKIP" in the first 400 chars) ──────────
+# ── the SKIP, with the reason spelled out, and printed before this gate claims any verdict ──────────
 if [ -z "$WANT_MAJOR" ]; then
     echo "formatgatecheck: could not read WANT_MAJOR out of scripts/formatcheck.sh — the pin this gate reports on is gone"
     exit 1

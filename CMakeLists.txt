@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 # The version string lives in exactly ONE place — this project() call. --version (main.cpp)
 # reads it via the generated version.h below; test/versioncheck.sh asserts the two never drift.
-project(ripwire VERSION 0.6.0 LANGUAGES C CXX)
+project(ripwire VERSION 0.6.1 LANGUAGES C CXX)
 
 # ---- language standards (C++23 for our own code / C11 for the vendored C dependencies) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -516,6 +516,7 @@ set(RIPWIRE_SRCS
   src/pagerank.cpp
   src/infra/diagnostics.cpp
   src/infra/platform_compat.cpp
+  $<$<BOOL:${WIN32}>:src/infra/os_win32.cpp>
 )
 
 # The global profile uses -ffast-math, but PageRank reductions must not reassociate (the determinism

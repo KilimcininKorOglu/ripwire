@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mcpedit.h"
+#include "infra/os.h"   // rw::os::realpath / getcwd / lstat — plan-directory confinement and the symlink-target refusal
 #include "nextverb.h"   // E4: nextFlag — the shell-safe spelling of the rollback message's one next:
 
 #include <filesystem>
@@ -104,7 +105,7 @@ inline std::string canonicalEditPlanPath( std::string_view path )
     return ec ? std::string() : weak.generic_string();
 #else
     char buf[ PATH_MAX ];
-    return ::realpath( std::string( path ).c_str(), buf ) != nullptr ? std::string( buf ) : std::string();
+    return os::realpath( std::string( path ).c_str(), buf ) != nullptr ? std::string( buf ) : std::string();
 #endif
 }
 
@@ -118,7 +119,7 @@ inline std::string planDirAbs( const std::string& planPath )
     return canonicalEditPlanPath( dir.empty() ? std::string_view( "." ) : std::string_view( dir ) );
 #else
     char              buf[ PATH_MAX ];
-    return ::realpath( dir.empty() ? "/" : dir.c_str(), buf ) != nullptr ? std::string( buf ) : std::string();
+    return os::realpath( dir.empty() ? "/" : dir.c_str(), buf ) != nullptr ? std::string( buf ) : std::string();
 #endif
 }
 
@@ -145,7 +146,7 @@ inline bool payloadWithinPlanDir( const std::string& planPath, const std::string
     // relative to the CWD (not to `dir` — joining it to `dir` a second time would silently un-escape a
     // "../" payload, which is the exact bug this function exists to catch).
     char cwdBuf[ PATH_MAX ];
-    const std::string cwd = ::getcwd( cwdBuf, sizeof( cwdBuf ) ) != nullptr ? std::string( cwdBuf ) : std::string();
+    const std::string cwd = os::getcwd( cwdBuf, sizeof( cwdBuf ) ) != nullptr ? std::string( cwdBuf ) : std::string();
     if( cwd.empty() && !isEditPathAbsolute( payloadPath ) )
     {
         resolved = payloadPath;
@@ -178,7 +179,7 @@ inline bool payloadWithinPlanDir( const std::string& planPath, const std::string
     }
 #else
     char buf[ PATH_MAX ];
-    if( ::realpath( lexical.c_str(), buf ) != nullptr )
+    if( os::realpath( lexical.c_str(), buf ) != nullptr )
     {
         resolved = std::string( buf );
         return pathIsUnder( resolved, dir );
@@ -306,8 +307,8 @@ inline std::pair<FileStage*, std::string> ensureStage( const McpIndex& ix, const
                    ? std::string( rw::sarif::rootRelativeUri( ix.ing.files[edit.fileId], rw::sarif::rootPrefixOf( root ) ) )
                    : ix.ing.files[edit.fileId];
     fresh.disk = diskPath( ix.ing, edit.fileId );
-    struct stat link{};
-    if( ::lstat( fresh.disk.c_str(), &link ) == 0 && S_ISLNK( link.st_mode ) ) { return { nullptr, "refusing edit plan target symlink '" + fresh.identity + "'" }; }
+    os::stat_t link{};
+    if( os::lstat( fresh.disk.c_str(), &link ) == 0 && S_ISLNK( link.st_mode ) ) { return { nullptr, "refusing edit plan target symlink '" + fresh.identity + "'" }; }
     bool readOk = false;
     fresh.original = mcpdetail::readFileBytes( fresh.disk, readOk );
     fresh.baseHash = readOk ? mcpdetail::byteHash( fresh.original.data(), fresh.original.size() ) : 0;

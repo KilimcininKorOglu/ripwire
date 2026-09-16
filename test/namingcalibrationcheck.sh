@@ -19,8 +19,9 @@
 #
 # TWO ARMS, and they answer different questions:
 #   B. LIVE — the verb on the repo under test. Reports the real numbers; enforces the floors only when
-#      the sample can carry them. It runs FIRST so that its SKIP banner lands inside the first bytes of
-#      output, which is where test/pargates.py looks when deciding whether a gate proved anything.
+#      the sample can carry them. It runs FIRST so that its SKIP banner precedes every PASS row this gate
+#      prints: test/pargates.py reads the FIRST verdict marker to decide whether a gate proved anything
+#      (classify_skipped()), so the order of these two arms is load-bearing, not cosmetic.
 #   A. INSTRUMENT — a synthetic repo whose renames are hand-derivable. Proves mine -> join -> score
 #      actually works. Without it, "every rule scored 0" is indistinguishable from "the scorer is
 #      broken", so this arm is enforced ALWAYS, including on the runs where arm B skips.
@@ -70,9 +71,9 @@ echo "LIVE CORPUS: $livecommits commits, $livecand raw substitutions mined, $liv
 skipping=0
 if [ "$livepairs" -lt "$MIN_PAIRS" ]; then
     skipping=1
-    # This banner is deliberately within the first bytes of output: test/pargates.py classifies a gate as
-    # skipped — "ran, but proved nothing" — on exactly that, and this gate proving its INSTRUMENT works is
-    # not the same thing as this gate having judged the RULES.
+    # This banner is deliberately printed BEFORE the instrument arm's PASS rows: test/pargates.py classifies
+    # a gate as skipped — "ran, but proved nothing" — when a SKIP marker precedes every PASS and FAIL marker,
+    # and this gate proving its INSTRUMENT works is not the same thing as this gate having judged the RULES.
     echo "namingcalibrationcheck: SKIP — $livepairs labelled pairs is below the declared floor of $MIN_PAIRS, so no per-rule proxy is estimable"
     echo "  (renames are a NOISY proxy — rebrands, moves and API changes all look like renames — so a proxy over"
     echo "   $livepairs pairs would be noise wearing a decimal point. The instrument arm below is still enforced.)"

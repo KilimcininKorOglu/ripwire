@@ -24,6 +24,7 @@
 // order elsewhere never matters to it.
 
 #include "editcheck.h"      // editCheckBundleText / editCheckGroups / editCheckAmbiguousMessage
+#include "infra/os.h"   // rw::os::getpid — the per-process preview temp root
 #include "mcpedit.h"        // Op / applyEdit / detectDominantEol / normalizeToCrlf / kBinaryPayloadRefusal
 #include "ingest.h"         // ingest() — the ONE parser path; looksBinary
 #include "graph.h"          // buildGraph / resolveAllByNameQualified
@@ -379,7 +380,7 @@ inline Outcome run( const IngestResult& ing, const Graph& g, const std::string& 
 
     const std::string relPath = std::string( rw::sarif::rootRelativeUri( path, rw::sarif::rootPrefixOf( root ) ) );
     std::error_code   ec;
-    const std::string tmpRoot = quality::cacheDirLadder() + "/ripwire-editpreview-" + std::to_string( ::getpid() );
+    const std::string tmpRoot = quality::cacheDirLadder() + "/ripwire-editpreview-" + std::to_string( os::getpid() );
     fs::remove_all( fs::path( tmpRoot ), ec );                    // a leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     {

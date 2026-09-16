@@ -172,21 +172,17 @@
 #if defined( _WIN32 )
   #include <windows.h>               // CreateFileW + FILE_FLAG_OPEN_REPARSE_POINT — Windows' atomic no-follow open
   #include <io.h>                    // _open_osfhandle / _chsize_s / _write / _close
-#else
-  #include <fcntl.h>                 // ::open + O_NOFOLLOW + O_NONBLOCK — the whole mechanism, in one syscall
-  #include <sys/stat.h>              // ::lstat + S_ISLNK (mcpedit, and the post-ELOOP wording); ::fstat + S_ISREG (round 4)
-  #include <unistd.h>                // ::write / ::close — the descriptor the writers hold instead of a stream
 #endif
+#include "infra/os.h"     // os::open + O_NOFOLLOW + O_NONBLOCK — the whole mechanism, in one syscall; os::lstat + S_ISLNK (mcpedit, and
+                          // the post-ELOOP wording); os::fstat + S_ISREG (round 4); os::write / os::close — the descriptor the writers
+                          // hold instead of a stream
 #include <cerrno>
 #include <cstddef>
-#include <cstdio>         // std::FILE / ::fdopen / ::getline / std::fclose — the read half's line stream
+#include <cstdio>         // std::FILE / os::fdopen / os::getline / std::fclose — the read half's line stream
 #include <cstdlib>        // std::free — POSIX getline's buffer
 #include <cstring>        // std::strerror — an honest reason for a failure that is not a link
 #include <string>
 #include <string_view>
-#if !defined( _WIN32 )
-  #include <sys/types.h>              // ssize_t
-#endif
 
 namespace rw::pathguard
 {
@@ -224,8 +220,8 @@ inline bool isSymlink( const std::string& path ) noexcept
 #else
 inline bool isSymlink( const std::string& path ) noexcept
 {
-    struct stat linkSt{};
-    return ::lstat( path.c_str(), &linkSt ) == 0 && S_ISLNK( linkSt.st_mode );
+    os::stat_t linkSt{};
+    return os::lstat( path.c_str(), &linkSt ) == 0 && S_ISLNK( linkSt.st_mode );
 }
 #endif
 
@@ -450,30 +446,30 @@ inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string
     }
     return { fd, 0 };
 #else
-    const int fd = ::open( path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666 );
+    const int fd = os::open( path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666 );
     if( fd >= 0 )
     {
-        struct stat openedSt{};
-        if( ::fstat( fd, &openedSt ) != 0 )
+        os::stat_t openedSt{};
+        if( os::fstat( fd, &openedSt ) != 0 )
         {
             const int statErr = errno;
-            ::close( fd );
+            os::close( fd );
             rw::emitTo( stderr, "ripwire: could not inspect {} at '{}': {}. Nothing was written.\n", what, path, std::strerror( statErr ) );
             return { -1, statErr };
         }
         if( !S_ISREG( openedSt.st_mode ) )
         {
-            ::close( fd );
+            os::close( fd );
             rw::emitTo( stderr,
                         "ripwire: refusing to write {} at '{}': that path is not a regular file (a FIFO, for example), so there is no\n"
                         "  sidecar there to write. Nothing was written. Remove it and re-run.\n",
                         what, path );
             return { -1, EINVAL };
         }
-        if( ::ftruncate( fd, 0 ) != 0 )
+        if( os::ftruncate( fd, 0 ) != 0 )
         {
             const int truncErr = errno;
-            ::close( fd );
+            os::close( fd );
             rw::emitTo( stderr, "ripwire: could not truncate {} at '{}' for writing: {}. Nothing was written.\n", what, path, std::strerror( truncErr ) );
             return { -1, truncErr };
         }
@@ -525,13 +521,7 @@ inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
     std::size_t off   = 0;
     while( off < bytes.size() )
     {
-#if defined( _WIN32 )
-        const std::size_t remaining = bytes.size() - off;
-        const unsigned int toWrite = remaining > ( 1u << 20 ) ? ( 1u << 20 ) : static_cast<unsigned int>( remaining );
-        const int n = ::_write( fd, bytes.data() + off, toWrite );
-#else
-        const ssize_t n = ::write( fd, bytes.data() + off, bytes.size() - off );
-#endif
+        const os::ssize_t n = os::write( fd, bytes.data() + off, bytes.size() - off );
         if( n > 0 )
         {
             off += static_cast<std::size_t>( n );
@@ -544,11 +534,7 @@ inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
         wrote = false;
         break;
     }
-#if defined( _WIN32 )
-    if( ::_close( fd ) != 0 )
-#else
-    if( ::close( fd ) != 0 )
-#endif
+    if( os::close( fd ) != 0 )
     {
         wrote = false;
     }
@@ -648,7 +634,7 @@ struct NoFollowRead
             line.push_back( c );
         }
 #else
-        const ssize_t got = ::getline( &lineBuf, &lineCap, file );
+        const os::ssize_t got = os::getline( &lineBuf, &lineCap, file );
         if( got < 0 )
         {
             return false;
@@ -770,7 +756,7 @@ inline NoFollowRead openNoFollowRead( std::string_view what, const std::string& 
     }
     return result;
 #else
-    const int    fd = ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK );
+    const int    fd = os::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK );
     if( fd < 0 )
     {
         result.err = errno;
@@ -800,17 +786,17 @@ inline NoFollowRead openNoFollowRead( std::string_view what, const std::string& 
     }
 
     result.opened = true;
-    struct stat openedSt{};
-    if( ::fstat( fd, &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+    os::stat_t openedSt{};
+    if( os::fstat( fd, &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
     {
-        ::close( fd );   // a FIFO, a directory, a device: present, and no lines — never a read that could wait
+        os::close( fd );   // a FIFO, a directory, a device: present, and no lines — never a read that could wait
         return result;
     }
-    result.file = ::fdopen( fd, "r" );
+    result.file = os::fdopen( fd, "r" );
     if( result.file == nullptr )
     {
         result.err = errno;
-        ::close( fd );   // fdopen did not take the descriptor, so it is still this function's to close
+        os::close( fd );   // fdopen did not take the descriptor, so it is still this function's to close
     }
     return result;
 #endif

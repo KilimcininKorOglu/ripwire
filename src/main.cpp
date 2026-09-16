@@ -128,17 +128,10 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include <vector>
 #include <cstdint>
 #include <climits>
-#include <sys/stat.h>
-#include <unistd.h>           // getpid — unique temp-dir suffix for the HEAD-snapshot path (T0.1)
 #include <chrono>             // VT-1 --run-trace: the wall clock behind duration_ms/timeout (steady_clock)
 #include <csignal>            // VT-1 --run-trace: SIGKILL for the timeout's process-group kill
-#include <fcntl.h>            // VT-1 --run-trace: /dev/null for the child's stdin
-#include <poll.h>             // VT-1 --run-trace: the capture loop's deadline wait
-#include <sys/wait.h>         // VT-1 --run-trace: waitpid — the command's exit status, honestly decoded
 #include <tree_sitter/api.h>  // --doctor's grammar-probe check (ts_query_new against each grammar's tags.scm)
-#if defined( __APPLE__ )
-#include <mach-o/dyld.h>       // --doctor's self-exe-path check (_NSGetExecutablePath)
-#endif
+#include "infra/os.h"         // rw::os — getpid, the --run-trace child (spawn_sh/poll/waitpid/kill), --doctor's exepath
 
 namespace
 {
@@ -377,8 +370,8 @@ inline ExpandToken parseExpandToken( const std::string& token, const char* verb 
 // fetched"). Clamped to >= 0 so a clock skew (mtime in the future) never prints a negative age.
 long cloneAgeDays( const std::string& cacheDir )
 {
-    struct stat st{};
-    if( ::stat( cacheDir.c_str(), &st ) != 0 )
+    rw::os::stat_t st{};
+    if( rw::os::stat( cacheDir.c_str(), &st ) != 0 )
     {
         return 0;
     }
@@ -431,7 +424,7 @@ std::pair<std::string, bool> resolveRemoteRoot( const std::string& urlOrPath, bo
                              "clone --depth=1 -q -- " + rw::shSingleQuote( urlOrPath )
                           + " " + rw::shSingleQuote( cacheDir ) + " 2>&1";
     rw::emitTo( stderr, "ripwire: cloning {} → {}\n", urlOrPath.c_str(), cacheDir.c_str() );
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = rw::os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         rw::emitRaw( stderr, "ripwire: could not launch git clone (is git on PATH?)\n" );
@@ -442,7 +435,7 @@ std::pair<std::string, bool> resolveRemoteRoot( const std::string& urlOrPath, bo
     {
         rw::emitTo( stderr, "  {}", rw::cstr( line ) ); // surface git's own diagnostics
     }
-    const int rc = pclose( pipe );
+    const int rc = rw::os::pclose( pipe );
     if( rc != 0 || !( fs::exists( fs::path( cacheDir ) / ".git", ec ) && !ec ) )
     {
         rw::emitTo( stderr, "ripwire: git clone failed for {}\n", urlOrPath.c_str() );
@@ -706,9 +699,9 @@ NoteTargetResolution resolveNoteAddTarget( const MainDispatch& d, const std::str
     // ── resolved NOTHING ────────────────────────────────────────────────────────────────────────────────
     const bool onDisk = [ & ]
     {
-        struct stat st{};
+        rw::os::stat_t st{};
         const std::string abs = normalized.empty() || normalized.front() == '/' ? normalized : d.root + "/" + normalized;
-        return ::stat( abs.c_str(), &st ) == 0;
+        return rw::os::stat( abs.c_str(), &st ) == 0;
     }();
     if( !notes::noteTargetIsPathShaped( normalized ) && !onDisk )
     {
@@ -958,7 +951,7 @@ inline TokenBudgetBuffer openTokenBudgetBuffer( std::size_t tokenBudget, std::FI
 {
     TokenBudgetBuffer tb;
     if( tokenBudget == 0 ) { tb.out = real; return tb; }
-    tb.mem = open_memstream( &tb.buf, &tb.sz );
+    tb.mem = rw::os::open_memstream( &tb.buf, &tb.sz );
     if( !tb.mem )
     {
         DEGRADED_PATH_ALERT( "openTokenBudgetBuffer: open_memstream failed — falling back to direct stdout" );
@@ -3278,14 +3271,14 @@ static bool cachePathIsDirectory( const std::string& cachePath )
 // size bound, a short read.
 static std::string_view scipIndexUnreadableReason( const std::string& scipPath )
 {
-    const int probeFd = ::open( scipPath.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    const int probeFd = rw::os::open( scipPath.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
     if( probeFd < 0 )
     {
         return "cannot open the index";
     }
-    struct stat probeStat;
-    const bool  isStatted = ::fstat( probeFd, &probeStat ) == 0;
-    ::close( probeFd );
+    rw::os::stat_t probeStat;
+    const bool  isStatted = rw::os::fstat( probeFd, &probeStat ) == 0;
+    rw::os::close( probeFd );
     if( !isStatted )
     {
         DEGRADED_PATH_ALERT( "--scip: fstat on the opened index failed — file kind and size undecided, loadScipOverlay's read decides" );
@@ -3447,19 +3440,19 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
         std::fputs( "ripwire: --legend=compact: could not open a capture buffer — emitting the full legend instead\n", stderr );
         return dispatchMain( cfg, argv );
     }
-    const int savedStdout = dup( STDOUT_FILENO );
-    if( savedStdout < 0 || dup2( fileno( capture ), STDOUT_FILENO ) < 0 )
+    const int savedStdout = rw::os::dup( STDOUT_FILENO );
+    if( savedStdout < 0 || rw::os::dup2( rw::os::fileno( capture ), STDOUT_FILENO ) < 0 )
     {
         DEGRADED_PATH_ALERT( "runWithCompactLegend: dup/dup2 failed — the FULL legend is emitted where compact was asked for" );
         std::fputs( "ripwire: --legend=compact: could not redirect stdout — emitting the full legend instead\n", stderr );
-        if( savedStdout >= 0 ) { close( savedStdout ); }
+        if( savedStdout >= 0 ) { rw::os::close( savedStdout ); }
         std::fclose( capture );
         return dispatchMain( cfg, argv );
     }
     const int rc = dispatchMain( cfg, argv );
     std::fflush( stdout );
-    dup2( savedStdout, STDOUT_FILENO );
-    close( savedStdout );
+    rw::os::dup2( savedStdout, STDOUT_FILENO );
+    rw::os::close( savedStdout );
 
     std::string doc;
     std::rewind( capture );
@@ -4334,7 +4327,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         for( const Family& fam : families )
         {
             const std::string path = base + fam.suffix;
-            rw::compat::rw_remove_utf8( path.c_str() );                     // force-rebuild: a stale warm file must not shadow the generate
+            rw::os::remove( path.c_str() );                     // force-rebuild: a stale warm file must not shadow the generate
 
             IngestResult r = ingest( root.c_str(), cfg.excludes, path, cfg.maxFileBytes, fam.rich, {}, !cfg.noIgnore, processCacheDir );
             (void)r;

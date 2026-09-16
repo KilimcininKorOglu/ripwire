@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::realpath — root identity
 
 
 // workspace.h — multi-root workspaces: N crawl roots → ONE merged symbol graph.
@@ -49,15 +50,7 @@ namespace wsdetail
     inline std::string realOf( const std::string& p )
     {
         char buf[ PATH_MAX ];
-        std::string real = ::realpath( p.c_str(), buf ) ? std::string( buf ) : p;
-        for( char& c : real )
-        {
-            if( c == '\\' )
-            {
-                c = '/';
-            }
-        }
-        return real;
+        return os::realpath( p.c_str(), buf ) ? std::string( buf ) : p;
     }
 
     // split a string on `delim` into its whole segments (no empties — a run of delimiters or a

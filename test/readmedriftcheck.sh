@@ -157,6 +157,12 @@ fi
 # "survey of\n220 tools" across a line boundary would otherwise make a line-oriented grep report "no
 # sentence found" — loud, but for the wrong reason, and one reflow away from a maintainer deleting the
 # arm as broken. Flattening makes the claimed rewrap-immunity actually true.
+# `head -1` in both extractions below is DELIBERATE and covered, not an oversight: (E2) asks whether the
+# FIRST copy agrees with the tables, and (E2b)/(E2d) ask whether EVERY copy agrees with each other — one
+# distinct value each, however many times the claim is printed. The two halves compose: first-copy-correct
+# plus all-copies-equal is all-copies-correct. Neither arm on its own is enough, which is why both exist
+# and why a third spelling of either claim (README says "The survey describes N tools" once) is reported
+# below as the population these matchers do NOT reach rather than left for someone to assume they do.
 counts_from() {                      # $1 = file → prints "M P N" (empty field = not found)
     local f="$1" flat pair survey
     flat="$( sed 's/\*//g' "$f" | tr '\n' ' ' | tr -s ' ' )"
@@ -276,6 +282,58 @@ elif [ "$( pairs_from "$TMP/README_second_copy_bad.md" | grep -c . )" -eq 2 ]; t
     ok "(E2c) mutation control: a drifted SECOND copy ($wrong_pair) is seen as a second distinct pair — the arm fires where (E2) alone would stay green ((E2) on the mutated copy still reads: $( counts_from "$TMP/README_second_copy_bad.md" | awk '{print $1}' ) repositories)"
 else
     no "(E2c) mutation control: a drifted second copy was NOT seen as a distinct pair — the arm cannot fail"
+fi
+
+# (E2d) EVERY copy of the SURVEY sentence must agree — the same demand (E2b) makes of the pair, for the
+#       number beside it. `counts_from` reads `survey of <N> tools` with `head -1` too, so until this arm a
+#       drifted SECOND copy of the survey figure was a published number with no instrument on it. The copy
+#       count is reported, never pinned: adding a copy is free and drifting one is not.
+surveys_from() {                     # $1 = file → every distinct "survey of <N> tools", one per line
+    sed 's/\*//g' "$1" | tr '\n' ' ' | tr -s ' ' | grep -oE 'survey of [0-9]+ tools' | sort -u
+}
+readme_surveys="$( surveys_from "$README" )"
+readme_survey_copies="$( sed 's/\*//g' "$README" | tr '\n' ' ' | tr -s ' ' | grep -oE 'survey of [0-9]+ tools' | wc -l | tr -d ' ' )"
+readme_survey_distinct="$( printf '%s\n' "$readme_surveys" | grep -c . )"
+if [ "$readme_survey_copies" -lt 1 ]; then
+    no "(E2d) README.md states no 'survey of <N> tools' sentence at all — the claim cannot have gone right by vanishing"
+elif [ "$readme_survey_distinct" -eq 1 ]; then
+    ok "(E2d) README.md's $readme_survey_copies copies of the survey sentence agree on one value ($readme_surveys)"
+else
+    no "(E2d) README.md prints $readme_survey_distinct DIFFERENT survey figures across $readme_survey_copies copies — every copy must agree: $( printf '%s' "$readme_surveys" | tr '\n' ';' )"
+fi
+
+# (E2e) mutation control for (E2d): mutate ONLY THE SECOND copy — the one (E2)'s `head -1` can never see —
+#       assert the mutation took, then re-run the IDENTICAL extraction over it. A control that mutated the
+#       first copy would be caught by (E2) and would prove nothing about this arm.
+first_survey="$( printf '%s\n' "$readme_surveys" | head -1 )"
+wrong_survey="$( printf '%s' "$first_survey" | sed -E "s/of [0-9]+ tools/of $(( d_surveyed + 7 )) tools/" )"
+awk -v pat="$first_survey" -v rep="$wrong_survey" 'BEGIN{c=0} { if (index($0, pat) > 0) { c++; if (c == 2) { sub(pat, rep) } } print }' "$README" > "$TMP/README_second_survey_bad.md"
+if [ "$readme_survey_copies" -lt 2 ]; then
+    no "(E2e) mutation control: README.md carries only $readme_survey_copies copy of the survey sentence, so a second-copy mutation cannot be staged — the control is void, not passed"
+elif [ "$( grep -c -F "$wrong_survey" "$TMP/README_second_survey_bad.md" )" -ne 1 ]; then
+    no "(E2e) mutation control: the second-copy mutation did not take ($wrong_survey not found exactly once in the mutated copy)"
+elif [ "$( surveys_from "$TMP/README_second_survey_bad.md" | grep -c . )" -eq 2 ]; then
+    ok "(E2e) mutation control: a drifted SECOND survey copy ($wrong_survey) is seen as a second distinct figure — the arm fires where (E2) alone would stay green ((E2) on the mutated copy still reads: $( counts_from "$TMP/README_second_survey_bad.md" | awk '{print $3}' ) tools)"
+else
+    no "(E2e) mutation control: a drifted second survey copy was NOT seen as a distinct figure — the arm cannot fail"
+fi
+
+# (E2f) THE POPULATION THESE MATCHERS DO NOT REACH, stated rather than assumed. Both extractions match one
+#       SPELLING of each claim. README spells the survey figure a third way ("The survey describes N tools"),
+#       which no arm above examines, so this arm counts every `<N> tools` mention and reports how many of them
+#       the checked spelling covers. It FAILS only when an unmatched mention carries a DIFFERENT number from
+#       the derived one — the drift that matters — and otherwise prints the coverage, so the next person to
+#       move that number reads what is and is not instrumented instead of inferring it.
+tools_mentions="$( sed 's/\*//g' "$README" | tr '\n' ' ' | tr -s ' ' | grep -oE '[0-9]+ tools' | sort | uniq -c | tr -s ' ' | sed 's/^ //' )"
+tools_wrong="$( printf '%s\n' "$tools_mentions" | awk -v want="$d_surveyed" '{ n = $2 + 0; if ( n != want ) print $0 }' )"
+# `grep -o | wc -l`, never `grep -c`: the text above is FLATTENED to one line, so a line count reports 1
+# however many mentions it holds — the first draft of this arm printed "all 1 mentions" beside "3 of them",
+# a self-contradicting row that was only visible because the two numbers sat in one sentence.
+tools_total="$( sed 's/\*//g' "$README" | tr '\n' ' ' | tr -s ' ' | grep -oE '[0-9]+ tools' | wc -l | tr -d ' ' )"
+if [ -n "$tools_wrong" ]; then
+    no "(E2f) README.md mentions a tool count that is not the derived $d_surveyed: $( printf '%s' "$tools_wrong" | tr '\n' ';' )"
+else
+    ok "(E2f) all $tools_total '<N> tools' mentions in README.md read $d_surveyed; $readme_survey_copies of them are in the 'survey of N tools' spelling (E2d) examines"
 fi
 
 # (E10) LINEAGE's DISJOINTNESS SENTENCE must carry the same numbers as its own header.

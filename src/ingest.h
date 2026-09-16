@@ -15,6 +15,7 @@
 
 #include "model.h"
 #include "infra/platform_compat.h"
+#include "infra/os.h"   // rw::os::realpath — canonicalCrawlRoot and the containment check
 
 #include <atomic>       // AstQueryGroup::ellipsisCappedOut — a summed counter across the parallel file walk
 #include <cctype>
@@ -330,11 +331,7 @@ inline std::string canonicalCrawlRoot( std::string_view rootDir )
     const std::string& dir = requested;
 #endif
     char              resolved[ PATH_MAX ];
-#if defined( _WIN32 )
-    return rw::compat::rw_realpath( dir.c_str(), resolved ) != nullptr ? std::string( resolved ) : dir;
-#else
-    return ::realpath( dir.c_str(), resolved ) != nullptr ? std::string( resolved ) : dir;
-#endif
+    return os::realpath( dir.c_str(), resolved ) != nullptr ? std::string( resolved ) : dir;
 }
 
 // Does `path` (as the walk spelled it) still live inside `rootReal` once every link on it is resolved?
@@ -342,7 +339,7 @@ inline std::string canonicalCrawlRoot( std::string_view rootDir )
 inline bool crawlPathStaysInRoot( const std::string& path, const std::string& rootReal ) noexcept
 {
     char resolved[ PATH_MAX ];
-    if( ::realpath( path.c_str(), resolved ) == nullptr )
+    if( os::realpath( path.c_str(), resolved ) == nullptr )
     {
         return false;   // fail closed
     }

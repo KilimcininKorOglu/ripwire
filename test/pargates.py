@@ -1023,9 +1023,14 @@ exclusive_gates = [g for g in gates if g in exclusive]
 #      hijack the selection; only if a gate produced none of those (it died before its own reporting)
 #      do the loose shapes -- `error:`, `fatal`, `Sanitizer`, a Python traceback, a missing binary --
 #      get a turn.
+REPORT_CHARS = 2000     # the stored report for a skipped gate -- see skip_report(), which keeps the declaration
 FAIL_TAIL_LINES = 5
 FAIL_MARK_LINES = 10
-_MARKER_RE = re.compile(r"^\s*FAIL\b|^FAILURES ABOVE|SOME CHECKS FAILED|^\s*TIMEOUT after")
+# re.M because classify_skipped() matches this against a WHOLE transcript: without it `^` binds only to the start
+# of the string, every anchored alternative here is dead below line 1, and the only one that would still fire is the
+# unanchored "SOME CHECKS FAILED" -- so a gate that printed a FAIL row and then a SKIP row read as "proved nothing".
+# A no-op for failure_lines(), which searches one line at a time: a single line has no newline for `^` to find.
+_MARKER_RE = re.compile(r"^\s*FAIL\b|^FAILURES ABOVE|SOME CHECKS FAILED|^\s*TIMEOUT after", re.M)
 _LOOSE_RE = re.compile(r"error:|fatal|Sanitizer|Traceback|command not found|no ripwire binary|required$")
 
 
@@ -1064,6 +1069,104 @@ def failure_report(out, logpath):
         block.append(f"  L{lineno}: {ln}")
     block.append(f"full output: {logpath}")
     return "\n".join(block)
+
+
+# --- SKIPPED vs PASSED: a gate's FIRST verdict decides (2026-09-13) ----------------------------------------------
+# A gate that SKIPS is not a gate that PASSED. argvdiffcheck skips without a RIPWIRE_BASE reference binary, and
+# reporting that as a pass is exactly the green-while-inert failure this suite exists to catch elsewhere (the
+# CI/NDEBUG blindness is the same family).
+#
+# This used to read `"SKIP" in out[:400]` -- a ruler laid over the transcript, and the transcript's origin moves.
+# The ruler was 400 CHARACTERS, not bytes: run_gate hands back raw bytes, run() decodes them
+# (`out = raw.decode("utf-8", "replace")`) and the slice lands on the str, so it counted code points. This
+# suite prints box-drawing rules and em dashes liberally, so an offset quoted in bytes against that threshold
+# is a unit error -- which is why every offset below names its unit.
+# Gates open with a banner naming their own absolute paths (`<name>: BIN=<abs>  ROOT=<abs>`) -- 515 of the 628
+# transcripts in one full run carry the crawl root in their first line -- so for those the window's CONTENTS are a
+# function of the checkout's pathname. Measured on w3fixlegendcheck, whose output is byte-identical after line 1:
+# the banner is 217 B from an 87-char root and 67 B from a 12-char one, and every offset after it moves by that
+# 150 B -- about 2 B per character of path, because the root is spelled twice.
+#
+# REPRODUCED, and the tree matters. The reported symptom was `skip=2` from a 137-char checkout against `skip=3`
+# from a 38-char one on 3c191bdf -- a commit on lane/recent-scope, NOT on main. On that tree w3fixlegendcheck's
+# N=3 partition arm TIES (`TIE 0.0928 vs 0.093`) and honestly skips, and that tie row is the third thing the gate
+# prints. Running that tree's gate from two checkouts, same binary, arm output byte-identical after line 1:
+#     38-char root    banner 168 B    tie row starts at 308    -> old rule: SKIP
+#    138-char root    banner 268 B    tie row starts at 408    -> old rule: PASS
+# It straddles the window by 8 bytes. On main (c1915d21) that arm does NOT tie -- N=3 passes -- so its only skip
+# marker is the NDEBUG degrade row about 3 KB in, and the symptom does not reproduce there at any path length.
+# An absolute offset in this comment is therefore a property of a named tree, never a constant of the gate.
+# `skip=` is read before every push; a count that moves with the pathname is not evidence.
+#
+# AND THE EXPOSURE IS NOT ONE GATE'S. Measured over all 628 transcripts of one full run: 24 gates print a skip
+# MARKER downstream of at least one absolute-root mention (28 by the bare substring the old rule actually looked
+# for, the extra four being gates that only narrate the word), so their classification moves with the checkout. The
+# nearest is a REAL standing skip -- editchecknotecheck declares its skip at byte 145, and 255 more characters of
+# checkout path (a 342-char root: ordinary for a nested worktree or a CI runner) push that declaration out of the
+# window, at which point the suite reports a gate that proved nothing as a PASS. Which gates are in range is a
+# property of the MACHINE, not of the commit, so the answer is not a wider window.
+#
+# THE RULE: a gate that proves nothing says so BEFORE it claims anything. The FIRST verdict marker in the
+# transcript decides -- a SKIP ahead of every PASS and FAIL marker is a WHOLE-GATE skip ("ran, but proved
+# nothing"); a SKIP that follows one is an ARM-level skip inside a gate that did prove something, and the gate is
+# a pass. That is what this tree already did on purpose -- namingcalibrationcheck runs its live arm FIRST so that
+# its skip banner precedes the instrument arm's pass rows, argvdiffcheck's skip is its opening line -- now written
+# down and free of the offsets. (That gate's comment used to justify the order by byte offset; this same change
+# rewrote it, so there is no longer a sentence there to quote.) Measured over one full run's 628 transcripts, the new rule and the old one
+# disagree on ZERO gates: it reproduces today's answers on this tree and stops needing the pathname to do it.
+#
+# MARKERS, NOT SUBSTRINGS. Five gates NARRATE the word SKIPPED (doctorcheck, formatgatecheck, headbinstagecheck,
+# mcpreadloopcheck, releaseinstallcheck) and prove plenty, so a verdict must be a row this tree's helpers actually
+# print -- `  SKIP  x` from skip(), `<name>: SKIP ...`, `SKIP: ...`, `...; SKIP` -- never a bare mention of the
+# word. The nearest gate-side contract is test/gateexitcheck.sh arm (D), but it holds LESS than the rule above: it
+# flags an `exit 0` only where both a skip word and "ALL PASS" appear within three lines of it, so it does not
+# police marker ORDER at all. This harness side is pinned by test/skipclassifycheck.sh.
+#
+# THE DIRECTION THIS RULE OPENS, disclosed rather than discovered later. A WHOLE-GATE skip that prints any PASS row
+# BEFORE its skip marker is now counted as a PASS -- it looks exactly like a gate that proved something and then
+# skipped an arm, and no transcript can tell the two apart. No gate in the suite does this today (the 628-transcript
+# replay is the evidence) and the convention "announce the skip before you claim anything" is what the two
+# sanctioned skips already follow, but NOTHING ENFORCES IT: a gate that grew a `  PASS  fixture present` row above
+# its skip banner would go from skip to pass silently. That is the green-while-inert direction this count exists to
+# refuse, so it is stated here as an unenforced convention and is the obvious next arm for gateexitcheck.
+_SKIP_RE = re.compile(r"^[ \t]*SKIP\b|^\S+:[ \t]*SKIP\b|;[ \t]*SKIP[ \t]*$", re.M)
+# The `<name>: PASS` form is real: 15 gates print it, w3fixlegendcheck among them. Widening to it changes 0 of the
+# 628 (no gate that prints it also prints a skip marker), so this is a latent hole closed, not a behaviour change.
+_PASS_RE = re.compile(r"^[ \t]*PASS\b|^[ \t]*ALL PASS\b|^\S+:[ \t]*(?:ALL )?PASS\b", re.M)
+
+
+def classify_skipped(rc, out):
+    """True when the gate RAN BUT PROVED NOTHING: it exited 0, and the FIRST verdict marker in its output is a
+    SKIP. A SKIP marker that follows a PASS or FAIL marker is an arm-level skip inside a gate that proved
+    something, and is not counted. A function of the verdicts alone -- the same output is classified the same way
+    from every checkout, whatever its pathname costs the transcript in leading bytes."""
+    if rc != 0:
+        return False            # a red is a FAILURE however it narrated itself: rc outranks every marker
+    skip = _SKIP_RE.search(out)
+    if skip is None:
+        return False
+    claims = [m.start() for m in (_PASS_RE.search(out), _MARKER_RE.search(out)) if m is not None]
+    return all(skip.start() < c for c in claims)
+
+
+def skip_reason(out):
+    """The gate's own skip declaration, for the SKIPPED section -- the marker line itself, never a line that
+    merely mentions the word."""
+    return next((ln.strip() for ln in out.splitlines() if _SKIP_RE.search(ln)), "")
+
+
+def skip_report(out, limit=REPORT_CHARS):
+    """The report stored for a skipped gate: a bounded prefix of the transcript that is GUARANTEED to carry
+    the gate's own declaration. classify_skipped() reads the WHOLE transcript, so a declaration sitting past
+    `limit` would leave the SKIPPED section printing that gate with an EMPTY reason -- the one thing the
+    section exists to say. Carrying the declaration costs one line, never the transcript, and a gate whose
+    reason already falls inside the prefix gets a byte-identical report. Pinned by arm (H) of
+    test/skipclassifycheck.sh, whose probe declares at character 3221."""
+    head = out[:limit]
+    decl = skip_reason(out)
+    if decl and skip_reason(head) != decl:
+        return decl + "\n" + head
+    return head
 
 
 # --- a gate is its whole process group, and a stop signals all of it (2026-09-10) ---------------------------------
@@ -1324,13 +1427,12 @@ def run(g):
         # the budget expired, and while its group was being stopped, is kept ahead of it: a gate killed at
         # 300 s that had already announced a failing arm used to report ONLY the word TIMEOUT.
         out += f"\nTIMEOUT after {limit}s (declared budget={limit}s{scaled})"
-    # A gate that SKIPS is not a gate that PASSED. argvdiffcheck skips without a RIPWIRE_BASE
-    # reference binary, and reporting that as a pass is exactly the green-while-inert failure this
-    # suite exists to catch elsewhere (the CI/NDEBUG blindness is the same family).
-    skipped = rc == 0 and "SKIP" in out[:400]
+    # SKIPPED vs PASSED -- the gate's first verdict decides; see classify_skipped() for the rule and the red
+    # that produced it (a byte window over a transcript whose origin moves with the checkout's pathname).
+    skipped = classify_skipped(rc, out)
     report = ""
     if skipped:
-        report = out[:2000]                      # enough for the caller to quote the SKIP's own reason
+        report = skip_report(out)            # bounded, and guaranteed to carry the declaration itself
     elif rc != 0:
         # best-effort: a full-output write that fails must never turn the report into a second failure.
         logpath = "(not written)"
@@ -1521,8 +1623,8 @@ if dirt_seen:
     print("***   name -- never build/, __pycache__/ or node_modules/); only then triage the arms above.")
 if skips:
     print("\nSKIPPED (ran, but proved nothing — not counted as passing):")
-    for g, rc, dt, out, _ in skips:
-        why = next((ln.strip() for ln in out.splitlines() if "SKIP" in ln), "")
+    for g, rc, dt, report, _ in skips:       # the 4th field is the stored REPORT, not the full transcript
+        why = skip_reason(report)
         print(f"  {g}  {why}")
 print(f"bin={binp}")
 print("\nslowest:")

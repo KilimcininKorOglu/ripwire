@@ -3035,8 +3035,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         std::vector<std::uint32_t> cur( ro, ro + N );
         for( const E& e : edges ) { const std::uint32_t pos = cur[ e.to ]++; ci[ pos ] = e.from; val[ pos ] = e.w; }
     }
-    VERIFY( verifyCsr( g.inEdges, N ) );
-    VERIFY( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
+    VERIFY_DEBUG_ONLY( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
+    VERIFY_DEBUG_ONLY( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
     }
 
     // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.

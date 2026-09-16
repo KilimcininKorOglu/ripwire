@@ -109,7 +109,8 @@ Please keep it that way.
 **No kqueue.** The long-lived MCP server's FS-event watcher is a macOS/BSD optimisation. On Linux it
 is compiled out and freshness comes from the per-request stat sweep — that is the designed path, not
 a degradation, so it is silent and the staleness contract is unchanged. You can build and run that
-path on a Mac with `cmake -S . -B build-nokqueue -DCMAKE_CXX_FLAGS=-DRIPWIRE_HAS_KQUEUE=0`.
+path on a Mac with `cmake -S . -B build-nokqueue -DCMAKE_CXX_FLAGS=-DRW_OS_HAS_KQUEUE=0` (the seam lives in
+`src/infra/os.h`, which may not name the project, so it is spelled `RW_OS_`).
 
 ### Building on Windows
 
@@ -321,6 +322,21 @@ already knew about the others, several while fixing one. So the rule is mechanic
   Guard, don't assert.
 - Throw only at the `operator new` seam. A throw escaping a worker thread is `std::terminate`, so
   wrap thread bodies in `try { … } catch( ... ) { … }`.
+- **Avoid exception handling. Where a throw is unavoidable, RAII is what makes the code exception-safe:
+  cleanup belongs in a destructor, never in a `catch`.** A handler that releases a resource has to know
+  which resources are live at the point the throw happened, so such handlers multiply — two throw sites
+  in one function own different things and need different teardown, and the handler is only correct
+  until someone adds an early `return` above it. One owner whose destructor releases what it holds
+  collapses that to a single handler whose only job is the conversion this codebase actually wants: a
+  recoverable error becomes a degrade, returned, never propagated. Measured on `216802ad`, 2026-09-14:
+  of **27 `catch` blocks under `src/`, exactly one releases a resource by hand** — `infra/emit.h`'s
+  `renderToString`, which `fclose`s a memstream and `free`s its buffer. The other 26 convert a throw
+  into a degrade, set a flag, return a message, or `continue`; they own nothing, which is why they are
+  one line each. Re-derive rather than trust: a bare `grep -cE '\bcatch[[:space:]]*\('` over `src/`
+  reports **35**, and 8 of those hits are the word inside a `//` comment or inside a tree-sitter query
+  string — most of them in `lintrules.h`, whose subject is *detecting* empty catch blocks in other
+  people's code. Exclude comment and string context, then read each surviving handler's first body
+  line, because the resource question is answered by reading it and not by counting.
 
 ### Naming encodes what the type cannot
 
@@ -363,6 +379,30 @@ already knew about the others, several while fixing one. So the rule is mechanic
 - **Views at seams** (`std::span`, `std::string_view`). The caller owns the storage; allocate from
   a caller-owned arena.
 - **Symmetric bare scopes** for deterministic RAII teardown.
+
+### Operating-system calls: call sites never ask which OS they are on
+
+**Call sites never ask which OS they are on; they call the `rw::os` function that says what they need.**
+`src/infra/os.h` is the one file in `src/` that tests an operating system: every `#if` naming one, every feature
+macro that is really an OS test (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`, the kqueue seam), every POSIX or Windows system
+header, and every call whose behaviour differs by platform. A call site reads like Unix code with a prefix —
+`os::lstat( path, &st )`, `os::rename( tmp, dst )`, `os::flock( fd, LOCK_EX )`, `os::stat_t` — with POSIX names,
+POSIX signatures and the POSIX errno contract, and it asks nothing about the platform: no `#if`, and no platform
+fact (`os::kWindows`, `os::kApple`) in a plain `if` either — those are for `os.h`'s own use. Each POSIX body is the
+libc call itself, `[[gnu::always_inline]]`, over the call's own raw types (no copy, no errno translation, no extra
+syscall), so a release binary carries no out-of-line `rw::os` symbol; where no POSIX call says what a site needs
+(`os::exepath`, `os::dirwatch_open`), the helper is lowercase and C-shaped, its POSIX body is the code that used to
+sit at the site, and its shape keeps that code's evaluation order — a read stays on its side of a `fork` — so the
+caller compiles to the same instructions. Check that with a release build of the base commit and `objdump -d`, not
+by reading. Inside `os.h`, `#if` is kept for what does not exist on the other platform — a header, an
+API or type, a field spelled differently (`st_mtimespec`/`st_mtim`) — while pure logic selects on the facts with
+`if constexpr`, so both branches are type-checked on every CI leg and the non-native one cannot rot. **The naming
+gotcha:** a POSIX name that some libc defines as a *function-like macro* cannot be wrapped by its own name, because
+the declaration and every `os::name(` call expand before the compiler sees a function — `S_ISREG( m )`,
+`S_ISLNK( m )` and the other mode predicates everywhere, and `htons` under glibc at `-O2`. Those stay bare at call
+sites, like the `O_*`/`X_OK`/`PATH_MAX` constants, and `os.h`'s Windows branch defines them. `test/osswitchcheck.sh`
+refuses all of the above outside `os.h`; its one allowlisted file is `src/infra/profilePmc.h`, the profiler's
+undocumented-ABI counter backends.
 
 ### Aliasing: spelling, placement, contract
 

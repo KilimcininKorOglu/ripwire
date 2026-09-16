@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::popen / pclose / rename / remove — the history walk and its cache publish
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -330,9 +331,9 @@ inline bool saveOracleCache( const std::string& path, const HistoryIndex& idx )
     }
     const bool wrote = std::fwrite( body.data(), 1, body.size(), fp ) == body.size();
     std::fclose( fp );
-    if( !wrote || std::rename( tmp.c_str(), path.c_str() ) != 0 )
+    if( !wrote || os::rename( tmp.c_str(), path.c_str() ) != 0 )
     {
-        rw::compat::rw_remove_utf8( tmp.c_str() );
+        os::remove( tmp.c_str() );
         DEGRADED_PATH_ALERT( "gitoracle: history cache write/rename failed — the probe stays correct but re-runs cold" );
         return false;
     }
@@ -526,7 +527,7 @@ template<class OnLine, class KeepWalking>
 inline PatchWalk walkGitPatch( const std::string& cmd, OnLine onLine, KeepWalking keepWalking )
 {
     PatchWalk  walk;
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return walk;                                          // the CALLER names the degrade — it knows what it lost
@@ -576,7 +577,7 @@ inline PatchWalk walkGitPatch( const std::string& cmd, OnLine onLine, KeepWalkin
         char sink[ 65536 ];
         while( std::fread( sink, 1, sizeof( sink ), pipe ) > 0 ) {}
     }
-    walk.status = pclose( pipe );
+    walk.status = os::pclose( pipe );
     return walk;
 }
 
