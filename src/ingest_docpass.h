@@ -16,6 +16,37 @@
 namespace rw
 {
 
+// Publish `text` as the doc bridge cache blob, best effort. The temp is created through the shared exclusive
+// no-follow helper (rw::pathguard::createExclTempFile), whose RAII holder removes it unless commit() renamed it;
+// `.tmp` stays in the name so a residue glob still matches, and fdopen keeps the fwrite/fclose shape. A failed
+// create, write or rename keeps the extracted text and discloses that the cache was not written.
+inline void publishDocBridgeBlob( const std::string& bridgeBlobPath, std::uint32_t tmpKey, const std::string& text )
+{
+    rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( bridgeBlobPath + ".tmp" + std::to_string( tmpKey ) + ".", "", 0666 );
+    const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+    std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
+    if( fp == nullptr )
+    {
+        if( rawFd >= 0 )
+        {
+            ::close( rawFd );
+        }
+        DEGRADED_PATH_ALERT( "ingest: doc bridge cache could not create its temp file — the text is kept, the cache is not written" );
+        return;
+    }
+    const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
+    const bool closed   = std::fclose( fp ) == 0;
+    if( !wroteAll || !closed )
+    {
+        DEGRADED_PATH_ALERT( "ingest: doc bridge cache write failed — the text is kept, the cache is not written" );
+        return;
+    }
+    if( !temp.commit( bridgeBlobPath ) )
+    {
+        DEGRADED_PATH_ALERT( "ingest: doc bridge cache rename failed — the text is kept, the cache is not written" );
+    }
+}
+
 // =====================================================================================
 // The markitdown-bridge doc cache, lifted out of ingest()'s doc post-pass worker (that function is
 // already the file's largest — the logic reads better named). A doc that needs the BRIDGE
@@ -50,25 +81,7 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
         text = docparse::parseDocFile( path, ext );
         if( !text.empty() && !bridgeBlobPath.empty() )
         {
-            // The temp is created through the shared exclusive no-follow helper
-            // (rw::pathguard::createExclTempFile), whose RAII holder removes it unless commit() renamed it;
-            // `.tmp` stays in the name so a residue glob still matches. fdopen keeps the fwrite/fclose shape.
-            rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( bridgeBlobPath + ".tmp" + std::to_string( tmpKey ) + ".", "", 0666 );
-            const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
-            std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
-            if( fp != nullptr )
-            {
-                const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
-                const bool closed   = std::fclose( fp ) == 0;
-                if( wroteAll && closed )
-                {
-                    temp.commit( bridgeBlobPath );
-                }
-            }
-            else if( rawFd >= 0 )
-            {
-                ::close( rawFd );
-            }
+            publishDocBridgeBlob( bridgeBlobPath, tmpKey, text );
         }
     }
     return text;

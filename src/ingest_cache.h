@@ -2575,8 +2575,11 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
                       path.c_str(), std::strerror( openErr )  );   // 2026-09-06: Release kept no signal for this
         return;
     }
-    const std::size_t wrote = std::fwrite( w.b.data(), 1, w.b.size(), fp );
-    const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;
+    // The stream owns the descriptor since releaseFd(), so it closes on every path: the write and the close
+    // are evaluated separately, never short-circuited into one expression.
+    const std::size_t wrote  = std::fwrite( w.b.data(), 1, w.b.size(), fp );
+    const bool        closed = std::fclose( fp ) == 0;
+    const bool        wErr   = wrote != w.b.size() || !closed;
     if( wErr )
     {
         // never rename a short/torn write over a good cache — the holder removes the temp on return

@@ -9,24 +9,32 @@
 #     quality::atomicWriteFile    (.ripwire_quality_acks, qsnap / qbody / …)
 #     ingest::saveCache           (an in-tree --cache= / --index-out= blob)
 #
-# Each now creates that temp with O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC under a CSPRNG-drawn name: an existing
-# entry at the chosen name — a symlink or a regular file — yields EEXIST and is never opened, followed or
-# truncated, and a fresh draw simply picks another name so a stray entry cannot block the write either. The
-# temp lives next to the target (a rename is atomic only within one filesystem). The mechanism (the open
-# flags, one shared helper) is pinned by sidecarsymlinkcheck.sh arms (f6)/(f7); this gate is the behavioural,
-# end-to-end half over the three writers.
+# Each now creates that temp through rw::pathguard::createExclTempFile, which draws a CSPRNG suffix and opens
+# each candidate name with openExclNoFollow (O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC). The temp lives next to the
+# target (a rename is atomic only within one filesystem). What each part of this gate proves, and no more:
 #
-# HOW THE ARM ADDRESSES A TEMP NAME. The temp-name shape is derived from the WRITER's getpid(), and a shell
-# that `exec`s ripwire keeps its pid, so a fixture that places `ln -s outside <path>.$$.tmp` and then execs
-# the tool has put an existing entry at a name of that exact shape. Deterministic, no race, drives the REAL
-# binary. atomicWriteFile also appends a process-wide counter that the same run's cache writes advance, so
-# the ack arm covers the low range of that counter.
-#
-# ARMS, per writer:
-#   (a) the outside file the temp-name symlink points at is byte-identical after the writer runs
-#   (b) the outside file's MODE is unchanged (mcpedit fchmods the temp; it must not reach the link target)
-#   (c) the target is a REGULAR file afterwards, not a symlink left in place over it
-#   (d) POSITIVE CONTROL: with no symlink present, the same writer still publishes its file with real content
+#   (a)-(d) BEHAVIOURAL, over the three writers through the real binary. The temp-name shape the writers used
+#       before is derived from the WRITER's getpid(), and a shell that `exec`s ripwire keeps its pid, so a
+#       fixture that places `ln -s outside <path>.$$.tmp` and then execs the tool has put an existing entry at a
+#       name of that exact shape (atomicWriteFile also appends a process-wide counter that the same run's cache
+#       writes advance, so the ack arm covers its low range). These arms prove the writers no longer open that
+#       name through the link and still publish normally. They do NOT drive a collision at the random name the
+#       writer actually draws — that name cannot be chosen from outside without a hook in product code.
+#       (a) the outside file the temp-name symlink points at is byte-identical after the writer runs
+#       (b) the outside file's MODE is unchanged (mcpedit fchmods the temp; it must not reach the link target)
+#       (c) the target is a REGULAR file afterwards, not a symlink left in place over it
+#       (d) POSITIVE CONTROL: with no symlink present, the same writer still publishes its file with real content
+#   (e) CENSUS: the two cache-dir writers route their temp through the shared helper (source).
+#   (e2) CENSUS: the three stream writers close their stream as a standalone statement after releaseFd(),
+#       never inside || / && after the write; a mutation control shows the scan flags the short-circuit form.
+#   (f) PROBE: a small program compiled against src/pathguard.h alone drives the product primitives directly —
+#       openExclNoFollow refuses an existing symlink, dangling symlink and regular file at the exact name it is
+#       given (EEXIST, nothing followed, nothing changed), and createExclTempFile yields a fresh regular file of
+#       the documented name shape that its RAII holder removes unless committed. A contrast open with the
+#       old O_CREAT|O_TRUNC flags on the same fixture DOES change the outside file, so the probe's checks can
+#       fail. The retry loop on EEXIST inside createExclTempFile is not driven (its name is random); a source
+#       row pins that it opens every candidate through openExclNoFollow and nothing else, and
+#       sidecarsymlinkcheck (f6) pins that primitive's flags.
 #
 # Red on main, green after.
 #
@@ -138,7 +146,7 @@ cp "$Q/w/q.py" "$PQ/w/q.py"
     || no "(acks d) the ack ledger was not written normally: $( head -1 "$PQ/err" )"
 
 # ── (e) CENSUS: the cache-dir tmp+rename writers route through the shared exclusive helper ────────────────
-# gitoracle::saveOracleCache and ingest_docpass::docTextViaBridgeCache publish to the per-user cache dir, so a
+# gitoracle::saveOracleCache and ingest_docpass::publishDocBridgeBlob publish to the per-user cache dir, so a
 # behavioural CLI arm cannot address their sha-keyed temp name; a SOURCE census asserts each creates its temp
 # through rw::pathguard::createExclTempFile and no longer opens a temp with std::fopen. (ingest_astquery's span
 # memo is deliberately NOT folded — it streams structured POD through a std::ofstream rather than one blob, so
@@ -159,6 +167,156 @@ census_writer(){
     fi
 }
 census_writer gitoracle src/gitoracle.h    'inline bool saveOracleCache('
-census_writer docpass   src/ingest_docpass.h 'inline std::string docTextViaBridgeCache('
+census_writer docpass   src/ingest_docpass.h 'inline void publishDocBridgeBlob('
+
+# (e2) CENSUS: after releaseFd() the stdio stream owns the descriptor, so each stream writer closes it on every
+# path — fclose is its own statement, never an operand of || or && where a failed fwrite would short-circuit past
+# it. A mutation control re-checks the pre-fix saveCache spelling and must be flagged.
+fclose_shortcircuit_lines(){ awk -v sig="$2" 'index($0,sig){f=1} f{print} f&&/^}$/{exit}' "$1" | grep -E 'fclose' | grep -E '\|\||&&'; }
+stream_close_row(){
+    local label="$1" file="$2" sig="$3" body bad
+    body="$( awk -v sig="$sig" 'index($0,sig){f=1} f{print} f&&/^}$/{exit}' "$ROOT/$file" )"
+    if [ -z "$body" ] || ! printf '%s' "$body" | grep -q 'std::fclose( fp )'; then
+        no "($label e2) could not find $sig with an fclose in $file — census void"
+        return
+    fi
+    bad="$( fclose_shortcircuit_lines "$ROOT/$file" "$sig" )"
+    if [ -z "$bad" ]; then
+        ok "($label e2) $sig closes its stream as a standalone statement (no fclose inside || / &&)"
+    else
+        no "($label e2) $sig can skip fclose after a failed write: $( printf '%s' "$bad" | head -2 | tr '\n' ';' )"
+    fi
+}
+stream_close_row savecache src/ingest_cache.h   'inline void saveCache('
+stream_close_row gitoracle src/gitoracle.h      'inline bool saveOracleCache('
+stream_close_row docpass   src/ingest_docpass.h 'inline void publishDocBridgeBlob('
+printf 'inline void mutantSave()\n{\n    const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;\n}\n' > "$TMP/fclose_mutant.h"
+if [ -n "$( fclose_shortcircuit_lines "$TMP/fclose_mutant.h" 'inline void mutantSave(' )" ]; then
+    ok "(e2) mutation control: the pre-fix short-circuit spelling is flagged by the same scan"
+else
+    no "(e2) mutation control: the short-circuit spelling was not flagged — the census cannot fail"
+fi
+
+# ── (f) PROBE: the product primitives, driven directly through a program compiled against pathguard.h ──────
+CXX="${CXX:-c++}"
+. "$ROOT/scripts/cxxstd.sh"
+CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"
+PR="$TMP/probe"; mkdir -p "$PR/work"
+cat > "$PR/probe.cpp" <<'CPP'
+#include "pathguard.h"
+
+#include <cerrno>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int failures = 0;
+static void row( bool okRow, const char* what ) { std::printf( "%s %s\n", okRow ? "PROBE-PASS" : "PROBE-FAIL", what ); failures += okRow ? 0 : 1; }
+static std::string slurp( const std::string& p ) { std::ifstream in( p, std::ios::binary ); return std::string( std::istreambuf_iterator<char>( in ), {} ); }
+static void spit( const std::string& p, const std::string& b ) { std::ofstream( p, std::ios::binary ) << b; }
+static mode_t modeOf( const std::string& p ) { struct stat st{}; return ::lstat( p.c_str(), &st ) == 0 ? ( st.st_mode & 07777 ) : 0; }
+static bool isLink( const std::string& p ) { struct stat st{}; return ::lstat( p.c_str(), &st ) == 0 && S_ISLNK( st.st_mode ); }
+static bool isReg( const std::string& p ) { struct stat st{}; return ::lstat( p.c_str(), &st ) == 0 && S_ISREG( st.st_mode ); }
+
+int main( int argc, char** argv )
+{
+    if( argc != 2 ) { return 2; }
+    const std::string w = argv[ 1 ];
+    const std::string outside = w + "/outside.txt";
+    const std::string bytes   = "outside file bytes";
+
+    // (f1) an existing symlink at the exact name: refused with EEXIST, the link target untouched in bytes and mode
+    spit( outside, bytes ); ::chmod( outside.c_str(), 0700 );
+    const std::string lnk = w + "/name-link.tmp";
+    ::symlink( outside.c_str(), lnk.c_str() );
+    errno = 0;
+    int fd = rw::pathguard::openExclNoFollow( lnk.c_str(), 0666 );
+    const int e1 = errno;
+    if( fd >= 0 ) { ::write( fd, "X", 1 ); ::close( fd ); }
+    row( fd < 0 && e1 == EEXIST, "(f1) openExclNoFollow refuses an existing symlink at its name with EEXIST" );
+    row( slurp( outside ) == bytes && modeOf( outside ) == 0700 && isLink( lnk ), "(f1) the link and the file it points at are unchanged" );
+
+    // (f2) a dangling symlink at the exact name: refused, and nothing is created at the link's target
+    const std::string dangTarget = w + "/never-created.txt";
+    const std::string dang       = w + "/name-dangling.tmp";
+    ::symlink( dangTarget.c_str(), dang.c_str() );
+    errno = 0;
+    fd = rw::pathguard::openExclNoFollow( dang.c_str(), 0666 );
+    const int e2 = errno;
+    if( fd >= 0 ) { ::close( fd ); }
+    row( fd < 0 && e2 == EEXIST && ::access( dangTarget.c_str(), F_OK ) != 0, "(f2) openExclNoFollow refuses a dangling symlink and creates nothing at its target" );
+
+    // (f3) an existing regular file at the exact name: refused, its bytes unchanged
+    const std::string reg = w + "/name-regular.tmp";
+    spit( reg, "existing" );
+    errno = 0;
+    fd = rw::pathguard::openExclNoFollow( reg.c_str(), 0666 );
+    const int e3 = errno;
+    if( fd >= 0 ) { ::close( fd ); }
+    row( fd < 0 && e3 == EEXIST && slurp( reg ) == "existing", "(f3) openExclNoFollow refuses an existing regular file and leaves it unchanged" );
+
+    // (f4) createExclTempFile: a fresh regular file of shape prefix + 24 hex + suffix, removed unless committed
+    std::string made;
+    {
+        rw::pathguard::ExclTempFile t = rw::pathguard::createExclTempFile( w + "/target.", ".tmp", 0600 );
+        made = t.path();
+        bool shape = t.ok() && made.size() == ( w + "/target." ).size() + 24 + 4 && made.compare( made.size() - 4, 4, ".tmp" ) == 0;
+        for( std::size_t i = ( w + "/target." ).size(); shape && i < made.size() - 4; ++i )
+        {
+            const char c = made[ i ];
+            shape = ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' );
+        }
+        row( shape && isReg( made ), "(f4) createExclTempFile yields a regular file named prefix + 24 hex + suffix" );
+    }
+    row( !made.empty() && ::access( made.c_str(), F_OK ) != 0, "(f4) the RAII holder removes an uncommitted temp" );
+
+    // (f5) commit(): the bytes land at the final name and the temp is gone
+    {
+        rw::pathguard::ExclTempFile t = rw::pathguard::createExclTempFile( w + "/final.", ".tmp", 0644 );
+        made = t.path();
+        const bool wrote = t.write( "published" );
+        row( wrote && t.commit( w + "/final.txt" ), "(f5) write + commit succeed" );
+    }
+    row( slurp( w + "/final.txt" ) == "published" && ::access( made.c_str(), F_OK ) != 0, "(f5) the final name holds the bytes and the temp is gone" );
+
+    // (contrast) the old O_CREAT|O_TRUNC flags on the same fixture DO change the outside file: the checks above can fail
+    const std::string outside2 = w + "/outside2.txt";
+    const std::string lnk2     = w + "/contrast-link.tmp";
+    spit( outside2, bytes );
+    ::symlink( outside2.c_str(), lnk2.c_str() );
+    fd = ::open( lnk2.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
+    if( fd >= 0 ) { ::write( fd, "X", 1 ); ::close( fd ); }
+    row( slurp( outside2 ) != bytes, "(contrast) an O_CREAT|O_TRUNC open through the same kind of link changes the outside file" );
+
+    return failures == 0 ? 0 : 1;
+}
+CPP
+if "$CXX" "$CXXSTD" -O1 -I"$ROOT/src" -I"$ROOT/src/infra" -I"$ROOT/third_party" "$PR/probe.cpp" -o "$PR/probe" 2> "$PR/cc.log"; then
+    "$PR/probe" "$PR/work" > "$PR/out.txt" 2>&1
+    PROBE_RC=$?
+    PROBE_ROWS="$( grep -c '^PROBE-' "$PR/out.txt" )"
+    [ "$PROBE_ROWS" -eq 9 ] \
+        && ok "(f) presence: the probe reported all 9 rows" \
+        || no "(f) the probe reported $PROBE_ROWS of 9 rows (rc=$PROBE_RC): $( head -c 300 "$PR/out.txt" )"
+    while IFS= read -r prow; do
+        case "$prow" in
+            PROBE-PASS\ *) ok "${prow#PROBE-PASS }" ;;
+            PROBE-FAIL\ *) no "${prow#PROBE-FAIL }" ;;
+        esac
+    done < "$PR/out.txt"
+else
+    no "(f) the pathguard probe did not compile with $CXX: $( head -5 "$PR/cc.log" | tr '\n' ' ' )"
+fi
+
+# (f6) source: createExclTempFile opens each candidate through openExclNoFollow and holds no other open
+CET="$( awk 'index($0,"inline ExclTempFile createExclTempFile("){f=1} f{print} f&&/^}$/{exit}' "$ROOT/src/pathguard.h" )"
+if [ -n "$CET" ] && printf '%s' "$CET" | grep -q 'openExclNoFollow(' && ! printf '%s' "$CET" | grep -qE '::open(at)?\('; then
+    ok "(f6) createExclTempFile opens every candidate name through openExclNoFollow and nothing else"
+else
+    no "(f6) createExclTempFile does not open its candidates solely through openExclNoFollow"
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "FAILURES ABOVE"; exit 1; }
