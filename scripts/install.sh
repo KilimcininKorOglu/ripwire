@@ -14,7 +14,8 @@
 #   RIPWIRE_REPO             "owner/repo" on GitHub, e.g. redhat-et/ripwire (see README.md). No default on
 #                             purpose: this MUST be passed explicitly (see error below) — the script
 #                             refuses to guess a plausible-looking but wrong org/repo.
-#   RIPWIRE_VERSION           a specific tag (e.g. "v0.2.0"); default: latest release.
+#   RIPWIRE_VERSION           a specific tag (e.g. "v0.2.0"); default: latest release. On an Intel Mac, v0.6.1 is
+#                             the last release with a binary (see "Intel macOS" below).
 #   RIPWIRE_INSTALL_PREFIX    install prefix; the binary lands in "$RIPWIRE_INSTALL_PREFIX/bin". Default:
 #                             ~/.local/bin (no sudo needed). Pass /usr/local for the traditional location
 #                             (may prompt for sudo to write there).
@@ -69,6 +70,42 @@ resolvedTag="$( printf '%s' "$releaseJson" | grep -m1 '"tag_name"' | sed -E 's/.
 [ -n "$resolvedTag" ] || { echo "install.sh: could not parse a tag_name out of the release metadata" >&2; exit 1; }
 resolvedVersion="${resolvedTag#v}"
 
+sourceBuildHint()
+{
+    echo "  Build from source instead, tuned for this CPU (https://github.com/${repo}/blob/main/INSTALL.md#build-from-source):" >&2
+    echo "    git clone https://github.com/${repo}.git && cd ${repo##*/} && ./install.sh" >&2
+    echo "  ./install.sh configures -DRIPWIRE_NATIVE=ON (-march=native); a plain cmake build keeps the x86-64-v3 floor." >&2
+}
+
+# ── Intel macOS: the last prebuilt binary is 0.6.1 ─────────────────────────────────────────────────────────
+# release.yml built macos-x64 on an arm64 runner (cross-compiled, PGO-trained and smoke-run under Rosetta 2) and
+# dropped that leg after 0.6.1. The arch map above is OS-agnostic, so without this stop an Intel Mac asks a later
+# release for a macos-x64 asset and hears only "has no asset named ...". The stop keys on the version, never on
+# the asset list, and each glob matches a whole version, so 0.10.0 is never read as older than 0.6.1. 0.6.1 and
+# everything before it keep their macos-x64 asset, so pinning RIPWIRE_VERSION=v0.6.1 still installs. A Rosetta
+# shell on Apple silicon also reports x86_64; it is sent to a native arm64 shell, where the arm64 binary installs.
+# test/releaseinstallcheck.sh arms (H1)-(H7) pin all of it.
+intelMacLast=0.6.1
+if [ "$assetOs" = macos ] && [ "$assetArch" = x64 ]; then
+    case "$resolvedVersion" in
+        0.[0-5].*|0.6.[01]) ;;
+        *)
+            echo "install.sh: ripwire ${resolvedTag} has no Intel macOS build: prebuilt Intel macOS (x86-64) binaries end with ${intelMacLast}." >&2
+            if [ "$( sysctl -n sysctl.proc_translated 2>/dev/null || true )" = 1 ]; then
+                echo "  This shell runs under Rosetta on an Apple silicon Mac. Run the installer from a native arm64 shell" >&2
+                echo "  to install the arm64 binary." >&2
+            else
+                echo "  Install ${intelMacLast}, the last one, by pinning it:" >&2
+                printf '    RIPWIRE_REPO=%s RIPWIRE_VERSION=v%s bash -c "$(curl -fsSL https://raw.githubusercontent.com/%s/main/scripts/install.sh)"\n' \
+                    "$repo" "$intelMacLast" "$repo" >&2
+                sourceBuildHint
+            fi
+            echo "  Nothing was downloaded." >&2
+            exit 1
+            ;;
+    esac
+fi
+
 assetName="ripwire-${resolvedVersion}-${assetOs}-${assetArch}.tar.gz"
 assetUrl="$( printf '%s' "$releaseJson" | grep -o "\"browser_download_url\": *\"[^\"]*${assetName}\"" | sed -E 's/.*"(https[^"]+)"/\1/' | head -1 )"
 [ -n "$assetUrl" ] || {
@@ -90,13 +127,7 @@ assetUrl="$( printf '%s' "$releaseJson" | grep -o "\"browser_download_url\": *\"
 #   * a Rosetta-translated shell is not judged: its feature bits describe the translator, not the machine;
 #   * releases up to 0.5.x were built without the floor, so pinning one with RIPWIRE_VERSION is not judged;
 #   * RIPWIRE_SKIP_CPU_CHECK=1 overrides a verdict the user knows is wrong (a VM hiding a flag its host has).
-# test/releaseinstallcheck.sh arms (G1)-(G15) pin all of it.
-sourceBuildHint()
-{
-    echo "  Build from source instead, tuned for this CPU (https://github.com/${repo}/blob/main/INSTALL.md#build-from-source):" >&2
-    echo "    git clone https://github.com/${repo}.git && cd ${repo##*/} && ./install.sh" >&2
-    echo "  ./install.sh configures -DRIPWIRE_NATIVE=ON (-march=native); a plain cmake build keeps the x86-64-v3 floor." >&2
-}
+# test/releaseinstallcheck.sh arms (G1)-(G15) pin all of it; sourceBuildHint is defined above the Intel macOS stop.
 cpuFloor=0
 case "$resolvedVersion" in
     0.[0-5].*) ;;
