@@ -28,7 +28,9 @@
 #include "os_win32_logic.h"    // the pure logic, compiled and tested on every platform
 
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -72,6 +74,147 @@ int failLastError()
 {
     return failWin32( ::GetLastError() );
 }
+
+// ── RAII: every handle this file opens has exactly one owner, so no early return needs a close ──────────────────────
+// Owner directive 2026-09-16: RAII over exception handling. A Unique<Traits> closes what it holds in its destructor;
+// release() hands ownership on (to _open_osfhandle, to a child table); nothing here throws. Traits name the value
+// type, its "holds nothing" value, the validity test and the close call.
+template<class Traits>
+class Unique
+{
+public:
+    using Value = typename Traits::Value;
+
+    Unique() noexcept = default;
+    explicit Unique( Value value ) noexcept : value_( value ) {}
+    Unique( const Unique& ) = delete;
+    Unique& operator=( const Unique& ) = delete;
+    Unique( Unique&& other ) noexcept : value_( std::exchange( other.value_, Traits::empty() ) ) {}
+    Unique& operator=( Unique&& other ) noexcept
+    {
+        if( this != &other )
+        {
+            reset( std::exchange( other.value_, Traits::empty() ) );
+        }
+        return *this;
+    }
+    ~Unique() { reset(); }
+
+    [[nodiscard]] Value get() const noexcept { return value_; }
+    [[nodiscard]] bool  valid() const noexcept { return Traits::isValid( value_ ); }
+    [[nodiscard]] Value release() noexcept { return std::exchange( value_, Traits::empty() ); }
+    void reset( Value value = Traits::empty() ) noexcept
+    {
+        if( Traits::isValid( value_ ) )
+        {
+            Traits::close( value_ );
+        }
+        value_ = value;
+    }
+
+private:
+    Value value_ = Traits::empty();
+};
+
+// A kernel HANDLE. Win32 reports failure as INVALID_HANDLE_VALUE (CreateFile) or nullptr (CreateJobObject, OpenProcess);
+// both hold nothing. GetCurrentProcess()'s pseudo-handle is never wrapped.
+struct HandleTraits
+{
+    using Value = HANDLE;
+    static Value empty() noexcept { return nullptr; }
+    static bool  isValid( Value value ) noexcept { return value != nullptr && value != INVALID_HANDLE_VALUE; }
+    static void  close( Value value ) noexcept { ::CloseHandle( value ); }
+};
+using UniqueHandle = Unique<HandleTraits>;
+
+// Memory Win32 allocated with LocalAlloc for the caller: security descriptors, CommandLineToArgvW's array.
+struct LocalTraits
+{
+    using Value = HLOCAL;
+    static Value empty() noexcept { return nullptr; }
+    static bool  isValid( Value value ) noexcept { return value != nullptr; }
+    static void  close( Value value ) noexcept { ::LocalFree( value ); }
+};
+using UniqueLocal = Unique<LocalTraits>;
+
+// A CRT descriptor, owned until _fdopen or a caller takes it.
+struct CrtFdTraits
+{
+    using Value = int;
+    static Value empty() noexcept { return -1; }
+    static bool  isValid( Value value ) noexcept { return value >= 0; }
+    static void  close( Value value ) noexcept { ::_close( value ); }
+};
+using UniqueFd = Unique<CrtFdTraits>;
+
+struct SocketTraits
+{
+    using Value = SOCKET;
+    static Value empty() noexcept { return INVALID_SOCKET; }
+    static bool  isValid( Value value ) noexcept { return value != INVALID_SOCKET; }
+    static void  close( Value value ) noexcept { ::closesocket( value ); }
+};
+using UniqueSocket = Unique<SocketTraits>;
+
+struct EnvironmentBlockTraits
+{
+    using Value = LPWCH;
+    static Value empty() noexcept { return nullptr; }
+    static bool  isValid( Value value ) noexcept { return value != nullptr; }
+    static void  close( Value value ) noexcept { ::FreeEnvironmentStringsW( value ); }
+};
+using UniqueEnvironmentBlock = Unique<EnvironmentBlockTraits>;
+
+// A file this code created and must not leave behind unless it succeeds: deleted on destruction until kept.
+class TemporaryFile
+{
+public:
+    explicit TemporaryFile( std::wstring path ) noexcept : path_( std::move( path ) ) {}
+    TemporaryFile() noexcept = default;
+    TemporaryFile( const TemporaryFile& ) = delete;
+    TemporaryFile& operator=( const TemporaryFile& ) = delete;
+    TemporaryFile( TemporaryFile&& other ) noexcept : path_( std::exchange( other.path_, std::wstring() ) ) {}
+    TemporaryFile& operator=( TemporaryFile&& other ) noexcept
+    {
+        if( this != &other )
+        {
+            remove();
+            path_ = std::exchange( other.path_, std::wstring() );
+        }
+        return *this;
+    }
+    ~TemporaryFile() { remove(); }
+    [[nodiscard]] const std::wstring& path() const noexcept { return path_; }
+    [[nodiscard]] std::wstring        keep() noexcept { return std::exchange( path_, std::wstring() ); }
+
+private:
+    void remove() noexcept
+    {
+        if( !path_.empty() )
+        {
+            ::DeleteFileW( path_.c_str() );
+        }
+    }
+
+    std::wstring path_;
+};
+
+// The UCRT's per-stream lock, held for a scope.
+class StreamLock
+{
+public:
+    explicit StreamLock( std::FILE* stream ) noexcept : stream_( stream ) { ::_lock_file( stream_ ); }
+    StreamLock( const StreamLock& ) = delete;
+    StreamLock& operator=( const StreamLock& ) = delete;
+    ~StreamLock() { ::_unlock_file( stream_ ); }
+
+private:
+    std::FILE* stream_;
+};
+
+// Every handle this file opens shares read, write and delete — POSIX never refuses a rename or unlink because another
+// descriptor has the file open.
+constexpr DWORD kShareAll = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 
 // ── UTF-8 / UTF-16 at the boundary ──────────────────────────────────────────────────────────────────────────────
 std::u16string_view viewOf( const wchar_t* text )
@@ -127,21 +270,93 @@ int programPathInto( std::u16string_view native, char* out, std::size_t outCount
     return 0;
 }
 
-// The user's temporary directory in the program's spelling — Git for Windows' "/tmp" — read once.
+// The user's temporary directory as Windows reports it (absolute, ending in '\'), read once and sized to fit — a TMP
+// longer than MAX_PATH is legal, and runtracecheck's LONG_TMP arm sets one. Empty when Windows cannot say.
+const std::u16string& nativeTempDirectory()
+{
+    static const std::u16string directory = []
+    {
+        std::u16string buffer( MAX_PATH + 2, u'\0' );
+        DWORD          length = ::GetTempPathW( static_cast<DWORD>( buffer.size() ), reinterpret_cast<LPWSTR>( buffer.data() ) );
+        if( length > buffer.size() )
+        {
+            buffer.assign( length, u'\0' );
+            length = ::GetTempPathW( static_cast<DWORD>( buffer.size() ), reinterpret_cast<LPWSTR>( buffer.data() ) );
+        }
+        buffer.resize( length < buffer.size() ? length : 0 );
+        return buffer;
+    }();
+    return directory;
+}
+
+// The same directory in the program's spelling — Git for Windows' "/tmp".
 const std::string& userTempDirectory()
 {
     static const std::string directory = []
     {
-        wchar_t     buffer[ MAX_PATH + 2 ];
-        const DWORD length = ::GetTempPathW( MAX_PATH + 2, buffer );
-        char        out[ PATH_MAX ];
-        if( length == 0 || length > MAX_PATH + 1 || programPathInto( std::u16string_view( reinterpret_cast<const char16_t*>( buffer ), length ), out, sizeof( out ) ) != 0 )
-        {
-            return std::string();
-        }
-        return std::string( out );
+        char out[ PATH_MAX ];
+        return programPathInto( nativeTempDirectory(), out, sizeof( out ) ) == 0 ? std::string( out ) : std::string();
     }();
     return directory;
+}
+
+// A new, empty, uniquely named file in the user's temporary directory, created with CREATE_NEW (never an existing
+// file, never a planted link) and returned OPEN, with its extended-length name so a temporary directory past MAX_PATH
+// works whatever LongPathsEnabled says. `flags` adds FILE_FLAG_* / FILE_ATTRIBUTE_* bits. Replaces GetTempFileNameW,
+// which is MAX_PATH-bound and creates the file for a second open to race. From lennix1337's win32-port-snapshot
+// (windowsCreateUniqueTempFile). Invalid handle with errno set on failure.
+struct CreatedTemporary
+{
+    UniqueHandle   handle;
+    std::u16string name;   // extended-length native name
+};
+
+CreatedTemporary createTemporary( const char* prefix, DWORD flags )
+{
+    static std::atomic<std::uint32_t> counter{ 0 };
+    CreatedTemporary created;
+    std::u16string   directory = oswin::extendedLengthPath( nativeTempDirectory() );
+    if( directory.empty() )
+    {
+        (void)fail( ENOENT );
+        return created;
+    }
+    if( directory.back() != u'\\' )
+    {
+        directory.push_back( u'\\' );
+    }
+    for( int attempt = 0; attempt < 64; ++attempt )
+    {
+        char        name[ 64 ];
+        char*       end = name;
+        const char* p   = prefix;
+        while( *p != '\0' && end < name + 16 )
+        {
+            *end++ = *p++;
+        }
+        end    = std::to_chars( end, name + sizeof( name ) - 8, static_cast<unsigned long>( ::GetCurrentProcessId() ) ).ptr;
+        *end++ = '-';
+        end    = std::to_chars( end, name + sizeof( name ) - 5, counter.fetch_add( 1, std::memory_order_relaxed ) ).ptr;
+        created.name = directory;
+        for( const char* c = name; c < end; ++c )
+        {
+            created.name.push_back( static_cast<char16_t>( *c ) );   // ASCII
+        }
+        created.name.append( u".tmp" );
+        created.handle.reset( ::CreateFileW( reinterpret_cast<LPCWSTR>( created.name.c_str() ), GENERIC_READ | GENERIC_WRITE, kShareAll, nullptr, CREATE_NEW,
+                                             FILE_ATTRIBUTE_TEMPORARY | flags, nullptr ) );
+        if( created.handle.valid() )
+        {
+            return created;
+        }
+        if( ::GetLastError() != ERROR_FILE_EXISTS && ::GetLastError() != ERROR_ALREADY_EXISTS )
+        {
+            break;
+        }
+    }
+    (void)failLastError();
+    created.name.clear();
+    return created;
 }
 
 // A program path as the -W calls take it: Git for Windows' "/tmp" rebased onto the user's temp directory, a POSIX
@@ -174,12 +389,19 @@ private:
     oswin::WidePath wide_;
 };
 
-constexpr DWORD kShareAll = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-
+// The kernel handle behind a CRT descriptor; INVALID_HANDLE_VALUE for anything else (a socket or watcher descriptor from
+// this file's own ranges, or a negative one). init_process installs a quiet invalid-parameter handler, so a stale CRT
+// descriptor is EBADF here, as on POSIX, instead of the UCRT's default of ending the process.
 HANDLE handleOf( int fd )
 {
-    return oswin::isSocketFd( fd ) ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>( ::_get_osfhandle( fd ) );
+    if( fd < 0 || oswin::isSocketFd( fd ) || oswin::isDirwatchFd( fd ) )
+    {
+        return INVALID_HANDLE_VALUE;
+    }
+    return reinterpret_cast<HANDLE>( ::_get_osfhandle( fd ) );
 }
+
+int closeDirwatch( int fd );   // below, with the watcher
 
 // ── the socket table ───────────────────────────────────────────────────────────────────────────────────────────
 // A SOCKET is a kernel handle, not a CRT descriptor, and a POSIX call site keeps a socket in an int and closes it with
@@ -199,14 +421,34 @@ SocketTable& socketTable()
     return table;
 }
 
-bool winsockStarted()
+// Winsock's lifetime: started by the first socket call, cleaned up at process exit by this object's destructor.
+class WinsockSession
 {
-    static const bool started = []
+public:
+    WinsockSession() noexcept
     {
         WSADATA data {};
-        return ::WSAStartup( MAKEWORD( 2, 2 ), &data ) == 0;
-    }();
-    return started;
+        started_ = ::WSAStartup( MAKEWORD( 2, 2 ), &data ) == 0;
+    }
+    WinsockSession( const WinsockSession& ) = delete;
+    WinsockSession& operator=( const WinsockSession& ) = delete;
+    ~WinsockSession()
+    {
+        if( started_ )
+        {
+            ::WSACleanup();
+        }
+    }
+    [[nodiscard]] bool started() const noexcept { return started_; }
+
+private:
+    bool started_ = false;
+};
+
+bool winsockStarted()
+{
+    static const WinsockSession session;
+    return session.started();
 }
 
 int failWsa()
@@ -214,7 +456,7 @@ int failWsa()
     return failWin32( static_cast<DWORD>( ::WSAGetLastError() ) );
 }
 
-int adoptSocket( SOCKET s )
+int adoptSocket( UniqueSocket s )
 {
     SocketTable&                      table = socketTable();
     const std::lock_guard<std::mutex> lock( table.mutex );
@@ -222,12 +464,11 @@ int adoptSocket( SOCKET s )
     {
         if( table.slots[ static_cast<std::size_t>( slot ) ] == INVALID_SOCKET )
         {
-            table.slots[ static_cast<std::size_t>( slot ) ] = s;
+            table.slots[ static_cast<std::size_t>( slot ) ] = s.release();
             return oswin::kSocketFdBase + slot;
         }
     }
-    ::closesocket( s );
-    return fail( EMFILE );
+    return fail( EMFILE );   // `s` closes the socket that found no slot
 }
 
 SOCKET socketOf( int fd )
@@ -424,19 +665,16 @@ ByName statByName( LPCWSTR path, bool noFollow, stat_t* st )
 
 int statByHandle( LPCWSTR path, bool noFollow, stat_t* st )
 {
-    const HANDLE handle = ::CreateFileW( path, FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
-                                         FILE_FLAG_BACKUP_SEMANTICS | ( noFollow ? FILE_FLAG_OPEN_REPARSE_POINT : 0 ), nullptr );
-    if( handle == INVALID_HANDLE_VALUE )
+    const UniqueHandle handle( ::CreateFileW( path, FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING,
+                                              FILE_FLAG_BACKUP_SEMANTICS | ( noFollow ? FILE_FLAG_OPEN_REPARSE_POINT : 0 ), nullptr ) );
+    if( !handle.valid() )
     {
         return failLastError();
     }
-    Facts       facts;
-    const bool  gathered = factsFromHandle( handle, facts );
-    const DWORD error    = ::GetLastError();
-    ::CloseHandle( handle );
-    if( !gathered )
+    Facts facts;
+    if( !factsFromHandle( handle.get(), facts ) )
     {
-        return failWin32( error );
+        return failLastError();
     }
     fillStat( facts, !noFollow, st );
     return 0;
@@ -476,13 +714,14 @@ const TokenIdentity& tokenIdentity()
     static const TokenIdentity identity = []
     {
         TokenIdentity out;
-        HANDLE        token = nullptr;
-        if( ::OpenProcessToken( ::GetCurrentProcess(), TOKEN_QUERY, &token ) )
+        HANDLE        rawToken = nullptr;
+        if( ::OpenProcessToken( ::GetCurrentProcess(), TOKEN_QUERY, &rawToken ) )
         {
-            DWORD bytes = 0;
-            (void)::GetTokenInformation( token, TokenUser, nullptr, 0, &bytes );
+            const UniqueHandle token( rawToken );
+            DWORD              bytes = 0;
+            (void)::GetTokenInformation( token.get(), TokenUser, nullptr, 0, &bytes );
             std::vector<BYTE> buffer( bytes );
-            if( bytes != 0 && ::GetTokenInformation( token, TokenUser, buffer.data(), bytes, &bytes ) )
+            if( bytes != 0 && ::GetTokenInformation( token.get(), TokenUser, buffer.data(), bytes, &bytes ) )
             {
                 const PSID sid = reinterpret_cast<TOKEN_USER*>( buffer.data() )->User.Sid;
                 out.userSid.assign( static_cast<BYTE*>( sid ), static_cast<BYTE*>( sid ) + ::GetLengthSid( sid ) );
@@ -492,7 +731,6 @@ const TokenIdentity& tokenIdentity()
                     out.uid = static_cast<uid_t>( *::GetSidSubAuthority( sid, subAuthorityCount - 1U ) );
                 }
             }
-            ::CloseHandle( token );
         }
         BYTE  administrators[ SECURITY_MAX_SID_SIZE ];
         DWORD administratorsBytes = sizeof( administrators );
@@ -514,7 +752,7 @@ const TokenIdentity& tokenIdentity()
 bool isThisUser( PSID sid )
 {
     const TokenIdentity& identity = tokenIdentity();
-    return !identity.userSid.empty() && ::EqualSid( sid, const_cast<PSID>( identity.userSid.data() ) );
+    return !identity.userSid.empty() && ::EqualSid( sid, static_cast<PSID>( const_cast<BYTE*>( identity.userSid.data() ) ) );
 }
 
 bool ownedByThisUser( PSID owner )
@@ -537,11 +775,13 @@ void readOwnerAndMode( HANDLE handle, stat_t* st )
 {
     PSID                 owner      = nullptr;
     PACL                 dacl       = nullptr;
-    PSECURITY_DESCRIPTOR descriptor = nullptr;
-    if( ::GetSecurityInfo( handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &dacl, nullptr, &descriptor ) != ERROR_SUCCESS )
+    PSECURITY_DESCRIPTOR rawDescriptor = nullptr;
+    if( ::GetSecurityInfo( handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &dacl, nullptr, &rawDescriptor ) != ERROR_SUCCESS )
     {
         return;
     }
+    const UniqueLocal          descriptorOwner( rawDescriptor );
+    const PSECURITY_DESCRIPTOR descriptor = rawDescriptor;
     st->st_uid = ownedByThisUser( owner ) ? tokenIdentity().uid : kOwnerSomeoneElse;
     WORD  control  = 0;
     DWORD revision = 0;
@@ -565,7 +805,6 @@ void readOwnerAndMode( HANDLE handle, stat_t* st )
     {
         st->st_mode = ( st->st_mode & ~static_cast<mode_t>( 0777 ) ) | 0700;
     }
-    ::LocalFree( descriptor );
 }
 
 // The file identity a no-follow reopen must match.
@@ -631,52 +870,41 @@ int openImpl( const char* path, int flags, mode_t mode )
         attributes = FILE_ATTRIBUTE_READONLY;   // POSIX: a file created without the owner write bit
     }
     const DWORD fileFlags = FILE_FLAG_BACKUP_SEMANTICS | ( noFollow ? FILE_FLAG_OPEN_REPARSE_POINT : 0 );
-    HANDLE handle = ::CreateFileW( native.c_str(), access, kShareAll, nullptr, disposition, attributes | fileFlags, nullptr );
-    if( handle == INVALID_HANDLE_VALUE )
+    UniqueHandle handle( ::CreateFileW( native.c_str(), access, kShareAll, nullptr, disposition, attributes | fileFlags, nullptr ) );
+    if( !handle.valid() )
     {
         return failLastError();
     }
     if( noFollow )
     {
         FILE_ATTRIBUTE_TAG_INFO tag {};
-        if( !::GetFileInformationByHandleEx( handle, FileAttributeTagInfo, &tag, sizeof( tag ) ) )
+        if( !::GetFileInformationByHandleEx( handle.get(), FileAttributeTagInfo, &tag, sizeof( tag ) ) )
         {
-            const DWORD error = ::GetLastError();
-            ::CloseHandle( handle );
-            return failWin32( error );
+            return failLastError();
         }
         switch( oswin::classifyFinalComponent( tag.FileAttributes, tag.ReparseTag ) )
         {
             case oswin::FinalComponent::Plain:
                 break;
             case oswin::FinalComponent::Link:
-                ::CloseHandle( handle );
                 return fail( ELOOP );
             case oswin::FinalComponent::OtherReparse:
             {
-                const HANDLE content = ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr );
-                const bool   same    = content != INVALID_HANDLE_VALUE && sameFile( handle, content );
-                ::CloseHandle( handle );
-                if( !same )
+                UniqueHandle content( ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr ) );
+                if( !content.valid() || !sameFile( handle.get(), content.get() ) )
                 {
-                    if( content != INVALID_HANDLE_VALUE )
-                    {
-                        ::CloseHandle( content );
-                    }
                     return fail( ELOOP );
                 }
-                handle = content;
+                handle = std::move( content );
                 break;
             }
         }
         if( truncateAfterCheck )
         {
             FILE_END_OF_FILE_INFO end {};
-            if( !::SetFileInformationByHandle( handle, FileEndOfFileInfo, &end, sizeof( end ) ) )
+            if( !::SetFileInformationByHandle( handle.get(), FileEndOfFileInfo, &end, sizeof( end ) ) )
             {
-                const DWORD error = ::GetLastError();
-                ::CloseHandle( handle );
-                return failWin32( error );
+                return failLastError();
             }
         }
     }
@@ -689,13 +917,12 @@ int openImpl( const char* path, int flags, mode_t mode )
     {
         crtFlags |= _O_APPEND;
     }
-    const int fd = ::_open_osfhandle( reinterpret_cast<intptr_t>( handle ), crtFlags );
+    const int fd = ::_open_osfhandle( reinterpret_cast<intptr_t>( handle.get() ), crtFlags );
     if( fd < 0 )
     {
-        const int error = errno;
-        ::CloseHandle( handle );
-        return fail( error );
+        return -1;   // errno set by the CRT; `handle` still owns the handle and closes it
     }
+    (void)handle.release();   // the descriptor owns it now
     return fd;
 }
 }   // namespace
@@ -708,6 +935,10 @@ int close( int fd )
     if( oswin::isSocketFd( fd ) )
     {
         return closeSocket( fd );
+    }
+    if( oswin::isDirwatchFd( fd ) )
+    {
+        return closeDirwatch( fd );
     }
     return ::_close( fd );
 }
@@ -772,29 +1003,26 @@ int lstat( const char* path, stat_t* st )
     }
     constexpr DWORD kNoFollow       = FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
     bool            canReadSecurity = true;
-    HANDLE          handle = ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr );
-    if( handle == INVALID_HANDLE_VALUE && ::GetLastError() == ERROR_ACCESS_DENIED )
+    UniqueHandle    handle( ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr ) );
+    if( !handle.valid() && ::GetLastError() == ERROR_ACCESS_DENIED )
     {
         canReadSecurity = false;
-        handle          = ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr );
+        handle.reset( ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr ) );
     }
-    if( handle == INVALID_HANDLE_VALUE )
+    if( !handle.valid() )
     {
         return failLastError();
     }
     Facts facts;
-    if( !factsFromHandle( handle, facts ) )
+    if( !factsFromHandle( handle.get(), facts ) )
     {
-        const DWORD error = ::GetLastError();
-        ::CloseHandle( handle );
-        return failWin32( error );
+        return failLastError();
     }
     fillStat( facts, false, st );
     if( canReadSecurity && facts.fileType == FILE_TYPE_DISK )
     {
-        readOwnerAndMode( handle, st );
+        readOwnerAndMode( handle.get(), st );
     }
-    ::CloseHandle( handle );
     return 0;
 }
 
@@ -917,8 +1145,8 @@ ssize_t getline( char** line, std::size_t* capacity, std::FILE* stream )
     {
         return fail( EINVAL );
     }
-    ::_lock_file( stream );
-    std::size_t used   = 0;
+    const StreamLock lock( stream );
+    std::size_t      used   = 0;
     ssize_t     result = -1;
     for( ;; )
     {
@@ -948,7 +1176,6 @@ ssize_t getline( char** line, std::size_t* capacity, std::FILE* stream )
             break;
         }
     }
-    ::_unlock_file( stream );
     return result;
 }
 
@@ -981,13 +1208,13 @@ std::vector<MemoryStream>& memoryStreams()
 // Copy the stream's whole content into a fresh *buffer (NUL-terminated) and *size, leaving the position where it was.
 int publishMemoryStream( const MemoryStream& record )
 {
-    const long position = std::ftell( record.stream );
-    if( std::fseek( record.stream, 0, SEEK_END ) != 0 )
+    const std::int64_t position = ::_ftelli64( record.stream );
+    if( ::_fseeki64( record.stream, 0, SEEK_END ) != 0 )
     {
         return EOF;
     }
-    const long length = std::ftell( record.stream );
-    if( length < 0 || std::fseek( record.stream, 0, SEEK_SET ) != 0 )
+    const std::int64_t length = ::_ftelli64( record.stream );
+    if( length < 0 || ::_fseeki64( record.stream, 0, SEEK_SET ) != 0 )
     {
         return EOF;
     }
@@ -1001,7 +1228,7 @@ int publishMemoryStream( const MemoryStream& record )
     published[ got ] = '\0';
     *record.buffer   = published;
     *record.size     = got;
-    return position >= 0 && std::fseek( record.stream, position, SEEK_SET ) == 0 ? 0 : EOF;
+    return position >= 0 && ::_fseeki64( record.stream, position, SEEK_SET ) == 0 ? 0 : EOF;
 }
 }   // namespace
 
@@ -1012,35 +1239,23 @@ std::FILE* open_memstream( char** buffer, std::size_t* size )
         errno = EINVAL;
         return nullptr;
     }
-    wchar_t directory[ MAX_PATH + 2 ];
-    wchar_t name[ MAX_PATH + 1 ];
-    const DWORD directoryLength = ::GetTempPathW( MAX_PATH + 2, directory );
-    if( directoryLength == 0 || directoryLength > MAX_PATH + 1 || ::GetTempFileNameW( directory, L"rwm", 0, name ) == 0 )
+    CreatedTemporary temporary = createTemporary( "rwm", FILE_FLAG_DELETE_ON_CLOSE );   // gone when the stream closes
+    if( !temporary.handle.valid() )
     {
-        (void)failLastError();
         return nullptr;
     }
-    const HANDLE handle = ::CreateFileW( name, GENERIC_READ | GENERIC_WRITE, kShareAll, nullptr, CREATE_ALWAYS,
-                                         FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr );
-    if( handle == INVALID_HANDLE_VALUE )
+    UniqueFd fd( ::_open_osfhandle( reinterpret_cast<intptr_t>( temporary.handle.get() ), _O_RDWR | _O_BINARY ) );
+    if( !fd.valid() )
     {
-        const DWORD error = ::GetLastError();
-        ::DeleteFileW( name );
-        (void)failWin32( error );
         return nullptr;
     }
-    const int fd = ::_open_osfhandle( reinterpret_cast<intptr_t>( handle ), _O_RDWR | _O_BINARY );
-    if( fd < 0 )
-    {
-        ::CloseHandle( handle );
-        return nullptr;
-    }
-    std::FILE* const stream = ::_fdopen( fd, "w+b" );
+    (void)temporary.handle.release();   // the descriptor owns it
+    std::FILE* const stream = ::_fdopen( fd.get(), "w+b" );
     if( stream == nullptr )
     {
-        ::_close( fd );
         return nullptr;
     }
+    (void)fd.release();       // the stream owns it
     *buffer = static_cast<char*>( std::malloc( 1 ) );
     if( *buffer == nullptr )
     {
@@ -1159,9 +1374,9 @@ constexpr DWORD kRenamePosixSemantics    = 0x00000002;   // FILE_RENAME_FLAG_POS
 
 DWORD renameWithPosixSemantics( LPCWSTR from, LPCWSTR to )
 {
-    const HANDLE source = ::CreateFileW( from, DELETE | SYNCHRONIZE, kShareAll, nullptr, OPEN_EXISTING,
-                                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr );
-    if( source == INVALID_HANDLE_VALUE )
+    const UniqueHandle source( ::CreateFileW( from, DELETE | SYNCHRONIZE, kShareAll, nullptr, OPEN_EXISTING,
+                                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr ) );
+    if( !source.valid() )
     {
         return ::GetLastError();
     }
@@ -1170,7 +1385,6 @@ DWORD renameWithPosixSemantics( LPCWSTR from, LPCWSTR to )
     std::unique_ptr<std::uint8_t[]> storage( new( std::nothrow ) std::uint8_t[ bytes ]() );
     if( !storage )
     {
-        ::CloseHandle( source );
         return ERROR_NOT_ENOUGH_MEMORY;
     }
     auto* const information         = reinterpret_cast<RenameInfo*>( storage.get() );
@@ -1178,10 +1392,9 @@ DWORD renameWithPosixSemantics( LPCWSTR from, LPCWSTR to )
     information->rootDirectory      = nullptr;
     information->fileNameLength     = static_cast<DWORD>( units * sizeof( wchar_t ) );
     std::memcpy( information->fileName, to, ( units + 1 ) * sizeof( wchar_t ) );
-    const BOOL  renamed = ::SetFileInformationByHandle( source, static_cast<FILE_INFO_BY_HANDLE_CLASS>( kFileRenameInfoEx ), information, static_cast<DWORD>( bytes ) );
-    const DWORD error   = renamed ? NO_ERROR : ::GetLastError();
-    ::CloseHandle( source );
-    return error;
+    return ::SetFileInformationByHandle( source.get(), static_cast<FILE_INFO_BY_HANDLE_CLASS>( kFileRenameInfoEx ), information, static_cast<DWORD>( bytes ) )
+               ? NO_ERROR
+               : ::GetLastError();
 }
 }   // namespace
 
@@ -1224,6 +1437,18 @@ int rename( const char* from, const char* to )
 // closed if the descriptor cannot be built (CodeRabbit 3946351163). Any other mode creates with the inherited ACL.
 constexpr const wchar_t* kOwnerOnlyDescriptor = L"D:P(A;OICI;GA;;;OW)(A;OICI;GA;;;BA)";
 
+// The owner-only security descriptor, built for one call: empty (errno set) when Windows cannot build it.
+UniqueLocal ownerOnlyDescriptor()
+{
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( kOwnerOnlyDescriptor, SDDL_REVISION_1, &descriptor, nullptr ) )
+    {
+        (void)failLastError();
+        return UniqueLocal();
+    }
+    return UniqueLocal( descriptor );
+}
+
 int mkdir( const char* path, mode_t mode )
 {
     const NativePath native( path );
@@ -1235,16 +1460,13 @@ int mkdir( const char* path, mode_t mode )
     {
         return ::CreateDirectoryW( native.c_str(), nullptr ) ? 0 : failLastError();
     }
-    PSECURITY_DESCRIPTOR descriptor = nullptr;
-    if( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( kOwnerOnlyDescriptor, SDDL_REVISION_1, &descriptor, nullptr ) )
+    const UniqueLocal descriptor = ownerOnlyDescriptor();
+    if( !descriptor.valid() )
     {
-        return failLastError();
+        return -1;
     }
-    SECURITY_ATTRIBUTES security { sizeof( SECURITY_ATTRIBUTES ), descriptor, FALSE };
-    const BOOL  created = ::CreateDirectoryW( native.c_str(), &security );
-    const DWORD error   = ::GetLastError();
-    ::LocalFree( descriptor );
-    return created ? 0 : failWin32( error );
+    SECURITY_ATTRIBUTES security { sizeof( SECURITY_ATTRIBUTES ), descriptor.get(), FALSE };
+    return ::CreateDirectoryW( native.c_str(), &security ) ? 0 : failLastError();
 }
 
 // chmod: 0700 writes the owner-only ACL above through a handle on the entry ITSELF, after checking that entry is not a
@@ -1261,55 +1483,51 @@ int chmod( const char* path, mode_t mode )
     }
     const bool   ownerOnly = ( mode & 077 ) == 0;
     const DWORD  access    = FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | ( ownerOnly ? READ_CONTROL | WRITE_DAC : 0 );
-    const HANDLE handle    = ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr );
-    if( handle == INVALID_HANDLE_VALUE )
+    const UniqueHandle handle( ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr ) );
+    if( !handle.valid() )
     {
         return failLastError();
     }
     FILE_ATTRIBUTE_TAG_INFO tag {};
-    if( !::GetFileInformationByHandleEx( handle, FileAttributeTagInfo, &tag, sizeof( tag ) ) )
+    if( !::GetFileInformationByHandleEx( handle.get(), FileAttributeTagInfo, &tag, sizeof( tag ) ) )
     {
-        const DWORD error = ::GetLastError();
-        ::CloseHandle( handle );
-        return failWin32( error );
+        return failLastError();
     }
     if( oswin::classifyFinalComponent( tag.FileAttributes, tag.ReparseTag ) == oswin::FinalComponent::Link )
     {
-        ::CloseHandle( handle );
         return fail( ELOOP );
     }
-    int result = 0;
     if( ownerOnly )
     {
-        PSECURITY_DESCRIPTOR descriptor = nullptr;
-        BOOL                 present    = FALSE;
-        BOOL                 defaulted  = FALSE;
-        PACL                 dacl       = nullptr;
-        if( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( kOwnerOnlyDescriptor, SDDL_REVISION_1, &descriptor, nullptr )
-            || !::GetSecurityDescriptorDacl( descriptor, &present, &dacl, &defaulted ) || !present || dacl == nullptr )
+        const UniqueLocal descriptor = ownerOnlyDescriptor();
+        BOOL              present    = FALSE;
+        BOOL              defaulted  = FALSE;
+        PACL              dacl       = nullptr;
+        if( !descriptor.valid() )
         {
-            result = failLastError();
+            return -1;
         }
-        else if( const DWORD error = ::SetSecurityInfo( handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                                                        nullptr, nullptr, dacl, nullptr ); error != ERROR_SUCCESS )
+        if( !::GetSecurityDescriptorDacl( descriptor.get(), &present, &dacl, &defaulted ) || !present || dacl == nullptr )
         {
-            result = failWin32( error );
+            return failLastError();
         }
-        if( descriptor != nullptr )
+        const DWORD error = ::SetSecurityInfo( handle.get(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr );
+        if( error != ERROR_SUCCESS )
         {
-            ::LocalFree( descriptor );
+            return failWin32( error );
         }
     }
-    if( result == 0 && ( tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ) == 0 )
+    if( ( tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ) == 0 )
     {
         const DWORD wanted = ( mode & 0200 ) != 0 ? ( tag.FileAttributes & ~FILE_ATTRIBUTE_READONLY ) : ( tag.FileAttributes | FILE_ATTRIBUTE_READONLY );
-        if( wanted != tag.FileAttributes && !::SetFileAttributesW( native.c_str(), wanted == 0 ? FILE_ATTRIBUTE_NORMAL : wanted ) )
+        FILE_BASIC_INFO basic {};
+        basic.FileAttributes = wanted == 0 ? FILE_ATTRIBUTE_NORMAL : wanted;   // zero times = unchanged; through the checked handle, not the path
+        if( wanted != tag.FileAttributes && !::SetFileInformationByHandle( handle.get(), FileBasicInfo, &basic, sizeof( basic ) ) )
         {
-            result = failLastError();
+            return failLastError();
         }
     }
-    ::CloseHandle( handle );
-    return result;
+    return 0;
 }
 
 // access: F_OK/R_OK — the path exists; W_OK — and is not a read-only file; X_OK — a directory (search), or a file
@@ -1358,8 +1576,8 @@ char* realpath( const char* path, char* resolved )
         errno = native.error();
         return nullptr;
     }
-    const HANDLE handle = ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr );
-    if( handle == INVALID_HANDLE_VALUE )
+    const UniqueHandle handle( ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr ) );
+    if( !handle.valid() )
     {
         (void)failLastError();
         return nullptr;
@@ -1367,15 +1585,14 @@ char* realpath( const char* path, char* resolved )
     wchar_t                    stackBuffer[ MAX_PATH + 1 ];
     std::unique_ptr<wchar_t[]> heapBuffer;
     wchar_t*                   buffer = stackBuffer;
-    DWORD length = ::GetFinalPathNameByHandleW( handle, buffer, MAX_PATH + 1, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS );
+    DWORD length = ::GetFinalPathNameByHandleW( handle.get(), buffer, MAX_PATH + 1, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS );
     if( length > MAX_PATH )
     {
         heapBuffer.reset( new( std::nothrow ) wchar_t[ length ] );
         buffer = heapBuffer.get();
-        length = buffer == nullptr ? 0 : ::GetFinalPathNameByHandleW( handle, buffer, length, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS );
+        length = buffer == nullptr ? 0 : ::GetFinalPathNameByHandleW( handle.get(), buffer, length, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS );
     }
     const DWORD error = ::GetLastError();
-    ::CloseHandle( handle );
     if( length == 0 || buffer == nullptr )
     {
         (void)failWin32( buffer == nullptr ? ERROR_NOT_ENOUGH_MEMORY : error );
@@ -1528,6 +1745,11 @@ void init_process( int& argc, char**& argv )
 {
     static_assert( sizeof( wchar_t ) == sizeof( char16_t ), "the Windows ABI's wchar_t is UTF-16" );
 
+    // A bad descriptor or argument makes a UCRT call return its error (EBADF, EINVAL) — POSIX's behaviour — instead of
+    // running the default invalid-parameter handler, which ends the process. PR #44 relied on the default.
+    (void)::_set_thread_local_invalid_parameter_handler( nullptr );
+    (void)::_set_invalid_parameter_handler( []( const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, std::uintptr_t ) noexcept {} );
+
     // stdout carries XML/JSON bytes and stdin carries MCP requests: no CRLF translation in either direction.
     (void)::_setmode( ::_fileno( stdin ), _O_BINARY );
     (void)::_setmode( ::_fileno( stdout ), _O_BINARY );
@@ -1537,7 +1759,8 @@ void init_process( int& argc, char**& argv )
     // when the manifest's activeCodePage took effect. An argument that is not valid UTF-16 leaves the CRT's argv in
     // place — every argument, so the indices stay aligned.
     int                 wideCount = 0;
-    const LPWSTR* const wideArgv  = ::CommandLineToArgvW( ::GetCommandLineW(), &wideCount );
+    LPWSTR* const       wideArgv  = ::CommandLineToArgvW( ::GetCommandLineW(), &wideCount );
+    const UniqueLocal   wideArgvOwner( static_cast<HLOCAL>( wideArgv ) );
     if( wideArgv != nullptr )
     {
         static std::vector<std::string> storage;
@@ -1548,7 +1771,6 @@ void init_process( int& argc, char**& argv )
         {
             allValid = utf8Of( viewOf( wideArgv[ i ] ), storage[ static_cast<std::size_t>( i ) ] );
         }
-        ::LocalFree( const_cast<HLOCAL>( wideArgv ) );
         if( allValid )
         {
             pointers.clear();
@@ -1704,22 +1926,32 @@ std::vector<wchar_t> childEnvironment( const std::string& bash )
             break;
         }
     }
-    bool                 ok = false;
-    const std::u16string extra = utf16Of( ";" + gitRoot + "/usr/bin;" + gitRoot + "/bin;" + gitRoot + "/cmd", ok );
-    std::vector<wchar_t> block;
-    const LPWCH          raw = ::GetEnvironmentStringsW();
-    if( raw == nullptr || !ok )
+    bool                         ok = false;
+    const std::u16string         extra = utf16Of( ";" + gitRoot + "/usr/bin;" + gitRoot + "/bin;" + gitRoot + "/cmd", ok );
+    const UniqueEnvironmentBlock environment( ::GetEnvironmentStringsW() );
+    std::vector<wchar_t>         block;
+    if( !environment.valid() || !ok )
     {
-        if( raw != nullptr )
-        {
-            ::FreeEnvironmentStringsW( raw );
-        }
-        return block;
+        return block;   // empty: CreateProcessW then gives the child this process's environment unchanged
     }
+    // A temporary directory near MAX_PATH breaks Git for Windows' tools; such a TMP/TEMP/TMPDIR is replaced, in the
+    // child's block only, by %LOCALAPPDATA%\Temp when that is shorter (lennix1337's win32-port-snapshot).
+    bool                 shortOk = false;
+    const std::string    localAppData = environmentUtf8( L"LOCALAPPDATA" );
+    const std::u16string shortTemp    = localAppData.empty() ? std::u16string() : utf16Of( localAppData + "\\Temp", shortOk );
     bool pathSeen = false;
-    for( const wchar_t* entry = raw; *entry != L'\0'; entry += std::wcslen( entry ) + 1 )
+    for( const wchar_t* entry = environment.get(); *entry != L'\0'; entry += std::wcslen( entry ) + 1 )
     {
-        const std::size_t length = std::wcslen( entry );
+        const std::size_t         length = std::wcslen( entry );
+        const std::u16string_view view( reinterpret_cast<const char16_t*>( entry ), length );
+        if( shortOk && oswin::isLongTemporaryEntry( view ) && shortTemp.size() < oswin::kLongTemporaryUnits )
+        {
+            const std::size_t equals = view.find( u'=' );
+            block.insert( block.end(), entry, entry + equals + 1 );
+            block.insert( block.end(), shortTemp.begin(), shortTemp.end() );
+            block.push_back( L'\0' );
+            continue;
+        }
         block.insert( block.end(), entry, entry + length );
         if( length >= 5 && ::_wcsnicmp( entry, L"PATH=", 5 ) == 0 )
         {
@@ -1728,7 +1960,6 @@ std::vector<wchar_t> childEnvironment( const std::string& bash )
         }
         block.push_back( L'\0' );
     }
-    ::FreeEnvironmentStringsW( raw );
     if( !pathSeen )
     {
         const std::wstring_view name = L"PATH=";
@@ -1740,34 +1971,47 @@ std::vector<wchar_t> childEnvironment( const std::string& bash )
     return block;
 }
 
-// One started child: its process handle, the job that holds its whole tree, and the signal kill() delivered (so
-// waitpid reports WIFSIGNALED, as POSIX does for a SIGKILLed group).
-struct Child
+// A PROC_THREAD_ATTRIBUTE_LIST owned for one CreateProcessW call.
+class ProcThreadAttributes
 {
-    pid_t  pid       = 0;
-    HANDLE process   = nullptr;
-    HANDLE job       = nullptr;
-    int    signalled = 0;
+public:
+    explicit ProcThreadAttributes( DWORD attributeCount ) noexcept
+    {
+        SIZE_T bytes = 0;
+        (void)::InitializeProcThreadAttributeList( nullptr, attributeCount, 0, &bytes );
+        storage_.reset( new( std::nothrow ) BYTE[ bytes ] );
+        initialized_ = storage_ && ::InitializeProcThreadAttributeList( get(), attributeCount, 0, &bytes ) != FALSE;
+    }
+    ProcThreadAttributes( const ProcThreadAttributes& ) = delete;
+    ProcThreadAttributes& operator=( const ProcThreadAttributes& ) = delete;
+    ~ProcThreadAttributes()
+    {
+        if( initialized_ )
+        {
+            ::DeleteProcThreadAttributeList( get() );
+        }
+    }
+    [[nodiscard]] bool                         valid() const noexcept { return initialized_; }
+    [[nodiscard]] LPPROC_THREAD_ATTRIBUTE_LIST get() const noexcept { return reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>( storage_.get() ); }
+
+private:
+    std::unique_ptr<BYTE[]> storage_;
+    bool                    initialized_ = false;
 };
 
-std::mutex& childMutex()
+// A started shell: its process, the job holding its tree, and its id.
+struct StartedChild
 {
-    static std::mutex mutex;
-    return mutex;
-}
-
-std::vector<Child>& children()
-{
-    static std::vector<Child> table;
-    return table;
-}
+    UniqueHandle process;
+    UniqueHandle job;
+    DWORD        pid = 0;
+};
 
 // Start bash with argv = { bash, arguments... } (quoted for CreateProcessW by os_win32_logic.h), stdin/stdout/stderr
-// the three given inheritable handles and nothing else inherited (PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PR #44's
-// rw_popen pattern), suspended until it is inside a KILL_ON_JOB_CLOSE job — so nothing it starts escapes a kill
-// (PR #44's order, proven by runtracecheck on lennix1337's machine). A job that cannot be created or joined leaves
-// kill() able to end only the shell itself; the child is still started, as #44 did.
-bool startBash( std::initializer_list<std::string_view> arguments, HANDLE input, HANDLE output, HANDLE error, PROCESS_INFORMATION& started, HANDLE& job )
+// the given inheritable handles and nothing else inherited (PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PR #44's rw_popen
+// pattern), suspended until it is inside a KILL_ON_JOB_CLOSE job — so nothing it starts escapes a kill (PR #44's
+// order, proven by runtracecheck on lennix1337's machine). False with the Win32 error in GetLastError().
+bool startBash( std::initializer_list<std::string_view> arguments, HANDLE input, HANDLE output, HANDLE error, StartedChild& started )
 {
     const std::string& bash = trustedBash();
     if( bash.empty() )
@@ -1787,8 +2031,8 @@ bool startBash( std::initializer_list<std::string_view> arguments, HANDLE input,
         commandLine.push_back( ' ' );
         oswin::appendQuotedArg( commandLine, argument );
     }
-    bool           converted = false;
-    std::u16string wideCommand = utf16Of( commandLine, converted );
+    bool             converted   = false;
+    std::u16string   wideCommand = utf16Of( commandLine, converted );
     const NativePath program( bash.c_str() );
     if( !converted || !program.ok() )
     {
@@ -1797,71 +2041,93 @@ bool startBash( std::initializer_list<std::string_view> arguments, HANDLE input,
     }
     std::vector<wchar_t> environment = childEnvironment( bash );
 
-    SIZE_T attributeBytes = 0;
-    (void)::InitializeProcThreadAttributeList( nullptr, 1, 0, &attributeBytes );
-    std::unique_ptr<BYTE[]> attributeStorage( new( std::nothrow ) BYTE[ attributeBytes ] );
-    const auto attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>( attributeStorage.get() );
-    if( attributes == nullptr || !::InitializeProcThreadAttributeList( attributes, 1, 0, &attributeBytes ) )
+    const ProcThreadAttributes attributes( 1 );
+    HANDLE                     inherited[ 3 ] = { input, output, error };
+    const DWORD                inheritedCount = output == error ? 2 : 3;
+    if( !attributes.valid()
+        || !::UpdateProcThreadAttribute( attributes.get(), 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, inheritedCount * sizeof( HANDLE ), nullptr, nullptr ) )
     {
         return false;
     }
-    HANDLE     inherited[ 3 ] = { input, output, error };
-    const bool sameOutput     = output == error;
-    const bool listed = ::UpdateProcThreadAttribute( attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
-                                                     ( sameOutput ? 2 : 3 ) * sizeof( HANDLE ), nullptr, nullptr ) != FALSE;
     STARTUPINFOEXW startup {};
     startup.StartupInfo.cb         = sizeof( startup );
     startup.StartupInfo.dwFlags    = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput  = input;
     startup.StartupInfo.hStdOutput = output;
     startup.StartupInfo.hStdError  = error;
-    startup.lpAttributeList        = attributes;
+    startup.lpAttributeList        = attributes.get();
 
-    job = ::CreateJobObjectW( nullptr, nullptr );
-    if( job != nullptr )
+    // The job first: without it a timeout could end the shell but not what the shell started, so a job that cannot be
+    // created or configured refuses the spawn (fail closed) rather than starting a tree nothing can stop.
+    started.job.reset( ::CreateJobObjectW( nullptr, nullptr ) );
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if( !started.job.valid() || !::SetInformationJobObject( started.job.get(), JobObjectExtendedLimitInformation, &limits, sizeof( limits ) ) )
     {
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits {};
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        (void)::SetInformationJobObject( job, JobObjectExtendedLimitInformation, &limits, sizeof( limits ) );
-    }
-    const BOOL created = listed && ::CreateProcessW( program.c_str(), reinterpret_cast<LPWSTR>( wideCommand.data() ), nullptr, nullptr, TRUE,
-                                                     CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                                                     environment.empty() ? nullptr : environment.data(), nullptr, &startup.StartupInfo, &started );
-    const DWORD createError = ::GetLastError();
-    ::DeleteProcThreadAttributeList( attributes );
-    if( !created )
-    {
-        if( job != nullptr )
-        {
-            ::CloseHandle( job );
-            job = nullptr;
-        }
-        ::SetLastError( listed ? createError : ERROR_INVALID_PARAMETER );
         return false;
     }
-    if( job != nullptr && !::AssignProcessToJobObject( job, started.hProcess ) )
+    PROCESS_INFORMATION information {};
+    if( !::CreateProcessW( program.c_str(), reinterpret_cast<LPWSTR>( wideCommand.data() ), nullptr, nullptr, TRUE,
+                           CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                           environment.empty() ? nullptr : environment.data(), nullptr, &startup.StartupInfo, &information ) )
     {
-        ::CloseHandle( job );
-        job = nullptr;
+        return false;
     }
-    ::ResumeThread( started.hThread );
-    ::CloseHandle( started.hThread );
-    started.hThread = nullptr;
+    started.process.reset( information.hProcess );
+    const UniqueHandle thread( information.hThread );
+    started.pid = information.dwProcessId;
+    // Inside the job before it runs a single instruction. If that fails (a job the caller's own job forbids nesting
+    // into), the suspended shell is ended and the spawn fails, for the same reason as above.
+    if( !::AssignProcessToJobObject( started.job.get(), started.process.get() ) )
+    {
+        const DWORD assignError = ::GetLastError();
+        ::TerminateProcess( started.process.get(), 1 );
+        ::SetLastError( assignError );
+        return false;
+    }
+    if( ::ResumeThread( thread.get() ) == static_cast<DWORD>( -1 ) )
+    {
+        const DWORD resumeError = ::GetLastError();
+        ::TerminateJobObject( started.job.get(), 1 );
+        ::SetLastError( resumeError );
+        return false;
+    }
     return true;
 }
 
 // An inheritable duplicate of a handle, for a child's standard stream.
-HANDLE inheritableCopy( HANDLE handle )
+UniqueHandle inheritableCopy( HANDLE handle )
 {
     HANDLE copy = nullptr;
-    return ::DuplicateHandle( ::GetCurrentProcess(), handle, ::GetCurrentProcess(), &copy, 0, TRUE, DUPLICATE_SAME_ACCESS ) ? copy : nullptr;
+    return UniqueHandle( ::DuplicateHandle( ::GetCurrentProcess(), handle, ::GetCurrentProcess(), &copy, 0, TRUE, DUPLICATE_SAME_ACCESS ) ? copy : nullptr );
 }
 
-HANDLE inheritableNul( DWORD access )
+UniqueHandle inheritableNul( DWORD access )
 {
     SECURITY_ATTRIBUTES inherit { sizeof( SECURITY_ATTRIBUTES ), nullptr, TRUE };
-    const HANDLE        nul = ::CreateFileW( L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
-    return nul == INVALID_HANDLE_VALUE ? nullptr : nul;
+    return UniqueHandle( ::CreateFileW( L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr ) );
+}
+
+// One spawn_sh child: the signal kill() delivered is recorded so waitpid reports WIFSIGNALED, as POSIX does for a
+// SIGKILLed group.
+struct Child
+{
+    pid_t        pid       = 0;
+    UniqueHandle process;
+    UniqueHandle job;
+    int          signalled = 0;
+};
+
+std::mutex& childMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::vector<Child>& children()
+{
+    static std::vector<Child> table;
+    return table;
 }
 }   // namespace
 
@@ -1877,34 +2143,20 @@ pid_t spawn_sh( const std::string& command, const int pipeFds[ 2 ] )
     {
         return fail( EBADF );
     }
-    const HANDLE input       = inheritableNul( GENERIC_READ );
-    const HANDLE childOutput = inheritableCopy( output );
-    if( input == nullptr || childOutput == nullptr )
+    const UniqueHandle input       = inheritableNul( GENERIC_READ );
+    const UniqueHandle childOutput = inheritableCopy( output );
+    if( !input.valid() || !childOutput.valid() )
     {
-        const DWORD error = ::GetLastError();
-        if( input != nullptr )
-        {
-            ::CloseHandle( input );
-        }
-        if( childOutput != nullptr )
-        {
-            ::CloseHandle( childOutput );
-        }
-        return failWin32( error );
+        return failLastError();
     }
-    PROCESS_INFORMATION started {};
-    HANDLE              job     = nullptr;
-    const bool          ok      = startBash( { "-c", command }, input, childOutput, childOutput, started, job );
-    const DWORD         error   = ::GetLastError();
-    ::CloseHandle( input );
-    ::CloseHandle( childOutput );
-    if( !ok )
+    StartedChild started;
+    if( !startBash( { "-c", command }, input.get(), childOutput.get(), childOutput.get(), started ) )
     {
-        return failWin32( error );
+        return failLastError();
     }
-    const pid_t pid = static_cast<pid_t>( started.dwProcessId );
+    const pid_t pid = static_cast<pid_t>( started.pid );
     const std::lock_guard<std::mutex> lock( childMutex() );
-    children().push_back( Child{ pid, started.hProcess, job, 0 } );
+    children().push_back( Child{ pid, std::move( started.process ), std::move( started.job ), 0 } );
     return pid;
 }
 
@@ -1922,11 +2174,11 @@ int kill( pid_t pid, int sig )
         }
         if( sig == 0 )
         {
-            return ::WaitForSingleObject( child.process, 0 ) == WAIT_TIMEOUT ? 0 : fail( ESRCH );
+            return ::WaitForSingleObject( child.process.get(), 0 ) == WAIT_TIMEOUT ? 0 : fail( ESRCH );
         }
         const UINT exitCode = 128u + static_cast<UINT>( sig );
-        const BOOL ended    = pid < 0 && child.job != nullptr ? ::TerminateJobObject( child.job, exitCode ) : ::TerminateProcess( child.process, exitCode );
-        if( ended || ::WaitForSingleObject( child.process, 0 ) == WAIT_OBJECT_0 )
+        const BOOL ended    = pid < 0 ? ::TerminateJobObject( child.job.get(), exitCode ) : ::TerminateProcess( child.process.get(), exitCode );
+        if( ended || ::WaitForSingleObject( child.process.get(), 0 ) == WAIT_OBJECT_0 )
         {
             if( child.signalled == 0 )
             {
@@ -1941,21 +2193,18 @@ int kill( pid_t pid, int sig )
 
 // waitpid: WNOHANG polls; 0 blocks. The status decodes through os.h's W* macros: an exit code, the recorded kill()
 // signal, or the signal a crash's NTSTATUS corresponds to. Reaping closes the job, which (KILL_ON_JOB_CLOSE) ends any
-// descendant the shell left running — where POSIX would leave an orphan to init.
+// descendant the shell left running — where POSIX would leave an orphan to init. One thread reaps a given child.
 pid_t waitpid( pid_t pid, int* status, int options )
 {
     std::unique_lock<std::mutex> lock( childMutex() );
     auto& table = children();
-    auto  it    = table.begin();
-    while( it != table.end() && it->pid != pid )
-    {
-        ++it;
-    }
+    auto  found = [ & ] { auto it = table.begin(); while( it != table.end() && it->pid != pid ) { ++it; } return it; };
+    auto  it    = found();
     if( it == table.end() )
     {
         return fail( ECHILD );
     }
-    const HANDLE process = it->process;
+    const HANDLE process = it->process.get();
     lock.unlock();
     const DWORD waited = ::WaitForSingleObject( process, ( options & WNOHANG ) != 0 ? 0 : INFINITE );
     if( waited == WAIT_TIMEOUT )
@@ -1967,27 +2216,18 @@ pid_t waitpid( pid_t pid, int* status, int options )
         return failLastError();
     }
     lock.lock();
-    it = table.begin();
-    while( it != table.end() && it->pid != pid )
-    {
-        ++it;
-    }
+    it = found();
     if( it == table.end() )
     {
-        return fail( ECHILD );   // reaped by a concurrent waitpid
+        return fail( ECHILD );
     }
     DWORD exitCode = 0;
-    (void)::GetExitCodeProcess( it->process, &exitCode );
+    (void)::GetExitCodeProcess( it->process.get(), &exitCode );
     if( status != nullptr )
     {
         *status = it->signalled != 0 ? oswin::waitStatusFromSignal( it->signalled ) : oswin::waitStatusFromExit( exitCode );
     }
-    ::CloseHandle( it->process );
-    if( it->job != nullptr )
-    {
-        ::CloseHandle( it->job );
-    }
-    table.erase( it );
+    table.erase( it );   // closes the process and the job
     return pid;
 }
 
@@ -2000,10 +2240,10 @@ namespace
 {
 struct PipeChild
 {
-    std::FILE*   stream  = nullptr;
-    HANDLE       process = nullptr;
-    HANDLE       job     = nullptr;   // closed only after the shell is reaped: KILL_ON_JOB_CLOSE would end it
-    std::wstring script;
+    std::FILE*    stream = nullptr;
+    UniqueHandle  process;
+    UniqueHandle  job;      // closed only after the shell is reaped: KILL_ON_JOB_CLOSE ends what the command left running
+    TemporaryFile script;   // the script's own trap removes it; this is the backstop
 };
 
 std::vector<PipeChild>& pipeChildren()
@@ -2012,18 +2252,11 @@ std::vector<PipeChild>& pipeChildren()
     return table;
 }
 
-bool writeScript( LPCWSTR path, const std::string& command )
+bool writeScript( HANDLE file, const std::string& command )
 {
-    const HANDLE file = ::CreateFileW( path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr );
-    if( file == INVALID_HANDLE_VALUE )
-    {
-        return false;
-    }
-    const std::string script = "trap 'rm -f -- \"$0\"' EXIT\n" + command + "\n";
-    DWORD       written = 0;
-    const BOOL  ok      = ::WriteFile( file, script.data(), static_cast<DWORD>( script.size() ), &written, nullptr );
-    ::CloseHandle( file );
-    return ok && written == script.size();
+    const std::string script  = "trap 'rm -f -- \"$0\"' EXIT\n" + command + "\n";
+    DWORD             written = 0;
+    return ::WriteFile( file, script.data(), static_cast<DWORD>( script.size() ), &written, nullptr ) && written == script.size();
 }
 }   // namespace
 
@@ -2034,80 +2267,67 @@ std::FILE* popen( const char* command, const char* mode )
         errno = EINVAL;
         return nullptr;
     }
-    wchar_t directory[ MAX_PATH + 2 ];
-    wchar_t script[ MAX_PATH + 1 ];
-    const DWORD directoryLength = ::GetTempPathW( MAX_PATH + 2, directory );
-    if( directoryLength == 0 || directoryLength > MAX_PATH + 1 || ::GetTempFileNameW( directory, L"rwc", 0, script ) == 0 )
+    // The script is written through the handle CREATE_NEW returned — no second open of a name another process could
+    // have replaced in between — and closed before bash opens it.
+    std::string   scriptPath( PATH_MAX, '\0' );
+    TemporaryFile script;
     {
-        (void)failLastError();
-        return nullptr;
-    }
-    char scriptPath[ PATH_MAX ];
-    if( programPathInto( viewOf( script ), scriptPath, sizeof( scriptPath ) ) != 0 || !writeScript( script, command ) )
-    {
-        const int error = errno;
-        ::DeleteFileW( script );
-        errno = error != 0 ? error : EIO;
-        return nullptr;
+        CreatedTemporary created = createTemporary( "rwc", 0 );
+        if( !created.handle.valid() )
+        {
+            return nullptr;
+        }
+        script = TemporaryFile( std::wstring( reinterpret_cast<const wchar_t*>( created.name.c_str() ) ) );
+        if( !writeScript( created.handle.get(), command ) )
+        {
+            (void)failLastError();
+            return nullptr;
+        }
+        if( programPathInto( created.name, scriptPath.data(), scriptPath.size() ) != 0 )
+        {
+            return nullptr;
+        }
+        scriptPath.resize( std::strlen( scriptPath.c_str() ) );
     }
     SECURITY_ATTRIBUTES pipeSecurity { sizeof( SECURITY_ATTRIBUTES ), nullptr, TRUE };
-    HANDLE readEnd = nullptr, writeEnd = nullptr;
-    if( !::CreatePipe( &readEnd, &writeEnd, &pipeSecurity, 0 ) )
+    HANDLE              rawRead = nullptr, rawWrite = nullptr;
+    if( !::CreatePipe( &rawRead, &rawWrite, &pipeSecurity, 0 ) )
     {
         (void)failLastError();
-        ::DeleteFileW( script );
         return nullptr;
     }
-    (void)::SetHandleInformation( readEnd, HANDLE_FLAG_INHERIT, 0 );
-    const HANDLE input       = inheritableNul( GENERIC_READ );
-    const HANDLE parentError = ::GetStdHandle( STD_ERROR_HANDLE );
-    HANDLE       error       = parentError != nullptr && parentError != INVALID_HANDLE_VALUE ? inheritableCopy( parentError ) : nullptr;
-    if( error == nullptr )
+    UniqueHandle       readEnd( rawRead );
+    const UniqueHandle writeEnd( rawWrite );
+    (void)::SetHandleInformation( readEnd.get(), HANDLE_FLAG_INHERIT, 0 );
+    const UniqueHandle input       = inheritableNul( GENERIC_READ );
+    const HANDLE       parentError = ::GetStdHandle( STD_ERROR_HANDLE );
+    UniqueHandle       error       = parentError != nullptr && parentError != INVALID_HANDLE_VALUE ? inheritableCopy( parentError ) : UniqueHandle();
+    if( !error.valid() )
     {
         error = inheritableNul( GENERIC_WRITE );
     }
-    PROCESS_INFORMATION started {};
-    HANDLE              job      = nullptr;
-    const bool          ok       = input != nullptr && error != nullptr && startBash( { scriptPath }, input, writeEnd, error, started, job );
-    const DWORD         startErr = ::GetLastError();
-    for( const HANDLE handle : { input, writeEnd, error } )
+    StartedChild started;
+    if( !input.valid() || !error.valid() || !startBash( { std::string_view( scriptPath ) }, input.get(), writeEnd.get(), error.get(), started ) )
     {
-        if( handle != nullptr )
-        {
-            ::CloseHandle( handle );
-        }
-    }
-    if( !ok )
-    {
-        ::CloseHandle( readEnd );
-        ::DeleteFileW( script );
-        (void)failWin32( startErr );
+        (void)failLastError();
         return nullptr;
     }
-    const int fd = ::_open_osfhandle( reinterpret_cast<intptr_t>( readEnd ), _O_RDONLY | _O_BINARY );
-    std::FILE* const stream = fd < 0 ? nullptr : ::_fdopen( fd, "rb" );
+    UniqueFd fd( ::_open_osfhandle( reinterpret_cast<intptr_t>( readEnd.get() ), _O_RDONLY | _O_BINARY ) );
+    if( !fd.valid() )
+    {
+        ::TerminateJobObject( started.job.get(), 1 );
+        return nullptr;
+    }
+    (void)readEnd.release();   // the descriptor owns it
+    std::FILE* const stream = ::_fdopen( fd.get(), "rb" );
     if( stream == nullptr )
     {
-        if( fd >= 0 )
-        {
-            ::_close( fd );
-        }
-        else
-        {
-            ::CloseHandle( readEnd );
-        }
-        ::TerminateProcess( started.hProcess, 1 );
-        ::WaitForSingleObject( started.hProcess, INFINITE );
-        ::CloseHandle( started.hProcess );
-        if( job != nullptr )
-        {
-            ::CloseHandle( job );
-        }
-        ::DeleteFileW( script );
+        ::TerminateJobObject( started.job.get(), 1 );
         return nullptr;
     }
+    (void)fd.release();        // the stream owns it
     const std::lock_guard<std::mutex> lock( childMutex() );
-    pipeChildren().push_back( PipeChild{ stream, started.hProcess, job, std::wstring( script ) } );
+    pipeChildren().push_back( PipeChild{ stream, std::move( started.process ), std::move( started.job ), TemporaryFile( script.keep() ) } );
     return stream;
 }
 
@@ -2115,7 +2335,7 @@ std::FILE* popen( const char* command, const char* mode )
 // test `== 0`, which holds exactly when the command exited 0.
 int pclose( std::FILE* stream )
 {
-    PipeChild child {};
+    PipeChild child;
     {
         const std::lock_guard<std::mutex> lock( childMutex() );
         auto& table = pipeChildren();
@@ -2128,23 +2348,17 @@ int pclose( std::FILE* stream )
         {
             return fail( ECHILD );
         }
-        child = *it;
+        child = std::move( *it );
         table.erase( it );
     }
     std::fclose( stream );
-    const DWORD waited   = ::WaitForSingleObject( child.process, INFINITE );
-    DWORD       exitCode = 1;
-    if( waited == WAIT_OBJECT_0 )
+    if( ::WaitForSingleObject( child.process.get(), INFINITE ) != WAIT_OBJECT_0 )
     {
-        (void)::GetExitCodeProcess( child.process, &exitCode );
+        return failLastError();
     }
-    ::CloseHandle( child.process );
-    if( child.job != nullptr )
-    {
-        ::CloseHandle( child.job );   // anything the command left running in the background ends with it
-    }
-    ::DeleteFileW( child.script.c_str() );   // the script's own trap normally removed it
-    return waited == WAIT_OBJECT_0 ? oswin::waitStatusFromExit( exitCode ) : fail( ECHILD );
+    DWORD exitCode = 1;
+    (void)::GetExitCodeProcess( child.process.get(), &exitCode );
+    return oswin::waitStatusFromExit( exitCode );   // `child` closes the process, the job and the script as it leaves
 }
 
 // system: popen, drain, pclose. POSIX system lets the command's output through to this process's stdout; every caller
@@ -2184,6 +2398,164 @@ int pthread_getname_np( pthread_t, char* name, std::size_t nameCount )
     return 0;
 }
 
+// ── directory watching ─────────────────────────────────────────────────────────────────────────────────────
+// kqueue's EVFILT_VNODE on a directory descriptor, done with ReadDirectoryChangesW: dirwatch_open is an I/O completion
+// port behind a descriptor from its own range; dirwatch_add reopens the directory for overlapped listing and starts a
+// NON-recursive watch for entries created, deleted or renamed (FILE_NAME | DIR_NAME — what NOTE_WRITE reports on a
+// directory; a file's content edits are the caller's per-file stat sweep, exactly as on kqueue); dirwatch_poll drains
+// completions within the timeout and re-arms each one. Any completion counts as an event — an overflow, or a watched
+// directory deleted, included — and a failed re-arm is -1, which the caller treats as "assume changed". The caller's
+// own contract is unchanged: all-or-nothing arming, a sweep whenever the watcher is unhealthy.
+// The capability is from lennix1337's win32-port-snapshot (RwFsWatcher: one recursive watch and a skipped per-file
+// sweep); here it is the kevent-shaped os:: API the macOS watcher already uses, so mcpindex.h asks nothing about the
+// platform and keeps its per-file sweep.
+namespace
+{
+struct DirectoryWatch
+{
+    UniqueHandle directory;
+    OVERLAPPED   overlapped {};
+    DWORD        buffer[ 256 ];   // FILE_NOTIFY_INFORMATION records are DWORD-aligned; their content is never read
+};
+
+struct Watcher
+{
+    UniqueHandle                                 port;
+    std::vector<std::unique_ptr<DirectoryWatch>> watches;   // stable addresses: the OVERLAPPED is the kernel's to write
+
+    ~Watcher()
+    {
+        for( const std::unique_ptr<DirectoryWatch>& watch : watches )
+        {
+            if( ::CancelIoEx( watch->directory.get(), &watch->overlapped ) || ::GetLastError() != ERROR_NOT_FOUND )
+            {
+                DWORD ignored = 0;
+                (void)::GetOverlappedResult( watch->directory.get(), &watch->overlapped, &ignored, TRUE );   // wait until the kernel lets go of it
+            }
+        }
+    }
+};
+
+struct WatcherTable
+{
+    std::mutex                                                  mutex;
+    std::array<std::unique_ptr<Watcher>, oswin::kDirwatchFdCount> slots;
+};
+
+WatcherTable& watcherTable()
+{
+    static WatcherTable table;
+    return table;
+}
+
+bool armWatch( DirectoryWatch& watch )
+{
+    watch.overlapped = OVERLAPPED {};
+    return ::ReadDirectoryChangesW( watch.directory.get(), watch.buffer, sizeof( watch.buffer ), FALSE,
+                                    FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, nullptr, &watch.overlapped, nullptr ) != FALSE;
+}
+
+int closeDirwatch( int fd )
+{
+    std::unique_ptr<Watcher> watcher;
+    {
+        WatcherTable&                     table = watcherTable();
+        const std::lock_guard<std::mutex> lock( table.mutex );
+        watcher = std::move( table.slots[ static_cast<std::size_t>( fd - oswin::kDirwatchFdBase ) ] );
+    }
+    return watcher ? 0 : fail( EBADF );   // ~Watcher cancels, waits, and closes every handle
+}
+}   // namespace
+
+int dirwatch_open()
+{
+    auto watcher = std::make_unique<Watcher>();
+    watcher->port.reset( ::CreateIoCompletionPort( INVALID_HANDLE_VALUE, nullptr, 0, 1 ) );
+    if( !watcher->port.valid() )
+    {
+        return failLastError();
+    }
+    WatcherTable&                     table = watcherTable();
+    const std::lock_guard<std::mutex> lock( table.mutex );
+    for( std::size_t slot = 0; slot < table.slots.size(); ++slot )
+    {
+        if( !table.slots[ slot ] )
+        {
+            table.slots[ slot ] = std::move( watcher );
+            return oswin::kDirwatchFdBase + static_cast<int>( slot );
+        }
+    }
+    return fail( EMFILE );
+}
+
+int dirwatch_add( int watchFd, int dirFd, dirwatch_event* change )
+{
+    const HANDLE original = handleOf( dirFd );
+    if( !oswin::isDirwatchFd( watchFd ) || original == INVALID_HANDLE_VALUE )
+    {
+        return fail( EBADF );
+    }
+    auto watch = std::make_unique<DirectoryWatch>();
+    watch->directory.reset( ::ReOpenFile( original, FILE_LIST_DIRECTORY, kShareAll, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED ) );
+    if( !watch->directory.valid() )
+    {
+        return failLastError();
+    }
+    WatcherTable&                     table = watcherTable();
+    const std::lock_guard<std::mutex> lock( table.mutex );
+    Watcher* const watcher = table.slots[ static_cast<std::size_t>( watchFd - oswin::kDirwatchFdBase ) ].get();
+    if( watcher == nullptr )
+    {
+        return fail( EBADF );
+    }
+    if( ::CreateIoCompletionPort( watch->directory.get(), watcher->port.get(), static_cast<ULONG_PTR>( dirFd ), 0 ) == nullptr || !armWatch( *watch ) )
+    {
+        return failLastError();
+    }
+    if( change != nullptr )
+    {
+        change->ident = dirFd;
+    }
+    watcher->watches.push_back( std::move( watch ) );
+    return 0;
+}
+
+int dirwatch_poll( int watchFd, dirwatch_event* events, int eventCount, const ::timespec* timeout )
+{
+    if( !oswin::isDirwatchFd( watchFd ) || events == nullptr || eventCount <= 0 )
+    {
+        return fail( EINVAL );
+    }
+    WatcherTable&                     table = watcherTable();
+    const std::lock_guard<std::mutex> lock( table.mutex );
+    Watcher* const watcher = table.slots[ static_cast<std::size_t>( watchFd - oswin::kDirwatchFdBase ) ].get();
+    if( watcher == nullptr )
+    {
+        return fail( EBADF );
+    }
+    const DWORD milliseconds = timeout == nullptr ? INFINITE
+                                                  : static_cast<DWORD>( timeout->tv_sec * 1000 + ( timeout->tv_nsec + 999999 ) / 1000000 );
+    OVERLAPPED_ENTRY entries[ os::kDirwatchBatch ];
+    ULONG            removed = 0;
+    const ULONG      wanted  = static_cast<ULONG>( eventCount < os::kDirwatchBatch ? eventCount : os::kDirwatchBatch );
+    if( !::GetQueuedCompletionStatusEx( watcher->port.get(), entries, wanted, &removed, milliseconds, FALSE ) )
+    {
+        return ::GetLastError() == WAIT_TIMEOUT ? 0 : failLastError();
+    }
+    for( ULONG i = 0; i < removed; ++i )
+    {
+        events[ i ].ident = static_cast<int>( entries[ i ].lpCompletionKey );
+        for( const std::unique_ptr<DirectoryWatch>& watch : watcher->watches )
+        {
+            if( &watch->overlapped == entries[ i ].lpOverlapped && !armWatch( *watch ) )
+            {
+                return failLastError();   // this directory is no longer watched: the caller must assume change from now on
+            }
+        }
+    }
+    return static_cast<int>( removed );
+}
+
 // ── sockets ────────────────────────────────────────────────────────────────────────────────────────────────
 // The structures call sites fill are os.h's Winsock-layout copies; they must match the SDK's exactly.
 static_assert( sizeof( os::sockaddr ) == sizeof( ::sockaddr ) && sizeof( os::sockaddr_in ) == sizeof( ::sockaddr_in )
@@ -2196,8 +2568,8 @@ int socket( int domain, int type, int protocol )
     {
         return fail( ENETDOWN );
     }
-    const SOCKET s = ::WSASocketW( domain, type, protocol, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT );
-    return s == INVALID_SOCKET ? failWsa() : adoptSocket( s );
+    UniqueSocket s( ::WSASocketW( domain, type, protocol, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT ) );
+    return s.valid() ? adoptSocket( std::move( s ) ) : failWsa();
 }
 
 // setsockopt: two options mean something different on Winsock, and the POSIX meaning is kept.
@@ -2250,13 +2622,13 @@ int accept( int fd, sockaddr* address, socklen_t* length )
     {
         return fail( EBADF );
     }
-    const SOCKET client = ::accept( s, reinterpret_cast<::sockaddr*>( address ), length );
-    if( client == INVALID_SOCKET )
+    UniqueSocket client( ::accept( s, reinterpret_cast<::sockaddr*>( address ), length ) );
+    if( !client.valid() )
     {
         return failWsa();   // WSAEINTR is EINTR, which the accept loop retries
     }
-    (void)::SetHandleInformation( reinterpret_cast<HANDLE>( client ), HANDLE_FLAG_INHERIT, 0 );
-    return adoptSocket( client );
+    (void)::SetHandleInformation( reinterpret_cast<HANDLE>( client.get() ), HANDLE_FLAG_INHERIT, 0 );
+    return adoptSocket( std::move( client ) );
 }
 
 ssize_t recv( int fd, void* buf, std::size_t count, int flags )

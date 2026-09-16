@@ -741,14 +741,15 @@ ssize_t send( int fd, const void* buf, std::size_t count, int flags );
 int     inet_pton( int family, const char* text, void* address );
 int     setsockopt_nosigpipe( int fd, const void* value, socklen_t length );
 
-// ── directory watching: none on Windows. The caller's designed no-watcher path, folded away at compile time ──
+// ── directory watching: ReadDirectoryChangesW behind the same kevent-shaped calls (os_win32.cpp says how) ──────────
 struct dirwatch_event
 {
+    int ident;   // the directory descriptor the event is for
 };
-[[gnu::always_inline]] inline constexpr bool dirwatch_available() { return false; }
-[[gnu::always_inline]] inline int dirwatch_open()                                               { errno = ENOSYS; return -1; }
-[[gnu::always_inline]] inline int dirwatch_add( int, int, dirwatch_event* )                     { errno = ENOSYS; return -1; }
-[[gnu::always_inline]] inline int dirwatch_poll( int, dirwatch_event*, int, const ::timespec* ) { errno = ENOSYS; return -1; }
+[[gnu::always_inline]] inline constexpr bool dirwatch_available() { return true; }
+int dirwatch_open();
+int dirwatch_add( int watchFd, int dirFd, dirwatch_event* change );
+int dirwatch_poll( int watchFd, dirwatch_event* events, int eventCount, const ::timespec* timeout );
 
 }   // namespace rw::os
 

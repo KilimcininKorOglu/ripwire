@@ -22,7 +22,9 @@
 //   6. Time, wait-status and socket-timeout conversions, and the socket-descriptor range.
 //   7. The shell choice: which bash may run a command (never a WSL launcher, never a relative PATH entry).
 //
-// Nothing here reads errno, the environment or the file system; every input is a parameter.
+// Nothing here reads errno, the environment or the file system; every input is a parameter. Every function is noexcept
+// (owner directive 2026-09-16: RAII and return values, no exception handling): the ones that build a std::string can
+// only fail by exhausting memory, which the house treats as the operator-new seam, not as a recoverable error.
 
 #include <array>
 #include <cerrno>
@@ -592,7 +594,7 @@ constexpr void normalizePathArgInPlace( char* text ) noexcept
 // on the current drive, which any user may create. A path at or under "/dev/null/" is therefore rewritten to one that
 // contains '|', a character no Win32 file name may hold, so every open, stat and mkdir of it fails. "/dev/null" itself
 // is the NUL device. Any other path returns empty.
-inline std::string rebaseDevNull( std::string_view path )
+inline std::string rebaseDevNull( std::string_view path ) noexcept
 {
     if( path == "/dev/null" )
     {
@@ -609,7 +611,7 @@ inline std::string rebaseDevNull( std::string_view path )
 // ladder's last rung, or a Git Bash spelling that reached the program unconverted — is rebased onto nativeTmp (read
 // once by the caller; either separator, a trailing one allowed) and returned in the program's spelling. Any other
 // path returns empty, and the caller uses it unchanged.
-inline std::string rebaseMsysTmp( std::string_view path, std::string_view nativeTmp )
+inline std::string rebaseMsysTmp( std::string_view path, std::string_view nativeTmp ) noexcept
 {
     if( path.substr( 0, 4 ) != "/tmp" || ( path.size() > 4 && path[ 4 ] != '/' ) || nativeTmp.empty() )
     {
@@ -637,6 +639,83 @@ inline std::string rebaseMsysTmp( std::string_view path, std::string_view native
     return out;
 }
 
+// The extended-length spelling of an ABSOLUTE native path, for the -W calls that must work past MAX_PATH whatever the
+// machine's LongPathsEnabled setting: "C:\\x" → "\\\\?\\C:\\x", "\\\\server\\share" → "\\\\?\\UNC\\server\\share", '/' → '\\'. A path that already
+// carries the prefix is returned as it is; a relative or drive-relative path is returned empty — "\\\\?\\" turns off
+// every normalisation, so it may only ever be put in front of a path that is already absolute and clean (the temp
+// directory Windows reports). Idea from lennix1337's win32-port-snapshot (windowsExtendedPath), which did not check that.
+inline std::u16string extendedLengthPath( std::u16string_view native ) noexcept
+{
+    const auto isSep = []( char16_t c ) noexcept { return c == u'\\' || c == u'/'; };
+    std::u16string out;
+    if( native.substr( 0, 4 ) == u"\\\\?\\" )
+    {
+        out.assign( native );
+        return out;
+    }
+    const bool drive = native.size() >= 3 && native[ 0 ] < 0x80 && isAsciiLetter( static_cast<char>( native[ 0 ] ) ) && native[ 1 ] == u':' && isSep( native[ 2 ] );
+    const bool unc   = native.size() >= 3 && isSep( native[ 0 ] ) && isSep( native[ 1 ] ) && !isSep( native[ 2 ] ) && native[ 2 ] != u'?' && native[ 2 ] != u'.';
+    if( !drive && !unc )
+    {
+        return out;
+    }
+    for( std::size_t start = 0; start <= native.size(); )
+    {
+        std::size_t end = start;
+        while( end < native.size() && !isSep( native[ end ] ) )
+        {
+            ++end;
+        }
+        const std::u16string_view component = native.substr( start, end - start );
+        if( component == u"." || component == u".." )
+        {
+            return out;   // a "." or ".." component: not clean, so not prefixable
+        }
+        start = end + 1;
+    }
+    out.reserve( native.size() + 6 );
+    out.append( unc ? u"\\\\?\\UNC" : u"\\\\?\\" );
+    for( std::size_t i = unc ? 1 : 0; i < native.size(); ++i )
+    {
+        out.push_back( isSep( native[ i ] ) ? u'\\' : native[ i ] );
+    }
+    return out;
+}
+
+// A child's environment entry "NAME=value" that names a temporary directory (TMP, TEMP or TMPDIR, any case) whose
+// value is at least `limit` UTF-16 units long. Git for Windows' shell and tools fail to create files under a temporary
+// directory near MAX_PATH, so the process-spawning bodies give such a child a short temporary directory instead —
+// in the child's environment block only, never this process's. From lennix1337's win32-port-snapshot
+// (rw_windows_temporary_environment_is_long; runtracecheck's LONG_TMP arm), minus its process-wide environment rewrite.
+inline constexpr std::size_t kLongTemporaryUnits = 240;
+
+constexpr bool isLongTemporaryEntry( std::u16string_view entry, std::size_t limit = kLongTemporaryUnits ) noexcept
+{
+    const std::size_t equals = entry.find( u'=' );
+    if( equals == std::u16string_view::npos || entry.size() - equals - 1 < limit )
+    {
+        return false;
+    }
+    const std::u16string_view name = entry.substr( 0, equals );
+    const auto matches = [ & ]( std::u16string_view wanted ) noexcept
+    {
+        if( name.size() != wanted.size() )
+        {
+            return false;
+        }
+        for( std::size_t i = 0; i < name.size(); ++i )
+        {
+            const char16_t c = name[ i ] >= u'a' && name[ i ] <= u'z' ? static_cast<char16_t>( name[ i ] - 32 ) : name[ i ];
+            if( c != wanted[ i ] )
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+    return matches( u"TMP" ) || matches( u"TEMP" ) || matches( u"TMPDIR" );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // 4. Command-line quoting for CreateProcessW
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -660,7 +739,7 @@ inline std::string rebaseMsysTmp( std::string_view path, std::string_view native
 // argument is not globbed. The rules are the MSVCRT ones CommandLineToArgvW and the MSYS runtime both implement:
 // backslashes are literal unless they precede a '"'; 2n backslashes + '"' → n backslashes and a closing quote,
 // 2n+1 backslashes + '"' → n backslashes and a literal '"'.
-inline void appendQuotedArg( std::string& commandLine, std::string_view arg )
+inline void appendQuotedArg( std::string& commandLine, std::string_view arg ) noexcept
 {
     commandLine.push_back( '"' );
     std::size_t backslashes = 0;
@@ -688,7 +767,7 @@ inline void appendQuotedArg( std::string& commandLine, std::string_view arg )
 
 // The full command line for argv (each argument quoted, single spaces between). An argument that contains a NUL
 // cannot be passed and makes the result empty.
-inline std::string buildCommandLine( std::initializer_list<std::string_view> argv )
+inline std::string buildCommandLine( std::initializer_list<std::string_view> argv ) noexcept
 {
     std::string commandLine;
     for( const std::string_view arg : argv )
@@ -882,6 +961,17 @@ constexpr bool isSocketFd( int fd ) noexcept
 {
     return fd >= kSocketFdBase && fd < kSocketFdBase + kSocketFdCount;
 }
+
+// The directory watcher (os::dirwatch_open) is an I/O completion port, not a CRT descriptor either; its descriptors come
+// from a second range so close() can tell the three kinds apart without a lookup.
+inline constexpr int kDirwatchFdBase  = 0x50000000;
+inline constexpr int kDirwatchFdCount = 64;
+
+constexpr bool isDirwatchFd( int fd ) noexcept
+{
+    return fd >= kDirwatchFdBase && fd < kDirwatchFdBase + kDirwatchFdCount;
+}
+static_assert( kSocketFdBase + kSocketFdCount <= kDirwatchFdBase, "the socket and watcher descriptor ranges must not overlap" );
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // 7. Which bash may run a command
