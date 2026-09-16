@@ -16,10 +16,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 212 | 84 | 118 | **94** |
+| 213 | 85 | 118 | **95** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 212 + 7 is the 219 constants this generator parses out of `src/`.
+are not counted as caps, and 213 + 7 is the 220 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -37,8 +37,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **114 of 212 caps are classified
-(39 INDEXING, 40 OUTPUT, 35 BOUNDARY); the remaining 98 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **115 of 213 caps are classified
+(39 INDEXING, 41 OUTPUT, 35 BOUNDARY); the remaining 98 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -88,7 +88,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 84 files that declare a cap — the 212 caps counted above, and no parameter.
+One table for each of the 85 files that declare a cap — the 213 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -373,6 +373,14 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kBlankSpellingMaxCodePoints` | `8` | — | — |
+
+### `src/infra/diagnostics.cpp`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kNoticeByteCap` | `4096` | OUTPUT | a longer notice is cut and says so: " ... [notice truncated: N bytes]" |
 
 ### `src/infra/fieldid.h`
 

@@ -114,6 +114,7 @@
 "depsprecisecheck.sh": 3.1,
 "det-gate.sh": 10.1,
 "detailcheck.sh": 13.3,
+"diagnoticecheck.sh": 25.0,
 "didyoumeancheck.sh": 17.4,
 "dispatchordercheck.sh": 130.9,
 "dmmcheck.sh": 17.3,
