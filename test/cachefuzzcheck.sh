@@ -666,7 +666,7 @@ print("\n".join(sorted(names)))
 PYEOF
 
     QMUT_NAMES=( $( ls "$MUTDIR"/qsnap_*.bin 2>/dev/null | xargs -n1 basename | sed 's/\.bin$//' | sort ) )
-    for name in "${QMUT_NAMES[@]}"; do
+    for name in ${QMUT_NAMES[@]+"${QMUT_NAMES[@]}"}; do
         cp "$MUTDIR/$name.bin" "$QBLOB"
         out="$TMP/q_${name}.out"; err="$TMP/q_${name}.err"
         qrun >"$out" 2>"$err"; rc=$?
@@ -691,7 +691,7 @@ PYEOF
     QBOUND="$( bound_mode_of "$BIN" )"
     [ -n "$QBOUND" ] || note "huge vector counts: no allocation bound for a plain $( uname -s ) binary — its allocator overcommits the reservation, so only the ASan sweep below or a Linux run can turn these rows red"
     if [ -n "$QBOUND" ]; then
-        for name in "${QHUGE_NAMES[@]}"; do
+        for name in ${QHUGE_NAMES[@]+"${QHUGE_NAMES[@]}"}; do
             cp "$MUTDIR/$name.bin" "$QBLOB"
             out="$TMP/qb_${name}.out"; err="$TMP/qb_${name}.err"
             bounded "$QBOUND" qrun >"$out" 2>"$err"; rc=$?
@@ -728,7 +728,7 @@ PYEOF
         echo
         echo "=== Part 2: qsnap mutation table — ASan build ==="
         asanq_fail=0
-        for name in "${QMUT_NAMES[@]}"; do
+        for name in ${QMUT_NAMES[@]+"${QMUT_NAMES[@]}"}; do
             cp "$MUTDIR/$name.bin" "$QBLOB" 2>/dev/null || { mkdir -p "$( dirname "$QBLOB" )"; cp "$MUTDIR/$name.bin" "$QBLOB"; }
             err="$TMP/qasan_${name}.err"
             # max_allocation_size_mb: the bound the huge-count rows need to go red on an overcommitting host (header).
