@@ -1384,7 +1384,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
             return 0;
         }
         packSigs( jm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds );
-        std::fflush( jm );  std::fclose( jm );
+        rw::os::fflush( jm );  rw::os::fclose( jm );
         if( jbuf ) { sigsJson.assign( jbuf, jsz );  std::free( jbuf ); }
     }
 
@@ -2453,7 +2453,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             if( std::FILE* lm = rw::openChargeBuffer( &lbuf, &lsz ) )
             {
                 packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg );
-                std::fflush( lm );  std::fclose( lm );
+                rw::os::fflush( lm );  rw::os::fclose( lm );
                 if( lbuf ) { legoStr.assign( lbuf, lsz );  std::free( lbuf ); }
                 legoPreRendered = true;
             }
@@ -2469,7 +2469,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             if( std::FILE* cm = rw::openChargeBuffer( &cbuf, &csz ) )
             {
                 packCompose( cm, ing, g.composeEdges, lensSurfaceIds );
-                std::fflush( cm );  std::fclose( cm );
+                rw::os::fflush( cm );  rw::os::fclose( cm );
                 if( cbuf ) { composeStr.assign( cbuf, csz );  std::free( cbuf ); }
                 composePreRendered = true;
             }
@@ -2490,7 +2490,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             if( std::FILE* rm = rw::openChargeBuffer( &rbuf, &rsz ) )
             {
                 packRoutes( rm, ing, g.routeEdges, lensSurfaceIds );
-                std::fflush( rm );  std::fclose( rm );
+                rw::os::fflush( rm );  rw::os::fclose( rm );
                 if( rbuf ) { routeStr.assign( rbuf, rsz );  std::free( rbuf ); }
                 routePreRendered = true;
             }
@@ -2639,7 +2639,7 @@ std::optional<int> runForLens( const MainDispatch& d )
                                 &shownSigIds,                                // lane 2: the rows actually emitted — the tail excludes THESE files
                                 &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
                                 forTopRowNext );                             // L-W: the widening page on a thin answer, else the body
-                std::fflush( sm );  std::fclose( sm );
+                rw::os::fflush( sm );  rw::os::fclose( sm );
                 if( sbuf ) { sigsStr.assign( sbuf, ssz );  std::free( sbuf ); }
                 sigsPreRendered = true;
             }

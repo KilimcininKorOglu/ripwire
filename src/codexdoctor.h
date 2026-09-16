@@ -5,16 +5,14 @@
 // emitted: a doctor report may be pasted into an issue, so unrelated tokens and secrets stay dark.
 
 #include <algorithm>
-#include "infra/platform_compat.h"
 #include <cstdlib>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <string>
 #include <string_view>
-#include "infra/os.h"   // rw::os::access / stat — the PATH walk and the same-file check
+#include "infra/os.h"   // rw::os::which / stat — the PATH search and the same-file check
 #include <vector>
 
 namespace rw::codexdoctor
@@ -46,91 +44,9 @@ inline std::string readSmallFile( const std::filesystem::path& path, bool& ok )
     return text;
 }
 
-#if defined( _WIN32 ) || defined( _MSC_VER )
-inline bool windowsExecutableFile( const std::string& path )
-{
-    const std::wstring widePath = rw::compat::rw_utf8_to_wide( rw::compat::rw_windows_path_from_msys( path ) );
-    if( widePath.empty() ) { return false; }
-    const DWORD attributes = ::GetFileAttributesW( widePath.c_str() );
-    if( attributes == INVALID_FILE_ATTRIBUTES || ( attributes & FILE_ATTRIBUTE_DIRECTORY ) != 0 ) { return false; }
-    const HANDLE handle = ::CreateFileW( widePath.c_str(), FILE_EXECUTE | FILE_READ_ATTRIBUTES,
-                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                                         FILE_ATTRIBUTE_NORMAL, nullptr );
-    if( handle == INVALID_HANDLE_VALUE ) { return false; }
-    ::CloseHandle( handle );
-    return true;
-}
-
-inline std::string windowsExecutableCandidate( const std::string& path )
-{
-    const std::string native = rw::compat::rw_windows_path_from_msys( path );
-    if( windowsExecutableFile( native ) ) { return native; }
-    const std::size_t separator = native.find_last_of( "\\/" );
-    const std::size_t dot = native.find( '.', separator == std::string::npos ? 0 : separator + 1 );
-    if( dot == std::string::npos && windowsExecutableFile( native + ".exe" ) ) { return native + ".exe"; }
-    return {};
-}
-#endif
-
 inline std::string resolveExecutable( std::string_view command )
 {
-    if( command.empty() ) { return {}; }
-#if defined( _WIN32 ) || defined( _MSC_VER )
-    const auto hasPath = command.find( '/' ) != std::string_view::npos || command.find( '\\' ) != std::string_view::npos
-                      || ( command.size() >= 2 && command[ 1 ] == ':' );
-    if( hasPath ) { return windowsExecutableCandidate( std::string( command ) ); }
-    const char* pathEnv = std::getenv( "PATH" );
-    const std::string_view pathList = pathEnv ? std::string_view( pathEnv ) : std::string_view();
-    const bool semicolonList = pathList.find( ';' ) != std::string_view::npos;
-    for( std::size_t at = 0; at <= pathList.size(); )
-    {
-        std::size_t split = pathList.size();
-        if( semicolonList )
-        {
-            const std::size_t found = pathList.find( ';', at );
-            if( found != std::string_view::npos ) { split = found; }
-        }
-        else
-        {
-            for( std::size_t i = at; i < pathList.size(); ++i )
-            {
-                const bool driveColon = i == at + 1 && i > 0
-                                     && ( ( pathList[ at ] >= 'A' && pathList[ at ] <= 'Z' )
-                                       || ( pathList[ at ] >= 'a' && pathList[ at ] <= 'z' ) );
-                if( pathList[ i ] == ':' && !driveColon ) { split = i; break; }
-            }
-        }
-        const std::string_view dir = pathList.substr( at, split - at );
-        const std::string candidate = std::string( dir.empty() ? "." : dir ) + "/" + std::string( command );
-        const std::string resolved = windowsExecutableCandidate( candidate );
-        if( !resolved.empty() ) { return resolved; }
-        if( split == pathList.size() ) { break; }
-        at = split + 1;
-    }
-    return {};
-#else
-    const auto executable = []( const std::string& path )
-    {
-        return os::access( path.c_str(), X_OK ) == 0;
-    };
-    if( command.find( '/' ) != std::string_view::npos )
-    {
-        const std::string path( command );
-        return executable( path ) ? path : std::string();
-    }
-    const char* pathEnv = std::getenv( "PATH" );
-    std::string_view remaining = pathEnv ? std::string_view( pathEnv ) : std::string_view();
-    while( !remaining.empty() )
-    {
-        const std::size_t split = remaining.find( ':' );
-        const std::string_view dir = remaining.substr( 0, split );
-        const std::string candidate = std::string( dir.empty() ? "." : dir ) + "/" + std::string( command );
-        if( executable( candidate ) ) { return candidate; }
-        if( split == std::string_view::npos ) { break; }
-        remaining.remove_prefix( split + 1 );
-    }
-    return {};
-#endif
+    return os::which( command );
 }
 
 inline Check binaryCheck( const std::string& selfPath )

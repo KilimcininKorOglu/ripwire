@@ -49,6 +49,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <string>
+#include <string_view>
 
 namespace rw::os
 {
@@ -171,6 +172,11 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 [[gnu::always_inline]] inline int        fileno( std::FILE* stream )                               { return ::fileno( stream ); }
 [[gnu::always_inline]] inline ssize_t    getline( char** line, std::size_t* capacity, std::FILE* stream ) { return ::getline( line, capacity, stream ); }
 [[gnu::always_inline]] inline std::FILE* open_memstream( char** buffer, std::size_t* size )        { return ::open_memstream( buffer, size ); }
+// fflush / fclose of a stream open_memstream returned: the POSIX calls themselves. Spelled os:: at a memstream's
+// flush and close because that is when POSIX publishes *buffer and *size — and a platform without open_memstream
+// has to publish them there itself. Any other stream closes through std::fclose.
+[[gnu::always_inline]] inline int        fflush( std::FILE* stream )                               { return std::fflush( stream ); }
+[[gnu::always_inline]] inline int        fclose( std::FILE* stream )                               { return std::fclose( stream ); }
 
 // ── paths ──────────────────────────────────────────────────────────────────────────────────────────────────
 [[gnu::always_inline]] inline int   unlink( const char* path )                                     { return ::unlink( path ); }
@@ -182,6 +188,35 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 [[gnu::always_inline]] inline char* realpath( const char* path, char* resolved )                   { return ::realpath( path, resolved ); }
 [[gnu::always_inline]] inline char* getcwd( char* buf, std::size_t size )                          { return ::getcwd( buf, size ); }
 [[gnu::always_inline]] inline int   setenv( const char* name, const char* value, int overwrite )   { return ::setenv( name, value, overwrite ); }
+
+// which: the path a shell would run for `command` — `command` itself when it contains a '/' and is executable,
+// otherwise the first executable PATH entry joined with it (an empty entry is the current directory, as sh
+// reads it); "" when there is none. No POSIX call does this search (execvp does it without saying what it found).
+inline std::string which( std::string_view command )
+{
+    if( command.empty() ) { return {}; }
+    const auto executable = []( const std::string& path )
+    {
+        return ::access( path.c_str(), X_OK ) == 0;
+    };
+    if( command.find( '/' ) != std::string_view::npos )
+    {
+        const std::string path( command );
+        return executable( path ) ? path : std::string();
+    }
+    const char* pathEnv = std::getenv( "PATH" );
+    std::string_view remaining = pathEnv ? std::string_view( pathEnv ) : std::string_view();
+    while( !remaining.empty() )
+    {
+        const std::size_t split = remaining.find( ':' );
+        const std::string_view dir = remaining.substr( 0, split );
+        const std::string candidate = std::string( dir.empty() ? "." : dir ) + "/" + std::string( command );
+        if( executable( candidate ) ) { return candidate; }
+        if( split == std::string_view::npos ) { break; }
+        remaining.remove_prefix( split + 1 );
+    }
+    return {};
+}
 
 // ── process start and path intake ──────────────────────────────────────────────────────────────────────────
 // Inside the program a path is UTF-8 with '/' separators on every platform, so the spelling is fixed where a path
@@ -613,6 +648,8 @@ std::FILE* fdopen( int fd, const char* mode );
 int        fileno( std::FILE* stream );
 ssize_t    getline( char** line, std::size_t* capacity, std::FILE* stream );
 std::FILE* open_memstream( char** buffer, std::size_t* size );
+int        fflush( std::FILE* stream );   // publishes a memstream's buffer; any other stream: std::fflush
+int        fclose( std::FILE* stream );   // publishes a memstream's buffer; any other stream: std::fclose
 
 // ── paths ──────────────────────────────────────────────────────────────────────────────────────────────────
 int   unlink( const char* path );
@@ -626,6 +663,7 @@ char* getcwd( char* buf, std::size_t size );
 int   setenv( const char* name, const char* value, int overwrite );
 
 // process start and path intake (see the POSIX branch)
+std::string which( std::string_view command );   // PATH is ';'-separated; PATHEXT names; relative entries (the current directory) are never searched
 void init_process( int& argc, char**& argv );
 void normalize_path_arg( char* text );
 

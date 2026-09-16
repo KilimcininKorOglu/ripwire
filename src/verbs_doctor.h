@@ -122,8 +122,8 @@ inline std::string doctorPopenTrim( const std::string& cmd )
 // pays. Sizes are compared first by the caller so this only runs on a plausible pair.
 inline bool doctorSameFileBytes( const std::string& a, const std::string& b )
 {
-    std::FILE* fa   = rw::compat::rw_fopen_utf8( a.c_str(), "rb" );
-    std::FILE* fb   = rw::compat::rw_fopen_utf8( b.c_str(), "rb" );
+    std::FILE* fa   = std::fopen( a.c_str(), "rb" );
+    std::FILE* fb   = std::fopen( b.c_str(), "rb" );
     bool       same = ( fa != nullptr && fb != nullptr );
     if( same )
     {
@@ -657,11 +657,7 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // `which ripwire`'s) ----
     {
         const std::string selfPath  = selfExecutablePath( argv0 );
-#if defined(_WIN32)
-        const std::string whichPath = codexdoctor::resolveExecutable( "ripwire" );
-#else
-        const std::string whichPath = doctorPopenTrim( "which ripwire 2>/dev/null" );
-#endif
+        const std::string whichPath = codexdoctor::resolveExecutable( "ripwire" );   // os::which — the same PATH search codex-binary reports
         rw::os::stat_t        selfSt {};
         rw::os::stat_t         whichSt {};
         const bool haveSelf  = !selfPath.empty()  && rw::os::stat( selfPath.c_str(),  &selfSt )  == 0;
@@ -730,7 +726,7 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
         const std::string dir   = cacheDirLadder();
         const std::string probe = dir + "/.ripwire-doctor-probe-" + std::to_string( rw::os::getpid() );
         bool writable = false;
-        if( std::FILE* f = rw::compat::rw_fopen_utf8( probe.c_str(), "wb" ) )
+        if( std::FILE* f = std::fopen( probe.c_str(), "wb" ) )
         {
             std::fputs( "doctor", f );
             std::fclose( f );

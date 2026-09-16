@@ -799,7 +799,7 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
             hop.rows[i].via == TestHopVia::Callee ? "callee" : "basename" );
     }
     rw::emitRaw( m, "</test_hop>" );
-    std::fflush( m );  std::fclose( m );
+    os::fflush( m );  os::fclose( m );
 
     std::string out;
     if( buf ) { out.assign( buf, sz );  std::free( buf ); }
@@ -860,7 +860,7 @@ inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameForm
         rw::emitTo( m, "<skipped p=\"{}\" line=\"{}\"/>", ex( sk->path ).c_str(), sk->line );
     }
     rw::emitRaw( m, "</trace>" );
-    std::fflush( m );  std::fclose( m );
+    os::fflush( m );  os::fclose( m );
     std::string out;
     if( buf ) { out.assign( buf, sz );  std::free( buf ); }
     return out;
@@ -1104,7 +1104,7 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
                         &rank );                                      // the served body's CUT <calls> ordered by the TRACE's own rank
                                                                        // (traceRankOf): a callee that is ITSELF a frame of this trace
                                                                        // scores positive, so the edge the trace walked survives the cut.
-            std::fflush( m );  std::fclose( m );
+            os::fflush( m );  os::fclose( m );
             if( buf ) { whole.append( buf, sz );  std::free( buf ); }
         }
         else

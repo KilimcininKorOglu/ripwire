@@ -259,7 +259,7 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
         // Everything this function owns, released once, in the order the non-throwing path releases it. The
         // stream is closed rather than flushed first: there is no document to salvage, and fclose frees the
         // FILE either way. `out` is still the default-constructed failure — empty text, ok == false.
-        std::fclose( m );
+        os::fclose( m );
         std::free( buf );
         // NOT degradeMsg: that one says the BUFFER failed, and here it did not — the emitter did. The macro
         // takes a const char*, so this is its own literal rather than a composed string; the caller is named
@@ -271,8 +271,8 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
     // Order matters: fflush first (it reports the write error), then fclose UNCONDITIONALLY (it owns the
     // stream, and skipping it on a flush failure would leak it). A null buf after a clean close is itself a
     // failure — an emitter that wrote nothing still gets a zero-length, null-terminated buffer.
-    const bool flushed = std::fflush( m ) == 0;
-    const bool closed  = std::fclose( m ) == 0;
+    const bool flushed = os::fflush( m ) == 0;
+    const bool closed  = os::fclose( m ) == 0;
     out.ok             = flushed && closed && buf != nullptr;
     if( out.ok )
     {

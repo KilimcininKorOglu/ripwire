@@ -2014,8 +2014,8 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
     rw::emitRaw( mem, "</ctx>" );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     // F5 (terminality round A 2026-09-05): PRICE the bundle instead of declaring it unpriced. The document is
@@ -2188,8 +2188,8 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
         rw::emitTo( mem, " top=\"{}\" share=\"{:.2f}\"/>", std::string_view( em.data(), em.size() ), top.share );
     }
     rw::emitRaw( mem, "</owners>" );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     return out;
@@ -2289,8 +2289,8 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
                 /*ranges=*/nullptr, /*noteIndex=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                 /*withFileContext=*/false, exSingleRoot ? std::string_view( root ) : std::string_view() );
     rw::emitRaw( mem, "</exemplar></ctx>" );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     return out;
@@ -2395,8 +2395,8 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
     rw::emitRaw( mem, "</impact>" );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     return out;
@@ -2656,8 +2656,8 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
         rw::emitRaw( mem, "/>" );
     }
     rw::emitRaw( mem, "</uses>" );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     return out;
@@ -2732,8 +2732,8 @@ inline std::string pathText( const std::string& root, const std::string& from, c
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line ); }
     rw::emitRaw( mem, "</path>" );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     return out;
@@ -3246,8 +3246,8 @@ inline std::string connectText( const std::string& root, const std::vector<std::
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     packConnect( mem, ing, g, res, redact, /*maxTokens=*/0, ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),
                  unprovenDefs );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     std::string out = buf ? std::string( buf, sz ) : std::string{};
     std::free( buf );
     return out;

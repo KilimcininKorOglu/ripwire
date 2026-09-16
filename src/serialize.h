@@ -1334,8 +1334,8 @@ inline ChargedSection chargeSection( RenderFn&& render, double bytesPerToken )
         return sec;
     }
     render( mem );
-    std::fflush( mem );
-    std::fclose( mem );
+    os::fflush( mem );
+    os::fclose( mem );
     if( buf ) { sec.xml.assign( buf, sz );  std::free( buf ); }
     sec.tokens     = tokensForEmittedBytes( sec.xml.size(), bytesPerToken );
     sec.isRendered = true;
@@ -2987,8 +2987,8 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         return;
     }
 
-    std::fflush( childMem );
-    std::fclose( childMem );
+    os::fflush( childMem );
+    os::fclose( childMem );
     std::string childrenStr;
     if( childBuf ) { childrenStr.assign( childBuf, childSz );  std::free( childBuf ); }
 
@@ -7580,8 +7580,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         }
         return;
     }
-    std::fflush( rowsMem );
-    std::fclose( rowsMem );
+    os::fflush( rowsMem );
+    os::fclose( rowsMem );
     std::string rowsStr;
     if( rowsBuf ) { rowsStr.assign( rowsBuf, rowsSz );  std::free( rowsBuf ); }
 
@@ -7600,7 +7600,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         if( std::FILE* pm = openChargeBuffer( &pbuf, &psz ) )
         {
             emitHeader( pm, mapEstTokens );
-            std::fflush( pm );  std::fclose( pm );
+            os::fflush( pm );  os::fclose( pm );
             headerBytes = psz;
             std::free( pbuf );
         }

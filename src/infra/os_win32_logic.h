@@ -920,6 +920,41 @@ constexpr bool isAcceptableShell( std::string_view candidate ) noexcept
     return isAbsoluteNativePath( candidate ) && endsWithAsciiCaseless( candidate, "bash.exe" ) && !isWslLauncher( candidate );
 }
 
+// Does the last component of `path` carry an extension ("tool.exe" yes; "tool", ".profile", "dir.d/tool" no)?
+constexpr bool hasExtension( std::string_view path ) noexcept
+{
+    const std::size_t slash = path.find_last_of( "/\\" );
+    const std::string_view name = slash == std::string_view::npos ? path : path.substr( slash + 1 );
+    const std::size_t dot = name.rfind( '.' );
+    return dot != std::string_view::npos && dot > 0 && dot + 1 < name.size();
+}
+
+// Is the extension of `path` one of the ';'-separated, case-insensitive entries of `pathext` (".COM;.EXE;...")?
+constexpr bool extensionInList( std::string_view path, std::string_view pathext ) noexcept
+{
+    if( !hasExtension( path ) )
+    {
+        return false;
+    }
+    const std::string_view extension = path.substr( path.rfind( '.' ) );
+    std::size_t at = 0;
+    while( at <= pathext.size() )
+    {
+        const std::size_t end = pathext.find( ';', at );
+        const std::string_view entry = pathext.substr( at, ( end == std::string_view::npos ? pathext.size() : end ) - at );
+        if( !entry.empty() && equalsAsciiCaseless( entry, extension ) )
+        {
+            return true;
+        }
+        if( end == std::string_view::npos )
+        {
+            break;
+        }
+        at = end + 1;
+    }
+    return false;
+}
+
 // The next entry of a ';'-separated PATH list starting at `at` (advanced past it); empty entries are returned as
 // empty views for the caller to skip.
 constexpr std::string_view nextPathListEntry( std::string_view list, std::size_t& at ) noexcept

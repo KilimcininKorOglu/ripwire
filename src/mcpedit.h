@@ -729,11 +729,7 @@ namespace mcpedit
         const bool  haveOrig = ( os::stat( path.c_str(), &orig ) == 0 );
 
         const std::string tmp = path + "." + std::to_string( os::getpid() ) + ".tmp";
-        int               openFlags = O_WRONLY | O_CREAT | O_TRUNC;
-#if defined( _WIN32 )
-        openFlags |= O_BINARY;
-#endif
-        const int fd = os::open( tmp.c_str(), openFlags, 0644 );
+        const int fd = os::open( tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
         if( fd < 0 )
         {
             return false;

@@ -970,7 +970,7 @@ inline TokenBudgetBuffer openTokenBudgetBuffer( std::size_t tokenBudget, std::FI
 inline std::optional<int> finishTokenBudgetGate( TokenBudgetBuffer& tb, std::FILE* real,
                                                  std::size_t mapEstTokens, std::size_t tokenBudget, bool asJson )
 {
-    if( tb.mem ) { std::fflush( tb.mem ); std::fclose( tb.mem ); }
+    if( tb.mem ) { rw::os::fflush( tb.mem ); rw::os::fclose( tb.mem ); }
     if( tokenBudget > 0 && mapEstTokens > tokenBudget )
     {
         // §B7.8 — withheld_est_tokens=, not est_tokens=. `est_tokens` is normatively about what THIS RUN
@@ -1732,7 +1732,7 @@ int runDefaultMap( const MainDispatch& d )
             return 0;
         }
         serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
-        std::fflush( m );  std::fclose( m );  std::free( buf );
+        rw::os::fflush( m );  rw::os::fclose( m );  std::free( buf );
         return sz;
     };
 
@@ -1771,8 +1771,8 @@ int runDefaultMap( const MainDispatch& d )
         serializeJson( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics,
                        fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
                        g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
-        std::fflush( m );
-        std::fclose( m );
+        rw::os::fflush( m );
+        rw::os::fclose( m );
         std::free( buf );
         return sz;
     };
