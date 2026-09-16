@@ -151,9 +151,45 @@ inline std::string hardenedGitPrefix( const std::string& root )
 // shared dir a linked worktree's config lives beside. Both are canonicalised against `root` (git's CWD) when
 // git prints a relative form. The hand-rolled `root/.git` inspection below is a git-absent fallback for the
 // repo-root and worktree-root shapes. Empty ⇒ not a repository, or git could not answer — nothing to probe.
+//
+// Git discovers a repository by walking up from its CWD to the first `.git` entry, or takes GIT_DIR from the
+// environment. A root with neither has no repository to govern it, so the probe spawns no git child for it:
+// a non-git tree stays git-free (test/nongitqmetricscheck.sh).
+inline bool gitMayGovernRoot( const std::string& root )
+{
+    if( const char* gitDir = std::getenv( "GIT_DIR" ); gitDir != nullptr && *gitDir != '\0' )
+    {
+        return true;
+    }
+    std::error_code       ec;
+    std::filesystem::path dir = std::filesystem::absolute( std::filesystem::path( root ), ec );
+    if( ec )
+    {
+        return true;   // cannot tell from here; let git answer
+    }
+    for( ;; )
+    {
+        if( std::filesystem::exists( std::filesystem::symlink_status( dir / ".git", ec ) ) )
+        {
+            return true;
+        }
+        ec.clear();
+        const std::filesystem::path parent = dir.parent_path();
+        if( parent == dir )
+        {
+            return false;
+        }
+        dir = parent;
+    }
+}
+
 inline std::vector<std::filesystem::path> gitResolvedConfigDirs( const std::string& root )
 {
     std::vector<std::filesystem::path> dirs;
+    if( !gitMayGovernRoot( root ) )
+    {
+        return dirs;
+    }
     const std::string out = popenTrimmed( hardenedGitPrefix( root )
                                           + " rev-parse --absolute-git-dir --git-common-dir 2>/dev/null" );
     if( out.empty() )

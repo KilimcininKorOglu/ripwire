@@ -54,6 +54,11 @@ OUTSIDE_MODE=700
 # place_outside FILE — a distinctive file at a known mode, outside any tree the writer indexes.
 place_outside(){ printf '%s' "$OUTSIDE_BYTES" > "$1"; chmod "$OUTSIDE_MODE" "$1"; }
 
+# filemode FILE — permission bits in octal (GNU coreutils stat, else BSD / macOS stat).
+if stat --version >/dev/null 2>&1; then filemode(){ stat -c %a "$1" 2>/dev/null; }
+else                                    filemode(){ stat -f %Lp "$1" 2>/dev/null; }
+fi
+
 # assert_outside TAG OUTSIDE_FILE — (a) bytes and (b) mode are unchanged.
 assert_outside(){
     local tag="$1" v="$2" got mode
@@ -61,7 +66,7 @@ assert_outside(){
     [ "$got" = "$OUTSIDE_BYTES" ] \
         && ok "($tag a) the outside file the temp-name symlink points at is byte-identical (never followed)" \
         || no "($tag a) the outside file was overwritten through the temp-name symlink: '$( printf '%s' "$got" | head -c 40 )'"
-    mode="$( stat -f %Lp "$v" 2>/dev/null )"
+    mode="$( filemode "$v" )"
     [ "$mode" = "$OUTSIDE_MODE" ] \
         && ok "($tag b) the outside's mode is unchanged ($OUTSIDE_MODE)" \
         || no "($tag b) the outside's mode changed $OUTSIDE_MODE → $mode (an fchmod reached the link target)"
