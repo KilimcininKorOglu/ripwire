@@ -1957,9 +1957,13 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
     // ── classify every hit once, then choose the tier to serve ────────────────────────────────────────
     // One byte per hit, with UNCLASSIFIED as a fourth value rather than a second parallel array: the
     // collection ceiling is 4M raw hits, so a second array is 4 MB spent to say what one spare value says.
-    constexpr std::uint8_t    kUnclassifiedTier = 3;
+    // Both spelled off ingest.h's kSpanTierCount (proven exact at compile time): UNCLASSIFIED is the first value past
+    // the last SpanTier, so an appended tier moves it instead of colliding with it, and the counter grows with the
+    // enum instead of being indexed past its end. serveMask below is a u8 bit per tier, hence the bound.
+    static_assert( kSpanTierCount < 8, "serveMask holds one bit per SpanTier in a std::uint8_t" );
+    constexpr std::uint8_t    kUnclassifiedTier = std::uint8_t( kSpanTierCount );
     std::vector<std::uint8_t> hitTier( collected.raw.size(), kUnclassifiedTier );
-    std::uint32_t             tierHitCount[3] = { 0, 0, 0 };
+    std::uint32_t             tierHitCount[kSpanTierCount] = {};
     for( std::size_t h = 0; h < collected.raw.size(); ++h )
     {
         const GrepRawHit&   r     = collected.raw[h];
