@@ -83,6 +83,57 @@ with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of eve
 other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
 `LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
 
+### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
+
+Two on-disk readers built enums straight from bytes with no range check. **The ingest cache** read ten of them —
+`SymKind` and `Lang` on a definition, `Lang`/`RecvKind`/`RefRole` on a reference, `Lang`/`LocalBindKind` on a
+binding, `BindKind` on an FFI alias, `HttpMethod` on both route records. **The span-tier memo** (`ripwire-stier-*`,
+the `--grep` classifier's per-file blob) read one `SpanTier` byte per span.
+
+What an out-of-range value did, measured on the unfixed binary at `3bf884e2` over a 15-file fixture
+(`test/fixture` + `test/ffifix` + `test/routeedgefix`), one field class set to 255 at every site with every digest
+rebuilt, 24 verbs each diffed against `--no-cache`: every record was accepted (`cached_records=15` of 15), and the
+answer changed on 18 verbs for `SymKind` (served as `t="other"`; a field became a map symbol), 18 and 17 for a
+definition's and a reference's `Lang`, 17 for `RefRole` (a call demoted to `role="read"` and out of the call graph),
+13 for `RecvKind`, 12 for `BindKind` and 11 for `LocalBindKind`. A `Lang` of 32 or more is also undefined behaviour:
+`src/clones.h:135` shifts a 32-bit language mask by it, and UBSan stops `--for`, `--clones`, `--readability` and
+`--pack-task` there. The memo was worse: a tier byte of 3 or more indexes the three-element per-tier hit counter in
+`grepApplySpanTiers` (`src/search.h:2174`), an out-of-bounds **write** on the stack that AddressSanitizer reports as
+`stack-buffer-overflow`, and the plain binary served a different `--grep` answer.
+
+How reachable, stated plainly. An ingest-cache record is covered by its own 32-bit digest and the offset table by
+another, so a random bit flip is refused before any enum is read; an out-of-range byte gets there only from a blob
+written wrong or edited with its digests rebuilt — a committed team artifact handed to `--cache=`, a copied cache
+directory. For that cache this is defence in depth, and hardening rather than an integrity boundary: a blob whose
+digests were rebuilt can still carry wrong in-range facts. The span-tier memo is read ONLY from the per-user cache
+directory ladder (`$TMPDIR/ripwire`, `$XDG_CACHE_HOME/ripwire`, `/tmp/ripwire-<uid>`; mode 0700 and owner-checked,
+failing closed otherwise), never from a repository or a `--cache=` path, so a cloned repository cannot supply one;
+reaching the out-of-bounds write took storage corruption or a write by the same user. And the memo still has **no
+checksum**: an in-range flip (a tier re-labelled, a span offset moved) is still believed and still changes a
+`--grep` answer. This change bounds out-of-range bytes only.
+
+Every enum byte is now validated at the read. The ingest readers go through one helper, `ByteR::enumU8`, which folds
+a failure into the reader's existing `ok` flag, so the record takes the refusal path a short read already takes:
+that file reparses and the rest of the blob stands. The memo refuses the whole blob and re-parses the file. Each
+bound is a count constant beside its enum (`kSymKindCount`, `kRecvKindCount`, `kRefRoleCount`,
+`kLocalBindKindCount`, `kBindKindCount`, `kHttpMethodCount`, `kSpanTierCount`; `kLangCount` already existed), and
+each is proven exact at compile time by `src/infra/enumcount.h`, which asks the compiler whether `count - 1` names
+an enumerator and `count` does not. So appending an enumerator without moving its count is a build error, not a
+validator that quietly refuses the new value's every record. The proof is evaluated under clang only; GCC's
+spelling was not verified, and the macOS and Linux clang legs carry it. On `-DNDEBUG` Apple clang the warm load
+function `loadCache` grows from 3,936 to 3,962 instructions: the checks become compares folded into the `ok` flag
+with `csel`, plus 4 conditional branches. No cache format, `kCacheVersion` or parser version moved.
+
+`test/cachefuzzcheck.sh` gains Part 3 and Part 4. Part 3 changes ONE enum byte per field class in an otherwise
+valid blob, rebuilds every digest, and asserts that the one record is refused (`cached_records` 14 of 15), that
+the output is byte-identical to `--no-cache`, and that the ASan binary with `--clones` stays silent. An in-range
+edit of the same byte must be accepted (15 of 15), which proves the refusal comes from the range check and not
+from a digest. The enumerator counts are read from `src/model.h`, not written into the gate. Part 4 does the same
+for a memo tier byte, and its control re-labels a comment span as code, which changes the answer. Against the
+unfixed binaries the new arms gave 27 FAIL rows: 20 accepted mutants, the `clones.h:135` UBSan report, the
+`search.h:2174` stack-buffer-overflow, and the memo serving a different answer. Against the fixed build the whole
+gate is 161 PASS, 0 FAIL.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
