@@ -1,7 +1,8 @@
 # Installing ripwire
 
-ripwire is one self-contained binary for macOS and Linux (arm64 and x86-64). Install it, point it at a
-repository, and optionally teach your coding agent when to reach for it.
+ripwire is one self-contained binary for macOS and Linux (arm64 and x86-64). Prebuilt binaries cover Linux on
+both architectures and macOS on Apple silicon; 0.6.1 is the last release with an Intel macOS binary. Install
+it, point it at a repository, and optionally teach your coding agent when to reach for it.
 
 ## Quick install (prebuilt)
 
@@ -26,6 +27,11 @@ Linux builds run on RHEL 8 and later; every release is smoke-tested on RHEL 9 be
 From 0.6.0 the prebuilt x86-64 binaries need an x86-64-v3 CPU (AVX2, BMI2, FMA and the rest of that level), roughly
 Intel Haswell (2013) or AMD Excavator (2015) and newer; the installer checks before it downloads. On an older CPU,
 [build from source](#build-from-source) with `./install.sh`, which builds for that machine's CPU (`-DRIPWIRE_NATIVE=ON`).
+
+Intel Macs: 0.6.1 is the last release with an Intel macOS binary, and the installer still installs it when you pin
+it. For any later release it stops before downloading and prints both routes: the pin (`RIPWIRE_VERSION=v0.6.1`
+in front of the command above) and the [source build](#build-from-source). A Rosetta shell on an Apple silicon Mac also
+reports x86-64; the installer sends it to a native arm64 shell, where the arm64 binary installs.
 
 | Variable | Effect |
 | --- | --- |
