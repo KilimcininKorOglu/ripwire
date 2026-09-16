@@ -561,10 +561,11 @@ else
     ok "Part 2: baseline qsnap blob produced ($QBLOB)"
     cp "$QBLOB" "$TMP/q_good.bin"
 
-    python3 - "$TMP/q_good.bin" "$MUTDIR" <<'PYEOF'
+    QHEAD="$( git -C "$QREPO" rev-parse --verify HEAD 2>/dev/null )"
+    python3 - "$TMP/q_good.bin" "$MUTDIR" "$QHEAD" <<'PYEOF' || no "Part 2: the qsnap header layout this table mutates no longer matches the blob (see the line above) — the offset rows would be refused by an earlier guard and prove nothing"
 import struct, sys
 
-good_path, outdir = sys.argv[1], sys.argv[2]
+good_path, outdir, head_sha = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(good_path, "rb") as f:
     good = bytearray(f.read())
 
@@ -596,8 +597,16 @@ def mut_wrong_scheme(b):
     p = bytearray(b[:body_len]); v = struct.unpack_from("<I", p, 4)[0]; struct.pack_into("<I", p, 4, v + 1); return with_recomputed_trailer(p)
 muts["qsnap_wrong_scheme_recomputed_checksum"] = mut_wrong_scheme
 
+# The offset rows below are only worth anything if they write where deserializeSnapshot READS — a row that lands in
+# a field an earlier guard checks is refused by that guard and passes while proving nothing (the stale-offset
+# defect these rows were rewritten for). So the layout is VERIFIED on the good blob before any row is built: the
+# u64 at QSNAP_SHA_OFF must be fnv1a64(HEAD sha), the field the reader checks last before the counts. A header
+# that grows a field moves the sha and fails here loudly, instead of silently re-aiming every row.
 QSNAP_SHA_OFF    = 16   # magic(4) + scheme(4) + cacheVer(4) + parserVer(4)
-QSNAP_COUNTS_OFF = 24   # ... + sha(8): the first of the ten field counts (7 maps, then 3 u64 vectors)
+QSNAP_COUNTS_OFF = QSNAP_SHA_OFF + 8   # the first of the ten field counts (7 maps, then 3 u64 vectors)
+if len(good) < QSNAP_COUNTS_OFF + 8 or struct.unpack_from("<Q", good, QSNAP_SHA_OFF)[0] != fnv1a64(head_sha.encode()):
+    print("qsnap layout: the u64 at offset %d is not fnv1a64(HEAD sha %s)" % (QSNAP_SHA_OFF, head_sha or "<none>"))
+    sys.exit(3)
 
 def mut_wrong_sha(b):
     p = bytearray(b[:body_len]); struct.pack_into("<Q", p, QSNAP_SHA_OFF, 0xDEADBEEFDEADBEEF & ((1<<64)-1)); return with_recomputed_trailer(p)
@@ -1112,7 +1121,7 @@ if command -v git >/dev/null 2>&1 && [ -n "${QREPO:-}" ] && [ -d "$QREPO" ]; the
         crun "$BIN" >"$TMP/c_warm" 2>/dev/null
         diff -q "$TMP/c_truth" "$TMP/c_warm" >/dev/null && ok "Part 5: the warm qchurn run is byte-identical to the cold one" \
                                                          || no "Part 5: the warm qchurn run already differs from the cold one — the harness cannot judge a mutation"
-        python3 - "$TMP/c_good.bin" "$MUTDIR" <<'PYEOF3'
+        python3 - "$TMP/c_good.bin" "$MUTDIR" <<'PYEOF3' || no "Part 5: the qchurn layout the rows mutate no longer matches the blob (see the line above) — they would prove nothing"
 import struct, sys
 good = open(sys.argv[1], "rb").read()
 def fnv1a64(data):
@@ -1120,7 +1129,24 @@ def fnv1a64(data):
     for c in data:
         h = ((h ^ c) * 1099511628211) & ((1 << 64) - 1)
     return h
-header = good[:16]   # magic, scheme, fnv(key): the key check must pass for the count to be read at all
+QCHURN_COUNT_OFF = 16   # magic(4) + scheme(4) + fnv(key)(8): the key check must pass for the count to be read at all
+# Verify the layout on the good blob before aiming a row at it: walking commits and paths from QCHURN_COUNT_OFF must
+# land exactly on the trailer. A header that grew a field would make that walk miss, and the rows would then be
+# refused by an earlier guard while passing — so a miss fails the arm instead.
+off = QCHURN_COUNT_OFF
+try:
+    (n_commits,) = struct.unpack_from("<I", good, off); off += 4
+    for _ in range(n_commits):
+        off += 8
+        (n_paths,) = struct.unpack_from("<I", good, off); off += 4
+        for _ in range(n_paths):
+            (length,) = struct.unpack_from("<I", good, off); off += 4 + length
+except struct.error:
+    off = -1
+if off != len(good) - 8:
+    print("qchurn layout: walking the good blob from offset %d does not land on its trailer" % QCHURN_COUNT_OFF)
+    sys.exit(3)
+header = good[:QCHURN_COUNT_OFF]
 rows = {
     "qchurn_huge_commit_count": header + struct.pack("<I", 0xFFFFFFFF),
     "qchurn_huge_path_count":   header + struct.pack("<I", 1) + struct.pack("<q", 0) + struct.pack("<I", 0xFFFFFFFF),
@@ -1146,6 +1172,7 @@ PYEOF3
         # The unbounded row is a CORRECTNESS row: it proves the blob is refused and rewritten, and it is named so,
         # because on an overcommitting allocator it cannot see the allocation. Only the bounded and ASan legs can.
         for name in qchurn_huge_commit_count qchurn_huge_path_count; do
+            [ -f "$MUTDIR/$name.bin" ] || { no "[$name] no mutant was built — nothing to judge"; continue; }
             cp "$MUTDIR/$name.bin" "$CBLOB"
             crun "$BIN" >"$TMP/c_$name.out" 2>"$TMP/c_$name.err"; rc=$?
             judge_qchurn "correctness:$name" "$rc" "$TMP/c_$name.out" "$TMP/c_$name.err"
