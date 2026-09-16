@@ -5,11 +5,10 @@ You are removing a class of **false call edges** that Kotlin's scope functions �
 from the syntax tree, one committed name table, and a resolver rule that is careful about what it
 must keep.
 
-> **Prerequisite — PR #126 (Kotlin support, by @xCatG).** Everything below describes code that #126
-> adds, and #126 is still open as of 2026-09-11. Until it merges, work on top of it: `gh pr checkout
-> 126` inside a fresh worktree. Before you plan, confirm you have the integrated head:
-> `src/graph.h` must define `keepOwnJvmLanguageCandidates`. If it is missing you are on an older
-> head — ask on #126 rather than rebuilding it. Line numbers drift; the function names are the
+> **Builds on PR #126 (Kotlin support, by @xCatG), merged 2026-09-11.** Everything below describes
+> code that #126 added, so work from `main`. Before you plan, confirm it is there: `src/graph.h`
+> defines `keepOwnJvmLanguageCandidates`. The outputs below were recorded on #126's integrated head
+> before it merged; re-record them on your base. Line numbers drift; the function names are the
 > pointers.
 
 Work in a git worktree, not your main checkout. Run every gate in the foreground.
@@ -26,7 +25,7 @@ graph. Wherever the Kotlin side defines no method of that name, each of those la
 edge into the Java method that shares it.
 
 Measured on square/retrofit at `e27d855b` (306 `.java` files, 16 `.kt`): `--callers=run` answers
-**2 callers on main and 5 with #126**. The three new rows:
+**2 callers before #126 and 5 with it**. The three new rows:
 
 - `deserialize` in
   `retrofit-converters/kotlinx-serialization/src/test/java/retrofit2/converter/kotlinx/serialization/KotlinxSerializationConverterFactoryContextualTest.kt:41`,
@@ -102,7 +101,7 @@ lambda.**
 
 ## Reproduce the gap
 
-Build #126 with the plain dev build (`cmake -S . -B build && cmake --build build -j`) and run
+Build `main` with the plain dev build (`cmake -S . -B build && cmake --build build -j`) and run
 `bash test/kotlincheck.sh` green first. Then build three scratch trees outside the checkout. Every
 output below was recorded on #126's integrated head.
 
@@ -246,7 +245,7 @@ enclosing function or file instead of the call site.
 
 ## Constraints — the non-negotiables
 
-- **Write the gate before the code.** Every arm that asserts a change is observed RED on #126's
+- **Write the gate before the code.** Every arm that asserts a change is observed RED on a `main`
   binary first.
 - **Determinism is a contract.** Two runs are byte-identical, and a warm run from the cache equals
   `--no-cache`. The new fact must ride the cache record.
@@ -269,7 +268,7 @@ enclosing function or file instead of the call site.
 ## Acceptance criteria
 
 Add a section to `test/kotlincheck.sh` (the next free § number), with its trees built in `$TMP` the
-way the file's §13 builds them. Every arm that asserts a change is red on #126 first:
+way the file's §13 builds them. Every arm that asserts a change is red on `main` first:
 
 1. **Tree A:** `--callers=run` is exactly `kick`; `build` is gone.
 2. **The true edge stays:** `kick` binds `Job.run`, and a `block.run()` on a `Runnable` parameter —
@@ -285,8 +284,8 @@ way the file's §13 builds them. Every arm that asserts a change is red on #126 
    file changed, and the Java edge must come back — proving the arm reads the trailing lambda, not the
    name.
 8. **Java invariant:** a Java-only tree, then the same tree plus tree B's Kotlin: every Java
-   `--callers` row and every Java map row is unchanged (the §13c pattern).
-9. **Cache and determinism:** a warm run equals `--no-cache`; a cache written by #126's binary is not
+   `--callers` row and every Java map row is unchanged (the §14c pattern).
+9. **Cache and determinism:** a warm run equals `--no-cache`; a cache written by a `main` binary is not
    served to yours; two runs are byte-identical; `xmllint --noout` is clean.
 
 **Measurements to report.** retrofit at a named commit: `--callers=run` before and after, with rows —
@@ -327,7 +326,7 @@ sanitizer lines.
 - The gap in one paragraph, with tree A's before/after `--callers=run`.
 - The fact's shape, the table and its provenance, the rule, where refused sites go, and the
   alternatives you rejected.
-- Red → green for every arm, naming the #126 head you were red on.
+- Red → green for every arm, naming the `main` commit you were red on.
 - The retrofit, nowinandroid and ktor measurements with their commits: removed pairs and the checked
   sample, Java pairs moved, the SAM-conversion count.
 - The version bumps (old → new) and the RE-PIN LOG entry.
