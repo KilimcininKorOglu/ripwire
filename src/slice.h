@@ -1366,9 +1366,14 @@ struct SliceRdWalker
                        || sliceKindIs( n, "try_statement" ) || sliceKindIs( n, "with_statement" ) || sliceKindIs( n, "match_statement" )
                        || sliceKindIs( n, "return_statement" ) || sliceKindIs( n, "raise_statement" ) || sliceKindIs( n, "break_statement" )
                        || sliceKindIs( n, "continue_statement" );
-            default:
+            case SliceFam::Js:     // reach=linear families: no control-flow graph, so no construct is a control kind
+            case SliceFam::Go:
+            case SliceFam::Java:
+            case SliceFam::Rust:
+            case SliceFam::None:
                 return false;
         }
+        return false;
     }
 
     // ── the structure walk (the definition root, and every node of a linear family): recurse while there

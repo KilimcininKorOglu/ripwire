@@ -253,11 +253,15 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         {
             return kind == SymKind::Macro;
         }
-        default:
+        case RefRole::Call:
+        case RefRole::Read:
+        case RefRole::Write:
+        case RefRole::Import:
         {
-            return true;   // Call / Read / Write / Import — see the doctrine above
+            return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }
     }
+    return true;
 }
 
 // ---- aider-style name-quality prior weights --------------------------------------------------------

@@ -77,8 +77,9 @@ inline const char* styleTag( ConventionStyle st ) noexcept
         case ConventionStyle::Snake:     return "snake";
         case ConventionStyle::Screaming: return "screaming";
         case ConventionStyle::Mixed:     return "mixed";
-        default:                         return "none";
+        case ConventionStyle::NoSignal:  return "none";
     }
+    return "none";
 }
 
 // Classifies a name ALREADY known to have >=2 splitIdentifier subtokens (the caller's job). Scans the raw
@@ -184,7 +185,8 @@ inline std::string recombineToStyle( const std::vector<std::string>& toks, Conve
                 out += detail::titleCaseToken( toks[i] );
                 break;
             case ConventionStyle::Camel:
-            default:
+            case ConventionStyle::Mixed:      // no single target style: camel, the same answer the default gave
+            case ConventionStyle::NoSignal:
                 out += ( i == 0 ) ? naminglens::toLowerAscii( toks[i] ) : detail::titleCaseToken( toks[i] );
                 break;
         }

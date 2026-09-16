@@ -900,6 +900,25 @@ if(RIPWIRE_ASAN)
     COMMENT "Run the G1 fixture with the platform leak-detection policy")
 endif()
 
+# ---- compile-time fences: two warnings that are errors on OUR C++ targets, every compiler, every flavour ----
+# The tree passes no warning set (no -Wall), so until this block a check only a warning could make was a check nobody
+# read, and on GCC -Wswitch did not run at all: GCC enables it only under -Wall, Clang by default.
+#   -Werror=switch                  a switch over an enum with no `default:` must name every enumerator, so appending
+#                                   one (a Lang, a SymKind, a RefRole) is a compile error at every per-value switch that
+#                                   has to decide it. The house rule that makes this bite: a switch returning one answer
+#                                   PER ENUMERATOR carries no `default:`, and ends with a plain `return` for a byte past
+#                                   the enum (a corrupt cache value); GCC's -Wreturn-type needs that line and Clang
+#                                   accepts it. A switch over a deliberate SUBSET keeps its `default:`.
+#   -Werror=implicit-fallthrough    a case body that falls into the next label says so with [[fallthrough]].
+# Both were measured at 0 diagnostics on this tree before they became errors (AppleClang and Homebrew clang, debug and
+# -DNDEBUG), so they cost nothing today and fence the next edit. GCC's first run of them is CI's.
+# OUR TARGETS ONLY, the same rule the sanitizer and separate-storage blocks follow: the tree-sitter core and the grammar
+# objects are generated C we do not own, and their scanners fall through by design.
+set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
+  target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})
+endforeach()
+
 # ---- G-race ThreadSanitizer build (the qsnap-prefetch worker vs the request loop) ----
 # A SEPARATE target/dir from ASan (TSan and ASan are mutually exclusive). Vets the one concurrent path in the
 # server: the detached HEAD-snapshot prefetch thread against a request-thread ingest, serialized by

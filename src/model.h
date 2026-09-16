@@ -71,8 +71,9 @@ inline const char* symTag( SymKind k ) noexcept
         case SymKind::Section:   return "sec";    // markdown heading (doc structure; isolated in the graph)
         case SymKind::Macro:     return "macro";  // #define (disclosed-degraded: replacement text, not a parsed body)
         case SymKind::Field:     return "field";  // member variable (id=path::Owner::field; use-sites via --uses=Owner.field)
-        default:                 return "other";
+        case SymKind::Other:     return "other";
     }
+    return "other";   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent "other"
 }
 
 // NOTE: Json sits AFTER Unknown deliberately. serialize.h pins `static_assert( int(Lang::Unknown)==12 )`
@@ -144,8 +145,9 @@ inline constexpr const char* langTag( Lang l ) noexcept
         case Lang::Elixir:     return "ex";
         case Lang::Dart:       return "dart";
         case Lang::Kotlin:     return "kt";
-        default:               return "?";
+        case Lang::Unknown:    return "?";
     }
+    return "?";   // a byte past the enum (a corrupt cache value) still reads "?"; a NEW Lang is a -Werror=switch error above
 }
 
 // Is this a CODE language (functions, calls, state), as opposed to a data or document format or no language at all?
@@ -239,8 +241,8 @@ inline const char* refRoleTag( RefRole r ) noexcept
         case RefRole::Extends: return "extends";
         case RefRole::Macro:   return "macro";
         case RefRole::Type:    return "type";
-        default:               return "read";
     }
+    return "read";   // a byte past the enum; every enumerator is named above, so a NEW role is a -Werror=switch error
 }
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the

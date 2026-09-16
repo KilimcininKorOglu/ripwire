@@ -228,6 +228,16 @@ inline Lang langOfPath( std::string_view path ) noexcept
 // a Cargo.toml [dependencies] table names real dependencies. They are PACKAGE deps, not the physical
 // file-include edges this graph is built from, and inventing a node for one would put a name with no
 // in-repo file behind it into a denominator that propagation_cost divides by.
+//
+// DART stays FALSE, and that is now a decision rather than a `default:`. Every language above was decided by name
+// except Dart, which reached `false` through the default when it was appended (70611d7a); -Wswitch-enum named it.
+// The rule this function states is "has a node-type branch in captureIncludes", and Dart has none: no Dart row in
+// ingest_relations.h's kImportContainersByLang, no `import_or_export`/`library_import` branch in directiveTargetOf,
+// no Dart Step-A in resolve.h. Measured 2026-09-16 on a two-file probe (`import 'util.dart';` beside a C++ pair):
+// --deps printed the C++ `<inc t="b.h"/>` row and nothing for the Dart file, and dep_langs= did not name dart. So a
+// Dart file cannot carry an edge today, and counting it would dilute ccd/acd/nccd exactly as .md/.sh once did. When
+// Dart import capture lands, this case and dependencyDialect's move in the same commit, and without the default a
+// reviewer sees them.
 /// Return whether this language has syntax-backed dependency extraction for dependency rules.
 inline bool dependencyCapable( Lang lang ) noexcept
 {
@@ -240,10 +250,11 @@ inline bool dependencyCapable( Lang lang ) noexcept
         case Lang::Bash: case Lang::Ruby: case Lang::Lua: case Lang::Elixir:
         case Lang::Kotlin:
             return true;
+        case Lang::Dart:   // no import capture yet — see the DART paragraph above
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
-        default:
             return false;
     }
+    return false;   // a byte past the enum
 }
 
 // The DEPENDENCY DIALECT a language's imports resolve in — the answer to "could an include edge from a
@@ -286,9 +297,11 @@ inline DepDialect dependencyDialect( Lang lang ) noexcept
         case Lang::Ruby:                                return DepDialect::Ruby;
         case Lang::Lua:                                 return DepDialect::Lua;
         case Lang::Elixir:                              return DepDialect::Elixir;
+        case Lang::Dart:                                // not dependency-capable (dependencyCapable's DART paragraph)
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
-        default:                                        return DepDialect::None;
+                                                        return DepDialect::None;
     }
+    return DepDialect::None;   // a byte past the enum
 }
 
 // Could a physical dependency edge exist between a file of language `a` and one of language `b`, in

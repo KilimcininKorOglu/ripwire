@@ -60,8 +60,9 @@ inline const char* skillSeverityStr( SkillSeverity s ) noexcept
     {
         case SkillSeverity::Critical: return "CRITICAL";
         case SkillSeverity::Warn:     return "WARN    ";
-        default:                      return "INFO    ";
+        case SkillSeverity::Info:     return "INFO    ";
     }
+    return "INFO    ";
 }
 
 // ── declarative pattern table ─────────────────────────────────────────────────────────────────────
