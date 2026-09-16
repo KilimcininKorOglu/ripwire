@@ -9,8 +9,10 @@ set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
-REL="${RIPWIRE_RELEASE_BIN:-}"
-[ -n "$REL" ] && [ "${REL#/}" = "$REL" ] && REL="$ROOT/$REL"
+BUILD_DIR="$( dirname "$BIN" )"
+CACHE="$BUILD_DIR/CMakeCache.txt"
+cacheVar(){ [ -f "$CACHE" ] && sed -n "s/^$1:[A-Z]*=//p" "$CACHE" | head -1; return 0; }
+CXX="${CXX:-$( cacheVar CMAKE_CXX_COMPILER )}"
 CXX="${CXX:-c++}"
 TMP="$( mktemp -d )"
 trap 'rm -rf "$TMP"' EXIT
@@ -22,10 +24,16 @@ skip(){ printf '  SKIP  %s\n' "$*"; }
 
 [ -x "$BIN" ] || { echo "structlayoutcheck: no ripwire binary at $BIN — build first"; exit 2; }
 command -v "$CXX" >/dev/null 2>&1 || { echo "structlayoutcheck: no C++ compiler at $CXX"; exit 2; }
+LAYOUT_TYPE_COUNT="$( grep -oF 'RIPWIRE_LAYOUT_TYPE_ENTRY(' "$ROOT/src/model.h" | wc -l | tr -d ' ' )"
+[ "$LAYOUT_TYPE_COUNT" -gt 0 ] || { echo "structlayoutcheck: no registered layout types in $ROOT/src/model.h"; exit 2; }
+. "$ROOT/scripts/cxxstd.sh"
+if ! CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"; then
+    echo "structlayoutcheck: $CXX accepts neither the C++23 standard flag nor its legacy spelling"; exit 2
+fi
 
 echo "structlayoutcheck: BIN=$BIN  CXX=$CXX"
 
-CXXFLAGS=( -std=c++23 -O2 -flto -I"$ROOT/src" )
+CXXFLAGS=( "$CXXSTD" -O2 -flto -I"$ROOT/src" )
 compile_unit(){
     local unit="$1"; shift
     "$CXX" "${CXXFLAGS[@]}" "-DRIPWIRE_LAYOUT_TU=\"$unit\"" "$@" \
@@ -103,28 +111,29 @@ check_doctor(){
     printf '%s' "$row" | grep -q 'units="[2-9][0-9]*"' \
         && ok "$label layout row compares at least two translation units" \
         || no "$label layout row has fewer than two translation units"
-    printf '%s' "$row" | grep -q 'types="[1-9][0-9]*"' \
-        && ok "$label layout row compares at least one type" \
-        || no "$label layout row did not report a type count"
+    printf '%s' "$row" | grep -q "types=\"$LAYOUT_TYPE_COUNT\"" \
+        && ok "$label layout row reports all $LAYOUT_TYPE_COUNT registered model types" \
+        || no "$label layout row did not report types=\"$LAYOUT_TYPE_COUNT\""
 }
 
 # ── C: the actual binary carries the records in the plain build ───────────────────────────────────
 check_doctor plain "$BIN"
 
-# ── D: Release/NDEBUG+LTO carries the same records when a reference binary is supplied ─────────────
-# The Release matrix sets RIPWIRE_RELEASE_REQUIRED so this arm cannot quietly disappear from CI. A
-# local run without a second build keeps the original explicit SKIP, while an explicitly supplied but
-# unusable path is always a configuration failure rather than a covered check.
-if [ -z "$REL" ]; then
-    if [ "${RIPWIRE_RELEASE_REQUIRED:-0}" = 1 ]; then
-        no "Release binary is required but RIPWIRE_RELEASE_BIN is unset"
-    else
-        skip "Release binary not supplied (set RIPWIRE_RELEASE_BIN=build_rel/ripwire)"
-    fi
-elif [ ! -x "$REL" ]; then
-    no "Release binary is not executable: $REL"
+# ── D: the binary's own --version selects the Release arm ─────────────────────────────────────────
+# Release matrix jobs pass this same binary as $BIN, so no workflow-specific environment is needed. A
+# plain dev binary keeps the local SKIP; only an exact build-type token of Release can enter this arm.
+BUILD_INFO="$( "$BIN" --version 2>/dev/null )"; BUILD_INFO_RC=$?
+BUILD_TYPE="$( printf '%s\n' "$BUILD_INFO" | sed -nE 's/^ripwire [^ ]+ \(([^,]+),.*$/\1/p' | head -1 )"
+if [ "$BUILD_INFO_RC" -ne 0 ]; then
+    no "could not query $BIN --version to choose the Release arm"
+elif [ "$BUILD_TYPE" = Release ]; then
+    check_doctor release "$BIN"
+elif [ "$BUILD_TYPE" = dev ]; then
+    skip "Release binary not supplied ($BIN reports build type dev)"
+elif [ -n "$BUILD_TYPE" ]; then
+    skip "Release arm not run ($BIN reports build type $BUILD_TYPE)"
 else
-    check_doctor release "$REL"
+    no "$BIN --version did not disclose a build type"
 fi
 
 if [ "$fail" -eq 0 ]; then

@@ -79,7 +79,8 @@ believing when it fires — it is not noise. It cannot catch this variant, becau
 *newer* than the source and only its contents are stale. Nothing in CMake can repair a source that
 changed mid-compile; the discipline is the fix. When this variant is suspected, `--doctor`'s `layout`
 row reports the cross-translation-unit `sizeof`/`alignof` evidence; treat `state="disagree"` as a
-clean-rebuild requirement.
+clean-rebuild requirement. `state="agree"` compares only the `types=` registered in `src/model.h`; a
+same-size layout change or a stale constant is invisible, so `agree` does not rule out a mixed binary.
 
 ## Verify
 

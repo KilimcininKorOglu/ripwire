@@ -282,11 +282,14 @@ inline const char* doctorLegendComment()
                        "COMMAND git would run on every read-only call, and neutralised=\"1\" says core.fsmonitor=false was "
                        "appended to git's environment override for this run (stderr said so as git_harden=fsmonitor-hook); "
                        "builtin, off and unset are left untouched and neutralised=\"0\". "
-                       "layout's state=\"agree\" means the layout records match; checked=\"1\" means the comparison ran; "
+                       "layout's state=\"agree\" means the layout records match; agree compares only the types= registered in src/model.h; "
+                       "a same-size layout change or a stale constant is invisible, so agree does not rule out a mixed binary; "
+                       "checked=\"1\" means the comparison ran; "
                        "units=\"N\" counts translation units and types=\"N\" counts recorded types. On state=\"disagree\", "
                        "type= names the first differing type, unit0=/unit1= name the two records, and "
                        "present0=/present1=, size0=/size1=, and align0=/align1= disclose their values; the row gives the rebuild action; "
-                       "state=\"not-checked\" means fewer than two records survived into this binary. "
+                       "state=\"not-checked\" means records exist but fewer than two records with a recorded type could be compared; "
+                       "state=\"no-records\" means no layout record was registered. "
                        "NB no flag below is spelled with its leading dashes: an XML comment may not contain a "
                        "double hyphen, and this legend is one comment. -->";
 }
