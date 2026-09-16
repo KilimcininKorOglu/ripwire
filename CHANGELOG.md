@@ -39,6 +39,36 @@ macOS arm64 on a later release) each went red against a mutant installer that re
 the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
 deployment target, retires with it.
 
+### Fixed — a deep or odd-shaped argument, source file or skills tree could crash or stall a verb
+
+Each of these was reproduced before it was fixed, and the gate that already owns each verb now fails on the old code.
+
+- **`--graph-query` nested deep enough overflowed the stack.** The evaluator recurses once per `(`, and a 50,000-level
+  `kind(kind(…all…))` chain died with SIGSEGV (exit 139). Nesting past 256 levels is now refused before evaluation,
+  exit 1 with the reason. Gate: `test/graphqueryrefusecheck.sh` arm 6.
+- **A `--layout` array extent could crash its evaluator.** A `#define` extent nested 200,000 parentheses deep overflowed
+  the stack (exit 139). `((0-1099511627776)*8388608/(0-1))` divides INT64_MIN by −1, which is SIGFPE (exit 136) on
+  Linux x86-64, and `1099511627776*1099511627776` is signed overflow, which aborts the sanitizer build. Arithmetic is
+  now checked, that quotient is refused, and parentheses are bounded at 64. Any of these reads as an unknown extent,
+  with its caveat. Gate: `test/layoutcheck.sh` §12.
+- **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
+  directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
+  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry and
+  names it on stderr. Gate: `test/skillevalcheck.sh`.
+- **`ripwire wrap` aborted on a `./skills` tree it could not descend.** The pre-recipe scan advanced a
+  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree nested past
+  the path-name limit was `std::terminate` (exit 134). The walk now stops early instead, says so, scores the scan WARN
+  and still prints the recipe. Gate: `test/codexwrapcheck.sh`.
+- **A deeply nested `--match` query overflowed the query compiler.** `ts_query_new` recurses per level on a worker
+  thread with a 512 KB stack: 4,000 levels died with SIGBUS (exit 138), and 2,000 ran past a minute. A query or
+  `--lint-rules` spec nested past 256 levels is refused before any compile. Gate: `test/matchgrammarcheck.sh` arm 6.
+- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** The slice walk's cost grows with the
+  cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
+  one call wedged the server. The definition's syntax depth is now measured first, and past 512 levels the slice is
+  refused. Gate: `test/slicecheck.sh` (15).
+
+The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
