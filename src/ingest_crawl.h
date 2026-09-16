@@ -1737,7 +1737,7 @@ bool readFilePrefix( const std::string& path, std::string& out, std::size_t maxB
 
     out.resize( maxBytes );
     const std::size_t got = maxBytes == 0 ? 0 : std::fread( out.data(), 1, maxBytes, fp );
-    const bool readOk = got > 0 || std::feof( fp ) != 0;
+    const bool readOk = std::ferror( fp ) == 0 && ( got > 0 || std::feof( fp ) != 0 );
     const bool closeOk = std::fclose( fp ) == 0;
     if( !readOk || !closeOk )
     {
