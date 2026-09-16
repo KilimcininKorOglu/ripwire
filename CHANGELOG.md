@@ -163,7 +163,8 @@ gate is 161 PASS, 0 FAIL.
 
 ### Fixed — git runs with the file-system monitor off, temp files are created exclusively, and edit-plan reads the path it confined
 
-- ripwire runs every git command with `--no-optional-locks -c core.fsmonitor=false`.
+- ripwire runs its git commands with `--no-optional-locks -c core.fsmonitor=false`; the one read of that setting
+  runs without them, since the flag would mask the value it reads.
 - the atomic-publish writers create their temp file exclusively and without following a symlink.
 - `--edit-plan` reads a payload through the same confined path its containment check judged.
 
