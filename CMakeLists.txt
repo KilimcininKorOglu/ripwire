@@ -296,9 +296,13 @@ else()
   set(_ripwire_build_type_str "${CMAKE_BUILD_TYPE}")
 endif()
 set(_ripwire_version_header "${_ripwire_generated_dir}/version.h")
-# Always run before the two executable targets. copy_if_different inside the script keeps the header's
-# mtime stable when neither HEAD nor tracked bytes changed, so this gives exact provenance without
-# recompiling main.cpp on every incremental build.
+# The producer identity (cmake/source_identity.cmake): one generated DEFINITION, compiled into both
+# executables, that src/quality.h keys its Snapshot caches on — so a blob one build computed is never
+# served to a build whose sources differ. A .cpp rather than a header: see src/sourceidentity.h.
+set(_ripwire_source_identity_cpp "${_ripwire_generated_dir}/source_identity.cpp")
+# Always run before the two executable targets. copy_if_different inside both scripts keeps each output's
+# mtime stable when its input did not change, so this gives exact provenance without recompiling main.cpp
+# on every incremental build.
 add_custom_target(ripwire_version_stamp ALL
   COMMAND ${CMAKE_COMMAND}
     -DRIPWIRE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
@@ -308,7 +312,11 @@ add_custom_target(ripwire_version_stamp ALL
     -DRIPWIRE_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
     -DRIPWIRE_COMPILER_VER=${CMAKE_CXX_COMPILER_VERSION}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version_stamp.cmake
-  BYPRODUCTS ${_ripwire_version_header}
+  COMMAND ${CMAKE_COMMAND}
+    -DRIPWIRE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DRIPWIRE_OUTPUT=${_ripwire_source_identity_cpp}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/source_identity.cmake
+  BYPRODUCTS ${_ripwire_version_header} ${_ripwire_source_identity_cpp}
   VERBATIM)
 
 # ---- tree-sitter CORE (static) ----
@@ -558,6 +566,7 @@ find_package(Threads REQUIRED)
 add_executable(ripwire_probe
   src/tsprobe.cpp
   ${RIPWIRE_SRCS}
+  ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire_probe PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire_probe PRIVATE
@@ -573,6 +582,7 @@ add_dependencies(ripwire_probe ripwire_version_stamp)
 add_executable(ripwire
   src/main.cpp
   ${RIPWIRE_SRCS}
+  ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire PRIVATE

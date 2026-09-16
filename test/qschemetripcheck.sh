@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, PRODUCER IDENTITY (test/qsnapproducercheck.sh): serializeSnapshot/deserializeSnapshot write and refuse
+#   a new header field — fnv1a64 of the build's source identity (cmake/source_identity.cmake) — and qsnapExclHex /
+#   qbodyExclHex fold it into the key, because a dead set is a function of call RESOLUTION and nothing in the key
+#   moved with it: two builds that resolve differently served each other's dead set. HEADER SHAPE change →
+#   kQSnapCacheScheme 12 -> 13 and kQBodyCacheScheme 3 -> 4, then re-pinned. Extraction unchanged: parserVer 96.
+#   Since this pin a missed bump no longer serves a wrong answer across builds (any source change renames the
+#   blob); this gate still asks the question, and its log still records the answer.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.
