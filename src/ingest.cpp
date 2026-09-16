@@ -41,9 +41,7 @@
 #include <cstdio>
 #include <cstdlib>             // std::getenv — RIPWIRE_CACHE_STATS drift observable
 #include <cstring>
-#include <sys/stat.h>          // A4-P7: stat() for the (size,mtime) warm-run shortcut
-#include <fcntl.h>             // v15: ::open( O_RDONLY ) — the cache blob's own read descriptor (ingest_cache.h)
-#include <unistd.h>            // getpid — unique per-process cache temp name; ::pread — the offset-table record reads
+#include "infra/os.h"          // rw::os — stat for the (size,mtime) warm-run shortcut (A4-P7); open/pread/fstat for the cache blob's own read descriptor (v15); getpid for the per-process cache temp name
 #include <filesystem>
 #include <fstream>
 #include <limits>

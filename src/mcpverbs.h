@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::open_memstream — the verb response buffers
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -1773,7 +1774,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem )
     {
         return {};
@@ -2119,7 +2120,7 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem )
     {
         return {};
@@ -2261,7 +2262,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem )
     {
         return {};
@@ -2343,7 +2344,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem )
     {
         return {};
@@ -2616,7 +2617,7 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem )
     {
         return {};
@@ -2703,7 +2704,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
 
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem )
     {
         return {};
@@ -3240,7 +3241,7 @@ inline std::string connectText( const std::string& root, const std::vector<std::
     const ConnectResult res = connectSubgraph( g, terminals, radius );
     char*       buf = nullptr;
     std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    std::FILE*  mem = os::open_memstream( &buf, &sz );
     if( !mem ) { err = "internal error"; return {}; }
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     packConnect( mem, ing, g, res, redact, /*maxTokens=*/0, ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),

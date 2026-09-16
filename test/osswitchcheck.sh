@@ -163,9 +163,11 @@ def strip( text, keep_strings ):
             j = s + 1
             while j < n and text[j] != tok and text[j] != "\n":
                 j += 2 if text[j] == "\\" else 1
-            j = min( j + 1, n )
-            out.append( text[s:j] if keep_strings else tok + blank( text[s + 1:j - 1] ) + ( tok if j - s >= 2 else "" ) ); i = j
+            closed = j < n and text[j] == tok
+            j = j + 1 if closed else min( j, n )                  # an unterminated literal stops before its newline
+            out.append( text[s:j] if keep_strings else tok + blank( text[s + 1:j - 1 if closed else j] ) + ( tok if closed else "" ) ); i = j
     result = "".join( out ); _stripped[key] = result
+    assert len( result ) == len( text ), "strip() must preserve every offset"
     return result
 
 def directives( code ):
@@ -180,11 +182,12 @@ def directives( code ):
         i += 1
 
 def non_directive_code( code ):
-    """The code with every preprocessor line (and its continuations) blanked — calls and types live here."""
+    """The code with every preprocessor line (and its continuations) blanked to spaces — calls and types live
+    here. Offsets are preserved, so a position in this text is a position in the file."""
     lines = code.split( "\n" ); out = []; cont = False
     for ln in lines:
         if cont or re.match( r'\s*#', ln ):
-            cont = ln.rstrip().endswith( "\\" ); out.append( "" ); continue
+            cont = ln.rstrip().endswith( "\\" ); out.append( " " * len( ln ) ); continue
         out.append( ln )
     return "\n".join( out )
 

@@ -41,9 +41,8 @@
 #include <utility>
 #include <vector>
 
-#include <fcntl.h>      // ::open + O_NONBLOCK + ::fcntl — scipReadFile's own non-blocking open of the index
-#include <sys/stat.h>   // ::fstat + S_ISREG — scipReadFile reads a regular file only
-#include <unistd.h>     // ::close — a descriptor stdio never adopted
+#include "infra/os.h"   // os::open + O_NONBLOCK + os::fcntl — scipReadFile's own non-blocking open of the index; os::fstat + S_ISREG —
+                        // it reads a regular file only; os::close — a descriptor stdio never adopted
 
 namespace rw
 {
@@ -360,17 +359,17 @@ inline bool scipDecodeIndex( const std::uint8_t* data, std::size_t size, std::ve
 inline std::vector<std::uint8_t> scipReadFile( const char* path )
 {
     std::vector<std::uint8_t> bytes;
-    const int indexFd = ::open( path, O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    const int indexFd = os::open( path, O_RDONLY | O_NONBLOCK | O_CLOEXEC );
     if( indexFd < 0 )
     {
         return bytes;
     }
-    struct stat indexStat;
-    const int   statusFlags = ( ::fstat( indexFd, &indexStat ) == 0 && S_ISREG( indexStat.st_mode ) ) ? ::fcntl( indexFd, F_GETFL ) : -1;
-    std::FILE*  f           = ( statusFlags >= 0 && ::fcntl( indexFd, F_SETFL, statusFlags & ~O_NONBLOCK ) == 0 ) ? ::fdopen( indexFd, "rb" ) : nullptr;
+    os::stat_t indexStat;
+    const int   statusFlags = ( os::fstat( indexFd, &indexStat ) == 0 && S_ISREG( indexStat.st_mode ) ) ? os::fcntl( indexFd, F_GETFL ) : -1;
+    std::FILE*  f           = ( statusFlags >= 0 && os::fcntl( indexFd, F_SETFL, statusFlags & ~O_NONBLOCK ) == 0 ) ? os::fdopen( indexFd, "rb" ) : nullptr;
     if( !f )
     {
-        ::close( indexFd );   // not a regular file, or fcntl/fdopen failed — stdio never adopted the descriptor
+        os::close( indexFd );   // not a regular file, or fcntl/fdopen failed — stdio never adopted the descriptor
         return bytes;
     }
     if( std::fseek( f, 0, SEEK_END ) != 0 ) { std::fclose( f ); return bytes; }
