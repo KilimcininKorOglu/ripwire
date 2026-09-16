@@ -15,6 +15,62 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — every operating-system difference lives in `src/infra/os.h`, and a gate refuses one anywhere else
+
+Main answered "which operating system is this?" wherever a call happened to need the answer: 19 OS-conditional
+preprocessor lines in 6 files, three more OS tests spelled as feature macros (`RIPWIRE_HAS_KQUEUE`, `MSG_NOSIGNAL`,
+`SO_NOSIGPIPE`), POSIX system headers included by 14 files, and 250 raw POSIX/libc call sites in 34 files (counted by a
+scanner that strips comments and string literals). Each was right for macOS and Linux, and none was findable except by
+reading — which is what a third platform would have had to do, site by site.
+
+`src/infra/os.h` owns all of it now: namespace `rw::os`, POSIX names, POSIX signatures and the POSIX errno contract, so
+a call site reads like Unix code with a prefix — `os::lstat( path, &st )`, `os::rename( tmp, dst )`, `os::stat_t` — and
+asks nothing about the platform. Each POSIX body is the libc call itself, `[[gnu::always_inline]]`, over the call's own
+raw types. The few needs no POSIX call answers get a lowercase helper whose POSIX body is the code that used to sit at
+the call site: `os::exepath` (`--doctor`'s own binary), `os::st_mtim`/`os::st_ctim` (Darwin's `st_mtimespec`),
+`os::setsockopt_nosigpipe`, the thread identity the profiler reports, `os::dirwatch_*` (the MCP server's kqueue watcher)
+and `os::spawn_sh` (the `--run-trace` child). That child keeps its fork/exec: `posix_spawn` would report three failure
+paths differently — an unexecutable `/bin/sh`, an unopenable `/dev/null`, a refused `setpgid` — and no gate can reach
+them to show the two equal. The Windows branch is a hard `#error` until #44 supplies its declarations there and its
+bodies in `src/infra/os_win32.cpp`. The kqueue build seam is spelled `-DRW_OS_HAS_KQUEUE=0` now, because a
+`src/infra/` file may not name the project.
+
+**No behaviour change, and no cost.** A differential run of the origin/main dev binary against this branch's, over the
+same checkout with a separate cache directory each, cold then warm: **71 comparisons, 71 byte-identical** — the flagless
+map over `src/`, `test/`, `docs/`, the repository root and `test/fixture`; `--legend=compact`; `--token-budget` refused
+and fitting; `--for`, `--callers`, `--uses`, `--expand`, `--impact`, `--grep`, `--situ`, `--quality-delta`,
+`--hotspots`, `--cochange`, `--owners`, `--pr-context`, `--merge-scout`, `--whereis`, `--edit-check`, `--pack-task`,
+`--recall`, `--lint`, `--notes`, `--doctor`, `--scip`, `--from-trace`; four `--run-trace` runs (exit code with stderr,
+stdin from `/dev/null`, a timeout that kills a process group, a signal); `--note-add` and `--index-out` including the
+bytes they write; a six-request `--mcp` stdio session; an MCP edit through the lock and the atomic write; and a
+`--listen` session with a client that drops mid-request. Normalised: the binary's own path and stamp, a dev-build
+alert's `__LINE__` (`main.cpp` lost seven include lines), `duration_ms`, and the index artifact's wall-clock write stamp
+with the checksum over it. Release against release (`-DCMAKE_BUILD_TYPE=Release`, ThinLTO, AppleClang 21): **4,166 of
+4,168 functions compile to identical instructions**; `getIndex` has the same 2,045 instructions with one two-instruction
+load scheduled earlier, and `runRunTrace` lost one unreachable branch. `__TEXT,__text` is 8,671,392 B on origin/main and
+8,671,388 B here, and `nm` finds no `rw::os` symbol in either build flavour. Getting there took the objdump: the first
+helper shapes read `cmd.c_str()` in the parent instead of after `fork`, called `__error()` on a dead path, and — by
+wrapping the kevent array in a struct — cost `getIndex` its stack protector; each shape now follows the code it
+replaced. On Linux, `main.cpp`, `ingest.cpp`, `pagerank.cpp`, `tsprobe.cpp` and the profiler harness compile against
+glibc 2.39 with g++ 13 and clang 22; the no-watcher path builds on a Mac with `-DRW_OS_HAS_KQUEUE=0`, links no
+`kqueue`/`kevent`, passes `mcpwatchercheck`, `mcpstalecheck` and `freshnesscheck`, and answers an `--mcp` session with
+the same bytes as origin/main built the same way. The ASan/UBSan build is clean over the touched paths
+(`sidecarsymlinkcheck`, `mcpeditracecheck`, `runtracecheck`, `cachefuzzcheck` against it), and
+`preprocdeadscalecheck` (D1)/(D2) and `recallbudgetcheck` pass their byte-identity arms against the origin/main binary.
+`--quality-delta` over the branch gates on two 20-token "clones" — `os::dirwatch_poll` and `os::setsockopt` against
+the profiler's one-line `sys_perf_event_open` — which are the one-line passthrough shape by design, acked with that
+reason.
+
+`test/osswitchcheck.sh` (new) refuses, outside `os.h`: an OS name in a preprocessor directive (A), an OS proxy macro or a
+`__has_include` of a system header (A′), a POSIX or Windows system header (B), a raw POSIX call or type (F), and a
+platform fact such as `os::kApple` or a reopened `namespace os` (G); and anywhere in `src/` or CMake, a force-include or
+a compat header tree (C) and a macro or compile definition named after a libc function (D). It was red on origin/main —
+A 17, A′ 8, B 41, F 275 — and on #44's head C and D red with 18 and 21 violations; its one allowlisted file is
+`src/infra/profilePmc.h`, the profiler's undocumented-ABI counter backends, and a row that stops exempting anything is
+itself a failure. Every arm fires on a planted fixture and stays silent on a clean one on every run. (E), POSIX/Windows
+declaration parity, is present and turns itself on when the Windows branch declares its first function.
+`test/namedfileinputcheck.sh`'s mechanism arm reads the `os::open` spelling. CONTRIBUTING §3 states the rule.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
