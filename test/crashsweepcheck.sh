@@ -104,10 +104,15 @@ os.makedirs(OUT, exist_ok=True)
 
 def match(query):
     """Run one --match over SRC; return [(file, line, fn, text)] and fail loudly if the scan was partial."""
-    proc = subprocess.run([BIN, SRC, "--match=" + query, "--limit=5000"], capture_output=True, text=True)
+    # A sanitizer job may route reports to a log file (log_path=…); the scan's own runs report on stderr instead,
+    # so a sanitizer abort here names its cause in the gate output rather than as a bare rc=-6.
+    env = dict(os.environ)
+    for key in ("ASAN_OPTIONS", "UBSAN_OPTIONS", "LSAN_OPTIONS"):
+        env[key] = (env[key] + ":" if env.get(key) else "") + "log_path=stderr"
+    proc = subprocess.run([BIN, SRC, "--match=" + query, "--limit=5000"], capture_output=True, text=True, env=env)
     root = re.search(r"<match [^>]*>", proc.stdout)
     if proc.returncode != 0 or root is None:
-        print("SCANFAIL rc=%d query=%s stderr=%s" % (proc.returncode, query[:80], proc.stderr[:300]))
+        print("SCANFAIL rc=%d query=%s stderr=%s" % (proc.returncode, query[:80], proc.stderr[-1200:]))
         sys.exit(3)
     if 'hits_capped="1"' in root.group(0):
         print("SCANFAIL engine hit cap reached — the scan is partial: " + query[:80])
@@ -419,7 +424,7 @@ inline void probeThreads()
 }
 PROBEH
 if ! python3 "$TMP/scan.py" "$BIN" "$PROBE" "$TMP/probe_out" >"$TMP/probe_scan.txt" 2>&1; then
-    no "static rules: the probe scan did not complete: $( tail -1 "$TMP/probe_scan.txt" )"
+    no "static rules: the probe scan did not complete:"; sed 's/^/          /' "$TMP/probe_scan.txt" | tail -25
 else
     judge_static "$TMP/probe_out" probe >"$TMP/probe_verdict.txt"
     grep -q 'S1	probe_reader.h:[0-9]* (probeUnbounded)' "$TMP/probe_verdict.txt" && ! grep -q 'probeBounded' "$TMP/probe_verdict.txt" \
@@ -435,7 +440,7 @@ else
 fi
 
 if ! python3 "$TMP/scan.py" "$BIN" "$SRC" "$TMP/src_out" >"$TMP/src_scan.txt" 2>&1; then
-    no "static rules: the source scan did not complete: $( tail -1 "$TMP/src_scan.txt" )"
+    no "static rules: the source scan did not complete:"; sed 's/^/          /' "$TMP/src_scan.txt" | tail -25
 else
     SUMMARY="$( grep '^SCANOK' "$TMP/src_scan.txt" )"
     READERS="$( printf '%s' "$SUMMARY" | sed -E 's/.*readers=([0-9]+).*/\1/' )"
