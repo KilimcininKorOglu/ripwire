@@ -510,6 +510,130 @@ g_install g15 Linux x86_64 RIPWIRE_CPUINFO="$GDIR/cpuinfo-both-v3"
     && ok "(G15) two different processor records that each carry v3 (LZCNT as abm on one, lzcnt on the other) install" \
     || no "(G15) processors that each carry v3 were refused: $( g_said g15 ) (rc=$G_RC)"
 
+# ── (H) INTEL macOS BINARIES END WITH 0.6.1, AND THE INSTALLER SAYS SO ─────────────────────────────────────────────
+# release.yml built macos-x64 on an arm64 runner: cross-compiled, PGO-trained under Rosetta 2, determinism-diffed and
+# smoke-run under Rosetta 2. The leg left the matrix after 0.6.1. The installer's arch map is OS-agnostic (x86_64 ->
+# x64), so an Intel Mac asked a later release for ripwire-X-macos-x64.tar.gz and heard only "has no asset named ...",
+# which names neither the decision nor the two routes that still work. Every arm above stubs `uname -m` as arm64 or
+# pins a 0.6.0 release, so none of them could see it. Pinned here:
+#   * an Intel Mac on a release after 0.6.1 stops BEFORE any download, says Intel macOS binaries end with 0.6.1, and
+#     prints the exact pin for 0.6.1 and the exact source build (H1); the stop keys on the VERSION, so a release that
+#     still listed a macos-x64 asset is not downloaded either, and 0.10.0 is not compared as a string (H2);
+#   * a Rosetta shell on Apple silicon is not told it owns an Intel Mac: it is sent to a native arm64 shell (H6);
+#   * release.yml publishes no macOS x86-64 asset, and the extractor that says so finds a planted one (H7).
+# Controls, because a boundary that refuses one version too many strands every user of it: pinning v0.6.1 on an Intel
+# Mac still installs its macos-x64 asset (H3); Linux x86-64 (H4) and macOS arm64 (H5) install a post-0.6.1 release.
+g_fetched(){ grep -c 'tar\.gz$' "$GDIR/$1.curl"; }
+
+# (H1) THE DEFECT, as the one-liner meets it: no RIPWIRE_VERSION, latest is a release after 0.6.1 with no macos-x64.
+g_release 0.6.2 macos arm64 'echo "ripwire 0.6.2 (Release, Test)"'
+G_TAG=""
+g_install h1 Darwin x86_64 FAKE_SYSCTL_DIR="$GDIR/sysctl-haswell"
+if ! grep -q 'releases/latest' "$GDIR/h1.curl"; then
+    no "(H1) fixture: the unpinned install never asked for releases/latest — the arm did not drive the one-liner's path"
+elif [ "$G_RC" -ne 0 ] && grep -q 'Intel macOS' "$GDIR/h1.err" && grep -q 'end with 0\.6\.1' "$GDIR/h1.err" \
+     && ! grep -q 'has no asset named' "$GDIR/h1.err" && [ "$( g_fetched h1 )" = 0 ] && [ ! -e "$GDIR/h1.prefix/bin/ripwire" ]; then
+    ok "(H1) an Intel Mac on latest v0.6.2 stops before any download: Intel macOS binaries end with 0.6.1 (rc=$G_RC)"
+else
+    no "(H1) an Intel Mac on latest v0.6.2 was reported as: $( g_said h1 ) (rc=$G_RC, archives fetched=$( g_fetched h1 ))"
+fi
+if grep -qF 'RIPWIRE_REPO=redhat-et/ripwire RIPWIRE_VERSION=v0.6.1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/redhat-et/ripwire/main/scripts/install.sh)"' "$GDIR/h1.err" \
+   && grep -qF 'git clone https://github.com/redhat-et/ripwire.git && cd ripwire && ./install.sh' "$GDIR/h1.err"; then
+    ok "(H1) the refusal prints the exact command that pins v0.6.1 and the exact source build"
+else
+    no "(H1) the refusal does not print both routes (the v0.6.1 pin, the source build): $( g_said h1 )"
+fi
+
+# (H2) The stop keys on the version, not on the asset's absence: a v0.10.0 that still LISTED a macos-x64 asset is not
+# downloaded. 0.10.0 also sorts before 0.6.1 as a string, so a lexical comparison installs it.
+g_release 0.10.0 macos x64 'echo "ripwire 0.10.0 (Release, Test)"'
+g_install h2 Darwin x86_64 FAKE_SYSCTL_DIR="$GDIR/sysctl-haswell"
+if [ "$G_RC" -ne 0 ] && [ "$( g_fetched h2 )" = 0 ] && [ ! -e "$GDIR/h2.prefix/bin/ripwire" ] && grep -q 'end with 0\.6\.1' "$GDIR/h2.err"; then
+    ok "(H2) an Intel Mac pinned to v0.10.0 downloads nothing even when a macos-x64 asset is listed"
+else
+    no "(H2) an Intel Mac pinned to v0.10.0 was reported as: $( g_said h2 ) (rc=$G_RC, archives fetched=$( g_fetched h2 ))"
+fi
+
+# (H3) CONTROL: 0.6.1 is the last Intel macOS release, not the first missing one. Pinning it still installs.
+g_release 0.6.1 macos x64 'echo "ripwire 0.6.1 (Release, Test)"'
+g_install h3 Darwin x86_64 FAKE_SYSCTL_DIR="$GDIR/sysctl-haswell"
+if [ "$G_RC" -eq 0 ] && grep -q 'ripwire-0\.6\.1-macos-x64\.tar\.gz$' "$GDIR/h3.curl" && [ -x "$GDIR/h3.prefix/bin/ripwire" ]; then
+    ok "(H3) an Intel Mac pinned to v0.6.1 still downloads and installs ripwire-0.6.1-macos-x64"
+else
+    no "(H3) an Intel Mac pinned to v0.6.1 was refused: $( g_said h3 ) (rc=$G_RC)"
+fi
+
+# (H4) CONTROL: Linux x86-64 after 0.6.1 is untouched — a stop keyed on the arch alone refuses it.
+g_release 0.6.2 linux x64 'echo "ripwire 0.6.2 (Release, Test)"'
+g_install h4 Linux x86_64 RIPWIRE_CPUINFO="$GDIR/cpuinfo-haswell"
+if [ "$G_RC" -eq 0 ] && grep -q 'ripwire-0\.6\.2-linux-x64\.tar\.gz$' "$GDIR/h4.curl" && [ -x "$GDIR/h4.prefix/bin/ripwire" ]; then
+    ok "(H4) Linux x86-64 installs ripwire-0.6.2-linux-x64"
+else
+    no "(H4) Linux x86-64 on v0.6.2 was refused: $( g_said h4 ) (rc=$G_RC)"
+fi
+
+# (H5) CONTROL: macOS arm64 after 0.6.1 is untouched — a stop keyed on the OS alone refuses it.
+g_release 0.6.2 macos arm64 'echo "ripwire 0.6.2 (Release, Test)"'
+g_install h5 Darwin arm64
+if [ "$G_RC" -eq 0 ] && grep -q 'ripwire-0\.6\.2-macos-arm64\.tar\.gz$' "$GDIR/h5.curl" && [ -x "$GDIR/h5.prefix/bin/ripwire" ]; then
+    ok "(H5) macOS arm64 installs ripwire-0.6.2-macos-arm64"
+else
+    no "(H5) macOS arm64 on v0.6.2 was refused: $( g_said h5 ) (rc=$G_RC)"
+fi
+
+# (H6) A Rosetta-translated shell answers `uname -m` with x86_64 on an Apple silicon Mac. It is not an Intel Mac, and
+# the arm64 binary runs there: the refusal sends it to a native arm64 shell rather than to a source build.
+g_install h6 Darwin x86_64 FAKE_SYSCTL_DIR="$GDIR/sysctl-rosetta"
+if [ "$G_RC" -ne 0 ] && grep -q 'native arm64 shell' "$GDIR/h6.err" && [ "$( g_fetched h6 )" = 0 ] && [ ! -e "$GDIR/h6.prefix/bin/ripwire" ]; then
+    ok "(H6) a Rosetta shell on v0.6.2 downloads nothing and is sent to a native arm64 shell"
+else
+    no "(H6) a Rosetta shell on v0.6.2 was reported as: $( g_said h6 ) (rc=$G_RC, archives fetched=$( g_fetched h6 ))"
+fi
+
+# (H7) release.yml publishes no macOS x86-64 asset. The extractor reads the build matrix's legs and their asset_os /
+# asset_arch; it runs on the real workflow AND on a copy with one macos/x64 leg planted, so an extractor that reads
+# nothing (shape 3) goes red instead of agreeing with an empty file. Re-adding the leg means moving the installer's
+# 0.6.1 boundary and restoring the Rosetta tuple arm: `git log -S relverdict -- test/portablebuildcheck.sh`.
+cat >"$TMP/legs.py" <<'PY'
+import re, sys
+text = open( sys.argv[ 1 ] ).read()
+build = text.split( '\n  build:', 1 )[ 1 ] if '\n  build:' in text else ''
+matrix = build.split( 'include:', 1 )[ 1 ].split( '\n    runs-on:', 1 )[ 0 ] if 'include:' in build else ''
+def key( leg, name ):
+    m = re.search( r'^[ \t]*%s:[ \t]*["\']?([^"\'\s#]+)' % name, leg, re.M )
+    return m.group( 1 ) if m else ''
+legs = [ ( key( leg, 'asset_os' ), key( leg, 'asset_arch' ) ) for leg in re.split( r'\n\s*- name: ', matrix )[ 1: ] ]
+print( 'legs=%d macos=%d macos_x64=%d' % ( len( legs ), sum( 1 for o, a in legs if o == 'macos' ),
+                                           sum( 1 for o, a in legs if ( o, a ) == ( 'macos', 'x64' ) ) ) )
+PY
+cp "$WORKFLOW" "$TMP/release-planted.yml"
+python3 - "$TMP/release-planted.yml" <<'PY'
+import sys
+path = sys.argv[ 1 ]
+text = open( path ).read()
+leg = '          - name: macos-x64-planted\n            os: macos-26\n            asset_arch: x64\n            asset_os: macos\n'
+at = text.find( '        include:\n', text.find( '\n  build:' ) )
+if at >= 0:
+    at += len( '        include:\n' )
+    open( path, 'w' ).write( text[ :at ] + leg + text[ at: ] )
+PY
+h7Real="$( python3 "$TMP/legs.py" "$WORKFLOW" 2>&1 )"
+h7Plant="$( python3 "$TMP/legs.py" "$TMP/release-planted.yml" 2>&1 )"
+h7RealX64="$( printf '%s' "$h7Real" | sed -n 's/.* macos_x64=\([0-9][0-9]*\)$/\1/p' )"
+h7PlantX64="$( printf '%s' "$h7Plant" | sed -n 's/.* macos_x64=\([0-9][0-9]*\)$/\1/p' )"
+if cmp -s "$WORKFLOW" "$TMP/release-planted.yml"; then
+    no "(H7) control: the planted macos/x64 leg did not take — the copy is byte-identical to release.yml, nothing was checked"
+elif [ -z "$h7RealX64" ] || [ -z "$h7PlantX64" ] || [ "$h7PlantX64" -ne $(( h7RealX64 + 1 )) ]; then
+    no "(H7) control: the leg extractor did not see the planted macos/x64 leg (real: '$h7Real', planted: '$h7Plant')"
+else
+    ok "(H7) control: the leg extractor finds a planted macos/x64 leg (real: $h7Real; planted: $h7Plant)"
+fi
+case "$h7Real" in
+    "legs="*" macos=0 "*) no "(H7) release.yml has no macOS leg at all ('$h7Real') — the extractor read the wrong matrix, or macOS arm64 left too" ;;
+    *" macos_x64=0") ok "(H7) release.yml builds no macOS x86-64 asset ($h7Real)" ;;
+    *) no "(H7) release.yml still builds a macOS x86-64 asset ($h7Real), which install.sh says ended with 0.6.1" ;;
+esac
+
 if [ "${1:-}" != "--isolation-child" ]; then
     python3 "$ROOT/test/installer_isolation.py" "${RIPWIRE_BIN:-$ROOT/build/ripwire}" \
         || no "installer gates escaped their fixture homes or failed with inherited overrides"
