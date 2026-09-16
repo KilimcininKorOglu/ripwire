@@ -133,8 +133,8 @@ else
 fi
 
 # ── #2d-#2g: the TARGET architecture decides the floor, never the HOST ─────────────────────────────────
-# release.yml builds the macOS x86_64 binary ON an arm64 runner: `-DCMAKE_OSX_ARCHITECTURES=x86_64`. CMake
-# derives CMAKE_SYSTEM_PROCESSOR from the RUNNING machine there (arm64 — CMakeDetermineSystem honours only
+# release.yml built the macOS x86_64 binary ON an arm64 runner through 0.6.1, and a source build still can:
+# `-DCMAKE_OSX_ARCHITECTURES=x86_64`. CMake derives CMAKE_SYSTEM_PROCESSOR from the RUNNING machine there (arm64 — CMakeDetermineSystem honours only
 # CMAKE_APPLE_SILICON_PROCESSOR, never CMAKE_OSX_ARCHITECTURES), so a floor keyed on it handed every x86_64
 # compile `-mcpu=apple-m1` and no -march at all. Clang >= 17 (AppleClang 16 — the Xcode 16.2 release.yml
 # pins since c7982037) rejects that outright: "unsupported option '-mcpu=' for target". Clang 16 (AppleClang
@@ -223,7 +223,7 @@ if [ "$( uname -s )" = "Darwin" ]; then
     else
         no "#2f a universal CMAKE_OSX_ARCHITECTURES=x86_64;arm64 configure was ACCEPTED with one flag set for both slices: '$fatFlags'"
     fi
-    # #2g: the REAL project, exactly as release.yml configures its macos-x64 leg — every src/ compile line, and
+    # #2g: the REAL project, exactly as release.yml configured its macos-x64 leg through 0.6.1 — every src/ compile line, and
     # the macros the compiler defines on one of them
     if ! cmake -S "$ROOT" -B "$TMP/real-x86" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >"$TMP/real-x86.log" 2>&1; then
@@ -244,77 +244,11 @@ else
     printf '  SKIP  #2d-#2g host is %s: CMAKE_OSX_ARCHITECTURES is Darwin-only (a no-op here); native Linux targets are #2b/#2c and the ubuntu CI legs\n' "$( uname -s )"
 fi
 
-# ── #2h: the release leg that CROSS-BUILDS x86_64 runs on the exact tuple it was verified on ──────────────────────
-# #2d-#2g make the macos-x64 binary an x86-64-v3 binary, and release.yml then EXECUTES it on its arm64 runner
-# under Rosetta 2: scripts/pgobuild.sh's nine instrumented training runs, the determinism diff, --version and
-# the smoke test. So the runner's Rosetta must execute the v3 extensions the binary carries (AVX2, BMI1/2, FMA,
-# LZCNT, MOVBE). Sonoma's cannot — macos-14 runners SIGILL a -march=x86-64-v3 slice at its first vector
-# instruction (test/strkerncheck.sh, PR #127 run 4, rc 132); macOS 15's gained AVX2, but its LZCNT/MOVBE coverage
-# was never verified; macos-26 with Xcode 26.6 ran the leg green. And a newer runner raises the binary's minimum
-# macOS with it: with no deployment target clang takes the lower of the runner's macOS and the SDK default (14.x
-# on macos-14, 26.0 on macos-26), so the target is PINNED at 14.0, a decision rather than a side effect of the
-# runner. A bound is not enough — "macos-N with N >= 15" plus "any numeric target" passed a macos-15 leg pinned
-# at 26.0 — so the verdict holds the exact tuple. Text-level; any host.
-cat >"$TMP/relverdict.py" <<'PY'
-import re, sys
-text = open( sys.argv[ 1 ] ).read()
-matrix = text.split( 'include:', 1 )[ 1 ].split( '\n    runs-on:', 1 )[ 0 ] if 'include:' in text else ''
-cross = [ leg for leg in re.split( r'\n\s*- name: ', matrix ) if 'CMAKE_OSX_ARCHITECTURES=x86_64' in leg ]
-# The tuple the leg was VERIFIED on, held exactly. Changing the runner or the Xcode is a deliberate edit to release.yml AND
-# to this tuple, made together with fresh evidence: the runner's Rosetta 2 decides which x86-64-v3 instructions the PGO
-# training, determinism and smoke runs can execute, and the Xcode is the compiler that ran them green. The minimum macOS
-# stays "14.0" (the std::print floor src/infra/emit.h names), or macOS 14/15 Intel users are dropped without a word —
-# quoted, because a bare 14.0 is a YAML number, not the string the release's otool minos check matches.
-RUNNER, XCODE, MINOS = 'macos-26', '/Applications/Xcode_26.6.app/Contents/Developer', '14.0'
-EXPECT = ( ( 'os',                RUNNER, False, 'the runner whose Rosetta 2 ran this leg\'s x86-64-v3 PGO training and smoke green' ),
-           ( 'developer_dir',     XCODE,  False, 'the Xcode the leg was verified with' ),
-           ( 'deployment_target', MINOS,  True,  'the minimum macOS the release keeps' ) )
-def scalar( leg, key ):
-    m = re.search( r"""^[ \t]*%s:[ \t]*("[^"\n]*"|'[^'\n]*'|[^\s#]+)""" % key, leg, re.M )
-    if not m:
-        return None, False
-    raw    = m.group( 1 )
-    quoted = len( raw ) >= 2 and raw[ 0 ] == raw[ -1 ] and raw[ 0 ] in '"\''
-    return ( raw[ 1:-1 ] if quoted else raw ), quoted
-def shown( value, quoted ):
-    return '(absent)' if value is None else ( '"%s"' % value if quoted else value )
-if len( cross ) != 1:
-    print( 'FAIL expected exactly one release leg with CMAKE_OSX_ARCHITECTURES=x86_64, found %d — nothing was checked' % len( cross ) )
-else:
-    leg  = cross[ 0 ]
-    name = leg.split( '\n', 1 )[ 0 ].strip()
-    for key, want, mustQuote, why in EXPECT:
-        got, quoted = scalar( leg, key )
-        if got == want and ( quoted or not mustQuote ):
-            print( 'PASS leg %s %s: %s, %s' % ( name, key, shown( want, mustQuote ), why ) )
-        else:
-            print( 'FAIL leg %s %s: %s%s, but the verified tuple is %s — %s; moving it edits release.yml and #2h\'s tuple together, deliberately'
-                   % ( name, key, shown( got, quoted ), ' (a bare YAML number)' if got == want else '', shown( want, mustQuote ), why ) )
-    # Each pin must also REACH the build. The deployment target through the step's export, with no -D on the leg that
-    # disagrees (CMake reads MACOSX_DEPLOYMENT_TARGET only when CMAKE_OSX_DEPLOYMENT_TARGET is not given); the Xcode
-    # through the job env's DEVELOPER_DIR, without which the image's default Xcode builds the release.
-    exported = 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}' in text
-    override = [ v for v in re.findall( r'CMAKE_OSX_DEPLOYMENT_TARGET=(\S+)', leg ) if v != MINOS ]
-    if not exported:
-        print( 'FAIL leg %s: no step exports matrix.deployment_target as MACOSX_DEPLOYMENT_TARGET — the key pins nothing; the runner\'s macOS sets the minimum' % name )
-    elif override:
-        print( 'FAIL leg %s: -DCMAKE_OSX_DEPLOYMENT_TARGET=%s on the leg overrides the exported %s — the pinned minimum is not what ships' % ( name, override[ 0 ], MINOS ) )
-    else:
-        print( 'PASS leg %s: a step exports deployment_target as MACOSX_DEPLOYMENT_TARGET and no -D on the leg overrides it' % name )
-    wired = re.search( r'^[ \t]*DEVELOPER_DIR:[ \t]*\$\{\{[ \t]*matrix\.developer_dir\b', text, re.M )
-    print( 'PASS leg %s: the job env hands developer_dir to the toolchain as DEVELOPER_DIR' % name if wired else
-           'FAIL leg %s: nothing exports matrix.developer_dir as DEVELOPER_DIR — the image\'s default Xcode, not the pinned one, builds the release' % name )
-print( 'DONE' )
-PY
-relVerdict="$( python3 "$TMP/relverdict.py" "$ROOT/.github/workflows/release.yml" 2>&1 )"
-while IFS= read -r row; do
-    case "$row" in
-        PASS\ *) ok "#2h ${row#PASS }" ;;
-        FAIL\ *) no "#2h ${row#FAIL }" ;;
-    esac
-done <<<"$relVerdict"
-printf '%s\n' "$relVerdict" | grep -q '^DONE$' \
-    || no "#2h the release.yml verdict never finished — no evidence either way: $( printf '%s' "$relVerdict" | tail -3 )"
+# ── #2h retired with the release leg it held ──────────────────────────────────────────────────────────────────────
+# #2h pinned release.yml's macos-x64 leg to the runner, Xcode and deployment target it was verified on, because that
+# leg ran its x86-64-v3 binary under Rosetta 2. The leg left the matrix after 0.6.1, so there is no tuple to hold;
+# test/releaseinstallcheck.sh (H7) now refuses a macOS x64 leg in release.yml, and re-adding one restores this arm
+# from history (`git log -S relverdict -- test/portablebuildcheck.sh`) together with fresh evidence for its tuple.
 
 # ── #3: RIPWIRE_NATIVE=ON stays opt-in and unaffected by the pretend-Linux hook ─────────────────────────
 nativeFlags="$( run_probe "$TMP/native" -DRIPWIRE_NATIVE=ON -DRIPWIRE_PRETEND_LINUX=ON )"
