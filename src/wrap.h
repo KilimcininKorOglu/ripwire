@@ -501,19 +501,29 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
         return 0;
     }
 
-    // Collect + sort .md paths for determinism.
+    // Collect + sort .md paths for determinism. The walk advances with increment(ec): the range-for's operator++
+    // THROWS, and this function is noexcept, so a skills tree it could not descend (a path past the name limit, a
+    // directory removed mid-walk, a descriptor limit) was std::terminate — SIGABRT, exit 134, from `ripwire wrap`
+    // run in a repository carrying such a tree. A walk that stops early is disclosed and scored as a WARN: the
+    // skills past that point were never scanned, so a clean result would claim more than was checked.
     std::vector<std::string> mdPaths;
-    for( const auto& entry : fs::recursive_directory_iterator( dir, fs::directory_options::skip_permission_denied, ec ) )
+    fs::recursive_directory_iterator it( dir, fs::directory_options::skip_permission_denied, ec ), end;
+    for( ; !ec && it != end; it.increment( ec ) )
     {
-        if( !ec && entry.is_regular_file( ec ) && !ec && entry.path().extension() == ".md" )
+        std::error_code entryEc;
+        if( it->is_regular_file( entryEc ) && !entryEc && it->path().extension() == ".md" )
         {
-            mdPaths.push_back( entry.path().string() );
+            mdPaths.push_back( it->path().string() );
         }
-        ec.clear();
     }
     std::sort( mdPaths.begin(), mdPaths.end() );
 
     int maxSev = 0;
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire wrap: WARN — the skill scan of {} stopped early ({}); skills past that point were not scanned\n", dir, ec.message() );
+        maxSev = 1;
+    }
     for( const std::string& p : mdPaths )
     {
         const std::vector<SkillFinding> findings = scanSkillFile( p );
