@@ -27,45 +27,30 @@
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — no-op in release; the visible line on a watcher-degrade path
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
 
-#include <sys/stat.h>
-#include <sys/time.h>  // struct timespec for a non-blocking kevent poll
-#include <fcntl.h>     // open() the watched dir fds + O_CREAT for the per-file edit lockfile
-#include <unistd.h>    // close()
-#include <sys/file.h>  // flock(LOCK_EX|LOCK_NB) — the ripwire-vs-ripwire edit serializer (F1); POSIX-wide, incl. glibc
+#include "infra/os.h"    // rw::os — stat + the nanosecond stat fields, open/close, flock, and the directory watcher
 
-// kqueue/kevent is a BSD interface: <sys/event.h> does not exist on Linux at all, which is where the first
-// public CI run stopped ("fatal error: sys/event.h: No such file or directory", both ubuntu legs). It powers
-// ONE optimisation — eliding the directory-mtime sweep on a settled tree — and the watcher already has a
-// fully-specified degrade path for "kqueue unavailable" (see FsWatcher below): stay unhealthy, and getIndex()
-// runs the full stat/mtime sweep on every request, i.e. the exact pre-Feature-1 behaviour. A platform without
-// kqueue takes that same path, so the MCP staleness CONTRACT is unchanged — a stale index is still detected
-// on request, by the per-file mtime+size loop that runs regardless of the watcher. FUTURE UPGRADE: inotify
-// (Linux) / FSEvents would restore the elision; that is new code with its own event-semantics bug surface and
-// is deliberately not attempted here, because the poll fallback is already correct.
+// The FS-event watcher (os::dirwatch_*) exists only where the platform has kqueue: <sys/event.h> does not exist on
+// Linux at all, which is where the first public CI run stopped ("fatal error: sys/event.h: No such file or
+// directory", both ubuntu legs). It powers ONE optimisation — eliding the directory-mtime sweep on a settled tree —
+// and the watcher already has a fully-specified degrade path for "no watcher" (see FsWatcher below): stay
+// unhealthy, and getIndex() runs the full stat/mtime sweep on every request, i.e. the exact pre-Feature-1
+// behaviour. A platform without kqueue takes that same path, so the MCP staleness CONTRACT is unchanged — a stale
+// index is still detected on request, by the per-file mtime+size loop that runs regardless of the watcher. FUTURE
+// UPGRADE: inotify (Linux) / FSEvents would restore the elision; that is new code with its own event-semantics bug
+// surface and is deliberately not attempted here, because the poll fallback is already correct.
 //
-// The `#ifndef` is a deliberate override seam, not decoration: `-DRIPWIRE_HAS_KQUEUE=0` compiles the Linux
-// path on a Mac, so the fallback can be built and RUN here instead of being first discovered by a CI leg
-// nobody can reproduce locally.
+// `-DRW_OS_HAS_KQUEUE=0` (read by os.h) compiles the no-watcher path on a Mac, so the fallback can be built and RUN
+// here instead of being first discovered by a CI leg nobody can reproduce locally.
 //
-// L2 (Linux runtime probe) — why FsWatcher::arm's no-kqueue branch is SILENT while its kqueue()-failed
-// branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something that normally
-// works did not, this run. On a build with no kqueue at all (every Linux build, and any
-// -DRIPWIRE_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has,
-// taken on every arm() call for the life of the process, forever. Alerting on it made every Linux MCP run
-// emit a degrade line nobody can act on, and reddened the stderr-clean gates that correctly read an alert as
-// a signal. The freshness CONTRACT is identical either way, which is precisely why that branch has nothing
-// to report. A RUNTIME kqueue() failure on a kqueue platform is the opposite event — the fast path exists
-// and did not come up — so it keeps its alert.
-#ifndef RIPWIRE_HAS_KQUEUE
-  #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ ) || defined( __DragonFly__ )
-    #define RIPWIRE_HAS_KQUEUE 1
-  #else
-    #define RIPWIRE_HAS_KQUEUE 0
-  #endif
-#endif
-#if RIPWIRE_HAS_KQUEUE
-#include <sys/event.h>     // kqueue / kevent — the FS-event freshness watcher (macOS/BSD; Feature-1 hot-reload)
-#endif
+// L2 (Linux runtime probe) — why FsWatcher::arm's no-watcher branch (os::dirwatch_open answers ENOSYS) is SILENT
+// while its watcher-failed branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something
+// that normally works did not, this run. On a build with no watcher at all (every Linux build, and any
+// -DRW_OS_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has, taken on
+// every arm() call for the life of the process, forever. Alerting on it made every Linux MCP run emit a degrade
+// line nobody can act on, and reddened the stderr-clean gates that correctly read an alert as a signal. The
+// freshness CONTRACT is identical either way, which is precisely why that branch has nothing to report. A RUNTIME
+// kqueue() failure on a kqueue platform is the opposite event — the fast path exists and did not come up — so it
+// keeps its alert.
 
 #include <algorithm>    // std::sort — the card-A3 content-change merge-walk over two path lists
 #include <atomic>       // RIPWIRE_MCP_TIMINGS rebuild-count observable (env-gated stderr timing; off → untouched)
@@ -89,46 +74,34 @@ namespace rw
 
 namespace mcpdetail
 {
-    // nanosecond mtime out of a filled `struct stat`. The sub-second field is spelled DIFFERENTLY per
-    // platform — st_mtimespec on Darwin/BSD, st_mtim on Linux (POSIX.1-2008) — and neither name exists on
-    // the other, so this is a compile error, not a portability nicety. Same ladder (and same whole-second
-    // last resort) as ingest.cpp's statSizeTimes; kept local rather than shared because that one lives in a
-    // .cpp and hoisting it would move ingest internals into a header for two call sites.
-    inline long long mtimeNsOf( const struct stat& st ) noexcept
+    // nanosecond mtime out of a filled stat_t (os::st_mtim reads the sub-second field under whichever name the
+    // platform gives it). Same arithmetic as ingest.cpp's statSizeTimes; kept local rather than shared because
+    // that one lives in a .cpp and hoisting it would move ingest internals into a header for two call sites.
+    inline long long mtimeNsOf( const os::stat_t& st ) noexcept
     {
-#if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
-#elif defined( __linux__ )
-        return (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
-#else
-        return (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
-#endif
+        const ::timespec mtim = os::st_mtim( st );
+        return (long long)mtim.tv_sec * 1000000000LL + mtim.tv_nsec;
     }
 
     // nanosecond mtime of a path, or -1 if it can't be stat'd. The staleness signal for the in-memory index.
     inline long long mtimeOf( const std::string& p )
     {
-        struct stat st;
-        if( ::stat( p.c_str(), &st ) != 0 )
+        os::stat_t st;
+        if( os::stat( p.c_str(), &st ) != 0 )
         {
             return -1;
         }
         return mtimeNsOf( st );
     }
 
-    // ctime-ns out of a filled `struct stat`, spelled per platform exactly like mtimeNsOf above. POSIX
-    // st_ctime is the inode CHANGE time, not a creation time: it moves on any write to the file and on any
-    // metadata change, INCLUDING the utimes() that a `touch -r` / `cp -p` / mtime-preserving editor performs.
-    // There is no POSIX interface for setting it, so an unprivileged writer cannot restore it.
-    inline long long ctimeNsOf( const struct stat& st ) noexcept
+    // ctime-ns out of a filled stat_t, exactly like mtimeNsOf above. POSIX st_ctime is the inode CHANGE time, not a
+    // creation time: it moves on any write to the file and on any metadata change, INCLUDING the utimes() that a
+    // `touch -r` / `cp -p` / mtime-preserving editor performs. There is no POSIX interface for setting it, so an
+    // unprivileged writer cannot restore it.
+    inline long long ctimeNsOf( const os::stat_t& st ) noexcept
     {
-#if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
-#elif defined( __linux__ )
-        return (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
-#else
-        return (long long)st.st_ctime * 1000000000LL;   // whole-second fallback
-#endif
+        const ::timespec ctim = os::st_ctim( st );
+        return (long long)ctim.tv_sec * 1000000000LL + ctim.tv_nsec;
     }
 
     // (mtime-ns, size, ctime-ns) of a path in ONE stat(), or (-1,-1,-1) if it can't be stat'd. mcpStale()
@@ -137,8 +110,8 @@ namespace mcpdetail
     struct FileStat { long long mtimeNs; long long sizeBytes; long long ctimeNs; };
     inline FileStat statOf( const std::string& p )
     {
-        struct stat st;
-        if( ::stat( p.c_str(), &st ) != 0 )
+        os::stat_t st;
+        if( os::stat( p.c_str(), &st ) != 0 )
         {
             return { -1, -1, -1 };
         }
@@ -252,13 +225,13 @@ namespace mcpdetail
             {
                 if( fd >= 0 )
                 {
-                    ::close( fd );
+                    os::close( fd );
                 }
             }
             dirFds.clear();
             if( kq >= 0 )
             {
-                ::close( kq );
+                os::close( kq );
             }
             kq = -1;
             healthy = false;
@@ -278,24 +251,24 @@ namespace mcpdetail
         void arm( const std::vector<std::string>& dirs )
         {
             reset();
-#if !RIPWIRE_HAS_KQUEUE                                             // the DESIGNED path here (no watcher exists) — unhealthy → getIndex() always sweeps, silently
-            (void) dirs; return;
-#else
-            kq = ::kqueue();
-            if( kq < 0 ) { DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
+            const int watchErr = os::dirwatch_open( &kq );
+            if( watchErr != 0 )
+            {
+                if( watchErr != ENOSYS )                                // ENOSYS: no watcher exists here — the DESIGNED path, unhealthy → getIndex() always sweeps, silently (L2)
+                {
+                    DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" );
+                }
+                return;
+            }
 
             dirFds.reserve( dirs.size() );
             for( const std::string& d : dirs )
             {
-                const int fd = ::open( d.c_str(), O_RDONLY | O_CLOEXEC );
+                const int fd = os::open( d.c_str(), O_RDONLY | O_CLOEXEC );
                 bool isRegistered = fd >= 0;
                 if( isRegistered )
                 {
-                    struct kevent ev;
-                    EV_SET( &ev, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
-                            NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND, 0, nullptr );
-                    struct timespec zero = { 0, 0 };
-                    if( ::kevent( kq, &ev, 1, nullptr, 0, &zero ) < 0 ) { ::close( fd ); isRegistered = false; }
+                    if( os::dirwatch_add( kq, fd ) < 0 ) { os::close( fd ); isRegistered = false; }
                 }
                 if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
                 {
@@ -306,7 +279,6 @@ namespace mcpdetail
                 dirFds.push_back( fd );
             }
             healthy = true;                                             // kq live AND every dir registered → the fast path is available
-#endif
         }
 
         // drain all pending events (EV_CLEAR → edge-triggered, so this both reports AND resets them). Returns
@@ -316,15 +288,12 @@ namespace mcpdetail
         {
             if( kq < 0 )
             {
-                return true; // unhealthy (incl. every non-kqueue platform, where arm() never opens kq) → force the sweep
+                return true; // unhealthy (incl. every platform with no watcher, where arm() never opens kq) → force the sweep
             }
-#if RIPWIRE_HAS_KQUEUE
-            struct kevent out[ 32 ];
-            struct timespec zero = { 0, 0 };
             bool any = false;
             for( ;; )
             {
-                const int n = ::kevent( kq, nullptr, 0, out, 32, &zero );
+                const int n = os::dirwatch_poll( kq );
                 if( n < 0 )
                 {
                     return true; // poll error → conservative: assume changed
@@ -334,15 +303,12 @@ namespace mcpdetail
                     break;
                 }
                 any = true;
-                if( n < 32 )
+                if( n < os::kDirwatchBatch )
                 {
                     break; // fewer than the batch cap → queue drained
                 }
             }
             return any;
-#else
-            return true;
-#endif
         }
     };
 
@@ -968,8 +934,8 @@ inline std::size_t mcpPrefetchMinFiles()
 inline std::uint64_t gitHeadMoveToken( const std::string& root )
 {
     std::string gitDir = root + "/.git";
-    struct stat st;
-    if( ::stat( gitDir.c_str(), &st ) != 0 )
+    os::stat_t st;
+    if( os::stat( gitDir.c_str(), &st ) != 0 )
     {
         return 0; // not a git working tree we track
     }

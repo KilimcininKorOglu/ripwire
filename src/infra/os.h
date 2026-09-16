@@ -315,13 +315,20 @@ inline int pthread_main_np()
 #endif
 
 // ── directory watching ─────────────────────────────────────────────────────────────────────────────────────
-// No POSIX call watches a directory. On a kqueue platform these are kqueue itself: dirwatch_open is kqueue(),
-// dirwatch_add registers a directory descriptor for write/delete/rename/extend events (edge-triggered), and
-// dirwatch_poll drains up to kDirwatchBatch pending events without blocking and returns how many it took, or -1.
-// Where there is no watcher all three fail with ENOSYS — the caller's designed "no watcher, always sweep" path,
-// which is not a degradation and must stay silent.
+// No POSIX call watches a directory. On a kqueue platform these are kqueue itself. dirwatch_open returns 0 with
+// *watchFd set, or an errno value — ENOSYS where the platform has no watcher, which is the caller's designed
+// "no watcher, always sweep" path, not a degradation, and must stay silent. The errno is RETURNED rather than
+// stored (posix_spawn's convention), so a platform without a watcher folds the caller's check away entirely.
+// dirwatch_add registers a directory descriptor for write/delete/rename/extend events (edge-triggered): the
+// kevent result, -1 on failure. dirwatch_poll drains up to kDirwatchBatch pending events without blocking and
+// returns how many it took, or -1. Without a watcher those two can only be handed a descriptor dirwatch_open
+// never produced, and simply return -1.
 #if RW_OS_HAS_KQUEUE
-[[gnu::always_inline]] inline int dirwatch_open() { return ::kqueue(); }
+[[gnu::always_inline]] inline int dirwatch_open( int* watchFd )
+{
+    *watchFd = ::kqueue();
+    return *watchFd < 0 ? errno : 0;
+}
 [[gnu::always_inline]] inline int dirwatch_add( int watchFd, int dirFd )
 {
     struct kevent ev;
@@ -336,9 +343,9 @@ inline int pthread_main_np()
     return ::kevent( watchFd, nullptr, 0, out, kDirwatchBatch, &zero );
 }
 #else
-[[gnu::always_inline]] inline int dirwatch_open()          { errno = ENOSYS; return -1; }
-[[gnu::always_inline]] inline int dirwatch_add( int, int ) { errno = ENOSYS; return -1; }
-[[gnu::always_inline]] inline int dirwatch_poll( int )     { errno = ENOSYS; return -1; }
+[[gnu::always_inline]] inline int dirwatch_open( int* )         { return ENOSYS; }
+[[gnu::always_inline]] inline int dirwatch_add( int, int )      { return -1; }
+[[gnu::always_inline]] inline int dirwatch_poll( int )          { return -1; }
 #endif
 
 }   // namespace rw::os
