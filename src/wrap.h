@@ -16,7 +16,7 @@
 #include <unistd.h>   // wrapCommandToken (2026-09-06)
 #include "skillscan.h"
 #include "infra/tablelookup.h"   // findByField — shared with ingest's lookupLang
-#include "infra/jsonesc.h"       // escapeMcp — JSON strings must remain valid on Windows paths
+#include "infra/jsonesc.h"       // escapeMcp — the stanza command is a path, and a path is bytes JSON must escape
 
 #include <cstdio>
 #include <cstdlib>
