@@ -31,6 +31,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>        // std::numeric_limits — the rule-mask width assert beside buildFirstByteRuleMask
 #include <regex>
 #include <span>
 #include <string>
@@ -270,7 +271,7 @@ inline std::string_view enclosingLine( std::string_view s, std::size_t pos ) noe
 // definition, read by both consumers: the first-byte dispatch below (that rule has no literal prefix, so
 // its first-byte set IS this class) and redactSecrets's run scan. Spelling it twice is how the two would
 // silently drift apart, and a drift there is a redaction that stops firing.
-inline std::array<bool, 256> buildGenericClassTable() noexcept
+inline constexpr std::array<bool, 256> buildGenericClassTable() noexcept
 {
     std::array<bool, 256> cls{};
     for( unsigned char c = 'A'; c <= 'Z'; ++c )
@@ -295,7 +296,7 @@ inline std::array<bool, 256> buildGenericClassTable() noexcept
 // The minimum run length that rule's pattern requires — the "{32,}" in [A-Za-z0-9+/=_\-]{32,}.
 inline constexpr std::size_t kGenericMinRunLength = 32;
 
-inline std::array<std::uint16_t, 256> buildFirstByteRuleMask() noexcept
+inline constexpr std::array<std::uint16_t, 256> buildFirstByteRuleMask() noexcept
 {
     std::array<std::uint16_t, 256> mask{};   // value-initialised → all-zero (no rule can start here)
 
@@ -338,6 +339,45 @@ inline std::array<std::uint16_t, 256> buildFirstByteRuleMask() noexcept
 
     return mask;
 }
+
+// THE HAND-NUMBERED MASK, CHECKED AGAINST THE TABLE IT NUMBERS. The addRule( 0..9, … ) calls above are a second copy
+// of kRedactRules' ORDER. Insert a vendor rule at index 2 and every later index points one rule off: each rule after
+// it is then TRIED only at bytes its pattern cannot start with, so it never fires. That is a redaction that silently
+// stops, with no test failing unless a fixture sits at exactly that rule. So the whole mask is recomputed from the table
+// at compile time and compared bit for bit: a rule with a literal prefix owns exactly the bit at its pattern's first
+// byte, the one GenericAssigned rule owns exactly its character class, and no other rule may start with a regex
+// metacharacter (it would need a first-byte set this check cannot derive, which is a decision, not an accident).
+// Returns the first rule index whose bits differ, and kRedactRules.size() when every bit agrees.
+constexpr std::size_t firstRuleTheMaskMisnumbers() noexcept
+{
+    const std::array<std::uint16_t, 256> mask         = buildFirstByteRuleMask();
+    const std::array<bool, 256>          genericClass = buildGenericClassTable();
+    const std::string_view               metachars    = "[(\\.^$|?*+{";
+    for( std::size_t ruleIndex = 0; ruleIndex < kRedactRules.size(); ++ruleIndex )
+    {
+        const RedactRule&   rule      = kRedactRules[ruleIndex];
+        const unsigned char first     = static_cast<unsigned char>( rule.pattern[0] );
+        const bool          isGeneric = rule.kind == SecretKind::GenericAssigned;
+        if( !isGeneric && metachars.find( char( first ) ) != std::string_view::npos )
+        {
+            return ruleIndex;
+        }
+        for( std::size_t byte = 0; byte < mask.size(); ++byte )
+        {
+            const bool isExpected = isGeneric ? genericClass[byte] : byte == first;
+            const bool isSet      = ( mask[byte] & ( 1u << ruleIndex ) ) != 0;
+            if( isExpected != isSet )
+            {
+                return ruleIndex;
+            }
+        }
+    }
+    return kRedactRules.size();
+}
+static_assert( kRedactRules.size() <= std::numeric_limits<std::uint16_t>::digits,
+               "the first-byte mask is a uint16_t per byte — widen it before a 17th rule, or its bit is shifted off the end" );
+static_assert( firstRuleTheMaskMisnumbers() == kRedactRules.size(),
+               "buildFirstByteRuleMask's addRule( index, … ) no longer matches kRedactRules' order — a rule would never be tried" );
 
 // ── per-line and per-run memoization (perf) ──────────────────────────────────────────────────────────
 // Three of the sweep's costs were O(lineLength) or O(runLength) *at every candidate position*, i.e. O(n²)
@@ -431,7 +471,7 @@ inline std::size_t matchLengthAtCursor( std::size_t ruleIndex, std::string_view 
                                         std::span<const std::regex> compiled, SweepState& state )
 {
     // the GenericAssigned class table — built once, and the same table buildFirstByteRuleMask read.
-    static const std::array<bool, 256> kGenericClass = buildGenericClassTable();
+    static constexpr std::array<bool, 256> kGenericClass = buildGenericClassTable();   // constant data: no guard, no per-process build
 
     if( kRedactRules[ruleIndex].kind == SecretKind::GenericAssigned )
     {
@@ -485,8 +525,7 @@ inline bool redactSecrets( std::string_view in, std::string& out, RedactCounts& 
     }();
 
     // first-byte dispatch mask (see buildFirstByteRuleMask) — also compiled/built exactly once.
-    static const std::array<std::uint16_t, 256> kFirstByteMask = redactdetail::buildFirstByteRuleMask();
-    static_assert( kRedactRules.size() <= 16, "kFirstByteMask bitmask is a uint16_t — widen if rules exceed 16" );
+    static constexpr std::array<std::uint16_t, 256> kFirstByteMask = redactdetail::buildFirstByteRuleMask();   // checked at compile time beside its builder
 
     out.clear();
     out.reserve( in.size() + 16 );
