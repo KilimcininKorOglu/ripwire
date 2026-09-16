@@ -66,6 +66,50 @@ macOS arm64 on a later release) each went red against a mutant installer that re
 the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
 deployment target, retires with it.
 
+### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
+
+Through 0.6.1 the `macos-arm64` release asset and every macOS CI leg were built with Xcode 16.2 on `macos-14`. Its
+AppleClang 16 is LLVM 17, and LLVM 17's loop vectorizer never reads `__builtin_assume_separate_storage`
+(llvm/llvm-project#64666, fixed in LLVM 18). There, a `VERIFY_NO_ALIAS_BUF` promise removed scalar reloads but left each
+vectorized loop's runtime overlap check and its scalar fallback in place. The release leg, the eight macOS gate shards
+and the macOS sanitizer leg now build with Xcode 26.6 (17F113, Apple clang 21.0.0), the default Xcode on `macos-26`.
+GitHub retires the `macos-14` images on 2026-11-02. On Xcode 26.6, with no flag beyond the release's own
+`-O2 -mcpu=apple-m1`, a two-buffer loop carrying the promise vectorizes with no overlap check. objdump counts 57
+instructions against 64 for the same loop without the promise, and 64 again with `-mllvm -basic-aa-separate-storage=false`.
+`test/noaliascheck.sh` classifies this compiler `CONSUMED_DEFAULT` and `LOOP_CONSUMED`. No speed is claimed: the promises
+that would use this land later, with the macro rename.
+
+The minimum macOS is now pinned instead of inherited from the runner. With no deployment target, clang takes the lower of
+the runner's macOS and the SDK default. The published `ripwire-0.6.1-macos-arm64` binary reads `minos 14.0` (otool), and
+the same build on `macos-26` would have read 26.x and dropped every macOS 14 and 15 user. The release leg exports
+`MACOSX_DEPLOYMENT_TARGET=14.0` before its PGO build and reads `minos` back off the binary it packages. The CI legs build
+at the same 14.0, where Xcode 26.6's libc++ still defines `__cpp_lib_print`. The leg also records its Xcode, compiler and
+`llvm-profdata`, and fails if `DEVELOPER_DIR` is empty or either tool is not the pinned Xcode's, so PGO trains, merges and
+optimizes with one toolchain. None of these checks skips a leg that lost its pin. A macOS release leg without a
+deployment target fails, and so does a CI leg whose CMake cache did not receive the pinned target.
+
+Gate: `test/portablebuildcheck.sh` #2i, sixteen rows. It holds the release leg's runner, Xcode and quoted minimum macOS;
+the export before the first configure; a single deployment-target source across the leg and the build job's env and
+steps (no `-DCMAKE_OSX_DEPLOYMENT_TARGET`, `-mmacosx-version-min` or second `MACOSX_DEPLOYMENT_TARGET`); the exact
+`otool` compare between PGO staging and packaging; and each fail-loudly guard: the empty-target refusal, the toolchain
+record step ahead of the first build, and ci.yml's two CMake-cache checks. It also holds ci.yml's nine macOS runner
+labels, five `matrix.os` conditions, two Xcode paths and two deployment targets to the release's values, so a half-done
+runner move (an `ASAN_OPTIONS` condition still naming `macos-14`) is refused. Three mutated copies must each be refused
+by exactly their own row: no minos step, `ASAN_OPTIONS` back on `macos-14`, and `-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0`
+added to the pgobuild step. Red before this change: 14 FAIL, 2 PASS. All sixteen pass after.
+
+A local emulation of the release leg on the same Xcode build (`scripts/pgobuild.sh`, Release,
+`MACOSX_DEPLOYMENT_TARGET=14.0`) passed every post-step: the PGO determinism diff, `emit=std::print`, `minos 14.0`, and
+xmllint. Its output was byte-identical to the plain build on `test/fixture`, the repo map and a `--for` query.
+
+The move also exposed a test-harness defect. Under a UTF-8 locale, macOS 26's `/usr/bin/sort` sorts case-insensitively,
+where macOS 14 and Linux sorted these lists in byte order. `test/scroundtripcheck.sh` compared a `sort`ed expected list
+with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of every `sort`, `comm`, `join`, `uniq` and
+`ls` call in the gate and bench scripts found 27 sites in 20 files that compare an order with something else: Python's
+`sorted()`, a literal, a pinned hash, ripwire's own byte-sorted output, or `git status`. Only that one fails today; the
+other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
+`LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
+
 ### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
 
 Two on-disk readers built enums straight from bytes with no range check. **The ingest cache** read ten of them —

@@ -46,7 +46,7 @@ printf 'def helper_only():\n    return 4\n'                                    >
 printf 'def plain_fn():\n    return 5\n'                                       > "$WORK/flat/pkg/mod.py"
 
 q(){ "$BIN" "$1" --graph-query="$2" --no-cache 2>"$WORK/err"; }
-names(){ printf '%s' "$1" | grep -oE '<s [^>]*n="[^"]*"' | grep -oE 'n="[^"]*"' | sed 's/n="//;s/"//' | sort | tr '\n' ' '; }
+names(){ printf '%s' "$1" | grep -oE '<s [^>]*n="[^"]*"' | grep -oE 'n="[^"]*"' | sed 's/n="//;s/"//' | LC_ALL=C sort | tr '\n' ' '; }
 
 # PRESENCE GUARD (CONTRIBUTING §2): the arms below assert things about a layer= tag that the MAP must
 # already be emitting. If it is not, every layer() arm would be measuring an absent taxonomy, not a
