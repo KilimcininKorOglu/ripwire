@@ -2289,15 +2289,22 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // keeps role="call": it IS a real call; only the RESOLUTION came from the binding — the same trust
         // level as Rule 2 receiver narrowing.
         bool narrowed = false;
-        // TS/JS literal receivers (issue #163): a syntactically certain built-in call skips the name
-        // ladder. Bind only a matching Foo.prototype.NAME extension (scope stamped at ingest); otherwise
-        // vetoExternal — counted, not dropped, not ambiguous. Identifier / this / object-literal /
-        // typed-parameter receivers stay RecvKind::None and take today's path.
+        // TS/JS literal receivers (issue #163): only names that really are members of the literal's
+        // built-in type leave the ladder. Bind a scope-matched polyfill first (JS `Foo.prototype.NAME`,
+        // TS has no protomethod capture); else External if the name exists in-repo, Undefined if it
+        // does not. A name that is NOT a member of that type (`shout`, named-function proto, Object.assign)
+        // falls through to today's path. !ctor.empty() stays: a future Lit* kind without a ctor must not
+        // match every unscoped method.
         if( !scipPinned && r.role == RefRole::Call && isJsTsLitRecv( r.recv ) )
         {
             const std::string_view ctor = jsLitCtorName( r.recv );
-            if( it != byName.end() && !ctor.empty() )
+            if( !ctor.empty() && isJsTsBuiltinMember( ctor, r.calleeName ) )
             {
+                if( it == byName.end() )
+                {
+                    disposition = CallDisposition::Undefined;   // no in-repo def of this builtin name — not external=
+                    continue;
+                }
                 for( NodeId c : it->second )
                 {
                     const Symbol& sy = ing.symbols[c];
@@ -2307,13 +2314,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                         cand.push_back( c );
                     }
                 }
+                if( cand.empty() )
+                {
+                    disposition = vetoExternal( r );
+                    continue;
+                }
+                narrowed = true;
             }
-            if( cand.empty() )
-            {
-                disposition = vetoExternal( r );
-                continue;
-            }
-            narrowed = true;
         }
         // ── ES named-import binding resolve — the JS/TS twin of the L3 block above, and BEFORE every
         // receiver rule for the same reason: `import { f } from './m.js'` is a name-lookup FACT, so a

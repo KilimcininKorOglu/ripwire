@@ -2001,8 +2001,13 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             }
             else if( ( le.lang == Lang::JavaScript || le.lang == Lang::TypeScript )
                      && defCapSv == "definition.protomethod" )
-            { // `String.prototype.shout` → scope "String" so a LitString call binds only that extension
-                d.scope = std::string( prototypeCtorName( nameNode, src ) );
+            { // only the five built-in ctors: every Foo.prototype.bar gaining sc= would mint a new
+              // canonical id and move quality baselines (node lib/ has ~163 anonymous protomethods)
+                const std::string_view ctor = prototypeCtorName( nameNode, src );
+                if( isJsTsBuiltinCtor( ctor ) )
+                {
+                    d.scope = std::string( ctor );
+                }
             }
             // extent honesty: did the parse RECOVER this def's container or kind? Only asked in a file whose root
             // holds an error (fileHasError, one O(1) flag test per file) — see parseRecoveredBits.
