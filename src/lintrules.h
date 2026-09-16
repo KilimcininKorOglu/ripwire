@@ -76,32 +76,39 @@ inline bool isValidSeverity( std::string_view s ) noexcept
 }
 
 // language token (as written in `language:`) → Lang enum. Declarative table, not an if-chain. Only the
-// grammar-bearing languages are accepted (Markdown has no tree-sitter grammar → no AST rules).
+// grammar-bearing CODE languages are accepted (Markdown has no tree-sitter grammar → no AST rules; JSON/TOML/YAML
+// are data). The table lives at namespace scope, with a DEDUCED extent, so main.cpp's registration asserts can read
+// it: a spelled extent turns a forgotten row into a zero-filled { "", Cpp } tail that compiles silently.
+struct LangTokenRow
+{
+    std::string_view name;
+    Lang             lang;
+};
+inline constexpr LangTokenRow kLangTokenRows[] = {
+    { "cpp",        Lang::Cpp        },
+    { "python",     Lang::Python     },
+    { "typescript", Lang::TypeScript },
+    { "go",         Lang::Go         },
+    { "rust",       Lang::Rust       },
+    { "swift",      Lang::Swift      },
+    { "objc",       Lang::ObjC       },
+    { "javascript", Lang::JavaScript },
+    { "bash",       Lang::Bash       },
+    { "java",       Lang::Java       },
+    { "ruby",       Lang::Ruby       },
+    { "csharp",     Lang::CSharp     },
+    { "c",          Lang::C          },
+    { "php",        Lang::Php        },
+    { "lua",        Lang::Lua        },
+    { "elixir",     Lang::Elixir     },
+    { "dart",       Lang::Dart       },
+    { "kotlin",     Lang::Kotlin     },
+};
+
 /// Parse a supported language token; assign out only on success and otherwise return false.
 inline bool langFromToken( std::string_view tok, Lang& out ) noexcept
 {
-    struct Row { std::string_view name; Lang lang; };
-    static constexpr std::array<Row, 18> kMap = { {
-        { "cpp",        Lang::Cpp        },
-        { "python",     Lang::Python     },
-        { "typescript", Lang::TypeScript },
-        { "go",         Lang::Go         },
-        { "rust",       Lang::Rust       },
-        { "swift",      Lang::Swift      },
-        { "objc",       Lang::ObjC       },
-        { "javascript", Lang::JavaScript },
-        { "bash",       Lang::Bash       },
-        { "java",       Lang::Java       },
-        { "ruby",       Lang::Ruby       },
-        { "csharp",     Lang::CSharp     },
-        { "c",          Lang::C          },
-        { "php",        Lang::Php        },
-        { "lua",        Lang::Lua        },
-        { "elixir",     Lang::Elixir     },
-        { "dart",       Lang::Dart       },
-        { "kotlin",     Lang::Kotlin     },
-    } };
-    for( const Row& r : kMap )
+    for( const LangTokenRow& r : kLangTokenRows )
     {
         if( r.name == tok )
         {
@@ -112,11 +119,48 @@ inline bool langFromToken( std::string_view tok, Lang& out ) noexcept
     return false;
 }
 
-// file extension → Lang, mirroring ingest.cpp's kLangTable so we can bucket a finding's file by
-// language WITHOUT reaching into ingest internals (lookupLang is not exported). Kept in sync by hand;
-// a header (.h) is treated as Cpp here (the same conservative choice ingest.cpp's kLangTable makes —
-// `.h` ownership is inherently ambiguous, see model.h's Lang-enum comment) — documented degrade: an
-// ObjC .h rule may not match, prefer .m/.mm fixtures for ObjC. `.c` (L3) is its OWN language, NOT Cpp.
+// file extension → Lang, mirroring ingest_crawl.h's kLangTable so we can bucket a finding's file by language WITHOUT
+// reaching into ingest internals (lookupLang is not exported, and kLangTable names the tree-sitter grammars).
+//
+// THE MIRROR IS CHECKED, NOT KEPT BY HAND. ingest_crawl.h asserts, in the one translation unit that sees both tables,
+// that every CODE row of kLangTable appears here with the same Lang, that no data/doc row does, and that every row here
+// names a kLangTable row. That check found the table five CODE extensions short of the crawl on main: `.metal`, `.cu`
+// and `.cuh` (C++ on the C++ and CUDA grammars) and `.pyi` and `.phtml` (Python and PHP). The index parses all five
+// under their language, and langOfPath called them Unknown. So a `language: cpp` rule silently dropped every match in a
+// CUDA or Metal file, `--deps`/`--arch` left them out of the dependency denominator, --nonlocal-state left `.pyi` stubs
+// and Metal/CUDA state unanalysed while never naming them unanalysed, and a `.phtml` corpus was not disclosed as PHP.
+// atoms.h carried a private workaround for the first three. The check also found `.hxx` HERE and not in the crawl: the
+// crawl admits no `.hxx` file, so no indexed path could ever reach that row, and it is gone.
+//
+// A header (.h) is Cpp here, the same conservative choice kLangTable makes (`.h` ownership is inherently ambiguous; see
+// model.h's Lang-enum comment). Documented degrade: an ObjC .h rule may not match, so prefer .m/.mm fixtures for ObjC.
+// `.c` (L3) is its OWN language, NOT Cpp.
+struct LintExtRow
+{
+    std::string_view ext;
+    Lang             lang;
+};
+inline constexpr LintExtRow kLintExtRows[] = {
+    { ".cpp", Lang::Cpp }, { ".cc", Lang::Cpp }, { ".cxx", Lang::Cpp }, { ".metal", Lang::Cpp }, { ".cu", Lang::Cpp }, { ".cuh", Lang::Cpp },
+    { ".h", Lang::Cpp }, { ".hpp", Lang::Cpp }, { ".hh", Lang::Cpp }, { ".c", Lang::C },
+    { ".py", Lang::Python }, { ".pyi", Lang::Python },
+    { ".go", Lang::Go },
+    { ".rs", Lang::Rust },
+    { ".ts", Lang::TypeScript }, { ".tsx", Lang::TypeScript }, { ".mts", Lang::TypeScript }, { ".cts", Lang::TypeScript },
+    { ".swift", Lang::Swift },
+    { ".m", Lang::ObjC }, { ".mm", Lang::ObjC },
+    { ".js", Lang::JavaScript }, { ".jsx", Lang::JavaScript }, { ".mjs", Lang::JavaScript }, { ".cjs", Lang::JavaScript },
+    { ".sh", Lang::Bash }, { ".bash", Lang::Bash }, { ".zsh", Lang::Bash },
+    { ".java", Lang::Java },
+    { ".rb", Lang::Ruby },
+    { ".cs", Lang::CSharp },
+    { ".php", Lang::Php }, { ".phtml", Lang::Php },
+    { ".lua", Lang::Lua },
+    { ".ex", Lang::Elixir }, { ".exs", Lang::Elixir },
+    { ".dart", Lang::Dart },
+    { ".kt", Lang::Kotlin },
+};
+
 /// Classify a path by its supported extension, returning Unknown when no extension matches.
 inline Lang langOfPath( std::string_view path ) noexcept
 {
@@ -131,28 +175,7 @@ inline Lang langOfPath( std::string_view path ) noexcept
         c = static_cast<char>( std::tolower( static_cast<unsigned char>( c ) ) );
     }
 
-    struct Row { std::string_view ext; Lang lang; };
-    static const std::array<Row, 34> kExt = { {
-        { ".cpp", Lang::Cpp }, { ".cc", Lang::Cpp }, { ".cxx", Lang::Cpp },
-        { ".h", Lang::Cpp }, { ".hpp", Lang::Cpp }, { ".hh", Lang::Cpp }, { ".hxx", Lang::Cpp }, { ".c", Lang::C },
-        { ".py", Lang::Python },
-        { ".go", Lang::Go },
-        { ".rs", Lang::Rust },
-        { ".ts", Lang::TypeScript }, { ".tsx", Lang::TypeScript }, { ".mts", Lang::TypeScript }, { ".cts", Lang::TypeScript },
-        { ".swift", Lang::Swift },
-        { ".m", Lang::ObjC }, { ".mm", Lang::ObjC },
-        { ".js", Lang::JavaScript }, { ".jsx", Lang::JavaScript }, { ".mjs", Lang::JavaScript }, { ".cjs", Lang::JavaScript },
-        { ".sh", Lang::Bash }, { ".bash", Lang::Bash }, { ".zsh", Lang::Bash },
-        { ".java", Lang::Java },
-        { ".rb", Lang::Ruby },
-        { ".cs", Lang::CSharp },
-        { ".php", Lang::Php },
-        { ".lua", Lang::Lua },
-        { ".ex", Lang::Elixir }, { ".exs", Lang::Elixir },
-        { ".dart", Lang::Dart },
-        { ".kt", Lang::Kotlin },
-    } };
-    for( const Row& r : kExt )
+    for( const LintExtRow& r : kLintExtRows )
     {
         if( r.ext == ext )
         {

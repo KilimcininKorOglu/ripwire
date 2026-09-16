@@ -117,7 +117,8 @@ inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::Kotlin
 // The canonical home for this switch: previously duplicated privately in htmlexport.h, moved here so a THIRD
 // caller (naming-consistency's per-language vote groups) reuses it instead of growing a second copy.
 /// Return the stable short output label for a language, or "?" for an unknown value.
-inline const char* langTag( Lang l ) noexcept
+/// constexpr so main.cpp's registration asserts can ask it about the value one past kLangCount.
+inline constexpr const char* langTag( Lang l ) noexcept
 {
     switch( l )
     {
@@ -145,6 +146,26 @@ inline const char* langTag( Lang l ) noexcept
         case Lang::Kotlin:     return "kt";
         default:               return "?";
     }
+}
+
+// Is this a CODE language (functions, calls, state), as opposed to a data or document format or no language at all?
+// It is the ONE declared exemption the per-language registration checks read: main.cpp's asserts and ingest_crawl.h's
+// kLangTable mirror check. Appending a Lang used to mean remembering five tables in four files, and three shipped or
+// nearly shipped one language short (02f798e3 Dart, 9418e35e five unanalyzed languages, PR #233's `.gd` row).
+// There is no `default:` here on purpose: a new enumerator is a -Wswitch error on this switch, so whether it is code is
+// a decision, and every table the checks read then has to agree with that decision at compile time.
+inline constexpr bool isCodeLang( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Cpp: case Lang::Python: case Lang::TypeScript: case Lang::Go: case Lang::Rust: case Lang::Swift:
+        case Lang::ObjC: case Lang::JavaScript: case Lang::Bash: case Lang::Java: case Lang::Ruby: case Lang::CSharp:
+        case Lang::C: case Lang::Php: case Lang::Lua: case Lang::Elixir: case Lang::Dart: case Lang::Kotlin:
+            return true;
+        case Lang::Markdown: case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Unknown:
+            return false;
+    }
+    return false;   // a byte past the enum (a corrupt cache value) is not a language
 }
 
 // Call-site RECEIVER classification (P2-D one-hop type narrowing). Captured at ingest from the AST shape

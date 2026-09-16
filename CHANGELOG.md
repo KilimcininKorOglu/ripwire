@@ -15,6 +15,35 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — five code extensions the index parses were no language at all to the dependency, state and lint verbs
+
+The crawl indexes `.metal`, `.cu` and `.cuh` as C++, `.pyi` as Python and `.phtml` as PHP. `langOfPath`
+(`src/lintrules.h`) is the verb-time classifier that `--deps`, `--arch`, co-change's `dep_capable=`, `--nonlocal-state`,
+`--quality-panel`, the lint catalog and user `--lint-rules` use to bucket a file. It kept its own extension table "in sync
+by hand", that table had drifted, and it called those five extensions Unknown. Every one of those verbs quietly left the
+files out. `includeLangOf` (`src/resolve.h`) had the same four C++ and Python gaps, so even a counted file could not
+resolve its includes.
+
+Both tables now know all five, and the crawl's table and `langOfPath`'s are asserted equal at compile time (below).
+`test/deplangscheck.sh` arm (G) requires every dependency-counted extension to resolve too. It went red with only the
+classifier rows added, naming exactly `.cu`, `.cuh`, `.metal` and `.pyi`, which is why the resolver rows land in the same
+change. `.hxx` left both tables: the crawl admits no `.hxx` file, so neither row could ever be reached.
+
+Measured by comparing stdout and exit code, `--no-cache`, between the base binary (`f8e6087c`) and this change, over all
+162 fixture corpora under `test/` and eight verbs: 1,296 runs. 14 differ. All 14 are on the six corpora that hold one of
+the extensions, and only on `--deps`, `--nonlocal-state` and `--quality-panel`. The map, `--json`, `--lint`,
+`--lint-catalog` and `--pack-signatures` are byte-identical everywhere.
+- `test/cudafix` `--nonlocal-state`: `cells="0" functions="0"` became `cells="5" functions="4"`. The CUDA kernel's
+  `rk_scaleTable`, read through `rk_clampScale`, was invisible.
+- `test/cudafix` `--deps`: `dep_files="1"` became `3`, and the kernel's include of `reduceShared.cuh` now counts
+  (`afferent` 1 → 2, `transitive` 1 → 2). `test/metalfix` gains the `.metal` shader's row with its two includes.
+  `test/phpfix`, `pyshapefix`, `stdqualfix` and `macroreparsefix` each gain the one file their denominator was missing.
+- `test/phpfix` `--nonlocal-state`: `unanalyzed_files="4"` became `5`. The `.phtml` view is disclosed as unanalysed PHP.
+- A user rule with `language: cpp` run over a `.metal` shader and a `.cu` kernel reported `findings="0"`. It now reports 16.
+
+Dart stays outside the dependency denominator, now by a named case instead of a `default:`. Dart has no import capture,
+and a two-file probe showed `--deps` printing no row for `import 'util.dart';`.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

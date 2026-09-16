@@ -535,6 +535,61 @@ struct MainDispatch
 #include "verbs_report.h"
 #include "verbs_grep.h"
 
+// ── LANGUAGE-REGISTRATION COMPLETENESS, at compile time ──────────────────────────────────────────────────────────
+// Appending a Lang is not one table. 02f798e3 left Dart out of kUnanalyzedLangs, kCatalogLangs and langFromToken's map;
+// 9418e35e found five languages the unanalyzed disclosure never named; PR #233 nearly shipped without its `.gd`
+// langOfPath row. Each stayed one language short because nothing but a gate run on the right fixture could notice.
+// This is the one translation unit that includes every one of those tables, so the checks live here. Each returns the
+// FIRST Lang index that is wrong and kLangCount when clean, so the compiler's note names the language
+// ("'21 == 23'" is Dart). A value a zero-filled row can also produce, such as an empty string, would pass the defect.
+// model.h's isCodeLang is the one declared exemption: a data or document format joins none of these tables.
+// ingest_crawl.h holds the sibling check for langOfPath's extension table, which needs kLangTable.
+namespace rw::langreg
+{
+// every code language is either analysed by --nonlocal-state or named by it as unanalysed, never both and never neither
+constexpr std::size_t firstLangNonlocalMisclassifies() noexcept
+{
+    for( std::size_t index = 0; index < kLangCount; ++index )
+    {
+        const Lang lang         = Lang( index );
+        const bool isAnalyzed   = std::ranges::find( nonlocal::kAnalyzedLangs, lang ) != nonlocal::kAnalyzedLangs.end();
+        const bool isUnanalyzed = std::ranges::find( nonlocal::kUnanalyzedLangs, lang, &nonlocal::UnanalyzedLang::lang ) != nonlocal::kUnanalyzedLangs.end();
+        if( isCodeLang( lang ) ? isAnalyzed == isUnanalyzed : ( isAnalyzed || isUnanalyzed ) )
+        {
+            return index;
+        }
+    }
+    return kLangCount;
+}
+
+// every code language is spellable in a rule's `language:`, carried by the lint catalog and reachable by langOfPath;
+// a data or document format is in none of the three
+constexpr std::size_t firstLangLintCannotName() noexcept
+{
+    for( std::size_t index = 0; index < kLangCount; ++index )
+    {
+        const Lang lang      = Lang( index );
+        const bool hasToken  = std::ranges::find( kLangTokenRows, lang, &LangTokenRow::lang ) != std::end( kLangTokenRows );
+        const bool isCatalog = std::ranges::find( lintcatalog::kCatalogLangs, lang ) != lintcatalog::kCatalogLangs.end();
+        const bool hasExt    = std::ranges::find( kLintExtRows, lang, &LintExtRow::lang ) != std::end( kLintExtRows );
+        if( isCodeLang( lang ) ? !( hasToken && isCatalog && hasExt ) : ( hasToken || isCatalog || hasExt ) )
+        {
+            return index;
+        }
+    }
+    return kLangCount;
+}
+} // namespace rw::langreg
+
+static_assert( rw::langreg::firstLangNonlocalMisclassifies() == rw::kLangCount,
+               "a code Lang is in neither (or both) of nonlocal::kAnalyzedLangs / kUnanalyzedLangs, or a data Lang is in one — "
+               "--nonlocal-state's unanalyzed_langs= disclosure would be silent about it" );
+static_assert( rw::langreg::firstLangLintCannotName() == rw::kLangCount,
+               "a code Lang is missing from lintrules.h kLangTokenRows, lintcatalog::kCatalogLangs or lintrules.h kLintExtRows "
+               "(or a data Lang is in one)" );
+static_assert( std::string_view( rw::langTag( rw::Lang( rw::kLangCount ) ) ) == "?",
+               "an enumerator was appended after the one kLangCount names — move kLangCount to the new last enumerator" );
+
 namespace
 {
 

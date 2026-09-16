@@ -212,6 +212,51 @@ static_assert( everyMarkdownGrammarExtHasARow(),
                "every docparse::kMarkdownGrammarExts entry needs a kLangTable row on Lang::Markdown — "
                "a prose format admitted by one and not the other is indexed nowhere while every lens calls it prose" );
 
+// SIBLING-COMPLETENESS GUARD #2, the same idea for the verb-time language classifier. lintrules.h's langOfPath buckets
+// an indexed file by language for --lint-rules, --deps/--arch, co-change's dep_capable=, --nonlocal-state and the lint
+// catalog, from its own kLintExtRows table. That table used to be "kept in sync by hand", and hand sync is how PR #233
+// lost its `.gd` row. This is the one translation unit that sees both tables, so the sync is asserted here:
+//   - every kLangTable row carries an extension and a grammar (a zero-filled tail row has neither);
+//   - a CODE row (model.h isCodeLang) is in kLintExtRows with the SAME Lang, and a data/doc row is not;
+//   - every kLintExtRows row names a kLangTable row with the same Lang (a lint row the crawl never admits is dead).
+// Each check returns the first offending ROW INDEX, and the table's size when clean. It never returns an extension
+// string: the first draft did, with "" for clean, and a zero-filled row's extension is also "", so the check passed
+// the very defect it exists for. The index is what the compiler's note prints ("'41 == 48'").
+constexpr std::size_t firstCrawlRowLangOfPathMisbuckets() noexcept
+{
+    for( std::size_t index = 0; index < kLangTable.size(); ++index )
+    {
+        const LangEntry&  row  = kLangTable[index];
+        const LintExtRow* lint = findByField( kLintExtRows, &LintExtRow::ext, row.ext );
+        const bool isMirrored  = lint != nullptr && lint->lang == row.lang;
+        if( row.ext.empty() || row.grammar == nullptr || ( isCodeLang( row.lang ) ? !isMirrored : lint != nullptr ) )
+        {
+            return index;
+        }
+    }
+    return kLangTable.size();
+}
+
+constexpr std::size_t firstLangOfPathRowTheCrawlNeverAdmits() noexcept
+{
+    for( std::size_t index = 0; index < std::size( kLintExtRows ); ++index )
+    {
+        const LintExtRow& row   = kLintExtRows[index];
+        const LangEntry*  crawl = findByField( kLangTable, &LangEntry::ext, row.ext );
+        if( crawl == nullptr || crawl->lang != row.lang )
+        {
+            return index;
+        }
+    }
+    return std::size( kLintExtRows );
+}
+
+static_assert( firstCrawlRowLangOfPathMisbuckets() == kLangTable.size(),
+               "a kLangTable row is empty, or a CODE row is missing from lintrules.h kLintExtRows (or names another Lang), "
+               "or a data/doc row is in it — langOfPath would call an indexed file the wrong language" );
+static_assert( firstLangOfPathRowTheCrawlNeverAdmits() == std::size( kLintExtRows ),
+               "a lintrules.h kLintExtRows row names an extension kLangTable does not admit under the same Lang" );
+
 const LangEntry* lookupLang( std::string_view ext ) noexcept
 {
     return findByField( kLangTable, &LangEntry::ext, ext );
