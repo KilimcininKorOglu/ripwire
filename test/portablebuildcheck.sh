@@ -310,11 +310,11 @@ else:
         return m.group( 1 ).strip() if m else ''
     def firstStep( pred ):
         return next( ( i for i, s in enumerate( steps ) if pred( s ) ), -1 )
-    fires     = lambda s: stepIf( s ) in ( '', '${{ matrix.deployment_target }}' )
+    fires     = lambda s: stepIf( s ) in ( '', "runner.os == 'macOS'", '${{ matrix.deployment_target }}' )
     exportAt  = firstStep( lambda s: 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}' in s and '$GITHUB_ENV' in s and fires( s ) )
     buildAt   = firstStep( lambda s: 'cmake -S' in s or 'scripts/pgobuild.sh' in s )
     stagedAt  = firstStep( lambda s: 'cp build_pgo/ripwire build/ripwire' in s )
-    minosAt   = firstStep( lambda s: 'otool -l build/ripwire' in s and 'minos ${{ matrix.deployment_target }}' in s and fires( s ) )
+    minosAt   = firstStep( lambda s: 'otool -l build/ripwire' in s and '${{ matrix.deployment_target }}' in s and fires( s ) )
     packageAt = firstStep( lambda s: s.startswith( 'name: Package' ) )
     override  = [ v for v in re.findall( r'CMAKE_OSX_DEPLOYMENT_TARGET=(\S+)', leg ) if v != MINOS ]
     if exportAt < 0:
@@ -326,7 +326,7 @@ else:
     else:
         print( 'PASS leg %s: step %d exports deployment_target as MACOSX_DEPLOYMENT_TARGET before the first configure (step %d), and no -D overrides it' % ( name, exportAt, buildAt ) )
     if minosAt < 0:
-        print( 'FAIL leg %s: no step reads the minimum macOS back off build/ripwire (otool -l ... minos ${{ matrix.deployment_target }}) — the pin is trusted, not checked' % name )
+        print( 'FAIL leg %s: no step reads the minimum macOS back off build/ripwire (otool -l build/ripwire against ${{ matrix.deployment_target }}) — the pin is trusted, not checked' % name )
     elif not ( stagedAt >= 0 and packageAt >= 0 and stagedAt < minosAt < packageAt ):
         print( 'FAIL leg %s: the otool minos step (step %d) is not between the PGO staging (step %d) and Package (step %d) — it reads a binary other than the one shipped' % ( name, minosAt, stagedAt, packageAt ) )
     else:
@@ -371,8 +371,11 @@ while IFS= read -r row; do
 done <<<"$armVerdict"
 printf '%s\n' "$armVerdict" | grep -q '^DONE$' \
     || no "#2i the release.yml/ci.yml verdict never finished — no evidence either way: $( printf '%s' "$armVerdict" | tail -3 )"
-# The controls: each mutation must TAKE (the copy differs) and must turn exactly its own row red.
-python3 - "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml" <<'PY'
+# The controls: each mutation must be WRITTEN, must TAKE (the copy differs), and must turn exactly its own row red — one
+# FAIL line, the one named. A writer that crashed, a copy that did not change, a verdict that crashed or refused for some
+# other reason: each is its own FAIL naming what happened, never a PASS and never the "not refused" row.
+if ! python3 - "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml" \
+        >"$TMP/mutate.log" 2>&1 <<'PY'
 import re, sys
 rel, relOut, ci, ciOut = sys.argv[ 1: ]
 text = open( rel ).read()
@@ -380,19 +383,35 @@ open( relOut, 'w' ).write( re.sub( r'\n      - name: [^\n]*\n(?:(?!\n      - )[\
 text = open( ci ).read()
 open( ciOut, 'w' ).write( re.sub( r"(ASAN_OPTIONS:[^\n]*matrix\.os[ \t]*==[ \t]*')macos-[^']*'", r"\1macos-14'", text, count=1 ) )
 PY
-if cmp -s "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml"; then
-    no "#2i control: removing the otool minos step did not take — the copy is byte-identical to release.yml, nothing was checked"
-elif python3 "$TMP/armverdict.py" "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" 2>&1 | grep -q '^FAIL leg .*no step reads the minimum macOS back off build/ripwire'; then
-    ok "#2i control: release.yml without the otool minos step is refused by name"
+then
+    no "#2i control: the mutation writer failed, so neither control ran: $( tail -3 "$TMP/mutate.log" )"
 else
-    no "#2i control: release.yml without the otool minos step was NOT refused — the minos row cannot fail"
-fi
-if cmp -s "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml"; then
-    no "#2i control: re-pointing ASAN_OPTIONS at macos-14 did not take — the copy is byte-identical to ci.yml, nothing was checked"
-elif python3 "$TMP/armverdict.py" "$ROOT/.github/workflows/release.yml" "$TMP/ci-oldasan.yml" 2>&1 | grep -q '^FAIL ci.yml: .*matrix.os conditions name macos-14'; then
-    ok "#2i control: a ci.yml ASAN_OPTIONS condition still naming macos-14 is refused by name"
-else
-    no "#2i control: a ci.yml ASAN_OPTIONS condition naming macos-14 was NOT refused — a half-done runner move passes"
+    # armControl LABEL ORIGINAL MUTANT RELEASE_ARG CI_ARG EXPECTED_FAIL_REGEX
+    armControl(){
+        local label="$1" orig="$2" mutant="$3" relArg="$4" ciArg="$5" want="$6" out fails
+        if [ ! -s "$mutant" ]; then
+            no "#2i control ($label): the mutated copy $mutant was not written — nothing was checked"
+            return 0
+        fi
+        if cmp -s "$orig" "$mutant"; then
+            no "#2i control ($label): the mutation did not take — the copy is byte-identical to $( basename "$orig" ), nothing was checked"
+            return 0
+        fi
+        out="$( python3 "$TMP/armverdict.py" "$relArg" "$ciArg" 2>&1 )"
+        fails="$( printf '%s\n' "$out" | grep -c '^FAIL ' )"
+        if ! printf '%s\n' "$out" | grep -q '^DONE$'; then
+            no "#2i control ($label): the verdict never finished on the mutant — no evidence either way: $( printf '%s' "$out" | tail -3 )"
+        elif [ "$fails" -eq 1 ] && printf '%s\n' "$out" | grep -qE "$want"; then
+            ok "#2i control ($label): refused by name, and by that row alone"
+        else
+            no "#2i control ($label): expected exactly one FAIL matching '$want', got $fails: $( printf '%s\n' "$out" | grep '^FAIL ' | head -3 | tr '\n' ';' )"
+        fi
+        return 0
+    }
+    armControl "release.yml without the otool minos step" "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml" \
+               "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" '^FAIL leg .*no step reads the minimum macOS back off build/ripwire'
+    armControl "ci.yml ASAN_OPTIONS condition back on macos-14" "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml" \
+               "$ROOT/.github/workflows/release.yml" "$TMP/ci-oldasan.yml" '^FAIL ci\.yml: .*matrix\.os conditions name macos-14'
 fi
 
 # ── #3: RIPWIRE_NATIVE=ON stays opt-in and unaffected by the pretend-Linux hook ─────────────────────────

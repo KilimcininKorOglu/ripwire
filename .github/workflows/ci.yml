@@ -259,9 +259,20 @@ jobs:
 
       # The front end is recorded per leg so a log reader never has to infer it from the job name alone —
       # a `cc: clang` leg whose CMake cache says GNU is a broken matrix, not a passing run.
+      # A macOS leg also proves the release toolchain pin reached it. The job env's matrix.os condition falls back to an
+      # empty string on any other runner label, so a runner bump without the condition would otherwise build silently
+      # with the image's default Xcode at the runner's own minimum macOS.
       - name: Confirm the front end this leg actually configured with
         run: |
           grep -h 'CMAKE_CXX_COMPILER_ID\|CMAKE_CXX_COMPILER_VERSION' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+          if [ "$RUNNER_OS" = macOS ]; then
+            if [ -z "$DEVELOPER_DIR" ] || [ -z "$MACOSX_DEPLOYMENT_TARGET" ] \
+               || ! grep -qx "CMAKE_OSX_DEPLOYMENT_TARGET:STRING=$MACOSX_DEPLOYMENT_TARGET" build/CMakeCache.txt; then
+              echo "ci: macOS leg without the release toolchain pin: DEVELOPER_DIR='$DEVELOPER_DIR' MACOSX_DEPLOYMENT_TARGET='$MACOSX_DEPLOYMENT_TARGET' cache='$( grep '^CMAKE_OSX_DEPLOYMENT_TARGET:' build/CMakeCache.txt )'" >&2
+              exit 1
+            fi
+            echo "DEVELOPER_DIR=$DEVELOPER_DIR MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET (in CMakeCache.txt)"
+          fi
 
       - name: Build
         run: cmake --build build -j
@@ -535,9 +546,16 @@ jobs:
           CXX: clang++
         run: cmake -S . -B asan -DRIPWIRE_ASAN=ON
 
+      # Fails, as the build matrix's front-end step does, when the release toolchain pin did not reach this leg.
       - name: Configure (G1 sanitizer stack)
         if: runner.os == 'macOS'
-        run: cmake -S . -B asan -DRIPWIRE_ASAN=ON
+        run: |
+          cmake -S . -B asan -DRIPWIRE_ASAN=ON
+          if [ -z "$DEVELOPER_DIR" ] || [ -z "$MACOSX_DEPLOYMENT_TARGET" ] \
+             || ! grep -qx "CMAKE_OSX_DEPLOYMENT_TARGET:STRING=$MACOSX_DEPLOYMENT_TARGET" asan/CMakeCache.txt; then
+            echo "ci: macOS asan leg without the release toolchain pin: DEVELOPER_DIR='$DEVELOPER_DIR' MACOSX_DEPLOYMENT_TARGET='$MACOSX_DEPLOYMENT_TARGET' cache='$( grep '^CMAKE_OSX_DEPLOYMENT_TARGET:' asan/CMakeCache.txt )'" >&2
+            exit 1
+          fi
 
       - name: Build
         run: cmake --build asan -j

@@ -86,25 +86,37 @@ jobs:
           fi
 
       # The leg's pinned minimum macOS (matrix.deployment_target — see the macos-arm64 entry), exported so both of
-      # pgobuild's configures and every clang invocation see it. A leg without the key never gets the variable at all,
-      # not even as an empty string.
+      # pgobuild's configures and every clang invocation see it. A macOS leg without the key FAILS here instead of
+      # building at whatever the runner's macOS implies. The Linux legs skip the step and never see the variable.
       - name: Pin the macOS deployment target
-        if: ${{ matrix.deployment_target }}
-        run: echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}" >> "$GITHUB_ENV"
+        if: runner.os == 'macOS'
+        run: |
+          if [ -z '${{ matrix.deployment_target }}' ]; then
+            echo "release: macOS leg ${{ matrix.name }} sets no deployment_target, so it would ship at the runner's macOS" >&2
+            exit 1
+          fi
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}" >> "$GITHUB_ENV"
 
       # PGO needs one toolchain end to end: the instrumented binary's profile runtime writes a .profraw version that
       # only the same LLVM's llvm-profdata merges and its clang reads. Both resolve through DEVELOPER_DIR; this step
-      # records them for the log and fails if llvm-profdata is not the pinned Xcode's.
+      # records them for the log and fails when DEVELOPER_DIR is empty or either tool lives outside the pinned Xcode.
       - name: Record the Xcode, compiler and llvm-profdata this leg builds with
         if: runner.os == 'macOS'
         run: |
+          if [ -z "$DEVELOPER_DIR" ]; then
+            echo "release: macOS leg ${{ matrix.name }} has no DEVELOPER_DIR, so the image's default Xcode would build it" >&2
+            exit 1
+          fi
           xcodebuild -version
           c++ --version
-          xcrun --find llvm-profdata
-          case "$( xcrun --find llvm-profdata )" in
-            "$DEVELOPER_DIR"/*) ;;
-            *) echo "llvm-profdata is not under DEVELOPER_DIR=$DEVELOPER_DIR" >&2; exit 1 ;;
-          esac
+          for tool in clang++ llvm-profdata; do
+            path="$( xcrun --find "$tool" )" || { echo "release: xcrun cannot find $tool under DEVELOPER_DIR=$DEVELOPER_DIR" >&2; exit 1; }
+            echo "$tool: $path"
+            case "$path" in
+              "$DEVELOPER_DIR"/*) ;;
+              *) echo "release: $tool resolves to $path, outside DEVELOPER_DIR=$DEVELOPER_DIR" >&2; exit 1 ;;
+            esac
+          done
 
       - name: Configure (portable — no RIPWIRE_NATIVE, this binary ships to other machines)
         if: ${{ !matrix.pgo }}
@@ -145,12 +157,17 @@ jobs:
           ./build/ripwire --version
           ./build/ripwire --version | grep -q 'emit=std::print'
 
-      # The deployment-target pin, read off the shipped binary rather than trusted from the environment.
+      # The deployment-target pin, read off the shipped binary rather than trusted from the environment. The comparison
+      # is an exact string match, so a missing or unreadable LC_BUILD_VERSION, two of them, or any other minimum fails.
       - name: The shipped binary's minimum macOS is the pinned one
-        if: ${{ matrix.deployment_target }}
+        if: runner.os == 'macOS'
         run: |
-          otool -l build/ripwire | grep -E '^ *minos '
-          otool -l build/ripwire | grep -qE "^ *minos ${{ matrix.deployment_target }}$"
+          minos="$( otool -l build/ripwire | awk '$1 == "minos" { print $2 }' )"
+          echo "build/ripwire: minos '$minos', pinned '${{ matrix.deployment_target }}'"
+          if [ -z "$minos" ] || [ "$minos" != '${{ matrix.deployment_target }}' ]; then
+            echo "release: the shipped binary's minimum macOS '$minos' is not the pinned '${{ matrix.deployment_target }}'" >&2
+            exit 1
+          fi
 
       - name: Smoke-test the freshly built binary
         run: |
