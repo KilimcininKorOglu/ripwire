@@ -2517,6 +2517,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // [TYPE] cut. Only when the var has a single unambiguous in-scope binding AND that type defines `m`
         // (canonByName, defs only); otherwise narrowed stays false and we fall through to the name-based fallback. Skipped when the
         // call was already pinned canonically or by Rule 1 (those are the more specific / already-resolved signals).
+        const bool narrowedBeforeReceiverRules = narrowed;
         if( !scipPinned && !canonical && !narrowed )
         {
             narrowed = narrowTo( narrower.rule2RecvVarType( r ), r, cand );
@@ -2541,6 +2542,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             narrowed = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
         }
+        // the receiver's TYPE chose the candidates: Rule 2, 2c or 2b fired on this site (read by the S6-C tie-break)
+        const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;
         // P2-D Rule 3 (import/include-based file narrow): when the name is ambiguous (K same-name defs) but the
         // caller's file #includes / imports EXACTLY ONE file that defines it, resolve to that file's def(s) and
         // DROP the rest — BEFORE the bare-name spray. Sound with no type info: it consumes only the file→file
@@ -2855,14 +2858,29 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // anti-evidence — it re-mints exactly the wrong pin Rule 1's bareCish guard stopped making when the
         // receiver capture widened (the sixth `recv`-ignorant site, found RED by chainguardcheck arm (a):
         // `this->m_pool.run()` pinned to App::run through THIS block after Rule 1 refused). The honest split
-        // stands instead. ThisObj/NamedVar keep the tie-break: for them the scope/locality prior is not
-        // contradicted by the receiver (`this->` IS the enclosing class; a typed var already narrowed above).
+        // stands instead. ThisObj keeps the whole tie-break: `this->` IS the enclosing class.
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
+        // A NamedVar receiver keeps the tie-break only up to the FILE segment unless a receiver rule (2, 2c, 2b)
+        // established its type (2026-09-16, test/localitycheck.sh arms 5-9). An untyped local, a member Rule 2b
+        // cannot read, a typed variable whose type defines no such method: the receiver names SOME object, and
+        // nothing says it is one of the caller's class — so the caller's own class winning the scope-segment credit
+        // is the same anti-evidence as above. It was the premise "a typed var already narrowed above" that let it
+        // through, and a receiver no rule typed never narrowed. Measured with --pin-census (base vs this change):
+        // rocksdb 121 sites leave a locality pin for the split, a private C++ corpus 71, django 72, rails 145, src/
+        // vue-core and go/net 0; read samples: 14 of 14 rocksdb pins and 14 of 16 private ones were wrong, mostly
+        // delegation (`rep_->Name()` inside `Wrapper::Name`). The file and directory credit stays, and dropping the
+        // whole tie-break instead moved no target on any of those seven corpora: it only relabelled the tiers whose
+        // one competitor is the caller itself (scored zero below) from `locality` to `unique`, losing lpin=.
+        // STATED FLOOR, not closed here: tier 1 above still admits same-file candidates alone, so a delegation
+        // whose true target lives in another file lands on a same-file namesake before this block ever runs.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
          && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
+            // the credit an untyped NamedVar receiver may earn: the caller's `path::` — the path localityKeyOf was built from
+            const std::size_t localityCap = ( r.recv == RecvKind::NamedVar && !receiverTypeNarrowed )
+                                          ? ing.files[ ing.symbols[ r.fromSymbol ].fileId ].size() + 2 : std::numeric_limits<std::size_t>::max();
             // memoize each survivor's shared-locality ONCE (was computed twice: once for bestShare, once inside the
             // stable_partition predicate). locShare[i] parallels tier[i]; the compaction below reads the memo.
             locShare.clear();
@@ -2890,7 +2908,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 // another — rubygems' composed_set.rb). Widening tier 1 past the caller would invent a
                 // cross-file edge the SAME-FILE tier already outranked, and `other.each` on a second instance
                 // of the caller's own class is a genuine self-loop, so the honest nothing stands.
-                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : sharedLocality( callerCanon, g.localityKey[c] );   // path-scoped even for a free function
+                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : std::min( sharedLocality( callerCanon, g.localityKey[c] ), localityCap );   // path-scoped even for a free function
                 locShare.push_back( sh );
                 if( sh > bestShare )
                 {
