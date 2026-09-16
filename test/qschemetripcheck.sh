@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
+#   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
+#   Both snapshot and delta consult the same set; extraction identity is unchanged.
 # 2026-09-13, INTERNAL LINKAGE (test/decltodefcheck.sh arm B2, CodeRabbit on #139): parserVer and its quality mirror
 #   move 95 -> 96 — every C/C++ def carries a syntactic `internalLinkage` bit (anonymous namespace at any depth, or
 #   a namespace-scope `static`), and the decl-to-def widening drops such a definition for another file's declaration.

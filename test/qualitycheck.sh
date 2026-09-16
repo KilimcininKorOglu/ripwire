@@ -249,5 +249,177 @@ else
     printf '  SKIP  T0.1 auto-baseline-vs-HEAD (git not available)\n'
 fi
 
+# Python virtual hooks (#228): deleting a redundant direct caller must not make an override dead
+# while an inherited self/cls dispatch still reaches it. The unrelated class is the negative control.
+if python3 - "$BIN" "$WORK/python-dispatch" <<'PYDISPATCH'
+import pathlib
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+binary, directory = sys.argv[1:]
+root = pathlib.Path(directory)
+root.mkdir()
+(root / "base.py").write_text("""class Base:
+    @classmethod
+    def setup(
+        # Parameters are AST facts even when comments precede the receiver.
+        cls,
+    ):
+        return cls.create_test_objects()
+
+    @classmethod
+    def create_test_objects(cls):
+        return -1
+
+    def exercise(
+        # A signature-text prefix check would miss this receiver.
+        self,
+    ):
+        return self.detail_url_kwargs()
+
+    def detail_url_kwargs(self):
+        return {"pk": -1}
+""")
+(root / "middle.py").write_text("from base import Base\n\nclass Middle(Base):\n    pass\n")
+for index in range(30):
+    directory = root / f"app_{index}"
+    directory.mkdir()
+    (directory / "hooks.py").write_text(f"""from middle import Middle
+
+class Child{index}(Middle):
+    @classmethod
+    def create_test_objects(cls):
+        return {index}
+
+    def detail_url_kwargs(self):
+        return {{"pk": {index}}}
+
+    @classmethod
+    def redundant_setup(cls):
+        return cls.create_test_objects()
+
+    def redundant_exercise(self):
+        return self.detail_url_kwargs()
+""")
+control = root / "unrelated.py"
+control.write_text("""class Unrelated:
+    def detail_url_kwargs(self):
+        return {"pk": 900}
+
+    def only_caller(self):
+        return self.detail_url_kwargs()
+""")
+
+sibling = root / "siblings.py"
+sibling.write_text("""class Parent:
+    pass
+
+class Left(Parent):
+    def dispatch(self):
+        return self.hook()
+
+    def hook(self):
+        return 1
+
+class Right(Parent):
+    def hook(self):
+        return 2
+
+    def redundant(self):
+        return self.hook()
+""")
+
+(root / "nested_pkg").mkdir()
+(root / "nested_pkg/parent.py").write_text("""class NestedParent:
+    def wrapper(self):
+        def inner(cls):
+            return cls.hook()
+        return inner
+
+    def second_parameter(other, cls):
+        return cls.hook()
+""")
+nested = root / "nested_child.py"
+nested.write_text("""from nested_pkg.parent import NestedParent
+
+class NestedChild(NestedParent):
+    def hook(self):
+        return 3
+
+    def redundant(self):
+        return self.hook()
+""")
+
+def git(*args):
+    return subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                           "-c", "core.hooksPath=/dev/null", *args], cwd=root,
+                          check=True, capture_output=True, text=True)
+
+git("init", "-q")
+git("add", ".")
+git("commit", "-qm", "direct and inherited callers")
+
+def run(*args):
+    return subprocess.run([binary, ".", *args, "--no-cache"], cwd=root,
+                          text=True, capture_output=True)
+
+def dead_rows(result):
+    assert result.returncode in (0, 2), result.stderr
+    return [row.attrib["sym"] for row in ET.fromstring(result.stdout).findall("r")
+            if row.attrib["kind"] == "dead-code"]
+
+baseline = run("--quality-baseline")
+assert baseline.returncode == 0, baseline.stderr
+assert not dead_rows(run("--quality-delta")), "unchanged baseline differs"
+for path in root.glob("app_*/hooks.py"):
+    text = path.read_text()
+    assert "def redundant_setup" in text and "def redundant_exercise" in text
+    path.write_text(text[:text.index("    @classmethod\n    def redundant_setup")])
+control.write_text(control.read_text().split("    def only_caller")[0])
+sibling.write_text(sibling.read_text().split("    def redundant")[0])
+nested.write_text(nested.read_text().split("    def redundant")[0])
+
+# Execute the inherited dispatch as well: these are reachable overrides, not merely matching names.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(root))
+for index in range(30):
+    namespace = {}
+    exec((root / f"app_{index}/hooks.py").read_text(), namespace)
+    child = namespace[f"Child{index}"]
+    assert child.setup() == index and child().exercise() == {"pk": index}
+
+result = run("--quality-delta")
+rows = dead_rows(result)
+assert rows == ["nested_child.py::NestedChild::hook", "siblings.py::Right::hook",
+                "unrelated.py::Unrelated::detail_url_kwargs"], rows
+assert result.returncode == 2, "the genuinely orphaned control must still gate"
+# Automatic HEAD, cached HEAD and committed-range paths must use the same eligibility rule.
+(root / ".ripwire_quality_baseline").unlink()
+assert dead_rows(run("--quality-delta")) == rows
+assert dead_rows(run("--quality-delta")) == rows
+git("add", ".")
+git("commit", "-qm", "remove redundant direct callers")
+assert dead_rows(run("--quality-delta=HEAD~1..HEAD")) == rows
+clean = run("--quality-delta")
+assert clean.returncode == 0 and not dead_rows(clean)
+
+base = root / "base.py"
+source = base.read_text()
+assert source.count("return cls.create_test_objects()") == 1
+assert source.count("return self.detail_url_kwargs()") == 1
+base.write_text(source.replace("return cls.create_test_objects()", "return None")
+                      .replace("return self.detail_url_kwargs()", "return None"))
+without_dispatch = run("--quality-delta")
+assert len([row for row in dead_rows(without_dispatch) if row.startswith("app_")]) == 60
+assert without_dispatch.returncode == 2
+print("inherited hooks stay live only while dispatch exists; unrelated and sibling orphans gate")
+PYDISPATCH
+then
+    ok "Python inherited self/cls hooks survive removal of redundant callers"
+else
+    no "Python inherited self/cls hooks were classified dead or the orphan was hidden"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
