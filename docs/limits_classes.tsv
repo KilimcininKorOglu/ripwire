@@ -51,6 +51,7 @@ kMaxAggsModeled	INDEXING
 kMaxAliasDepth	INDEXING
 kMaxAnchorsShown	OUTPUT
 kMaxAssertChars	OUTPUT
+kMaxAstQueryNesting	BOUNDARY
 kMaxBindings	INDEXING
 kMaxCacheBlobAgeDays	BOUNDARY
 kMaxCacheBlobCount	BOUNDARY
