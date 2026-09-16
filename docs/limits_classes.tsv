@@ -83,6 +83,7 @@ kMaxPartitions	BOUNDARY
 kMaxPlanScout	OUTPUT
 kMaxProbeCommits	INDEXING
 kMaxQualifierHops	INDEXING
+kMaxQueryNesting	BOUNDARY
 kMaxRefs	INDEXING
 kMaxSample	INDEXING
 kMaxScopeChars	OUTPUT

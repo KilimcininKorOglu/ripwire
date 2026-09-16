@@ -72,5 +72,21 @@ N="$( grep -oE ' count="[0-9]+"' "$TMP/ok" | head -1 | grep -oE '[0-9]+' )"
 [ "$sib" -eq 1 ] && ok "--callers=mainn also exits 1 (siblings agree)" \
     || no "--callers=mainn exits $sib — the sibling contract this gate mirrors has moved"
 
+# ── 6. nesting depth is bounded before evaluation. The evaluator recurses once per `(` level: a kind(kind(…all…))
+#    chain 50,000 levels deep (≈400 KB of argument) overflowed the main thread's stack — SIGSEGV, exit 139, no
+#    output. Refused now at 256 levels with the reason; a chain inside the bound still evaluates.
+FIX="$ROOT/test/fixture"
+DEEP="$( python3 -c 'n=50000; print("kind("*n + "all" + ",fn)"*n)' )"
+"$BIN" "$FIX" --graph-query="$DEEP" >"$TMP/deep.out" 2>"$TMP/deep.err"; rc6=$?
+[ "$rc6" -eq 1 ] && ok "a 50,000-level expression refuses: exit 1" \
+    || no "a 50,000-level expression: exit $rc6 (expected 1; 139 is the stack overflow this arm exists for)"
+grep -q 'nests deeper than 256 levels' "$TMP/deep.err" && ok "the refusal names the nesting bound" \
+    || no "the deep refusal does not name the bound: $( head -c 200 "$TMP/deep.err" )"
+SHALLOW="$( python3 -c 'n=200; print("kind("*n + "all" + ",fn)"*n)' )"
+"$BIN" "$FIX" --graph-query="$SHALLOW" >"$TMP/shallow.out" 2>/dev/null; rc6b=$?
+[ "$rc6b" -eq 0 ] && grep -q '<query [^>]*count="[1-9]' "$TMP/shallow.out" \
+    && ok "a 200-level expression inside the bound still evaluates (exit 0, count >= 1)" \
+    || no "a 200-level expression: exit $rc6b without a non-zero count"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
