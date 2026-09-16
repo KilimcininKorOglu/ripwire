@@ -130,6 +130,10 @@ if [ -s "$OUT_FILE" ]; then
     else
         no "onefn: map missing function name 'compute'"
     fi
+else
+    # The name run_and_check writes and the name read here are two spellings of one rule; when they drifted
+    # apart this block was skipped on every run and the gate still said ALL PASS.
+    no "onefn: $OUT_FILE is missing or empty — the output-name rule and this path disagree, so the arms above never ran"
 fi
 
 run_and_check "$ONEFN_CORPUS" "--for=anything" "onefn: --for=anything" || true
@@ -137,8 +141,10 @@ run_and_check "$ONEFN_CORPUS" "--zoom" "onefn: --zoom" || true
 run_and_check "$ONEFN_CORPUS" "--dead-code" "onefn: --dead-code" || true
 run_and_check "$ONEFN_CORPUS" "--graph-query=all" "onefn: --graph-query=all" || true
 
-OUT_QUERY="$TMP/out_onefngraphquery=all"
-if [ -s "$OUT_QUERY" ]; then
+OUT_QUERY="$TMP/out_onefngraphqueryall"
+if [ ! -s "$OUT_QUERY" ]; then
+    no "onefn: $OUT_QUERY is missing or empty — the output-name rule and this path disagree"
+else
     # For --graph-query=all, the compute function should appear in the count
     if grep -q 'count="1"' "$OUT_QUERY"; then
         ok "onefn: --graph-query=all has count=\"1\""
