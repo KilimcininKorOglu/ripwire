@@ -14,7 +14,8 @@
 //   FILTER  := kind( EXPR , KIND )       keep nodes of KIND  (fn|method|cls|struct|iface|var|sec|macro)
 //            | cx(   EXPR , INT )         keep nodes with cyclomatic complexity >= INT
 //            | fanin(EXPR , INT )         keep nodes with in-degree (caller count) >= INT
-//            | file( EXPR , "RE" )        keep nodes whose file PATH matches the ECMAScript regex RE
+//            | file( EXPR , "RE" )        keep nodes whose ROOT-RELATIVE file path (the p= the verb prints) matches the
+//                                         ECMAScript regex RE
 //            | layer(EXPR , NAME )        keep nodes in architecture LAYER (game|infra|render|math|audio|ai|test)
 //   CLOSURE := callers( EXPR [, INT=1] )  nodes that transitively (<= INT hops) CALL any node in EXPR
 //            | callees( EXPR [, INT=1] )  nodes transitively (<= INT hops) CALLED BY any node in EXPR
@@ -26,7 +27,8 @@
 //         — the functions that transitively (<= 2 hops) call parseArchRules.
 //
 // Determinism: every operator returns a SORTED, UNIQUE NodeId vector; the closure BFS visits in
-// ascending-id order. Robustness: a malformed file() regex or any parse error sets ok=false and yields the
+// ascending-id order. Robustness: a file() regex the guard refuses (malformed, non-portable, or catastrophic —
+// src/regexguard.h), a match the engine abandons, or any parse error sets ok=false and yields the
 // empty set (the CLI then reports err and exits 1) — the evaluator never throws past this seam, and the
 // only recursion into the graph is the hop-bounded closure, so it can neither hang nor blow the stack on a
 // cyclic call graph (a `seen` set caps every node at one visit).
@@ -34,12 +36,14 @@
 #include "model.h"
 #include "graph.h"
 #include "arch.h"          // P0-5: builtinLayer() — THE layer taxonomy, the same one the map's layer= attribute carries
+#include "regexguard.h"    // file(): the screen, the compile and the guarded match every user-authored pattern takes
+#include "sarif.h"         // rootRelativeUri — file() matches the path the verb PRINTS, never the checkout's own directories
 #include "infra/Diagnostics.h"
 
 #include <algorithm>
 #include <cctype>
 #include <functional>
-#include <regex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -135,8 +139,16 @@ struct Eval
     // query legitimately selects nothing still returns count="0" — that one is a measurement.
     std::vector<std::string> unresolvedNames;
 
-    Eval( const IngestResult& ingest, const Graph& graph, std::string_view expr )
-        : ing( ingest ), g( graph ), src( expr ) {}
+    // THE PATH file() MATCHES. ing.files spells a single-root file `<root argument>/<relative>`, so a regex over it
+    // could bind to the directories the tree was CLONED into: file(all,"alpha") selected every symbol in a checkout
+    // named repo_alpha and none in repo_beta, and an anchored ^src/ selected nothing under an absolute root. The
+    // match subject is now exactly the p= this verb prints — rootRelativeUri( path, prefix ) for a single root
+    // (set), the already-labeled `<label>/<relative>` verbatim for a multi-root workspace (nullopt) — the rule
+    // --arch adopted for its path-rules for the same reason (arch.h, the `wt-cf2src` fixture).
+    std::optional<std::string> fileRootPrefix;
+
+    Eval( const IngestResult& ingest, const Graph& graph, std::string_view expr, std::optional<std::string> singleRootPrefix )
+        : ing( ingest ), g( graph ), src( expr ), fileRootPrefix( std::move( singleRootPrefix ) ) {}
 
     // ── scanner ───────────────────────────────────────────────────────────────────────────────────────
     void skipWs()
@@ -271,19 +283,49 @@ struct Eval
         return set;
     }
 
+    std::string_view filePathForMatch( std::uint32_t fileId ) const
+    {
+        return fileRootPrefix ? sarif::rootRelativeUri( ing.files[ fileId ], *fileRootPrefix ) : std::string_view( ing.files[ fileId ] );
+    }
+
+    // The regex is compiled ONCE per file() and decided ONCE per distinct FILE (every symbol of a file shares its
+    // path), then applied to the set in order — so the sorted-unique contract above holds. The comment this
+    // replaced said "paths are short, so std::regex_search here cannot meaningfully back-track-blow-up"; a 44-byte
+    // run of 'a' in a directory name aborted the process with `(a+)+z` (rc 134, libc++). A refused pattern and an
+    // abandoned match both refuse the query by name: count="0" would read as "no such file".
     std::vector<NodeId> filterFile( std::vector<NodeId> set, const std::string& re )
     {
-        std::regex rx;
-        try { rx = std::regex( re, std::regex::ECMAScript ); }
-        catch( const std::regex_error& )
+        const RegexCompile compiled = compileGuardedRegex( re, kRegexEcmaScript );
+        if( compiled.refusal )
         {
-            DEGRADED_PATH_ALERT( "query: malformed file() regex — empty result" );
-            fail( "malformed file() regex" );
+            DEGRADED_PATH_ALERT( "query: file() regex refused — empty result" );
+            fail( "file(\"" + re + "\") refused: " + *compiled.refusal );
             return {};
         }
-        // Paths are short (<~300 B) so std::regex_search here cannot meaningfully back-track-blow-up.
-        set.erase( std::remove_if( set.begin(), set.end(),
-                   [ & ]( NodeId id ) { return !std::regex_search( ing.files[ ing.symbols[id].fileId ], rx ); } ), set.end() );
+        enum : std::uint8_t { kUndecided, kMiss, kHit };
+        std::vector<std::uint8_t> fileVerdict( ing.files.size(), kUndecided );
+        std::size_t               keptCount = 0;
+        for( const NodeId id : set )
+        {
+            const std::uint32_t fileId = ing.symbols[id].fileId;
+            if( fileVerdict[ fileId ] == kUndecided )
+            {
+                const std::string_view path    = filePathForMatch( fileId );
+                const RegexVerdict     verdict = compiled.regex.search( path );
+                if( verdict == RegexVerdict::Exhausted )
+                {
+                    fail( "file(\"" + re + "\") could not be evaluated on " + std::string( path ) + ": " + std::string( kRegexAbandonedReason )
+                          + " — refusing rather than reporting a count the engine did not finish" );
+                    return {};
+                }
+                fileVerdict[ fileId ] = ( verdict == RegexVerdict::Hit ) ? kHit : kMiss;
+            }
+            if( fileVerdict[ fileId ] == kHit )
+            {
+                set[ keptCount++ ] = id;
+            }
+        }
+        set.resize( keptCount );
         return set;
     }
 

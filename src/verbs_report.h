@@ -470,10 +470,22 @@ std::optional<int> runArchViews( const MainDispatch& d )
                 // ABS-4 regex path-rules: sibling-isolation etc. Independent of layers (an edge can be a
                 // path-rule violation even when both files are unlayered). A self-edge can't happen (g!=f
                 // by resolveIncludeAdj), so no same-module guard needed beyond the rule's own regex.
-                std::size_t ruleIdx = 0;
-                if( !ar.pathRules.empty() && pathRuleForbids( ar, relFiles[f], relFiles[g], ruleIdx ) )
+                const PathRuleVerdict pathVerdict = ar.pathRules.empty() ? PathRuleVerdict{} : pathRuleForbids( ar, relFiles[f], relFiles[g] );
+                if( pathVerdict.isAbandoned )
                 {
-                    const PathRule&     pr    = ar.pathRules[ ruleIdx ];
+                    // The engine gave up on this edge (src/regexguard.h: RegexVerdict::Exhausted), so the rule is
+                    // neither satisfied nor violated here — and a CI gate that reports violations="0" or exit 0 over
+                    // an edge it could not judge is the failure --arch exists to prevent. Refuse, name the rule and
+                    // the edge, before any byte of the answer is printed.
+                    const PathRule& pr = ar.pathRules[ pathVerdict.ruleIndex ];
+                    rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "
+                                        "reporting a violation count the engine did not finish\n",
+                                pr.from, pr.to, relFiles[f], relFiles[g], rw::kRegexAbandonedReason );
+                    return 1;
+                }
+                if( pathVerdict.isForbidden )
+                {
+                    const PathRule&     pr    = ar.pathRules[ pathVerdict.ruleIndex ];
                     const std::string   label = std::string( "path:" ) + pr.from + "->" + pr.to;
                     const std::uint64_t h     = archViolHash( relFiles[f], relFiles[g], label );
                     viols.push_back( { std::uint32_t( f ), g, h, std::string( "path" ), pr.from + "->" + pr.to } );

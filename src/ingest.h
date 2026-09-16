@@ -551,6 +551,19 @@ struct AstQueryGroup
     std::vector<std::string>*        nearestGrammarOut = nullptr;   // optional: the grammar (kLangTable's
                                                                      // querySub name) that nearestKindOut's
                                                                      // entry belongs to, "" alongside a "" kind
+
+    // USER-AUTHORED #match? / #not-match? patterns (src/regexguard.h). Both opt-in, both null for the built-in
+    // rule packs, whose patterns are constants of this binary: a caller that passes them is saying "these
+    // predicates are the user's, and a predicate that could not be decided must not quietly keep or drop a row".
+    //   regexRefusedOut   — one "'PATTERN' refused: REASON" per distinct constant pattern of this group's specs the
+    //                       guard REFUSED (malformed, non-portable, or catastrophic backtracking), sorted. Decided
+    //                       when the query is compiled, before any file is walked, so the verdict is the pattern's.
+    //   regexUndecidedOut — how many predicate evaluations could not be decided during the walk: the engine
+    //                       abandoned the match (RegexVerdict::Exhausted), or a capture-typed argument's per-match
+    //                       text was itself refused. Summed across workers (integers: order-independent).
+    // Without them the legacy contract holds for that group: a refused or undecided predicate filters NOTHING.
+    std::vector<std::string>*        regexRefusedOut   = nullptr;
+    std::atomic<std::uint64_t>*      regexUndecidedOut = nullptr;
 };
 
 // keptBytesOut (optional): the walk is where the corpus gets READ, so a pass that runs after it and needs

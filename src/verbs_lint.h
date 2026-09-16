@@ -1035,6 +1035,8 @@ struct MatchQueryOutcome
     std::size_t                eligibleFiles = 0;
     std::string                nearestKind;     // octocode F3: "" when no candidate was close enough
     std::string                nearestGrammar;  // "" alongside a "" nearestKind
+    std::vector<std::string>   regexRefused;    // src/regexguard.h: "'PATTERN' refused: REASON" per refused #match? pattern
+    std::uint64_t              regexUndecided = 0;   // #match? evaluations the engine abandoned (or whose per-match text it refused)
 };
 
 // Runs a --match query and reports the grammar-applicability disclosure (see AstQueryGroup::grammarsOut/
@@ -1055,11 +1057,41 @@ static MatchQueryOutcome runMatchQuery( const rw::IngestResult& ing, const std::
     grp.eligibleFilesOut  = &out.eligibleFiles;
     grp.nearestKindOut    = &nearestKinds;      // octocode F3: parallel to uncompiledOut — a one-spec caller
     grp.nearestGrammarOut = &nearestGrammars;   // ever gets at most one entry in either
+    std::atomic<std::uint64_t> regexUndecided{ 0 };
+    grp.regexRefusedOut   = &out.regexRefused;  // the query is the user's, so its #match? patterns are too
+    grp.regexUndecidedOut = &regexUndecided;
     out.matches = std::move( rw::astQueryGrouped( ing, { grp } )[0] );
+    out.regexUndecided = regexUndecided.load( std::memory_order_relaxed );
     out.grammarsAttr = rw::mcprefuse::joinClauses( std::vector<std::string_view>( grammarsOut.begin(), grammarsOut.end() ), "," );
     if( !nearestKinds.empty() )    { out.nearestKind    = std::move( nearestKinds[0] ); }
     if( !nearestGrammars.empty() ) { out.nearestGrammar = std::move( nearestGrammars[0] ); }
     return out;
+}
+
+// src/regexguard.h, applied to a user's tree-sitter query: a #match?/#not-match? predicate the guard could not
+// DECIDE used to filter nothing — a refused pattern kept every row, an abandoned match kept that one — and the
+// verb printed the rows as the query's answer at exit 0 (on libstdc++ the catastrophic pattern backtracked
+// without end instead). A user wrote the pattern, so the verb refuses by name, the way --regex does: a pattern
+// refusal is decided when the query compiles, whatever the files hold; the undecided count is what the walk met.
+// `verb` is the flag the user typed; `where` is the closing clause that locates the pattern (the query echoed, or
+// the rules directory).
+static bool refuseUndecidedMatchRegex( std::string_view verb, const std::vector<std::string>& refused, std::uint64_t undecidedCount, std::string_view where )
+{
+    if( !refused.empty() )
+    {
+        lintPrintErr( "ripwire: {}: the #match? pattern {}, nothing was reported ({} refused pattern(s); a predicate that cannot be compiled "
+                      "would filter nothing, so the rows would not be the query's answer — fix the pattern) ({})\n",
+                      verb, refused.front(), refused.size(), where );
+        return true;
+    }
+    if( undecidedCount != 0 )
+    {
+        lintPrintErr( "ripwire: {}: {} #match?/#not-match? evaluation(s) could not be decided: {} — refusing rather than reporting rows no "
+                      "predicate judged ({})\n",
+                      verb, undecidedCount, rw::kRegexAbandonedReason, where );
+        return true;
+    }
+    return false;
 }
 
 // Join owned strings through the ONE joiner the refusal surfaces already use, so a list this file prints
@@ -1305,6 +1337,10 @@ std::optional<int> runLint( const MainDispatch& d )
                 lintPrintErr( "ripwire: --match: the query compiled for no grammar — refusing rather than reporting a zero it did not measure "
                                     "(query as received: {}){}\n",
                             cfg.match, matchNearestKindClause( mq.nearestKind, mq.nearestGrammar ) );
+                return 1;
+            }
+            if( refuseUndecidedMatchRegex( "--match", mq.regexRefused, mq.regexUndecided, "query as received: " + std::string( cfg.match ) ) )
+            {
                 return 1;
             }
             // §P8 G3: --match was missed when its sibling --grep got paging — `--limit=5` still emitted the
@@ -1695,7 +1731,11 @@ std::optional<int> runLint( const MainDispatch& d )
                 lintPrintErr( "ripwire: --lint-rules={}: no rules loaded\n", cfg.lintRulesDir );
                 return 1;
             }
-            const auto [ userFindings, saturatedUserRuleIds, uncompiledIds ] = runLintRules( ing, userRules );
+            const auto [ userFindings, saturatedUserRuleIds, uncompiledIds, regexRefused, regexUndecided ] = runLintRules( ing, userRules );
+            if( refuseUndecidedMatchRegex( "--lint-rules", regexRefused, regexUndecided, "in a rule loaded from " + std::string( cfg.lintRulesDir ) ) )
+            {
+                return 1;
+            }
             for( const LintFinding& f : userFindings )
             {
                 outs.push_back( { f.fileId, f.startByte, f.line, f.id, f.severity, f.message } );

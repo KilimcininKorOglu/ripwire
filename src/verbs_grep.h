@@ -530,6 +530,31 @@ void joinGrepScanPrefetch( std::thread& worker )
     }
 }
 
+// A --regex scan whose engine ABANDONED a match (RegexVerdict::Exhausted, src/regexguard.h) — in an indexed file or
+// an unindexed one — has no count to report: the hits it kept are the ones found before the engine gave up, and
+// how many lie past that point is unknown. Before the seam the file was skipped with an alert NDEBUG deletes,
+// and the run printed hits= as a measurement at exit 0. Refused here, by name, before a byte reaches stdout —
+// the same shape and exit code as the pattern refusal above, so a caller handles both the one way it already
+// does. The file named is the lowest-fileId indexed one (else the first unindexed one): deterministic.
+static bool refuseAbandonedRegexScan( const rw::Config& cfg, const rw::IngestResult& ing, const rw::GrepCollection& found, const rw::GrepAuxCollection& aux )
+{
+    const std::uint32_t abandonedCount = found.regexAbandonedFiles + aux.regexAbandonedFiles;
+    if( !cfg.grepRegex || abandonedCount == 0 )
+    {
+        return false;
+    }
+    const bool             singleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
+    const std::string      rootPrefix = singleRoot ? rw::sarif::rootPrefixOf( std::string( cfg.roots[0] ) ) : std::string();
+    const std::string_view firstPath  = found.regexAbandonedFiles == 0 ? std::string_view( aux.firstRegexAbandonedPath )
+                                      : singleRoot ? rw::sarif::rootRelativeUri( ing.files[ found.firstRegexAbandonedFile ], rootPrefix )
+                                                   : std::string_view( ing.files[ found.firstRegexAbandonedFile ] );
+    rw::emitTo( stderr, "ripwire: --regex='{}' refused, no hit is reported: {} in {} file(s), first {} — the hits collected before that "
+                        "point would be a floor this verb cannot state (rewrite the pattern so no two of its alternatives can match the "
+                        "same text, e.g. (a|b)+ rather than (a|a)+)\n",
+                cfg.grep, rw::kRegexAbandonedReason, abandonedCount, firstPath );
+    return true;
+}
+
 int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
                     const std::vector<std::uint32_t>* amp, const std::vector<std::uint8_t>* tested,
                     const GrepScanPhases* prefetched )
@@ -579,6 +604,10 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     const std::vector<GrepTerm>&    grepTerms       = phases->terms;
     const GrepScope                 grepScopeVal    = phases->scope;
     const std::uint32_t             termsSuppressed = phases->termsSuppressed;
+    if( refuseAbandonedRegexScan( cfg, ing, found, aux ) )
+    {
+        return 1;
+    }
     PROFILE_SCOPE_DESCRIBE( "grep/4: window + enrich + emit" );
 
     const std::size_t          hitCount = found.raw.size();

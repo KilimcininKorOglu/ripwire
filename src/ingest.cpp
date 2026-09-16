@@ -27,6 +27,7 @@
 #include "preprocdead.h"       // #62: the ONE literal `#if 0` rule (shared with slice.h) — dead call sites never become edges
 #include "extentsuspect.h"     // extent honesty: the containment rules + the recovered/suspect bit vocabulary
 #include "macroreparse.h"      // member-macro re-parse: the scanner, the offset-preserving blank, the adoption rule
+#include "regexguard.h"        // #match?/#not-match?: the screen, the compile and the guarded match (ingest_astquery.h)
 
 #include "infra/Diagnostics.h"
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -54,7 +55,6 @@
 #include <span>
 #include <string_view>
 #include <atomic>
-#include <regex>
 #include <thread>
 #include <type_traits>
 #include <utility>

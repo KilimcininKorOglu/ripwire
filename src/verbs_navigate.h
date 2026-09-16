@@ -262,7 +262,7 @@ std::optional<int> runGraphQuery( const MainDispatch& d )
     // --callers so the agent can compose questions the fixed verbs did not pre-anticipate.
     if( !cfg.graphQuery.empty() )
     {
-        query::Eval         ev( ing, g, cfg.graphQuery );
+        query::Eval         ev( ing, g, cfg.graphQuery, gqSingleRoot ? std::optional<std::string>( gqRootPrefix ) : std::nullopt );   // file() matches the p= printed below
         std::vector<NodeId> result = ev.run();
         if( !ev.ok )
         {

@@ -37,7 +37,7 @@ inline bool captureText( const TSQueryMatch& m, std::uint32_t capIndex, std::str
 }
 
 // ---- the compiled #match? / #not-match? regexes of ONE query, resolved when the query is ----------
-// One `std::regex` per ( query, string id ), built when the query is compiled instead of once per MATCH.
+// One compiled regex per ( query, string id ), built when the query is compiled instead of once per MATCH.
 //
 // WHY. `passesPredicates` ran `std::regex_search( lhs, std::regex( rhs ) )` per match, per file, and `rhs`
 // is a CONSTANT owned by the TSQuery — `ts_query_string_value_for_id` hands back the same bytes every time.
@@ -50,12 +50,15 @@ inline bool captureText( const TSQueryMatch& m, std::uint32_t capIndex, std::str
 // KEYED BY STRING ID, NOT BY TEXT. `value_id` indexes the query's own string table, so
 // `ts_query_string_count` sizes an exact O(1) lookup and no hashing, no comparison and no allocation is
 // left on the per-match path. -1 = this string is not a precompilable regex argument; -2 = it IS one and
-// `std::regex` REFUSED it.
+// the guard REFUSED it (src/regexguard.h: malformed, non-portable, or catastrophic backtracking).
 //
 // THE REFUSAL IS PART OF THE CONTRACT. A malformed pattern used to throw out of the per-match constructor,
-// get caught, and leave `ok = true` — i.e. filter NOTHING. Precompiling moves that throw from the match to
-// the build, so -2 exists to reproduce it exactly; without it a broken rule would silently drop every row
-// instead of silently keeping them. test/astqueryregexcheck.sh arm C4.
+// get caught, and leave `ok = true` — i.e. filter NOTHING. Precompiling moved that throw from the match to
+// the build, and -2 reproduces it for the BUILT-IN rule packs, whose patterns are constants of this binary.
+// A USER's pattern (--match, --lint-rules) is different: filtering nothing for it is a row the predicate never
+// decided, printed as if it had. So every refusal is also recorded in `refusals`, which the caller's
+// AstQueryGroup::regexRefusedOut collects and --match / --lint-rules refuse by name, like --regex.
+// test/astqueryregexcheck.sh arm C4, test/regexguardcheck.sh arm (a).
 //
 // A CAPTURE-TYPED ARGUMENT IS NEVER IN HERE. `(#match? @a @b)`'s pattern is the matched node's own text —
 // per match by construction — and stays dynamic (arm D).
@@ -66,7 +69,8 @@ inline bool captureText( const TSQueryMatch& m, std::uint32_t capIndex, std::str
 struct PredicateRegexTable
 {
     std::vector<std::int32_t> slotOfStringId;   // per query-string id: -1 not precompiled, -2 refused, >=0 index into res
-    std::vector<std::regex>   res;
+    std::vector<GuardedRegex> res;
+    std::vector<std::string>  refusals;         // "'PATTERN' refused: REASON", one per refused string id, build order
 };
 
 // Walk every predicate of every pattern once and compile the constant #match?/#not-match? arguments.
@@ -120,15 +124,16 @@ inline PredicateRegexTable buildPredicateRegexTable( const TSQuery* q )
             {
                 continue;
             }
-            try
+            const std::string pattern( rv, rl );
+            RegexCompile      compiled = compileGuardedRegex( pattern, kRegexEcmaScript );   // std::regex's default flags, as before
+            if( compiled.refusal )
             {
-                table.res.emplace_back( std::string( rv, rl ) );         // same construction, same default ECMAScript flags
-                table.slotOfStringId[ arg.value_id ] = static_cast<std::int32_t>( table.res.size() - 1 );
+                table.slotOfStringId[ arg.value_id ] = -2;               // refused — the built-in packs keep the old per-match catch
+                table.refusals.push_back( "'" + pattern + "' refused: " + *compiled.refusal );
+                continue;
             }
-            catch( ... )
-            {
-                table.slotOfStringId[ arg.value_id ] = -2;               // refused — reproduce the old per-match catch
-            }
+            table.res.push_back( std::move( compiled.regex ) );
+            table.slotOfStringId[ arg.value_id ] = static_cast<std::int32_t>( table.res.size() - 1 );
         }
     }
     return table;
@@ -139,13 +144,16 @@ inline PredicateRegexTable buildPredicateRegexTable( const TSQuery* q )
 // the ccx bar — and because the states are the whole contract of the precompile and deserve to be read in
 // one place:
 //   * slot >= 0  — a precompiled constant pattern. The common case, and the point of the table.
-//   * slot == -2 — a constant pattern std::regex REFUSED. Filter NOTHING, which is exactly what the old
-//     per-match `catch( ... ) { ok = true; }` did when the same construction threw at the same pattern.
+//   * slot == -2 — a constant pattern the guard REFUSED. Filter NOTHING, which is exactly what the old
+//     per-match `catch( ... ) { ok = true; }` did when the same construction threw at the same pattern (a user
+//     group never gets this far: its refusal was collected at compile time and the verb refused).
 //   * slot == -1 — no constant to precompile (a Capture-typed argument, whose pattern is per-match text).
-//     Construct it here, per match, as before.
-// `rhs` is only read on the last of the three; it is the caller's already-materialised argument text.
+//     Compile it here, per match, as before — through the guard.
+// A predicate the guard cannot DECIDE — the engine abandoned the match, or the per-match text was refused —
+// filters nothing, as it always did, and is COUNTED into `undecidedOut` when the group is a user's (non-null),
+// so the verb refuses instead of printing rows no predicate judged. `rhs` is only read on the last state.
 inline bool evalMatchPredicate( bool negated, const std::string& lhs, const std::string& rhs,
-                                const PredicateRegexTable& rx, const TSQueryPredicateStep& arg )
+                                const PredicateRegexTable& rx, const TSQueryPredicateStep& arg, std::atomic<std::uint64_t>* undecidedOut )
 {
     const bool          constant = ( arg.type == TSQueryPredicateStepTypeString && arg.value_id < rx.slotOfStringId.size() );
     const std::int32_t  slot     = constant ? rx.slotOfStringId[ arg.value_id ] : -1;
@@ -153,21 +161,33 @@ inline bool evalMatchPredicate( bool negated, const std::string& lhs, const std:
     {
         return true;                                    // the pattern did not compile ⇒ this predicate filters nothing
     }
-    try
+    // A Capture-typed argument's pattern is this match's own node text, compiled per match through the guard; a
+    // refusal of that text leaves the predicate exactly as undecided as an abandoned match, and reads the same.
+    RegexVerdict verdict = RegexVerdict::Exhausted;
+    if( slot >= 0 )
     {
-        const bool mm = ( slot >= 0 ) ? std::regex_search( lhs, rx.res[ std::size_t( slot ) ] )
-                                      : std::regex_search( lhs, std::regex( rhs ) );
-        return negated ? !mm : mm;
+        verdict = rx.res[ std::size_t( slot ) ].search( lhs );
     }
-    catch( ... )
+    else if( const RegexCompile perMatch = compileGuardedRegex( rhs, kRegexEcmaScript ); !perMatch.refusal )
     {
-        return true;                                    // same arm the per-match construction always took
+        verdict = perMatch.regex.search( lhs );
     }
+    if( verdict == RegexVerdict::Exhausted )
+    {
+        if( undecidedOut != nullptr )
+        {
+            undecidedOut->fetch_add( 1, std::memory_order_relaxed );
+        }
+        return true;                                    // undecided ⇒ filters nothing, the arm the per-match catch always took
+    }
+    const bool mm = ( verdict == RegexVerdict::Hit );
+    return negated ? !mm : mm;
 }
 
 // evaluate a pattern's query predicates against a match — #eq? / #not-eq? (string/capture equality) and
 // #match? / #not-match? (ECMAScript regex). ts_query never applies these itself; without this, #eq? is a no-op.
-inline bool passesPredicates( const TSQuery* q, const PredicateRegexTable& rx, const TSQueryMatch& m, std::string_view src )
+inline bool passesPredicates( const TSQuery* q, const PredicateRegexTable& rx, const TSQueryMatch& m, std::string_view src,
+                              std::atomic<std::uint64_t>* undecidedOut )
 {
     std::uint32_t pc = 0;
     const TSQueryPredicateStep* steps = ts_query_predicates_for_pattern( q, m.pattern_index, &pc );
@@ -230,7 +250,7 @@ inline bool passesPredicates( const TSQuery* q, const PredicateRegexTable& rx, c
         }
         else if( op == "match?" || op == "not-match?" )
         {
-            ok = evalMatchPredicate( op == "not-match?", lhs, rhs, rx, pr[2] );
+            ok = evalMatchPredicate( op == "not-match?", lhs, rhs, rx, pr[2], undecidedOut );
         }
         if( !ok )
         {
@@ -696,6 +716,33 @@ static void computeGrammarDisclosure( const IngestResult& ing, const std::vector
     }
 }
 
+// Every constant #match?/#not-match? pattern the guard refused, per group that asked (regexRefusedOut): read off
+// the per-SPEC tables, whose group is known (the combined query's table holds the same patterns and no group).
+// One spec compiles for several grammars, so the same refusal arrives more than once, and byGrammar is a hash
+// map — sorted and de-duplicated, the list is a pure function of the patterns.
+static void collectPredicateRegexRefusals( const HashMap<const TSLanguage*, GrammarQueries>& byGrammar, const std::vector<AstQueryGroup>& groups )
+{
+    for( const auto& [ grammar, queries ] : byGrammar )
+    {
+        for( const GroupedQuery& gq : queries.perSpec )
+        {
+            std::vector<std::string>* const out = groups[ gq.groupIndex ].regexRefusedOut;
+            if( out != nullptr )
+            {
+                out->insert( out->end(), gq.rx.refusals.begin(), gq.rx.refusals.end() );
+            }
+        }
+    }
+    for( const AstQueryGroup& group : groups )
+    {
+        if( group.regexRefusedOut != nullptr )
+        {
+            std::sort( group.regexRefusedOut->begin(), group.regexRefusedOut->end() );
+            group.regexRefusedOut->erase( std::unique( group.regexRefusedOut->begin(), group.regexRefusedOut->end() ), group.regexRefusedOut->end() );
+        }
+    }
+}
+
 std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, const std::vector<AstQueryGroup>& groups,
                                                     std::vector<std::string>* keptBytesOut )
 {
@@ -868,6 +915,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
     // pass so the existing groups[] loops above stay exactly as complex as they were for every caller that
     // doesn't ask for this (--lint, --lint-rules leave both null; zero cost, zero shape change for them).
     computeGrammarDisclosure( ing, groups );
+    collectPredicateRegexRefusals( byGrammar, groups );   // opt-in per group, the same way (regexRefusedOut)
 
     const std::size_t nfiles = ing.files.size();
     unsigned hw = std::thread::hardware_concurrency();
@@ -1036,15 +1084,16 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                         TSQueryMatch m;
                         while( ts_query_cursor_next_match( cur, &m ) )
                         {
-                            if( !passesPredicates( q, it->second.combinedRx, m, bytes ) )
-                            {
-                                continue; // honour #eq? / #match? etc. — predicates are per PATTERN, so this reads the right ones
-                            }
                             if( m.pattern_index >= it->second.patternOwner.size() )
                             {
                                 continue;   // unreachable: patternOwner was verified against ts_query_pattern_count
                             }
-                            emitCaptures( m, it->second.perSpec[ it->second.patternOwner[ m.pattern_index ] ] );
+                            const GroupedQuery& owner = it->second.perSpec[ it->second.patternOwner[ m.pattern_index ] ];
+                            if( !passesPredicates( q, it->second.combinedRx, m, bytes, groups[ owner.groupIndex ].regexUndecidedOut ) )
+                            {
+                                continue; // honour #eq? / #match? etc. — predicates are per PATTERN, so this reads the right ones
+                            }
+                            emitCaptures( m, owner );
                         }
                     }
                     else
@@ -1055,7 +1104,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                             TSQueryMatch m;
                             while( ts_query_cursor_next_match( cur, &m ) )
                             {
-                                if( !passesPredicates( gq.query, gq.rx, m, bytes ) )
+                                if( !passesPredicates( gq.query, gq.rx, m, bytes, groups[ gq.groupIndex ].regexUndecidedOut ) )
                                 {
                                     continue; // honour #eq? / #match? etc.
                                 }
