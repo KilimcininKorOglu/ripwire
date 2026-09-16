@@ -14,8 +14,8 @@
 #
 # THE DOCUMENTED-ABSENT ROWS ARE THE POINT. Roughly a quarter of the arms below assert that a
 # spelling produces NOTHING: C++ casts, most-vexing-parse declarations, member-templates and
-# destructor spellings; Go's explicit generic instantiation; Java's method references and both
-# generic `new` forms; Ruby's bare paren-less call; Swift's explicit specialization; computed
+# destructor spellings; Go's explicit generic instantiation; Java's two generic `new`
+# forms; Ruby's bare paren-less call; Swift's explicit specialization; computed
 # `new a.b[c]()` in TS and JS. Those are honest rejects — several of them unfixable by any query —
 # and an arm that fences them goes RED if a naive widening lands. A matrix that only recorded the
 # successes would be a celebration, not a gate.
@@ -384,7 +384,10 @@ uses java Inner     1 "7. scoped new, 2 segments — dropped before this round"
 uses java Deep      1 "8. scoped new, 3 segments"
 uses java PkgType   1 "9. fully package-qualified new"
 # 10. Type::method. `Widget::makeFn` is a statically resolvable call site (issue #74); the
-# lambda-equivalent form already produced an edge. The reference form now does too.
+# lambda-equivalent form already produced an edge. The reference form now does too. The receiver
+# forms that stay unresolved are the ones whose target is not fixed by the syntax: `this::m`,
+# `super::m`, `expr::m` (an instance reference — the runtime object decides) and `Type::new`,
+# which the member-name query does not capture at all. test/javamethodrefcheck.sh pins each.
 fixtureHasLit java/Main.java 'Widget::makeFn' "10. the method-reference spelling is still WRITTEN"
 probeSees java runAbsent makeFn "10. Type::method EXTRACTS makeFn — same target as Widget.makeFn()"
 fixtureHasLit java/Main.java 'new GenBox<String>()' "11. the bare generic-new spelling is still WRITTEN"

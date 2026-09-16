@@ -93,6 +93,29 @@ public class A extends Base {
         return Widget::new;
     }
 
+    // The member the proven type does NOT declare: nestedInnerFn is Outer.Inner's. The receiver is
+    // the whole evidence a method reference carries, so this resolves to nothing — it must never
+    // fall back to the bare name and steal Outer.Inner's definition.
+    public Function<Object, String> typeMissingMember() {
+        return Widget::nestedInnerFn;
+    }
+
+    // The issue's own pair, the two spellings of one call: the lambda and the method reference must
+    // agree on Util.conv.
+    public List<String> convLambda(List<Object> in) {
+        return in.stream().map(item -> Util.conv(item)).toList();
+    }
+
+    public List<String> convMethodRef(List<Object> in) {
+        return in.stream().map(Util::conv).toList();
+    }
+
+    // r9 shadow-suppression control: `name` is a parameter here AND a method on Builder. Java has no
+    // callable locals, so this call can only mean Builder.name — the edge and the --uses row stay.
+    public String builderChain(Builder b, String name) {
+        return b.name(name).build();
+    }
+
     public String makeFn(Object value) { return String.valueOf(value); }
     public String thisFn(Object value) { return String.valueOf(value); }
 }

@@ -1273,6 +1273,20 @@ inline bool shadowSuppressedSite( const Reference& r, const ShadowEvidence& ev, 
     {
         return false;   // a receiver- or scope-qualified name can never resolve to a plain local
     }
+    // JAVA IS REFUSED OUTRIGHT, and this arm is load-bearing rather than defensive. This pass is
+    // C++/ObjC evidence: it deletes a reference because a declared local of that name shadows it at
+    // that byte. Java's VarDecl records (ingest_binds.h captureJavaShadowDecls) exist for one
+    // unrelated consumer — the JavaTypeCandidate receiver proof for issue #74 — and Java call sites
+    // carry no classified receiver, so `b.name(name)` inside `make( Builder b, String name )` reaches
+    // here as a BARE call whose name a parameter declares, and lost its call edge and its `--uses`
+    // row. The refusal is not a heuristic: Java has no free functions and no callable locals, so a
+    // Java call NEVER resolves to a local and there is nothing here to prevent. Python keeps its
+    // veto-only evidence at an empty span for the same reason (ingest_binds.h, the note above
+    // capturePythonParamShadowDecls); Java needs real spans, so the refusal lives at the consumer.
+    if( r.lang == Lang::Java )
+    {
+        return false;
+    }
     // ORDER IS A COST DECISION, not a semantic one: all four guards are pure predicates ANDed together, so
     // any order gives the same verdict — but they are not equally selective. `varSpans` is keyed on
     // "<callingSymbol>#<name>" and hits only when THIS caller declares a local of exactly this name (rare);

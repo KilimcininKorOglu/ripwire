@@ -1143,6 +1143,16 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
     // type vetoes Identifier::method the same way a parameter or local does — for the
     // whole method, which is Java field lookup. Locals/parameters are NOT copied here;
     // JavaTypeCandidate consults localShadowSpans at the call-site byte instead.
+    //
+    // GROUPED BY OWNING CLASS, and the grouping is the point: the field NAMES of one class are
+    // collected first, then that class's file bucket is walked ONCE. Written per-binding it was a
+    // full `ing.symbols` scan for every Java field — O(fields × symbols) on every run, and the
+    // scan's own first test was "is this symbol even in the owner's file". The key SET is
+    // unchanged: the bucket predicate carries the kind filter, the bucket carries the file filter,
+    // and the byte-range containment test is the same one.
+    std::vector<NodeId>                        javaFieldOwners;   // distinct owners in first-seen order (ing.bindings is totally ordered)
+    std::vector<std::vector<std::string_view>> javaFieldsOfOwner; // parallel: that owner's field names, in binding order
+    HashMap<NodeId, std::uint32_t>             javaOwnerSlot;
     for( const Binding& b : ing.bindings )
     {
         if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
@@ -1156,27 +1166,53 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         {
             continue;
         }
-        key.clear();
-        Narrower::appendUint( key, owner.id );
-        key.push_back( '#' );
-        key.append( b.var );
-        t.javaFieldShadow.try_emplace( key, 1 );
-        for( const Symbol& s : ing.symbols )
+        const auto [ slot, inserted ] = javaOwnerSlot.try_emplace( owner.id, std::uint32_t( javaFieldOwners.size() ) );
+        if( inserted )
         {
-            if( s.fileId != owner.fileId
-                || ( s.kind != SymKind::Method && s.kind != SymKind::Function )
-                || s.sigStartByte < owner.sigStartByte
-                || s.endByte > owner.endByte
-                || s.id == owner.id )
+            javaFieldOwners.push_back( owner.id );
+            javaFieldsOfOwner.emplace_back();
+        }
+        javaFieldsOfOwner[ slot->second ].push_back( b.var );
+    }
+    if( !javaFieldOwners.empty() )
+    {
+        // model.h::symbolsByFile — the shared bucket-and-sort, id order (no reordering wanted). Built
+        // only when a Java class field exists, so a Java-free corpus pays nothing at all.
+        const SymbolsByFile byFile = symbolsByFileInIdOrder(
+            ing, []( const Symbol& s ) { return s.kind == SymKind::Method || s.kind == SymKind::Function; } );
+        for( std::size_t oi = 0; oi < javaFieldOwners.size(); ++oi )
+        {
+            const Symbol&                          owner  = ing.symbols[ javaFieldOwners[ oi ] ];
+            const std::vector<std::string_view>&   fields = javaFieldsOfOwner[ oi ];
+            for( std::string_view field : fields )
+            {
+                key.clear();
+                Narrower::appendUint( key, owner.id );
+                key.push_back( '#' );
+                key.append( field );
+                t.javaFieldShadow.try_emplace( key, 1 );
+            }
+            if( owner.fileId >= byFile.size() )
             {
                 continue;
             }
-            key.clear();
-            Narrower::appendUint( key, s.id );
-            key.push_back( '#' );
-            key.append( b.var );
-            t.localNameSet.try_emplace( key, 1 );
-            t.javaFieldShadow.try_emplace( key, 1 );
+            for( NodeId sid : byFile[ owner.fileId ] )
+            {
+                const Symbol& s = ing.symbols[ sid ];
+                if( s.id == owner.id || s.sigStartByte < owner.sigStartByte || s.endByte > owner.endByte )
+                {
+                    continue;
+                }
+                for( std::string_view field : fields )
+                {
+                    key.clear();
+                    Narrower::appendUint( key, s.id );
+                    key.push_back( '#' );
+                    key.append( field );
+                    t.localNameSet.try_emplace( key, 1 );
+                    t.javaFieldShadow.try_emplace( key, 1 );
+                }
+            }
         }
     }
     return t;
@@ -1217,18 +1253,21 @@ inline bool javaLeadingShadowed( const FieldNarrowTables& t, NodeId from, std::s
     return false;
 }
 
-// Prove a Java method-reference receiver is a type, not a value.
+// Prove a Java method-reference receiver is a type, not a value, and RETURN the type it names —
+// the receiver's LAST segment, which is the type the member must be resolved against. Empty view
+// ⇒ not proven; a proof never yields an empty name, so the two are distinguishable.
 //   Widget              — last (only) segment is an indexed class, leading name not shadowed
 //   Outer.Inner         — leading is a class: every segment is a class; only leading is shadowed
 //   com.example.Widget  — leading is not a class and not shadowed; last segment is a class
 // Expression receivers (this/super/calls) never reach here with a dotted type spelling;
 // System.out fails because leading is a class and `out` is not.
-inline bool javaTypeReceiverProven( const Reference& r, const HashMap<std::string, char>& classNames,
-                                    const FieldNarrowTables& fieldNarrow, std::string& qkey )
+// The view borrows r.recvVar and is consumed inside the same resolve-loop iteration.
+inline std::string_view javaProvenTypeReceiver( const Reference& r, const HashMap<std::string, char>& classNames,
+                                                const FieldNarrowTables& fieldNarrow, std::string& qkey )
 {
     if( r.recvVar.empty() || r.fromSymbol == kNoNode )
     {
-        return false;
+        return {};
     }
     const std::string_view recv = r.recvVar;
     const std::size_t firstDot = recv.find( '.' );
@@ -1237,19 +1276,19 @@ inline bool javaTypeReceiverProven( const Reference& r, const HashMap<std::strin
     const std::string_view last = lastDot == std::string_view::npos ? recv : recv.substr( lastDot + 1 );
     if( leading.empty() || last.empty() || !javaClassNamed( classNames, last ) )
     {
-        return false;
+        return {};
     }
     if( javaLeadingShadowed( fieldNarrow, r.fromSymbol, leading, r.startByte, qkey ) )
     {
-        return false;
+        return {};
     }
     if( firstDot == std::string_view::npos )
     {
-        return true;
+        return last;
     }
     if( !javaClassNamed( classNames, leading ) )
     {
-        return true;   // package-qualified type: last is a class, leading is not a value
+        return last;   // package-qualified type: last is a class, leading is not a value
     }
     std::size_t begin = 0;
     while( begin < recv.size() )
@@ -1259,7 +1298,7 @@ inline bool javaTypeReceiverProven( const Reference& r, const HashMap<std::strin
                                         ( end == std::string_view::npos ? recv.size() : end ) - begin );
         if( !javaClassNamed( classNames, segment ) )
         {
-            return false;
+            return {};
         }
         if( end == std::string_view::npos )
         {
@@ -1267,7 +1306,86 @@ inline bool javaTypeReceiverProven( const Reference& r, const HashMap<std::strin
         }
         begin = end + 1;
     }
-    return true;
+    return last;
+}
+
+// ── Java `Class::method` → definition ids, for the issue-#74 receiver resolution ────────────────────
+// The SAME shape `canonByName` holds for every language whose defs carry a `Symbol::scope` — and Java's
+// do not (ingest_sidecap.h populates scope for C++/Python/Rust/Elixir/Ruby/Kotlin only), so canonByName
+// has no Java key to find. Deriving it here rather than at extraction is deliberate: `Symbol::scope` is a
+// CACHED field, so writing it would change the extraction identity, and this map is a pure function of
+// `ing.symbols` that buildGraph recomputes on every run.
+//
+// The scope is the INNERMOST containing class — the same thing `Symbol::scope` means elsewhere ("a nested
+// scope's last segment is the innermost class"), which is what makes `Outer.Inner::makeFn` resolve to
+// `Inner::makeFn` and NOT to a same-named method of `Outer`. Definitions only, matching canonByName: an
+// interface's abstract method declares no body, and `methodOnTypeOrBases` promises every id it returns is
+// a real definition. Empty on a Java-free corpus, so the Java arm of the resolve loop is inert there.
+// Deterministic: symbols are visited in id order and every bucket is appended in that order.
+inline HashMap<std::string, rw::SmallVec<NodeId, 2>> buildJavaTypeMembers( const IngestResult& ing )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2e: Java Class::method members (issue #74)" );
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> members;
+    std::vector<NodeId> javaTypes;   // class-like Java defs, in id order
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.lang == Lang::Java
+            && ( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface ) )
+        {
+            javaTypes.push_back( s.id );
+        }
+    }
+    if( javaTypes.empty() )
+    {
+        return members;
+    }
+    std::string key;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.lang != Lang::Java || ( s.kind != SymKind::Method && s.kind != SymKind::Function )
+            || !isDefinitionNotDeclaration( s ) )
+        {
+            continue;
+        }
+        const Symbol* innermost = nullptr;
+        for( NodeId tid : javaTypes )
+        {
+            const Symbol& t = ing.symbols[ tid ];
+            if( t.fileId != s.fileId || s.sigStartByte < t.sigStartByte || s.endByte > t.endByte )
+            {
+                continue;
+            }
+            if( innermost == nullptr || t.sigStartByte > innermost->sigStartByte )
+            {
+                innermost = &t;   // the deepest container wins — Outer.Inner's methods scope to Inner
+            }
+        }
+        if( innermost == nullptr )
+        {
+            continue;
+        }
+        key.clear();
+        key.append( innermost->name ).append( "::" ).append( s.name );
+        members[ key ].push_back( s.id );
+    }
+    return members;
+}
+
+// ── Issue #74: the one taxonomy both JavaTypeCandidate give-up exits use ────────────────────────────
+// A `Type::method` site that fails its receiver proof, and a proven receiver whose type declares no such
+// member, are the same kind of refusal — and the vocabulary is the resolver's own (see the Elixir note in
+// the resolve loop): a spelling some in-repo definition carries is `unresolved=` (an in-tree def was found
+// and dropped); a spelling NO definition carries at all is undefined, which has no header surface because
+// it is dominated by genuine externals. `String::valueOf` and `System.out::println` are that second case,
+// and counting them into `unresolved=` would claim ripwire missed an internal definition of `valueOf`.
+inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool nameHasInRepoDef )
+{
+    if( !nameHasInRepoDef )
+    {
+        return CallDisposition::Undefined;
+    }
+    ++g.unresolvedOut[ r.fromSymbol ];
+    return CallDisposition::Unresolved;
 }
 
 // ── Phase 5 external-name veto tables (docs/EVALS.md "Phase 5", mechanism 1; src/externalnames.h) ─────
@@ -2097,6 +2215,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // to the variable's type; Rule 3 pins a call to the ONE file the caller includes that defines it — all
     // BEFORE the bare-name spray below. See resolve.h.
     const Narrower narrower( canonByName, varType, fileIncludes, symFileId );
+    // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
+    // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
+    // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
+    // Java members into the shared map would put them in reach of the Kotlin↔Java bridge's Rule-1 lookups,
+    // which is a resolution change #74 does not ask for. Empty map on a Java-free corpus ⇒ never hits.
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>> javaTypeMembers = buildJavaTypeMembers( ing );
+    const Narrower javaNarrower( javaTypeMembers, varType, fileIncludes, symFileId );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The
@@ -2311,13 +2436,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // with an identifier receiver. A method-reference capture is therefore admitted only when
         // repository evidence proves the receiver is a type at this site. Every other receiver is
         // a known callback expression: stop before the bare-name ladder, which would otherwise
-        // manufacture an ordinary call edge by member spelling.
+        // manufacture an ordinary call edge by member spelling. The proven TYPE is carried to the
+        // resolution step below — `Widget::makeFn` must land on Widget's member, not on whichever
+        // same-named definition the locality tie-break finds nearest the caller.
+        std::string_view javaProvenType;
         if( !scipPinned && r.recv == RecvKind::JavaTypeCandidate )
         {
-            if( !javaTypeReceiverProven( r, classNames, fieldNarrow, qkey ) )
+            javaProvenType = javaProvenTypeReceiver( r, classNames, fieldNarrow, qkey );
+            if( javaProvenType.empty() )
             {
-                ++g.unresolvedOut[r.fromSymbol];
-                disposition = CallDisposition::Unresolved;
+                disposition = javaCandidateRefused( g, r, it != byName.end() );
                 continue;
             }
         }
@@ -2520,6 +2648,26 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     disposition = CallDisposition::Unresolved;
                     continue;
                 }
+            }
+        }
+        // Issue #74: the receiver is PROVEN to name an indexed Java type, so the target is that type's
+        // member — `Narrower::methodOnTypeOrBases` against the receiver's last segment, the same type-side
+        // probe Rule 2c uses for `Cls.m()`, walking the type's bases on a miss of its own method set.
+        // Driven through `javaNarrower` because Java definitions carry no `Symbol::scope` and therefore no
+        // canonByName key; see buildJavaTypeMembers.
+        //
+        // A MISS IS A REFUSAL, not a fallback. Reaching the bare-name ladder from here is exactly the bug
+        // this closes: `Widget::makeFn` resolved to the caller's own file's `A::makeFn` and `Base::makeFn`,
+        // because the ladder sprays the member spelling and the S6-C locality tie-break then hands the site
+        // to whichever candidate sits nearest. The receiver is the whole evidence a method reference has; a
+        // member the proven type does not declare is a call to something outside the indexed tree.
+        if( !scipPinned && !canonical && !narrowed && r.recv == RecvKind::JavaTypeCandidate )
+        {
+            narrowed = narrowTo( javaNarrower.methodOnTypeOrBases( javaProvenType, r, chaUp ), r, cand );
+            if( !narrowed )
+            {
+                disposition = javaCandidateRefused( g, r, it != byName.end() );
+                continue;
             }
         }
         // P2-D Rule 1 (class membership): a `this->m()` / `self.m()` call resolves to the caller's enclosing
@@ -2892,8 +3040,12 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // contradicted by the receiver (`this->` IS the enclosing class; a typed var already narrowed above).
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
+        // Issue #74: a proven `Type::method` receiver is excluded on the same ground — the type receiver
+        // names the target outright, so the caller's own scope is anti-evidence. Two same-named classes both
+        // declaring the member is a genuine split (the shape Rule 2c also keeps whole), not a locality race.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
-         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
+         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj
+         && r.recv != RecvKind::JavaTypeCandidate )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
             // memoize each survivor's shared-locality ONCE (was computed twice: once for bestShare, once inside the
