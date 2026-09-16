@@ -50,6 +50,19 @@
 # `--quality-delta --no-cache`-equivalent run with the qsnap blob deleted; every mutation must degrade
 # to the SAME byte-identical output.
 #
+# ── Part 2's huge-count arms, and why they run under a bounded allocator ──────────────────────────────
+# A checksum-valid qsnap blob whose vector count reads 0xFFFFFFFF used to reach `reserve` straight from the
+# blob: 32 GiB for a u64 vector. Linux (no overcommit for that size) threw std::bad_alloc, which nothing on
+# the CLI path catches — SIGABRT (134) on every run until the blob was evicted, reproduced on Ubuntu. The
+# macOS allocator overcommits the reservation and never touches it, so a plain macOS run of the same blob
+# exits 0 against the defect. The arms therefore run the huge-count mutations under a BOUND that turns the
+# reservation into the failure a small host would see: `ulimit -v` for a plain Linux binary, and ASan's
+# max_allocation_size_mb for an instrumented binary on any platform (the ASan sweep below carries it for
+# every mutation). A plain macOS binary has no such bound, and the arm says so rather than passing blind.
+# The layout offsets (magic 4, scheme 4, cacheVer 4, parserVer 4, sha 8, then the ten field counts from
+# byte 24) are the ones deserializeSnapshot reads; the map-count and sha arms used to write at 16 and 8,
+# which a guard ahead of the one they were written for rejected first.
+#
 # Usage:
 #   bash test/cachefuzzcheck.sh
 #   RIPWIRE_BIN=build/ripwire RIPWIRE_ASAN_BIN=asan/ripwire bash test/cachefuzzcheck.sh
@@ -87,6 +100,23 @@ stderr_sane(){
     lines="$( wc -l < "$f" | tr -d ' ' )"
     bytes="$( wc -c < "$f" | tr -d ' ' )"
     [ "$lines" -le "$STDERR_LINE_CAP" ] && [ "$bytes" -le "$STDERR_BYTE_CAP" ]
+}
+
+# The allocation bound the huge-count arms run under (header): which one `$1`'s build can take, or empty.
+bound_mode_of(){
+    if LC_ALL=C grep -q -a '__asan_init' "$1" 2>/dev/null; then echo asan
+    elif [ "$( uname -s )" = "Linux" ]; then echo ulimit
+    fi
+}
+# Run "$@" under bound mode $1. An address-space limit that cannot be set exits 97, so the caller reports a
+# skip instead of a pass that ran unbounded.
+bounded(){
+    local mode="$1"; shift
+    case "$mode" in
+        asan)   ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}max_allocation_size_mb=1024" "$@" ;;
+        ulimit) ( ulimit -v 8388608 2>/dev/null || exit 97; "$@" ) ;;
+        *)      "$@" ;;
+    esac
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -562,17 +592,32 @@ def mut_wrong_scheme(b):
     p = bytearray(b[:body_len]); v = struct.unpack_from("<I", p, 4)[0]; struct.pack_into("<I", p, 4, v + 1); return with_recomputed_trailer(p)
 muts["qsnap_wrong_scheme_recomputed_checksum"] = mut_wrong_scheme
 
+QSNAP_SHA_OFF    = 16   # magic(4) + scheme(4) + cacheVer(4) + parserVer(4)
+QSNAP_COUNTS_OFF = 24   # ... + sha(8): the first of the ten field counts (7 maps, then 3 u64 vectors)
+
 def mut_wrong_sha(b):
-    p = bytearray(b[:body_len]); struct.pack_into("<Q", p, 8, 0xDEADBEEFDEADBEEF & ((1<<64)-1)); return with_recomputed_trailer(p)
+    p = bytearray(b[:body_len]); struct.pack_into("<Q", p, QSNAP_SHA_OFF, 0xDEADBEEFDEADBEEF & ((1<<64)-1)); return with_recomputed_trailer(p)
 muts["qsnap_wrong_sha_recomputed_checksum"] = mut_wrong_sha
 
 def mut_huge_map_count(b):
     p = bytearray(b[:body_len])
-    off = 16   # first field-map count (ccxBySym), right after magic(4)+scheme(4)+sha(8)
-    if off + 4 <= len(p):
-        struct.pack_into("<I", p, off, 0xFFFFFFF0)
+    struct.pack_into("<I", p, QSNAP_COUNTS_OFF, 0xFFFFFFF0)   # ccxBySym's count
     return with_recomputed_trailer(p)
 muts["qsnap_huge_map_count_recomputed_checksum"] = mut_huge_map_count
+
+# The three VECTOR counts (cloneGroups, dead, publicApi): the maps ahead of them read as empty, and the
+# target count claims 0xFFFFFFFF u64 records in a body with none left. Each is its own row so a guard on one
+# vector cannot hide a missing guard on another.
+def huge_vec_count(field):
+    def mut(b):
+        p = bytearray(b[:QSNAP_COUNTS_OFF])
+        for _ in range(7 + field):
+            p += struct.pack("<I", 0)
+        p += struct.pack("<I", 0xFFFFFFFF)
+        return with_recomputed_trailer(p)
+    return mut
+for field, name in enumerate(("clonegroups", "dead", "publicapi")):
+    muts["qsnap_huge_vec_count_" + name + "_recomputed_checksum"] = huge_vec_count(field)
 
 def mut_garbage_body(b):
     p = bytearray(b[:body_len])
@@ -625,6 +670,33 @@ PYEOF
         cp "$TMP/q_good.bin" "$QBLOB"   # restore for the next mutation
     done
 
+    # The huge VECTOR counts once more, under a bound (see the header): red on a reader that reserves from the
+    # count, green on one that measures the count against the bytes left first.
+    QHUGE_NAMES=( $( ls "$MUTDIR"/qsnap_huge_vec_count_*.bin 2>/dev/null | xargs -n1 basename | sed 's/\.bin$//' | sort ) )
+    [ "${#QHUGE_NAMES[@]}" -eq 3 ] && ok "huge vector-count rows generated (${#QHUGE_NAMES[@]})" \
+                                   || no "expected 3 huge vector-count rows, generated ${#QHUGE_NAMES[@]}"
+    QBOUND="$( bound_mode_of "$BIN" )"
+    [ -n "$QBOUND" ] || note "huge vector counts: no allocation bound for a plain $( uname -s ) binary — its allocator overcommits the reservation, so only the ASan sweep below or a Linux run can turn these rows red"
+    if [ -n "$QBOUND" ]; then
+        for name in "${QHUGE_NAMES[@]}"; do
+            cp "$MUTDIR/$name.bin" "$QBLOB"
+            out="$TMP/qb_${name}.out"; err="$TMP/qb_${name}.err"
+            bounded "$QBOUND" qrun >"$out" 2>"$err"; rc=$?
+            if [ "$rc" -eq 97 ]; then
+                skip "[bounded:$QBOUND:$name] the address-space limit could not be set here"
+            elif [ "$rc" -ne 0 ] || grep -qiE 'AddressSanitizer|bad_alloc|terminate called' "$err"; then
+                no "[bounded:$QBOUND:$name] exit $rc — the count reached an allocation before any byte-count check"; sed -n '1,6p' "$err"
+            elif ! diff -q "$TMP/q_truth" "$out" >/dev/null 2>&1; then
+                no "[bounded:$QBOUND:$name] OUTPUT POISONED under the bound"
+            elif ! grep -q 'HEAD Snapshot cache corrupt' "$err"; then
+                no "[bounded:$QBOUND:$name] exit 0 but the blob was not disclosed as corrupt"
+            else
+                ok "[bounded:$QBOUND:$name] exit 0, byte-identical, disclosed as a corrupt cache"
+            fi
+            cp "$TMP/q_good.bin" "$QBLOB"
+        done
+    fi
+
     # filesystem-shape: directory at the qsnap blob path.
     rm -f "$QBLOB"; mkdir -p "$QBLOB"
     out="$TMP/q_dir.out"; err="$TMP/q_dir.err"
@@ -646,7 +718,8 @@ PYEOF
         for name in "${QMUT_NAMES[@]}"; do
             cp "$MUTDIR/$name.bin" "$QBLOB" 2>/dev/null || { mkdir -p "$( dirname "$QBLOB" )"; cp "$MUTDIR/$name.bin" "$QBLOB"; }
             err="$TMP/qasan_${name}.err"
-            ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$ASAN_BIN" "$QREPO" --quality-delta >/dev/null 2>"$err"
+            # max_allocation_size_mb: the bound the huge-count rows need to go red on an overcommitting host (header).
+            ASAN_OPTIONS="halt_on_error=1:abort_on_error=0:max_allocation_size_mb=1024" env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$ASAN_BIN" "$QREPO" --quality-delta >/dev/null 2>"$err"
             rc=$?
             if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|heap-buffer-overflow|stack-buffer-overflow|SEGV|ERROR: ' "$err" || [ "$rc" -ge 128 ]; then
                 no "[asan:$name] SANITIZER REPORT / crash (exit $rc)"; sed -n '1,10p' "$err"
