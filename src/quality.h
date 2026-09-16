@@ -1972,7 +1972,9 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
 // `static_assert` — this lane's file boundary forbade editing those files.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 96;   // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 100;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 100 = 2026-09-16 (C++ template scopes, test/cpptmplscopecheck.sh):
+                                                          //    97..99 are held by open lanes. See ingest_cache.h's kParserVer note.
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
                                                           //    RE-BUMPED from the branch's 87 over #139's 93 and #172's 94.
                                                           //    See ingest_cache.h's kParserVer note.

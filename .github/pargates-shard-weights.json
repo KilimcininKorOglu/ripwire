@@ -94,6 +94,7 @@
 "cppbenchcheck.sh": 170.6,
 "cppoperatorcheck.sh": 5.5,
 "cppqualcheck.sh": 36.1,
+"cpptmplscopecheck.sh": 4.4,
 "crossdirincludecheck.sh": 103.4,
 "crossrefcheck.sh": 35.0,
 "crossrefdegradecheck.sh": 10.4,

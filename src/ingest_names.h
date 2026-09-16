@@ -196,10 +196,10 @@ inline bool hasPhantomScopeSeparator( TSNode qualified ) noexcept
 // The hop cap is defensive only: each step moves strictly down a finite tree, so it cannot spin. A chain
 // deeper than the cap would return a still-qualified node, which finalSegment() still names correctly (it
 // splits on the last `::`); only the immediate-scope precision would degrade, so there is nothing here a
-// DEGRADED_PATH_ALERT could truthfully claim.
+// DEGRADED_PATH_ALERT could truthfully claim. cppScopeNameText below walks the same chain under the same cap.
+constexpr int kMaxQualifierHops = 32;   // `a::b::c::…` past 32 segments is not written C++
 inline TSNode innermostQualifiedName( TSNode n ) noexcept
 {
-    constexpr int kMaxQualifierHops = 32;   // `a::b::c::…` past 32 segments is not written C++
     for( int hop = 0; hop < kMaxQualifierHops; ++hop )
     {
         if( ts_node_is_null( n ) || !kindIs( ts_node_type( n ), "qualified_identifier" ) )
@@ -268,6 +268,66 @@ inline DefNameFacts cppDefNameReseat( bool applies, TSNode nameNode, std::string
     }
     return { inner, src.substr( a, b - a ), a, ts_node_start_point( inner ).row };
 }
+
+// ── C++ scopes carry no template-argument list ──────────────────────────────────────────────────────────────
+// A scope is half of an IDENTITY — the map's sc=, the canonical `path::scope::name` id the S6-C locality
+// tie-break and the census key on, the `A::b` a selector names — so it must be what a caller writes before `::`,
+// never the argument list a class template's member repeats. tree-sitter-cpp hands such a scope over as a
+// `template_type` (`name:` type_identifier + `arguments:` template_argument_list) in three places: the `scope:`
+// of a qualified declarator (`void Box<T>::grow()`), the `name:` of a class specialization (`struct Slot<bool>
+// { … }`), and a link of a qualified class name (`struct Tree<T>::Leaf { … }`). Reading those nodes' TEXT kept
+// the list, so one member keyed two identities: the in-class declaration `Box::grow`, the out-of-line body
+// `Box<T>::grow`, and --callers=Box::grow resolved to the declaration and answered 0. A list broken over lines
+// put the line break into the id, and `Slot<std::string>` — whose `::` sits INSIDE the list — was cut by
+// immediateScope to `string>`. Reading the `name:` child is structural, so no bracket counting is involved and
+// nothing inside the list (a `>` in a parenthesised argument, a comment, a line break) can unbalance it.
+//
+// A specialization therefore keys the PRIMARY template's member: `template<> void Box<int>::grow()` is one more
+// definition of Box::grow, joined the way an overload is. The resolver does no template-argument deduction, so no
+// call site can reach a `Box<int>` identity; test/cpptmplscopecheck.sh's header carries the full argument.
+
+inline bool isCppTemplateType( TSNode n ) noexcept
+{
+    return !ts_node_is_null( n ) && kindIs( ts_node_type( n ), "template_type" );
+}
+
+// One scope segment's text: a template_type's `name:` child, any other node's own text.
+inline std::string_view cppScopeSegmentText( TSNode segment, std::string_view src ) noexcept
+{
+    if( isCppTemplateType( segment ) )
+    {
+        const TSNode name = fieldChild( segment, NodeField::Name );
+        if( !ts_node_is_null( name ) )
+        {
+            return nodeTextOf( name, src );
+        }
+    }
+    return nodeTextOf( segment, src );
+}
+
+// A class's written `name:` read as a scope: `Slot<bool>` → "Slot", `Tree<T>::Leaf` → "Tree::Leaf". When no
+// link is a template_type the written text is returned as is, so every non-template name — `Outer::Inner`, a
+// Python class, a namespace — keeps exactly the bytes it had. Same hop cap (kMaxQualifierHops), and the same
+// reason it can only degrade precision, as innermostQualifiedName.
+inline std::string cppScopeNameText( TSNode name, std::string_view src )
+{
+    std::string stripped;
+    bool        hasTemplateLink = isCppTemplateType( name );
+    TSNode      link            = name;
+    for( int hop = 0; hop < kMaxQualifierHops && !ts_node_is_null( link ) && kindIs( ts_node_type( link ), "qualified_identifier" ); ++hop )
+    {
+        const TSNode scope = fieldChild( link, NodeField::Scope );             // null for a leading `::`
+        stripped.append( cppScopeSegmentText( scope, src ) ).append( "::" );
+        link            = fieldChild( link, NodeField::Name );
+        hasTemplateLink = hasTemplateLink || isCppTemplateType( scope ) || isCppTemplateType( link );
+    }
+    if( !hasTemplateLink )
+    {
+        return std::string( nodeTextOf( name, src ) );
+    }
+    return stripped.append( cppScopeSegmentText( link, src ) );
+}
+
 inline std::string qualifierOf( TSNode nameNode, std::string_view src )
 {
     const TSNode parent = ts_node_parent( nameNode );
@@ -284,8 +344,7 @@ inline std::string qualifierOf( TSNode nameNode, std::string_view src )
     {
         return {};
     }
-    const std::uint32_t a = ts_node_start_byte( scope ), b = ts_node_end_byte( scope );
-    return ( a <= b && b <= src.size() ) ? immediateScope( src.substr( a, b - a ) ) : std::string{};
+    return immediateScope( cppScopeSegmentText( scope, src ) );   // `Box<T>::grow` → "Box" (an out-of-range span reads "", as before)
 }
 // ── H4 RUST qualified-call helpers (W1-MEASURE verdict) ─────────────────────────────────────────────────
 // W1 measured that the Rust PATTERN ALONE under-delivers: Rust defs carried scope="" (canonByName was fed
@@ -420,8 +479,7 @@ inline std::string enclosingScopeOf( TSNode node, std::string_view src )
             {
                 return {}; // anonymous → no usable scope
             }
-            const std::uint32_t a = ts_node_start_byte( nm ), b = ts_node_end_byte( nm );
-            return ( a <= b && b <= src.size() ) ? std::string( src.substr( a, b - a ) ) : std::string{};
+            return cppScopeNameText( nm, src );   // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text
         }
     }
     return {};

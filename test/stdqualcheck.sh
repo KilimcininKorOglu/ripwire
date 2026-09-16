@@ -138,8 +138,10 @@ printf '%s' "$MAP" | grep -qE 'n="launderIt"[^>]*amb=' \
 # Measured on the pre-fix binary: zero callees — the brace-initialised temporary names no call reference that
 # reaches operator(). Pinned at that literal so the guard is seen to invent nothing; the vacuity guard asserts
 # the specialization's operator() really is indexed (so the zero is about resolution, not a missing file).
-printf '%s' "$MAP" | grep -qE '<s t="method" n="operator\(\)" sc="hash&lt;Mine&gt;"' \
-    && ok "the std::hash<Mine> specialization's operator() IS indexed (scope hash<Mine>)" \
+# Scope `hash`, not `hash<Mine>`, since parser version 100: a specialization's member keys the primary template's
+# identity (test/cpptmplscopecheck.sh §4 carries why). Pin moved there, deliberately; the vacuity question is unchanged.
+printf '%s' "$MAP" | grep -qE '<s t="method" n="operator\(\)" sc="hash"' \
+    && ok "the std::hash<Mine> specialization's operator() IS indexed (scope hash)" \
     || no "the specialization's operator() is missing from the map — the arm below is vacuous"
 expect callees hashMine            0 "std::hash<Mine>{}( m ) — no edge today, none after: pinned, not invented"
 

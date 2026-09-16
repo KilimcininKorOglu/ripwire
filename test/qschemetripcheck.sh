@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, C++ TEMPLATE SCOPES (test/cpptmplscopecheck.sh): parserVer and its quality mirror move 96 -> 100 — a
+#   scope read off a template_type keeps only its `name:`, so an out-of-line member of a class template, a class
+#   specialization's members and a two-segment `Box<int>::make()` qualifier key the primary template's identity.
+#   97..99 are held by open lanes, so this takes the next free number over them. No record layout changes:
+#   kCacheVersion stays 22. kQSnapCacheScheme stays 12: no manifest function changed, only extraction identity.
+#   Old extraction facts must be re-parsed.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.

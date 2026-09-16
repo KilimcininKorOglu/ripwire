@@ -15,6 +15,38 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a class template's out-of-line member is the same symbol as its declaration (parser version 100)
+
+A C++ member defined out of line on a class template kept the template-argument list in its scope, so `template <class
+T> void Box<T>::grow() {}` produced a `sc="Box&lt;T&gt;"` row next to the in-class declaration's `sc="Box"`. One member
+was two identities. `--callers=Box::grow` resolved to the declaration and answered `count="0"` while `use( Box<int>& b
+) { b.grow(); }` sat three lines below, because its edge landed on the other row. `--impact` and `--uses` missed it the
+same way, and the S6-C locality tie-break compared `Box<T>::` with `Box::` segment by segment. An argument list broken
+over lines put the line break into the `--pin-census` id. A list that itself holds `::` was cut inside it: `template<>
+void Slot<std::string>::clear()` was scoped `string>`. The reference side had the twin defect at two segments.
+`Factory<int>::make()` qualified as `Factory<int>`, which names no symbol, so the call split onto an unrelated
+`Decoy::make` and published a caller for a function nobody called. (At three or more segments the qualified-call
+re-split already stripped the arguments.) A C++ scope that tree-sitter hands over as a `template_type` now keeps only
+the template's name. That covers the qualified declarator, the name of a class specialization, and a link of a
+qualified class name such as `struct Tree<T>::Leaf`. An explicit or partial specialization's member therefore keys the
+primary template's member: `template<> void Box<int>::grow()` is one more definition of `Box::grow`, joined the way an
+overload is. The resolver does no template-argument deduction, so no call site can reach a `Box<int>` identity.
+Measured with `--pin-census` on dgl (343 C, C++ and CUDA files, public, `f0b7cc9`), same corpus before and after:
+symbol ids with an argument list in their scope fell from 156 to 0, and 77 of 32,628 decided call sites changed. 48 of
+them now reach a different target, and one wrong split is gone (a dispatcher's call into its own next instantiation,
+now a self-call): a call from a specialization into its `_Sum<Idx, float, atomic>` base no longer pins the
+specialization's own `Call`, `CSRGEMM<DType>::compute` no longer splits onto `CSRGEAM`, and `Selector<LhsTarget>::Call`
+qualifies to `Selector::Call` instead of splitting over seven unrelated operators. 22 keep the same target id but now
+split, because a primary template and its specialization both define that member (`Map::assign` and `Map<std::string,
+V, T1, T2>::assign`): the cost of the join, disclosed as `amb=`. The remaining 6 change only their mechanism label. The
+map header moved from edges 20,829 / ambiguous 1,891 to 20,745 / 1,899. On this repository 4 symbols move (the
+`node_rank` specializations in `src/infra/dynamic_map.hpp`) and no call edge changes. An ack or saved baseline keyed on
+a template member's old spelling re-keys once. Gated by `test/cpptmplscopecheck.sh` (36 checks; 27 fail on the previous
+binary). It compares a line-aligned template and non-template twin byte for byte across the map, `--callers`,
+`--impact`, `--uses` and the census. It also covers a multi-line argument list, namespace chains, a template inside a
+template, all three specialization forms and the two-segment decoy call. `test/stdqualcheck.sh`'s specialization pin
+moves from `hash<Mine>` to `hash`.
+
 ### Changed — Intel macOS binaries end with 0.6.1
 
 0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
