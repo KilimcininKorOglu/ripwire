@@ -682,7 +682,7 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     {
         return false; // Q-DIAL-2: the LANGUAGE calls it — see languageInvokedSymbol (this replaced a blanket header exclusion)
     }
-    const std::string& p = ing.files[ s.fileId ];
+    const std::string_view p = rootRelPath( ing, s.fileId );   // #228: a directory above the root never decides this
     if( isFixturePath( p ) )
     {
         return false; // fixtures are dead by design (noise rules)
@@ -2820,7 +2820,14 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // lookup this binary makes, so each Elixir symbol would read as new. Extraction is unchanged (parser version
 // 95 stays), so kParserVer and its mirror deliberately did NOT move. Bumped 10 -> 11.
 // v12 — Python inherited self/cls dispatch excludes possible overrides from the dead set on both sides.
-constexpr std::uint32_t kQSnapCacheScheme = 12;
+// v13 (#228, root-spelling invariance) — the HEAD side always ingests at an absolute temp root, and until this
+// round that spelling decided answers: Python's root-relative import probe was inert there (the name ladder bound
+// a same-directory def instead), and isFixturePath / isTestScriptPath read the directories ABOVE the temp root.
+// Both now read model.h::rootRelPath, so the dead set and every call edge a v12 blob was computed from can differ
+// for an UNCHANGED sha — and served to this binary, the pre-fix Snapshot is exactly the phantom row #228 reported
+// (test/rootspellingcheck.sh arm 5 watched it served: exit 2 on an unchanged four-file tree). No extraction
+// change: parser version and its mirror stay. Bumped 12 -> 13.
+constexpr std::uint32_t kQSnapCacheScheme = 13;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -6646,7 +6653,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             bool allTestScript = !cg.members.empty();
             for( NodeId m : cg.members )
             {
-                if( m >= ing.symbols.size() || !isTestScriptPath( ing.files[ ing.symbols[m].fileId ] ) ) { allTestScript = false; break; }
+                if( m >= ing.symbols.size() || !isTestScriptPath( rootRelPath( ing, ing.symbols[m].fileId ) ) ) { allTestScript = false; break; }
             }
             if( allTestScript )
             {
@@ -6900,7 +6907,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                 std::vector<std::uint8_t> fixtureByFile( ing.files.size(), 0 );
                 for( std::uint32_t f = 0; f < ing.files.size(); ++f )
                 {
-                    fixtureByFile[f] = isFixturePath( ing.files[f] ) ? 1 : 0;
+                    fixtureByFile[f] = isFixturePath( rootRelPath( ing, f ) ) ? 1 : 0;
                 }
 
                 // B10.2d — SELF-vs-AMBIENT window cutoff, same basis as gates 1/3 (HEAD's own committer epoch

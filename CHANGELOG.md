@@ -15,6 +15,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — an answer depended on how the root was typed (`ripwire .` and `ripwire "$PWD"` disagreed)
+
+Reported by **@hnipps** in #228: `--quality-delta` on an unchanged tree gated. Part of that report is how the
+root is spelled, and it was a graph defect, not a delta one. The crawl stores every path with the root exactly
+as typed, and the include/import index and the path predicates read that spelling raw. Three things followed.
+Python's root-relative import probe joined onto an empty base, which is the crawl root only under `ripwire .`.
+Under `"$PWD"`, which is every MCP session and the `--quality-delta` HEAD side (always an absolute temp root),
+`from pkg.store import load` stopped resolving and the name ladder bound a same-directory `load` instead. A root
+typed `../repo` lost every include and import edge in every language, because `lexicalNormalize` refuses a path
+that starts above its base. And a checkout that merely lives under a `tests/` or `fixtures/` directory had every
+file tagged `layer="test"`, exempted from dead-code and seeded as a test under an absolute root, and none of that
+under `.`. The fix is one seam: `ingest()` records the root once, and `rootRelPath` (`src/model.h`) gives the
+root-relative view (a prefix strip, no syscall, no allocation). The include/import index, the Python/JS/C
+declaration indexes, the module vocabularies, the test, fixture, layer and tier predicates, the path-mention
+and stack-trace suffix matches, the `--lint` byte cap and the map's byte model now read that view. Stored and
+printed paths are unchanged. `rootRelativeUri` also trims a trailing `/`, so `--pack-task` rows stop printing the
+whole absolute path under `"$PWD/"`. On a shallow Django clone (2b30f62, 3,449 indexed files, `--no-cache`, map
+header), `"$PWD"` went from 62,591 edges, `ambiguous=3135` and `declined=49153` to what `.` always gave: 74,972,
+5,958 and 40,681. The ambiguous gauge rises because 12,381 more calls now reach a definition set at all. On the
+same clone, `--quality-delta` with a fresh cache gated 14 rows under `.` and `./`, 8 under `../dj` and 0 under
+`"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped to `order=important-last(auto:fill)` under
+`"$PWD"` alone and now agrees. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is
+never served. `test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and
+`../name`) to byte-identical output across the committed four-file repro and eight language import fixtures. It
+also checks a tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme
+upgrade. On origin/main it fails 56 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules,
+sparse checkouts, skip-worktree, `--no-ignore`) stays open.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
