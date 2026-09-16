@@ -128,6 +128,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -164,6 +165,10 @@ inline const char* familyName( std::uint8_t family ) noexcept
                                            : kNewFamilyNames[ family - ensemble::kFamilyCount ];
 }
 
+// The panel's six families are bits of the same std::uint8_t masks ensemble's four are (PanelRow::firedMask below,
+// kAllFamilies here), set by `1u << family`: pinned so a seventh family cannot shift past the mask.
+static_assert( kPanelFamilyCount <= std::numeric_limits<std::uint8_t>::digits,
+               "quality-panel families are bits of a std::uint8_t mask — widen the masks before adding a family" );
 inline constexpr std::uint8_t kAllFamilies = std::uint8_t( ( 1u << kPanelFamilyCount ) - 1u );
 
 // The families measured stable enough to stand behind a gate — everything but `historical` and `colocation`,

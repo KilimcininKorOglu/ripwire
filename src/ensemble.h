@@ -90,6 +90,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>          // std::popcount — familyCountOf
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -230,6 +231,12 @@ struct EnsembleFileRow
     std::uint8_t  topCount  = 0;
     std::uint8_t  unionMask = 0;
 };
+
+// Every family mask above and below is one bit per family, set by `1u << family` at runtime (markUnavailableIn, the
+// join's per-symbol mask): a family index at or past the mask's width would be a shift into undefined behaviour.
+static_assert( kFamilyCount <= std::numeric_limits<decltype( EnsembleRow::firedMask )>::digits
+                   && kFamilyCount <= std::numeric_limits<decltype( EnsembleFileRow::unionMask )>::digits,
+               "ensemble families are bits of a std::uint8_t mask — widen firedMask/unionMask/unavailMask first" );
 
 struct EnsembleScan
 {
