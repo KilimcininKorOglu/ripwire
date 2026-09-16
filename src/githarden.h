@@ -36,7 +36,7 @@
 // a read-only call. The `ext::` transport is already refused at the one place a URL reaches git (main.cpp's clone).
 
 #include "arch.h"            // rw::ciEqualAscii — the case-insensitive ASCII compare the tree already has (reused, not re-rolled)
-#include "docparse.h"        // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
+#include "pathguard.h"       // pathguard::readRegularFileNoFollow — config candidates are read non-blocking and regular-file-only
 #include "gitmine.h"         // rw::popenTrimmed — the one popen-and-trim shape in the tree (never a second)
 #include "infra/emit.h"      // rw::emitTo — the house emitter; no new printf-family site
 #include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
@@ -248,7 +248,7 @@ inline std::vector<std::filesystem::path> localConfigCandidates( const std::file
         out.push_back( dotGit / "config.worktree" );
         return out;
     }
-    const std::string head = docparse::detail::readWholeFile( dotGit.string() ).value_or( std::string() );
+    const std::string head = pathguard::readRegularFileNoFollow( dotGit.string() ).value_or( std::string() );
     if( !head.starts_with( "gitdir:" ) )
     {
         return out;   // not a repository at all — nothing for git to read, nothing to probe
@@ -260,7 +260,7 @@ inline std::vector<std::filesystem::path> localConfigCandidates( const std::file
     }
     out.push_back( gitDir / "config" );
     out.push_back( gitDir / "config.worktree" );
-    if( const std::optional<std::string> common = docparse::detail::readWholeFile( ( gitDir / "commondir" ).string() ) )
+    if( const std::optional<std::string> common = pathguard::readRegularFileNoFollow( ( gitDir / "commondir" ).string() ) )
     {
         std::filesystem::path commonDir = trimmedFirstLine( *common );
         if( commonDir.is_relative() )
@@ -276,7 +276,7 @@ inline bool localConfigMayCarryFsmonitor( const std::string& root )
 {
     for( const std::filesystem::path& candidate : localConfigCandidates( root ) )
     {
-        std::optional<std::string> bytes = docparse::detail::readWholeFile( candidate.string() );
+        std::optional<std::string> bytes = pathguard::readRegularFileNoFollow( candidate.string() );
         if( !bytes )
         {
             continue;
