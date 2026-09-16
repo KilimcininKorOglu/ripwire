@@ -526,7 +526,7 @@ inline std::uint64_t fnv1a64( std::string_view s ) noexcept
     return h;
 }
 
-// relForHash — the S2 root-relative path view — moved to model.h (beside rootRelPath and diskPath) so every
+// relForHash — the S2 root-relative path view — moved to model.h (beside rootRelPath and the disk-path seam) so every
 // header that reads ing.files can reach it without pulling in arch.h. Its contract is unchanged.
 
 // relForHash's read-side twin: does `tail` name the same path as `full`, allowing `full` to carry a leading

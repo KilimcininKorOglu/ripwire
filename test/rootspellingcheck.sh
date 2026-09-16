@@ -171,6 +171,21 @@ for sp in dot abs; do
 done
 ( cd "$PY" && git checkout -q -- app/views.py )
 
+# ── (1)+(2) a C++ header selector: the declaration file answers through an include PROOF ──────────────
+# `--callers=include/Store.h:putObject` widens to the defining .cpp only when that .cpp's own #include resolves to
+# the header. The proof builds its own path index (graph.h markCandidateFilesIncludingDecl), a second place the
+# includer spelling and the index keys must agree — an earlier cut of this fix keyed the index root-relative and
+# resolved the includer as typed, and the header answered count="0" under every spelling but `.`.
+CH="$TMP/w/cpphdr"
+mkdir -p "$TMP/cpphdr.src/include" "$TMP/cpphdr.src/src" "$TMP/cpphdr.src/app"
+printf '#pragma once\nclass Store\n{\npublic:\n    int putObject( const char* key );\n};\n' >"$TMP/cpphdr.src/include/Store.h"
+printf '#include "../include/Store.h"\nint Store::putObject( const char* key )\n{\n    return key ? 1 : 0;\n}\n' >"$TMP/cpphdr.src/src/Store.cpp"
+printf '#include "../include/Store.h"\nint driveTheStore( Store& s )\n{\n    return s.putObject( "k" );\n}\n' >"$TMP/cpphdr.src/app/Caller.cpp"
+stage "$TMP/cpphdr.src" "$CH"
+invariant "cpphdr --callers=include/Store.h:putObject" "$CH" --callers=include/Store.h:putObject
+every_spelling 'control: the header selector reaches the caller through the include proof (driveTheStore)' \
+    "cpphdr --callers=include/Store.h:putObject" 'n="driveTheStore" p="app/Caller.cpp:2"'
+
 # ── (1)+(2) every language with a path-resolved import tier ─────────────────────────────────────────
 # fixture | symbol | a file whose change reaches it | an --deps row that proves an edge resolved
 while IFS='|' read -r fx sym file edge; do

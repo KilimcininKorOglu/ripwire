@@ -38,9 +38,9 @@ same clone, `--quality-delta` with a fresh cache gated 14 rows under `.` and `./
 `"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped to `order=important-last(auto:fill)` under
 `"$PWD"` alone and now agrees. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is
 never served. `test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and
-`../name`) to byte-identical output across the committed four-file repro and eight language import fixtures. It
-also checks a tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme
-upgrade. On origin/main it fails 56 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules,
+`../name`) to byte-identical output across the committed four-file repro, eight language import fixtures and a
+C++ header selector whose answer rests on an include proof. It also checks a tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme
+upgrade. On origin/main it fails 57 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules,
 sparse checkouts, skip-worktree, `--no-ignore`) stays open.
 
 ### Changed — Intel macOS binaries end with 0.6.1

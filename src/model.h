@@ -1135,7 +1135,7 @@ inline std::string_view relForHash( std::string_view path, std::string_view root
     return path;
 }
 
-// The ONE root-relative seam, the dual of diskPath below: every DECISION about a file's place in the tree reads
+// The ONE root-relative seam, the dual of the disk-path seam below: every DECISION about a file's place in the tree reads
 // this, never ing.files[fileId] directly. It is relForHash against the root the crawl recorded, so it costs a
 // prefix compare and no allocation or syscall, and it is a VIEW — the stored spelling (and so every printed
 // path, cache key and disk open) is untouched.

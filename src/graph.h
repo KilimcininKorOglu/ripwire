@@ -1221,7 +1221,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
             {
                 verdict = 'i';   // a relative import cannot leave the package
             }
-            else if( resolvePreciseInclude( ing.files[ b.fileId ], b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )
+            else if( resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )   // same view as fileIndex's keys
             {
                 verdict = 'i';
             }
@@ -4224,7 +4224,7 @@ inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std:
         {
             continue;
         }
-        const std::uint32_t to = resolvePreciseInclude( ing.files[ inc.fileId ], inc.target, inc.isAngle, declIndex,
+        const std::uint32_t to = resolvePreciseInclude( rootRelPath( ing, inc.fileId ), inc.target, inc.isAngle, declIndex,   // same view as declIndex's keys
                                                         {}, false, ws, inc.fileId, nullptr );
         if( to != kNoFile && to < isDecl.size() && isDecl[ to ] != 0 )
         {
