@@ -15,43 +15,6 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — a user's regular expression could abort the process or answer a question it never finished; one header owns them now
-
-Only `--regex` screened a user's pattern before handing it to `std::regex`. Three other entry points took the same
-engine unscreened and caught nothing at match time, so on Apple libc++ — whose engine throws `error_complexity` when
-it gives up — `ripwire <dir> --graph-query='file(all,"(a+)+z")'` and an `--arch` rules file holding
-`deny path zz/.* -> (a+)+z` both died with an uncaught `std::regex_error` (rc 134), over a fixture whose directory
-name is a run of 44 `a`. `--match` swallowed the same throw and KEPT every row the `#match?` predicate never decided,
-at rc 0; a malformed `#match?` pattern kept every row too. On libstdc++, which has no budget, each of these
-backtracks without end. And `file()` matched the path with the checkout's own directories in front of it:
-`file(all,"alpha")` selected every symbol in a clone named `repo_alpha` and none in `repo_beta`, and `file(all,"^src/")`
-selected nothing under an absolute root.
-
-`src/regexguard.h` now owns the screen (moved verbatim from `src/search.h`), the compile and the match, and is the one
-place that catches `std::regex_error` and `std::bad_alloc` — by type, converted to a value behind a `noexcept` API that
-`static_assert`s pin. A pattern the screen or the parser rejects is refused by name at exit 1 on every entry point
-(`--graph-query file()`, an `--arch` FROM or TO path-rule, a `#match?` in `--match` or `--lint-rules`), in the words
-`--regex` already printed. A match the engine abandons part-way (overlapping alternation such as `(a|a)+z` passes the
-structural screen) is refused by name at exit 1, never read as "no match": on `--regex` it used to skip the file with
-an alert Release deletes and print `hits=` as a measurement. `file()` matches the root-relative path its own `p=`
-prints, the rule `--arch` adopted for its rules. The built-in lint packs keep the old keep-the-row fallback for their
-constant patterns.
-
-Byte-identical: 32 of 32 comparisons of the origin/main binary against this one (dev build, one checkout, stdout,
-stderr and exit code) across `--grep`/`--regex` (prefiltered, `--no-prefilter`, context, compact, unindexed, the three
-existing refusals, JSON), `--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` (incl. SARIF) and the map,
-plus a three-request `--mcp` grep session; the only differences are the four fixes above. No compile moved: once per
-query, per rule and per grep worker as before (the per-edge `--arch` TO compile is unchanged), and `file()` now decides
-each FILE once instead of each symbol.
-
-Gate: `test/regexguardcheck.sh` — (a) a catastrophic pattern refused by name on all five entry points, each with a
-positive control; (b1) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_MATCH=1` makes every guarded match throw and
-each entry point must refuse, on every standard library; (b2) `(a|a)+z` against libc++'s real engine; (c) no
-`std::regex` spelled in `src/` outside the owner and a two-row allowlist of constant rule tables (redact, skill scan),
-with planted-file controls; (d) two clones at different directory names, absolute and relative roots, agree. Red on
-origin/main: 35 failures, four of them rc 134. `test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern
-refusal, and its golden's `match-malformed` section is empty.
-
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
@@ -78,6 +41,62 @@ arm (global `operator new`) measured with `src/alloccount.cpp` as a delta betwee
 ASan/UBSan pass. kotlincheck §12 now prints the first five lines of stderr when that arm fails, because
 none of the eight CI logs could show what the notice had looked like. Not fixed here: the default map over the same
 fixture says `files=4` with no sign of the two refused files, a disclosure gap tracked by #157.
+
+### Fixed — a user's regular expression could abort the process, hang the skill scanner, or answer a question it never finished; one header owns them now
+
+Only `--regex` screened a user's pattern before handing it to `std::regex`. Three other entry points took the same
+engine unscreened and caught nothing at match time, so on Apple libc++ — whose engine throws `error_complexity` when
+it gives up — `ripwire <dir> --graph-query='file(all,"(a+)+z")'` and an `--arch` rules file holding `deny path zz/.*
+-> (a+)+z` both died with an uncaught `std::regex_error` (rc 134), over a fixture whose directory name is a run of 44
+`a`. `--match` swallowed the same throw and KEPT every row the `#match?` predicate never decided, at rc 0; a malformed
+`#match?` pattern kept every row too. On libstdc++, which has no budget, each of these backtracks without end. A
+`--regex` of 20,000 bytes died with SIGBUS (rc 138): `std::regex` compiles by recursion, and a grep worker runs on a
+512 KiB stack. The skill scanner's `EXFILTRATE:net-exfil` regex was quadratic in the line — a 20,000-byte fenced `curl
+curl …` line took 5.9 s and a 200,000-byte one was still running at 60 s — and an engine throw inside it would have
+ended `wrap`'s `noexcept` scan. And `file()` matched the path with the checkout's own directories in front of it:
+`file(all,"alpha")` selected every symbol in a clone named `repo_alpha` and none in `repo_beta`, and
+`file(all,"^src/")` selected nothing under an absolute root.
+
+`src/regexguard.h` now owns the screen (moved verbatim from `src/search.h`), the compile and the match, and is the one
+place that catches `std::regex_error` and `std::bad_alloc` — by type, converted to a value behind a `noexcept` API
+that `static_assert`s pin. A pattern the screen or the parser rejects is refused by name at exit 1 on every entry
+point (`--graph-query file()`, an `--arch` FROM or TO path-rule, a `#match?` in `--match` or `--lint-rules`), in the
+words `--regex` already printed. The screen also bounds a pattern at 2,048 bytes and 64 nested groups, under the
+smallest stack overflow measured with a standalone probe (a 3,392-deep nesting and a 16,896-byte literal on a 512 KiB
+libc++ thread; 960 and 3,648 on a 512 KiB libstdc++ one). A match the engine abandons part-way — overlapping
+alternation such as `(a|a)+z` passes the structural screen — is refused by name at exit 1, never read as "no match":
+the regex scan used to skip the rest of that file behind a `DEGRADED_PATH_ALERT`, which a Release build compiles out,
+and still print `hits=` as a complete count. An `--arch` TO template that compiles for no capture rejects the rules
+file at parse, and one that only breaks once an edge's captures are substituted (`a{2,\1}` becoming `a{2,1}`) is
+refused naming the substituted text, where both used to leave the rule silently inert. `file()` matches the
+root-relative path its own `p=` prints, the rule `--arch` adopted for its rules. The skill scanner's patterns go
+through the same boundary and fail CLOSED — an undecided line is a CRITICAL `SCAN-INCOMPLETE:regex-abandoned` finding
+— and `net-exfil` is decided by a linear scan derived from its regex. The built-in lint packs keep the old
+keep-the-row fallback for their constant patterns.
+
+Not fixed here, measured and disclosed: libstdc++'s matcher recurses once per consumed character, so on Linux a
+`--regex` such as `a*b` crashes on a line of 26,624 matching bytes (13,312 for `(a|b)*c`) with an 8 MiB stack; a
+pattern bound cannot reach that.
+
+Byte-identical: 45 of 45 comparisons of the origin/main binary against this one (dev build, one checkout, stdout,
+stderr and exit code) across `--grep`/`--regex` (prefiltered and full-scan, context, compact, unindexed, the three
+existing refusals, JSON), `--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` (incl. SARIF), `--scan-skill`
+and `--scan-skills` over every scanner fixture and this repository's own skills, and the map, plus a three-request
+`--mcp` grep session; the only differences are the fixes above. Instructions retired (Release, `/usr/bin/time -l`,
+median of 5, interleaved): `--regex` over an llvm-project checkout of 8,837 C/C++ files −2.6% to −4.4%, over this
+repository within ±0.2%, the literal `--grep` and map controls within ±0.8%. No compile was added: once per query, per
+rule and per grep worker as before, and `file()` now decides each FILE once instead of each symbol.
+
+Gate: `test/regexguardcheck.sh` — (a) a catastrophic pattern refused by name on all five entry points, each with a
+positive control; (b1) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_MATCH=1` makes every guarded match throw and
+each entry point must refuse naming the pattern (or, for `--lint-rules`, the rule); (b2) `(a|a)+z` against libc++'s
+real engine; (c) no `std::regex` spelled in `src/` outside the owner and a one-row allowlist (the constant redaction
+table), with planted-file controls; (e) the `--arch` TO template refused at parse and after substitution; (f) the
+linear `net-exfil` agrees with its regex over 1,200 generated lines, a 200,000-byte line scans in bounded time, and an
+abandoned match fails closed; (g) the size and depth bounds, each with its limit still compiling; (d) two clones at
+different directory names, absolute and relative roots, agree. Red on origin/main: 55 failures, seven of them a signal
+death (rc 134 or 138). `test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern refusal, and its golden's
+`match-malformed` section is empty.
 
 ### Changed — Intel macOS binaries end with 0.6.1
 
