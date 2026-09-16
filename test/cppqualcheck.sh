@@ -215,9 +215,11 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # 19 -> 22 2026-09-09 (harvest githarden): githarden.h's local-config pre-scan reads the `.git` gitdir FILE, the
 # gitdir's `commondir`, and each config candidate through the same canonical helper — three sites for one probe,
 # rather than a fourth fopen/fread of its own.
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 24 ] \
-    && ok "repo: --uses=readWholeFile count=24 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 24"
+# 24 -> 25 2026-09-15 (Phase 1 --lsp): src/lsp.h's hover reads the whole file through the same canonical
+# detail::readWholeFile helper rather than growing a fifth fopen/fread, one site for the signature+doc gist.
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 25 ] \
+    && ok "repo: --uses=readWholeFile count=25 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 25"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"

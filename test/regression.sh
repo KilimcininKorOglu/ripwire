@@ -258,6 +258,15 @@ else
     no "grep handle gate (test/grephandlecheck.sh failed)"
     RIPWIRE_BIN="$BIN" bash "$ROOT/test/grephandlecheck.sh" 2>&1 | grep -E 'FAIL|SOME' | head -8
 fi
+# The --lsp navigation-server PoC gate (docs/LSP.md Phase 1) — a dedicated standalone gate with the
+# same named-invocation shape as grephandlecheck above, so it is deliberately NOT in the bulk loop below
+# (whose quoted length docs/EVALS.md pins and test/manifestcheck.sh re-derives).
+if RIPWIRE_BIN="$BIN" bash "$ROOT/test/lspcheck.sh" >/dev/null 2>&1; then
+    ok "LSP navigation-server gate (test/lspcheck.sh)"
+else
+    no "LSP navigation-server gate (test/lspcheck.sh failed)"
+    RIPWIRE_BIN="$BIN" bash "$ROOT/test/lspcheck.sh" 2>&1 | grep -E 'FAIL|SOME' | head -8
+fi
 
 # 3n) absorb gates (P3-B arch layer(), S6-A lint completion, S6-B swift purity, S5-C owners) — each a
 #     dedicated standalone gate; run with the binary under test (skip any not yet present).

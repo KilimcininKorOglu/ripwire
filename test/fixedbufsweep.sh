@@ -218,6 +218,8 @@ NUMERIC_ONLY = {
     ( "src/infra/profileScope.h", "buf" ): 5,
     ( "src/ingest_astquery.h", "suffix" ): 1,
     ( "src/ingest_docpass.h", "blobName" ): 1,
+    ( "src/lsp.h", "hdr" ): 1,    # 2026-09-16 (--lsp Phase 1): lspWriteMessage's "Content-Length: {}\r\n\r\n" — ONE size_t, 20 digits worst case: 40 B against 63 usable + NUL. No %s, nothing escaped.
+    ( "src/lsp.h", "buf" ): 1,    # 2026-09-16 (--lsp Phase 1): lspRangeJson's range object — 61 fixed chars + FOUR uint32 line/character numbers, 10 digits worst case: 101 B against 127 usable + NUL. No %s, nothing escaped; the strings around it (URI, name) are composed on std::string by the callers, never through this buffer.
     ( "src/main.cpp", "hdr" ): 1,
     ( "src/main.cpp", "nb" ): 4,
     ( "src/main.cpp", "open" ): 2,   # PR #215 review: chooseExpandServe's four openers became two early-return refusals plus the two rowed buffers above
@@ -501,7 +503,12 @@ if not bad:
 #            (S1) confirms the MEMBER SET behind the numbers: 221 sites over 35 hand-classified TABLE rows (33
 #            plus #215's two new ones) and 59 derived NUMERIC_ONLY rows, with (S2) reporting no stale row and
 #            (S1b) nothing breaching. rows is 94 from #215's two additions, which this lane does not touch.
-EXPECTED = { "mentions": 328, "calls": 221, "sites": 221, "rows": 94, "widthforms": 0 }
+EXPECTED = { "mentions": 330, "calls": 223, "sites": 223, "rows": 96, "widthforms": 0 }
+#            2026-09-16 (--lsp Phase 1): +2 calls/+2 mentions/+2 sites/+2 rows — the two NEW fixed-buffer
+#            format sites in src/lsp.h, rowed in NUMERIC_ONLY above with their worst-case arithmetic
+#            (hdr: 40 B max in 63 usable; buf: 101 B max in 127 usable; both integer-only, no %s, nothing
+#            escaped). Not printf conversions at 4c10be9d — they are new code, rowed for their shape, and
+#            (S1) re-derives the member set from source rather than from this arithmetic.
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,
