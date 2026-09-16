@@ -18,6 +18,7 @@
 #include "infra/namesplit.h"   // H4: stripTemplateArgs for the C++ qualified-call re-split (shared with tracelocus.h)
 #include "infra/jsonesc.h"     // rw::shSingleQuote - the git ignore probe quotes its root the same way every other git popen does
 #include "infra/fixedStr.h"    // rw::findByte — the NEON/SSE2 byte scan buildNewlineOffsets rides
+#include "infra/ownedfile.h"   // rw::OwnedFile — readFile/readFilePrefix own their stream, so no return path skips the close
 #include "lexindex.h"          // B0.1/B0.2: shared subtoken state machine + per-def lexical statistics builder
 #include "didyoumean.h"        // octocode F3: boundedEditDistance/nearestNameByEditDistance — the ONE near-miss
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings

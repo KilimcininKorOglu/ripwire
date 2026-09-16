@@ -1685,42 +1685,41 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
 // ---- read a file's bytes (false when it cannot be opened, sized or read in full) ----
 // Deliberately an out-parameter, unlike docparse::detail::readWholeFile: the parse pool and the AST-query pass
 // each hand in one worker-local buffer and reuse it for every file they read, so its capacity carries over.
+//
+// The stream is OWNED (rw::OwnedFile), so every return closes it. It used to be a raw FILE* closed inside
+// `( got == want ) && ( std::fclose( fp ) == 0 )`, which short-circuited past the close on every short read: a
+// file truncated between the size probe and the read leaked one descriptor per read, per re-ingest of a long-lived
+// server, until nothing more could be opened and every later file dropped out of the answer with exit 0.
 bool readFile( const std::string& path, std::string& out )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest/readFile: fopen+read whole file" );
 
-    std::FILE* fp = std::fopen( path.c_str(), "rb" );
-    if( fp == nullptr )
+    OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
+    if( !fp )
     {
         return false;
     }
 
-    if( std::fseek( fp, 0, SEEK_END ) != 0 )
+    if( std::fseek( fp.file, 0, SEEK_END ) != 0 )
     {
-        std::fclose( fp );
         return false;
     }
-    const long len = std::ftell( fp );
-    if( len < 0 )
+    const long len = std::ftell( fp.file );
+    if( len < 0 || std::fseek( fp.file, 0, SEEK_SET ) != 0 )
     {
-        std::fclose( fp );
-        return false;
-    }
-    if( std::fseek( fp, 0, SEEK_SET ) != 0 )
-    {
-        std::fclose( fp );
         return false;
     }
 
     out.resize( static_cast<std::size_t>( len ) );
     const std::size_t want = out.size();
-    const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp );
-    const bool ok = ( got == want ) && ( std::fclose( fp ) == 0 );
-    if( !ok )
+    const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp.file );
+    const bool        closedOk = fp.close();
+    if( got != want || !closedOk )
     {
         out.clear();
+        return false;
     }
-    return ok;
+    return true;
 }
 
 // The first `maxBytes` of a file, into `out` for the same reason as readFile: each prewarm hash worker reuses one
@@ -1729,17 +1728,17 @@ bool readFilePrefix( const std::string& path, std::string& out, std::size_t maxB
 {
     PROFILE_SCOPE_DESCRIBE( "ingest/readFilePrefix: fopen+read prefix" );
 
-    std::FILE* fp = std::fopen( path.c_str(), "rb" );
-    if( fp == nullptr )
+    OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
+    if( !fp )
     {
         return false;
     }
 
     out.resize( maxBytes );
-    const std::size_t got = maxBytes == 0 ? 0 : std::fread( out.data(), 1, maxBytes, fp );
-    const bool readOk = got > 0 || std::feof( fp ) != 0;
-    const bool closeOk = std::fclose( fp ) == 0;
-    if( !readOk || !closeOk )
+    const std::size_t got      = maxBytes == 0 ? 0 : std::fread( out.data(), 1, maxBytes, fp.file );
+    const bool        readOk   = got > 0 || std::feof( fp.file ) != 0;
+    const bool        closedOk = fp.close();
+    if( !readOk || !closedOk )
     {
         out.clear();
         return false;

@@ -29,6 +29,7 @@
 #include "graph.h"          // buildGraph / resolveAllByNameQualified
 #include "quality.h"        // cacheDirLadder / TmpTreeGuard
 #include "sarif.h"          // rootPrefixOf / rootRelativeUri — the root-relative identity of the edited file
+#include "infra/ownedfile.h" // rw::OwnedFile — the spliced temp file is closed on every return
 
 #include <array>
 #include <cstdio>
@@ -259,19 +260,20 @@ inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string&
     std::error_code   ec;
     const fs::path    target = fs::path( tmpDir ) / fs::path( rel );
     fs::create_directories( target.parent_path(), ec );
-    std::FILE* fp = std::fopen( target.string().c_str(), "wb" );
-    if( fp == nullptr )
     {
-        DEGRADED_PATH_ALERT( "edit-preview: cannot write the spliced file into the temp root" );
-        return {};
-    }
-    const std::size_t written = bytes.empty() ? 0 : std::fwrite( bytes.data(), 1, bytes.size(), fp );
-    const bool        wrote   = ( written == bytes.size() );
-    std::fclose( fp );
-    if( !wrote )
-    {
-        DEGRADED_PATH_ALERT( "edit-preview: short write of the spliced file" );
-        return {};
+        OwnedFile fp = openOwnedFile( target.string().c_str(), "wb" );
+        if( !fp )
+        {
+            DEGRADED_PATH_ALERT( "edit-preview: cannot write the spliced file into the temp root" );
+            return {};
+        }
+        const std::size_t written  = bytes.empty() ? 0 : std::fwrite( bytes.data(), 1, bytes.size(), fp.file );
+        const bool        closedOk = fp.close();
+        if( written != bytes.size() || !closedOk )
+        {
+            DEGRADED_PATH_ALERT( "edit-preview: short write of the spliced file" );
+            return {};
+        }
     }
     // No excludes: the ONE file here is the one the caller already resolved through the main index, so a
     // --exclude that would drop it can only produce a false "the payload defines nothing".

@@ -21,6 +21,7 @@
                         // to below instead of carrying a local copy; STL-only, no coupling cost here.
 
 #include "infra/sortutil.h"  // svLess — the memcmp-then-length string_view order the sorted tables below use
+#include "infra/ownedfile.h" // rw::OwnedFile — the whole-file readers own their stream, so every return closes it
 
 #include <algorithm>   // std::binary_search — the membership test, instead of a hand-rolled scan loop
 #include <iterator>
@@ -177,40 +178,43 @@ inline bool isProseExtension( std::string_view extLower ) noexcept
 namespace detail
 {
 
+// The rest of an open stream from its start, or nullopt when it cannot be sized or read in full. The ONE body both
+// whole-file readers below share; the stream stays owned by the caller, who closes it on every path.
+inline std::optional<std::string> readAllOfStream( std::FILE* fp )
+{
+    if( std::fseek( fp, 0, SEEK_END ) != 0 )
+    {
+        return std::nullopt;
+    }
+    const long len = std::ftell( fp );
+    if( len < 0 || std::fseek( fp, 0, SEEK_SET ) != 0 )
+    {
+        return std::nullopt;
+    }
+    std::string       out( std::size_t( len ), '\0' );
+    const std::size_t want = out.size();
+    const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp );
+    if( got != want )
+    {
+        return std::nullopt;
+    }
+    return out;
+}
+
 // The whole file, or nullopt when it cannot be opened, sized or read in full. An EMPTY file is an engaged empty
 // string, not a failure — a caller for which empty and unreadable mean the same thing says so with value_or.
 inline std::optional<std::string> readWholeFile( const std::string& path )
 {
-    std::FILE* fp = std::fopen( path.c_str(), "rb" );
-    if( fp == nullptr )
+    // Owned, so the close runs on every return: `( got == want ) && ( std::fclose( fp ) == 0 )` short-circuited
+    // past it and leaked the FILE on every short read (clang-analyzer-unix.Stream).
+    OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
+    if( !fp )
     {
         return std::nullopt;
     }
-
-    if( std::fseek( fp, 0, SEEK_END ) != 0 )
-    {
-        std::fclose( fp );
-        return std::nullopt;
-    }
-    const long len = std::ftell( fp );
-    if( len < 0 )
-    {
-        std::fclose( fp );
-        return std::nullopt;
-    }
-    if( std::fseek( fp, 0, SEEK_SET ) != 0 )
-    {
-        std::fclose( fp );
-        return std::nullopt;
-    }
-
-    std::string       out( std::size_t( len ), '\0' );
-    const std::size_t want = out.size();
-    const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp );
-    // fclose unconditionally: `( got == want ) && ( std::fclose( fp ) == 0 )` short-circuited past it and leaked the
-    // FILE on every short read (clang-analyzer-unix.Stream) — githarden's git-config probe and the notebook reader share this.
-    const bool closedOk = std::fclose( fp ) == 0;
-    if( got != want || !closedOk )
+    std::optional<std::string> out      = readAllOfStream( fp.file );
+    const bool                 closedOk = fp.close();
+    if( !closedOk )
     {
         return std::nullopt;
     }
