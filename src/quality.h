@@ -5114,17 +5114,13 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 {
     badLines = 0;
     gtl::btree_map<std::string, AckRecord> out;
-    // readRegularFile, not a stream opened on the name: a FIFO planted at the ledger's name blocked that open until a
-    // writer appeared, so --quality-delta hung before any output, and a link to /dev/zero never reached end of file.
-    // Anything that is not a regular file now reads as no ledger, and stderr says so (docparse.h).
-    const std::optional<std::string> text = docparse::detail::readRegularFile( "the quality-acks ledger", path );
-    if( !text )
-    {
-        return out;
-    }
-    std::istringstream f( *text );
-    std::string        line;
-    while( std::getline( f, line ) )
+    // openRegularFileStream, not a stream opened on the name: a FIFO planted at the ledger's name blocked that open until
+    // a writer appeared, so --quality-delta hung before any output, and a link to /dev/zero never reached end of file.
+    // Anything that is not a regular file now reads as no ledger, and stderr says so (docparse.h). Still one line at a
+    // time, as the std::ifstream it replaces read it: a large ledger is never held whole.
+    rw::pathguard::NoFollowRead ledger = docparse::detail::openRegularFileStream( "the quality-acks ledger", path );
+    std::string                 line;
+    while( ledger.readLine( line ) )
     {
         while( !line.empty() && ( line.back() == '\r' || line.back() == '\n' ) )
         {

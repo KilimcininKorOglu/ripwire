@@ -22,6 +22,7 @@
 
 #include "infra/sortutil.h"  // svLess — the memcmp-then-length string_view order the sorted tables below use
 #include "infra/ownedfile.h" // rw::OwnedFile — the whole-file readers own their stream, so every return closes it
+#include "pathguard.h"        // rw::pathguard::NoFollowRead — the owned line stream a fixed-name file is read through
 
 #include <algorithm>   // std::binary_search — the membership test, instead of a hand-rolled scan loop
 #include <iterator>
@@ -224,45 +225,57 @@ inline std::optional<std::string> readWholeFile( const std::string& path )
     return out;
 }
 
-// readWholeFile for a path whose CONTENT is the repository's to decide but whose SHAPE is not: a file the tool reads
-// at a fixed name in the tree (.ripwire_config, the quality-acks ledger). Anything at that name that is not a
-// regular file — a FIFO, a directory, a device, or a symlink to one — is refused before a byte is read, and
-// `what` names it on stderr, because each of those shapes used to take the process down or hold it forever:
+// A fixed-name file in the tree (.ripwire_config, the quality-acks ledger) whose CONTENT is the repository's to decide
+// but whose SHAPE is not, opened as a line stream only when it is a regular file. Anything else at that name — a
+// FIFO, a directory, a device, or a symlink to one — is refused before a byte is read, and `what` names it on
+// stderr, because each of those shapes used to hold or take down the process:
 //   - a FIFO blocked the open until a writer appeared, so every --quality-delta hung before any output;
-//   - a directory opened on Linux, sized to LLONG_MAX through ftell, and the string that length asked for threw
-//     std::length_error — SIGABRT, with nothing on the CLI path to catch it;
-//   - a symlink to /dev/zero or /dev/urandom never reaches end of file.
+//   - a symlink to /dev/zero or /dev/urandom never reaches end of file;
+//   - a directory opens on Linux, and where its seek reports LLONG_MAX (overlayfs) a whole-file read sizes a string
+//     to that — the shape ingest_crawl.h's PathShape note measured for --cache=<dir>.
 // The open carries O_NONBLOCK so a FIFO answers instead of waiting, and the shape is asked of the DESCRIPTOR (fstat),
 // so nothing can swap the name between the question and the read. A symlink to a regular file is still followed:
 // that is the ordinary way a user-authored file is shared, and refusing it is a different policy with its own owner.
-inline std::optional<std::string> readRegularFile( std::string_view what, const std::string& path )
+//
+// The stream comes back inside pathguard's NoFollowRead, the house line reader over a descriptor-checked stream: it
+// owns the FILE from fdopen on, so every return closes it, and readLine streams one line at a time — a large ledger
+// is never held whole. No stream (file == nullptr) means absent, unreadable or refused.
+inline rw::pathguard::NoFollowRead openRegularFileStream( std::string_view what, const std::string& path )
 {
-    const int fd = ::open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    rw::pathguard::NoFollowRead stream;
+    const int                   fd = ::open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
     if( fd < 0 )
     {
-        return std::nullopt;   // absent or unreadable: the caller's own "no such file" reading
+        return stream;   // absent or unreadable: the caller's own "no such file" reading
     }
-    OwnedFile fp( ::fdopen( fd, "rb" ) );   // owned before anything else runs; fdopen does not care what the fd is
-    if( !fp )
+    stream.file = ::fdopen( fd, "rb" );   // owned from here: NoFollowRead's destructor fcloses it on every return
+    if( stream.file == nullptr )
     {
         ::close( fd );   // fdopen did not take the descriptor, so it is still ours to close
-        return std::nullopt;
+        return stream;
     }
+    stream.opened = true;
     struct stat st{};
-    if( ::fstat( ::fileno( fp.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
+    if( ::fstat( ::fileno( stream.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
     {
         rw::emitTo( stderr, "ripwire: ignoring {} at '{}': it is not a regular file (a FIFO, a directory or a device), "
                             "so it was not read and counts as absent\n", what, path );
         DEGRADED_PATH_ALERT( "docparse: a fixed-name file in the tree is not a regular file — refused before reading" );
-        return std::nullopt;
+        return rw::pathguard::NoFollowRead{};   // `stream` closes as it leaves scope; the caller gets no stream
     }
-    std::optional<std::string> out      = readAllOfStream( fp.file );
-    const bool                 closedOk = fp.close();
-    if( !closedOk )
+    return stream;
+}
+
+// The whole of such a file, for a caller that parses it as one text (.ripwire_config, and --quality-ack's
+// byte-for-byte comparison of a ledger it is about to rewrite). nullopt when openRegularFileStream gave no stream.
+inline std::optional<std::string> readRegularFile( std::string_view what, const std::string& path )
+{
+    const rw::pathguard::NoFollowRead stream = openRegularFileStream( what, path );
+    if( stream.file == nullptr )
     {
         return std::nullopt;
     }
-    return out;
+    return readAllOfStream( stream.file );
 }
 
 // Decode the JSON string starting at s[i]=='"' into `out`, advancing i past the closing quote. Handles the
