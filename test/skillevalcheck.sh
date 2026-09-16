@@ -253,5 +253,24 @@ awk -v on="$stopOn" -v off="$stopOff" 'BEGIN{exit !((on+0)-(off+0) >= 12.5)}' \
     && ok "the rules are LOAD-BEARING: ${stopOn}% with them vs ${stopOff}% without (gap floor 12.5pp)" \
     || no "stripping all four stop rules moved hit@1 only ${stopOn}% -> ${stopOff}% — this arm measures nothing"
 
+# ── a skills directory the harness cannot fully read never takes the process down ───────────────────
+# Every entry below used to raise an uncaught std::filesystem_error from a throwing overload (the range-for's
+# operator++, directory_entry::is_directory(), filesystem::exists()): SIGABRT, exit 134, before any output.
+# Each is now skipped with a stderr line naming it, and the readable skills still rank exactly as before.
+HOSTILE="$TMP/hostile_skills"; cp -R "$SKILLS" "$HOSTILE"
+mkdir -p "$HOSTILE/zz-looped-skillmd";  ln -s SKILL.md "$HOSTILE/zz-looped-skillmd/SKILL.md"   # SKILL.md -> itself (ELOOP)
+ln -s zz-loop-b "$HOSTILE/zz-loop-a"; ln -s zz-loop-a "$HOSTILE/zz-loop-b"                     # a directory link loop
+mkdir -p "$HOSTILE/zz-sealed"; printf -- '---\nname: sealed\ndescription: x\n---\n' > "$HOSTILE/zz-sealed/SKILL.md"; chmod 000 "$HOSTILE/zz-sealed"
+mkdir -p "$HOSTILE/zz-fifo"; mkfifo "$HOSTILE/zz-fifo/SKILL.md"                                  # would block a read for ever
+bounded(){ if command -v timeout >/dev/null 2>&1; then timeout 60 "$@"; else perl -e 'alarm 60; exec @ARGV' "$@"; fi; }
+bounded "$BIN" "$HOSTILE" --eval-skills="$CORPUS" --no-cache >"$TMP/hostile.out" 2>"$TMP/hostile.err"; rc_h=$?
+chmod 755 "$HOSTILE/zz-sealed"
+[ "$rc_h" -eq "$rc_a" ] && cmp -s "$TMP/a" "$TMP/hostile.out" \
+    && ok "unreadable entries (SKILL.md link loop, directory link loop, mode-000 skill, FIFO SKILL.md): exit $rc_h, ranking byte-identical to the clean run" \
+    || { no "unreadable entries: exit $rc_h (clean run $rc_a; 134 is the uncaught filesystem_error, 124/142 a hang), or the ranking changed"; head -3 "$TMP/hostile.err"; }
+grep -q "skipping '.*zz-looped-skillmd/SKILL.md'" "$TMP/hostile.err" \
+    && ok "the looped SKILL.md is named on stderr as skipped" \
+    || no "the looped SKILL.md was skipped silently: $( head -c 300 "$TMP/hostile.err" )"
+
 [ $fail -eq 0 ] && echo "skillevalcheck: ALL PASS" || echo "skillevalcheck: FAILURES"
 exit $fail

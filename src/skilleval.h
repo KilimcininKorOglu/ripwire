@@ -176,24 +176,30 @@ inline SkillSet discoverSkills( const std::string& root )
 {
     SkillSet        set;
     std::error_code ec;
-    for( const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator( root, ec ) )
+    // Every filesystem question here takes an error_code. The throwing forms — the range-for's operator++,
+    // directory_entry::is_directory(), filesystem::exists() — turned a symlink loop at SKILL.md, a mode-000 skill
+    // directory or a directory link loop into an uncaught filesystem_error: SIGABRT, exit 134, on a directory the
+    // caller names. Such an entry is not a readable skill: it is skipped, and stderr names it and why.
+    for( std::filesystem::directory_iterator it( root, ec ), end; !ec && it != end; it.increment( ec ) )
     {
-        if( ec )
-        {
-            break;
-        }
-        if( !entry.is_directory() )
+        std::error_code entryEc;
+        if( !it->is_directory( entryEc ) )
         {
             continue;
         }
-        const std::filesystem::path md = entry.path() / "SKILL.md";
-        if( !std::filesystem::exists( md ) )
+        const std::filesystem::path md       = it->path() / "SKILL.md";
+        const bool                  regular = std::filesystem::is_regular_file( md, entryEc );
+        if( entryEc && entryEc != std::errc::no_such_file_or_directory )
         {
-            continue;
+            rw::emitTo( stderr, "ripwire --eval-skills: skipping '{}': {}\n", md.string(), entryEc.message() );
+        }
+        if( !regular )
+        {
+            continue;   // absent, unreadable, or not a regular file (a FIFO would block the read below)
         }
 
         SkillDoc doc;
-        doc.dirName = entry.path().filename().string();
+        doc.dirName = it->path().filename().string();
         std::tie( doc.descText, doc.bodyText ) = parseSkillMd( readWholeFileText( md ) );
 
         if( doc.dirName == "ripwire-router" ) { set.router = std::move( doc ); set.hasRouter = true; }
@@ -201,6 +207,10 @@ inline SkillSet discoverSkills( const std::string& root )
         {
             set.candidates.push_back( std::move( doc ) );
         }
+    }
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire --eval-skills: stopped listing '{}' early: {} — the skills after that point were not read\n", root, ec.message() );
     }
     std::sort( set.candidates.begin(), set.candidates.end(),
                []( const SkillDoc& a, const SkillDoc& b ) { return a.dirName < b.dirName; } );
