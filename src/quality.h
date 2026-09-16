@@ -393,7 +393,8 @@ inline void appendConfigValueTokens( std::string_view rest, bool isVendor, Regis
 inline RegisterMacrosConfig readRegisterMacrosConfig( std::string_view root )
 {
     RegisterMacrosConfig out;
-    const std::string    text = docparse::detail::readWholeFile( configPath( root ) ).value_or( std::string() );
+    // readRegularFile: a FIFO at the name hung every --quality-delta, and a directory there aborted on Linux (docparse.h).
+    const std::string    text = docparse::detail::readRegularFile( ".ripwire_config", configPath( root ) ).value_or( std::string() );
     if( text.empty() )
     {
         return out;   // absent/unreadable/empty — inert, never a refusal
@@ -5113,12 +5114,16 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 {
     badLines = 0;
     gtl::btree_map<std::string, AckRecord> out;
-    std::ifstream f( path );
-    if( !f )
+    // readRegularFile, not a stream opened on the name: a FIFO planted at the ledger's name blocked that open until a
+    // writer appeared, so --quality-delta hung before any output, and a link to /dev/zero never reached end of file.
+    // Anything that is not a regular file now reads as no ledger, and stderr says so (docparse.h).
+    const std::optional<std::string> text = docparse::detail::readRegularFile( "the quality-acks ledger", path );
+    if( !text )
     {
         return out;
     }
-    std::string line;
+    std::istringstream f( *text );
+    std::string        line;
     while( std::getline( f, line ) )
     {
         while( !line.empty() && ( line.back() == '\r' || line.back() == '\n' ) )

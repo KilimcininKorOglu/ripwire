@@ -9,12 +9,22 @@
 #        Measured with the interposed short-read shim below: 300 of 600 short-read streams were never closed, and
 #        under `ulimit -n 200` all 20 ordinary files vanished from a --grep answer. Fixed by an owner type,
 #        rw::OwnedFile (src/infra/ownedfile.h), whose destructor closes on every path.
+#   (B2) A FIXED-NAME FILE THAT IS NOT A REGULAR FILE. `.ripwire_config` and `.ripwire_quality_acks` were read
+#        with a blocking open on the name. A FIFO there hung --quality-delta before any output (timeout 124); a
+#        committed symlink from the ledger to /dev/zero or /dev/urandom never reached end of file (hang); a
+#        DIRECTORY at `.ripwire_config` opens on Linux, and where a directory's seek reports LLONG_MAX (overlayfs)
+#        the string that length asks for aborts — the shape ingest_crawl.h's PathShape note measured for
+#        --cache=<dir>. Both now go through docparse::detail::readRegularFile: open O_NONBLOCK, ask the
+#        descriptor, refuse anything that is not a regular file with a stderr line, and read it as absent. Red on
+#        the base: the FIFO and device-link shapes hang (killed at 30 s); every shape is read without disclosure.
 #
-# Usage:  bash test/crashsweepcheck.sh [BIN]
+# Usage:  bash test/crashsweepcheck.sh [BIN]      RIPWIRE_ASAN_BIN=asan/ripwire bash test/crashsweepcheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
+ASAN_BIN="${RIPWIRE_ASAN_BIN:-}"
+[ -n "$ASAN_BIN" ] && [ "${ASAN_BIN#/}" = "$ASAN_BIN" ] && ASAN_BIN="$ROOT/$ASAN_BIN"
 TMP="$( mktemp -d )"; trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 fail=0
 
@@ -22,11 +32,17 @@ ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write th
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 note(){ printf '  NOTE  %s\n' "$*"; }
 skip(){ printf '  SKIP  %s\n' "$*"; }
+bounded_run(){ if command -v timeout >/dev/null 2>&1; then timeout 30 "$@"; else perl -e 'alarm 30; exec @ARGV' "$@"; fi; }
+is_hang(){ [ "$1" -eq 124 ] || [ "$1" -eq 142 ]; }
 is_sanitized(){ LC_ALL=C grep -q -a '__asan_init' "$1" 2>/dev/null; }
+bin_tag(){ is_sanitized "$1" && printf 'asan' || printf 'plain'; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
-echo "crashsweepcheck: BIN=$BIN"
+command -v git >/dev/null 2>&1 || { echo "git required"; exit 2; }
+echo "crashsweepcheck: BIN=$BIN  ASAN_BIN=${ASAN_BIN:-none}"
+RUN_BINS=( "$BIN" )   # the behavioural arms run once per distinct binary
+[ -n "$ASAN_BIN" ] && [ "$ASAN_BIN" != "$BIN" ] && RUN_BINS+=( "$ASAN_BIN" )
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 echo
@@ -144,6 +160,46 @@ else
         fi
     fi
 fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+echo
+echo "=== B2: a fixed-name file that is not a regular file (FIFO, directory, device link) ==="
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+B2="$TMP/b2repo"; mkdir -p "$B2/src"
+printf 'int helper( int x ) { int s = 0; for( int i = 0; i < x; ++i ) { s += i; } return s; }\n' > "$B2/src/lib.cpp"
+git -C "$B2" init -q; git -C "$B2" config user.email x@y; git -C "$B2" config user.name x
+git -C "$B2" add -A; git -C "$B2" commit -qm init
+B2XDG="$TMP/b2xdg"; mkdir -p "$B2XDG"
+b2run(){ bounded_run env -u TMPDIR XDG_CACHE_HOME="$B2XDG" "$1" "$B2" --quality-delta; }
+normalize_at(){ sed -E 's/ at="[0-9a-f]+(\+dirty)?"/ at="AT"/'; }
+b2run "$BIN" 2>/dev/null | normalize_at >"$TMP/b2_truth.txt"
+[ -s "$TMP/b2_truth.txt" ] || no "B2: the clean --quality-delta produced nothing — cannot judge the shapes"
+for name in .ripwire_config .ripwire_quality_acks; do
+    for shape in fifo directory devzero urandom; do
+        case "$shape" in
+            fifo)      mkfifo "$B2/$name" ;;
+            directory) mkdir "$B2/$name"; printf 'x\n' > "$B2/$name/inside" ;;
+            devzero)   ln -s /dev/zero "$B2/$name" ;;
+            urandom)   ln -s /dev/urandom "$B2/$name" ;;
+        esac
+        for bin in "${RUN_BINS[@]}"; do
+            tag="$shape $name ($( bin_tag "$bin" ))"
+            b2run "$bin" >"$TMP/b2_out.txt" 2>"$TMP/b2_err.txt"; rc=$?
+            if is_hang "$rc"; then
+                no "B2 [$tag]: --quality-delta HUNG (killed after 30 s)"
+            elif [ "$rc" -ne 0 ]; then
+                no "B2 [$tag]: exit $rc — $( grep -m1 -iE 'terminat|abort|error|sanitizer' "$TMP/b2_err.txt" | cut -c1-160 )"
+            elif ! normalize_at <"$TMP/b2_out.txt" | cmp -s - "$TMP/b2_truth.txt"; then
+                no "B2 [$tag]: the answer changed — a file that is not regular must read as absent"
+            elif ! grep -q "at '$B2/$name': it is not a regular file" "$TMP/b2_err.txt"; then
+                no "B2 [$tag]: exit 0, but nothing on stderr says the file was ignored"
+            else
+                ok "B2 [$tag]: refused before reading, disclosed, answer unchanged"
+            fi
+        done
+        rm -rf "$B2/$name"
+    done
+done
 
 
 echo

@@ -28,6 +28,9 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <fcntl.h>     // ::open( O_NONBLOCK ) — readRegularFile asks a FIFO for an answer instead of waiting on it
+#include <sys/stat.h>  // ::fstat — readRegularFile asks the DESCRIPTOR what it opened
+#include <unistd.h>    // ::close — the one descriptor fdopen may decline to take
 #include <optional>
 #include <string>
 #include <string_view>
@@ -210,6 +213,47 @@ inline std::optional<std::string> readWholeFile( const std::string& path )
     OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
     if( !fp )
     {
+        return std::nullopt;
+    }
+    std::optional<std::string> out      = readAllOfStream( fp.file );
+    const bool                 closedOk = fp.close();
+    if( !closedOk )
+    {
+        return std::nullopt;
+    }
+    return out;
+}
+
+// readWholeFile for a path whose CONTENT is the repository's to decide but whose SHAPE is not: a file the tool reads
+// at a fixed name in the tree (.ripwire_config, the quality-acks ledger). Anything at that name that is not a
+// regular file — a FIFO, a directory, a device, or a symlink to one — is refused before a byte is read, and
+// `what` names it on stderr, because each of those shapes used to take the process down or hold it forever:
+//   - a FIFO blocked the open until a writer appeared, so every --quality-delta hung before any output;
+//   - a directory opened on Linux, sized to LLONG_MAX through ftell, and the string that length asked for threw
+//     std::length_error — SIGABRT, with nothing on the CLI path to catch it;
+//   - a symlink to /dev/zero or /dev/urandom never reaches end of file.
+// The open carries O_NONBLOCK so a FIFO answers instead of waiting, and the shape is asked of the DESCRIPTOR (fstat),
+// so nothing can swap the name between the question and the read. A symlink to a regular file is still followed:
+// that is the ordinary way a user-authored file is shared, and refusing it is a different policy with its own owner.
+inline std::optional<std::string> readRegularFile( std::string_view what, const std::string& path )
+{
+    const int fd = ::open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    if( fd < 0 )
+    {
+        return std::nullopt;   // absent or unreadable: the caller's own "no such file" reading
+    }
+    OwnedFile fp( ::fdopen( fd, "rb" ) );   // owned before anything else runs; fdopen does not care what the fd is
+    if( !fp )
+    {
+        ::close( fd );   // fdopen did not take the descriptor, so it is still ours to close
+        return std::nullopt;
+    }
+    struct stat st{};
+    if( ::fstat( ::fileno( fp.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
+    {
+        rw::emitTo( stderr, "ripwire: ignoring {} at '{}': it is not a regular file (a FIFO, a directory or a device), "
+                            "so it was not read and counts as absent\n", what, path );
+        DEGRADED_PATH_ALERT( "docparse: a fixed-name file in the tree is not a regular file — refused before reading" );
         return std::nullopt;
     }
     std::optional<std::string> out      = readAllOfStream( fp.file );
