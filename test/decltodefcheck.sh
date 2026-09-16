@@ -688,16 +688,64 @@ BUILD_DIR="$( cd "$( dirname "$BIN" )" && pwd )"
 FLAGS_MK="$BUILD_DIR/CMakeFiles/ripwire.dir/flags.make"
 LINK_TXT="$BUILD_DIR/CMakeFiles/ripwire.dir/link.txt"
 NINJA_BUILD=0
+NMAKE_BUILD=0
 INCLUDE_ROOT="$ROOT"
 TMP_NATIVE="$TMP"
 if [ -f "$FLAGS_MK" ] && [ -f "$LINK_TXT" ]; then
     :
 elif [ -f "$BUILD_DIR/build.ninja" ] && [ -f "$BUILD_DIR/CMakeFiles/rules.ninja" ]; then
     NINJA_BUILD=1
+elif [ -f "$FLAGS_MK" ] && [ -f "$BUILD_DIR/CMakeFiles/ripwire.dir/objects1.rsp" ] \
+     && [ -f "$BUILD_DIR/CMakeFiles/ripwire.dir/build.make" ]; then
+    NMAKE_BUILD=1
 else
     echo "cannot find CMake flags/link under $BUILD_DIR — build with CMake first"; exit 2
 fi
-if [ "$NINJA_BUILD" = 0 ]; then
+if [ "$NMAKE_BUILD" = 1 ]; then
+    CXX="$( sed -n 's/^CMAKE_CXX_COMPILER:STRING=//p' "$BUILD_DIR/CMakeCache.txt" | head -1 )"
+    [ -n "$CXX" ] || { echo "cannot find CMAKE_CXX_COMPILER under $BUILD_DIR"; exit 2; }
+    cxxflags_load "$FLAGS_MK" \
+        || no "cannot parse $FLAGS_MK without executing it (see the cxxflags: line on stderr)"
+    cxxflags_selfproof "$TMP/cxxflags" "$FLAGS_MK" > "$TMP/cxxflags.rows" 2>&1 || true
+    while IFS= read -r _row; do
+        case "$_row" in
+            PASS*) ok "${_row#PASS }" ;;
+            NOTE*) printf '  NOTE  %s\n' "${_row#NOTE }" ;;
+            FAIL*) no "${_row#FAIL }" ;;
+        esac
+    done < "$TMP/cxxflags.rows"
+    TMP_NATIVE="$( cygpath -m "$TMP" )"
+    INCLUDE_ROOT="$( cygpath -m "$ROOT" )"
+    "$PYTHON" - "$( cygpath -w "$BUILD_DIR/CMakeFiles/ripwire.dir/objects1.rsp" )" "$BUILD_DIR" > "$TMP/link.objects" <<'PYNMAKEOBJECTS'
+from pathlib import Path
+import sys
+root = Path( sys.argv[2] )
+for token in Path( sys.argv[1] ).read_text( errors = "replace" ).split():
+    token = token.replace( "\\\\", "/" )
+    if token.endswith( "main.cpp.obj" ):
+        continue
+    print( str( root / token ) )
+PYNMAKEOBJECTS
+    LINK_OBJECTS=()
+    while IFS= read -r _object; do LINK_OBJECTS+=( "$_object" ); done < "$TMP/link.objects"
+    "$PYTHON" - "$( cygpath -w "$BUILD_DIR/CMakeFiles/ripwire.dir/build.make" )" > "$TMP/link.args" <<'PYNMAKELINK'
+from pathlib import Path
+import sys
+lines = Path( sys.argv[1] ).read_text( errors = "replace" ).splitlines()
+line = next( line for line in lines if line.strip().startswith( "/out:ripwire.exe" ) )
+for token in line.strip().split():
+    if token.startswith( ( "/out:", "/implib:", "/pdb:", "/version:" ) ):
+        continue
+    print( token.replace( "\\\\", "/" ) )
+PYNMAKELINK
+    LINK_ARGS=()
+    while IFS= read -r _arg; do LINK_ARGS+=( "$_arg" ); done < "$TMP/link.args"
+    CXX_FLAGS+=( "/clang:-fuse-ld=lld" )
+    for _include in "$ROOT/third_party" "$ROOT/src" "$ROOT/src/infra" "$ROOT/src/infra/compat" \
+                    "$BUILD_DIR/generated" "$ROOT/third_party/deps/tree_sitter/lib/include"; do
+        CXX_INCLUDES+=( "-I$( cygpath -m "$_include" )" )
+    done
+elif [ "$NINJA_BUILD" = 0 ]; then
 CXX="$( awk 'NR==1{ print $1; exit }' "$LINK_TXT" )"
 command -v "$CXX" >/dev/null 2>&1 || CXX="$( command -v c++ || command -v clang++ )"
 # The flags parse is SHARED and shlex-based, never `eval`: test/lib/cxxflags.sh carries the CWE-78
@@ -820,12 +868,12 @@ EOF
 
 UNIT_OK=1
 # compiled+linked FROM the build dir: link.txt's object and library paths are relative to it.
-if [ "$NINJA_BUILD" = 1 ]; then
+if [ "$NINJA_BUILD" = 1 ] || [ "$NMAKE_BUILD" = 1 ]; then
     COMPILE_UNIT=( /TP "${CXX_FLAGS[@]}" "${CXX_DEFINES[@]}" "${CXX_INCLUDES[@]}" /c "$TMP_NATIVE/decltodef_unit.cpp" /Fo"$TMP_NATIVE/unit.o" )
 else
     COMPILE_UNIT=( "${CXX_FLAGS[@]}" "${CXX_DEFINES[@]}" "${CXX_INCLUDES[@]}" -c "$TMP/decltodef_unit.cpp" -o "$TMP/unit.o" )
 fi
-if [ "$NINJA_BUILD" = 1 ]; then
+if [ "$NINJA_BUILD" = 1 ] || [ "$NMAKE_BUILD" = 1 ]; then
     if ( cd "$BUILD_DIR" && MSYS_NO_PATHCONV=1 "$CXX" "${COMPILE_UNIT[@]}" ) 2>"$TMP/cc.err"; then
         :
     else
@@ -845,7 +893,14 @@ else
 fi
 # shellcheck disable=SC2086
 if [ "$UNIT_OK" = 1 ]; then
-    if [ "$NINJA_BUILD" = 1 ]; then
+    if [ "$NMAKE_BUILD" = 1 ]; then
+        LINK_UNIT=( "${CXX_FLAGS[@]}" "$TMP_NATIVE/unit.o" "${LINK_OBJECTS[@]}" /Fe:"$TMP_NATIVE/unit.exe" /link "${LINK_ARGS[@]}" )
+        if ( cd "$BUILD_DIR" && MSYS_NO_PATHCONV=1 "$CXX" "${LINK_UNIT[@]}" ) 2>"$TMP/ld.err"; then
+            :
+        else
+            false
+        fi
+    elif [ "$NINJA_BUILD" = 1 ]; then
         LINK_UNIT=( "${CXX_FLAGS[@]}" "$TMP_NATIVE/unit.o" "${LINK_OBJECTS[@]}" /Fe:"$TMP_NATIVE/unit.exe" /link "${LINK_FLAGS[@]}" "${LINK_LIBRARIES[@]}" )
         if ( cd "$BUILD_DIR" && MSYS_NO_PATHCONV=1 "$CXX" "${LINK_UNIT[@]}" ) 2>"$TMP/ld.err"; then
             :
@@ -865,7 +920,7 @@ if [ "$UNIT_OK" = 1 ]; then
 fi
 if [ "$UNIT_OK" = 1 ]; then
     UNIT_BIN="$TMP/unit"
-    [ "$NINJA_BUILD" = 1 ] && UNIT_BIN="$TMP/unit.exe"
+    { [ "$NINJA_BUILD" = 1 ] || [ "$NMAKE_BUILD" = 1 ]; } && UNIT_BIN="$TMP/unit.exe"
     "$UNIT_BIN" "$TMP/ns" "$TMP/hdr" >"$TMP/unit.out" 2>&1
     urc=$?
     grep -E '^  (PASS|FAIL) ' "$TMP/unit.out" || true

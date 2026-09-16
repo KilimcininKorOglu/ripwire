@@ -260,6 +260,10 @@ if [ "${UPDATE_GOLDEN:-0}" = "1" ]; then
     moved=""; unchanged=0
     if [ -n "$prevManifest" ]; then
         while read -r pl prc pout perr; do
+            pl="$( printf '%s' "$pl" | tr -d '\015' )"
+            prc="$( printf '%s' "$prc" | tr -d '\015' )"
+            pout="$( printf '%s' "$pout" | tr -d '\015' )"
+            perr="$( printf '%s' "$perr" | tr -d '\015' )"
             [ -n "$pl" ] || continue
             newline="$( grep "^$pl " "$MANIFEST" | head -1 )"
             if [ -z "$newline" ]; then

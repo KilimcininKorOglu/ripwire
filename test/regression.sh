@@ -82,6 +82,22 @@ if [ "$WINDOWS_GATE" = 1 ]; then
         RIPWIRE_PYTHON="$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )"
     fi
     [ -n "$RIPWIRE_PYTHON" ] || { echo "regression.sh: native Python is required on Windows" >&2; exit 2; }
+    export RIPWIRE_PYTHON
+    CXX_BUILD_DIR="$( cd "$( dirname "$BIN" )" && pwd )"
+    CXX_FLAGS_MK="$CXX_BUILD_DIR/CMakeFiles/ripwire.dir/flags.make"
+    CXX_REAL="$( sed -n 's/^CMAKE_CXX_COMPILER:STRING=//p' "$CXX_BUILD_DIR/CMakeCache.txt" | head -1 )"
+    if [ -f "$CXX_FLAGS_MK" ] && [ -n "$CXX_REAL" ] && command -v cygpath >/dev/null 2>&1; then
+        CXX_DRIVER="$TMP/windows-cxx-driver"
+        CXX_DRIVER_PY="$( cygpath -w "$ROOT/test/lib/windows_cxx_driver.py" )"
+        CXX_FLAGS_MK_NATIVE="$( cygpath -w "$CXX_FLAGS_MK" )"
+        CXX_BUILD_DIR_NATIVE="$( cygpath -w "$CXX_BUILD_DIR" )"
+        CXX_ROOT_NATIVE="$( cygpath -w "$ROOT" )"
+        printf '%s\n' '#!/usr/bin/env bash' 'exec "$RIPWIRE_PYTHON" "$RIPWIRE_CXX_DRIVER_PY" "$@"' >"$CXX_DRIVER"
+        chmod +x "$CXX_DRIVER"
+        export RIPWIRE_CXX_REAL="$CXX_REAL" RIPWIRE_CXX_FLAGS_MK="$CXX_FLAGS_MK_NATIVE"
+        export RIPWIRE_CXX_BUILD_DIR="$CXX_BUILD_DIR_NATIVE" RIPWIRE_NATIVE_ROOT="$CXX_ROOT_NATIVE"
+        export RIPWIRE_CXX_DRIVER_PY="$CXX_DRIVER_PY" CXX="$CXX_DRIVER"
+    fi
     PYTOOLS="$TMP/python-tools"
     mkdir -p "$PYTOOLS"
     PYTOOLS_PATH="$PYTOOLS"

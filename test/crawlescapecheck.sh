@@ -40,23 +40,51 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
-[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
+case "$BIN" in
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+    *) BIN="$ROOT/$BIN" ;;
+esac
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
-PYTHON="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-python3}}"
-command -v "$PYTHON" >/dev/null 2>&1 || { echo "Python required for the MCP arm (set RIPWIRE_PYTHON)"; exit 2; }
 command -v git     >/dev/null 2>&1 || { echo "git required — the fixture is a git work tree (tracked symlinks)"; exit 2; }
 echo "crawlescapecheck: BIN=$BIN"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 WINDOWS_GATE=0
 case "$( uname -s 2>/dev/null )" in
-    MINGW*|MSYS*) WINDOWS_GATE=1 ;;
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
 esac
 [ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+if [ "$WINDOWS_GATE" -eq 1 ]; then
+    unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+    PYTHON_NATIVE="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
+    [ -n "$PYTHON_NATIVE" ] || { echo "crawlescapecheck: native Python is required on Windows"; exit 2; }
+    PYTHON_EXEC="$PYTHON_NATIVE"
+    if command -v cygpath >/dev/null 2>&1; then
+        PYTHON_EXEC="$( cygpath -w "$PYTHON_NATIVE" )"
+    fi
+    PYTHON="$PYTHON_EXEC"
+    python3()
+    {
+        local arg
+        local -a mapped=()
+        for arg in "$@"; do
+            case "$arg" in
+                /*)
+                    if command -v cygpath >/dev/null 2>&1; then mapped+=( "$( cygpath -w "$arg" )" ); else mapped+=( "$arg" ); fi
+                    ;;
+                *) mapped+=( "$arg" ) ;;
+            esac
+        done
+        MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" "${mapped[@]}"
+    }
+else
+    PYTHON="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-python3}}"
+    command -v "$PYTHON" >/dev/null 2>&1 || { echo "Python required for the MCP arm (set RIPWIRE_PYTHON)"; exit 2; }
+fi
 
 make_symlink()
 {
@@ -65,7 +93,7 @@ make_symlink()
         case "$target" in
             /*) target="$( cygpath -w "$target" )" ;;
         esac
-        "$PYTHON" - "$target" "$( cygpath -w "$link" )" "$directory" <<'PY'
+        MSYS_NO_PATHCONV=1 "$PYTHON" - "$target" "$( cygpath -w "$link" )" "$directory" <<'PY'
 import os, sys
 os.symlink( sys.argv[1], sys.argv[2], target_is_directory=( sys.argv[3] == "1" ) )
 PY
@@ -114,7 +142,7 @@ git -C "$R" -c user.email=gate@ripwire -c user.name=gate commit -qm "tracked sym
 # assert the fixture is what the arms below think it is — a vanishing probe target passes every arm and
 # proves nothing (CONTRIBUTING §2).
 if [ "$WINDOWS_GATE" -eq 1 ]; then
-    linkcount="$( "$PYTHON" - "$( cygpath -w "$R" )" <<'PY'
+    linkcount="$( MSYS_NO_PATHCONV=1 "$PYTHON" - "$( cygpath -w "$R" )" <<'PY'
 from pathlib import Path
 import sys
 root = Path( sys.argv[1] )

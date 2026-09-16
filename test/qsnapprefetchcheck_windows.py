@@ -166,7 +166,13 @@ class Gate:
 
     @staticmethod
     def qsnap_files(cache: Path) -> list[Path]:
-        return sorted(cache.rglob("ripwire-qsnap-*.bin"), key=lambda path: str(path).lower())
+        try:
+            paths = list(cache.rglob("ripwire-qsnap-*.bin"))
+        except FileNotFoundError:
+            # The detached worker removes its pid-suffixed qhead tree while this probe walks the cache.
+            # A transient missing directory is not a missing qsnap; the caller's deadline rechecks it.
+            return []
+        return sorted(paths, key=lambda path: str(path).lower())
 
     @staticmethod
     def validate_qsnap(path: Path) -> str:
@@ -412,6 +418,42 @@ class Gate:
         finally:
             server.close()
 
+    def scenario_e(self) -> None:
+        main_work, cache = self.new_repo()
+        linked = self.temp / "linked-worktree"
+        server = None
+        try:
+            self.git( main_work, "worktree", "add", "-q", str( linked ), "-b", "linked-gate" )
+            if not ( linked / ".git" ).is_file():
+                self.no( "(e) linked worktree did not expose a .git gitfile" )
+                return
+            self.ok( "(e) linked worktree exposes a .git gitfile" )
+            server = Server( self.binary, self.env( cache, 1 ) )
+            server.call( 1, "initialize" )
+            self.find( server, 2, linked, "perimeter" )
+            if self.qsnap_files( cache ):
+                self.no( "(e) unexpected qsnap before the linked-worktree HEAD move" )
+            geo = linked / "geometry.cpp"
+            with geo.open( "ab" ) as handle:
+                handle.write( b"\n// linked-worktree prefetch edit\n" )
+            self.git( linked, "commit", "-q", "-am", "linked worktree edit" )
+            self.find( server, 3, linked, "perimeter" )
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline and not self.qsnap_files( cache ):
+                time.sleep( 0.05 )
+            if self.qsnap_files( cache ):
+                self.ok( "(e) linked-worktree HEAD move triggered a qsnap prefetch" )
+            else:
+                self.no( "(e) linked-worktree HEAD move did not trigger a qsnap prefetch" )
+                print( "        server stderr: " + " | ".join( server.stderr_lines[-12:] ) )
+        finally:
+            if server is not None:
+                server.close()
+            try:
+                self.git( main_work, "worktree", "remove", "--force", str( linked ) )
+            except ( GateError, OSError, subprocess.SubprocessError ):
+                pass
+
     def run(self) -> int:
         print(f"qsnapprefetchcheck: BIN={self.binary}")
         print("\n=== (a) atomic publish: no torn read — tmp+rename, checksum-valid, no residue ===")
@@ -422,6 +464,8 @@ class Gate:
         self.scenario_c()
         print("\n=== (d) SINGLE-FLIGHT: two rapid HEAD moves → no crash, at most one concurrent worker ===")
         self.scenario_d()
+        print("\n=== (e) LINKED WORKTREE: absolute gitdir path still triggers the prefetch ===")
+        self.scenario_e()
         if self.failures:
             print(f"qsnapprefetchcheck: FAIL ({self.failures} failures)")
             return 1

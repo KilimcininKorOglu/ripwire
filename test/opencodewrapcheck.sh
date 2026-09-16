@@ -100,7 +100,7 @@ else:
 cmd = entry.get( "command" )
 if not isinstance( cmd, list ) or not all( isinstance( x, str ) for x in cmd ):
     print( "FAIL command must be an ARRAY of strings (not a command/args pair), got %r" % ( cmd, ) )
-elif not ( cmd[ :1 ] == [ "ripwire" ] or ( cmd[ :1 ] and cmd[ 0 ].endswith( "/ripwire" ) ) ) or "--mcp" not in cmd:   # 2026-09-06: absolute path when nothing on PATH is ripwire
+elif not ( cmd[ :1 ] == [ "ripwire" ] or ( cmd[ :1 ] and cmd[ 0 ].replace( "\\\\", "/" ).lower().endswith( ( "/ripwire", "/ripwire.exe" ) ) ) ) or "--mcp" not in cmd:   # 2026-09-06: absolute path when nothing on PATH is ripwire
     print( "FAIL command %r does not invoke ripwire --mcp" % ( cmd, ) )
 else:
     print( "PASS command is a string array invoking ripwire --mcp" )
@@ -155,10 +155,14 @@ fi
 # ── 7. the pin itself ───────────────────────────────────────────────────────────────────────────
 # Recorded so a silent fixture edit is visible in review; refresh via test/tools/refresh-opencode-schema.sh.
 want="dcd450a9a5ff40d2b73f821b39c1885fad849c73ae738e59f318e51d44e28728"
-got=$( shasum -a 256 "$SCHEMA" 2>/dev/null | awk '{print $1}' )
-if [ -z "$got" ]; then
-    got=$( sha256sum "$SCHEMA" 2>/dev/null | awk '{print $1}' )
-fi
+got=$( python3 - "$SCHEMA" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes().replace(b"\r\n", b"\n")).hexdigest())
+PY
+)
 if [ "$got" = "$want" ]; then
     ok "pinned schema sha256 matches the recorded pin"
 else

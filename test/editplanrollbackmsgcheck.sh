@@ -37,10 +37,31 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 TMP="$( mktemp -d )"
 trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 fail=0
+WINDOWS_GATE=0
+case "$( uname -s 2>/dev/null )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 [ "$( id -u )" != 0 ] || { echo "SKIP: running as root — a read-only directory cannot fail a write"; exit 0; }
+
+make_readonly(){
+    if [ "$WINDOWS_GATE" -eq 1 ]; then
+        MSYS_NO_PATHCONV=1 icacls.exe "$( cygpath -w "$1" )" /deny '*S-1-1-0:(WD,AD)' >/dev/null 2>&1
+    else
+        chmod 0555 "$1"
+    fi
+}
+
+make_writable(){
+    if [ "$WINDOWS_GATE" -eq 1 ]; then
+        MSYS_NO_PATHCONV=1 icacls.exe "$( cygpath -w "$1" )" /remove:d '*S-1-1-0' >/dev/null 2>&1 || true
+    else
+        chmod 0755 "$1"
+    fi
+}
 
 echo "editplanrollbackmsgcheck: BIN=$BIN"
 
@@ -56,16 +77,22 @@ build_corpus(){
 {"version":1,"edits":[{"op":"replace_symbol_body","target":"one","payload":"p1"},
                       {"op":"replace_symbol_body","target":"two","payload":"p2"}]}
 JSON
+    ( cd "$d/corpus" && git init -q && git -c user.email=t@t -c user.name=t add -A \
+      && git -c user.email=t@t -c user.name=t commit -qm base ) >/dev/null 2>&1
 }
 
 # run the plan with $2 made read-only; leaves stderr in $TMP/<tag>.err and re-opens the directory after.
 run_with_readonly(){
     local d="$1" ro="$2" tag="$3"
     ( cd "$d" && "$BIN" corpus >/dev/null 2>&1 )        # warm the index while everything is writable
-    chmod 0555 "$d/$ro"
+    if ! make_readonly "$d/$ro"; then
+        printf '%s\n' "edit-plan test could not make $ro read-only" >"$TMP/$tag.err"
+        printf '%s' 1 >"$TMP/$tag.rc"
+        return
+    fi
     ( cd "$d" && "$BIN" corpus --edit-plan=plans/plan.json --apply ) >"$TMP/$tag.out" 2>"$TMP/$tag.err"
     printf '%s' "$?" >"$TMP/$tag.rc"
-    chmod 0755 "$d/$ro"
+    make_writable "$d/$ro"
 }
 
 echo

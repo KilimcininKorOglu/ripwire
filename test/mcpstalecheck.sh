@@ -50,8 +50,23 @@ ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write th
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
-PYTHON3="${RIPWIRE_PYTHON:-python3}"
-"$PYTHON3" -c 'import sys' >/dev/null 2>&1 || { echo "native Python required for JSON assertions"; exit 2; }
+WINDOWS_GATE=0
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+case "$( uname -s 2>/dev/null || true )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+if [ "$WINDOWS_GATE" = 1 ]; then
+    PYTHON3="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
+    [ -n "$PYTHON3" ] || { echo "native Python required for JSON assertions"; exit 2; }
+    PYTHON_EXEC="$PYTHON3"
+    if command -v cygpath >/dev/null 2>&1; then
+        PYTHON_EXEC="$( cygpath -w "$PYTHON3" )"
+    fi
+    MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" -c 'import sys' >/dev/null 2>&1 || { echo "native Python required for JSON assertions"; exit 2; }
+else
+    PYTHON3="${RIPWIRE_PYTHON:-python3}"
+    "$PYTHON3" -c 'import sys' >/dev/null 2>&1 || { echo "native Python required for JSON assertions"; exit 2; }
+fi
 
 echo "mcpstalecheck: BIN=$BIN  FIX=$FIX"
 
@@ -69,7 +84,7 @@ if command -v cygpath >/dev/null 2>&1; then
     PY_BIN="$( cygpath -w "$BIN" )"
     PY_WORK="$( cygpath -w "$WORK" )"
     PY_SCRIPT="$( cygpath -w "$ROOT/test/mcpstalecheck_windows.py" )"
-    "$PYTHON3" "$PY_SCRIPT" "$PY_BIN" "$PY_WORK"
+    MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" "$PY_SCRIPT" "$PY_BIN" "$PY_WORK"
     exit $?
 fi
 inner_for_id() {

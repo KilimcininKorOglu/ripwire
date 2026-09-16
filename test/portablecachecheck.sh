@@ -38,7 +38,26 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
-[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative RIPWIRE_BIN
+WINDOWS_GATE=0
+case "$( uname -s 2>/dev/null || printf '%s' unknown )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+if [ "$WINDOWS_GATE" = 1 ]; then
+    # The native executable must receive Win32 paths.  CI/agent shells may inherit either of these
+    # MSYS conversion guards; keeping them set turns /tmp and /c/... into literal POSIX strings in
+    # the product, which is exactly the disguised-cache-miss this gate is meant to detect.
+    unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+    case "$BIN" in
+        [A-Za-z]:/*|[A-Za-z]:\\*)
+            command -v cygpath >/dev/null 2>&1 && BIN="$( cygpath -u "$BIN" )"
+            ;;
+    esac
+fi
+case "$BIN" in
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+    *) BIN="$ROOT/$BIN" ;;                              # allow a repo-relative RIPWIRE_BIN
+esac
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
 
@@ -46,6 +65,28 @@ ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write th
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
+
+# The old-format arm edits the cache header with native Python on Windows.  Convert only that one
+# file argument explicitly; the product invocations above use Git Bash's normal native-argument
+# conversion after the inherited guards were removed.
+if [ "$WINDOWS_GATE" = 1 ]; then
+    PYTHON_NATIVE="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
+    [ -n "$PYTHON_NATIVE" ] || { echo "portablecachecheck: native Python is required on Windows"; exit 2; }
+    python3()
+    {
+        local arg
+        local -a mapped=()
+        for arg in "$@"; do
+            case "$arg" in
+                /*)
+                    if command -v cygpath >/dev/null 2>&1; then mapped+=( "$( cygpath -w "$arg" )" ); else mapped+=( "$arg" ); fi
+                    ;;
+                *) mapped+=( "$arg" ) ;;
+            esac
+        done
+        MSYS_NO_PATHCONV=1 "$PYTHON_NATIVE" "${mapped[@]}"
+    }
+fi
 
 echo "portablecachecheck: BIN=$BIN  TMP=$TMP"
 

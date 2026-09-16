@@ -60,17 +60,46 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
-[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
+case "$BIN" in
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+    *) BIN="$ROOT/$BIN" ;;
+esac
 ASAN_BIN="${RIPWIRE_ASAN_BIN:-$ROOT/asan/ripwire}"
-[ "${ASAN_BIN#/}" = "$ASAN_BIN" ] && ASAN_BIN="$ROOT/$ASAN_BIN"
+case "$ASAN_BIN" in
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+    *) ASAN_BIN="$ROOT/$ASAN_BIN" ;;
+esac
 FIXTURE="$ROOT/test/fixture"
 TMP="$( mktemp -d )"; trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 fail=0
 WINDOWS_GATE=0
 case "$( uname -s 2>/dev/null )" in
-    MINGW*|MSYS*) WINDOWS_GATE=1 ;;
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1
 esac
 [ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+if [ "$WINDOWS_GATE" -eq 1 ]; then
+    unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+    PYTHON_NATIVE="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
+    [ -n "$PYTHON_NATIVE" ] || { echo "cachefuzzcheck: native Python is required on Windows"; exit 2; }
+    PYTHON_EXEC="$PYTHON_NATIVE"
+    if command -v cygpath >/dev/null 2>&1; then
+        PYTHON_EXEC="$( cygpath -w "$PYTHON_NATIVE" )"
+    fi
+    python3()
+    {
+        local arg
+        local -a mapped=()
+        for arg in "$@"; do
+            case "$arg" in
+                /*)
+                    if command -v cygpath >/dev/null 2>&1; then mapped+=( "$( cygpath -w "$arg" )" ); else mapped+=( "$arg" ); fi
+                    ;;
+                *) mapped+=( "$arg" ) ;;
+            esac
+        done
+        MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" "${mapped[@]}"
+    }
+fi
 
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
@@ -79,7 +108,9 @@ skip(){ printf '  SKIP  %s\n' "$*"; }   # an ABSENT PRECONDITION with a named re
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 [ -d "$FIXTURE" ] || { echo "no fixture at $FIXTURE"; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
+if [ "$WINDOWS_GATE" -eq 0 ]; then
+    command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
+fi
 
 echo "cachefuzzcheck: BIN=$BIN  ASAN_BIN=$ASAN_BIN  FIXTURE=$FIXTURE  TMP=$TMP"
 
@@ -398,13 +429,24 @@ chmod 644 "$UNREAD"
 
 # symlink to a VALID good cache — must still warm-hit correctly (not a corruption case, a sanity check
 # that the harness's file-target mutations don't accidentally break the happy path).
+make_symlink(){
+    if [ "$WINDOWS_GATE" -eq 1 ]; then
+        python3 - "$1" "$2" <<'PYLINK'
+import os
+import sys
+os.symlink(sys.argv[1], sys.argv[2])
+PYLINK
+    else
+        ln -sf "$1" "$2"
+    fi
+}
 SYMGOOD="$TMP/symlink_to_good.cache"
-ln -sf "$GOOD" "$SYMGOOD"
+make_symlink "$GOOD" "$SYMGOOD"
 run_one_dev "symlink_to_valid_cache" "$SYMGOOD"
 
 # dangling symlink (target does not exist) — must degrade like a missing file.
 SYMDANGLE="$TMP/symlink_dangling.cache"
-ln -sf "$TMP/does_not_exist_$$" "$SYMDANGLE"
+make_symlink "$TMP/does_not_exist_$$" "$SYMDANGLE"
 run_one_dev "symlink_dangling" "$SYMDANGLE"
 
 # ── disclosure (2026-09-06 stranger audit): a Release binary keeps NO DEGRADED_PATH_ALERT, so every reject

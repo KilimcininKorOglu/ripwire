@@ -30,18 +30,41 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
-[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
+case "$BIN" in
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+    *) BIN="$ROOT/$BIN" ;;
+esac
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
 WINDOWS_GATE=0
 case "$( uname -s 2>/dev/null )" in
-    MINGW*|MSYS*) WINDOWS_GATE=1 ;;
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
 esac
 [ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
 if [ "$WINDOWS_GATE" -eq 1 ]; then
+    unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
     PYTHON_NATIVE="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-}}"
     [ -n "$PYTHON_NATIVE" ] || PYTHON_NATIVE="$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )"
     WINDOWS_ACL_PROBE="$ROOT/test/cacheisolationcheck_windows.py"
+    PYTHON_EXEC="$PYTHON_NATIVE"
+    if command -v cygpath >/dev/null 2>&1; then
+        PYTHON_EXEC="$( cygpath -w "$PYTHON_NATIVE" )"
+        WINDOWS_ACL_PROBE="$( cygpath -w "$WINDOWS_ACL_PROBE" )"
+    fi
+    python3()
+    {
+        local arg
+        local -a mapped=()
+        for arg in "$@"; do
+            case "$arg" in
+                /*)
+                    if command -v cygpath >/dev/null 2>&1; then mapped+=( "$( cygpath -w "$arg" )" ); else mapped+=( "$arg" ); fi
+                    ;;
+                *) mapped+=( "$arg" ) ;;
+            esac
+        done
+        MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" "${mapped[@]}"
+    }
 fi
 
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
@@ -171,7 +194,7 @@ if [ -d "$XDG4/ripwire" ]; then
     if [ "$WINDOWS_GATE" -eq 1 ]; then
         WINDOWS_XDG4="$XDG4/ripwire"
         command -v cygpath >/dev/null 2>&1 && WINDOWS_XDG4="$( cygpath -m "$WINDOWS_XDG4" )"
-        "$PYTHON_NATIVE" "$WINDOWS_ACL_PROBE" "$WINDOWS_XDG4" \
+        MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" "$WINDOWS_ACL_PROBE" "$WINDOWS_XDG4" \
             && ok "defaultCachePath: \$XDG_CACHE_HOME/ripwire has a protected owner/admin DACL" \
             || no "defaultCachePath: \$XDG_CACHE_HOME/ripwire DACL is not protected"
     else
@@ -200,7 +223,7 @@ if [ -d "$XDG5/ripwire" ]; then
     if [ "$WINDOWS_GATE" -eq 1 ]; then
         WINDOWS_XDG5="$XDG5/ripwire"
         command -v cygpath >/dev/null 2>&1 && WINDOWS_XDG5="$( cygpath -m "$WINDOWS_XDG5" )"
-        "$PYTHON_NATIVE" "$WINDOWS_ACL_PROBE" "$WINDOWS_XDG5" \
+        MSYS_NO_PATHCONV=1 "$PYTHON_EXEC" "$WINDOWS_ACL_PROBE" "$WINDOWS_XDG5" \
             && ok "resolveRemoteRoot: \$XDG_CACHE_HOME/ripwire (binary-created) has a protected owner/admin DACL" \
             || no "resolveRemoteRoot: \$XDG_CACHE_HOME/ripwire DACL is not protected"
     else

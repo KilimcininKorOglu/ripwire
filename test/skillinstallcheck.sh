@@ -12,6 +12,8 @@ set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 SK="$ROOT/skills"
 GATE_BASH="${RIPWIRE_BASH:-bash}"
+EXPLICIT_BIN=0
+[ -n "${1:-}" ] || [ -n "${RIPWIRE_BIN:-}" ] && EXPLICIT_BIN=1
 make_dangling_link()
 {
     case "${OSTYPE:-}" in
@@ -129,6 +131,9 @@ CODEX_ADAPTER="$ROOT/hooks/ripwire-codex-nudge.sh"
 ADAPTER_TMP="$TMP/adapter"; mkdir -p "$ADAPTER_TMP"
 ADAPTER_BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${ADAPTER_BIN#/}" = "$ADAPTER_BIN" ] && ADAPTER_BIN="$ROOT/$ADAPTER_BIN"
+if [ "$EXPLICIT_BIN" -eq 1 ] && [ ! -f "$ADAPTER_BIN" ]; then
+    no "explicit RIPWIRE_BIN is not a readable binary path: $ADAPTER_BIN"
+fi
 # §RETIRED (2026-09-02): the shared hook's PreToolUse path no longer emits ANY context — a randomized
 # A/B measured both nudge tiers inert and the registered consequence was applied (docs/EVALS.md §4,
 # hooks/ripwire-nudge.sh §RETIRED). These two arms used to assert that the adapter PRESERVED the
@@ -183,7 +188,11 @@ grep -rqiE 'install\.sh' "$ROOT/README.md" "$SK"/ripwire-router/SKILL.md 2>/dev/
 # unrouted. A flag that is neither is the drift this gate exists to catch.
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative RIPWIRE_BIN
-[ -x "$BIN" ] || BIN="$( command -v ripwire 2>/dev/null || true )"
+if [ "$EXPLICIT_BIN" -eq 1 ]; then
+    [ -f "$BIN" ] || { no "explicit RIPWIRE_BIN is not a readable binary path: $BIN"; BIN=""; }
+else
+    [ -x "$BIN" ] || BIN="$( command -v ripwire 2>/dev/null || true )"
+fi
 
 # UNROUTED allowlist — every entry needs a one-word reason a new flag can't just hide behind.
 UNROUTED="

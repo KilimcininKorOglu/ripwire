@@ -117,17 +117,17 @@ path on a Mac with `cmake -S . -B build-nokqueue -DCMAKE_CXX_FLAGS=-DRW_OS_HAS_K
 ripwire builds natively on Windows (x64) with Clang and the MSVC ABI, with zero external runtime
 dependencies (linking only system `kernel32`, `ws2_32`, `advapi32`, `shell32`).
 
-From an **x64 Native Tools Command Prompt for Visual Studio** (with `clang` and `ninja` on `PATH`):
+From an **x64 Native Tools Command Prompt for Visual Studio** (with LLVM's `clang-cl` and Ninja on `PATH`):
 
 ```cmd
-cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 cmake --build build -j
 ```
 
 For maximum performance (Release mode with ThinLTO and host-CPU vectorization):
 
 ```cmd
-cmake -S . -B build-release -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -DRIPWIRE_NATIVE=ON
+cmake -S . -B build-release -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release -DRIPWIRE_NATIVE=ON
 cmake --build build-release -j
 ```
 

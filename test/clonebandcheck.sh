@@ -46,10 +46,19 @@ build_one() {   # $1 = tag, $2.. = extra flags
 build_one on
 build_one off -DCTX_TYPE3_SKETCH_OFF
 
-# ── run both; each enforces its own S-checks (nonzero exit = fail) ───────────────────────────────────────────────
+# ── run both; each enforces its own S-checks (nonzero exit = fail) ─────────────────────────────────────────────
 mkdir -p "$WORK/fix_on" "$WORK/fix_off"
-if ! "$WORK/harness_on"  "$WORK/fix_on"  > "$WORK/out_on.txt";  then echo "clonebandcheck: FAIL (ON harness)";  sed 's/^/    /' "$WORK/out_on.txt";  exit 2; fi
-if ! "$WORK/harness_off" "$WORK/fix_off" > "$WORK/out_off.txt"; then echo "clonebandcheck: FAIL (OFF harness)"; sed 's/^/    /' "$WORK/out_off.txt"; exit 2; fi
+native_fixture_path(){
+    if [ "${OS:-}" = Windows_NT ] || [[ "$( uname -s 2>/dev/null )" == MINGW* || "$( uname -s 2>/dev/null )" == MSYS* ]]; then
+        cygpath -w "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+ON_FIX="$( native_fixture_path "$WORK/fix_on" )"
+OFF_FIX="$( native_fixture_path "$WORK/fix_off" )"
+if ! "$WORK/harness_on"  "$ON_FIX"  > "$WORK/out_on.txt";  then echo "clonebandcheck: FAIL (ON harness)";  sed 's/^/    /' "$WORK/out_on.txt"; exit 2; fi
+if ! "$WORK/harness_off" "$OFF_FIX" > "$WORK/out_off.txt"; then echo "clonebandcheck: FAIL (OFF harness)"; sed 's/^/    /' "$WORK/out_off.txt"; exit 2; fi
 sed 's/^/    /' "$WORK/out_on.txt"
 
 # ── recall parity: the emitted pair lines (PAIR id id sim) must be byte-identical ON vs OFF ─────────────────────

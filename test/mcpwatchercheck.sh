@@ -30,7 +30,10 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
-[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
+case "$BIN" in
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;;
+    *) BIN="$ROOT/$BIN" ;;
+esac
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
 
@@ -38,6 +41,23 @@ ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write th
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
+WINDOWS_GATE=0
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
+case "$( uname -s 2>/dev/null || true )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+if [ "$WINDOWS_GATE" = 1 ]; then
+    PYTHON_NATIVE="${RIPWIRE_PYTHON:-${PYTHON_NATIVE:-$( command -v python.exe 2>/dev/null || command -v python 2>/dev/null || true )}}"
+    [ -n "$PYTHON_NATIVE" ] || { echo "mcpwatchercheck: native Python is required on Windows"; exit 2; }
+    PYTHON_SCRIPT="$ROOT/test/mcpwatchercheck_windows.py"
+    BIN_NATIVE="${RIPWIRE_REAL_BIN:-$BIN}"
+    if command -v cygpath >/dev/null 2>&1; then
+        PYTHON_NATIVE="$( cygpath -w "$PYTHON_NATIVE" )"
+        PYTHON_SCRIPT="$( cygpath -w "$PYTHON_SCRIPT" )"
+        BIN_NATIVE="$( cygpath -w "$BIN_NATIVE" )"
+    fi
+    MSYS_NO_PATHCONV=1 exec "$PYTHON_NATIVE" "$PYTHON_SCRIPT" "$BIN_NATIVE"
+fi
 command -v python3 >/dev/null 2>&1 || { echo "python3 required for JSON assertions"; exit 2; }
 
 echo "mcpwatchercheck: BIN=$BIN"

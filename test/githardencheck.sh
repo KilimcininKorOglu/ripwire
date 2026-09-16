@@ -41,6 +41,11 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0
+WINDOWS_GATE=0
+case "$( uname -s 2>/dev/null )" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS_GATE=1 ;;
+esac
+[ "${OS:-}" = Windows_NT ] && WINDOWS_GATE=1
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
@@ -136,8 +141,14 @@ grep -q '^COUNT=1 K0=user.name V0=gateprobe K1= V1=$' "$TMP/shim.log" 2>/dev/nul
 # The startup probe reads the LOCAL config files for the bytes "fsmonitor"/"include" before paying for a git
 # subprocess. A hostile config that hides the key behind an include must still be caught.
 FH="$TMP/fh"; cp -R "$FX" "$FH"
-printf '[core]\n\tfsmonitor = %s\n' "$TMP/hook.sh" > "$TMP/hidden.inc"
-( cd "$FH" && "$REALGIT" config --unset core.fsmonitor && "$REALGIT" config include.path "$TMP/hidden.inc" )
+HIDDEN_HOOK="$TMP/hook.sh"
+HIDDEN_INC="$TMP/hidden.inc"
+if [ "$WINDOWS_GATE" -eq 1 ] && command -v cygpath >/dev/null 2>&1; then
+    HIDDEN_HOOK="$( cygpath -m "$HIDDEN_HOOK" )"
+    HIDDEN_INC="$( cygpath -m "$HIDDEN_INC" )"
+fi
+( printf '[core]\n\tfsmonitor = %s\n' "$HIDDEN_HOOK" > "$TMP/hidden.inc" )
+( cd "$FH" && "$REALGIT" config --unset core.fsmonitor && "$REALGIT" config include.path "$HIDDEN_INC" )
 grep -qi fsmonitor "$FH/.git/config" \
     && no "(H) the fixture still spells fsmonitor in .git/config — the include arm is not testing the include" \
     || ok "(H) mutation took: .git/config no longer spells fsmonitor; the key lives only behind include.path"

@@ -237,8 +237,17 @@ CAVEAT_WORDS = (
 # ── reading the binary ────────────────────────────────────────────────────────────────────────────
 
 def tool_name_of( binPath ):
-    """The tool's name is whatever the binary is called. Never hardcoded."""
-    return os.path.basename( binPath )
+    """The user-facing tool name, independent of a native executable suffix."""
+    name = os.path.basename( binPath )
+    for suffix in ( '.exe', '.com', '.cmd', '.bat' ):
+        if name.lower().endswith( suffix ):
+            return name[ : -len( suffix ) ]
+    return name
+
+
+def repo_relative( path ):
+    """Render repository-relative paths with Markdown separators on every host."""
+    return os.path.relpath( path, ROOT ).replace( os.sep, '/' )
 
 
 def help_text_of( binPath ):
@@ -700,7 +709,7 @@ def render( name, preamble, sections, captures, capturePath ):
     w( '' )
     if capturePath:
         w( 'Sample output is lifted from a real recorded run (`%s`), trimmed to the first few lines and'
-           % os.path.relpath( capturePath, ROOT ) )
+           % repo_relative( capturePath ) )
         w( 'scrubbed of local paths. It is illustrative, not a golden: run the command yourself for the' )
         w( 'current shape.' )
     else:
@@ -934,7 +943,7 @@ def main():
     print( 'docs_commands_build: wrote %s — %d flags in %d sections, %d sample(s) from %s'
            % ( os.path.relpath( args.out, ROOT ), len( binary_flags( sections ) ), len( sections ),
                sum( 1 for _t, es in sections for e in es if pick_sample( e, captures ) ),
-               os.path.relpath( capturePath, ROOT ) if capturePath and captures else 'no capture' ) )
+               repo_relative( capturePath ) if capturePath and captures else 'no capture' ) )
     return 0
 
 
