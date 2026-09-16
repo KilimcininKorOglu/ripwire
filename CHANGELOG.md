@@ -15,6 +15,33 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
+
+The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
+`std::cerr` insertions. With stdio sync on, each insertion is its own write to stderr, so a line another thread
+wrote at the same moment could land inside a notice. kotlincheck §12 refuses two Kotlin files at once; when the
+second parse worker's refusal line landed straight after `[math degraded] `, the arm's one-line grep failed with
+"raised no DEGRADED_PATH_ALERT" although the alert was on stderr, whole, one line further down. That is the
+failure eight CI jobs hit since Kotlin landed, three of them on `main`. Measured on f8e6087c by running §12's map
+over its own fixture: 18 gate failures in 5,700 runs, and the notice torn in 32–73% of runs depending on load.
+Every reporter now formats its whole notice into a fixed 4,096-byte stack buffer and hands it to stderr in ONE
+stdio call, which no other stdio writer in the process can interleave, and which needs no heap in a reporter that
+may be running because memory ran out. The text is byte-identical for every notice under the cap; a longer one is
+cut and says so at its end (`... [notice truncated: kept K of N bytes]`). The reporters still flush stdout
+before the notice, as `std::cerr`'s tie to `std::cout` always did, so a trap or an abort right after it loses no
+buffered output and `>file 2>&1` keeps its order. Measured after the fix on §12's fixture, alternating
+run by run with the f8e6087c binary under four busy loops: 0 gate failures and 0 torn notices in 2,100 runs,
+against 6 failures and 726 torn notices from the old binary in the same 2,100 interleaved runs. The new gate
+`test/diagnoticecheck.sh` counts the write(2) calls each reporter makes by giving it a datagram socket as fd 2,
+which keeps write boundaries: red on the old reporters (9 writes for the degraded notice, 15 to 21 for the banners,
+every one still byte-exact), green at one write each. Three `2>&1` cases leave text in stdout's buffer before a
+degraded notice, an assert and a panic, and require it first and whole: byte-identical to the old reporters. It also carries a static arm with a mutation control, a
+12,000-notice race against raw and stdio writers (red in 200 of 200 runs on the old reporters), a zero-allocation
+arm (global `operator new`) measured with `src/alloccount.cpp` as a delta between otherwise identical runs, and an
+ASan/UBSan pass. kotlincheck §12 now prints the first five lines of stderr when that arm fails, because
+none of the eight CI logs could show what the notice had looked like. Not fixed here: the default map over the same
+fixture says `files=4` with no sign of the two refused files, a disclosure gap tracked by #157.
+
 ### Changed — Intel macOS binaries end with 0.6.1
 
 0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
@@ -68,6 +95,50 @@ with those bytes flipped, which must be refused with output byte-identical to a 
 rows failed: the forgery had no producer bytes to flip and was served in both directions, and the key, header,
 derivation and blob arms found nothing. Under ASan the gate passes with no sanitizer report on any child's stderr, and
 `test/cachefuzzcheck.sh`'s snapshot sweep stays clean. Pin moved: `test/qschemetrip.hash`.
+
+### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
+
+Through 0.6.1 the `macos-arm64` release asset and every macOS CI leg were built with Xcode 16.2 on `macos-14`. Its
+AppleClang 16 is LLVM 17, and LLVM 17's loop vectorizer never reads `__builtin_assume_separate_storage`
+(llvm/llvm-project#64666, fixed in LLVM 18). There, a `VERIFY_NO_ALIAS_BUF` promise removed scalar reloads but left each
+vectorized loop's runtime overlap check and its scalar fallback in place. The release leg, the eight macOS gate shards
+and the macOS sanitizer leg now build with Xcode 26.6 (17F113, Apple clang 21.0.0), the default Xcode on `macos-26`.
+GitHub retires the `macos-14` images on 2026-11-02. On Xcode 26.6, with no flag beyond the release's own
+`-O2 -mcpu=apple-m1`, a two-buffer loop carrying the promise vectorizes with no overlap check. objdump counts 57
+instructions against 64 for the same loop without the promise, and 64 again with `-mllvm -basic-aa-separate-storage=false`.
+`test/noaliascheck.sh` classifies this compiler `CONSUMED_DEFAULT` and `LOOP_CONSUMED`. No speed is claimed: the promises
+that would use this land later, with the macro rename.
+
+The minimum macOS is now pinned instead of inherited from the runner. With no deployment target, clang takes the lower of
+the runner's macOS and the SDK default. The published `ripwire-0.6.1-macos-arm64` binary reads `minos 14.0` (otool), and
+the same build on `macos-26` would have read 26.x and dropped every macOS 14 and 15 user. The release leg exports
+`MACOSX_DEPLOYMENT_TARGET=14.0` before its PGO build and reads `minos` back off the binary it packages. The CI legs build
+at the same 14.0, where Xcode 26.6's libc++ still defines `__cpp_lib_print`. The leg also records its Xcode, compiler and
+`llvm-profdata`, and fails if `DEVELOPER_DIR` is empty or either tool is not the pinned Xcode's, so PGO trains, merges and
+optimizes with one toolchain. None of these checks skips a leg that lost its pin. A macOS release leg without a
+deployment target fails, and so does a CI leg whose CMake cache did not receive the pinned target.
+
+Gate: `test/portablebuildcheck.sh` #2i, sixteen rows. It holds the release leg's runner, Xcode and quoted minimum macOS;
+the export before the first configure; a single deployment-target source across the leg and the build job's env and
+steps (no `-DCMAKE_OSX_DEPLOYMENT_TARGET`, `-mmacosx-version-min` or second `MACOSX_DEPLOYMENT_TARGET`); the exact
+`otool` compare between PGO staging and packaging; and each fail-loudly guard: the empty-target refusal, the toolchain
+record step ahead of the first build, and ci.yml's two CMake-cache checks. It also holds ci.yml's nine macOS runner
+labels, five `matrix.os` conditions, two Xcode paths and two deployment targets to the release's values, so a half-done
+runner move (an `ASAN_OPTIONS` condition still naming `macos-14`) is refused. Three mutated copies must each be refused
+by exactly their own row: no minos step, `ASAN_OPTIONS` back on `macos-14`, and `-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0`
+added to the pgobuild step. Red before this change: 14 FAIL, 2 PASS. All sixteen pass after.
+
+A local emulation of the release leg on the same Xcode build (`scripts/pgobuild.sh`, Release,
+`MACOSX_DEPLOYMENT_TARGET=14.0`) passed every post-step: the PGO determinism diff, `emit=std::print`, `minos 14.0`, and
+xmllint. Its output was byte-identical to the plain build on `test/fixture`, the repo map and a `--for` query.
+
+The move also exposed a test-harness defect. Under a UTF-8 locale, macOS 26's `/usr/bin/sort` sorts case-insensitively,
+where macOS 14 and Linux sorted these lists in byte order. `test/scroundtripcheck.sh` compared a `sort`ed expected list
+with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of every `sort`, `comm`, `join`, `uniq` and
+`ls` call in the gate and bench scripts found 27 sites in 20 files that compare an order with something else: Python's
+`sorted()`, a literal, a pinned hash, ripwire's own byte-sorted output, or `git status`. Only that one fails today; the
+other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
+`LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
 
 ### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
 

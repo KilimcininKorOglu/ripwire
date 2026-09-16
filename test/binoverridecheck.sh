@@ -90,6 +90,7 @@ EXEMPT = {
     "codexplugincheck.sh":       "pure-python/json check of a static MCP manifest file; 'ripwire' only appears as a string field",
     "columnarcommacheck.sh":     "compiles an isolated $CXX probe .cpp; never invokes build/ripwire",
     "connectcorecheck.sh":       "builds its OWN standalone harness binary, independent of build/ripwire",
+    "diagnoticecheck.sh":        "builds its OWN standalone harness (test/diagnotice_harness.cpp) against src/infra/diagnostics.cpp and statically reads that file; the subject is the Diagnostics reporters, so no ripwire binary is bound or executed — the file contains neither RIPWIRE_BIN nor $BIN",
     "dependencypincheck.sh":     "CMake-configure-level gate (checks CMakeLists.txt text + a throwaway cmake -S/-B configure); no ripwire binary",
     "dynmapsimdcheck.sh":        "builds its OWN standalone harness binaries per SIMD arm, independent of build/ripwire",
     "flagtablecheck.sh":         "pure file/doc-table check; no binary invocation",
