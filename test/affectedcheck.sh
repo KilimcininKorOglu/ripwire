@@ -76,7 +76,7 @@ runec(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" "$@" --no-cache >/dev/null 2
 # refuses to, so that p= is one path, not a list), which turned such a row into two names that name nothing.
 # The shared reader splits only a QUALIFIED group row and decodes entities, so the two helpers in this file
 # can no longer disagree about what a row is.
-tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | sort | tr '\n' ','; }
+tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ','; }
 cnt(){  printf '%s' "$1" | grep -oE 'tests="[0-9]+"' | head -1 | grep -oE '[0-9]+'; }
 
 # ── 1) change core.cpp → exactly the two tests that reach its symbols ────────────────────────────────

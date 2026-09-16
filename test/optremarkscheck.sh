@@ -153,7 +153,7 @@ else
         CLANGPIN="1"
         ok "front end: default is $CXXID, so the Clang-only arms below are pinned to the box's clang++ (coverage kept, not skipped)"
     else
-        CLANGONLY_SKIP="the default front end is $CXXID and no clang++ is on PATH; -Rpass=/-fsave-optimization-record and .profdata are Clang-only spellings, so a successful configure is not expressible here. CI's macos-14 legs (AppleClang) run these arms."
+        CLANGONLY_SKIP="the default front end is $CXXID and no clang++ is on PATH; -Rpass=/-fsave-optimization-record and .profdata are Clang-only spellings, so a successful configure is not expressible here. CI's macOS legs (AppleClang) run these arms."
     fi
 fi
 # cmake_cc <args...> — configure with the Clang-only arms' toolchain, whatever that turned out to be.

@@ -23,8 +23,9 @@
 //
 // THE FALLBACK IS ALWAYS COMPILED, on every platform, even where the std path is chosen. A shim that
 // only type-checks on the toolchain that cannot be built locally is a shim that rots silently; this
-// way the dev machine's build proves the fallback still compiles, and the macos-14 CI leg proves it
-// still behaves (the lint magic-number gates run straight through it there).
+// way the dev machine's build proves the fallback still compiles, and the macOS CI legs prove it still
+// behaves: they build at the release's 14.0 deployment target, below the macOS 26 where libc++'s
+// floating-point from_chars becomes available (the lint magic-number gates run straight through it there).
 //
 // SEMANTICS: `parseFloating` reproduces `std::from_chars( first, last, value )` with the default
 // `chars_format::general`, which is strtod's grammar MINUS three things. All three are handled below

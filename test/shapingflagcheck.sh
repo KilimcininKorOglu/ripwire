@@ -79,7 +79,7 @@ echo "shapingflagcheck: BIN=$BIN"
 export TMPDIR="$TMP/cache"; mkdir -p "$TMPDIR"
 "$BIN" . >/dev/null 2>&1 || true                       # the repo root: the (B)/(D)/anchor/hotspots arms
 
-git status --porcelain 2>/dev/null | grep -vE '^\?\? (build|asan|tsan)' > "$TMP/status.before"
+git status --porcelain 2>/dev/null | grep -vE '^\?\? (build|asan|tsan)' | LC_ALL=C sort > "$TMP/status.before"
 
 # ── (A) the SOURCE side: the read sites, re-derived ────────────────────────────────────────────────────
 # cli.h is excluded because that is where the fields are DECLARED and where the guards read them to decide
@@ -498,8 +498,8 @@ done < "$TMP/universe.tsv"
 [ "$nDeferred" -gt 0 ] && ok "(B) $nDeferred notice-only rows carry no hand-written probe and were asserted by (F) instead" || true
 
 # ── the harness must not mutate the tree ───────────────────────────────────────────────────────────────
-git status --porcelain 2>/dev/null | grep -vE '^\?\? (build|asan|tsan)' > "$TMP/status.after"
-STRAY="$( comm -13 "$TMP/status.before" "$TMP/status.after" 2>/dev/null | head -5 )"
+git status --porcelain 2>/dev/null | grep -vE '^\?\? (build|asan|tsan)' | LC_ALL=C sort > "$TMP/status.after"
+STRAY="$( LC_ALL=C comm -13 "$TMP/status.before" "$TMP/status.after" 2>/dev/null | head -5 )"
 [ -z "$STRAY" ] && ok "gate left the tree unmodified" \
                 || { no "gate MUTATED the tree:"; printf '%s\n' "$STRAY" | sed 's/^/        /'; }
 
