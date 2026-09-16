@@ -526,6 +526,26 @@ inline std::uint32_t resolveTsImport( std::string_view includerPath, std::string
     };
     // FIRST an exact hit (specifier already has an extension, e.g. `./x.js`), then extension-appended, then index.
     probe( std::string( target ) );
+    // TypeScript permits a runtime `.js`/`.jsx` specifier to name its typed source file. Appending `.ts` to
+    // `api.js` would probe the wrong spelling (`api.js.ts`); substitute the runtime suffix while keeping the
+    // exact probe above. All candidates still share the unique-or-degrade accumulator, so a tree containing
+    // both `api.ts` and `api.js` remains unresolved rather than guessing which module the author meant.
+    for( const std::string_view runtimeExt : { std::string_view{ ".js" }, std::string_view{ ".jsx" },
+                                                std::string_view{ ".mjs" }, std::string_view{ ".cjs" } } )
+    {
+        if( target.size() > runtimeExt.size() && target.compare( target.size() - runtimeExt.size(), runtimeExt.size(), runtimeExt ) == 0 )
+        {
+            const std::string stem( target.substr( 0, target.size() - runtimeExt.size() ) );
+            probe( stem + ".ts" );
+            probe( stem + ".tsx" );
+            probe( stem + ".d.ts" );
+            for( const std::string_view indexRel : kIndexRel )
+            {
+                probe( stem + std::string( indexRel ) );
+            }
+            break;
+        }
+    }
     for( std::string_view e : kFileExt )
     {
         probe( std::string( target ) + std::string( e ) );
