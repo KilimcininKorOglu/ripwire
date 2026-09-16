@@ -9,6 +9,7 @@
 //        → serialize: top-K symbols (by rank) → minified XML, grouped by file.
 
 #include "infra/profileScope.h"
+#include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 
 #include <algorithm>   // std::sort — symbolsByFile below
@@ -57,6 +58,12 @@ inline constexpr NodeId kNoNode = 0xFFFFFFFFu;
 // capture; a mutable static member is not extracted — disclosed). symTag("field") exists for the RawDef kind
 // and diagnostics; no map emitter ever reaches it.
 enum class SymKind : std::uint8_t { Function, Method, Class, Struct, Interface, Var, Section, Macro, Field, Other };
+// The number of SymKind enumerators, and the bound a cached def's kind byte is VALIDATED against on the way
+// back in (ingest_cache.h ByteR::enumU8). The static_assert is not a restatement: enumCountIsExact asks the
+// compiler whether `Other` is the last NAMED value, so appending a kind without moving this is a build error
+// rather than a validator that silently refuses the new kind's every cached record.
+inline constexpr std::size_t kSymKindCount = static_cast<std::size_t>( SymKind::Other ) + 1;
+static_assert( enumCountIsExact<SymKind, kSymKindCount>(), "kSymKindCount must name the LAST SymKind enumerator — move it with the append" );
 
 inline const char* symTag( SymKind k ) noexcept
 {
@@ -112,6 +119,9 @@ enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC,
 // those three as unanalyzed even though kUnanalyzedLangs listed Php and Lua. Size per-language
 // arrays with this, never with a number.
 inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::Kotlin ) + 1;
+// ...and the cache readers validate every cached Lang byte against it, so a stale kLangCount would also refuse
+// the new language's records. The compile-time proof (infra/enumcount.h) makes the append a build error instead.
+static_assert( enumCountIsExact<Lang, kLangCount>(), "kLangCount must name the LAST Lang enumerator — move it with the append" );
 
 // short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt").
 // The canonical home for this switch: previously duplicated privately in htmlexport.h, moved here so a THIRD
@@ -174,6 +184,9 @@ inline const char* langTag( Lang l ) noexcept
 //              cache with recv as a u8). Python only: isMemberAccessNode classifies C++/Python receivers and
 //              C++ has no `super`.
 enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule };
+// The number of RecvKind enumerators — the bound readRef validates a cached receiver byte against (see kSymKindCount).
+inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::ElixirSelfModule ) + 1;
+static_assert( enumCountIsExact<RecvKind, kRecvKindCount>(), "kRecvKindCount must name the LAST RecvKind enumerator — move it with the append" );
 
 // ABS-3 reference / use-site ROLE: WHAT a reference does at the use site, captured at ingest so a
 // use-site index (`--uses=SYM`) can report the resolvable places a name is referenced, not just calls.
@@ -204,6 +217,9 @@ enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, Field
 //             Distinct from Extends (a base clause) and from isCompose (a member variable's declared type) —
 //             those two are SPECIFIC declaration forms and are unchanged; this is the general mention.
 enum class RefRole : std::uint8_t { Call, Read, Write, Import, Extends, Macro, Type };
+// The number of RefRole enumerators — the bound readRef validates a cached role byte against (see kSymKindCount).
+inline constexpr std::size_t kRefRoleCount = static_cast<std::size_t>( RefRole::Type ) + 1;
+static_assert( enumCountIsExact<RefRole, kRefRoleCount>(), "kRefRoleCount must name the LAST RefRole enumerator — move it with the append" );
 static_assert( sizeof( RefRole ) == 1, "RefRole must be a single byte (SoA-friendly, smallest int that fits)" );
 
 // the terse `role=` attribute string for the use-site index (declarative table, not a switch chain).
@@ -651,6 +667,9 @@ enum class LocalBindKind : std::uint8_t
     ElixirImport,   // typeName=module, var=all/only/except/functions/macros; importedName=newline-delimited name/arities.
                    // spanStart/spanEnd delimit lexical visibility, starting after the directive.
 };
+// The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ElixirImport ) + 1;
+static_assert( enumCountIsExact<LocalBindKind, kLocalBindKindCount>(), "kLocalBindKindCount must name the LAST LocalBindKind enumerator — move it with the append" );
 
 inline constexpr const char* kFnBindLambdaTarget  = "(lambda)";    // parens are illegal in identifiers, so
 inline constexpr const char* kFnBindClobberTarget = "(unknown)";   //   neither sentinel can match a real def
@@ -691,6 +710,9 @@ struct Binding
 //   Jni          — decoded in buildGraph from a `Java_pkg_Cls_method` def name (no ingest capture); not
 //                  stored here.
 enum class BindKind : std::uint8_t { Pybind, ExternC, CtypesHandle };
+// The number of BindKind enumerators — the bound readFfi validates a cached kind byte against (see kSymKindCount).
+inline constexpr std::size_t kBindKindCount = static_cast<std::size_t>( BindKind::CtypesHandle ) + 1;
+static_assert( enumCountIsExact<BindKind, kBindKindCount>(), "kBindKindCount must name the LAST BindKind enumerator — move it with the append" );
 
 struct BindingAlias
 {
@@ -725,10 +747,14 @@ struct ComposeEdge
 // Cross-root matching is INTENTIONAL: a (method,path) match between a client
 // root and a server root IS explicit evidence, unlike a bare same-name guess.
 enum class HttpMethod : std::uint8_t { Get, Post, Put, Patch, Delete, Unknown };
+// The number of HttpMethod enumerators — the bound readRouteDef/readRouteUse validate a cached method byte against.
+inline constexpr std::size_t kHttpMethodCount = static_cast<std::size_t>( HttpMethod::Unknown ) + 1;
+static_assert( enumCountIsExact<HttpMethod, kHttpMethodCount>(), "kHttpMethodCount must name the LAST HttpMethod enumerator — move it with the append" );
 
 // ordinal-indexed table (declaration order MUST track the enum above) — the `method=` XML attribute.
 // Unknown ⇒ "" (omitted attribute value, matches EITHER side per routematch::methodsCompatible).
 inline constexpr const char* kHttpMethodTagTable[] = { "GET", "POST", "PUT", "PATCH", "DELETE", "" };
+static_assert( std::size( kHttpMethodTagTable ) == kHttpMethodCount, "kHttpMethodTagTable needs one tag per HttpMethod enumerator" );
 
 inline const char* httpMethodTag( HttpMethod m ) noexcept
 {

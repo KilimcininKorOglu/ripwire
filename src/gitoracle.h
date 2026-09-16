@@ -126,6 +126,10 @@ inline constexpr FateSpec kFateTable[] = {
 
 static_assert( std::size( kFateTable ) == std::size_t( Fate::Removed ) + 1,
                "kFateTable drifted from the Fate enum — update both together" );
+// loadOracleCache validates a cached fate byte against this table's size, so the table must also END at the last
+// enumerator. The assert above restates `Removed + 1`; this one asks the compiler (infra/enumcount.h), so a Fate
+// appended after Removed is a build error rather than a fate every cached record is refused for.
+static_assert( enumCountIsExact<Fate, std::size( kFateTable )>(), "kFateTable must end at the LAST Fate enumerator" );
 
 inline const char* fateTag( Fate f ) noexcept
 {
