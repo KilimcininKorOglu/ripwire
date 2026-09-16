@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::popen / pclose — the markitdown bridge
 
 
 // docparse.h — P1-B document ingest. Turns non-code documents that live IN a repo
@@ -544,7 +545,7 @@ inline std::string shellQuote( const std::string& s )
 inline std::string runMarkitdown( const std::string& path )
 {
     const std::string cmd = "markitdown " + detail::shellQuote( path ) + " 2>/dev/null";
-    std::FILE* pipe = ::popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
         DEGRADED_PATH_ALERT( "docparse: popen failed for markitdown bridge" );
@@ -557,7 +558,7 @@ inline std::string runMarkitdown( const std::string& path )
     {
         out.append( buf.data(), n );
     }
-    const int rc = ::pclose( pipe );
+    const int rc = os::pclose( pipe );
     if( rc != 0 )
     { // markitdown absent or errored → degrade to no-doc
         return {};

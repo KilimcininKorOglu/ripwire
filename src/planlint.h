@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::popen / pclose / realpath — git blame and the file argument
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -391,7 +392,7 @@ inline std::string gitBlameLineSha( const std::string& repoRoot, const std::stri
     const std::string cmd = "git -c core.quotepath=false" + quality::gitBlameConfigPins( repoRoot )
                            + " -C " + shSingleQuote( repoRoot ) + " blame --porcelain -L "
                            + std::to_string( lineNo1 ) + ",+1 HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return {};
@@ -409,7 +410,7 @@ inline std::string gitBlameLineSha( const std::string& repoRoot, const std::stri
             sha.assign( ln.substr( 0, 40 ) );
         }
     }
-    pclose( pipe );
+    os::pclose( pipe );
     return sha;
 }
 
@@ -547,7 +548,7 @@ inline LintResult computePlanLint( const std::string& fileArg )
     std::string absFile;
     {
         char        resolved[ PATH_MAX ];
-        const char* rp = ::realpath( fileArg.c_str(), resolved );
+        const char* rp = os::realpath( fileArg.c_str(), resolved );
         absFile        = rp ? std::string( resolved ) : std::filesystem::absolute( fileArg ).lexically_normal().string();
     }
     const std::string parentDir = std::filesystem::path( absFile ).parent_path().string();
