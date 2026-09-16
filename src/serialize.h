@@ -4700,7 +4700,7 @@ inline SlicedBody sliceBodyLines( std::string_view body, std::uint32_t startLine
     {
         ++bs;
     }
-    while( byteEnd > bs && ( static_cast<unsigned char>( body[byteEnd] ) & 0xC0 ) == 0x80 )
+    while( byteEnd > bs && byteEnd < body.size() && ( static_cast<unsigned char>( body[byteEnd] ) & 0xC0 ) == 0x80 )
     {
         --byteEnd;
     }
