@@ -15,6 +15,43 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a user's regular expression could abort the process or answer a question it never finished; one header owns them now
+
+Only `--regex` screened a user's pattern before handing it to `std::regex`. Three other entry points took the same
+engine unscreened and caught nothing at match time, so on Apple libc++ — whose engine throws `error_complexity` when
+it gives up — `ripwire <dir> --graph-query='file(all,"(a+)+z")'` and an `--arch` rules file holding
+`deny path zz/.* -> (a+)+z` both died with an uncaught `std::regex_error` (rc 134), over a fixture whose directory
+name is a run of 44 `a`. `--match` swallowed the same throw and KEPT every row the `#match?` predicate never decided,
+at rc 0; a malformed `#match?` pattern kept every row too. On libstdc++, which has no budget, each of these
+backtracks without end. And `file()` matched the path with the checkout's own directories in front of it:
+`file(all,"alpha")` selected every symbol in a clone named `repo_alpha` and none in `repo_beta`, and `file(all,"^src/")`
+selected nothing under an absolute root.
+
+`src/regexguard.h` now owns the screen (moved verbatim from `src/search.h`), the compile and the match, and is the one
+place that catches `std::regex_error` and `std::bad_alloc` — by type, converted to a value behind a `noexcept` API that
+`static_assert`s pin. A pattern the screen or the parser rejects is refused by name at exit 1 on every entry point
+(`--graph-query file()`, an `--arch` FROM or TO path-rule, a `#match?` in `--match` or `--lint-rules`), in the words
+`--regex` already printed. A match the engine abandons part-way (overlapping alternation such as `(a|a)+z` passes the
+structural screen) is refused by name at exit 1, never read as "no match": on `--regex` it used to skip the file with
+an alert Release deletes and print `hits=` as a measurement. `file()` matches the root-relative path its own `p=`
+prints, the rule `--arch` adopted for its rules. The built-in lint packs keep the old keep-the-row fallback for their
+constant patterns.
+
+Byte-identical: 32 of 32 comparisons of the origin/main binary against this one (dev build, one checkout, stdout,
+stderr and exit code) across `--grep`/`--regex` (prefiltered, `--no-prefilter`, context, compact, unindexed, the three
+existing refusals, JSON), `--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` (incl. SARIF) and the map,
+plus a three-request `--mcp` grep session; the only differences are the four fixes above. No compile moved: once per
+query, per rule and per grep worker as before (the per-edge `--arch` TO compile is unchanged), and `file()` now decides
+each FILE once instead of each symbol.
+
+Gate: `test/regexguardcheck.sh` — (a) a catastrophic pattern refused by name on all five entry points, each with a
+positive control; (b1) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_MATCH=1` makes every guarded match throw and
+each entry point must refuse, on every standard library; (b2) `(a|a)+z` against libc++'s real engine; (c) no
+`std::regex` spelled in `src/` outside the owner and a two-row allowlist of constant rule tables (redact, skill scan),
+with planted-file controls; (d) two clones at different directory names, absolute and relative roots, agree. Red on
+origin/main: 35 failures, four of them rc 134. `test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern
+refusal, and its golden's `match-malformed` section is empty.
+
 ### Changed — Intel macOS binaries end with 0.6.1
 
 0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
