@@ -211,9 +211,10 @@ inline bool parseEdit( const McpIndex& ix, const std::string& object, const std:
         return false;
     }
     // Read EXACTLY the path the confinement check judged (its canonical `resolved`), never the raw spelling,
-    // so the check and the read agree on which file a directory symlink + `..` payload names.
-    // The read goes through one owned, no-follow descriptor, so a link swapped in at that name later is refused.
-    const bool payloadOk = rw::pathguard::readWholeNoFollow( edit.payloadPath, edit.payload );
+    // so the check and the read agree on which file a directory symlink + `..` payload names. The read is a
+    // descriptor chain anchored at the plan's canonical directory with no symlink followed beneath it, so the
+    // file opened is beneath that directory when it is opened; a path no longer beneath it reads as unreadable.
+    const bool payloadOk = rw::pathguard::readWholeBeneathNoFollow( planDirAbs( planPath ), edit.payloadPath, edit.payload );
     if( !payloadOk || edit.payload.empty() ) { error = "cannot read non-empty payload '" + payloadPath + "'"; return false; }
     if( edit.payload.size() > maxBytes ) { error = "payload '" + payloadPath + "' exceeds --max-file-size"; return false; }
     // A1: the plan path does not route through runEditVerb, so it carries the same third payload arm itself.

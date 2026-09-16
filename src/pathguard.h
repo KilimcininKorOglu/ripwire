@@ -179,6 +179,7 @@
 #include <cstring>        // std::strerror — an honest reason for a failure that is not a link
 #include <chrono>         // std::chrono::steady_clock — the entropy-fallback mixer (round 5)
 #include <random>         // std::random_device — the entropy fallback when /dev/urandom is unavailable (round 5)
+#include <optional>       // readRegularFileNoFollow's absent-or-bytes answer
 #include <string>
 #include <string_view>
 #include <sys/types.h>    // ssize_t + mode_t
@@ -543,32 +544,27 @@ public:
     int  get() const noexcept   { return fd_; }
     bool valid() const noexcept { return fd_ >= 0; }
 
+    // Close what is held and take ownership of `fd` — how a descriptor chain steps one component down.
+    void reset( int fd ) noexcept
+    {
+        if( fd_ >= 0 )
+        {
+            ::close( fd_ );
+        }
+        fd_ = fd;
+    }
+
 private:
     int fd_ = -1;
 };
 
-// Read the whole of `path` into `out` through ONE owned descriptor, refusing a symlink at the final component
-// (O_NOFOLLOW) and anything that is not a regular file (O_NONBLOCK, then fstat — a FIFO never blocks the read).
-// For a caller that has already canonicalised and confined `path`: the open cannot be redirected through a
-// link swapped in at the name afterwards, so the bytes read are the bytes of the file that was judged.
-// Returns false, with `out` empty, on any refusal or read failure; the caller words its own refusal.
-inline bool readWholeNoFollow( const std::string& path, std::string& out )
+// Read everything `fd` yields into `out`, retrying EINTR. False, with `out` empty, on a read error.
+inline bool readAllFromFd( int fd, std::string& out )
 {
-    out.clear();
-    const OwnedFd fd( ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
-    if( !fd.valid() )
-    {
-        return false;
-    }
-    struct stat openedSt{};
-    if( ::fstat( fd.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
-    {
-        return false;
-    }
     char buf[ 8192 ];
     for( ;; )
     {
-        const ssize_t n = ::read( fd.get(), buf, sizeof( buf ) );
+        const ssize_t n = ::read( fd, buf, sizeof( buf ) );
         if( n > 0 )
         {
             out.append( buf, static_cast<std::size_t>( n ) );
@@ -584,6 +580,98 @@ inline bool readWholeNoFollow( const std::string& path, std::string& out )
         }
         out.clear();
         return false;
+    }
+}
+
+// The whole of `path` when it is a regular file, read through ONE non-blocking, no-follow descriptor; nullopt when it
+// is absent, a symlink at the final component, anything that is not a regular file (a FIFO never blocks the open:
+// O_NONBLOCK, then fstat), or unreadable. For small metadata a caller only inspects — never a file whose absence
+// or refusal it has to word to the user.
+inline std::optional<std::string> readRegularFileNoFollow( const std::string& path )
+{
+    const OwnedFd fd( ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+    struct stat   openedSt{};
+    if( !fd.valid() || ::fstat( fd.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+    {
+        return std::nullopt;
+    }
+    std::string bytes;
+    if( !readAllFromFd( fd.get(), bytes ) )
+    {
+        return std::nullopt;
+    }
+    return bytes;
+}
+
+// The part of `path` below `dir`, or false when `path` is not strictly beneath it — including a sibling whose name
+// merely starts with dir's ("/x/plans-other/…" is not beneath "/x/plans").
+inline bool relativeBeneath( const std::string& dir, const std::string& path, std::string_view& rel ) noexcept
+{
+    if( dir.empty() || path.size() <= dir.size() || path.compare( 0, dir.size(), dir ) != 0 )
+    {
+        return false;
+    }
+    std::size_t relStart = dir.size();
+    if( dir.back() != '/' )
+    {
+        if( path[ relStart ] != '/' )
+        {
+            return false;
+        }
+        ++relStart;
+    }
+    rel = std::string_view( path ).substr( relStart );
+    return !rel.empty();
+}
+
+// Read the whole of `path` into `out`, where the caller has already confined `path` beneath `dir` (both
+// canonical, as realpath spells them). The read goes through a descriptor chain ANCHORED at `dir`: `dir` is
+// opened once, and every component of `path` below it is opened with openat( ..., O_NOFOLLOW ) relative to the
+// previous descriptor — O_DIRECTORY for the intermediates — so no component beneath the confined directory is
+// resolved through a symbolic link at read time, and the bytes read belong to a file that really is beneath
+// `dir` when it is opened. A component that is now a link, missing, empty, "." or ".." refuses the read, as does
+// a `path` that does not start with `dir`. The final component must be a regular file (O_NONBLOCK, then fstat —
+// a FIFO never blocks). Returns false, with `out` empty, on any refusal or read failure; the caller words its
+// own refusal. POSIX openat throughout (D1 follow-up: these calls move behind rw::os with the rest).
+inline bool readWholeBeneathNoFollow( const std::string& dir, const std::string& path, std::string& out )
+{
+    out.clear();
+    std::string_view rel;
+    if( !relativeBeneath( dir, path, rel ) )
+    {
+        return false;
+    }
+
+    OwnedFd cur( ::open( dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC ) );
+    if( !cur.valid() )
+    {
+        return false;
+    }
+    for( ;; )
+    {
+        const std::size_t slash = rel.find( '/' );
+        const std::string component( rel.substr( 0, slash ) );
+        if( component.empty() || component == "." || component == ".." )
+        {
+            return false;
+        }
+        if( slash == std::string_view::npos )
+        {
+            const OwnedFd file( ::openat( cur.get(), component.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+            struct stat   openedSt{};
+            if( !file.valid() || ::fstat( file.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+            {
+                return false;
+            }
+            return readAllFromFd( file.get(), out );
+        }
+        const int next = ::openat( cur.get(), component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC );
+        if( next < 0 )
+        {
+            return false;
+        }
+        cur.reset( next );
+        rel.remove_prefix( slash + 1 );
     }
 }
 

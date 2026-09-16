@@ -28,6 +28,15 @@
 #   8. (A7) {"version":"1"} — the JSON string — is refused, as the spec and the refusal text both say
 #      NUMERIC 1. findRawValue strips quotes, so `1` and `"1"` both arrived as text=="1" and the string
 #      form slipped through a rule the message claimed to enforce.
+#   9. a directory symlink inside the plan dir plus a `..` payload that resolves out of the plan dir refuses,
+#      naming the resolved path, with nothing from outside reaching the corpus; an in-root dir symlink + `..`
+#      control is still accepted.
+#  10. PROBE: a program compiled against src/pathguard.h alone drives rw::pathguard::readWholeBeneathNoFollow —
+#      the read parseEdit uses — directly. Anchored at a directory, it reads a regular file beneath it, and
+#      refuses a path whose intermediate component beneath the anchor is a symlink (even to a real directory),
+#      a final symlink, a `..` component, a path outside the anchor and a FIFO (without blocking). A contrast
+#      plain open of the same intermediate-symlink path DOES read the outside file, so the refusal rows can fail.
+#      A source row pins that parseEdit reads through it, anchored at the plan's own directory.
 #
 # Usage: test/editplanpayloadconfinecheck.sh [BIN]
 set -u
@@ -204,6 +213,94 @@ runplan qver plans/qver.json --dry-run
 grep -q 'numeric version 1' "$TMP/qver.err" \
     && ok "the refusal names the numeric-version rule" \
     || no "the refusal does not name the rule: $( head -1 "$TMP/qver.err" )"
+
+echo
+echo "=== 10. PROBE: the anchored payload read, driven directly ==="
+CXX="${CXX:-c++}"
+. "$ROOT/scripts/cxxstd.sh"
+CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"
+PB="$TMP/probe"; mkdir -p "$PB/work"
+cat > "$PB/probe.cpp" <<'CPP'
+#include "pathguard.h"
+
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int failures = 0;
+static void row( bool okRow, const char* what ) { std::printf( "%s %s\n", okRow ? "PROBE-PASS" : "PROBE-FAIL", what ); failures += okRow ? 0 : 1; }
+static void spit( const std::string& p, const std::string& b ) { std::ofstream( p, std::ios::binary ) << b; }
+
+int main( int argc, char** argv )
+{
+    if( argc != 2 ) { return 2; }
+    char buf[ PATH_MAX ];
+    if( ::realpath( argv[ 1 ], buf ) == nullptr ) { return 2; }
+    const std::string w      = buf;
+    const std::string anchor = w + "/plans";
+    ::mkdir( anchor.c_str(), 0755 );
+    ::mkdir( ( anchor + "/real" ).c_str(), 0755 );
+    ::mkdir( ( w + "/outside" ).c_str(), 0755 );
+    spit( anchor + "/real/ok.txt", "inside bytes" );
+    spit( w + "/outside/data.txt", "outside bytes" );
+    ::symlink( ( w + "/outside" ).c_str(), ( anchor + "/linkdir" ).c_str() );   // intermediate symlink, pointing out
+    ::symlink( ( anchor + "/real" ).c_str(), ( anchor + "/indirlink" ).c_str() );  // intermediate symlink, pointing in
+    ::symlink( ( w + "/outside/data.txt" ).c_str(), ( anchor + "/finallink.txt" ).c_str() );
+    ::mkfifo( ( anchor + "/fifo" ).c_str(), 0644 );
+
+    std::string out;
+    row( rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "/real/ok.txt", out ) && out == "inside bytes",
+         "(10a) a regular file beneath the anchor is read" );
+    out = "unchanged";
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "/linkdir/data.txt", out ) && out.empty(),
+         "(10b) an intermediate component that is a symlink out of the anchor is refused, nothing read" );
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "/indirlink/ok.txt", out ) && out.empty(),
+         "(10c) an intermediate symlink is refused even when it points at a directory beneath the anchor" );
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "/finallink.txt", out ) && out.empty(),
+         "(10d) a final-component symlink is refused" );
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "/real/../real/ok.txt", out ) && out.empty(),
+         "(10e) a `..` component is refused" );
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, w + "/outside/data.txt", out ) && out.empty(),
+         "(10f) a path outside the anchor is refused" );
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "-sibling/x.txt", out ) && out.empty(),
+         "(10g) a sibling whose name merely starts with the anchor's is refused" );
+    row( !rw::pathguard::readWholeBeneathNoFollow( anchor, anchor + "/fifo", out ) && out.empty(),
+         "(10h) a FIFO beneath the anchor is refused without blocking" );
+
+    std::ifstream plain( anchor + "/linkdir/data.txt", std::ios::binary );
+    std::string   through( ( std::istreambuf_iterator<char>( plain ) ), std::istreambuf_iterator<char>() );
+    row( through == "outside bytes", "(contrast) a plain open of the intermediate-symlink path does read the outside file" );
+    return failures == 0 ? 0 : 1;
+}
+CPP
+if "$CXX" "$CXXSTD" -O1 -I"$ROOT/src" -I"$ROOT/src/infra" -I"$ROOT/third_party" "$PB/probe.cpp" -o "$PB/probe" 2> "$PB/cc.log"; then
+    "$PB/probe" "$PB/work" > "$PB/out.txt" 2>&1
+    PBRC=$?
+    PBROWS="$( grep -c '^PROBE-' "$PB/out.txt" )"
+    [ "$PBROWS" -eq 9 ] \
+        && ok "presence: the probe reported all 9 rows" \
+        || no "the probe reported $PBROWS of 9 rows (rc=$PBRC): $( head -c 300 "$PB/out.txt" )"
+    while IFS= read -r prow; do
+        case "$prow" in
+            PROBE-PASS\ *) ok "${prow#PROBE-PASS }" ;;
+            PROBE-FAIL\ *) no "${prow#PROBE-FAIL }" ;;
+        esac
+    done < "$PB/out.txt"
+else
+    no "the pathguard probe did not compile with $CXX: $( head -5 "$PB/cc.log" | tr '\n' ' ' )"
+fi
+PE_BODY="$( awk 'index($0,"inline bool parseEdit("){f=1} f{print} f&&/^}$/{exit}' "$ROOT/src/editplan.h" )"
+if printf '%s' "$PE_BODY" | grep -q 'readWholeBeneathNoFollow( planDirAbs( planPath ), edit.payloadPath' \
+   && ! printf '%s' "$PE_BODY" | grep -qE 'readFileBytes\(|readWholeNoFollow\('; then
+    ok "(10i) parseEdit reads the payload through readWholeBeneathNoFollow anchored at the plan's own directory"
+else
+    no "(10i) parseEdit does not read the payload through the anchored read"
+fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

@@ -427,8 +427,10 @@ wOpen="$( pgopens 'inline OpenedFile openNoFollowTruncate(' )"
 rOpen="$( pgopens 'inline NoFollowRead openNoFollowRead(' )"
 xOpen="$( pgopens 'inline int openExclNoFollow(' )"
 eOpen="$( pgopens 'inline std::string randomTempSuffix(' )"
-pOpen="$( pgopens 'inline bool readWholeNoFollow(' )"
-EXPECT_OPENS=5
+pOpen="$( pgopens 'inline bool readWholeBeneathNoFollow(' )"
+pOpenAt="$( pgfn 'inline bool readWholeBeneathNoFollow(' | grep '::openat(' )"
+mOpen="$( pgopens 'inline std::optional<std::string> readRegularFileNoFollow(' )"
+EXPECT_OPENS=6
 # The write open does NOT truncate. With O_TRUNC on the open, an existing regular sidecar was emptied before the
 # fstat check had looked at anything; the writer now truncates the descriptor with ftruncate, and only after fstat has
 # confirmed a regular file. (w2) is the behavioural half: a rewrite over a longer planted baseline must still come
@@ -462,13 +464,38 @@ if [ "$( printf '%s\n' "$eOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$
 else
     no "pathguard: (f7) expected one read-only ::open of /dev/urandom in randomTempSuffix — found: $( printf '%s' "$eOpen" | tr '\n' ' ' | head -c 240 )"
 fi
-if [ "$( printf '%s\n' "$pOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$pOpen" | grep -q 'O_RDONLY' \
-   && printf '%s' "$pOpen" | grep -q 'O_NOFOLLOW' && printf '%s' "$pOpen" | grep -q 'O_NONBLOCK' \
+# The edit-plan payload read is a descriptor chain anchored at the confined directory: ONE ::open (the anchor,
+# O_DIRECTORY, read-only), then every component beneath it through ::openat carrying O_NOFOLLOW — O_DIRECTORY on
+# the intermediate step, O_NONBLOCK on the final one, which fstat must confirm is a regular file.
+if [ "$( printf '%s\n' "$pOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$pOpen" | grep -q 'O_DIRECTORY' \
    && ! printf '%s' "$pOpen" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC' \
-   && pgfn 'inline bool readWholeNoFollow(' | grep -q 'S_ISREG'; then
-    ok "pathguard: (f8) the edit-plan payload read is one ::open carrying O_RDONLY|O_NOFOLLOW|O_NONBLOCK, refusing a non-regular file by fstat"
+   && [ "$( printf '%s\n' "$pOpenAt" | grep -c '::openat(' )" = "2" ] \
+   && [ "$( printf '%s\n' "$pOpenAt" | grep -c 'O_NOFOLLOW' )" = "2" ] \
+   && printf '%s' "$pOpenAt" | grep 'O_DIRECTORY' | grep -q 'O_NOFOLLOW' \
+   && printf '%s' "$pOpenAt" | grep 'O_NONBLOCK' | grep -q 'O_NOFOLLOW' \
+   && ! printf '%s' "$pOpenAt" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC' \
+   && pgfn 'inline bool readWholeBeneathNoFollow(' | grep -q 'S_ISREG'; then
+    ok "pathguard: (f8) the edit-plan payload read anchors ONE O_DIRECTORY ::open and walks beneath it with two ::openat, both O_NOFOLLOW (O_DIRECTORY intermediate, O_NONBLOCK final), refusing a non-regular file by fstat"
 else
-    no "pathguard: (f8) expected one ::open in readWholeNoFollow with O_RDONLY|O_NOFOLLOW|O_NONBLOCK and an S_ISREG check — found: $( printf '%s' "$pOpen" | tr '\n' ' ' | head -c 240 )"
+    no "pathguard: (f8) expected readWholeBeneathNoFollow to anchor one O_DIRECTORY ::open and walk with two O_NOFOLLOW ::openat plus an S_ISREG check — open: $( printf '%s' "$pOpen" | tr '\n' ' ' | head -c 160 ); openat: $( printf '%s' "$pOpenAt" | tr '\n' ' ' | head -c 240 )"
+fi
+# The metadata read (githarden's config candidates): one ::open carrying O_RDONLY|O_NOFOLLOW|O_NONBLOCK and an
+# fstat S_ISREG check, so a FIFO or other non-regular file at a candidate name is unreadable rather than a stall.
+if [ "$( printf '%s\n' "$mOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$mOpen" | grep -q 'O_RDONLY' \
+   && printf '%s' "$mOpen" | grep -q 'O_NOFOLLOW' && printf '%s' "$mOpen" | grep -q 'O_NONBLOCK' \
+   && ! printf '%s' "$mOpen" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC' \
+   && pgfn 'inline std::optional<std::string> readRegularFileNoFollow(' | grep -q 'S_ISREG'; then
+    ok "pathguard: (f10) the metadata read is one ::open carrying O_RDONLY|O_NOFOLLOW|O_NONBLOCK, refusing a non-regular file by fstat"
+else
+    no "pathguard: (f10) expected one ::open in readRegularFileNoFollow with O_RDONLY|O_NOFOLLOW|O_NONBLOCK and an S_ISREG check — found: $( printf '%s' "$mOpen" | tr '\n' ' ' | head -c 240 )"
+fi
+# No ::openat anywhere in the header follows a link.
+openatAll="$( grep -c '::openat(' "$PGCODE" | tr -d ' ' )"
+openatNoFollow="$( grep '::openat(' "$PGCODE" | grep -c 'O_NOFOLLOW' | tr -d ' ' )"
+if [ "$openatAll" -ge 1 ] && [ "$openatAll" = "$openatNoFollow" ]; then
+    ok "pathguard: (f9) every ::openat in the header ($openatAll) carries O_NOFOLLOW"
+else
+    no "pathguard: (f9) $openatAll ::openat in the header, only $openatNoFollow carry O_NOFOLLOW"
 fi
 
 # Round 4: a descriptor that is not a regular file is refused before a byte moves. O_NONBLOCK is what lets the
