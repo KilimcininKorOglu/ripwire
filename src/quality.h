@@ -3913,7 +3913,16 @@ inline bool writeBaseline( const Snapshot& s, const std::string& path, std::stri
     // direction only: its loc values are larger, every symbol reads as having SHRUNK, and the verbosity kind
     // silently reports nothing at all. A kind that quietly stops firing is the worst of the three outcomes, so
     // this is a version refusal like v4's, not a graceful skip.
-    f << "# ripwire quality baseline v5 — regenerate with --quality-baseline; do not hand-edit\n";
+    // v6 (2026-09-16): the `producer` record below. Its absence is not a graceful skip either: a v5 sidecar can
+    // only have been written by a build that predates the stamp, so it is foreign to every build that reads the
+    // record, and an OLD binary reading a v6 sidecar refuses it rather than skipping the stamp it cannot check.
+    f << "# ripwire quality baseline v6 — regenerate with --quality-baseline; do not hand-edit\n";
+    // PRODUCER STAMP: the identity of the build that computed this snapshot (producerIdentity). The `dead`
+    // records are a function of CALL RESOLUTION, which the head stamp below says nothing about, so at one HEAD
+    // a floor pinned by one build and a working tree judged by another disagreed about which symbols had
+    // callers: a gating dead-code row on an untouched symbol, or a real one hidden. selectBaseline honors the
+    // sidecar only for the build this names (test/qbaselineproducercheck.sh).
+    f << "producer " << producerIdentity() << '\n';
     // STALENESS STAMP: the HEAD commit the baseline was pinned at. --quality-delta compares this to the
     // current HEAD and, if they differ (a baseline left by an abandoned/parallel session, or from before a
     // commit), IGNORES the sidecar and falls back to the git-HEAD auto-baseline instead of reporting a wall
@@ -3991,9 +4000,12 @@ inline bool writeBaseline( const Snapshot& s, const std::string& path, std::stri
 // the honest degrade — an unrecognizable baseline makes the caller fall back to git HEAD, and that fallback is
 // already named on every report through `baseline=`. The sidecar is generated and gitignored, so the whole
 // cost of refusing is one `--quality-baseline` re-pin.
+//
+// v6 moved the accepted version for the producer stamp (see writeBaseline), and the refusal carries it: a v5
+// sidecar has no stamp to check, and the build that wrote it cannot be this one.
 inline bool baselineHeaderIsForeign( const std::string& line ) noexcept
 {
-    return line.rfind( "# ripwire quality baseline v", 0 ) == 0 && line.find( " v5 " ) == std::string::npos;
+    return line.rfind( "# ripwire quality baseline v", 0 ) == 0 && line.find( " v6 " ) == std::string::npos;
 }
 
 // 2026-09-06 stranger audit: the sidecar readers dropped what they could not parse with no trace a Release
@@ -4005,9 +4017,32 @@ struct BaselineReadStats
     bool        present        = false;   // the file opened
     bool        symlinkRefused = false;   // a SYMLINK sits at the name: refused unopened (pathguard.h round 3), so `present` stays false
     bool        unrecognizable = false;   // opened, but no line of the format's structure in it
+    bool        olderFormat    = false;   // opened, and its header names another format version: refused unread
     bool        preQ1          = false;   // structure, but no per-symbol loc records: origin cannot be classified
     std::size_t badLines       = 0;       // lines of a known kind whose payload did not parse — skipped
+    std::string producer;                 // the `producer` record: 64 lowercase hex, or "" when absent or malformed
 };
+
+// The v6 `producer` record's payload, into `stats.producer` when it is identity-shaped (64 lowercase hex). Only the
+// SHAPE is judged here — whether it names THIS build is selectBaseline's question. The file is committed DATA, so a
+// payload of any other shape is a bad line and leaves `producer` empty, which no build's identity equals; the first
+// well-formed record wins, as the head stamp's does.
+inline void readProducerRecord( std::istream& is, BaselineReadStats& stats )
+{
+    std::string value;
+    is >> value;
+    const auto isLowerHexDigit = []( char c ) { return ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' ); };
+    if( value.size() != 64 || !std::all_of( value.begin(), value.end(), isLowerHexDigit ) )
+    {
+        DEGRADED_PATH_ALERT( "quality: malformed baseline producer line skipped" );
+        ++stats.badLines;
+        return;
+    }
+    if( stats.producer.empty() )
+    {
+        stats.producer = std::move( value );
+    }
+}
 
 // THE ONE PLACE THE BASELINE SIDECAR IS READ — shared by readBaseline, readBaselineHeadSha and
 // readBaselineAbsorbed, and openBaselineSidecar's other half with the same answer to a link: O_NOFOLLOW, refused
@@ -4044,6 +4079,10 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
             // DEGRADED_PATH_ALERT a Release binary refuses SILENTLY and the caller reads "no baseline
             // found" — a refusal that hides its reason misleads exactly like the misread it prevents.
             rw::emitRaw( stderr, "ripwire: quality: baseline sidecar predates this binary's baseline format — refused, re-pin with --quality-baseline\n" );
+            // ...and the caller's marker has to say a sidecar is THERE. Without this flag the refusal read as
+            // Absent, so the CLI reported baseline="git-HEAD" ("no sidecar existed") and printed "no <file>"
+            // one line under the refusal that named it. Since v6 every pre-stamp sidecar lands here.
+            stats.olderFormat = true;
             out = Snapshot{};
             return false;
         }
@@ -4065,7 +4104,8 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         { std::uint64_t h = 0, v = 0; is >> std::hex >> h >> v;
           if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } m[h] = v; };
 
-        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs" )
+        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
+         || kind == "producer" )
         {
             ++recognizedLineCount;                                    // structure seen — this file IS a baseline
         }
@@ -4109,6 +4149,10 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         else if( kind == "api" )
         {
             readSet( out.publicApi, "quality: malformed baseline api line skipped" );
+        }
+        else if( kind == "producer" )
+        {
+            readProducerRecord( is, stats );
         }
         // else: unknown kind (older/newer format) → skip silently, do not crash.
     }
@@ -4238,13 +4282,26 @@ inline std::size_t readBaselineAbsorbed( const std::string& path )
 // Both cases are recorded ONLY in the `baseline=`/`"baseline"` marker — no stderr spam, which is the B10.1b
 // noise fix that survives the ruling intact.
 //
-// NON-GIT ROOTS are unaffected: `gitHeadSha` returns "" and an unstamped sidecar's pin reads "", so ""=="" and
-// the sidecar is honored — the only floor such a tree can have (there is no HEAD to fall back to).
+// NON-GIT ROOTS: `gitHeadSha` returns "" and an unstamped sidecar's pin reads "", so ""=="" and the sidecar is
+// honored — the only floor such a tree can have (there is no HEAD to fall back to) — provided THIS build pinned it.
+//
+// THE PRODUCER RULE (v6, 2026-09-16) — the head stamp's twin, for the other thing a floor depends on. A sidecar's
+// `dead` records are a function of CALL RESOLUTION, so at one HEAD a floor pinned by one build and a working tree
+// judged by another disagreed about which symbols had callers. Measured with two real builds (the std::-qualified
+// call guard on and off) over one fixture: a gating dead-code row on an untouched symbol (exit 2 where the same
+// build reports 0), and in the other direction a real gating regression hidden (exit 0 where the same build
+// reports 2). The qsnap cache had the same defect (producerIdentity); this is the file a user writes on purpose.
+// So the sidecar is honored only when its `producer` record equals this build's identity, and one that does not
+// is FOREIGN. Its policy differs from Stale's on purpose: a stale pin can never describe this HEAD again, while
+// a foreign one is still the right floor for the build that wrote it (a PATH binary and ./build/ripwire in turn),
+// so NEITHER arm deletes it. Demoting the dead-code rows instead of falling back was weighed and rejected: it
+// cannot un-hide a regression whose row never appears, and a different build can compute any kind differently.
 enum class BaselineSource : std::uint8_t
 {
-    Sidecar = 0,      // a readable sidecar pinned at the CURRENT HEAD sha (or a non-git root) — honored as the floor
+    Sidecar = 0,      // a readable sidecar pinned at the CURRENT HEAD sha (or a non-git root) by THIS build — honored as the floor
     Stale   = 1,      // a readable sidecar pinned at ANY other sha — dropped (R3); the caller falls back to git HEAD
     Absent  = 2,      // no readable sidecar (missing, or empty/unrecognizable per readBaseline) — caller falls back
+    Foreign = 3,      // a readable sidecar pinned at the CURRENT HEAD by ANOTHER build (or unstamped) — ignored, never removed; caller falls back
 };
 
 // The seam's answer. `snapshot` carries the pinned floor and is EMPTY unless `source == Sidecar`; `marker` is
@@ -4266,10 +4323,28 @@ struct BaselineSelection
 
     bool isSidecarHonored() const noexcept { return source == BaselineSource::Sidecar; }
     bool isSidecarStale()   const noexcept { return source == BaselineSource::Stale; }
+    bool isSidecarForeign() const noexcept { return source == BaselineSource::Foreign; }
     // "the stale pin is STILL sitting there" — true on the read-only arm, and on the CLI arm when the unlink
     // failed. This is the predicate a caller's user-facing wording must branch on (never `removeStaleFile`).
     bool isStaleFileOnDisk() const noexcept { return source == BaselineSource::Stale && !staleFileRemoved; }
 };
+
+// A readable sidecar pinned at the CURRENT HEAD: the floor for the build that pinned it, FOREIGN to every other (the
+// producer rule — see BaselineSource). Asked only once the head matches, because a pin at another sha is stale for
+// EVERY build, and the stale verdict and its self-heal take precedence. A foreign pin is never unlinked, on either arm.
+inline BaselineSelection selectPinnedAtHead( BaselineSelection sel, std::string_view producer )
+{
+    if( producer == producerIdentity() )
+    {
+        sel.source = BaselineSource::Sidecar;
+        sel.marker = "sidecar";
+        return sel;
+    }
+    sel.snapshot = Snapshot{};
+    sel.source   = BaselineSource::Foreign;
+    sel.marker   = "git-HEAD (foreign sidecar ignored)";
+    return sel;
+}
 
 // Read `sidecarPath` and decide whether it is still a valid floor for `root`'s CURRENT HEAD. `removeStaleFile`
 // = the CLI's self-heal policy: a best-effort unlink of a stale sidecar. The unlink can FAIL (read-only parent
@@ -4299,7 +4374,7 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
             sel.sidecarSymlinkRefused = true;
             sel.marker                = "git-HEAD (symlinked sidecar refused)";
         }
-        else if( readStats.present && ( readStats.unrecognizable || readStats.preQ1 ) )
+        else if( readStats.present && ( readStats.unrecognizable || readStats.olderFormat || readStats.preQ1 ) )
         {
             sel.sidecarUnreadable = true;                      // 2026-09-06: never "no sidecar existed" about a file that is right there
             sel.marker            = "git-HEAD (sidecar unreadable)";
@@ -4314,9 +4389,7 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
     const std::string headSha   = gitHeadSha( root );
     if( pinnedSha == headSha )
     {
-        sel.source = BaselineSource::Sidecar;
-        sel.marker = "sidecar";
-        return sel;
+        return selectPinnedAtHead( std::move( sel ), readStats.producer );
     }
 
     // Stale. The DEFAULT marker is the read-only truth ("ignored") and the self-heal upgrades it to "removed"

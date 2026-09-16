@@ -69,6 +69,43 @@ rows failed: the forgery had no producer bytes to flip and was served in both di
 derivation and blob arms found nothing. Under ASan the gate passes with no sanitizer report on any child's stderr, and
 `test/cachefuzzcheck.sh`'s snapshot sweep stays clean. Pin moved: `test/qschemetrip.hash`.
 
+### Fixed — a pinned `--quality-baseline` was honored by a build that resolves calls differently
+
+The same defect, in the file you write on purpose. `--quality-baseline` pins a floor to `.ripwire_quality_baseline`,
+dead-code records included, and stamped it with nothing but the `HEAD` commit, so `--quality-delta` honored the pin
+whenever the commit matched, whichever build had written it. Pin with the installed `ripwire`, then check with a local
+build (or upgrade) before the next commit, and the floor's dead set came from one resolver while the working tree's came
+from another. Measured with two builds of the previous commit, `d8c225a2` as built and with the `std::`-qualified call
+guard switched off, over the fixture above: pinned by the unguarded build and checked by the guarded one, an untouched
+tree reported a gating `dead-code` row on `Pool::launder` and exited 2 (the guarded build pinning its own floor: exit 0).
+In the other order a real regression disappeared: deleting the only `std::launder` call exited 0 where the unguarded
+build, against its own pin, exits 2.
+
+The sidecar is now format v6 and carries a `producer` record, the same source identity the snapshot cache uses. A pin
+at the current `HEAD` whose producer is missing or names another build is not the floor: `--quality-delta` falls back to
+the `HEAD` tree this build computes and says so as `baseline="git-HEAD (foreign sidecar ignored)"`, with one stderr line
+and a legend sentence naming the two ways back (run the delta with the build that pinned it, or re-pin). Unlike a stale
+pin the file is never deleted, by the CLI or by the MCP `quality_delta` verb, because the build that wrote it can still
+use it. A root with no git has nothing to fall back to and exits 1 naming the foreign pin. Demoting the dead-code rows
+instead was ruled out: it cannot surface a regression whose row never appears, and another build can compute any kind
+differently. A pin at another commit is still stale first and still self-heals. On the same two fixed builds all four
+cross-build runs give the same-build answer: exit 0 and exit 2, both marked foreign, the sidecar still on disk.
+
+Every existing sidecar is v5, which only a build without the stamp can have written, so the version rule refuses it.
+That refusal used to be reported as `baseline="git-HEAD"`, which means no sidecar existed, under a stderr line saying
+there was no `.ripwire_quality_baseline`, one line below the line naming the refused file. It now reads
+`baseline="git-HEAD (sidecar unreadable)"` with the matching stderr line, and a root with no git no longer says "no
+<file>" about an unreadable sidecar on either arm. Upgrading costs one re-pin. A v6 pin read by an older binary is
+refused the same way rather than honored without its stamp.
+
+Gate: `test/qbaselineproducercheck.sh`, 26 rows. Matched pairs over a real pin: dead records dropped (or one added)
+with the producer kept, a control that must change the answer and does, and the same forgery with one hex digit of the
+producer flipped, which must give the no-sidecar answer and leave the file byte-identical. Beside them: an unstamped v6
+pin, a v5 pin, a stale foreign pin, a root with no git, the MCP verb, the legend and `--help`. Against the previous
+commit 12 rows failed, both forged directions among them. `test/qrevtokencheck.sh`'s hand-written sidecars move to the
+v6 header so its hostile head stamps still reach the head-stamp path. Pin moved: `test/printf_parity.manifest`
+(`help_all` only, `UPDATE_GOLDEN_EXPECT` matched).
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
