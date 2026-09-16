@@ -230,5 +230,49 @@ else
 fi
 if [ "$( grep -c '' "$TMP/a" )" -le 1 ]; then ok "output is minified (no stray newlines)"; else no "output contains newlines outside CDATA"; fi
 
+# ── 12) a hostile extent never takes the process down ────────────────────────────────────────────────
+# The extent evaluator reads source text. Before the fix: a `#define` extent nested 200,000 `(` deep recursed
+# until the stack overflowed (SIGSEGV, exit 139, every platform); `(0-2^40)*2^23/(0-1)` divided INT64_MIN by
+# -1 (SIGFPE on x86-64); and `2^40*2^40` was signed overflow (an abort under the G1 sanitizer build — run this
+# gate with RIPWIRE_BIN=asan/ripwire to see that one). Each is now an UNKNOWN extent: the field is unsized and
+# the struct carries the unknown-extent caveat, exactly like any expression the evaluator cannot read.
+HOSTILE="$TMP/hostile"; mkdir -p "$HOSTILE"
+python3 - "$HOSTILE/deep.h" <<'PYDEEP'
+import sys
+n = 200000
+open(sys.argv[1], "w").write("#define DEEP_EXTENT " + "(" * n + "1" + ")" * n + "\nstruct DeepExtent\n{\n    int n;\n    char a[DEEP_EXTENT];\n};\n")
+PYDEEP
+cat > "$HOSTILE/range.h" <<'EOF'
+#define QUOTIENT_EXTENT ((0-1099511627776)*8388608/(0-1))
+struct QuotientExtent
+{
+    int  n;
+    char a[QUOTIENT_EXTENT];
+};
+struct ProductExtent
+{
+    int  n;
+    char b[1099511627776*1099511627776];
+};
+struct PlainExtent
+{
+    int  n;
+    char c[4*2];
+};
+EOF
+for s in DeepExtent QuotientExtent ProductExtent; do
+    "$BIN" "$HOSTILE" --layout="$s" --no-cache >"$TMP/h_$s" 2>"$TMP/h_$s.err"; rc=$?
+    if [ "$rc" -ne 0 ] || grep -q 'runtime error' "$TMP/h_$s.err"; then
+        no "$s: exit $rc $( grep -m1 'runtime error' "$TMP/h_$s.err" | cut -c1-120 ) — a hostile extent crashed the evaluator"
+    elif grep -q '<caveat k="unknown-extent"' "$TMP/h_$s"; then
+        ok "$s: exit 0, the extent reads as unknown (field unsized, caveat carried)"
+    else
+        no "$s: exit 0 but no unknown-extent caveat: $( grep -o '<def .*</def>' "$TMP/h_$s" | head -c 200 )"
+    fi
+done
+"$BIN" "$HOSTILE" --layout=PlainExtent --no-cache >"$TMP/h_plain" 2>/dev/null
+grep -q '<f n="c" ty="char" x="8" sz="8"' "$TMP/h_plain" && ok "control: an ordinary 4*2 extent still sizes to 8" \
+    || no "control: 4*2 no longer sizes: $( grep -o '<def .*</def>' "$TMP/h_plain" | head -c 200 )"
+
 [ $fail -eq 0 ] && echo "layoutcheck: ALL PASS" || echo "layoutcheck: FAILURES"
 exit $fail

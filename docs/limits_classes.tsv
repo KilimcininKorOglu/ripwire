@@ -63,6 +63,7 @@ kMaxEditDistance	BOUNDARY
 kMaxEditLockAgeDays	BOUNDARY
 kMaxEnvNameLen	BOUNDARY
 kMaxExtLen	BOUNDARY
+kMaxExtentParens	BOUNDARY
 kMaxFamily	INDEXING
 kMaxFieldsShown	OUTPUT
 kMaxFlipRows	OUTPUT

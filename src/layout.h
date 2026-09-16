@@ -67,6 +67,7 @@
 #include <cctype>
 #include <cstdio>
 #include <functional>
+#include <limits>       // std::numeric_limits — IntEval::apply refuses the one quotient int64 cannot hold
 #include <string>
 #include <string_view>
 #include <utility>
@@ -81,6 +82,7 @@ namespace layout
 
 constexpr std::size_t   kMaxNestDepth   = 8;          // nested-aggregate resolution depth (a cycle stops here)
 constexpr std::size_t   kMaxMacroDepth  = 4;          // object-like macro expansion depth for a type name
+constexpr std::size_t   kMaxExtentParens = 64;        // `(` nesting an extent expression may use (IntEval recurses per level)
 constexpr std::size_t   kMaxDefScan     = 1u << 20;   // bytes scanned forward from a def start looking for its body
 constexpr std::size_t   kMaxAssertChars = 220;        // the displayed prefix of a static_assert's text
 constexpr std::uint32_t kMaxArrayElems  = 1u << 24;   // refusal bound: past this the extent is a parse artefact
@@ -631,6 +633,7 @@ struct IntEval
     const ConstTable& table;
     std::size_t       depth = 0;
     bool              ok    = true;
+    std::size_t       parens = 0;   // `(` levels entered so far in this expression — kMaxExtentParens bounds the recursion
 
     std::int64_t parse( std::string_view s )
     {
@@ -658,16 +661,30 @@ private:
         }
     }
 
+    // Every operator is checked: an extent is source text, so `(0-1099511627776)*8388608` reaches INT64_MIN and a
+    // following `/(0-1)` is the one quotient int64 cannot hold (SIGFPE on x86-64), and a plain `1<<40 * 1<<40`
+    // product is signed overflow (an abort in the sanitizer build). An expression that leaves the range is not a
+    // knowable extent, so it un-sizes the field exactly like any other expression this evaluator cannot read.
     std::int64_t apply( char op, std::int64_t a, std::int64_t b )
     {
-        if( ( op == '/' ) && b == 0 ) { ok = false; return 0; }        // never divide by zero under G1
+        std::int64_t r = 0;
+        bool         outOfRange = false;
         switch( op )
         {
-            case '+': return a + b;
-            case '-': return a - b;
-            case '*': return a * b;
-            default:  return a / b;
+            case '+': outOfRange = __builtin_add_overflow( a, b, &r ); break;
+            case '-': outOfRange = __builtin_sub_overflow( a, b, &r ); break;
+            case '*': outOfRange = __builtin_mul_overflow( a, b, &r ); break;
+            default:
+                outOfRange = b == 0 || ( b == -1 && a == std::numeric_limits<std::int64_t>::min() );   // never divide by zero under G1
+                r          = outOfRange ? 0 : a / b;
+                break;
         }
+        if( outOfRange )
+        {
+            ok = false;
+            return 0;
+        }
+        return r;
     }
 
     std::int64_t level( std::string_view s, std::size_t& i, std::size_t rank )
@@ -692,6 +709,8 @@ private:
         if( i >= s.size() || !ok ) { ok = false; return 0; }
         if( s[i] == '(' )
         {
+            // A bounded recursion: `#define N ((((…1))))` 200,000 levels deep overflowed the stack (SIGSEGV, exit 139).
+            if( ++parens > kMaxExtentParens ) { ok = false; return 0; }
             ++i;
             const std::int64_t v = level( s, i, 0 );
             skipWs( s, i );
