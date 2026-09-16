@@ -34,17 +34,20 @@ namespace {
 //
 // WHY emitRaw OVER A RAW write( 2, … ). One stdio call holds the stream's lock for the whole call, so no other stdio
 // writer in the process — which is every other stderr writer here — can interleave, at any length. Underneath, the
-// unbuffered stderr hands the whole notice to the kernel as one write(2): measured on macOS up to the full buffer
-// (4,093 bytes in one write), and glibc's unbuffered path passes the whole block to a single write as well. A libc
-// that split a long write would still do it with the lock held. A raw write(2) would add nothing for this process
-// and would step OUTSIDE that lock, so a line another thread is writing through stdio could be split by the notice
-// instead. Across PROCESSES sharing the descriptor, one write to a pipe is atomic only up to PIPE_BUF (512 bytes on
-// macOS), and neither spelling changes that.
+// unbuffered stderr hands the whole notice to the kernel as one write(2), measured up to the full buffer (4,094 bytes
+// in one write) on macOS's libc and on glibc. A libc that split a long write would still do it with the lock held.
+// A raw write(2) would add nothing for this process and would step OUTSIDE that lock, so a line another thread is
+// writing through stdio could be split by the notice instead. Across PROCESSES sharing the descriptor, one write to a
+// pipe is atomic only up to PIPE_BUF (512 bytes on macOS), and neither spelling changes that.
 //
 // NO ALLOCATION. A reporter may be running because memory ran out, so the notice is formatted into a fixed stack
 // buffer through rw::formatTo, never into a std::string (which std::print and rw::emitTo both build). The buffer is
 // a cap: a notice longer than it is cut, and the cut is DISCLOSED in the notice itself (markTruncated, below).
-inline constexpr std::size_t kNoticeByteCap = 4096;   // a longer notice is cut and says so: " ... [notice truncated: N bytes]"
+//
+// STDOUT FIRST. std::cerr is tied to std::cout, so every insertion the old reporters made flushed stdout before it
+// wrote. writeNotice keeps that: without it a trap or an abort right after the notice loses whatever stdout still
+// held, and under `>file 2>&1` a notice lands ahead of output the program wrote before it. fflush allocates nothing.
+inline constexpr std::size_t kNoticeByteCap = 4096;   // a longer notice is cut and says so: " ... [notice truncated: kept K of N bytes]"
 
 // std::format on a null const char* is undefined, and a reporter must survive the malformed call it is reporting.
 const char* orEmpty( const char* text ) noexcept
@@ -69,17 +72,23 @@ NotesRow notesRowOf( const char* description ) noexcept
     return NotesRow{ "", "", "" };
 }
 
-// A notice past kNoticeByteCap keeps its opening and ends in a marker that names the full length, still on a line of
-// its own. The cut backs off to a UTF-8 lead byte, so the kept text never ends inside a multi-byte sequence.
+// A notice past kNoticeByteCap keeps its opening and ends in a marker giving the bytes KEPT and the notice's full
+// length (shown and total, never one ambiguous number), still on a line of its own. The cut backs off to a UTF-8 lead
+// byte, so the kept text never ends inside a multi-byte sequence. K depends on the marker's length and the marker
+// spells K, so the marker is first sized with the largest K it could carry; the real K is never longer.
 void markTruncated( char* notice, std::size_t capacity, std::size_t fullBytes ) noexcept
 {
-    char              marker[ 64 ];
-    const std::size_t markerBytes = rw::formatTo( marker, sizeof( marker ), " ... [notice truncated: {} bytes]\n", fullBytes );
-    std::size_t       keptBytes   = capacity - 1 - markerBytes;
+    char       marker[ 96 ];   // 42 literal B + two 20-digit counts + NUL = 83
+    const auto formatMarker = [ & ]( std::size_t kept ) noexcept
+    {
+        return rw::formatTo( marker, sizeof( marker ), " ... [notice truncated: kept {} of {} bytes]\n", kept, fullBytes );
+    };
+    std::size_t keptBytes = capacity - 1 - formatMarker( capacity - 1 );
     while( keptBytes > 0 && ( static_cast<unsigned char>( notice[ keptBytes ] ) & 0xC0 ) == 0x80 )
     {
         --keptBytes;
     }
+    const std::size_t markerBytes = formatMarker( keptBytes );
     std::memcpy( notice + keptBytes, marker, markerBytes + 1 );
 }
 
@@ -92,6 +101,7 @@ template<class... A>
     {
         markTruncated( notice, sizeof( notice ), fullBytes );
     }
+    std::fflush( stdout );
     rw::emitRaw( stderr, notice );
     std::fflush( stderr );
 }

@@ -25,20 +25,32 @@
 #        fd 2 is an AF_UNIX SOCK_DGRAM socket: a datagram socket keeps write boundaries, so the parent counts the
 #        write(2) calls a notice took. Every case must be writes=1, byte-exact against text the harness spells
 #        out independently, and end the way the reporter must (degraded returns, assert and thread-violation
-#        trap, panic aborts). Seven cases, including the empty and null Notes branches.
+#        trap, panic aborts). Ten cases: the seven text branches, including the empty and null Notes rows, plus
+#        three `2>&1` ORDERING cases (degraded, assert, panic) where stdout holds unflushed text when the reporter
+#        runs. std::cerr is tied to std::cout, so the old reporters flushed stdout first; that text must still
+#        arrive first, whole, as the first of exactly two writes, or a trap or an abort would lose it.
 #   (W') CONTROL for (W): the harness rebuilt against (S')'s duplicated-writer mutation must see writes=2.
-#   (L)  LONG. A notice past the writer's fixed buffer still arrives as one line, carries a truncation marker,
-#        stays valid UTF-8 (the cut backs off a multi-byte sequence) and keeps its opening.
+#   (L)  LONG. A notice past the writer's fixed buffer still arrives as one line and stays valid UTF-8 (the cut
+#        backs off a multi-byte sequence). Its marker "kept K of N bytes" must be honest — K the length of the
+#        text in front of it, N the full notice — and those K bytes must be the notice's own first K.
 #   (T)  STRESS, end to end. fd 2 is a regular file; 4 threads raise 3,000 notices each while 2 threads write one
 #        line per stdio call and 2 more one line per raw write(2). Every line of the file must be a whole notice
 #        or a whole competitor line, and every count must be exact.
 #   (A)  ALLOC. A reporter may run under memory exhaustion, so it must not allocate. Measured with the house
 #        instrument, src/alloccount.cpp, as a delta between two otherwise identical runs: 110 extra reporter
 #        calls (55 over-long) must leave the allocation count and bytes unchanged. The baseline must count at
-#        least one allocation, or the instrument is not live.
+#        least one allocation, or the instrument is not live. What it counts is global operator new ONLY; a
+#        malloc inside the C library is invisible to it (by reading, neither glibc nor the BSD libc allocates on
+#        an fputs to an unbuffered stderr). The harness's own output in this mode must cost the same in both
+#        runs: an emitTo report line one byte past libstdc++'s 15-byte small-string buffer made this arm red on
+#        every g++ leg of #245's first CI run, and libc++'s 22-byte buffer hid it on macOS.
 #   (A') CONTROL for (A): the real file with the writer's rw::emitRaw rerouted through rw::emitTo (a std::string
 #        per notice) must show a larger count on the same measurement.
-#   (Z)  SANITIZED. (W), (L) and (T) again with the harness and diagnostics.cpp under ASan+UBSan.
+#   (Z)  SANITIZED. (W), (L) and (T) again with the harness and diagnostics.cpp under ASan+UBSan. A toolchain
+#        that cannot build it prints SKIP with the reason, never a WARN a runner would count as a pass.
+#
+# The header line names the harness compiler and the emit.h arm it compiled (rw::kEmitterName): the gate builds with
+# $CXX, not with the leg's product compiler, and the arm decides what the harness's own output allocates.
 #
 # RED, MEASURED against the multi-insertion reporters (f8e6087c's diagnostics.cpp, AppleClang 21): (S) red on all
 # four reporters; (W) red on all seven cases — writes=9 for the degraded notice and 15 to 21 for the banners — while
@@ -238,16 +250,22 @@ build_harness()   # $1 = output, $2 = diagnostics.cpp to link, $3 = compile log,
 
 check_writes()   # $1 = label, $2 = rows file
 {
-    local label="$1" rows="$2" spec name want line
-    for spec in degraded:return assert:trap assert-nonotes:trap assert-nullnotes:trap panic:abort thread:trap thread-nonotes:trap; do
-        name="${spec%%:*}"; want="${spec#*:}"
+    local label="$1" rows="$2" spec name rest want writes line
+    # name:ending:writes. An ordering case is TWO writes: stdout's buffered text, then the whole notice.
+    for spec in degraded:return:1 assert:trap:1 assert-nonotes:trap:1 assert-nullnotes:trap:1 panic:abort:1 thread:trap:1 \
+                thread-nonotes:trap:1 stdout-degraded:return:2 stdout-assert:trap:2 stdout-panic:abort:2; do
+        name="${spec%%:*}"; rest="${spec#*:}"; want="${rest%%:*}"; writes="${rest#*:}"
         line="$( grep -E "^case $name " "$rows" )"
         if [ -z "$line" ]; then
             no "$label $name: the harness printed no row — nothing was measured"
-        elif [[ "$line" == *" writes=1 "* && "$line" == *" exact=1 "* && "$line" == *" ended=$want" ]]; then
-            ok "$label $name: one write, byte-exact, ended=$want"
+        elif [[ "$line" == *" writes=$writes "* && "$line" == *" exact=1 "* && "$line" == *" ended=$want" ]]; then
+            if [ "$writes" = 1 ]; then
+                ok "$label $name: one write, byte-exact, ended=$want"
+            else
+                ok "$label $name: buffered stdout first, then the notice in one write — byte-exact under 2>&1, ended=$want"
+            fi
         else
-            no "$label $name: $line (want writes=1 exact=1 ended=$want)"
+            no "$label $name: $line (want writes=$writes exact=1 ended=$want)"
             grep -A2 -E "^case $name " "$rows" | grep -E '^  (got|want):' | sed 's/^/  /'
         fi
     done
@@ -260,9 +278,10 @@ check_long()   # $1 = label, $2 = rows file
     if [ -z "$line" ]; then
         no "$1 degraded-long: the harness printed no row — nothing was measured"
     elif [[ "$line" == *" lines=1 "* && "$line" == *" marker=1 "* && "$line" == *" utf8=1 "* && "$line" == *" prefix=1 "* && "$line" == *" ended=return" ]]; then
-        ok "$1 an over-long notice is one line with a truncation marker, valid UTF-8 and its own opening ($line)"
+        ok "$1 an over-long notice is one line, valid UTF-8, its own first K bytes and an honest 'kept K of N bytes' marker ($line)"
     else
         no "$1 over-long notice: $line (want lines=1 marker=1 utf8=1 prefix=1 ended=return)"
+        grep -A2 -E '^case degraded-long ' "$2" | grep -E '^  (tail|want)' | sed 's/^/  /'
     fi
 }
 
@@ -290,6 +309,7 @@ if ! build_harness "$H" "$DIAG" "$WORK/cc.log" -O2; then
     no "the harness failed to compile against src/infra/diagnostics.cpp"; sed 's/^/    /' "$WORK/cc.log" | head -30
 else
     ok "harness compiled against src/infra/diagnostics.cpp"
+    echo "diagnoticecheck: harness CXX=$CXX ($( "$CXX" --version 2>/dev/null | head -1 )) $( "$H" info )"
 
     # ── (W) one write per notice, byte-exact ──
     mkdir -p "$WORK/dump"
@@ -340,9 +360,9 @@ else
         elif [ "${base%% *}" -lt 1 ]; then
             no "(A) the baseline run counted 0 allocations — the instrument is not live, so an equal count proves nothing"
         elif [ "$base" = "$measured" ]; then
-            ok "(A) 110 reporter calls (55 over-long) add no heap allocation: allocs/bytes '$base' with and without them"
+            ok "(A) 110 reporter calls (55 over-long) add no operator-new allocation: allocs/bytes '$base' with and without them (a libc malloc is not counted)"
         else
-            no "(A) the reporter calls allocate: allocs/bytes '$base' without them, '$measured' with 110 — a reporter can fail exactly when memory is gone"
+            no "(A) operator new is called: allocs/bytes '$base' without the reporter calls, '$measured' with 110 — a reporter can fail exactly when memory is gone"
         fi
     fi
 
@@ -378,7 +398,8 @@ if build_harness "$Z" "$DIAG" "$WORK/ccz.log" -O1 -fsanitize=address,undefined -
     fi
     check_stress "(Z)" "$WORK/zstress.txt"
 else
-    echo "  WARN  sanitizer build unavailable on this toolchain; (Z) not run"; sed 's/^/    /' "$WORK/ccz.log" | head -5
+    echo "  SKIP  (Z) the ASan+UBSan harness does not build with $CXX here, so the sanitized arm proved nothing; first compiler line:"
+    sed 's/^/    /' "$WORK/ccz.log" | head -5
 fi
 
 if [ "$fail" -eq 0 ]; then

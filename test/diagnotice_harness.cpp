@@ -13,8 +13,13 @@
 //   writes [DUMPDIR]  every reporter, each in a forked child (assert and thread-violation trap, panic
 //                     aborts). One row per case:
 //                       case NAME writes=N bytes=N exact=0|1 ended=return|trap|abort|status:N
+//                     The stdout-* cases also point fd 1 at the same socket (a `2>&1`) and leave text in stdout's
+//                     buffer before the reporter runs: that text must arrive FIRST, in its own write, because the
+//                     reporters flush stdout before the notice as std::cerr's tie to std::cout always did.
 //                     and for the over-long notice:
 //                       case degraded-long writes=N bytes=N lines=N marker=0|1 utf8=0|1 prefix=0|1 ended=...
+//                     marker=1 only when "kept K of N bytes" is honest: K is the length of the text in front of
+//                     it and N the full notice's length; prefix=1 when those K bytes are the notice's own first K.
 //                     With DUMPDIR, each case's reassembled bytes are also written to DUMPDIR/NAME.bin, so two
 //                     builds of this harness can be compared byte for byte.
 //   stress PATH R C N fd 2 is a regular file opened O_APPEND. R threads each raise N degraded notices while
@@ -24,7 +29,9 @@
 //   alloc N           N short and N over-long degraded notices after one warm-up pair, and nothing else. Built
 //                     with src/alloccount.cpp, the process reports its heap allocations at exit on stderr; the
 //                     gate runs `alloc 0` and `alloc N` and requires the SAME count, because that instrument's
-//                     own rule is that only a delta between otherwise identical runs is attributable.
+//                     own rule is that only a delta between otherwise identical runs is attributable. Everything
+//                     the harness itself does in this mode must therefore allocate the SAME in both runs.
+//   info              prints emitter=<rw::kEmitterName>, the emit.h arm this harness was compiled with.
 //
 // Exit 0 when the mode ran to completion (the rows carry the verdicts); 3 when the measurement itself could not
 // be set up (socketpair, fork, open), which the gate reports as a failure to measure, never as a pass.
@@ -34,6 +41,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +51,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -111,6 +120,8 @@ std::string expectedThread( const char* description )
 }
 
 // ── printable form of captured bytes, for a mismatch report ─────────────────────────────────────────────
+// Pure ASCII out, every byte past 0x7E as \xNN: the gate greps these rows, and one raw multi-byte character in a
+// mismatch line makes grep under a C locale call the whole file binary and print none of the rows around it.
 std::string escaped( std::string_view bytes, std::size_t maxBytes )
 {
     std::string out;
@@ -121,7 +132,7 @@ std::string escaped( std::string_view bytes, std::size_t maxBytes )
         {
             out += "\\n";
         }
-        else if( c < 0x20 || c == 0x7F )
+        else if( c < 0x20 || c >= 0x7F )
         {
             out += std::format( "\\x{:02x}", static_cast<unsigned>( c ) );
         }
@@ -307,11 +318,41 @@ struct ExactCase
 
 std::string g_longNotes;   // 3,000 em dashes, built before any fork
 
+// No newline on purpose: a line-buffered stdout (a terminal) would flush at one, and the case must hold the text in the
+// buffer until the reporter runs, whatever stdout's buffering mode is.
+constexpr std::string_view kStdoutText = "[stdout] written before the notice, still in stdout's buffer|";
+
+// The `2>&1` shape: fd 1 joins fd 2 on the capture socket, and stdout holds kStdoutText when the reporter is called.
+void bufferStdoutIntoCapture()
+{
+    dup2( 2, 1 );
+    rw::emitRaw( stdout, kStdoutText.data() );
+}
+
+// " ... [notice truncated: kept K of N bytes]\n" at the very end of `bytes`, parsed; false when it is not there.
+bool parseTruncationMarker( std::string_view bytes, std::size_t& markerAt, std::size_t& keptBytes, std::size_t& fullBytes )
+{
+    constexpr std::string_view kHead = " ... [notice truncated: kept ";
+    markerAt                         = bytes.rfind( kHead );
+    if( markerAt == std::string_view::npos )
+    {
+        return false;
+    }
+    const char* const end  = bytes.data() + bytes.size();
+    const auto        kept = std::from_chars( bytes.data() + markerAt + kHead.size(), end, keptBytes );
+    if( kept.ec != std::errc() || !std::string_view( kept.ptr, static_cast<std::size_t>( end - kept.ptr ) ).starts_with( " of " ) )
+    {
+        return false;
+    }
+    const auto full = std::from_chars( kept.ptr + 4, end, fullBytes );
+    return full.ec == std::errc() && std::string_view( full.ptr, static_cast<std::size_t>( end - full.ptr ) ) == " bytes]\n";
+}
+
 bool reportLongCase( const char* dumpDir )
 {
     // Its bytes cannot be pinned without pinning the reporter's capacity, so the row carries properties instead:
-    // one line, a disclosed truncation, valid UTF-8 (the cut is likely to land inside a 3-byte sequence), and
-    // the notice's own opening.
+    // one line, an honest truncation marker, valid UTF-8 (the cut is likely to land inside a 3-byte sequence), and
+    // the notice's own first K bytes.
     const Captured got = captureInChild( [] { CL::handleDegraded( kFile, kLine, kFunction, g_longNotes.c_str() ); } );
     if( !got.isMeasured )
     {
@@ -319,11 +360,20 @@ bool reportLongCase( const char* dumpDir )
         return false;
     }
     dumpBytes( dumpDir, "degraded-long", got.bytes );
+    const std::string want      = expectedDegraded( g_longNotes.c_str() );
     const bool        endsLine  = !got.bytes.empty() && got.bytes.back() == '\n';
     const std::size_t lineCount = endsLine ? static_cast<std::size_t>( std::count( got.bytes.begin(), got.bytes.end(), '\n' ) ) : 0;
+    std::size_t       markerAt = 0, keptBytes = 0, fullBytes = 0;
+    const bool        isMarkerHonest = parseTruncationMarker( got.bytes, markerAt, keptBytes, fullBytes ) && keptBytes == markerAt
+                                    && fullBytes == want.size();
+    const bool        isOwnPrefix = isMarkerHonest && keptBytes > 0 && want.compare( 0, keptBytes, got.bytes, 0, keptBytes ) == 0;
     rw::emitTo( stdout, "case degraded-long writes={} bytes={} lines={} marker={} utf8={} prefix={} ended={}\n", got.writeCount,
-                got.bytes.size(), lineCount, got.bytes.find( "truncated" ) != std::string::npos ? 1 : 0, isValidUtf8( got.bytes ) ? 1 : 0,
-                got.bytes.starts_with( "[math degraded] \xE2\x80\x94" ) ? 1 : 0, got.ended );
+                got.bytes.size(), lineCount, isMarkerHonest ? 1 : 0, isValidUtf8( got.bytes ) ? 1 : 0, isOwnPrefix ? 1 : 0, got.ended );
+    if( !isMarkerHonest )
+    {
+        rw::emitTo( stdout, "  tail: {}\n  want full={}\n", escaped( std::string_view( got.bytes ).substr( got.bytes.size() > 80 ? got.bytes.size() - 80 : 0 ), 80 ),
+                    want.size() );
+    }
     return true;
 }
 
@@ -341,6 +391,11 @@ int runWrites( const char* dumpDir )
         { "panic", expectedPanic(), [] { CL::handlePanic( kFile, kLine, kFunction, kNotes ); } },
         { "thread", expectedThread( kNotes ), [] { CL::handleThreadViolation( kOwnerThread, kOffendingThread, kFile, kLine, kFunction, kNotes ); } },
         { "thread-nonotes", expectedThread( "" ), [] { CL::handleThreadViolation( kOwnerThread, kOffendingThread, kFile, kLine, kFunction, "" ); } },
+        { "stdout-degraded", std::string( kStdoutText ) + expectedDegraded( kNotes ),
+          [] { bufferStdoutIntoCapture(); CL::handleDegraded( kFile, kLine, kFunction, kNotes ); } },
+        { "stdout-assert", std::string( kStdoutText ) + expectedAssert( kNotes ),
+          [] { bufferStdoutIntoCapture(); CL::handleAssert( kExpr, kFile, kLine, kFunction, kNotes ); } },
+        { "stdout-panic", std::string( kStdoutText ) + expectedPanic(), [] { bufferStdoutIntoCapture(); CL::handlePanic( kFile, kLine, kFunction, kNotes ); } },
     };
     bool isMeasured = true;
     for( const ExactCase& c : cases )
@@ -480,7 +535,13 @@ int runAlloc( int pairCount )
         CL::handleDegraded( kFile, kLine, kFunction, kNotes );
         CL::handleDegraded( kFile, kLine, kFunction, longNotes.c_str() );
     }
-    rw::emitTo( stdout, "alloc calls={}\n", 2 * pairCount );
+    // Into a stack buffer, never through rw::emitTo: on the std::format+fputs arm that renders a std::string, and
+    // "alloc calls=110\n" is 16 bytes, one past libstdc++'s 15-byte small-string buffer, while "alloc calls=0\n" fits
+    // it. That one 31-byte allocation turned this arm red on every g++ leg while libc++'s 22-byte buffer hid it on
+    // macOS (review of #245). The report line must cost the same in both runs, so it costs nothing in either.
+    char line[ 32 ];
+    rw::formatTo( line, sizeof( line ), "alloc calls={}\n", 2 * pairCount );
+    rw::emitRaw( stdout, line );
     return 0;
 }
 
@@ -501,6 +562,11 @@ int main( int argc, char** argv )
     {
         return runAlloc( std::atoi( argv[ 2 ] ) );
     }
-    rw::emitRaw( stderr, "usage: diagnotice_harness writes [DUMPDIR] | stress PATH R C N | alloc N\n" );
+    if( mode == "info" )
+    {
+        rw::emitTo( stdout, "emitter={}\n", rw::kEmitterName );
+        return 0;
+    }
+    rw::emitRaw( stderr, "usage: diagnotice_harness writes [DUMPDIR] | stress PATH R C N | alloc N | info\n" );
     return 64;
 }

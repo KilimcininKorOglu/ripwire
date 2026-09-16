@@ -151,7 +151,7 @@ TABLE = {
     # NUMERIC_ONLY, for the arch.h `hex` reason: they have no pre-conversion printf format to derive a class from (the
     # reporters wrote through std::cerr until 2026-09-16, when they began formatting first so a notice is ONE write).
     ( "src/infra/diagnostics.cpp", "notice" ): ( 1, "not-markup", "notice[4096] in writeNotice: every reporter's whole notice — the assert, panic and thread-violation banners and the one-line degraded notice — interpolating the caller's expression text, file name, __PRETTY_FUNCTION__ and description, none escaped and none needing it, because the bytes go to stderr in one stdio call. A longer notice is cut by markTruncated and the cut is stated on the notice's own last line (test/diagnoticecheck.sh arm L)." ),
-    ( "src/infra/diagnostics.cpp", "marker" ): ( 1, "not-markup", "marker[64] in markTruncated: ' ... [notice truncated: {} bytes]\\n' of ONE std::size_t and no string argument — 32 literal B + 20 digits + NUL = 53 B against 64, so it cannot truncate. Copied over the tail of notice[] on stderr; never a document." ),
+    ( "src/infra/diagnostics.cpp", "marker" ): ( 1, "not-markup", "marker[96] in markTruncated: ' ... [notice truncated: kept {} of {} bytes]\\n' of TWO std::size_t (bytes kept, full length) and no string argument — 42 literal B + two 20-digit counts + NUL = 83 B against 96, so it cannot truncate; formatted twice through one lambda (sized with the largest K first, then the real K), which is one call site. Copied over the tail of notice[] on stderr; never a document." ),
     # ── src/lanes.h — THE REFERENCE SAFE SHAPE ───────────────────────────────────────────────────────────
     ( "src/lanes.h", "buf" ): ( 10, "safe",       "buf[640] x3: snprintf-THEN-escape. :723 interpolates an UNBOUNDED file path and is still safe for exactly that reason — the warning text is escaped downstream, so a cut shortens prose and can never land inside markup. This is the shape §B14's six were not." ),
     # ── src/main.cpp ─────────────────────────────────────────────────────────────────────────────────────
@@ -511,7 +511,7 @@ if not bad:
 #            sites 221 -> 223, rows 94 -> 96, widthforms unmoved — re-read from `git diff origin/main -- src/`, not
 #            accepted from the delta. src/infra/diagnostics.cpp stopped building notices from std::cerr insertions
 #            and now formats each whole notice into `notice[4096]` (writeNotice) before one stdio call, cutting an
-#            over-long one with a size_t-only marker formatted into `marker[64]` (markTruncated): two calls, two
+#            over-long one with a size_t-only marker formatted into `marker[96]` (markTruncated): two calls, two
 #            sites, two NEW TABLE rows above. mentions is +3 because the comment explaining the stack buffer names
 #            rw::formatTo on a third line. No site interpolates escaped text, and neither buffer reaches a document.
 EXPECTED = { "mentions": 331, "calls": 223, "sites": 223, "rows": 96, "widthforms": 0 }
