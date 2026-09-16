@@ -1,0 +1,17 @@
+diff --git a/third_party/deps/tree_sitter/lib/src/query.c b/third_party/deps/tree_sitter/lib/src/query.c
+index cdc38766..3385bf2c 100644
+--- a/third_party/deps/tree_sitter/lib/src/query.c
++++ b/third_party/deps/tree_sitter/lib/src/query.c
+@@ -2836,6 +2836,12 @@ static TSQueryError ts_query__parse_pattern(
+       length
+     );
+     if (!field_id) {
++      // RIPWIRE_VENDOR_PATCH(tree_sitter/001-field-error-quantifier-leak): the field's sub-pattern
++      // was already parsed into field_capture_quantifiers, and this return skipped its delete — every
++      // query naming a field the grammar lacks, over a capturing sub-pattern, leaked that array. A
++      // structural query compiled against each linked grammar in turn (--match, --lint-rules) hits it
++      // on every grammar without the field, and LeakSanitizer turned it into an abort at exit.
++      capture_quantifiers_delete(&field_capture_quantifiers);  /* RIPWIRE_VENDOR_PATCH(tree_sitter/001-field-error-quantifier-leak) */
+       stream->input = field_name;
+       return TSQueryErrorField;
+     }
