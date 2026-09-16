@@ -164,5 +164,32 @@ grep -q 'return 4242' "$P6/corpus/b.py" \
     && ok "the MCP edit landed in the file the absolute argument named" \
     || no "the MCP edit did not land in b.py"
 
+echo
+echo "=== 7. an absolute hint naming an INDEXED file blames the symbol, never the path ==="
+# The symbol scan and the path-half refusal must ask the SAME question (editHintMatches). When they did not,
+# arm 3's refusal was right for the wrong reason: the path half answered with the relative-spelling test
+# alone, so an absolute hint naming a file the index DOES hold read "no indexed file matches" — a false
+# statement about the tree that sends the agent after a path it typed correctly.
+P7="$( scratch abspathhalf )"
+printf 'def solo():\n    return 0\n' >"$P7/corpus/c.py"
+( cd "$P7" && "$BIN" corpus --replace-symbol-body=solo --edit-target-file="$P7/corpus/a.py" \
+    --edit-payload="$TMP/pay" ) >"$TMP/7.out" 2>"$TMP/7.err" && no "7a: an absolute hint naming a file without the symbol wrongly succeeded"
+grep -q 'no indexed file matches' "$TMP/7.err" \
+    && no "7a: the refusal blames the PATH half for a file the index holds: $( head -1 "$TMP/7.err" )" \
+    || ok "7a: the refusal does not claim the absolute path names nothing indexed"
+grep -q "symbol 'solo' not found under path" "$TMP/7.err" \
+    && ok "7a: the refusal names the symbol as the fault" \
+    || no "7a: the refusal does not say the symbol is missing under that path: $( head -1 "$TMP/7.err" )"
+# 7b: the never-parsed disclosure rides the same predicate, so it must reach an absolute hint too.
+python3 - "$P7/corpus/opaque.py" <<'PY'
+import sys
+open( sys.argv[1], "wb" ).write( b"def zeta():\n    return \x00\n" )
+PY
+( cd "$P7" && "$BIN" corpus --replace-symbol-body=zeta --edit-target-file="$P7/corpus/opaque.py" \
+    --edit-payload="$TMP/pay" ) >"$TMP/7b.out" 2>"$TMP/7b.err" && no "7b: an edit into a never-parsed file wrongly succeeded"
+grep -q 'never parsed' "$TMP/7b.err" \
+    && ok "7b: an absolute hint naming a never-parsed file gets the never-parsed disclosure" \
+    || no "7b: the never-parsed disclosure is missing for an absolute hint: $( head -1 "$TMP/7b.err" )"
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
