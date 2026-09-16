@@ -92,7 +92,6 @@ inline bool iEquals( std::string_view a, std::string_view b ) noexcept
     return true;
 }
 
-/// Trims HTTP header whitespace without allocating or changing the source buffer.
 inline std::string_view trim( std::string_view s ) noexcept
 {
     std::size_t b = 0, e = s.size();
@@ -121,13 +120,6 @@ inline bool sendAll( int fd, const std::string& data ) noexcept
         const os::ssize_t n = os::send( fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL );
         if( n <= 0 )
         {
-            std::fprintf( stderr, "ripwire-mcp: send failed n=%zd err=%d\n", n,
-#ifdef _WIN32
-                          WSAGetLastError()
-#else
-                          errno
-#endif
-            );
             return false;
         }
         sent += static_cast<std::size_t>( n );
@@ -136,8 +128,7 @@ inline bool sendAll( int fd, const std::string& data ) noexcept
 }
 
 // build + send a minimal HTTP/1.1 response. Connection: close — one request per connection (§2b serialize).
-/// Builds and sends the single-response envelope used by the serialized MCP connection loop.
-inline void respond( socket_t fd, const char* status, const char* contentType, const std::string& body ) noexcept
+inline void respond( int fd, const char* status, const char* contentType, const std::string& body ) noexcept
 {
     std::string out;
     out.reserve( body.size() + 160 );
@@ -187,8 +178,7 @@ struct Request
 // makes recv() return <= 0 → we abandon the connection (server lives).
 //
 // `tooManyHeaderBytes` / `tooLargeBody` out-params let the caller pick the right 4xx without a wider enum.
-/// Parses one bounded HTTP request and degrades malformed or stalled input into a caller-visible status.
-inline Request readRequest( socket_t fd, bool& tooManyHeaderBytes, bool& tooLargeBody )
+inline Request readRequest( int fd, bool& tooManyHeaderBytes, bool& tooLargeBody )
 {
     tooManyHeaderBytes = false;
     tooLargeBody       = false;
@@ -424,7 +414,6 @@ inline bool isLoopbackHost( std::string_view host ) noexcept
 
 // serve the remote HTTP transport. Returns the process exit code. REFUSES TO START (returns 1 + stderr)
 // when the security preconditions are not met; otherwise loops forever, one request at a time.
-/// Runs the single-threaded MCP HTTP listener with platform-correct socket ownership and cleanup.
 inline int runMcpHttp( const McpHttpConfig& cfg )
 {
     using namespace mcphttp;
@@ -526,7 +515,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
     int one = 1;
     os::setsockopt( listenFd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof( one ) );
 
-    sockaddr_in addr{};
+    os::sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons( static_cast<uint16_t>( port ) );
     const std::string bindHost = ( host == "localhost" ) ? std::string( "127.0.0.1" ) : host;
@@ -536,7 +525,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
         os::close( listenFd );
         return 1;
     }
-    if( os::bind( listenFd, reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) != 0 )
+    if( os::bind( listenFd, reinterpret_cast<os::sockaddr*>( &addr ), sizeof( addr ) ) != 0 )
     {
         rw::emitTo( stderr, "ripwire: --listen: bind {}:{} failed: {}\n", host.c_str(), port, std::strerror( errno ) );
         os::close( listenFd );
@@ -594,7 +583,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
 
         // slow-loris guard: a client that opens a connection and dribbles (or stalls) must not wedge the
         // single-threaded loop. SO_RCVTIMEO makes recv() return after kRecvTimeoutSec → readRequest drops it.
-        timeval tv{ kRecvTimeoutSec, 0 };
+        os::timeval tv{ kRecvTimeoutSec, 0 };
         os::setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
         os::setsockopt( fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof( one ) );
         // a client that drops mid-response costs only its own connection: a send() to a peer that is gone fails with EPIPE

@@ -141,6 +141,9 @@ using uid_t     = ::uid_t;
 using nfds_t    = ::nfds_t;
 using socklen_t = ::socklen_t;
 using pthread_t = ::pthread_t;
+using sockaddr    = struct ::sockaddr;
+using sockaddr_in = struct ::sockaddr_in;
+using timeval     = struct ::timeval;
 
 // the stat fields call sites read; every platform's stat_t carries them
 static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtime; st.st_ctime; st.st_dev; st.st_ino; st.st_uid; } );
@@ -355,9 +358,9 @@ inline int pthread_main_np()
 // ── sockets ────────────────────────────────────────────────────────────────────────────────────────────────
 [[gnu::always_inline]] inline int     socket( int domain, int type, int protocol )                     { return ::socket( domain, type, protocol ); }
 [[gnu::always_inline]] inline int     setsockopt( int fd, int level, int name, const void* value, socklen_t length ) { return ::setsockopt( fd, level, name, value, length ); }
-[[gnu::always_inline]] inline int     bind( int fd, const ::sockaddr* address, socklen_t length )     { return ::bind( fd, address, length ); }
+[[gnu::always_inline]] inline int     bind( int fd, const sockaddr* address, socklen_t length )       { return ::bind( fd, address, length ); }
 [[gnu::always_inline]] inline int     listen( int fd, int backlog )                                     { return ::listen( fd, backlog ); }
-[[gnu::always_inline]] inline int     accept( int fd, ::sockaddr* address, socklen_t* length )          { return ::accept( fd, address, length ); }
+[[gnu::always_inline]] inline int     accept( int fd, sockaddr* address, socklen_t* length )            { return ::accept( fd, address, length ); }
 [[gnu::always_inline]] inline ssize_t recv( int fd, void* buf, std::size_t count, int flags )           { return ::recv( fd, buf, count, flags ); }
 [[gnu::always_inline]] inline ssize_t send( int fd, const void* buf, std::size_t count, int flags )     { return ::send( fd, buf, count, flags ); }
 [[gnu::always_inline]] inline int     inet_pton( int family, const char* text, void* address )          { return ::inet_pton( family, text, address ); }
@@ -568,16 +571,16 @@ struct dirwatch_event
   #define WNOHANG 1
 #endif
 #ifndef WIFEXITED
-  #define WIFEXITED( s ) ( ( ( s ) & 0x7f ) == 0 )
+  #define WIFEXITED( s ) ::rw::oswin::waitIfExited( s )       // the decoders are tested on every platform (os_win32_logic.h)
 #endif
 #ifndef WEXITSTATUS
-  #define WEXITSTATUS( s ) ( ( ( s ) >> 8 ) & 0xff )
+  #define WEXITSTATUS( s ) ::rw::oswin::waitExitStatus( s )
 #endif
 #ifndef WIFSIGNALED
-  #define WIFSIGNALED( s ) ( ( ( s ) & 0x7f ) != 0 )
+  #define WIFSIGNALED( s ) ::rw::oswin::waitIfSignaled( s )
 #endif
 #ifndef WTERMSIG
-  #define WTERMSIG( s ) ( ( s ) & 0x7f )
+  #define WTERMSIG( s ) ::rw::oswin::waitTermSig( s )
 #endif
 #ifndef POLLIN
   #define POLLIN 0x0300           // Winsock's POLLRDNORM | POLLRDBAND
@@ -585,6 +588,36 @@ struct dirwatch_event
 #ifndef MSG_NOSIGNAL
   #define MSG_NOSIGNAL 0          // Windows raises no SIGPIPE
 #endif
+
+// ── sockets: the Winsock values of the POSIX names call sites spell. <winsock2.h> is not included here; os_win32.cpp
+//    includes it BEFORE this header, so there each guard below finds the SDK's own (identical) definition ─────────
+#ifndef AF_INET
+  #define AF_INET 2
+#endif
+#ifndef SOCK_STREAM
+  #define SOCK_STREAM 1
+#endif
+#ifndef SOL_SOCKET
+  #define SOL_SOCKET 0xffff
+#endif
+#ifndef SO_REUSEADDR
+  #define SO_REUSEADDR 0x0004     // setsockopt maps it to SO_EXCLUSIVEADDRUSE: Winsock's own SO_REUSEADDR lets a second socket steal the port
+#endif
+#ifndef SO_RCVTIMEO
+  #define SO_RCVTIMEO 0x1006
+#endif
+#ifndef IPPROTO_TCP
+  #define IPPROTO_TCP 6
+#endif
+#ifndef TCP_NODELAY
+  #define TCP_NODELAY 0x0001
+#endif
+#if !defined( _WINSOCK2API_ ) && !defined( htons )
+  // glibc defines htons as a function-like macro too; this one is the byte swap Windows' little-endian ABI needs.
+  #define htons( x ) static_cast<unsigned short>( ( ( static_cast<unsigned>( x ) & 0xff ) << 8 ) | ( ( static_cast<unsigned>( x ) >> 8 ) & 0xff ) )
+#endif
+
+#include "os_win32_logic.h"       // pure logic, no Win32 API: the wait-status decoders the W* macros above name
 
 namespace rw::os
 {
@@ -620,6 +653,26 @@ struct pollfd
     int   fd;
     short events;
     short revents;
+};
+
+// The Winsock layouts of the socket structures call sites fill (checked against the SDK's in os_win32.cpp). Declared in
+// this namespace, not globally, so they can never collide with <winsock2.h>'s; POSIX spells them os:: too.
+struct sockaddr
+{
+    unsigned short sa_family;
+    char           sa_data[ 14 ];
+};
+struct sockaddr_in
+{
+    short          sin_family;
+    unsigned short sin_port;
+    unsigned char  sin_addr[ 4 ];   // Winsock's in_addr is a 4-byte union whose member names are macros; callers only take its address
+    char           sin_zero[ 8 ];
+};
+struct timeval
+{
+    long tv_sec;
+    long tv_usec;
 };
 
 // ── descriptors and files ──────────────────────────────────────────────────────────────────────────────────
@@ -696,9 +749,9 @@ int           pthread_getname_np( pthread_t thread, char* name, std::size_t name
 // ── sockets ────────────────────────────────────────────────────────────────────────────────────────────────
 int     socket( int domain, int type, int protocol );
 int     setsockopt( int fd, int level, int name, const void* value, socklen_t length );
-int     bind( int fd, const ::sockaddr* address, socklen_t length );
+int     bind( int fd, const sockaddr* address, socklen_t length );
 int     listen( int fd, int backlog );
-int     accept( int fd, ::sockaddr* address, socklen_t* length );
+int     accept( int fd, sockaddr* address, socklen_t* length );
 ssize_t recv( int fd, void* buf, std::size_t count, int flags );
 ssize_t send( int fd, const void* buf, std::size_t count, int flags );
 int     inet_pton( int family, const char* text, void* address );

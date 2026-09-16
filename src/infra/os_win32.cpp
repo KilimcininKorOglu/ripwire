@@ -10,13 +10,14 @@
 // WHAT IS NOT HERE. Every piece of logic that needs no Win32 call — the errno table, UTF-8/UTF-16, quoting, reparse
 // classification, time and wait-status conversion — is in os_win32_logic.h, compiled and tested on every platform.
 //
-// TRANSITIONAL. The processes and the sockets still delegate to PR #44's compat layer (platform_compat.{h,cpp},
-// force-included) until their own bodies land; each such section says so.
+// TRANSITIONAL. PR #44's compat layer (platform_compat.{h,cpp}) is still force-included into every translation unit;
+// no body here calls it any more, and it is deleted next.
 
 #include "platform_compat.h"   // TRANSITIONAL: force-included today; named so the dependency is visible
 #include "os.h"
 #include "os_win32_logic.h"    // the pure logic, compiled and tested on every platform
 
+#include <array>
 #include <cerrno>
 #include <climits>
 #include <cstddef>
@@ -25,11 +26,13 @@
 #include <cstring>
 #include <ctime>
 #include <cwchar>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <direct.h>
@@ -166,6 +169,81 @@ constexpr DWORD kShareAll = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELE
 HANDLE handleOf( int fd )
 {
     return oswin::isSocketFd( fd ) ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>( ::_get_osfhandle( fd ) );
+}
+
+// ── the socket table ───────────────────────────────────────────────────────────────────────────────────────────
+// A SOCKET is a kernel handle, not a CRT descriptor, and a POSIX call site keeps a socket in an int and closes it with
+// close(). socket() and accept() therefore hand out descriptors from a range the CRT never uses (os_win32_logic.h),
+// each naming a slot of this table, and the socket calls and close() look the SOCKET up — no narrowing of a SOCKET to
+// an int (CodeRabbit 3946215403). Winsock starts on the first socket(), not in a static constructor of every process.
+struct SocketTable
+{
+    std::mutex                                 mutex;
+    std::array<SOCKET, oswin::kSocketFdCount> slots;
+    SocketTable() { slots.fill( INVALID_SOCKET ); }
+};
+
+SocketTable& socketTable()
+{
+    static SocketTable table;
+    return table;
+}
+
+bool winsockStarted()
+{
+    static const bool started = []
+    {
+        WSADATA data {};
+        return ::WSAStartup( MAKEWORD( 2, 2 ), &data ) == 0;
+    }();
+    return started;
+}
+
+int failWsa()
+{
+    return failWin32( static_cast<DWORD>( ::WSAGetLastError() ) );
+}
+
+int adoptSocket( SOCKET s )
+{
+    SocketTable&                      table = socketTable();
+    const std::lock_guard<std::mutex> lock( table.mutex );
+    for( int slot = 0; slot < oswin::kSocketFdCount; ++slot )
+    {
+        if( table.slots[ static_cast<std::size_t>( slot ) ] == INVALID_SOCKET )
+        {
+            table.slots[ static_cast<std::size_t>( slot ) ] = s;
+            return oswin::kSocketFdBase + slot;
+        }
+    }
+    ::closesocket( s );
+    return fail( EMFILE );
+}
+
+SOCKET socketOf( int fd )
+{
+    if( !oswin::isSocketFd( fd ) )
+    {
+        return INVALID_SOCKET;
+    }
+    SocketTable&                      table = socketTable();
+    const std::lock_guard<std::mutex> lock( table.mutex );
+    return table.slots[ static_cast<std::size_t>( fd - oswin::kSocketFdBase ) ];
+}
+
+int closeSocket( int fd )
+{
+    SOCKET s = INVALID_SOCKET;
+    {
+        SocketTable&                      table = socketTable();
+        const std::lock_guard<std::mutex> lock( table.mutex );
+        std::swap( s, table.slots[ static_cast<std::size_t>( fd - oswin::kSocketFdBase ) ] );
+    }
+    if( s == INVALID_SOCKET )
+    {
+        return fail( EBADF );
+    }
+    return ::closesocket( s ) == 0 ? 0 : failWsa();
 }
 
 // ── stat ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -619,7 +697,7 @@ int close( int fd )
 {
     if( oswin::isSocketFd( fd ) )
     {
-        return rw::compat::rw_closesocket( static_cast<SOCKET>( fd ) );   // TRANSITIONAL: the socket table lands with the socket bodies
+        return closeSocket( fd );
     }
     return ::_close( fd );
 }
@@ -777,12 +855,44 @@ int flock( int fd, int operation )
     return ::LockFileEx( handle, flags, 0, MAXDWORD, MAXDWORD, &wholeFile ) ? 0 : failLastError();
 }
 
-// ── TRANSITIONAL: pipes and polling delegate until the process bodies land ────────────────────────────────────
-int pipe( int fds[ 2 ] )           { return ::_pipe( fds, 65536, _O_BINARY | _O_NOINHERIT ); }
-int poll( pollfd*, nfds_t, int timeoutMs )
+// pipe: the CRT's anonymous pipe, both ends non-inheritable (spawn_sh hands the write end to its child explicitly).
+int pipe( int fds[ 2 ] ) { return ::_pipe( fds, 65536, _O_BINARY | _O_NOINHERIT ); }
+
+// poll: pipes only — the one caller waits on a spawn_sh pipe. POLLIN when bytes are waiting, POLLHUP once every writer
+// has closed (the read that follows returns 0, POSIX's EOF), POLLNVAL for a descriptor with no handle. There is no
+// readiness wait for an anonymous pipe on Windows, so the wait is a PeekNamedPipe loop at 1 ms. nullptr/0 fds sleeps.
+int poll( pollfd* fds, nfds_t count, int timeoutMs )
 {
-    ::Sleep( timeoutMs < 0 ? 0 : static_cast<DWORD>( timeoutMs ) );
-    return 0;
+    const ULONGLONG start = ::GetTickCount64();
+    for( ;; )
+    {
+        int ready = 0;
+        for( nfds_t i = 0; fds != nullptr && i < count; ++i )
+        {
+            fds[ i ].revents   = 0;
+            const HANDLE handle = handleOf( fds[ i ].fd );
+            DWORD        waiting = 0;
+            if( handle == INVALID_HANDLE_VALUE )
+            {
+                fds[ i ].revents = 0x0020;   // POLLNVAL
+            }
+            else if( ::PeekNamedPipe( handle, nullptr, 0, nullptr, &waiting, nullptr ) )
+            {
+                fds[ i ].revents = waiting > 0 ? static_cast<short>( fds[ i ].events & POLLIN ) : 0;
+            }
+            else
+            {
+                fds[ i ].revents = 0x0010;   // POLLHUP: ERROR_BROKEN_PIPE, or any error a read would report
+            }
+            ready += fds[ i ].revents != 0 ? 1 : 0;
+        }
+        const ULONGLONG elapsed = ::GetTickCount64() - start;
+        if( ready > 0 || ( timeoutMs >= 0 && elapsed >= static_cast<ULONGLONG>( timeoutMs ) ) )
+        {
+            return ready;
+        }
+        ::Sleep( fds == nullptr || count == 0 ? static_cast<DWORD>( timeoutMs < 0 ? INFINITE : static_cast<ULONGLONG>( timeoutMs ) - elapsed ) : 1 );
+    }
 }
 
 // ── streams over descriptors and memory ────────────────────────────────────────────────────────────────────
@@ -1504,15 +1614,544 @@ int nanosleep( const ::timespec* request, ::timespec* remaining )
 
 std::tm* localtime_r( const std::time_t* time, std::tm* result ) { return ::localtime_s( result, time ) == 0 ? result : nullptr; }
 
-// ── TRANSITIONAL: processes delegate until their bodies land ────────────────────────────────────────────────
-pid_t      getpid()                                        { return static_cast<pid_t>( ::GetCurrentProcessId() ); }
-uid_t      getuid()                                        { return tokenIdentity().uid; }
-int        kill( pid_t, int )                              { return fail( ENOSYS ); }
-pid_t      waitpid( pid_t, int*, int )                     { return fail( ENOSYS ); }
-std::FILE* popen( const char* command, const char* mode )  { return rw::compat::rw_popen( command, mode ); }
-int        pclose( std::FILE* stream )                     { return rw::compat::rw_pclose( stream ); }
-int        system( const char* command )                   { return rw::compat::rw_system( command ); }
-pid_t      spawn_sh( const std::string&, const int[ 2 ] )  { return fail( ENOSYS ); }
+// ── processes ──────────────────────────────────────────────────────────────────────────────────────────────
+pid_t getpid() { return static_cast<pid_t>( ::GetCurrentProcessId() ); }
+uid_t getuid() { return tokenIdentity().uid; }
+
+namespace
+{
+// The POSIX shell every command runs under: bash from Git for Windows, resolved ONCE per process. Candidates, in
+// order: RW_BASH (an explicit override, PR #44's name), Git for Windows' install directories, then the absolute PATH
+// entries. Each must pass oswin::isAcceptableShell — absolute, a bash.exe, not a WSL launcher — so the current
+// directory, a relative PATH entry, the application directory and System32\bash.exe are never used. That closes
+// CodeRabbit 3946215444's regression on #44, where SearchPathA( "sh.exe" ) searched the application directory and
+// the current directory first and ran a checkout's planted sh.exe. When no shell qualifies there is no fallback to
+// cmd.exe (a different language: the command would run with different quoting); the spawn fails with ENOENT.
+const std::string& trustedBash()
+{
+    static const std::string bash = []
+    {
+        const auto isFile = []( const std::string& candidate )
+        {
+            const NativePath native( candidate.c_str() );
+            const DWORD      attributes = native.ok() ? ::GetFileAttributesW( native.c_str() ) : INVALID_FILE_ATTRIBUTES;
+            return attributes != INVALID_FILE_ATTRIBUTES && ( attributes & FILE_ATTRIBUTE_DIRECTORY ) == 0;
+        };
+        const auto usable = [ & ]( std::string candidate )
+        {
+            oswin::normalizePathArgInPlace( candidate.data() );
+            return oswin::isAcceptableShell( candidate ) && isFile( candidate ) ? candidate : std::string();
+        };
+        if( std::string chosen = usable( environmentUtf8( L"RW_BASH" ) ); !chosen.empty() )
+        {
+            return chosen;
+        }
+        for( const wchar_t* const root : { L"ProgramW6432", L"ProgramFiles", L"ProgramFiles(x86)", L"LOCALAPPDATA" } )
+        {
+            const std::string base = environmentUtf8( root );
+            if( base.empty() )
+            {
+                continue;
+            }
+            const std::string git = base + ( std::wstring_view( root ) == L"LOCALAPPDATA" ? "/Programs/Git" : "/Git" );
+            for( const char* const tail : { "/bin/bash.exe", "/usr/bin/bash.exe" } )
+            {
+                if( std::string chosen = usable( git + tail ); !chosen.empty() )
+                {
+                    return chosen;
+                }
+            }
+        }
+        const std::string path = environmentUtf8( L"PATH" );
+        std::size_t       at   = 0;
+        while( at <= path.size() )
+        {
+            const std::string_view directory = oswin::nextPathListEntry( path, at );
+            if( !directory.empty() )
+            {
+                if( std::string chosen = usable( std::string( directory ) + "/bash.exe" ); !chosen.empty() )
+                {
+                    return chosen;
+                }
+            }
+        }
+        return std::string();
+    }();
+    return bash;
+}
+
+// The environment block a child gets: this process's own, with Git for Windows' usr/bin, bin and cmd directories
+// appended to PATH so the tools a shell command names (tail, tar, sed, git) resolve — PR #44's windowsGitEnvironment.
+// Rebuilt for each spawn, because setenv (githarden's GIT_CONFIG_* pins) changes the environment between spawns.
+std::vector<wchar_t> childEnvironment( const std::string& bash )
+{
+    std::string gitRoot = bash.substr( 0, bash.find_last_of( '/' ) );
+    for( const std::string_view tail : { std::string_view( "/usr/bin" ), std::string_view( "/bin" ) } )
+    {
+        if( gitRoot.size() > tail.size() && gitRoot.compare( gitRoot.size() - tail.size(), tail.size(), tail ) == 0 )
+        {
+            gitRoot.resize( gitRoot.size() - tail.size() );
+            break;
+        }
+    }
+    bool                 ok = false;
+    const std::u16string extra = utf16Of( ";" + gitRoot + "/usr/bin;" + gitRoot + "/bin;" + gitRoot + "/cmd", ok );
+    std::vector<wchar_t> block;
+    const LPWCH          raw = ::GetEnvironmentStringsW();
+    if( raw == nullptr || !ok )
+    {
+        if( raw != nullptr )
+        {
+            ::FreeEnvironmentStringsW( raw );
+        }
+        return block;
+    }
+    bool pathSeen = false;
+    for( const wchar_t* entry = raw; *entry != L'\0'; entry += std::wcslen( entry ) + 1 )
+    {
+        const std::size_t length = std::wcslen( entry );
+        block.insert( block.end(), entry, entry + length );
+        if( length >= 5 && ::_wcsnicmp( entry, L"PATH=", 5 ) == 0 )
+        {
+            block.insert( block.end(), extra.begin(), extra.end() );
+            pathSeen = true;
+        }
+        block.push_back( L'\0' );
+    }
+    ::FreeEnvironmentStringsW( raw );
+    if( !pathSeen )
+    {
+        const std::wstring_view name = L"PATH=";
+        block.insert( block.end(), name.begin(), name.end() );
+        block.insert( block.end(), extra.begin() + 1, extra.end() );
+        block.push_back( L'\0' );
+    }
+    block.push_back( L'\0' );
+    return block;
+}
+
+// One started child: its process handle, the job that holds its whole tree, and the signal kill() delivered (so
+// waitpid reports WIFSIGNALED, as POSIX does for a SIGKILLed group).
+struct Child
+{
+    pid_t  pid       = 0;
+    HANDLE process   = nullptr;
+    HANDLE job       = nullptr;
+    int    signalled = 0;
+};
+
+std::mutex& childMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::vector<Child>& children()
+{
+    static std::vector<Child> table;
+    return table;
+}
+
+// Start bash with argv = { bash, arguments... } (quoted for CreateProcessW by os_win32_logic.h), stdin/stdout/stderr
+// the three given inheritable handles and nothing else inherited (PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PR #44's
+// rw_popen pattern), suspended until it is inside a KILL_ON_JOB_CLOSE job — so nothing it starts escapes a kill
+// (PR #44's order, proven by runtracecheck on lennix1337's machine). A job that cannot be created or joined leaves
+// kill() able to end only the shell itself; the child is still started, as #44 did.
+bool startBash( std::initializer_list<std::string_view> arguments, HANDLE input, HANDLE output, HANDLE error, PROCESS_INFORMATION& started, HANDLE& job )
+{
+    const std::string& bash = trustedBash();
+    if( bash.empty() )
+    {
+        ::SetLastError( ERROR_FILE_NOT_FOUND );
+        return false;
+    }
+    std::string commandLine;
+    oswin::appendQuotedArg( commandLine, bash );
+    for( const std::string_view argument : arguments )
+    {
+        if( argument.find( '\0' ) != std::string_view::npos )
+        {
+            ::SetLastError( ERROR_INVALID_PARAMETER );
+            return false;
+        }
+        commandLine.push_back( ' ' );
+        oswin::appendQuotedArg( commandLine, argument );
+    }
+    bool           converted = false;
+    std::u16string wideCommand = utf16Of( commandLine, converted );
+    const NativePath program( bash.c_str() );
+    if( !converted || !program.ok() )
+    {
+        ::SetLastError( ERROR_NO_UNICODE_TRANSLATION );
+        return false;
+    }
+    std::vector<wchar_t> environment = childEnvironment( bash );
+
+    SIZE_T attributeBytes = 0;
+    (void)::InitializeProcThreadAttributeList( nullptr, 1, 0, &attributeBytes );
+    std::unique_ptr<BYTE[]> attributeStorage( new( std::nothrow ) BYTE[ attributeBytes ] );
+    const auto attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>( attributeStorage.get() );
+    if( attributes == nullptr || !::InitializeProcThreadAttributeList( attributes, 1, 0, &attributeBytes ) )
+    {
+        return false;
+    }
+    HANDLE     inherited[ 3 ] = { input, output, error };
+    const bool sameOutput     = output == error;
+    const bool listed = ::UpdateProcThreadAttribute( attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                                     ( sameOutput ? 2 : 3 ) * sizeof( HANDLE ), nullptr, nullptr ) != FALSE;
+    STARTUPINFOEXW startup {};
+    startup.StartupInfo.cb         = sizeof( startup );
+    startup.StartupInfo.dwFlags    = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput  = input;
+    startup.StartupInfo.hStdOutput = output;
+    startup.StartupInfo.hStdError  = error;
+    startup.lpAttributeList        = attributes;
+
+    job = ::CreateJobObjectW( nullptr, nullptr );
+    if( job != nullptr )
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits {};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        (void)::SetInformationJobObject( job, JobObjectExtendedLimitInformation, &limits, sizeof( limits ) );
+    }
+    const BOOL created = listed && ::CreateProcessW( program.c_str(), reinterpret_cast<LPWSTR>( wideCommand.data() ), nullptr, nullptr, TRUE,
+                                                     CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                                                     environment.empty() ? nullptr : environment.data(), nullptr, &startup.StartupInfo, &started );
+    const DWORD createError = ::GetLastError();
+    ::DeleteProcThreadAttributeList( attributes );
+    if( !created )
+    {
+        if( job != nullptr )
+        {
+            ::CloseHandle( job );
+            job = nullptr;
+        }
+        ::SetLastError( listed ? createError : ERROR_INVALID_PARAMETER );
+        return false;
+    }
+    if( job != nullptr && !::AssignProcessToJobObject( job, started.hProcess ) )
+    {
+        ::CloseHandle( job );
+        job = nullptr;
+    }
+    ::ResumeThread( started.hThread );
+    ::CloseHandle( started.hThread );
+    started.hThread = nullptr;
+    return true;
+}
+
+// An inheritable duplicate of a handle, for a child's standard stream.
+HANDLE inheritableCopy( HANDLE handle )
+{
+    HANDLE copy = nullptr;
+    return ::DuplicateHandle( ::GetCurrentProcess(), handle, ::GetCurrentProcess(), &copy, 0, TRUE, DUPLICATE_SAME_ACCESS ) ? copy : nullptr;
+}
+
+HANDLE inheritableNul( DWORD access )
+{
+    SECURITY_ATTRIBUTES inherit { sizeof( SECURITY_ATTRIBUTES ), nullptr, TRUE };
+    const HANDLE        nul = ::CreateFileW( L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
+    return nul == INVALID_HANDLE_VALUE ? nullptr : nul;
+}
+}   // namespace
+
+// spawn_sh: POSIX's fork/exec of `/bin/sh -c command` in its own process group becomes bash -c command inside a job
+// object — the job IS the process group: kill( -pid, SIGKILL ) terminates it. stdin is NUL, stdout and stderr both
+// go to pipeFds[1], nothing else is inherited. The pid is the Windows process id. Where POSIX reports an unstartable
+// shell as the child's exit status 127, this returns -1 with errno (ENOENT when no trusted bash exists) — the caller
+// treats both as a failed spawn.
+pid_t spawn_sh( const std::string& command, const int pipeFds[ 2 ] )
+{
+    const HANDLE output = handleOf( pipeFds[ 1 ] );
+    if( output == INVALID_HANDLE_VALUE )
+    {
+        return fail( EBADF );
+    }
+    const HANDLE input       = inheritableNul( GENERIC_READ );
+    const HANDLE childOutput = inheritableCopy( output );
+    if( input == nullptr || childOutput == nullptr )
+    {
+        const DWORD error = ::GetLastError();
+        if( input != nullptr )
+        {
+            ::CloseHandle( input );
+        }
+        if( childOutput != nullptr )
+        {
+            ::CloseHandle( childOutput );
+        }
+        return failWin32( error );
+    }
+    PROCESS_INFORMATION started {};
+    HANDLE              job     = nullptr;
+    const bool          ok      = startBash( { "-c", command }, input, childOutput, childOutput, started, job );
+    const DWORD         error   = ::GetLastError();
+    ::CloseHandle( input );
+    ::CloseHandle( childOutput );
+    if( !ok )
+    {
+        return failWin32( error );
+    }
+    const pid_t pid = static_cast<pid_t>( started.dwProcessId );
+    const std::lock_guard<std::mutex> lock( childMutex() );
+    children().push_back( Child{ pid, started.hProcess, job, 0 } );
+    return pid;
+}
+
+// kill: a negative pid is the process group — TerminateJobObject ends the whole tree; a positive pid ends that
+// process. Only children spawn_sh started are known (ESRCH otherwise). Signal 0 asks whether the child still runs. The
+// signal is recorded so waitpid reports the death as that signal.
+int kill( pid_t pid, int sig )
+{
+    const std::lock_guard<std::mutex> lock( childMutex() );
+    for( Child& child : children() )
+    {
+        if( child.pid != ( pid < 0 ? -pid : pid ) )
+        {
+            continue;
+        }
+        if( sig == 0 )
+        {
+            return ::WaitForSingleObject( child.process, 0 ) == WAIT_TIMEOUT ? 0 : fail( ESRCH );
+        }
+        const UINT exitCode = 128u + static_cast<UINT>( sig );
+        const BOOL ended    = pid < 0 && child.job != nullptr ? ::TerminateJobObject( child.job, exitCode ) : ::TerminateProcess( child.process, exitCode );
+        if( ended || ::WaitForSingleObject( child.process, 0 ) == WAIT_OBJECT_0 )
+        {
+            if( child.signalled == 0 )
+            {
+                child.signalled = sig;
+            }
+            return 0;
+        }
+        return failLastError();
+    }
+    return fail( ESRCH );
+}
+
+// waitpid: WNOHANG polls; 0 blocks. The status decodes through os.h's W* macros: an exit code, the recorded kill()
+// signal, or the signal a crash's NTSTATUS corresponds to. Reaping closes the job, which (KILL_ON_JOB_CLOSE) ends any
+// descendant the shell left running — where POSIX would leave an orphan to init.
+pid_t waitpid( pid_t pid, int* status, int options )
+{
+    std::unique_lock<std::mutex> lock( childMutex() );
+    auto& table = children();
+    auto  it    = table.begin();
+    while( it != table.end() && it->pid != pid )
+    {
+        ++it;
+    }
+    if( it == table.end() )
+    {
+        return fail( ECHILD );
+    }
+    const HANDLE process = it->process;
+    lock.unlock();
+    const DWORD waited = ::WaitForSingleObject( process, ( options & WNOHANG ) != 0 ? 0 : INFINITE );
+    if( waited == WAIT_TIMEOUT )
+    {
+        return 0;
+    }
+    if( waited != WAIT_OBJECT_0 )
+    {
+        return failLastError();
+    }
+    lock.lock();
+    it = table.begin();
+    while( it != table.end() && it->pid != pid )
+    {
+        ++it;
+    }
+    if( it == table.end() )
+    {
+        return fail( ECHILD );   // reaped by a concurrent waitpid
+    }
+    DWORD exitCode = 0;
+    (void)::GetExitCodeProcess( it->process, &exitCode );
+    if( status != nullptr )
+    {
+        *status = it->signalled != 0 ? oswin::waitStatusFromSignal( it->signalled ) : oswin::waitStatusFromExit( exitCode );
+    }
+    ::CloseHandle( it->process );
+    if( it->job != nullptr )
+    {
+        ::CloseHandle( it->job );
+    }
+    table.erase( it );
+    return pid;
+}
+
+// popen: PR #44's Git Bash bridge (proven by the git-backed gates on lennix1337's machine): the command text is written
+// to a temporary script and bash runs the script, so no byte of the command passes through a Windows command line
+// (and cmd.exe never sees a '%' in a git --format; CodeRabbit 3946215374 / 3946215385). The shell is the trusted bash
+// above, resolved once; stdin is NUL, stderr is this process's stderr, stdout is the returned stream. Read mode only
+// (no caller writes); "w" is EINVAL.
+namespace
+{
+struct PipeChild
+{
+    std::FILE*   stream  = nullptr;
+    HANDLE       process = nullptr;
+    HANDLE       job     = nullptr;   // closed only after the shell is reaped: KILL_ON_JOB_CLOSE would end it
+    std::wstring script;
+};
+
+std::vector<PipeChild>& pipeChildren()
+{
+    static std::vector<PipeChild> table;
+    return table;
+}
+
+bool writeScript( LPCWSTR path, const std::string& command )
+{
+    const HANDLE file = ::CreateFileW( path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr );
+    if( file == INVALID_HANDLE_VALUE )
+    {
+        return false;
+    }
+    const std::string script = "trap 'rm -f -- \"$0\"' EXIT\n" + command + "\n";
+    DWORD       written = 0;
+    const BOOL  ok      = ::WriteFile( file, script.data(), static_cast<DWORD>( script.size() ), &written, nullptr );
+    ::CloseHandle( file );
+    return ok && written == script.size();
+}
+}   // namespace
+
+std::FILE* popen( const char* command, const char* mode )
+{
+    if( command == nullptr || mode == nullptr || mode[ 0 ] != 'r' )
+    {
+        errno = EINVAL;
+        return nullptr;
+    }
+    wchar_t directory[ MAX_PATH + 2 ];
+    wchar_t script[ MAX_PATH + 1 ];
+    const DWORD directoryLength = ::GetTempPathW( MAX_PATH + 2, directory );
+    if( directoryLength == 0 || directoryLength > MAX_PATH + 1 || ::GetTempFileNameW( directory, L"rwc", 0, script ) == 0 )
+    {
+        (void)failLastError();
+        return nullptr;
+    }
+    char scriptPath[ PATH_MAX ];
+    if( programPathInto( viewOf( script ), scriptPath, sizeof( scriptPath ) ) != 0 || !writeScript( script, command ) )
+    {
+        const int error = errno;
+        ::DeleteFileW( script );
+        errno = error != 0 ? error : EIO;
+        return nullptr;
+    }
+    SECURITY_ATTRIBUTES pipeSecurity { sizeof( SECURITY_ATTRIBUTES ), nullptr, TRUE };
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    if( !::CreatePipe( &readEnd, &writeEnd, &pipeSecurity, 0 ) )
+    {
+        (void)failLastError();
+        ::DeleteFileW( script );
+        return nullptr;
+    }
+    (void)::SetHandleInformation( readEnd, HANDLE_FLAG_INHERIT, 0 );
+    const HANDLE input       = inheritableNul( GENERIC_READ );
+    const HANDLE parentError = ::GetStdHandle( STD_ERROR_HANDLE );
+    HANDLE       error       = parentError != nullptr && parentError != INVALID_HANDLE_VALUE ? inheritableCopy( parentError ) : nullptr;
+    if( error == nullptr )
+    {
+        error = inheritableNul( GENERIC_WRITE );
+    }
+    PROCESS_INFORMATION started {};
+    HANDLE              job      = nullptr;
+    const bool          ok       = input != nullptr && error != nullptr && startBash( { scriptPath }, input, writeEnd, error, started, job );
+    const DWORD         startErr = ::GetLastError();
+    for( const HANDLE handle : { input, writeEnd, error } )
+    {
+        if( handle != nullptr )
+        {
+            ::CloseHandle( handle );
+        }
+    }
+    if( !ok )
+    {
+        ::CloseHandle( readEnd );
+        ::DeleteFileW( script );
+        (void)failWin32( startErr );
+        return nullptr;
+    }
+    const int fd = ::_open_osfhandle( reinterpret_cast<intptr_t>( readEnd ), _O_RDONLY | _O_BINARY );
+    std::FILE* const stream = fd < 0 ? nullptr : ::_fdopen( fd, "rb" );
+    if( stream == nullptr )
+    {
+        if( fd >= 0 )
+        {
+            ::_close( fd );
+        }
+        else
+        {
+            ::CloseHandle( readEnd );
+        }
+        ::TerminateProcess( started.hProcess, 1 );
+        ::WaitForSingleObject( started.hProcess, INFINITE );
+        ::CloseHandle( started.hProcess );
+        if( job != nullptr )
+        {
+            ::CloseHandle( job );
+        }
+        ::DeleteFileW( script );
+        return nullptr;
+    }
+    const std::lock_guard<std::mutex> lock( childMutex() );
+    pipeChildren().push_back( PipeChild{ stream, started.hProcess, job, std::wstring( script ) } );
+    return stream;
+}
+
+// pclose: close the stream, wait for the shell, and return its wait status (WEXITSTATUS is the exit code) — callers
+// test `== 0`, which holds exactly when the command exited 0.
+int pclose( std::FILE* stream )
+{
+    PipeChild child {};
+    {
+        const std::lock_guard<std::mutex> lock( childMutex() );
+        auto& table = pipeChildren();
+        auto  it    = table.begin();
+        while( it != table.end() && it->stream != stream )
+        {
+            ++it;
+        }
+        if( it == table.end() )
+        {
+            return fail( ECHILD );
+        }
+        child = *it;
+        table.erase( it );
+    }
+    std::fclose( stream );
+    const DWORD waited   = ::WaitForSingleObject( child.process, INFINITE );
+    DWORD       exitCode = 1;
+    if( waited == WAIT_OBJECT_0 )
+    {
+        (void)::GetExitCodeProcess( child.process, &exitCode );
+    }
+    ::CloseHandle( child.process );
+    if( child.job != nullptr )
+    {
+        ::CloseHandle( child.job );   // anything the command left running in the background ends with it
+    }
+    ::DeleteFileW( child.script.c_str() );   // the script's own trap normally removed it
+    return waited == WAIT_OBJECT_0 ? oswin::waitStatusFromExit( exitCode ) : fail( ECHILD );
+}
+
+// system: popen, drain, pclose. POSIX system lets the command's output through to this process's stdout; every caller
+// redirects it to /dev/null inside the command, so draining it here loses nothing.
+int system( const char* command )
+{
+    std::FILE* const stream = os::popen( command, "r" );
+    if( stream == nullptr )
+    {
+        return -1;
+    }
+    char buffer[ 4096 ];
+    while( std::fread( buffer, 1, sizeof( buffer ), stream ) > 0 )
+    {
+    }
+    return os::pclose( stream );
+}
 
 // ── threads ────────────────────────────────────────────────────────────────────────────────────────────────
 pthread_t     pthread_self() { return ::GetCurrentThreadId(); }
@@ -1535,15 +2174,114 @@ int pthread_getname_np( pthread_t, char* name, std::size_t nameCount )
     return 0;
 }
 
-// ── TRANSITIONAL: sockets (a SOCKET narrowed to int, as the compat layer's callers did) ───────────────────────
-int     socket( int domain, int type, int protocol )                  { return static_cast<int>( ::socket( domain, type, protocol ) ); }
-int     setsockopt( int fd, int level, int name, const void* value, socklen_t length ) { return rw::compat::rw_setsockopt( static_cast<SOCKET>( fd ), level, name, value, length ); }
-int     bind( int fd, const ::sockaddr* address, socklen_t length )   { return ::bind( static_cast<SOCKET>( fd ), address, length ); }
-int     listen( int fd, int backlog )                                 { return ::listen( static_cast<SOCKET>( fd ), backlog ); }
-int     accept( int fd, ::sockaddr* address, socklen_t* length )      { return static_cast<int>( ::accept( static_cast<SOCKET>( fd ), address, length ) ); }
-ssize_t recv( int fd, void* buf, std::size_t count, int flags )       { return ::recv( static_cast<SOCKET>( fd ), static_cast<char*>( buf ), static_cast<int>( count > INT_MAX ? INT_MAX : count ), flags ); }
-ssize_t send( int fd, const void* buf, std::size_t count, int flags ) { return ::send( static_cast<SOCKET>( fd ), static_cast<const char*>( buf ), static_cast<int>( count > INT_MAX ? INT_MAX : count ), flags ); }
-int     inet_pton( int family, const char* text, void* address )      { return ::inet_pton( family, text, address ); }
-int     setsockopt_nosigpipe( int, const void*, socklen_t )           { return 0; }
+// ── sockets ────────────────────────────────────────────────────────────────────────────────────────────────
+// The structures call sites fill are os.h's Winsock-layout copies; they must match the SDK's exactly.
+static_assert( sizeof( os::sockaddr ) == sizeof( ::sockaddr ) && sizeof( os::sockaddr_in ) == sizeof( ::sockaddr_in )
+               && offsetof( os::sockaddr_in, sin_port ) == offsetof( ::sockaddr_in, sin_port )
+               && offsetof( os::sockaddr_in, sin_addr ) == offsetof( ::sockaddr_in, sin_addr ) && sizeof( os::timeval ) == sizeof( ::timeval ) );
+
+int socket( int domain, int type, int protocol )
+{
+    if( !winsockStarted() )
+    {
+        return fail( ENETDOWN );
+    }
+    const SOCKET s = ::WSASocketW( domain, type, protocol, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT );
+    return s == INVALID_SOCKET ? failWsa() : adoptSocket( s );
+}
+
+// setsockopt: two options mean something different on Winsock, and the POSIX meaning is kept.
+//   SO_REUSEADDR — POSIX lets a restarted listener rebind a port still in TIME_WAIT; Winsock lets a SECOND socket bind a
+//     port this one is already listening on, so another local process could take --listen's port. The POSIX-safe
+//     meaning on Windows is SO_EXCLUSIVEADDRUSE (and Windows never blocks a rebind on TIME_WAIT the way POSIX does).
+//   SO_RCVTIMEO / SO_SNDTIMEO — POSIX takes a timeval, Winsock a DWORD of milliseconds in which 0 means forever; the
+//     conversion rounds up, so the 10-second slow-loris guard stays 10 seconds and no nonzero timeout becomes infinite.
+int setsockopt( int fd, int level, int name, const void* value, socklen_t length )
+{
+    const SOCKET s = socketOf( fd );
+    if( s == INVALID_SOCKET )
+    {
+        return fail( EBADF );
+    }
+    if( level == SOL_SOCKET && name == SO_REUSEADDR && length == sizeof( int ) )
+    {
+        if( *static_cast<const int*>( value ) == 0 )
+        {
+            return 0;
+        }
+        const int exclusive = 1;
+        return ::setsockopt( s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>( &exclusive ), sizeof( exclusive ) ) == 0 ? 0 : failWsa();
+    }
+    if( level == SOL_SOCKET && ( name == SO_RCVTIMEO || name == SO_SNDTIMEO ) && length == sizeof( os::timeval ) )
+    {
+        const auto* const tv           = static_cast<const os::timeval*>( value );
+        const DWORD       milliseconds = oswin::millisecondsFromTimeval( tv->tv_sec, tv->tv_usec );
+        return ::setsockopt( s, level, name, reinterpret_cast<const char*>( &milliseconds ), sizeof( milliseconds ) ) == 0 ? 0 : failWsa();
+    }
+    return ::setsockopt( s, level, name, static_cast<const char*>( value ), length ) == 0 ? 0 : failWsa();
+}
+
+int bind( int fd, const sockaddr* address, socklen_t length )
+{
+    const SOCKET s = socketOf( fd );
+    return s == INVALID_SOCKET ? fail( EBADF ) : ::bind( s, reinterpret_cast<const ::sockaddr*>( address ), length ) == 0 ? 0 : failWsa();
+}
+
+int listen( int fd, int backlog )
+{
+    const SOCKET s = socketOf( fd );
+    return s == INVALID_SOCKET ? fail( EBADF ) : ::listen( s, backlog ) == 0 ? 0 : failWsa();
+}
+
+int accept( int fd, sockaddr* address, socklen_t* length )
+{
+    const SOCKET s = socketOf( fd );
+    if( s == INVALID_SOCKET )
+    {
+        return fail( EBADF );
+    }
+    const SOCKET client = ::accept( s, reinterpret_cast<::sockaddr*>( address ), length );
+    if( client == INVALID_SOCKET )
+    {
+        return failWsa();   // WSAEINTR is EINTR, which the accept loop retries
+    }
+    (void)::SetHandleInformation( reinterpret_cast<HANDLE>( client ), HANDLE_FLAG_INHERIT, 0 );
+    return adoptSocket( client );
+}
+
+ssize_t recv( int fd, void* buf, std::size_t count, int flags )
+{
+    const SOCKET s = socketOf( fd );
+    if( s == INVALID_SOCKET )
+    {
+        return fail( EBADF );
+    }
+    const int received = ::recv( s, static_cast<char*>( buf ), static_cast<int>( count > INT_MAX ? INT_MAX : count ), flags );
+    return received == SOCKET_ERROR ? failWsa() : received;
+}
+
+ssize_t send( int fd, const void* buf, std::size_t count, int flags )
+{
+    const SOCKET s = socketOf( fd );
+    if( s == INVALID_SOCKET )
+    {
+        return fail( EBADF );
+    }
+    const int sent = ::send( s, static_cast<const char*>( buf ), static_cast<int>( count > INT_MAX ? INT_MAX : count ), flags & ~MSG_NOSIGNAL );
+    return sent == SOCKET_ERROR ? failWsa() : sent;
+}
+
+int inet_pton( int family, const char* text, void* address )
+{
+    if( !winsockStarted() )
+    {
+        return fail( ENETDOWN );
+    }
+    const INT converted = ::inet_pton( family, text, address );
+    return converted < 0 ? failWsa() : converted;
+}
+
+// Winsock never raises SIGPIPE: nothing to switch off.
+int setsockopt_nosigpipe( int, const void*, socklen_t ) { return 0; }
 
 }   // namespace rw::os
