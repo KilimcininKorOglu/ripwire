@@ -2204,7 +2204,7 @@ inline constexpr const char* kSymShapes[] = {
     "cross",      // Other
 };
 inline constexpr std::size_t kSymShapeCount = sizeof( kSymShapes ) / sizeof( kSymShapes[0] );
-static_assert( kSymShapeCount == std::size_t( SymKind::Other ) + 1,
+static_assert( kSymShapeCount == kSymKindCount,
                "kSymShapes must carry one shape per SymKind enumerator, in declaration order — a kind with no "
                "shape falls back to the function circle, which is the page asserting something false about it" );
 
