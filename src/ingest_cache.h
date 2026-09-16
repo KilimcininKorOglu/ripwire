@@ -4,6 +4,7 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "pathguard.h"  // CWE-59/367 round 5: rw::pathguard::createExclTempFile — saveCache's temp is created exclusively, never through a link
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 // ingest_cache.h — the raw-facts model + incremental cache, moved VERBATIM from ingest.cpp in the
@@ -2535,27 +2536,38 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // cache should never be clobbered without a peep). Mirrors mcpedit::atomicWrite's discipline
     // (src/mcp.h): check the write byte-count AND fclose's return, and on any failure unlink the temp
     // and leave the prior on-disk cache (if any) untouched.
-    const std::string tmp = path + "." + std::to_string( getpid() ) + ".tmp";
-    std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the cache blob, refusing an existing entry at that name. The name keeps its
+    // `.tmp` tail (a *.tmp residue glob still
+    // matches) and 0666 preserves the fopen("wb") default mode. The RAII holder owns the temp NAME and removes
+    // it on every early return below; fdopen adopts the descriptor so fwrite/fclose keep their bookkeeping.
+    rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0666 );
+    const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+    std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
     if( !fp )
     {
+        const int openErr = errno;
+        if( rawFd >= 0 )
+        {
+            ::close( rawFd );   // fdopen did not adopt the descriptor; the holder still removes the temp name
+        }
         DEGRADED_PATH_ALERT( "ingest: saveCache could not open temp file for write — cache left unchanged" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot write ({}) — every run parses from source until this is fixed\n",
-                      path.c_str(), std::strerror( errno )  );   // 2026-09-06: Release kept no signal for this
+                      path.c_str(), std::strerror( openErr )  );   // 2026-09-06: Release kept no signal for this
         return;
     }
     const std::size_t wrote = std::fwrite( w.b.data(), 1, w.b.size(), fp );
     const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;
     if( wErr )
     {
-        std::remove( tmp.c_str() );   // never rename a short/torn write over a good cache
+        // never rename a short/torn write over a good cache — the holder removes the temp on return
         DEGRADED_PATH_ALERT( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
+    if( !temp.commit( path ) )
     {
-        std::remove( tmp.c_str() );   // clean up on failure
+        // the holder removes the temp on return
         DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot replace ({}) — old cache kept, this run was parsed from source\n",
                       path.c_str(), std::strerror( errno ) );

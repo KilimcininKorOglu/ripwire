@@ -44,7 +44,7 @@
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
 #include <algorithm>
-#include <atomic>       // Phase-M: the tmp-name sequence counter (atomicWriteFile); also the A5 process-once cache-sweep guard
+#include <atomic>       // the A5 process-once cache-sweep guard
 #include <cctype>       // std::isxdigit/std::isdigit — B10.2d churn-blame porcelain parsing
 #include <chrono>       // A5: the 30-day cache-blob age cutoff (evictOldCacheFamily)
 #include <cstdio>
@@ -3113,15 +3113,17 @@ inline std::mutex& headSnapshotIngestMutex()
 // and degrade rules to drift, which is the clone kind --quality-delta gates on.
 inline bool atomicWriteFile( const std::string& path, const std::string& blob )
 {
-    static std::atomic<std::uint64_t> seq{ 0 };
-    const std::string tmp = path + ".tmp." + std::to_string( ::getpid() )
-                          + "." + std::to_string( seq.fetch_add( 1, std::memory_order_relaxed ) );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the target, refusing an existing entry at that name. The RAII holder removes
+    // the temp on any failure
+    // path below; commit() renames it into place. The name keeps its `.tmp.` infix (a *.tmp.* residue glob
+    // still matches) and 0666 preserves the ofstream default mode; the kernel applies the umask exactly as
+    // the stream did. The fd-based write replaces the ofstream, which cannot express O_EXCL.
+    rw::pathguard::ExclTempFile temp = rw::pathguard::createExclTempFile( path + ".tmp.", "", 0666 );
+    if( !temp.ok() || !temp.write( blob ) )
     {
-        std::ofstream of( tmp, std::ios::binary | std::ios::trunc );
-        if( !of )
-        {
-            return false;
-        }
+        return false;   // temp removed by the holder's destructor
+    }
     return temp.commit( path );
 }
 
