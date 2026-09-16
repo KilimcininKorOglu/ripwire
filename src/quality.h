@@ -649,6 +649,7 @@ inline bool languageInvokedSymbol( const Symbol& s ) noexcept
 inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
                              const std::vector<std::uint64_t>& topLevelCallees,
                              const std::vector<NodeId>& registeredMacroIds,
+                             const std::vector<NodeId>& pythonDispatchIds,
                              bool* exemptedByRegisterMacro = nullptr ) noexcept
 {
     if( exemptedByRegisterMacro )
@@ -672,6 +673,10 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     if( std::binary_search( topLevelCallees.begin(), topLevelCallees.end(), fnv1a64( s.name ) ) )
     {
         return false; // W1-S2: invoked from file scope (a top-level script statement) — a use the CSR drops
+    }
+    if( std::binary_search( pythonDispatchIds.begin(), pythonDispatchIds.end(), i ) )
+    {
+        return false; // a Python self/cls call can dispatch to this override through an indexed base
     }
     if( languageInvokedSymbol( s ) )
     {
@@ -879,6 +884,166 @@ inline void forEachSymbolBody( const IngestResult& ing, Fn&& visit )
             visit( i, s, std::string_view( bytes.data() + s.sigStartByte, s.endByte - s.sigStartByte ) );
         }
     }
+}
+
+// Direct Python class members only; module-level and nested functions have no class owner.
+inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
+{
+    const bool hasClasses = std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& s )
+    {
+        return s.lang == Lang::Python && s.kind == SymKind::Class;
+    } );
+    if( !hasClasses )
+    {
+        return {};
+    }
+    std::vector<NodeId> owner( ing.symbols.size(), kNoNode );
+    SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s )
+    {
+        return s.lang == Lang::Python && ( s.kind == SymKind::Class || s.kind == SymKind::Function || s.kind == SymKind::Method );
+    } );
+    std::vector<NodeId> parents;
+    for( auto& ids : byFile )
+    {
+        std::sort( ids.begin(), ids.end(), [ & ]( NodeId a, NodeId b )
+        {
+            const Symbol& x = ing.symbols[a];
+            const Symbol& y = ing.symbols[b];
+            if( x.sigStartByte != y.sigStartByte ) { return x.sigStartByte < y.sigStartByte; }
+            if( x.endByte != y.endByte ) { return x.endByte > y.endByte; }
+            return a < b;
+        } );
+        parents.clear();
+        for( NodeId id : ids )
+        {
+            const Symbol& s = ing.symbols[id];
+            while( !parents.empty() && ( ing.symbols[parents.back()].sigStartByte >= s.sigStartByte
+                                         || ing.symbols[parents.back()].endByte < s.endByte ) )
+            {
+                parents.pop_back();
+            }
+            if( s.kind != SymKind::Class && !parents.empty() && ing.symbols[parents.back()].kind == SymKind::Class )
+            {
+                owner[id] = parents.back();
+            }
+            parents.push_back( id );
+        }
+    }
+    return owner;
+}
+
+// Python VarDecl bindings are parameter names in source order (emitBindings); the first one
+// identifies the conventional receiver. Reuse those AST facts, including commented/typed parameters.
+// A non-receiver first parameter is marked 3 so a later parameter named cls cannot replace it.
+inline std::vector<std::uint8_t> pythonReceiverParameters( const IngestResult& ing )
+{
+    std::vector<std::uint8_t> receiver( ing.symbols.size(), 0 );
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.fromSymbol >= receiver.size() || ing.symbols[b.fromSymbol].lang != Lang::Python
+            || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 || receiver[b.fromSymbol] != 0 )
+        {
+            continue;
+        }
+        receiver[b.fromSymbol] = b.var == "self" ? 1 : b.var == "cls" ? 2 : 3;
+    }
+    return receiver;
+}
+
+// Deduplicate receiver-call evidence before walking inheritance; repeated call sites have the same
+// possible targets. Views borrow the ingested reference names for this one snapshot computation.
+inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( const IngestResult& ing,
+    std::span<const NodeId> owner, std::span<const std::uint8_t> receiver )
+{
+    std::vector<std::pair<NodeId, std::string_view>> requests;
+    for( const Reference& r : ing.references )
+    {
+        if( r.lang != Lang::Python || r.role != RefRole::Call || r.fromSymbol >= owner.size()
+            || owner[r.fromSymbol] == kNoNode || !r.qualifier.empty()
+            || !( ( r.recv == RecvKind::ThisObj && receiver[r.fromSymbol] == 1 )
+                  || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" && receiver[r.fromSymbol] == 2 ) ) )
+        {
+            continue;
+        }
+        requests.emplace_back( owner[r.fromSymbol], r.calleeName );
+    }
+    std::sort( requests.begin(), requests.end(), []( const auto& a, const auto& b )
+    {
+        return a.first != b.first ? a.first < b.first : rw::sortutil::svLess( a.second, b.second );
+    } );
+    requests.erase( std::unique( requests.begin(), requests.end() ), requests.end() );
+    return requests;
+}
+
+// Include the class itself and follow implementors DOWNWARD only. A walk up then down would admit
+// sibling classes the receiver cannot be. The graph already filters inheritance by language/root.
+inline std::vector<NodeId> pythonDispatchClasses( const Graph& g, NodeId base )
+{
+    std::vector<NodeId> classes{ base };
+    HashMap<NodeId, bool> visited;
+    visited.reserve( 32 );
+    visited.emplace( base, true );
+    for( std::size_t n = 0; n < classes.size(); ++n )
+    {
+        const NodeId id = classes[n];
+        if( id >= g.implementors.size() )
+        {
+            continue;
+        }
+        for( NodeId child : g.implementors[id] )
+        {
+            if( visited.emplace( child, true ).second )
+            {
+                classes.push_back( child ); // cycles and diamonds visit a class only once
+            }
+        }
+    }
+    return classes;
+}
+
+// Python self/cls dispatch can reach a subclass override even when the call graph pins the base
+// definition. Keep possible targets out of the deletion-candidate set; do not invent call edges.
+// Evidence is bounded to an enclosing class, a receiver parameter, and the indexed inheritance graph.
+// This is conservative liveness, not a model of Python's MRO, descriptors, or monkey-patching.
+inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, const Graph& g )
+{
+    const std::vector<NodeId> owner = pythonMethodOwners( ing );
+    if( owner.empty() )
+    {
+        return {};
+    }
+    HashMap<NodeId, std::vector<NodeId>> methods;
+    methods.reserve( 32 );
+    for( NodeId i = 0; i < owner.size(); ++i )
+    {
+        if( owner[i] != kNoNode && ing.symbols[i].sigEndByte < ing.symbols[i].endByte )
+        {
+            methods[ owner[i] ].push_back( i );
+        }
+    }
+    const std::vector<std::uint8_t> receiver = pythonReceiverParameters( ing );
+    std::vector<NodeId> result;
+    for( const auto& [ base, name ] : pythonDispatchRequests( ing, owner, receiver ) )
+    {
+        for( NodeId id : pythonDispatchClasses( g, base ) )
+        {
+            const auto it = methods.find( id );
+            if( it == methods.end() )
+            {
+                continue;
+            }
+            for( NodeId method : it->second )
+            {
+                if( ing.symbols[method].name == name )
+                {
+                    result.push_back( method );
+                }
+            }
+        }
+    }
+    std::sort( result.begin(), result.end() );
+    result.erase( std::unique( result.begin(), result.end() ), result.end() );
+    return result;
 }
 
 // Q-DIAL-3 (2026-09-10) — THE VERBOSITY KIND'S METRIC: CODE lines, not physical lines.
@@ -2571,6 +2736,11 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // instructions: did the *semantics* of what a cached Snapshot represents change? → bump kQSnapCacheScheme AND
 // re-pin the hash in the same diff. Refactor-only (no behavior change)? → just re-pin. Keep this manifest
 // SMALL and edit it here (nowhere else) if the semantic surface grows:
+//   pythonMethodOwners        (quality.h) — enclosing-class evidence
+//   pythonReceiverParameters  (quality.h) — conventional first receiver parameter
+//   pythonDispatchRequests    (quality.h) — eligible receiver-call evidence
+//   pythonDispatchClasses     (quality.h) — downward-only inheritance reachability
+//   pythonDispatchedMethodIds  (quality.h) — Python inherited receiver-call evidence for the dead set
 //   isDeadCandidate            (quality.h) — the dead-set predicate itself
 //   isFixturePath              (quality.h) — a fixture-path exemption isDeadCandidate calls into
 //   isTestScriptPath           (quality.h) — the test-script exemption isDeadCandidate calls into (the exact
@@ -2649,7 +2819,8 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // hash a different byte string), confined to one language: a v10 blob's Elixir entries are absent from every
 // lookup this binary makes, so each Elixir symbol would read as new. Extraction is unchanged (parser version
 // 95 stays), so kParserVer and its mirror deliberately did NOT move. Bumped 10 -> 11.
-constexpr std::uint32_t kQSnapCacheScheme = 11;
+// v12 — Python inherited self/cls dispatch excludes possible overrides from the dead set on both sides.
+constexpr std::uint32_t kQSnapCacheScheme = 12;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -3569,6 +3740,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
     const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );          // W1-S2: dead-kind evidence, built once
     const std::vector<std::string>   macroNames      = registeredMacroNames( root );             // P2.2: built-ins + .ripwire_config
     const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
+    const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
     for( NodeId i = 0; i < ing.symbols.size(); ++i )
     {
         if( i >= g.canonId.size() || g.canonId[i].empty() )
@@ -3591,7 +3763,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
         // (editcheck.h). A COUNT is overload-collision-proof for the opposite reason a MAX is: it is the one
         // number a collision cannot hide. (maskBySym is the other non-MAX kind; it sums for its own reason.)
         { std::uint32_t& slot = snap.defsBySym[ key ];    slot += 1; }
-        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds ) )
+        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) )
         {
             snap.dead.push_back( key );
         }
@@ -6518,6 +6690,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );   // W1-S2: dead-kind evidence, built once
     const std::vector<std::string>   macroNames      = registeredMacroNames( root );      // P2.2: built-ins + .ripwire_config
     const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
+    const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
     for( NodeId i = 0; i < ing.symbols.size(); ++i )
     {
         if( i >= g.canonId.size() || g.canonId[i].empty() )
@@ -6525,7 +6698,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             continue;
         }
         bool macroExempt = false;
-        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, &macroExempt ) )
+        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt ) )
         {
             if( macroExempt && registerMacroExcludedOut )
             {
