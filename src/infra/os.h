@@ -435,22 +435,6 @@ struct dirwatch_event
 //   * processes — spawn_sh starts bash (Git for Windows, resolved once, never from the current directory) with
 //     `-c command` inside a Job Object: kill( -pid, SIGKILL ) ends the whole tree, and waitpid's status decodes
 //     through the W* macros below.
-// TRANSITIONAL (removed with the compat layer): PR #44's force-included platform_compat.h renames these libc names with
-// object-like macros, which would rename the declarations below and every os:: call site with them.
-#undef open
-#undef fdopen
-#undef fstat
-#undef fcntl
-#undef rename
-#undef popen
-#undef pclose
-#undef pread
-#undef realpath
-#undef flock
-#undef open_memstream
-#undef localtime_r
-#undef setsockopt
-
 #include <climits>
 #include <fcntl.h>       // UCRT: _O_RDONLY/_O_WRONLY/_O_RDWR/_O_CREAT/_O_TRUNC/_O_EXCL/_O_APPEND/_O_BINARY
 #include <sys/stat.h>    // UCRT: _S_IFMT/_S_IFDIR/_S_IFREG/_S_IFCHR/_S_IFIFO

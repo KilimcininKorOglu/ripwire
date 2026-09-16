@@ -323,7 +323,7 @@ inline bool saveOracleCache( const std::string& path, const HistoryIndex& idx )
     // Write-then-rename: a reader in another process must never see a half-written blob (the torn-read rule
     // the rest of the cache families follow).
     const std::string tmp = path + ".tmp";
-    std::FILE*        fp  = rw::compat::rw_fopen_utf8( tmp.c_str(), "wb" );
+    std::FILE*        fp  = std::fopen( tmp.c_str(), "wb" );
     if( !fp )
     {
         DEGRADED_PATH_ALERT( "gitoracle: cannot write the history cache — the probe stays correct but re-runs cold" );
@@ -344,7 +344,7 @@ inline bool loadOracleCache( const std::string& path, HistoryIndex& idx )
 {
     std::string bytes;
     {
-        std::FILE* fp = rw::compat::rw_fopen_utf8( path.c_str(), "rb" );
+        std::FILE* fp = std::fopen( path.c_str(), "rb" );
         if( !fp )
         {
             return false; // a plain miss, not a degrade

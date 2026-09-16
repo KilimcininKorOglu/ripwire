@@ -24,10 +24,10 @@
 #     (D)  no macro, object-like OR function-like, named after a libc/POSIX function anywhere in src/ (os.h
 #          included), and no CMake compile definition of one: a macro that renames `open` renames it in every
 #          file that includes it, including `std::` spellings;
-#     (E)  os.h's POSIX branch and Windows branch declare the same function names. DISABLED until the Windows
-#          branch declares its first function (PR #44): today that branch is a placeholder `#error`, so there
-#          is no second set to compare. The arm turns itself on — nothing to edit here — and its comparator
-#          runs against a planted pair on every run so it is not first exercised on the day it matters;
+#     (E)  os.h's POSIX branch and Windows branch declare the same function names, so a POSIX-only addition
+#          cannot silently break the Windows build. (While the Windows branch was a placeholder `#error` the arm
+#          reported itself disabled; it turned itself on when that branch declared its first function.) Its
+#          comparator also runs against a planted pair on every run;
 #     (F)  no raw POSIX/libc call with Windows-divergent behaviour outside os.h — `::open(`, `std::rename(`,
 #          an unqualified `popen(` — and no raw POSIX type (`struct stat`, `ssize_t`, `pid_t`) at a call site;
 #     (G)  no platform FACT (`os::kWindows`, `os::kApple`, `os::kLinux`, `os::kTarget`, `os::Target`) named
@@ -36,8 +36,8 @@
 #          fact is covered the moment it is declared.
 #
 # THE ALLOWLIST is a table in the Python below, one row per file, naming the arms it is exempt from and why.
-#   Today it has ONE row: src/infra/profilePmc.h (arms A, B, F) — the self-profiler's hardware-counter
-#   backends. A row that no longer exempts anything is itself a FAIL, so the table cannot outlive its reason.
+#   Two rows: src/infra/os_win32.cpp (arms A', B, F, G) — os.h's own Windows bodies, the one translation unit that sees
+#   <windows.h>; and src/infra/profilePmc.h (arms A, B, F) — the self-profiler's hardware-counter backends. A row that no longer exempts anything is itself a FAIL, so the table cannot outlive its reason.
 #
 # NON-VACUITY (CONTRIBUTING.md §2). Every arm runs its detector over a planted fixture that violates it and
 #   must FIRE, and over a clean fixture and must stay SILENT; the scan must reach real files; os.h must exist
@@ -74,6 +74,11 @@ def no( m ):
 
 # ── the allowlist: path -> ( arms, reason ). A row that exempts nothing any more is reported stale. ──────────
 ALLOW = {
+    "src/infra/os_win32.cpp": ( { "A'", "B", "F", "G" },
+        "os.h's Windows bodies, out of line: the ONE translation unit that includes <windows.h>/<winsock2.h> (arm B) after "
+        "WIN32_LEAN_AND_MEAN/NOMINMAX (arm A'), calls "
+        "the Win32 and Winsock API by its global names inside rw::os's own definitions (arm F), and reopens namespace rw::os "
+        "to define what os.h declares (arm G). Compiled only for Windows; no other file may do any of the three" ),
     "src/infra/profilePmc.h": ( { "A", "B", "F" },
         "the opt-in self-profiler's hardware-counter backends: dlopen of Apple's private kperf frameworks and Linux "
         "perf_event_open (syscall/ioctl/read on a perf descriptor) — an undocumented ABI with no POSIX shape and no "
@@ -362,7 +367,7 @@ def detect_G( rel, raw, facts ):
         hits.append( "%s:%d: %s — namespace os is opened or imported outside os.h" % ( rel, line_of( code, m.start() ), " ".join( m.group( 0 ).split() ) ) )
     return hits
 
-DECL_HEAD = re.compile( r'^\s*(?:\[\[[^\]]*\]\]\s*)*(?:(?:inline|static|extern|constexpr)\s+)*(?!return\b|using\b|typedef\b|namespace\b|enum\b|struct\b|class\b)'
+DECL_HEAD = re.compile( r'^(?:\[\[[^\]]*\]\]\s*)*(?:(?:inline|static|extern|constexpr|const)\s+)*(?!return\b|using\b|typedef\b|namespace\b|enum\b|struct\b|class\b)'
                         r'[\w:<>]+(?:\s*[*&])*\s+[*&]?\s*(\w+)\s*\(', re.M )
 def branch_functions( os_raw ):
     """( POSIX names, Windows names, Windows-is-placeholder ) from os.h's top-level `#if !defined( _WIN32 )` split,
@@ -383,7 +388,7 @@ def branch_functions( os_raw ):
             depth -= 1
     if start is None or els is None or end is None: return None
     posix = "\n".join( lines[ start + 1:els ] ); win = "\n".join( lines[ els + 1:end ] )
-    names = lambda t: { m.group( 1 ) for m in DECL_HEAD.finditer( t ) if m.group( 1 ) not in CALL_KEYWORDS }
+    names = lambda t: { m.group( 1 ) for m in DECL_HEAD.finditer( t ) if m.group( 1 ) not in CALL_KEYWORDS }   # column-0 declarations: a body statement is indented
     placeholder = bool( re.search( r'^\s*#\s*error\b', win, re.M ) ) and not names( win )
     return names( posix ), names( win ), placeholder
 

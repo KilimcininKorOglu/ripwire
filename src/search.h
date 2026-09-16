@@ -1533,7 +1533,7 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
     };
     {
         // symmetric bare scope: the workers live exactly as long as the scan
-        const unsigned    hwThreadCount = rw::compat::rw_effective_hardware_concurrency();
+        const unsigned    hwThreadCount = std::thread::hardware_concurrency();
         const std::size_t workerCount   = std::min<std::size_t>( { hwThreadCount ? hwThreadCount : 1u, fileCount, 16 } );
         if( workerCount <= 1 )
         {

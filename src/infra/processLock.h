@@ -1,14 +1,11 @@
 #pragma once
 
 #include "Diagnostics.h"
-#include "platform_compat.h"
+#include "os.h"
 
 #include <cerrno>
 #include <cstdio>
-#include <fcntl.h>
 #include <string>
-#include <sys/file.h>
-#include <unistd.h>
 
 namespace rw::infra
 {
@@ -20,7 +17,7 @@ class ProcessLock
 public:
     explicit ProcessLock( const std::string& lockPath )
     {
-        fd_ = ::open( lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600 );
+        fd_ = rw::os::open( lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600 );
         if( fd_ < 0 )
         {
             DEGRADED_PATH_ALERT( "process lockfile open failed; continuing without cross-process serialization" );
@@ -30,7 +27,7 @@ public:
 
         for( ;; )
         {
-            if( ::flock( fd_, LOCK_EX ) == 0 )
+            if( rw::os::flock( fd_, LOCK_EX ) == 0 )
             {
                 locked_ = true;
                 return;
@@ -50,9 +47,9 @@ public:
         {
             if( locked_ )
             {
-                ::flock( fd_, LOCK_UN );
+                rw::os::flock( fd_, LOCK_UN );
             }
-            ::close( fd_ );
+            rw::os::close( fd_ );
         }
     }
 

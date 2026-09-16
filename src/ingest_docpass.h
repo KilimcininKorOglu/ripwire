@@ -4,7 +4,6 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
-#include "infra/platform_compat.h"
 #include "infra/text.h" // presentation/index text uses one LF spelling across native platforms
 
 // ingest_docpass.h — the P1-B doc post-pass, moved VERBATIM out of ingest() in the 2026-08-30
@@ -65,7 +64,7 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
         if( !text.empty() && !textBlobPath.empty() )
         {
             const std::string tmp = textBlobPath + ".tmp" + std::to_string( tmpKey );
-            std::FILE* fp = rw::compat::rw_fopen_utf8( tmp.c_str(), "wb" );
+            std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
             if( fp != nullptr )
             {
                 const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
@@ -122,7 +121,11 @@ inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, 
     }
     if( ndocs > 0 )
     {
-        const unsigned hwDoc = rw::compat::rw_effective_hardware_concurrency();
+        unsigned hwDoc = std::thread::hardware_concurrency();
+        if( hwDoc == 0 )
+        {
+            hwDoc = 1;
+        }
         const unsigned nDocThreads = static_cast<unsigned>( std::min<std::size_t>( hwDoc, ndocs ) );
         std::atomic<std::size_t> nextDoc{ 0 };
         std::vector<std::thread> docPool;

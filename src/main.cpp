@@ -1886,7 +1886,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             // open the target file for writing; report failure and exit cleanly
             const std::string htmlPath( cfg.htmlFile );
-            htmlOut = rw::compat::rw_fopen_utf8( htmlPath.c_str(), "wb" );
+            htmlOut = std::fopen( htmlPath.c_str(), "wb" );
             if( !htmlOut )
             {
                 DEGRADED_PATH_ALERT( "writeHtml: could not open output file" );
@@ -4047,7 +4047,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         else
         {
             const std::string bf( cfg.batchFile );
-            std::FILE* f = rw::compat::rw_fopen_utf8( bf.c_str(), "rb" );
+            std::FILE* f = std::fopen( bf.c_str(), "rb" );
             if( !f ) { rw::emitTo( stderr, "ripwire: --batch: cannot open '{}'\n", bf.c_str() ); return 1; }
             char buf[ 4096 ]; std::size_t n;
             while( ( n = std::fread( buf, 1, sizeof buf, f ) ) > 0 )

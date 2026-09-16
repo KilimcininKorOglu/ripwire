@@ -260,7 +260,7 @@ inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string&
     std::error_code   ec;
     const fs::path    target = fs::path( tmpDir ) / fs::path( rel );
     fs::create_directories( target.parent_path(), ec );
-    std::FILE* fp = rw::compat::rw_fopen_utf8( target.string().c_str(), "wb" );
+    std::FILE* fp = std::fopen( target.string().c_str(), "wb" );
     if( fp == nullptr )
     {
         DEGRADED_PATH_ALERT( "edit-preview: cannot write the spliced file into the temp root" );

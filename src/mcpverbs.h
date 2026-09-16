@@ -3008,7 +3008,7 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
         std::string s;
         if( fid < ing.files.size() )
         {
-            if( std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, fid ).c_str(), "rb" ) )
+            if( std::FILE* in = std::fopen( diskPath( ing, fid ).c_str(), "rb" ) )
             {
                 char b[4096];
                 std::size_t n;
@@ -3900,7 +3900,7 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     // ── read + re-parse the ONE file holding the definition ───────────────────────────────────────────
     const std::string& path = diskPath( ing, sym.fileId );
     std::string        src;
-    if( std::FILE* in = rw::compat::rw_fopen_utf8( path.c_str(), "rb" ) )
+    if( std::FILE* in = std::fopen( path.c_str(), "rb" ) )
     {
         char        buf[ 4096 ];
         std::size_t n = 0;

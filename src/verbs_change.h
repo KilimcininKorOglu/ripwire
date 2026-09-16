@@ -637,7 +637,7 @@ std::optional<std::string> readTraceText( const std::string& src )
         while( rw::readByteSafeLine( stdin, l ) ) { text += l; text += '\n'; }
         return text;
     }
-    std::FILE* f = rw::compat::rw_fopen_utf8( src.c_str(), "rb" );
+    std::FILE* f = std::fopen( src.c_str(), "rb" );
     if( !f ) { rw::emitTo( stderr, "ripwire: --from-trace: cannot open '{}'\n", src.c_str() ); return std::nullopt; }
     char buf[ 4096 ]; std::size_t n;
     while( ( n = std::fread( buf, 1, sizeof buf, f ) ) > 0 )
@@ -1217,7 +1217,7 @@ struct BriefFile { std::vector<std::string> lines; bool ok = false; };
 BriefFile readBriefFile( const std::string& path )
 {
     BriefFile  out;
-    std::FILE* fp = rw::compat::rw_fopen_utf8( path.c_str(), "rb" );
+    std::FILE* fp = std::fopen( path.c_str(), "rb" );
     if( !fp )
     {
         return out; // caller refuses loudly, naming the path

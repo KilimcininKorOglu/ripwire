@@ -16,7 +16,6 @@
 #include "infra/stdinline.h"     // readByteSafeLine — THE line reader (R4); no fixed buffer to split a long path on
 #include "infra/jsonesc.h"       // A4-F27 residual: rw::shSingleQuote lives here (lightest shared header) —
                                  // gitmine.h no longer carries its own copy; see jsonesc.h for the dedup rationale
-#include "infra/platform_compat.h"
 
 #include <algorithm>
 #include <atomic>       // the join's once-per-process disclosure flags

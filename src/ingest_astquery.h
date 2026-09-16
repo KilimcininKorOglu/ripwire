@@ -790,7 +790,11 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
     PROFILE_SCOPE_DESCRIBE( "astQuery: compile queries per grammar" );
     std::vector<GrammarQueries> compiledPerGrammar( presentGrammars.size() );
     {
-        const unsigned compileHw = rw::compat::rw_effective_hardware_concurrency();
+        unsigned compileHw = std::thread::hardware_concurrency();
+        if( compileHw == 0 )
+        {
+            compileHw = 1;
+        }
         const unsigned           compileThreads = static_cast<unsigned>( std::min<std::size_t>( compileHw, std::max<std::size_t>( presentGrammars.size(), std::size_t( 1 ) ) ) );
         std::atomic<std::size_t> nextGrammar{ 0 };
         std::vector<std::thread> compilers;  compilers.reserve( compileThreads );
@@ -891,7 +895,11 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
     computeGrammarDisclosure( ing, groups );
 
     const std::size_t nfiles = ing.files.size();
-    const unsigned hw = rw::compat::rw_effective_hardware_concurrency();
+    unsigned hw = std::thread::hardware_concurrency();
+    if( hw == 0 )
+    {
+        hw = 1;
+    }
     const unsigned nthreads = static_cast<unsigned>( std::min<std::size_t>( hw, nfiles ) );
 
     // NO mid-flight global cap: a shared match counter raced by workers makes WHICH matches survive the
@@ -1677,7 +1685,11 @@ SpanTierBatch spanTiersOfFiles( std::span<const std::string> diskPaths, bool use
                           } );
     }
 
-    const unsigned hw = rw::compat::rw_effective_hardware_concurrency();
+    unsigned hw = std::thread::hardware_concurrency();
+    if( hw == 0 )
+    {
+        hw = 1;
+    }
     const unsigned            threadCount = static_cast<unsigned>( std::min<std::size_t>( hw, fileCount ) );
     std::atomic<std::size_t>  nextSlot{ 0 };
     std::atomic<std::uint64_t> bytesParsed{ 0 };

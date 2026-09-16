@@ -1,6 +1,5 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
-#include "infra/platform_compat.h"
 #include "infra/os.h"   // rw::os::popen / pclose — the markitdown bridge
 
 
@@ -183,7 +182,7 @@ namespace detail
 // string, not a failure — a caller for which empty and unreadable mean the same thing says so with value_or.
 inline std::optional<std::string> readWholeFile( const std::string& path )
 {
-    std::FILE* fp = rw::compat::rw_fopen_utf8( path.c_str(), "rb" );
+    std::FILE* fp = std::fopen( path.c_str(), "rb" );
     if( fp == nullptr )
     {
         return std::nullopt;

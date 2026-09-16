@@ -34,7 +34,6 @@
 #include "infra/emit.h"      // rw::emitTo — the house emitter; no new printf-family site
 #include "infra/os.h"   // rw::os::setenv — the GIT_CONFIG_* pins
 #include "infra/jsonesc.h"   // rw::shSingleQuote
-#include "infra/platform_compat.h"
 
 #include <cstdint>
 #include <cstdlib>

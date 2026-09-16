@@ -10,10 +10,20 @@
 // WHAT IS NOT HERE. Every piece of logic that needs no Win32 call — the errno table, UTF-8/UTF-16, quoting, reparse
 // classification, time and wait-status conversion — is in os_win32_logic.h, compiled and tested on every platform.
 //
-// TRANSITIONAL. PR #44's compat layer (platform_compat.{h,cpp}) is still force-included into every translation unit;
-// no body here calls it any more, and it is deleted next.
+// INCLUDE ORDER. <winsock2.h> and <windows.h> come first, so os.h's #ifndef-guarded POSIX constants find the SDK's own
+// definitions here, and its htons macro is never defined in this file.
 
-#include "platform_compat.h"   // TRANSITIONAL: force-included today; named so the dependency is visible
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#include <shellapi.h>   // CommandLineToArgvW
+#undef near             // <windows.h> still defines these 16-bit keywords, and the program uses `near` as a name
+#undef far
+
 #include "os.h"
 #include "os_win32_logic.h"    // the pure logic, compiled and tested on every platform
 

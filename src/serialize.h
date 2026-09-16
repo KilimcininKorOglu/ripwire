@@ -3063,7 +3063,7 @@ inline void packSource( std::FILE* out, const IngestResult& ing, const std::vect
 
     for( std::size_t k = 0; k < keep && used < budgetBytes; ++k )
     {
-        std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, order[k] ).c_str(), "rb" );
+        std::FILE* in = std::fopen( diskPath( ing, order[k] ).c_str(), "rb" );
         if( !in )
         {
             continue; // graceful: file gone
@@ -4094,7 +4094,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                 break;
             }
 
-            std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
+            std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
             if( !in )
             {
                 // A2: this file's whole bucket never gets a content-skip OR a collection attempt below — it is
@@ -4363,7 +4363,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             break;
         }
 
-        std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
+        std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
         if( !in )
         {
             continue; // graceful: file gone
@@ -4579,7 +4579,7 @@ inline void packCandidates( std::FILE* out, const IngestResult& ing, const std::
         std::string s;
         if( fid < ing.files.size() )
         {
-            if( std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, fid ).c_str(), "rb" ) )
+            if( std::FILE* in = std::fopen( diskPath( ing, fid ).c_str(), "rb" ) )
             {
                 char b[4096];
                 std::size_t n;
@@ -5258,7 +5258,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         std::string s;
         if( fid < ing.files.size() )
         {
-            if( std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, fid ).c_str(), "rb" ) )
+            if( std::FILE* in = std::fopen( diskPath( ing, fid ).c_str(), "rb" ) )
             {
                 char b[4096];
                 std::size_t n;
@@ -5576,7 +5576,7 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
         std::string s;
         if( fid < ing.files.size() )
         {
-            if( std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, fid ).c_str(), "rb" ) )
+            if( std::FILE* in = std::fopen( diskPath( ing, fid ).c_str(), "rb" ) )
             {
                 char        b[ 4096 ];
                 std::size_t n;
@@ -5728,7 +5728,7 @@ inline WholeFileRender renderWholeFiles( const IngestResult& ing, const std::vec
     std::vector<char> esc;
     for( std::uint32_t f : fileOrder )
     {
-        std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, f ).c_str(), "rb" );
+        std::FILE* in = std::fopen( diskPath( ing, f ).c_str(), "rb" );
         if( !in )
         {
             return WholeFileRender{};   // unreadable => not a candidate, never a partial "complete" answer
@@ -5855,7 +5855,7 @@ inline std::size_t estimateExpandBodyTokens( const IngestResult& ing, const std:
         std::string s;
         if( fid < ing.files.size() )
         {
-            if( std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, fid ).c_str(), "rb" ) )
+            if( std::FILE* in = std::fopen( diskPath( ing, fid ).c_str(), "rb" ) )
             {
                 char b[4096];
                 std::size_t n;
@@ -5994,7 +5994,7 @@ inline void packOutline( std::FILE* out, const IngestResult& ing, const std::vec
         {
             break;
         }
-        std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
+        std::FILE* in = std::fopen( diskPath( ing, std::uint32_t( f ) ).c_str(), "rb" );
         if( !in )
         {
             continue;
@@ -6554,7 +6554,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
             if( isym.fileId != loadedFile )
             {
                 src.clear();  loadedFile = isym.fileId;
-                std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, isym.fileId ).c_str(), "rb" );
+                std::FILE* in = std::fopen( diskPath( ing, isym.fileId ).c_str(), "rb" );
                 if( in )
                 {
                     char buf[4096];
@@ -7846,7 +7846,7 @@ inline void collectJsonSigEntries( const IngestResult& ing, const std::vector<st
             break;
         }
 
-        std::FILE* in = rw::compat::rw_fopen_utf8( diskPath( ing, f ).c_str(), "rb" );
+        std::FILE* in = std::fopen( diskPath( ing, f ).c_str(), "rb" );
         if( !in )
         {
             if( rank && positivesContentSkippedOut )   // A2: content reason (the file is gone), not the budget

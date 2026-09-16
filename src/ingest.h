@@ -14,7 +14,6 @@
 // not thread-safe, so multithreading would need one parser per worker (deferred).
 
 #include "model.h"
-#include "infra/platform_compat.h"
 #include "infra/os.h"   // rw::os::realpath — canonicalCrawlRoot and the containment check
 
 #include <atomic>       // AstQueryGroup::ellipsisCappedOut — a summed counter across the parallel file walk

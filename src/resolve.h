@@ -702,7 +702,7 @@ inline std::uint32_t resolveRustImport( std::string_view includerPath, std::stri
 inline std::string readConfigBytes( const std::string& path )
 {
     std::string out;
-    std::FILE*  f = rw::compat::rw_fopen_utf8( path.c_str(), "rb" );
+    std::FILE*  f = std::fopen( path.c_str(), "rb" );
     if( !f )
     {
         return out;

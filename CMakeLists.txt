@@ -62,8 +62,13 @@ option(RIPWIRE_NATIVE "build with -march=native (DEV MACHINES ONLY — bakes in 
 include(cmake/PortableFlags.cmake)
 add_compile_options(${RIPWIRE_ARCH_FLAGS})
 
+# Windows adds one source (src/infra/os_win32.cpp), a manifest and three system libraries to each target — all in
+# cmake/Windows.cmake. Elsewhere the hook is empty, so the target blocks below call it unconditionally.
 if(WIN32)
-  add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+  include(cmake/Windows.cmake)
+else()
+  function(ripwire_windows_target tgt)
+  endfunction()
 endif()
 
 # ---- link-time optimization: -DRIPWIRE_LTO=ON ----
@@ -521,8 +526,6 @@ set(RIPWIRE_SRCS
   src/ingest.cpp
   src/pagerank.cpp
   src/infra/diagnostics.cpp
-  src/infra/platform_compat.cpp
-  $<$<BOOL:${WIN32}>:src/infra/os_win32.cpp>
 )
 
 # The global profile uses -ffast-math, but PageRank reductions must not reassociate (the determinism
@@ -576,19 +579,10 @@ add_executable(ripwire_probe
   ${RIPWIRE_SRCS}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire_probe PRIVATE tree-sitter Threads::Threads)
-if(WIN32)
-  target_link_libraries(ripwire_probe PRIVATE ws2_32)
-  target_sources(ripwire_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/win32/ripwire.manifest")
-  if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    target_compile_options(ripwire_probe PRIVATE /EHsc /FI "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/platform_compat.h")
-  else()
-    target_compile_options(ripwire_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/platform_compat.h")
-  endif()
-endif()
+ripwire_windows_target(ripwire_probe)
 target_include_directories(ripwire_probe PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
   ${_ripwire_generated_dir}
-  $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_SOURCE_DIR}/src/infra/compat>
   src/infra
   third_party
   src)
@@ -601,19 +595,10 @@ add_executable(ripwire
   ${RIPWIRE_SRCS}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire PRIVATE tree-sitter Threads::Threads)
-if(WIN32)
-  target_link_libraries(ripwire PRIVATE ws2_32)
-  target_sources(ripwire PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/win32/ripwire.manifest")
-  if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    target_compile_options(ripwire PRIVATE /EHsc /FI "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/platform_compat.h")
-  else()
-    target_compile_options(ripwire PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/platform_compat.h")
-  endif()
-endif()
+ripwire_windows_target(ripwire)
 target_include_directories(ripwire PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
   ${_ripwire_generated_dir}
-  $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_SOURCE_DIR}/src/infra/compat>
   src/infra
   third_party
   src)
@@ -703,17 +688,9 @@ if(RIPWIRE_TESTS)
   target_link_libraries(ripwire_test_strkern PRIVATE doctest::doctest)
   add_test(NAME ripwire.strkern COMMAND ripwire_test_strkern)
 
-  if(WIN32)
-    foreach(_ripwire_test_target ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
-      target_sources(${_ripwire_test_target} PRIVATE src/infra/platform_compat.cpp)
-      target_link_libraries(${_ripwire_test_target} PRIVATE ws2_32)
-      if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-        target_compile_options(${_ripwire_test_target} PRIVATE /EHsc /FI "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/platform_compat.h")
-      else()
-        target_compile_options(${_ripwire_test_target} PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/src/infra/platform_compat.h")
-      endif()
-    endforeach()
-  endif()
+  foreach(_ripwire_test_target ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
+    ripwire_windows_target(${_ripwire_test_target})   # the manifest too: a test binary runs under the same code page as the product
+  endforeach()
 endif()
 
 # ---- self-profiling build (src/infra/profileScope.h): -DRIPWIRE_PROFILE=ON ----

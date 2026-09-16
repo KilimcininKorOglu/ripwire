@@ -479,7 +479,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
 
     const std::string listPath = quality::cacheDirLadder() + "/ripwire-crossref-" + std::to_string( os::getpid() ) + ".shas";
     {
-        std::FILE* lf = rw::compat::rw_fopen_utf8( listPath.c_str(), "wb" );
+        std::FILE* lf = std::fopen( listPath.c_str(), "wb" );
         if( !lf )
         {
             st.startFailed = true;
@@ -816,7 +816,11 @@ inline void parallelIndexed( std::size_t count, Body body )
         return;
     }
 
-    const std::size_t hwThreadCount = rw::compat::rw_effective_hardware_concurrency();
+    std::size_t hwThreadCount = std::thread::hardware_concurrency();
+    if( hwThreadCount == 0 )
+    {
+        hwThreadCount = 1;
+    }
     const std::size_t workerCount = std::min( { hwThreadCount, count, kMaxGitWorkers } );
     if( workerCount <= 1 )
     {
@@ -1776,7 +1780,7 @@ inline EvalReport evalStray( const std::string& root, const std::string& labelsP
 
     std::string bytes;
     {
-        std::FILE* fp = rw::compat::rw_fopen_utf8( labelsPath.c_str(), "rb" );
+        std::FILE* fp = std::fopen( labelsPath.c_str(), "rb" );
         if( !fp ) { rep.ok = false; return rep; }
         char        buf[ 65536 ];
         std::size_t n = 0;
