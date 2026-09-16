@@ -17,6 +17,11 @@
 #        --cache=<dir>. Both now go through docparse::detail::readRegularFile: open O_NONBLOCK, ask the
 #        descriptor, refuse anything that is not a regular file with a stderr line, and read it as absent. Red on
 #        the base: the FIFO and device-link shapes hang (killed at 30 s); every shape is read without disclosure.
+#   (B3) A TIMESTAMP PAST 2262. `tv_sec * 1000000000 + tv_nsec` overflowed `long long` for a file ext4, XFS,
+#        tmpfs or a tar restore dates later than 2262-04-11: signed overflow — undefined behaviour in release,
+#        an abort in the sanitizer build (reproduced on Linux tmpfs: "runtime error: signed integer overflow:
+#        10000000000 * 1000000000"). Both stat readers now call rw::saturatingNanoseconds (infra/statclock.h).
+#        APFS clamps timestamps at 2262, so on macOS the arm cannot build its input and says so.
 #
 # Usage:  bash test/crashsweepcheck.sh [BIN]      RIPWIRE_ASAN_BIN=asan/ripwire bash test/crashsweepcheck.sh
 set -u
@@ -201,6 +206,30 @@ for name in .ripwire_config .ripwire_quality_acks; do
     done
 done
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+echo
+echo "=== B3: a file timestamp past 2262 ==="
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+B3="$TMP/b3tree"; mkdir -p "$B3"
+printf 'int far( int x ) { return x; }\n' > "$B3/far.c"
+STORED="$( python3 -c 'import os,sys; p=sys.argv[1]; os.utime(p,(10**10,10**10)); print(int(os.stat(p).st_mtime))' "$B3/far.c" 2>/dev/null )"
+if [ "${STORED:-0}" -lt 9300000000 ]; then
+    note "B3: this filesystem does not store a timestamp past 2262 (read back ${STORED:-nothing}) — the input cannot be built here"
+else
+    for bin in "${RUN_BINS[@]}"; do
+        tag="$( bin_tag "$bin" )"
+        bounded_run "$bin" "$B3" --cache="$TMP/b3.cache" >"$TMP/b3_out.txt" 2>"$TMP/b3_err.txt"; rc=$?
+        if [ "$rc" -ne 0 ] || grep -q 'runtime error' "$TMP/b3_err.txt"; then
+            no "B3 [$tag]: exit $rc on a file dated $STORED — $( grep -m1 'runtime error' "$TMP/b3_err.txt" | cut -c1-160 )"
+        elif ! grep -q 'n="far"' "$TMP/b3_out.txt"; then
+            no "B3 [$tag]: exit 0 but the far-dated file is missing from the map"
+        else
+            ok "B3 [$tag]: a file dated $STORED indexes cleanly"
+        fi
+    done
+    is_sanitized "$BIN" || [ -n "$ASAN_BIN" ] \
+        || note "B3: no sanitizer binary (RIPWIRE_ASAN_BIN) — the overflow this arm exists for is only observable in that build"
+fi
 
 echo
 [ "$fail" -eq 0 ] && { echo "crashsweepcheck: ALL PASS"; exit 0; } || { echo "crashsweepcheck: SOME CHECKS FAILED"; exit 1; }

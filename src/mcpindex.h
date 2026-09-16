@@ -23,6 +23,7 @@
 #include "recall.h"
 #include "situ.h"
 #include "workspace.h"          // multi-root `paths` array (A11): root hygiene + labels + merge
+#include "infra/statclock.h"    // rw::saturatingNanoseconds — the staleness stat reads without signed overflow past 2262
 #include "quality.h"            // computeSnapshot/computeDelta + writeBaseline + gitHeadSha/computeHeadSnapshot — the quality_delta/quality_baseline verbs reuse the exact CLI logic
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — no-op in release; the visible line on a watcher-degrade path
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
@@ -89,7 +90,8 @@ namespace rw
 
 namespace mcpdetail
 {
-    // nanosecond mtime out of a filled `struct stat`. The sub-second field is spelled DIFFERENTLY per
+    // nanosecond mtime out of a filled `struct stat`, saturating past 2262 (infra/statclock.h) where the plain product
+    // overflowed. The sub-second field is spelled DIFFERENTLY per
     // platform — st_mtimespec on Darwin/BSD, st_mtim on Linux (POSIX.1-2008) — and neither name exists on
     // the other, so this is a compile error, not a portability nicety. Same ladder (and same whole-second
     // last resort) as ingest.cpp's statSizeTimes; kept local rather than shared because that one lives in a
@@ -97,11 +99,11 @@ namespace mcpdetail
     inline long long mtimeNsOf( const struct stat& st ) noexcept
     {
 #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
+        return saturatingNanoseconds( st.st_mtimespec );
 #elif defined( __linux__ )
-        return (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+        return saturatingNanoseconds( st.st_mtim );
 #else
-        return (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
+        return saturatingNanoseconds( (long long)st.st_mtime, 0 );   // whole-second fallback
 #endif
     }
 
@@ -123,11 +125,11 @@ namespace mcpdetail
     inline long long ctimeNsOf( const struct stat& st ) noexcept
     {
 #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
+        return saturatingNanoseconds( st.st_ctimespec );
 #elif defined( __linux__ )
-        return (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
+        return saturatingNanoseconds( st.st_ctim );
 #else
-        return (long long)st.st_ctime * 1000000000LL;   // whole-second fallback
+        return saturatingNanoseconds( (long long)st.st_ctime, 0 );   // whole-second fallback
 #endif
     }
 

@@ -579,6 +579,13 @@ jobs:
       - name: Sanitizer-only class — cppqualcheck §9 operator-frame scan (test/cppqualcheck.sh)
         run: RIPWIRE_BIN=asan/ripwire bash test/cppqualcheck.sh
 
+      # crashsweepcheck B3 is the other sanitizer-only class: a file dated past 2262 overflowed the stat readers'
+      # nanosecond product, silent UB in the plain build and an abort here. The job's Linux leg is the one whose
+      # filesystem stores such a date (APFS clamps at 2262, and the arm says so on macOS). B2's hostile
+      # fixed-name files ride along on the instrumented binary; B1's preload shim skips a sanitizer build by name.
+      - name: Sanitizer-only class — crashsweepcheck far-future timestamp and fixed-name shapes (test/crashsweepcheck.sh)
+        run: RIPWIRE_BIN=asan/ripwire RIPWIRE_ASAN_BIN=asan/ripwire bash test/crashsweepcheck.sh
+
       - name: det-gate — 2-run byte-identical diff (ASan binary)
         run: |
           ./asan/ripwire test/fixture --no-cache >/tmp/run_a.xml

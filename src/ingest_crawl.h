@@ -1779,15 +1779,17 @@ inline StatInfo statSizeTimes( const std::string& path ) noexcept
     {
         return { -1, -1, -1 };
     }
+    // saturatingNanoseconds (infra/statclock.h): a timestamp past 2262 overflowed the plain product — undefined
+    // behaviour in release and an abort under the sanitizer build, on any ext4/XFS/tmpfs file or tar restore carrying one.
 #if defined( __APPLE__ )
-    const long long m = (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
-    const long long c = (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
+    const long long m = saturatingNanoseconds( st.st_mtimespec );
+    const long long c = saturatingNanoseconds( st.st_ctimespec );
 #elif defined( __linux__ )
-    const long long m = (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
-    const long long c = (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
+    const long long m = saturatingNanoseconds( st.st_mtim );
+    const long long c = saturatingNanoseconds( st.st_ctim );
 #else
-    const long long m = (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
-    const long long c = (long long)st.st_ctime * 1000000000LL;
+    const long long m = saturatingNanoseconds( (long long)st.st_mtime, 0 );   // whole-second fallback
+    const long long c = saturatingNanoseconds( (long long)st.st_ctime, 0 );
 #endif
     return { m, (long long)st.st_size, c };
 }
