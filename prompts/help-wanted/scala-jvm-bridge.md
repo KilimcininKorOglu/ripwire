@@ -150,19 +150,44 @@ Count `.sc` and `.sbt` files too, and decide in the plan whether either is index
 If the Scala 3 rate is low, stop and write that down. A grammar that parses half a dialect is worse
 than a disclosed absence.
 
-**STEP 0 also reads the scanner for the abort class, before any corpus run.** tree-sitter-kotlin's
-scanner called `abort()` when its delimiter stack filled, which ended the run for the entire tree. Read
-tree-sitter-scala's `src/scanner.c` at your pinned commit and write down, in the plan:
+**STEP 0 also reads the scanner for the abort class, before any corpus run, and it checks both kinds
+of nesting.** tree-sitter-kotlin's scanner called `abort()` when its delimiter stack filled, which ended
+the run for the entire tree. Scala gives a hostile file two shapes to drive deep: string interpolation
+(`s"…${ s"…" }…"`) and Scala 3's significant indentation, whose INDENT/OUTDENT stack lives in the external
+scanner. Read tree-sitter-scala's `src/scanner.c` at your pinned commit and write down, in the plan, for
+the interpolation path and for the indentation stack alike:
 
-- every stack or counter the scanner keeps (interpolation nesting, the indentation stack for Scala 3's
-  significant indentation), and what bounds each one;
-- what `serialize()` writes per entry, against `TREE_SITTER_SERIALIZATION_BUFFER_SIZE`, and whether
-  its guard proves the whole write fits;
-- whether a push past the bound calls `abort()`, asserts, truncates, or writes out of bounds.
+- every stack or counter the scanner keeps, its element type, and what bounds each one;
+- what `serialize()` writes per entry, against `TREE_SITTER_SERIALIZATION_BUFFER_SIZE` (1024), and
+  whether its guard proves the whole write fits;
+- whether a push past the bound calls `abort()`, asserts, truncates, drops state, or writes out of
+  bounds;
+- whether any counter is narrower than the input can drive it.
 
-Then confirm it on a generated file under the ASan build (`cmake -S . -B asan -DRIPWIRE_ASAN=ON`):
-nested interpolations (`s"${ s"${ … }" }"`) and deeply indented blocks, raised until something gives.
-Record the depth. That number sets the ceiling in "Hostile nesting".
+What the maintainers read at the `v0.26.2` tag (`b931fcc3`, on 2026-09-16). Re-read it at your pin,
+because the scanner moves:
+
+- **The indentation stack** is `Array(int16_t) indents`, pushed on every INDENT (two `array_push` sites,
+  neither bounded) and popped on OUTDENT. `serialize()` checks the whole write,
+  `( indents.size + 5 ) * sizeof( int16_t )` against the buffer, and returns 0 when it would not fit:
+  no out-of-bounds write and no abort, but the scanner's whole layout state is dropped past about 507
+  open levels, and the parse carries on from a reset state. That is the overflow class of Kotlin's
+  string stack, ending in a silently wrong tree instead of a crash.
+- **The widths are narrow.** Each indentation width is an `int16_t` counted one leading space at a time,
+  and `CASE_INDENT_FLAG` (`0x4000`) is packed into the same value. A line indented 16,384 spaces or more
+  collides with the flag, and past 32,767 the count wraps: an implicit truncation, which the ASan build's
+  `-fno-sanitize-recover=all` turns into a hard abort. `third_party/patches/kotlin/003-dollar-run-saturate.patch`
+  is the precedent for a narrow counter.
+- **Interpolation nesting** is not a scanner stack at that tag: the scanner lexes one string segment at
+  a time, and the nesting rides the parser's own stack. Measure what a deep one costs anyway (time,
+  memory, and ripwire's own walks over the tree), and give it a ceiling if STEP 0 finds a limit.
+  `scan_string_content` also holds an `assert( false )` in its string-mode switch; a plain build keeps
+  `assert`, so find out whether any input reaches it.
+
+Then confirm each finding on generated files under the ASan build (`cmake -S . -B asan -DRIPWIRE_ASAN=ON`):
+nested interpolations, deeply indented Scala 3 blocks (braceless `def … =` and `if … then` chains), and a
+line with a very long run of leading spaces, each raised until something gives. Record each depth. Those
+numbers set the ceilings in "Hostile nesting".
 
 ---
 
@@ -226,19 +251,29 @@ first is useful on its own. The hostile-nesting layers below belong in the first
 
 ## Hostile nesting: reuse the Kotlin refusal shape
 
-Scala interpolations nest, as in `s"…${ s"…" }…"`, and its scanner keeps state that a hostile file may
-drive past its bound. Kotlin already solved this class with two independent layers. Reuse that shape
-rather than inventing a second one, and make the disclosure safe under concurrency from the first
-commit.
+Scala gives a hostile file two nesting shapes: string interpolation (`s"…${ s"…" }…"`) and Scala 3's
+significant indentation, whose INDENT/OUTDENT stack the external scanner keeps and serializes. Deep
+indentation is the same overflow class as Kotlin's string stack, and as the indent stack of any
+layout-sensitive grammar (Python's; GDScript's in #233). Kotlin already solved this class with two
+independent layers. Reuse that shape for **both** Scala shapes rather than inventing a second mechanism,
+and make the disclosure safe under concurrency from the first commit.
 
-1. **A pre-parse scan that mirrors the scanner's stack, not a shape estimate.** One pure O(n) pass over
-   the bytes, pushing and popping exactly where the scanner would, with a fixed frame array (string and
-   interpolation frames alternate, so bound it at twice the ceiling). The ceiling sits well under the
-   depth STEP 0 measured. The exemplar is `kotlinStringsNestTooDeep` (`src/ingest_crawl.h`) with
-   `kMaxKotlinStringNestDepth` (`src/ingest.h`).
-2. **A vendored scanner patch that refuses the push instead of aborting**, so the parser recovers with
-   an `ERROR` node even if the scan is ever bypassed. The precedent is
-   `third_party/patches/kotlin/001-stack-push-no-abort.patch`, with its arm in
+1. **A pre-parse scan that mirrors the scanner's stacks, not a shape estimate.** One pure O(n) pass over
+   the bytes that covers both shapes:
+   - the indentation stack, pushed and popped by the scanner's own INDENT/OUTDENT rule, with widths
+     counted the way the scanner counts them, so a file is refused before the stack stops serializing
+     or a width outgrows its `int16_t`;
+   - interpolation depth, with a fixed frame array (string and interpolation frames alternate, so bound
+     it at twice its ceiling).
+
+   Each ceiling sits well under the depth STEP 0 measured for that shape. The exemplar is
+   `kotlinStringsNestTooDeep` (`src/ingest_crawl.h`) with `kMaxKotlinStringNestDepth` (`src/ingest.h`).
+2. **A vendored scanner patch that refuses instead of failing**, for every stack and counter STEP 0
+   flags: the indentation push is refused once the stack would no longer serialize, rather than state
+   being dropped, and a width counter saturates rather than wrapping. The parser then recovers with an
+   `ERROR` node even if the scan is ever bypassed. The precedents are
+   `third_party/patches/kotlin/001-stack-push-no-abort.patch` (a push refused) and
+   `003-dollar-run-saturate.patch` (a counter saturated), each with its arm in
    `test/vendorpatchcheck.sh`.
 3. **One table-driven check, at every parse site.** A declarative row (language, pre-parse scan,
    ceiling, reason) consulted wherever a corpus file is parsed: the ingest parse pool (`runParseWorker`,
@@ -257,9 +292,16 @@ commit.
    call site per process (not once per file), compiles out in Release, and is written in several pieces
    that a concurrent stderr line can split, which is what made `test/kotlincheck.sh` §12's alert arm
    flaky.
-5. **Two refused files in every fixture, on purpose.** Pin the ceiling from both sides: the ceiling depth
-   indexed, one level more refused, and a sibling file indexed. Two refusals in one run are what expose a
-   concurrency defect in whatever disclosure a site uses.
+5. **Two refused files in EVERY hostile fixture, on purpose.** That covers the interpolation fixture, the
+   indentation fixture, and any fixture an arm builds for itself. Each holds:
+   - a file at the ceiling depth, which is indexed;
+   - **two** files past the ceiling, both refused: one level over, and far over, the way
+     `test/kotlincheck.sh` §12 pairs `OverCeiling.kt` with `Deep.kt`;
+   - a sibling file, which is indexed.
+
+   Two refusals in one run are the concurrency that exposed the torn stderr notice behind §12's flaky
+   alert arm. A fixture with one refused file cannot see that class of defect in any disclosure a site
+   uses.
 
 ---
 
@@ -315,9 +357,10 @@ commit.
    base binary must be zero; list the Java ↔ Scala pairs gained and hand-check a sample.
 8. **Memory safety:** ASan/UBSan/LSan over the STEP 0 corpora with zero sanitizer lines, and the
    fuzzer registered with `add_ripwire_fuzzer`.
-   - **Hostile nesting:** STEP 0's scanner findings in the plan; the pre-parse scan, the vendored patch
-     with its `test/vendorpatchcheck.sh` arm, and the guard row applied at every parse site; `--skipped`
-     rows and `nest_refused=` asserted cold and warm over a fixture with two refused files and a sibling;
+   - **Hostile nesting, for the interpolation path and the indentation stack alike:** STEP 0's scanner
+     findings in the plan; the pre-parse scan, the vendored patch with its `test/vendorpatchcheck.sh`
+     arm, and the guard row applied at every parse site; `--skipped` rows and `nest_refused=` asserted
+     cold and warm over fixtures that each hold a ceiling-depth file, two refused files and a sibling;
      `--match` returns no hits inside a refused file and says so; the map exits 0 on the ASan build.
 9. **Every registration surface** above updated, and every blind spot above either modeled or stated.
 
