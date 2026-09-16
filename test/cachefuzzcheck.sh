@@ -689,7 +689,9 @@ fi
 #   (c) value = a DIFFERENT in-range enumerator: cached_records = N — the record is ACCEPTED, which proves
 #       the (a) refusal came from the enum range and not from a digest the mutation failed to rebuild.
 #   (b) the (a) mutants under the ASan/UBSan binary with --clones (the verb that reaches clones.h's
-#       Lang-indexed shift): no sanitizer report.
+#       Lang-indexed shift): no sanitizer report AND cached_records = N-1, and the (c) mutants under the same
+#       binary: cached_records = N. That is the LIVENESS half — a sanitizer-clean run over a cache the ASan binary
+#       never loaded (a key mismatch, an earlier refusal) would otherwise pass while proving nothing.
 # The enumerator counts are DERIVED from src/model.h, not written here, so appending an enumerator without
 # moving its k*Count constant turns (c)'s last-enumerator control red instead of going unnoticed.
 echo
@@ -856,26 +858,37 @@ elif [ -n "$GOOD_RECORDS" ]; then
 
     if [ -x "$ASAN_BIN" ]; then
         echo
-        echo "=== Part 3: out-of-range enum mutants — ASan build, --clones ==="
+        echo "=== Part 3: enum mutants — ASan build, --clones; cached_records proves each doctored cache was loaded ==="
         enumAsanFail=0
-        for mutant in "$EDIR"/*.count.cache "$EDIR"/*.255.cache; do
-            [ -f "$mutant" ] || continue
-            name="$( basename "$mutant" .cache )"
-            cp "$mutant" "$EDIR/run.cache"
-            ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
-                "$ASAN_BIN" "$EFX" --cache="$EDIR/run.cache" --clones --no-stable >/dev/null 2>"$EDIR/asan.err"
+        while IFS="$( printf '\t' )" read -r cls enum tag value orig enumCount; do
+            if [ "$tag" = "ABSENT" ]; then
+                continue   # already a FAIL row in the dev loop above
+            fi
+            name="$cls.$tag"
+            if [ "$tag" = "inrange" ]; then
+                expectRecords="$GOOD_RECORDS"
+            else
+                expectRecords="$expectRefused"
+            fi
+            cp "$EDIR/$name.cache" "$EDIR/asan_run.cache"
+            RIPWIRE_CACHE_STATS=1 ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+                "$ASAN_BIN" "$EFX" --cache="$EDIR/asan_run.cache" --clones --no-stable >/dev/null 2>"$EDIR/asan.err"
             rc=$?
+            records="$( cachedRecords "$EDIR/asan.err" )"
             if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|SEGV' "$EDIR/asan.err" || [ "$rc" -ge 128 ]; then
                 no "[asan:enum:$name] sanitizer report / crash (exit $rc): $( grep -m1 -E 'runtime error:|ERROR: AddressSanitizer' "$EDIR/asan.err" | sed -E 's#.*/src/#src/#' | cut -c1-160 )"
                 enumAsanFail=1
+            elif [ "$records" != "$expectRecords" ]; then
+                no "[asan:enum:$name] LIVENESS: the ASan binary read cached_records=${records:-none}, expected $expectRecords of $GOOD_RECORDS — it did not load the doctored cache as the dev binary did, so a clean run here proves nothing"
+                enumAsanFail=1
             else
-                ok "[asan:enum:$name] no sanitizer report (exit $rc)"
+                ok "[asan:enum:$name] no sanitizer report (exit $rc), and the doctored cache was loaded: cached_records=$records of $GOOD_RECORDS"
             fi
-        done
+        done <"$EDIR/plan.tsv"
         if [ "$enumAsanFail" -eq 0 ]; then
-            ok "Part 3 ASan sweep: no sanitizer report across the out-of-range enum mutants"
+            ok "Part 3 ASan sweep: no sanitizer report across the enum mutants, each one loaded (refused record N-1, in-range control N)"
         else
-            no "Part 3 ASan sweep: at least one sanitizer report fired (see above)"
+            no "Part 3 ASan sweep: a sanitizer report fired or a mutant was never loaded (see above)"
         fi
     else
         skip "Part 3 ASan sweep — no ASan binary supplied at $ASAN_BIN (see Part 1's skip)"
@@ -891,7 +904,9 @@ fi
 # three-element array indexed by that byte (search.h grepApplySpanTiers), so a tier byte of 3 or more written
 # anywhere in the cache directory used to be an out-of-bounds WRITE on the stack.
 #   (a) tier byte = the SpanTier count and 255: exit 0, stdout byte-identical to --no-cache (memo refused).
-#   (b) the same two mutants under the ASan/UBSan binary: no sanitizer report.
+#   (b) the same two mutants under the ASan/UBSan binary: no sanitizer report, output byte-identical to
+#       --no-cache; and the (c) mutant under that binary must CHANGE the answer — the liveness proof that the ASan
+#       binary reads the memo at all, without which a clean (b) could be a memo it never opened.
 #   (c) CONTROL: the same byte set to an in-range tier that CHANGES the answer (a comment span re-labelled
 #       Code): stdout DIFFERS from --no-cache — the memo was read and believed, so (a) is refused at the tier
 #       byte and not by an earlier stat or path guard.
@@ -969,20 +984,30 @@ PYEOF
         done
         if [ -x "$ASAN_BIN" ]; then
             stierAsanFail=0
-            for tag in count 255; do
-                cp "$SDIR/$tag.bin" "$STIER_BLOB"
+            for asanTag in inrange count 255; do
+                cp "$SDIR/$asanTag.bin" "$STIER_BLOB"   # the ASan runs' own memo copy: a refusal rewrites the blob
                 ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
-                    stierRun "$ASAN_BIN" "$SDIR/asan_$tag"
-                rc="$( cat "$SDIR/asan_$tag.rc" )"
-                if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|SEGV' "$SDIR/asan_$tag.err" || [ "$rc" -ge 128 ]; then
-                    no "[asan:stier:$tag] sanitizer report / crash (exit $rc): $( grep -m1 -E 'runtime error:|ERROR: AddressSanitizer' "$SDIR/asan_$tag.err" | sed -E 's#.*/src/#src/#' | cut -c1-160 )"
+                    stierRun "$ASAN_BIN" "$SDIR/asan_$asanTag"
+                rc="$( cat "$SDIR/asan_$asanTag.rc" )"
+                if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|SEGV' "$SDIR/asan_$asanTag.err" || [ "$rc" -ge 128 ]; then
+                    no "[asan:stier:$asanTag] sanitizer report / crash (exit $rc): $( grep -m1 -E 'runtime error:|ERROR: AddressSanitizer' "$SDIR/asan_$asanTag.err" | sed -E 's#.*/src/#src/#' | cut -c1-160 )"
+                    stierAsanFail=1
+                elif [ "$asanTag" = "inrange" ]; then
+                    if [ "$rc" = "0" ] && ! cmp -s "$SDIR/truth.out" "$SDIR/asan_$asanTag.out"; then
+                        ok "[asan:stier control] the ASan binary read and believed the in-range memo edit (the answer changed), so its out-of-range runs load the memo too"
+                    else
+                        no "[asan:stier control] LIVENESS: the in-range memo edit did not change the ASan binary's answer (exit $rc) — it never read the memo, so its clean runs prove nothing"
+                        stierAsanFail=1
+                    fi
+                elif [ "$rc" != "0" ] || ! cmp -s "$SDIR/truth.out" "$SDIR/asan_$asanTag.out"; then
+                    no "[asan:stier:$asanTag] a memo tier byte past SpanTier was served under ASan: exit $rc, output differs from --no-cache"
                     stierAsanFail=1
                 else
-                    ok "[asan:stier:$tag] no sanitizer report (exit $rc)"
+                    ok "[asan:stier:$asanTag] no sanitizer report (exit $rc), memo refused, output byte-identical to --no-cache"
                 fi
             done
             if [ "$stierAsanFail" -ne 0 ]; then
-                no "Part 4 ASan sweep: a memo tier byte past SpanTier reached a sanitizer report"
+                no "Part 4 ASan sweep: a sanitizer report fired, a tier byte was served, or the memo was never read (see above)"
             fi
         else
             skip "Part 4 ASan sweep — no ASan binary supplied at $ASAN_BIN (see Part 1's skip)"
