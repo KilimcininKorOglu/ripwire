@@ -297,12 +297,12 @@ inline std::string writtenTypeOf( TSNode typeNode, std::string_view src )
     return {};   // auto / template / decltype — type not directly written → try the initializer
 }
 
-// Rule 2's qualifier guard (2026-09-16, test/narrowcheck.sh arm 17): the text of a type or constructor NAME node
+// Rule 2's qualifier guard (2026-09-16, test/narrowcheck.sh arms 17-24): the text of a type or constructor NAME node
 // when it is QUALIFIED — it carries `::` past a leading global `::` (`std::map<K, V>`, `ext::Widget`,
 // `Outer<int>::Inner`) — else "". writtenTypeOf/ctorTypeOf keep the final segment alone, and Rule 2 matches that
 // segment against class names that carry no namespace, so `const std::map<K, V>& ref` read as `map` and narrowed to
-// an unrelated in-repo `map` (measured on a private C++ corpus). The whole text rides the declaration's Type/ParamType
-// record in RawBind::importedName; Rule 2's lexical lookup refuses to narrow on it.
+// an unrelated in-repo `map` (measured on a private C++ corpus). The whole text rides the Type/ParamType record in
+// RawBind::importedName; Rule 2 refuses to narrow on a `std::` one (resolve.h namesStdType) and keeps every other.
 inline std::string qualifiedNameText( TSNode nameNode, std::string_view src )
 {
     std::string_view text = nodeTextOf( nameNode, src );
@@ -1448,7 +1448,8 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             return true;
         } );
     }
-    // C++ `x = Foo();` (re-assignment to a constructor) — assignment_expression inside an expression_statement.
+    // C++ `x = Foo();` (re-assignment to a constructor) — assignment_expression inside an expression_statement. The
+    // record carries the constructor's qualified text like a declaration's does (`x = std::map<K, V>()`, kParserVer 98).
     else if( ( lang == Lang::Cpp || lang == Lang::ObjC ) && kindIs( t, "assignment_expression" ) )
     {
         const TSNode lhs = fieldChild( n, NodeField::Left );
@@ -1458,7 +1459,8 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             const std::uint32_t a = ts_node_start_byte( lhs ), b = ts_node_end_byte( lhs );
             if( a <= b && b <= src.size() )
             {
-                emitBind( fileId, lang, src.substr( a, b - a ), ctorTypeOf( rhs, src ), ts_node_start_byte( n ), binds );
+                pushTypedBind( fileId, lang, src.substr( a, b - a ), declaredTypeOf( DeclType{}, rhs, src ), BindSite{ ts_node_start_byte( n ), 0u, 0u },
+                               LocalBindKind::Type, binds );
             }
         }
     }

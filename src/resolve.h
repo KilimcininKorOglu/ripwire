@@ -2057,6 +2057,22 @@ inline std::size_t sharedLocality( std::string_view a, std::string_view b ) noex
     return cut;
 }
 
+// Rule 2's qualifier guard (test/narrowcheck.sh arms 17-24): whether a declaration's written QUALIFIED type text
+// (Binding::importedName, "" when unqualified) names namespace `std`. A recorded type is its final segment and class
+// names carry no namespace, so `std::map<K, V> m; m.find( k )` narrowed to any in-repo class named `map`. `std` is
+// reserved to the implementation ([namespace.std]: a program adds nothing to it but specializations), so no in-repo
+// class IS the `std::` type — refusing costs nothing but the rare standard-library source tree's own narrows.
+// EVERY OTHER QUALIFIER STILL NARROWS, measured: refusing them all refused 424 in-repo narrows on rocksdb
+// (`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on src/, every sampled one correct,
+// and fixed no wrong edge outside `std`. STATED FLOOR: a qualifier that is neither `std` nor the class's own
+// namespace (an external or alias-template type whose final segment an in-repo class shares) still narrows on the
+// name — closing it needs the namespace chain in Symbol::scope (arm 24 pins it). The text is ingest_binds.h
+// qualifiedNameText's, which already dropped a leading global `::` (`::std::map` arrives as `std::map`).
+inline bool namesStdType( std::string_view qualified ) noexcept
+{
+    return qualified.starts_with( "std::" );
+}
+
 // P2-D Rule 2, PARAMETER receivers (2026-09-16, test/narrowcheck.sh arms 7-18): one DECLARATION of a receiver
 // name inside one definition — the scope its VarDecl record covers and the written type its Type/ParamType
 // record carries, joined on the record position the two share (Binding::startByte). graph.h
@@ -2545,10 +2561,9 @@ struct Narrower
     // disagree about a receiver. A name with a ParamType declaration in this definition is answered LEXICALLY: the
     // innermost declaration whose scope covers the site decides, and only its own written type counts — a
     // parameter shadowed by an `auto` loop variable, a range-for variable read after its loop, and two declarations
-    // with one scope all answer "" — and so does a QUALIFIED written type (`const std::map<K, V>&`): the type name is
-    // its final segment and class names carry no namespace, so `map` cannot be told apart from an unrelated in-repo
-    // `map` (ingest_binds.h qualifiedNameText). Every other name reads the flat varType table exactly as before
-    // ("" = tombstone).
+    // with one scope all answer "" — and so does a type written in namespace `std` (`const std::map<K, V>&`, see
+    // namesStdType). Every other name reads the flat varType table, where buildGraph tombstones a `std::` type the
+    // same way ("" = tombstone).
     // KNOWN FLOOR, the span model's own: a range-for variable's span is the whole loop statement, so a same-named
     // outer variable used inside the loop's own range expression reads as the loop variable.
     std::string_view recvVarTypeName( const Reference& r ) const
@@ -2566,7 +2581,7 @@ struct Narrower
                 return {};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
-            return declared.importedName.empty() ? std::string_view( declared.typeName ) : std::string_view{};   // qualified → no narrow
+            return namesStdType( declared.importedName ) ? std::string_view{} : std::string_view( declared.typeName );
         }
         const auto vit = varType.find( keyBind );
         return ( vit == varType.end() ) ? std::string_view{} : std::string_view( vit->second );

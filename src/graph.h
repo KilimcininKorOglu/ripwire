@@ -977,10 +977,10 @@ inline void keepOwnJvmLanguageCandidates( const IngestResult& ing, const Referen
 // name, a same-named field read after the loop, and a parameter hidden by an untyped loop variable). So for every
 // name with a ParamType record, this lists ALL its declarations in the definition — each VarDecl with its scope
 // span — and attaches each Type/ParamType record to the declaration whose VarDecl shares its record position;
-// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type only when the type
-// was written UNQUALIFIED — a written type is its final segment alone, and a parameter's is often a library container
-// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (measured: three such precise wrong edges on a
-// private C++ corpus, arm 17; the qualified text rides Binding::importedName). A typed record with no VarDecl at its
+// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type unless the type was
+// written in namespace `std` — a written type is its final segment alone, and a parameter's is often a library container
+// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (resolve.h namesStdType, arm 17; the qualified
+// text rides Binding::importedName). A typed record with no VarDecl at its
 // position (a shape the shadow capture refuses) types nothing: a lost narrow, never a wrong one. Names with no
 // ParamType record are absent and keep the flat varType answer, byte-identically. Deterministic: ing.bindings is
 // totally ordered, lists are appended in that order, and nothing iterates the map into output.
@@ -1918,7 +1918,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // P2-D Rule 2 binding table: per-scope `(fromSymbol, var) → type` from ingest's local var→type bindings,
     // for receiver-VARIABLE narrowing (`Foo x; x.m()` → `Foo::m`). CONSERVATIVE — a var bound to ≥2 DISTINCT
     // types in one scope (reassigned to a different type) is TOMBSTONED (value set to ""), so it never narrows;
-    // only an unambiguous single-type binding is usable. A binding's `type` is matched as a SCOPE in canonByName
+    // only an unambiguous single-type binding is usable. A type written in namespace `std` tombstones the var too
+    // (resolve.h namesStdType; test/narrowcheck.sh arms 19-21): `std::map<K, V> m` recorded `map` and narrowed to an
+    // in-repo `map` — 6 precise wrong edges on a private C++ corpus. A tombstone, not a skipped record: the flat table
+    // cannot tell which of the function's declarations of the name is in scope at a call site. A binding's `type` is matched as a SCOPE in canonByName
     // by Rule 2, so a type that names no class (e.g. inferred from a non-constructor `auto x = makeT()`) simply
     // never produces a `type::method` hit and degrades to the name-based fallback — the safety net for constructor-inferred types.
     // Deterministic: ing.bindings is in (file, byte, var) order; first binding wins, a later conflict tombstones.
@@ -1941,8 +1944,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             Narrower::appendUint( key, b.fromSymbol );
             key.push_back( '#' );
             key.append( b.var );
-            const auto [ it, inserted ] = varType.try_emplace( key, b.typeName );
-            if( !inserted && !it->second.empty() && it->second != b.typeName )
+            const std::string_view type = namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName );
+            const auto [ it, inserted ] = varType.try_emplace( key, type );
+            if( !inserted && !it->second.empty() && it->second != type )
             {
                 it->second.clear();   // conflicting types for one var in one scope → tombstone (never narrow this var)
             }
