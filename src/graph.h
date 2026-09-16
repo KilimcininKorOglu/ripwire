@@ -2289,6 +2289,32 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // keeps role="call": it IS a real call; only the RESOLUTION came from the binding — the same trust
         // level as Rule 2 receiver narrowing.
         bool narrowed = false;
+        // TS/JS literal receivers (issue #163): a syntactically certain built-in call skips the name
+        // ladder. Bind only a matching Foo.prototype.NAME extension (scope stamped at ingest); otherwise
+        // vetoExternal — counted, not dropped, not ambiguous. Identifier / this / object-literal /
+        // typed-parameter receivers stay RecvKind::None and take today's path.
+        if( !scipPinned && r.role == RefRole::Call && isJsTsLitRecv( r.recv ) )
+        {
+            const std::string_view ctor = jsLitCtorName( r.recv );
+            if( it != byName.end() && !ctor.empty() )
+            {
+                for( NodeId c : it->second )
+                {
+                    const Symbol& sy = ing.symbols[c];
+                    if( sy.kind == SymKind::Method && sy.scope == ctor
+                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        cand.push_back( c );
+                    }
+                }
+            }
+            if( cand.empty() )
+            {
+                disposition = vetoExternal( r );
+                continue;
+            }
+            narrowed = true;
+        }
         // ── ES named-import binding resolve — the JS/TS twin of the L3 block above, and BEFORE every
         // receiver rule for the same reason: `import { f } from './m.js'` is a name-lookup FACT, so a
         // bound ES name never falls through to the global spelling ladder. SCIP remains authoritative.
@@ -2742,7 +2768,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
-         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
+         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj
+         && !isJsTsLitRecv( r.recv ) )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
             // memoize each survivor's shared-locality ONCE (was computed twice: once for bestShare, once inside the
@@ -4816,6 +4843,12 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
                 }
             }
             break;
+            case RecvKind::LitString:
+            case RecvKind::LitArray:
+            case RecvKind::LitRegex:
+            case RecvKind::LitNumber:
+            case RecvKind::LitBoolean:
+            break; // a certain built-in receiver is not a field owner
         }
         if( std::find( cand.begin(), cand.end(), fieldId ) == cand.end() )
         {

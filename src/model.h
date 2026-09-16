@@ -16,6 +16,7 @@
 #include <array>       // Symbol::evWhy — the fixed-size ev_why tag counters
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>   // std::is_trivially_copyable_v — the VarSpan layout pin below
 #include <vector>
 
@@ -173,7 +174,32 @@ inline const char* langTag( Lang l ) noexcept
 //              `@external` veto, never a spray. APPENDED so no persisted value renumbers (RawRef rides the
 //              cache with recv as a u8). Python only: isMemberAccessNode classifies C++/Python receivers and
 //              C++ has no `super`.
-enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule };
+//   LitString / LitArray / LitRegex / LitNumber / LitBoolean — TS/JS member call whose receiver type the
+//              syntax already proves (a literal, or a chain of built-in methods that stay certain). APPENDED
+//              so the cache u8 does not renumber. isMemberAccessNode stays false for TS/JS; receiverOf
+//              classifies these beside that function, TS/JS only. A matching Foo.prototype.NAME extension
+//              may bind; anything else is vetoExternal. Object literals, identifier receivers, this, casts,
+//              and element-returning links (find/at/pop/shift/reduce/subscript/!) stay None.
+enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean };
+
+inline bool isJsTsLitRecv( RecvKind k ) noexcept
+{
+    return k == RecvKind::LitString || k == RecvKind::LitArray || k == RecvKind::LitRegex
+        || k == RecvKind::LitNumber || k == RecvKind::LitBoolean;
+}
+
+inline std::string_view jsLitCtorName( RecvKind k ) noexcept
+{
+    switch( k )
+    {
+        case RecvKind::LitString:  return "String";
+        case RecvKind::LitArray:   return "Array";
+        case RecvKind::LitRegex:   return "RegExp";
+        case RecvKind::LitNumber:  return "Number";
+        case RecvKind::LitBoolean: return "Boolean";
+        default:                   return {};
+    }
+}
 
 // ABS-3 reference / use-site ROLE: WHAT a reference does at the use site, captured at ingest so a
 // use-site index (`--uses=SYM`) can report the resolvable places a name is referenced, not just calls.

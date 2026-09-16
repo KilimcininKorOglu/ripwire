@@ -1999,6 +1999,11 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
               // exactly the false-candidate risk that bridge's own comment names.
                 d.scope = kotlinEnclosingScopeOf( nameNode, src );
             }
+            else if( ( le.lang == Lang::JavaScript || le.lang == Lang::TypeScript )
+                     && defCapSv == "definition.protomethod" )
+            { // `String.prototype.shout` → scope "String" so a LitString call binds only that extension
+                d.scope = std::string( prototypeCtorName( nameNode, src ) );
+            }
             // extent honesty: did the parse RECOVER this def's container or kind? Only asked in a file whose root
             // holds an error (fileHasError, one O(1) flag test per file) — see parseRecoveredBits.
             d.recovered = fileHasError ? parseRecoveredBits( defNode, kind, le.lang, d.scope.empty() ) : std::uint8_t( 0 );
