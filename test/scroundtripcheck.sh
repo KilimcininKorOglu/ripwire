@@ -90,7 +90,7 @@ for fx in cppqualfix nestedqualfix; do
     # (A) presence: sc= rows exist at all
     if [ "$nsc" -gt 0 ]; then ok "(A) $fx: $nsc scoped rows carry sc="; else no "(A) $fx: no <s ... sc=> row on the map (the short id is not emitted)"; fi
     # (B) the composed multiset equals the pre-change id= multiset
-    eval "printf '%s\n' \"\$expected_$fx\"" | sort >"$TMP/$fx.expected"
+    eval "printf '%s\n' \"\$expected_$fx\"" | LC_ALL=C sort >"$TMP/$fx.expected"
     if [ "$nsc" -gt 0 ] && cmp -s "$TMP/$fx.composed" "$TMP/$fx.expected"; then
         ok "(B) $fx: p::sc::n composed from the rows == the id= multiset the pre-change binary printed ($nsc ids)"
     else
