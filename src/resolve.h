@@ -414,6 +414,36 @@ inline std::uint32_t resolvePythonImport( std::string_view includerPath, std::st
     return ( hit == kNoFile || hit == kNoFile - 1 ) ? kNoFile : hit;   // unique-or-degrade
 }
 
+// A relative JS/TS specifier may spell the RUNTIME file its source compiles to: TypeScript's node16/nodenext
+// resolution requires `import './api.js'` for `api.ts`, and a `.mjs`/`.cjs` specifier names its `.mts`/`.cts`
+// source. ONE table, read by the precise include tier (resolveTsImport below) and by graph.h's named-import binder
+// (resolveJsNamedImportFile), so --deps and the call binder cannot disagree about which file a runtime spelling
+// names. No directory-index row: TypeScript never maps `./lib.js` onto `lib/index.ts`.
+struct JsRuntimeSourceExt
+{
+    std::string_view runtime;        // the emitted spelling the specifier carries
+    std::string_view sources[ 2 ];   // the source spellings it may name; an empty slot is unused
+};
+
+inline constexpr JsRuntimeSourceExt kJsRuntimeSourceExts[] = {
+    { ".js",  { ".ts", ".tsx" } },
+    { ".mjs", { ".mts", {} } },
+    { ".cjs", { ".cts", {} } },
+};
+
+// The row a specifier's suffix selects, or nullptr when it carries no runtime extension.
+inline const JsRuntimeSourceExt* jsRuntimeSourceExtOf( std::string_view specifier ) noexcept
+{
+    for( const JsRuntimeSourceExt& row : kJsRuntimeSourceExts )
+    {
+        if( specifier.size() > row.runtime.size() && specifier.ends_with( row.runtime ) )
+        {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
 // ── TS/JS Step-A — SOUND (closest to C quote-includes). Relative specifier `./x` / `../a/b` → probe a
 // FIXED extension list then index files, relative-to-includer; a BARE specifier (`react`, `lodash` — no
 // leading dot) is node_modules/external → kNoFile (unresolved, never matched). Resolve IFF exactly ONE
@@ -524,26 +554,19 @@ inline std::uint32_t resolveTsImport( std::string_view includerPath, std::string
             hit = kNoFile - 1; // second distinct file → ambiguous
         }
     };
-    // FIRST an exact hit (specifier already has an extension, e.g. `./x.js`), then extension-appended, then index.
+    // FIRST an exact hit (specifier already has an extension, e.g. `./x.js`), then the source file a runtime spelling
+    // names (kJsRuntimeSourceExts), then extension-appended, then index. One accumulator for all of them, so a tree
+    // holding BOTH api.js and api.ts leaves `./api.js` unresolved rather than guessing which module was meant.
     probe( std::string( target ) );
-    // TypeScript permits a runtime `.js`/`.jsx` specifier to name its typed source file. Appending `.ts` to
-    // `api.js` would probe the wrong spelling (`api.js.ts`); substitute the runtime suffix while keeping the
-    // exact probe above. All candidates still share the unique-or-degrade accumulator, so a tree containing
-    // both `api.ts` and `api.js` remains unresolved rather than guessing which module the author meant.
-    for( const std::string_view runtimeExt : { std::string_view{ ".js" }, std::string_view{ ".jsx" },
-                                                std::string_view{ ".mjs" }, std::string_view{ ".cjs" } } )
+    if( const JsRuntimeSourceExt* const runtimeExt = jsRuntimeSourceExtOf( target ) )
     {
-        if( target.size() > runtimeExt.size() && target.compare( target.size() - runtimeExt.size(), runtimeExt.size(), runtimeExt ) == 0 )
+        const std::string stem( target.substr( 0, target.size() - runtimeExt->runtime.size() ) );
+        for( const std::string_view source : runtimeExt->sources )
         {
-            const std::string stem( target.substr( 0, target.size() - runtimeExt.size() ) );
-            probe( stem + ".ts" );
-            probe( stem + ".tsx" );
-            probe( stem + ".d.ts" );
-            for( const std::string_view indexRel : kIndexRel )
+            if( !source.empty() )
             {
-                probe( stem + std::string( indexRel ) );
+                probe( stem + std::string( source ) );
             }
-            break;
         }
     }
     for( std::string_view e : kFileExt )

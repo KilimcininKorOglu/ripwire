@@ -1524,8 +1524,8 @@ inline std::pair<std::uint32_t, bool> resolveJsNamedImportFile( std::string_view
     // source alternatives; competing emitted and source files are deliberately unresolved — and the
     // second return value says WHICH kind of unresolved, because "two files answer this" is contrary
     // in-tree evidence while "no file answers this" may simply be a module we cannot follow.
-    if( ( !module.starts_with( "./" ) && !module.starts_with( "../" ) )
-        || ( !module.ends_with( ".js" ) && !module.ends_with( ".mjs" ) && !module.ends_with( ".cjs" ) ) )
+    const JsRuntimeSourceExt* const runtimeExt = jsRuntimeSourceExtOf( module );   // resolve.h: the ONE runtime→source table
+    if( ( !module.starts_with( "./" ) && !module.starts_with( "../" ) ) || runtimeExt == nullptr )
     {
         return { resolvePreciseInclude( importer, module, false, files, {}, false, workspace, importerFileId ), false };
     }
@@ -1539,9 +1539,13 @@ inline std::pair<std::uint32_t, bool> resolveJsNamedImportFile( std::string_view
         if( hit != kNoFile && hit != candidate ) { ambiguous = true; }
         hit = candidate;
     };
-    if( module.ends_with( ".js" ) ) { probe( ".ts", 3 ); probe( ".tsx", 3 ); }
-    else if( module.ends_with( ".mjs" ) ) { probe( ".mts", 4 ); }
-    else if( module.ends_with( ".cjs" ) ) { probe( ".cts", 4 ); }
+    for( const std::string_view source : runtimeExt->sources )
+    {
+        if( !source.empty() )
+        {
+            probe( source, runtimeExt->runtime.size() );
+        }
+    }
     return { ambiguous ? kNoFile : hit, ambiguous };
 }
 
