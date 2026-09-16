@@ -50,11 +50,13 @@
 #include "smallvec.h"
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
+#include "infra/Diagnostics.h"   // VERIFY — buildScopedRecvDecls' index-range precondition
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>       // fopen/fread — workspace-only config-file evidence (go.mod / tsconfig.json), §3.2
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -2012,6 +2014,26 @@ inline std::string canonicalIdForEmit( const IngestResult& ing, const Symbol& s,
                         : canonicalIdRelTo( ing, s, root );
 }
 
+// The most shared-locality credit (sharedLocality below) the S6-C tie-break may give a candidate for this call: the whole
+// canonical id, except for a NamedVar receiver whose type no receiver rule (2, 2c, 2b) established — an untyped local, a
+// member Rule 2b cannot read, a typed variable whose type defines no such method. That receiver stops at the end of the
+// caller's FILE segment, `path::` (`callerPath` is the path localityKeyOf built the caller's key from), so same-file and
+// same-directory locality still count and the CLASS segment does not (2026-09-16, test/localitycheck.sh arms 5-9). The
+// receiver names SOME object and nothing says it is one of the caller's class, so the caller's own class winning the
+// scope credit is anti-evidence — the tie-break used to grant it on the premise "a typed var already narrowed above",
+// and a receiver no rule typed never narrowed. Measured in isolation with --pin-census (before vs after): rocksdb 121
+// call sites leave a locality decision for a split, a private C++ corpus 71, django 72, rails 145; this repo's src/,
+// vue-core and go/net 0. Read samples: 14 of 14 rocksdb pins and 14 of 16 private ones were wrong, mostly delegation
+// (`rep_->Name()` inside `Wrapper::Name`). Dropping the tie-break outright for these receivers moved no target on any of
+// those seven corpora; it only relabelled the tiers whose one competitor is the caller itself (scored zero there) from
+// `locality` to `unique`, losing their lpin= disclosure — so the file credit stays.
+// STATED FLOOR, not closed here: the ladder's tier 1 still admits same-file candidates alone, so a delegation whose true
+// target lives in another file lands on a same-file namesake before the tie-break runs.
+inline std::size_t receiverLocalityCap( const Reference& r, bool receiverTypeNarrowed, std::string_view callerPath ) noexcept
+{
+    return ( r.recv == RecvKind::NamedVar && !receiverTypeNarrowed ) ? callerPath.size() + 2 : std::numeric_limits<std::size_t>::max();
+}
+
 // Shared-locality score of two canonical ids — counted in characters, but ONLY over WHOLE matching SEGMENTS.
 // A canonical id is `path/to/file.ext::scope::name`, so its real structural boundaries are the `/` (directory)
 // and `::` (scope/name) delimiters. The resolution tie-break wants "nearer" = same file > same class/scope >
@@ -2068,6 +2090,9 @@ inline std::size_t sharedLocality( std::string_view a, std::string_view b ) noex
 // namespace (an external or alias-template type whose final segment an in-repo class shares) still narrows on the
 // name — closing it needs the namespace chain in Symbol::scope (arm 24 pins it). The text is ingest_binds.h
 // qualifiedNameText's, which already dropped a leading global `::` (`::std::map` arrives as `std::map`).
+// Readers: the lexical lookup (Narrower::recvVarTypeName) answers "" for such a declaration; buildGraph's flat varType
+// table TOMBSTONES the variable rather than skipping the record, because it cannot tell which of a function's
+// declarations of the name is in scope at a call site (six `std::map` locals narrowed wrong on a private C++ corpus).
 inline bool namesStdType( std::string_view qualified ) noexcept
 {
     return qualified.starts_with( "std::" );
@@ -2075,8 +2100,8 @@ inline bool namesStdType( std::string_view qualified ) noexcept
 
 // P2-D Rule 2, PARAMETER receivers (2026-09-16, test/narrowcheck.sh arms 7-18): one DECLARATION of a receiver
 // name inside one definition — the scope its VarDecl record covers and the written type its Type/ParamType
-// record carries, joined on the record position the two share (Binding::startByte). graph.h
-// buildScopedRecvDecls builds the table; Narrower::recvVarTypeName reads it.
+// record carries, joined on the record position the two share (Binding::startByte).
+// buildScopedRecvDecls (below) builds the table; Narrower::recvVarTypeName reads it.
 struct ScopedRecvDecl
 {
     std::uint32_t declByte;      // Binding::startByte of the declaration's records
@@ -2096,6 +2121,121 @@ struct ScopedRecvDecls
     HashMap<std::string, rw::SmallVec<ScopedRecvDecl, 1>> byName;
     const std::vector<Binding>*                           bindings = nullptr;
 };
+
+// ── P2-D Rule 2 PARAMETER receivers: building the lexical declaration table (2026-09-16, test/narrowcheck.sh arms 7-18) ──
+// A ParamType record — a definition or lambda parameter, a typed range-for variable, a reference local — was read
+// by the field use-site index alone, so `int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` fell
+// through Rule 2 and the S6-C locality tie-break handed the site to Decoy::pick: one precise wrong edge, no amb=.
+// It cannot simply join the flat per-definition varType table: every one of those shapes is scoped narrower than
+// the definition or can be hidden by a nested redeclaration, and the naive fold was MEASURED to mint three precise
+// wrong edges on the gate fixture (arms 12-14: a range-for variable's type reaching a later `auto` loop of the same
+// name, a same-named field read after the loop, and a parameter hidden by an untyped loop variable). So for every
+// name with a ParamType record, this lists ALL its declarations in the definition — each VarDecl with its scope
+// span — and attaches each Type/ParamType record to the declaration whose VarDecl shares its record position;
+// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type unless the type was
+// written in namespace `std` — a written type is its final segment alone, and a parameter's is often a library container
+// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (namesStdType above, arm 17; the qualified
+// text rides Binding::importedName). A typed record with no VarDecl at its
+// position (a shape the shadow capture refuses) types nothing: a lost narrow, never a wrong one. Names with no
+// ParamType record are absent and keep the flat varType answer, byte-identically. Deterministic: ing.bindings is
+// totally ordered, lists are appended in that order, and nothing iterates the map into output.
+inline void attachRecvDeclType( ScopedRecvDecl& decl, std::uint32_t bindIndex, const std::vector<Binding>& bindings ) noexcept
+{
+    if( decl.typeBinding == kRecvDeclUntyped )
+    {
+        decl.typeBinding = bindIndex;
+    }
+    else if( decl.typeBinding != kRecvDeclConflicted && bindings[ decl.typeBinding ].typeName != bindings[ bindIndex ].typeName )
+    {
+        decl.typeBinding = kRecvDeclConflicted;   // one declaration, two written types — trust neither
+    }
+}
+
+// a binding record the lexical table can key: attributed to a definition, naming a variable
+inline bool isScopedBindRecord( const Binding& b ) noexcept
+{
+    return b.fromSymbol != kNoNode && !b.var.empty();
+}
+
+// the names the table covers: every "<fromSymbol>#<var>" with a ParamType record
+inline void addParamTypedNames( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    const auto isParamType = []( const Binding& b ) noexcept { return b.kind == LocalBindKind::ParamType && isScopedBindRecord( b ); };
+    table.byName.reserve( std::size_t( std::ranges::count_if( ing.bindings, isParamType ) ) );
+    for( const Binding& b : ing.bindings )
+    {
+        if( isParamType( b ) )
+        {
+            buildShadowKey( key, b.fromSymbol, b.var );
+            table.byName.try_emplace( key );
+        }
+    }
+}
+
+// every declaration of those names: the VarDecl records, in (file, byte) order — an exact repeat of the previous one
+// (the same declaration captured twice) is dropped, or it would tie with itself and refuse the site
+inline void addRecvDeclScopes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::VarDecl || !isScopedBindRecord( b ) )
+        {
+            continue;
+        }
+        buildShadowKey( key, b.fromSymbol, b.var );
+        const auto it = table.byName.find( key );
+        if( it == table.byName.end() )
+        {
+            continue;
+        }
+        const ScopedRecvDecl decl{ b.startByte, b.spanStart, b.spanEnd, kRecvDeclUntyped };
+        const bool repeat = !it->second.empty() && it->second.back().declByte == decl.declByte && it->second.back().spanStart == decl.spanStart
+                         && it->second.back().spanEnd == decl.spanEnd;
+        if( !repeat )
+        {
+            it->second.push_back( decl );
+        }
+    }
+}
+
+// each written type onto the declaration that shares its record position
+inline void attachRecvDeclTypes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    for( std::uint32_t bindIndex = 0; bindIndex < std::uint32_t( ing.bindings.size() ); ++bindIndex )
+    {
+        const Binding& b = ing.bindings[ bindIndex ];
+        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || !isScopedBindRecord( b ) || b.typeName.empty() )
+        {
+            continue;
+        }
+        buildShadowKey( key, b.fromSymbol, b.var );
+        const auto it = table.byName.find( key );
+        if( it == table.byName.end() )
+        {
+            continue;
+        }
+        for( ScopedRecvDecl& decl : it->second )
+        {
+            if( decl.declByte == b.startByte ) { attachRecvDeclType( decl, bindIndex, ing.bindings ); }
+        }
+    }
+}
+
+inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: Rule-2 lexical receiver declarations" );
+    VERIFY( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
+    ScopedRecvDecls table;
+    table.bindings = &ing.bindings;
+    std::string key;
+    addParamTypedNames( ing, table, key );
+    if( !table.byName.empty() )
+    {
+        addRecvDeclScopes( ing, table, key );
+        attachRecvDeclTypes( ing, table, key );
+    }
+    return table;
+}
 
 // One-hop receiver narrowing over the canonical scope::name → definition-ids map (built once by buildGraph).
 // Holds only const references to maps buildGraph owns — no state, no allocation, no copy of the symbol table.

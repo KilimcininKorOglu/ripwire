@@ -231,7 +231,7 @@ inline std::string_view declaratorVarName( TSNode decl, std::string_view src )
 // child (`Counter& c` — the `&` is the only anonymous sibling), so the `declarator` field probe is null there.
 // Unwrapped HERE, for the ParamType record alone — widening declaratorVarName itself would mint Rule-2 Type
 // records for `Foo& x = …` locals too, which Rule 2's flat per-function table would leak past their scope
-// (ParamType records reach Rule 2 only through the lexical lookup, graph.h buildScopedRecvDecls).
+// (ParamType records reach Rule 2 only through the lexical lookup, resolve.h buildScopedRecvDecls).
 inline std::string_view paramDeclaratorVarName( TSNode decl, std::string_view src )
 {
     if( !ts_node_is_null( decl ) && kindIs( ts_node_type( decl ), "reference_declarator" )
@@ -956,7 +956,7 @@ inline void emitDeclBinds( std::uint32_t fileId, Lang lang, TSNode declNode, std
         // member-variable round (card A3): a REFERENCE local (`const Symbol& s = ing.symbols[ i ];`) is the one
         // typed declaration Rule 2's flat table refuses (declaratorVarName cannot see through the unnamed reference
         // child). Recorded as a ParamType fact, so `s.name` resolves in the field use-site index and `s.m()` narrows
-        // through Rule 2's LEXICAL lookup (graph.h buildScopedRecvDecls) — only where this declaration is in scope.
+        // through Rule 2's LEXICAL lookup (resolve.h buildScopedRecvDecls) — only where this declaration is in scope.
         pushTypedBind( fileId, lang, paramDeclaratorVarName( declNode, src ), std::move( type ), BindSite{ site.startByte, 0u, 0u }, LocalBindKind::ParamType, binds );
     }
     else

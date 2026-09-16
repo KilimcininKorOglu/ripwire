@@ -137,7 +137,11 @@ rowsOf(){
 expectRows(){   # arm label, caller, method, the exact expected row set
     local got
     got="$( rowsOf "$2" "$3" )"
-    [ "$got" = "$4" ] && ok "$1 $2(): $3 -> [$got]" || no "$1 $2(): $3 -> [$got], want [$4]"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2(): $3 -> [$got]"
+    else
+        no "$1 $2(): $3 -> [$got], want [$4]"
+    fi
 }
 expectIncludes(){   # arm label, caller, method, a row the honest split must keep
     local got
@@ -247,7 +251,11 @@ expectNoStdNarrow(){   # arm label, caller, what the declaration writes
 expectNarrow(){   # arm label, caller, the one expected row
     local got
     got="$( visRows "$2" )"
-    [ "$got" = "$3" ] && ok "$1 $2(): narrows -> [$got]" || no "$1 $2(): -> [$got], want [$3]"
+    if [ "$got" = "$3" ]; then
+        ok "$1 $2(): narrows -> [$got]"
+    else
+        no "$1 $2(): -> [$got], want [$3]"
+    fi
 }
 # ── 17) a PARAMETER written `std::map<int, int>&`: no narrow to the unrelated in-repo lib/map.h `map`. ────────────────
 expectNoStdNarrow "(17)" lookupHidden "a std::-qualified parameter type"

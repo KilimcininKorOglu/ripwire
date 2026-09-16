@@ -628,7 +628,7 @@ enum class LocalBindKind : std::uint8_t
                //     (`void f( Counter& c )` → c:Counter) — also a lambda parameter's, a typed range-for
                //     variable's and a reference local's — so `c.count` resolves to Counter.count in the field
                //     use-site index (graph.h collectFieldUseSites). Rule 2's call narrowing reads it too, but
-               //     LEXICALLY (graph.h buildScopedRecvDecls, 2026-09-16): every one of these shapes is scoped
+               //     LEXICALLY (resolve.h buildScopedRecvDecls, 2026-09-16): every one of these shapes is scoped
                //     narrower than the whole function or can be redeclared inside it, so the flat per-function
                //     varType table would leak the type to other declarations of the name. The L3 fn tables skip
                //     it by kind; shadow suppression already holds the declaration's VarDecl record. importedName
