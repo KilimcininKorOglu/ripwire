@@ -39,6 +39,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   declaration's record already did at 97 (parameter receivers, lane/param-receiver-binding, re-pinned there).
 #   Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key or snapshot semantics
 #   changed, only the extraction identity. Old extraction facts must be re-parsed.
+# 2026-09-16, STD-TYPED MEMBER FIELDS (test/fieldnarrowcheck.sh arm q): parserVer and its quality mirror move 98 -> 99 —
+#   a C++ field's compose record carries the namespace its type was written in as its qualifier (`std` for
+#   `std::string name_;`). Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key
+#   or snapshot semantics changed, only the extraction identity. Old extraction facts must be re-parsed.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.
