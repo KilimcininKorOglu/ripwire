@@ -231,7 +231,17 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 96;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 97;           // bump on any grammar/.scm/extraction change
+                                                      // 97 = 2026-09-16 (parameter receivers, test/narrowcheck.sh arm
+                                                      //    17): a declaration's Type/ParamType RawBind records its
+                                                      //    written type WHOLE in importedName when the type is
+                                                      //    QUALIFIED (`std::map<K, V>`). Record FORMAT unchanged (the
+                                                      //    field was already serialised, empty on these kinds), but a
+                                                      //    96 blob holds "" there and would let Rule 2's lexical lookup
+                                                      //    narrow a qualified parameter type to an unrelated same-named
+                                                      //    in-repo class on a warm run: content change, bump required.
+                                                      //    (Binding::startByte, same lane, is re-derived from the cached
+                                                      //    RawBind::startByte and needed none.)
                                                       // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm
                                                       //    B2): every C/C++ def carries a new syntactic
                                                       //    `internalLinkage` bit — inside an anonymous namespace at any

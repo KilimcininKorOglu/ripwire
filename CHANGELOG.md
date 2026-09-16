@@ -15,6 +15,47 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a member call through a typed parameter was pinned to the caller's own class
+
+`int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` answered `--callees=plainCaller` with one edge
+to `Decoy::pick` — precise, no `amb=`, nothing disclosed, and wrong. Rule 2 narrowed a receiver only through a typed
+LOCAL; a parameter's written type had been captured since the member-variable round but was read only by the field
+use-site index, so the call fell through to the name ladder, whose locality tie-break hands a same-file tie to the
+caller's own class. The same call through `Target other;` resolved correctly.
+
+Rule 2, and CHA-lite with it, now reads the written type of a parameter, a lambda parameter, a typed range-for
+variable and a reference local LEXICALLY: the innermost declaration of the name whose scope covers the call site
+decides, and only a written, unqualified type narrows. Both limits were measured before they were chosen. Folding
+these types into Rule 2's flat per-function table minted three precise wrong edges on the gate fixture — a range-for
+variable's type reaching a later `auto` loop of the same name, a same-named field read after the loop, and a
+parameter hidden by an untyped loop variable. And a written type is recorded as its final segment against class
+names that carry no namespace, so `const std::map<K, V>& ref; ref.lower_bound( q )` narrowed to an unrelated in-repo
+`map`: three such edges on a private C++/ObjC++ corpus of 129,759 call sites, which refusing qualified types removes
+at the cost of 11 correct narrows through namespace- or class-qualified in-repo types (those sites keep their previous
+answer). An include-visibility guard was measured first and rejected: path-precise includes miss include-root
+spellings such as `"LinearMath/btVector3.h"`, and it refused about 150 correct narrows on that corpus to stop the
+same three. The qualified text rides the declaration's record, so **kParserVer moves 96 → 97** and a warm cache is
+reparsed once.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `f8e6087c` against this change, on that corpus: 587 call
+sites change target — 373 splits narrow (300 to a Rule-2 pin or the type's own overload set, 73 through the CHA cone), 147
+calls the ladder had declined gain an edge (`bound=` 80,432 → 80,583, `declined=` 17,552 → 17,401), 66 pins or splits
+that did not contain the parameter's type move to it (40 of them `unique` pins to the one same-file method of the
+wrong class), and one edge is lost — a friend function ripwire scopes inside its class, which the parameter's type
+then names as the caller itself. 956 more sites keep their target and are now decided by Rule 2. Every category was
+sampled and read against the source. On this repository's `src/`, 53 splits become one Rule-2 pin and nothing else
+moves target. Wall time is unchanged within noise (three cold runs each on the same corpus, 1.66–2.51 s both).
+
+`test/narrowcheck.sh` arms 7-18 are the gate: ten rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
+red on the lexical lookup without the qualifier guard, arm 15 asserting through the census that the site is decided
+by Rule 2 rather than the locality tie-break. Five gates' controls were built on "a parameter has no binding" and now
+use an untyped `auto` receiver — `narrowcheck`, `chacheck`, `chaconecheck`, `localitycheck` (whose call no longer
+reached the tie-break it exists to test) and `resolverhonestycheck` F9 (whose `check_signal` row had gone vacuous on a
+single edge). `fieldnarrowcheck`'s ambiguity gauge moves 7 → 6 because `shadowParam( Decoy& m_x )` now resolves to the
+parameter's type, and its arm (s1) now also asserts that the shadowed field's `Pool::acquire` is not linked. Still
+open, and unchanged by this entry: an untyped receiver (`auto x = make(); x.m()`) still reaches the locality
+tie-break, and a typed LOCAL still reads the flat table, qualified-type collision included.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

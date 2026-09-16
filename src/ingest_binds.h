@@ -230,7 +230,8 @@ inline std::string_view declaratorVarName( TSNode decl, std::string_view src )
 // answer plus one shape it refuses on purpose: a reference_declarator holds its inner declarator as an UNNAMED
 // child (`Counter& c` — the `&` is the only anonymous sibling), so the `declarator` field probe is null there.
 // Unwrapped HERE, for the ParamType record alone — widening declaratorVarName itself would mint Rule-2 Type
-// records for `Foo& x = …` locals too and move call edges outside this round's gate.
+// records for `Foo& x = …` locals too, which Rule 2's flat per-function table would leak past their scope
+// (ParamType records reach Rule 2 only through the lexical lookup, graph.h buildScopedRecvDecls).
 inline std::string_view paramDeclaratorVarName( TSNode decl, std::string_view src )
 {
     if( !ts_node_is_null( decl ) && kindIs( ts_node_type( decl ), "reference_declarator" )
@@ -245,11 +246,11 @@ inline std::string_view paramDeclaratorVarName( TSNode decl, std::string_view sr
 // (new_expression). Final segment of the callee/constructor identifier. "" if the value isn't a
 // plain constructor call (so `auto x = makeFoo()` infers nothing here unless `makeFoo` names a class —
 // and the class-name filter in buildGraph is what makes that safe).
-inline std::string ctorTypeOf( TSNode value, std::string_view src )
+inline TSNode ctorNameNode( TSNode value )
 {
     if( ts_node_is_null( value ) )
     {
-        return {};
+        return TSNode{};
     }
     const char* vt = ts_node_type( value );
     TSNode      idn {};
@@ -263,10 +264,20 @@ inline std::string ctorTypeOf( TSNode value, std::string_view src )
     }
     if( ts_node_is_null( idn ) )
     {
-        return {};
+        return TSNode{};
     }
     const char* it = ts_node_type( idn );
     if( !kindIs( it, "identifier" ) && !kindIs( it, "type_identifier" ) && !kindIs( it, "qualified_identifier" ) && !kindIs( it, "scoped_identifier" ) )
+    {
+        return TSNode{};
+    }
+    return idn;
+}
+
+inline std::string ctorTypeOf( TSNode value, std::string_view src )
+{
+    const TSNode idn = ctorNameNode( value );
+    if( ts_node_is_null( idn ) )
     {
         return {};
     }
@@ -290,6 +301,31 @@ inline std::string writtenTypeOf( TSNode typeNode, std::string_view src )
         return ( a <= b && b <= src.size() ) ? finalSegment( src.substr( a, b - a ) ) : std::string{};
     }
     return {};   // auto / template / decltype — type not directly written → try the initializer
+}
+
+// Rule 2's qualifier guard (2026-09-16, test/narrowcheck.sh arm 17): the text of a type or constructor NAME node
+// when it is QUALIFIED — it carries `::` past a leading global `::` (`std::map<K, V>`, `ext::Widget`,
+// `Outer<int>::Inner`) — else "". writtenTypeOf/ctorTypeOf keep the final segment alone, and Rule 2 matches that
+// segment against class names that carry no namespace, so `const std::map<K, V>& ref` read as `map` and narrowed to
+// an unrelated in-repo `map` (measured on a private C++ corpus). The whole text rides the declaration's Type/ParamType
+// record in RawBind::importedName; Rule 2's lexical lookup refuses to narrow on it.
+inline std::string qualifiedNameText( TSNode nameNode, std::string_view src )
+{
+    if( ts_node_is_null( nameNode ) )
+    {
+        return {};
+    }
+    const std::uint32_t a = ts_node_start_byte( nameNode ), b = ts_node_end_byte( nameNode );
+    if( a > b || b > src.size() )
+    {
+        return {};
+    }
+    std::string_view text = src.substr( a, b - a );
+    while( !text.empty() && ( text.front() == ' ' || text.front() == ':' ) )
+    {
+        text.remove_prefix( 1 );   // a leading `::` names the global namespace — not a qualifier
+    }
+    return ( text.find( "::" ) != std::string_view::npos ) ? std::string( text ) : std::string{};
 }
 
 // ── L3 fn-pointer/callback binding capture helpers ───────────────────────────────────────────────────
@@ -740,7 +776,7 @@ struct BindSite
 // ever reads a type off it), so the empty-typeName refusal applies to every OTHER kind, where it is
 // load-bearing for Rule 2 (an undecidable type must degrade to §2a, not mint a half-record).
 inline void pushRawBind( std::uint32_t fileId, Lang lang, std::string_view var, std::string typeName,
-                         BindSite site, LocalBindKind kind, std::vector<RawBind>& binds )
+                         BindSite site, LocalBindKind kind, std::vector<RawBind>& binds, std::string qualifiedType = {} )
 {
     if( var.empty() || ( typeName.empty() && kind != LocalBindKind::VarDecl ) )
     {
@@ -755,15 +791,19 @@ inline void pushRawBind( std::uint32_t fileId, Lang lang, std::string_view var, 
     b.spanEnd   = site.spanEnd;
     b.var.assign( var );
     b.typeName  = std::move( typeName );
+    if( kind == LocalBindKind::Type || kind == LocalBindKind::ParamType )
+    {
+        b.importedName = std::move( qualifiedType );   // the written type WHOLE when qualified (qualifiedNameText), else ""
+    }
     binds.push_back( std::move( b ) );
 }
 
 // emit a Rule-2 binding from one declared variable: prefer the WRITTEN type; else infer from a
 // constructor-style initializer (`auto x = Foo()`). Records nothing when neither is decidable.
 inline void emitBind( std::uint32_t fileId, Lang lang, std::string_view var, std::string typeName,
-                      std::uint32_t startByte, std::vector<RawBind>& binds )
+                      std::uint32_t startByte, std::vector<RawBind>& binds, std::string qualifiedType = {} )
 {
-    pushRawBind( fileId, lang, var, std::move( typeName ), BindSite{ startByte, 0u, 0u }, LocalBindKind::Type, binds );
+    pushRawBind( fileId, lang, var, std::move( typeName ), BindSite{ startByte, 0u, 0u }, LocalBindKind::Type, binds, std::move( qualifiedType ) );
 }
 
 // the scope a `declaration` node's names shadow within: the byte span, plus whether that span came from a
@@ -893,20 +933,21 @@ inline void emitShadowVarDecls( std::uint32_t fileId, Lang lang, TSNode decl, st
 // name reads stay separate on purpose — declaratorVarName descends into a function declarator (harmless
 // for narrowing), emitShadowVarDecls refuses it (load-bearing for suppression).
 inline void emitDeclBinds( std::uint32_t fileId, Lang lang, TSNode declNode, std::string_view src, std::string type,
-                           BindSite site, std::vector<RawBind>& binds )
+                           std::string qualifiedType, BindSite site, std::vector<RawBind>& binds )
 {
     const std::string_view var = declaratorVarName( declNode, src );
     if( var.empty() && !type.empty() )
     {
         // member-variable round (card A3): a REFERENCE local (`const Symbol& s = ing.symbols[ i ];`) is the one
-        // typed declaration Rule 2 refuses (declaratorVarName cannot see through the unnamed reference child).
-        // Recorded as a ParamType fact — the field use-site index's own kind — so `s.name` resolves there while
-        // Rule 2's call narrowing (kind == Type) stays byte-identical.
-        pushRawBind( fileId, lang, paramDeclaratorVarName( declNode, src ), std::move( type ), BindSite{ site.startByte, 0u, 0u }, LocalBindKind::ParamType, binds );
+        // typed declaration Rule 2's flat table refuses (declaratorVarName cannot see through the unnamed reference
+        // child). Recorded as a ParamType fact, so `s.name` resolves in the field use-site index and `s.m()` narrows
+        // through Rule 2's LEXICAL lookup (graph.h buildScopedRecvDecls) — only where this declaration is in scope.
+        pushRawBind( fileId, lang, paramDeclaratorVarName( declNode, src ), std::move( type ), BindSite{ site.startByte, 0u, 0u }, LocalBindKind::ParamType, binds,
+                     std::move( qualifiedType ) );
     }
     else
     {
-        emitBind( fileId, lang, var, std::move( type ), site.startByte, binds );
+        emitBind( fileId, lang, var, std::move( type ), site.startByte, binds, std::move( qualifiedType ) );
     }
     emitShadowVarDecls( fileId, lang, declNode, src, site, binds );
 }
@@ -930,10 +971,11 @@ inline void emitShadowParamDecls( TSNode params, std::uint32_t fileId, Lang lang
         const TSNode declarator = fieldChild( p, NodeField::Declarator );
         emitShadowVarDecls( fileId, lang, declarator, src, bodySite, binds );
         // member-variable round (card A3): the parameter's WRITTEN type as a ParamType record (`Counter& c` →
-        // c:Counter), read by the field use-site index alone — see LocalBindKind::ParamType. `auto`, templated
+        // c:Counter), read by the field use-site index and Rule 2's lexical lookup — see LocalBindKind::ParamType. `auto`, templated
         // and decltype types write nothing (writtenTypeOf's own refusal), and pushRawBind drops the record.
-        pushRawBind( fileId, lang, paramDeclaratorVarName( declarator, src ), writtenTypeOf( fieldChild( p, NodeField::Type ), src ),
-                     BindSite{ ts_node_start_byte( p ), 0u, 0u }, LocalBindKind::ParamType, binds );
+        const TSNode paramType = fieldChild( p, NodeField::Type );
+        pushRawBind( fileId, lang, paramDeclaratorVarName( declarator, src ), writtenTypeOf( paramType, src ),
+                     BindSite{ ts_node_start_byte( p ), 0u, 0u }, LocalBindKind::ParamType, binds, qualifiedNameText( paramType, src ) );
     }
 }
 
@@ -1096,10 +1138,12 @@ inline void captureShadowScopeDecls( TSNode n, const char* t, std::uint32_t file
         const TSNode   loopDeclarator = fieldChild( n, NodeField::Declarator );
         emitShadowVarDecls( fileId, lang, loopDeclarator, src, loopSite, binds );
         // member-variable round (card A3): the loop variable's WRITTEN type (`for( const Symbol& s : v )` →
-        // s:Symbol) as a ParamType record for the field use-site index — the single most common typed
-        // receiver shape in this repo's own source (`s.name`), and `auto` writes nothing, as for parameters.
-        pushRawBind( fileId, lang, paramDeclaratorVarName( loopDeclarator, src ), writtenTypeOf( fieldChild( n, NodeField::Type ), src ),
-                     BindSite{ ts_node_start_byte( n ), 0u, 0u }, LocalBindKind::ParamType, binds );
+        // s:Symbol) as a ParamType record for the field use-site index and Rule 2's lexical lookup — the single
+        // most common typed receiver shape in this repo's own source (`s.name`), and `auto` writes nothing, as for
+        // parameters.
+        const TSNode loopType = fieldChild( n, NodeField::Type );
+        pushRawBind( fileId, lang, paramDeclaratorVarName( loopDeclarator, src ), writtenTypeOf( loopType, src ),
+                     BindSite{ ts_node_start_byte( n ), 0u, 0u }, LocalBindKind::ParamType, binds, qualifiedNameText( loopType, src ) );
         return;
     }
     if( isLambda )
@@ -1357,6 +1401,7 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
     {
         const TSNode typeNode = fieldChild( n, NodeField::Type );
         std::string  written  = writtenTypeOf( typeNode, src );
+        const std::string writtenQualified = written.empty() ? std::string{} : qualifiedNameText( typeNode, src );
         // A5 fix round: the declared names shadow within their enclosing block (or, for a control-statement
         // header declaration, that whole statement) — one parent walk per declaration node, shared by every
         // declarator child below; each declarator then contributes its own declaration POINT as the span's
@@ -1382,13 +1427,15 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             if( kindIs( ct, "init_declarator" ) )
             {
                 const TSNode declarator = fieldChild( c, NodeField::Declarator );
-                std::string  type       = written.empty() ? ctorTypeOf( fieldChild( c, NodeField::Value ), src ) : written;
-                emitDeclBinds( fileId, lang, declarator, src, std::move( type ),
+                const TSNode value      = fieldChild( c, NodeField::Value );
+                std::string  type       = written.empty() ? ctorTypeOf( value, src ) : written;
+                std::string  qualified  = written.empty() ? qualifiedNameText( ctorNameNode( value ), src ) : writtenQualified;
+                emitDeclBinds( fileId, lang, declarator, src, std::move( type ), std::move( qualified ),
                                BindSite{ ts_node_start_byte( n ), shadowSpanStart( scope, declarator ), scope.end }, binds );
             }
             else   // plain declarator (identifier / pointer_declarator / reference_declarator), no initializer
             {
-                emitDeclBinds( fileId, lang, c, src, std::string( written ),
+                emitDeclBinds( fileId, lang, c, src, std::string( written ), std::string( writtenQualified ),
                                BindSite{ ts_node_start_byte( n ), shadowSpanStart( scope, c ), scope.end }, binds );
             }
             return true;
