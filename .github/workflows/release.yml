@@ -120,7 +120,7 @@ jobs:
 
       - name: Configure (portable — no RIPWIRE_NATIVE, this binary ships to other machines)
         if: ${{ !matrix.pgo }}
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_extra || '' }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         if: ${{ !matrix.pgo }}
@@ -137,7 +137,7 @@ jobs:
       - name: Build (profile-guided — instrument, train, merge, optimize)
         if: ${{ matrix.pgo }}
         run: |
-          scripts/pgobuild.sh --cmake-extra -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_extra && format('--cmake-extra {0}', matrix.cmake_extra) || '' }}
+          scripts/pgobuild.sh --cmake-extra -DCMAKE_BUILD_TYPE=Release
           mkdir -p build
           cp build_pgo/ripwire build/ripwire
 
