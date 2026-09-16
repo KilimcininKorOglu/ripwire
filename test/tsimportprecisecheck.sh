@@ -67,6 +67,44 @@ grep -q '<inc t="react"' "$TMP/deps.out" \
   && ok 'B0: bare `react` captured (and left external at resolve time)' \
   || no 'B0: bare react specifier missing'
 
+# ── RUNTIME-EXTENSION specifiers: `./x.js` names x.ts (node16/nodenext), `.mjs`→`.mts`, `.cjs`→`.cts` ─────────
+# One importer file per case, so each row's instab= answers for exactly one specifier: a resolved import is an
+# efferent edge (instab="1.00"), an unresolved one is not (instab="0.00"). Built under $TMP so the committed
+# fixture's own arms above keep their counts. The two guards (dual, idx) hold on every binary: a tree carrying
+# BOTH dual.js and dual.ts stays unresolved (unique-or-degrade), and `./lib.js` never lands on lib/index.ts —
+# TypeScript resolves neither.
+RX="$TMP/runtimeext"
+mkdir -p "$RX/other" "$RX/lib"
+printf 'export function helper() { return 1; }\n'  >"$RX/x.ts"
+printf 'export function helper() { return 99; }\n' >"$RX/other/x.ts"
+printf 'export function widget() { return 2; }\n'  >"$RX/w.tsx"
+printf 'export function modfn() { return 3; }\n'   >"$RX/m.mts"
+printf 'export function cjsfn() { return 4; }\n'   >"$RX/c.cts"
+printf 'export function dual() { return 5; }\n'    >"$RX/dual.ts"
+printf 'export function dual() { return 6; }\n'    >"$RX/dual.js"
+printf 'export function libfn() { return 7; }\n'   >"$RX/lib/index.ts"
+printf "import { helper } from './x.js';\nexport function useJs() { return helper(); }\n"     >"$RX/usejs.ts"
+printf "import { widget } from './w.js';\nexport function useTsx() { return widget(); }\n"    >"$RX/usetsx.ts"
+printf "import { modfn } from './m.mjs';\nexport function useMjs() { return modfn(); }\n"     >"$RX/usemjs.ts"
+printf "import { cjsfn } from './c.cjs';\nexport function useCjs() { return cjsfn(); }\n"     >"$RX/usecjs.ts"
+printf "import { dual } from './dual.js';\nexport function useDual() { return dual(); }\n"    >"$RX/usedual.ts"
+printf "import { libfn } from './lib.js';\nexport function useLib() { return libfn(); }\n"    >"$RX/uselib.ts"
+"$BIN" "$RX" --deps --no-cache >"$TMP/rx.deps" 2>/dev/null
+rx_instab(){ grep -oE "<f p=\"$1\" [^>]*instab=\"[0-9.]+\"" "$TMP/rx.deps" | grep -oE 'instab="[0-9.]+"' | head -1; }
+rx_expect(){  # $1 importer  $2 want instab  $3 what
+  local got; got="$( rx_instab "$1" )"
+  if [ "$got" = "instab=\"$2\"" ]; then ok "runtime-ext: $3 ($1 $got)"; else no "runtime-ext: $3 — $1 has '${got:-no row}', want instab=\"$2\""; fi
+}
+rx_expect usejs.ts   1.00 "./x.js resolves to x.ts"
+rx_expect usetsx.ts  1.00 "./w.js resolves to w.tsx"
+rx_expect usemjs.ts  1.00 "./m.mjs resolves to m.mts"
+rx_expect usecjs.ts  1.00 "./c.cjs resolves to c.cts"
+rx_expect usedual.ts 0.00 "./dual.js with BOTH dual.js and dual.ts stays unresolved"
+rx_expect uselib.ts  0.00 "./lib.js does not resolve to lib/index.ts"
+grep -qE '<f p="other/x.ts" afferent="[1-9]' "$TMP/rx.deps" \
+  && no "runtime-ext: ./x.js bound the decoy other/x.ts" \
+  || ok "runtime-ext: the decoy other/x.ts gains no importer"
+
 # ── the fixture resolves everything → ambiguous=0 ─────────────────────────────────────────────────
 famb="$( "$BIN" "$FIX" --no-cache 2>/dev/null | grep -oE 'ambiguous=[0-9]+' | head -1 )"
 if [ "$famb" = "ambiguous=0" ]; then ok "fixture $famb"; else no "fixture $famb (expected 0)"; fi
