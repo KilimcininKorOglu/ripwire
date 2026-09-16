@@ -137,7 +137,7 @@ fi
 # `-DCMAKE_OSX_ARCHITECTURES=x86_64`. CMake derives CMAKE_SYSTEM_PROCESSOR from the RUNNING machine there (arm64 — CMakeDetermineSystem honours only
 # CMAKE_APPLE_SILICON_PROCESSOR, never CMAKE_OSX_ARCHITECTURES), so a floor keyed on it handed every x86_64
 # compile `-mcpu=apple-m1` and no -march at all. Clang >= 17 (AppleClang 16 — the Xcode 16.2 release.yml
-# pins since c7982037) rejects that outright: "unsupported option '-mcpu=' for target". Clang 16 (AppleClang
+# pinned from c7982037 through 0.6.1) rejects that outright: "unsupported option '-mcpu=' for target". Clang 16 (AppleClang
 # 15, every release through v0.5.0) let it through, so the Intel-Mac binary could only ever have been the
 # x86-64 BASELINE — strkern.h's scalar twins, below the owner's v3 floor, and nothing else in the tree notices.
 # #2b cannot see this: it SETS CMAKE_SYSTEM_PROCESSOR=x86_64, which a real cross configure never does.
@@ -249,6 +249,151 @@ fi
 # leg ran its x86-64-v3 binary under Rosetta 2. The leg left the matrix after 0.6.1, so there is no tuple to hold;
 # test/releaseinstallcheck.sh (H7) now refuses a macOS x64 leg in release.yml, and re-adding one restores this arm
 # from history (`git log -S relverdict -- test/portablebuildcheck.sh`) together with fresh evidence for its tuple.
+
+# ── #2i: the macos-arm64 release leg ships the toolchain CI tests, at a pinned minimum macOS ───────────────────────────
+# Three facts, held in step, text-level on any host:
+#   * The leg's runner and Xcode are the exact pair its release was verified on, and ci.yml's macOS legs (the eight gate
+#     shards and the sanitizer leg) run that same pair — TESTED == SHIPPED. Xcode 26.6 (17F113, Apple clang 21.0.0) is
+#     there because VERIFY_NO_ALIAS's `__builtin_assume_separate_storage` reaches the loop vectorizer only from LLVM 18
+#     (llvm/llvm-project#64666, fixed by #76770): Xcode 16.2's AppleClang 16, which built this leg through 0.6.1, is
+#     LLVM 17 and keeps every runtime overlap check (test/noaliascheck.sh arm 6, LOOP_NOT_CONSUMED). A text check cannot
+#     read a compiler version, so the pair is held exactly and moved deliberately, with noaliascheck's classification on
+#     the new pair as the evidence. A half-done move is the other failure: an `ASAN_OPTIONS` or `DEVELOPER_DIR` condition
+#     in ci.yml still naming the old runner silently turns leak detection on, or hands a leg the image's default Xcode.
+#   * The minimum macOS is PINNED, a decision rather than a side effect of the runner. With no deployment target clang
+#     takes the lower of the runner's macOS and the SDK default, which was 14.0 on macos-14 (otool on v0.6.1's
+#     ripwire-0.6.1-macos-arm64: `minos 14.0`, `sdk 15.2`) and is 26.x on macos-26, so the runner move alone would have
+#     dropped every macOS 14 and 15 user. 14.0 is also the std::print floor (src/infra/emit.h) and README's "Prebuilt
+#     macOS floor"; quoted, because a bare 14.0 is a YAML number, not the string the otool minos check matches. ci.yml's
+#     macOS legs build at the same target, since libc++ decides what it declares available by the deployment target.
+#   * The pin reaches the binary and is read back off it: a step exports matrix.deployment_target as
+#     MACOSX_DEPLOYMENT_TARGET before the first configure, no -D on the leg overrides it, and an otool minos step runs on
+#     build/ripwire after the PGO binary is staged there and before Package tars it.
+# Two mutated copies prove the verdict can fail: release.yml without the minos step, and ci.yml whose sanitizer leg's
+# ASAN_OPTIONS condition still names macos-14.
+cat >"$TMP/armverdict.py" <<'PY'
+import re, sys
+relPath, ciPath = sys.argv[ 1 ], sys.argv[ 2 ]
+rel, ci = open( relPath ).read(), open( ciPath ).read()
+RUNNER, XCODE, MINOS = 'macos-26', '/Applications/Xcode_26.6.app/Contents/Developer', '14.0'
+EXPECT = ( ( 'os',                RUNNER, False, 'the runner image that carries the pinned Xcode' ),
+           ( 'developer_dir',     XCODE,  False, 'Apple clang 21.0.0 (LLVM 18+): the loop vectorizer reads the no-alias promise' ),
+           ( 'deployment_target', MINOS,  True,  'the minimum macOS v0.6.1 shipped (otool minos 14.0)' ) )
+def scalar( leg, key ):
+    m = re.search( r"""^[ \t]*%s:[ \t]*("[^"\n]*"|'[^'\n]*'|[^\s#]+)""" % key, leg, re.M )
+    if not m:
+        return None, False
+    raw    = m.group( 1 )
+    quoted = len( raw ) >= 2 and raw[ 0 ] == raw[ -1 ] and raw[ 0 ] in '"\''
+    return ( raw[ 1:-1 ] if quoted else raw ), quoted
+def shown( value, quoted ):
+    return '(absent)' if value is None else ( '"%s"' % value if quoted else value )
+build  = rel.split( '\n  build:', 1 )[ 1 ].split( '\n  smoke-rhel:', 1 )[ 0 ] if '\n  build:' in rel else ''
+matrix = build.split( 'include:', 1 )[ 1 ].split( '\n    runs-on:', 1 )[ 0 ] if 'include:' in build else ''
+legs   = [ leg for leg in re.split( r'\n\s*- name: ', matrix )[ 1: ] if scalar( leg, 'asset_os' )[ 0 ] == 'macos' and scalar( leg, 'asset_arch' )[ 0 ] == 'arm64' ]
+if len( legs ) != 1:
+    print( 'FAIL expected exactly one release.yml build leg with asset_os macos and asset_arch arm64, found %d — nothing was checked' % len( legs ) )
+else:
+    leg  = legs[ 0 ]
+    name = leg.split( '\n', 1 )[ 0 ].strip()
+    for key, want, mustQuote, why in EXPECT:
+        got, quoted = scalar( leg, key )
+        if got == want and ( quoted or not mustQuote ):
+            print( 'PASS leg %s %s: %s, %s' % ( name, key, shown( want, mustQuote ), why ) )
+        else:
+            print( 'FAIL leg %s %s: %s%s, but the verified tuple is %s — %s; moving it edits release.yml, ci.yml and #2i\'s tuple together, deliberately'
+                   % ( name, key, shown( got, quoted ), ' (a bare YAML number)' if got == want else '', shown( want, mustQuote ), why ) )
+    # The steps of the build job, in order. A step whose `if:` is anything but the deployment-target key could skip this leg.
+    steps = re.split( r'\n      - ', build.split( '\n    steps:', 1 )[ 1 ] if '\n    steps:' in build else '' )[ 1: ]
+    def stepIf( step ):
+        m = re.search( r'^[ \t]*if:[ \t]*(.+)$', step, re.M )
+        return m.group( 1 ).strip() if m else ''
+    def firstStep( pred ):
+        return next( ( i for i, s in enumerate( steps ) if pred( s ) ), -1 )
+    fires     = lambda s: stepIf( s ) in ( '', '${{ matrix.deployment_target }}' )
+    exportAt  = firstStep( lambda s: 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}' in s and '$GITHUB_ENV' in s and fires( s ) )
+    buildAt   = firstStep( lambda s: 'cmake -S' in s or 'scripts/pgobuild.sh' in s )
+    stagedAt  = firstStep( lambda s: 'cp build_pgo/ripwire build/ripwire' in s )
+    minosAt   = firstStep( lambda s: 'otool -l build/ripwire' in s and 'minos ${{ matrix.deployment_target }}' in s and fires( s ) )
+    packageAt = firstStep( lambda s: s.startswith( 'name: Package' ) )
+    override  = [ v for v in re.findall( r'CMAKE_OSX_DEPLOYMENT_TARGET=(\S+)', leg ) if v != MINOS ]
+    if exportAt < 0:
+        print( 'FAIL leg %s: no step exports matrix.deployment_target as MACOSX_DEPLOYMENT_TARGET — the key pins nothing; the runner\'s macOS sets the minimum' % name )
+    elif buildAt < 0 or exportAt > buildAt:
+        print( 'FAIL leg %s: the MACOSX_DEPLOYMENT_TARGET export (step %d) does not precede the first configure (step %d)' % ( name, exportAt, buildAt ) )
+    elif override:
+        print( 'FAIL leg %s: -DCMAKE_OSX_DEPLOYMENT_TARGET=%s on the leg overrides the exported %s — the pinned minimum is not what ships' % ( name, override[ 0 ], MINOS ) )
+    else:
+        print( 'PASS leg %s: step %d exports deployment_target as MACOSX_DEPLOYMENT_TARGET before the first configure (step %d), and no -D overrides it' % ( name, exportAt, buildAt ) )
+    if minosAt < 0:
+        print( 'FAIL leg %s: no step reads the minimum macOS back off build/ripwire (otool -l ... minos ${{ matrix.deployment_target }}) — the pin is trusted, not checked' % name )
+    elif not ( stagedAt >= 0 and packageAt >= 0 and stagedAt < minosAt < packageAt ):
+        print( 'FAIL leg %s: the otool minos step (step %d) is not between the PGO staging (step %d) and Package (step %d) — it reads a binary other than the one shipped' % ( name, minosAt, stagedAt, packageAt ) )
+    else:
+        print( 'PASS leg %s: step %d reads minos off build/ripwire after the PGO binary is staged (step %d) and before Package (step %d)' % ( name, minosAt, stagedAt, packageAt ) )
+    wired = re.search( r'^[ \t]*DEVELOPER_DIR:[ \t]*\$\{\{[ \t]*matrix\.developer_dir\b', build, re.M )
+    print( 'PASS leg %s: the job env hands developer_dir to the toolchain as DEVELOPER_DIR' % name if wired else
+           'FAIL leg %s: nothing exports matrix.developer_dir as DEVELOPER_DIR — the image\'s default Xcode, not the pinned one, builds the release' % name )
+# ci.yml: every macOS runner label, every condition on one, every Xcode path and every deployment target is the release's.
+ciRunners = ( re.findall( r'\b(?:os|runs-on):[ \t]*\[?[ \t]*(macos-[\w.-]+)', ci ) + re.findall( r',[ \t]*(macos-[\w.-]+)[ \t]*\]', ci ) )
+ciConds   = re.findall( r"matrix\.os[ \t]*==[ \t]*'(macos-[^']*)'", ci )
+ciXcodes  = re.findall( r'(/Applications/Xcode[^\'"\s]*/Contents/Developer)', ci )
+ciDevDirs = re.findall( r'^[ \t]*DEVELOPER_DIR:.*$', ci, re.M )
+ciTargets = re.findall( r'^[ \t]*MACOSX_DEPLOYMENT_TARGET:[ \t]*(.*)$', ci, re.M )
+for what, found in ( ( 'runs-on label', ciRunners ), ( 'matrix.os condition', ciConds ) ):
+    wrong = sorted( set( v for v in found if v != RUNNER ) )
+    if not found:
+        print( 'FAIL ci.yml: no macOS %s found — the extractor read nothing, or the macOS legs left CI' % what )
+    elif wrong:
+        print( 'FAIL ci.yml: %d of %d macOS %ss name %s, not the release runner %s — a leg tests another toolchain, or a condition no longer matches its leg'
+               % ( sum( 1 for v in found if v != RUNNER ), len( found ), what, ', '.join( wrong ), RUNNER ) )
+    else:
+        print( 'PASS ci.yml: all %d macOS %ss name the release runner %s' % ( len( found ), what, RUNNER ) )
+wrongX = sorted( set( x for x in ciXcodes if x != XCODE ) )
+if not ciDevDirs or len( ciXcodes ) != len( ciDevDirs ) or wrongX:
+    print( 'FAIL ci.yml: %d DEVELOPER_DIR line(s) name %d Xcode path(s) (%s), not exactly one %s each' % ( len( ciDevDirs ), len( ciXcodes ), ', '.join( sorted( set( ciXcodes ) ) ) or 'none', XCODE ) )
+else:
+    print( 'PASS ci.yml: all %d DEVELOPER_DIR lines name the release Xcode %s' % ( len( ciDevDirs ), XCODE ) )
+wantTarget = "${{ matrix.os == '%s' && '%s' || '' }}" % ( RUNNER, MINOS )
+if len( ciTargets ) != len( ciDevDirs ) or any( t.strip() != wantTarget for t in ciTargets ):
+    print( 'FAIL ci.yml: %d MACOSX_DEPLOYMENT_TARGET line(s) beside %d DEVELOPER_DIR line(s); each macOS job env must set exactly %s (found: %s)'
+           % ( len( ciTargets ), len( ciDevDirs ), wantTarget, '; '.join( t.strip() for t in ciTargets ) or 'none' ) )
+else:
+    print( 'PASS ci.yml: every job env that pins the Xcode also builds at MACOSX_DEPLOYMENT_TARGET %s, the release minimum' % MINOS )
+print( 'DONE' )
+PY
+armVerdict="$( python3 "$TMP/armverdict.py" "$ROOT/.github/workflows/release.yml" "$ROOT/.github/workflows/ci.yml" 2>&1 )"
+while IFS= read -r row; do
+    case "$row" in
+        PASS\ *) ok "#2i ${row#PASS }" ;;
+        FAIL\ *) no "#2i ${row#FAIL }" ;;
+    esac
+done <<<"$armVerdict"
+printf '%s\n' "$armVerdict" | grep -q '^DONE$' \
+    || no "#2i the release.yml/ci.yml verdict never finished — no evidence either way: $( printf '%s' "$armVerdict" | tail -3 )"
+# The controls: each mutation must TAKE (the copy differs) and must turn exactly its own row red.
+python3 - "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml" <<'PY'
+import re, sys
+rel, relOut, ci, ciOut = sys.argv[ 1: ]
+text = open( rel ).read()
+open( relOut, 'w' ).write( re.sub( r'\n      - name: [^\n]*\n(?:(?!\n      - )[\s\S])*?otool -l build/ripwire[\s\S]*?(?=\n\n|\n      - )', '', text, count=1 ) )
+text = open( ci ).read()
+open( ciOut, 'w' ).write( re.sub( r"(ASAN_OPTIONS:[^\n]*matrix\.os[ \t]*==[ \t]*')macos-[^']*'", r"\1macos-14'", text, count=1 ) )
+PY
+if cmp -s "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml"; then
+    no "#2i control: removing the otool minos step did not take — the copy is byte-identical to release.yml, nothing was checked"
+elif python3 "$TMP/armverdict.py" "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" 2>&1 | grep -q '^FAIL leg .*no step reads the minimum macOS back off build/ripwire'; then
+    ok "#2i control: release.yml without the otool minos step is refused by name"
+else
+    no "#2i control: release.yml without the otool minos step was NOT refused — the minos row cannot fail"
+fi
+if cmp -s "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml"; then
+    no "#2i control: re-pointing ASAN_OPTIONS at macos-14 did not take — the copy is byte-identical to ci.yml, nothing was checked"
+elif python3 "$TMP/armverdict.py" "$ROOT/.github/workflows/release.yml" "$TMP/ci-oldasan.yml" 2>&1 | grep -q '^FAIL ci.yml: .*matrix.os conditions name macos-14'; then
+    ok "#2i control: a ci.yml ASAN_OPTIONS condition still naming macos-14 is refused by name"
+else
+    no "#2i control: a ci.yml ASAN_OPTIONS condition naming macos-14 was NOT refused — a half-done runner move passes"
+fi
 
 # ── #3: RIPWIRE_NATIVE=ON stays opt-in and unaffected by the pretend-Linux hook ─────────────────────────
 nativeFlags="$( run_probe "$TMP/native" -DRIPWIRE_NATIVE=ON -DRIPWIRE_PRETEND_LINUX=ON )"
