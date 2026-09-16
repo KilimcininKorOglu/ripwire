@@ -42,8 +42,8 @@ Work in a git worktree, not the main checkout. Run gates in the foreground.
   ([#70](https://github.com/redhat-et/ripwire/issues/70)).
   - ripwire already indexes Java, TypeScript, JavaScript, Rust, C, C++, Ruby, Python, C#, Dart and
     PHP.
-  - Kotlin is in review ([#126](https://github.com/redhat-et/ripwire/pull/126)), and Scala has its
-    own kit.
+  - Kotlin landed in [#126](https://github.com/redhat-et/ripwire/pull/126) (merged 2026-09-11), and
+    Scala has its own kit.
   - **Visual Basic is the other gap.**
 - **First-class means the whole tool**, not a navigation-only row. That covers bodies, complexity,
   clones, lint, `--match`, parse health and the call graph, all from the one offline binary without
@@ -530,15 +530,14 @@ candidates only when its own language defines no candidate of that name.
 - Its stated cost is one Kotlin pair across retrofit, ktor and nowinandroid: a same-directory
   cross-language target can lose to same-named own-language definitions elsewhere.
 
-**Current status.** As of 2026-09-11:
+**Current status.**
 
-- #126 is still open, and that filter (`keepOwnJvmLanguageCandidates` in the review fix) is not on
-  `main`.
+- #126 merged on 2026-09-11, so that filter is on `main`: `keepOwnJvmLanguageCandidates` in
+  `src/graph.h`.
 - [#136](https://github.com/redhat-et/ripwire/pull/136) has merged (d752d953), so those silent drops
   now show as `declined=`.
 
-Search for the filter before you design. If #126 has landed, generalise its filter instead of writing
-a second one.
+Generalise that filter for a VB↔C# bridge instead of writing a second one beside it.
 
 **Case folding makes the .NET version worse.** A folded VB lookup for `tostring` meets every C#
 `ToString`, `Equals` and `Dispose` in the solution.
@@ -635,8 +634,8 @@ a capture recorded on your branch describes a tree that no longer exists after t
 | the gate count | `python3 docs/gatecount_build.py` |
 | `test/printf_parity.manifest` | re-pin after the `--help` text moves |
 
-**A clean merge with the wrong population.** Git merges text, not meaning. Kotlin appends to
-`enum class Lang` too, and a textually clean merge can still leave:
+**A clean merge with the wrong population.** Git merges text, not meaning. Other language PRs append
+to `enum class Lang` too (#233 adds GDScript), and a textually clean merge can still leave:
 
 - `kLangCount` naming the wrong last enumerator
 - `kLangTable`'s array size one short
