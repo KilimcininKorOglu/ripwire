@@ -35,8 +35,14 @@ definition's and a reference's `Lang`, 17 for `RefRole` (a call demoted to `role
 
 How reachable, stated plainly. An ingest-cache record is covered by its own 32-bit digest and the offset table by
 another, so a random bit flip is refused before any enum is read; an out-of-range byte gets there only from a blob
-written wrong or edited with its digests rebuilt — a committed team artifact, a copied cache directory. For that
-cache this is defence in depth. The memo has **no checksum**, so any flipped or hand-written byte reached the write.
+written wrong or edited with its digests rebuilt — a committed team artifact handed to `--cache=`, a copied cache
+directory. For that cache this is defence in depth, and hardening rather than an integrity boundary: a blob whose
+digests were rebuilt can still carry wrong in-range facts. The span-tier memo is read ONLY from the per-user cache
+directory ladder (`$TMPDIR/ripwire`, `$XDG_CACHE_HOME/ripwire`, `/tmp/ripwire-<uid>`; mode 0700 and owner-checked,
+failing closed otherwise), never from a repository or a `--cache=` path, so a cloned repository cannot supply one;
+reaching the out-of-bounds write took storage corruption or a write by the same user. And the memo still has **no
+checksum**: an in-range flip (a tier re-labelled, a span offset moved) is still believed and still changes a
+`--grep` answer. This change bounds out-of-range bytes only.
 
 Every enum byte is now validated at the read. The ingest readers go through one helper, `ByteR::enumU8`, which folds
 a failure into the reader's existing `ok` flag, so the record takes the refusal path a short read already takes:
