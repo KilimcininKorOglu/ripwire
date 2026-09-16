@@ -524,6 +524,69 @@ inline ExclTempFile createExclTempFile( const std::string& prefix, std::string_v
     return ExclTempFile();
 }
 
+// A descriptor that closes itself: the RAII owner for a one-shot read. Move-only.
+class OwnedFd
+{
+public:
+    explicit OwnedFd( int fd ) noexcept : fd_( fd ) {}
+    OwnedFd( const OwnedFd& )            = delete;
+    OwnedFd& operator=( const OwnedFd& ) = delete;
+    OwnedFd& operator=( OwnedFd&& )      = delete;
+    OwnedFd( OwnedFd&& other ) noexcept : fd_( other.fd_ ) { other.fd_ = -1; }
+    ~OwnedFd()
+    {
+        if( fd_ >= 0 )
+        {
+            ::close( fd_ );
+        }
+    }
+    int  get() const noexcept   { return fd_; }
+    bool valid() const noexcept { return fd_ >= 0; }
+
+private:
+    int fd_ = -1;
+};
+
+// Read the whole of `path` into `out` through ONE owned descriptor, refusing a symlink at the final component
+// (O_NOFOLLOW) and anything that is not a regular file (O_NONBLOCK, then fstat — a FIFO never blocks the read).
+// For a caller that has already canonicalised and confined `path`: the open cannot be redirected through a
+// link swapped in at the name afterwards, so the bytes read are the bytes of the file that was judged.
+// Returns false, with `out` empty, on any refusal or read failure; the caller words its own refusal.
+inline bool readWholeNoFollow( const std::string& path, std::string& out )
+{
+    out.clear();
+    const OwnedFd fd( ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+    if( !fd.valid() )
+    {
+        return false;
+    }
+    struct stat openedSt{};
+    if( ::fstat( fd.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+    {
+        return false;
+    }
+    char buf[ 8192 ];
+    for( ;; )
+    {
+        const ssize_t n = ::read( fd.get(), buf, sizeof( buf ) );
+        if( n > 0 )
+        {
+            out.append( buf, static_cast<std::size_t>( n ) );
+            continue;
+        }
+        if( n == 0 )
+        {
+            return true;
+        }
+        if( errno == EINTR )
+        {
+            continue;
+        }
+        out.clear();
+        return false;
+    }
+}
+
 // ── the read half (round 3) ───────────────────────────────────────────────────────────────────────────
 
 // What the no-follow open produced, and the handle the caller reads through. `opened` is the OPEN, not the

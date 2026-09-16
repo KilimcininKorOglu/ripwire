@@ -52,6 +52,18 @@ printf 'RIPWIRE_GATE_SECRET_MARKER=abc123\n' >"$D/secret/creds.txt"
 printf 'def alpha( x ):\n    return 42\n' >"$D/plans/good"
 ln -s ../secret/creds.txt "$D/plans/link"
 
+# (9) a DIRECTORY symlink inside the plan dir, pointing OUT, plus a `..` payload. The lexical fold cancels
+# `dirlink/..` to an in-dir spelling, while the kernel resolving the unfolded path follows dirlink out of the
+# tree first and only then applies `..`; the confinement check must judge the same path the read will open.
+# Its own out-of-plan file, with a neutral marker, so the corpus-poison check is unambiguous.
+mkdir -p "$D/outside/sub"
+printf 'RIPWIRE_GATE_OUTSIDE_MARKER=zzz999\n' >"$D/outside/data.txt"
+ln -s ../outside/sub "$D/plans/dirlink"
+# (9-ctrl) the same shape, but the dir symlink stays INSIDE the plan dir: `indirlink/../good` is a legitimate
+# in-dir payload that must still be ALLOWED — the fix must reject the out-of-plan case without rejecting this.
+mkdir -p "$D/plans/indir"
+ln -s indir "$D/plans/indirlink"
+
 plan(){ printf '{"version":%s,"edits":[{"op":"replace_symbol_body","target":"alpha","payload":"%s"}]}\n' "$2" "$3" >"$D/plans/$1.json"; }
 plan escape 1 '../secret/creds.txt'
 plan abs     1 '/etc/hosts'
@@ -59,6 +71,8 @@ plan sym     1 'link'
 plan gone    1 '../../../nope'
 plan good    1 'good'
 plan qver    '"1"' 'good'
+plan dirsym  1 'dirlink/../data.txt'
+plan dirctrl 1 'indirlink/../good'
 
 BEFORE="$( hashcorpus "$D/corpus" )"
 POISONED=0
@@ -163,6 +177,23 @@ case "$POISONED" in
     2) no "a plan spliced the secret marker into the corpus";;
     *) no "a plan modified the corpus";;
 esac
+
+echo
+echo "=== 9. a dir-symlink + '..' out-of-plan payload refuses; an in-root dir-symlink + '..' is allowed ==="
+runplan dirsym plans/dirsym.json --apply
+[ "$RC" != 0 ] \
+    && ok "the dir-symlink + '..' out-of-plan payload refuses" \
+    || no "the dir-symlink + '..' out-of-plan payload was accepted"
+grep -q "resolves to '/.*outside/data.txt'" "$TMP/dirsym.err" \
+    && ok "the refusal names the resolved path the read would have opened" \
+    || no "the refusal does not name the resolved out-of-plan target: $( head -1 "$TMP/dirsym.err" )"
+grep -rq 'RIPWIRE_GATE_OUTSIDE_MARKER' "$D/corpus" \
+    && no "an out-of-plan byte from the dir-symlink payload reached the corpus" \
+    || ok "no out-of-plan byte from the dir-symlink payload reached the corpus"
+runplan dirctrl plans/dirctrl.json --dry-run
+[ "$RC" = 0 ] \
+    && ok "an in-root dir-symlink + '..' payload is still accepted (the fix does not over-refuse)" \
+    || no "an in-root dir-symlink + '..' payload was wrongly refused: $( head -1 "$TMP/dirctrl.err" )"
 
 echo
 echo "=== 8. (A7) a QUOTED version is not numeric 1 ==="
