@@ -1969,8 +1969,8 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // suite the moment the two disagree, and `test/qschemetripcheck.sh` (which previously hashed only quality.h
 // functions and never looked at ingest.cpp — precisely why this shipped) now hashes the ingest-side constant
 // lines too. Bumping kParserVer without updating these two lines is a hard gate failure, not a silent miss.
-// FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
-// `static_assert` — this lane's file boundary forbade editing those files.
+// The FOLLOW-UP this note asked for is done the other way round: ingest_cache.h, which includes this header, holds
+// `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
 constexpr std::uint32_t kIngestParserVerMirror    = 96;   // MUST equal ingest.cpp's kParserVer   (gated)
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
@@ -2867,11 +2867,15 @@ inline std::string qbodyCachePath( const std::string& repoHex, const std::string
     return shaKeyedCachePath( "qbody", repoHex, exclHex, refSha );
 }
 
-// append one trivially-copyable POD to the blob buffer (native layout; see the determinism note above).
+// append one POD to the blob buffer (native layout; see the determinism note above). CONSTRAINED, not merely asserted
+// trivially copyable: a trivially copyable struct can still carry padding bytes, whose values are indeterminate, and a
+// float has more than one byte spelling of one value (-0.0 beside 0.0, many NaNs). Either would write a blob whose
+// bytes differ between two runs over the same facts. Every call site passes a fixed-width integer, and the constraint
+// keeps it that way: has_unique_object_representations is false for any type with padding or a floating-point member.
 template<class T>
+    requires std::has_unique_object_representations_v<T>
 inline void qsnapPut( std::string& buf, const T& v )
 {
-    static_assert( std::is_trivially_copyable_v<T>, "qsnap serializes PODs only" );
     buf.append( reinterpret_cast<const char*>( &v ), sizeof( T ) );
 }
 

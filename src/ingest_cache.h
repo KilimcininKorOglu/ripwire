@@ -1046,6 +1046,15 @@ constexpr std::uint32_t kParserVer    = 96;           // bump on any grammar/.sc
                                                       //    kMaxJsonConfigBytes crawl skip + kMaxJsonNestDepth hostile-data guard;
                                                       //    the crawl/parse SET changed; 27: +C (.c); 26: +JSON config keys)
 
+// THE QUALITY-CACHE MIRROR, as a compile error. quality.h keys every qsnap/qbody blob on kIngestCacheVersionMirror and
+// kIngestParserVerMirror, because quality.h cannot see these two constants from every translation unit that includes it.
+// Until now only test/qextractionkeycheck.sh kept the pair equal, by parsing both files. A kParserVer bump that missed
+// the mirror would re-serve quality snapshots computed under the old extraction, which is the poisoned-cache defect the
+// mirror exists for (quality.h's r27 note). This translation unit includes both files, so the equality is a static_assert
+// here. The gate still runs its source-text arm; this makes the same fact fail the build first.
+static_assert( quality::kIngestParserVerMirror == kParserVer && quality::kIngestCacheVersionMirror == kCacheVersion,
+               "quality.h's kIngestParserVerMirror / kIngestCacheVersionMirror must equal kParserVer / kCacheVersion — bump both in one commit" );
+
 // A1 (team-index artifact): architecture/ABI tag for the cache-blob header. The blob is NATIVE-ENDIAN —
 // ByteW/ByteR memcpy raw ints (see ByteW below), no portable varint/LE re-encoding — so it is only safely
 // consumable on a machine with the same integer byte order AND pointer width that WROTE it. This one byte
@@ -1195,6 +1204,12 @@ struct CacheEntry
 };
 static_assert( sizeof( CacheEntry ) == kCacheEntryBytes, "CacheEntry must be the exact 32-byte on-disk row (no padding)" );
 static_assert( alignof( CacheEntry ) == 8, "CacheEntry must stay 8-byte aligned so the table is a raw array copy" );
+// The size pin above does NOT prove "no padding", although its message says so. Narrow recSum from u32 to u16 and the
+// struct still rounds up to 32 bytes, with two indeterminate bytes in every row of a committed, checksummed blob: the
+// determinism contract broken, and a portable cache that differs by build. has_unique_object_representations is the
+// compiler's own answer to "is every byte of this type part of its value", so it refuses padding (and any float).
+static_assert( std::is_trivially_copyable_v<CacheEntry> && std::has_unique_object_representations_v<CacheEntry>,
+               "CacheEntry is copied to disk as raw bytes — it must carry no padding bytes and no float" );
 
 // The per-record digest stored in the table: the low half of the same 8-lane FNV the trailer uses.
 // 32 bits is a detection budget, not a security one — the whole-blob guards above sit in front of it.
