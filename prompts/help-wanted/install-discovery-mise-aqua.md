@@ -302,8 +302,9 @@ directories); keep the line's shape; and assert the probe order against cases (a
   PATH, is evidence for question 6. #68 has a claimant mid-run, so change the line shape only in the PR
   that updates every parser. None of the three is a duplicate.
 - **#224** (a doctor row for cross-translation-unit layout drift) and **#233** also edit
-  `src/verbs_doctor.h`, and #224 grows the named row set in `test/doctorcheck.sh`. **#240** edits
-  `scripts/install.sh`, `release.yml` and `INSTALL.md`. Expect small merges.
+  `src/verbs_doctor.h`, and #224 grows the named row set in `test/doctorcheck.sh`. Expect small merges.
+  **#240** (merged 2026-09-16) ended Intel macOS binaries and changed `scripts/install.sh`, `release.yml`,
+  `INSTALL.md` and `test/releaseinstallcheck.sh`; start from a `main` that includes it.
 
 ---
 
