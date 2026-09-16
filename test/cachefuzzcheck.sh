@@ -794,10 +794,12 @@ PYEOF3
                 ok "[$1] exit 0, byte-identical, and the recompute rewrote the rejected blob"
             fi
         }
+        # The unbounded row is a CORRECTNESS row: it proves the blob is refused and rewritten, and it is named so,
+        # because on an overcommitting allocator it cannot see the allocation. Only the bounded and ASan legs can.
         for name in qchurn_huge_commit_count qchurn_huge_path_count; do
             cp "$MUTDIR/$name.bin" "$CBLOB"
             crun "$BIN" >"$TMP/c_$name.out" 2>"$TMP/c_$name.err"; rc=$?
-            judge_qchurn "$name" "$rc" "$TMP/c_$name.out" "$TMP/c_$name.err"
+            judge_qchurn "correctness:$name" "$rc" "$TMP/c_$name.out" "$TMP/c_$name.err"
             if [ -n "$CBOUND" ]; then
                 cp "$MUTDIR/$name.bin" "$CBLOB"
                 bounded "$CBOUND" crun "$BIN" >"$TMP/cb_$name.out" 2>"$TMP/cb_$name.err"; rc=$?
@@ -807,6 +809,8 @@ PYEOF3
                 cp "$MUTDIR/$name.bin" "$CBLOB"
                 bounded asan crun "$ASAN_BIN" >"$TMP/ca_$name.out" 2>"$TMP/ca_$name.err"; rc=$?
                 judge_qchurn "asan:$name" "$rc" "$TMP/ca_$name.out" "$TMP/ca_$name.err"
+            elif [ "$CBOUND" != "asan" ]; then
+                skip "[asan:$name] no separate sanitizer binary at ${ASAN_BIN:-<unset>} — the instrumented leg did not run"
             fi
             cp "$TMP/c_good.bin" "$CBLOB"
         done

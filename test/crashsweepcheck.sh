@@ -34,8 +34,10 @@
 #        `need = n * width; if( left < need )`). Loop headers do not count — `i < n` walks a count, it does
 #        not bound it. Red on the base: quality.h deserializeSnapshot `n` and deserializeRawCommitStream
 #        `nCommits`/`nPaths` — the counts that reached reserve() straight from a checksum-valid blob.
-#        CATCHES a count decoded and allocated in one function. MISSES a count decoded in one function and
-#        allocated in another, a primitive not in the list, and a bound that is textually present but wrong.
+#        CATCHES a count decoded and allocated in one function, alone or inside a larger size expression (sizeof
+#        and .size() terms are stripped, not taken as proof). MISSES a count decoded in one function and allocated
+#        in another, a primitive not in the list, a bound that is textually present but wrong, and a sizeof or
+#        .size() term whose parentheses nest (its identifiers are then judged like any other).
 #   (S2) EVERY RAW STREAM OR DESCRIPTOR ACQUISITION IS ACCOUNTED FOR. Each fopen/open/fdopen/openat/opendir/
 #        open_memstream/popen call site must appear in the registry below with the fact that makes it safe
 #        (owned by a destructor, closed on every return, or handed to a closer). A NEW site fails: wrap it in
@@ -144,7 +146,9 @@ fnStarts = defaultdict(list)
 for f, ln, fn, name in match('(function_definition declarator: (function_declarator declarator: (_) @name))'):
     fnStarts[(f, name.split("::")[-1])].append(ln)
 
-SAFE_SIZE = re.compile(r"(\.|->)(size|length)\(\s*\)|\bsizeof\b")   # sized by an in-memory container or a type
+# Terms that size by an in-memory container or a type. They are STRIPPED from the size expression, not used to
+# excuse it: `reserve( n * sizeof( T ) )` still has to bound `n`.
+SAFE_TERM = re.compile(r"\bsizeof\s*\([^()]*\)|\bsizeof\s+[A-Za-z_]\w*|[A-Za-z_][\w.\[\]]*\s*(\.|->)\s*(size|length)\(\s*\)")
 def bound_in(f, fn, ident, allocLine):
     starts = [s for s in fnStarts.get((f, fn), []) if s <= allocLine]
     start = max(starts) if starts else max(1, allocLine - 200)
@@ -168,9 +172,10 @@ def bound_in(f, fn, ident, allocLine):
 
 with open(os.path.join(OUT, "s1.tsv"), "w") as out:
     for f, ln, fn, _kind, size in allocs:
-        if (f, fn) not in readerFns or SAFE_SIZE.search(size):
+        if (f, fn) not in readerFns:
             continue
-        idents = [i for i in re.findall(r"\b[A-Za-z_]\w*\b", size) if not re.match(r"^(k[A-Z]\w*|std|size_t|static_cast|uint32_t|uint64_t|int)$", i)]
+        rest = SAFE_TERM.sub(" ", size)
+        idents = [i for i in re.findall(r"\b[A-Za-z_]\w*\b", rest) if not re.match(r"^(k[A-Z]\w*|std|size_t|static_cast|uint32_t|uint64_t|int)$", i)]
         if not idents:
             continue
         unbounded = [i for i in idents if not bound_in(f, fn, i, ln)]
@@ -245,8 +250,8 @@ crossref.h	evalStray	fopen	1	closes	returns only on a failed open; fclose after 
 crossref.h	streamBlobs	fopen	1	closes	returns only on a failed open; fclose after the list is written
 crossref.h	streamBlobs	popen	1	closes	the read loop leaves by break/continue only; pclose then unlink
 darkflags.h	readWhole	fopen	1	closes	fclose before the size-cap return and before the final return
-docparse.h	readRegularFile	fdopen	1	owned	adopted by rw::OwnedFile in the declaration that calls it
-docparse.h	readRegularFile	open	1	owned	fdopen'd straight into rw::OwnedFile; ::close only when fdopen declined it
+docparse.h	openRegularFileStream	fdopen	1	owned	stored straight into pathguard::NoFollowRead, whose destructor fcloses it
+docparse.h	openRegularFileStream	open	1	owned	fdopen'd into NoFollowRead; ::close only when fdopen declined it
 docparse.h	runMarkitdown	popen	1	closes	no exit between popen and pclose
 gitmine.h	gitCommandLines	popen	1	closes	status = pclose after the loop; no exit between
 gitmine.h	gitFileAuthors	popen	1	closes	continue-only loop; pclose after it
@@ -581,7 +586,9 @@ B2XDG="$TMP/b2xdg"; mkdir -p "$B2XDG"
 b2run(){ bounded_run env -u TMPDIR XDG_CACHE_HOME="$B2XDG" "$1" "$B2" --quality-delta; }
 normalize_at(){ sed -E 's/ at="[0-9a-f]+(\+dirty)?"/ at="AT"/'; }
 b2run "$BIN" 2>/dev/null | normalize_at >"$TMP/b2_truth.txt"
-[ -s "$TMP/b2_truth.txt" ] || no "B2: the clean --quality-delta produced nothing — cannot judge the shapes"
+if [ ! -s "$TMP/b2_truth.txt" ]; then
+    no "B2: the clean --quality-delta produced nothing — cannot judge the shapes"
+else
 for name in .ripwire_config .ripwire_quality_acks; do
     for shape in fifo directory devzero urandom; do
         case "$shape" in
@@ -608,6 +615,7 @@ for name in .ripwire_config .ripwire_quality_acks; do
         rm -rf "$B2/$name"
     done
 done
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 echo
