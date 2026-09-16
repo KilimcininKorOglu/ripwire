@@ -10,8 +10,8 @@
 // WHAT IS NOT HERE. Every piece of logic that needs no Win32 call — the errno table, UTF-8/UTF-16, quoting, reparse
 // classification, time and wait-status conversion — is in os_win32_logic.h, compiled and tested on every platform.
 //
-// TRANSITIONAL. The locks, the cache-directory ACLs, the processes and the sockets still delegate to PR #44's compat
-// layer (platform_compat.{h,cpp}, force-included) until their own bodies land; each such section says so.
+// TRANSITIONAL. The processes and the sockets still delegate to PR #44's compat layer (platform_compat.{h,cpp},
+// force-included) until their own bodies land; each such section says so.
 
 #include "platform_compat.h"   // TRANSITIONAL: force-included today; named so the dependency is visible
 #include "os.h"
@@ -131,23 +131,32 @@ const std::string& userTempDirectory()
     return directory;
 }
 
-// A program path as the -W calls take it: Git for Windows' "/tmp" rebased onto the user's temp directory (only a path
-// that starts with "/tmp" pays for the lookup), then WidePath's UTF-16 — '\' separators, "/c/..." as "C:\...", on a
-// stack buffer below MAX_PATH.
+// A program path as the -W calls take it: Git for Windows' "/tmp" rebased onto the user's temp directory, a POSIX
+// fail-closed "/dev/null/..." made unopenable (os_win32_logic.h says why) — only a path starting "/tmp" or "/dev" pays
+// for either — then WidePath's UTF-16: '\' separators, "/c/..." as "C:\...", on a stack buffer below MAX_PATH.
 class NativePath
 {
 public:
-    explicit NativePath( const char* path )
-        : rebased_( path != nullptr && std::strncmp( path, "/tmp", 4 ) == 0 ? oswin::rebaseMsysTmp( path, userTempDirectory() ) : std::string() ),
-          wide_( rebased_.empty() ? path : rebased_.c_str() )
-    {
-    }
+    explicit NativePath( const char* path ) : rebased_( rebase( path ) ), wide_( rebased_.empty() ? path : rebased_.c_str() ) {}
 
     [[nodiscard]] bool    ok() const { return wide_.ok(); }
     [[nodiscard]] int     error() const { return wide_.error(); }
     [[nodiscard]] LPCWSTR c_str() const { return reinterpret_cast<LPCWSTR>( wide_.c_str() ); }
 
 private:
+    static std::string rebase( const char* path )
+    {
+        if( path == nullptr || path[ 0 ] != '/' )
+        {
+            return {};
+        }
+        if( std::strncmp( path, "/tmp", 4 ) == 0 )
+        {
+            return oswin::rebaseMsysTmp( path, userTempDirectory() );
+        }
+        return std::strncmp( path, "/dev/null", 9 ) == 0 ? oswin::rebaseDevNull( path ) : std::string();
+    }
+
     std::string     rebased_;
     oswin::WidePath wide_;
 };
@@ -361,6 +370,116 @@ int statPath( const char* path, bool noFollow, stat_t* st )
     return statByHandle( native.c_str(), noFollow, st );
 }
 
+// ── identity: the process's user, its uid, and who owns a file ─────────────────────────────────────────────────────
+// lstat's st_uid is getuid() exactly when the file's owner is this user — or BUILTIN\Administrators while this token
+// holds that group, the owner Windows gives an object an elevated administrator creates — and kOwnerSomeoneElse
+// otherwise. getuid() is the relative identifier of the user's SID (1001 for a first local account), stable across runs.
+constexpr uid_t kOwnerSomeoneElse = static_cast<uid_t>( -3 );
+
+struct TokenIdentity
+{
+    std::vector<BYTE> userSid;
+    uid_t             uid               = 1000;
+    bool              hasAdministrators = false;
+};
+
+const TokenIdentity& tokenIdentity()
+{
+    static const TokenIdentity identity = []
+    {
+        TokenIdentity out;
+        HANDLE        token = nullptr;
+        if( ::OpenProcessToken( ::GetCurrentProcess(), TOKEN_QUERY, &token ) )
+        {
+            DWORD bytes = 0;
+            (void)::GetTokenInformation( token, TokenUser, nullptr, 0, &bytes );
+            std::vector<BYTE> buffer( bytes );
+            if( bytes != 0 && ::GetTokenInformation( token, TokenUser, buffer.data(), bytes, &bytes ) )
+            {
+                const PSID sid = reinterpret_cast<TOKEN_USER*>( buffer.data() )->User.Sid;
+                out.userSid.assign( static_cast<BYTE*>( sid ), static_cast<BYTE*>( sid ) + ::GetLengthSid( sid ) );
+                const UCHAR subAuthorityCount = *::GetSidSubAuthorityCount( sid );
+                if( subAuthorityCount > 0 )
+                {
+                    out.uid = static_cast<uid_t>( *::GetSidSubAuthority( sid, subAuthorityCount - 1U ) );
+                }
+            }
+            ::CloseHandle( token );
+        }
+        BYTE  administrators[ SECURITY_MAX_SID_SIZE ];
+        DWORD administratorsBytes = sizeof( administrators );
+        BOOL  member              = FALSE;
+        if( ::CreateWellKnownSid( WinBuiltinAdministratorsSid, nullptr, administrators, &administratorsBytes )
+            && ::CheckTokenMembership( nullptr, administrators, &member ) )
+        {
+            out.hasAdministrators = member != FALSE;
+        }
+        if( out.uid == kOwnerNotRead || out.uid == kOwnerSomeoneElse )
+        {
+            out.uid = 1000;   // never one of the two sentinels an ownership test compares against
+        }
+        return out;
+    }();
+    return identity;
+}
+
+bool isThisUser( PSID sid )
+{
+    const TokenIdentity& identity = tokenIdentity();
+    return !identity.userSid.empty() && ::EqualSid( sid, const_cast<PSID>( identity.userSid.data() ) );
+}
+
+bool ownedByThisUser( PSID owner )
+{
+    return owner != nullptr && ( isThisUser( owner ) || ( tokenIdentity().hasAdministrators && ::IsWellKnownSid( owner, WinBuiltinAdministratorsSid ) ) );
+}
+
+// An ACL entry POSIX mode 0700 allows: this user, the owner (OWNER RIGHTS, CREATOR OWNER), Administrators or SYSTEM —
+// the principals that can reach a POSIX user's 0700 directory too (root).
+bool isOwnerClassSid( PSID sid )
+{
+    return isThisUser( sid ) || ::IsWellKnownSid( sid, WinCreatorOwnerRightsSid ) || ::IsWellKnownSid( sid, WinCreatorOwnerSid )
+        || ::IsWellKnownSid( sid, WinBuiltinAdministratorsSid ) || ::IsWellKnownSid( sid, WinLocalSystemSid );
+}
+
+// Owner and permission bits from the handle's security descriptor: st_uid as above; mode 0700 when the DACL is
+// PROTECTED (inherits nothing) and every allow entry names an owner-class principal, else the attribute-derived bits
+// stat reports. A descriptor that cannot be read leaves st as it was (st_uid = kOwnerNotRead: fails closed).
+void readOwnerAndMode( HANDLE handle, stat_t* st )
+{
+    PSID                 owner      = nullptr;
+    PACL                 dacl       = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if( ::GetSecurityInfo( handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr, &dacl, nullptr, &descriptor ) != ERROR_SUCCESS )
+    {
+        return;
+    }
+    st->st_uid = ownedByThisUser( owner ) ? tokenIdentity().uid : kOwnerSomeoneElse;
+    WORD  control  = 0;
+    DWORD revision = 0;
+    bool  ownerOnly = dacl != nullptr && ::GetSecurityDescriptorControl( descriptor, &control, &revision ) && ( control & SE_DACL_PROTECTED ) != 0;
+    for( DWORD aceIndex = 0; ownerOnly && aceIndex < dacl->AceCount; ++aceIndex )
+    {
+        LPVOID ace = nullptr;
+        if( !::GetAce( dacl, aceIndex, &ace ) )
+        {
+            ownerOnly = false;
+            break;
+        }
+        const BYTE aceType = static_cast<ACE_HEADER*>( ace )->AceType;
+        if( aceType == ACCESS_DENIED_ACE_TYPE )
+        {
+            continue;
+        }
+        ownerOnly = aceType == ACCESS_ALLOWED_ACE_TYPE && isOwnerClassSid( reinterpret_cast<PSID>( &static_cast<ACCESS_ALLOWED_ACE*>( ace )->SidStart ) );
+    }
+    if( ownerOnly )
+    {
+        st->st_mode = ( st->st_mode & ~static_cast<mode_t>( 0777 ) ) | 0700;
+    }
+    ::LocalFree( descriptor );
+}
+
 // The file identity a no-follow reopen must match.
 bool sameFile( HANDLE a, HANDLE b )
 {
@@ -553,7 +672,43 @@ int fstat( int fd, stat_t* st )
 }
 
 int stat( const char* path, stat_t* st )  { return statPath( path, false, st ); }
-int lstat( const char* path, stat_t* st ) { return statPath( path, true, st ); }   // TRANSITIONAL: the owner read lands with the cache-directory bodies
+// lstat: the entry itself (a symlink or junction reports S_IFLNK), plus its owner and ACL-derived mode (see
+// readOwnerAndMode) — the one stat that pays for a security-descriptor read, because the cache-directory check
+// (`S_ISDIR && st_uid == getuid() && ( st_mode & 0777 ) == 0700`) is the caller that needs them.
+int lstat( const char* path, stat_t* st )
+{
+    const NativePath native( path );
+    if( !native.ok() )
+    {
+        return fail( native.error() );
+    }
+    constexpr DWORD kNoFollow       = FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+    bool            canReadSecurity = true;
+    HANDLE          handle = ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr );
+    if( handle == INVALID_HANDLE_VALUE && ::GetLastError() == ERROR_ACCESS_DENIED )
+    {
+        canReadSecurity = false;
+        handle          = ::CreateFileW( native.c_str(), FILE_READ_ATTRIBUTES, kShareAll, nullptr, OPEN_EXISTING, kNoFollow, nullptr );
+    }
+    if( handle == INVALID_HANDLE_VALUE )
+    {
+        return failLastError();
+    }
+    Facts facts;
+    if( !factsFromHandle( handle, facts ) )
+    {
+        const DWORD error = ::GetLastError();
+        ::CloseHandle( handle );
+        return failWin32( error );
+    }
+    fillStat( facts, false, st );
+    if( canReadSecurity && facts.fileType == FILE_TYPE_DISK )
+    {
+        readOwnerAndMode( handle, st );
+    }
+    ::CloseHandle( handle );
+    return 0;
+}
 
 // fcntl: a CRT descriptor has no status flags to read or set; F_GETFL answers 0 and F_SETFL accepts and ignores (the
 // only caller clears O_NONBLOCK, which a Windows handle never had).
@@ -597,8 +752,32 @@ int fchmod( int fd, mode_t mode )
     return ::SetFileInformationByHandle( handle, FileBasicInfo, &basic, sizeof( basic ) ) ? 0 : failLastError();
 }
 
-// ── TRANSITIONAL: locks, pipes and polling delegate until their bodies land ──────────────────────────────────
-int flock( int fd, int operation ) { return rw::compat::rw_flock( fd, operation ); }
+// flock: LockFileEx over the whole range — PR #44's rw_flock (proven by mcpeditracecheck's race trials on lennix1337's
+// machine), with its errors through the errno table: a held lock is EWOULDBLOCK under LOCK_NB, and unlocking an
+// unlocked descriptor succeeds, as POSIX's does. The lock is mandatory for the locked range on Windows, which is
+// harmless for what callers lock: dedicated .lock files nobody reads.
+int flock( int fd, int operation )
+{
+    const HANDLE handle = handleOf( fd );
+    if( handle == INVALID_HANDLE_VALUE )
+    {
+        return fail( EBADF );
+    }
+    OVERLAPPED wholeFile {};
+    if( ( operation & LOCK_UN ) != 0 )
+    {
+        if( ::UnlockFileEx( handle, 0, MAXDWORD, MAXDWORD, &wholeFile ) )
+        {
+            return 0;
+        }
+        const DWORD error = ::GetLastError();
+        return error == ERROR_NOT_LOCKED ? 0 : failWin32( error );
+    }
+    const DWORD flags = ( ( operation & LOCK_EX ) != 0 ? LOCKFILE_EXCLUSIVE_LOCK : 0 ) | ( ( operation & LOCK_NB ) != 0 ? LOCKFILE_FAIL_IMMEDIATELY : 0 );
+    return ::LockFileEx( handle, flags, 0, MAXDWORD, MAXDWORD, &wholeFile ) ? 0 : failLastError();
+}
+
+// ── TRANSITIONAL: pipes and polling delegate until the process bodies land ────────────────────────────────────
 int pipe( int fds[ 2 ] )           { return ::_pipe( fds, 65536, _O_BINARY | _O_NOINHERIT ); }
 int poll( pollfd*, nfds_t, int timeoutMs )
 {
@@ -919,9 +1098,99 @@ int rename( const char* from, const char* to )
     return failWin32( error );
 }
 
-// ── TRANSITIONAL: the cache-directory bodies (mkdir with an owner-only ACL, chmod, the owner read) land next ────
-int mkdir( const char* path, mode_t ) { return ::_mkdir( path ); }
-int chmod( const char*, mode_t )      { return 0; }
+// mkdir / chmod with mode 0700: NTFS has no mode bits, so "owner only" is an ACL — PROTECTED (nothing inherited from a
+// shared parent such as %TEMP%) and granting only the owner and Administrators: PR #44's cacheDirLadder descriptor,
+// proven by cacheisolationcheck's ACL probe (CodeRabbit 3946215433). mkdir sets it at creation, never after, and fails
+// closed if the descriptor cannot be built (CodeRabbit 3946351163). Any other mode creates with the inherited ACL.
+constexpr const wchar_t* kOwnerOnlyDescriptor = L"D:P(A;OICI;GA;;;OW)(A;OICI;GA;;;BA)";
+
+int mkdir( const char* path, mode_t mode )
+{
+    const NativePath native( path );
+    if( !native.ok() )
+    {
+        return fail( native.error() );
+    }
+    if( ( mode & 077 ) != 0 )
+    {
+        return ::CreateDirectoryW( native.c_str(), nullptr ) ? 0 : failLastError();
+    }
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( kOwnerOnlyDescriptor, SDDL_REVISION_1, &descriptor, nullptr ) )
+    {
+        return failLastError();
+    }
+    SECURITY_ATTRIBUTES security { sizeof( SECURITY_ATTRIBUTES ), descriptor, FALSE };
+    const BOOL  created = ::CreateDirectoryW( native.c_str(), &security );
+    const DWORD error   = ::GetLastError();
+    ::LocalFree( descriptor );
+    return created ? 0 : failWin32( error );
+}
+
+// chmod: 0700 writes the owner-only ACL above through a handle on the entry ITSELF, after checking that entry is not a
+// link. CodeRabbit 3946215433's open residual on #44: SetNamedSecurityInfoW on a path follows a junction, so a
+// junction planted where the cache directory should be redirected the ACL write onto its target. Here a symlink or
+// junction is refused with ELOOP and nothing is written — stricter than POSIX chmod, which follows links; the cache
+// ladder then fails closed. Other modes map the owner write bit to the read-only attribute of a file.
+int chmod( const char* path, mode_t mode )
+{
+    const NativePath native( path );
+    if( !native.ok() )
+    {
+        return fail( native.error() );
+    }
+    const bool   ownerOnly = ( mode & 077 ) == 0;
+    const DWORD  access    = FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | ( ownerOnly ? READ_CONTROL | WRITE_DAC : 0 );
+    const HANDLE handle    = ::CreateFileW( native.c_str(), access, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr );
+    if( handle == INVALID_HANDLE_VALUE )
+    {
+        return failLastError();
+    }
+    FILE_ATTRIBUTE_TAG_INFO tag {};
+    if( !::GetFileInformationByHandleEx( handle, FileAttributeTagInfo, &tag, sizeof( tag ) ) )
+    {
+        const DWORD error = ::GetLastError();
+        ::CloseHandle( handle );
+        return failWin32( error );
+    }
+    if( oswin::classifyFinalComponent( tag.FileAttributes, tag.ReparseTag ) == oswin::FinalComponent::Link )
+    {
+        ::CloseHandle( handle );
+        return fail( ELOOP );
+    }
+    int result = 0;
+    if( ownerOnly )
+    {
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        BOOL                 present    = FALSE;
+        BOOL                 defaulted  = FALSE;
+        PACL                 dacl       = nullptr;
+        if( !::ConvertStringSecurityDescriptorToSecurityDescriptorW( kOwnerOnlyDescriptor, SDDL_REVISION_1, &descriptor, nullptr )
+            || !::GetSecurityDescriptorDacl( descriptor, &present, &dacl, &defaulted ) || !present || dacl == nullptr )
+        {
+            result = failLastError();
+        }
+        else if( const DWORD error = ::SetSecurityInfo( handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                                        nullptr, nullptr, dacl, nullptr ); error != ERROR_SUCCESS )
+        {
+            result = failWin32( error );
+        }
+        if( descriptor != nullptr )
+        {
+            ::LocalFree( descriptor );
+        }
+    }
+    if( result == 0 && ( tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY ) == 0 )
+    {
+        const DWORD wanted = ( mode & 0200 ) != 0 ? ( tag.FileAttributes & ~FILE_ATTRIBUTE_READONLY ) : ( tag.FileAttributes | FILE_ATTRIBUTE_READONLY );
+        if( wanted != tag.FileAttributes && !::SetFileAttributesW( native.c_str(), wanted == 0 ? FILE_ATTRIBUTE_NORMAL : wanted ) )
+        {
+            result = failLastError();
+        }
+    }
+    ::CloseHandle( handle );
+    return result;
+}
 
 // access: F_OK/R_OK — the path exists; W_OK — and is not a read-only file; X_OK — a directory (search), or a file
 // whose extension PATHEXT lists. The UCRT's _access is never called: it rejects X_OK with the invalid-parameter
@@ -1237,7 +1506,7 @@ std::tm* localtime_r( const std::time_t* time, std::tm* result ) { return ::loca
 
 // ── TRANSITIONAL: processes delegate until their bodies land ────────────────────────────────────────────────
 pid_t      getpid()                                        { return static_cast<pid_t>( ::GetCurrentProcessId() ); }
-uid_t      getuid()                                        { return 1000; }
+uid_t      getuid()                                        { return tokenIdentity().uid; }
 int        kill( pid_t, int )                              { return fail( ENOSYS ); }
 pid_t      waitpid( pid_t, int*, int )                     { return fail( ENOSYS ); }
 std::FILE* popen( const char* command, const char* mode )  { return rw::compat::rw_popen( command, mode ); }

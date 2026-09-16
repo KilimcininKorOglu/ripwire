@@ -587,6 +587,24 @@ constexpr void normalizePathArgInPlace( char* text ) noexcept
     }
 }
 
+// POSIX code fails a path CLOSED by putting it under "/dev/null" — a device, so nothing below it can ever exist
+// (quality.h's cache ladder does this for an unsafe cache directory). On Windows that spelling would name "\\dev\\null\\..."
+// on the current drive, which any user may create. A path at or under "/dev/null/" is therefore rewritten to one that
+// contains '|', a character no Win32 file name may hold, so every open, stat and mkdir of it fails. "/dev/null" itself
+// is the NUL device. Any other path returns empty.
+inline std::string rebaseDevNull( std::string_view path )
+{
+    if( path == "/dev/null" )
+    {
+        return "NUL";
+    }
+    if( path.substr( 0, 10 ) != "/dev/null/" )
+    {
+        return {};
+    }
+    return "|unusable|" + std::string( path.substr( 9 ) );
+}
+
 // Git for Windows' "/tmp" is the user's temporary directory. A program path at or under "/tmp" — the POSIX cache
 // ladder's last rung, or a Git Bash spelling that reached the program unconverted — is rebased onto nativeTmp (read
 // once by the caller; either separator, a trailing one allowed) and returned in the program's spelling. Any other
