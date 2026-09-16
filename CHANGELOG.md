@@ -15,6 +15,40 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a cached 16-bit field wider than 16 bits was believed, and a `--with-profile` line past INT_MAX joined the wrong site
+
+Two defects found by a new static gate that asks, of the crashes fixed this cycle, whether their shapes were visible
+in source before they shipped. **The ingest cache stores five def fields (`ppAlt`, `humps`, `deepLoc`, `ev`,
+`params`) and a reference's `argCount` as 16-bit values in u32 slots, and read them back with
+`std::uint16_t( r.u32() )`**, which keeps the low bits of a value the writer can never have produced: a
+checksum-valid record carrying 0x10000 was served as 0. `ByteR::u16Of32` refuses such a record the way `enumU8`
+refuses an enum byte past its count (that file reparses, the rest of the blob stands). Measured on the
+`cachefuzzcheck` Part 3 fixture (15 files): 0x10000 and 0xFFFFFFFF in `ppAlt`, `params` and `argCount` were accepted
+before (`cached_records=15 of 15`, 6 FAIL rows) and are refused after (`14 of 15`, output byte-identical to
+`--no-cache`, clean under ASan/UBSan), while 0xFFFF is still accepted. Cost, Apple clang 21 `-O2 -DNDEBUG` on the
+ingest TU: `loadCache` 3,962 → 3,991 instructions (+0.7%, six shift-and-test branches); no other function changed.
+**`--with-profile` read its `#PROF_TSV` line column with `std::atoi`**, which is undefined past INT_MAX; libc kept
+the low 32 bits, so a line of 4294967329 read as 33 and annotated the finding at line 38 with a site that is not
+there (`heat_joined="1"`). The column now goes through `std::from_chars`, and a value that is not wholly a positive
+int is a row that carries nothing joinable, like a short row (`test/withprofilecheck.sh` arm 8: red on the base,
+`heat_joined="0"` after, with the same row at line 33 still joining as its control). `--plan-lint`'s
+`std::filesystem::absolute` fallback takes an `std::error_code` too.
+
+The new gate `test/hazardpatterncheck.sh` runs ripwire's own `--match` over `src/` (19 queries, about 5 s) for the
+hazard classes no other gate holds, and registers every site it finds with the fact that makes it safe: (A) an enum
+built from a byte reader outside `ByteR::enumU8` (1 site, validated in place); (B) every `catch` handler that
+records nothing (11 of 27 — 6 of them rows naming a drop that is silent in Release, for the disclosure lane) and
+every `throw` with no `try` in its own function (3, all permitted seams); (C) a throwing or overflow-undefined
+standard call where nothing may throw — `std::sto*`, `.at( )`, `.value( )`, the `atoi` family, `std::filesystem`
+without its error_code (72 calls read), a range-for over a directory iterator; (D) a decoded value narrowed without a
+check (1,269 casts read, 0 left); (E) a raw acquisition `crashsweepcheck` does not name — descriptors, the malloc
+family, `new`, tree-sitter parsers, queries, cursors and trees — without an owning destructor (36 sites registered,
+2 owned). Every registry is exact both ways: a new site fails, a moved count fails, and a row that matches no site
+fails, except a row marked PENDING, whose fix is already written on another branch and which asks to be deleted once
+it lands. Red on the base: 6 rule-C sites (four of them the `--eval-skills` and `ripwire wrap` filesystem throws that
+the parser-crash lane fixes) and 6 rule-D sites; green after. A probe tree with one violation and one compliant twin
+per rule proves each rule fires (13 planted violations, nothing else).
+
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
