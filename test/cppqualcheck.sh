@@ -215,9 +215,13 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # 19 -> 22 2026-09-09 (harvest githarden): githarden.h's local-config pre-scan reads the `.git` gitdir FILE, the
 # gitdir's `commondir`, and each config candidate through the same canonical helper — three sites for one probe,
 # rather than a fourth fopen/fread of its own.
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 24 ] \
-    && ok "repo: --uses=readWholeFile count=24 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 24"
+# 24 -> 22 2026-09-16 (crash lane, #249): the two fixed-name readers LEFT the canonical whole-file read for its
+# regular-file-only sibling docparse::detail::readRegularFile, because a FIFO or a device link at the name hung the
+# blocking open — quality.h's readRegisterMacrosConfig (.ripwire_config) and verbs_quality.h's ackNothingToAccept
+# (the acks ledger). Both removed sites were re-read on the merged tree; every other site is unchanged.
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 22 ] \
+    && ok "repo: --uses=readWholeFile count=22 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 22"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"
