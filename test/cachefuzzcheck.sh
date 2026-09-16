@@ -63,6 +63,8 @@
 # byte 24) are the ones deserializeSnapshot reads; the map-count and sha arms used to write at 16 and 8,
 # which a guard ahead of the one they were written for rejected first.
 #
+# ── Part 3: qchurn blob (deserializeRawCommitStream) — the same huge-count rows for the churn memo ────────
+#
 # Usage:
 #   bash test/cachefuzzcheck.sh
 #   RIPWIRE_BIN=build/ripwire RIPWIRE_ASAN_BIN=asan/ripwire bash test/cachefuzzcheck.sh
@@ -736,6 +738,81 @@ PYEOF
         skip "qsnap ASan sweep — no ASan binary supplied at $ASAN_BIN (see Part 1's skip)"
     fi
 fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# PART 3 — qchurn blob (deserializeRawCommitStream) — the co-change/churn history memo behind --for
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Same reader family as Part 2 (readQSnapBlob + qsnapGet), a different layout: magic "QCHN"(4), scheme(4),
+# fnv(key)(8), then a u32 commit count, and per commit an i64 epoch and a u32 path count ahead of its
+# length-prefixed paths. Both counts used to size a reserve before any byte of the records was read: 2^32-1
+# commits is ~128 GiB and 2^32-1 paths ~96 GiB, and Linux answered either with an uncaught std::bad_alloc
+# (SIGABRT on every --for until the blob was evicted). A rejected blob is a SILENT miss by this memo's contract
+# (a stale key is the ordinary case), so the proof that the reader refused it rather than trusting it is that
+# the recompute rewrote the blob byte-identical to the good one.
+echo
+echo "=== Part 3: qchurn blob huge counts (--for) ==="
+if command -v git >/dev/null 2>&1 && [ -n "${QREPO:-}" ] && [ -d "$QREPO" ]; then
+    crun(){ env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$@" "$QREPO" --for=helper; }
+    crun "$BIN" >"$TMP/c_truth" 2>/dev/null                 # cold: walks git log, writes the blob
+    CBLOB="$( find "$QCACHEDIR" -maxdepth 2 -type f -name 'ripwire-qchurn-*.bin' 2>/dev/null | head -1 )"
+    if [ -z "$CBLOB" ]; then
+        no "Part 3: no qchurn blob produced — cannot proceed with the qchurn rows"
+    else
+        cp "$CBLOB" "$TMP/c_good.bin"
+        crun "$BIN" >"$TMP/c_warm" 2>/dev/null
+        diff -q "$TMP/c_truth" "$TMP/c_warm" >/dev/null && ok "Part 3: the warm qchurn run is byte-identical to the cold one" \
+                                                         || no "Part 3: the warm qchurn run already differs from the cold one — the harness cannot judge a mutation"
+        python3 - "$TMP/c_good.bin" "$MUTDIR" <<'PYEOF3'
+import struct, sys
+good = open(sys.argv[1], "rb").read()
+def fnv1a64(data):
+    h = 14695981039346656037
+    for c in data:
+        h = ((h ^ c) * 1099511628211) & ((1 << 64) - 1)
+    return h
+header = good[:16]   # magic, scheme, fnv(key): the key check must pass for the count to be read at all
+rows = {
+    "qchurn_huge_commit_count": header + struct.pack("<I", 0xFFFFFFFF),
+    "qchurn_huge_path_count":   header + struct.pack("<I", 1) + struct.pack("<q", 0) + struct.pack("<I", 0xFFFFFFFF),
+}
+for name, body in rows.items():
+    open(sys.argv[2] + "/" + name + ".bin", "wb").write(body + struct.pack("<Q", fnv1a64(body)))
+PYEOF3
+        CBOUND="$( bound_mode_of "$BIN" )"
+        [ -n "$CBOUND" ] || note "qchurn huge counts: no allocation bound for a plain $( uname -s ) binary — its allocator overcommits the reservation, so only the ASan leg or a Linux run can turn these rows red"
+        judge_qchurn(){   # $1 = row label, $2 = rc, $3 = out, $4 = err
+            if [ "$2" -eq 97 ]; then
+                skip "[$1] the address-space limit could not be set here"
+            elif [ "$2" -ne 0 ] || grep -qiE 'AddressSanitizer|bad_alloc|terminate called' "$4"; then
+                no "[$1] exit $2 — a qchurn count reached an allocation before any byte-count check"; sed -n '1,6p' "$4"
+            elif ! diff -q "$TMP/c_truth" "$3" >/dev/null 2>&1; then
+                no "[$1] OUTPUT POISONED by the corrupt qchurn blob"
+            elif ! cmp -s "$TMP/c_good.bin" "$CBLOB"; then
+                no "[$1] exit 0, but the blob on disk is not the recomputed one — the reader did not reject it"
+            else
+                ok "[$1] exit 0, byte-identical, and the recompute rewrote the rejected blob"
+            fi
+        }
+        for name in qchurn_huge_commit_count qchurn_huge_path_count; do
+            cp "$MUTDIR/$name.bin" "$CBLOB"
+            crun "$BIN" >"$TMP/c_$name.out" 2>"$TMP/c_$name.err"; rc=$?
+            judge_qchurn "$name" "$rc" "$TMP/c_$name.out" "$TMP/c_$name.err"
+            if [ -n "$CBOUND" ]; then
+                cp "$MUTDIR/$name.bin" "$CBLOB"
+                bounded "$CBOUND" crun "$BIN" >"$TMP/cb_$name.out" 2>"$TMP/cb_$name.err"; rc=$?
+                judge_qchurn "bounded:$CBOUND:$name" "$rc" "$TMP/cb_$name.out" "$TMP/cb_$name.err"
+            fi
+            if [ -x "$ASAN_BIN" ] && [ "$ASAN_BIN" != "$BIN" ]; then
+                cp "$MUTDIR/$name.bin" "$CBLOB"
+                bounded asan crun "$ASAN_BIN" >"$TMP/ca_$name.out" 2>"$TMP/ca_$name.err"; rc=$?
+                judge_qchurn "asan:$name" "$rc" "$TMP/ca_$name.out" "$TMP/ca_$name.err"
+            fi
+            cp "$TMP/c_good.bin" "$CBLOB"
+        done
+    fi
+else
+    skip "Part 3: needs git and Part 2's scratch repository"
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────

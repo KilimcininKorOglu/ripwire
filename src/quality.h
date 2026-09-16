@@ -3660,8 +3660,12 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
         return false;
     }
 
+    // Every commit record is at least its epoch plus its path count, and every path at least its length prefix;
+    // both counts are measured against the bytes left before either sizes a reserve (qsnapCountFits).
+    constexpr std::size_t kMinCommitRecordBytes = sizeof( RawCommitStream::Commit::epoch ) + sizeof( std::uint32_t );
+    constexpr std::size_t kMinPathRecordBytes   = sizeof( std::uint32_t );
     std::uint32_t nCommits = 0;
-    if( !qsnapGet( p, end, nCommits ) )
+    if( !qsnapGet( p, end, nCommits ) || !qsnapCountFits( p, end, nCommits, kMinCommitRecordBytes ) )
     {
         return false;
     }
@@ -3675,7 +3679,7 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
             return false;
         }
         std::uint32_t nPaths = 0;
-        if( !qsnapGet( p, end, nPaths ) )
+        if( !qsnapGet( p, end, nPaths ) || !qsnapCountFits( p, end, nPaths, kMinPathRecordBytes ) )
         {
             return false;
         }
