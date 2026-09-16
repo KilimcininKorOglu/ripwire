@@ -819,6 +819,159 @@ else
     no "#14a observability probe FAILED: RIPWIRE_FAULT_CHARGE_BUFFER=1 produced no DEGRADED_PATH_ALERT on a build that CAN observe alerts (--version build type \"$BUILD_FLAVOUR\", unrelated-degrade-path observable=$alerts_observable) — the openChargeBuffer seam regressed. This is a FAILURE, not a skip."
 fi
 
+# ── #14f THE MEMSTREAM FINISH DEGRADE: a buffer that opened and then lost a write takes the SAME path a failed open
+#    takes, and never prints the short bytes. A memstream records a lost write in its error flag, and on macOS fflush and
+#    fclose both return 0 afterwards (measured: 19 of 19 injected realloc failures; src/infra/emit.h MemoryStream).
+#    Every site used to read buf/sz after an unchecked close. INFRA_FAULT_MEMSTREAM_FINISH=1 (non-NDEBUG only, like the
+#    switch above) makes every finish report failure after really closing the stream, so each caller's degrade runs. The
+#    observability rule is #14's: a flavour that CAN see alerts and sees none of these is a FAILURE, NDEBUG is a SKIP.
+#    (a) the alert fires for the section AND the document;
+#    (b) THE DOCUMENT IS STILL WHOLE: byte-identical to the undegraded run once every est_tokens number is masked. The
+#        document was already spent into the buffer when the finish failed, so this proves the re-render, not a replay;
+#    (c) exit 0 and well-formed XML; (d) est_tokens is the MODELLED number, below the charged one;
+#    (e) --json: the same whole-document identity on the other serializer, and the document parses;
+#    (f) --token-budget, where the buffer IS the answer and nothing can render it again: nothing reaches stdout, exit 1,
+#        and stderr says the map was withheld — against an undegraded control that prints the map at exit 0.
+mask_est(){ sed -E 's/est_tokens(="?|":)[0-9]+/est_tokens\1N/g' "$1"; }
+INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf.out" 2>"$TMP/mf.err"
+rc_mf=$?
+if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err"; then
+    ok "#14f observability probe: INFRA_FAULT_MEMSTREAM_FINISH=1 reached the chargeSection finish"
+    grep -aq 'serialize: the charge buffer did not finish whole .* MODELLED bytes' "$TMP/mf.err" \
+        && ok "#14f(a) the serialize finish alert fired and says est_tokens reports the MODELLED bytes" \
+        || no "#14f(a) serialize's finish degraded without its alert (or the alert lost the MODELLED clause)"
+    "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf_ctl.out" 2>/dev/null
+    if [ -s "$TMP/mf_ctl.out" ] && cmp -s <( mask_est "$TMP/mf_ctl.out" ) <( mask_est "$TMP/mf.out" ); then
+        ok "#14f(b) the degraded document is byte-identical to the undegraded one outside est_tokens ($( bytes_of "$TMP/mf.out" ) B) — rendered again, whole"
+    else
+        no "#14f(b) the degraded document DIFFERS from the undegraded one outside est_tokens — a finish failure lost or corrupted content"
+    fi
+    if [ "$rc_mf" -eq 0 ]; then
+        ok "#14f(c) the degraded run exits 0"
+    else
+        no "#14f(c) the degraded run exited $rc_mf — a measurement buffer failure must degrade, not fail"
+    fi
+    if command -v xmllint >/dev/null 2>&1; then
+        if xmllint --noout "$TMP/mf.out" 2>/dev/null; then
+            ok "#14f(c) the degraded document is well-formed XML"
+        else
+            no "#14f(c) the degraded document is malformed XML"
+        fi
+    fi
+    MFE="$( est_of "$TMP/mf.out" )";  MFC="$( est_of "$TMP/mf_ctl.out" )"
+    { [ -n "$MFE" ] && [ -n "$MFC" ] && [ "$MFE" -lt "$MFC" ]; } 2>/dev/null \
+        && ok "#14f(d) degraded est_tokens=$MFE is the MODELLED number, below the charged $MFC" \
+        || no "#14f(d) degraded est_tokens=$MFE vs charged $MFC — the modelled fallback is not observable"
+    INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --json --no-cache >"$TMP/mfj.out" 2>"$TMP/mfj.err"
+    "$BIN" src --top-k=10 --json --no-cache >"$TMP/mfj_ctl.out" 2>/dev/null
+    if grep -aq 'serializeJson: the charge buffer did not finish whole' "$TMP/mfj.err" && [ -s "$TMP/mfj_ctl.out" ] \
+       && cmp -s <( mask_est "$TMP/mfj_ctl.out" ) <( mask_est "$TMP/mfj.out" ) \
+       && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/mfj.out" 2>/dev/null; then
+        ok "#14f(e) --json: the finish alert fired, and the document parses and is byte-identical outside est_tokens"
+    else
+        no "#14f(e) --json under the finish fault: no alert, a different document outside est_tokens, or JSON that does not parse"
+    fi
+    "$BIN" test/fixture --token-budget=100000 --no-cache >"$TMP/mft_ctl.out" 2>/dev/null; rc_mft_ctl=$?
+    INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" test/fixture --token-budget=100000 --no-cache >"$TMP/mft.out" 2>"$TMP/mft.err"; rc_mft=$?
+    if [ "$rc_mft_ctl" -eq 0 ] && [ -s "$TMP/mft_ctl.out" ] && [ "$rc_mft" -eq 1 ] && [ ! -s "$TMP/mft.out" ] \
+       && grep -aq 'the map is withheld, not printed short' "$TMP/mft.err"; then
+        ok "#14f(f) --token-budget: the control prints $( bytes_of "$TMP/mft_ctl.out" ) B at exit 0; under the fault stdout is EMPTY, exit 1, and stderr says the map was withheld"
+    else
+        no "#14f(f) --token-budget under the finish fault: control rc=$rc_mft_ctl ($( bytes_of "$TMP/mft_ctl.out" ) B), faulted rc=$rc_mft with $( bytes_of "$TMP/mft.out" ) B on stdout — want 0/non-empty and 1/empty with the withheld line"
+    fi
+elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
+    skip "#14f memstream finish degrade arms — this NDEBUG binary has neither DEGRADED_PATH_ALERT nor the INFRA_FAULT_MEMSTREAM_FINISH switch (build type \"$BUILD_FLAVOUR\"); the PLAIN-flavour CI leg proves them"
+else
+    no "#14f observability probe FAILED: INFRA_FAULT_MEMSTREAM_FINISH=1 produced no finish alert on a build that CAN observe alerts (build type \"$BUILD_FLAVOUR\", observable=$alerts_observable) — the MemoryStream seam or its switch regressed"
+fi
+
+# ── #14g THE FENCE, over the source: every memstream is owned by rw::MemoryStream ─────────────────────────────────────
+#    [[nodiscard]] on MemoryStream::finish makes a caller that IGNORES the answer a compiler warning; it cannot stop a
+#    caller from opening a stream by hand, which is how twenty-two sites read buf/sz after an unchecked close. So, over
+#    src/, with comments stripped:
+#      (A) `open_memstream(` appears only inside `class MemoryStream` (src/infra/emit.h) and inside the one opener it is
+#          handed, serialize.h's fault-injectable openChargeBuffer;
+#      (B) openChargeBuffer is called only by openChargeStream, which hands it to MemoryStream::open;
+#      (C) no fflush/fclose names a FILE* that came from a memory stream (`= x.open(…)`, `= openChargeStream(…)` or
+#          `= open_memstream(…)`).
+#    Presence guards first (the class and its [[nodiscard]] finish exist, and the population is real), then the rule,
+#    then a POSITIVE CONTROL: the same scan over a copy of src/ with one real site turned back into the hand-written
+#    open and close it replaced must report exactly that site — a scan that cannot fail is not a fence.
+memstream_scan(){ python3 - "$1" <<'PY'
+import os, re, sys
+src = sys.argv[1]
+texts = {}
+for dirpath, _, files in os.walk( src ):
+    for fn in sorted( files ):
+        if fn.endswith( ( '.h', '.cpp', '.hpp', '.inl' ) ):
+            path = os.path.join( dirpath, fn )
+            texts[ os.path.relpath( path, src ) ] = open( path, encoding='utf-8', errors='replace' ).read().split( '\n' )
+code = lambda line: line.split( '//', 1 )[0]
+def region( rel, head, close ):
+    lines = texts.get( rel, [] )
+    start = next( ( i for i, l in enumerate( lines ) if re.match( head, l ) ), None )
+    end   = next( ( i for i in range( start, len( lines ) ) if lines[i] == close ), None ) if start is not None else None
+    return ( start, end )
+emit, ser = os.path.join( 'infra', 'emit.h' ), 'serialize.h'
+cls  = region( emit, r'class MemoryStream\b', '};' )
+opnr = region( ser, r'inline std::FILE\* openChargeBuffer\s*\(', '}' )
+strm = region( ser, r'inline std::FILE\* openChargeStream\s*\(', '}' )
+inside = lambda rel, i, r, want: rel == want and r[0] is not None and r[1] is not None and r[0] <= i <= r[1]
+finish = cls[1] is not None and any( re.search( r'\[\[nodiscard\]\]\s*MemoryStreamBytes\s+finish\s*\(', l ) for l in texts[ emit ][ cls[0]:cls[1] ] )
+holders, violations = 0, []
+OPENED = re.compile( r'([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\.open\s*\(|(?:rw::)?(?:open_memstream|openChargeStream)\s*\()' )
+for rel, lines in sorted( texts.items() ):
+    holders += sum( len( re.findall( r'\bMemoryStream\s+[A-Za-z_]\w*\s*;', code( l ) ) ) for l in lines )
+    names = { m.group( 1 ) for l in lines for m in OPENED.finditer( code( l ) ) }
+    closes = re.compile( r'\b(?:std::)?(fflush|fclose)\s*\(\s*(' + '|'.join( re.escape( n ) for n in sorted( names ) ) + r')\s*\)' ) if names else None
+    for i, l in enumerate( lines ):
+        c = code( l )
+        if re.search( r'\bopen_memstream\s*\(', c ) and not inside( rel, i, cls, emit ) and not inside( rel, i, opnr, ser ):
+            violations.append( f'{rel}:{i + 1}: (A) open_memstream outside MemoryStream' )
+        if re.search( r'\bopenChargeBuffer\s*\(', c ) and not inside( rel, i, opnr, ser ) and not inside( rel, i, strm, ser ):
+            violations.append( f'{rel}:{i + 1}: (B) openChargeBuffer called outside openChargeStream' )
+        if closes and not inside( rel, i, cls, emit ):
+            for m in closes.finditer( c ):
+                violations.append( f'{rel}:{i + 1}: (C) {m.group( 1 )}( {m.group( 2 )} ) on a memory stream' )
+print( f'holders={holders} class={int( cls[1] is not None )} finish_nodiscard={int( finish )} opener={int( opnr[1] is not None and strm[1] is not None )} violations={len( violations )}' )
+for v in violations:
+    print( 'VIOLATION ' + v )
+PY
+}
+memstream_scan "$ROOT/src" >"$TMP/ms_live.txt" 2>&1
+MS_SUMMARY="$( head -1 "$TMP/ms_live.txt" )"
+MS_HOLDERS="$( sed -nE 's/^holders=([0-9]+).*/\1/p' "$TMP/ms_live.txt" )"
+MS_VIOL="$( sed -nE 's/.* violations=([0-9]+)$/\1/p' "$TMP/ms_live.txt" )"
+{ [ -n "$MS_HOLDERS" ] && [ "$MS_HOLDERS" -ge 10 ]; } 2>/dev/null \
+    && ok "#14g presence: $MS_HOLDERS MemoryStream holders under src/ ($MS_SUMMARY)" \
+    || no "#14g presence: '${MS_HOLDERS:-no}' MemoryStream holders — the population is gone or the pattern stopped matching ($MS_SUMMARY)"
+grep -q 'class=1 finish_nodiscard=1 opener=1' "$TMP/ms_live.txt" \
+    && ok "#14g presence: class MemoryStream with a [[nodiscard]] finish(), and serialize.h's openChargeBuffer and openChargeStream, all found" \
+    || no "#14g presence: MemoryStream, its [[nodiscard]] finish(), openChargeBuffer or openChargeStream is missing — the exemptions would exempt nothing ($MS_SUMMARY)"
+[ "$MS_VIOL" = "0" ] \
+    && ok "#14g the rule: 0 hand-written open_memstream / openChargeBuffer / fflush / fclose of a memory stream outside MemoryStream" \
+    || no "#14g a memory stream handled by hand outside MemoryStream: $( grep '^VIOLATION' "$TMP/ms_live.txt" | tr '\n' ';' )"
+#    positive control: turn tracelocus.h's first MemoryStream back into the hand-written open and close it replaced
+cp -R "$ROOT/src" "$TMP/ms_src"
+python3 - "$TMP/ms_src/tracelocus.h" <<'PY'
+import sys
+p = sys.argv[1]; t = open( p ).read()
+t = t.replace( 'rw::MemoryStream stream;\n    std::FILE* const m = stream.open();', 'char* buf = nullptr;  std::size_t sz = 0;\n    std::FILE* m = open_memstream( &buf, &sz );', 1 )
+t = t.replace( 'const rw::MemoryStreamBytes block = stream.finish();', 'std::fclose( m );  const rw::MemoryStreamBytes block{ std::string_view( buf, sz ), buf != nullptr };', 1 )
+open( p, 'w' ).write( t )
+PY
+if cmp -s "$ROOT/src/tracelocus.h" "$TMP/ms_src/tracelocus.h"; then
+    no "#14g positive control: the mutation did not take (tracelocus.h unchanged) — the control proves nothing"
+else
+    memstream_scan "$TMP/ms_src" >"$TMP/ms_ctl.txt" 2>&1
+    MS_CA="$( grep -c '^VIOLATION tracelocus.h:[0-9]*: (A)' "$TMP/ms_ctl.txt" )"
+    MS_CC="$( grep -c '^VIOLATION tracelocus.h:[0-9]*: (C) fclose( m )' "$TMP/ms_ctl.txt" )"
+    MS_CT="$( grep -c '^VIOLATION' "$TMP/ms_ctl.txt" )"
+    [ "$MS_CA" = "1" ] && [ "$MS_CC" = "1" ] && [ "$MS_CT" = "2" ] \
+        && ok "#14g positive control: the same scan over a copy with one site hand-opened and hand-closed again reports exactly those two lines ($( grep '^VIOLATION' "$TMP/ms_ctl.txt" | sed 's/^VIOLATION //' | tr '\n' ' '))" \
+        || no "#14g positive control: expected tracelocus.h (A)=1 (C)=1 and 2 in total, got $MS_CA, $MS_CC and $MS_CT — the scan cannot see the defect it exists for"
+fi
+
 # ── §C1 + §C2 (capture-audit-4, wave 3): --for --json's ENVELOPE is charged, and so is over_ceiling ─────
 #
 # emitForLensJson reserved a flat 40 bytes for `,"capped":false,"est_tokens":NNNNN,"sigs":}` — 38 fixed plus

@@ -15,6 +15,37 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a memory buffer that lost a write was read back as a whole document
+
+Twenty-three places render into an `open_memstream` buffer and then read it back: the map's own children (XML and JSON),
+the `est_tokens` payload charges, the `--max-tokens` fit probes, the `--token-budget` buffer, the `--for` lens's pre-rendered
+blocks, the `--from-trace` blocks and seven MCP answers. Twenty-two of them flushed and closed the buffer without looking
+at either result. The one that did look, `renderToString`, could not see the failure it looked for.
+
+Measured, not assumed: a `DYLD_INSERT_LIBRARIES` interposer failed one chosen `realloc` inside an `open_memstream` on macOS
+26.5.1 (Apple libc), over 5 KB, 50 KB and 200 KB streams written in 1 KB chunks. In all 19 runs where the failure landed
+inside the stream, one `fwrite` came back short and the stream's error flag was set. Each run lost 152 to 976 bytes, as
+late as chunk 177 of 200, so the hole sat in the middle of the document. `fflush` and `fclose` both returned 0 every time.
+Read after that, the buffer is a shorter document with no sign that it is one. What that meant per site: a map or `--json`
+map with a hole in it; a payload section, trace block or MCP answer cut mid-element; a `--max-tokens` probe that read a
+too-small size as fitting; and a `--token-budget` map printed short at exit 0.
+
+Every buffer is now owned by one type, `rw::MemoryStream` (`src/infra/emit.h`). Its `finish()` flushes, reads the error
+flag, closes, and reports by value, and it is `[[nodiscard]]`. The destructor closes a stream nobody finished and frees the
+buffer on every path, so no site frees or closes anything by hand. A buffer that did not finish whole takes the path a
+failed open already took. The map and the JSON map are rendered again, straight to the output, with the modelled
+`est_tokens`: the children became one renderer both paths call. A charged section streams uncharged, and a probe answers
+"unmeasured". The `--for` blocks are emitted directly, and the trace blocks and MCP answers answer as they do when the open
+fails. The `--token-budget` buffer is the one with no second path, because it holds the map itself: it prints nothing,
+says `write error — the --token-budget buffer lost bytes` on stderr in every build, and exits 1.
+
+`test/estchargecheck.sh` gains two arms. **#14f** drives every site's degrade through a new debug-only fault switch,
+`INFRA_FAULT_MEMSTREAM_FINISH=1`, which really closes each stream and then reports failure. The `--pack-signatures` map and
+the `--json` map come out byte-identical to the undegraded run outside `est_tokens`, well-formed, at exit 0. The
+`--token-budget` run prints 0 bytes and exits 1 where its control prints the map. **#14g** reads `src/` and refuses an
+`open_memstream`, a direct call of the charge opener, or an `fflush`/`fclose` of a memory stream anywhere outside the
+type. On `f8e6087c` it reports 46 such lines, and its positive control reports the two lines of one site put back by hand.
+
 ### Fixed — five code extensions the index parses were no language at all to the dependency, state and lint verbs
 
 The crawl indexes `.metal`, `.cu` and `.cuh` as C++, `.pyi` as Python and `.phtml` as PHP. `langOfPath`

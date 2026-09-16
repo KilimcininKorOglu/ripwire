@@ -776,9 +776,8 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
         return rootArg.empty() ? std::string_view( ing.files[ fileId ] ) : rw::sarif::rootRelativeUri( ing.files[ fileId ], rootPrefix );
     };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  m   = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const m = stream.open();
     if( !m )
     {
         DEGRADED_PATH_ALERT( "renderTestHopBlock: open_memstream failed — hop block omitted" );
@@ -798,11 +797,14 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
             hop.rows[i].via == TestHopVia::Callee ? "callee" : "basename" );
     }
     rw::emitRaw( m, "</test_hop>" );
-    std::fflush( m );  std::fclose( m );
-
-    std::string out;
-    if( buf ) { out.assign( buf, sz );  std::free( buf ); }
-    return out;
+    const rw::MemoryStreamBytes block = stream.finish();
+    if( !block.isWhole )
+    {
+        // a lost write left a hole in the block, and a half <test_hop> element is not XML: omit it, as a failed open does
+        DEGRADED_PATH_ALERT( "renderTestHopBlock: the buffer did not finish whole — hop block omitted" );
+        return {};
+    }
+    return std::string( block.bytes );
 }
 
 // render the <trace> block (the ranked suspect map + the two listed-but-unranked buckets) to a string, so
@@ -815,9 +817,8 @@ inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameForm
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  m   = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const m = stream.open();
     if( !m )
     {
         DEGRADED_PATH_ALERT( "renderTraceBlock: open_memstream failed — trace block omitted" );
@@ -859,10 +860,13 @@ inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameForm
         rw::emitTo( m, "<skipped p=\"{}\" line=\"{}\"/>", ex( sk->path ).c_str(), sk->line );
     }
     rw::emitRaw( m, "</trace>" );
-    std::fflush( m );  std::fclose( m );
-    std::string out;
-    if( buf ) { out.assign( buf, sz );  std::free( buf ); }
-    return out;
+    const rw::MemoryStreamBytes block = stream.finish();
+    if( !block.isWhole )
+    {
+        DEGRADED_PATH_ALERT( "renderTraceBlock: the buffer did not finish whole — trace block omitted" );
+        return {};
+    }
+    return std::string( block.bytes );
 }
 
 // optional Q3/redaction/notes inputs, same graceful-degrade contract as packtask.h's PackTaskInputs — every
@@ -1084,9 +1088,8 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
     whole += hopStr;
     if( !part.suspects.empty() )
     {
-        char*       buf = nullptr;  std::size_t sz = 0;
-        std::FILE*  m   = open_memstream( &buf, &sz );
-        if( m )
+        rw::MemoryStream stream;
+        if( std::FILE* const m = stream.open() )
         {
             packSignatures( m, ing, rank, int( servedOrder.size() ), in.sigLadderBudgetBytes, /*metrics=*/true,
                             in.fanIn, in.impure, in.redact,
@@ -1103,8 +1106,14 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
                         &rank );                                      // the served body's CUT <calls> ordered by the TRACE's own rank
                                                                        // (traceRankOf): a callee that is ITSELF a frame of this trace
                                                                        // scores positive, so the edge the trace walked survives the cut.
-            std::fflush( m );  std::fclose( m );
-            if( buf ) { whole.append( buf, sz );  std::free( buf ); }
+            if( const rw::MemoryStreamBytes section = stream.finish(); section.isWhole )
+            {
+                whole.append( section.bytes );
+            }
+            else
+            {
+                DEGRADED_PATH_ALERT( "from-trace: the signature/body buffer did not finish whole — section skipped" );
+            }
         }
         else
         {

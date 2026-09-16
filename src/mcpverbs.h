@@ -377,6 +377,21 @@ inline std::string captureXml( const std::function<void( std::FILE* )>& render )
     return rw::renderToString( render, "mcp: open_memstream failed — this verb answers empty" ).text;
 }
 
+// The seven verbs below that render into their own memstream (for, owners, exemplar, impact, uses, path_between,
+// connect) all finish it the same way, so they finish it HERE: the answer's bytes only when rw::MemoryStream::finish
+// says the buffer is whole, and nullopt when it is not. A lost write left a hole in the answer, so each caller answers
+// exactly what it answers when the open fails, never the short bytes. The stream itself closes and frees on every path.
+inline std::optional<std::string> mcpAnswerText( rw::MemoryStream& stream )
+{
+    const rw::MemoryStreamBytes answer = stream.finish();
+    if( !answer.isWhole )
+    {
+        DEGRADED_PATH_ALERT( "mcp: an answer buffer did not finish whole — this verb answers as if the buffer never opened" );
+        return std::nullopt;
+    }
+    return std::string( answer.bytes );
+}
+
 // full pipeline on a dir → XML captured into a string (captureXml, above).
 //
 // §B6 M1 — the two COMPLETENESS gauges are passed, not nulled. This front door handed serialize() null
@@ -1771,9 +1786,8 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         }
     }
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
         return {};
@@ -2013,10 +2027,12 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
     rw::emitRaw( mem, "</ctx>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
+    std::optional<std::string> answer = mcpAnswerText( stream );
+    if( !answer )
+    {
+        return {};   // the same answer as the failed open above
+    }
+    std::string out = std::move( *answer );
     // F5 (terminality round A 2026-09-05): PRICE the bundle instead of declaring it unpriced. The document is
     // complete here, so this is the same measurement the CLI twin makes over its own (deliberately different)
     // bytes: pricedRootAttr's ≤4-pass fixpoint at kBytesPerTokenDefault, spliced onto the <ctx> root by the
@@ -2117,9 +2133,8 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
         return {}; // git unavailable or no history → caller sends error
     }
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
         return {};
@@ -2187,11 +2202,7 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
         rw::emitTo( mem, " top=\"{}\" share=\"{:.2f}\"/>", std::string_view( em.data(), em.size() ), top.share );
     }
     rw::emitRaw( mem, "</owners>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream ).value_or( std::string{} );
 }
 
 // ─── flagship-reflex verbs (exemplar / impact / uses / path — the write-moment + is-it-safe reflexes) ──────
@@ -2259,9 +2270,8 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
                                                    + ( pick.lowConfidence ? ", low-confidence: weak match, fell back to fn" : "" ) + ")" )
                                                : std::string();
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
         return {};
@@ -2288,11 +2298,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
                 /*ranges=*/nullptr, /*noteIndex=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                 /*withFileContext=*/false, exSingleRoot ? std::string_view( root ) : std::string_view() );
     rw::emitRaw( mem, "</exemplar></ctx>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream ).value_or( std::string{} );
 }
 
 // `impact` verb (is-it-safe-to-change-X reflex): the transitive blast radius of SYM — every symbol that
@@ -2341,9 +2347,8 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
         return {};
@@ -2394,11 +2399,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
     rw::emitRaw( mem, "</impact>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream ).value_or( std::string{} );
 }
 
 // `uses` verb (ABS-3): the use-site index for SYM — the resolvable places its name is REFERENCED (call/read/
@@ -2614,9 +2615,8 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
         return {};
@@ -2655,11 +2655,7 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
         rw::emitRaw( mem, "/>" );
     }
     rw::emitRaw( mem, "</uses>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream ).value_or( std::string{} );
 }
 
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
@@ -2701,9 +2697,8 @@ inline std::string pathText( const std::string& root, const std::string& from, c
       const std::string_view rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       return ex( rp ) + ":" + std::to_string( s.line ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
         return {};
@@ -2731,11 +2726,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line ); }
     rw::emitRaw( mem, "</path>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream ).value_or( std::string{} );
 }
 
 // §B6 M8: `path_between`'s not-found refusal, shared by both arms. The old wording — "path endpoint not
@@ -3238,18 +3229,19 @@ inline std::string connectText( const std::string& root, const std::vector<std::
     }
 
     const ConnectResult res = connectSubgraph( g, terminals, radius );
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem ) { err = "internal error"; return {}; }
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     packConnect( mem, ing, g, res, redact, /*maxTokens=*/0, ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),
                  unprovenDefs );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    std::optional<std::string> answer = mcpAnswerText( stream );
+    if( !answer )
+    {
+        err = "internal error";   // the same refusal as the failed open above
+        return {};
+    }
+    return std::move( *answer );
 }
 
 // ─── quality_baseline / quality_delta verbs (the convergence-loop oracle over the warm index) ──────────────

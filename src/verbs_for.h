@@ -1366,14 +1366,23 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     std::vector<rw::NodeId> jsonShownIds;   // lane 2: the sigs rows actually emitted (the XML twin's shownSigIds)
     std::string sigsJson;
     {
-        char*       jbuf = nullptr;
-        std::size_t jsz  = 0;
-        std::FILE*  jm   = rw::openChargeBuffer( &jbuf, &jsz );
-        if( !jm )
+        rw::MemoryStream sigsStream;
+        bool             isSigsBuffered = false;
+        if( std::FILE* const jm = rw::openChargeStream( sigsStream ) )
         {
-            // ENOMEM-class: emit unbudgeted rather than nothing, and report no est_tokens/capped at all —
-            // a number this path cannot compute must never be fabricated.
-            DEGRADED_PATH_ALERT( "main: open_memstream failed for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
+            packSigs( jm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds );
+            const rw::MemoryStreamBytes block = sigsStream.finish();   // a write lost inside the block is not a whole block
+            isSigsBuffered = block.isWhole;
+            if( isSigsBuffered )
+            {
+                sigsJson.assign( block.bytes );
+            }
+        }
+        if( !isSigsBuffered )
+        {
+            // ENOMEM-class, at the open or inside the buffer: emit unbudgeted rather than nothing, and report no
+            // est_tokens/capped at all — a number this path cannot compute must never be fabricated.
+            DEGRADED_PATH_ALERT( "main: open_memstream failed (or its buffer lost a write) for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
             std::fputs( header.c_str(), out );
             std::fwrite( kJsonBundleSigsKey.data(), 1, kJsonBundleSigsKey.size(), out );   // the posture disclosure survives the degrade (a plain constant — nothing here can fail to compute it)
             std::fwrite( surfaceCountsStanza.data(), 1, surfaceCountsStanza.size(), out );
@@ -1383,9 +1392,6 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
             std::fputs( "}", out );
             return 0;
         }
-        packSigs( jm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds );
-        std::fflush( jm );  std::fclose( jm );
-        if( jbuf ) { sigsJson.assign( jbuf, jsz );  std::free( jbuf ); }
     }
 
     const std::string notesStanza = forLensNotesStanza( noteCounts, in.noteIndex != nullptr );
@@ -2447,36 +2453,34 @@ std::optional<int> runForLens( const MainDispatch& d )
         std::string legoStr, composeStr, routeStr, sigsStr;
         bool        legoPreRendered = false, composePreRendered = false, routePreRendered = false, sigsPreRendered = false;
 
+        // ONE pre-render for the four blocks below: into a charge buffer, and into `into` only when the buffer finished
+        // whole. false means the open failed or a write was lost inside the buffer (rw::MemoryStream::finish), and the
+        // direct-emission path further down renders that block straight to stdout, whole — the budget just cannot see it.
+        const auto preRender = [ & ]( const auto& render, std::string& into, const char* degradeMsg ) -> bool
         {
-            char*       lbuf = nullptr;
-            std::size_t lsz  = 0;
-            if( std::FILE* lm = rw::openChargeBuffer( &lbuf, &lsz ) )
+            rw::MemoryStream stream;
+            std::FILE* const buffer = rw::openChargeStream( stream );
+            if( buffer == nullptr )
             {
-                packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg );
-                std::fflush( lm );  std::fclose( lm );
-                if( lbuf ) { legoStr.assign( lbuf, lsz );  std::free( lbuf ); }
-                legoPreRendered = true;
+                DEGRADED_PATH_ALERT( degradeMsg );
+                return false;
             }
-            else
+            render( buffer );
+            const rw::MemoryStreamBytes block = stream.finish();
+            if( !block.isWhole )
             {
-                DEGRADED_PATH_ALERT( "main: open_memstream failed for the lego block — budget will not see its size" );
+                DEGRADED_PATH_ALERT( degradeMsg );
+                return false;
             }
-        }
+            into.assign( block.bytes );
+            return true;
+        };
+        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg ); },
+                                     legoStr, "main: open_memstream failed (or its buffer lost a write) for the lego block — budget will not see its size" );
         if( !g.composeEdges.empty() )
         {
-            char*       cbuf = nullptr;
-            std::size_t csz  = 0;
-            if( std::FILE* cm = rw::openChargeBuffer( &cbuf, &csz ) )
-            {
-                packCompose( cm, ing, g.composeEdges, lensSurfaceIds );
-                std::fflush( cm );  std::fclose( cm );
-                if( cbuf ) { composeStr.assign( cbuf, csz );  std::free( cbuf ); }
-                composePreRendered = true;
-            }
-            else
-            {
-                DEGRADED_PATH_ALERT( "main: open_memstream failed for the compose block — budget will not see its size" );
-            }
+            composePreRendered = preRender( [ & ]( std::FILE* cm ) { packCompose( cm, ing, g.composeEdges, lensSurfaceIds ); },
+                                            composeStr, "main: open_memstream failed (or its buffer lost a write) for the compose block — budget will not see its size" );
         }
         else
         {
@@ -2485,19 +2489,8 @@ std::optional<int> runForLens( const MainDispatch& d )
         if( !g.routeEdges.empty() )
         {
             // B6.3: route view for the same relevant symbol set (top-N by lensRank)
-            char*       rbuf = nullptr;
-            std::size_t rsz  = 0;
-            if( std::FILE* rm = rw::openChargeBuffer( &rbuf, &rsz ) )
-            {
-                packRoutes( rm, ing, g.routeEdges, lensSurfaceIds );
-                std::fflush( rm );  std::fclose( rm );
-                if( rbuf ) { routeStr.assign( rbuf, rsz );  std::free( rbuf ); }
-                routePreRendered = true;
-            }
-            else
-            {
-                DEGRADED_PATH_ALERT( "main: open_memstream failed for the routes block — budget will not see its size" );
-            }
+            routePreRendered = preRender( [ & ]( std::FILE* rm ) { packRoutes( rm, ing, g.routeEdges, lensSurfaceIds ); },
+                                          routeStr, "main: open_memstream failed (or its buffer lost a write) for the routes block — budget will not see its size" );
         }
         else
         {
@@ -2623,10 +2616,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // (the same reason est_tokens is "omitted", not "wrong", on that path — see its DEGRADED_PATH_ALERT).
         std::size_t forDroppedPositive = 0;
         bool        forSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= legend clause below
-        {
-            char*       sbuf = nullptr;
-            std::size_t ssz  = 0;
-            if( std::FILE* sm = rw::openChargeBuffer( &sbuf, &ssz ) )
+        sigsPreRendered = preRender( [ & ]( std::FILE* sm )
             {
                 packSignatures( sm, ing, lensRank, forTopN, cfg.packBudgetBytes, true, fanInPtr, impurePtr, redactPtr,
                                 &forChurn, &forClone, testedPtr, ampPtr,     // Q3: churn/clone/tested/amp folded onto the <d> blocks
@@ -2639,14 +2629,15 @@ std::optional<int> runForLens( const MainDispatch& d )
                                 &shownSigIds,                                // lane 2: the rows actually emitted — the tail excludes THESE files
                                 &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
                                 forTopRowNext );                             // L-W: the widening page on a thin answer, else the body
-                std::fflush( sm );  std::fclose( sm );
-                if( sbuf ) { sigsStr.assign( sbuf, ssz );  std::free( sbuf ); }
-                sigsPreRendered = true;
-            }
-            else
-            {
-                DEGRADED_PATH_ALERT( "main: open_memstream failed for the sigs block — est_tokens omitted from the header" );
-            }
+            },
+            sigsStr, "main: open_memstream failed (or its buffer lost a write) for the sigs block — est_tokens omitted from the header" );
+        if( !sigsPreRendered )
+        {
+            // what a render into a failed buffer measured belongs to bytes that will not be printed: dropped, exactly as a
+            // failed open never sets it, and the direct-emission path below renders the block whole
+            forDroppedPositive = 0;
+            forSigsCapped      = false;
+            shownSigIds.clear();
         }
 
         // A2: the splice text, built ONCE here (right after forDroppedPositive becomes known) rather than at
