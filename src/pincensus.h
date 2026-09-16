@@ -34,6 +34,7 @@
 // Populated ONLY when buildGraph is asked for it; empty otherwise, and the writer is the only consumer.
 // The flagless map is byte-identical either way — the census is a side file, never a change to stdout.
 
+#include "infra/strkern.h" // Byteset256 + appendCleanRun — the run-copy skip the field escape is built on, as escapeXml's is
 #include "model.h"
 #include "resolve.h"        // canonicalIdForEmit — the census id must be the map's id= spelling
 #include "scipoverlay.h"    // kScipNonDefExternal / kScipNonDefInIndex — the O-row sentinel kinds
@@ -287,6 +288,61 @@ inline std::string pinFlagString( std::uint8_t fl )
     return out;
 }
 
+// THE FIELD ESCAPE (format v3) — why an id or a callee name is never written raw.
+//
+// A census row is one LF-terminated line of TAB-separated fields, and a C/O row's targets field is a list
+// split on `|`. The strings those fields carry are SOURCE TEXT: a C++ out-of-line member of a class template
+// whose template-argument list spans lines has a scope holding that line break verbatim
+// (`SmallVec<T, Alloc, SizeType,\n    GrowingPolicy, N>`), a CRLF file adds a CR, a TAB can sit inside the
+// argument list, and a path may hold a `|`. Written raw, each one splits a row: a C row became a 6-field
+// line plus a continuation line starting with neither C, S, O nor `#` (observed 2026-09-16 on a large private
+// C++ corpus), and `pipe|dir/far.hpp::f#5` read back as two targets. The map never had the defect — escapeXml
+// writes the same scope as `&#10;` — so this is the census catching up with its own sibling surface.
+//
+// The escape is REVERSIBLE and minimal: backslash (the escape's own lead byte) -> `\\`, TAB/LF/CR ->
+// `\t`/`\n`/`\r`, every other C0 control byte and `|` -> `\xHH` (lowercase hex). Nothing else moves, so
+// an id without those bytes is spelled byte-for-byte as in v2, and the three separators can never occur
+// inside a field — a reader splits lines on LF, fields on TAB and targets on `|`, and only then decodes.
+// `|` becomes `\x7c` rather than `\|` for exactly that reason: a naive split must stay exact.
+// Emission side only: the resolver's names and scopes are untouched, and every column spells one symbol
+// the same way, so the caller_id / targets / S-row join is still byte equality.
+inline constexpr strkern::Byteset256 kCensusFieldEscapeByteset = []
+{
+    strkern::Byteset256 set;
+    set.addRange( 0x00, 0x1F );
+    set.add( '\\' );
+    set.add( '|' );
+    return set;
+}();
+
+inline void appendCensusField( std::string& out, std::string_view s )
+{
+    const char*       d = s.data();
+    const std::size_t n = s.size();
+    for( std::size_t i = strkern::appendCleanRun( d, 0, n, kCensusFieldEscapeByteset, out ); i < n;
+         i = strkern::appendCleanRun( d, i, n, kCensusFieldEscapeByteset, out ) )
+    {
+        const unsigned char c = static_cast<unsigned char>( d[ i ] );
+        switch( c )
+        {
+            case '\\': out += "\\\\"; break;
+            case '\t': out += "\\t";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            default:
+            {
+                // Two digits from a table, not a format call into a char[]: there is no buffer to size or classify.
+                static constexpr char kHex[] = "0123456789abcdef";
+                out += "\\x";
+                out.push_back( kHex[ c >> 4 ] );
+                out.push_back( kHex[ c & 0x0F ] );
+                break;
+            }
+        }
+        ++i;
+    }
+}
+
 // THE CENSUS IDENTITY — `path::scope::name#NODEID`, and why it is NOT simply the map's `id=`.
 //
 // `canonicalIdForEmit` degrades an UNSCOPED symbol (a free function, a module-level def) to its BARE NAME
@@ -308,20 +364,23 @@ inline std::string pinFlagString( std::uint8_t fl )
 // exactly as the map's `p=`/`id=`. Returns false if the file cannot be opened.
 // The per-symbol census identity, resolved ONCE per symbol and reused — a row-by-row rebuild would re-make
 // the same strings thousands of times over a real corpus, and every row of a census names two of them.
+// Each identity is composed raw into one reused scratch string and escaped once into its slot (THE FIELD
+// ESCAPE above), so the stored id is already the spelling every column writes.
 inline std::vector<std::string> pinCensusIdentities( const IngestResult& ing, std::string_view root )
 {
     std::vector<std::string> canon( ing.symbols.size() );
+    std::string              raw;
     for( std::size_t i = 0; i < ing.symbols.size(); ++i )
     {
         const Symbol& s = ing.symbols[ i ];
-        const std::string rel( relForHash( ing.files[ s.fileId ], root ) );
-        canon[ i ].reserve( rel.size() + s.scope.size() + s.name.size() + 16 );
-        canon[ i ].append( rel ).append( "::" );
+        raw.assign( relForHash( ing.files[ s.fileId ], root ) ).append( "::" );
         if( !s.scope.empty() )
         {
-            canon[ i ].append( s.scope ).append( "::" );
+            raw.append( s.scope ).append( "::" );
         }
-        canon[ i ].append( s.name ).append( "#" ).append( std::to_string( i ) );
+        raw.append( s.name ).append( "#" ).append( std::to_string( i ) );
+        canon[ i ].reserve( raw.size() );
+        appendCensusField( canon[ i ], raw );
     }
     return canon;
 }
@@ -334,6 +393,7 @@ inline const char* pinCensusIdOf( const std::vector<std::string>& canon, NodeId 
 // `C` rows — one per decided call site; returns the per-mechanism tally the summary line prints.
 inline void writePinCensusDecisionRows( std::FILE* f, const PinCensus& pc, const std::vector<std::string>& canon, std::size_t ( &mechCount )[ kPinMechCount ] )
 {
+    std::string callee;   // the escaped callee name, one buffer reused across rows
     for( std::size_t i = 0; i < pc.rows(); ++i )
     {
         const std::uint8_t m = pc.mech[ i ];
@@ -344,8 +404,10 @@ inline void writePinCensusDecisionRows( std::FILE* f, const PinCensus& pc, const
             // file. Derived from the roster now, so a mechanism added below cannot be dropped again.
             ++mechCount[ m ];
         }
+        callee.clear();
+        appendCensusField( callee, pc.nameAt( pc.nameOff[ i ] ) );
         rw::emitTo( f, "C\t{}\t{}\t{}\t{}\t{}\t{}\t", pinMechName( m ), unsigned( pc.preTier[ i ] ), unsigned( pc.postReal[ i ] ),
-                      pinFlagString( pc.flags[ i ] ).c_str(), pinCensusIdOf( canon, pc.fromSym[ i ] ), pc.nameAt( pc.nameOff[ i ] ) );
+                      pinFlagString( pc.flags[ i ] ).c_str(), pinCensusIdOf( canon, pc.fromSym[ i ] ), callee );
         const std::uint32_t end = pc.rowEnd( i );
         for( std::uint32_t t = pc.tgtStart[ i ]; t < end; ++t )
         {
@@ -358,9 +420,12 @@ inline void writePinCensusDecisionRows( std::FILE* f, const PinCensus& pc, const
 // `O` rows — the SCIP oracle; a sentinel row prints `@external` / `@nondef` and carries no target ids.
 inline void writePinCensusOracleRows( std::FILE* f, const PinCensus& pc, const std::vector<std::string>& canon )
 {
+    std::string callee;   // the escaped callee name, one buffer reused across rows
     for( std::size_t i = 0; i < pc.oraRows(); ++i )
     {
-        rw::emitTo( f, "O\t{}\t{}\t", pinCensusIdOf( canon, pc.oraFrom[ i ] ), pc.nameAt( pc.oraNameOff[ i ] ) );
+        callee.clear();
+        appendCensusField( callee, pc.nameAt( pc.oraNameOff[ i ] ) );
+        rw::emitTo( f, "O\t{}\t{}\t", pinCensusIdOf( canon, pc.oraFrom[ i ] ), callee );
         const std::uint8_t sentinel = ( i < pc.oraSentinel.size() ) ? pc.oraSentinel[ i ] : std::uint8_t( 0 );
         if( sentinel != 0 )
         {
@@ -395,7 +460,12 @@ inline bool writePinCensus( const char* path, const PinCensus& pc, const IngestR
     }
     const std::vector<std::string> canon = pinCensusIdentities( ing, root );
 
-    rw::emitRaw( f, "# ripwire pin-census v2\tC=kind\\tmech\\tpre\\tpost\\tflags\\tcaller_id\\tcallee\\ttargets(|-sep)\\tline\n" );
+    rw::emitRaw( f, "# ripwire pin-census v3\tC=kind\\tmech\\tpre\\tpost\\tflags\\tcaller_id\\tcallee\\ttargets(|-sep)\\tline\n" );
+    rw::emitRaw( f, "# v3 field escape: every id and callee field is escaped, so no separator occurs inside one. A backslash is\n" );
+    rw::emitRaw( f, "#   written \\\\, TAB \\t, LF \\n, CR \\r, every other control byte 0x00-0x1f and the targets separator | as \\xHH\n" );
+    rw::emitRaw( f, "#   (lowercase hex). Split lines on LF, fields on TAB and targets on |, THEN decode. Columns are unchanged\n" );
+    rw::emitRaw( f, "#   from v2 and an id without those bytes is spelled exactly as in v2; a C++ out-of-line template member\n" );
+    rw::emitRaw( f, "#   whose template-argument list spans lines keeps its line break as \\n instead of splitting the row.\n" );
     rw::emitRaw( f, "# line is the 1-based call-site line in the caller's file (v2, appended LAST so v1 readers are unchanged):\n" );
     rw::emitRaw( f, "#   the key a SCIP occurrence joins on, so a coverage loss can be classified per site instead of guessed.\n" );
     rw::emitRaw( f, "# O rows (only under --scip) are the SCIP oracle: O\\tcaller_id\\tcallee\\ttargets(|-sep)\n" );
