@@ -34,6 +34,7 @@
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -253,6 +254,16 @@ inline IngestResult previewMerge( const IngestResult& ing, std::uint32_t fileId,
 // A single-file ingest of `bytes` written under `rel` inside a private temp root, so the parse sees the
 // file's real EXTENSION and its real relative directory (both are inputs to language selection). Returns
 // an empty result (files empty) on any I/O failure — a degrade, never a throw.
+//
+// THE INGEST HOLDS THE PROCESS-WIDE INGEST LOCK. ingest() installs compiled tags queries into a process-global
+// cache and deletes the query each install displaces (ingest_prewarm.h), which is single-writer by design; every
+// other ingest a long-lived server runs is serialized on quality::headSnapshotIngestMutex. This one was not: the
+// MCP `edit_check` new_body preview ran its two ingests after the verb's own locked ingest had released, so they
+// raced the detached HEAD-snapshot prefetch worker's ingest — a reader probing the map while it was written, and
+// a query freed under a parse worker still using it (ThreadSanitizer: data race at ingest.cpp's parse-pool call,
+// prefetch worker vs editpreview::ingestOneFile). Taken HERE, around the ingest alone: the caller's
+// editCheckBundleText takes the same (non-recursive) mutex inside computeHeadSnapshot, so a lock held across the
+// whole preview would deadlock. Uncontended on the CLI, where nothing else ingests.
 inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string& rel, const std::string& bytes,
                                    std::size_t maxFileBytes, bool captureValueUses )
 {
@@ -277,6 +288,7 @@ inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string&
     }
     // No excludes: the ONE file here is the one the caller already resolved through the main index, so a
     // --exclude that would drop it can only produce a false "the payload defines nothing".
+    std::lock_guard<std::mutex> ingestLk( quality::headSnapshotIngestMutex() );
     return ingest( tmpDir.c_str(), {}, {}, maxFileBytes, captureValueUses );
 }
 

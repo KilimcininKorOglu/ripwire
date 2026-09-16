@@ -19,6 +19,13 @@
 #   (c) DETERMINISM — quality_delta's response body is BYTE-IDENTICAL prefetch-fired vs prefetch-suppressed.
 #   (d) SINGLE-FLIGHT — two rapid HEAD moves: no crash, and at most ONE concurrent worker (observed via the
 #       RIPWIRE_MCP_TIMINGS "prefetch spawn"/"prefetch done" stderr lines — the live count never exceeds 1).
+#   (f) THE PREVIEW INGEST RACE — `edit_check` with `new_body` parses the spliced file through two ingests of its
+#       own (editpreview::ingestOneFile). They ran OUTSIDE headSnapshotIngestMutex, so a prefetch worker kicked by
+#       the read verb just before them ingested concurrently: ingest() installs compiled tags queries into a
+#       process-global cache and deletes the entry each install displaces, single-writer by design. Measured on
+#       the TSan build before the fix: `data race` at ingest.cpp's parse-pool call (prefetch worker vs
+#       ingestOneFile) and the server ABORTED (exit 134) mid-session. Asserted here on every build: each preview
+#       is answered, and the server is still alive afterwards; on a TSan build the (e) assertion is the red one.
 #   (e) TSan — run this whole script with a ThreadSanitizer binary (see below); every scenario asserts the
 #       server stderr carries NO "ThreadSanitizer" warning (trivially true on a normal build; a real check on a
 #       TSan build). Build + run:
@@ -280,6 +287,44 @@ print(mx)
 [ "${MAXLIVE:-0}" -le 1 ] && ok "(d) at most one concurrent prefetch worker (max live=${MAXLIVE:-0}; single-flight holds)" \
                           || no "(d) more than one concurrent worker (max live=$MAXLIVE) — single-flight broken"
 assert_no_tsan "$D_W/err.txt" "d"
+exec 9>&-; kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+echo
+echo "=== (f) edit_check new_body preview ingests vs a concurrent prefetch ingest ==="
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+read F_W F_C <<<"$( new_repo )"
+FIFO="$F_W/in.fifo"; mkfifo "$FIFO"
+TMPDIR="$F_C/" RIPWIRE_QSNAP_PREFETCH_MIN_FILES=1 RIPWIRE_MCP_TIMINGS=1 \
+    "$BIN" --mcp <"$FIFO" >"$F_W/out.txt" 2>"$F_W/err.txt" &
+SRV=$!; exec 9>"$FIFO"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' >&9
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$F_W\",\"symbol\":\"perimeter\"}}}" >&9
+wait_for_id "$F_W/out.txt" 2 || no "(f) server never answered the warm-up read (id=2)"
+F_BODY='double perimeter( const Point* pts, int n )\n{\n    double total = 0.0;\n    for( int i = 0; i < n; ++i )\n    {\n        total += distance( pts[i], pts[ ( i + 1 ) % n ] ) * 2.0;\n    }\n    return total;\n}'
+F_PREVIEWS=0
+# A preview now WAITS for the worker's whole locked HEAD-snapshot compute, which a sanitizer build takes seconds
+# over — so this arm waits up to 120 s per answer instead of the 10 s wait_for_id gives a plain read.
+wait_long(){ local i; for i in $( seq 1 1200 ); do grep -q "\"id\":$2[,}]" "$1" 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+for r in 1 2 3; do
+    printf '\n// preview race round %s\n' "$r" >> "$F_W/geometry.cpp"
+    git -C "$F_W" commit -q -am "preview race $r"
+    # the read verb observes the HEAD move and detaches the prefetch worker; the preview is queued right behind it,
+    # so its ingests run while the worker materializes and ingests the new HEAD tree.
+    printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$(( 100 + 2 * r )),\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$F_W\",\"symbol\":\"perimeter\"}}}" >&9
+    printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$(( 101 + 2 * r )),\"method\":\"tools/call\",\"params\":{\"name\":\"edit_check\",\"arguments\":{\"path\":\"$F_W\",\"symbol\":\"geometry.cpp:perimeter\",\"new_body\":\"$F_BODY\"}}}" >&9
+    wait_long "$F_W/out.txt" $(( 101 + 2 * r )) || break
+    inner_for_id "$F_W/out.txt" $(( 101 + 2 * r )) | grep -q '<overwrite ' && F_PREVIEWS=$(( F_PREVIEWS + 1 ))
+    for i in $( seq 1 100 ); do [ "$( grep -c 'ripwire-prefetch done' "$F_W/err.txt" )" -ge "$r" ] && break; sleep 0.1; done
+done
+[ "$( grep -c 'ripwire-prefetch spawn' "$F_W/err.txt" )" -ge 1 ] && ok "(f) the prefetch worker fired during the preview rounds (non-vacuous)" \
+                                                                 || no "(f) no prefetch spawn — the race this arm exists for never had a second ingest"
+[ "$F_PREVIEWS" -eq 3 ] && ok "(f) all 3 new_body previews answered with the overwrite span" \
+                        || no "(f) only $F_PREVIEWS of 3 new_body previews answered — the server died or refused mid-race"
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":199,\"method\":\"tools/call\",\"params\":{\"name\":\"find_symbol\",\"arguments\":{\"path\":\"$F_W\",\"symbol\":\"distance\"}}}" >&9
+wait_long "$F_W/out.txt" 199 && ok "(f) server still responsive after the preview rounds" \
+                               || no "(f) server unresponsive after the preview rounds (crash?)"
+assert_no_tsan "$F_W/err.txt" "f"
 exec 9>&-; kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
 
 echo
