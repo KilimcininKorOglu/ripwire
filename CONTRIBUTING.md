@@ -416,7 +416,7 @@ already knew about the others, several while fixing one. So the rule is mechanic
   it (measured 2026-09-08). Testing the macro means every toolchain BUILDS — which is why the choice is
   DISCLOSED: `--version` prints `emit=std::print` or `emit=std::format+fputs` (`test/versioncheck.sh` #6),
   every CI and release leg asserts `std::print` (gcc-14 on the ubuntu legs, gcc-toolset-14 on RHEL and the
-  manylinux containers, Xcode 16.2 on macOS), and the `fallback-emitter` job builds the fallback arm with
+  manylinux containers, Xcode 26.6 on macOS), and the `fallback-emitter` job builds the fallback arm with
   the stock ubuntu g++ 13 on purpose and proves it emits the same bytes. A silent fallback is the failure
   this whole arrangement exists to make impossible.
 - **A conversion is byte-parity-fenced, not reviewed by eye.** `test/printffmtparitycheck.sh` hashes
