@@ -12,10 +12,13 @@
 // anywhere else in src/.
 //
 // ZERO COST ON POSIX. Each POSIX body is the libc call itself, always inlined, taking the libc call's own raw
-// types: no std::string, no path normalisation, no errno translation, no extra syscall, no lock, no heap. The
-// wrappers are deliberately NOT noexcept — a noexcept wrapper around a C function the compiler cannot prove
-// non-throwing would add a terminate landing pad the direct call never had. A release build carries no
-// out-of-line rw::os symbol.
+// types: no path normalisation, no errno translation, no extra syscall, no lock, no heap, and no std::string
+// except spawn_sh's command (its comment says why). The wrappers are deliberately NOT noexcept — a noexcept
+// wrapper around a C function the compiler cannot prove non-throwing would add a terminate landing pad the direct
+// call never had. A release build carries no out-of-line rw::os symbol. Where a helper's shape could move work
+// (a read across a fork, a store across a scope), the shape follows the code it replaced, so the caller compiles
+// to the same instructions: the stat-time helpers return a reference to the field, spawn_sh reads its arguments
+// in the child, and dirwatch_add / dirwatch_poll take kevent's own caller-owned records.
 //
 // POSIX CONSTANTS STAY BARE. O_NOFOLLOW, X_OK, PATH_MAX, S_ISREG( m ), LOCK_EX, SIGKILL and friends are macros
 // on every POSIX libc, and a function-like macro cannot be wrapped by its own name: `os::S_ISLNK( m )` and even
@@ -36,9 +39,9 @@
 // keeps the POSIX one: open( …, O_NOFOLLOW ) refuses a link at the FINAL component only, as POSIX specifies.
 //
 // SELECTION. #if is used only where a branch names something that does not exist on the other platform — a
-// system header, a platform API or type, or a struct field whose name differs. Pure logic selects on the
-// constexpr facts with `if constexpr`, so both branches are type-checked on every CI leg and the non-native one
-// cannot rot.
+// system header, a platform API or type, or a struct field whose name differs; every #if below is one of those.
+// Pure logic selects on the constexpr facts with `if constexpr`, so both branches are type-checked on every CI leg
+// and the non-native one cannot rot.
 
 #include <cerrno>
 #include <cstddef>
@@ -46,6 +49,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <string>
 
 namespace rw::os
 {
@@ -72,7 +76,7 @@ inline constexpr bool kWindows = kTarget == Target::Windows;
 inline constexpr bool kApple   = kTarget == Target::Apple;
 inline constexpr bool kLinux   = kTarget == Target::Linux;
 
-// dirwatch_poll drains at most this many events per call; a full batch means "call again".
+// the directory watcher's drain batch: a poll that fills it means "call again".
 inline constexpr int kDirwatchBatch = 32;
 
 }   // namespace rw::os
@@ -180,13 +184,15 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 [[gnu::always_inline]] inline int   setenv( const char* name, const char* value, int overwrite )   { return ::setenv( name, value, overwrite ); }
 
 // The nanosecond modification / status-change time of a filled stat_t. POSIX.1-2008 names the fields st_mtim and
-// st_ctim; Darwin and the BSDs spell them st_mtimespec and st_ctimespec. A platform with neither gets whole seconds.
+// st_ctim; Darwin and the BSDs spell them st_mtimespec and st_ctimespec. A reference to the field itself, so
+// `os::st_mtim( st ).tv_nsec` is the same load as `st.st_mtim.tv_nsec`. A platform with neither gets whole seconds
+// (by value).
 #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-[[gnu::always_inline]] inline ::timespec st_mtim( const stat_t& st ) { return st.st_mtimespec; }
-[[gnu::always_inline]] inline ::timespec st_ctim( const stat_t& st ) { return st.st_ctimespec; }
+[[gnu::always_inline]] inline const ::timespec& st_mtim( const stat_t& st ) { return st.st_mtimespec; }
+[[gnu::always_inline]] inline const ::timespec& st_ctim( const stat_t& st ) { return st.st_ctimespec; }
 #elif defined( __linux__ )
-[[gnu::always_inline]] inline ::timespec st_mtim( const stat_t& st ) { return st.st_mtim; }
-[[gnu::always_inline]] inline ::timespec st_ctim( const stat_t& st ) { return st.st_ctim; }
+[[gnu::always_inline]] inline const ::timespec& st_mtim( const stat_t& st ) { return st.st_mtim; }
+[[gnu::always_inline]] inline const ::timespec& st_ctim( const stat_t& st ) { return st.st_ctim; }
 #else
 [[gnu::always_inline]] inline ::timespec st_mtim( const stat_t& st ) { return ::timespec{ st.st_mtime, 0 }; }
 [[gnu::always_inline]] inline ::timespec st_ctim( const stat_t& st ) { return ::timespec{ st.st_ctime, 0 }; }
@@ -234,35 +240,38 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 
 // Start `/bin/sh -c command` as the leader of its own process group — so a timeout can SIGKILL the whole tree —
 // with stdin from /dev/null (a command that reads its terminal must not hang the caller), stdout AND stderr both
-// onto outFd (interleaved, as a terminal would show them), and closeFd (the pipe's read end) closed in the child.
-// posix_spawn's contract: 0 with *pid set, or an errno value and no child. An exec failure is the child's own
+// onto the pipe's write end pipeFds[1] (interleaved, as a terminal would show them), and both pipe ends closed in
+// the child. fork's contract: the child's pid, or -1 with errno set and no child. An exec failure is the child's own
 // exit status 127, mirroring sh's command-not-found code.
 //
 // WHY NOT ::posix_spawn. Its file actions and POSIX_SPAWN_SETPGROUP express every step here, but three failure
 // paths would change what the caller reports: a /bin/sh that cannot be exec'd becomes a spawn error instead of
 // exit 127, an unopenable /dev/null or a refused setpgid fails the spawn instead of being tolerated, and no gate
-// can reach any of the three to show them equal. So the body stays the fork/exec it has always been; a Windows
-// body gives the same contract (a job object is the process group).
-[[gnu::always_inline]] inline int spawn_sh( pid_t* pid, const char* command, int outFd, int closeFd )
+// can reach any of the three to show them equal. So the body stays the fork/exec it has always been, and a
+// Windows body gives the same contract (a job object is the process group).
+//
+// WHY A std::string AND THE PIPE ARRAY. The command's c_str() and both descriptors are read in the CHILD, after
+// fork, exactly where the call site used to read them; `const char*` and two ints would move those reads into the
+// parent and change the caller's codegen.
+[[gnu::always_inline]] inline pid_t spawn_sh( const std::string& command, const int pipeFds[ 2 ] )
 {
     const pid_t child = ::fork();
     if( child < 0 )
     {
-        return errno;
+        return child;
     }
     if( child == 0 )
     {
         ::setpgid( 0, 0 );
         const int devNull = ::open( "/dev/null", O_RDONLY );
         if( devNull >= 0 ) { ::dup2( devNull, STDIN_FILENO );  ::close( devNull ); }
-        ::dup2( outFd, STDOUT_FILENO );  ::dup2( outFd, STDERR_FILENO );
-        ::close( closeFd );  ::close( outFd );
-        ::execl( "/bin/sh", "sh", "-c", command, static_cast<char*>( nullptr ) );
+        ::dup2( pipeFds[ 1 ], STDOUT_FILENO );  ::dup2( pipeFds[ 1 ], STDERR_FILENO );
+        ::close( pipeFds[ 0 ] );  ::close( pipeFds[ 1 ] );
+        ::execl( "/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>( nullptr ) );
         ::_exit( 127 );
     }
     ::setpgid( child, child );   // the parent side of the same race — both settings agree, whichever runs first
-    *pid = child;
-    return 0;
+    return child;
 }
 
 // ── threads ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -315,37 +324,37 @@ inline int pthread_main_np()
 #endif
 
 // ── directory watching ─────────────────────────────────────────────────────────────────────────────────────
-// No POSIX call watches a directory. On a kqueue platform these are kqueue itself. dirwatch_open returns 0 with
-// *watchFd set, or an errno value — ENOSYS where the platform has no watcher, which is the caller's designed
-// "no watcher, always sweep" path, not a degradation, and must stay silent. The errno is RETURNED rather than
-// stored (posix_spawn's convention), so a platform without a watcher folds the caller's check away entirely.
-// dirwatch_add registers a directory descriptor for write/delete/rename/extend events (edge-triggered): the
-// kevent result, -1 on failure. dirwatch_poll drains up to kDirwatchBatch pending events without blocking and
-// returns how many it took, or -1. Without a watcher those two can only be handed a descriptor dirwatch_open
-// never produced, and simply return -1.
+// No POSIX call watches a directory; on a kqueue platform these ARE kqueue/kevent, with kevent's own argument shapes.
+// dirwatch_available: whether this build has a watcher at all. Where it has none, "no watcher, always sweep" is the
+//   caller's DESIGNED path, not a degradation, and must stay silent — so the caller asks this before it opens one,
+//   and a platform without a watcher folds the whole arm away.
+// dirwatch_open: kqueue() — a descriptor, or -1 with errno set.
+// dirwatch_add: register dirFd for write/delete/rename/extend events (edge-triggered) through the caller's change
+//   record, without blocking — the kevent result, -1 on failure.
+// dirwatch_poll: kevent's receive half — up to eventCount pending events into the caller's array, waiting at most
+//   *timeout; how many it took, or -1.
 #if RW_OS_HAS_KQUEUE
-[[gnu::always_inline]] inline int dirwatch_open( int* watchFd )
+using dirwatch_event = struct ::kevent;
+[[gnu::always_inline]] inline constexpr bool dirwatch_available() { return true; }
+[[gnu::always_inline]] inline int            dirwatch_open()      { return ::kqueue(); }
+[[gnu::always_inline]] inline int dirwatch_add( int watchFd, int dirFd, dirwatch_event* change )
 {
-    *watchFd = ::kqueue();
-    return *watchFd < 0 ? errno : 0;
-}
-[[gnu::always_inline]] inline int dirwatch_add( int watchFd, int dirFd )
-{
-    struct kevent ev;
-    EV_SET( &ev, dirFd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND, 0, nullptr );
+    EV_SET( change, dirFd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND, 0, nullptr );
     struct timespec zero = { 0, 0 };
-    return ::kevent( watchFd, &ev, 1, nullptr, 0, &zero );
+    return ::kevent( watchFd, change, 1, nullptr, 0, &zero );
 }
-[[gnu::always_inline]] inline int dirwatch_poll( int watchFd )
+[[gnu::always_inline]] inline int dirwatch_poll( int watchFd, dirwatch_event* events, int eventCount, const ::timespec* timeout )
 {
-    struct kevent   out[ kDirwatchBatch ];
-    struct timespec zero = { 0, 0 };
-    return ::kevent( watchFd, nullptr, 0, out, kDirwatchBatch, &zero );
+    return ::kevent( watchFd, nullptr, 0, events, eventCount, timeout );
 }
 #else
-[[gnu::always_inline]] inline int dirwatch_open( int* )         { return ENOSYS; }
-[[gnu::always_inline]] inline int dirwatch_add( int, int )      { return -1; }
-[[gnu::always_inline]] inline int dirwatch_poll( int )          { return -1; }
+struct dirwatch_event
+{
+};
+[[gnu::always_inline]] inline constexpr bool dirwatch_available() { return false; }
+[[gnu::always_inline]] inline int dirwatch_open()                                                         { errno = ENOSYS; return -1; }
+[[gnu::always_inline]] inline int dirwatch_add( int, int, dirwatch_event* )                               { errno = ENOSYS; return -1; }
+[[gnu::always_inline]] inline int dirwatch_poll( int, dirwatch_event*, int, const ::timespec* )           { errno = ENOSYS; return -1; }
 #endif
 
 }   // namespace rw::os

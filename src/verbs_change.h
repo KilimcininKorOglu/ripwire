@@ -819,8 +819,8 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
     // the child: own process group (the timeout kills the whole tree), stdin from /dev/null (a command that reads its
     // terminal must not hang the report), both streams into ONE pipe (interleaved, as a terminal would see them), then
     // the shell; an exec failure is the child's exit 127, sh's own command-not-found code.
-    rw::os::pid_t childPid = -1;
-    if( rw::os::spawn_sh( &childPid, cmd.c_str(), fds[1], fds[0] ) != 0 )
+    const rw::os::pid_t childPid = rw::os::spawn_sh( cmd, fds );
+    if( childPid < 0 )
     {
         rw::os::close( fds[0] );  rw::os::close( fds[1] );
         cap.isSpawnFailed = true;

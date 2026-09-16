@@ -42,7 +42,7 @@
 // `-DRW_OS_HAS_KQUEUE=0` (read by os.h) compiles the no-watcher path on a Mac, so the fallback can be built and RUN
 // here instead of being first discovered by a CI leg nobody can reproduce locally.
 //
-// L2 (Linux runtime probe) — why FsWatcher::arm's no-watcher branch (os::dirwatch_open answers ENOSYS) is SILENT
+// L2 (Linux runtime probe) — why FsWatcher::arm's no-watcher branch (os::dirwatch_available() is false) is SILENT
 // while its watcher-failed branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something
 // that normally works did not, this run. On a build with no watcher at all (every Linux build, and any
 // -DRW_OS_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has, taken on
@@ -79,8 +79,7 @@ namespace mcpdetail
     // that one lives in a .cpp and hoisting it would move ingest internals into a header for two call sites.
     inline long long mtimeNsOf( const os::stat_t& st ) noexcept
     {
-        const ::timespec mtim = os::st_mtim( st );
-        return (long long)mtim.tv_sec * 1000000000LL + mtim.tv_nsec;
+        return (long long)os::st_mtim( st ).tv_sec * 1000000000LL + os::st_mtim( st ).tv_nsec;
     }
 
     // nanosecond mtime of a path, or -1 if it can't be stat'd. The staleness signal for the in-memory index.
@@ -100,8 +99,7 @@ namespace mcpdetail
     // unprivileged writer cannot restore it.
     inline long long ctimeNsOf( const os::stat_t& st ) noexcept
     {
-        const ::timespec ctim = os::st_ctim( st );
-        return (long long)ctim.tv_sec * 1000000000LL + ctim.tv_nsec;
+        return (long long)os::st_ctim( st ).tv_sec * 1000000000LL + os::st_ctim( st ).tv_nsec;
     }
 
     // (mtime-ns, size, ctime-ns) of a path in ONE stat(), or (-1,-1,-1) if it can't be stat'd. mcpStale()
@@ -251,15 +249,12 @@ namespace mcpdetail
         void arm( const std::vector<std::string>& dirs )
         {
             reset();
-            const int watchErr = os::dirwatch_open( &kq );
-            if( watchErr != 0 )
+            if( !os::dirwatch_available() )                             // the DESIGNED path here (no watcher exists) — unhealthy → getIndex() always sweeps, silently (L2)
             {
-                if( watchErr != ENOSYS )                                // ENOSYS: no watcher exists here — the DESIGNED path, unhealthy → getIndex() always sweeps, silently (L2)
-                {
-                    DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" );
-                }
                 return;
             }
+            kq = os::dirwatch_open();
+            if( kq < 0 ) { DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
 
             dirFds.reserve( dirs.size() );
             for( const std::string& d : dirs )
@@ -268,7 +263,8 @@ namespace mcpdetail
                 bool isRegistered = fd >= 0;
                 if( isRegistered )
                 {
-                    if( os::dirwatch_add( kq, fd ) < 0 ) { os::close( fd ); isRegistered = false; }
+                    os::dirwatch_event ev;
+                    if( os::dirwatch_add( kq, fd, &ev ) < 0 ) { os::close( fd ); isRegistered = false; }
                 }
                 if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
                 {
@@ -290,10 +286,12 @@ namespace mcpdetail
             {
                 return true; // unhealthy (incl. every platform with no watcher, where arm() never opens kq) → force the sweep
             }
-            bool any = false;
+            os::dirwatch_event out[ os::kDirwatchBatch ];
+            struct timespec    zero = { 0, 0 };
+            bool               any = false;
             for( ;; )
             {
-                const int n = os::dirwatch_poll( kq );
+                const int n = os::dirwatch_poll( kq, out, os::kDirwatchBatch, &zero );
                 if( n < 0 )
                 {
                     return true; // poll error → conservative: assume changed

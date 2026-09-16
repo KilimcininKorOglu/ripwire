@@ -1780,10 +1780,8 @@ inline StatInfo statSizeTimes( const std::string& path ) noexcept
     {
         return { -1, -1, -1 };
     }
-    const ::timespec mtim = os::st_mtim( st );
-    const ::timespec ctim = os::st_ctim( st );
-    const long long  m    = (long long)mtim.tv_sec * 1000000000LL + mtim.tv_nsec;
-    const long long  c    = (long long)ctim.tv_sec * 1000000000LL + ctim.tv_nsec;
+    const long long m = (long long)os::st_mtim( st ).tv_sec * 1000000000LL + os::st_mtim( st ).tv_nsec;
+    const long long c = (long long)os::st_ctim( st ).tv_sec * 1000000000LL + os::st_ctim( st ).tv_nsec;
     return { m, (long long)st.st_size, c };
 }
 
