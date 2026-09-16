@@ -9,6 +9,7 @@
 //        → serialize: top-K symbols (by rank) → minified XML, grouped by file.
 
 #include "infra/profileScope.h"
+#include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 
 #include <algorithm>   // std::sort — symbolsByFile below
@@ -250,7 +251,7 @@ inline const char* refRoleTag( RefRole r ) noexcept
 // adding a tag later is a compatible extension, renaming one is not. Declaration order MUST track the
 // EvWhyTag indices ingest.cpp writes — the table is the single source both emitters read.
 inline constexpr std::size_t kEvWhyTagCount = 8;
-inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
+inline constexpr const char* kEvWhyTagTable[] = {
     "guard-return",     // return/throw whose escape crosses at least one construct (incl. §1.3's guard clause)
     "loop-escape",      // break/continue out of a loop from under an intervening construct
     "switch-escape",    // break (or Java yield) out of a switch from under an intervening construct
@@ -260,6 +261,7 @@ inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
     "fallthrough",      // Go fallthrough — an explicit intra-switch goto
     "multi-entry",      // a case label displaced into a loop/branch (Duff's device; §2.6)
 };
+static_assert( std::size( kEvWhyTagTable ) == kEvWhyTagCount, "kEvWhyTagTable: one spelling per ev_why tag — a spelled extent zero-fills a missing one into a null the emitter prints" );
 
 // A definition = one node in the graph. symbols[i].id == i (dense, deterministic order).
 struct Symbol

@@ -647,10 +647,12 @@ inline void reportRedactions( std::FILE* err, const RedactCounts& counts )
     }
 
     // fixed kind→label table, iterated in enum order for a deterministic summary line
-    static constexpr std::array<const char*, std::size_t( SecretKind::kCount )> kLabel = {
+    static constexpr const char* kLabel[] = {
         "aws-key", "aws-secret", "github-token", "slack-token", "google-api-key",
         "openai/anthropic-key", "private-key", "keyword-gated-secret", "jwt"
     };
+    static_assert( std::size( kLabel ) == std::size_t( SecretKind::kCount ),
+                   "kLabel is indexed by SecretKind — a spelled extent zero-filled a missing label into a null pointer the summary line prints" );
 
     rw::emitTo( err, "ripwire: redacted {} secret{} from emitted context (",
                   total, total == 1 ? "" : "s" );

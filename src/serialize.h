@@ -1443,7 +1443,9 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
                                      const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets )
 {
     std::size_t                      markupBytes = kEnvelopeBytes;
-    double                           contentBytesByLang[ 13 ] = { 0 };   // indexed by Lang enum (13 values)
+    // indexed by Lang, through Unknown: every later language clamps into Unknown's bucket (model.h's Lang note). The extent
+    // is spelled from the enumerator rather than as a literal 13, so the bound and the clamp below name the same value.
+    double                           contentBytesByLang[ std::size_t( Lang::Unknown ) + 1 ] = { 0 };
     static_assert( int( Lang::Unknown ) == 12, "contentBytesByLang sized for the 13-value Lang enum" );
     std::vector<char>                seen( ing.files.size(), 0 );
     for( std::size_t k = 0; k < keep; ++k )
@@ -1451,7 +1453,7 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
         const NodeId        id = order[k];
         const Symbol&       s  = ing.symbols[id];
         const std::uint32_t f  = s.fileId;
-        const int           li = int( s.lang ) < 13 ? int( s.lang ) : int( Lang::Unknown );
+        const int           li = s.lang < Lang::Unknown ? int( s.lang ) : int( Lang::Unknown );
         if( !seen[f] )
         {
             seen[f] = 1;
@@ -1486,7 +1488,7 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
     // measured B/tok. Rounds to nearest (0.5 up) so the reported number never systematically under-reads.
     double estTokensF   = double( markupBytes ) / kBytesPerTokenDefault;
     double modelBytesF  = double( markupBytes );
-    for( int l = 0; l < 13; ++l )
+    for( int l = 0; l <= int( Lang::Unknown ); ++l )
     {
         if( contentBytesByLang[ l ] > 0.0 )
         {

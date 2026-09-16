@@ -15,6 +15,43 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — the compiler checks the tables, switches, masks and layouts this tree's defects came from
+
+Each check below is written against a defect this repository shipped or nearly shipped, and each was shown failing on a
+deliberate break before it landed. None of them changes output. They are `static_assert`s, one template constraint, one
+link-time stamp and two warning flags. Output was compared with the base binary on every fixture corpus, stdout and exit
+code, and the only differences are the extension fix above.
+
+- **Language registration.** Appending a `Lang` meant updating five tables in four files. 02f798e3 (Dart), 9418e35e (five
+  unanalysed languages) and PR #233's `.gd` row each stayed one language short. `src/main.cpp` now asserts that every
+  code language is analysed or disclosed as unanalysed by `--nonlocal-state`, and that it is named by the lint vocabulary,
+  the lint catalog and `langOfPath`. `src/ingest_crawl.h` asserts that `langOfPath`'s extensions and the crawl's are the
+  same. Each check returns the first INDEX that is wrong, so a zero-filled row cannot pass. `isCodeLang` (`src/model.h`)
+  is the one declared exemption, and it has no `default:`.
+- **`-Werror=switch -Werror=implicit-fallthrough`** on ripwire's own C++ targets, for every compiler. GCC ran no
+  `-Wswitch` at all before this, because it enables it only under `-Wall`. The warning count was measured at 0 on
+  AppleClang 21 and Homebrew clang 22, debug and `-DNDEBUG`, for both binaries and the four test harnesses. A switch that
+  returns one answer per enumerator carries no `default:` any more. Eleven did, including `dependencyCapable` and
+  `dependencyDialect`, where Dart was the one language never decided.
+- **Cache and layout facts.** `quality.h`'s mirror of `kParserVer` and `kCacheVersion` is asserted equal to the real
+  constants; only `test/qextractionkeycheck.sh` held that before. `CacheEntry` must have unique object representations,
+  because `sizeof == 32` did not prove "no padding". `qsnapPut` is constrained the same way, so a padded struct or a float
+  cannot reach a byte-stable blob. `ingest()` carries `sizeof( Symbol )` and `sizeof( IngestResult )` in its mangled name.
+  CLAUDE.md records three mixed-layout builds that linked "successfully". Measured on this tree, an object pair compiled
+  against two `Symbol` layouts now fails to link, where the same pair without the stamp linked and died with SIGBUS.
+- **The redaction first-byte mask** is compared bit for bit with the rule table it hand-numbers, so an inserted rule
+  cannot leave a later rule tried only at bytes its pattern cannot start with.
+- **Shift width against count.** Every mask a runtime value is shifted into has its count pinned to its width: the
+  language masks, the ensemble and quality-panel family masks, the naming-rule mask, the redaction rule mask, the
+  pack-task subset enumeration and `strkern`'s block masks.
+- **Tables indexed by an enum.** A table's extent is deduced and asserted against the enum's count, and the count is
+  proven exact beside the enum with `infra/enumcount.h` (#241). A spelled extent had let several of these asserts restate
+  their own declaration, and let a missing row compile as a null pointer. `kNodeFieldNames` rows now name their
+  enumerator, because the enum and the table are paired by index. `skilleval`'s provenance counters were `[3]` for a
+  four-value `Prov`. A new gate, `test/enumtablecheck.sh`, refuses a literal-extent table indexed by an enum. It reports 14
+  subscripts over five tables on `f8e6087c`, and each of its three positive controls puts one real literal back and must
+  report exactly that table.
+
 ### Fixed — a memory buffer that lost a write was read back as a whole document
 
 Twenty-three places render into an `open_memstream` buffer and then read it back: the map's own children (XML and JSON),

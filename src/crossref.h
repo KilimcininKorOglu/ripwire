@@ -922,11 +922,14 @@ private:
 enum class Verdict : std::uint8_t { Merged = 0, Superseded, Unmerged, Unknown };
 
 constexpr std::size_t kVerdictCount = 4;
+static_assert( enumCountIsExact<Verdict, kVerdictCount>(), "kVerdictCount must equal the Verdict count — raise it with the append" );
 
 inline const char* verdictTag( Verdict v ) noexcept
 {
-    static const char* kTag[ kVerdictCount ] = { "merged", "superseded", "unmerged", "unknown" };
-    static_assert( sizeof( kTag ) / sizeof( kTag[0] ) == kVerdictCount, "verdictTag table must cover every Verdict" );
+    // The extent is DEDUCED: the old `kTag[ kVerdictCount ]` made the size assert below restate its own declaration, and
+    // a missing tag would have zero-filled into a null pointer instead of failing.
+    static constexpr const char* kTag[] = { "merged", "superseded", "unmerged", "unknown" };
+    static_assert( std::size( kTag ) == kVerdictCount, "verdictTag table must cover every Verdict" );
     VERIFY( std::size_t( v ) < kVerdictCount );
     return kTag[ std::size_t( v ) ];
 }

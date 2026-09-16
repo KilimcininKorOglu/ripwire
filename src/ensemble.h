@@ -129,7 +129,8 @@ enum : std::uint8_t
     kFamilyCount   = 4
 };
 
-inline constexpr std::array<const char*, kFamilyCount> kFamilyNames = { { "structural", "lexical", "confusion", "historical" } };
+inline constexpr const char* kFamilyNames[] = { "structural", "lexical", "confusion", "historical" };
+static_assert( std::size( kFamilyNames ) == kFamilyCount, "kFamilyNames is indexed by family — one name per kFam* value (a spelled extent zero-fills a missing one)" );
 
 // ── THE FAMILY-VOCABULARY HELPERS, written ONCE over a (count, name lookup) pair ──────────────────────────
 // Three operations are pure functions of "a bitmask over a family table": name the set bits, mark one family

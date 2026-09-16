@@ -153,8 +153,11 @@ constexpr std::size_t   kMaxFrontMatter  = 12;
 // ── anchor kinds, drift verdicts and unchecked reasons: declarative tables, not switch chains ────────────
 
 enum class AnchorKind : std::uint8_t { FileLine = 0, Symbol, Const, Array };
+inline constexpr std::size_t kAnchorKindCount = static_cast<std::size_t>( AnchorKind::Array ) + 1;
+static_assert( enumCountIsExact<AnchorKind, kAnchorKindCount>(), "kAnchorKindCount must name the LAST AnchorKind — move it with the append" );
 
 inline constexpr const char* kAnchorKindTag[] = { "file-line", "symbol", "const", "array" };
+static_assert( std::size( kAnchorKindTag ) == kAnchorKindCount, "kAnchorKindTag is indexed by AnchorKind — one tag per enumerator" );
 
 inline const char* anchorKindTag( AnchorKind k ) noexcept { return kAnchorKindTag[ std::size_t( k ) ]; }
 
@@ -162,8 +165,11 @@ inline const char* anchorKindTag( AnchorKind k ) noexcept { return kAnchorKindTa
 // here", deleted says "this repo HAD it and commit X removed it". Only the history oracle can say the second,
 // so a run without --with-history never emits it.
 enum class Drift : std::uint8_t { Holds = 0, MissingFile, PastEof, LineMoved, Undefined, Deleted, ConstValue, ArrayExtent, RangeStraddles };
+inline constexpr std::size_t kDriftCount = static_cast<std::size_t>( Drift::RangeStraddles ) + 1;
+static_assert( enumCountIsExact<Drift, kDriftCount>(), "kDriftCount must name the LAST Drift — move it with the append" );
 
 inline constexpr const char* kDriftTag[] = { "holds", "missing-file", "past-eof", "line-moved", "undefined", "deleted", "const-value", "array-extent", "range-straddles" };
+static_assert( std::size( kDriftTag ) == kDriftCount, "kDriftTag is indexed by Drift — one tag per enumerator" );
 
 inline const char* driftTag( Drift d ) noexcept { return kDriftTag[ std::size_t( d ) ]; }
 

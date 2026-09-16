@@ -145,6 +145,7 @@
 "emptyvaluerefusecheck.sh": 12.1,
 "ensembleavailcheck.sh": 6.3,
 "ensemblecheck.sh": 2.8,
+"enumtablecheck.sh": 4.0,
 "essentialcxcheck.sh": 9.9,
 "estchargecheck.sh": 131.6,
 "evalcheck.sh": 2.2,
