@@ -132,4 +132,28 @@ cp "$Q/w/q.py" "$PQ/w/q.py"
     && ok "(acks d) with no symlink, the ack ledger is written as a regular file with real content" \
     || no "(acks d) the ack ledger was not written normally: $( head -1 "$PQ/err" )"
 
+# ── (e) CENSUS: the cache-dir tmp+rename writers route through the shared exclusive helper ────────────────
+# gitoracle::saveOracleCache and ingest_docpass::docTextViaBridgeCache publish to the per-user cache dir, so a
+# behavioural CLI arm cannot address their sha-keyed temp name; a SOURCE census asserts each creates its temp
+# through rw::pathguard::createExclTempFile and no longer opens a temp with std::fopen. (ingest_astquery's span
+# memo is deliberately NOT folded — it streams structured POD through a std::ofstream rather than one blob, so
+# it is not a mechanical swap; it too writes only inside the 0700 cache dir.)
+census_writer(){
+    local label="$1" file="$2" fn="$3"
+    local body
+    body="$( awk -v sig="$fn" 'index($0,sig){f=1} f{print} f&&/^}$/{exit}' "$ROOT/$file" )"
+    if [ -z "$body" ]; then
+        no "($label e) could not isolate $fn in $file — census void"
+        return
+    fi
+    if printf '%s' "$body" | grep -q 'pathguard::createExclTempFile' \
+       && ! printf '%s' "$body" | grep -qE 'std::fopen\(|std::ofstream'; then
+        ok "($label e) $fn creates its temp via pathguard::createExclTempFile, with no std::fopen/ofstream temp open"
+    else
+        no "($label e) $fn does not route its temp through pathguard::createExclTempFile: $( printf '%s' "$body" | grep -nE 'std::fopen\(|std::ofstream|createExclTempFile' | head -3 | tr '\n' ';' )"
+    fi
+}
+census_writer gitoracle src/gitoracle.h    'inline bool saveOracleCache('
+census_writer docpass   src/ingest_docpass.h 'inline std::string docTextViaBridgeCache('
+
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "FAILURES ABOVE"; exit 1; }

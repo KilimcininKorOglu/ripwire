@@ -50,16 +50,24 @@ inline std::string docTextViaBridgeCache( const std::string& path, const std::st
         text = docparse::parseDocFile( path, ext );
         if( !text.empty() && !bridgeBlobPath.empty() )
         {
-            const std::string tmp = bridgeBlobPath + ".tmp" + std::to_string( tmpKey );
-            std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
+            // The temp is created through the shared exclusive no-follow helper
+            // (rw::pathguard::createExclTempFile), whose RAII holder removes it unless commit() renamed it;
+            // `.tmp` stays in the name so a residue glob still matches. fdopen keeps the fwrite/fclose shape.
+            rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( bridgeBlobPath + ".tmp" + std::to_string( tmpKey ) + ".", "", 0666 );
+            const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+            std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
             if( fp != nullptr )
             {
                 const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
-                std::fclose( fp );
-                if( !wroteAll || std::rename( tmp.c_str(), bridgeBlobPath.c_str() ) != 0 )
+                const bool closed   = std::fclose( fp ) == 0;
+                if( wroteAll && closed )
                 {
-                    std::remove( tmp.c_str() );
+                    temp.commit( bridgeBlobPath );
                 }
+            }
+            else if( rawFd >= 0 )
+            {
+                ::close( rawFd );
             }
         }
     }
