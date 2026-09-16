@@ -2072,9 +2072,14 @@ static_assert( std::is_trivially_copyable_v<ScopedRecvDecl> && sizeof( ScopedRec
 inline constexpr std::uint32_t kRecvDeclUntyped    = 0xFFFFFFFFu;   // no typed record at this declaration (`auto`, a capture)
 inline constexpr std::uint32_t kRecvDeclConflicted = 0xFFFFFFFEu;   // two typed records disagree — never narrows
 
-// "<fromSymbol>#<var>" → that name's declarations in the definition, in declaration-byte order. Holds ONLY names
-// with at least one ParamType record; every other name keeps the flat varType table, byte-identical.
-using ScopedRecvDecls = HashMap<std::string, rw::SmallVec<ScopedRecvDecl, 1>>;
+// the lexical table and the bindings its typeBinding indices point into, held together so they cannot be paired wrong
+struct ScopedRecvDecls
+{
+    // "<fromSymbol>#<var>" → that name's declarations in the definition, in declaration-byte order. Holds ONLY names
+    // with at least one ParamType record; every other name keeps the flat varType table, byte-identical.
+    HashMap<std::string, rw::SmallVec<ScopedRecvDecl, 1>> byName;
+    const std::vector<Binding>*                           bindings = nullptr;
+};
 
 // One-hop receiver narrowing over the canonical scope::name → definition-ids map (built once by buildGraph).
 // Holds only const references to maps buildGraph owns — no state, no allocation, no copy of the symbol table.
@@ -2086,10 +2091,9 @@ struct Narrower
     // one scope) — looked up but never narrowed. buildGraph builds it from IngestResult::bindings. Empty when
     // there are no bindings, so Rule 2 simply never fires (degrades to the unchanged ladder).
     const HashMap<std::string, std::string>&             varType;
-    // Rule 2's LEXICAL table for names with a ParamType declaration (see ScopedRecvDecl above), and the bindings
-    // its typeBinding indices point into. A name found here is answered here ONLY — varType is not consulted.
+    // Rule 2's LEXICAL table for names with a ParamType declaration (see ScopedRecvDecl above). A name found here is
+    // answered here ONLY — varType is not consulted.
     const ScopedRecvDecls&                               scopedDecls;
-    const std::vector<Binding>&                          bindings;
     // P2-D Rule 3 include table: caller fileId → the sorted, deduped set of fileIds it #includes / imports
     // (resolved file→file by basename, exactly like graph.h::resolveIncludeAdj; the caller's own file is NEVER
     // in its own set). buildGraph builds it once from IngestResult::includes. Empty when the repo has no
@@ -2112,10 +2116,9 @@ struct Narrower
     explicit Narrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon,
                        const HashMap<std::string, std::string>&             vt,
                        const ScopedRecvDecls&                               scoped,
-                       const std::vector<Binding>&                          binds,
                        const std::vector<std::vector<NodeId>>&              incl,
                        const std::vector<std::uint32_t>&                    symFile ) noexcept
-        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), bindings( binds ), fileIncludes( incl ), symFileId( symFile ) {}
+        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), fileIncludes( incl ), symFileId( symFile ) {}
 
     // append base-10 `n` to `dst` without an intermediate std::to_string allocation (matches to_string bytes).
     static void appendUint( std::string& dst, std::uint32_t n )
@@ -2555,14 +2558,14 @@ struct Narrower
         appendUint( keyBind, r.fromSymbol );
         keyBind.push_back( '#' );
         keyBind.append( r.recvVar );
-        if( const auto sit = scopedDecls.find( keyBind ); sit != scopedDecls.end() )
+        if( const auto sit = scopedDecls.byName.find( keyBind ); sit != scopedDecls.byName.end() )
         {
             const ScopedRecvDecl* const innermost = innermostCoveringDecl( sit->second, r.startByte );
             if( innermost == nullptr || innermost->typeBinding >= kRecvDeclConflicted )
             {
                 return {};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
-            const Binding& declared = bindings[ innermost->typeBinding ];
+            const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
             return declared.importedName.empty() ? std::string_view( declared.typeName ) : std::string_view{};   // qualified → no narrow
         }
         const auto vit = varType.find( keyBind );

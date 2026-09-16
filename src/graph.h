@@ -996,64 +996,88 @@ inline void attachRecvDeclType( ScopedRecvDecl& decl, std::uint32_t bindIndex, c
     }
 }
 
-inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
+// a binding record the lexical table can key: attributed to a definition, naming a variable
+inline bool isScopedBindRecord( const Binding& b ) noexcept
 {
-    PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: Rule-2 lexical receiver declarations" );
-    VERIFY( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
-    const auto isScopedRecord = []( const Binding& b ) noexcept { return b.fromSymbol != kNoNode && !b.var.empty(); };
-    ScopedRecvDecls table;
-    table.reserve( std::size_t( std::ranges::count_if( ing.bindings, [ & ]( const Binding& b ) { return b.kind == LocalBindKind::ParamType && isScopedRecord( b ); } ) ) );
-    std::string key;
+    return b.fromSymbol != kNoNode && !b.var.empty();
+}
+
+// the names the table covers: every "<fromSymbol>#<var>" with a ParamType record
+inline void addParamTypedNames( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    const auto isParamType = []( const Binding& b ) noexcept { return b.kind == LocalBindKind::ParamType && isScopedBindRecord( b ); };
+    table.byName.reserve( std::size_t( std::ranges::count_if( ing.bindings, isParamType ) ) );
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind == LocalBindKind::ParamType && isScopedRecord( b ) )
+        if( isParamType( b ) )
         {
             buildShadowKey( key, b.fromSymbol, b.var );
-            table.try_emplace( key );
+            table.byName.try_emplace( key );
         }
     }
-    if( table.empty() )
-    {
-        return table;
-    }
+}
 
-    // every declaration of those names: the VarDecl records, in (file, byte) order — an exact repeat of the previous
-    // one (the same declaration captured twice) is dropped, or it would tie with itself and refuse the site
+// every declaration of those names: the VarDecl records, in (file, byte) order — an exact repeat of the previous one
+// (the same declaration captured twice) is dropped, or it would tie with itself and refuse the site
+inline void addRecvDeclScopes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind != LocalBindKind::VarDecl || !isScopedRecord( b ) )
+        if( b.kind != LocalBindKind::VarDecl || !isScopedBindRecord( b ) )
         {
             continue;
         }
         buildShadowKey( key, b.fromSymbol, b.var );
-        const auto it = table.find( key );
-        if( it == table.end() )
+        const auto it = table.byName.find( key );
+        if( it == table.byName.end() )
         {
             continue;
         }
         const ScopedRecvDecl decl{ b.startByte, b.spanStart, b.spanEnd, kRecvDeclUntyped };
-        if( it->second.empty() || it->second.back().declByte != decl.declByte || it->second.back().spanStart != decl.spanStart || it->second.back().spanEnd != decl.spanEnd )
+        const bool repeat = !it->second.empty() && it->second.back().declByte == decl.declByte && it->second.back().spanStart == decl.spanStart
+                         && it->second.back().spanEnd == decl.spanEnd;
+        if( !repeat )
         {
             it->second.push_back( decl );
         }
     }
+}
 
-    // each written type onto the declaration that shares its record position
+// each written type onto the declaration that shares its record position
+inline void attachRecvDeclTypes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
     for( std::uint32_t bindIndex = 0; bindIndex < std::uint32_t( ing.bindings.size() ); ++bindIndex )
     {
         const Binding& b = ing.bindings[ bindIndex ];
-        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || !isScopedRecord( b ) || b.typeName.empty() )
+        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || !isScopedBindRecord( b ) || b.typeName.empty() )
         {
             continue;
         }
         buildShadowKey( key, b.fromSymbol, b.var );
-        if( const auto it = table.find( key ); it != table.end() )
+        const auto it = table.byName.find( key );
+        if( it == table.byName.end() )
         {
-            for( ScopedRecvDecl& decl : it->second )
-            {
-                if( decl.declByte == b.startByte ) { attachRecvDeclType( decl, bindIndex, ing.bindings ); }
-            }
+            continue;
         }
+        for( ScopedRecvDecl& decl : it->second )
+        {
+            if( decl.declByte == b.startByte ) { attachRecvDeclType( decl, bindIndex, ing.bindings ); }
+        }
+    }
+}
+
+inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: Rule-2 lexical receiver declarations" );
+    VERIFY( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
+    ScopedRecvDecls table;
+    table.bindings = &ing.bindings;
+    std::string key;
+    addParamTypedNames( ing, table, key );
+    if( !table.byName.empty() )
+    {
+        addRecvDeclScopes( ing, table, key );
+        attachRecvDeclTypes( ing, table, key );
     }
     return table;
 }
@@ -2054,7 +2078,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // BEFORE the bare-name spray below. See resolve.h.
     // Rule 2's lexical table for names with a ParamType declaration — built by buildScopedRecvDecls above.
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
-    const Narrower narrower( canonByName, varType, scopedRecvDecls, ing.bindings, fileIncludes, symFileId );
+    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The
