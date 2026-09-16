@@ -33,8 +33,9 @@ the runner's macOS and the SDK default. The published `ripwire-0.6.1-macos-arm64
 the same build on `macos-26` would have read 26.x and dropped every macOS 14 and 15 user. The release leg exports
 `MACOSX_DEPLOYMENT_TARGET=14.0` before its PGO build and reads `minos` back off the binary it packages. The CI legs build
 at the same 14.0, where Xcode 26.6's libc++ still defines `__cpp_lib_print`. The leg also records its Xcode, compiler and
-`llvm-profdata`, and fails if `llvm-profdata` is not the pinned Xcode's, so PGO trains, merges and optimizes with one
-toolchain.
+`llvm-profdata`, and fails if `DEVELOPER_DIR` is empty or either tool is not the pinned Xcode's, so PGO trains, merges and
+optimizes with one toolchain. None of these checks skips a leg that lost its pin. A macOS release leg without a
+deployment target fails, and so does a CI leg whose CMake cache did not receive the pinned target.
 
 Gate: `test/portablebuildcheck.sh` #2i, twelve rows. It holds the release leg's runner, Xcode and quoted minimum macOS,
 the export before the first configure, and the `otool` step between PGO staging and packaging. It also holds ci.yml's
