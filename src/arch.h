@@ -44,6 +44,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -144,7 +145,8 @@ inline const char* builtinLayer( std::string_view path ) noexcept
 //   old note claimed here — "std::regex on a BOUNDED corpus terminates" — was false on both standard
 //   libraries: `deny path zz/.* -> (a+)+z` aborted the process on libc++ (an uncaught error_complexity, rc 134)
 //   and backtracks without end on libstdc++. A match the engine still abandons (RegexVerdict::Exhausted, e.g.
-//   overlapping alternation) is reported by pathRuleForbids and refused by the verb, never read as "no match".
+//   overlapping alternation), and a TO pattern that only becomes invalid once an edge's captures are substituted
+//   into it (`a{2,\1}` → `a{2,1}`), are reported by pathRuleForbids and refused by the verb, never read as "no match".
 struct PathRule
 {
     std::string from;        // FROM_REGEX source (as written)
@@ -189,10 +191,12 @@ inline std::string regexEscapeLiteral( std::string_view s )
     return out;
 }
 
-// Substitute \1..\9 in a TO_REGEX template with the regex-escaped literal of the matching FROM capture.
-// An out-of-range or absent group substitutes empty (a rule referencing a group its FROM never captured
-// simply never matches a real sibling — inert, not an error). A literal "\\" passes through unchanged.
-inline std::string substituteBackrefs( std::string_view toTemplate, const RegexCaptures& m )
+// Substitute \1..\9 in a TO_REGEX template with `groupText( n )`: the regex-escaped literal of the matching FROM
+// capture when an edge is judged (substituteBackrefs), or a placeholder atom when the template itself is validated
+// at parse time (toTemplateRefusal). An out-of-range or absent group substitutes empty (a rule referencing a group
+// its FROM never captured simply never matches a real sibling — inert, not an error). A literal "\\" passes through.
+template<typename GroupText>
+inline std::string substituteBackrefsWith( std::string_view toTemplate, GroupText&& groupText )
 {
     std::string out;
     out.reserve( toTemplate.size() + 16 );
@@ -203,11 +207,7 @@ inline std::string substituteBackrefs( std::string_view toTemplate, const RegexC
             const char nxt = toTemplate[ i + 1 ];
             if( nxt >= '1' && nxt <= '9' )
             {
-                const std::size_t grp = std::size_t( nxt - '0' );
-                if( grp < m.size() && m[grp].matched )
-                {
-                    out += regexEscapeLiteral( m[grp].str() );
-                }
+                out += groupText( std::size_t( nxt - '0' ) );
                 i += 1;                                   // consume the digit
                 continue;
             }
@@ -222,35 +222,97 @@ inline std::string substituteBackrefs( std::string_view toTemplate, const RegexC
     return out;
 }
 
+inline std::string substituteBackrefs( std::string_view toTemplate, const RegexCaptures& m )
+{
+    return substituteBackrefsWith( toTemplate, [ & ]( std::size_t grp )
+    { return ( grp < m.size() && m[grp].matched ) ? regexEscapeLiteral( m[grp].str() ) : std::string(); } );
+}
+
+// Can this TO template compile for ANY edge? A captured segment arrives as a run of escaped literal ATOMS, so the
+// template's structure — group and class balance, what a quantifier applies to — does not depend on the capture.
+// It is therefore judged at parse time with a placeholder atom in every \1..\9: "x", and "9" for the one position
+// where a capture's content (not just its presence) decides validity — an interval such as a{2,\1}. A template that
+// compiles with neither can compile for no edge, and rejects the rules file with the line named (the D9 rule), where
+// it used to be stored and then skipped on every edge. What still depends on the capture is refused per edge
+// (pathRuleForbids' isRefused). The screen runs inside compileGuardedRegex, so its refusal wins as before.
+inline std::optional<std::string> toTemplateRefusal( std::string_view toTemplate )
+{
+    std::optional<std::string> firstRefusal;
+    for( const char* const placeholder : { "x", "9" } )
+    {
+        RegexCompile compiled = compileGuardedRegex( substituteBackrefsWith( toTemplate, [ & ]( std::size_t ) { return std::string( placeholder ); } ),
+                                                     kRegexEcmaScript );
+        if( !compiled.refusal )
+        {
+            return std::nullopt;
+        }
+        if( !firstRefusal )
+        {
+            firstRefusal = std::move( compiled.refusal );
+        }
+    }
+    return firstRefusal;
+}
+
 // Does the regex path-rule set FORBID the edge src→dst? deny path-rule matches the (src,dst) pair AND no
 // allow path-rule matches it (allow = explicit exception). `bad` (uncompilable) rules are skipped — they
 // can never fire. Pure function of its inputs (deterministic). `ruleIndex` is the 0-based index of the matching
-// DENY rule (for a stable label) when `isForbidden`, or of the rule whose match the engine ABANDONED when
-// `isAbandoned` — which is neither permitted nor forbidden but unknown, so the caller refuses rather than choose.
+// DENY rule (for a stable label) when `isForbidden`, or of the rule that could not be JUDGED on this edge — the
+// engine abandoned its match (`isAbandoned`), or its TO pattern, after this edge's backreferences were
+// substituted, is one the guard refuses (`isRefused`, with the substituted text and the reason). An undecided rule
+// is neither permitted nor forbidden but unknown, so the caller refuses rather than choose.
 struct PathRuleVerdict
 {
     bool        isForbidden = false;
     bool        isAbandoned = false;
+    bool        isRefused   = false;
     std::size_t ruleIndex   = 0;
+    std::string refusedTo;   // isRefused only: the TO pattern as substituted for this edge
+    std::string refusal;     // isRefused only: the guard's reason, in the words --regex prints
 };
 
 // One rule against one edge: FROM against src, then (on a hit) the backreference-substituted TO against dst. The
-// substituted TO is compiled per edge because its text depends on this edge's captures; the template it came
-// from was screened at parse time, and a substitution that does not compile leaves the rule inert for this edge.
-inline RegexVerdict pathRuleMatches( const PathRule& pr, std::string_view src, std::string_view dst )
+// substituted TO is compiled per edge because its text depends on this edge's captures. Its template was screened at
+// parse time, and substitution cannot add a construct the screen reads (every captured character is escaped) — but
+// it CAN make the text unparseable: `a{2,\1}` is a well-formed template and `a{2,1}` is an invalid interval on every
+// standard library. That used to leave the rule silently inert for the edge (a CI gate reporting exit 0 over an edge
+// its rule never judged); it is now a verdict the caller refuses by name.
+struct PathRuleMatch
+{
+    RegexVerdict               verdict = RegexVerdict::Miss;
+    std::string                substitutedTo;   // set only when `refusal` is
+    std::optional<std::string> refusal;
+};
+
+inline PathRuleMatch pathRuleMatches( const PathRule& pr, std::string_view src, std::string_view dst )
 {
     RegexCaptures      fromCaptures;
     const RegexVerdict fromVerdict = pr.fromRe.search( src, fromCaptures );
     if( fromVerdict != RegexVerdict::Hit )
     {
-        return fromVerdict;
+        return { fromVerdict, {}, std::nullopt };
     }
-    const RegexCompile toCompiled = compileGuardedRegex( substituteBackrefs( pr.to, fromCaptures ), kRegexEcmaScript );
+    std::string        substitutedTo = substituteBackrefs( pr.to, fromCaptures );
+    RegexCompile       toCompiled    = compileGuardedRegex( substitutedTo, kRegexEcmaScript );
     if( toCompiled.refusal )
     {
-        return RegexVerdict::Miss;   // malformed-after-substitution → inert
+        return { RegexVerdict::Miss, std::move( substitutedTo ), std::move( toCompiled.refusal ) };
     }
-    return toCompiled.regex.search( dst );
+    return { toCompiled.regex.search( dst ), {}, std::nullopt };
+}
+
+// The verdict for rule `ruleIndex` when its match could not be decided on this edge, or nullopt when it was.
+inline std::optional<PathRuleVerdict> undecidedPathRule( PathRuleMatch& match, std::size_t ruleIndex )
+{
+    if( match.refusal )
+    {
+        return PathRuleVerdict{ false, false, true, ruleIndex, std::move( match.substitutedTo ), std::move( *match.refusal ) };
+    }
+    if( match.verdict == RegexVerdict::Exhausted )
+    {
+        return PathRuleVerdict{ false, true, false, ruleIndex, {}, {} };
+    }
+    return std::nullopt;
 }
 
 inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src, std::string_view dst )
@@ -263,12 +325,12 @@ inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src
         {
             continue;
         }
-        const RegexVerdict verdict = pathRuleMatches( pr, src, dst );
-        if( verdict == RegexVerdict::Exhausted )
+        PathRuleMatch match = pathRuleMatches( pr, src, dst );
+        if( std::optional<PathRuleVerdict> undecided = undecidedPathRule( match, i ) )
         {
-            return { false, true, i };
+            return std::move( *undecided );
         }
-        if( verdict == RegexVerdict::Hit )
+        if( match.verdict == RegexVerdict::Hit )
         {
             return {}; // an allow rule matches → permitted
         }
@@ -282,10 +344,14 @@ inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src
         {
             continue;
         }
-        const RegexVerdict verdict = pathRuleMatches( pr, src, dst );
-        if( verdict != RegexVerdict::Miss )
+        PathRuleMatch match = pathRuleMatches( pr, src, dst );
+        if( std::optional<PathRuleVerdict> undecided = undecidedPathRule( match, i ) )
         {
-            return { verdict == RegexVerdict::Hit, verdict == RegexVerdict::Exhausted, i };
+            return std::move( *undecided );
+        }
+        if( match.verdict == RegexVerdict::Hit )
+        {
+            return { true, false, false, i, {}, {} };
         }
     }
     return {};
@@ -428,8 +494,8 @@ inline ArchRules parseArchRules( const std::string& path )
                 pr.allow = ( kw == "allow" );
                 pr.bad   = false;
                 // Compile the FROM regex now, through the guard. The TO regex is compiled per-edge after backref
-                // substitution, so only its TEMPLATE can be judged here — by the structural screen, whose verdict
-                // the substitution cannot change (every captured character is escaped).
+                // substitution, so only its TEMPLATE can be judged here: screened, and compiled with a placeholder
+                // atom in each \1..\9 (toTemplateRefusal) — a template no capture can make valid never gets stored.
                 RegexCompile fromCompiled = compileGuardedRegex( fromRe, kRegexEcmaScript );
                 if( fromCompiled.refusal && !fromCompiled.isScreened )
                 {
@@ -444,7 +510,7 @@ inline ArchRules parseArchRules( const std::string& path )
                     ok = badLine( lineNo, "FROM path-regex '" + fromRe + "' refused: " + *fromCompiled.refusal );
                     break;
                 }
-                if( const std::optional<std::string> toRefusal = screenRegexPattern( toRe ) )
+                if( const std::optional<std::string> toRefusal = toTemplateRefusal( toRe ) )
                 {
                     ok = badLine( lineNo, "TO path-regex '" + toRe + "' refused: " + *toRefusal );
                     break;

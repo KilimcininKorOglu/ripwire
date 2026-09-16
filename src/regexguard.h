@@ -53,6 +53,7 @@
 
 #include "infra/emit.h"   // rw::faultSwitchOn — the one reader every non-NDEBUG fault switch goes through
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <new>        // std::bad_alloc — the one other exception type the engine raises, caught here by type
@@ -311,12 +312,72 @@ inline std::optional<std::string> catastrophicRegexConstruct( const std::string&
     return std::nullopt;
 }
 
-// Both structural screens, in the order `--regex` has always applied them: the portability screen first (L5),
-// then the backtracking screen (M2). A pure function of the pattern TEXT, so it is also the check for a pattern
-// that cannot be compiled as written — an --arch TO template carries \1..\9 placeholders its own groups do not
-// define — and whose substitutions cannot change the verdict (each captured character is escaped).
+// ── STACK: both standard libraries' regex PARSERS recurse, so a long or deeply nested pattern overflows the stack ──
+//
+// Measured 2026-09-16 with a standalone probe (compile + destroy one pattern, binary search for the first signal death):
+//
+//     smallest crash            Apple libc++, std::thread (512 KiB)   libstdc++ 13, 8 MiB     libstdc++ 13, 512 KiB
+//     nested groups  ((( a )))           3,392 deep                         15,616 deep             960 deep
+//     literal atoms  aaaa…              16,896 bytes                        58,368 bytes          3,648 bytes
+//     alternatives   a|a|…               8,448 alternatives           (NFA-state refusal first)        —
+//
+// A grep worker, an --arch/astquery compile thread and every other std::thread runs on the 512 KiB default on macOS,
+// which is how `--regex=<20,000 bytes of a>` died with SIGBUS (rc 138) in a worker after the main thread's probe
+// compile had passed it. So the screen bounds the pattern BEFORE any parser sees it: at most kRegexMaxPatternBytes
+// bytes and kRegexMaxGroupDepth nested groups. Both sit under the smallest crash in every column above (the tightest,
+// libstdc++ on a 512 KiB stack, by 1.78x on bytes and 15x on depth), are far above any pattern this tree's gates or
+// rule tables write, and are one verdict on every platform. The MATCHER is a different story on libstdc++ — its DFS
+// executor recurses per consumed character — and a pattern bound cannot reach it; that residual is disclosed in the
+// lane report, not claimed fixed here.
+inline constexpr std::size_t kRegexMaxPatternBytes = 2048;   // a longer pattern is REFUSED by name, never truncated — the compile-recursion stack bound
+inline constexpr std::size_t kRegexMaxGroupDepth   = 64;     // deeper group nesting is REFUSED by name — the same stack bound, for nesting
+
+inline std::optional<std::string> regexSizeRefusal( const std::string& pattern )
+{
+    if( pattern.size() > kRegexMaxPatternBytes )
+    {
+        return "the pattern is " + std::to_string( pattern.size() ) + " bytes and the limit is " + std::to_string( kRegexMaxPatternBytes )
+             + ": std::regex compiles by recursion, and a longer pattern can overflow a worker thread's stack (a 16,896-byte literal "
+               "killed a 512 KiB libc++ thread, a 3,648-byte one a libstdc++ thread of the same size) — split it into several shorter "
+               "patterns or searches";
+    }
+    std::size_t depth = 0, deepest = 0;
+    bool        isInsideClass = false;
+    for( std::size_t i = 0; i < pattern.size(); ++i )
+    {
+        const char c = pattern[i];
+        if( c == '\\' )
+        {
+            ++i;
+            continue;
+        }
+        if( isInsideClass )
+        {
+            isInsideClass = ( c != ']' );
+            continue;
+        }
+        isInsideClass = ( c == '[' );
+        depth         = ( c == '(' ) ? depth + 1 : ( c == ')' && depth > 0 ) ? depth - 1 : depth;
+        deepest       = std::max( deepest, depth );
+    }
+    if( deepest > kRegexMaxGroupDepth )
+    {
+        return "groups nest " + std::to_string( deepest ) + " deep and the limit is " + std::to_string( kRegexMaxGroupDepth )
+             + ": std::regex compiles nested groups by recursion, and a deeper pattern can overflow a worker thread's stack (960 nested "
+               "groups killed a 512 KiB libstdc++ thread) — flatten the nesting";
+    }
+    return std::nullopt;
+}
+
+// The structural screens, in order: the size bounds first (the stack reason above, and cheap), then the two
+// `--regex` has always applied — the portability screen (L5), then the backtracking screen (M2). A pure function of
+// the pattern TEXT, so every verdict is the same on every standard library.
 inline std::optional<std::string> screenRegexPattern( const std::string& pattern ) noexcept
 {
+    if( std::optional<std::string> size = regexSizeRefusal( pattern ) )
+    {
+        return size;
+    }
     if( std::optional<std::string> portability = nonPortableRegexEscape( pattern ) )
     {
         return portability;
@@ -330,6 +391,7 @@ using RegexCaptures = std::cmatch;   // captures over a std::string_view subject
 
 inline constexpr RegexSyntax kRegexEcmaScript = std::regex_constants::ECMAScript;   // std::regex's own default
 inline constexpr RegexSyntax kRegexOptimize   = std::regex_constants::optimize;
+inline constexpr RegexSyntax kRegexIcase      = std::regex_constants::icase;
 
 enum class RegexVerdict : std::uint8_t
 {

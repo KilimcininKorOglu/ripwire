@@ -36,6 +36,13 @@
 #       src/regexguard.h, over source with comments and string literals blanked (so the words in prose do not
 #       count). The allowlist carries a reason per row, a stale row FAILS, and the detector is proved on a
 #       planted file (fires) and on a planted clean file (silent) before its verdict on the tree is believed.
+#   (e) AN --arch TO PATTERN THAT ONLY FAILS AFTER SUBSTITUTION IS REFUSED, NOT INERT — `a{2,\1}` is a well-formed
+#       template that passes the screen, and on an edge whose FROM captured "1" it becomes `a{2,1}`, an invalid
+#       interval on every standard library. That rule used to be skipped silently for the edge (exit 0, violations
+#       unreported); it must refuse by name, quoting the substituted text, with the other edges' rules still judged.
+#   (g) THE STACK BOUND — std::regex compiles by recursion, and a 20,000-byte literal --regex died with SIGBUS in a
+#       512 KiB grep worker. A pattern over kRegexMaxPatternBytes (2,048) or nesting groups deeper than
+#       kRegexMaxGroupDepth (64) is refused by name; exactly at each limit it still compiles.
 #   (d) file() IS ROOT-RELATIVE — two clones of one tree at different directory names, each run with an
 #       absolute and a relative root spelling, must give the SAME count for a pattern naming one clone's
 #       directory, and an anchored `^src/` must select the src/ symbols (it selected nothing under an
@@ -81,6 +88,7 @@ mkdir -p "$FIX/$RUNA" "$FIX/zz" "$TMP/rules_bomb" "$TMP/rules_ok"
 printf 'int aaaa_one() { return 1; }\nint aaaa_two() { return aaaa_one(); }\n' >"$FIX/$RUNA/$RUNA.h"
 printf '#include "%s.h"\nint aaaa_three() { return aaaa_two(); }\n' "$RUNA" >"$FIX/$RUNA/$RUNA.c"
 printf '#include "../%s/%s.h"\nint zz_caller() { return aaaa_one(); }\n' "$RUNA" "$RUNA" >"$FIX/zz/b.c"
+printf '#include "../%s/%s.h"\nint zz_digit() { return aaaa_two(); }\n' "$RUNA" "$RUNA" >"$FIX/zz/d1.c"
 printf 'int foo_alpha() { return 0; }\nint foo_beta() { return foo_alpha(); }\nconst char* bait = "%s";\n' "$RUNA$RUNA" >"$FIX/zz/q.cpp"
 { printf '# bait\n'; head -c 4000 /dev/zero | tr '\0' 'a'; printf '\nzz marker line\n'; } >"$FIX/zz/bait.md"
 cat >"$TMP/rules_bomb/bomb.yml" <<'YML'
@@ -103,6 +111,9 @@ printf 'deny path zz/.* -> (a+)+z\n'         >"$TMP/arch_to_bomb.txt"
 printf 'deny path (a+)+z -> .*\n'            >"$TMP/arch_from_bomb.txt"
 printf 'deny path zz/.* -> a+/\n'            >"$TMP/arch_ok.txt"
 printf 'deny path zz/.* -> (a|a)+z\n'        >"$TMP/arch_alt.txt"
+printf '%s\n' 'deny path zz/d(\d)\.c -> a{2,\1}'  >"$TMP/arch_subst.txt"
+printf '%s\n' 'deny path zz/(\w+)/.* -> (\1'      >"$TMP/arch_to_unbalanced.txt"
+printf '%s\n' 'deny path zz/d(\d)\.c -> a{1,\1}'  >"$TMP/arch_subst_ok.txt"
 
 MATCH_BOMB='(function_declarator declarator: (identifier) @fn (#match? @fn "(a+)+z"))'
 MATCH_OK='(function_declarator declarator: (identifier) @fn (#match? @fn "^foo_"))'
@@ -160,26 +171,36 @@ else no "(a) the file() refusal is not a deterministic refusal (exit $rc1/$rc2, 
 RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$FIX" --top-k=5 --pack-signatures --no-cache >/dev/null 2>"$TMP/probe.err"
 if grep -aq 'open_memstream failed' "$TMP/probe.err"; then FAULTS=1; else FAULTS=0; fi
 
-exhaustedByName(){               # exhaustedByName <label> <args…>   (run under RIPWIRE_FAULT_REGEX_MATCH=1)
-    local label="$1"; shift
-    local rc; rc="$( RIPWIRE_FAULT_REGEX_MATCH=1 capRun 20 "$TMP/b.out" "$TMP/b.err" "$FIX" --no-cache "$@" )"
+# The whole exhaustion contract, for every entry point, in one helper shared by (b1) and (b2): a bounded exit 1, never
+# a signal death; stderr says the engine abandoned the match AND names what the reader must fix — the pattern, or for
+# --lint-rules the rule id (the per-evaluation counter is kept per rule group, so the rules are what can be named);
+# and no answer element on stdout. Each check is its own row, so a refusal that names nothing cannot pass.
+abandonedContract(){             # abandonedContract <arm> <label> <rc> <out> <err> <needle>
+    local arm="$1" label="$2" rc="$3" out="$4" err="$5" needle="$6"
     if [ "$rc" = TIMEOUT ] || [ "$rc" -ge 128 ]; then
-        no "(b1) $label: exit $rc under an injected match exhaustion (expected a bounded refusal at exit 1)"
+        no "$arm $label: exit $rc (expected a bounded refusal at exit 1)$( grep -m1 -o 'terminating.*' "$err" | head -c 120 )"
         return
     fi
-    [ "$rc" -eq 1 ] && ok "(b1) $label: an exhausted match refuses at exit 1" \
-        || no "(b1) $label: exit $rc — an exhausted match was answered anyway (silent)"
-    grep -q 'abandoned the match' "$TMP/b.err" && ok "(b1) $label: the refusal says the engine abandoned the match" \
-        || no "(b1) $label: stderr does not disclose the abandoned match: $( head -c 200 "$TMP/b.err" )"
-    grep -qE 'count="|hits="|<lint|<arch ' "$TMP/b.out" && no "(b1) $label: an answer element was printed beside the refusal" \
-        || ok "(b1) $label: no answer element on stdout"
+    if [ "$rc" -eq 1 ]; then ok "$arm $label: an abandoned match refuses at exit 1"
+    else no "$arm $label: exit $rc — an abandoned match was answered anyway (silent)"; fi
+    if grep -q 'abandoned the match' "$err"; then ok "$arm $label: the refusal says the engine abandoned the match"
+    else no "$arm $label: stderr does not disclose the abandoned match: $( head -c 200 "$err" )"; fi
+    if grep -qF -- "$needle" "$err"; then ok "$arm $label: the refusal names $needle"
+    else no "$arm $label: the refusal does not name $needle: $( head -c 200 "$err" )"; fi
+    if grep -qE 'count="|hits="|<lint|<arch |<match ' "$out"; then no "$arm $label: an answer element was printed beside the refusal"
+    else ok "$arm $label: no answer element on stdout"; fi
+}
+exhaustedByName(){               # exhaustedByName <label> <needle> <args…>   (run under RIPWIRE_FAULT_REGEX_MATCH=1)
+    local label="$1" needle="$2"; shift 2
+    local rc; rc="$( RIPWIRE_FAULT_REGEX_MATCH=1 capRun 20 "$TMP/b.out" "$TMP/b.err" "$FIX" --no-cache "$@" )"
+    abandonedContract "(b1)" "$label" "$rc" "$TMP/b.out" "$TMP/b.err" "$needle"
 }
 if [ "$FAULTS" -eq 1 ]; then
-    exhaustedByName "--graph-query file()" --graph-query='file(all,"q\.cpp")'
-    exhaustedByName "--arch path-rule"     --arch="$TMP/arch_ok.txt"
-    exhaustedByName "--match #match?"      "--match=$MATCH_OK"
-    exhaustedByName "--lint-rules #match?" --lint-rules="$TMP/rules_ok"
-    exhaustedByName "--regex"              --regex='zz marker'
+    exhaustedByName "--graph-query file()" 'q\.cpp'    --graph-query='file(all,"q\.cpp")'
+    exhaustedByName "--arch path-rule"     'a+/'       --arch="$TMP/arch_ok.txt"
+    exhaustedByName "--match #match?"      '^foo_'     "--match=$MATCH_OK"
+    exhaustedByName "--lint-rules #match?" 'rx-ok'     --lint-rules="$TMP/rules_ok"
+    exhaustedByName "--regex"              'zz marker' --regex='zz marker'
     # the switch is exact "1", like every fault switch in this tree: anything else leaves the answer alone
     RIPWIRE_FAULT_REGEX_MATCH=10 "$BIN" "$FIX" --no-cache --graph-query='file(all,"q\.cpp")' >"$TMP/b10.out" 2>/dev/null
     grep -q 'count="[1-9]' "$TMP/b10.out" && ok "(b1) control: RIPWIRE_FAULT_REGEX_MATCH=10 is not ON (exact \"1\" only)" \
@@ -195,22 +216,10 @@ fi
 LINKS_LIBCXX=0
 if command -v otool >/dev/null 2>&1 && otool -L "$BIN" 2>/dev/null | grep -q 'libc++'; then LINKS_LIBCXX=1; fi
 if command -v ldd >/dev/null 2>&1 && ldd "$BIN" 2>/dev/null | grep -q 'libc++\.so'; then LINKS_LIBCXX=1; fi
-realExhaustion(){                # realExhaustion <label> <args…>
+realExhaustion(){                # realExhaustion <label> <args…>   (the needle is the (a|a)+z pattern itself)
     local label="$1"; shift
     local rc; rc="$( capRun 30 "$TMP/r.out" "$TMP/r.err" "$FIX" --no-cache "$@" )"
-    if [ "$rc" = TIMEOUT ]; then
-        no "(b2) $label: still running after 30 s on libc++, whose engine abandons this match"
-        return
-    fi
-    if [ "$rc" -ge 128 ]; then
-        no "(b2) $label: signal death, exit $rc ($( grep -m1 -o 'terminating.*' "$TMP/r.err" | head -c 120 ))"
-        return
-    fi
-    if [ "$rc" -eq 1 ] && grep -q 'abandoned the match' "$TMP/r.err"; then
-        ok "(b2) $label: the engine's own mid-match give-up is refused by name at exit 1"
-    else
-        no "(b2) $label: exit $rc, disclosure $( grep -q 'abandoned the match' "$TMP/r.err" && echo present || echo ABSENT ) — the give-up was answered silently"
-    fi
+    abandonedContract "(b2)" "$label" "$rc" "$TMP/r.out" "$TMP/r.err" '(a|a)+z'
 }
 if [ "$LINKS_LIBCXX" -eq 1 ]; then
     realExhaustion "--graph-query file((a|a)+z)" --graph-query='file(all,"(a|a)+z")'
@@ -332,6 +341,47 @@ while IFS= read -r line; do
         *)     no "(c) unexpected scanner output: $line" ;;
     esac
 done <"$TMP/static.txt"
+
+# ── (e) an --arch TO pattern refused only AFTER backreference substitution is refused by name ────────────────
+# (e0) first, the template no capture can repair — `(\1` is unbalanced whatever lands in \1 — rejects the rules file
+# at PARSE, with the line named, instead of being stored and skipped on every edge.
+rc="$( capRun 20 "$TMP/e0.out" "$TMP/e0.err" "$FIX" --no-cache --arch="$TMP/arch_to_unbalanced.txt" )"
+if [ "$rc" = 1 ] && grep -qF "TO path-regex '(\1' refused" "$TMP/e0.err" && grep -q 'rules file rejected' "$TMP/e0.err"; then
+    ok "(e0) a TO template that compiles for no capture rejects the rules file at parse, naming the template"
+else
+    no "(e0) exit $rc — an unbalanced TO template was not rejected at parse: $( head -c 240 "$TMP/e0.err" )"
+fi
+rc="$( capRun 20 "$TMP/e.out" "$TMP/e.err" "$FIX" --no-cache --arch="$TMP/arch_subst.txt" )"
+if [ "$rc" = 1 ]; then ok "(e) a TO pattern that becomes invalid after substitution refuses at exit 1"
+else no "(e) exit $rc — a rule its own substitution broke was not refused (inert rules report exit 0 over edges they never judged)"; fi
+if grep -qF "a{2,1}" "$TMP/e.err" && grep -q 'refused' "$TMP/e.err"; then ok "(e) the refusal quotes the substituted pattern a{2,1} and says it is refused"
+else no "(e) stderr does not quote the substituted pattern: $( head -c 240 "$TMP/e.err" )"; fi
+if grep -q '<arch ' "$TMP/e.out"; then no "(e) an <arch> answer was printed beside the refusal"; else ok "(e) no <arch> answer on stdout"; fi
+# control: the same rule shape whose substitution stays valid (a{1,1}) is judged, not refused — the refusal is the
+# substituted TEXT's, not the backreference's
+rc="$( capRun 20 "$TMP/e2.out" "$TMP/e2.err" "$FIX" --no-cache --arch="$TMP/arch_subst_ok.txt" )"
+if [ "$rc" != 1 ] && [ "$rc" != TIMEOUT ] && grep -q '<arch ' "$TMP/e2.out"; then ok "(e) control: a{1,\\1} substitutes to a valid a{1,1} and the rule is judged (exit $rc)"
+else no "(e) control: exit $rc — $( head -c 200 "$TMP/e2.err" )"; fi
+
+# ── (g) the stack bound: a pattern too long or too deeply nested is refused by name, the limit itself still compiles ──
+LIT2048="$( python3 -c "print('a' * 2048)" )"; LIT2049="$( python3 -c "print('a' * 2049)" )"
+NEST64="$( python3 -c "print('(' * 64 + 'q' + ')' * 64)" )"; NEST65="$( python3 -c "print('(' * 65 + 'q' + ')' * 65)" )"
+BIG="$( python3 -c "print('a' * 20000)" )"
+rc="$( capRun 20 "$TMP/g1.out" "$TMP/g1.err" "$FIX" --no-cache --regex="$BIG" )"
+if [ "$rc" = 1 ] && grep -q 'bytes and the limit is 2048' "$TMP/g1.err"; then ok "(g) a 20,000-byte --regex is refused by name at exit 1 (it died with SIGBUS in a 512 KiB grep worker)"
+else no "(g) a 20,000-byte --regex: exit $rc — $( head -c 160 "$TMP/g1.err" )"; fi
+rc="$( capRun 20 "$TMP/g2.out" "$TMP/g2.err" "$FIX" --no-cache --graph-query="file(all,\"$LIT2049\")" )"
+if [ "$rc" = 1 ] && grep -q 'is 2049 bytes and the limit is 2048' "$TMP/g2.err"; then ok "(g) 2,049 bytes: refused, naming the size and the limit"
+else no "(g) 2,049 bytes: exit $rc — $( head -c 160 "$TMP/g2.err" )"; fi
+rc="$( capRun 20 "$TMP/g3.out" "$TMP/g3.err" "$FIX" --no-cache --graph-query="file(all,\"$LIT2048\")" )"
+if [ "$rc" = 0 ] && grep -q '<query ' "$TMP/g3.out"; then ok "(g) exactly 2,048 bytes still compiles and answers"
+else no "(g) 2,048 bytes: exit $rc — $( head -c 160 "$TMP/g3.err" )"; fi
+rc="$( capRun 20 "$TMP/g4.out" "$TMP/g4.err" "$FIX" --no-cache --graph-query="file(all,\"$NEST65\")" )"
+if [ "$rc" = 1 ] && grep -q 'groups nest 65 deep and the limit is 64' "$TMP/g4.err"; then ok "(g) groups nested 65 deep: refused, naming the depth and the limit"
+else no "(g) 65 nested groups: exit $rc — $( head -c 160 "$TMP/g4.err" )"; fi
+rc="$( capRun 20 "$TMP/g5.out" "$TMP/g5.err" "$FIX" --no-cache --graph-query="file(all,\"$NEST64\")" )"
+if [ "$rc" = 0 ] && grep -q '<query ' "$TMP/g5.out"; then ok "(g) groups nested exactly 64 deep still compile and answer"
+else no "(g) 64 nested groups: exit $rc — $( head -c 160 "$TMP/g5.err" )"; fi
 
 # ── (d) file() matches the ROOT-RELATIVE path, so the checkout's directory name cannot select anything ─────────
 mkTree(){

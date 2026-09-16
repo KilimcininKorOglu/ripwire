@@ -471,16 +471,20 @@ std::optional<int> runArchViews( const MainDispatch& d )
                 // path-rule violation even when both files are unlayered). A self-edge can't happen (g!=f
                 // by resolveIncludeAdj), so no same-module guard needed beyond the rule's own regex.
                 const PathRuleVerdict pathVerdict = ar.pathRules.empty() ? PathRuleVerdict{} : pathRuleForbids( ar, relFiles[f], relFiles[g] );
-                if( pathVerdict.isAbandoned )
+                if( pathVerdict.isAbandoned || pathVerdict.isRefused )
                 {
-                    // The engine gave up on this edge (src/regexguard.h: RegexVerdict::Exhausted), so the rule is
-                    // neither satisfied nor violated here — and a CI gate that reports violations="0" or exit 0 over
-                    // an edge it could not judge is the failure --arch exists to prevent. Refuse, name the rule and
-                    // the edge, before any byte of the answer is printed.
-                    const PathRule& pr = ar.pathRules[ pathVerdict.ruleIndex ];
+                    // The rule could not be JUDGED on this edge — the engine gave up (src/regexguard.h:
+                    // RegexVerdict::Exhausted), or the TO pattern this edge's backreferences produced is one the guard
+                    // refuses — so it is neither satisfied nor violated here, and a CI gate that reports
+                    // violations="0" or exit 0 over an edge it could not judge is the failure --arch exists to
+                    // prevent. Refuse, name the rule, the edge and the reason, before any byte of the answer.
+                    const PathRule&   pr     = ar.pathRules[ pathVerdict.ruleIndex ];
+                    const std::string reason = pathVerdict.isRefused
+                                             ? "its TO pattern became '" + pathVerdict.refusedTo + "' after backreference substitution, which is refused: " + pathVerdict.refusal
+                                             : std::string( rw::kRegexAbandonedReason );
                     rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "
-                                        "reporting a violation count the engine did not finish\n",
-                                pr.from, pr.to, relFiles[f], relFiles[g], rw::kRegexAbandonedReason );
+                                        "reporting a violation count the rule did not measure\n",
+                                pr.from, pr.to, relFiles[f], relFiles[g], reason );
                     return 1;
                 }
                 if( pathVerdict.isForbidden )

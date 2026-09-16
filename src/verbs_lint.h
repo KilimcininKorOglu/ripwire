@@ -1094,6 +1094,26 @@ static bool refuseUndecidedMatchRegex( std::string_view verb, const std::vector<
     return false;
 }
 
+// The ids of the user rules any of whose queries (main or combinator) carries a #match?/#not-match? predicate, in
+// load order — the rules an undecided-predicate refusal can be about, so the refusal names them rather than only the
+// directory (the per-evaluation counter is kept per group, not per rule).
+static std::string rulesWithMatchPredicate( const std::vector<rw::LintRule>& rules )
+{
+    const auto hasPredicate = []( const std::string& query ) { return query.find( "match?" ) != std::string::npos; };
+    std::string ids;
+    for( const rw::LintRule& r : rules )
+    {
+        const bool any = hasPredicate( r.query ) || std::any_of( r.inside.begin(), r.inside.end(), hasPredicate )
+                      || std::any_of( r.notInside.begin(), r.notInside.end(), hasPredicate )
+                      || std::any_of( r.notMatches.begin(), r.notMatches.end(), hasPredicate );
+        if( any )
+        {
+            ids += ids.empty() ? r.id : "," + r.id;
+        }
+    }
+    return ids;
+}
+
 // Join owned strings through the ONE joiner the refusal surfaces already use, so a list this file prints
 // and a list an MCP refusal prints cannot drift in spelling. (joinClauses takes views; every caller here
 // holds owned strings, and hand-rolling the conversion at each call site is how they drift.)
@@ -1732,7 +1752,9 @@ std::optional<int> runLint( const MainDispatch& d )
                 return 1;
             }
             const auto [ userFindings, saturatedUserRuleIds, uncompiledIds, regexRefused, regexUndecided ] = runLintRules( ing, userRules );
-            if( refuseUndecidedMatchRegex( "--lint-rules", regexRefused, regexUndecided, "in a rule loaded from " + std::string( cfg.lintRulesDir ) ) )
+            if( refuseUndecidedMatchRegex( "--lint-rules", regexRefused, regexUndecided,
+                                           "rules loaded from " + std::string( cfg.lintRulesDir ) + " whose queries carry a #match?/#not-match? predicate: "
+                                               + rulesWithMatchPredicate( userRules ) ) )
             {
                 return 1;
             }
