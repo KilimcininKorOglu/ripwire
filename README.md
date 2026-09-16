@@ -864,9 +864,10 @@ ranking, bodies, callers and tests in one budgeted bundle.
 ## Quickstart
 
 <details>
-<summary><b>Prebuilt binary</b> — macOS and Linux (arm64 / x86-64, built for <b>RHEL 8+</b>), SHA-256 verified, shipping <b>seventeen agent skills</b> the installer activates for every agent it detects</summary>
+<summary><b>Prebuilt binary</b> — macOS on Apple silicon and Linux (arm64 / x86-64, built for <b>RHEL 8+</b>), SHA-256 verified, shipping <b>seventeen agent skills</b> the installer activates for every agent it detects</summary>
 
-**Prebuilt binary** — macOS (arm64 / x86-64) and Linux (arm64 / x86-64, built for **RHEL 8+**;
+**Prebuilt binary** — macOS (arm64; 0.6.1 is the last release with an Intel macOS binary, and an Intel Mac
+builds later releases from source) and Linux (arm64 / x86-64, built for **RHEL 8+**;
 every release is smoke-tested on a RHEL 9 userland before it publishes). Downloads the latest
 [GitHub Release](https://github.com/redhat-et/ripwire/releases), verifies its SHA-256, and installs
 to `~/.local/bin`. From v0.2.2 the release tarball also ships the seventeen agent skills, and the
@@ -1816,9 +1817,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>619 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>620 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **619 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **620 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2168,7 +2169,7 @@ same renderer. One computation has one output shape.
 | --- | --- |
 | Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). On Windows, use WSL2. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
-| Prebuilt macOS floor | macOS 14 or later |
+| Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |
 | Build tools | CMake 3.24 or later, and a C++23 compiler |
 | Compilers | clang 16+, AppleClang 15+, or gcc 13+ |
@@ -2554,7 +2555,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 212 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 213 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.

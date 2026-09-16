@@ -43,7 +43,7 @@ export RIPWIRE_BIN="$BIN"
 
 # ── (1) inventory: bin/ and config.yaml agree ───────────────────────────────────────────────────────
 expected="rw_at rw_callees rw_callers rw_expand rw_for rw_from_trace rw_impact rw_pack_task rw_slice"
-actual="$( ls "$SHIMS" | sort | tr '\n' ' ' | sed 's/ $//' )"
+actual="$( ls "$SHIMS" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//' )"
 [ "$actual" = "$expected" ] && ok "(1) bin/ holds exactly the nine registered shims" \
     || no "(1) bin/ inventory drifted: got '$actual'"
 missing=0
