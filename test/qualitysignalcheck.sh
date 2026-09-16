@@ -380,7 +380,7 @@ crcount="$( grep -c $'\r' "$AR/.ripwire_quality_acks" 2>/dev/null || true )"
     && ok "sorted acks round-trip: writer strips CRLF (LF-only canonical output)" \
     || no "sorted acks round-trip: rewritten acks file still contains CRLF"
 grep '^ack ' "$AR/.ripwire_quality_acks" > "$AR/acklines.txt"
-if diff -q "$AR/acklines.txt" <( sort "$AR/acklines.txt" ) >/dev/null 2>&1; then
+if diff -q "$AR/acklines.txt" <( LC_ALL=C sort "$AR/acklines.txt" ) >/dev/null 2>&1; then
     ok "sorted acks round-trip: writer re-emits fully (kind,key)-sorted output"
 else
     no "sorted acks round-trip: rewritten acks file is not sorted"

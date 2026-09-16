@@ -41,7 +41,7 @@ k_of(){ printf '%s' "$1" | grep -oE '<s [^>]*n="'"$2"'"[^>]*k="[0-9.]+"' | head 
 ORDER="$( names_in_order "$OUT" )"
 first="$( printf '%s\n' "$ORDER" | head -1 )"
 count="$( printf '%s\n' "$ORDER" | wc -l | tr -d ' ' )"
-rest="$( printf '%s\n' "$ORDER" | tail -n +2 | sort | tr '\n' ',' )"
+rest="$( printf '%s\n' "$ORDER" | tail -n +2 | LC_ALL=C sort | tr '\n' ',' )"
 if [ "$first" = "hub" ]; then ok "rank order: hub() emitted first"; else no "rank order: expected hub() first, got: $first"; fi
 { [ "$count" = 4 ] && [ "$rest" = "caller_x,caller_y,caller_z," ]; } \
     && ok "rank order: all 4 symbols present, hub followed by exactly {caller_x,caller_y,caller_z}" \
