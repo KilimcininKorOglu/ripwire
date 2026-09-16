@@ -647,19 +647,22 @@ namespace mcpedit
     // HONEST LIMIT: this is ADVISORY — a non-cooperating external writer (an editor/formatter that doesn't take
     // this lock) is not serialized by it; that residual is handled by the re-check-before-rename in runEditVerb,
     // which shrinks (but cannot fully close) the external-writer window. Never blocks forever: LOCK_NB with a
-    // short bounded retry, then refuses the edit if the lock is still unavailable — proceeding lock-free would
-    // let a cooperating writer enter just after the last attempt and lose its committed update. RAII: the fd is
+    // short bounded retry. CONTENDED past it (a live cooperating writer holds the lock) refuses the edit —
+    // proceeding would let that writer commit after this edit's rename and silently undo an edit reported as
+    // applied. A lockfile that cannot be opened, or a filesystem without flock, proves no live holder, and a
+    // refusal there would block every edit without serializing anything, so that degrade stays lock-free. RAII: the fd is
     // closed (releasing the flock) at scope exit, deterministically.
     struct EditLock
     {
-        int  fd     = -1;
-        bool locked = false;
+        int  fd        = -1;
+        bool locked    = false;
+        bool contended = false;   // every bounded attempt saw EWOULDBLOCK — another holder is live
 
         explicit EditLock( const std::string& targetPath )
         {
             const std::string lockPath = editLockPath( targetPath );
             fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
-            if( fd < 0 ) { DEGRADED_PATH_ALERT( "edit lockfile open failed; refusing the edit" ); return; }
+            if( fd < 0 ) { DEGRADED_PATH_ALERT( "edit lockfile open failed; proceeding lock-free (re-check still guards)" ); return; }
 
             // ~200 ms bounded acquire: 20 tries × 10 ms. If a peer holds it longer, refuse rather than hang or
             // proceed lock-free — the latter can lose a cooperating writer's committed update.
@@ -670,12 +673,17 @@ namespace mcpedit
                 {
                     break;
                 }
+                contended = attempt == 19;
                 struct timespec ts{ 0, 10 * 1000 * 1000 };   // 10 ms
                 ::nanosleep( &ts, nullptr );
             }
-            if( !locked )
+            if( contended )
             {
                 DEGRADED_PATH_ALERT( "edit lock contended past timeout; refusing the edit" );
+            }
+            else if( !locked )
+            {
+                DEGRADED_PATH_ALERT( "edit lock unsupported on this filesystem; proceeding lock-free (re-check still guards)" );
             }
         }
 
@@ -1245,15 +1253,16 @@ inline mcpedit::Outcome runEditVerb( const std::string& root, mcpedit::Op op, co
 
     // F1: hold a per-file advisory lock across the ENTIRE read→check→splice→rename below, so two cooperating
     //     ripwire MCP edit ops on one file serialize instead of racing (RAII: released at function return).
-    //     Refuses on contention/failure after the bounded acquire — proceeding lock-free could lose a
-    //     cooperating writer's committed update; the re-check remains the floor for non-cooperating writers.
+    //     Refuses when another holder keeps the lock past the bounded acquire — proceeding could let that
+    //     cooperating writer undo this edit after it reports applied. An unopenable lockfile or a filesystem
+    //     without flock degrades lock-free (no holder is provable); the re-check is the floor for both.
     //     Keyed by the REAL disk path so cross-process serialization lands on the actual file, not the label.
     const mcpedit::EditLock editLock( disk );
-    if( !editLock.locked )
+    if( editLock.contended )
     {
         oc.ok = false; oc.errCode = -32603;
-        oc.message = "edit lock unavailable for '" + path + "'; another edit is in progress or the lock directory "
-                   + "cannot be opened — retry after it is released; file left unchanged";
+        oc.message = "edit lock unavailable for '" + path + "'; another edit is in progress — retry after it is released; "
+                     "file left unchanged";
         return oc;
     }
 
