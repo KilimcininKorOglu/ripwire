@@ -29,7 +29,7 @@ CORPUS="$TMP/corpus"
 case "$RUNS" in *[!0-9]*|'') echo "representative_perfgate: RUNS must be numeric"; exit 2;; esac
 [ "$RUNS" -ge 5 ] || { echo "representative_perfgate: RUNS must be at least 5"; exit 2; }
 
-actualHash="$( cd "$ROOT/test/fixture" && find . -type f -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}' )"
+actualHash="$( cd "$ROOT/test/fixture" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum | awk '{print $1}' )"
 [ "$actualHash" = "$FIXTURE_HASH" ] || {
     echo "representative_perfgate: fixture drifted ($actualHash != $FIXTURE_HASH); review shape and update the pin"
     exit 2

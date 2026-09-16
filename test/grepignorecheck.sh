@@ -103,10 +103,10 @@ attr(){ grep -oE " $1=\"[0-9]+\"" | head -1 | grep -oE '[0-9]+'; }
 
 # ── oracles, both independent of ripwire ───────────────────────────────────────────────────────────────
 # oracle ERE: the files git does NOT ignore (tracked, plus untracked-but-unignored) that contain ERE.
-oracle(){ ( cd "$R" && git ls-files -co --exclude-standard -z | xargs -0 grep -lE -- "$1" 2>/dev/null | sort -u ); }
+oracle(){ ( cd "$R" && git ls-files -co --exclude-standard -z | xargs -0 grep -lE -- "$1" 2>/dev/null | LC_ALL=C sort -u ); }
 # oracle_all ERE: every file under the tree that contains ERE, ignore rules NOT applied (the --no-ignore
 # and non-git expectation).
-oracle_all(){ ( cd "$1" && grep -rlE --exclude-dir=.git -- "$2" . 2>/dev/null | sed 's|^\./||' | sort -u ); }
+oracle_all(){ ( cd "$1" && grep -rlE --exclude-dir=.git -- "$2" . 2>/dev/null | sed 's|^\./||' | LC_ALL=C sort -u ); }
 # the number of aux files git does not ignore — from git check-ignore, so C/D never learn it from ripwire
 AUX_UNIGNORED=0
 for f in $AUX_FILES; do ( cd "$R" && git check-ignore -q "$f" ) || AUX_UNIGNORED=$(( AUX_UNIGNORED + 1 )); done

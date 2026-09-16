@@ -501,9 +501,16 @@ if [ "$NEST_RC" -eq 0 ]; then
         Release|RelWithDebInfo|MinSizeRel)
             ok "hostile nesting: $NEST_FLAVOUR build defines NDEBUG — DEGRADED_PATH_ALERT is compiled out, nothing to assert" ;;
         *)
-            grep -q 'math degraded.*kMaxKotlinStringNestDepth' "$TMP/nest.err" \
-                && ok "hostile nesting: DEGRADED_PATH_ALERT names the refusal on this '${NEST_FLAVOUR:-unknown}' (non-NDEBUG) build" \
-                || no "hostile nesting: '${NEST_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the Kotlin refusal raised no DEGRADED_PATH_ALERT" ;;
+            # ONE line on purpose, never with newlines stripped first: the notice must arrive whole. This arm went red on
+            # CI when the reporter wrote the notice in nine writes and the second refusal's line landed between two of
+            # them (test/diagnoticecheck.sh is the gate for that). On a FAIL the stderr is printed, because no CI log of
+            # those eight failures could show what the notice had actually looked like.
+            if grep -q 'math degraded.*kMaxKotlinStringNestDepth' "$TMP/nest.err"; then
+                ok "hostile nesting: DEGRADED_PATH_ALERT names the refusal on this '${NEST_FLAVOUR:-unknown}' (non-NDEBUG) build"
+            else
+                no "hostile nesting: '${NEST_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the Kotlin refusal raised no DEGRADED_PATH_ALERT on one line; stderr:"
+                head -5 "$TMP/nest.err" | sed 's/^/        /'
+            fi ;;
     esac
 else
     no "hostile nesting: the symbol, stderr and degrade-alert arms were NOT evaluated — the map did not exit 0"

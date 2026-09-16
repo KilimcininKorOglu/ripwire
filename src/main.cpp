@@ -107,7 +107,7 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include "cli.h"
 #include "embedded_queries.h"      // configure-generated tags.scm table shared with ingest and --doctor
 #include "infra/hashutil.h"        // sanitizer-clean modulo-2^64 FNV multiplication
-#include "infra/charconvcompat.h"  // rw::parseFloating — FP from_chars is `= delete` on older libc++ (macos-14 CI)
+#include "infra/charconvcompat.h"  // rw::parseFloating — FP from_chars is `= delete` on older libc++, unavailable below macOS 26
 
 #include <algorithm>
 #include <array>
