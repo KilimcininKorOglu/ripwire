@@ -388,7 +388,19 @@ namespace mcpedit
             // "symbol 'size' not found under path 'svectr.h'; nearest: sized, size_of, Side, Site, sink",
             // sending the reader after a rename in a header that was never indexed under that spelling.
             // Same verdict, same words as the read verbs' file-half diagnosis (selectorrefuse.h).
-            if( !pathHint.empty() && !indexHasFileMatching( ing, pathHint ) )
+            bool pathMatches = false;
+            if( !pathHint.empty() )
+            {
+                for( std::size_t f = 0; f < ing.files.size(); ++f )
+                {
+                    if( editHintMatches( ing, std::uint32_t( f ), pathHint, frame ) )
+                    {
+                        pathMatches = true;
+                        break;
+                    }
+                }
+            }
+            if( !pathHint.empty() && !pathMatches )
             {
                 err = "no indexed file matches '" + pathHint + "' — the PATH half is the fault, so nothing is claimed about '"
                     + symbol + "'; drop the file qualifier to search every file, or pass a path the map lists"
