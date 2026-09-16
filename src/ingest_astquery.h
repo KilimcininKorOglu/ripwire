@@ -775,7 +775,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
         std::vector<std::thread> compilers;  compilers.reserve( compileThreads );
         for( unsigned worker = 0; worker < compileThreads; ++worker )
         {
-            compilers.emplace_back( [ & ]()
+            compilers.emplace_back( [ & ]() noexcept
             {
                 for( ;; )
                 {
@@ -919,7 +919,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
 
     for( unsigned t = 0; t < nthreads; ++t )
     {
-        pool.emplace_back( [ &, t ]()
+        pool.emplace_back( [ &, t ]() noexcept
         {
             ParserGuard pg;
             if( pg.p == nullptr )
@@ -1668,7 +1668,7 @@ SpanTierBatch spanTiersOfFiles( std::span<const std::string> diskPaths, bool use
     const unsigned            threadCount = static_cast<unsigned>( std::min<std::size_t>( hw, fileCount ) );
     std::atomic<std::size_t>  nextSlot{ 0 };
     std::atomic<std::uint64_t> bytesParsed{ 0 };
-    const auto                worker = [ & ]()
+    const auto                worker = [ & ]() noexcept
     {
         ParserGuard pg;
         if( pg.p == nullptr )

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# crashsweepcheck.sh — process crashes, hangs and descriptor leaks reachable from input ripwire does not control.
+# crashsweepcheck.sh — process crashes, hangs and descriptor leaks reachable from input ripwire does not control,
+# and the STATIC rules that keep their three shapes from being written again.
 #
-# THE DEFECTS, each reproduced on the base before its fix:
+# THE DEFECTS, each reproduced on the base before its fix (the arm that shows it red is named):
 #   (B1) A FILE* LEAKED ON EVERY SHORT READ. ingest_crawl.h's readFile closed its stream inside
 #        `( got == want ) && ( std::fclose( fp ) == 0 )`: a file that came up short (truncated between the size
 #        probe and the read) skipped the close. A long-lived server re-ingesting such a tree ran out of
@@ -23,6 +24,43 @@
 #        10000000000 * 1000000000"). Both stat readers now call rw::saturatingNanoseconds (infra/statclock.h).
 #        APFS clamps timestamps at 2262, so on macOS the arm cannot build its input and says so.
 #
+# THE STATIC RULES — could these have been caught before they shipped? Three of the crash shapes are visible in
+# the source, so each is now a rule, run with ripwire's own structural query (--match) over src/:
+#   (S1) AN ALLOCATION SIZED BY A DECODED COUNT IS BOUNDED FIRST. In any function that decodes bytes through a
+#        reader primitive (qsnapGet, pod, u8..u64, i32/i64, varint, lenDelim, view), a reserve/resize or a
+#        std::vector/std::string size constructor whose size names a variable must be preceded, in the same
+#        function, by a bound on it: countFits/qsnapCountFits/min/clamp over it, or a relational or equality
+#        comparison against something that is not a literal 0 (one level of derivation is followed:
+#        `need = n * width; if( left < need )`). Loop headers do not count — `i < n` walks a count, it does
+#        not bound it. Red on the base: quality.h deserializeSnapshot `n` and deserializeRawCommitStream
+#        `nCommits`/`nPaths` — the counts that reached reserve() straight from a checksum-valid blob.
+#        CATCHES a count decoded and allocated in one function. MISSES a count decoded in one function and
+#        allocated in another, a primitive not in the list, and a bound that is textually present but wrong.
+#   (S2) EVERY RAW STREAM OR DESCRIPTOR ACQUISITION IS ACCOUNTED FOR. Each fopen/open/fdopen/openat/opendir/
+#        open_memstream/popen call site must appear in the registry below with the fact that makes it safe
+#        (owned by a destructor, closed on every return, or handed to a closer). A NEW site fails: wrap it in
+#        rw::OwnedFile — `rw::openOwnedFile( path, mode )`, or `rw::OwnedFile f( ::fdopen( fd, mode ) )` — or
+#        register it with its reason. And one shape is refused outright, registry or not: a close call as the
+#        right operand of && or ||, or an arm of ?: — the exact expression that leaked (B1). Red on the base:
+#        ingest_crawl.h readFile. A registry row that no longer matches a site also fails, so the list cannot
+#        rot into permission for code that is gone. CATCHES a new raw acquisition and the short-circuited close.
+#        MISSES a registered site whose body later grows an early return (the reason goes stale silently — the
+#        owner type is the durable fix), and a throw between open and close, which only an owner prevents.
+#   (S3) THREAD WORK DOES NOT THROW. A throw escaping a std::thread body is std::terminate, and in the MCP
+#        server that turns one bad request into a dead server. Every lambda handed to a thread — `std::thread( [..] )`,
+#        or `emplace_back` into a std::vector<std::thread>, inline or through a named local — must be declared
+#        noexcept, or its body must be one try block. There is no templated pool to static_assert
+#        std::is_nothrow_invocable in, so the rule reads the call sites. Red on the base: eight bare bodies.
+#        CATCHES a new bare thread body. MISSES a thread started through a helper this query does not name.
+#
+# NON-VACUITY. Every static rule runs twice: over src/ (the verdict) and over a synthetic probe tree that holds
+# one violation and one compliant twin per rule, where the violation must fire and the twin must not. A scan
+# that reached the engine's hit cap, or ran against a binary that answered nothing, FAILS as partial.
+#
+# RUNTIME CHECKS. None of B1-B3 trips an assertion a debug build already has: an input-sized count is not an
+# invariant (VERIFY on external data is forbidden), a short read is legal, and the timestamp overflow is seen
+# only by the sanitizer build — which is why B3's red needs RIPWIRE_ASAN_BIN.
+#
 # Usage:  bash test/crashsweepcheck.sh [BIN]      RIPWIRE_ASAN_BIN=asan/ripwire bash test/crashsweepcheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -30,6 +68,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 ASAN_BIN="${RIPWIRE_ASAN_BIN:-}"
 [ -n "$ASAN_BIN" ] && [ "${ASAN_BIN#/}" = "$ASAN_BIN" ] && ASAN_BIN="$ROOT/$ASAN_BIN"
+SRC="${RIPWIRE_CRASHSWEEP_SRC:-$ROOT/src}"   # the tree the static rules read; a red-first run points it at a base checkout
 TMP="$( mktemp -d )"; trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 fail=0
 
@@ -45,9 +84,373 @@ bin_tag(){ is_sanitized "$1" && printf 'asan' || printf 'plain'; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "git required"; exit 2; }
-echo "crashsweepcheck: BIN=$BIN  ASAN_BIN=${ASAN_BIN:-none}"
+echo "crashsweepcheck: BIN=$BIN  ASAN_BIN=${ASAN_BIN:-none}  SRC=$SRC"
 RUN_BINS=( "$BIN" )   # the behavioural arms run once per distinct binary
 [ -n "$ASAN_BIN" ] && [ "$ASAN_BIN" != "$BIN" ] && RUN_BINS+=( "$ASAN_BIN" )
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+echo
+echo "=== static rules S1-S3 (ripwire --match over the source) ==="
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+cat > "$TMP/scan.py" <<'SCANPY'
+# static scan driver: python3 scan.py BIN SRC OUT
+import html, os, re, subprocess, sys
+from collections import Counter, defaultdict
+
+BIN, SRC, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
+os.makedirs(OUT, exist_ok=True)
+
+def match(query):
+    """Run one --match over SRC; return [(file, line, fn, text)] and fail loudly if the scan was partial."""
+    proc = subprocess.run([BIN, SRC, "--match=" + query, "--limit=5000"], capture_output=True, text=True)
+    root = re.search(r"<match [^>]*>", proc.stdout)
+    if proc.returncode != 0 or root is None:
+        print("SCANFAIL rc=%d query=%s stderr=%s" % (proc.returncode, query[:80], proc.stderr[:300]))
+        sys.exit(3)
+    if 'hits_capped="1"' in root.group(0):
+        print("SCANFAIL engine hit cap reached — the scan is partial: " + query[:80])
+        sys.exit(3)
+    rows = []
+    for p, fn, text in re.findall(r'<m p="([^"]*)" in="([^"]*)">(.*?)</m>', proc.stdout, re.S):
+        f, _, ln = p.rpartition(":")
+        rows.append((f, int(ln), html.unescape(fn), html.unescape(text)))
+    return rows
+
+def pairs(rows):
+    """Queries below bind a predicate capture then the payload capture: rows arrive in that order, two per match."""
+    if len(rows) % 2:
+        print("SCANFAIL odd row count for a two-capture query"); sys.exit(3)
+    return [(a[0], a[1], a[2], a[3], b[3]) for a, b in zip(rows[0::2], rows[1::2])]
+
+lines_cache = {}
+def lines_of(f):
+    if f not in lines_cache:
+        with open(os.path.join(SRC, f), encoding="utf-8", errors="replace") as fh:
+            lines_cache[f] = fh.read().split("\n")
+    return lines_cache[f]
+
+# ── S1: an allocation sized by a count a byte reader decoded must be bounded first ────────────────────────────
+READERS = "^(qsnapGet|pod|u8|u16|u32|u64|i32|i64|varint|lenDelim|view)$"
+readerFns = set()
+for f, ln, fn, text in match('(call_expression function: [(identifier) @r (qualified_identifier name: (identifier) @r) '
+                             '(field_expression field: (field_identifier) @r) (template_function name: (identifier) @r) '
+                             '(field_expression field: (template_method name: (field_identifier) @r))] (#match? @r "%s"))' % READERS):
+    readerFns.add((f, fn))
+allocs  = pairs(match('(call_expression function: (field_expression field: (field_identifier) @_m) arguments: (argument_list . (_) @size) '
+                      '(#match? @_m "^(reserve|resize)$"))'))
+allocs += pairs(match('(declaration type: [(qualified_identifier) (template_type)] @_t declarator: (init_declarator value: (argument_list . (_) @size)) '
+                      '(#match? @_t "^std::(vector|string|basic_string)"))'))
+fnStarts = defaultdict(list)
+for f, ln, fn, name in match('(function_definition declarator: (function_declarator declarator: (_) @name))'):
+    fnStarts[(f, name.split("::")[-1])].append(ln)
+
+SAFE_SIZE = re.compile(r"(\.|->)(size|length)\(\s*\)|\bsizeof\b")   # sized by an in-memory container or a type
+def bound_in(f, fn, ident, allocLine):
+    starts = [s for s in fnStarts.get((f, fn), []) if s <= allocLine]
+    start = max(starts) if starts else max(1, allocLine - 200)
+    text = lines_of(f)[start - 1:allocLine]
+    names = {ident}
+    for line in text:                                    # one level of derivation: `need = n * width;`
+        for m in re.finditer(r"\b([A-Za-z_]\w*)\s*=\s*[^;=]*\b" + re.escape(ident) + r"\b", line):
+            names.add(m.group(1))
+    for line in text:
+        if re.search(r"\bfor\s*\(", line):
+            continue                                     # a loop header's `i < n` walks the count, it does not bound it
+        for name in names:
+            n = re.escape(name)
+            if re.search(r"\b(countFits|qsnapCountFits|min|clamp)\s*\([^;]*\b" + n + r"\b", line):
+                return True
+            if re.search(r"\b" + n + r"\b\s*(<=|>=|==|!=|<(?![<=])|>(?![>=]))\s*(?!0\b)[A-Za-z_(]", line):
+                return True
+            if re.search(r"[A-Za-z_)\]]\s*(?<![-<>])(<=|>=|==|!=|<|>)\s*(std::size_t\s*\(\s*)?\b" + n + r"\b", line):
+                return True
+    return False
+
+with open(os.path.join(OUT, "s1.tsv"), "w") as out:
+    for f, ln, fn, _kind, size in allocs:
+        if (f, fn) not in readerFns or SAFE_SIZE.search(size):
+            continue
+        idents = [i for i in re.findall(r"\b[A-Za-z_]\w*\b", size) if not re.match(r"^(k[A-Z]\w*|std|size_t|static_cast|uint32_t|uint64_t|int)$", i)]
+        if not idents:
+            continue
+        unbounded = [i for i in idents if not bound_in(f, fn, i, ln)]
+        if unbounded:
+            out.write("%s\t%s\t%s\t%d\n" % (f, fn, unbounded[0], ln))
+
+# ── S2: raw stream/descriptor acquisitions, and a close hidden behind a short-circuit ────────────────────────
+OPENERS = "^(std::|::)?(fopen|open|fdopen|openat|opendir|open_memstream|popen)$"
+sites = Counter()
+for f, ln, fn, kind, _call in pairs(match('(call_expression function: [(identifier) @f (qualified_identifier) @f] (#match? @f "%s")) @call' % OPENERS)):
+    sites[(f, fn, kind.split("::")[-1])] += 1
+with open(os.path.join(OUT, "s2_sites.tsv"), "w") as out:
+    for (f, fn, kind), n in sorted(sites.items()):
+        out.write("%s\t%s\t%s\t%d\n" % (f, fn, kind, n))
+CLOSERS = "^(std::|::)?(fclose|pclose|close|closedir)$"
+shortCircuit = []
+for shape in ('(binary_expression operator: ["&&" "||"] right: (call_expression function: (_) @c) (#match? @c "%s"))',
+              '(binary_expression operator: ["&&" "||"] right: (binary_expression left: (call_expression function: (_) @c)) (#match? @c "%s"))',
+              '(binary_expression operator: ["&&" "||"] right: (parenthesized_expression (binary_expression left: (call_expression function: (_) @c))) (#match? @c "%s"))',
+              '(binary_expression operator: ["&&" "||"] right: (unary_expression argument: (call_expression function: (_) @c)) (#match? @c "%s"))',
+              '(conditional_expression consequence: (call_expression function: (_) @c) (#match? @c "%s"))',
+              '(conditional_expression alternative: (call_expression function: (_) @c) (#match? @c "%s"))'):
+    for f, ln, fn, text in match(shape % CLOSERS):
+        shortCircuit.append((f, fn, ln))
+with open(os.path.join(OUT, "s2_shortcircuit.tsv"), "w") as out:
+    for f, fn, ln in sorted(set(shortCircuit)):
+        out.write("%s\t%s\t%d\n" % (f, fn, ln))
+
+# ── S3: every lambda handed to a std::thread is declared noexcept, or is one try block ───────────────────────
+def lambda_text(f, ln, name):
+    """The text of `auto name = [..](..) ... {` .. `}` declared at or above line `ln` of f."""
+    ls = lines_of(f)
+    for i in range(ln - 1, max(0, ln - 400), -1):
+        if re.search(r"\bauto\s+" + re.escape(name) + r"\s*=\s*\[", ls[i]):
+            return "\n".join(ls[i:i + 400])
+    return None
+
+def compliant(text):
+    brace = text.find("{")
+    if brace < 0:
+        return False
+    head = text[:brace]
+    body = re.sub(r"^(\s|//[^\n]*\n)*", "", text[brace + 1:])
+    return "noexcept" in head or body.startswith("try")
+
+threadFiles = set(f for f, ln, fn, t in match('(template_argument_list (type_descriptor type: (qualified_identifier) @_t) (#match? @_t "^std::thread$"))'))
+bodies = []
+for f, ln, fn, _e, arg in pairs(match('(call_expression function: (field_expression field: (field_identifier) @_e) arguments: (argument_list . (_) @arg .) '
+                                      '(#match? @_e "^emplace_back$"))')):
+    if f not in threadFiles:
+        continue
+    if arg.lstrip().startswith("["):
+        bodies.append((f, fn, ln, arg))
+    elif re.match(r"^[A-Za-z_]\w*$", arg.strip()):
+        text = lambda_text(f, ln, arg.strip())
+        if text is not None:
+            bodies.append((f, fn, ln, text))
+for f, ln, fn, _t, lam in pairs(match('(call_expression function: (qualified_identifier) @_t arguments: (argument_list (lambda_expression) @lam) '
+                                      '(#match? @_t "^std::thread$"))')):
+    bodies.append((f, fn, ln, lam))
+with open(os.path.join(OUT, "s3.tsv"), "w") as out:
+    for f, fn, ln, text in sorted(bodies, key=lambda r: (r[0], r[2])):
+        out.write("%s\t%s\t%d\t%s\n" % (f, fn, ln, "ok" if compliant(text) else "bare"))
+print("SCANOK readers=%d allocs=%d openers=%d threadbodies=%d" % (len(readerFns), len(allocs), sum(sites.values()), len(bodies)))
+SCANPY
+
+cat > "$TMP/registry.tsv" <<'REGISTRY'
+ccjson.h	ccCountLoc	fopen	1	closes	the only early exit is the failed open; nothing between open and fclose allocates
+clones.h	findClones	fopen	1	closes	skips only a failed open; fclose right after the sized read
+clones.h	findClonesType3	fopen	1	closes	same shape as findClones
+crossref.h	evalStray	fopen	1	closes	returns only on a failed open; fclose after the read loop
+crossref.h	streamBlobs	fopen	1	closes	returns only on a failed open; fclose after the list is written
+crossref.h	streamBlobs	popen	1	closes	the read loop leaves by break/continue only; pclose then unlink
+darkflags.h	readWhole	fopen	1	closes	fclose before the size-cap return and before the final return
+docparse.h	readRegularFile	fdopen	1	owned	adopted by rw::OwnedFile in the declaration that calls it
+docparse.h	readRegularFile	open	1	owned	fdopen'd straight into rw::OwnedFile; ::close only when fdopen declined it
+docparse.h	runMarkitdown	popen	1	closes	no exit between popen and pclose
+gitmine.h	gitCommandLines	popen	1	closes	status = pclose after the loop; no exit between
+gitmine.h	gitFileAuthors	popen	1	closes	continue-only loop; pclose after it
+gitmine.h	gitFileCommitCountsInDayWindow	popen	1	closes	continue-only loop; pclose after it
+gitmine.h	gitLogDecayedFileMining	popen	1	closes	continue-only loop; pclose after the flush
+gitmine.h	gitLogFileSets	popen	1	closes	continue-only loop; pclose after the flush
+gitmine.h	gitLogNameOnlyRaw	popen	1	closes	continue-only loop; pclose after it
+gitmine.h	popenTrimmed	popen	1	closes	no exit between popen and pclose
+gitoracle.h	loadOracleCache	fopen	1	closes	returns only on a failed open; fclose after the read loop
+gitoracle.h	saveOracleCache	fopen	1	closes	the fwrite result is kept, then an unconditional fclose
+gitoracle.h	walkGitPatch	popen	1	closes	break-only loops, a drain, then pclose; no return between
+infra/emit.h	renderToString	open_memstream	1	closes	the catch at the seam fcloses; the success path always fcloses
+infra/ownedfile.h	openOwnedFile	fopen	1	owned	the owner itself: the stream is returned inside rw::OwnedFile
+ingest_cache.h	openOnce	open	1	owned	ReadFd's destructor closes it
+ingest_cache.h	saveCache	fopen	1	writer	temp-file publish writer; its write and close path is not audited by this gate
+ingest_crawl.h	collectGitIgnored	popen	1	closes	the overflow break still reaches pclose
+ingest_docpass.h	docTextViaBridgeCache	fopen	1	closes	the fwrite result is kept, then an unconditional fclose
+lintrules.h	loadLintRules	fopen	1	closes	skips only a failed open; fclose after the sized read
+main.cpp	dispatchMain	fopen	1	closes	returns only on a failed open; fclose after the read loop
+main.cpp	openTokenBudgetBuffer	open_memstream	1	transferred	finishTokenBudgetGate fcloses it; the caller has no return between
+main.cpp	resolveRemoteRoot	popen	1	closes	no exit between popen and pclose
+main.cpp	runDefaultMap	fopen	1	closes	returns only on a failed open; fclose after the render
+main.cpp	scipIndexUnreadableReason	open	1	closes	close right after fstat, before every return
+mcpedit.h	EditLock	open	1	owned	EditLock's destructor unlocks and closes
+mcpedit.h	atomicWrite	open	1	writer	temp-file publish writer; its write and close path is not audited by this gate
+mcpindex.h	arm	open	1	owned	held in FsWatcher::dirFds, closed by reset and the destructor
+mcpindex.h	readFileBytes	fopen	1	closes	fclose before both returns
+mcpverbs.h	connectText	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
+mcpverbs.h	exemplarText	open_memstream	1	closes	no return between open and fclose
+mcpverbs.h	forTaskText	open_memstream	1	closes	no return between open and fclose
+mcpverbs.h	impactText	open_memstream	1	closes	no return between open and fclose
+mcpverbs.h	ownersText	open_memstream	1	closes	no return between open and fclose
+mcpverbs.h	packConnect	fopen	1	closes	if-scoped; fclose after the read
+mcpverbs.h	pathText	open_memstream	1	closes	no return between open and fclose
+mcpverbs.h	sliceText	fopen	1	closes	if-scoped; fclose after the read loop
+mcpverbs.h	usesText	open_memstream	1	closes	no return between open and fclose
+naminglens.h	namingLensChecks	fopen	1	closes	if-scoped; fclose after the sized read
+packtask.h	d1ReadSrcCached	fopen	1	closes	if-scoped; fclose after the read loop
+pathguard.h	openNoFollowRead	fdopen	1	owned	adopted by NoFollowRead, whose destructor fcloses
+pathguard.h	openNoFollowRead	open	1	owned	closed on every refusal; otherwise fdopen'd into NoFollowRead
+pathguard.h	openNoFollowTruncate	open	1	transferred	every caller hands the descriptor to writeAllAndClose, which always closes
+pincensus.h	writePinCensus	fopen	1	closes	returns only on a failed open; one fclose before the return
+planlint.h	gitBlameLineSha	popen	1	closes	no exit between popen and pclose
+prcontext.h	numstatChangedPaths	popen	1	closes	rc = pclose after the loop; no exit between
+quality.h	SidecarWriteLock	open	1	owned	SidecarWriteLock's destructor unlocks and closes
+quality.h	gitBlameRangeWindowCommits	popen	1	closes	continue-only loop; pclose after it
+quality.h	gitDiffHunksVsHead	popen	1	closes	continue-only loop; pclose after it
+quality.h	gitRepoHasHistory	popen	1	closes	fgets-only loop, then pclose
+quality.h	sweepStaleEditLocks	open	1	closes	skips only a failed open; close after flock and unlink
+resolve.h	readConfigBytes	fopen	1	closes	returns only on a failed open; fclose before the return
+scip.h	scipReadFile	fdopen	1	closes	fclose before each of the three returns
+scip.h	scipReadFile	open	1	closes	::close when fstat, fcntl or fdopen fails; otherwise the stream owns it
+serialize.h	collectJsonSigEntries	fopen	1	closes	skips only a failed open; fclose after the read loop
+serialize.h	estimateExpandBodyTokens	fopen	1	closes	if-scoped; fclose after the read loop
+serialize.h	openChargeBuffer	open_memstream	1	transferred	every caller fcloses it; their only early returns are on a null stream
+serialize.h	packBodies	fopen	1	closes	if-scoped; fclose after the read loop
+serialize.h	packCandidates	fopen	1	closes	if-scoped; fclose after the read loop
+serialize.h	packHops	fopen	1	closes	if-scoped; fclose after the read loop
+serialize.h	packLego	fopen	1	closes	if-scoped; fclose after the read loop
+serialize.h	packOutline	fopen	1	closes	skips only a failed open; fclose after the read loop
+serialize.h	packSignatures	fopen	2	closes	both skip only a failed open; fclose after each read loop
+serialize.h	packSource	fopen	1	closes	skips only a failed open; fclose after the read loop
+serialize.h	renderWholeFiles	fopen	1	closes	returns only on a failed open; fclose before the empty-body return
+tracelocus.h	fromTraceBundleText	open_memstream	1	closes	if-scoped; fclose after the pack calls
+tracelocus.h	renderTestHopBlock	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
+tracelocus.h	renderTraceBlock	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
+verbs_change.h	readBriefFile	fopen	1	closes	continue-only loop; fclose before the return
+verbs_change.h	readTraceText	fopen	1	closes	returns only on a failed open; fclose after the read loop
+verbs_change.h	runChangeViews	fopen	1	closes	returns only on a failed open; fclose after the write
+verbs_change.h	runCommandCapture	open	1	closes	in the forked child: dup2 onto stdin, close, then exec or _exit
+verbs_doctor.h	doctorSameFileBytes	fopen	2	closes	break-only loop; each stream is fclosed on every path
+verbs_doctor.h	runDoctor	fopen	1	closes	if-scoped fputs then fclose
+verbs_lint.h	lintSymbolLevelChecks	fopen	1	closes	if-scoped; fclose after the sized read
+verbs_lint.h	parseProfTsv	fopen	1	closes	returns only on a failed open; fclose after the read loop
+verbs_navigate.h	runSafeDelete	fopen	1	closes	if-scoped; fclose after the sized read
+verbs_navigate.h	runSlice	fopen	1	closes	if-scoped; fclose after the read loop
+verbs_quality.h	runQualityViews	fopen	1	closes	returns on a failed open; fclose before the other return
+REGISTRY
+
+# The allocations S1 reports inside a reader function whose size is NOT a decoded count, with why.
+cat > "$TMP/s1_allow.tsv" <<'S1ALLOW'
+ingest_cache.h	finishCacheBlob	entryCount	writer: entryCount counts the in-memory records being written, not a decoded field
+ingest_cache.h	saveCache	slotCount	writer: slotCount sizes the table from the in-memory plan, not a decoded field
+S1ALLOW
+# The short-circuited closes S2 refuses, registered only where this gate does not audit the writer.
+cat > "$TMP/s2_shortcircuit_allow.tsv" <<'S2ALLOW'
+ingest_cache.h	saveCache	temp-file publish writer; its write and close path is not audited by this gate
+S2ALLOW
+# Thread bodies S3 reports as bare, with why each is accepted.
+cat > "$TMP/s3_allow.tsv" <<'S3ALLOW'
+search.h	grepCollect	every statement that can throw sits inside a catch(...) that records the degrade
+S3ALLOW
+
+judge_static(){   # $1 = scan output dir, $2 = label; echoes one line per violation, returns 0
+    python3 - "$1" "$TMP" "$2" <<'JUDGEPY'
+import os, sys
+out, tmp, label = sys.argv[1], sys.argv[2], sys.argv[3]
+def rows(path):
+    if not os.path.exists(path):
+        return []
+    return [l.rstrip("\n").split("\t") for l in open(path) if l.strip()]
+allow1  = {(r[0], r[1], r[2]) for r in rows(tmp + "/s1_allow.tsv")}
+allowSc = {(r[0], r[1]) for r in rows(tmp + "/s2_shortcircuit_allow.tsv")}
+allow3  = {(r[0], r[1]) for r in rows(tmp + "/s3_allow.tsv")}
+registry = {(r[0], r[1], r[2]): int(r[3]) for r in rows(tmp + "/registry.tsv")}
+for f, fn, ident, ln in rows(out + "/s1.tsv"):
+    if label != "src" or (f, fn, ident) not in allow1:
+        print("S1\t%s:%s (%s) sizes an allocation by `%s` with no bound on it earlier in the function" % (f, ln, fn, ident))
+for f, fn, ln in rows(out + "/s2_shortcircuit.tsv"):
+    if label != "src" or (f, fn) not in allowSc:
+        print("S2\t%s:%s (%s) closes a handle inside && / || / ?: — a short-circuit skips the close; own it (rw::OwnedFile)" % (f, ln, fn))
+seen = {}
+for f, fn, kind, n in rows(out + "/s2_sites.tsv"):
+    seen[(f, fn, kind)] = int(n)
+if label == "src":
+    for key, n in sorted(seen.items()):
+        if registry.get(key) != n:
+            print("S2\t%s %s: %d raw %s call(s), registry says %s — wrap it in rw::OwnedFile (rw::openOwnedFile) or register it with the reason every path closes it" % (key[0], key[1], n, key[2], registry.get(key, 0)))
+    for key, n in sorted(registry.items()):
+        if key not in seen:
+            print("S2\tregistry row %s %s %s matches no site any more — delete the row" % key)
+else:
+    for key, n in sorted(seen.items()):
+        print("S2\t%s %s: %d raw %s call(s) outside the registry" % (key[0], key[1], n, key[2]))
+for f, fn, ln, verdict in rows(out + "/s3.tsv"):
+    if verdict == "bare" and (label != "src" or (f, fn) not in allow3):
+        print("S3\t%s:%s (%s) hands a thread a body that is neither noexcept nor one try block" % (f, ln, fn))
+JUDGEPY
+}
+
+# The probe tree: one violation and one compliant twin per rule.
+PROBE="$TMP/probe"; mkdir -p "$PROBE"
+cat > "$PROBE/probe_reader.h" <<'PROBEH'
+#include <cstdio>
+#include <string>
+#include <thread>
+#include <vector>
+inline bool qsnapGet( const char*& p, const char* end, unsigned& out );
+inline bool probeUnbounded( const char* p, const char* end, std::vector<unsigned long>& v )
+{
+    unsigned n = 0;
+    if( !qsnapGet( p, end, n ) ) { return false; }
+    v.reserve( n );
+    return true;
+}
+inline bool probeBounded( const char* p, const char* end, std::vector<unsigned long>& v )
+{
+    unsigned m = 0;
+    if( !qsnapGet( p, end, m ) || !qsnapCountFits( p, end, m, 8 ) ) { return false; }
+    v.reserve( m );
+    return true;
+}
+inline bool probeShortCircuit( const char* path )
+{
+    std::FILE* fp = std::fopen( path, "rb" );
+    const bool ok = ( fp != nullptr ) && ( std::fclose( fp ) == 0 );
+    return ok;
+}
+inline void probeThreads()
+{
+    std::vector<std::thread> pool;
+    pool.emplace_back( [ & ]() { probeShortCircuit( "x" ); } );
+    pool.emplace_back( [ & ]() noexcept { probeShortCircuit( "y" ); } );
+    for( std::thread& t : pool ) { t.join(); }
+}
+PROBEH
+if ! python3 "$TMP/scan.py" "$BIN" "$PROBE" "$TMP/probe_out" >"$TMP/probe_scan.txt" 2>&1; then
+    no "static rules: the probe scan did not complete: $( tail -1 "$TMP/probe_scan.txt" )"
+else
+    judge_static "$TMP/probe_out" probe >"$TMP/probe_verdict.txt"
+    grep -q 'S1	probe_reader.h:[0-9]* (probeUnbounded)' "$TMP/probe_verdict.txt" && ! grep -q 'probeBounded' "$TMP/probe_verdict.txt" \
+        && ok "S1 probe: the unbounded reserve fires and its bounded twin does not" \
+        || { no "S1 probe: expected probeUnbounded only"; cat "$TMP/probe_verdict.txt"; }
+    grep -q 'S2	probe_reader.h:[0-9]* (probeShortCircuit) closes a handle inside' "$TMP/probe_verdict.txt" \
+        && ok "S2 probe: the short-circuited fclose fires" || { no "S2 probe: the short-circuited fclose did not fire"; cat "$TMP/probe_verdict.txt"; }
+    grep -q 'S2	probe_reader.h probeShortCircuit: 1 raw fopen' "$TMP/probe_verdict.txt" \
+        && ok "S2 probe: an unregistered raw fopen fires" || { no "S2 probe: the unregistered raw fopen did not fire"; cat "$TMP/probe_verdict.txt"; }
+    [ "$( grep -c '^S3' "$TMP/probe_verdict.txt" )" -eq 1 ] \
+        && ok "S3 probe: the bare thread body fires and its noexcept twin does not" \
+        || { no "S3 probe: expected exactly one bare thread body"; cat "$TMP/probe_verdict.txt"; }
+fi
+
+if ! python3 "$TMP/scan.py" "$BIN" "$SRC" "$TMP/src_out" >"$TMP/src_scan.txt" 2>&1; then
+    no "static rules: the source scan did not complete: $( tail -1 "$TMP/src_scan.txt" )"
+else
+    SUMMARY="$( grep '^SCANOK' "$TMP/src_scan.txt" )"
+    READERS="$( printf '%s' "$SUMMARY" | sed -E 's/.*readers=([0-9]+).*/\1/' )"
+    OPENERS="$( printf '%s' "$SUMMARY" | sed -E 's/.*openers=([0-9]+).*/\1/' )"
+    BODIES="$( printf '%s' "$SUMMARY" | sed -E 's/.*threadbodies=([0-9]+).*/\1/' )"
+    if [ "${READERS:-0}" -ge 5 ] && [ "${OPENERS:-0}" -ge 20 ] && [ "${BODIES:-0}" -ge 5 ]; then
+        ok "static rules reached the source ($SUMMARY)"
+    else
+        no "static rules found almost nothing to judge ($SUMMARY) — a broken query reads as a clean tree"
+    fi
+    judge_static "$TMP/src_out" src >"$TMP/src_verdict.txt"
+    for rule in S1 S2 S3; do
+        if grep -q "^$rule" "$TMP/src_verdict.txt"; then
+            no "$rule: $( grep -c "^$rule" "$TMP/src_verdict.txt" ) violation(s):"
+            grep "^$rule" "$TMP/src_verdict.txt" | cut -f2 | sed 's/^/          /'
+        else
+            ok "$rule: no violation in $SRC"
+        fi
+    done
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 echo

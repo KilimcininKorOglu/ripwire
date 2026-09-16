@@ -1097,7 +1097,7 @@ inline void maybePrefetchHeadSnapshot( const std::string& root, std::size_t file
     // quality_delta uses with the SAME default args (so it warms the IDENTICAL qsnap key), then clears the
     // in-flight flag via an RAII guard on EVERY exit path. (3) discard-on-error: a throw (OOM at operator new)
     // is swallowed; the flag is always cleared so the mechanism never wedges.
-    std::thread( [ root, timingsOn ]()
+    std::thread( [ root, timingsOn ]() noexcept
     {
         struct FlagGuard { ~FlagGuard(){ mcpPrefetchInFlight().store( false, std::memory_order_release ); } } guard;
         try   { (void)rw::quality::computeHeadSnapshot( root ); }      // side effect: warm the sha-keyed qsnap (atomic publish)

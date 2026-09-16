@@ -830,7 +830,7 @@ inline void parallelIndexed( std::size_t count, Body body )
     }
 
     std::atomic<std::size_t> nextIndex{ 0 };
-    const auto               worker = [ & ]()
+    const auto               worker = [ & ]() noexcept
     {
         // A throw escaping a std::thread entry is std::terminate — degrade to partial coverage instead. Only
         // the allocation seam can throw here (popen/parse), and a short answer beats killing the process.
