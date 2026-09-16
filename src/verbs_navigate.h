@@ -1247,6 +1247,12 @@ std::optional<int> runSlice( const MainDispatch& d )
 
     const ::TSLanguage* grammar = sliceGrammarForFile( path );
     slicev::SliceScan   scan    = slicev::sliceScanDefinition( src, sym, fam, grammar, varName );   // re-scanned below on a seed pre-pick
+    if( scan.tooDeep )
+    {
+        rw::emitTo( stderr, "ripwire: --slice: {} in {} nests deeper than {} syntax levels — refused: the slice walk's cost grows with "
+                              "the cube of the nesting, so a definition this deep would not finish\n", sym.name, path, slicev::kMaxSliceDepth );
+        return 1;
+    }
     if( !scan.parseOk )
     {
         DEGRADED_PATH_ALERT( "slice: definition re-parse failed" );

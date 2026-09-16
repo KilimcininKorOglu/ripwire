@@ -258,6 +258,7 @@ struct SliceNamedOcc
 struct SliceScan
 {
     bool                       parseOk = false;   // grammar present + file parsed + span located
+    bool                       tooDeep = false;   // parsed, but the definition nests past kMaxSliceDepth — refused, never walked
     std::vector<SliceOcc>      occ;               // VAR-mode occurrences, source order (empty when var empty)
     std::vector<SliceLocal>    locals;            // the sliceable-locals NAMES, first-def order (refusal text, seed pick)
     std::vector<SliceBinding>  bindings;          // the sliceable-locals inventory, one per VARIABLE (a shadowed name lists twice)
@@ -1977,9 +1978,48 @@ inline void sliceComputeReach( SliceScan& scan, TSNode root, const SliceWalkCtx&
     w.structure( ts_node_is_null( defn ) ? root : defn, state );
 }
 
+// The deepest syntax-tree nesting a definition may reach before the slice refuses it. The walks below recurse
+// per level and climb to a statement anchor through ts_node_parent, which is itself linear in depth, so their
+// cost grows with the cube of the nesting: 1,000 chained `if (x)` in one function took 5.7 s, 2,000 took 48 s,
+// and 4,000 did not finish in two minutes — a hang any repository file (or an MCP `slice` call on it) could
+// cause. 512 levels is the bound the ingest walkers already use; real definitions stay far below it.
+inline constexpr std::uint32_t kMaxSliceDepth = 512;
+
+// The deepest node overlapping [spanStart, spanEnd), counted from the root. A cursor walk, so measuring the depth
+// cannot itself recurse, and it descends only into nodes that overlap the span.
+inline std::uint32_t sliceSpanDepth( TSNode root, std::uint32_t spanStart, std::uint32_t spanEnd ) noexcept
+{
+    TSTreeCursor  cursor  = ts_tree_cursor_new( root );
+    std::uint32_t depth   = 0;
+    std::uint32_t deepest = 0;
+    for( ;; )
+    {
+        const TSNode node     = ts_tree_cursor_current_node( &cursor );
+        const bool   overlaps = ts_node_start_byte( node ) < spanEnd && ts_node_end_byte( node ) > spanStart;
+        if( overlaps )
+        {
+            deepest = std::max( deepest, depth );
+            if( ts_tree_cursor_goto_first_child( &cursor ) )
+            {
+                ++depth;
+                continue;
+            }
+        }
+        while( !ts_tree_cursor_goto_next_sibling( &cursor ) )
+        {
+            if( !ts_tree_cursor_goto_parent( &cursor ) )
+            {
+                ts_tree_cursor_delete( &cursor );
+                return deepest;
+            }
+            --depth;
+        }
+    }
+}
+
 // parse + walk. `src` is the WHOLE file (symbol byte offsets are file-absolute). parseOk=false means
 // the grammar refused or the span is out of range — the caller refuses loudly, never emits an empty
-// success.
+// success. tooDeep=true (with parseOk=false) means the definition nests past kMaxSliceDepth.
 inline SliceScan sliceScanDefinition( const std::string& src, const Symbol& sym, SliceFam fam,
                                       const ::TSLanguage* grammar, std::string_view varName )
 {
@@ -2016,6 +2056,13 @@ inline SliceScan sliceScanDefinition( const std::string& src, const Symbol& sym,
     ctx.lang      = sym.lang;
     ctx.src       = src;
     ctx.selfName  = sym.name;
+    if( sliceSpanDepth( ts_tree_root_node( tree ), ctx.spanStart, ctx.spanEnd ) > kMaxSliceDepth )
+    {
+        scan.tooDeep = true;
+        ts_tree_delete( tree );
+        ts_parser_delete( parser );
+        return scan;
+    }
     sliceWalk( ts_tree_root_node( tree ), ctx, scan, SlicePp::Live );
     sliceResolveBindings( scan );
     sliceComputeReach( scan, ts_tree_root_node( tree ), ctx );   // rung 3: needs the bindings resolved and the tree still alive

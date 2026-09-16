@@ -94,6 +94,7 @@ kMaxShown	OUTPUT
 kMaxSig	OUTPUT
 kMaxSitesShown	OUTPUT
 kMaxSkipRowsPerClass	OUTPUT
+kMaxSliceDepth	BOUNDARY
 kMaxStructsPerRef	OUTPUT
 kMaxStructsShown	OUTPUT
 kMeasuredDigitsPricedWidth	OUTPUT

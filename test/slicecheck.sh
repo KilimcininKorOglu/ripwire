@@ -413,5 +413,25 @@ printf '%s' "$( row "$OUT14N" 11 )" | grep -q 'k="scope" t="nonlocal"' && printf
     && ok "(14) inner:acc — 'nonlocal acc' rows k=scope t=nonlocal, 'acc += k' rows k=both" \
     || { no "(14) expected l=11 k=\"scope\" t=\"nonlocal\" and l=12 k=\"both\""; printf '%s\n' "$OUT14N"; }
 
+# ── (15) a definition nested past the walk's bound refuses instead of hanging. 2,000 chained `if (x)` took 48 s
+#    and 4,000 did not finish in two minutes (the walk's cost grows with the cube of the nesting) — the MCP
+#    `slice` verb on such a file wedged the server. Refused at 512 syntax levels, by name, in well under a second.
+DEEPDIR="$( mktemp -d )"
+python3 - "$DEEPDIR/deep.c" <<'PYDEEP'
+import sys
+open(sys.argv[1], "w").write("int deep( int x )\n{\n    int y = 0;\n    " + "if (x) " * 4000 + "y = x;\n    return y;\n}\n"
+                             "int shallow( int x )\n{\n    int y = 0;\n    " + "if (x) " * 20 + "y = x;\n    return y;\n}\n")
+PYDEEP
+bounded(){ if command -v timeout >/dev/null 2>&1; then timeout 30 "$@"; else perl -e 'alarm 30; exec @ARGV' "$@"; fi; }
+( cd "$DEEPDIR" && bounded "$BIN" . --slice=deep:y --no-cache >"$DEEPDIR/deep.out" 2>"$DEEPDIR/deep.err" ); rc15=$?
+[ "$rc15" -eq 1 ] && grep -q 'nests deeper than 512 syntax levels' "$DEEPDIR/deep.err" \
+    && ok "(15) deep:y — 4,000 nested ifs refuse in bounded time, naming the 512-level bound" \
+    || no "(15) deep:y exit $rc15 (expected 1 with the nesting refusal; 124/142 is the hang): $( head -c 200 "$DEEPDIR/deep.err" )"
+( cd "$DEEPDIR" && bounded "$BIN" . --slice=shallow:y --no-cache >"$DEEPDIR/shallow.out" 2>/dev/null ); rc15b=$?
+[ "$rc15b" -eq 0 ] && grep -q '<s l="10"' "$DEEPDIR/shallow.out" \
+    && ok "(15) shallow:y — 20 nested ifs still slice (exit 0, the assignment row at l=10)" \
+    || no "(15) shallow:y exit $rc15b without the l=10 assignment row"
+rm -rf "$DEEPDIR"
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"
