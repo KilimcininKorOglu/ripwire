@@ -100,6 +100,7 @@ jobs:
       # PGO needs one toolchain end to end: the instrumented binary's profile runtime writes a .profraw version that
       # only the same LLVM's llvm-profdata merges and its clang reads. Both resolve through DEVELOPER_DIR; this step
       # records them for the log and fails when DEVELOPER_DIR is empty or either tool lives outside the pinned Xcode.
+      # Both sides are compared as physical paths (pwd -P), so a symlinked Xcode neither passes nor fails by spelling.
       - name: Record the Xcode, compiler and llvm-profdata this leg builds with
         if: runner.os == 'macOS'
         run: |
@@ -107,14 +108,17 @@ jobs:
             echo "release: macOS leg ${{ matrix.name }} has no DEVELOPER_DIR, so the image's default Xcode would build it" >&2
             exit 1
           fi
+          devDir="$( cd "$DEVELOPER_DIR" && pwd -P )" || { echo "release: DEVELOPER_DIR=$DEVELOPER_DIR is not a directory" >&2; exit 1; }
           xcodebuild -version
           c++ --version
           for tool in clang++ llvm-profdata; do
             path="$( xcrun --find "$tool" )" || { echo "release: xcrun cannot find $tool under DEVELOPER_DIR=$DEVELOPER_DIR" >&2; exit 1; }
+            toolDir="$( cd "$( dirname "$path" )" && pwd -P )" || { echo "release: cannot resolve the directory of $tool at $path" >&2; exit 1; }
+            path="$toolDir/${path##*/}"
             echo "$tool: $path"
             case "$path" in
-              "$DEVELOPER_DIR"/*) ;;
-              *) echo "release: $tool resolves to $path, outside DEVELOPER_DIR=$DEVELOPER_DIR" >&2; exit 1 ;;
+              "$devDir"/*) ;;
+              *) echo "release: $tool resolves to $path, outside DEVELOPER_DIR=$DEVELOPER_DIR ($devDir)" >&2; exit 1 ;;
             esac
           done
 

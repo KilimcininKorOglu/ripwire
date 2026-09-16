@@ -267,10 +267,18 @@ fi
 #     macOS floor"; quoted, because a bare 14.0 is a YAML number, not the string the otool minos check matches. ci.yml's
 #     macOS legs build at the same target, since libc++ decides what it declares available by the deployment target.
 #   * The pin reaches the binary and is read back off it: a step exports matrix.deployment_target as
-#     MACOSX_DEPLOYMENT_TARGET before the first configure, no -D on the leg overrides it, and an otool minos step runs on
-#     build/ripwire after the PGO binary is staged there and before Package tars it.
-# Two mutated copies prove the verdict can fail: release.yml without the minos step, and ci.yml whose sanitizer leg's
-# ASAN_OPTIONS condition still names macos-14.
+#     MACOSX_DEPLOYMENT_TARGET before the first configure, and an otool minos step runs on build/ripwire after the PGO
+#     binary is staged there and before Package tars it. The pin has ONE source: no -DCMAKE_OSX_DEPLOYMENT_TARGET,
+#     -mmacosx-version-min or second MACOSX_DEPLOYMENT_TARGET anywhere in the leg or the build job's env and steps (a
+#     `--cmake-extra -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0` on the pgobuild step would win over the export).
+#   * Nothing fails silently. Every step that carries the pin runs on every macOS leg (`if:` absent or
+#     `runner.os == 'macOS'`, never `matrix.deployment_target`, which skips a leg that lost the key), and each guard
+#     that turns a lost pin into a red is present: the export's empty-target refusal, the exact string compare of
+#     otool's minos, the toolchain record step (empty DEVELOPER_DIR, clang++ and llvm-profdata inside it) ahead of the
+#     first build, and ci.yml's two CMakeCache.txt checks (the gate shards' front-end step, the asan macOS configure).
+# Three mutated copies prove the verdict can fail, each by exactly its own row: release.yml without the minos step,
+# release.yml whose pgobuild step overrides the target with -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0, and ci.yml whose sanitizer
+# leg's ASAN_OPTIONS condition still names macos-14.
 cat >"$TMP/armverdict.py" <<'PY'
 import re, sys
 relPath, ciPath = sys.argv[ 1 ], sys.argv[ 2 ]
@@ -303,34 +311,62 @@ else:
         else:
             print( 'FAIL leg %s %s: %s%s, but the verified tuple is %s — %s; moving it edits release.yml, ci.yml and #2i\'s tuple together, deliberately'
                    % ( name, key, shown( got, quoted ), ' (a bare YAML number)' if got == want else '', shown( want, mustQuote ), why ) )
-    # The steps of the build job, in order. A step whose `if:` is anything but the deployment-target key could skip this leg.
+    # The steps of the build job, in order. A step runs on this leg only when its `if:` is absent or `runner.os == 'macOS'`;
+    # `if: ${{ matrix.deployment_target }}` is refused, because it silently skips a macOS leg that lost the key.
     steps = re.split( r'\n      - ', build.split( '\n    steps:', 1 )[ 1 ] if '\n    steps:' in build else '' )[ 1: ]
     def stepIf( step ):
         m = re.search( r'^[ \t]*if:[ \t]*(.+)$', step, re.M )
         return m.group( 1 ).strip() if m else ''
     def firstStep( pred ):
         return next( ( i for i, s in enumerate( steps ) if pred( s ) ), -1 )
-    fires     = lambda s: stepIf( s ) in ( '', "runner.os == 'macOS'", '${{ matrix.deployment_target }}' )
+    fires     = lambda s: stepIf( s ) in ( '', "runner.os == 'macOS'" )
     exportAt  = firstStep( lambda s: 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}' in s and '$GITHUB_ENV' in s and fires( s ) )
     buildAt   = firstStep( lambda s: 'cmake -S' in s or 'scripts/pgobuild.sh' in s )
     stagedAt  = firstStep( lambda s: 'cp build_pgo/ripwire build/ripwire' in s )
     minosAt   = firstStep( lambda s: 'otool -l build/ripwire' in s and '${{ matrix.deployment_target }}' in s and fires( s ) )
     packageAt = firstStep( lambda s: s.startswith( 'name: Package' ) )
-    override  = [ v for v in re.findall( r'CMAKE_OSX_DEPLOYMENT_TARGET=(\S+)', leg ) if v != MINOS ]
+    recordAt  = firstStep( lambda s: 'xcrun --find' in s and 'llvm-profdata' in s and 'clang++' in s and fires( s ) )
+    emptyTargetGuard = r"""if \[ -z '\$\{\{ matrix\.deployment_target \}\}' \]; then[ \t]*\n[^\n]*>&2[ \t]*\n[ \t]*exit 1\b"""
+    exactMinos       = r"""if \[ -z "\$minos" \] \|\| \[ "\$minos" != '\$\{\{ matrix\.deployment_target \}\}' \]; then[ \t]*\n[^\n]*>&2[ \t]*\n[ \t]*exit 1\b"""
+    emptyDevDirGuard = r"""if \[ -z "\$DEVELOPER_DIR" \]; then[ \t]*\n[^\n]*>&2[ \t]*\n[ \t]*exit 1\b"""
+    physicalDevDir   = r"""devDir="\$\( cd "\$DEVELOPER_DIR" && pwd -P \)" \|\| \{[^\n]*exit 1; \}"""
+    outsidePrefix    = r"""case "\$path" in[ \t]*\n[ \t]*"\$devDir"/\*\)[ \t]*;;[ \t]*\n[ \t]*\*\)[^\n]*>&2;[ \t]*exit 1[ \t]*;;"""
     if exportAt < 0:
-        print( 'FAIL leg %s: no step exports matrix.deployment_target as MACOSX_DEPLOYMENT_TARGET — the key pins nothing; the runner\'s macOS sets the minimum' % name )
+        print( 'FAIL leg %s: no step that runs on every macOS leg exports matrix.deployment_target as MACOSX_DEPLOYMENT_TARGET — the key pins nothing; the runner\'s macOS sets the minimum' % name )
     elif buildAt < 0 or exportAt > buildAt:
         print( 'FAIL leg %s: the MACOSX_DEPLOYMENT_TARGET export (step %d) does not precede the first configure (step %d)' % ( name, exportAt, buildAt ) )
-    elif override:
-        print( 'FAIL leg %s: -DCMAKE_OSX_DEPLOYMENT_TARGET=%s on the leg overrides the exported %s — the pinned minimum is not what ships' % ( name, override[ 0 ], MINOS ) )
+    elif not re.search( emptyTargetGuard, steps[ exportAt ] ):
+        print( 'FAIL leg %s: the export step (step %d) has no empty-deployment_target refusal (`if [ -z \'${{ matrix.deployment_target }}\' ]` ... `exit 1`) — a leg that lost the key would export an empty pin' % ( name, exportAt ) )
     else:
-        print( 'PASS leg %s: step %d exports deployment_target as MACOSX_DEPLOYMENT_TARGET before the first configure (step %d), and no -D overrides it' % ( name, exportAt, buildAt ) )
+        print( 'PASS leg %s: step %d exports deployment_target as MACOSX_DEPLOYMENT_TARGET before the first configure (step %d), and refuses an empty one' % ( name, exportAt, buildAt ) )
+    # One source for the pin: the leg and every part of the job after the matrix (env, steps), comment lines excluded.
+    jobRest   = build.split( '\n    runs-on:', 1 )[ 1 ] if '\n    runs-on:' in build else ''
+    scanned   = '\n'.join( l for l in ( leg + '\n' + jobRest ).split( '\n' ) if not l.lstrip().startswith( '#' ) )
+    overrides = re.findall( r'-DCMAKE_OSX_DEPLOYMENT_TARGET=\S*|-mmacosx-version-min=\S*', scanned )
+    overrides += [ m.group( 0 ).strip() for m in re.finditer( r'[^\n]*\bMACOSX_DEPLOYMENT_TARGET\b[^\n]*', scanned )
+                   if 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}" >> "$GITHUB_ENV"' not in m.group( 0 ) ]
+    if not jobRest:
+        print( 'FAIL leg %s: the build job has no runs-on/steps section to scan for a deployment-target override — nothing was checked' % name )
+    elif overrides:
+        print( 'FAIL leg %s: a second deployment-target source in the leg or the build job overrides the exported %s: %s' % ( name, MINOS, overrides[ 0 ] ) )
+    else:
+        print( 'PASS leg %s: matrix.deployment_target is the only deployment-target source in the leg and the build job (no -D, -mmacosx-version-min or other MACOSX_DEPLOYMENT_TARGET)' % name )
     if minosAt < 0:
-        print( 'FAIL leg %s: no step reads the minimum macOS back off build/ripwire (otool -l build/ripwire against ${{ matrix.deployment_target }}) — the pin is trusted, not checked' % name )
+        print( 'FAIL leg %s: no step that runs on every macOS leg reads the minimum macOS back off build/ripwire (otool -l build/ripwire against ${{ matrix.deployment_target }}) — the pin is trusted, not checked' % name )
     elif not ( stagedAt >= 0 and packageAt >= 0 and stagedAt < minosAt < packageAt ):
         print( 'FAIL leg %s: the otool minos step (step %d) is not between the PGO staging (step %d) and Package (step %d) — it reads a binary other than the one shipped' % ( name, minosAt, stagedAt, packageAt ) )
+    elif not re.search( exactMinos, steps[ minosAt ] ):
+        print( 'FAIL leg %s: the otool minos step (step %d) is not the exact, fail-closed compare (`[ -z "$minos" ] || [ "$minos" != \'${{ matrix.deployment_target }}\' ]` ... `exit 1`)' % ( name, minosAt ) )
     else:
-        print( 'PASS leg %s: step %d reads minos off build/ripwire after the PGO binary is staged (step %d) and before Package (step %d)' % ( name, minosAt, stagedAt, packageAt ) )
+        print( 'PASS leg %s: step %d compares otool\'s minos off build/ripwire exactly with the pin, after the PGO binary is staged (step %d) and before Package (step %d)' % ( name, minosAt, stagedAt, packageAt ) )
+    if recordAt < 0:
+        print( 'FAIL leg %s: no step that runs on every macOS leg records clang++ and llvm-profdata through xcrun --find — PGO toolchain skew goes unchecked' % name )
+    elif buildAt < 0 or recordAt > buildAt:
+        print( 'FAIL leg %s: the toolchain record step (step %d) does not precede the first build (step %d)' % ( name, recordAt, buildAt ) )
+    elif not ( re.search( emptyDevDirGuard, steps[ recordAt ] ) and re.search( outsidePrefix, steps[ recordAt ] ) and re.search( physicalDevDir, steps[ recordAt ] ) ):
+        print( 'FAIL leg %s: the toolchain record step (step %d) lacks a fail-closed guard (empty DEVELOPER_DIR refusal, pwd -P, or the outside-DEVELOPER_DIR `exit 1`)' % ( name, recordAt ) )
+    else:
+        print( 'PASS leg %s: step %d, before the first build, fails on an empty DEVELOPER_DIR and on clang++ or llvm-profdata outside it' % ( name, recordAt ) )
     wired = re.search( r'^[ \t]*DEVELOPER_DIR:[ \t]*\$\{\{[ \t]*matrix\.developer_dir\b', build, re.M )
     print( 'PASS leg %s: the job env hands developer_dir to the toolchain as DEVELOPER_DIR' % name if wired else
            'FAIL leg %s: nothing exports matrix.developer_dir as DEVELOPER_DIR — the image\'s default Xcode, not the pinned one, builds the release' % name )
@@ -360,6 +396,13 @@ if len( ciTargets ) != len( ciDevDirs ) or any( t.strip() != wantTarget for t in
            % ( len( ciTargets ), len( ciDevDirs ), wantTarget, '; '.join( t.strip() for t in ciTargets ) or 'none' ) )
 else:
     print( 'PASS ci.yml: every job env that pins the Xcode also builds at MACOSX_DEPLOYMENT_TARGET %s, the release minimum' % MINOS )
+# The fail-loudly guard on each macOS leg: an empty pin, or a CMake cache that did not receive it, exits 1.
+cacheGuard  = r'if \[ -z "\$DEVELOPER_DIR" \] \|\| \[ -z "\$MACOSX_DEPLOYMENT_TARGET" \][ \t]*\\[ \t]*\n[ \t]*\|\| ! grep -qx "CMAKE_OSX_DEPLOYMENT_TARGET:STRING=\$MACOSX_DEPLOYMENT_TARGET" (\w+)/CMakeCache\.txt; then[ \t]*\n[^\n]*>&2[ \t]*\n[ \t]*exit 1\b'
+guardTrees  = sorted( m.group( 1 ) for m in re.finditer( cacheGuard, ci ) )
+if guardTrees != [ 'asan', 'build' ]:
+    print( 'FAIL ci.yml: the CMakeCache.txt pin guards found are for %s, not exactly one each for build/ (the gate shards) and asan/ (the sanitizer leg) — a macOS leg that lost its pin builds silently' % ( guardTrees or 'no tree' ) )
+else:
+    print( 'PASS ci.yml: build/ and asan/ each fail when DEVELOPER_DIR or MACOSX_DEPLOYMENT_TARGET is empty or CMakeCache.txt lacks the pinned target' )
 print( 'DONE' )
 PY
 armVerdict="$( python3 "$TMP/armverdict.py" "$ROOT/.github/workflows/release.yml" "$ROOT/.github/workflows/ci.yml" 2>&1 )"
@@ -382,6 +425,9 @@ text = open( rel ).read()
 open( relOut, 'w' ).write( re.sub( r'\n      - name: [^\n]*\n(?:(?!\n      - )[\s\S])*?otool -l build/ripwire[\s\S]*?(?=\n\n|\n      - )', '', text, count=1 ) )
 text = open( ci ).read()
 open( ciOut, 'w' ).write( re.sub( r"(ASAN_OPTIONS:[^\n]*matrix\.os[ \t]*==[ \t]*')macos-[^']*'", r"\1macos-14'", text, count=1 ) )
+text = open( rel ).read()
+open( relOut.replace( 'rel-nominos', 'rel-stepoverride' ), 'w' ).write(
+    re.sub( r'(scripts/pgobuild\.sh --cmake-extra -DCMAKE_BUILD_TYPE=Release)', r'\1 --cmake-extra -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0', text, count=1 ) )
 PY
 then
     no "#2i control: the mutation writer failed, so neither control ran: $( tail -3 "$TMP/mutate.log" )"
@@ -409,9 +455,12 @@ else
         return 0
     }
     armControl "release.yml without the otool minos step" "$ROOT/.github/workflows/release.yml" "$TMP/rel-nominos.yml" \
-               "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" '^FAIL leg .*no step reads the minimum macOS back off build/ripwire'
+               "$TMP/rel-nominos.yml" "$ROOT/.github/workflows/ci.yml" '^FAIL leg .*no step that runs on every macOS leg reads the minimum macOS back off build/ripwire'
     armControl "ci.yml ASAN_OPTIONS condition back on macos-14" "$ROOT/.github/workflows/ci.yml" "$TMP/ci-oldasan.yml" \
                "$ROOT/.github/workflows/release.yml" "$TMP/ci-oldasan.yml" '^FAIL ci\.yml: .*matrix\.os conditions name macos-14'
+    armControl "pgobuild step overrides the target with -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0" "$ROOT/.github/workflows/release.yml" \
+               "$TMP/rel-stepoverride.yml" "$TMP/rel-stepoverride.yml" "$ROOT/.github/workflows/ci.yml" \
+               '^FAIL leg .*second deployment-target source.*-DCMAKE_OSX_DEPLOYMENT_TARGET=15\.0'
 fi
 
 # ── #3: RIPWIRE_NATIVE=ON stays opt-in and unaffected by the pretend-Linux hook ─────────────────────────
