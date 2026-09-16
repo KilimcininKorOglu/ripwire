@@ -40,9 +40,10 @@ inline constexpr const char* kLangName[] = {
 static_assert( std::size( kLangName ) == rw::kLangCount,
                "kLangName drifted from the Lang enum — update both together" );
 
-// SymKind has no table here: rw::symTag() already IS the declarative one. Only its count is needed,
-// and it is derived the same way — `Other` is the last kind, so an appended kind resizes the counter.
-inline constexpr std::size_t kSymKindCount = std::size_t( rw::SymKind::Other ) + 1;
+// SymKind has no table here: rw::symTag() already IS the declarative one. Only its count is needed, and
+// model.h owns it — rw::kSymKindCount, proven at compile time to end at the LAST kind, so an appended kind
+// resizes the counter below instead of indexing it off its end.
+using rw::kSymKindCount;
 
 // A Lang / SymKind reaching these out of range means a symbol carries a value its own enum does not
 // name — a corrupt invariant, not a recoverable input, so VERIFY (free in release) and no fallback:

@@ -63,7 +63,9 @@
 # byte 24) are the ones deserializeSnapshot reads; the map-count and sha arms used to write at 16 and 8,
 # which a guard ahead of the one they were written for rejected first.
 #
-# ── Part 3: qchurn blob (deserializeRawCommitStream) — the same huge-count rows for the churn memo ────────
+# ── Part 3: one out-of-range ENUM byte per field class in a checksum-valid ingest record (see its header below).
+# ── Part 4: a span-tier memo (ripwire-stier-*) tier byte past SpanTier — a blob with no checksum at all.
+# ── Part 5: qchurn blob (deserializeRawCommitStream) — the same huge-count rows for the churn memo ────────
 #
 # Usage:
 #   bash test/cachefuzzcheck.sh
@@ -741,7 +743,354 @@ fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-# PART 3 — qchurn blob (deserializeRawCommitStream) — the co-change/churn history memo behind --for
+# PART 3 — an out-of-range ENUM BYTE inside a checksum-VALID ingest-cache record
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# The readers build enums straight from cache bytes (readDef's SymKind/Lang, readRef's Lang/RecvKind/RefRole,
+# readBind's Lang/LocalBindKind, readFfi's BindKind, readRouteDef/readRouteUse's HttpMethod). An enum with a
+# fixed underlying type holds any u8, so nothing fails AT the cast; the damage is downstream, where a value
+# past the last enumerator is served as a wrong answer or reaches UB (clones.h shifts a mask by the Lang).
+#
+# WHY THESE ARMS CAN FAIL, and are not stopped by an earlier guard: Part 1's garbage payload never isolates
+# one enum byte, and a stale digest would be refused by recSum before any enum is read. Each mutant here
+# changes exactly ONE enum byte and then rebuilds every recSum and the tableSum, so the ONLY thing that can
+# refuse it is a range check at the enum read. The walker below mirrors readFileRecord field by field and
+# asserts it lands on each record's exact end — a layout it no longer understands is a FAIL, never a guess.
+#
+# Per field class, three runs against the SAME byte:
+#   (a) value = the enumerator COUNT (first invalid) and 255: exit 0, stdout byte-identical to --no-cache,
+#       and RIPWIRE_CACHE_STATS cached_records = N-1 — exactly the one record carrying the byte was refused
+#       (that file reparses) while the rest of the blob stood.
+#   (c) value = a DIFFERENT in-range enumerator: cached_records = N — the record is ACCEPTED, which proves
+#       the (a) refusal came from the enum range and not from a digest the mutation failed to rebuild.
+#   (b) the (a) mutants under the ASan/UBSan binary with --clones (the verb that reaches clones.h's
+#       Lang-indexed shift): no sanitizer report AND cached_records = N-1, and the (c) mutants under the same
+#       binary: cached_records = N. That is the LIVENESS half — a sanitizer-clean run over a cache the ASan binary
+#       never loaded (a key mismatch, an earlier refusal) would otherwise pass while proving nothing.
+# The enumerator counts are DERIVED from src/model.h, not written here, so appending an enumerator without
+# moving its k*Count constant turns (c)'s last-enumerator control red instead of going unnoticed.
+echo
+echo "=== Part 3: out-of-range enum byte in a checksum-valid ingest-cache record — DEV build ==="
+EFX="$TMP/enumfx"; mkdir -p "$EFX/ffi" "$EFX/routes"
+cp -R "$FIXTURE/." "$EFX/"
+cp -R "$ROOT/test/ffifix/." "$EFX/ffi/"            # BindKind (pybind11, extern "C", ctypes handle)
+cp -R "$ROOT/test/routeedgefix/." "$EFX/routes/"   # HttpMethod on both route records
+EDIR="$TMP/enum"; mkdir -p "$EDIR"
+"$BIN" "$EFX" --no-cache --no-stable >"$EDIR/truth.xml" 2>/dev/null
+"$BIN" "$EFX" --cache="$EDIR/good.cache" --no-stable >/dev/null 2>&1
+if [ ! -s "$EDIR/truth.xml" ] || [ ! -s "$EDIR/good.cache" ]; then
+    no "Part 3: could not build the ground truth or the baseline cache for the enum fixture — every arm below would be vacuous"
+else
+cachedRecords(){ grep -oE 'cached_records=[0-9]+' "$1" | head -1 | cut -d= -f2; }
+cp "$EDIR/good.cache" "$EDIR/run.cache"
+RIPWIRE_CACHE_STATS=1 "$BIN" "$EFX" --cache="$EDIR/run.cache" --no-stable >"$EDIR/good_warm.xml" 2>"$EDIR/good_warm.err"
+GOOD_RECORDS="$( cachedRecords "$EDIR/good_warm.err" )"
+if [ -n "$GOOD_RECORDS" ] && [ "$GOOD_RECORDS" -gt 0 ] && cmp -s "$EDIR/truth.xml" "$EDIR/good_warm.xml"; then
+    ok "Part 3 baseline: the unmodified cache is used whole (cached_records=$GOOD_RECORDS) and serves the --no-cache answer"
+else
+    no "Part 3 baseline: the unmodified cache did not warm-hit cleanly (cached_records='${GOOD_RECORDS:-none}') — the arms below cannot conclude"
+    GOOD_RECORDS=""
+fi
+
+python3 - "$ROOT/src/model.h" "$EDIR/good.cache" "$EDIR" >"$EDIR/plan.tsv" 2>"$EDIR/plan.err" <<'PYEOF'
+import re, struct, sys
+
+model_path, good_path, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+# comments stripped FIRST: an enumerator's own comment may spell a brace (LocalBindKind's "spans {0,0}"), and a
+# brace match run over the raw text stops there and under-counts the enum
+src = re.sub(r"//[^\n]*", "", open(model_path, encoding="utf-8").read())
+
+def enumerator_count(name):
+    m = re.search(r"enum\s+class\s+" + name + r"\s*:\s*std::uint8_t\s*\{(.*?)\}\s*;", src, re.S)
+    if not m:
+        raise SystemExit(f"enum {name} not found in model.h")
+    names = [t.strip() for t in m.group(1).split(",") if t.strip()]
+    if not names or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t) for t in names):
+        raise SystemExit(f"enum {name}: unexpected enumerator list {names}")
+    return len(names)
+
+ENUM_OF = { "def.kind": "SymKind", "def.lang": "Lang", "ref.lang": "Lang", "ref.recv": "RecvKind", "ref.role": "RefRole",
+            "bind.lang": "Lang", "bind.kind": "LocalBindKind", "ffi.kind": "BindKind",
+            "routedef.method": "HttpMethod", "routeuse.method": "HttpMethod" }
+count = { e: enumerator_count(e) for e in set(ENUM_OF.values()) }
+
+blob = bytearray(open(good_path, "rb").read())
+HDR, TRAILER, ENTRY = 25, 24, 32
+table_off, n = struct.unpack_from("<QI", blob, len(blob) - TRAILER)[0:2]
+sites = {}
+for i in range(n):
+    e = table_off + i * ENTRY
+    rec_off = struct.unpack_from("<Q", blob, e + 8)[0]
+    rec_len = struct.unpack_from("<I", blob, e + 24)[0]
+    p = rec_off
+    def u8():
+        global p; v = blob[p]; p += 1; return v
+    def u32():
+        global p; v = struct.unpack_from("<I", blob, p)[0]; p += 4; return v
+    def skip(k):
+        global p; p += k
+    def s():
+        global p; ln = u32(); p += ln
+    def site(cls):
+        sites.setdefault(cls, (p, blob[p])); skip(1)
+    s(); skip(4 * 8 + 5 * 4)                                              # path, hash/size/mtime/ctime, FileHealth
+    for _ in range(u32()):                                                # defs (LEAN family: no subtoken rows)
+        skip(14 * 4 + 5); site("def.kind"); site("def.lang"); s(); s(); skip(8)
+    for _ in range(u32()):                                                # refs
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); skip(9)
+    for _ in range(u32()):                                                # includes
+        skip(3 + 4 + 1); s()
+    for _ in range(u32()):                                                # binds
+        skip(4); site("bind.lang"); site("bind.kind"); skip(8); s(); s(); s()
+    for _ in range(u32()):                                                # FFI aliases
+        site("ffi.kind"); skip(1); s(); s(); s()
+    for _ in range(u32()):                                                # route defs
+        skip(4); site("routedef.method"); s(); s()
+    for _ in range(u32()):                                                # route uses
+        skip(8); site("routeuse.method"); s()
+    for _ in range(u32()):                                                # const-opens
+        skip(9); s()
+    if p != rec_off + rec_len:
+        raise SystemExit(f"walker desynchronised from the record layout at entry {i}: ended at {p}, record ends at {rec_off + rec_len}")
+
+def blob_checksum(data):
+    P, M = 1099511628211, (1 << 64) - 1
+    lane = [1469598103934665603, 1099511628211, 0x100000001b3, 0x9e3779b97f4a7c15,
+            0xc2b2ae3d27d4eb4f, 0x165667b19e3779f9, 0xff51afd7ed558ccd, 0xc4ceb9fe1a85ec53]
+    k8 = len(data) - len(data) % 8
+    for i in range(0, k8, 8):
+        for k in range(8):
+            lane[k] = ((lane[k] ^ data[i + k]) * P) & M
+    for k, i in enumerate(range(k8, len(data))):
+        lane[k] = ((lane[k] ^ data[i]) * P) & M
+    h = 1469598103934665603
+    for k in range(8):
+        h = ((h ^ lane[k]) * P) & M
+    return h
+
+def rebuilt_with(off, value):
+    b = bytearray(blob); b[off] = value
+    for i in range(n):
+        e = table_off + i * ENTRY
+        ro = struct.unpack_from("<Q", b, e + 8)[0]; rl = struct.unpack_from("<I", b, e + 24)[0]
+        struct.pack_into("<I", b, e + 28, blob_checksum(bytes(b[ro:ro + rl])) & 0xFFFFFFFF)
+    struct.pack_into("<Q", b, len(b) - 8, blob_checksum(bytes(b[:HDR]) + bytes(b[table_off:table_off + n * ENTRY])))
+    return bytes(b)
+
+for cls, enum in ENUM_OF.items():
+    if cls not in sites:
+        print(f"{cls}\t{enum}\tABSENT\t-\t-\t-")
+        continue
+    off, orig = sites[cls]
+    c = count[enum]
+    control = c - 1 if orig != c - 1 else 0
+    for tag, value in (("count", c), ("255", 255), ("inrange", control)):
+        data = rebuilt_with(off, value)
+        path = f"{outdir}/{cls}.{tag}.cache"
+        open(path, "wb").write(data)
+        print(f"{cls}\t{enum}\t{tag}\t{value}\t{orig}\t{c}")
+PYEOF
+planRc=$?
+if [ "$planRc" -ne 0 ]; then
+    no "Part 3: the mutation planner refused ($( head -c 300 "$EDIR/plan.err" )) — no arm below can run"
+elif [ -n "$GOOD_RECORDS" ]; then
+    expectRefused=$(( GOOD_RECORDS - 1 ))
+    while IFS="$( printf '\t' )" read -r cls enum tag value orig enumCount; do
+        if [ "$tag" = "ABSENT" ]; then
+            no "[enum:$cls] the fixture produced no $enum byte for this field class — its arms would be vacuous"
+            continue
+        fi
+        mutant="$EDIR/$cls.$tag.cache"
+        if cmp -s "$mutant" "$EDIR/good.cache"; then
+            no "[enum:$cls=$value] the mutation did not take (mutant equals the good cache)"
+            continue
+        fi
+        cp "$mutant" "$EDIR/run.cache"   # a run that refuses a record REWRITES the blob, so every run gets a fresh copy
+        RIPWIRE_CACHE_STATS=1 "$BIN" "$EFX" --cache="$EDIR/run.cache" --no-stable >"$EDIR/out.xml" 2>"$EDIR/out.err"
+        rc=$?
+        records="$( cachedRecords "$EDIR/out.err" )"
+        if [ "$tag" = "inrange" ]; then
+            if [ "$rc" -eq 0 ] && [ "$records" = "$GOOD_RECORDS" ]; then
+                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the enum read"
+            else
+                no "[enum:$cls control] in-range $enum value $value (last enumerator of $enumCount, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale k*Count bound, or a digest the mutation did not rebuild"
+            fi
+            continue
+        fi
+        if [ "$rc" -ge 128 ]; then
+            no "[enum:$cls=$value] CRASH — exit $rc on a $enum byte past the last enumerator"
+        elif [ "$rc" -ne 0 ]; then
+            no "[enum:$cls=$value] nonzero exit ($rc) — an out-of-range cache byte must degrade, not fail the run"
+        elif [ "$records" != "$expectRefused" ]; then
+            no "[enum:$cls=$value] $enum byte past the last enumerator (count $enumCount) was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
+        elif ! cmp -s "$EDIR/truth.xml" "$EDIR/out.xml"; then
+            no "[enum:$cls=$value] record refused but the output still differs from --no-cache"
+            diff "$EDIR/truth.xml" "$EDIR/out.xml" | head -4
+        else
+            ok "[enum:$cls=$value] $enum past the last enumerator: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
+        fi
+    done <"$EDIR/plan.tsv"
+
+    if [ -x "$ASAN_BIN" ]; then
+        echo
+        echo "=== Part 3: enum mutants — ASan build, --clones; cached_records proves each doctored cache was loaded ==="
+        enumAsanFail=0
+        while IFS="$( printf '\t' )" read -r cls enum tag value orig enumCount; do
+            if [ "$tag" = "ABSENT" ]; then
+                continue   # already a FAIL row in the dev loop above
+            fi
+            name="$cls.$tag"
+            if [ "$tag" = "inrange" ]; then
+                expectRecords="$GOOD_RECORDS"
+            else
+                expectRecords="$expectRefused"
+            fi
+            cp "$EDIR/$name.cache" "$EDIR/asan_run.cache"
+            RIPWIRE_CACHE_STATS=1 ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+                "$ASAN_BIN" "$EFX" --cache="$EDIR/asan_run.cache" --clones --no-stable >/dev/null 2>"$EDIR/asan.err"
+            rc=$?
+            records="$( cachedRecords "$EDIR/asan.err" )"
+            if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|SEGV' "$EDIR/asan.err" || [ "$rc" -ge 128 ]; then
+                no "[asan:enum:$name] sanitizer report / crash (exit $rc): $( grep -m1 -E 'runtime error:|ERROR: AddressSanitizer' "$EDIR/asan.err" | sed -E 's#.*/src/#src/#' | cut -c1-160 )"
+                enumAsanFail=1
+            elif [ "$records" != "$expectRecords" ]; then
+                no "[asan:enum:$name] LIVENESS: the ASan binary read cached_records=${records:-none}, expected $expectRecords of $GOOD_RECORDS — it did not load the doctored cache as the dev binary did, so a clean run here proves nothing"
+                enumAsanFail=1
+            else
+                ok "[asan:enum:$name] no sanitizer report (exit $rc), and the doctored cache was loaded: cached_records=$records of $GOOD_RECORDS"
+            fi
+        done <"$EDIR/plan.tsv"
+        if [ "$enumAsanFail" -eq 0 ]; then
+            ok "Part 3 ASan sweep: no sanitizer report across the enum mutants, each one loaded (refused record N-1, in-range control N)"
+        else
+            no "Part 3 ASan sweep: a sanitizer report fired or a mutant was never loaded (see above)"
+        fi
+    else
+        skip "Part 3 ASan sweep — no ASan binary supplied at $ASAN_BIN (see Part 1's skip)"
+    fi
+fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# PART 4 — the span-tier memo (ripwire-stier-*, ingest_astquery.h spanTierMemoLoad): a tier byte past SpanTier
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# The memo is a raw blob with NO checksum: magic, version, the file's stat triple, its path, then three parallel
+# arrays — startByte[], endByte[], tier[] (one u8 per span). --grep's tier pass counts hits per tier into a
+# three-element array indexed by that byte (search.h grepApplySpanTiers), so a tier byte of 3 or more written
+# anywhere in the cache directory used to be an out-of-bounds WRITE on the stack.
+#   (a) tier byte = the SpanTier count and 255: exit 0, stdout byte-identical to --no-cache (memo refused).
+#   (b) the same two mutants under the ASan/UBSan binary: no sanitizer report, output byte-identical to
+#       --no-cache; and the (c) mutant under that binary must CHANGE the answer — the liveness proof that the ASan
+#       binary reads the memo at all, without which a clean (b) could be a memo it never opened.
+#   (c) CONTROL: the same byte set to an in-range tier that CHANGES the answer (a comment span re-labelled
+#       Code): stdout DIFFERS from --no-cache — the memo was read and believed, so (a) is refused at the tier
+#       byte and not by an earlier stat or path guard.
+echo
+echo "=== Part 4: span-tier memo with a tier byte past SpanTier — DEV build ==="
+SDIR="$TMP/stier"; SSB="$SDIR/sandbox"; SCACHE="$SDIR/cache"
+mkdir -p "$SSB/src" "$SCACHE"
+{
+    printf '// FASTTOKEN_zeta named in a comment\n'
+    printf 'const char* alphaMessage = "FASTTOKEN_zeta inside a string literal";\n'
+    printf 'int alphaFastTokenZeta( int n )\n{\n    int FASTTOKEN_zeta = n + 1;\n    return FASTTOKEN_zeta;\n}\n'
+    # past kSpanTierMemoMinBytes (32 KiB): below it no memo is written and every arm here would be vacuous
+    awk 'BEGIN{ for( i = 0; i < 900; i++ ) printf "int alphaFiller%04d( int v ) { return v + %d; }\n", i, i }'
+} >"$SSB/src/alpha.c"
+touch -t 202001010000 "$SSB/src/alpha.c"   # well before any blob this gate writes, so the memo's racy rule admits it
+stierRun(){   # $1 = binary, $2 = out prefix, $3.. = extra argv
+    local bin="$1" out="$2"; shift 2
+    TMPDIR="$SCACHE" "$bin" "$SSB" --grep=FASTTOKEN_zeta "$@" >"$out.out" 2>"$out.err"
+    printf '%s' "$?" >"$out.rc"
+}
+stierRun "$BIN" "$SDIR/truth" --no-cache
+stierRun "$BIN" "$SDIR/populate"
+STIER_BLOB="$( find "$SCACHE" -name 'ripwire-stier-*' -type f 2>/dev/null | head -1 )"
+STIER_COUNT="$( sed -nE 's/^enum class SpanTier : std::uint8_t \{(.*)\};.*/\1/p' "$ROOT/src/ingest.h" | tr ',' '\n' | grep -cE '[A-Za-z]' )"
+if [ -z "$STIER_BLOB" ] || [ "${STIER_COUNT:-0}" -lt 2 ]; then
+    no "Part 4: no span-tier memo blob was written (blob='${STIER_BLOB:-none}') or SpanTier was not found in src/ingest.h (count='${STIER_COUNT:-none}') — every arm below would be vacuous"
+elif ! cmp -s "$SDIR/truth.out" "$SDIR/populate.out"; then
+    no "Part 4: the memo-populating run already differs from --no-cache — the arms below cannot conclude"
+else
+    cp "$STIER_BLOB" "$SDIR/good.bin"
+    python3 - "$SDIR/good.bin" "$SDIR" "$STIER_COUNT" >"$SDIR/plan.txt" 2>"$SDIR/plan.err" <<'PYEOF'
+import struct, sys
+good, outdir, count = sys.argv[1], sys.argv[2], int(sys.argv[3])
+b = bytearray(open(good, "rb").read())
+if b[0:4] != struct.pack("<I", 0x53544d31):
+    raise SystemExit("not an STM1 blob")
+p = 8 + 3 * 8
+p += 4 + struct.unpack_from("<I", b, p)[0]                     # recorded path
+spans = struct.unpack_from("<I", b, p)[0]; p += 4
+tier0 = p + 8 * spans                                           # startByte[], endByte[], then tier[]
+if spans == 0 or tier0 + spans != len(b):
+    raise SystemExit(f"layout mismatch: spans={spans} tier[] at {tier0}, blob is {len(b)} bytes")
+target = next((tier0 + i for i in range(spans) if b[tier0 + i] != 0), None)   # a non-Code span, re-labelled by the control
+if target is None:
+    raise SystemExit("no comment/string span in the memo")
+for tag, value in (("count", count), ("255", 255), ("inrange", 0)):
+    m = bytearray(b); m[target] = value
+    open(f"{outdir}/{tag}.bin", "wb").write(bytes(m))
+    print(tag, value, b[target])
+PYEOF
+    if [ $? -ne 0 ]; then
+        no "Part 4: the memo mutation planner refused ($( head -c 200 "$SDIR/plan.err" ))"
+    else
+        for tag in count 255 inrange; do
+            if cmp -s "$SDIR/$tag.bin" "$SDIR/good.bin"; then
+                no "[stier:$tag] the mutation did not take"
+                continue
+            fi
+            cp "$SDIR/$tag.bin" "$STIER_BLOB"
+            stierRun "$BIN" "$SDIR/$tag"
+            rc="$( cat "$SDIR/$tag.rc" )"
+            if [ "$tag" = "inrange" ]; then
+                if [ "$rc" = "0" ] && ! cmp -s "$SDIR/truth.out" "$SDIR/$tag.out"; then
+                    ok "[stier control] an in-range tier edit changes the answer — the memo is read and believed, so the arms below reach the tier byte"
+                else
+                    no "[stier control] an in-range tier edit did not reach the answer (exit $rc) — the memo was refused before the tier byte, so the out-of-range arms prove nothing"
+                fi
+            elif [ "$rc" -ge 128 ] 2>/dev/null; then
+                no "[stier:$tag] CRASH — exit $rc on a memo tier byte past SpanTier"
+            elif [ "$rc" != "0" ] || ! cmp -s "$SDIR/truth.out" "$SDIR/$tag.out"; then
+                no "[stier:$tag] a memo tier byte past SpanTier was served: exit $rc, output differs from --no-cache"
+            else
+                ok "[stier:$tag] a memo tier byte past SpanTier ($tag): memo refused, output byte-identical to --no-cache"
+            fi
+        done
+        if [ -x "$ASAN_BIN" ]; then
+            stierAsanFail=0
+            for asanTag in inrange count 255; do
+                cp "$SDIR/$asanTag.bin" "$STIER_BLOB"   # the ASan runs' own memo copy: a refusal rewrites the blob
+                ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+                    stierRun "$ASAN_BIN" "$SDIR/asan_$asanTag"
+                rc="$( cat "$SDIR/asan_$asanTag.rc" )"
+                if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|SEGV' "$SDIR/asan_$asanTag.err" || [ "$rc" -ge 128 ]; then
+                    no "[asan:stier:$asanTag] sanitizer report / crash (exit $rc): $( grep -m1 -E 'runtime error:|ERROR: AddressSanitizer' "$SDIR/asan_$asanTag.err" | sed -E 's#.*/src/#src/#' | cut -c1-160 )"
+                    stierAsanFail=1
+                elif [ "$asanTag" = "inrange" ]; then
+                    if [ "$rc" = "0" ] && ! cmp -s "$SDIR/truth.out" "$SDIR/asan_$asanTag.out"; then
+                        ok "[asan:stier control] the ASan binary read and believed the in-range memo edit (the answer changed), so its out-of-range runs load the memo too"
+                    else
+                        no "[asan:stier control] LIVENESS: the in-range memo edit did not change the ASan binary's answer (exit $rc) — it never read the memo, so its clean runs prove nothing"
+                        stierAsanFail=1
+                    fi
+                elif [ "$rc" != "0" ] || ! cmp -s "$SDIR/truth.out" "$SDIR/asan_$asanTag.out"; then
+                    no "[asan:stier:$asanTag] a memo tier byte past SpanTier was served under ASan: exit $rc, output differs from --no-cache"
+                    stierAsanFail=1
+                else
+                    ok "[asan:stier:$asanTag] no sanitizer report (exit $rc), memo refused, output byte-identical to --no-cache"
+                fi
+            done
+            if [ "$stierAsanFail" -ne 0 ]; then
+                no "Part 4 ASan sweep: a sanitizer report fired, a tier byte was served, or the memo was never read (see above)"
+            fi
+        else
+            skip "Part 4 ASan sweep — no ASan binary supplied at $ASAN_BIN (see Part 1's skip)"
+        fi
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# PART 5 — qchurn blob (deserializeRawCommitStream) — the co-change/churn history memo behind --for
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # Same reader family as Part 2 (readQSnapBlob + qsnapGet), a different layout: magic "QCHN"(4), scheme(4),
 # fnv(key)(8), then a u32 commit count, and per commit an i64 epoch and a u32 path count ahead of its
@@ -751,18 +1100,18 @@ fi
 # (a stale key is the ordinary case), so the proof that the reader refused it rather than trusting it is that
 # the recompute rewrote the blob byte-identical to the good one.
 echo
-echo "=== Part 3: qchurn blob huge counts (--for) ==="
+echo "=== Part 5: qchurn blob huge counts (--for) ==="
 if command -v git >/dev/null 2>&1 && [ -n "${QREPO:-}" ] && [ -d "$QREPO" ]; then
     crun(){ env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$@" "$QREPO" --for=helper; }
     crun "$BIN" >"$TMP/c_truth" 2>/dev/null                 # cold: walks git log, writes the blob
     CBLOB="$( find "$QCACHEDIR" -maxdepth 2 -type f -name 'ripwire-qchurn-*.bin' 2>/dev/null | head -1 )"
     if [ -z "$CBLOB" ]; then
-        no "Part 3: no qchurn blob produced — cannot proceed with the qchurn rows"
+        no "Part 5: no qchurn blob produced — cannot proceed with the qchurn rows"
     else
         cp "$CBLOB" "$TMP/c_good.bin"
         crun "$BIN" >"$TMP/c_warm" 2>/dev/null
-        diff -q "$TMP/c_truth" "$TMP/c_warm" >/dev/null && ok "Part 3: the warm qchurn run is byte-identical to the cold one" \
-                                                         || no "Part 3: the warm qchurn run already differs from the cold one — the harness cannot judge a mutation"
+        diff -q "$TMP/c_truth" "$TMP/c_warm" >/dev/null && ok "Part 5: the warm qchurn run is byte-identical to the cold one" \
+                                                         || no "Part 5: the warm qchurn run already differs from the cold one — the harness cannot judge a mutation"
         python3 - "$TMP/c_good.bin" "$MUTDIR" <<'PYEOF3'
 import struct, sys
 good = open(sys.argv[1], "rb").read()
@@ -816,7 +1165,7 @@ PYEOF3
         done
     fi
 else
-    skip "Part 3: needs git and Part 2's scratch repository"
+    skip "Part 5: needs git and Part 2's scratch repository"
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
