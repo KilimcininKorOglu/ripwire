@@ -219,17 +219,6 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
                      std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore,
                      std::string_view cacheDir )
 {
-#if defined( _WIN32 )
-    std::string nativeRoot = rw::compat::rw_windows_path_from_msys( rootDir == nullptr ? std::string_view( "." ) : std::string_view( rootDir ) );
-    // Keep the root spelling in the same generic form as the logical paths emitted by the crawl.  The
-    // filesystem APIs still receive this native Windows path; forward slashes are accepted by Win32 and
-    // prevent a platform-only separator from leaking into cache keys, XML, MCP handles and sidecars.
-    for( char& c : nativeRoot )
-    {
-        if( c == '\\' ) { c = '/'; }
-    }
-    rootDir = nativeRoot.c_str();
-#endif
     PROFILE_SCOPE_DESCRIBE( "ingest: total (crawl + parse + model)" );
     // Cheap (a handful of bytes serialized twice) and runs once per invocation — catches a
     // writeDef/writeRef field added without updating kMinDefRecordBytesLean/kMinRefRecordBytes immediately

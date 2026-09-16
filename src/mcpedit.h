@@ -268,33 +268,6 @@ namespace mcpedit
 
         explicit AbsHintFrame( const std::string& pathHint )
         {
-#if defined( _WIN32 )
-            const std::string nativeHint = rw::compat::rw_windows_path_from_msys( pathHint );
-            std::error_code  ec;
-            const std::filesystem::path hintPath( nativeHint );
-            if( !hintPath.is_absolute() )
-            {
-                return;
-            }
-            const std::filesystem::path absoluteHint = std::filesystem::absolute( hintPath, ec );
-            if( ec )
-            {
-                hint = hintPath.lexically_normal().generic_string();
-            }
-            else
-            {
-                const std::filesystem::path canonicalHint = std::filesystem::weakly_canonical( absoluteHint, ec );
-                hint = ( ec ? absoluteHint.lexically_normal() : canonicalHint ).generic_string();
-            }
-            ec.clear();
-            const std::filesystem::path current = std::filesystem::current_path( ec );
-            if( ec )
-            {
-                return;
-            }
-            const std::filesystem::path canonicalCurrent = std::filesystem::weakly_canonical( current, ec );
-            cwd = ( ec ? current.lexically_normal() : canonicalCurrent ).generic_string();
-#else
             if( pathHint.empty() || pathHint.front() != '/' )
             {
                 return;
@@ -302,7 +275,6 @@ namespace mcpedit
             char buf[ PATH_MAX ];
             hint = os::realpath( pathHint.c_str(), buf ) != nullptr ? std::string( buf ) : pathHint;
             cwd  = os::getcwd( buf, sizeof( buf ) ) != nullptr ? std::string( buf ) : std::string();
-#endif
         }
 
         bool matches( const IngestResult& ing, std::uint32_t fileId ) const
@@ -311,20 +283,8 @@ namespace mcpedit
             {
                 return false;
             }
-#if defined( _WIN32 )
-            const std::string diskNative = rw::compat::rw_windows_path_from_msys( diskPath( ing, fileId ) );
-            std::error_code    ec;
-            std::filesystem::path candidate( diskNative );
-            if( !candidate.is_absolute() )
-            {
-                candidate = std::filesystem::path( cwd ) / candidate;
-            }
-            const std::filesystem::path absolute = std::filesystem::weakly_canonical( candidate, ec );
-            const std::string           abs = ( ec ? candidate.lexically_normal() : absolute ).generic_string();
-#else
             const std::string& disk = diskPath( ing, fileId );   // the on-disk spelling, never the label
             const std::string  abs  = !disk.empty() && disk.front() == '/' ? disk : cwd + "/" + disk;
-#endif
             return abs.find( hint ) != std::string::npos;
         }
     };
@@ -683,12 +643,8 @@ namespace mcpedit
     // had 45,765 of these before that; a possibly-live (held, or fresh) lock inode is still never removed.
     inline std::string editLockPath( const std::string& targetPath )
     {
-        std::string lockKey = targetPath;
-#if defined( _WIN32 )
-        std::replace( lockKey.begin(), lockKey.end(), '\\', '/' );
-#endif
         std::uint64_t h = 1469598103934665603ULL;      // FNV-1a-64 of the target path → a stable per-file lock name
-        for( char c : lockKey ) { h ^= static_cast<unsigned char>( c ); h = hashutil::fnv1aMultiply( h ); }
+        for( char c : targetPath ) { h ^= static_cast<unsigned char>( c ); h = hashutil::fnv1aMultiply( h ); }
         char name[ 64 ];
         rw::formatTo( name, sizeof( name ), "ripwire-edit-{:016x}.lock", (unsigned long long)h );
         const std::string lockDir = quality::cacheDirLadder() + "/locks";

@@ -18,6 +18,7 @@
 #include "ingest.h"   // rw::kDefaultMaxFileBytes — the canonical crawl size ceiling (--max-file-size)
 #include "version.h"  // configure-generated kRipwireVersion + short build info (--version)
 #include "infra/emit.h" // rw::emitTo + kEmitterName — --version discloses the emitter that compiled in (emit=)
+#include "infra/os.h"   // rw::os::normalize_path_arg — path-valued arguments take the program's path spelling at intake
 
 namespace rw
 {
@@ -3326,13 +3327,12 @@ inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
             continue;
         }
         const std::string_view value = arg.substr( vf.prefix.size() );
-#if defined( _WIN32 )
         if( isPathValuePrefix( vf.prefix ) )
         {
-            // argv storage is mutable and Config deliberately borrows it as a view.
-            rw::compat::rw_normalize_msys_drive_paths_in_place( const_cast<char*>( value.data() ) );
+            // intake: a path-valued flag's value takes the program's path spelling here, once (argv storage is mutable,
+            // and Config borrows it as a view, so the rewrite is in place and never longer)
+            os::normalize_path_arg( const_cast<char*>( value.data() ) );
         }
-#endif
         // §B5: the EMPTY-value decision is the row's, never this loop's. Refuse prints here; Meaningful and
         // HandlerRefuses both fall through to the assignment — the difference between them is which code
         // OWNS the refusal, and the row records it (the consteval floor beside the table pins the columns).
@@ -5107,6 +5107,7 @@ inline Config parseArgs( int argc, char** argv ) noexcept
                 rw::emitTo( stderr, "ripwire: too many roots (max {}): '{}'\n", kMaxWorkspaceRoots, std::string_view( a.data(), a.size() ) );
                 c.ok = false;  return c;
             }
+            os::normalize_path_arg( const_cast<char*>( a.data() ) );   // intake: a root takes the program's path spelling once
             if( c.rootPath.empty() )
             {
                 c.rootPath = a; // roots[0] alias (A1)

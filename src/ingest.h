@@ -317,19 +317,14 @@ inline bool withinCanonicalRoot( std::string_view real, std::string_view rootRea
     }
     // "/" already ends in the separator; every other root needs the next byte to BE one, or this is a sibling
     // whose name merely starts with the root's ("/x/repo" vs "/x/repo-evil").
-    return rootReal.back() == '/' || rootReal.back() == '\\' || real[ rootReal.size() ] == '/' || real[ rootReal.size() ] == '\\';
+    return rootReal.back() == '/' || real[ rootReal.size() ] == '/';
 }
 
 // The canonical spelling of a crawl root, computed ONCE per walk. Falls back to the literal argument when the
 // root will not resolve (fail closed: an unresolved root matches fewer targets, never more).
 inline std::string canonicalCrawlRoot( std::string_view rootDir )
 {
-    const std::string requested( rootDir.empty() ? std::string_view( "." ) : rootDir );
-#if defined( _WIN32 )
-    const std::string dir = rw::compat::rw_windows_path_from_msys( requested );
-#else
-    const std::string& dir = requested;
-#endif
+    const std::string dir( rootDir.empty() ? std::string_view( "." ) : rootDir );
     char              resolved[ PATH_MAX ];
     return os::realpath( dir.c_str(), resolved ) != nullptr ? std::string( resolved ) : dir;
 }

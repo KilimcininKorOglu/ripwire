@@ -249,17 +249,12 @@ inline const Report& hardenForRoots( std::span<const std::string_view> roots )
     bool anyHook = false;
     for( std::string_view root : roots )
     {
-        const std::string rootStr =
-#if defined( _WIN32 )
-            rw::compat::rw_windows_path_from_msys( root );
-#else
-            std::string( root );
-#endif
         std::error_code ec;
-        if( rootStr.empty() || !std::filesystem::is_directory( std::filesystem::path( rootStr ), ec ) || ec )
+        if( root.empty() || !std::filesystem::is_directory( std::filesystem::path( root ), ec ) || ec )
         {
             continue;
         }
+        const std::string   rootStr = std::string( root );
         const FsmonitorForm form    = localConfigMayCarryFsmonitor( rootStr ) ? probeFsmonitorForm( rootStr ) : FsmonitorForm::Unset;
         r.forms.emplace_back( rootStr, form );
         anyHook = anyHook || form == FsmonitorForm::Hook;

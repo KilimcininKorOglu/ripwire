@@ -3490,7 +3490,7 @@ int main( int argc, char** argv )
 {
     using namespace rw;
 
-    rw::compat::rw_set_stdout_binary();
+    rw::os::init_process( argc, argv );   // POSIX: nothing. Windows: UTF-8 argv, binary stdio, path-valued environment in the program's spelling
 
     if( argc >= 2 && std::string_view( argv[1] ) == "wrap" )
     { // adoption recipe (subcommand, not a flag)
@@ -3883,37 +3883,25 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         else
         {
             addDir( ".agents/skills" );
-            const auto nativeEnvPath = []( const char* value )
+            const char* homeEnv        = std::getenv( "HOME" );
+            const char* claudeConfigEnv = std::getenv( "CLAUDE_CONFIG_DIR" );
+            if( claudeConfigEnv && *claudeConfigEnv )
             {
-                if( value == nullptr || *value == 0 )
-                {
-                    return std::string{};
-                }
-#if defined( _WIN32 )
-                return rw::compat::rw_windows_path_from_msys( value );
-#else
-                return std::string( value );
-#endif
-            };
-            const std::string homeEnv         = nativeEnvPath( std::getenv( "HOME" ) );
-            const std::string claudeConfigEnv = nativeEnvPath( std::getenv( "CLAUDE_CONFIG_DIR" ) );
-            if( !claudeConfigEnv.empty() )
-            {
-                addDir( claudeConfigEnv + "/skills" );
+                addDir( std::string( claudeConfigEnv ) + "/skills" );
             }
-            else if( !homeEnv.empty() )
+            else if( homeEnv && *homeEnv )
             {
-                addDir( homeEnv + "/.claude/skills" );
+                addDir( std::string( homeEnv ) + "/.claude/skills" );
             }
 
-            const std::string codexHomeEnv = nativeEnvPath( std::getenv( "CODEX_HOME" ) );
-            if( !codexHomeEnv.empty() )
+            const char* codexHomeEnv = std::getenv( "CODEX_HOME" );
+            if( codexHomeEnv && *codexHomeEnv )
             {
-                addDir( codexHomeEnv + "/skills" );
+                addDir( std::string( codexHomeEnv ) + "/skills" );
             }
-            else if( !homeEnv.empty() )
+            else if( homeEnv && *homeEnv )
             {
-                addDir( homeEnv + "/.codex/skills" );
+                addDir( std::string( homeEnv ) + "/.codex/skills" );
             }
         }
 
@@ -4132,17 +4120,11 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     std::vector<std::string> resolvedRoots;
     for( const std::string_view rootArg : cfg.roots )
     {
-        const auto [ resolvedRootArg, cloneOk ] = resolveRemoteRoot( std::string( rootArg ), cfg.refetch );
+        const auto [ resolvedRoot, cloneOk ] = resolveRemoteRoot( std::string( rootArg ), cfg.refetch );
         if( !cloneOk )
         {
             return 1;
         }
-        const std::string resolvedRoot =
-#if defined( _WIN32 )
-            rw::compat::rw_windows_path_from_msys( resolvedRootArg );
-#else
-            resolvedRootArg;
-#endif
 
         // a root that does not EXIST is caller error (a typo'd path), not a degradable runtime condition —
         // exit 1 with empty stdout so agent pipelines can detect it. A readable-but-empty directory still

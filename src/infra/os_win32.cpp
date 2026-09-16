@@ -8,16 +8,19 @@
 
 #include "platform_compat.h"   // force-included today; named so the dependency is visible
 #include "os.h"
+#include "os_win32_logic.h"    // the pure logic, compiled and tested on every platform
 
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <string>
 
 #include <direct.h>
 #include <io.h>
 #include <process.h>
+#include <vector>
 
 namespace rw::os
 {
@@ -172,6 +175,94 @@ int   setenv( const char* name, const char* value, int overwrite )
         return 0;
     }
     return ::_putenv_s( name, value ) == 0 ? 0 : -1;
+}
+
+// ── process start and path intake ──────────────────────────────────────────────────────────────────────────
+void normalize_path_arg( char* text )
+{
+    oswin::normalizePathArgInPlace( text );
+}
+
+namespace
+{
+    // UTF-8 of a UTF-16 string, or false (a lone surrogate) — the caller keeps what it had.
+    bool utf8Of( std::u16string_view wide, std::string& out )
+    {
+        const std::ptrdiff_t bytes = oswin::utf8LengthOf( wide );
+        if( bytes < 0 )
+        {
+            return false;
+        }
+        out.assign( static_cast<std::size_t>( bytes ), '\0' );
+        oswin::encodeUtf8( wide, out.data() );
+        return true;
+    }
+
+    std::u16string_view viewOf( const wchar_t* text )
+    {
+        return text == nullptr ? std::u16string_view() : std::u16string_view( reinterpret_cast<const char16_t*>( text ), std::wcslen( text ) );
+    }
+}
+
+void init_process( int& argc, char**& argv )
+{
+    static_assert( sizeof( wchar_t ) == sizeof( char16_t ), "the Windows ABI's wchar_t is UTF-16" );
+
+    // stdout carries XML/JSON bytes and stdin carries MCP requests: no CRLF translation in either direction.
+    (void)::_setmode( ::_fileno( stdin ), _O_BINARY );
+    (void)::_setmode( ::_fileno( stdout ), _O_BINARY );
+    (void)::_setmode( ::_fileno( stderr ), _O_BINARY );
+
+    // argv as UTF-8, from the UTF-16 command line: the CRT's narrow argv is in the ANSI code page, which is UTF-8 only
+    // when the manifest's activeCodePage took effect. One allocation for the process; an argument that is not valid
+    // UTF-16 leaves the CRT's argv in place (every argument, so indices stay aligned).
+    int                   wideCount = 0;
+    const LPWSTR* const   wideArgv  = ::CommandLineToArgvW( ::GetCommandLineW(), &wideCount );
+    if( wideArgv != nullptr )
+    {
+        static std::vector<std::string> storage;
+        static std::vector<char*>       pointers;
+        storage.resize( static_cast<std::size_t>( wideCount ) );
+        bool allValid = wideCount > 0;
+        for( int i = 0; i < wideCount && allValid; ++i )
+        {
+            allValid = utf8Of( viewOf( wideArgv[ i ] ), storage[ static_cast<std::size_t>( i ) ] );
+        }
+        ::LocalFree( const_cast<HLOCAL>( wideArgv ) );
+        if( allValid )
+        {
+            pointers.clear();
+            for( std::string& arg : storage )
+            {
+                pointers.push_back( arg.data() );
+            }
+            pointers.push_back( nullptr );
+            argc = wideCount;
+            argv = pointers.data();
+        }
+    }
+
+    // the path-valued environment the program reads, in its own spelling. A variable left unchanged is not rewritten, so
+    // a child process inherits exactly what this one was given unless the spelling had to change.
+    static constexpr const wchar_t* kPathVariables[] = { L"HOME", L"TMPDIR", L"XDG_CACHE_HOME", L"CODEX_HOME", L"CLAUDE_CONFIG_DIR" };
+    for( const wchar_t* name : kPathVariables )
+    {
+        std::string value;
+        if( !utf8Of( viewOf( ::_wgetenv( name ) ), value ) || value.empty() )
+        {
+            continue;
+        }
+        const std::string before = value;
+        oswin::normalizePathArgInPlace( value.data() );
+        if( value == before )
+        {
+            continue;
+        }
+        const std::ptrdiff_t units = oswin::utf16LengthOf( value );   // valid: it was UTF-16 a moment ago
+        std::u16string       programSpelling( static_cast<std::size_t>( units < 0 ? 0 : units ), u'\0' );
+        oswin::encodeUtf16( value, programSpelling.data() );
+        (void)::_wputenv_s( name, reinterpret_cast<const wchar_t*>( programSpelling.c_str() ) );
+    }
 }
 
 int exepath( char* buf, std::size_t bufCount )

@@ -183,6 +183,19 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 [[gnu::always_inline]] inline char* getcwd( char* buf, std::size_t size )                          { return ::getcwd( buf, size ); }
 [[gnu::always_inline]] inline int   setenv( const char* name, const char* value, int overwrite )   { return ::setenv( name, value, overwrite ); }
 
+// ── process start and path intake ──────────────────────────────────────────────────────────────────────────
+// Inside the program a path is UTF-8 with '/' separators on every platform, so the spelling is fixed where a path
+// ENTERS — argv, the environment, an MCP argument — and nowhere else. Neither call has a POSIX name because POSIX
+// needs neither: argv is already the caller's bytes, stdio does no newline translation, and a path has one
+// separator. Both POSIX bodies are empty; a call compiles to nothing.
+// init_process: the first statement of main. (Windows: UTF-8 argv from the UTF-16 command line, binary
+//   stdin/stdout/stderr, and HOME/TMPDIR/XDG_CACHE_HOME/CODEX_HOME/CLAUDE_CONFIG_DIR in the program's spelling.)
+// normalize_path_arg: one argument the CALLER knows is a path — a positional root, a --cache= value, an MCP `path` —
+//   rewritten in place, never longer. (Windows: '\' becomes '/', Git Bash's "/c/..." becomes "C:/...".) A value that
+//   is not a path (a --grep pattern) must never reach it.
+[[gnu::always_inline]] inline void init_process( int&, char**& ) {}
+[[gnu::always_inline]] inline void normalize_path_arg( char* ) {}
+
 // The nanosecond modification / status-change time of a filled stat_t. POSIX.1-2008 names the fields st_mtim and
 // st_ctim; Darwin and the BSDs spell them st_mtimespec and st_ctimespec. A reference to the field itself, so
 // `os::st_mtim( st ).tv_nsec` is the same load as `st.st_mtim.tv_nsec`. A platform with neither gets whole seconds
@@ -611,6 +624,10 @@ int   access( const char* path, int mode );
 char* realpath( const char* path, char* resolved );
 char* getcwd( char* buf, std::size_t size );
 int   setenv( const char* name, const char* value, int overwrite );
+
+// process start and path intake (see the POSIX branch)
+void init_process( int& argc, char**& argv );
+void normalize_path_arg( char* text );
 
 // field reads, not calls: inline on every platform
 [[gnu::always_inline]] inline const ::timespec& st_mtim( const stat_t& st ) { return st.st_mtim; }

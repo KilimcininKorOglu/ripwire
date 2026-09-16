@@ -1773,13 +1773,7 @@ inline RawRouteUse readRouteUse( ByteR& r ) { RawRouteUse u; u.startByte = r.u32
 inline std::string reAbsolutize( std::string_view rel, std::string_view root )
 {
     std::string_view rootTrim = root;
-#if defined( _WIN32 )
-    // collectSources() stores p.generic_string() and ingest() normalizes the root to forward slashes.
-    constexpr char separator = '/';
-#else
-    constexpr char separator = '/';
-#endif
-    while( rootTrim.size() > 1 && ( rootTrim.back() == '/' || rootTrim.back() == '\\' ) )
+    while( rootTrim.size() > 1 && rootTrim.back() == '/' )
     {
         rootTrim.remove_suffix( 1 );
     }
@@ -1790,15 +1784,8 @@ inline std::string reAbsolutize( std::string_view rel, std::string_view root )
     std::string out;
     out.reserve( rootTrim.size() + 1 + rel.size() );
     out.append( rootTrim );
-    out.push_back( separator );
-    while( !rel.empty() && ( rel.front() == '/' || rel.front() == '\\' ) )
-    {
-        rel.remove_prefix( 1 );
-    }
-    for( const char c : rel )
-    {
-        out.push_back( c == '/' || c == '\\' ? separator : c );
-    }
+    out.push_back( '/' );
+    out.append( rel );
     return out;
 }
 
