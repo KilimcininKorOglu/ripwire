@@ -153,6 +153,70 @@ grep -q 'n="helperOne"' "$TMP/mix.xml" && ! grep -A2 'n="helperOne"' "$TMP/mix.x
     && ok "mixed request: helperOne (no range) stays whole-body" || no "mixed request: helperOne unexpectedly carries a lines= marker"
 if grep -q 'lines="3-5/11"' "$TMP/mix.xml"; then ok "mixed request: bigFunction still slices to 3-5/11"; else no "mixed request: bigFunction slice missing/wrong"; fi
 
+# 11) sliceBodyLines never reads past its body. A slice whose last line is the body's final line ends AT
+#     body.size(), and the UTF-8 back-off used to read body[body.size()]. Through the CLI the view sits over a
+#     std::string, so that byte is the NUL terminator and every arm above stays green on the defect; only a view
+#     that ends exactly at its allocation shows it. So this arm compiles serialize.h into a tiny harness whose
+#     bodies are exact-size heap buffers and runs it under AddressSanitizer: the read past the end aborts.
+CXX="${CXX:-c++}"
+. "$ROOT/scripts/cxxstd.sh"
+CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"
+cat >"$TMP/slicebody_harness.cpp" <<'CPP'
+#include "serialize.h"
+
+#include <cstdio>
+#include <cstring>
+#include <memory>
+
+static int g_fail = 0;
+
+static void check( bool cond, const char* what )
+{
+    std::printf( "  %s  harness: %s\n", cond ? "PASS" : "FAIL", what );
+    if( !cond )
+    {
+        g_fail = 1;
+    }
+}
+
+// the view ends at the last byte of its own heap allocation, so body[body.size()] is outside it
+static rw::SlicedBody sliceExact( const char* text, std::uint32_t lo, std::uint32_t hi )
+{
+    const std::size_t             n = std::strlen( text );
+    const std::unique_ptr<char[]> buf( new char[ n ] );
+    std::memcpy( buf.get(), text, n );
+    return rw::sliceBodyLines( std::string_view( buf.get(), n ), lo, hi );
+}
+
+int main()
+{
+    const rw::SlicedBody one = sliceExact( "int f() { return 1; }", 1, 1 );
+    check( one.text == "int f() { return 1; }" && one.total == 1, "a one-line body with no trailing newline slices whole" );
+    const rw::SlicedBody utf = sliceExact( "int g()\n{\n    return 2; // caf\xC3\xA9", 3, 3 );
+    check( utf.text == "    return 2; // caf\xC3\xA9" && utf.loLine == 3 && utf.hiLine == 3,
+           "a final line ending in a two-byte codepoint keeps the codepoint" );
+    const rw::SlicedBody clamp = sliceExact( "a\nb\nc", 2, 99 );
+    check( clamp.text == "b\nc" && clamp.hiLine == 3, "an END past the last line clamps to the body's end" );
+    return g_fail;
+}
+CPP
+printf 'int main() { return 0; }\n' >"$TMP/asanprobe.cpp"
+if ! "$CXX" "$CXXSTD" -fsanitize=address,undefined "$TMP/asanprobe.cpp" -o "$TMP/asanprobe" >/dev/null 2>&1; then
+    printf '  SKIP  sliceBodyLines bounds harness: %s cannot link an ASan/UBSan program on this host\n' "$CXX"
+elif ! "$CXX" "$CXXSTD" -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I"$ROOT/src/infra" -I"$ROOT/third_party" -I"$ROOT/src" \
+        "$TMP/slicebody_harness.cpp" "$ROOT/src/infra/diagnostics.cpp" -o "$TMP/slicebody_harness" 2>"$TMP/slicebody_cc.log"; then
+    no "sliceBodyLines bounds harness failed to compile (the sanitizer toolchain works, so this is the harness or serialize.h)"
+    grep -m5 'error' "$TMP/slicebody_cc.log" | sed 's/^/    /'
+elif ASAN_OPTIONS=detect_leaks=0 "$TMP/slicebody_harness" >"$TMP/slicebody_run.log" 2>&1; then
+    grep -E '^  PASS  ' "$TMP/slicebody_run.log"
+    ok "sliceBodyLines stays inside an exact-size body under ASan/UBSan"
+else
+    grep -E '^  (PASS|FAIL)  ' "$TMP/slicebody_run.log"
+    no "sliceBodyLines read outside its body, or a harness check failed:"
+    grep -E 'ERROR: AddressSanitizer|READ of size|runtime error' "$TMP/slicebody_run.log" | head -3 | sed 's/^/    /'
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"
