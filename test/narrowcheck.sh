@@ -135,7 +135,11 @@ rowsOf(){
 expectRows(){   # arm label, caller, method, the exact expected row set
     local got
     got="$( rowsOf "$2" "$3" )"
-    [ "$got" = "$4" ] && ok "$1 $2(): $3 -> [$got]" || no "$1 $2(): $3 -> [$got], want [$4]"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2(): $3 -> [$got]"
+    else
+        no "$1 $2(): $3 -> [$got], want [$4]"
+    fi
 }
 expectIncludes(){   # arm label, caller, method, a row the honest split must keep
     local got
@@ -231,7 +235,11 @@ case "$got" in
 esac
 # ── 18) control — the same call shape with an UNQUALIFIED `map&` narrows to lib/map.h exactly. ──────────────────
 got="$( visRows lookupSeen )"
-[ "$got" = "find@lib/map.h:1" ] && ok "(18) lookupSeen(): the included class narrows -> [$got]" || no "(18) lookupSeen(): -> [$got], want [find@lib/map.h:1]"
+if [ "$got" = "find@lib/map.h:1" ]; then
+    ok "(18) lookupSeen(): the unqualified map& narrows -> [$got]"
+else
+    no "(18) lookupSeen(): -> [$got], want [find@lib/map.h:1]"
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

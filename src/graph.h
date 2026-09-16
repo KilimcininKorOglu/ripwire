@@ -966,122 +966,6 @@ inline void keepOwnJvmLanguageCandidates( const IngestResult& ing, const Referen
 // (from,to) out-edge(s) are stamped prov="scip". Name-based call-sites elsewhere are untouched. Passing
 // nullptr (the default) yields byte-identical output to the pre-overlay build. Deterministic: the overlay
 // is sorted, so candidate order and thus edge order are unchanged.
-
-// ── P2-D Rule 2 PARAMETER receivers: the lexical declaration table (2026-09-16, test/narrowcheck.sh arms 7-18) ──
-// A ParamType record — a definition or lambda parameter, a typed range-for variable, a reference local — was read
-// by the field use-site index alone, so `int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` fell
-// through Rule 2 and the S6-C locality tie-break handed the site to Decoy::pick: one precise wrong edge, no amb=.
-// It cannot simply join the flat per-definition varType table: every one of those shapes is scoped narrower than
-// the definition or can be hidden by a nested redeclaration, and the naive fold was MEASURED to mint three precise
-// wrong edges on the gate fixture (arms 12-14: a range-for variable's type reaching a later `auto` loop of the same
-// name, a same-named field read after the loop, and a parameter hidden by an untyped loop variable). So for every
-// name with a ParamType record, this lists ALL its declarations in the definition — each VarDecl with its scope
-// span — and attaches each Type/ParamType record to the declaration whose VarDecl shares its record position;
-// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type only when the type
-// was written UNQUALIFIED — a written type is its final segment alone, and a parameter's is often a library container
-// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (measured: three such precise wrong edges on a
-// private C++ corpus, arm 17; the qualified text rides Binding::importedName). A typed record with no VarDecl at its
-// position (a shape the shadow capture refuses) types nothing: a lost narrow, never a wrong one. Names with no
-// ParamType record are absent and keep the flat varType answer, byte-identically. Deterministic: ing.bindings is
-// totally ordered, lists are appended in that order, and nothing iterates the map into output.
-inline void attachRecvDeclType( ScopedRecvDecl& decl, std::uint32_t bindIndex, const std::vector<Binding>& bindings ) noexcept
-{
-    if( decl.typeBinding == kRecvDeclUntyped )
-    {
-        decl.typeBinding = bindIndex;
-    }
-    else if( decl.typeBinding != kRecvDeclConflicted && bindings[ decl.typeBinding ].typeName != bindings[ bindIndex ].typeName )
-    {
-        decl.typeBinding = kRecvDeclConflicted;   // one declaration, two written types — trust neither
-    }
-}
-
-// a binding record the lexical table can key: attributed to a definition, naming a variable
-inline bool isScopedBindRecord( const Binding& b ) noexcept
-{
-    return b.fromSymbol != kNoNode && !b.var.empty();
-}
-
-// the names the table covers: every "<fromSymbol>#<var>" with a ParamType record
-inline void addParamTypedNames( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
-{
-    const auto isParamType = []( const Binding& b ) noexcept { return b.kind == LocalBindKind::ParamType && isScopedBindRecord( b ); };
-    table.byName.reserve( std::size_t( std::ranges::count_if( ing.bindings, isParamType ) ) );
-    for( const Binding& b : ing.bindings )
-    {
-        if( isParamType( b ) )
-        {
-            buildShadowKey( key, b.fromSymbol, b.var );
-            table.byName.try_emplace( key );
-        }
-    }
-}
-
-// every declaration of those names: the VarDecl records, in (file, byte) order — an exact repeat of the previous one
-// (the same declaration captured twice) is dropped, or it would tie with itself and refuse the site
-inline void addRecvDeclScopes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
-{
-    for( const Binding& b : ing.bindings )
-    {
-        if( b.kind != LocalBindKind::VarDecl || !isScopedBindRecord( b ) )
-        {
-            continue;
-        }
-        buildShadowKey( key, b.fromSymbol, b.var );
-        const auto it = table.byName.find( key );
-        if( it == table.byName.end() )
-        {
-            continue;
-        }
-        const ScopedRecvDecl decl{ b.startByte, b.spanStart, b.spanEnd, kRecvDeclUntyped };
-        const bool repeat = !it->second.empty() && it->second.back().declByte == decl.declByte && it->second.back().spanStart == decl.spanStart
-                         && it->second.back().spanEnd == decl.spanEnd;
-        if( !repeat )
-        {
-            it->second.push_back( decl );
-        }
-    }
-}
-
-// each written type onto the declaration that shares its record position
-inline void attachRecvDeclTypes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
-{
-    for( std::uint32_t bindIndex = 0; bindIndex < std::uint32_t( ing.bindings.size() ); ++bindIndex )
-    {
-        const Binding& b = ing.bindings[ bindIndex ];
-        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || !isScopedBindRecord( b ) || b.typeName.empty() )
-        {
-            continue;
-        }
-        buildShadowKey( key, b.fromSymbol, b.var );
-        const auto it = table.byName.find( key );
-        if( it == table.byName.end() )
-        {
-            continue;
-        }
-        for( ScopedRecvDecl& decl : it->second )
-        {
-            if( decl.declByte == b.startByte ) { attachRecvDeclType( decl, bindIndex, ing.bindings ); }
-        }
-    }
-}
-
-inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
-{
-    PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: Rule-2 lexical receiver declarations" );
-    VERIFY( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
-    ScopedRecvDecls table;
-    table.bindings = &ing.bindings;
-    std::string key;
-    addParamTypedNames( ing, table, key );
-    if( !table.byName.empty() )
-    {
-        addRecvDeclScopes( ing, table, key );
-        attachRecvDeclTypes( ing, table, key );
-    }
-    return table;
-}
-
 // ── L3 fn-pointer/callback binding tables (var→FUNCTION, Rule 2's exact discipline). Two scopes:
 //   varFn      "<fromSymbol>#var" → bound function name — LOCAL bindings (decls AND assignments inside one
 //              function). First binding wins; a DIFFERENT later target tombstones (value ""), so a var
@@ -2072,11 +1956,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const bool ffiActive = !pybindAlias.empty() || !externCAlias.empty();
 
-    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a
-    // `this->m()` / `self.m()` call to the caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call
-    // to the variable's type; Rule 3 pins a call to the ONE file the caller includes that defines it — all
-    // BEFORE the bare-name spray below. See resolve.h.
-    // Rule 2's lexical table for names with a ParamType declaration — built by buildScopedRecvDecls above.
+    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a `this->m()` / `self.m()` call to the
+    // caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call to the variable's type (a parameter's through resolve.h's lexical table);
+    // Rule 3 pins a call to the ONE file the caller includes that defines it — all BEFORE the bare-name spray below. See resolve.h.
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId );
     const ElixirResolver elixirResolver( ing );
