@@ -1565,7 +1565,7 @@ using rw::gitResolveCommitSha;
 
 // Run one short git query against `root` and return its whitespace-trimmed output (expected single-line), or
 // "" on any failure. The shared shape behind gitHeadSha / gitWindowRefSha — `tail` is everything after
-// `git -C <root>` INCLUDING redirects; callers must use git's own limiting flags so the command is portable.
+// `git -C <root>` INCLUDING redirects (so a caller can pipe, e.g. "rev-list HEAD 2>/dev/null | tail -1").
 inline std::string gitOneLine( const std::string& root, const std::string& tail )
 {
     return popenTrimmed( "git -c core.quotepath=false -C " + shSingleQuote( root ) + " " + tail );
@@ -1809,16 +1809,32 @@ inline std::string gitWindowRefSha( const std::string& root, std::uint32_t days 
         return preWindow;
     }
 
-    return gitOneLine( root, "rev-list --max-count=1 --reverse HEAD 2>/dev/null" );   // repo younger than the window → its first commit
+    return gitOneLine( root, "rev-list HEAD 2>/dev/null | tail -1" );   // repo younger than the window → its first commit
 }
 
 // Does `root` sit in a git repo that HAS at least one commit? A WINDOWLESS probe (no --since), so it is true
 // whenever history exists. This tells "git unavailable / not-a-repo / no-history" apart from "git fine, history
-// exists, but a --since window matched zero commits". Reuse gitOneLine so the Windows shell bridge and its
-// byte-safe pipe reader have one implementation.
+// exists, but a --since window matched zero commits". popen failure degrades to false.
 inline bool gitRepoHasHistory( const std::string& root )
 {
-    return !gitOneLine( root, "rev-parse --verify --quiet HEAD 2>/dev/null" ).empty();
+    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+                          + " rev-parse --verify --quiet HEAD 2>/dev/null";
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
+    if( !pipe )
+    {
+        return false;
+    }
+    char buf[ 128 ];
+    bool gotHead = false;
+    while( std::fgets( buf, sizeof( buf ), pipe ) )
+    {
+        if( buf[0] != '\n' && buf[0] != '\0' )
+        {
+            gotHead = true;
+        }
+    }
+    const int rc = os::pclose( pipe );
+    return rc == 0 && gotHead;
 }
 
 // A4-P1 — the HEAD-snapshot ingest cache. The HEAD tree is IMMUTABLE for a given HEAD sha, so its cold ingest
