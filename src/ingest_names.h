@@ -307,8 +307,8 @@ inline std::string_view cppScopeSegmentText( TSNode segment, std::string_view sr
 
 // A class's written `name:` read as a scope: `Slot<bool>` → "Slot", `Tree<T>::Leaf` → "Tree::Leaf". When no
 // link is a template_type the written text is returned as is, so every non-template name — `Outer::Inner`, a
-// Python class, a namespace — keeps exactly the bytes it had. Same hop cap (kMaxQualifierHops), and the same
-// reason it can only degrade precision, as innermostQualifiedName.
+// Python class, a namespace — keeps exactly the bytes it had, and a NULL `name` (an anonymous class) reads "".
+// Same hop cap (kMaxQualifierHops), and the same reason it can only degrade precision, as innermostQualifiedName.
 inline std::string cppScopeNameText( TSNode name, std::string_view src )
 {
     std::string stripped;
@@ -474,12 +474,8 @@ inline std::string enclosingScopeOf( TSNode node, std::string_view src )
                                 || kindIs( t, "namespace_definition" ) || kindIs( t, "class_definition" );
         if( scopeOwner )
         {
-            const TSNode nm = fieldChild( p, NodeField::Name );
-            if( ts_node_is_null( nm ) )
-            {
-                return {}; // anonymous → no usable scope
-            }
-            return cppScopeNameText( nm, src );   // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text
+            // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text; anonymous (no `name:`) → ""
+            return cppScopeNameText( fieldChild( p, NodeField::Name ), src );
         }
     }
     return {};
