@@ -15,6 +15,33 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
+
+The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
+`std::cerr` insertions. With stdio sync on, each insertion is its own write to stderr, so a line another thread
+wrote at the same moment could land inside a notice. kotlincheck §12 refuses two Kotlin files at once; when the
+second parse worker's refusal line landed straight after `[math degraded] `, the arm's one-line grep failed with
+"raised no DEGRADED_PATH_ALERT" although the alert was on stderr, whole, one line further down. That is the
+failure eight CI jobs hit since Kotlin landed, three of them on `main`. Measured on f8e6087c by running §12's map
+over its own fixture: 18 gate failures in 5,700 runs, and the notice torn in 32–73% of runs depending on load.
+Every reporter now formats its whole notice into a fixed 4,096-byte stack buffer and hands it to stderr in ONE
+stdio call, which no other stdio writer in the process can interleave, and which needs no heap in a reporter that
+may be running because memory ran out. The text is byte-identical for every notice under the cap; a longer one is
+cut and says so at its end (`... [notice truncated: kept K of N bytes]`). The reporters still flush stdout
+before the notice, as `std::cerr`'s tie to `std::cout` always did, so a trap or an abort right after it loses no
+buffered output and `>file 2>&1` keeps its order. Measured after the fix on §12's fixture, alternating
+run by run with the f8e6087c binary under four busy loops: 0 gate failures and 0 torn notices in 2,100 runs,
+against 6 failures and 726 torn notices from the old binary in the same 2,100 interleaved runs. The new gate
+`test/diagnoticecheck.sh` counts the write(2) calls each reporter makes by giving it a datagram socket as fd 2,
+which keeps write boundaries: red on the old reporters (9 writes for the degraded notice, 15 to 21 for the banners,
+every one still byte-exact), green at one write each. Three `2>&1` cases leave text in stdout's buffer before a
+degraded notice, an assert and a panic, and require it first and whole: byte-identical to the old reporters. It also carries a static arm with a mutation control, a
+12,000-notice race against raw and stdio writers (red in 200 of 200 runs on the old reporters), a zero-allocation
+arm (global `operator new`) measured with `src/alloccount.cpp` as a delta between otherwise identical runs, and an
+ASan/UBSan pass. kotlincheck §12 now prints the first five lines of stderr when that arm fails, because
+none of the eight CI logs could show what the notice had looked like. Not fixed here: the default map over the same
+fixture says `files=4` with no sign of the two refused files, a disclosure gap tracked by #157.
+
 ### Changed — Intel macOS binaries end with 0.6.1
 
 0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
