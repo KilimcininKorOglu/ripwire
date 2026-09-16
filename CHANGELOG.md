@@ -71,6 +71,30 @@ itself a failure. Every arm fires on a planted fixture and stays silent on a cle
 declaration parity, is present and turns itself on when the Windows branch declares its first function.
 `test/namedfileinputcheck.sh`'s mechanism arm reads the `os::open` spelling. CONTRIBUTING §3 states the rule.
 
+### Changed — Intel macOS binaries end with 0.6.1
+
+0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
+GitHub retired its `macos-13` runner pool, which left v0.1.0's leg and the first v0.2.0 run queued for 24 hours until
+the auto-cancel. From then on it cross-compiled on an arm64 runner with `-DCMAKE_OSX_ARCHITECTURES=x86_64` and ran its
+PGO training, its determinism diff and its smoke test under Rosetta 2, pinned to the one runner image whose Rosetta was
+verified to execute the binary's x86-64-v3 instructions. Every step that proved the binary ran did so under a
+translator. The leg is gone from `release.yml`, along with the deployment-target step and the `minos` check that only it
+used. The Linux x86-64 binary and its x86-64-v3 floor are unchanged, and an Intel Mac can still build from source.
+
+The installer was not told. Its arch map sends `x86_64` to `x64` on every OS, so an Intel Mac asking for a later release
+would have heard `release vX has no asset named ripwire-X-macos-x64.tar.gz`: true, and silent on both the decision and
+the two routes that still work. `scripts/install.sh` now stops an Intel Mac before any download for every release after
+0.6.1, says Intel macOS binaries end with 0.6.1, and prints the exact command that pins `RIPWIRE_VERSION=v0.6.1` and the
+exact source build. Pinning 0.6.1 still installs its Intel binary. A Rosetta shell on Apple silicon, which also reports
+`x86_64`, is sent to a native arm64 shell rather than told it owns an Intel Mac.
+
+Gate: `test/releaseinstallcheck.sh` section H, nine rows. Five were red on main: the unpinned one-liner on an Intel Mac
+(two rows), a v0.10.0 pin whose release still listed a `macos-x64` asset and installed it, the Rosetta shell, and
+`release.yml` still building the asset. The three installer controls (a v0.6.1 pin on an Intel Mac, Linux x86-64,
+macOS arm64 on a later release) each went red against a mutant installer that refused one release too many, or keyed on
+the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
+deployment target, retires with it.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

@@ -53,7 +53,8 @@ CORPUS="$ROOT"
 reuse=0
 
 cmake_extra=()   # --cmake-extra ARG (repeatable): appended to BOTH configures — the release
-                 # pipeline passes -DCMAKE_BUILD_TYPE=Release (and the cross leg its OSX arch)
+                 # pipeline passes -DCMAKE_BUILD_TYPE=Release (through 0.6.1 the macOS x64 cross leg also
+                 # passed its OSX arch)
 while [ $# -gt 0 ]; do
     case "$1" in
         --corpus)         CORPUS="${2:-}"; shift 2 ;;
