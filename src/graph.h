@@ -1350,32 +1350,30 @@ inline HashMap<std::string, rw::SmallVec<NodeId, 2>> buildJavaTypeMembers( const
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2e: Java Class::method members (issue #74)" );
     HashMap<std::string, rw::SmallVec<NodeId, 2>> members;
-    std::vector<NodeId> javaTypes;   // class-like Java defs, in id order
-    for( const Symbol& s : ing.symbols )
+    const auto isJavaType = []( const Symbol& s ) {
+        return s.lang == Lang::Java && ( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface );
+    };
+    if( std::ranges::none_of( ing.symbols, isJavaType ) )
     {
-        if( s.lang == Lang::Java
-            && ( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface ) )
-        {
-            javaTypes.push_back( s.id );
-        }
+        return members;   // a Java-free corpus builds no buckets at all
     }
-    if( javaTypes.empty() )
-    {
-        return members;
-    }
+    // class-like Java defs bucketed per file, id order kept (model.h symbolsByFileInIdOrder): a method scans only its
+    // own file's types. Scanning every Java type for every method was O(methods × types) (CodeRabbit on #281); the
+    // types a method could be inside were always its own file's, in the same order, so the innermost pick is unchanged.
+    const SymbolsByFile typesByFile = symbolsByFileInIdOrder( ing, isJavaType );
     std::string key;
     for( const Symbol& s : ing.symbols )
     {
         if( s.lang != Lang::Java || ( s.kind != SymKind::Method && s.kind != SymKind::Function )
-            || !isDefinitionNotDeclaration( s ) )
+            || !isDefinitionNotDeclaration( s ) || s.fileId >= typesByFile.size() )
         {
             continue;
         }
         const Symbol* innermost = nullptr;
-        for( NodeId tid : javaTypes )
+        for( NodeId tid : typesByFile[ s.fileId ] )
         {
             const Symbol& t = ing.symbols[ tid ];
-            if( t.fileId != s.fileId || s.sigStartByte < t.sigStartByte || s.endByte > t.endByte )
+            if( s.sigStartByte < t.sigStartByte || s.endByte > t.endByte )
             {
                 continue;
             }
