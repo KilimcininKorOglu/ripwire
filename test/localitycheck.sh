@@ -26,7 +26,9 @@
 # `btree_container::upper_bound`): 14 of 14 sampled pins wrong on rocksdb, 14 of 16 on a private C++ corpus. Such a
 # receiver now keeps the file and directory credit and loses the scope segments, so the call splits and says so.
 #   5  an untyped local receiver splits (RED on the unfixed binary: locality pin to Decoy::pick)
-#   6  a member receiver of a type Rule 2b cannot read (`std::unique_ptr<Target> rep_`) splits (RED: Wrapper::pick)
+#   6  a member receiver of a type Rule 2b cannot read (`ns::Handle<Target> rep_`) splits (RED: Wrapper::pick)
+#  6b  control — a `std::unique_ptr<Target>` member, which Rule 2b reads since test/fieldnarrowcheck.sh arm p, narrows
+#      `owned_->pick()` to Target::pick alone (receiver-rule). Arm 6 held that member until then, as the unreadable type.
 #   7  a TYPED receiver whose type defines no such method (`Shape& other`) splits (RED: Decoy::pick)
 #   8  control — the FILE credit stays: {the caller itself, Target::peek} still pins Target::peek by locality, with
 #      the disclosure (census mech=locality). Skipping the tie-break for these receivers moved no target on seven
@@ -117,9 +119,10 @@ struct Decoy
 };
 struct Wrapper
 {
-    std::unique_ptr<Target> rep_;
+    ns::Handle<Target> rep_; std::unique_ptr<Target> owned_;
     int pick( int n ) { return n; }
     int forward( int n ) { return rep_->pick( n ); }
+    int forwardOwned( int n ) { return owned_->pick( n ); }
 };
 EOF
 "$BIN" "$RFIX" --no-cache --pin-census="$TMP/recv.tsv" >/dev/null 2>&1
@@ -147,7 +150,7 @@ expectSite(){   # arm label, Class::caller, callee, the exact expected row set, 
 RMAP="$( "$BIN" "$RFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
 rmiss=0
 for want in 'n="pick" sc="Target"' 'n="peek" sc="Target"' 'n="pick" sc="Decoy"' 'n="peek" sc="Decoy"' 'n="pick" sc="Wrapper"' \
-            'n="untypedLocal" sc="Decoy"' 'n="typedNoMethod" sc="Decoy"' 'n="typedLocal" sc="Decoy"' 'n="forward" sc="Wrapper"'; do
+            'n="untypedLocal" sc="Decoy"' 'n="typedNoMethod" sc="Decoy"' 'n="typedLocal" sc="Decoy"' 'n="forward" sc="Wrapper"' 'n="forwardOwned" sc="Wrapper"'; do
     printf '%s\n' "$RMAP" | grep -qF "$want" || { no "presence guard: recvfix symbol $want not indexed"; rmiss=1; }
 done
 [ "$rmiss" = 0 ] && ok "presence: all recvfix symbols indexed"
@@ -156,6 +159,8 @@ done
 expectSite "(5)" Decoy::untypedLocal pick "pick@1 pick@15 pick@6" split
 # ── 6) delegation through a member whose type Rule 2b cannot read (the measured dominant shape).
 expectSite "(6)" Wrapper::forward pick "pick@1 pick@15 pick@6" split
+# ── 6b) control: the member Rule 2b CAN read — a std smart pointer's pointee through `->` — is a narrow, not a split.
+expectSite "(6b)" Wrapper::forwardOwned pick "pick@1" receiver-rule
 # ── 7) a TYPED receiver whose type defines no `pick`: Rule 2 declines, CHA-lite's cone keeps nothing and degrades.
 expectSite "(7)" Decoy::typedNoMethod pick "pick@1 pick@15 pick@6" split
 # ── 8) control — the FILE credit stays: the tier is {Decoy::peek itself, Target::peek}; the caller scores zero, so

@@ -925,7 +925,7 @@ for i in range(n):
         site32("def.ppAlt", 9 * 4); site32("def.params", 13 * 4)
         skip(14 * 4 + 5); site("def.kind"); site("def.lang"); s(); s(); skip(8)
     for _ in range(u32()):                                                # refs
-        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(9)
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(10)   # line, argCount, argCountKnown, viaArrow
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds

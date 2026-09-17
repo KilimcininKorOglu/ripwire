@@ -15,6 +15,37 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a member held by `std::unique_ptr` or `std::shared_ptr` had no type, so every call through it guessed
+
+The member-field capture that feeds Rule 2b read a qualified type only when a plain name sat directly under the `::`.
+In `std::unique_ptr<ToolOutputFile> OutputFile;` that name is a template, so the member recorded no type at all, and
+`OutputFile->keep()` took the bare-name ladder: a split over every `keep`, a locality pick, or no edge. A member written
+`std::unique_ptr<T>` or `std::shared_ptr<T>` now records T, marked as reachable through `->` only, and every C++ call
+reference records whether its member access was written `->`. Rule 2b narrows `p->m()` to T's `m` and leaves `p.m()`
+alone, because `.` names the smart pointer's own `reset` or `get`. The `->` requirement matters: without it, 9
+llvm-project sites (`MC.reset(…)`, `MII.get()`) bind the pointee's same-named method. A list of smart-pointer member
+names cannot stand in for the bit either, since it would also refuse 38 `->get()`/`->reset()` narrows the change makes.
+No other template is read through. `std::vector` has no `->`, and an in-repo `Holder<T>` may overload it onto anything.
+Two same-named classes whose same-named member is reached through `->` in one and as the member itself in the other now
+tombstone each other, as two different types already did. Recording every other `std::Tmpl<…>` member as a std type
+was measured and rejected: on both corpora it changed 6 sites, and all 6 got worse. `--uses=Owner.field` reads the
+same record, so `w_->level` pins to the pointee's `level` instead of every owner's.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 809 sites (448 gain an edge, 355 change target, 6 lose one; bound +442), and
+llvm-project @ 4d5358b1d retargets 793 (498 gained, 295 changed, 0 lost; bound +501). A seeded, blinded, stratified
+sample of 60 retargets graded against source came out 53 better, 4 same and 3 worse. The 3 worse sites are limits Rule 2b
+already had, now reached through a smart pointer: a pointee class name shared by nested classes (`Iterator`), and two
+overload picks that miss a default argument. The ref record grows by one byte, so kCacheVersion moves 22 → 23 and
+kParserVer 103 → 104.
+
+`test/fieldnarrowcheck.sh` arm p is the gate. p1–p4 (the narrow), p7 (`--uses`), all four p8 tombstones and p9 (the warm
+cache) are red on the previous commit. p5 (`w_.reset()`) is red on a build that ignores the `->` bit, the p6 in-repo
+template controls on a build that reads through any template, and a p8 row on a build without the new tombstone.
+`qschemetripcheck` is re-pinned for both versions, and `cachefuzzcheck`'s record walker learns the new byte.
+`localitycheck` arm 6 had used a `std::unique_ptr` member as its example of a type Rule 2b cannot read; it now holds a
+qualified non-std template, and new arm 6b asserts the smart-pointer member narrows (red on the previous commit).
+
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
 A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles

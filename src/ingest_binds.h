@@ -60,12 +60,14 @@ inline TSNode memberAccessField( TSNode access, Lang lang ) noexcept
 }
 
 // The classified receiver of one call site. `var` is set for NamedVar / FieldOfVar, `field` for
-// FieldOfThis / FieldOfVar; both "" for None / ThisObj.
+// FieldOfThis / FieldOfVar; both "" for None / ThisObj. `viaArrow`: the call's own member access was written
+// `->` (C++/ObjC) — set by receiverOf only, which is the one caller that holds that access.
 struct RecvShape
 {
     RecvKind    kind = RecvKind::None;
     std::string var;
     std::string field;
+    bool        viaArrow = false;
 };
 
 // One receiver NODE → its RecvShape. `allowChain` is the ONE-hop bound: true at the call's immediate
@@ -425,6 +427,8 @@ inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
         return {};
     }
     RecvShape rs = classifyReceiver( recvNode, lang, src, /*allowChain=*/ true );
+    // `p->m()` against `p.m()`: on a std smart pointer member only `->` reaches the pointee (Rule 2b, fieldnarrowcheck arm p)
+    rs.viaArrow  = ( lang == Lang::Cpp || lang == Lang::ObjC ) && nodeFieldText( parent, NodeField::Operator, src ) == "->";
     if( rs.kind == RecvKind::None )
     {
         // Phase 5 (docs/EVALS.md "Phase 5", kParserVer 77): a member access whose receiver is too rich to

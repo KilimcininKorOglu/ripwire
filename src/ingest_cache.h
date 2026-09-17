@@ -70,6 +70,8 @@ struct RawRef
     RecvKind      recv      = RecvKind::None;   // call-site receiver shape (P2-D narrowing)
     std::uint16_t argCount     = 0;             // B2.2: call-site positional arg count when countable; 0 otherwise
     bool          argCountKnown = false;        // B2.2: true ⇒ argCount is reliable (no spread/splat/apply)
+    bool          viaArrow  = false;   // a C++/ObjC call: the member access was written `->`. A compose ref: `name` is the POINTEE
+                                       //   of a std smart pointer member, which only `->` reaches (see Reference::viaArrow)
     std::string   name;
     std::string   qualifier;           // explicit scope at a call site (`A` in `A::b()`); C++; "" if bare/method
     std::string   recvVar;             // receiver variable when recv==NamedVar/FieldOfVar (`x` in `x->m()`); Rule 2 fuel
@@ -125,7 +127,16 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFromAssignment` (parser version 106, a u8 after
+constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaArrow` (parser version 113, a u8 after
+                                                      //    `argCountKnown` in the ref record, kMinRefRecordBytes 39 -> 40)
+                                                      //    — a call's member access was written `->`, and a compose
+                                                      //    ref's type is the pointee of a std smart pointer member
+                                                      //    (test/fieldnarrowcheck.sh arm p). A FORMAT change: v23 blobs
+                                                      //    end the ref record one byte early and would read the next
+                                                      //    record's start byte as the bit → reject them. PR #282
+                                                      //    declared 22 -> 23; integration/train-5 assigns 24 over
+                                                      //    #278's 23.
+                                                      // 23: RawBind gains `isFromAssignment` (parser version 106, a u8 after
                                                       //    `kind` in the bind record, 26 -> 27 bytes lean) — a C++
                                                       //    assignment's callee-read type is kept only when it names a
                                                       //    class (test/narrowcheck.sh arms 44-51). A FORMAT change: v22
@@ -238,7 +249,15 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 112;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 113;          // bump on any grammar/.scm/extraction change
+                                                      // 113 = 2026-09-17 (smart-pointer members, PR #282,
+                                                      //    test/fieldnarrowcheck.sh arm p): a C++ member written
+                                                      //    `std::unique_ptr<T>` / `std::shared_ptr<T>` records T with
+                                                      //    viaArrow set (it recorded nothing), and a call ref records
+                                                      //    whether its member access was `->`. The ref record grows by
+                                                      //    one u8 (kCacheVersion 23 -> 24 in the same commit). The PR
+                                                      //    declared 104 over main's 103; integration/train-5 assigns
+                                                      //    113 over main's 112.
                                                       // 112 = 2026-09-17 (type aliases, PR #280, test/fieldnarrowcheck.sh
                                                       //    arm t): a C/C++/ObjC `typedef` / `using` alias of a named class
                                                       //    emits a compose-shaped RawRef (composeRel "alias", empty
@@ -1825,7 +1844,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         }
     }
 }
-inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); }
+inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); }
 
 // loadCache's countFits() bounds a corrupt on-disk record COUNT against remaining bytes /
 // minRecordBytes BEFORE reserve() — the guard that keeps a hostile blob's 0xFFFFFFFF count from reaching
@@ -1839,13 +1858,14 @@ inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8
 // added one u8 in the run — 12 -> 13 u8, so 56 + 13 + 8 = 77; the extent-honesty `recovered` bit then added
 // one more u8 in the run — 13 -> 14 u8, so 56 + 14 + 8 = 78; the internal-linkage bit then added one more u8 in
 // the run — 14 -> 15 u8, so 56 + 15 + 8 = 79); the RICH (withLex) extra is
-// dlWeighted u32 + tokenCount u32 + tfWidth u8 = 9 bytes. A ref record is 3 u32 + 7 u8 + 5 empty
-// str(len u32) fields = 3*4 + 7*1 + 5*4 = 39 bytes. verifyCacheRecordMinimaTripwire() below derives these
+// dlWeighted u32 + tokenCount u32 + tfWidth u8 = 9 bytes. A ref record is 3 u32 + 8 u8 + 5 empty
+// str(len u32) fields = 3*4 + 8*1 + 5*4 = 40 bytes (39 until the `viaArrow` u8, kCacheVersion 23).
+// verifyCacheRecordMinimaTripwire() below derives these
 // same numbers from the REAL writer functions at runtime so the next field added to writeDef/writeRef
 // can't silently stale them.
 inline constexpr std::size_t kMinDefRecordBytesLean      = 79;   // 14×u32 + 15×u8 + 2×str(len u32, empty)
 inline constexpr std::size_t kMinDefRecordBytesRichExtra =  9;   // v10 rich withLex extra: dlWeighted u32 + tokenCount u32 + tfWidth u8
-inline constexpr std::size_t kMinRefRecordBytes          = 39;   // 3×u32 + 7×u8 + 5×str(len u32, empty)
+inline constexpr std::size_t kMinRefRecordBytes          = 40;   // 3×u32 + 8×u8 + 5×str(len u32, empty)
 
 inline std::size_t minDefRecordBytes( bool captureValueUses ) noexcept
 {
@@ -1953,7 +1973,7 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; return x; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; return x; }
 inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u8( b.isFromAssignment ? 1 : 0 ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
 inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.isFromAssignment = r.u8() != 0; b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }

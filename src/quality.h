@@ -1976,8 +1976,12 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 112;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 24;   // MUST equal ingest.cpp's kCacheVersion (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 113;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 113 = 2026-09-17 (smart-pointer members, PR #282): a std smart
+                                                          //    pointer member records its pointee, a call records `->`;
+                                                          //    the ref record grows a u8 (cache version 24 above).
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 112 = 2026-09-17 (type aliases, PR #280): a typedef / using alias
                                                           //    of a named class records its target for the base walk.
                                                           //    See ingest_cache.h's kParserVer note.

@@ -1205,8 +1205,8 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        // same class-name#field-name with different declared types → tombstone (resolve.h recordFlatRecvTypeFact)
-        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty() );
+        // same class-name#field-name with different declared types, or one reached through `->` alone (a smart pointer's pointee) → tombstone
+        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
     }
     t.localNameSet.reserve( ing.bindings.size() );
     t.localShadowSpans.reserve( ing.bindings.size() );
@@ -3534,9 +3534,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/7: HAS-A compose edges" );
     for( const Reference& r : ing.references )
     {
-        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) )
+        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) || r.viaArrow )
         {
-            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member
+            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member; a smart pointer's pointee is Rule 2b's alone
         }
         const auto it = byName.find( r.calleeName );
         if( it == byName.end() )
@@ -5116,6 +5116,8 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         key.clear();
         key.append( owner ).push_back( '#' );
         key.append( member );
+        // a smart-pointer pointee (arrowOnly) is taken whatever the access: a std smart pointer has no data members, so a member
+        // read through one is `->` by construction
         const auto it = narrow.fieldTypeByClass.find( key );
         return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second.type );
     };
