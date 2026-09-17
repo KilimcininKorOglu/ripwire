@@ -713,26 +713,27 @@ namespace mcpedit
         struct stat orig{};
         const bool  haveOrig = ( ::stat( path.c_str(), &orig ) == 0 );
 
-        const std::string tmp = path + "." + std::to_string( ::getpid() ) + ".tmp";
-        const int fd = ::open( tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
-        if( fd < 0 )
+        // The temp is created EXCLUSIVELY, without following a link, under an unpredictable name beside the
+        // target (rw::pathguard round 5): the create refuses an existing entry at the temp name, so this
+        // publish's write and fchmod land only on a file it just created. The RAII holder owns the temp — its
+        // destructor removes it on any early return below, so there is no manual unlink to forget — and
+        // commit() renames it into place. Same tmp+rename atomicity as before.
+        rw::pathguard::ExclTempFile temp = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0644 );
+        if( !temp.ok() )
         {
             return false;
         }
+        const int fd = temp.fd();
 
-        // write the full buffer (a short write is a failure); a partial-write loop handles a signal-truncated write.
-        bool        wErr = false;
-        std::size_t off  = 0;
-        while( off < bytes.size() )
+        // write the full buffer (a short write is a failure); the shared loop handles a signal-truncated write.
+        if( !temp.write( bytes ) )
         {
-            const ssize_t n = ::write( fd, bytes.data() + off, bytes.size() - off );
-            if( n <= 0 ) { wErr = true; break; }
-            off += (std::size_t)n;
+            return false;   // temp removed by the holder's destructor
         }
 
         // A3-F7: restore the original mode bits onto the temp before the rename (preserve +x etc.). A new file
         // (no original) keeps the umask default. fchmod failure is non-fatal — degrade to the default mode.
-        if( !wErr && haveOrig )
+        if( haveOrig )
         {
             if( ::fchmod( fd, orig.st_mode & 07777 ) != 0 )
             {
@@ -741,18 +742,12 @@ namespace mcpedit
         }
 
         // A3-F7: fsync the data to disk BEFORE the atomic rename so a crash can't leave a renamed-but-empty file.
-        if( !wErr && ::fsync( fd ) != 0 )
+        if( ::fsync( fd ) != 0 )
         {
             DEGRADED_PATH_ALERT( "atomicWrite: fsync failed; proceeding (bytes may not be durable across a crash)" );
         }
 
-        if( ::close( fd ) != 0 )
-        {
-            wErr = true;
-        }
-        if( wErr ) { ::unlink( tmp.c_str() ); return false; }
-        if( std::rename( tmp.c_str(), path.c_str() ) != 0 ) { ::unlink( tmp.c_str() ); return false; }
-        return true;
+        return temp.commit( path );   // closes the fd and renames; the destructor removes the temp on failure
     }
 
     struct EditTarget

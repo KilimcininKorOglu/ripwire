@@ -161,6 +161,13 @@ unfixed binaries the new arms gave 27 FAIL rows: 20 accepted mutants, the `clone
 `search.h:2174` stack-buffer-overflow, and the memo serving a different answer. Against the fixed build the whole
 gate is 161 PASS, 0 FAIL.
 
+### Fixed — git runs with the file-system monitor off, temp files are created exclusively, and edit-plan reads the path it confined
+
+- ripwire runs its git commands with `--no-optional-locks -c core.fsmonitor=false`; the one read of that setting
+  runs without them, since the flag would mask the value it reads.
+- the atomic-publish writers create their temp file exclusively and without following a symlink.
+- `--edit-plan` reads a payload through the same confined path its containment check judged.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
