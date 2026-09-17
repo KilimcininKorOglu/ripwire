@@ -170,6 +170,7 @@ inline const char* provLabel( std::uint8_t prov ) noexcept
         case 2u: return "binding";   // A4-R5 cross-language FFI alias
         case 3u: return "split";     // C1 one arm of a k-way split the resolver could not choose between
         case 4u: return "import";    // an ES named-import binding named the module and the export
+        case 5u: return "final-segment";   // narrowed by a QUALIFIED written receiver type's last name alone (resolve.h finalSegmentTypeAt)
     }
     return "";
 }
@@ -1806,7 +1807,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // by Rule 2, so a type that names no class (e.g. inferred from a non-constructor `auto x = makeT()`) simply
     // never produces a `type::method` hit and degrades to the name-based fallback — the safety net for constructor-inferred types.
     // Deterministic: ing.bindings is in (file, byte, var) order; first binding wins, a later conflict tombstones.
-    HashMap<std::string, std::string> varType;
+    HashMap<std::string, FlatRecvType> varType;
     varType.reserve( ing.bindings.size() );
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1g: varType binding table" );
@@ -1821,13 +1822,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 continue; // file-scope/empty → unusable
             }
-            buildShadowKey( key, b.fromSymbol, b.var );   // "<fromSymbol>#var"; a type written in `std` tombstones (resolve.h namesStdType)
-            const std::string_view type = namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName );
-            const auto [ it, inserted ] = varType.try_emplace( key, type );
-            if( !inserted && !it->second.empty() && it->second != type )
-            {
-                it->second.clear();   // conflicting types for one var in one scope → tombstone (never narrow this var)
-            }
+            buildShadowKey( key, b.fromSymbol, b.var );   // "<fromSymbol>#var"
+            recordFlatRecvType( varType, key, b );         // a conflicting or `std::` type tombstones (resolve.h)
         }
     }
 
@@ -2012,6 +2008,12 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // unmarked would let a NEW resolution mechanism inherit the
                                                  // confidence label of the old one, silently. Not reserved, for the
                                                  // reason spelled out for splitEdges below.
+    HashMap<std::uint64_t, char> finalSegmentEdges;   // (from<<32|to) keys of edges a receiver's QUALIFIED written type chose by
+                                                      // its last name alone (Rule 2, or CHA-lite pruning by that type) —
+                                                      // consumed below to stamp prov (outProv=5). The qualifier was never
+                                                      // checked against the class's namespace, so such an edge can be a
+                                                      // precise-looking WRONG one (test/narrowcheck.sh arm 24); an absent
+                                                      // prov= would call it uniquely resolved. Not reserved, like splitEdges.
     HashMap<std::uint64_t, char> splitEdges;     // C1: (from<<32|to) keys of edges that are an ARM of a k-way split the
                                                  // resolver could not choose between — the per-EDGE half of the per-SYMBOL
                                                  // ambOut counter, consumed below to stamp prov (outProv=3). ambOut says K
@@ -2909,6 +2911,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
         const float base = conf / float( nReal );              // split over real (non-self) targets
+        // the receiver's qualified written type decided this site by its last name — Rule 2 narrowed on it, or CHA-lite pruned
+        // by it — so every edge it commits is marked prov="final-segment" below (resolve.h Narrower::finalSegmentTypeAt)
+        const bool  finalSegmentType = ( receiverTypeNarrowed || censusCone ) && narrower.finalSegmentTypeAt( r );
         for( NodeId to : tier )
         {
             if( to == r.fromSymbol )
@@ -2930,6 +2935,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( jsImportPinned )
             {
                 importEdges[ekey] = 1;  // remember (from,to) for prov="import"
+            }
+            if( finalSegmentType )
+            {
+                finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
         }
         disposition = CallDisposition::Bound;
@@ -2983,10 +2992,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     //   1 = PRECISE (SCIP-pinned) → prov="scip";  2 = A4-R5 cross-language FFI binding → prov="binding";
     //   3 = C1 one arm of a k-way split the resolver could not choose between → prov="split";
     //   4 = an ES named-import binding named the module and the export → prov="import".
-    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() )
+    //   5 = a receiver's QUALIFIED written type chose this edge by its last name alone → prov="final-segment".
+    // The value per edge comes from resolve.h edgeProvenance, which owns the precedence between them.
+    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() || !finalSegmentEdges.empty() )
     {
         g.outProv.assign( edges.size(), 0u );
     }
+    const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges };
     {
         std::vector<std::uint32_t> cur( g.outOff.begin(), g.outOff.begin() + N );
         for( const E& e : edges )
@@ -2995,25 +3007,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             g.outTargets[ pos ] = e.to;
             g.outVals[ pos ]    = e.w;
             g.wOutDeg[ e.from ] += e.w;
-            if( scip && scip->isPrecise( e.from, e.to ) )
+            // one value per edge, by resolve.h edgeProvenance's fixed precedence: scip PINS an edge (precise), binding and
+            // import NAME the mechanism that resolved it, split says the resolver could not choose, final-segment says it
+            // chose by a qualified type's last name. A binding edge that is also a split keeps the more specific label;
+            // the symbol's amb= counts it either way, so nothing is lost by the ordering.
+            if( !g.outProv.empty() )
             {
-                g.outProv[pos] = 1u; // (from,to) pinned by SCIP
-            }
-            else if( !bindingEdges.empty() && bindingEdges.find( ( std::uint64_t( e.from ) << 32 ) | e.to ) != bindingEdges.end() )
-            {
-                g.outProv[ pos ] = 2u;                                             // (from,to) an FFI binding edge
-            }
-            // C1 precedence, and it is deliberate: scip PINS an edge (precise), binding NAMES the mechanism that
-            // resolved it (and already carries its own amb= mark), split says the resolver could not choose. A
-            // binding edge that is also a split keeps the more specific label; prov= is single-valued, and the
-            // symbol's amb= counts it either way, so nothing is lost by the ordering.
-            else if( !importEdges.empty() && importEdges.find( ( std::uint64_t( e.from ) << 32 ) | e.to ) != importEdges.end() )
-            {
-                g.outProv[ pos ] = 4u;                                             // (from,to) an ES named-import edge
-            }
-            else if( !splitEdges.empty() && splitEdges.find( ( std::uint64_t( e.from ) << 32 ) | e.to ) != splitEdges.end() )
-            {
-                g.outProv[ pos ] = 3u;                                             // (from,to) one arm of a k-way split
+                g.outProv[ pos ] = edgeProvenance( scip && scip->isPrecise( e.from, e.to ), provSets, ( std::uint64_t( e.from ) << 32 ) | e.to );
             }
         }
     }
