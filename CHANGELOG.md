@@ -15,37 +15,69 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — a class template's out-of-line member is the same symbol as its declaration (parser version 100)
+### Fixed — a class template's out-of-line member is the same symbol as its declaration, and a specialization stays its own (parser version 100)
 
 A C++ member defined out of line on a class template kept the template-argument list in its scope, so `template <class
 T> void Box<T>::grow() {}` produced a `sc="Box&lt;T&gt;"` row next to the in-class declaration's `sc="Box"`. One member
 was two identities. `--callers=Box::grow` resolved to the declaration and answered `count="0"` while `use( Box<int>& b
-) { b.grow(); }` sat three lines below, because its edge landed on the other row. `--impact` and `--uses` missed it the
-same way, and the S6-C locality tie-break compared `Box<T>::` with `Box::` segment by segment. An argument list broken
-over lines put the line break into the `--pin-census` id. A list that itself holds `::` was cut inside it: `template<>
-void Slot<std::string>::clear()` was scoped `string>`. The reference side had the twin defect at two segments.
-`Factory<int>::make()` qualified as `Factory<int>`, which names no symbol, so the call split onto an unrelated
-`Decoy::make` and published a caller for a function nobody called. (At three or more segments the qualified-call
-re-split already stripped the arguments.) A C++ scope that tree-sitter hands over as a `template_type` now keeps only
-the template's name. That covers the qualified declarator, the name of a class specialization, and a link of a
-qualified class name such as `struct Tree<T>::Leaf`. An explicit or partial specialization's member therefore keys the
-primary template's member: `template<> void Box<int>::grow()` is one more definition of `Box::grow`, joined the way an
-overload is. The resolver does no template-argument deduction, so no call site can reach a `Box<int>` identity.
-Measured with `--pin-census` on dgl (343 C, C++ and CUDA files, public, `f0b7cc9`), same corpus before and after:
-symbol ids with an argument list in their scope fell from 156 to 0, and 77 of 32,628 decided call sites changed. 48 of
-them now reach a different target, and one wrong split is gone (a dispatcher's call into its own next instantiation,
-now a self-call): a call from a specialization into its `_Sum<Idx, float, atomic>` base no longer pins the
-specialization's own `Call`, `CSRGEMM<DType>::compute` no longer splits onto `CSRGEAM`, and `Selector<LhsTarget>::Call`
-qualifies to `Selector::Call` instead of splitting over seven unrelated operators. 22 keep the same target id but now
-split, because a primary template and its specialization both define that member (`Map::assign` and `Map<std::string,
-V, T1, T2>::assign`): the cost of the join, disclosed as `amb=`. The remaining 6 change only their mechanism label. The
-map header moved from edges 20,829 / ambiguous 1,891 to 20,745 / 1,899. On this repository 4 symbols move (the
-`node_rank` specializations in `src/infra/dynamic_map.hpp`) and no call edge changes. An ack or saved baseline keyed on
-a template member's old spelling re-keys once. Gated by `test/cpptmplscopecheck.sh` (36 checks; 27 fail on the previous
-binary). It compares a line-aligned template and non-template twin byte for byte across the map, `--callers`,
-`--impact`, `--uses` and the census. It also covers a multi-line argument list, namespace chains, a template inside a
-template, all three specialization forms and the two-segment decoy call. `test/stdqualcheck.sh`'s specialization pin
-moves from `hash<Mine>` to `hash`.
+) { b.grow(); }` sat three lines below, and `--impact`, `--uses` and the S6-C locality tie-break missed it the same
+way. An argument list broken over lines put the line break into the `--pin-census` id, and a list that itself holds
+`::` was cut inside it: `template<> void Slot<std::string>::clear()` was scoped `string>`. On the reference side,
+`Factory<int>::make()` qualified as `Factory<int>`, which keyed nothing, so the call split onto an unrelated
+`Decoy::make`.
+
+Scopes now follow what the declaration is. A primary template's out-of-line member keys the bare template name: its
+template-id names exactly the parameters its own `template <…>` introduces, as in `template <class T, int N> void
+Box<T, N>::grow()`. An explicit or partial specialization keeps its template-id, spelled canonically: whitespace and
+comments are dropped except between two identifier characters, and a comma is followed by one space, so `Traits< int >`
+and a list broken over lines key the same identity as `Traits<int>`. A call keeps the template-id it writes.
+`Traits<int>::encode( 1 )` resolves precisely to the int specialization, including from a 3-segment spelling. When no
+definition is keyed by the written id, the resolver takes the template's family (the primary and every specialization
+of that name) instead of the bare-name spray, so an unrelated same-named definition never shares the split. The first
+version of this fix joined every specialization to the primary. An independent review measured that on llvm: precise
+edges became splits, and a delegation between two specializations vanished (`DenseMapInfo<APSInt>::getHashValue`
+calling `DenseMapInfo<APInt, void>::getHashValue`, APSInt.h:371), so the two halves were split apart. The locality
+tie-break also now prefers a candidate declared in the caller's own scope over one nested inside it, for a bare or
+`this->` call only. Both ids share the caller's `Outer::` segment, so segment counting tied `Outer::start` with
+`Outer::Inner::start`. On main a non-template nested class already split there, and the template form pinned the nested
+class's member.
+
+Measured with `--pin-census --no-cache`, the same frozen corpus through main (`31e788ce`) and this change, sites joined
+on (caller file, callee, line). On llvm `ADT` + `Support` + `lib/Support` (590 files, 37,055 calls), edges moved from
+45,768 to 44,935 and ambiguous from 7,247 to 7,230, and `--callers=lib/Support/APInt.cpp:getHashValue` answers 5, as on
+main.
+
+Wins: 44 splits became precise, 54 call sites that had no edge gained a precise one, and 12 external sites resolved
+in-repo. Of the 58 sites main resolved precisely and the first version split, 44 are precise again, each to main's
+target.
+
+Costs and differences, reported apart:
+
+- 14 of those 58 sites still split. In 10 of them main had pinned the wrong class: the caller's own
+  `SmallString::assign` for `SmallVectorImpl<char>::assign`, an iterator's own `end`/`find` for a `DenseMap` field's,
+  the caller's own `isEqual` for `ImutContainerInfo<S>::isEqual`, and 3 of 4 `IntervalMap` iterator calls. One correct
+  pin (`RHS.branched()`) is now a 2-way split that contains it. The last 3 are `DominatorTreeBase::dominates` overloads
+  that are now one identity.
+- One site lost its edge: `simple_ilist::sort`, whose body had been "calling" its own declaration's identity.
+- 47 sites gained a split where main had none, 9 external sites became splits, and 6 sites became external.
+
+On dgl (`f0b7cc9`, 343 C, C++ and CUDA files; main at `b1489df4`, whose resolver is identical), edges moved from 20,829
+to 20,730 and ambiguous from 1,891 to 1,882, with 11 splits made precise and 3 precise sites split. Those 3 are calls
+through a dependent template-id (`DGLValueCast<T, TSrc>::Apply`, `typed_packed_call_dispatcher<R>::run`), where main
+had pinned the primary. On this repository nothing changes. An ack or saved baseline keyed on a primary template
+member's old `Box<T>` spelling re-keys once.
+
+Gated by `test/cpptmplscopecheck.sh`, 55 checks; main fails 38 and the first version fails 17. The gate covers:
+
+- a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact`, `--uses`
+  and the census;
+- the multi-line, namespaced, nested and member-template primary forms;
+- all three specialization forms;
+- the review's own `Traits` probe verbatim;
+- an APSInt-shaped cross-file delegation;
+- a partial specialization's own-class call;
+- the two-segment decoy;
+- the nested-class tie, in both twins.
 
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 

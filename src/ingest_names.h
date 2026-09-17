@@ -269,82 +269,307 @@ inline DefNameFacts cppDefNameReseat( bool applies, TSNode nameNode, std::string
     return { inner, src.substr( a, b - a ), a, ts_node_start_point( inner ).row };
 }
 
-// ── C++ scopes carry no template-argument list ──────────────────────────────────────────────────────────────
-// A scope is half of an IDENTITY — the map's sc=, the canonical `path::scope::name` id the S6-C locality
-// tie-break and the census key on, the `A::b` a selector names — so it must be what a caller writes before `::`,
-// never the argument list a class template's member repeats. tree-sitter-cpp hands such a scope over as a
-// `template_type` (`name:` type_identifier + `arguments:` template_argument_list) in three places: the `scope:`
-// of a qualified declarator (`void Box<T>::grow()`), the `name:` of a class specialization (`struct Slot<bool>
-// { … }`), and a link of a qualified class name (`struct Tree<T>::Leaf { … }`). Reading those nodes' TEXT kept
-// the list, so one member keyed two identities: the in-class declaration `Box::grow`, the out-of-line body
-// `Box<T>::grow`, and --callers=Box::grow resolved to the declaration and answered 0. A list broken over lines
-// put the line break into the id, and `Slot<std::string>` — whose `::` sits INSIDE the list — was cut by
-// immediateScope to `string>`. Reading the `name:` child is structural, so no bracket counting is involved and
-// nothing inside the list (a `>` in a parenthesised argument, a comment, a line break) can unbalance it.
+// ── C++ template scopes: the primary's member keys the template name, a specialization keeps its id ──────────
+// A scope is half of an IDENTITY — the map's sc=, the canonical `path::scope::name` id the S6-C locality tie-break
+// and the census key on, the `A::b` a selector names. tree-sitter-cpp hands a template scope over as a
+// `template_type` (`name:` + `arguments:`) in three places: the `scope:` of a qualified declarator (`void
+// Box<T>::grow()`), the `name:` of a class specialization (`struct Slot<bool> { … }`), and a link of a qualified
+// class name (`struct Tree<T>::Leaf { … }`). Reading those nodes' raw TEXT made one member two identities — the
+// in-class declaration `Box::grow` and the out-of-line body `Box<T>::grow` — so --callers=Box::grow resolved to the
+// declaration and answered 0; a list broken over lines put the line break into the id; and `Slot<std::string>`,
+// whose `::` sits INSIDE the list, was cut by immediateScope to `string>`.
 //
-// A specialization therefore keys the PRIMARY template's member: `template<> void Box<int>::grow()` is one more
-// definition of Box::grow, joined the way an overload is. The resolver does no template-argument deduction, so no
-// call site can reach a `Box<int>` identity; test/cpptmplscopecheck.sh's header carries the full argument.
+// Two identities are genuinely different, and the reading keeps them apart (test/cpptmplscopecheck.sh):
+//   * the PRIMARY template's own member — its declarator's template-id names exactly the parameters its own
+//     `template <…>` introduces, `template <class T, int N> void Box<T, N>::grow()` — keys the bare name `Box`;
+//   * a SPECIALIZATION (explicit or partial, a whole class or one member) keeps its template-id, spelled canonically
+//     (canonicalTemplateIdText), because a call spelled `Traits<int>::encode( 1 )` names exactly that body and a
+//     delegation from one specialization into another (`DenseMapInfo<APInt>::getHashValue` inside
+//     `DenseMapInfo<APSInt>`) is a call to a different body. Joining them to the primary was measured on llvm ADT +
+//     Support: 58 precise edges became splits and that delegation vanished.
+// A REFERENCE keeps the template-id it writes; the resolver retries the template's family when no definition is keyed
+// by it (resolve.h appendCanonicalCandidates).
 
 inline bool isCppTemplateType( TSNode n ) noexcept
 {
     return !ts_node_is_null( n ) && kindIs( ts_node_type( n ), "template_type" );
 }
 
-// One scope segment's text: a template_type's `name:` child, any other node's own text.
-inline std::string_view cppScopeSegmentText( TSNode segment, std::string_view src ) noexcept
+// Index just past a `//` or `/* */` comment starting at `i`, or `i` itself when none starts there. An unclosed comment
+// runs to the end of `text`.
+inline std::size_t cppCommentEnd( std::string_view text, std::size_t i ) noexcept
 {
-    if( isCppTemplateType( segment ) )
+    if( text[i] != '/' || i + 1 >= text.size() || ( text[i + 1] != '/' && text[i + 1] != '*' ) )
     {
-        const TSNode name = fieldChild( segment, NodeField::Name );
-        if( !ts_node_is_null( name ) )
+        return i;
+    }
+    const bool        lineComment = text[i + 1] == '/';
+    const std::size_t close       = text.find( lineComment ? std::string_view( "\n" ) : std::string_view( "*/" ), i + 2 );
+    return close == std::string_view::npos ? text.size() : close + ( lineComment ? 1 : 2 );
+}
+
+// One spelling for a template-id, so a definition and a call written differently still key one identity: whitespace
+// and comments are dropped except for a single space between two identifier characters (`unsigned int`), and a comma
+// is followed by one space. `Traits< int >` → "Traits<int>"; `Map<std::string,\n V>` → "Map<std::string, V>".
+inline std::string canonicalTemplateIdText( std::string_view text )
+{
+    std::string canonical;
+    canonical.reserve( text.size() );
+    bool        separated = false;   // whitespace or a comment since the last kept character
+    std::size_t i         = 0;
+    while( i < text.size() )
+    {
+        const char        c         = text[i];
+        const std::size_t afterSkip = std::isspace( static_cast<unsigned char>( c ) ) ? i + 1 : cppCommentEnd( text, i );
+        if( afterSkip != i )
         {
-            return nodeTextOf( name, src );
+            separated = true;
+            i         = afterSkip;
+            continue;
+        }
+        if( separated && !canonical.empty() && namesplit::isIdentChar( canonical.back() ) && namesplit::isIdentChar( c ) )
+        {
+            canonical.push_back( ' ' );
+        }
+        separated = false;
+        canonical.push_back( c );
+        if( c == ',' )
+        {
+            canonical.push_back( ' ' );
+        }
+        ++i;
+    }
+    return canonical;
+}
+
+// Where a template parameter's top-level default begins (its `=`), or `text.size()` when it has none. Angle,
+// parenthesis, bracket and brace depth is tracked so `template <class U = int> class C` keeps its inner `=`.
+inline std::size_t templateParameterDefaultStart( std::string_view text ) noexcept
+{
+    std::size_t depth = 0;
+    for( std::size_t i = 0; i < text.size(); ++i )
+    {
+        const char c = text[i];
+        if( c == '=' && depth == 0 )
+        {
+            return i;
+        }
+        const bool opens  = c == '<' || c == '(' || c == '[' || c == '{';
+        const bool closes = c == '>' || c == ')' || c == ']' || c == '}';
+        depth = opens ? depth + 1 : ( closes && depth > 0 ? depth - 1 : depth );
+    }
+    return text.size();
+}
+
+// The last identifier in `text`, or an empty view when it holds none.
+inline std::string_view lastIdentifierIn( std::string_view text ) noexcept
+{
+    std::string_view last;
+    std::size_t      i = 0;
+    while( i < text.size() )
+    {
+        std::size_t runEnd = i;
+        while( runEnd < text.size() && namesplit::isIdentChar( text[runEnd] ) )
+        {
+            ++runEnd;
+        }
+        if( runEnd > i && namesplit::isIdentStart( text[i] ) )
+        {
+            last = text.substr( i, runEnd - i );
+        }
+        i = runEnd > i ? runEnd : i + 1;
+    }
+    return last;
+}
+
+// The name one template parameter declares, read off its text: the last identifier before its top-level default `=`,
+// with `...` appended for a pack — `class T` → "T", `int N = 4` → "N", `class... Ts` → "Ts...", `template <class U =
+// int> class C` → "C". An unnamed parameter yields its keyword (`class`), which no template argument can equal.
+inline std::string cppTemplateParameterName( std::string_view text )
+{
+    const std::string_view declared = text.substr( 0, templateParameterDefaultStart( text ) );
+    std::string            name { lastIdentifierIn( declared ) };
+    if( declared.find( "..." ) != std::string_view::npos )
+    {
+        name.append( "..." );
+    }
+    return name;
+}
+
+// True when `templateType`'s argument list names exactly the parameters `parameterList` declares, in order: the
+// template-id a primary template's out-of-line member writes (`Box<T, N>` under `template <class T, int N>`).
+inline bool templateIdNamesItsParameters( TSNode templateType, TSNode parameterList, std::string_view src )
+{
+    const TSNode arguments = fieldChild( templateType, NodeField::Arguments );
+    if( ts_node_is_null( arguments ) || ts_node_is_null( parameterList ) )
+    {
+        return false;
+    }
+    const auto nextNamed = []( TSNode list, std::uint32_t index ) noexcept
+    {
+        const std::uint32_t count = ts_node_named_child_count( list );
+        while( index < count && kindIs( ts_node_type( ts_node_named_child( list, index ) ), "comment" ) )
+        {
+            ++index;
+        }
+        return index;
+    };
+    const std::uint32_t argumentCount  = ts_node_named_child_count( arguments );
+    const std::uint32_t parameterCount = ts_node_named_child_count( parameterList );
+    std::uint32_t       a              = nextNamed( arguments, 0 );
+    std::uint32_t       p              = nextNamed( parameterList, 0 );
+    for( ; a < argumentCount && p < parameterCount; a = nextNamed( arguments, a + 1 ), p = nextNamed( parameterList, p + 1 ) )
+    {
+        const std::string argument = canonicalTemplateIdText( nodeTextOf( ts_node_named_child( arguments, a ), src ) );
+        if( argument != cppTemplateParameterName( nodeTextOf( ts_node_named_child( parameterList, p ), src ) ) )
+        {
+            return false;
         }
     }
-    return nodeTextOf( segment, src );
+    return a >= argumentCount && p >= parameterCount && parameterCount > 0;
 }
 
-// A class's written `name:` read as a scope: `Slot<bool>` → "Slot", `Tree<T>::Leaf` → "Tree::Leaf". When no
-// link is a template_type the written text is returned as is, so every non-template name — `Outer::Inner`, a
-// Python class, a namespace — keeps exactly the bytes it had, and a NULL `name` (an anonymous class) reads "".
-// Same hop cap (kMaxQualifierHops), and the same reason it can only degrade precision, as innermostQualifiedName.
+// The `template <…>` parameter lists that introduce the declaration `node` belongs to, INNERMOST first: the run of
+// template_declaration ancestors directly above it. The walk passes through declarator and declaration wrappers and
+// stops at the first body or namespace boundary, so nothing inside a function or class body reaches an enclosing
+// template's list. On the way up it also counts the template-id `scope:` links of the qualified_identifier chain
+// ABOVE `node` — the pairing index of `node`'s own scope. Stores at most kMaxQualifierHops lists — the chain cap, and
+// past it only precision degrades.
+struct TemplateParameterLists
+{
+    std::array<TSNode, static_cast<std::size_t>( kMaxQualifierHops )> innerFirst {};
+    std::size_t                                                         count              = 0;
+    std::size_t                                                         templateLinksAbove = 0;
+};
+inline TemplateParameterLists templateParameterListsAbove( TSNode node ) noexcept
+{
+    TemplateParameterLists lists;
+    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        const char* t = ts_node_type( p );
+        if( kindIs( t, "qualified_identifier" ) )
+        {
+            lists.templateLinksAbove += isCppTemplateType( fieldChild( p, NodeField::Scope ) ) ? 1u : 0u;
+            continue;
+        }
+        if( kindIs( t, "template_declaration" ) )
+        {
+            if( lists.count < lists.innerFirst.size() )
+            {
+                lists.innerFirst[ lists.count++ ] = fieldChild( p, NodeField::Parameters );
+            }
+            continue;
+        }
+        const bool boundary = kindIs( t, "compound_statement" ) || kindIs( t, "field_declaration_list" ) || kindIs( t, "declaration_list" )
+                           || kindIs( t, "translation_unit" );
+        if( lists.count > 0 || boundary )
+        {
+            break;
+        }
+    }
+    return lists;
+}
+
+// How many `scope:` links of the qualified class name `name` are template-ids.
+inline std::size_t templateScopeLinksIn( TSNode name ) noexcept
+{
+    std::size_t count = 0;
+    for( int hop = 0; hop < kMaxQualifierHops && !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "qualified_identifier" ); ++hop )
+    {
+        count += isCppTemplateType( fieldChild( name, NodeField::Scope ) ) ? 1u : 0u;
+        name   = fieldChild( name, NodeField::Name );
+    }
+    return count;
+}
+
+// The scope text a DECLARATION's template-id link contributes: the bare template name when it is the primary's own
+// id, its canonical template-id otherwise. The link is paired with the `template <…>` list that introduces it:
+// outermost first when there are at least as many lists as template-id links (a member function template's own list
+// is the extra, innermost one: `template <class T> template <class U> void Box<T>::convert( U )`), innermost first
+// when there are fewer (the outer links then belong to an explicit specialization, which has no list of its own).
+inline std::string cppDeclaratorLinkText( TSNode link, std::size_t linkIndex, std::size_t linkCount, const TemplateParameterLists& lists,
+                                          std::string_view src )
+{
+    const std::size_t fromInner = lists.count >= linkCount ? lists.count - 1 - linkIndex : linkCount - 1 - linkIndex;
+    if( fromInner < lists.count && templateIdNamesItsParameters( link, lists.innerFirst[ fromInner ], src ) )
+    {
+        return std::string( nodeFieldText( link, NodeField::Name, src ) );
+    }
+    return canonicalTemplateIdText( nodeTextOf( link, src ) );
+}
+
+// A class's written `name:` read as a scope. `struct Slot<bool>` is a specialization → "Slot<bool>";
+// `template <class T> struct Tree<T>::Leaf` → "Tree::Leaf". A name with no template-id keeps its written text byte for
+// byte — `Outer::Inner`, a Python class, a namespace — and a NULL `name` (an anonymous class) reads "".
 inline std::string cppScopeNameText( TSNode name, std::string_view src )
 {
-    std::string stripped;
-    bool        hasTemplateLink = isCppTemplateType( name );
-    TSNode      link            = name;
+    const std::string_view written = nodeTextOf( name, src );
+    if( isCppTemplateType( name ) )
+    {
+        return canonicalTemplateIdText( written );
+    }
+    if( written.find( '<' ) == std::string_view::npos || !kindIs( ts_node_type( name ), "qualified_identifier" ) )
+    {
+        return std::string( written );
+    }
+    const std::size_t            linkCount = templateScopeLinksIn( name );
+    const TemplateParameterLists lists     = templateParameterListsAbove( name );
+    std::string                  scope;
+    std::size_t                  linkIndex = 0;
+    TSNode                       link      = name;
     for( int hop = 0; hop < kMaxQualifierHops && !ts_node_is_null( link ) && kindIs( ts_node_type( link ), "qualified_identifier" ); ++hop )
     {
-        const TSNode scope = fieldChild( link, NodeField::Scope );             // null for a leading `::`
-        stripped.append( cppScopeSegmentText( scope, src ) ).append( "::" );
-        link            = fieldChild( link, NodeField::Name );
-        hasTemplateLink = hasTemplateLink || isCppTemplateType( scope ) || isCppTemplateType( link );
+        const TSNode segment = fieldChild( link, NodeField::Scope );             // null for a leading `::`
+        scope.append( isCppTemplateType( segment ) ? cppDeclaratorLinkText( segment, linkIndex++, linkCount, lists, src )
+                                                   : std::string( nodeTextOf( segment, src ) ) ).append( "::" );
+        link = fieldChild( link, NodeField::Name );
     }
-    if( !hasTemplateLink )
-    {
-        return std::string( nodeTextOf( name, src ) );
-    }
-    return stripped.append( cppScopeSegmentText( link, src ) );
+    return scope.append( canonicalTemplateIdText( nodeTextOf( link, src ) ) );
 }
 
-inline std::string qualifierOf( TSNode nameNode, std::string_view src )
+// The scope that qualifies `nameNode` — "" when it is unqualified, or qualified only by a separator error recovery
+// invented (hasPhantomScopeSeparator). A plain scope reads its immediate segment (`a::B::c` → "B"). A template-id
+// scope depends on who asks: a REFERENCE keeps the id it wrote, canonically (`Traits<int>::encode()` → "Traits<int>",
+// never cut inside the list); a DEFINITION keys the bare name when the id is its primary template's own (`template
+// <class T> void Box<T>::grow()` → "Box") and the canonical id otherwise (`template <> … Traits<long>::encode` →
+// "Traits<long>"). An out-of-range span reads "", as before.
+inline std::string cppQualifierText( TSNode nameNode, std::string_view src, bool isDefinition )
 {
     const TSNode parent = ts_node_parent( nameNode );
-    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "qualified_identifier" ) )
+    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "qualified_identifier" ) || hasPhantomScopeSeparator( parent ) )
     {
         return {};
     }
-    if( hasPhantomScopeSeparator( parent ) )
+    const TSNode scope = fieldChild( parent, NodeField::Scope );   // null for a leading `::`
+    if( !isCppTemplateType( scope ) )
     {
-        return {}; // error-recovery artefact, not a written qualification
+        return immediateScope( nodeTextOf( scope, src ) );
     }
-    const TSNode scope = fieldChild( parent, NodeField::Scope );
-    if( ts_node_is_null( scope ) )
+    if( !isDefinition )
     {
-        return {};
+        return canonicalTemplateIdText( nodeTextOf( scope, src ) );
     }
-    return immediateScope( cppScopeSegmentText( scope, src ) );   // `Box<T>::grow` → "Box" (an out-of-range span reads "", as before)
+    const TemplateParameterLists lists = templateParameterListsAbove( parent );   // `nameNode` is the chain's last link
+    return cppDeclaratorLinkText( scope, lists.templateLinksAbove, lists.templateLinksAbove + 1, lists, src );
+}
+inline std::string qualifierOf( TSNode nameNode, std::string_view src )
+{
+    return cppQualifierText( nameNode, src, /*isDefinition=*/false );
+}
+inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src )
+{
+    return cppQualifierText( nameNode, src, /*isDefinition=*/true );
+}
+
+// The qualifier the 3+-segment re-split keys a REFERENCE on, from the scope half of its captured text: the last
+// top-level segment, a template-id kept whole and canonical (`numeric_limits<std::size_t>` stays itself; the resolver
+// falls back to the family when nothing is keyed by it). PRECONDITION: `scopeText` holds no operator tail — it is the
+// part BEFORE the name's separator, and an operator never names a scope.
+inline std::string cppRefQualifierText( std::string_view scopeText )
+{
+    const std::size_t      sep  = lastTopLevelScopeSep( scopeText );
+    const std::string_view last = sep == std::string_view::npos ? scopeText : scopeText.substr( sep + 2 );
+    return last.ends_with( '>' ) ? canonicalTemplateIdText( last ) : immediateScope( last );
 }
 // ── H4 RUST qualified-call helpers (W1-MEASURE verdict) ─────────────────────────────────────────────────
 // W1 measured that the Rust PATTERN ALONE under-delivers: Rust defs carried scope="" (canonByName was fed

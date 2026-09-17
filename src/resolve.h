@@ -48,6 +48,7 @@
 #include "model.h"
 #include "arch.h"        // §B1.3: relForHash — the root-relative path segment canonicalIdRelTo keys on
 #include "smallvec.h"
+#include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey)
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
@@ -2053,6 +2054,85 @@ inline std::size_t sharedLocality( std::string_view a, std::string_view b ) noex
         cut = i;
     }
     return cut;
+}
+
+// S6-C's ranking key for one candidate: sharedLocality doubled, plus one when a BARE or `this->` call's candidate is
+// declared in the caller's OWN scope rather than in a scope nested inside it. Both share the caller's whole
+// `path::Scope::` prefix, so counting segments ties `Outer::start` with `Outer::Inner::start` for a `start()` written in
+// `Outer::operator=`; but a nested class's non-static member needs an object, so the bare call names Outer's. The
+// bonus never separates candidates the segment count already ranks, never applies to an explicit receiver (whose
+// type, not the enclosing scope, decides), and never fires when either id's NAME holds `::` (a conversion operator's
+// type) — that case keeps the plain tie. test/cpptmplscopecheck.sh §6.
+inline std::size_t localityRank( std::string_view caller, std::string_view cand, bool lexicalCall ) noexcept
+{
+    const std::size_t shared   = sharedLocality( caller, cand );
+    const std::size_t scopeEnd = caller.rfind( "::" );
+    const bool        ownScope = lexicalCall && scopeEnd != std::string_view::npos && shared == scopeEnd + 2
+                              && cand.find( "::", shared ) == std::string_view::npos;
+    return 2 * shared + ( ownScope ? 1u : 0u );
+}
+
+// The FAMILY key of a C++ template-id scope: `Traits<int>` + `encode` → "Traits::encode" written into `key`, true;
+// false with `key` untouched for a scope that is not a template-id. Ingest keys a primary template's out-of-line
+// member by the bare template name and a specialization by its canonical template-id (ingest_names.h), so the family
+// of `Traits::encode` is the defs keyed by it plus every specialization def whose own family key it is.
+inline bool appendTemplateFamilyKey( std::string& key, std::string_view scope, std::string_view name )
+{
+    if( scope.empty() || scope.back() != '>' )
+    {
+        return false;
+    }
+    const std::string_view family = namesplit::stripTemplateArgs( scope );
+    if( family.empty() || family.size() == scope.size() )
+    {
+        return false;
+    }
+    key.clear();
+    key.append( family ).append( "::" ).append( name );
+    return true;
+}
+
+// buildGraph's two canonical indexes: every scoped definition under "scope::name", and each C++ specialization's
+// definition again under its template's family key (appendTemplateFamilyKey).
+struct CanonicalScopes
+{
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byScope;
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byFamily;
+};
+
+// E#4's canonical tier: the defs keyed `qualifier::name` that `admit` (the caller's language/root filter) accepts,
+// appended to `cand`. When a C++ template-id qualifier keys none — `Traits<double>::encode` with no double
+// specialization, `Factory<int>::make` on a primary alone — the template's FAMILY answers instead: its primary's
+// `T::name` defs, then every specialization's. A call through a template-id names that template, so a same-named def
+// in an unrelated scope is never its candidate; which instantiation it reaches is not decidable from the text, so a
+// family of more than one is an honest split. `key` is the caller's reused buffer.
+template< class Admit >
+inline void appendCanonicalCandidates( std::vector<NodeId>& cand, std::string& key, const Reference& r, const CanonicalScopes& scopes, Admit&& admit )
+{
+    const std::size_t before      = cand.size();
+    const auto        appendKeyed = [ & ]( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& keyed )
+    {
+        const auto it = keyed.find( key );
+        if( it == keyed.end() )
+        {
+            return;
+        }
+        for( NodeId c : it->second )
+        {
+            if( admit( c ) )
+            {
+                cand.push_back( c );
+            }
+        }
+    };
+    key.clear();
+    key.append( r.qualifier ).append( "::" ).append( r.calleeName );
+    appendKeyed( scopes.byScope );
+    if( cand.size() == before && appendTemplateFamilyKey( key, r.qualifier, r.calleeName ) )
+    {
+        appendKeyed( scopes.byScope );
+        appendKeyed( scopes.byFamily );
+    }
 }
 
 // One-hop receiver narrowing over the canonical scope::name → definition-ids map (built once by buildGraph).

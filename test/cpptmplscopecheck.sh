@@ -1,61 +1,64 @@
 #!/usr/bin/env bash
-# cpptmplscopecheck.sh — gate: a C++ member of a class TEMPLATE keys ONE identity, the one its non-template twin
-# keys, with no template-argument list anywhere in its scope.
+# cpptmplscopecheck.sh — gate: a C++ out-of-line member of a class template's PRIMARY definition keys the same identity
+# as its in-class declaration (no template-argument list in its scope); a SPECIALIZATION keeps its own identity; a call
+# through a template-id that names no specialization lands on the template's family, never on an unrelated decoy.
 #
 # THE DEFECT (observed 2026-09-16 while fixing the --pin-census field escape). An out-of-line member definition of
 # a class template kept the scope's template-argument list: `template <class T> void Box<T>::grow() {}` minted
 # `<s t="method" n="grow" sc="Box&lt;T&gt;">` beside the in-class declaration's `sc="Box"`. One member became two
 # identities, so `--callers=Box::grow` resolved the selector to the DECLARATION and answered `count="0"` while
-# `use( Box<int>& b ) { b.grow(); }` sat in plain sight — the edge landed on the `Box<T>::grow` row no selector
-# names. The same raw text reached every consumer of the id: the S6-C locality tie-break compared `Box<T>::` with
-# `Box::` segment by segment, the census printed `SmallVec<T, Alloc, SizeType,<LF> GrowingPolicy, N>::grow` with
-# the line break in the id, and a scope whose arguments themselves hold `::` was cut INSIDE the list
-# (`template<> void Slot<std::string>::clear()` scoped as `string>`).
+# `use( Box<int>& b ) { b.grow(); }` sat in plain sight. The same raw text reached every consumer of the id: the census
+# printed `SmallVec<T, Alloc, SizeType,<LF> GrowingPolicy, N>::grow` with the line break in the id, and a scope whose
+# arguments hold `::` was cut INSIDE the list (`template<> void Slot<std::string>::clear()` scoped as `string>`).
+# The reference side had the twin at two segments: `Factory<int>::make()` carried the qualifier `Factory<int>`, which
+# keys nothing, so the call SPLIT onto an unrelated `Decoy::make` — a caller published for a function nobody called.
 #
-# The reference side had the twin defect at two segments: a static call `Factory<int>::make()` carried the
-# qualifier `Factory<int>`, which keys no canonical entry, so the call fell to the bare-name tier and SPLIT onto an
-# unrelated `Decoy::make` — a caller published for a function nobody called. (At three or more segments the
-# §H4 re-split already stripped the arguments, which is why `a::b::Box<int>::get` in cppqualcheck was never red.)
+# THE DECISION (owner, 2026-09-16, after an independent review of the first version of this fix). That first version
+# stripped the argument list from EVERY template scope, so a specialization's member joined the primary's. Measured by
+# the review on llvm ADT + Support (590 files): 58 precise edges became splits, and one true edge disappeared outright
+# (`DenseMapInfo<APSInt>::getHashValue` -> `DenseMapInfo<APInt>::getHashValue`, APSInt.h:371, `--callers` 5 -> 4) —
+# a delegation from one specialization into another is a call to a different body. And `Traits<int>::encode( 1 )`
+# already resolved precisely on main, because the call's spelling matched the specialization's scope byte for byte.
+# So the two halves are split apart:
+#   * a PRIMARY template's out-of-line member — the declarator's template-id names exactly the parameters its own
+#     `template <…>` introduces (`template <class T, int N> void Box<T, N>::grow()`) — keys the bare template name;
+#   * an explicit or partial SPECIALIZATION (`template<> … Traits<int>::encode`, `template <class T> … Slot<T*>`, the
+#     members of `template<> struct Slot<bool> { … }`) keeps its template-id, spelled canonically (whitespace dropped
+#     except between two identifier characters, `, ` after a comma, so `Traits< int >` and a list broken over lines
+#     key the same identity as `Traits<int>`);
+#   * a reference keeps the template-id it writes; when no definition is keyed by it, the resolver retries the
+#     template's FAMILY — the primary and every specialization of that name — and never the bare-name spray.
 #
-# THE SPECIALIZATION DECISION, deliberately: an explicit or partial specialization's member keys the PRIMARY
-# template's identity. `template<> void Box<int>::grow()`, `template<class T> void Slot<T*>::clear()` and the
-# members declared inside `template<> struct Slot<bool> { … }` are all `Slot::clear` / `Box::grow`. Why:
-#   * identity here is what a caller can WRITE and a call site can NAME. The resolver is name-based and does no
-#     template-argument deduction, so it can never route `b.grow()` on a `Box<int>` to a `Box<int>` identity; a
-#     scope carrying arguments is one no call edge and no selector can reach (measured on the pre-fix binary:
-#     every such row had --callers count=0);
-#   * the spelling is not canonical — `Box<T>` / `Box<U>` / `Box<T, A>` / a list broken over lines are one class,
-#     so keeping any of it splits one entity by formatting;
-#   * a specialization body joins the member exactly the way an overload does: several bodies under one name,
-#     each keeping its own row and line, callers the UNION (which is what counts_floor already promises). The
-#     alternative hides the specialization from --callers/--impact/--uses entirely, which is the worse lie;
-#   * precedent in this tree: Rust's `impl<T> Foo<T>` already scopes to `Foo`, and the C++ 3-segment reference
-#     re-split already strips (`numeric_limits<std::size_t>::max` keys `numeric_limits`).
-#
-# THREE CORPORA, generated below into a scratch dir (never committed under test/, where the live-tree gates would
+# FIVE CORPORA, generated below into a scratch dir (never committed under test/, where the live-tree gates would
 # index them: the repo already has a `grow` with callers, and a fixture def beside it would move the live graph):
 #   plain/  the CONTROL — the non-template twin, the join the codebase already makes (decl + out-of-line def = one
 #           row, overloads="2"; --callers=Box::grow defs="2" count="1" use).
 #   templ/  the SAME file with the template added — line-aligned (the `template <class T>` prefix shares the line),
 #           so the ONE difference is templateness; every answer must be byte-identical to plain/'s. `plain` and
 #           `templ` are the same length on purpose: root="…" rides in the bytes.
-#   shape/  every other spelling, each with its own names so arms cannot lean on each other: a multi-line
-#           argument list, a nested-namespace chain, a C++17 nested namespace, a template inside a template, an
-#           out-of-line nested class of a template, the three specialization forms (one with `::` inside its
-#           arguments), and the two-segment static call with a same-name decoy.
+#   shape/  every other PRIMARY spelling, each with its own names so arms cannot lean on each other: a multi-line
+#           argument list, a nested-namespace chain, a C++17 nested namespace, a template inside a template, a member
+#           function template, an out-of-line nested class of a template, and the two-segment decoy call.
+#   spec/   the specializations: the three forms (one with `::` inside its arguments, one broken over lines), the
+#           review's own `Traits` probe verbatim, an APSInt-shaped delegation between two explicit specializations
+#           across a header and its .cpp, and a partial specialization calling its own member (llvm's
+#           `SmallVectorTemplateBase<T, true>` shape).
+#   tiepl/ tietm/  the NESTED-CLASS LOCALITY TIE, non-template and template twins (equal-length names): a bare
+#           `start()` in `Outer::operator=` beside `Outer::Inner::start`. Both ids share the `Outer::` segment, so the
+#           segment-counting tie-break could not choose; on main the non-template twin split and the template twin
+#           pinned the NESTED class's `start` (the argument text had hidden the shared segment from one candidate).
 #
 # EVERY expected value below is a LITERAL read by hand off the fixture text, never derived the way the code does.
 #
-# RED-FIRST (2026-09-16, main b1489df4, plain build): 27 of 36 checks FAIL. The 9 that pass are the §1 control,
-# the presence guards, determinism, and two arms green on both binaries by construction (--callers=Leaf::shed, whose
-# selector already matched `Tree<T>::Leaf` by suffix; the seven-clear-definitions count). The failures, by section —
-#   §2 templ/ --callers=Box::grow defs="1" count="0" (control defs="2" count="1"); the map keeps a separate
-#      sc="Box&lt;T&gt;" row; --impact reaches="0", --uses defs="1"; census target box.hpp::Box<T>::grow
-#   §3 11 sc= values carry template text, one of them with &#10;; census ids split across lines; --callers count="0"
-#      for reserveMore, fill, stack, link
-#   §4 slot.hpp scopes Slot<T> / string> / Slot<T*> / Slot<bool>; --callers=Slot::clear defs="1" count="0"
-#   §5 --callers=Decoy::make count="1" (the false caller build), --callers=Factory::make count="0", build amb="1",
-#      census mech=split
+# RED-FIRST (2026-09-16, plain builds, every arm below):
+#   main 31e788ce                      38 of 55 FAIL. It passes the §1 control, the presence guards, determinism,
+#                                      --callers=Leaf::shed (a suffix match), and the arms that keep main's own correct
+#                                      edges: Traits<int|bool|long>::encode, the Dmi delegation (--callers count="1"),
+#                                      the partial specialization's own-class call, and the five distinct encode rows.
+#   d42f3639 (this PR's first version)  17 of 55 FAIL: every specialization arm — the rows joined into one, Traits<…>
+#                                      and Info<char> split over the joined identity, the Dmi delegation gone
+#                                      (--callers count="0"), Svb's own-class calls split — plus both tie twins.
+#   ALL PASS on the fix.
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/cpptmplscopecheck.sh   |   bash test/cpptmplscopecheck.sh asan/ripwire
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
@@ -73,7 +76,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 echo "cpptmplscopecheck: BIN=$BIN"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/plain" "$TMP/templ" "$TMP/shape" || { echo "could not create the scratch corpora under $TMP"; exit 2; }
+mkdir -p "$TMP/plain" "$TMP/templ" "$TMP/shape" "$TMP/spec" "$TMP/tiepl" "$TMP/tietm" || { echo "could not create the scratch corpora under $TMP"; exit 2; }
 cd "$TMP"
 
 run(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$@" 2>/dev/null; }
@@ -129,7 +132,7 @@ void useVec( SmallVec<int, int, int, int, 4>& v )
 }
 EOF
 
-# namespaces, a template inside a template, and an out-of-line nested class of a template
+# namespaces, a template inside a template, a member function template, and an out-of-line nested class of a template
 cat > shape/nested.hpp <<'EOF'
 namespace outer
 {
@@ -167,7 +170,14 @@ struct Tree
         void link();
     };
     struct Leaf;
+    template <class W>
+    void graft( W w );
 };
+template <class T>
+template <class W>
+void Tree<T>::graft( W w )
+{
+}
 template <class T>
 template <class U>
 void Tree<T>::Node<U>::link()
@@ -178,17 +188,19 @@ struct Tree<T>::Leaf
 {
     void shed();
 };
-void useNested( outer::inner::Cell<int>& c, outer::inner::Tray<int>& t, Tree<int>::Node<long>& n, Tree<int>::Leaf& l )
+void useNested( outer::inner::Cell<int>& c, outer::inner::Tray<int>& t, Tree<int>::Node<long>& n, Tree<int>::Leaf& l, Tree<int>& tr )
 {
     c.fill();
     t.stack();
     n.link();
     l.shed();
+    tr.graft( 1 );
 }
 EOF
 
-# the specialization forms — explicit member (with `::` INSIDE its argument list), partial class, explicit class
-cat > shape/slot.hpp <<'EOF'
+# the specialization forms — explicit member (with `::` INSIDE its argument list, and one broken over lines), partial
+# class, explicit class; the primary's own out-of-line member beside them
+cat > spec/slot.hpp <<'EOF'
 template <class T>
 struct Slot
 {
@@ -200,6 +212,11 @@ void Slot<T>::clear()
 }
 template <>
 void Slot<std::string>::clear()
+{
+}
+template <>
+void Slot<std::pair<int,
+                    long>>::clear()
 {
 }
 template <class T>
@@ -223,6 +240,127 @@ void useSlot( Slot<int>& a, Slot<int*>& b )
 {
     a.clear();
     b.clear();
+}
+EOF
+
+# the independent review's probe, verbatim: explicit specializations called through their own template-id, the same
+# call spelled with spaces, a template-id no specialization matches, a same-name decoy, and a 3-segment spelling
+cat > spec/traits.hpp <<'EOF'
+template <class T> struct Traits { static int encode( T v ) { return 0; } };
+template <> struct Traits<int> { static int encode( int v ) { return 1; } };
+template <> struct Traits<bool> { static int encode( bool v ) { return 2; } };
+template <> int Traits<long>::encode( long v ) { return 4; }
+struct Decoy { static int encode( int v ) { return 3; } };
+int useInt() { return Traits<int>::encode( 1 ); }
+int useBool() { return Traits<bool>::encode( true ); }
+int useLong() { return Traits<long>::encode( 1L ); }
+int useGeneric() { return Traits<double>::encode( 1.0 ); }
+int useSpaced() { return Traits< int >::encode( 1 ); }
+namespace ns { template <class K> struct Info { static unsigned hash( K k ); }; }
+namespace ns { template <> struct Info<char> { static unsigned hash( char k ) { return 7; } }; }
+namespace ns { template <class K> unsigned Info<K>::hash( K k ) { return 8; } }
+unsigned useInfo() { return ns::Info<char>::hash( 'a' ); }
+unsigned useInfo2() { return ns::Info<short>::hash( 1 ); }
+EOF
+
+# APSInt.h:371's shape: one explicit specialization delegating to ANOTHER, whose member is defined in a .cpp
+cat > spec/dmi.h <<'EOF'
+struct Wide
+{
+};
+struct SWide
+{
+};
+template <class T, class E = void>
+struct Dmi
+{
+    static unsigned hashValue( const T& key );
+};
+template <>
+struct Dmi<Wide, void>
+{
+    static unsigned hashValue( const Wide& key );
+};
+template <>
+struct Dmi<SWide, void>
+{
+    static unsigned hashValue( const SWide& key )
+    {
+        return Dmi<Wide, void>::hashValue( key );
+    }
+};
+EOF
+cat > spec/dmi.cpp <<'EOF'
+#include "dmi.h"
+unsigned Dmi<Wide, void>::hashValue( const Wide& key )
+{
+    return 1;
+}
+EOF
+
+# llvm SmallVectorTemplateBase<T, true>'s shape: a partial specialization's member calls its OWN class's member
+cat > spec/svb.hpp <<'EOF'
+template <class T, bool B>
+struct Svb
+{
+    void grow();
+    void assignGrow()
+    {
+        grow();
+    }
+};
+template <class T>
+struct Svb<T, true>
+{
+    void grow();
+    void assignGrow()
+    {
+        grow();
+    }
+};
+template <class T, bool B>
+void Svb<T, B>::grow()
+{
+}
+template <class T>
+void Svb<T, true>::grow()
+{
+}
+EOF
+
+# the nested-class locality tie, non-template and template twins
+cat > tiepl/m.hpp <<'EOF'
+struct Outer
+{
+    void start();
+    struct Inner;
+    Outer& operator=( const Outer& o );
+};
+struct Outer::Inner
+{
+    void start();
+};
+Outer& Outer::operator=( const Outer& o )
+{
+    start();
+    return *this;
+}
+EOF
+cat > tietm/m.hpp <<'EOF'
+template <class T> struct Outer
+{
+    void start();
+    struct Inner;
+    Outer& operator=( const Outer& o );
+};
+template <class T> struct Outer<T>::Inner
+{
+    void start();
+};
+template <class T> Outer<T>& Outer<T>::operator=( const Outer& o )
+{
+    start();
+    return *this;
 }
 EOF
 
@@ -303,14 +441,14 @@ printf '%s\n' "$PC" | grep -qE $'^C\t[a-z-]+\t.*\tbox\\.hpp::use#[0-9]+\tgrow\tb
     && ok "templ census: every C and S row identical to the control's (the S6-C id space is the same)" \
     || no "templ census differs — control: $( printf '%s' "$PC" | tr '\n\t' '| ' ) — templ: $( printf '%s' "$TC" | tr '\n\t' '| ' )"
 
-# ── §3 NO TEMPLATE ARGUMENTS IN ANY SCOPE, over every other spelling ────────────────────────────────────────────
+# ── §3 NO TEMPLATE ARGUMENTS IN A PRIMARY TEMPLATE'S SCOPE, over every other spelling ───────────────────────────
 SMAP="$( run shape --no-cache --legend=compact )"
 run shape --pin-census="$TMP/shape.tsv" --no-cache >/dev/null
 SC_ALL="$( printf '%s' "$SMAP" | grep -oE ' sc="[^"]*"' )"
-# 17 by hand once joined: smallvec 2 (SmallVec, reserveMore) + nested 9 (Cell fill Tray stack Tree Node link Leaf shed)
-# + slot 2 (Slot, clear) + statics 4 (Factory, Factory::make, Decoy, Decoy::make). The split pre-fix map has more rows.
-[ "$( printf '%s\n' "$SC_ALL" | grep -c . )" -ge 17 ] \
-    && ok "presence: the shape map carries $( printf '%s\n' "$SC_ALL" | grep -c . ) sc= attributes (>= 17) — the sweep below has a population" \
+# 16 by hand once joined: smallvec 2 (SmallVec, reserveMore) + nested 10 (Cell fill Tray stack Tree Node link Leaf shed
+# graft) + statics 4 (Factory, Factory::make, Decoy, Decoy::make). The split pre-fix map has more rows.
+[ "$( printf '%s\n' "$SC_ALL" | grep -c . )" -ge 16 ] \
+    && ok "presence: the shape map carries $( printf '%s\n' "$SC_ALL" | grep -c . ) sc= attributes (>= 16) — the sweep below has a population" \
     || no "presence: the shape map carries only $( printf '%s\n' "$SC_ALL" | grep -c . ) sc= attributes — the no-arguments sweep would be vacuous"
 BAD="$( printf '%s\n' "$SC_ALL" | grep -E '&lt;|&gt;|&#10;|&#13;' )"
 [ -z "$BAD" ] \
@@ -350,18 +488,74 @@ expect_callers Node::link   2 useNested "a template member of a template"
 expect_row     cls    Leaf  '<s t="cls" n="Leaf" sc="Tree">'                  "the out-of-line nested class Tree<T>::Leaf scopes to its container"
 expect_row     method shed  '<s t="method" n="shed" sc="Tree::Leaf">'         "its member scopes to Tree::Leaf, the non-template Outer::Inner reading"
 expect_callers Leaf::shed   1 useNested "member of an out-of-line nested class of a template"
+# (the in-class `template <class W> void graft( W w );` declaration is extracted as t="fn" and the out-of-line body as
+# t="method" — a separate kind-classification gap for member templates — so the map shows two rows; the IDENTITY is
+# the join this pair proves, through the scope pairing rule: two `template <…>` lists, one template-id)
+expect_row     method graft '<s t="method" n="graft" sc="Tree">' "a member FUNCTION template's out-of-line body scopes to Tree (two template <…>, one template-id)"
+expect_callers Tree::graft  2 useNested "a member function template's declaration and body are one member"
 
-# ── §4 SPECIALIZATIONS KEY THE PRIMARY TEMPLATE'S MEMBER (the decision in the header) ───────────────────────────
-expect_row     method clear '<s t="method" n="clear" sc="Slot" overloads="7">' \
-    "all seven clear rows (primary decl+def, explicit member, partial decl+def, explicit class decl+member) are one member"
-expect_callers Slot::clear  7 useSlot "every specialization body is a definition of Slot::clear"
-SLOTIDS="$( awk -F'\t' '$1=="S" && $2 ~ /^slot\.hpp::/ && $2 ~ /::clear#/ { sub( /#[0-9]+$/, "", $2 ); print $2 }' "$TMP/shape.tsv" | sort -u )"
-[ "$SLOTIDS" = "slot.hpp::Slot::clear" ] \
-    && ok "census: every clear definition in slot.hpp has the one id slot.hpp::Slot::clear (was Slot<T> / string> / Slot<T*> / Slot<bool>)" \
-    || no "census: slot.hpp clear ids are not all slot.hpp::Slot::clear: $( printf '%s' "$SLOTIDS" | tr '\n' ' ' )"
-[ "$( awk -F'\t' '$1=="S" && $2 ~ /^slot\.hpp::.*::clear#/' "$TMP/shape.tsv" | grep -c . )" = 7 ] \
-    && ok "census: seven clear definitions — the specializations were joined, not dropped" \
-    || no "census: expected 7 clear S rows, got $( awk -F'\t' '$1=="S" && $2 ~ /^slot\.hpp::.*::clear#/' "$TMP/shape.tsv" | grep -c . )"
+# ── §4 A SPECIALIZATION KEEPS ITS OWN IDENTITY, spelled canonically (the decision in the header) ───────────────
+XMAP="$( run spec --no-cache --legend=compact )"
+run spec --pin-census="$TMP/spec.tsv" --no-cache >/dev/null
+[ -s "$TMP/spec.tsv" ] \
+    && ok "presence: the spec census wrote rows" \
+    || no "the spec census wrote nothing — every census arm in §4 would be vacuous"
+xrows(){ printf '%s' "$XMAP" | grep -oE "<s t=\"method\" n=\"$1\"[^>]*>" | sed 's/ k="[^"]*"//' | LC_ALL=C sort | tr '\n' '|'; }
+expect_rows(){   # $1 name  $2 the exact sorted row set, '|'-joined  $3 prose
+    [ "$( xrows "$1" )" = "$2" ] \
+        && ok "$3" \
+        || no "$3 — expected $2 — got $( xrows "$1" )"
+}
+# the census answer for one caller's sites: "<mech>\t<target|target…>" per site, ids without #NODEID, targets sorted
+xsite(){ awk -F'\t' -v c="$1" '$1=="C" { id=$6; sub( /#[0-9]+$/, "", id ); if( id == c ) { t=$8; gsub( /#[0-9]+/, "", t ); print $2 "\t" t } }' "$TMP/spec.tsv"; }
+xtargets(){ xsite "$1" | cut -f2 | tr '|' '\n' | LC_ALL=C sort | tr '\n' '|'; }
+expect_site(){   # $1 caller id  $2 exact "<mech>\t<target>"  $3 prose
+    [ "$( xsite "$1" )" = "$2" ] \
+        && ok "census: $3" \
+        || no "census: $3 — expected '$( printf '%s' "$2" | tr '\t' ' ' )' — got '$( xsite "$1" | tr '\t\n' ' ;' )'"
+}
+
+expect_rows clear '<s t="method" n="clear" sc="Slot" overloads="2">|<s t="method" n="clear" sc="Slot&lt;T*&gt;" overloads="2">|<s t="method" n="clear" sc="Slot&lt;bool&gt;" overloads="2">|<s t="method" n="clear" sc="Slot&lt;std::pair&lt;int, long&gt;&gt;">|<s t="method" n="clear" sc="Slot&lt;std::string&gt;">|' \
+    "slot.hpp: the primary joins its declaration; the partial and explicit class specializations each join theirs; the two explicit members stand alone — the \`::\` list uncut, the broken list on one line"
+expect_rows encode '<s t="method" n="encode" sc="Decoy">|<s t="method" n="encode" sc="Traits">|<s t="method" n="encode" sc="Traits&lt;bool&gt;">|<s t="method" n="encode" sc="Traits&lt;int&gt;">|<s t="method" n="encode" sc="Traits&lt;long&gt;">|' \
+    "traits.hpp: an explicit specialization's member does NOT join the primary's (five identities, not one)"
+expect_rows hash '<s t="method" n="hash" sc="Info" overloads="2">|<s t="method" n="hash" sc="Info&lt;char&gt;">|' \
+    "traits.hpp: Info<K>::hash (primary, out of line, inside ns) joins its declaration; Info<char> stays apart"
+
+expect_site 'traits.hpp::useInt'    $'qualified\ttraits.hpp::Traits<int>::encode'  "Traits<int>::encode( 1 ) is ONE precise edge to the int specialization (main's edge, kept)"
+expect_site 'traits.hpp::useBool'   $'qualified\ttraits.hpp::Traits<bool>::encode' "Traits<bool>::encode( true ) is precise"
+expect_site 'traits.hpp::useLong'   $'qualified\ttraits.hpp::Traits<long>::encode' "Traits<long>::encode( 1L ) reaches the out-of-line explicit MEMBER specialization"
+expect_site 'traits.hpp::useSpaced' $'qualified\ttraits.hpp::Traits<int>::encode'  "Traits< int >::encode( 1 ) keys the same canonical identity (main split it five ways)"
+expect_site 'traits.hpp::useInfo'   $'qualified\ttraits.hpp::Info<char>::hash'     "ns::Info<char>::hash( 'a' ), a 3-segment spelling, keeps its template-id and is precise"
+[ "$( xtargets 'traits.hpp::useGeneric' )" = 'traits.hpp::Traits::encode|traits.hpp::Traits<bool>::encode|traits.hpp::Traits<int>::encode|traits.hpp::Traits<long>::encode|' ] \
+    && ok "census: Traits<double>::encode names no specialization, so it lands on the Traits FAMILY (primary + 3 specializations) — never Decoy::encode" \
+    || no "census: Traits<double>::encode expected the four-member Traits family, got '$( xtargets 'traits.hpp::useGeneric' )'"
+[ "$( xtargets 'traits.hpp::useInfo2' )" = 'traits.hpp::Info::hash|traits.hpp::Info<char>::hash|' ] \
+    && ok "census: ns::Info<short>::hash lands on the Info family (primary + Info<char>)" \
+    || no "census: ns::Info<short>::hash expected the Info family, got '$( xtargets 'traits.hpp::useInfo2' )'"
+TENC="$( run spec --callers=Traits::encode --no-cache --legend=compact )"
+{ printf '%s' "$TENC" | grep -q 'n="useGeneric"' && ! printf '%s' "$TENC" | grep -qE 'n="use(Int|Bool|Long|Spaced)"'; } \
+    && ok "--callers=Traits::encode lists useGeneric (the family split) and none of the four calls a specialization owns" \
+    || no "--callers=Traits::encode should list useGeneric only among the Traits callers, got: $( el "$TENC" )"
+
+expect_site 'dmi.h::Dmi<SWide, void>::hashValue' $'qualified\tdmi.cpp::Dmi<Wide, void>::hashValue' \
+    "Dmi<SWide>::hashValue delegating to Dmi<Wide, void>::hashValue is an edge to the OTHER specialization's body in dmi.cpp"
+DMI="$( run spec --callers=dmi.cpp:hashValue --no-cache --legend=compact )"
+{ [ "$( cnt "$DMI" )" = 1 ] && printf '%s' "$DMI" | grep -q 'n="hashValue" p="dmi.h:20"'; } \
+    && ok "--callers=dmi.cpp:hashValue count=\"1\" -> dmi.h:20 (APSInt.h:371's shape; the first version of this fix answered 0)" \
+    || no "--callers=dmi.cpp:hashValue expected count=1 from dmi.h:20, got: $( el "$DMI" )"
+expect_site 'svb.hpp::Svb<T, true>::assignGrow' "$( xsite 'svb.hpp::Svb<T, true>::assignGrow' | cut -f1 )"$'\tsvb.hpp::Svb<T, true>::grow' \
+    "a partial specialization's own-class call grow() binds ITS grow, one target"
+[ "$( xtargets 'svb.hpp::Svb::assignGrow' )" = 'svb.hpp::Svb::grow|' ] \
+    && ok "census: the primary's own-class call grow() binds the primary's grow, one target" \
+    || no "census: Svb::assignGrow expected the primary's grow alone, got '$( xtargets 'svb.hpp::Svb::assignGrow' )'"
+BADX="$( printf '%s' "$XMAP" | grep -oE ' sc="[^"]*"' | grep -E '&#10;|&#13;|sc="string' )"
+[ -z "$BADX" ] \
+    && ok "no specialization sc= holds a line break or a list cut at an inner ::" \
+    || no "specialization scopes still carry raw text: $( printf '%s' "$BADX" | tr '\n' ' ' )"
+[ "$( grep -v '^#' "$TMP/spec.tsv" | grep -cvE $'^(C|S|O)\t' )" = 0 ] \
+    && ok "every spec census data line is a whole C/S row — no id broke across lines" \
+    || no "spec census lines that are not whole rows: $( grep -v '^#' "$TMP/spec.tsv" | grep -vE $'^(C|S|O)\t' | tr '\n\t' '| ' )"
 
 # ── §5 THE REFERENCE SIDE: a two-segment call through a template-id is QUALIFIED, not sprayed onto a decoy ─────
 expect_callers Factory::make 2 build "Factory<int>::make() keys Factory::make"
@@ -379,11 +573,27 @@ printf '%s' "$SMAP" | grep -qE '<s t="fn" n="build"[^>]* amb=' \
     && ok "census: build's site is decided by mech=qualified -> statics.hpp::Factory::make" \
     || no "census: build's site expected qualified -> Factory::make, got: $( awk -F'\t' '$1=="C" && $6 ~ /^statics\.hpp::build#/' "$TMP/shape.tsv" | tr '\n\t' '| ' )"
 
-# ── §6 determinism ──────────────────────────────────────────────────────────────────────────────────────────────
-run shape --pin-census="$TMP/shape2.tsv" --no-cache >"$TMP/smap2.xml"
-{ [ "$( cat "$TMP/smap2.xml" )" = "$( run shape --no-cache )" ] && cmp -s "$TMP/shape.tsv" "$TMP/shape2.tsv"; } \
-    && ok "deterministic: map and census byte-identical across two --no-cache runs" \
-    || no "shape map or census differs between two identical runs"
+# ── §6 THE NESTED-CLASS LOCALITY TIE: a bare call in Outer's member binds Outer::start, not Outer::Inner::start ───
+# Both candidates share the caller's whole `m.hpp::Outer::` prefix, so counting shared segments ties them. A bare or
+# `this->` call inside a scope names that scope's member: a nested class's non-static member needs an object. The
+# tie-break now prefers the candidate declared in the caller's own scope over one nested inside it (resolve.h
+# localityRank) — and only for a bare or `this->` call, where the enclosing scope is the evidence.
+for tie in tiepl tietm; do
+    run "$tie" --pin-census="$TMP/$tie.tsv" --no-cache >/dev/null
+    got="$( awk -F'\t' '$1=="C" { id=$6; sub( /#[0-9]+$/, "", id ); t=$8; gsub( /#[0-9]+/, "", t ); print $2 "\t" id "\t" t }' "$TMP/$tie.tsv" )"
+    [ "$got" = "$( printf 'locality\tm.hpp::Outer::operator=\tm.hpp::Outer::start' )" ] \
+        && ok "$tie: start() in Outer::operator= binds m.hpp::Outer::start alone (mech=locality)" \
+        || no "$tie: expected locality -> m.hpp::Outer::start, got '$( printf '%s' "$got" | tr '\t\n' ' ;' )'"
+done
+
+# ── §7 determinism ──────────────────────────────────────────────────────────────────────────────────────────────
+for corpus in shape spec; do
+    run "$corpus" --pin-census="$TMP/$corpus.again.tsv" --no-cache >"$TMP/$corpus.again.xml"
+    run "$corpus" --pin-census="$TMP/$corpus.once.tsv" --no-cache >"$TMP/$corpus.once.xml"
+    { cmp -s "$TMP/$corpus.again.xml" "$TMP/$corpus.once.xml" && cmp -s "$TMP/$corpus.again.tsv" "$TMP/$corpus.once.tsv"; } \
+        && ok "deterministic: $corpus map and census byte-identical across two --no-cache runs" \
+        || no "$corpus map or census differs between two identical runs"
+done
 
 if [ "$fail" = 0 ]; then echo "cpptmplscopecheck: ALL PASS"; else echo "cpptmplscopecheck: FAIL"; fi
 exit "$fail"

@@ -1948,7 +1948,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             d.internalLinkage = internalLinkageBit( le.lang, defNode, src );
             if( le.lang == Lang::Cpp )                              // canonical scope (E#4): out-of-line `A::b` → "A", else enclosing class/namespace
             {
-                d.scope = qualifierOf( nameNode, src );
+                d.scope = qualifierOfDefinition( nameNode, src );   // `Box<T>::grow` (primary) → "Box"; a specialization keeps its id
                 if( d.scope.empty() )
                 {
                     d.scope = enclosingScopeOf( nameNode, src );
@@ -2100,14 +2100,14 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     if( opScoped )
                     {
                         r.name      = finalSegment( nameTxt.substr( opStart ) );                                  // `operator>` verbatim
-                        r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, opStart - 2 ) ) );
+                        r.qualifier = cppRefQualifierText( nameTxt.substr( 0, opStart - 2 ) );
                     }
                     else if( opStart == std::string_view::npos )
                     {
                         if( const std::size_t sep = lastTopLevelScopeSep( nameTxt ); sep != std::string_view::npos )
                         {
                             r.name      = finalSegment( nameTxt.substr( sep + 2 ) );
-                            r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, sep ) ) );
+                            r.qualifier = cppRefQualifierText( nameTxt.substr( 0, sep ) );   // the template-id kept whole: `Info<char>::hash`
                         }
                     }
                 }

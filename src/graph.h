@@ -1783,6 +1783,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ambiguity. Definitions only (body present); the obj.method()/unqualified halves stay bare-name (and
     // keep their honest `amb`). C++ only (scope is populated for Lang::Cpp).
     HashMap<std::string, rw::SmallVec<NodeId, 2>> canonByName;
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> canonFamilyByName;   // a C++ specialization's def under its template's `T::name` (resolve.h)
     canonByName.reserve( N );
     std::string canonKey;
     {
@@ -1796,6 +1797,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             canonKey.clear();
             canonKey.append( s.scope ).append( "::" ).append( s.name );
             canonByName[ canonKey ].push_back( s.id );
+            if( appendTemplateFamilyKey( canonKey, s.scope, s.name ) )
+            {
+                canonFamilyByName[ canonKey ].push_back( s.id );
+            }
         }
     }
 
@@ -2029,7 +2034,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
-    std::vector<std::size_t> locShare;   // reused per-candidate sharedLocality memo (computed once per tier, below)
+    std::vector<std::size_t> locShare;   // reused per-candidate localityRank memo (computed once per tier, below)
 
     // ── B2.1 CHA-lite inheritance NAME graph (built once, consumed in the resolve loop below). A class is
     // keyed by its final-segment NAME, exactly like byName — so a same-name collision only ever ENLARGES a
@@ -2261,21 +2266,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             canonical = true;
         }
+        // E#4 canonical tier (resolve.h appendCanonicalCandidates): the defs keyed "qualifier::name", built in the reused
+        // qkey buffer and admitted by language and root. A C++ template-id qualifier that keys nothing — a call through
+        // `Traits<double>` when only `Traits` and other specializations are defined — takes its template's FAMILY
+        // (the primary's `T::name` defs, then each specialization's) instead of falling to the bare-name spray, where
+        // an unrelated same-named def would share the split. An exact template-id still keys exactly its
+        // specialization (`Traits<int>::encode`), which is what keeps a delegation between specializations an edge.
         if( !scipPinned && r.lang != Lang::Elixir && !r.qualifier.empty() )
         {
-            qkey.clear();                                       // "qualifier::name" — reused buffer, identical bytes
-            qkey.append( r.qualifier ).append( "::" ).append( r.calleeName );
-            const auto cit = canonByName.find( qkey );
-            if( cit != canonByName.end() )
-            {
-                for( NodeId c : cit->second )
-                {
-                    if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
-                    {
-                        cand.push_back( c );
-                    }
-                }
-            }
+            appendCanonicalCandidates( cand, qkey, r, CanonicalScopes { canonByName, canonFamilyByName },
+                                       [ & ]( NodeId c ) { return langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ); } );
             canonical = !cand.empty();
         }
         // ── L3 fn-pointer/callback binding resolve — BEFORE Rule 1, because a local variable shadows a
@@ -2772,7 +2772,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 // another — rubygems' composed_set.rb). Widening tier 1 past the caller would invent a
                 // cross-file edge the SAME-FILE tier already outranked, and `other.each` on a second instance
                 // of the caller's own class is a genuine self-loop, so the honest nothing stands.
-                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : sharedLocality( callerCanon, g.localityKey[c] );   // path-scoped even for a free function
+                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKey[c], r.recv == RecvKind::None || r.recv == RecvKind::ThisObj );   // path-scoped even for a free function
                 locShare.push_back( sh );
                 if( sh > bestShare )
                 {
