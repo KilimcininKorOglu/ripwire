@@ -56,7 +56,7 @@ on (caller, callee, line):
   `UsingShadowDecl::getMostRecentDeclImpl` reaches `Redeclarable::getMostRecentDecl` through `using
   redeclarable_base::getMostRecentDecl;`, graded WRONG → PARTIAL. rocksdb stays at 0.
 
-The ASan build's llvm-project census is byte-identical to the plain build's and reports no sanitizer finding.
+The ASan build's llvm-project census is byte-identical to the plain build's and reports no sanitizer finding. Re-measured after merging `main` at `a5ce95e2`: the same five llvm-project sites move, and rocksdb still moves none.
 
 The gate is `test/fieldnarrowcheck.sh` arms (u0)–(u7). On `main`, (u2) the field call, (u3) Rule 1's bare call and (u5)
 the template-qualified re-export are red. (u4) is the contrast: the same two bases with no using-declaration keep their
