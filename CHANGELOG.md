@@ -26,7 +26,7 @@ refuses an enum byte past its count (that file reparses, the rest of the blob st
 `cachefuzzcheck` Part 3 fixture (15 files): 0x10000 and 0xFFFFFFFF in `ppAlt`, `params` and `argCount` were accepted
 before (`cached_records=15 of 15`, 6 FAIL rows) and are refused after (`14 of 15`, output byte-identical to
 `--no-cache`, clean under ASan/UBSan), while 0xFFFF is still accepted. Cost, Apple clang 21 `-O2 -DNDEBUG` on the
-ingest TU: `loadCache` 3,962 → 3,991 instructions (+0.7%, six shift-and-test branches); no other function changed.
+ingest TU: `loadCache` 3,962 → 3,992 instructions (+0.8%, six branchless compare-and-selects); no other function changed.
 **`--with-profile` read its `#PROF_TSV` line column with `std::atoi`**, which is undefined past INT_MAX; libc kept
 the low 32 bits, so a line of 4294967329 read as 33 and annotated the finding at line 38 with a site that is not
 there (`heat_joined="1"`). The column now goes through `std::from_chars`, and a value that is not wholly a positive
