@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 2b (integration/train-2b on main bcd3b016: #244 a948bf46, #243 6b234717, #256 8464f3be,
+#   lane/field-final-segment a23f4ec3): RE-DERIVED ON THE MERGED TREE, carried from no side. kParserVer and its mirror
+#   are assigned in merge order over train 2's 99: #244 = 100, #243 = 101, #256 = 102 (the lanes declared 97, 99 and
+#   100); the field lane does not bump. kCacheVersion stays 22; kQSnapCacheScheme stays 12. Every lane pin hashed its
+#   own number over its own base, so none hashed the merged declaration lines; the three lane entries below are
+#   renumbered to the train's numbers.
 # 2026-09-16, C++ TEMPLATE SCOPES (test/cpptmplscopecheck.sh, PR #256): parserVer and its quality mirror move to 102 on
 #   integration/train-2b (the PR declared 100) — a primary template's out-of-line member keys the bare template name,
 #   a specialization keeps its canonical template-id, a reference keeps the template-id it writes, and a class
