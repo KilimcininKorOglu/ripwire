@@ -293,7 +293,7 @@ namespace mcpedit
     inline bool editHintMatches( const IngestResult& ing, std::uint32_t fileId,
                                  const std::string& pathHint, const AbsHintFrame& frame )
     {
-        return filePathContains( ing.files[ fileId ], pathHint ) || frame.matches( ing, fileId );
+        return filePathContainsRootRel( ing, fileId, pathHint ) || frame.matches( ing, fileId );
     }
 
     // A1 (secondary): "symbol 'X' not found under path 'F'" is a TRUE statement with a misleading cause when

@@ -1073,7 +1073,7 @@ inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, c
 inline bool langUsesHashComment( Lang l ) noexcept
 {
     return l == Lang::Python || l == Lang::Bash || l == Lang::Ruby || l == Lang::Elixir
-        || l == Lang::Toml   || l == Lang::Yaml;
+        || l == Lang::Toml   || l == Lang::Yaml || l == Lang::GDScript;
 }
 
 inline std::uint32_t codeLinesInBody( std::string_view body, Lang lang ) noexcept
@@ -1976,8 +1976,37 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 103;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 110;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, #235
+                                                          //    follow-up). See ingest_cache.h's kParserVer note.
+                                                          // 109 = 2026-09-17 (Ruby constant receivers, PR #267): a constant or
+                                                          //    scope_resolution receiver is NamedVar with its final segment.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 108 = 2026-09-17 (GDScript, PR #233): a new grammar, tags.scm and
+                                                          //    `.gd` crawl row. See ingest_cache.h's kParserVer note.
+                                                          // 107 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
+                                                          //    steps below (declared 97, 98) land as one on integration/train-3.
+                                                          //    PR step 98, 2026-09-15 (Java Type::method review):
+                                                          //    Java shadow binds carry lexical spans and inferred
+                                                          //    lambda parameters are captured. See ingest_cache.h.
+                                                          //    PR step 97, 2026-09-15 (Java Type::method candidates):
+                                                          //    method_reference member capture plus indexed-class +
+                                                          //    no-shadow resolver gating. #216 spent 96, so this
+                                                          //    RE-BUMPS. See ingest_cache.h's kParserVer note.
+                                                          // 106 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
+                                                          //    record carries isFromAssignment (cache version 23).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 105 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
+                                                          //    gained a kLangTable row (src/ingest_crawl.h), so a
+                                                          //    tree that spells its headers `.hxx` now yields NEW
+                                                          //    files/symbols/edges a pre-bump cache never saw.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 104 = 2026-09-17 (template arguments in a receiver's type): a
+                                                          //    declaration records its type's last name through the
+                                                          //    grammar's fields. See ingest_cache.h's kParserVer note.
+                                                          // 103 = 2026-09-17 (TS/JS signed numeric literal receivers, train 1b
+                                                          //    #277). See ingest_cache.h's kParserVer note.
                                                           // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
                                                           //    PR #256). See ingest_cache.h's kParserVer note.
                                                           // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
@@ -1994,6 +2023,8 @@ constexpr std::uint32_t kIngestParserVerMirror    = 103;  // MUST equal ingest.c
                                                           //    See ingest_cache.h's kParserVer note.
                                                           // 97 = 2026-09-16 (parameter receivers): a declaration's qualified
                                                           //    written type rides its Type/ParamType RawBind (importedName).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm B2):
                                                           //    See ingest_cache.h's kParserVer note.
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
                                                           //    RE-BUMPED from the branch's 87 over #139's 93 and #172's 94.

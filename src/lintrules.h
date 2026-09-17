@@ -103,6 +103,7 @@ inline constexpr LangTokenRow kLangTokenRows[] = {
     { "elixir",     Lang::Elixir     },
     { "dart",       Lang::Dart       },
     { "kotlin",     Lang::Kotlin     },
+    { "gdscript",   Lang::GDScript   },
 };
 
 /// Parse a supported language token; assign out only on success and otherwise return false.
@@ -129,8 +130,9 @@ inline bool langFromToken( std::string_view tok, Lang& out ) noexcept
 // under their language, and langOfPath called them Unknown. So a `language: cpp` rule silently dropped every match in a
 // CUDA or Metal file, `--deps`/`--arch` left them out of the dependency denominator, --nonlocal-state left `.pyi` stubs
 // and Metal/CUDA state unanalysed while never naming them unanalysed, and a `.phtml` corpus was not disclosed as PHP.
-// atoms.h carried a private workaround for the first three. The check also found `.hxx` HERE and not in the crawl: the
-// crawl admits no `.hxx` file, so no indexed path could ever reach that row, and it is gone.
+// atoms.h carried a private workaround for the first three. The check also found `.hxx` HERE and not in the crawl, whose
+// then-missing row made this one unreachable, so it was dropped; the crawl now admits `.hxx` (A4, lane/small-fixes-0917),
+// and the same check requires the row back.
 //
 // A header (.h) is Cpp here, the same conservative choice kLangTable makes (`.h` ownership is inherently ambiguous; see
 // model.h's Lang-enum comment). Documented degrade: an ObjC .h rule may not match, so prefer .m/.mm fixtures for ObjC.
@@ -142,7 +144,7 @@ struct LintExtRow
 };
 inline constexpr LintExtRow kLintExtRows[] = {
     { ".cpp", Lang::Cpp }, { ".cc", Lang::Cpp }, { ".cxx", Lang::Cpp }, { ".metal", Lang::Cpp }, { ".cu", Lang::Cpp }, { ".cuh", Lang::Cpp },
-    { ".h", Lang::Cpp }, { ".hpp", Lang::Cpp }, { ".hh", Lang::Cpp }, { ".c", Lang::C },
+    { ".h", Lang::Cpp }, { ".hpp", Lang::Cpp }, { ".hh", Lang::Cpp }, { ".hxx", Lang::Cpp }, { ".c", Lang::C },
     { ".py", Lang::Python }, { ".pyi", Lang::Python },
     { ".go", Lang::Go },
     { ".rs", Lang::Rust },
@@ -159,6 +161,7 @@ inline constexpr LintExtRow kLintExtRows[] = {
     { ".ex", Lang::Elixir }, { ".exs", Lang::Elixir },
     { ".dart", Lang::Dart },
     { ".kt", Lang::Kotlin },
+    { ".gd", Lang::GDScript },
 };
 
 /// Classify a path by its supported extension, returning Unknown when no extension matches.
@@ -237,7 +240,9 @@ inline Lang langOfPath( std::string_view path ) noexcept
 // --deps printed the C++ `<inc t="b.h"/>` row and nothing for the Dart file, and dep_langs= did not name dart. So a
 // Dart file cannot carry an edge today, and counting it would dilute ccd/acd/nccd exactly as .md/.sh once did. When
 // Dart import capture lands, this case and dependencyDialect's move in the same commit, and without the default a
-// reviewer sees them.
+// reviewer sees them. GDSCRIPT stays FALSE for the same reason (PR #233, which left this function untouched on purpose):
+// `preload`/`load("res://…")` resolution is a later round, so no `.gd` file carries a dependency edge yet, and claiming
+// capability without edges would make the dep_files= denominator lie.
 /// Return whether this language has syntax-backed dependency extraction for dependency rules.
 inline bool dependencyCapable( Lang lang ) noexcept
 {
@@ -251,6 +256,7 @@ inline bool dependencyCapable( Lang lang ) noexcept
         case Lang::Kotlin:
             return true;
         case Lang::Dart:   // no import capture yet — see the DART paragraph above
+        case Lang::GDScript:   // no preload/load capture yet — the same paragraph
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
             return false;
     }
@@ -298,6 +304,7 @@ inline DepDialect dependencyDialect( Lang lang ) noexcept
         case Lang::Lua:                                 return DepDialect::Lua;
         case Lang::Elixir:                              return DepDialect::Elixir;
         case Lang::Dart:                                // not dependency-capable (dependencyCapable's DART paragraph)
+        case Lang::GDScript:                            // not dependency-capable (the same paragraph)
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
                                                         return DepDialect::None;
     }

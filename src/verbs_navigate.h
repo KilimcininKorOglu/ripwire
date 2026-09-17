@@ -1424,7 +1424,7 @@ std::optional<int> runVerify( const MainDispatch& d )
         bool any = false;
         for( std::size_t fileIndex = 0; fileIndex < ing.files.size(); ++fileIndex )
         {
-            if( filePathContains( ing.files[ fileIndex ], filePat ) )
+            if( filePathContainsRootRel( ing, std::uint32_t( fileIndex ), filePat ) )
             {
                 fileFlags[ fileIndex ] = 1;
                 any = true;

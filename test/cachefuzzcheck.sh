@@ -929,7 +929,7 @@ for i in range(n):
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds
-        skip(4); site("bind.lang"); site("bind.kind"); skip(8); s(); s(); s()
+        skip(4); site("bind.lang"); site("bind.kind"); skip(1 + 8); s(); s(); s()   # isFromAssignment, spanStart/End
     for _ in range(u32()):                                                # FFI aliases
         site("ffi.kind"); skip(1); s(); s(); s()
     for _ in range(u32()):                                                # route defs

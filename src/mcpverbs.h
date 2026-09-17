@@ -3347,7 +3347,11 @@ inline const char* mcpBaselineMarker( const rw::quality::BaselineSelection& sele
     std::error_code sidecarEc;
     if( std::filesystem::exists( std::filesystem::path( sidecarPath ), sidecarEc ) && !sidecarEc )
     {
-        return "git-HEAD (unreadable sidecar ignored)";   // present on disk, rejected by readBaseline
+        return "git-HEAD (sidecar unreadable)";   // present on disk, rejected by readBaseline — the SAME
+                                                   // spelling selectBaseline's own "present but unrecognizable"
+                                                   // state uses (quality.h), and the one verbs_quality.h's
+                                                   // legend documents; A2 (found-items 2026-09-17) found this
+                                                   // arm spelling the identical state differently.
     }
     return selection.marker;                              // genuinely absent — "git-HEAD"
 }

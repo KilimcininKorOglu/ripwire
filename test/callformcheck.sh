@@ -15,8 +15,9 @@
 # THE DOCUMENTED-ABSENT ROWS ARE THE POINT. Roughly a quarter of the arms below assert that a
 # spelling produces NOTHING: C++ casts, most-vexing-parse declarations and destructor spellings (the
 # member-template row left this list 2026-09-16, when the spelling started to extract); Go's explicit
-# generic instantiation; Java's method references and both generic `new` forms; Ruby's bare paren-less
-# call; Swift's explicit specialization; computed
+# generic instantiation; Java's two generic `new` forms (its method references left this list with
+# issue #74, when `Type::method` became a call site); Ruby's bare paren-less call; Swift's explicit
+# specialization; computed
 # `new a.b[c]()` in TS and JS. Those are honest rejects — several of them unfixable by any query —
 # and an arm that fences them goes RED if a naive widening lands. A matrix that only recorded the
 # successes would be a celebration, not a gate.
@@ -380,17 +381,20 @@ echo
 echo "=== Java — test/callformfix/java/Main.java ==="
 uses java bareFn    1 "1. bare call"
 uses java memberFn  1 "2. member call"
-uses java makeFn    1 "3. static call through the type — and NOT the method reference on line 60"
+uses java makeFn    2 "3. static call through the type AND the Type::method reference on line 60"
 uses java threeSeg  1 "4. 3-segment invocation chain (method_invocation's name: is always final)"
 uses java thisFn    1 "6. explicit this receiver"
 uses java Widget    1 "5. new, unqualified"
 uses java Inner     1 "7. scoped new, 2 segments — dropped before this round"
 uses java Deep      1 "8. scoped new, 3 segments"
 uses java PkgType   1 "9. fully package-qualified new"
-# 10. method REFERENCE. `Widget::makeFn` names a target without invoking it; it belongs to the
-# disclosed callback caveat. Streams lean on it heavily, which is exactly why it is pinned.
+# 10. Type::method. `Widget::makeFn` is a statically resolvable call site (issue #74); the
+# lambda-equivalent form already produced an edge. The reference form now does too. The receiver
+# forms that stay unresolved are the ones whose target is not fixed by the syntax: `this::m`,
+# `super::m`, `expr::m` (an instance reference — the runtime object decides) and `Type::new`,
+# which the member-name query does not capture at all. test/javamethodrefcheck.sh pins each.
 fixtureHasLit java/Main.java 'Widget::makeFn' "10. the method-reference spelling is still WRITTEN"
-probeBlind java runAbsent makeFn "10. ABSENT (callback caveat): a method REFERENCE mints no call edge"
+probeSees java runAbsent makeFn "10. Type::method EXTRACTS makeFn — same target as Widget.makeFn()"
 fixtureHasLit java/Main.java 'new GenBox<String>()' "11. the bare generic-new spelling is still WRITTEN"
 uses java GenBox   0 "11. ABSENT: bare generic new — the type child is a generic_type"
 fixtureHasLit java/Main.java 'new GenOuter.GenInner<String>()' "12. the qualified generic-new spelling is still WRITTEN"

@@ -114,19 +114,19 @@ inline const char* symTag( SymKind k ) noexcept
 // JVM-bridged to Java via graph.h's langCompatible (mirroring the existing Cpp<->ObjC and Cpp<->C
 // bridges) so a mixed Kotlin+Java module (the Android norm) resolves calls across the language
 // boundary instead of dropping every one of them as unresolved.
-enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC, Markdown, JavaScript, Bash, Java, Ruby, Unknown, Json, CSharp, C, Toml, Yaml, Php, Lua, Elixir, Dart, Kotlin };
+enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC, Markdown, JavaScript, Bash, Java, Ruby, Unknown, Json, CSharp, C, Toml, Yaml, Php, Lua, Elixir, Dart, Kotlin, GDScript };
 // The number of Lang enumerators. MUST stay ( last enumerator + 1 ): any per-language array sized by
 // a LITERAL silently drops the tail when a language is appended, and the drop is invisible because
 // the affected code paths just see a zero. That happened: nonlocalstate.h's filesByLang was a
 // hardcoded 16 while Php(18), Lua(19) and Elixir(20) existed, so --nonlocal-state never disclosed
 // those three as unanalyzed even though kUnanalyzedLangs listed Php and Lua. Size per-language
 // arrays with this, never with a number.
-inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::Kotlin ) + 1;
+inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::GDScript ) + 1;
 // ...and the cache readers validate every cached Lang byte against it, so a stale kLangCount would also refuse
 // the new language's records. The compile-time proof (infra/enumcount.h) makes the append a build error instead.
 static_assert( enumCountIsExact<Lang, kLangCount>(), "kLangCount must name the LAST Lang enumerator — move it with the append" );
 
-// short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt").
+// short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt|gd").
 // The canonical home for this switch: previously duplicated privately in htmlexport.h, moved here so a THIRD
 // caller (naming-consistency's per-language vote groups) reuses it instead of growing a second copy.
 /// Return the stable short output label for a language, or "?" for an unknown value.
@@ -157,6 +157,7 @@ inline constexpr const char* langTag( Lang l ) noexcept
         case Lang::Elixir:     return "ex";
         case Lang::Dart:       return "dart";
         case Lang::Kotlin:     return "kt";
+        case Lang::GDScript:   return "gd";
         case Lang::Unknown:    return "?";
     }
     return "?";   // a byte past the enum (a corrupt cache value) still reads "?"; a NEW Lang is a -Werror=switch error above
@@ -174,7 +175,7 @@ inline constexpr bool isCodeLang( Lang l ) noexcept
     {
         case Lang::Cpp: case Lang::Python: case Lang::TypeScript: case Lang::Go: case Lang::Rust: case Lang::Swift:
         case Lang::ObjC: case Lang::JavaScript: case Lang::Bash: case Lang::Java: case Lang::Ruby: case Lang::CSharp:
-        case Lang::C: case Lang::Php: case Lang::Lua: case Lang::Elixir: case Lang::Dart: case Lang::Kotlin:
+        case Lang::C: case Lang::Php: case Lang::Lua: case Lang::Elixir: case Lang::Dart: case Lang::Kotlin: case Lang::GDScript:
             return true;
         case Lang::Markdown: case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Unknown:
             return false;
@@ -214,9 +215,13 @@ inline constexpr bool isCodeLang( Lang l ) noexcept
 //              classifies these beside that function, TS/JS only. A matching Foo.prototype.NAME extension
 //              may bind; anything else is vetoExternal. Object literals, identifier receivers, this, casts,
 //              and element-returning links (find/at/pop/shift/reduce/subscript/!) stay None.
-enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean };
+//   JavaTypeCandidate — Java `identifier::method` (issue #74): syntax alone cannot say type or value. Ingest stamps
+//              the candidate; graph resolution admits it only when the identifier names an indexed class and no Java
+//              declaration in the caller shadows that name. APPENDED after the literal kinds: persisted values stay stable.
+enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean,
+    JavaTypeCandidate };
 // The number of RecvKind enumerators — the bound readRef validates a cached receiver byte against (see kSymKindCount).
-inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::LitBoolean ) + 1;
+inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::JavaTypeCandidate ) + 1;
 static_assert( enumCountIsExact<RecvKind, kRecvKindCount>(), "kRecvKindCount must name the LAST RecvKind enumerator — move it with the append" );
 
 inline bool isJsTsLitRecv( RecvKind k ) noexcept
@@ -804,6 +809,9 @@ struct Binding
     NodeId        fromSymbol = kNoNode;   // enclosing function/method (the binding's scope); kNoNode if file-scope
     std::uint32_t fileId     = 0;
     LocalBindKind kind       = LocalBindKind::Type;
+    bool          isFromAssignment = false;   // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
+                                              //   a function's name as often as a class's, so buildGraph drops it unless a class of
+                                              //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
                                           //   VarDecl and its typed record (Type or ParamType) carry the SAME
                                           //   value — that shared byte is how Rule 2's lexical receiver lookup
@@ -826,7 +834,7 @@ struct Binding
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
 static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
-               "Binding's scalars are five u32 and a u8 kind in 24 bytes — startByte rides the padding after `kind`" );
+               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT
@@ -1184,6 +1192,13 @@ struct IngestResult
     //    Recorded once by ingest(); a single-file root records the file's directory. EMPTY on a multi-root
     //    merge, whose `files` are already the labeled root-relative identity (rootRelPath is then the identity).
     std::string                crawlRoot;
+    // …and every PREFIX a selector path typed from the cwd can start with before the root-relative part (graph.h
+    // selectorRootTail): the root as typed, then the root expressed relative to the cwd, then its absolute spellings
+    // (joined onto the shell's logical $PWD and onto getcwd, and its realpath — a user types the logical spelling, and
+    // a symlinked prefix such as /tmp vs /private/tmp makes the two differ). "." means the root IS the cwd, so a `./`
+    // path is root-relative. Lexically normalised, no trailing '/', each once. Recorded once by ingest(); empty on a
+    // multi-root merge, like crawlRoot.
+    std::vector<std::string>   crawlRootPrefixes;
 
     // ── P1-15: how many files this run actually RE-EXTRACTED (cache miss / changed / new) rather than
     //    reusing from the content-hash cache — the number RIPWIRE_CACHE_STATS has always printed as
@@ -1524,6 +1539,20 @@ inline bool shadowSuppressedSite( const Reference& r, const ShadowEvidence& ev, 
     if( r.recv != RecvKind::None || !r.qualifier.empty() )
     {
         return false;   // a receiver- or scope-qualified name can never resolve to a plain local
+    }
+    // JAVA IS REFUSED OUTRIGHT, and this arm is load-bearing rather than defensive. This pass is
+    // C++/ObjC evidence: it deletes a reference because a declared local of that name shadows it at
+    // that byte. Java's VarDecl records (ingest_binds.h captureJavaShadowDecls) exist for one
+    // unrelated consumer — the JavaTypeCandidate receiver proof for issue #74 — and Java call sites
+    // carry no classified receiver, so `b.name(name)` inside `make( Builder b, String name )` reaches
+    // here as a BARE call whose name a parameter declares, and lost its call edge and its `--uses`
+    // row. The refusal is not a heuristic: Java has no free functions and no callable locals, so a
+    // Java call NEVER resolves to a local and there is nothing here to prevent. Python keeps its
+    // veto-only evidence at an empty span for the same reason (ingest_binds.h, the note above
+    // capturePythonParamShadowDecls); Java needs real spans, so the refusal lives at the consumer.
+    if( r.lang == Lang::Java )
+    {
+        return false;
     }
     // ORDER IS A COST DECISION, not a semantic one: all four guards are pure predicates ANDed together, so
     // any order gives the same verdict — but they are not equally selective. `varSpans` is keyed on

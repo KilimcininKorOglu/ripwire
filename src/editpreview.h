@@ -156,6 +156,7 @@ inline IngestResult previewMerge( const IngestResult& ing, std::uint32_t fileId,
     out.rootPaths       = ing.rootPaths;
     out.rootReals       = ing.rootReals;
     out.crawlRoot       = ing.crawlRoot;
+    out.crawlRootPrefixes = ing.crawlRootPrefixes;
     out.skippedOversize = ing.skippedOversize;
     out.crawlSkips      = ing.crawlSkips;
     out.fileHealth      = ing.fileHealth;

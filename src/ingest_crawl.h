@@ -58,7 +58,7 @@ struct LangEntry
 // Order does not matter (linear scan); kept grouped by language for readability.
 // The extent is EXACT, not headroom: it was 32 with 32 rows, .toml made it 33, .pyi made it 34 and the
 // .yml/.yaml pair made it 36, the .php/.phtml/.lua trio made it 40, the .ex/.exs pair made it 42, the
-// .rst/.adoc/.org/.mdx prose quartet made it 46, .dart made it 47 and .kt made it 48. Sizing it to the row count is what
+// .rst/.adoc/.org/.mdx prose quartet made it 46, .dart made it 47, .kt made it 48, .hxx made it 49 and .gd made it 50. Sizing it to the row count is what
 // makes
 // `std::array<bool, kLangTable.size()> present` (the grammar-prewarm set,
 // below) exact too, and it turns "added a row and forgot the extent" into a compile error rather than a
@@ -87,7 +87,7 @@ struct LangEntry
 // the latter a list item), so those files carry the file-level node alone and serve as ONE whole-file
 // unit. A heading detector per format is a later lane with its own measurement. `.mdx` is markdown with
 // JSX, which the block grammar already reads as html blocks (opaque). Gate: test/textdocscheck.sh.
-constexpr std::array<LangEntry, 48> kLangTable = {{
+constexpr std::array<LangEntry, 50> kLangTable = {{
     { ".cpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".cc",   Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".cxx",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
@@ -143,6 +143,12 @@ constexpr std::array<LangEntry, 48> kLangTable = {{
     { ".h",    Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".hpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".hh",   Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
+    // A4 (found-items 2026-09-17): `.hxx` (a C++ header spelling, same status as `.hpp`/`.hh`) had no row
+    // here — every OTHER per-extension table in the tree (flipimpact.h's dead-code header set, layout.h's
+    // --layout scan, lintrules.h, quality.h's isHeaderPath/isTestScriptPath twin, resolve.h's include
+    // resolver, verbs_lint.h) already lists `.hxx` alongside `.h`/`.hpp`/`.hh`, so a repository that spells
+    // its headers `.hxx` was invisible to the crawl even though every downstream table was ready for it.
+    { ".hxx",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".c",    Lang::C,          &tree_sitter_c,          "c"          },   // plain C (L3) — was entirely invisible before this table gained its own row
     { ".py",   Lang::Python,     &tree_sitter_python,     "python"     },
     { ".pyi",  Lang::Python,     &tree_sitter_python,     "python"     },   // typing stub — often a library's ONLY Python-visible API (a Rust/C core's whole Python surface lives in one .pyi)
@@ -181,6 +187,11 @@ constexpr std::array<LangEntry, 48> kLangTable = {{
     // Lua: no classes, no imports. The five function-definition spellings and the one call node are the
     // whole extractable structure (queries/lua/tags.scm states the metatable/dynamic-dispatch floor).
     { ".lua",  Lang::Lua,        &tree_sitter_lua,        "lua"        },   // Lua — function/method defs (5 shapes) + calls
+    // GDScript (.gd): Godot's language. A .gd FILE IS A CLASS BODY — `class_name` names it, top-level
+    // `func`/`var` are its members — which is why queries/gdscript/tags.scm captures file-scope defs as
+    // function/var rather than needing an enclosing class node. `.tscn`/`.tres`/`.gdshader` are NOT
+    // indexed: they are scene/resource/shader formats with their own grammars, and none is vendored here.
+    { ".gd",   Lang::GDScript,   &tree_sitter_gdscript,   "gdscript"   },   // GDScript — class/func/var/const/enum/signal defs + calls
     // Kotlin: `.kts` (Gradle script DSL) is deliberately NOT a row here yet — its trailing-lambda
     // density needs its own parse-quality probe before riding this grammar; `.kt` only for now.
     { ".kt",   Lang::Kotlin,     &tree_sitter_kotlin,     "kotlin"     },   // Kotlin — classes/objects/interfaces/functions + calls; JVM-bridged to Java (graph.h langCompatible)
@@ -1550,17 +1561,20 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
                 return full;
             };
 
-            // user --exclude substrings prune dirs and drop files (vendored/generated trees). Multi-root (A12):
-            // match against the LABELED spelling so one excludes list applies uniformly across roots.
+            // user --exclude substrings prune dirs and drop files (vendored/generated trees). #228/A1: match
+            // against the ROOT-RELATIVE spelling (relForHash), never the raw typed path — an absolute or
+            // trailing-slash root spelling must not let an --exclude substring hit the checkout location
+            // above the root (the same defect class rootRelPath fixes for the index-builder seams). Multi-root
+            // (A12): match against the LABELED spelling so one excludes list applies uniformly across roots.
             bool excluded = false;
             if( !excludeSubstr.empty() )
             {
-                std::string labeledBuf;
-                std::string_view matchPath = fullPath();
+                std::string             labeledBuf;
+                const std::string_view  rel       = relForHash( fullPath(), rootDir );
+                std::string_view        matchPath = rel;
                 if( !excludeLabel.empty() )
                 {
                     labeledBuf.assign( excludeLabel );
-                    const std::string_view rel = relForHash( fullPath(), rootDir );
                     if( !rel.empty() ) { labeledBuf.push_back( '/' );  labeledBuf.append( rel ); }
                     matchPath = labeledBuf;
                 }

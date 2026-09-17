@@ -33,6 +33,17 @@
 #   * Arm 25 — DISCLOSURE: a narrow decided by a qualified written type matched only its final segment, so it never reads
 #     as precise. Its edge carries prov="final-segment" (the floor's wrong edge, a correct parameter narrow and the local
 #     twin alike); an unqualified narrow and a uniquely named call carry no prov=, and both legends define the value.
+#   * Arms 39-43 — TEMPLATE ARGUMENTS in a written type (2026-09-17). An unqualified template-id (`Vec<Decl *>& v`) recorded
+#     no type at all, so `v.size()` never reached Rule 2, while its qualified twin (`ll::Vec<Decl *>&`) did; and a type
+#     whose arguments sit before its last name (`Outer<int>::Inner& in`) recorded `Outer` — a precise edge to the wrong
+#     class wherever `Outer` defines the method. The recorded name is now the type's LAST NAME read through the grammar's
+#     fields, never cut from its text.
+#     (39d) pins the stated floor: an unqualified template-id CONSTRUCTOR (`auto v = Vec<Decl *>()`) infers nothing.
+#   * Arms 44-51 — an ASSIGNMENT's callee is a type only when a class is called that (2026-09-17). `t = ns::cast<Target>( y )`
+#     recorded `cast`, and the conflict tombstoned the written `Target* t`: Rule 2's narrow (44, 45, 50), the field use-site
+#     pin (49) and a member's Rule 2b narrow (46) were lost. A class-named assignment still types and still conflicts (47);
+#     a DECLARATION initialised by a call still tombstones a sibling declaration (48); the new record byte round-trips
+#     the cache (51).
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -290,9 +301,9 @@ expectNarrow "(24)" lookupExternal "find@lib/map.h:1"
 #        before the attribute existed: (25) rows a, b, c and both legend rows. ─────────────────────────────────────────
 "$BIN" "$VFIX" --no-cache >"$TMP/vis.map" 2>/dev/null
 "$BIN" "$VFIX" --no-cache --legend=compact >"$TMP/vis.compact" 2>/dev/null
-provOf(){   # the prov= of caller $1's <c n="$2"> edge in the map: a word, "none" when absent, NO-EDGE when the row or edge is missing
+provOf(){   # the prov= of caller $1's <c n="$2"> edge in map $3 (default: the VFIX map): a word, "none" when absent, NO-EDGE when missing
     local row
-    row="$( tr '<' '\n' <"$TMP/vis.map" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
+    row="$( tr '<' '\n' <"${3:-$TMP/vis.map}" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
     row="$( printf '%s\n' "$row" | grep "^c n=\"$2\"" | head -1 )"
     if [ -z "$row" ]; then
         printf 'NO-EDGE'
@@ -302,9 +313,9 @@ provOf(){   # the prov= of caller $1's <c n="$2"> edge in the map: a word, "none
         printf 'none'
     fi
 }
-expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent)
+expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent), optional map file (provOf's $3)
     local got
-    got="$( provOf "$2" "$3" )"
+    got="$( provOf "$2" "$3" "${5:-}" )"
     if [ "$got" = "$4" ]; then
         ok "$1 $2() -> $3: prov=[$got]"
     else
@@ -325,6 +336,452 @@ if grep -q 'final-segment' "$TMP/vis.compact"; then
     ok "(25g) the compact legend defines prov=final-segment"
 else
     no "(25g) the compact legend does not define prov=final-segment"
+fi
+# ── Arms 26-31: CLASS IDENTITY — an interface-typed receiver and its NESTED NAMESAKES (2026-09-16). Rule 2 matched
+#    `T::m` by the final class-name segment, and a nested class loses its enclosing class in that key: a call through
+#    `Iterator* it` whose Iterator is an abstract interface (its methods are pure-virtual DECLARATIONS, never in the
+#    definitions-only map) narrowed onto the unrelated nested `Iterator` classes that do define the method, and every
+#    candidate was wrong (measured on rocksdb @ 0e2801ac3: 79 sites, 5-way splits over memtable/'s nested iterators).
+#    Now: a hit owned by a nested class the caller cannot name is dropped, and when nothing is left and the method is
+#    only DECLARED along the receiver class's ancestry, the call resolves to the definitions in the class's real
+#    subclasses — an honest dispatch split, never trimmed to the same-file override by the locality ladder. LINE
+#    NUMBERS ARE ASSERTED: include/iterator.h:6 IteratorBase::size; memtable/rep.h:12 ListRep::Iterator::key, :25
+#    Skip::Iterator::key (out-of-line); db/impls.h:5 DBIter::key, :14 Outer::NestedIt::key; tests/use.cc:5 KVIter::key.
+DFIX="$TMP/dispatchfix"
+mkdir -p "$DFIX/include" "$DFIX/memtable" "$DFIX/db" "$DFIX/tests"
+cat >"$DFIX/include/iterator.h" <<'EOF'
+struct IteratorBase
+{
+    virtual ~IteratorBase() {}
+    virtual bool Valid() const = 0;
+    virtual int key() const = 0;
+    virtual int size() const { return 0; }
+};
+struct Iterator : IteratorBase
+{
+    virtual int value() const = 0;
+};
+EOF
+cat >"$DFIX/memtable/rep.h" <<'EOF'
+struct MemRep
+{
+    struct Iterator
+    {
+        virtual int key() const = 0;
+    };
+};
+struct ListRep : MemRep
+{
+    struct Iterator : MemRep::Iterator
+    {
+        int key() const override { return 1; }
+        bool Valid() const { return true; }
+    };
+    int peek( Iterator& it ) { return it.key(); }
+};
+struct Skip
+{
+    struct Iterator
+    {
+        int key() const;
+        bool Valid() const;
+    };
+};
+inline int Skip::Iterator::key() const { return 2; }
+inline bool Skip::Iterator::Valid() const { return true; }
+EOF
+cat >"$DFIX/db/impls.h" <<'EOF'
+#include "../include/iterator.h"
+struct DBIter : Iterator
+{
+    bool Valid() const override { return true; }
+    int key() const override { return 3; }
+    int value() const override { return 0; }
+    int size() const override { return 7; }
+};
+struct Outer
+{
+    struct NestedIt : Iterator
+    {
+        bool Valid() const override { return true; }
+        int key() const override { return 4; }
+        int value() const override { return 0; }
+    };
+};
+EOF
+cat >"$DFIX/tests/use.cc" <<'EOF'
+#include "../include/iterator.h"
+struct KVIter : Iterator
+{
+    bool Valid() const override { return true; }
+    int key() const override { return 5; }
+    int value() const override { return 0; }
+};
+Iterator* makeIter();
+int useParam( Iterator* it ) { return it->key(); }
+int useLocal() { Iterator* it = makeIter(); return it->key(); }
+int useInherited( Iterator& it ) { return it.size(); }
+EOF
+cat >"$DFIX/tests/qual.cc" <<'EOF'
+#include "../memtable/rep.h"
+int useQualified( Skip::Iterator& it ) { return it.key(); }
+EOF
+dispatchRows(){   # caller, callee name → its sorted `name@path:line` rows, or NO-CALLEES-ANSWER when the probe did not run
+    local out
+    out="$( "$BIN" "$DFIX" "--callees=$1" --no-cache 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="\([^"]*\)".* p="\([^"]*\)".*/\1@\2/p' | grep "^$2@" | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectDispatch(){   # arm label, caller, callee, the exact expected row set
+    local got
+    got="$( dispatchRows "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2(): $3 -> [$got]"
+    else
+        no "$1 $2(): $3 -> [$got], want [$4]"
+    fi
+}
+DISPATCH_KEYS="key@db/impls.h:14 key@db/impls.h:5 key@tests/use.cc:5"
+# presence guard: the fixture's definitions and callers are indexed, or the arms below prove nothing
+DMAP="$( "$BIN" "$DFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+dmiss=0
+for want in 'n="useParam"' 'n="useLocal"' 'n="useInherited"' 'n="peek"' 'n="useQualified"' 'n="DBIter"' 'n="NestedIt"' 'n="KVIter"'; do
+    printf '%s\n' "$DMAP" | grep -qF "$want" || { no "presence guard: dispatchfix symbol $want not indexed"; dmiss=1; }
+done
+[ "$dmiss" = 0 ] && ok "presence: all dispatchfix symbols indexed"
+# ── 26) THE DEFECT: `it->key()` through a PARAMETER typed with the interface reaches its three real overriders — the
+#        top-level DBIter, the NESTED Outer::NestedIt (a nested subclass is still a subclass) and the same-file KVIter —
+#        and neither nested namesake (ListRep::Iterator, Skip::Iterator), and is not trimmed to the same-file KVIter. ─
+expectDispatch "(26)" useParam key "$DISPATCH_KEYS"
+# ── 27) the same through a typed LOCAL (Rule 2's flat table), `Iterator* it = makeIter();`. ────────────────────────────
+expectDispatch "(27)" useLocal key "$DISPATCH_KEYS"
+# ── 28) INSIDE ListRep a bare `Iterator` IS ListRep::Iterator (a nested class is nameable in its enclosing class): the
+#        visible nested owner stays, Skip's namesake goes. ──────────────────────────────────────────────────────────────
+expectDispatch "(28)" peek key "key@memtable/rep.h:12"
+# ── 29) a QUALIFIED nested type, `Skip::Iterator& it`, names exactly Skip's nested class — its out-of-line def. ─────────
+expectDispatch "(29)" useQualified key "key@memtable/rep.h:25"
+# ── 30) control — a method the interface's base DEFINES (`IteratorBase::size`) keeps the static inherited definition;
+#        overriders join only when the ancestry has no body at all. ────────────────────────────────────────────────────
+expectDispatch "(30)" useInherited size "size@include/iterator.h:6"
+# ── 31) the dispatch split is disclosed as ambiguity: useParam carries amb=, never a quiet single pin. ────────────────
+if printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | grep -q 'amb="'; then
+    ok "(31) useParam carries amb= — the dispatch split is disclosed"
+else
+    no "(31) useParam carries no amb= — a multi-target dispatch reads as a confident edge: $( printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | head -1 )"
+fi
+# ── Arms 32-35: the four shapes the corpora taught class identity (rocksdb, llvm-project, a private C++ corpus). ────────
+# 32: a namespace-level FORWARD DECLARATION `class Iterator;` is not a class — counted as one it made every bare `Iterator`
+#     read as several namesakes and refused arm 26's dispatch (rocksdb has five). db/fwd.h adds one; arms 26-27 re-run.
+printf 'class Iterator;\nclass IteratorBase;\n' >"$DFIX/db/fwd.h"
+expectDispatch "(32)" useParam key "$DISPATCH_KEYS"
+# 33: a type ALIAS reaching a nested class (`using NodeSet = Graph::NodeSet;`, llvm's X86 LVI pass) is invisible to the
+#     index; the nested class's header is visible from the caller, so its hit is never dropped for the unrelated
+#     namespace-level `NodeSet` the caller never includes. pipe/pipeliner.h:1 must not be the whole answer.
+mkdir -p "$DFIX/graph" "$DFIX/pipe"
+printf 'struct Graph\n{\n    struct NodeSet\n    {\n        void clear() {}\n    };\n};\n' >"$DFIX/graph/graph.h"
+printf 'struct NodeSet { void clear() {} };\n' >"$DFIX/pipe/pipeliner.h"
+printf '#include "../graph/graph.h"\nstruct Pass\n{\n    using NodeSet = Graph::NodeSet;\n    void run() { NodeSet s; s.clear(); }\n};\n' >"$DFIX/graph/pass.cc"
+got="$( dispatchRows run clear )"
+case " $got " in
+    *" clear@graph/graph.h:5 "*) ok "(33) run(): an aliased nested NodeSet keeps its clear -> [$got]" ;;
+    *)                           no "(33) run(): clear -> [$got] lost graph/graph.h:5 — an alias's nested class was dropped for an unincluded namesake" ;;
+esac
+# 34: two NAMESPACE-level classes named Value (llvm::Value, sandboxir::Value): the base the derived class's file INCLUDES is
+#     the one it means — here through an include-root spelling (`"ir/Value.h"`) the path-precise include set cannot resolve,
+#     read as a path suffix, so the out-of-line sb::Value::getType in sandbox/Value.cc is not a candidate.
+mkdir -p "$DFIX/ir" "$DFIX/sandbox" "$DFIX/opt"
+printf 'struct Value\n{\n    int getType() const { return 1; }\n};\n' >"$DFIX/ir/Value.h"
+printf 'namespace sb { struct Value { int getType() const; }; }\n' >"$DFIX/sandbox/Value.h"
+printf '#include "sandbox/Value.h"\nint sb::Value::getType() const { return 2; }\n' >"$DFIX/sandbox/Value.cc"
+printf '#include "ir/Value.h"\nstruct Inst : Value {};\n' >"$DFIX/ir/Inst.h"
+printf '#include "ir/Inst.h"\nint typeOf( Inst* i ) { return i->getType(); }\n' >"$DFIX/opt/use.cc"
+expectDispatch "(34)" typeOf getType "getType@ir/Value.h:3"
+# 35: an INHERITED BODY — `IOStatus` defines no `ok`, its base Status does — is the static answer through the typed receiver,
+#     over a same-named `ok` elsewhere the name ladder could only split or decline over.
+#     Caller, Status and the decoy sit in three directories and the caller includes both headers — the shape the ladder
+#     DECLINES (two cross-directory candidates, no include narrow), measured as 397 formerly unlinked calls on rocksdb.
+mkdir -p "$DFIX/status" "$DFIX/probe" "$DFIX/app"
+printf 'struct Status\n{\n    bool ok() const { return true; }\n};\nstruct IOStatus : Status {};\n' >"$DFIX/status/status.h"
+printf 'struct Probe { bool ok() const { return false; } };\n' >"$DFIX/probe/probe.h"
+printf '#include "../status/status.h"\n#include "../probe/probe.h"\nbool healthy( IOStatus& s ) { return s.ok(); }\n' >"$DFIX/app/health.cc"
+expectDispatch "(35)" healthy ok "ok@status/status.h:3"
+# ── 36) an identity CLAIM is not a final-segment guess: `hs::DiskHealth& d; d.fine()` resolves through class identity to the
+#        inherited HealthBase::fine — one plausible class, its namespace evidenced in its file (a non-member of `hs` defined
+#        there: a file holding only classes gives no namespace evidence, and the claim then stays out) — so the edge carries no
+#        prov="final-segment", which says a qualified type was matched by its last name and nothing checked. Control: the
+#        class-qualified `Skip::Iterator& it; it.key()` (arm 29) is a step-1 narrow, no claim, and keeps the disclosure. RED
+#        on a merge that stamps every qualified receiver's edge: (36b). ──────────────────────────────────────────────────
+printf 'namespace hs\n{\nstruct HealthBase\n{\n    bool fine() const { return true; }\n};\nstruct DiskHealth : HealthBase {};\ninline int version() { return 1; }\n}\n' >"$DFIX/status/ns.h"
+printf 'struct Gauge { bool fine() const { return false; } };\n' >"$DFIX/probe/gauge.h"
+printf '#include "../status/ns.h"\n#include "../probe/gauge.h"\nbool nsHealthy( hs::DiskHealth& d ) { return d.fine(); }\n' >"$DFIX/app/nshealth.cc"
+expectDispatch "(36a)" nsHealthy fine "fine@status/ns.h:5"
+"$BIN" "$DFIX" --no-cache >"$TMP/dispatch.map" 2>/dev/null
+expectProv "(36b)" nsHealthy fine none "$TMP/dispatch.map"
+expectProv "(36c)" useQualified key final-segment "$TMP/dispatch.map"
+
+# ── 37) FLOOR, stated: an inherited body answers for EVERY overload of its name. rocksdb's BackupEngineReadOnlyBase pairs a
+#        pure-virtual RestoreDBFromLatestBackup( options, db, wal ) with an inline compat overload ( db, wal, options = {} ), so
+#        a call through `BackupEngine*` resolves to the compat body even when it passes RestoreOptions first, and the pure
+#        overload's overrider is not joined. Joining it was built and measured (2026-09-17): 7 rocksdb sites, graded against
+#        source 2 better and 5 worse (those 5 call the compat overload, which already answered RIGHT); 0 llvm-project sites.
+#        Arity cannot tell the two apart — only argument TYPES could. If this arm goes red, the floor moved: rewrite it to
+#        assert the fixed behaviour, never delete it. ─────────────────────────────────────────────────────────────────────────
+mkdir -p "$DFIX/backup" "$DFIX/vecs"
+printf 'struct ReadOnlyBase\n{\n    virtual ~ReadOnlyBase() {}\n    virtual int Restore( int opts, int dir ) = 0;\n    int Restore( int dir, int wal = 0 ) { return Restore( wal, dir ); }\n};\nstruct Engine : ReadOnlyBase {};\n' >"$DFIX/backup/engine.h"
+printf '#include "engine.h"\nstruct EngineImpl : Engine\n{\n    int Restore( int opts, int dir ) override { return opts + dir; }\n};\n' >"$DFIX/backup/impl.cc"
+printf '#include "../backup/engine.h"\nint restoreAll( Engine* e ) { return e->Restore( 1, 2 ); }\n' >"$DFIX/app/restore.cc"
+expectDispatch "(37)" restoreAll Restore "Restore@backup/engine.h:5"
+# ── 38) a class template's SPECIALIZATION defines the method too: llvm's `SmallVectorImpl<FunctionDecl *>& v; v.push_back( FD )`
+#        claimed the primary SmallVectorTemplateBase::push_back, while pointer T selects SmallVectorTemplateBase<T, true> —
+#        whose members have no class symbol (scope `TBase<T, true>`), so the ancestor walk never saw them (sampled: none ->
+#        wrong, 133 llvm sites). The defining level now adds its template's specialization-scoped definitions: the family
+#        split, holding the one the instantiation picks. RED before: (38). ───────────────────────────────────────────────────
+printf 'namespace ll\n{\ntemplate <typename T, bool = false>\nclass TBase\n{\npublic:\n    void push_back( const T& x ) {}\n};\ntemplate <typename T>\nclass TBase<T, true>\n{\npublic:\n    void push_back( T x ) {}\n};\ntemplate <typename T>\nclass VecImpl : public TBase<T>\n{\n};\ninline int version() { return 1; }\n}\n' >"$DFIX/vecs/adt.h"
+printf 'struct Log { void push_back( int ) {} };\n' >"$DFIX/probe/log.h"
+printf '#include "../vecs/adt.h"\n#include "../probe/log.h"\nstruct Decl;\nvoid fillQ( ll::VecImpl<Decl *> &v, Decl* d )\n{\n    v.push_back( d );\n}\n' >"$DFIX/app/fill.cc"
+expectDispatch "(38)" fillQ push_back "push_back@vecs/adt.h:13 push_back@vecs/adt.h:7"
+
+# ── Arms 39-43: TEMPLATE ARGUMENTS in a receiver's written type (see the header). The record keeps the type's last name, and
+#    finalSegment() cut a spelling at its FIRST `<`: an unqualified template-id (a `template_type` node) was refused outright,
+#    and `Outer<int>::Inner` was cut to `Outer`. llvm-project writes the first shape wherever code sits inside `namespace llvm`
+#    or imports the name (`SmallVectorImpl<FunctionDecl *> &Decls; Decls.push_back( FD )`). Every candidate lives in a header
+#    two directories from the caller, beside a same-named decoy the caller also includes, so a call Rule 2 cannot type
+#    declines instead of landing on a locality guess. LINE NUMBERS ARE ASSERTED: vecs/adt.h:7 Vec::size, :13 TBase::push_back,
+#    :19 TBase<T, true>::push_back, :28 Outer::size, :31 Outer::Inner::size; probe/log.h:3-4 the Log decoys.
+TFIX="$TMP/tmplfix"
+mkdir -p "$TFIX/vecs" "$TFIX/probe" "$TFIX/app"
+cat >"$TFIX/vecs/adt.h" <<'EOF'
+namespace ll
+{
+template <typename T>
+class Vec
+{
+public:
+    int size() const { return 0; }
+};
+template <typename T, bool = false>
+class TBase
+{
+public:
+    void push_back( const T& x ) {}
+};
+template <typename T>
+class TBase<T, true>
+{
+public:
+    void push_back( T x ) {}
+};
+template <typename T>
+class VecImpl : public TBase<T>
+{
+};
+template <typename T>
+struct Outer
+{
+    int size() const { return 1; }
+    struct Inner
+    {
+        int size() const { return 2; }
+    };
+};
+inline int version() { return 1; }
+}
+EOF
+cat >"$TFIX/probe/log.h" <<'EOF'
+struct Log
+{
+    void push_back( int ) {}
+    int size() const { return 3; }
+};
+EOF
+cat >"$TFIX/app/sizes.cc" <<'EOF'
+#include "../vecs/adt.h"
+#include "../probe/log.h"
+struct Decl;
+using namespace ll;
+int sizeParam( Vec<Decl *>& v ) { return v.size(); }
+int sizeLocal() { Vec<Decl *> v; return v.size(); }
+int sizeLoop() { int n = 0; for( const Vec<int>& v : table ) { n += v.size(); } return n; }
+int sizeCtor() { auto v = Vec<Decl *>(); return v.size(); }
+int sizeStdArg( const Vec<std::string>& v ) { return v.size(); }
+int sizeInner( Outer<int>::Inner& in ) { return in.size(); }
+int sizeInnerLocal() { Outer<int>::Inner in; return in.size(); }
+int sizeInnerCtor() { auto in = Outer<int>::Inner(); return in.size(); }
+EOF
+cat >"$TFIX/app/fill.cc" <<'EOF'
+#include "../vecs/adt.h"
+#include "../probe/log.h"
+struct Decl;
+using namespace ll;
+void fillQ( ll::VecImpl<Decl *>& v, Decl* d ) { v.push_back( d ); }
+void fillU( VecImpl<Decl *>& v, Decl* d ) { v.push_back( d ); }
+void fillL( Decl* d ) { VecImpl<Decl *> v; v.push_back( d ); }
+namespace ll
+{
+void fillN( VecImpl<Decl *>& v, Decl* d ) { v.push_back( d ); }
+}
+EOF
+tmplRows(){   # caller, callee name → its sorted `name@path:line` rows, or NO-CALLEES-ANSWER when the probe did not run
+    local out
+    out="$( "$BIN" "$TFIX" "--callees=$1" --no-cache 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="\([^"]*\)".* p="\([^"]*\)".*/\1@\2/p' | grep "^$2@" | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectTmpl(){   # arm label, caller, callee, the exact expected row set
+    local got
+    got="$( tmplRows "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2(): $3 -> [$got]"
+    else
+        no "$1 $2(): $3 -> [${got:-no edge}], want [$4]"
+    fi
+}
+# presence guard: the fixture's definitions and callers are indexed, or the arms below prove nothing
+TMAP="$( "$BIN" "$TFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+tmiss=0
+for want in 'n="Vec"' 'n="VecImpl"' 'n="Outer"' 'n="Inner"' 'n="Log"' 'n="sizeParam"' 'n="sizeInnerCtor"' 'n="fillQ"' 'n="fillN"'; do
+    printf '%s\n' "$TMAP" | grep -qF "$want" || { no "presence guard: tmplfix symbol $want not indexed"; tmiss=1; }
+done
+[ "$tmiss" = 0 ] && ok "presence: all tmplfix symbols indexed"
+# ── 39) THE DEFECT: an UNQUALIFIED template-id types its receiver like any class name — as a parameter (a), a local (b) and a
+#        range-for variable (c). RED before: no edge. (d) is a STATED FLOOR: a constructor spelled as an unqualified
+#        template-id, `auto v = Vec<Decl *>()`, infers nothing, because that spelling is every cast helper — reading it
+#        records `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )`, whose conflict with a written type or a
+#        second declaration tombstones the variable: 324 edges lost on llvm-project on integration/train-3, 779 on main
+#        before #278 dropped an assignment's callee name (ingest_binds.h ctorNameNode). If (d) goes red, the floor moved:
+#        rewrite it to assert the fixed behaviour, never delete it. ──────────────────────────────────────────────────────────
+expectTmpl "(39a)" sizeParam size "size@vecs/adt.h:7"
+expectTmpl "(39b)" sizeLocal size "size@vecs/adt.h:7"
+expectTmpl "(39c)" sizeLoop size "size@vecs/adt.h:7"
+expectTmpl "(39d)" sizeCtor size ""
+# ── 40) a `std::` template ARGUMENT does not make the type qualified: `const Vec<std::string>& v` narrows, is not refused as
+#        a standard type, and its edge carries no prov="final-segment" (no qualifier was skipped). RED on a fix that reads
+#        qualification off the whole spelling: prov=final-segment. ───────────────────────────────────────────────────────────
+expectTmpl "(40a)" sizeStdArg size "size@vecs/adt.h:7"
+"$BIN" "$TFIX" --no-cache >"$TMP/tmpl.map" 2>/dev/null
+expectProv "(40b)" sizeStdArg size none "$TMP/tmpl.map"
+# ── 41) template arguments BEFORE the last name: `Outer<int>::Inner` is Inner, not Outer — a parameter (a), a local (b) and a
+#        constructor (c). RED before: one precise edge to Outer::size, line 28. ───────────────────────────────────────────
+expectTmpl "(41a)" sizeInner size "size@vecs/adt.h:31"
+expectTmpl "(41b)" sizeInnerLocal size "size@vecs/adt.h:31"
+expectTmpl "(41c)" sizeInnerCtor size "size@vecs/adt.h:31"
+# ── 42) the SPELLING never decides: the unqualified parameter, local and in-namespace twins of fillQ's
+#        `ll::VecImpl<Decl *>&` resolve exactly as it does. VecImpl defines no push_back, so the answer is whatever the
+#        resolver makes of an inherited member — its base template's family split where class identity walks the bases,
+#        a decline where nothing does; either way one answer for every spelling. RED before on a resolver that walks the
+#        bases: the qualified twin resolved and the unqualified ones declined. ──────────────────────────────────────────────
+twinQ="$( tmplRows fillQ push_back )"
+for twin in fillU fillL fillN; do
+    got="$( tmplRows "$twin" push_back )"
+    if [ "$twinQ" = NO-CALLEES-ANSWER ] || [ "$got" != "$twinQ" ]; then
+        no "(42) $twin(): push_back -> [${got:-no edge}], its qualified twin fillQ() -> [${twinQ:-no edge}]"
+    else
+        ok "(42) $twin(): push_back -> [${got:-no edge}], as its qualified twin fillQ()"
+    fi
+done
+# ── 43) the mechanism, not just the answer: the census names Rule 2 (receiver-rule) for sizeParam's site. ─────────────────
+"$BIN" "$TFIX" --no-cache --pin-census="$TMP/tmpl.tsv" >/dev/null 2>&1
+mech="$( awk -F '\t' '$1 == "C" && $6 ~ /::sizeParam#/ && $7 == "size" { print $2 }' "$TMP/tmpl.tsv" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//' )"
+[ "$mech" = "receiver-rule" ] \
+    && ok "(43) sizeParam's size site is decided by receiver-rule (Rule 2)" \
+    || no "(43) sizeParam's size site mech=[${mech:-NO-CENSUS-ROW}], want [receiver-rule]"
+
+# ── Arms 44-51: a type read off an ASSIGNMENT's callee (2026-09-17). C++ `x = f( … )` records the callee's last name as
+#    x's type, because a constructor call and a function call are one grammar node — `t = ns::cast<Target>( y )` recorded
+#    `cast`, `t = makeTarget( y )` recorded `makeTarget`. Rule 2's flat per-function table tombstones a variable whose
+#    records disagree, so the non-type erased the variable's WRITTEN type (`Target* t = nullptr;`) and the call declined
+#    (a same-named method sits two directories away); the field use-site index lost the same pin, and the record made a
+#    MEMBER assigned from a call read as a local, so Rule 2b refused its declared type. An assignment declares nothing, so
+#    its callee is a type only when the corpus defines a class of that name. Candidates live two directories apart from the
+#    caller and nothing is included, so an unnarrowed call declines (no edge) instead of landing on a same-directory guess.
+AFIX="$TMP/assignfix"
+mkdir -p "$AFIX/lib" "$AFIX/lib2" "$AFIX/lib3" "$AFIX/app"
+printf 'struct Target { int pick( int n ) { return n; } int count; };\n' >"$AFIX/lib/target.h"
+printf 'struct Decoy { int pick( int n ) { return n; } int count; };\n'  >"$AFIX/lib2/decoy.h"
+printf 'namespace ns { template <class T, class F> T* cast( F* from ) { return static_cast<T*>( from ); } }\nTarget* makeTarget( void* p );\n' >"$AFIX/lib3/cast.h"
+cat >"$AFIX/app/use.cpp" <<'EOF'
+int assignCast( void* y ) { Target* t = nullptr; t = ns::cast<Target>( y ); return t->pick( 1 ); }
+int assignCall( void* y ) { Target* t = nullptr; t = makeTarget( y ); return t->pick( 1 ); }
+int countCast( void* y ) { Target* t = nullptr; t = ns::cast<Target>( y ); return t->count; }
+struct Holder
+{
+    Target* cur;
+    int memberCast( void* y ) { cur = ns::cast<Target>( y ); return cur->pick( 1 ); }
+};
+int assignCtor() { Decoy d; d = Decoy(); return d.pick( 1 ); }
+int twoCtors() { int n = 0; { auto t = Target(); n += t.pick( 1 ); } { auto t = Decoy(); n += t.pick( 2 ); } return n; }
+int declCast( void* y ) { int n = 0; { auto t = ns::cast<Decoy>( y ); n += t->pick( 1 ); } { Target* t = nullptr; n += t->pick( 2 ); } return n; }
+EOF
+assignRows(){   # caller → its sorted pick@<path:line> rows, or NO-CALLEES-ANSWER when the probe did not run
+    local out
+    out="$( "$BIN" "$AFIX" "--callees=$1" --no-cache 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="pick".* p="\([^"]*\)".*/pick@\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectAssign(){   # arm label, caller, the exact expected row set
+    local got
+    got="$( assignRows "$2" )"
+    if [ "$got" = "$3" ]; then
+        ok "$1 $2(): pick -> [$got]"
+    else
+        no "$1 $2(): pick -> [${got:-no edge}], want [$3]"
+    fi
+}
+# presence guard: both candidate defs, both fields and every probed caller are indexed, or the arms below prove nothing
+AMAP="$( "$BIN" "$AFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+amiss=0
+for want in 'n="pick" sc="Target"' 'n="pick" sc="Decoy"' 'n="assignCast"' 'n="assignCall"' 'n="countCast"' 'n="memberCast" sc="Holder"' \
+            'n="assignCtor"' 'n="twoCtors"' 'n="declCast"'; do
+    printf '%s\n' "$AMAP" | grep -qF "$want" || { no "presence guard: assignfix symbol $want not indexed"; amiss=1; }
+done
+[ "$amiss" = 0 ] && ok "presence: all assignfix symbols indexed"
+# ── 44) THE DEFECT: `t = ns::cast<Target>( y )` recorded `cast` and tombstoned the written `Target* t`. RED before: no edge. ──
+expectAssign "(44)" assignCast "pick@lib/target.h:1"
+# ── 45) the same through a plain function, `t = makeTarget( y )`. RED before: no edge. ─────────────────────────────────────
+expectAssign "(45)" assignCall "pick@lib/target.h:1"
+# ── 46) a MEMBER assigned from a call, `cur = ns::cast<Target>( y )`: the record is no local, so Rule 2b reads the field's
+#        declared `Target* cur`. RED before: no edge. ──────────────────────────────────────────────────────────────────────
+expectAssign "(46)" memberCast "pick@lib/target.h:1"
+# ── 47) controls — a CONSTRUCTOR still types: an assignment from a class the corpus defines agrees with its declaration (a),
+#        and two constructor-typed declarations of one name in sibling blocks still tombstone and decline, never one leaking to
+#        the other (b). Green before and after. ────────────────────────────────────────────────────────────────────────────
+expectAssign "(47a)" assignCtor "pick@lib2/decoy.h:1"
+expectAssign "(47b)" twoCtors ""
+# ── 48) a DECLARATION initialised by a call still counts as a declaration of unknown type: `auto t = ns::cast<Decoy>( y )`
+#        in one block beside `Target* t` in another keeps the flat table's tombstone and both decline, or the second block's
+#        type would reach the first block's call — one precise edge to the wrong class. Green before; RED on a fix that drops
+#        every call-read type. ─────────────────────────────────────────────────────────────────────────────────────────────
+expectAssign "(48)" declCast ""
+# ── 49) the field use-site index shares the flat table's rule: `t->count` after the cast assignment pins to Target.count
+#        (no owner_candidates=). RED before: owner_candidates="2". ─────────────────────────────────────────────────────────
+uses="$( "$BIN" "$AFIX" --uses=Target.count --no-cache 2>/dev/null )"
+urow="$( printf '%s' "$uses" | tr '<' '\n' | grep '^u ' | grep 'app/use.cpp:3"' | head -1 )"
+if ! printf '%s' "$uses" | grep -q '<uses [^>]*of="Target.count"'; then
+    no "(49) --uses=Target.count did not answer"
+elif [ -z "$urow" ]; then
+    no "(49) --uses=Target.count has no row at app/use.cpp:3"
+elif printf '%s' "$urow" | grep -q 'owner_candidates='; then
+    no "(49) countCast's t->count is not pinned to Target.count: <$urow"
+else
+    ok "(49) countCast's t->count pins to Target.count: <$urow"
+fi
+# ── 50) the mechanism, not just the answer: the census names Rule 2 (receiver-rule) for assignCast's site. RED before. ─────
+"$BIN" "$AFIX" --no-cache --pin-census="$TMP/assign.tsv" >/dev/null 2>&1
+mech="$( awk -F '\t' '$1 == "C" && $6 ~ /::assignCast#/ && $7 == "pick" { print $2 }' "$TMP/assign.tsv" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//' )"
+[ "$mech" = "receiver-rule" ] \
+    && ok "(50) assignCast's pick site is decided by receiver-rule (Rule 2)" \
+    || no "(50) assignCast's pick site mech=[${mech:-NO-CENSUS-ROW}], want [receiver-rule]"
+# ── 51) determinism + cache transparency: whether a record was read off an assignment rides the cached record, so warm must
+#        equal cold. RED on a fix that does not persist it. ───────────────────────────────────────────────────────────────────
+"$BIN" "$AFIX" --no-cache >"$TMP/a1" 2>/dev/null
+"$BIN" "$AFIX" --no-cache >"$TMP/a2" 2>/dev/null
+rm -rf "$TMP/ac"
+"$BIN" "$AFIX" --cache="$TMP/ac" >/dev/null 2>&1
+"$BIN" "$AFIX" --cache="$TMP/ac" >"$TMP/awarm" 2>/dev/null
+if [ -s "$TMP/a1" ] && cmp -s "$TMP/a1" "$TMP/a2" && cmp -s "$TMP/a1" "$TMP/awarm"; then
+    ok "(51) assignfix map byte-identical: cold, cold again, and warm"
+else
+    no "(51) assignfix map differs across runs or warm vs cold"; diff "$TMP/a1" "$TMP/awarm" | head -6
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

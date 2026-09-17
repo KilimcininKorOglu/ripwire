@@ -31,6 +31,10 @@
 #       exactly as the neutrally-staged copy does, under `.` and under the absolute spelling.
 #   (5) THE QSNAP SCHEME BUMP (opt-in, RIPWIRE_PREFIX_BIN=<a pre-#228 build>) — the pre-fix binary writes its
 #       HEAD Snapshot into a shared cache; the fixed binary must not serve it.
+#   (6) A SELECTOR SPELLED FROM THE CWD — `<root as typed>/pkg/store.py:load` and the absolute `/…/pkg/store.py:load`
+#       answer like the root-relative `pkg/store.py:load` under every spelling, on --edit-check, --callers, --at and
+#       --affected (one shared matcher, graph.h filePathContainsRootRel). A1's first version matched root-relative
+#       ONLY, so every such selector refused a file 0.6.1 found (#281's CI: xmlwellformed's --edit-check).
 #
 # Fixtures are STAGED under this gate's own mktemp dir with neutral names (a copy beside the sources would
 # perturb the crawl, and an in-tree test/<x>fix location is itself a fixture component), git-committed with a
@@ -127,6 +131,24 @@ every_spelling()
     if [ -z "$missing" ]; then ok "$label"; else no "$label — missing under:$missing"; fi
 }
 
+# refuses_uniformly LABEL DIR VERB-ARGS... — every spelling's exit code is 1 (a uniform refusal). Some
+# CORRECT answers are "refuses, no document at all" (stdout empty, the diagnosis on stderr), which
+# invariant()'s "diff the abs run's stdout" guard has nothing to compare — this asserts the exit code
+# vector instead.
+refuses_uniformly()
+{
+    local label="$1" d="$2"; shift 2
+    local key; key="$( printf '%s' "$label" | tr -c 'A-Za-z0-9' '_' )"
+    local sp rcs="" want=""
+    for sp in $SPELLINGS; do
+        spell "$sp" "$d" "$TMP/out/$key.$sp" "$@"
+        rcs="$rcs$( cat "$TMP/out/$key.$sp.rc" )"
+        want="${want}1"
+    done
+    [ "$rcs" = "$want" ] && ok "$label: refuses (rc=1) identically under every spelling" \
+                         || no "$label: exit codes per spelling ($SPELLINGS) = $rcs, want $want"
+}
+
 # ── (1)+(2) the four-file Python tree (the #228 repro) ───────────────────────────────────────────────
 PY="$TMP/w/pyfour"
 stage "$FIX" "$PY"
@@ -157,6 +179,110 @@ qrc=""
 for sp in $SPELLINGS; do qrc="$qrc$( cat "$TMP/out/pyfour___quality_delta.$sp.rc" )"; done
 [ "$qrc" = "000000" ] && ok "control: --quality-delta exits 0 on the unchanged tree under all six spellings" \
                       || no "control: --quality-delta exit codes per spelling ($SPELLINGS) = $qrc, want 000000"
+
+# ── (6) a selector spelled from the cwd (#281) ───────────────────────────────────────────────────────────────
+# selector_prefix SPELLING DIR FORM — what a user in that spelling's cwd types before a root-relative path:
+#   FORM=typed  the root exactly as that spelling typed it, then '/' (`./`, "$PWD/", the symlink, `../name/`);
+#   FORM=abs    the absolute root (physical — $TMP is staged under `pwd -P`, so the symlink spelling reaches it
+#               through the root's realpath, not through the link text);
+#   FORM=cwdrel the root's path RELATIVE TO THAT SPELLING'S CWD, whatever the root was typed as — xmlwellformed's own
+#               shape: `ripwire "$ROOT/test/fixture" --edit-check=test/fixture/geometry.cpp:distance` from $ROOT.
+selector_prefix()
+{
+    local sp="$1" d="$2" form="$3" name; name="$( basename "$d" )"
+    if [ "$form" = abs ]; then printf '%s/' "$d"; return; fi
+    if [ "$form" = cwdrel ]; then
+        case "$sp" in
+            dot|dotslash)    printf './' ;;
+            abs|trail|link)  printf '%s/' "${d#"$TMP"/}" ;;   # these spellings run from $TMP
+            dotdot)          printf '../%s/' "$name" ;;
+        esac
+        return
+    fi
+    case "$sp" in
+        dot|dotslash) printf './' ;;
+        abs|trail)    printf '%s/' "$d" ;;
+        link)         printf '%s/' "$TMP/ln/$name" ;;
+        dotdot)       printf '../%s/' "$name" ;;
+    esac
+}
+
+# cwd_selector LABEL DIR FORM FLAG REL PATTERN... — under every spelling, FLAG=<prefix><REL> exits 0 and its stdout
+# holds every PATTERN (fixed strings). The patterns are the root-relative selector's own answer rows, so a refusal,
+# an empty document, or a different file cannot pass; the selector's echo (of=, changed=) is never asserted.
+cwd_selector()
+{
+    local label="$1" d="$2" form="$3" flag="$4" rel="$5"; shift 5
+    local key sp pat pre rc wrong=""
+    key="$( printf '%s' "$label" | tr -c 'A-Za-z0-9' '_' )"
+    for sp in $SPELLINGS; do
+        pre="$( selector_prefix "$sp" "$d" "$form" )"
+        spell "$sp" "$d" "$TMP/out/$key.$sp" "$flag=$pre$rel"
+        rc="$( cat "$TMP/out/$key.$sp.rc" )"
+        if [ "$rc" != 0 ]; then wrong="$wrong $sp(rc=$rc)"; continue; fi
+        for pat in "$@"; do
+            grep -qF -- "$pat" "$TMP/out/$key.$sp.xml" || { wrong="$wrong $sp(missing $pat)"; break; }
+        done
+    done
+    [ -z "$wrong" ] && ok "$label: answers like the root-relative selector under . ./ \$PWD \$PWD/ symlink ../name" \
+                    || no "$label — wrong under:$wrong"
+}
+
+for form in typed abs cwdrel; do
+    cwd_selector "(6) --edit-check=<$form root>/pkg/store.py:load" "$PY" "$form" --edit-check pkg/store.py:load 'sym="load"' '<c n="handler" p="app/views.py:4"/>'
+    cwd_selector "(6) --callers=<$form root>/pkg/store.py:load"    "$PY" "$form" --callers    pkg/store.py:load 'count="1"' '<s t="fn" n="handler" p="app/views.py:4"/>'
+    cwd_selector "(6) --at=<$form root>/pkg/store.py:2"            "$PY" "$form" --at         pkg/store.py:2    'sym="load"'
+    cwd_selector "(6) --affected=<$form root>/pkg/store.py"        "$PY" "$form" --affected   pkg/store.py      'seeds="1"' 'reached="1"'
+done
+# the control: a cwd-spelled path that names no indexed file still refuses under every spelling, in both forms (the
+# second reading adds a spelling of the same file, it does not loosen the match)
+for form in typed abs cwdrel; do
+    nrc=""
+    for sp in $SPELLINGS; do
+        spell "$sp" "$PY" "$TMP/out/nosuch_$form.$sp" "--callers=$( selector_prefix "$sp" "$PY" "$form" )pkg/nosuch.py:load"
+        nrc="$nrc$( cat "$TMP/out/nosuch_$form.$sp.rc" )"
+    done
+    [ "$nrc" = "111111" ] && ok "(6) control: --callers=<$form root>/pkg/nosuch.py:load refuses (rc=1) under every spelling" \
+                          || no "(6) control: --callers=<$form root>/pkg/nosuch.py:load exit codes per spelling ($SPELLINGS) = $nrc, want 111111"
+done
+
+# ── (1)+(2) A1 residual (found-items 2026-09-17, reports/pr-253.md R1/R2): SELECTOR PATH PATTERNS and
+# --exclude= must match the ROOT-RELATIVE path, not the typed one. testmap.h::resolveAffectedSeeds/
+# resolveExerciseSeeds and ingest_crawl.h's --exclude matcher used to filePathContains() the RAW stored
+# path, so a marker that exists only in the CHECKOUT location above the crawl root — never inside any
+# file's own tree-relative path — decided the answer: `--affected=<marker>` matched every file (seeds
+# nonzero) and `--exclude=<marker>` dropped every file, under an absolute or trailing-slash root spelling,
+# while `.`/`./`/symlink/`..`-spelled runs correctly saw no match at all.
+MARK="$TMP/w/zzzmarker9/pyfour"
+stage "$FIX" "$MARK"
+refuses_uniformly "A1 --affected=<above-root marker>" "$MARK" --affected=zzzmarker9
+invariant "A1 --exclude=<above-root marker> excludes nothing under every spelling" "$MARK" --exclude=zzzmarker9
+
+# review round (2026-09-17): --affected/--exclude were not the only raw filePathContains consumers.
+# graph.h's resolveAtSeed (--at=FILE:LINE) and resolveAllByNameQualified (the file:name qualifier every
+# --callers/--impact/--uses/--edit-check/--around/--lego selector shares), selectorrefuse.h's
+# indexHasFileMatching (the refusal diagnosis those same verbs print — reused by name below, since a
+# wrong-file refusal is silent success from the caller's POV), and verbs_navigate.h's --verify FILE
+# argument all matched the RAW stored path. All four now route through graph.h's shared
+# filePathContainsRootRel; mcpedit.h's editHintMatches (the MCP write verbs' `file` disambiguation hint)
+# is the fifth site and is MCP-only — covered in test/mcpeditcheck.sh instead, where the MCP call harness
+# already lives (arm (14), below its own root-spelling fixture).
+refuses_uniformly "A1 --verify contains(<above-root marker>) FILE half" "$MARK" --verify='contains(zzzmarker9,"x")'
+# --at needs a CONTENT check, not just an exit-code one: a marker that matches several files under an
+# absolute spelling refuses as FileAmbiguous ("'zzzmarker9' matches N indexed files") instead of
+# FileUnmatched ("no indexed file matches 'zzzmarker9'") — a DIFFERENT, wrong reason at the SAME rc=1, so
+# refuses_uniformly's exit-code vector cannot see it (confirmed: this arm passed on the pre-fix binary
+# under a bare rc check and only reds once the reason is compared).
+atReason=""
+for sp in $SPELLINGS; do
+    spell "$sp" "$MARK" "$TMP/out/a1at.$sp" --at=zzzmarker9:1
+    grep -qF "no indexed file matches 'zzzmarker9'" "$TMP/out/a1at.$sp.err" || atReason="$atReason $sp"
+done
+[ -z "$atReason" ] && ok "A1 --at=<above-root marker>:1 (resolveAtSeed): every spelling refuses for the SAME reason (no indexed file matches)" \
+                    || no "A1 --at=<above-root marker>:1: refusal reason differs under:$atReason (a marker matching several files there reads FileAmbiguous, not FileUnmatched)"
+# --callers=<marker>:load exercises BOTH resolveAllByNameQualified (graph.h) and the refusal diagnosis
+# indexHasFileMatching (selectorrefuse.h) prints when the file half matches nothing — one arm, two sites.
+refuses_uniformly "A1 --callers=<above-root marker>:load (resolveAllByNameQualified + refusal diagnosis)" "$MARK" --callers=zzzmarker9:load
 
 # ── (3) sensitivity: an edit that moves the import's target MUST gate, under `.` and absolute alike ─────
 printf 'from app.local import load\n\n\ndef handler():\n    return load(1)\n' >"$PY/app/views.py"

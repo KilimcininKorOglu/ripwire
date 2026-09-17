@@ -1226,6 +1226,358 @@ Both commands in one target made a cross-config Ninja Multi-Config build fail wi
 merged tree. Both stamp scripts also give their temp file a random name. Two builds of one tree used to share
 `<output>.tmp`: in 40 concurrent runs of the old identity script, 10 to 19 failed with "could not write" in each of
 three rounds, and none of the new script's runs did.
+### Fixed — a TS/JS call on a literal no longer pins an unrelated same-named function (parser versions 100 and 103)
+
+`"=".repeat( 50 )` bound webpack's in-repo CssSyntax `repeat`, and `/^@/.exec( … )` its DefinePlugin `exec` (issue
+#163): a member call whose receiver is a literal took the bare-name ladder like any receiver of unknown type. A string,
+template, array, regex, number or boolean literal's type is certain from the syntax, and so is a chain that keeps it
+certain; certainty ends at `find`, `at`, `pop`, `shift`, `reduce`, a subscript, `!`, `as`, `satisfies` or `<T>x`.
+`RecvKind` gains LitString, LitArray, LitRegex, LitNumber and LitBoolean, and only a name that really is a member of that
+built-in (sorted per-type tables in `src/model.h`) leaves the ladder: a JS `Foo.prototype.NAME` polyfill binds first,
+otherwise the call is External when the name exists in the repository and Undefined when it does not. A name that is not
+a member of the built-in (`shout`, `Object.assign`, a TS `declare global { interface String { loud() } }`) keeps its old
+path. Object literals, `this.replace()`, `helpers.transform()`, `JSON.stringify` and a typed `text: string` are out of
+scope.
+
+Measured with `--pin-census`: on webpack `a943d69c4`, 139 previously bound sites become External (sort 46, repeat 32,
+join 25, exec 17, test 13, split 3, slice 3), edges go 23,970 → 23,823 and `--callers=stringify` stays 361; node's `lib/`
+loses 10 wrong pins (`regex.test` had bound the test runner's `test`); zod's `external=` rises 112 → 192. A signed number,
+`(-1).toFixed()`, was no literal in the first version and could still bind an unrelated `toFixed`: the grammar spells the
+sign as a unary expression over the number, and a unary `+` or `-` over a number now classifies as LitNumber while every
+other unary expression (`!1`, `typeof 1`, `-x`) stays unclassified. `test/fieldnarrowcheck.sh`'s literal-receiver arm is
+the gate, with `viaNegative` and `viaPositive` in its TS, JS and TSX fixtures. `kParserVer` moved to 100 on
+integration/train-2b (the PR declared 97) and 102 → 103 on integration/train-1b for the signed-number fix. Thanks to
+@csy20.
+
+### Fixed — a call through an interface pointer landed on unrelated nested classes of the same name
+
+`void AssertItersEqual( Iterator* iter1, Iterator* iter2 ) { … iter1->key() … }` in rocksdb answered with five edges to
+the nested `Iterator` classes inside memtable/'s skip lists, and none was right. Rule 2 keys a receiver's type by its final
+class-name segment, a nested class keeps only that segment (`SkipList<Key, Comparator>::Iterator::key` has scope
+`Iterator`), and `rocksdb::Iterator`'s methods are pure-virtual declarations the definitions-only map never holds — so the
+only `Iterator::key` it could find were the namesakes. The entry above disclosed 79 such parameter sites; typed LOCALS
+(`Iterator* iter = db->NewIterator( … )`) have the same shape, and there are more than a thousand.
+
+Rule 2 now reads the call through class identity rebuilt from facts ingest already has (resolve.h `ClassIdentity`): byte
+spans give each class its enclosing class and each member its owner, the inherit references give the class graph, and
+an `Iterator` nested in `SkipList` can then be told apart from a namespace-level one. A hit owned by a nested class the
+written type cannot name — C++ lookup outward from the caller, a qualifier naming the enclosing class — is dropped; with
+nothing left, the call resolves to the shallowest ancestor that defines the method; and when the ancestry only DECLARES
+it, to its definitions in the class's real subclasses — the dispatch split a virtual call through an interface is, kept
+whole rather than trimmed to the same-file override by the locality ladder. Four guards came from reading the corpora,
+each one a wrong edge an intermediate build made and a gate arm now pins: a forward declaration (`class Iterator;`, five
+at rocksdb's namespace scope) is not a class; two namespace-level classes of one name (`llvm::Value`,
+`llvm::sandboxir::Value`) are told apart by what the file includes, an include-root spelling read as a path suffix; a
+type ALIAS the index cannot see (`using NodeSet = MachineGadgetGraph::NodeSet;`) keeps the nested class its caller
+includes; and identity replaces an answer only with one it can explain — otherwise the previous answer stands. No
+extraction change: kParserVer does not move.
+
+Measured with `--pin-census --no-cache`, the stack tip `50129f8c` against this change:
+- rocksdb @ `0e2801ac3`: 2,659 call sites change target and `bound=` goes 200,036 → 201,085. 995 namesake splits become
+  the real `Iterator` implementations (DBIter, ArenaWrappedDBIter, ModelIter, … — 11 for `key`); 638 declined calls gain
+  a dispatch split (`Statistics::getTickerCount`, `DB::DefaultColumnFamily`); 397 declined calls gain their inherited body
+  (`IOStatus io_s; io_s.ok()` → `Status::ok`); 276 partial splits complete (`Comparator::Compare`, 6 → 26); 88 wrong unique
+  pins become the interface's implementations (`env->DeleteFile` had pinned an unrelated file system).
+- llvm-project @ `4d5358b1d`: 37,949 of 1,790,841 call sites change target and `bound=` goes 1,126,051 → 1,153,808 —
+  21,408 declined calls gain their inherited body (`LD->getAlign()` → `MemSDNode::getAlign`, `e->getRHS()` →
+  `BinaryOperator::getRHS`), and wrong locality pins move to the right base (`FD->getType()` → `ValueDecl::getType`).
+- a private C++/ObjC++ corpus: 177 sites change target, `bound=` 80,582 → 80,646 (a map subclass's `begin` → its base's,
+  a behaviour interface's `get` → all 64 implementations).
+- this repository's `src/`: no site changes.
+
+Every change bucket on all three corpora was sampled and read against the source on the final build; the wrong shapes
+the intermediate builds produced are the four guards above. Cost, two cold runs each on llvm-project: user time 52.4 /
+52.9 s before, 50.9 / 55.9 s after; peak RSS 2.37–2.47 GB both; output byte-identical run to run on every corpus.
+`test/narrowcheck.sh` arms 26-38 are the gate: seven rows red on the stack tip — (26) (27) (28) (29) (32) (34) (35) — and
+arms 30, 31 and 33 are controls (33 was red on the intermediate build that dropped an aliased nested class). An identity
+claim is a verified answer, not a last-name match, so its edges carry no `prov="final-segment"`; a class-qualified step-1
+narrow keeps that disclosure (arm 36).
+A seeded sample of the retargets graded against source — 30 rocksdb and 30 llvm-project sites — read 56 better, 2 the same
+and 2 worse. One worse shape is fixed here. A class template's specialization has no class symbol, so its members (scope
+`SmallVectorTemplateBase<T, true>`) were never reached: `SmallVectorImpl<FunctionDecl *>& v; v.push_back( FD )` answered
+the primary template alone, while pointer T instantiates the specialization. A defining level now adds its template's
+specialization-scoped definitions — among them a primary template's own `DominatorTreeBase<NodeT, IsPostDom>::verify`
+out-of-line bodies — and the CHA-lite cone prune skips an identity claim, as the ladder and locality already do. This moves
+366 llvm-project sites (a sample of 20 graded: 12 now right, 8 hold the right target in a split; 0 worse) and none on
+rocksdb, the private corpus or `src/` (arm 38).
+FLOORS, stated: namespaces are evidence, not a model — a same-named class in another namespace that the caller's file
+also includes stays a candidate; a type alias is kept rather than read through; an inherited body is the static answer,
+as a class's own body always was (overriders join only a method no ancestor defines), and it answers for every overload
+of its name. rocksdb's `BackupEngine* e; e->RestoreDBFromLatestBackup( options, db, wal )` therefore takes the inline compat
+overload while the pure-virtual overload it calls goes unjoined. Joining its overriders was built and measured: 2 sites
+better, 5 worse (arm 37). A dispatch split is as wide as the interface's implementations — up to 50 targets on rocksdb
+and 71 on the private corpus, every one disclosed by `amb=`.
+
+### Fixed — a receiver typed with template arguments got no type, or the wrong class's
+
+`void f( SmallVectorImpl<FunctionDecl *> &Decls ) { Decls.push_back( FD ); }` bound nothing on llvm-project unless the
+parameter was spelled `llvm::SmallVectorImpl<…>`. Rule 2 reads a receiver's type off its declaration, and that capture
+recorded a type only for a plain or a qualified name: an unqualified template-id (`SmallVectorImpl<FunctionDecl *>`,
+`Expected<unsigned>`, rocksdb's `autovector<VersionEdit*>`) recorded none, and that is how code inside its own namespace
+writes nearly all of them. A qualified name was read by cutting its text at the first `<`, so a type whose template
+arguments come before its last name — `SkipList<Key, TestComparator>::Iterator iter` — recorded `SkipList`. `SkipList`
+defines no `key`, so `iter.key()` fell to the name ladder, which picked the test's own `ConcurrentTest::key` (86 such
+receivers changed target: 76 on rocksdb, 10 on llvm-project). Where the outer class does define the method, the edge was
+precise and wrong: `Outer<int>::Inner& in; in.size()` went to `Outer::size`. Neither corpus has an instance of that; arm
+41 pins it. The last name is now read through the grammar's own fields (`Vec<T>`
+and `ll::Vec<T>` are `Vec`, `Outer<int>::Inner` is `Inner`), and a `::` inside a template argument (`Vec<std::string>`)
+no longer marks the type qualified, so its edge carries no `prov="final-segment"`.
+
+Measured with `--pin-census --no-cache`, call sites joined on (caller id, callee, line), `main` 13a19162 against this
+change. rocksdb `0e2801ac3`: 640 sites change target and bound calls rise by 347. llvm-project `4d5358b1d`: 5,231 sites
+and +3,589. Composed with the class-identity resolver (#268), whose inherited-member walk these bindings feed, it is 657
+and 18,050 sites, +12,702 bound on llvm-project. A seeded sample of 100 of those sites (seed 20260917: 20 + 30
+standalone, 12 + 38 composed) was graded blind against source, each grader seeing the two answers as A and B in random
+order: 99 better, 1 the same, none worse (62 NONE → RIGHT, 24 WRONG → RIGHT, 5 PARTIAL → RIGHT, 1 WRONG → PARTIAL, 7
+NONE → PARTIAL where #268's template-family split lists the specialization a trivially copyable element does not select,
+and 1 PARTIAL either way). Nine edges are lost, all on llvm-project, and all nine were read. Seven are a name declared
+twice in one function with different types (`APInt Mask` beside `SmallVector<int> Mask`): Rule 2's per-function table
+cannot tell which declaration covers a call, so it drops both, as it always has for two plain types. Two are
+`auto Table = EytzingerTable<…>::create( … )`, which recorded `EytzingerTable` only because the cut stopped at `<`; it
+now reads `create`, as `Foo::create()` always did.
+
+STATED FLOOR: an unqualified template-id constructor, `auto v = Vec<T>()`, still infers nothing. It is the spelling of
+every cast helper. Reading it records `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )`, a name that
+conflicts with the declaration's written type (`const ConstantInt *CI = dyn_cast<ConstantInt>( V )`) or with a second
+declaration of the variable, and the conflict tombstones it. Measured on integration/train-3 (llvm-project `4d5358b1d`,
+`--pin-census --no-cache`), reading it moves 463 sites: 324 edges lost, 137 retargeted and 2 gained, and rocksdb moves
+none. On `main` 13a19162, before #278 dropped an assignment's callee name (`Spec = cast<FunctionDecl>( F )`), it moved 994
+and lost 779. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 103 → 104 (the PR
+declared 99 → 103 over `main`; integration/train-3 assigns 104 after train 1b's 103) and `test/qschemetrip.hash` is re-pinned.
+Gate: `test/narrowcheck.sh` arms 39–43. They are red on `main` (no edge, or the precise edge to `Outer::size`) and on
+#268's head, where arm 42 also fails: the qualified twin splits and the unqualified twins decline. Arm 40b is red on a fix
+that reads qualification off the whole spelling.
+
+### Fixed — `--affected=`/`--exercises=` and `--exclude=` matched a directory ABOVE the crawl root, not just the tree
+
+Root-spelling-invariance seams #228 missed. `--affected=`/`--exercises=` (`testmap.h`'s
+`resolveAffectedSeeds`/`resolveExerciseSeeds`), `--exclude=` (`ingest_crawl.h`), `--verify`'s FILE argument
+(`verbs_navigate.h`), `--at=FILE:LINE` (`graph.h::resolveAtSeed`), the `file:name` qualifier every
+`--callers`/`--impact`/`--uses`/`--edit-check`/`--around`/`--lego` selector shares
+(`graph.h::resolveAllByNameQualified`), its own refusal diagnosis (`selectorrefuse.h::indexHasFileMatching`
+and `definingFilesOf`), and the MCP write verbs' `file` disambiguation hint
+(`mcpedit.h::editHintMatches`) all `filePathContains`'d the RAW stored path instead of the root-relative one
+— the same seam every other index-builder and path predicate already reads per #228. So a pattern that
+happened to match the CHECKOUT location — never anything inside the tree itself — decided the answer only
+under an absolute or trailing-slash root: `--affected=<marker-above-root>` matched every file instead of
+refusing, `--exclude=<marker-above-root>` silently dropped every file from the map, `--verify`/`--at`/the
+file:name qualifier confirmed or ambiguated claims about files the index never matched, and an MCP edit's
+bogus `file` hint could pass a false disambiguation. Every path-pattern consumer now routes through one
+shared helper, `graph.h::filePathContainsRootRel`, so the next consumer cannot independently reintroduce the
+raw form; `selectorrefuse.h::definingFilesOf`'s own "here's a runnable retry" suggestion is root-relative too,
+for the same reason — the retry text has to re-match under the fixed rule to still be runnable.
+`test/rootspellingcheck.sh` gained arms for `--affected`/`--exclude`/`--verify`/`--at`/`--callers=file:name`
+across all six root spellings; `test/mcpeditcheck.sh` gained arm (10) for the MCP `file` hint.
+Matching root-relative ONLY dropped the other way a user names a file: from the cwd. `ripwire test/fixture
+--edit-check=test/fixture/geometry.cpp:distance`, `./a.cpp` under `ripwire .`, `../repo/a.cpp` under
+`ripwire ../repo` and an absolute `/…/repo/a.cpp` all resolved in 0.6.1 and refused with this change's first version.
+`filePathContainsRootRel` still tries the root-relative path first; on a miss it strips a root prefix the crawl
+recorded once (the root as typed, the root relative to the cwd, or one of its absolute spellings, `$PWD`'s and
+realpath's alike) and matches the rest root-relative. A path that names no indexed file still refuses.
+`test/rootspellingcheck.sh` arm (6) pins `<root as typed>/`, absolute and cwd-relative selectors on `--edit-check`,
+`--callers`, `--at` and `--affected` under all six spellings, with a refusal control for each form.
+
+### Fixed — MCP `quality_delta`'s "sidecar present but unreadable" baseline marker now spells the CLI's own wording
+
+The CLI and MCP arms named the same disk state — a `.ripwire_quality_baseline` sidecar that exists but was
+rejected by `readBaseline` (unrecognizable, an older format, or pre-Q1) — with two different strings:
+`baseline="git-HEAD (sidecar unreadable)"` on the CLI (the spelling `quality::selectBaseline` sets and
+`--help`'s own legend documents) versus `"git-HEAD (unreadable sidecar ignored)"` from MCP's
+`mcpBaselineMarker`, which carries its own local `std::filesystem::exists` fallback for a residual case
+`selectBaseline` cannot flag on its own. MCP now returns the documented CLI string.
+`test/mcpattrparitycheck.sh` gained a value-level check (its existing arms compare attribute NAMES only,
+deliberately) that pins both surfaces to the identical marker on a pre-stamp v5 sidecar fixture.
+
+### Fixed — `--layout` no longer drops a field decorated with a postfix `__attribute__((...))`
+
+`int x __attribute__((aligned(8)));` reached `layout.h`'s plain-field parser with the attribute still
+attached: the last-identifier scan that splits a declarator into its type and name took the digit inside
+the attribute's own argument list (`8`) as the field NAME and left its closing parens as unparsed trailing
+text, so the whole declaration was refused as `caveat k="unparsed-member"` with no `<f n="x">` row at
+all — unlike every other unmodelable-field shape the fixture covers (`alignas(N)`, `decltype(...)`,
+`std::function<...>`), all of which still count the field. `layout.h` now peels a trailing
+`__attribute__((...))` (balanced parens, same technique as the existing array-extent peel) before the
+name/type split. An attribute that changes the field's own placement (`aligned`/`packed`) still refuses —
+`x` is counted (`<f n="x">`) but `unknown-type`, the same degrade `alignas(N)` already gets, rather than a
+confidently wrong offset; any other attribute (`deprecated`, `unused`, …) is a pure hint and is now modelled
+normally, with no caveat at all. `test/layoutcheck.sh`'s `AttributeFieldCase` gained the same
+field-survives assertion `AlignasFieldCase` already had, and a new `AttributeHarmlessFieldCase` fixture
+pins the fully-modelled path.
+
+The aligned/packed check also missed GNU's reserved-namespace double-underscore spelling
+(`__aligned__`/`__packed__` — what system headers reach for so the keyword cannot collide with a macro of
+the same bare name): `containsWord`'s word-boundary rule treats `_` as an identifier byte, so it does not
+match `aligned` inside `__aligned__` at all, and the field came back `modeled="1"` with a confidently
+wrong `sz`/`al`/`off`. `attrHasKeyword` now checks both spellings. The C++11 standard attribute syntax
+(`[[gnu::aligned(8)]]`/`[[gnu::packed]]`) was checked too: both already refuse, as a side effect of how the
+surrounding text fails to parse as a plain field rather than by design — pinned in the fixture so a later
+change to `[[...]]` handling cannot silently start modelling these as natural. `test/layoutcheck.sh` gained
+`AttributeGnuAlignedFieldCase`/`AttributeGnuPackedFieldCase` (must degrade), `AttributeGnuHarmlessFieldCase`
+(`__unused__`, must stay modelled), and `AttributeStdAlignedFieldCase`/`AttributeStdPackedFieldCase`
+(the `[[gnu::...]]` regression pins).
+
+### Fixed — the crawl now admits `.hxx`, a C++ header spelling every OTHER per-extension table already listed
+
+`src/ingest_crawl.h`'s `kLangTable` — the ONE table that decides whether the crawl looks at a file at
+all — had rows for `.h`/`.hpp`/`.hh` but none for `.hxx`, so a repository that spells its headers `.hxx`
+was invisible to the crawl (`files=0`, `unindexed="hxx:N"`) even though six other per-extension tables in
+the tree (`flipimpact.h`'s dead-code header set, `layout.h`'s `--layout` scan, `lintrules.h`,
+`quality.h`'s header/public-API predicates, `resolve.h`'s include resolver, `verbs_lint.h`) already listed
+`.hxx` alongside `.hpp`/`.hh`. `.hxx` now rides the same `Lang::Cpp` / tree-sitter-cpp grammar as `.h`.
+This changes extraction output for any tree with `.hxx` files (new files, symbols and edges a pre-bump
+cache never saw), so `kParserVer` moves 104 → 105 (the lane declared 99 → 100 over `main`;
+integration/train-3 assigns 105 after #276's 104; mirrored in `kIngestParserVerMirror`, same diff;
+`test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
+single-file root. `taskroute.h::kCodeExtensions` (the FILE:LINE token recognizer behind `--help-task`'s
+at-line routing) was a seventh table listing `.hpp`/`.hh` without `.hxx` — added, with a `test/taskroutecheck.sh`
+arm routing a `.hxx:LINE` token to `--slice=@FILE:LINE`. Two of the six had just dropped their `.hxx` rows as unreachable
+(`langOfPath`'s and `includeLangOf`'s, in the five-extensions entry above), and the compile-time check between the crawl's
+table and `langOfPath`'s refuses a crawl row without its classifier row, so both rows are restored with it.
+
+### Fixed — `--slice --since` no longer tells the "new code" story about a blob that was never parseable source
+
+A file whose blob at REV held ERROR/MISSING tree-sitter nodes (binary content committed under a source
+extension, a merge gone wrong, anything the grammar's error recovery could not read as this language)
+could leave the REV-side symbol search empty for a reason that has nothing to do with the definition
+being new. `status="sym_absent_at_rev"` claims "the file was there and the definition was not" — every
+row then reads `op="+"`, the reviewer's cue that this is newly-added code — which is a confidently wrong
+story for a blob that was not valid source at all. `slicediff.h`'s `sliceAtRev` now checks the same
+`errNodes > 0` degraded-parse signal `fileParseDegraded` already shares with `--grep`'s `parse_degraded=`
+and the selector refusals, and reports `status="unparsed_at_rev"` (`comparable="0"`, no rows) instead
+when the REV blob's own parse was this degraded. `test/slicediffcheck.sh` gained arm (8c) pinning a
+binary-at-REV case against the (8)/(8b) sym-absent case it must not be confused with.
+
+### Fixed — assigning a variable from a function call erased the type it was declared with
+
+`Status s; … s = GetDBOptionsFromMap( … ); if( !s.ok() )` bound no `ok` edge on rocksdb, and `PHINode *PHI = nullptr; …
+PHI = PHINode::Create( … ); PHI->addIncoming( V, BB )` bound no `addIncoming` edge on llvm-project. Rule 2 reads a
+receiver's type off its declaration, and it also records a C++ ASSIGNMENT from a call as a type, so that `x = Foo()`
+types `x`. A constructor call and a function call are the same grammar node, so the assignment recorded the callee's
+last name, `GetDBOptionsFromMap` or `Create` (and `cast` for `x = llvm::cast<T>( y )`). Rule 2's per-function table
+drops a variable whose records disagree, so that non-type erased the declared `Status` or `PHINode *`. The field use-site index (`--uses=Owner.field`) lost
+the same pin. A MEMBER assigned from a call (`cur = ns::cast<Target>( y )`) also read as a local, so Rule 2b refused the
+member's declared type. An assignment declares nothing, so its callee name now counts as a type only when a class of
+that name exists. A declaration initialised by a call (`auto t = makeFoo()`) still counts, as a declaration whose type
+is unknown: when a sibling block declares the same name with another type, both calls are dropped rather than one
+block's type reaching the other's call.
+
+Measured with `--pin-census --no-cache`, call sites joined on (caller id, callee, line), `main` fe28fd49 against this
+change. rocksdb `0e2801ac3`: 1,871 sites change target, bound calls +1,562 (1,544 newly bound, 327 retargeted, none lost;
+1,494 are `Status::ok`). llvm-project `4d5358b1d`: 4,046 sites, +2,984 (2,859 newly bound, 1,187 retargeted, none lost).
+A seeded sample of 60 (seed 20260917: 25 rocksdb, 35 llvm-project) was graded blind against source by independent
+readers, with the two answers shown as A and B in random order. 51 were better, 6 the same and 3 worse. The better ones
+were 39 NONE → RIGHT, 5 WRONG → RIGHT, 4 PARTIAL → RIGHT, 2 NONE → PARTIAL and 1 WRONG → PARTIAL. The same ones were
+4 WRONG → WRONG and 2 RIGHT → RIGHT. All three worse sites are resolver floors the erased type had been hiding, not
+errors in the recovered type. One is a rocksdb `Iterator*` that narrows onto the memtable's same-named `Iterator` classes.
+Two are llvm-project calls where arity picked the wrong overload of the right class (`getFirstInsertionPt`, `find`).
+Dropping the member's record from the local-name set is 23 of the rocksdb sites and 132 of the llvm-project ones; 15 of
+those graded 10 better, 2 the same and 3 worse. Two of the worse ones show a floor this change exposes but does not
+cause: Rule 2c reads a member named like a class (`std::unique_ptr<ToolOutputFile> OutputFile;`) as that class.
+
+Built and rejected: also dropping a DECLARATION's callee name. It moves 89 more llvm-project sites (none on rocksdb), and
+15 graded 11 better, 2 the same and 2 worse. Arm 48 is why it is not shipped: the flat table would hand one block's
+declared type to a sibling block's `auto t = ns::cast<Decoy>( y )`, a precise edge to the wrong class. The unqualified
+`Vec<T>()` constructor spelling left unread by the template-id receiver lane (#276) stays unread. Composed with that lane
+and this change on #276's head, reading it moves 245 llvm-project sites, and all of them get worse: 170 edges lost and none
+gained, where it lost 779 before this change (on integration/train-3, with the class-identity resolver, 463 and 324). The losses left are declaration conflicts, `auto *LI = cast<LoadInst>( … )` beside
+another `LI`.
+
+The bind record gains one byte (`kCacheVersion` 22 → 23). `kParserVer` moves 105 → 106 (the PR declared 99 → 104
+over `main`; integration/train-3 assigns 106 after small-fixes' 105). `test/qschemetrip.hash` is re-pinned, and `test/cachefuzzcheck.sh`'s
+blob walker reads the new byte. Gate: `test/narrowcheck.sh` arms 44–51. On `main`, arms 44, 45, 46, 49 and 50 are red.
+Arm 48 is red on the declaration variant, 46 without the local-name-set change, and 51 on a build that does not persist
+the new byte.
+
+### Added — a Java `Type::method` reference is a call site for `--uses` and `--callers` (parser version 107)
+
+`Widget.makeFn()` minted a call edge and `Widget::makeFn` did not, so a lambda and the method reference beside it
+disagreed about who calls `makeFn` (issue #74). The receiver is a type and the member a literal identifier, so the
+target is fixed at compile time. `queries/java/tags.scm` now captures the member name after `::` on a
+`method_reference`, and ingest stamps the site `RecvKind::JavaTypeCandidate`: the pinned grammar spells `Widget` and
+`widget` with the same `identifier` node, so the query alone proves nothing about the receiver. `src/graph.h` admits
+an ordinary call edge only when the receiver denotes an indexed Java type; a Java parameter, local or field binding of
+that name in scope vetoes it, and nested and package-qualified type receivers are handled explicitly. Java shadow
+binds now carry lexical spans and capture inferred lambda parameters, and the C-family shadow pass refuses Java
+outright (a Java call never resolves to a local). `widget::instanceFn`, `this::thisFn`, `super::superFn` and
+`Widget::new` stay unresolved, and the receiver identifier is never the callee.
+
+`test/javamethodrefcheck.sh` is the gate: the callers of `makeFn` are exactly `genericTypeMethod`, `lambdaForm`,
+`nestedTypeMethod` and `typeMethod`, nothing calls `instanceFn`, `thisFn`, `superFn`, `Widget` or `widget`, and
+rewriting `Widget::makeFn` removes only `typeMethod`. `test/callformcheck.sh`'s Java `--uses=makeFn` is 2.
+A catch parameter, an enhanced-for variable and a try-with-resources resource declare names as well, and none of the
+three was read, so `catch (RuntimeException Widget) { return Widget::m; }` still resolved `Widget` as the class
+(CodeRabbit on #281). All three now shadow, each inside its own clause, loop or statement only; the gate pins both
+the shadowed reference and the one after the scope closes, and `kParserVer` moves 109 → 110.
+`kParserVer` 106 → 107 (the PR declared 96 → 97 → 98 over `main`; integration/train-3 assigns 107). Thanks to
+@rainhuang0220.
+
+### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 108)
+
+A Godot repository was invisible: `.gd` fell out at crawl time as an unsupported extension, so every ranked lens
+answered `reason="no_candidates"`, while `--grep`'s unindexed-text fallback still scanned the files and made the gap
+read as a ranking problem. ripwire now vendors `PrestonKnopp/tree-sitter-gdscript` and extracts `class_name`, inner
+classes, functions and methods, constants, enums and their members, variables and signals, plus call edges. A `.gd`
+file is a class body: `class_name` names it and its file-scope `func`/`var` are its members. Measured on 13
+open-source Godot projects outside this tree: 3,525 files, 58,128 symbols and 27,768 edges, indexed cold in 0.82 s,
+and 98.81% of their 2,611 `.gd` files parse clean.
+
+STATED FLOORS: three upstream grammar bugs are not patched here (G3) — a `%` scene-unique name inside a node path, a
+column-0 comment inside an indented block, and Godot 3 keywords that are still reserved (`remote = {}`). tree-sitter's
+recovery is local, and `test/gdscriptcheck.sh` asserts that every definition and call edge in a fixture holding them
+survives. `preload`/`load("res://…")` dependency edges are a later round, so GDScript is not dependency-capable, and
+`.tscn`, `.tres` and `.gdshader` are not indexed. `test/gdscriptcheck.sh` is the gate, and it is red on a
+pre-GDScript binary. On integration/train-3 the language registers through train 1's compile-time-checked tables
+(`isCodeLang`, `kLintExtRows`, `kLangTokenRows`, `kNodeFieldNames`, `kLangTable`'s exact extent), and `kParserVer`
+107 → 108 (the PR declared 96 → 98 over `main`). Thanks to @sclyde.
+
+### Added — a Ruby constant receiver now pins the call, instead of splitting it across every same-named method
+
+`Calc.add( 1, 2 )`, `Outer::Engine.run( 3 )`, `::Top.ping` and `Util.format( 5 )` resolved to EVERY
+method of that name in the corpus, each edge marked `prov="split"`. The resolver's Rule 2c already
+says "the receiver token IS the type" (`docs/EVALS.md` "Phase 4b"), but it could not fire for Ruby:
+`classifyReceiver` accepted a receiver node of kind `(identifier)` only, and Ruby's class/module
+receiver is its own node kind — `(constant)` for `Calc`, `(scope_resolution)` for `Outer::Engine`
+and `::Top`. Every such call classified `RecvKind::None`, and the resolver fell through to the
+name spray. Ruby's one call form that carries a type was the one the type rule never saw.
+
+The receiver's FINAL constant segment is the type name (`Outer::Engine` → `Engine`), the same
+final-segment convention the existing type bindings use (`ns::Foo` → `Foo`), because `Symbol::scope`
+is the IMMEDIATE enclosing name by design. A Ruby MODULE is a receiver of class methods as much as
+a class is (`Util.format`), so Ruby's `SymKind::Other` symbols — which `queries/ruby/tags.scm` can
+only reach through `module` — join Rule 2c's class-name set.
+
+Measured with `--no-cache` on five Ruby corpora, before → after (map header gauges):
+
+| corpus | files | edges | ambiguous | declined |
+| --- | --- | --- | --- | --- |
+| activesupport 8.1.3 `lib` | 290 | 3,868 → 3,912 | 468 → 434 | 1,022 → 985 |
+| activerecord 8.1.3 `lib` | 398 | 9,116 → 9,152 | 1,496 → 1,479 | 4,576 → 4,497 |
+| actionpack 8.1.3 `lib` | 157 | 3,151 → 3,140 | 390 → 364 | 943 → 923 |
+| Rails app A | 4,683 | 23,784 → 24,376 | 1,328 → 1,263 | 12,485 → 11,624 |
+| Rails app B | 2,174 | 14,859 → 15,257 | 275 → 431 | 3,264 → 3,050 |
+
+`declined` falls on all five: those are call sites the resolver refused to guess at and now has
+evidence for. Edges fall on actionpack because a pinned call is ONE edge where a two-way split was
+two. App B's `ambiguous` rises while its `declined` falls by 214: a receiver that names two
+same-final-segment classes both defining the callee produces an honest split where there was
+previously no edge at all — the disclosed floor below, not a regression.
+
+Stated floors, each pinned by an arm of `test/rubyrecvnarrowcheck.sh`: Ruby feeds no
+class-hierarchy edges (`captureBases` has no Ruby arm), so a method inherited from a superclass does
+not narrow — this is what holds the gem numbers down, where deep `ActiveRecord::Base` hierarchies are
+the idiom; matching is by final segment, so two same-named classes in different namespaces both
+defining the callee keep both candidates; a variable receiver (`c.scale`) or a chained one
+(`Calc.new.scale`) is untouched; and a constant receiver whose class defines both `def self.x` and `def x` gets an
+honest two-way split that includes the instance method (rails `Journey::Parser.parse`) — a split, not a pin, because
+telling `method` from `singleton_method` apart is a later round. A narrow that misses degrades to the unchanged ladder — it never
+deletes an edge and never invents one (`Time.now` still mints nothing).
+
+The default map is byte-identical to the previous build on five Ruby-free corpora (this repo's
+`src/`, npm, a Clojure project, CPython 3.14's stdlib, and this whole repository), and this
+repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols · 22,529 edges.
+`kParserVer` 108 → 109 (the PR declared 96 → 97 over `main`; integration/train-3 assigns 109; record layout
+unchanged by it, `kCacheVersion` stays 23; the VALUES of `recv`/`recvVar` move, so Ruby extraction facts are re-parsed),
+with `quality.h`'s mirror and `test/qschemetrip.hash` re-pinned in the same commit. Thanks to @andriytyurnikov.
 
 ## [0.6.1] — 2026-09-14
 

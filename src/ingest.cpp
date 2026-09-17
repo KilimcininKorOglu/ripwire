@@ -167,6 +167,7 @@ extern "C"
     const TSLanguage* tree_sitter_elixir( void );
     const TSLanguage* tree_sitter_dart( void );
     const TSLanguage* tree_sitter_kotlin( void );
+    const TSLanguage* tree_sitter_gdscript( void );
 }
 
 // ── the ingest-family sections (2026-08-29 split; ingest() phases followed 2026-08-30) ──────────────
@@ -220,6 +221,71 @@ const char* cacheArtifactVerdict( const std::string& path, bool captureValueUses
     return cacheRejectName( inspectCacheArtifact( path, captureValueUses ) );
 }
 
+// Every prefix a cwd-spelled selector path can carry before its root-relative part (IngestResult::crawlRootPrefixes), in
+// the order selectorRootTail tries them: the root as typed, the root relative to the cwd, the root's absolute spellings.
+// $PWD is trusted only when its realpath IS getcwd, so a stale inherited PWD is ignored; a spelling that cannot be
+// computed is left out, never guessed. Lexical throughout, apart from the one realpath of the root and of $PWD.
+static std::vector<std::string> selectorRootPrefixes( const std::string& root )
+{
+    const auto normal = []( const std::filesystem::path& p ) {
+        std::string s = p.lexically_normal().string();
+        while( s.size() > 1 && s.back() == '/' ) { s.pop_back(); }
+        return s;
+    };
+    std::vector<std::string> out;
+    const auto add = [ & ]( std::string s ) {
+        if( !s.empty() && std::find( out.begin(), out.end(), s ) == out.end() ) { out.push_back( std::move( s ) ); }
+    };
+    const std::filesystem::path rootPath( root.empty() ? std::string( "." ) : root );
+    add( normal( rootPath ) );   // as typed: "test/fixture", "../repo", "/abs/repo", "."
+    char cwdBuf[ PATH_MAX ];
+    const char* const cwd = ::getcwd( cwdBuf, sizeof( cwdBuf ) );
+    std::vector<std::string> cwds;   // the cwd's absolute spellings: logical first
+    if( cwd != nullptr )
+    {
+        const char* const pwd = std::getenv( "PWD" );
+        char pwdBuf[ PATH_MAX ];
+        if( pwd != nullptr && pwd[0] == '/' && ::realpath( pwd, pwdBuf ) != nullptr && std::strcmp( pwdBuf, cwd ) == 0 )
+        {
+            cwds.push_back( normal( pwd ) );
+        }
+        cwds.push_back( normal( cwd ) );
+    }
+    std::vector<std::string> absolutes;
+    if( rootPath.is_absolute() )
+    {
+        absolutes.push_back( normal( rootPath ) );
+    }
+    for( const std::string& c : cwds )
+    {
+        if( !rootPath.is_absolute() ) { absolutes.push_back( normal( std::filesystem::path( c ) / rootPath ) ); }
+    }
+    char realBuf[ PATH_MAX ];
+    if( ::realpath( rootPath.c_str(), realBuf ) != nullptr )
+    {
+        absolutes.push_back( normal( realBuf ) );
+    }
+    for( const std::string& a : absolutes )
+    {
+        for( const std::string& c : cwds )
+        {
+            if( a == c )
+            {
+                add( "." );
+            }
+            else if( a.size() > c.size() + 1 && a.compare( 0, c.size(), c ) == 0 && ( c == "/" || a[ c.size() ] == '/' ) )
+            {
+                add( a.substr( c == "/" ? 1 : c.size() + 1 ) );   // the root relative to the cwd
+            }
+        }
+    }
+    for( std::string& a : absolutes )
+    {
+        add( std::move( a ) );
+    }
+    return out;
+}
+
 IngestResult ingest( const char* rootDir, const std::vector<std::string>& excludeSubstr, std::string_view cacheFile,
                      std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore,
                      IngestLayout )
@@ -259,6 +325,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
             const std::size_t lastSlash = rootArg.rfind( '/' );
             result.crawlRoot = ( lastSlash == std::string_view::npos ) ? std::string_view{} : rootArg.substr( 0, std::max<std::size_t>( lastSlash, 1 ) );
         }
+        result.crawlRootPrefixes = selectorRootPrefixes( result.crawlRoot );   // #281: a selector typed from the cwd (graph.h selectorRootTail)
         result.skippedOversize = std::move( oversizeSkipped );
         result.crawlSkips      = std::move( taxonomySkips );   // §L1: excluded / unsupported-ext / unindexed exts
     }
