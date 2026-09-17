@@ -1521,39 +1521,37 @@ struct ByteR
     std::string      str () { const std::string_view s = view(); return ok ? std::string( s ) : std::string{}; }
     bool rawInto( void* dst, std::size_t n )   // B0.2: bulk array read — overflow-safe bound, memcpy into caller storage
     { if( !ok || std::size_t( end - p ) < n ) { ok = false; return false; } if( n ) { std::memcpy( dst, p, n ); p += n; } return true; }
-    // An ENUM byte. The blob is external input — a committed team artifact, a copied cache directory, a file
-    // whose digests were rebuilt around an edit — so a value at or past the enum's count is corruption, never an
-    // enumerator this binary forgot (model.h proves each k*Count exact at compile time). It folds into `ok`
-    // exactly like a short read, so the record takes readFileRecord's one refusal path: that file reparses and
-    // the rest of the blob stands. Accepting it was never harmless downstream: symTag/refRoleTag serve such a
-    // value as "other"/"read", and clones.h shifts a 32-bit language mask by the Lang (UB at 32 and up).
-    // One compare per byte on the warm path; never an assumption, because nothing upstream makes it true.
+    // A decoded value that must lie below `count`. The blob is external input — a committed team artifact, a copied
+    // cache directory, a file whose digests were rebuilt around an edit — so a value at or past its bound is
+    // corruption, never a value this binary forgot. It folds into `ok` exactly like a short read, so the record
+    // takes readFileRecord's one refusal path: that file reparses and the rest of the blob stands. One compare on the
+    // warm path; never an assumption, because nothing upstream makes it true.
+    bool fitsBelow( std::uint64_t v, std::uint64_t count )
+    {
+        if( v >= count )   // VALIDATE-SITE: becomes `if( !VALIDATE( v < count ) )` when the macro vocabulary lands
+        {
+            DEGRADED_PATH_ALERT( "ingest: cache record carries a field past its range (an enum byte past its last enumerator, or a 16-bit field wider than 16 bits) — cache treated as corrupt" );
+            ok = false;
+            return false;
+        }
+        return true;
+    }
+    // An ENUM byte. Accepting one past the count was never harmless downstream: symTag/refRoleTag serve such a value
+    // as "other"/"read", and clones.h shifts a 32-bit language mask by the Lang (UB at 32 and up). model.h proves
+    // each k*Count exact at compile time.
     template<class E>
     E enumU8( std::size_t enumCount )
     {
         const std::uint8_t v = u8();
-        if( v >= enumCount )   // VALIDATE-SITE: becomes `if( !VALIDATE( v < enumCount ) )` when the macro vocabulary lands
-        {
-            DEGRADED_PATH_ALERT( "ingest: cache record carries an enum byte past its enum's last enumerator — cache treated as corrupt" );
-            ok = false;
-            return E{};
-        }
-        return E( v );
+        return fitsBelow( v, enumCount ) ? E( v ) : E{};
     }
-    // A 16-bit field the writer stores in a u32 slot (writeDef's ppAlt/humps/deepLoc/ev/params, writeRef's
-    // argCount). The writer only ever holds a uint16_t there, so a value past 0xFFFF is corruption, not a field
-    // this binary narrows: it folds into `ok` like enumU8 above, and the record takes the same one refusal path.
-    // A plain `std::uint16_t( u32() )` kept the low bits and believed them (test/hazardpatterncheck.sh rule D).
+    // A 16-bit field the writer stores in a u32 slot (writeDef's ppAlt/humps/deepLoc/ev/params, writeRef's argCount).
+    // The writer only ever holds a uint16_t there; a plain `std::uint16_t( u32() )` kept the low bits of a wider value
+    // and believed them (test/hazardpatterncheck.sh rule D, test/cachefuzzcheck.sh Part 3).
     std::uint16_t u16Of32()
     {
         const std::uint32_t v = u32();
-        if( v > 0xFFFFu )   // VALIDATE-SITE: becomes `if( !VALIDATE( v <= 0xFFFFu ) )` when the macro vocabulary lands
-        {
-            DEGRADED_PATH_ALERT( "ingest: cache record carries a 16-bit field wider than 16 bits — cache treated as corrupt" );
-            ok = false;
-            return 0;
-        }
-        return std::uint16_t( v );
+        return fitsBelow( v, 0x10000u ) ? std::uint16_t( v ) : std::uint16_t( 0 );
     }
 };
 

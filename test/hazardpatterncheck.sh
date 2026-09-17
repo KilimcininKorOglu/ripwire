@@ -32,7 +32,7 @@
 #       line of 2^32+33 as 33 and joined a finding to a site that is not there (withprofilecheck.sh arm 8).
 #   (D) A DECODED VALUE NARROWED WITHOUT A CHECK. `std::uint16_t( r.u32() )`: a cast to a narrower integer of a
 #       reader call (or a local assigned from one, with no comparison on it in between). The writer never stores a
-#       value the field cannot hold, so one that does not fit is corruption, refused by ByteR::u16Of32( ). Red on
+#       value the field cannot hold, so one that does not fit is corruption, refused by ByteR::u16Of32( ) (fitsBelow is a bound). Red on
 #       the base: readDef's five u16 fields and readRef's argCount.
 #   (E) RAW ACQUISITIONS crashsweepcheck's S2 does not name: descriptors (socket, ::accept, pipe, dup, kqueue …),
 #       heap (malloc family, a non-placement `new`), and tree-sitter handles (ts_parser_new, ts_query_new,
@@ -239,13 +239,16 @@ def derived_reader_width(f, fn, ln, ident):
     text, starts = code_of(f)
     a, _ = fn_span(f, fn, ln)
     body = text[a:starts[ln - 1]]
+    castLine = text[starts[ln - 1]:starts[ln] if ln < len(starts) else len(text)]   # `fits( v ) ? T( v ) : 0` checks on the cast's own line
     width, bounded = 0, False
-    for m in re.finditer(r"\b" + re.escape(ident) + r"\s*(=|\{|\()\s*([^;]*);", body):
+    idRx = r"\b" + re.escape(ident) + r"\b"
+    for m in re.finditer(idRx + r"\s*(=|\{|\()\s*([^;]*);", body):
         w = reader_width(m.group(2))
         if w:
             width = w
-            tail = body[m.end():]
-            bounded = bool(re.search(r"\b" + re.escape(ident) + r"\b\s*(<=|>=|<(?![<=])|>(?![>=])|==|!=)|(<=|>=|[^<>-]<|[^<>-]>|==|!=)\s*\b" + re.escape(ident) + r"\b", tail))
+            tail = body[m.end():] + castLine
+            bounded = bool(re.search(idRx + r"\s*(<=|>=|<(?![<=])|>(?![>=])|==|!=)|(<=|>=|[^<>-]<|[^<>-]>|==|!=)\s*" + idRx, tail)
+                           or re.search(r"\b(fitsBelow|countFits|qsnapCountFits|min|clamp)\s*\([^;]*" + idRx, tail))
     return width, bounded
 
 
@@ -585,6 +588,11 @@ inline std::uint16_t probeNarrowBounded( ProbeReader& r )
     return std::uint16_t( v );
 }
 inline std::uint16_t probeNarrowChecked( ProbeReader& r ) { return r.u16Of32(); }
+inline std::uint16_t probeNarrowHelper( ProbeReader& r )
+{
+    const std::uint32_t w = r.u32();
+    return fitsBelow( w, 0x10000u ) ? std::uint16_t( w ) : std::uint16_t( 0 );
+}
 inline void probeThrowBare( int x ) { if( x ) { throw x; } }
 inline int  probeThrowInTry( int x ) { try { if( x ) { throw x; } } catch( ... ) { return 1; } return 0; }
 inline void probeCatchSilent() { try { probeThrowBare( 1 ); } catch( ... ) { } }
@@ -630,6 +638,7 @@ else
     expect_probe D 'probeNarrowDirect uint16_t<-32: 1' 1 "std::uint16_t( r.u32() ) fires"
     expect_probe D 'probeNarrowBounded'            0 "a local compared against its bound before the cast does not fire"
     expect_probe D 'probeNarrowChecked'            0 "a checked reader (u16Of32) does not fire"
+    expect_probe D 'probeNarrowHelper'             0 "a local passed through a bound helper (fitsBelow) on the cast's own line does not fire"
     expect_probe B1 'probeCatchSilent silent: 1'    1 "an empty catch fires as silent"
     expect_probe B1 'probeCatchAlertOnly alert-only: 1' 1 "a catch whose only statement is DEGRADED_PATH_ALERT fires as alert-only"
     expect_probe B1 'probeCatchRecords'             0 "a catch that returns a value does not fire"
