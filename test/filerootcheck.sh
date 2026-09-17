@@ -93,7 +93,7 @@ HXX_FILE="$TMP/thing.hxx"
 printf '#pragma once\nint hxxFunc( int a );\n' >"$HXX_FILE"
 "$BIN" "$HXX_FILE" --no-cache >"$TMP/hxxfile" 2>/dev/null
 
-grep -q 'files=1' "$TMP/hxxfile" \
+grep -qE 'files=1([^0-9]|$)' "$TMP/hxxfile" \
     && ok "A4: a .hxx file as root is indexed (files=1)" \
     || no "A4: a .hxx file as root was not indexed: $( grep -oE '<!-- files=[^>]*' "$TMP/hxxfile" | head -1 )"
 
