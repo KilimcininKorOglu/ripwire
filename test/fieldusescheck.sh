@@ -44,7 +44,9 @@
 #   (F) python      — the self.x / annotated-attribute contract above
 #   (G) nonlocal    — --nonlocal-state charges the GLOBAL `count` only to the free function that touches it,
 #                     never to a method touching the same-named FIELD (precision)
-#   (H) additive    — the flagless map carries the field rows with NO <c> edges; determinism, warm==cold, xmllint
+#   (H) additive    — the flagless map carries the field rows with NO <c> edges; determinism, xmllint, and warm==cold on a
+#                     cache the second run provably READ (its RIPWIRE_CACHE_STATS line: the cold run wrote the file, and the
+#                     warm one reparsed nothing and reused every file — without it a failed write reparses and "matches")
 #   (I) legend      — the member-form legend defines every attribute it emits and states the alias limit
 #   (J) std receiver — a receiver whose declared type is written in namespace `std` names NO in-repo class, even when
 #                     one shares the type's final segment (resolve.h namesStdType, the guard Rule 2 already applies).
@@ -84,6 +86,13 @@ echo "fieldusescheck: BIN=$BIN  FIX=$FIX"
 rows(){ "$BIN" "$FIX" --uses="$1" --no-cache 2>/dev/null | grep -o '<u [^>]*/>' \
         | sed -E 's/.*role="([a-z]*)" p="([^"]*\/)?([^"/]*)"( in_id="[^"]*")?( owner_candidates="([0-9]+)")?.*/\1 \3 \6/; s/ +$//; s/ ([0-9]+)$/ owner_candidates=\1/' | sort; }
 attr(){ printf '%s' "$2" | grep -o "<uses [^>]*>" | grep -o " $1=\"[^\"]*\"" | head -1 | sed -E 's/.*="([^"]*)"/\1/'; }
+# $1 a RIPWIRE_CACHE_STATS line (artifactcheck's observable): true only when that run parsed nothing and reused every file it
+# indexed — a cache it READ, not a cold parse whose output merely equals the cold run's
+cache_was_read(){
+    reparsed="$( printf '%s' "$1" | sed -nE 's/.* reparsed=([0-9]+) .*/\1/p' )"; reused="$( printf '%s' "$1" | sed -nE 's/.* reused=([0-9]+) .*/\1/p' )"
+    files="$( printf '%s' "$1" | sed -nE 's/.* files=([0-9]+) .*/\1/p' )"
+    [ "$reparsed" = "0" ] && [ -n "$files" ] && [ "$files" -gt 0 ] && [ "$reused" = "$files" ]
+}
 expect_rows(){  # $1 selector, $2 label, $3.. expected lines
     sel="$1"; label="$2"; shift 2
     want="$( printf '%s\n' "$@" | sort )"; got="$( rows "$sel" )"
@@ -183,7 +192,9 @@ if printf '%s' "$MAP" | grep -q 'symbols=27 '; then ok "(H) flagless map symbols
 "$BIN" "$FIX" --uses=Counter.count --no-cache >"$TMP/b" 2>/dev/null
 if cmp -s "$TMP/a" "$TMP/b"; then ok "(H) determinism: two --no-cache runs byte-identical"; else no "(H) --uses=Counter.count is not deterministic"; fi
 "$BIN" "$FIX" --uses=Counter.count --cache="$TMP/c.bin" >/dev/null 2>&1
-"$BIN" "$FIX" --uses=Counter.count --cache="$TMP/c.bin" >"$TMP/w" 2>/dev/null
+RIPWIRE_CACHE_STATS=1 "$BIN" "$FIX" --uses=Counter.count --cache="$TMP/c.bin" >"$TMP/w" 2>"$TMP/w.err"
+HSTATS="$( grep 'cache-stats' "$TMP/w.err" )"
+if [ -s "$TMP/c.bin" ] && cache_was_read "$HSTATS"; then ok "(H) the warm run READ the cache the cold run wrote (${HSTATS#ripwire: })"; else no "(H) the warm run did not read a written cache: ${HSTATS:-<no cache-stats line>}"; fi
 if cmp -s "$TMP/a" "$TMP/w"; then ok "(H) warm cache == cold (field refs round-trip the cache)"; else no "(H) warm --uses=Counter.count differs from cold"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/a" 2>/dev/null; then ok "(H) --uses=Counter.count is well-formed XML"; else no "(H) --uses=Counter.count is not well-formed XML"; fi
@@ -258,7 +269,9 @@ TL="$( "$BIN" "$STD" --uses=Text.len --no-cache 2>/dev/null )"
     && ok '(J) Text.len pinned="2" against owners_of_name="2" (the control has a contrast)' \
     || no "(J) Text.len pinned=$( attr pinned "$TL" ) owners_of_name=$( attr owners_of_name "$TL" ) (want 2/2)"
 "$BIN" "$STD" --uses=pair.first --cache="$TMP/std.bin" >/dev/null 2>&1
-"$BIN" "$STD" --uses=pair.first --cache="$TMP/std.bin" >"$TMP/stdwarm" 2>/dev/null
+RIPWIRE_CACHE_STATS=1 "$BIN" "$STD" --uses=pair.first --cache="$TMP/std.bin" >"$TMP/stdwarm" 2>"$TMP/stdwarm.err"
+JSTATS="$( grep 'cache-stats' "$TMP/stdwarm.err" )"
+if [ -s "$TMP/std.bin" ] && cache_was_read "$JSTATS"; then ok "(J) the warm run READ the cache the cold run wrote (${JSTATS#ripwire: })"; else no "(J) the warm run did not read a written cache: ${JSTATS:-<no cache-stats line>}"; fi
 if [ -n "$PF" ] && [ "$( cat "$TMP/stdwarm" )" = "$PF" ]; then ok "(J) warm cache == cold (the qualified type text round-trips the cache)"; else no "(J) warm --uses=pair.first differs from cold"; fi
 
 echo
