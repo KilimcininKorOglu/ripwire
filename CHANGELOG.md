@@ -120,7 +120,10 @@ could not match at all. Three changes, in this order:
   diff checks them too.
 - **The scan threads get a stack they can state.** grep's workers and its unindexed scan run on 256 MiB POSIX threads
   (`src/infra/stackthreads.h`), halving on refusal down to 8 MiB; pages are committed only as deep as a match recurses.
-  Starting 16 of them costs the same at 8 MiB and 256 MiB, within run-to-run noise, on macOS and on Linux.
+  Starting 16 of them costs the same at 8 MiB and 256 MiB, within run-to-run noise, on macOS and on Linux. ONE size is
+  settled — the smallest any thread got — before a single file is read, and every thread is held to it, so no file's
+  answer depends on which thread picked it up; a size below 256 MiB is disclosed on the answer as `regex_stack_bytes=`,
+  with `regex_line_max=` beside it even when nothing was skipped.
 - **A line past the measured bound is skipped and said so.** A per-pattern model bounds the matcher's recursion; the
   bytes one modelled visit may take (128) is the largest need measured over 35 pattern shapes and six builds — gcc
   -O0/-O2, clang -O2 and -O3 -flto, gcc and clang under AddressSanitizer — rounded up, with half of every stack held
@@ -129,10 +132,17 @@ could not match at all. Three changes, in this order:
   `regex_lines_skipped=` (0 means none was), and when it is not 0, `regex_line_max=` and `counts_floor="1"` ride with
   it — hits= is a floor — defined in the full legend and the compact one. libc++ does not recurse per character, so
   macOS has no bound and skips nothing.
+- **Secret redaction no longer runs the engine.** `src/redact.h` redacts every emitted body by default, up to 4 MB, and
+  its rules went straight to `std::regex`: on the gcc 13 Linux build, `--expand` over a file holding `sk-` and a 200 KB
+  token run died with exit 139. Every rule is a literal prefix and character-class runs, so each is now matched by
+  reading its runs once (the PEM banner's word loop takes the regex's greedy choice); the regexes stay in the table as
+  the specification. Nothing is skipped, so there is no unscanned line to withhold. `src/regexguard.h`'s allowlist of
+  files that may spell the engine is now empty.
 
-Byte-identical: 55 of 55 comparisons against this lane's parent (dev builds, one checkout, stdout, stderr and exit
-code) — 36 unchanged to the byte (`--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` with SARIF, the map,
-`--scan-skill(s)`, the literal `--grep`), and 19 `--regex` answers (literal, alternation, anchored, required-literal,
+Byte-identical: 61 of 61 comparisons against this lane's parent (dev builds, one checkout, stdout, stderr and exit
+code) — 42 unchanged to the byte (`--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` with SARIF, the map,
+`--scan-skill(s)`, the literal `--grep`, and every redaction seam: `--pack-top-n`, `--expand` and `--recall` over the
+secrets fixture and this tree), and 19 `--regex` answers (literal, alternation, anchored, required-literal,
 prefiltered and full-scan, context, compact, unindexed) identical once the new `regex_lines_skipped="0"` and its legend
 sentence are removed. Instructions retired (Release, `/usr/bin/time -l`, median of 5, interleaved, against the parent):
 `--regex` over an llvm-project checkout of 8,837 C/C++ files −83% to −90% (`getOperand\w*\(` 224.5G → 28.3G), over
@@ -146,7 +156,11 @@ skills and gates spell, every `#match?` a query or lint pack carries) over CRLF,
 syntax sets; 0 mismatches over about 80,000 cases on libc++ and on libstdc++, and a copy of the header whose
 alternation resumes one byte past a match must go red; (k) a 300 KB matching line is matched or skipped-and-disclosed,
 a 2 MB line with no `b` is ruled out in bounded time, a literal alternation over a 3 MB line answers, and a literal
-`--grep` is unchanged; (l) on a recursing engine, for three shapes, a line of exactly `regex_line_max` bytes is matched
+`--grep` is unchanged; (n) with a test switch that gives half the scan threads half the stack, 48 files are answered
+identically over five runs at one bound and the smaller stack is disclosed (the per-thread bound it replaced skipped 24
+to 27 of the 48, varying run to run); (o) `test/redactshape_harness.cpp` gives each redaction rule's regex match length
+at every position over 30,000 generated texts (682,859 checks, 0 mismatches on libc++ and libstdc++; a threshold moved
+by one goes red), and the 200 KB `sk-` file exits 0 with the key redacted; (l) on a recursing engine, for three shapes, a line of exactly `regex_line_max` bytes is matched
 at exit 0 and one byte more is skipped; (m) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` reaches the
 skip path and its disclosure on every engine. Red on this lane's parent: 8 failures on macOS (a TIMEOUT on the 2 MB
 line), and 8 on the gcc 13 Linux build, two of them a signal death (exit 139). `test/emittertruthcheck.sh` (Z2h) holds the

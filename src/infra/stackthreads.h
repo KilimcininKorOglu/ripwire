@@ -14,9 +14,13 @@
 //
 //  The work pulls its own share from shared state (an atomic cursor), so a thread that fails to start costs
 //  parallelism, not coverage: the threads that did start finish the work. A thread the system refuses the full
-//  stack is retried with half, down to 8 MiB, and its work is told the stack it got. When NONE starts, the work
-//  runs once on the calling thread and is told kCallerStackBytesFloor instead — the caller's stack is not this
-//  header's to measure, so the work plans for the smallest one this tree runs on.
+//  stack is retried with half, down to 8 MiB. ONE size is then SETTLED — the smallest any started thread got — and
+//  every thread is told that size, and no thread runs any work until it is settled (the threads wait on a gate
+//  the creator holds). So a piece of work never sees a size that depends on which thread picked it up: work that
+//  derives a limit from its stack derives the same limit on every thread (determinism, CLAUDE.md non-negotiable
+//  #2). When NONE starts, the work runs once on the calling thread and is told kCallerStackBytesFloor — the
+//  caller's stack is not this header's to measure, so the work plans for the smallest one this tree runs on. The
+//  settled size is RETURNED, so a caller whose answer depends on it can disclose it.
 //
 #pragma once
 
@@ -26,6 +30,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <mutex>
 #include <vector>
 
 namespace rw
@@ -51,40 +56,60 @@ public:
     const bool     isSized;
 };
 
-// work( stackBytes ) on `threadCount` threads; returns after every one has been joined. Each thread asks for `stackBytes`
-// and, when the system refuses that much (a strict overcommit policy, an address-space ulimit), for half as much, down to
-// kStackThreadBytesFloor — so `work` is told the stack ITS thread got. `work` must not throw: an exception escaping a
-// thread's entry is std::terminate.
-inline constexpr std::size_t kStackThreadBytesFloor = 8 * 1024 * 1024;
+inline constexpr std::size_t kStackThreadBytesFloor = 8 * 1024 * 1024;   // the smallest stack a refused thread is retried with
 
-template<typename Work>
-void runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, Work& work ) noexcept
+// work( settledBytes ) on `threadCount` threads; returns the settled stack size after every thread has been joined. Each
+// thread asks for `stackBytes` and, when the system refuses that much (a strict overcommit policy, an address-space
+// ulimit), for half as much, down to kStackThreadBytesFloor. `work` must not throw: an exception escaping a thread's
+// entry is std::terminate. `isRefused( threadIndex, tryBytes, askedBytes )` lets a caller's test hook refuse a size the
+// system would have granted, so the degrade is reachable on demand; the default refuses nothing.
+inline bool isStackNeverRefused( std::size_t, std::size_t, std::size_t ) noexcept { return false; }
+
+template<typename Work, typename RefusePolicy = decltype( &isStackNeverRefused )>
+std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, Work& work, RefusePolicy isRefused = &isStackNeverRefused ) noexcept
 {
+    struct Shared
+    {
+        explicit Shared( Work* w ) noexcept : work( w ) {}
+        Work*       work;
+        std::size_t settledBytes = 0;   // written under `gate` before it opens; read under it by every thread
+        std::mutex  gate;
+    };
     struct Launch
     {
-        Work*       work;
-        std::size_t stackBytes;
-        pthread_t   thread;
+        Shared*   shared;
+        pthread_t thread;
     };
     const auto entry = []( void* arg ) -> void*
     {
-        const Launch& launch = *static_cast<Launch*>( arg );
-        ( *launch.work )( launch.stackBytes );
+        Shared&     shared       = *static_cast<Launch*>( arg )->shared;
+        std::size_t settledBytes = 0;
+        {
+            const std::lock_guard<std::mutex> wait( shared.gate );   // blocks until the creator has settled one size
+            settledBytes = shared.settledBytes;
+        }
+        ( *shared.work )( settledBytes );
         return nullptr;
     };
-    std::vector<Launch> launches( threadCount, Launch{ &work, 0, pthread_t{} } );
+    Shared              shared( &work );
+    std::vector<Launch> launches( threadCount, Launch{ &shared, pthread_t{} } );
     std::size_t         startedCount = 0;
-    for( std::size_t t = 0; t < threadCount; ++t )
     {
-        Launch& launch    = launches[ startedCount ];
-        bool    isStarted = false;
-        for( std::size_t tryBytes = stackBytes; !isStarted && tryBytes > 0 && tryBytes >= std::min( stackBytes, kStackThreadBytesFloor ); tryBytes /= 2 )
+        const std::lock_guard<std::mutex> hold( shared.gate );
+        std::size_t                       smallestBytes = stackBytes;
+        for( std::size_t t = 0; t < threadCount; ++t )
         {
-            launch.stackBytes = tryBytes;                                // written BEFORE the thread can read it
-            const StackThreadAttr attr( tryBytes );
-            isStarted = attr.isSized && pthread_create( &launch.thread, &attr.attr, entry, &launch ) == 0;
+            Launch& launch    = launches[ startedCount ];
+            bool    isStarted = false;
+            for( std::size_t tryBytes = stackBytes; !isStarted && tryBytes > 0 && tryBytes >= std::min( stackBytes, kStackThreadBytesFloor ); tryBytes /= 2 )
+            {
+                const StackThreadAttr attr( tryBytes );
+                isStarted     = attr.isSized && !isRefused( t, tryBytes, stackBytes ) && pthread_create( &launch.thread, &attr.attr, entry, &launch ) == 0;
+                smallestBytes = isStarted ? std::min( smallestBytes, tryBytes ) : smallestBytes;
+            }
+            startedCount += isStarted ? 1 : 0;
         }
-        startedCount += isStarted ? 1 : 0;
+        shared.settledBytes = startedCount == 0 ? kCallerStackBytesFloor : smallestBytes;
     }
     for( std::size_t t = 0; t < startedCount; ++t )
     {
@@ -95,6 +120,7 @@ void runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, Work& w
         DEGRADED_PATH_ALERT( "stackthreads: no thread could be created with any stack of at least 8 MiB — the work runs on the caller's thread" );
         work( kCallerStackBytesFloor );
     }
+    return shared.settledBytes;
 }
 
 }   // namespace rw

@@ -35,7 +35,8 @@
 #   (c) STATIC — no std::regex construction, match, iterator, result type or <regex> include in src/ outside
 #       src/regexguard.h, over source with comments and string literals blanked (so the words in prose do not
 #       count). The allowlist carries a reason per row, a stale row FAILS, and the detector is proved on a
-#       planted file (fires) and on a planted clean file (silent) before its verdict on the tree is believed.
+#       planted file (fires) and on a planted clean file (silent) before its verdict on the tree is believed. The
+#       allowlist is EMPTY since src/redact.h stopped spelling the engine (arm (o)).
 #   (e) AN --arch TO PATTERN THAT ONLY FAILS AFTER SUBSTITUTION IS REFUSED, NOT INERT — `a{2,\1}` is a well-formed
 #       template that passes the screen, and on an edge whose FROM captured "1" it becomes `a{2,1}`, an invalid
 #       interval on every standard library. That rule used to be skipped silently for the edge (exit 0, violations
@@ -74,6 +75,15 @@
 #   (m) THE SKIP PATH ON EVERY ENGINE — the non-NDEBUG fault switch RIPWIRE_FAULT_REGEX_LINE_BOUND=1 caps the bound at 64
 #       bytes: a 104-byte line is skipped, counted and floored, and the compact legend reads both attributes; a literal
 #       pattern and a line lacking the required literal are never skipped; the exact-"1" control changes nothing.
+#   (n) ONE STACK FOR THE WHOLE SCAN — the scan threads settle one size (the smallest any got) before a single file is
+#       read, so no file's skip-or-match depends on which thread took it. The fault switch RIPWIRE_FAULT_SCAN_STACK_MIXED=1
+#       gives odd threads half the stack; with RIPWIRE_FAULT_REGEX_LINE_BOUND=1 (bound = stack >> 22) 48 files of a 50-byte
+#       line are then all skipped at regex_line_max 32, five runs byte-identical, and regex_stack_bytes= discloses the
+#       smaller stack even at 0 skips. The per-thread bound this replaced skipped 24-27 of the 48, varying run to run.
+#   (o) REDACTION HAS NO ENGINE TO OVERFLOW — src/redact.h's nine prefixed rules are matched structurally;
+#       test/redactshape_harness.cpp diffs each against its own table regex (0 mismatches, every rule matched), a mutated
+#       threshold goes red, and --expand over a file holding "sk-" and a 200 KB token run exits 0 with the key redacted
+#       (libstdc++'s regex overflowed the stack on it).
 #   (d) file() IS ROOT-RELATIVE — two clones of one tree at different directory names, each run with an
 #       absolute and a relative root spelling, must give the SAME count for a pattern naming one clone's
 #       directory, and an anchored `^src/` must select the src/ symbols (it selected nothing under an
@@ -271,7 +281,7 @@ import os, re, sys
 root, tmp = sys.argv[1], sys.argv[2]
 OWNER = "src/regexguard.h"
 ALLOW = {
-    "src/redact.h":    "the secret-redaction rule table: constant patterns compiled ONCE into a static array on the redaction hot path; never user text",
+    # empty: src/redact.h, the last row, matches its rules structurally now (arm (o) is its oracle)
 }
 TOKENS = re.compile(r"\bstd::(?:w?regex|basic_regex)\b|\b(?:regex_(?:search|match|replace|iterator|token_iterator|error|constants|traits)|[cs]regex_(?:token_)?iterator|w[cs]?regex_(?:token_)?iterator|[cs]match|w[cs]match|[cs]sub_match|w[cs]sub_match|sub_match|match_results)\b")
 INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[ \t]*<regex>", re.M)
@@ -697,6 +707,75 @@ if [ "$FAULTS" -eq 1 ]; then
     else no "(m) control: RIPWIRE_FAULT_REGEX_LINE_BOUND=10 changed the answer: $( grep -o '<grep [^>]*>' "$TMP/m5.out" | head -c 300 )"; fi
 else
     printf '  INFO  (m) this binary compiles fault switches out (NDEBUG); the skip path is observable through (k)/(l) on a recursing engine\n'
+fi
+
+# ── (n) one stack for the whole scan: a degraded start holds every thread to the same size, and says so ──────────────
+if [ "$FAULTS" -eq 1 ]; then
+    FIXS="$TMP/stackfix"; mkdir -p "$FIXS"
+    for i in $( seq -w 1 48 ); do printf '# f%s\n%s aab\n' "$i" "$( head -c 46 /dev/zero | tr '\0' x )" >"$FIXS/f$i.md"; done
+    : >"$TMP/n.sums"
+    for run in 1 2 3 4 5; do
+        RIPWIRE_FAULT_SCAN_STACK_MIXED=1 RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXS" --no-cache --regex='a+b' >"$TMP/n$run.out" 2>/dev/null
+        cksum <"$TMP/n$run.out" >>"$TMP/n.sums"
+    done
+    distinctRuns="$( sort -u "$TMP/n.sums" | wc -l | tr -d ' ' )"
+    cpuCount="$( getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2 )"
+    if [ "$cpuCount" -lt 2 ]; then
+        printf '  INFO  (n) one CPU: the scan runs one thread, so no second stack size can be mixed in\n'
+    elif [ "$distinctRuns" = 1 ] && [ "$( attrOf regex_lines_skipped "$TMP/n1.out" )" = 48 ] && [ "$( attrOf regex_line_max "$TMP/n1.out" )" = 32 ] \
+         && [ "$( attrOf regex_stack_bytes "$TMP/n1.out" )" = 134217728 ]; then
+        ok "(n) mixed stacks: every thread held to the smallest (regex_stack_bytes=\"134217728\"), all 48 lines skipped at regex_line_max=\"32\", 5 runs byte-identical"
+    else
+        no "(n) mixed stacks: $distinctRuns distinct outputs over 5 runs; root $( grep -o '<grep [^>]*>' "$TMP/n1.out" | head -c 300 )"
+    fi
+    RIPWIRE_FAULT_SCAN_STACK_MIXED=1 "$BIN" "$FIXS" --no-cache --regex='a+b' >"$TMP/n6.out" 2>/dev/null
+    if [ "$cpuCount" -ge 2 ] && [ "$( attrOf regex_stack_bytes "$TMP/n6.out" )" = 134217728 ] && [ "$( attrOf regex_lines_skipped "$TMP/n6.out" )" = 0 ] \
+       && grep -q 'hits="48"' "$TMP/n6.out"; then
+        ok "(n) the smaller stack is disclosed even when no line was skipped (regex_stack_bytes= beside regex_lines_skipped=\"0\")"
+    elif [ "$cpuCount" -ge 2 ]; then
+        no "(n) a degraded stack with 0 skips is not disclosed: $( grep -o '<grep [^>]*>' "$TMP/n6.out" | head -c 300 )"
+    fi
+    "$BIN" "$FIXS" --no-cache --regex='a+b' >"$TMP/n7.out" 2>/dev/null
+    if grep -q '<grep ' "$TMP/n7.out" && [ -z "$( attrOf regex_stack_bytes "$TMP/n7.out" )" ]; then ok "(n) control: a full-size scan's root carries no regex_stack_bytes="
+    else no "(n) control: regex_stack_bytes= without the fault switch: $( grep -o '<grep [^>]*>' "$TMP/n7.out" | head -c 300 )"; fi
+else
+    printf '  INFO  (n) this binary compiles fault switches out (NDEBUG); the settled-stack arm needs RIPWIRE_FAULT_SCAN_STACK_MIXED\n'
+fi
+
+# ── (o) redaction has no regex engine to overflow: the structural shapes ARE the table's regexes ─────────────────────
+if "$CXX" "$CXXSTD" -O2 -Wall -Wextra -I"$ROOT/src" "$ROOT/test/redactshape_harness.cpp" -o "$TMP/rxshape" 2>"$TMP/rxshape.cc"; then
+    "$TMP/rxshape" >"$TMP/rxshape.out" 2>&1; shapeRc=$?
+    shapeSummary="$( grep -m1 '^redactshape: texts=' "$TMP/rxshape.out" )"
+    if [ "$shapeRc" -eq 0 ] && printf '%s' "$shapeSummary" | grep -q ' mismatches=0 coverage=met'; then
+        ok "(o) every redaction shape gives its table regex's match length ($CXX): $shapeSummary"
+    else
+        no "(o) a redaction shape disagrees with its regex (rc $shapeRc): $shapeSummary $( grep -m2 '^MISMATCH' "$TMP/rxshape.out" | head -c 400 )"
+    fi
+    mkdir -p "$TMP/rxshapemut"
+    python3 - "$ROOT/src/redact.h" "$TMP/rxshapemut/redact.h" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = 'case 7: return shapePrefixRun( in, pos, "sk-", ShapeClass::KeyBody, 20,'
+assert s.count(old) == 1, "mutation site moved"
+open(sys.argv[2], "w").write(s.replace(old, 'case 7: return shapePrefixRun( in, pos, "sk-", ShapeClass::KeyBody, 19,'))
+PY
+    if "$CXX" "$CXXSTD" -O2 -w -I"$TMP/rxshapemut" -I"$ROOT/src" "$ROOT/test/redactshape_harness.cpp" -o "$TMP/rxshapemutbin" 2>"$TMP/rxshapemut.cc"; then
+        "$TMP/rxshapemutbin" >"$TMP/rxshapemut.out" 2>&1; mutRc=$?
+        if [ "$mutRc" -ne 0 ] && grep -q '^MISMATCH' "$TMP/rxshapemut.out"; then ok "(o) mutation control: an sk- key one byte short of its threshold is caught ($( grep -m1 -o 'mismatches=[0-9]*' "$TMP/rxshapemut.out" ))"
+        else no "(o) mutation control: the harness passed a shape whose threshold drifted from its regex (rc $mutRc)"; fi
+    else
+        no "(o) mutation control did not compile: $( head -c 300 "$TMP/rxshapemut.cc" )"
+    fi
+else
+    no "(o) test/redactshape_harness.cpp did not compile with $CXX: $( head -c 400 "$TMP/rxshape.cc" )"
+fi
+FIXR="$TMP/redactfix"; mkdir -p "$FIXR"
+python3 -c "import sys; open(sys.argv[1],'w').write('def leaky_config():\n    return \"sk-' + 'A' * 200000 + '\"\n')" "$FIXR/leak.py"
+rc="$( capRun 60 "$TMP/o1.out" "$TMP/o1.err" "$FIXR" --no-cache --expand=leaky_config )"
+if [ "$rc" = 0 ] && grep -q 'openai/anthropic-key=1' "$TMP/o1.err" && ! grep -q 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' "$TMP/o1.out"; then
+    ok "(o) --expand over a file holding sk- and a 200 KB token run exits 0, the key is redacted (stderr tally) and no run of it is printed"
+else
+    no "(o) --expand over a 200 KB sk- token: exit $rc, redacted=$( grep -c 'REDACTED:openai-key' "$TMP/o1.out" ) — $( head -c 160 "$TMP/o1.err" )"
 fi
 
 # ── (d) file() matches the ROOT-RELATIVE path, so the checkout's directory name cannot select anything ─────────

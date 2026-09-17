@@ -355,14 +355,27 @@ std::string grepRegexSkipAttrs( const rw::Config& cfg, const rw::GrepCollection&
     {
         return {};
     }
-    const std::uint64_t skipped = found.regexLinesSkipped + aux.regexLinesSkipped;
-    std::string         attrs   = " regex_lines_skipped=\"" + std::to_string( skipped ) + "\"";
-    if( skipped != 0 )
+    // Each scan settled ONE stack for all its threads (search.h); the unindexed scan never asks for more than the indexed
+    // one got, so the smaller of the two, and the bound it gives, are the ones a reader can rely on for every line.
+    const std::uint64_t skipped      = found.regexLinesSkipped + aux.regexLinesSkipped;
+    const std::size_t   stackBytes   = ( found.regexStackBytes == 0 || aux.regexStackBytes == 0 ) ? std::max( found.regexStackBytes, aux.regexStackBytes )
+                                                                                                 : std::min( found.regexStackBytes, aux.regexStackBytes );
+    const std::size_t   lineMax      = found.regexStackBytes == 0 ? aux.regexLineBytesMax
+                                     : aux.regexStackBytes == 0   ? found.regexLineBytesMax
+                                                                  : std::min( found.regexLineBytesMax, aux.regexLineBytesMax );
+    const bool          isStackShort = stackBytes != 0 && stackBytes < rw::kGrepScanStackBytes;
+    std::string         attrs        = " regex_lines_skipped=\"" + std::to_string( skipped ) + "\"";
+    if( ( skipped != 0 || isStackShort ) && lineMax != SIZE_MAX )
     {
-        const std::size_t lineMax = found.regexLinesSkipped == 0 ? aux.regexLineBytesMax
-                                  : aux.regexLinesSkipped == 0   ? found.regexLineBytesMax
-                                                                 : std::min( found.regexLineBytesMax, aux.regexLineBytesMax );
-        attrs += " regex_line_max=\"" + std::to_string( lineMax ) + "\"" + ( floorAlreadyEmitted ? "" : rw::kGraphCountFloorAttrXml );
+        attrs += " regex_line_max=\"" + std::to_string( lineMax ) + "\"";
+    }
+    if( isStackShort )
+    {
+        attrs += " regex_stack_bytes=\"" + std::to_string( stackBytes ) + "\"";
+    }
+    if( skipped != 0 && !floorAlreadyEmitted )
+    {
+        attrs += rw::kGraphCountFloorAttrXml;
     }
     return attrs;
 }
@@ -498,7 +511,8 @@ GrepScanPhases collectGrepScanPhases( const rw::Config& cfg, const rw::IngestRes
     {
         PROFILE_SCOPE_DESCRIBE( "grep/3: aux unindexed scan" );
         const std::size_t maxAuxFileBytes = cfg.maxFileBytes == 0 ? kDefaultMaxFileBytes : cfg.maxFileBytes;
-        phases.aux = grepCollectAux( ing.crawlSkips, pat, cfg.grepRegex, maxAuxFileBytes );
+        phases.aux = grepCollectAux( ing.crawlSkips, pat, cfg.grepRegex, maxAuxFileBytes,
+                                     phases.found.regexStackBytes != 0 ? phases.found.regexStackBytes : kGrepScanStackBytes );
     }
     phases.valid = true;
     return phases;
@@ -762,7 +776,8 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
                              "because they were longer than its thread's stack can take (libstdc++ recurses once per character matched): a match "
                              "on one of them is neither found nor ruled out, and a value of 0 means no line was skipped. When it is not 0, "
                              "regex_line_max= is the longest line the engine could take on that stack and the root also carries counts_floor: hits= is a "
-                             "floor. A pattern that is a literal (or literals joined by |) never reaches the engine, so no line is too long "
+                             "floor. regex_stack_bytes= appears only when the system refused the scan threads their full stack: it is the ONE smaller "
+                             "stack every thread was held to, and regex_line_max= then rides even beside a 0 wherever the engine's bound is finite. A pattern that is a literal (or literals joined by |) never reaches the engine, so no line is too long "
                              "for it; neither is a line holding none of the pattern's required literal text. " );
     }
     rw::emitTo( stdout,

@@ -352,7 +352,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --regex's long-line disclosure (search.h grepScanText / regexguard.h maxEngineSubjectBytes): the count rides every
     // regex answer, the bound only beside a nonzero count.
     { "regex_lines_skipped", "regex_lines_skipped=N: N lines too long for the regex engine, never matched" },
-    { "regex_line_max",    "regex_line_max=: the longest line it could take; hits= is a floor" },
+    { "regex_line_max",    "regex_line_max=: the longest line it could take" },
+    { "regex_stack_bytes", "regex_stack_bytes=: the smaller stack every scan thread was held to" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
     // under max-tokens. Same number, same reading, so one row reads both places.
     { "est_tokens",        "est_tokens=: price as emitted (an upper bound under compact)", false, {}, MapHeaderRead::Also },

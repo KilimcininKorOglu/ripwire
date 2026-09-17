@@ -47,11 +47,12 @@
 // under NDEBUG, so the branch and the getenv are deleted from a release build. Measured in the lane that made
 // this seam: byte-identical output on every touched verb, release __text size in the CHANGELOG entry.
 //
-// THE ALLOWLIST, and why it is one row. src/redact.h compiles a CONSTANT rule table written in its own file, once,
-// on the redaction hot path, so it keeps std::regex directly (arm (c) names the reason). src/skillscan.h was the
-// second row until its patterns moved behind this header: a skill file is untrusted input, so an abandoned match
-// there must fail closed rather than abort wrap's noexcept scan. A new constant table may join redact.h only on the
-// same argument; a pattern a user can type may not.
+// THE ALLOWLIST, and why it is empty. src/skillscan.h was a row until its patterns moved behind this header: a skill
+// file is untrusted input, so an abandoned match there must fail closed rather than abort wrap's noexcept scan.
+// src/redact.h was the last row — a constant rule table — until libstdc++'s per-state recursion made it the same Linux
+// crash on a long token run in a default run's emitted bodies; its rules are now matched structurally, with each
+// regex kept as the specification arm (o) diffs against. A new constant table needs a reason at least that strong; a
+// pattern a user can type never gets a row.
 
 #include "infra/emit.h"      // rw::faultSwitchOn — the one reader every non-NDEBUG fault switch goes through
 #include "infra/strkern.h"   // findByte / find3 / findByteset / lowerFoldedEquals — the literal paths' byte kernels
@@ -1173,7 +1174,7 @@ void regexScanLines( const std::regex& engine, const RegexLiteralPaths& paths, s
     }
 }
 
-inline constexpr std::size_t kRegexFaultLineBytes = 64;   // RIPWIRE_FAULT_REGEX_LINE_BOUND=1's engine line bound (non-NDEBUG only)
+inline constexpr unsigned kRegexFaultStackShift = 22;   // RIPWIRE_FAULT_REGEX_LINE_BOUND=1: the engine line bound is stack >> 22 (64 B at 256 MiB)
 
 // FAULT INJECTION, because the only real trigger is one standard library's budget and the other has none:
 // RIPWIRE_FAULT_REGEX_MATCH=1 makes every guarded match throw regex_error(error_complexity) inside its own try,
@@ -1255,12 +1256,12 @@ public:
     }
 
     // regexMaxSubjectBytes for this pattern. The non-NDEBUG fault switch RIPWIRE_FAULT_REGEX_LINE_BOUND=1 caps it at
-    // kRegexFaultLineBytes on every library, so the skip path and its disclosure are reachable where the engine never
-    // needs them.
+    // stackBytes >> kRegexFaultStackShift on every library (64 B on a 256 MiB stack, and proportionally less on a smaller
+    // one), so the skip path, its disclosure and its dependence on the stack are reachable where the engine never needs them.
     std::size_t maxEngineSubjectBytes( std::size_t stackBytes ) const noexcept
     {
         static const bool isCapped = rw::faultSwitchOn( "RIPWIRE_FAULT_REGEX_LINE_BOUND" );
-        return isCapped ? std::min( regexMaxSubjectBytes( cost, stackBytes ), kRegexFaultLineBytes ) : regexMaxSubjectBytes( cost, stackBytes );
+        return isCapped ? std::min( regexMaxSubjectBytes( cost, stackBytes ), stackBytes >> kRegexFaultStackShift ) : regexMaxSubjectBytes( cost, stackBytes );
     }
 
 private:

@@ -1218,9 +1218,13 @@ struct GrepCollection
     // A --regex scan's lines the engine was never handed because they were longer than a scan thread's stack can take
     // (GrepScanVerdict). A match there is neither found nor ruled out, so nonzero makes hits= a floor; it does NOT set
     // `degraded` — every other line was read, and the answer is printed with the count beside it rather than refused.
-    // `regexLineBytesMax` is the longest line the engine was handed where any was skipped (0 when none was).
+    // `regexStackBytes` is the ONE stack size every scan thread was told (runOnStackThreads settles it before any file is
+    // read, so no file's outcome depends on which thread took it; below kGrepScanStackBytes means the system refused the
+    // full size), and `regexLineBytesMax` the engine line bound that size gives this pattern — the same on every thread
+    // (SIZE_MAX where the engine does not recurse per byte). Both 0 for a literal scan.
     std::uint64_t           regexLinesSkipped       = 0;
     std::size_t             regexLineBytesMax       = 0;
+    std::size_t             regexStackBytes         = 0;
 
     // The scan-side completeness conditions, stated ONCE for both emitters (the CLI XML root and the MCP
     // JSON payload) so the condition cannot fork between them — each emitter ANDs in only its own arms
@@ -1259,7 +1263,18 @@ inline AbandonedFileCount countAbandonedFiles( const std::vector<char>& perFileA
 // line bounds it buys are in the CHANGELOG entry. Literal scans use the same threads and never recurse.
 inline constexpr std::size_t kGrepScanStackBytes = 256 * 1024 * 1024;
 
-inline GrepCollection grepCollect( const IngestResult& ing, const std::string& pat, bool regex = false, bool noPrefilter = false )
+// FAULT INJECTION (non-NDEBUG; faultSwitchOn is constexpr false under NDEBUG): RIPWIRE_FAULT_SCAN_STACK_MIXED=1 refuses every
+// ODD scan thread any stack above half of what was asked, so one scan obtains two sizes — the degrade a strict overcommit
+// policy or an address-space ulimit produces, made deterministic and reachable on every platform (regexguardcheck arm (n)).
+inline bool isScanStackRefusedByFault( std::size_t threadIndex, std::size_t tryBytes, std::size_t askedBytes ) noexcept
+{
+    static const bool isMixed = rw::faultSwitchOn( "RIPWIRE_FAULT_SCAN_STACK_MIXED" );
+    return isMixed && threadIndex % 2 == 1 && tryBytes > askedBytes / 2;
+}
+
+// `stackBytes` is the size the scan threads ask for; only a gate's fault switch or a caller testing the degrade passes less.
+inline GrepCollection grepCollect( const IngestResult& ing, const std::string& pat, bool regex = false, bool noPrefilter = false,
+                                   std::size_t stackBytes = kGrepScanStackBytes )
 {
     const std::uint32_t fileCount   = std::uint32_t( ing.files.size() );
     const std::size_t   budgetCount = kGrepCollectionBudget;
@@ -1285,7 +1300,7 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
     std::vector<std::vector<GrepMatchSite>> perFileSites( fileCount );   // slot f written by exactly one worker
     std::vector<char>                       perFileAbandoned( regex ? fileCount : 0, 0 );   // slot f: the engine abandoned a match in f
     std::vector<std::uint32_t>              perFileSkipped( regex ? fileCount : 0, 0 );     // slot f: lines too long for the engine in f
-    std::vector<std::size_t>                perFileLineMax( regex ? fileCount : 0, 0 );     // slot f: the engine's line bound where f skipped any
+    std::atomic<std::size_t>                engineLineBytesMax { 0 };    // every worker stores the SAME value: one settled stack, one pattern
     std::atomic<std::uint32_t>              nextFileId { 0 };
     std::atomic<std::uint32_t>              unreadableCount { 0 };       // T1: files the scan could not read
     std::atomic<bool>                       workerDegraded { false };    // T1: a worker died mid-scan
@@ -1293,6 +1308,7 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
     {
         const RegexCompile reLocal = regex ? compileGuardedRegex( pat, kGrepRegexSyntax ) : RegexCompile{};
         const RegexLinePolicy linePolicy{ regex ? reLocal.regex.maxEngineSubjectBytes( stackBytes ) : SIZE_MAX, !noPrefilter };
+        engineLineBytesMax.store( regex ? linePolicy.engineLineBytesMax : 0, std::memory_order_relaxed );
         if( reLocal.refusal )
         {
             workerDegraded.store( true, std::memory_order_relaxed );
@@ -1323,7 +1339,6 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
                 if( linesSkipped != 0 )
                 {
                     perFileSkipped[f] = linesSkipped;
-                    perFileLineMax[f] = linePolicy.engineLineBytesMax;
                 }
             }
         }
@@ -1333,9 +1348,10 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
             DEGRADED_PATH_ALERT( "grep: scan worker degraded (exception swallowed) — partial hit set" );
         }
     };
+    // symmetric bare scope: the workers live exactly as long as the scan. A regex scan runs on the scan threads
+    // even when one worker is enough — the line bound is a promise about the stack the match runs on.
+    std::size_t scanStackBytes = 0;
     {
-        // symmetric bare scope: the workers live exactly as long as the scan. A regex scan runs on the scan threads
-        // even when one worker is enough — the line bound is a promise about the stack the match runs on.
         const unsigned    hwThreadCount = std::thread::hardware_concurrency();
         const std::size_t workerCount   = std::min<std::size_t>( { hwThreadCount ? hwThreadCount : 1u, fileCount, 16 } );
         if( workerCount <= 1 && !regex )
@@ -1344,7 +1360,7 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
         }
         else
         {
-            runOnStackThreads( workerCount, kGrepScanStackBytes, fileWorker );
+            scanStackBytes = runOnStackThreads( workerCount, stackBytes, fileWorker, &isScanStackRefusedByFault );
         }
     }
 
@@ -1417,16 +1433,13 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
     const bool isBudgetReached = raw.size() >= budgetCount;
     const auto [ regexAbandonedFiles, firstRegexAbandonedFile ] = countAbandonedFiles( perFileAbandoned );
     std::uint64_t regexLinesSkipped = 0;
-    std::size_t   regexLineBytesMax = 0;
-    for( std::uint32_t f = 0; f < std::uint32_t( perFileSkipped.size() ); ++f )
+    for( const std::uint32_t skipped : perFileSkipped )
     {
-        regexLinesSkipped += perFileSkipped[f];
-        regexLineBytesMax  = perFileSkipped[f] == 0 ? regexLineBytesMax
-                           : regexLineBytesMax == 0 ? perFileLineMax[f] : std::min( regexLineBytesMax, perFileLineMax[f] );
+        regexLinesSkipped += skipped;
     }
     return { std::move( raw ), isBudgetReached, unreadableCount.load( std::memory_order_relaxed ),
              workerDegraded.load( std::memory_order_relaxed ) || regexAbandonedFiles != 0, regexAbandonedFiles, firstRegexAbandonedFile,
-             regexLinesSkipped, regexLineBytesMax };
+             regexLinesSkipped, engineLineBytesMax.load( std::memory_order_relaxed ), regex ? scanStackBytes : 0 };
 }
 
 // ─── §R-J (Wave-2 harvest item R-J) — query-file / unsupported-ext TEXT visibility ─────────────────────
@@ -1479,7 +1492,8 @@ struct GrepAuxCollection
     std::uint32_t           regexAbandonedFiles  = 0;       // the engine abandoned a match in this many unindexed files (see GrepCollection)
     std::string             firstRegexAbandonedPath;        // the first of them, in the candidate list's own path order
     std::uint64_t           regexLinesSkipped    = 0;       // lines too long for the engine in unindexed files (see GrepCollection)
-    std::size_t             regexLineBytesMax    = 0;       // the engine's line bound where any was skipped, else 0
+    std::size_t             regexLineBytesMax    = 0;       // the engine line bound of this scan's one thread (see GrepCollection)
+    std::size_t             regexStackBytes      = 0;       // that thread's stack (see GrepCollection); 0 for a literal scan
 
     void noteRegexAbandoned( const std::string& path )
     {
@@ -1523,11 +1537,7 @@ inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pa
         {
             out.noteRegexAbandoned( row.path );
         }
-        if( linesSkipped != 0 )
-        {
-            out.regexLinesSkipped += linesSkipped;
-            out.regexLineBytesMax  = linePolicy.engineLineBytesMax;
-        }
+        out.regexLinesSkipped += linesSkipped;
         if( sites.empty() )
         {
             continue;
@@ -1556,7 +1566,10 @@ inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pa
 // ceiling here would silently reintroduce the hazard the crawl exists to cap. Sequential by design — the
 // candidate population is capped at kMaxSkipRowsPerClass (500), far below where grepCollect's worker-pool
 // fan-out would pay for itself.
-inline GrepAuxCollection grepCollectAux( const CrawlSkips& skips, const std::string& pat, bool regex, std::size_t maxAuxFileBytes )
+// `stackBytes`: what the scan thread asks for — collectGrepScanPhases passes the size grepCollect's threads settled on, so
+// the unindexed scan never runs on MORE stack than the indexed one did.
+inline GrepAuxCollection grepCollectAux( const CrawlSkips& skips, const std::string& pat, bool regex, std::size_t maxAuxFileBytes,
+                                         std::size_t stackBytes = kGrepScanStackBytes )
 {
     GrepAuxCollection out;
     out.candidatesCapped = skips.unsupported.size() < skips.unsupportedFiles;
@@ -1571,12 +1584,12 @@ inline GrepAuxCollection grepCollectAux( const CrawlSkips& skips, const std::str
     // A regex scan runs on one scan thread for the same reason grepCollect's workers do: the line bound is a promise
     // about the stack the match runs on. The body is the whole scan; a throw out of a thread is std::terminate, so
     // it degrades the collection the way a grepCollect worker does.
-    const auto scanAll = [ & ]( std::size_t stackBytes )
+    const auto scanAll = [ & ]( std::size_t settledBytes )
     {
         try
         {
-            scanUnsupportedFiles( skips, pat, regex ? &re.regex : nullptr, maxAuxFileBytes,
-                                  RegexLinePolicy{ regex ? re.regex.maxEngineSubjectBytes( stackBytes ) : SIZE_MAX, true }, out );
+            out.regexLineBytesMax = regex ? re.regex.maxEngineSubjectBytes( settledBytes ) : 0;
+            scanUnsupportedFiles( skips, pat, regex ? &re.regex : nullptr, maxAuxFileBytes, RegexLinePolicy{ regex ? out.regexLineBytesMax : SIZE_MAX, true }, out );
         }
         catch( ... )
         {
@@ -1586,7 +1599,7 @@ inline GrepAuxCollection grepCollectAux( const CrawlSkips& skips, const std::str
     };
     if( regex )
     {
-        runOnStackThreads( 1, kGrepScanStackBytes, scanAll );
+        out.regexStackBytes = runOnStackThreads( 1, stackBytes, scanAll, &isScanStackRefusedByFault );
     }
     else
     {
