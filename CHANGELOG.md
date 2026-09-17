@@ -15,6 +15,24 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a `#match?` predicate or an `--arch` path-rule that never reached the engine still filtered nothing
+
+`#match?`/`#not-match?` (a `--match`/`--lint-rules` predicate) and `--arch` path-rules matched a captured node's
+text, or a FROM/TO path, straight through the engine with no length bound — the same crash shape #251/the
+regex-long-lines lane fixed for `--regex`, just not wired to these three entry points yet. A subject too long
+for the engine on its thread now answers `RegexVerdict::Skipped` (never a silent Miss) at both: `#match?`
+refuses like an abandoned match, naming the site (`--match`/`--lint-rules` exit 1); an `--arch` path-rule's
+verdict refuses only when the skip could actually change the edge's answer — a LATER deny rule that decisively
+matches the same edge settles it regardless, and the earlier skip is disclosed on stderr, not refused. That
+"keep scanning past an undecided rule" shape used to stop at the FIRST undecided deny even when a later one
+would have settled things either way; it now mirrors the allow-loop's own shape, which already scanned past an
+undecided allow the same way.
+
+Gates: `test/astqueryregexcheck.sh` (new arm G, red via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1`), `test/archcheck.sh`
+(new F-B4 section: arm 1 red via the same fault, arm 2 deterministic via a per-edge TO-template refusal — the
+fault forces every `kCallerStackBytesFloor`-bound match to skip unconditionally, so a differential needs a
+cause that isn't stack-size-uniform). quality-delta gating=0 (short-horizon-churn acked through the binary).
+
 ### Fixed — a skill scan that could not finish reading a line, or a directory, still said "clean"
 
 `--scan-skill(s)` skipped a line the regex engine was never handed (too long for this thread's measured-safe

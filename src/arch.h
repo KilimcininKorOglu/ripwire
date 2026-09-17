@@ -35,6 +35,7 @@
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — graceful-degrade on a malformed path-regex (never throw at match time)
 #include "regexguard.h"          // path-rules: the screen, the compile and the guarded match every user-authored pattern takes
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
+#include "infra/stackthreads.h" // kCallerStackBytesFloor — path-rule matching runs on whatever thread --arch is on, never one it sized itself
 
 #include <algorithm>
 #include <array>
@@ -258,17 +259,26 @@ inline std::optional<std::string> toTemplateRefusal( std::string_view toTemplate
 // allow path-rule matches it (allow = explicit exception). `bad` (uncompilable) rules are skipped — they
 // can never fire. Pure function of its inputs (deterministic). `ruleIndex` is the 0-based index of the matching
 // DENY rule (for a stable label) when `isForbidden`, or of the rule that could not be JUDGED on this edge — the
-// engine abandoned its match (`isAbandoned`), or its TO pattern, after this edge's backreferences were
-// substituted, is one the guard refuses (`isRefused`, with the substituted text and the reason). An undecided rule
-// is neither permitted nor forbidden but unknown, so the caller refuses rather than choose.
+// engine abandoned its match (`isAbandoned`), the edge's FROM or substituted-TO subject was too long for the
+// engine on this thread and never reached it at all (`isSkipped`, F-B4 — src/regexguard.h RegexVerdict::Skipped,
+// the same bound `--regex` uses on a long matching line), or its TO pattern, after this edge's backreferences
+// were substituted, is one the guard refuses (`isRefused`, with the substituted text and the reason). An
+// undecided rule is neither permitted nor forbidden but unknown, so the caller refuses rather than choose.
 struct PathRuleVerdict
 {
     bool        isForbidden = false;
     bool        isAbandoned = false;
+    bool        isSkipped   = false;
     bool        isRefused   = false;
     std::size_t ruleIndex   = 0;
     std::string refusedTo;   // isRefused only: the TO pattern as substituted for this edge
     std::string refusal;     // isRefused only: the guard's reason, in the words --regex prints
+
+    // F-B4: appended last so every existing positional PathRuleVerdict{...} construction stays valid. True when
+    // pathRuleForbids met an undecided rule (Exhausted/Skipped/refused) while resolving THIS edge but a decisive
+    // rule elsewhere settled the verdict anyway — the edge is still isForbidden/permitted, not refused, and the
+    // caller discloses the count rather than treating it as unknown.
+    bool        hadUndecided = false;
 };
 
 // One rule against one edge: FROM against src, then (on a hit) the backreference-substituted TO against dst. The
@@ -284,10 +294,14 @@ struct PathRuleMatch
     std::optional<std::string> refusal;
 };
 
+// F-B4: subjects here are ROOT-RELATIVE PATHS (arch.h's own top-of-file note — realistically a few KB), so the
+// caller thread's own bound (kCallerStackBytesFloor, the smallest stack this tree runs work on) is what protects
+// an adversarial FROM/TO regex the same way skillscan.h and #match? are protected — this runs off the grep
+// line-loop's own bounding, on whatever thread --arch happens to run on.
 inline PathRuleMatch pathRuleMatches( const PathRule& pr, std::string_view src, std::string_view dst )
 {
     RegexCaptures      fromCaptures;
-    const RegexVerdict fromVerdict = pr.fromRe.search( src, fromCaptures );
+    const RegexVerdict fromVerdict = pr.fromRe.search( src, fromCaptures, kCallerStackBytesFloor );
     if( fromVerdict != RegexVerdict::Hit )
     {
         return { fromVerdict, {}, std::nullopt };
@@ -298,7 +312,7 @@ inline PathRuleMatch pathRuleMatches( const PathRule& pr, std::string_view src, 
     {
         return { RegexVerdict::Miss, std::move( substitutedTo ), std::move( toCompiled.refusal ) };
     }
-    return { toCompiled.regex.search( dst ), {}, std::nullopt };
+    return { toCompiled.regex.search( dst, kCallerStackBytesFloor ), {}, std::nullopt };
 }
 
 // The verdict for rule `ruleIndex` when its match could not be decided on this edge, or nullopt when it was.
@@ -306,29 +320,41 @@ inline std::optional<PathRuleVerdict> undecidedPathRule( PathRuleMatch& match, s
 {
     if( match.refusal )
     {
-        return PathRuleVerdict{ false, false, true, ruleIndex, std::move( match.substitutedTo ), std::move( *match.refusal ) };
+        return PathRuleVerdict{ false, false, false, true, ruleIndex, std::move( match.substitutedTo ), std::move( *match.refusal ) };
     }
     if( match.verdict == RegexVerdict::Exhausted )
     {
-        return PathRuleVerdict{ false, true, false, ruleIndex, {}, {} };
+        return PathRuleVerdict{ false, true, false, false, ruleIndex, {}, {} };
+    }
+    if( match.verdict == RegexVerdict::Skipped )
+    {
+        return PathRuleVerdict{ false, false, true, false, ruleIndex, {}, {} };
     }
     return std::nullopt;
 }
 
-// DENY FIRST, and refuse only when an undecided rule could change the verdict. The answer is "forbidden" exactly when
-// some deny matches and no allow does, with the FIRST matching deny as the label. So:
+// DENY FIRST, and refuse only when an undecided rule COULD change the verdict — never merely because one was met
+// along the way (F-B4). The answer is "forbidden" exactly when some deny matches and no allow does, with the FIRST
+// matching deny as the label. So:
 //   * every deny misses            ⇒ permitted, whatever the allows would say — none is consulted (an allow whose
 //                                    pattern the engine cannot finish can no longer turn a determinable "not a
 //                                    violation" into a refusal);
-//   * a deny is undecided before any deny matches ⇒ it might be the matching one (or the label) — it matters
-//                                    unless an allow matches, which permits the edge either way;
+//   * a deny is undecided, but a LATER deny decisively matches ⇒ forbidden either way — the undecided one never
+//                                    needed an answer; disclosed (hadUndecided), not refused (F-B4: this used to
+//                                    stop and refuse at the FIRST undecided deny, even when a later one settled it);
+//   * every deny is either a decided miss or undecided, none a decided hit ⇒ the FIRST undecided one is the
+//                                    verdict — it might have been the matching one (or the label) — unless an
+//                                    allow decisively matches, which permits the edge either way;
 //   * a deny matches               ⇒ consult the allows: any allow that matches permits the edge, even after an
 //                                    earlier allow was undecided; only when none matches does an undecided allow
 //                                    matter, because it might have been the exception.
 // Every decided edge gets the answer the old allow-first order gave, and the same label.
 inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src, std::string_view dst )
 {
-    // 1) the first DENY that matches, or the first one that could not be decided before any matched
+    // 1) the first DENY that DECISIVELY matches wins the label; an undecided deny met along the way is a fallback,
+    // not a stop — scanning continues so a later decisive deny can settle the edge regardless of it (mirrors the
+    // allow loop below, which already scanned past an undecided allow this way).
+    std::optional<PathRuleVerdict> undecidedDeny;
     std::optional<PathRuleVerdict> denyVerdict;
     for( std::size_t i = 0; i < r.pathRules.size() && !denyVerdict; ++i )
     {
@@ -338,11 +364,23 @@ inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src
             continue;
         }
         PathRuleMatch match = pathRuleMatches( pr, src, dst );
-        denyVerdict = undecidedPathRule( match, i );
-        if( !denyVerdict && match.verdict == RegexVerdict::Hit )
+        if( match.verdict == RegexVerdict::Hit )
         {
-            denyVerdict = PathRuleVerdict{ true, false, false, i, {}, {} };
+            denyVerdict = PathRuleVerdict{ true, false, false, false, i, {}, {} };
+            continue;
         }
+        if( !undecidedDeny )
+        {
+            undecidedDeny = undecidedPathRule( match, i );
+        }
+    }
+    if( !denyVerdict )
+    {
+        denyVerdict = undecidedDeny;    // no deny decisively fired; this edge's answer truly depends on the first undecided one
+    }
+    else if( undecidedDeny )
+    {
+        denyVerdict->hadUndecided = true;   // a later deny fired anyway; the earlier undecided one never mattered
     }
     if( !denyVerdict )
     {
@@ -361,7 +399,9 @@ inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src
         PathRuleMatch match = pathRuleMatches( pr, src, dst );
         if( match.verdict == RegexVerdict::Hit && !match.refusal )
         {
-            return {};   // an allow rule matches → permitted
+            PathRuleVerdict permitted;
+            permitted.hadUndecided = denyVerdict->hadUndecided || bool( undecidedAllow );
+            return permitted;   // an allow rule matches → permitted
         }
         if( !undecidedAllow )
         {

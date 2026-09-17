@@ -227,5 +227,33 @@ else
     no "F: --lint is not deterministic across runs"
 fi
 
+# ── G (F-B4) — a #match? subject too long for the engine on this thread REFUSES, naming the site ───────
+# RIPWIRE_FAULT_REGEX_LINE_BOUND=1 forces src/regexguard.h's per-thread subject-length bound to (near) zero on
+# every platform (macOS libc++ has no natural bound to force — same hook regexguardcheck.sh uses), so a
+# captured node's text that would normally MATCH is instead never handed to the engine at all
+# (RegexVerdict::Skipped). A skipped subject must refuse like an abandoned one (never a silent non-match, never
+# a silent Pass that keeps a row no predicate actually judged). "o+" (quantified, not a bare literal) is used
+# rather than arm C2's "oo" so the probe actually reaches the engine: a pure literal answers off regexguard.h's
+# literal-plan byte search, which no subject is ever too long for, so it would never observe the bound at all.
+CTRL_RC=0
+"$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"o+\"))" >"$TMP/g_ctrl.out" 2>"$TMP/g_ctrl.err" || CTRL_RC=$?
+[ "$CTRL_RC" -eq 0 ] && grep -q '<match ' "$TMP/g_ctrl.out" \
+    && ok "G control: the same #match? probe with no fault answers normally (exit 0, a <match> element)" \
+    || no "G control: the probe is not a genuine control (exit $CTRL_RC): $( head -c 200 "$TMP/g_ctrl.err" )"
+
+FAULT_RC=0
+RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"o+\"))" >"$TMP/g_fault.out" 2>"$TMP/g_fault.err" || FAULT_RC=$?
+[ "$FAULT_RC" -eq 1 ] \
+    && ok "G: a forced too-long #match? subject refuses (exit 1), not a silent non-match" \
+    || no "G: forced skip exited $FAULT_RC, expected 1 (refusal)"
+if grep -q '<match ' "$TMP/g_fault.out"; then
+    no "G: a refused --match still emitted a <match> element: $( head -c 200 "$TMP/g_fault.out" )"
+else
+    ok "G: no <match> element on the refused run"
+fi
+grep -qE 'could not be decided|too long' "$TMP/g_fault.err" \
+    && ok "G: the refusal names the reason on stderr" \
+    || no "G: stderr does not name a reason: $( head -c 300 "$TMP/g_fault.err" )"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

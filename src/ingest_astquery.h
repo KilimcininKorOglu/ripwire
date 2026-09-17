@@ -150,10 +150,12 @@ inline PredicateRegexTable buildPredicateRegexTable( const TSQuery* q )
 //   * slot == -1 — no constant to precompile (a Capture-typed argument, whose pattern is per-match text).
 //     Compile it here, per match, as before — through the guard.
 // A predicate the guard cannot DECIDE filters nothing, as it always did, and says WHY: the per-match text was refused
-// by the screen, the per-match text does not compile, or the engine abandoned the match. The caller records that
-// cause for a user's group (noteUndecidedPredicate), so the verb's refusal names the right fix. `rhs` is the pattern
-// text in every state (the constant, or the per-match capture); it is only COMPILED in the last one.
-enum class MatchPredicateOutcome : std::uint8_t { Pass, Fail, TextScreened, TextUncompilable, Abandoned };
+// by the screen, the per-match text does not compile, the engine abandoned the match, or the captured text was too
+// long to hand the engine at all (F-B4). The caller records that cause for a user's group
+// (noteUndecidedPredicate), so the verb's refusal names the right fix. `rhs` is the pattern text in every state (the
+// constant, or the per-match capture); it is only COMPILED in the last one. `lhs` (the captured node's own text) can
+// be arbitrarily large — kCallerStackBytesFloor bounds it the same way skillscan.h and --arch bound theirs.
+enum class MatchPredicateOutcome : std::uint8_t { Pass, Fail, TextScreened, TextUncompilable, Abandoned, Skipped };
 
 inline MatchPredicateOutcome evalMatchPredicate( bool negated, const std::string& lhs, const std::string& rhs,
                                                  const PredicateRegexTable& rx, const TSQueryPredicateStep& arg )
@@ -167,7 +169,7 @@ inline MatchPredicateOutcome evalMatchPredicate( bool negated, const std::string
     RegexVerdict verdict = RegexVerdict::Miss;
     if( slot >= 0 )
     {
-        verdict = rx.res[ std::size_t( slot ) ].search( lhs );
+        verdict = rx.res[ std::size_t( slot ) ].search( lhs, kCallerStackBytesFloor );
     }
     else
     {
@@ -176,11 +178,15 @@ inline MatchPredicateOutcome evalMatchPredicate( bool negated, const std::string
         {
             return perMatch.isScreened ? MatchPredicateOutcome::TextScreened : MatchPredicateOutcome::TextUncompilable;
         }
-        verdict = perMatch.regex.search( lhs );
+        verdict = perMatch.regex.search( lhs, kCallerStackBytesFloor );
     }
     if( verdict == RegexVerdict::Exhausted )
     {
         return MatchPredicateOutcome::Abandoned;
+    }
+    if( verdict == RegexVerdict::Skipped )
+    {
+        return MatchPredicateOutcome::Skipped;
     }
     return ( ( verdict == RegexVerdict::Hit ) != negated ) ? MatchPredicateOutcome::Pass : MatchPredicateOutcome::Fail;
 }
@@ -208,6 +214,11 @@ inline void noteUndecidedPredicate( const PredicateSite& site, const TSQueryMatc
     if( outcome == MatchPredicateOutcome::Abandoned )
     {
         site.sink->note( AstRegexUndecidedCause::Abandoned, site.fileId, byte, lineAtByte( site.nlOffsets, byte ), pattern, kRegexAbandonedReason );
+        return;
+    }
+    if( outcome == MatchPredicateOutcome::Skipped )
+    {
+        site.sink->note( AstRegexUndecidedCause::Skipped, site.fileId, byte, lineAtByte( site.nlOffsets, byte ), pattern, kRegexOversizeReason );
         return;
     }
     const RegexCompile refused = compileGuardedRegex( pattern, kRegexEcmaScript );

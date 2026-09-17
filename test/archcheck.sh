@@ -210,6 +210,74 @@ rc_outside=$?
     && ok "…and the CI exit code is 2 from outside the fixture too (not a silent 0)" \
     || no "running the same rules from outside the fixture exits $rc_outside, not 2 — the gate disarms itself off-cwd"
 
+# ══ F-B4 — a skipped path-rule subject refuses ONLY when a deny rule would have fired on it ═════════
+# RIPWIRE_FAULT_REGEX_LINE_BOUND=1 forces src/regexguard.h's per-thread subject-length bound to (near) zero,
+# so a FROM/TO regex that is not a bare literal (and so reaches the engine — a literal answers off the
+# byte-search plan, which no subject is ever too long for) never gets a verdict on the same edge these earlier
+# checks already know is a real violation (test/main.cpp -> render/shader.h). "test/(\w+)\.cpp" has a
+# quantifier, so it is not a literal plan; "test/main\.cpp" IS one (an escaped literal dot is still a byte
+# string), so it stays decided even under the fault — the control that makes arm 2 mean something.
+echo
+echo "--- F-B4: a skipped path-rule subject refuses only when a deny would have fired on it ---"
+
+# (1) ONE deny rule, forced to skip, nothing else decides the edge → genuinely undecided → refuse.
+cat >"$TMP/skip_only.txt" <<'EOF'
+deny path test/(\w+)\.cpp -> render/(\w+)\.h
+EOF
+RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" . --arch="$TMP/skip_only.txt" --no-cache >"$TMP/skip_only.out" 2>"$TMP/skip_only.err"
+rc_skiponly=$?
+[ "$rc_skiponly" -eq 1 ] \
+    && ok "F-B4(1): a skip with nothing else to decide the edge refuses (exit 1)" \
+    || no "F-B4(1): expected exit 1 (refusal), got $rc_skiponly: $( head -c 200 "$TMP/skip_only.err" )"
+[ ! -s "$TMP/skip_only.out" ] \
+    && ok "F-B4(1): no XML emitted on refusal" \
+    || no "F-B4(1): XML emitted alongside the refusal"
+# control: the SAME rule with no fault decides normally (a real violation, exit 2) — proves (1) is a genuine skip,
+# not a rule that was already broken.
+"$BIN" . --arch="$TMP/skip_only.txt" --no-cache >/dev/null 2>"$TMP/skip_only_ctrl.err"
+rc_skiponly_ctrl=$?
+[ "$rc_skiponly_ctrl" -eq 2 ] \
+    && ok "F-B4(1) control: the same rule with no fault finds the real violation (exit 2)" \
+    || no "F-B4(1) control: expected exit 2 with no fault, got $rc_skiponly_ctrl — the fixture is not adversarial"
+
+# (2) TWO deny rules on the same edge, the first genuinely UNDECIDED, the second DECISIVE — the edge must stay
+# forbidden and DISCLOSE the undecided one, never refuse for it. RIPWIRE_FAULT_REGEX_LINE_BOUND=1 forces every
+# FROM/TO match on kCallerStackBytesFloor (524288 B) to Skip UNCONDITIONALLY (524288 >> 22 == 0 — a caller-floor
+# stack this small has no non-zero bound to spare once forced), which would skip BOTH rules' FROM evaluation and
+# so cannot build a differential within one run. A per-edge TO-refusal (arch.h's own documented `a{2,\1}` shape)
+# is undecided the same way — pathRuleForbids treats isRefused/isAbandoned/isSkipped identically — and unlike the
+# fault it is deterministic and per-RULE, so it is used here to prove the scan-past-the-undecided-one behavior.
+# A dedicated tiny corpus (not test/archfix) supplies a NUMERIC path segment for the interval's `\1`.
+NUMFIX="$TMP/numfix"; mkdir -p "$NUMFIX/test/v25" "$NUMFIX/render"
+: > "$NUMFIX/render/shader.h"
+printf '#include "../../render/shader.h"\n' > "$NUMFIX/test/v25/main.cpp"
+cat >"$TMP/skip_then_decide.txt" <<'EOF'
+deny path test/v(\d+)/main\.cpp -> render/shader\.h{\1,20}
+deny path test/(\w+)/main\.cpp  -> render/shader\.h
+EOF
+# control: rule 1 ALONE is genuinely undecided for this edge (25 > 20: an invalid interval only the real capture
+# produces — the "9" placeholder toTemplateRefusal probes with gives {9,20}, valid, so the whole FILE still loads).
+cat >"$TMP/skip_only2.txt" <<'EOF'
+deny path test/v(\d+)/main\.cpp -> render/shader\.h{\1,20}
+EOF
+( cd "$NUMFIX" && "$BIN" . --arch="$TMP/skip_only2.txt" --no-cache >"$TMP/skip_only2.out" 2>"$TMP/skip_only2.err" )
+rc_skiponly2=$?
+[ "$rc_skiponly2" -eq 1 ] \
+    && ok "F-B4(2) control: rule 1 alone (undecided on this edge) refuses (exit 1)" \
+    || no "F-B4(2) control: expected exit 1 with rule 1 alone, got $rc_skiponly2: $( head -c 200 "$TMP/skip_only2.err" )"
+
+( cd "$NUMFIX" && "$BIN" . --arch="$TMP/skip_then_decide.txt" --no-cache >"$TMP/skip_then_decide.out" 2>"$TMP/skip_then_decide.err" )
+rc_skipdecide=$?
+[ "$rc_skipdecide" -eq 2 ] \
+    && ok "F-B4(2): a later decisive deny settles the edge despite the earlier undecided one (exit 2, not a refusal)" \
+    || no "F-B4(2): expected exit 2 (a real, undeterred violation), got $rc_skipdecide: $( head -c 200 "$TMP/skip_then_decide.err" )"
+grep -q 'violations="[^0]' "$TMP/skip_then_decide.out" \
+    && ok "F-B4(2): the violation is reported (not silently dropped because a sibling rule was undecided)" \
+    || no "F-B4(2): no non-zero violations= in $( head -c 200 "$TMP/skip_then_decide.out" )"
+grep -qE 'edge\(s\) met an undecided' "$TMP/skip_then_decide.err" \
+    && ok "F-B4(2): stderr discloses that an undecided evaluation occurred" \
+    || no "F-B4(2): the undecided evaluation was not disclosed: $( head -c 300 "$TMP/skip_then_decide.err" )"
+
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then
