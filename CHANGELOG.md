@@ -339,6 +339,33 @@ gate is 161 PASS, 0 FAIL.
 - the atomic-publish writers create their temp file exclusively and without following a symlink.
 - `--edit-plan` reads a payload through the same confined path its containment check judged.
 
+### Fixed — a `--pin-census` row no longer splits on a line break, TAB or `|` inside an id
+
+A C++ out-of-line member of a class template whose template-argument list spans source lines has a scope that holds
+the line break verbatim, and the census wrote it raw. One `C` row became a six-field line plus a continuation line
+starting with neither `C`, `S`, `O` nor `#`, and the symbol's `S` row broke the same way; a reader splitting lines
+dropped or mis-keyed the site. It was seen once, on a large private C++ corpus. The map was never affected: it writes
+the same scope as `&#10;`. Five more spellings of the defect reproduce on the pre-fix binary: a TAB or a form feed
+inside the argument list, a backslash line splice, CRLF source, and a `|` inside an id. `|` separates targets, and on
+this repository that case is real: Markdown heading symbols such as ``--token-budget=N[K|M|G]`` made a `|`-split read
+18 single-target rows as two to six targets.
+
+Every id and callee field is now escaped. A backslash is written `\\`, TAB, LF and CR are `\t`, `\n` and `\r`, and every
+other control byte and `|` is `\xHH`. Nothing else changes, so the columns are the same and an id without those bytes
+is spelled exactly as before. The first line now reads `pin-census v3` and the header documents the escape.
+`bench/scip_match_diag.py` decodes the fields, because it opens files by an id's path; `bench/scip_pin_precision.py`
+joins ids as opaque keys and needs no decode.
+
+Measured by running the pre-fix and fixed binaries with `--pin-census --no-cache` over a clean export of this
+repository at `a55b118e`: 99 of 51,821 rows change, 18 `C` and 81 `S`. 98 of them hold a `|` and one holds a backslash,
+each decodes back to its pre-fix bytes exactly, and every other row is byte-identical. Before the fix all 18 of those
+`C` rows had target lists a `|`-split misread; after it, none do. Gate: `test/pincensuscheck.sh`
+arm (L), over a generated fixture. Every non-comment line must be a `C`, `S` or `O` row with its full field count, and
+the check also runs over arm (B)'s and arm (G)'s censuses. Each awkward caller id must decode to its source bytes,
+re-encode byte-identically and appear verbatim as an `S` id. The `|` target must split into one id, and the
+dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
+12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
