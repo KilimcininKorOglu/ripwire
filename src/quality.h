@@ -1976,8 +1976,11 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 104;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 105;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 105 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
+                                                          //    record carries isFromAssignment (cache version 23).
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 104 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
                                                           //    gained a kLangTable row (src/ingest_crawl.h), so a
                                                           //    tree that spells its headers `.hxx` now yields NEW

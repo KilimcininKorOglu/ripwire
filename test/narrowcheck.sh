@@ -39,6 +39,11 @@
 #     class wherever `Outer` defines the method. The recorded name is now the type's LAST NAME read through the grammar's
 #     fields, never cut from its text.
 #     (39d) pins the stated floor: an unqualified template-id CONSTRUCTOR (`auto v = Vec<Decl *>()`) infers nothing.
+#   * Arms 44-51 — an ASSIGNMENT's callee is a type only when a class is called that (2026-09-17). `t = ns::cast<Target>( y )`
+#     recorded `cast`, and the conflict tombstoned the written `Target* t`: Rule 2's narrow (44, 45, 50), the field use-site
+#     pin (49) and a member's Rule 2b narrow (46) were lost. A class-named assignment still types and still conflicts (47);
+#     a DECLARATION initialised by a call still tombstones a sibling declaration (48); the new record byte round-trips
+#     the cache (51).
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -679,6 +684,104 @@ mech="$( awk -F '\t' '$1 == "C" && $6 ~ /::sizeParam#/ && $7 == "size" { print $
 [ "$mech" = "receiver-rule" ] \
     && ok "(43) sizeParam's size site is decided by receiver-rule (Rule 2)" \
     || no "(43) sizeParam's size site mech=[${mech:-NO-CENSUS-ROW}], want [receiver-rule]"
+
+# ── Arms 44-51: a type read off an ASSIGNMENT's callee (2026-09-17). C++ `x = f( … )` records the callee's last name as
+#    x's type, because a constructor call and a function call are one grammar node — `t = ns::cast<Target>( y )` recorded
+#    `cast`, `t = makeTarget( y )` recorded `makeTarget`. Rule 2's flat per-function table tombstones a variable whose
+#    records disagree, so the non-type erased the variable's WRITTEN type (`Target* t = nullptr;`) and the call declined
+#    (a same-named method sits two directories away); the field use-site index lost the same pin, and the record made a
+#    MEMBER assigned from a call read as a local, so Rule 2b refused its declared type. An assignment declares nothing, so
+#    its callee is a type only when the corpus defines a class of that name. Candidates live two directories apart from the
+#    caller and nothing is included, so an unnarrowed call declines (no edge) instead of landing on a same-directory guess.
+AFIX="$TMP/assignfix"
+mkdir -p "$AFIX/lib" "$AFIX/lib2" "$AFIX/lib3" "$AFIX/app"
+printf 'struct Target { int pick( int n ) { return n; } int count; };\n' >"$AFIX/lib/target.h"
+printf 'struct Decoy { int pick( int n ) { return n; } int count; };\n'  >"$AFIX/lib2/decoy.h"
+printf 'namespace ns { template <class T, class F> T* cast( F* from ) { return static_cast<T*>( from ); } }\nTarget* makeTarget( void* p );\n' >"$AFIX/lib3/cast.h"
+cat >"$AFIX/app/use.cpp" <<'EOF'
+int assignCast( void* y ) { Target* t = nullptr; t = ns::cast<Target>( y ); return t->pick( 1 ); }
+int assignCall( void* y ) { Target* t = nullptr; t = makeTarget( y ); return t->pick( 1 ); }
+int countCast( void* y ) { Target* t = nullptr; t = ns::cast<Target>( y ); return t->count; }
+struct Holder
+{
+    Target* cur;
+    int memberCast( void* y ) { cur = ns::cast<Target>( y ); return cur->pick( 1 ); }
+};
+int assignCtor() { Decoy d; d = Decoy(); return d.pick( 1 ); }
+int twoCtors() { int n = 0; { auto t = Target(); n += t.pick( 1 ); } { auto t = Decoy(); n += t.pick( 2 ); } return n; }
+int declCast( void* y ) { int n = 0; { auto t = ns::cast<Decoy>( y ); n += t->pick( 1 ); } { Target* t = nullptr; n += t->pick( 2 ); } return n; }
+EOF
+assignRows(){   # caller → its sorted pick@<path:line> rows, or NO-CALLEES-ANSWER when the probe did not run
+    local out
+    out="$( "$BIN" "$AFIX" "--callees=$1" --no-cache 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="pick".* p="\([^"]*\)".*/pick@\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectAssign(){   # arm label, caller, the exact expected row set
+    local got
+    got="$( assignRows "$2" )"
+    if [ "$got" = "$3" ]; then
+        ok "$1 $2(): pick -> [$got]"
+    else
+        no "$1 $2(): pick -> [${got:-no edge}], want [$3]"
+    fi
+}
+# presence guard: both candidate defs, both fields and every probed caller are indexed, or the arms below prove nothing
+AMAP="$( "$BIN" "$AFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+amiss=0
+for want in 'n="pick" sc="Target"' 'n="pick" sc="Decoy"' 'n="assignCast"' 'n="assignCall"' 'n="countCast"' 'n="memberCast" sc="Holder"' \
+            'n="assignCtor"' 'n="twoCtors"' 'n="declCast"'; do
+    printf '%s\n' "$AMAP" | grep -qF "$want" || { no "presence guard: assignfix symbol $want not indexed"; amiss=1; }
+done
+[ "$amiss" = 0 ] && ok "presence: all assignfix symbols indexed"
+# ── 44) THE DEFECT: `t = ns::cast<Target>( y )` recorded `cast` and tombstoned the written `Target* t`. RED before: no edge. ──
+expectAssign "(44)" assignCast "pick@lib/target.h:1"
+# ── 45) the same through a plain function, `t = makeTarget( y )`. RED before: no edge. ─────────────────────────────────────
+expectAssign "(45)" assignCall "pick@lib/target.h:1"
+# ── 46) a MEMBER assigned from a call, `cur = ns::cast<Target>( y )`: the record is no local, so Rule 2b reads the field's
+#        declared `Target* cur`. RED before: no edge. ──────────────────────────────────────────────────────────────────────
+expectAssign "(46)" memberCast "pick@lib/target.h:1"
+# ── 47) controls — a CONSTRUCTOR still types: an assignment from a class the corpus defines agrees with its declaration (a),
+#        and two constructor-typed declarations of one name in sibling blocks still tombstone and decline, never one leaking to
+#        the other (b). Green before and after. ────────────────────────────────────────────────────────────────────────────
+expectAssign "(47a)" assignCtor "pick@lib2/decoy.h:1"
+expectAssign "(47b)" twoCtors ""
+# ── 48) a DECLARATION initialised by a call still counts as a declaration of unknown type: `auto t = ns::cast<Decoy>( y )`
+#        in one block beside `Target* t` in another keeps the flat table's tombstone and both decline, or the second block's
+#        type would reach the first block's call — one precise edge to the wrong class. Green before; RED on a fix that drops
+#        every call-read type. ─────────────────────────────────────────────────────────────────────────────────────────────
+expectAssign "(48)" declCast ""
+# ── 49) the field use-site index shares the flat table's rule: `t->count` after the cast assignment pins to Target.count
+#        (no owner_candidates=). RED before: owner_candidates="2". ─────────────────────────────────────────────────────────
+uses="$( "$BIN" "$AFIX" --uses=Target.count --no-cache 2>/dev/null )"
+urow="$( printf '%s' "$uses" | tr '<' '\n' | grep '^u ' | grep 'app/use.cpp:3"' | head -1 )"
+if ! printf '%s' "$uses" | grep -q '<uses [^>]*of="Target.count"'; then
+    no "(49) --uses=Target.count did not answer"
+elif [ -z "$urow" ]; then
+    no "(49) --uses=Target.count has no row at app/use.cpp:3"
+elif printf '%s' "$urow" | grep -q 'owner_candidates='; then
+    no "(49) countCast's t->count is not pinned to Target.count: <$urow"
+else
+    ok "(49) countCast's t->count pins to Target.count: <$urow"
+fi
+# ── 50) the mechanism, not just the answer: the census names Rule 2 (receiver-rule) for assignCast's site. RED before. ─────
+"$BIN" "$AFIX" --no-cache --pin-census="$TMP/assign.tsv" >/dev/null 2>&1
+mech="$( awk -F '\t' '$1 == "C" && $6 ~ /::assignCast#/ && $7 == "pick" { print $2 }' "$TMP/assign.tsv" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//' )"
+[ "$mech" = "receiver-rule" ] \
+    && ok "(50) assignCast's pick site is decided by receiver-rule (Rule 2)" \
+    || no "(50) assignCast's pick site mech=[${mech:-NO-CENSUS-ROW}], want [receiver-rule]"
+# ── 51) determinism + cache transparency: whether a record was read off an assignment rides the cached record, so warm must
+#        equal cold. RED on a fix that does not persist it. ───────────────────────────────────────────────────────────────────
+"$BIN" "$AFIX" --no-cache >"$TMP/a1" 2>/dev/null
+"$BIN" "$AFIX" --no-cache >"$TMP/a2" 2>/dev/null
+rm -rf "$TMP/ac"
+"$BIN" "$AFIX" --cache="$TMP/ac" >/dev/null 2>&1
+"$BIN" "$AFIX" --cache="$TMP/ac" >"$TMP/awarm" 2>/dev/null
+if [ -s "$TMP/a1" ] && cmp -s "$TMP/a1" "$TMP/a2" && cmp -s "$TMP/a1" "$TMP/awarm"; then
+    ok "(51) assignfix map byte-identical: cold, cold again, and warm"
+else
+    no "(51) assignfix map differs across runs or warm vs cold"; diff "$TMP/a1" "$TMP/awarm" | head -6
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

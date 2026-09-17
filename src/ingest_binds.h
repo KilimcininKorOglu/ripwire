@@ -385,9 +385,9 @@ inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
 // Walk a node subtree and emit one RawBind per local variable whose TYPE is syntactically decidable, so a
 // later `x.m()`/`x->m()` can narrow to `typeName::m`. Pure-syntactic, deterministic, allocation-light:
 // it reads exactly the declaration/assignment shapes ground-truthed from the grammars (see the gate fixtures).
-//   * The recorded typeName is the WRITTEN type's final segment (`ns::Foo` → `Foo`). It is matched against
-//     class/struct symbol NAMES in buildGraph, which is the conservative safety net: an inferred type from a
-//     constructor-call (`auto x = Foo()`) only narrows if `Foo` actually names a class — else it drops.
+//   * The recorded typeName is the WRITTEN type's final segment (`ns::Foo` → `Foo`). Rule 2 matches it as the scope
+//     of the called method, so an inferred type from a constructor-call (`auto x = Foo()`) only narrows if `Foo`
+//     defines the method; an ASSIGNMENT's inferred type is dropped in buildGraph unless a class of that name exists.
 //   * Only the named-receiver shape is useful downstream, so only bare-identifier targets are recorded
 //     (member targets `self.x`/`obj.f` are not — `receiverOf` doesn't capture those as recvVar either).
 
@@ -453,7 +453,8 @@ inline TSNode lastNameNode( TSNode n ) noexcept
 // (new_expression). Last name of the callee/constructor identifier. "" if the value isn't a
 // plain constructor call. A plain FUNCTION call is not told apart: `auto x = makeFoo()` records `makeFoo`, which names
 // no class and never narrows (graph.h's varType note) — but it still conflicts with the variable's other declarations
-// in Rule 2's flat table, and a conflict tombstones the variable.
+// in Rule 2's flat table, and a conflict tombstones the variable. The assignment `x = makeFoo()` records it too;
+// assignedTypeOf marks that one, and buildGraph keeps it only when a class names it (resolve.h assignmentNamesNoClass).
 inline TSNode ctorNameNode( TSNode value )
 {
     if( ts_node_is_null( value ) )
@@ -537,11 +538,13 @@ inline std::string qualifiedNameText( TSNode nameNode, std::string_view src )
 }
 
 // one declaration's recorded type: the name Rule 2 matches (the final segment) and, when the type was written
-// QUALIFIED, its whole text — carried together so no emitter can record one without the other.
+// QUALIFIED, its whole text — carried together so no emitter can record one without the other — and whether an
+// ASSIGNMENT's callee supplied it rather than a declaration (assignedTypeOf).
 struct DeclType
 {
     std::string name;
     std::string qualified;
+    bool        isFromAssignment = false;
 };
 
 // a type or constructor NAME node's DeclType
@@ -559,6 +562,16 @@ inline DeclType declaredTypeOf( const DeclType& written, TSNode value, std::stri
         return written;
     }
     return DeclType{ ctorTypeOf( value, src ), qualifiedNameText( ctorNameNode( value ), src ) };
+}
+
+// a C++ ASSIGNMENT's recorded type (`x = Foo()`, `x = new Foo()`): the callee's, marked as an assignment's. The grammar
+// cannot tell a constructor from a function here — `t = llvm::cast<Target>( y )` reads `cast` — and an assignment
+// declares nothing, so graph.h keeps the record only when a class of that name exists (resolve.h assignmentNamesNoClass).
+inline DeclType assignedTypeOf( TSNode value, std::string_view src )
+{
+    DeclType type = declaredTypeOf( DeclType{}, value, src );
+    type.isFromAssignment = true;
+    return type;
 }
 
 // ── L3 fn-pointer/callback binding capture helpers ───────────────────────────────────────────────────
@@ -1026,6 +1039,7 @@ inline void pushTypedBind( std::uint32_t fileId, Lang lang, std::string_view var
     b.var.assign( var );
     b.typeName     = std::move( type.name );
     b.importedName = std::move( type.qualified );
+    b.isFromAssignment = type.isFromAssignment;
     binds.push_back( std::move( b ) );
 }
 
@@ -1672,7 +1686,8 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
         } );
     }
     // C++ `x = Foo();` (re-assignment to a constructor) — assignment_expression inside an expression_statement. The
-    // record carries the constructor's qualified text like a declaration's does (`x = std::map<K, V>()`, kParserVer 98).
+    // record carries the constructor's qualified text like a declaration's does (`x = std::map<K, V>()`, kParserVer 98),
+    // and is marked an assignment's: its callee may be a function (`x = makeFoo()`), kParserVer 104.
     else if( ( lang == Lang::Cpp || lang == Lang::ObjC ) && kindIs( t, "assignment_expression" ) )
     {
         const TSNode lhs = fieldChild( n, NodeField::Left );
@@ -1682,7 +1697,7 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             const std::uint32_t a = ts_node_start_byte( lhs ), b = ts_node_end_byte( lhs );
             if( a <= b && b <= src.size() )
             {
-                pushTypedBind( fileId, lang, src.substr( a, b - a ), declaredTypeOf( DeclType{}, rhs, src ), BindSite{ ts_node_start_byte( n ), 0u, 0u },
+                pushTypedBind( fileId, lang, src.substr( a, b - a ), assignedTypeOf( rhs, src ), BindSite{ ts_node_start_byte( n ), 0u, 0u },
                                LocalBindKind::Type, binds );
             }
         }

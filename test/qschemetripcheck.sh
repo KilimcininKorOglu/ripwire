@@ -40,6 +40,11 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   declared 103 and 100 over main's 99, and pinned 95a27416 and 6fa4c131 over those numbers; neither hashed 104).
 #   kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14 (no member changes a manifest function). The two lane
 #   entries below are renumbered to the train's numbers.
+# 2026-09-17, ASSIGNMENT TYPES (test/narrowcheck.sh arms 44-51, PR #278): kCacheVersion 22 -> 23 and kParserVer -> 105 on
+#   integration/train-3 after small-fixes' 104 (the PR declared 99 -> 104 over main), with both quality.h mirrors — a C++
+#   assignment's bind record gains the isFromAssignment u8, and buildGraph keeps its callee-read type only when a class of
+#   that name exists. kQSnapCacheScheme stays train 1's 14: the extraction identity (the two mirrors) and the producer
+#   identity already key every blob, and no snapshot semantics changed.
 # 2026-09-17, A4 (lane/small-fixes-0917, found-items 2026-09-17): kParserVer -> 104 on integration/train-3 after
 #   #276's 103 (the lane declared 99 -> 100 over main), mirrored in
 #   src/quality.h's kIngestParserVerMirror in the same diff (test/qextractionkeycheck.sh asserts the

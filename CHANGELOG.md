@@ -1413,6 +1413,47 @@ and the selector refusals, and reports `status="unparsed_at_rev"` (`comparable="
 when the REV blob's own parse was this degraded. `test/slicediffcheck.sh` gained arm (8c) pinning a
 binary-at-REV case against the (8)/(8b) sym-absent case it must not be confused with.
 
+### Fixed — assigning a variable from a function call erased the type it was declared with
+
+`Status s; … s = GetDBOptionsFromMap( … ); if( !s.ok() )` bound no `ok` edge on rocksdb, and `PHINode *PHI = nullptr; …
+PHI = PHINode::Create( … ); PHI->addIncoming( V, BB )` bound no `addIncoming` edge on llvm-project. Rule 2 reads a
+receiver's type off its declaration, and it also records a C++ ASSIGNMENT from a call as a type, so that `x = Foo()`
+types `x`. A constructor call and a function call are the same grammar node, so the assignment recorded the callee's
+last name, `GetDBOptionsFromMap` or `Create` (and `cast` for `x = llvm::cast<T>( y )`). Rule 2's per-function table
+drops a variable whose records disagree, so that non-type erased the declared `Status` or `PHINode *`. The field use-site index (`--uses=Owner.field`) lost
+the same pin. A MEMBER assigned from a call (`cur = ns::cast<Target>( y )`) also read as a local, so Rule 2b refused the
+member's declared type. An assignment declares nothing, so its callee name now counts as a type only when a class of
+that name exists. A declaration initialised by a call (`auto t = makeFoo()`) still counts, as a declaration whose type
+is unknown: when a sibling block declares the same name with another type, both calls are dropped rather than one
+block's type reaching the other's call.
+
+Measured with `--pin-census --no-cache`, call sites joined on (caller id, callee, line), `main` fe28fd49 against this
+change. rocksdb `0e2801ac3`: 1,871 sites change target, bound calls +1,562 (1,544 newly bound, 327 retargeted, none lost;
+1,494 are `Status::ok`). llvm-project `4d5358b1d`: 4,046 sites, +2,984 (2,859 newly bound, 1,187 retargeted, none lost).
+A seeded sample of 60 (seed 20260917: 25 rocksdb, 35 llvm-project) was graded blind against source by independent
+readers, with the two answers shown as A and B in random order. 51 were better, 6 the same and 3 worse. The better ones
+were 39 NONE → RIGHT, 5 WRONG → RIGHT, 4 PARTIAL → RIGHT, 2 NONE → PARTIAL and 1 WRONG → PARTIAL. The same ones were
+4 WRONG → WRONG and 2 RIGHT → RIGHT. All three worse sites are resolver floors the erased type had been hiding, not
+errors in the recovered type. One is a rocksdb `Iterator*` that narrows onto the memtable's same-named `Iterator` classes.
+Two are llvm-project calls where arity picked the wrong overload of the right class (`getFirstInsertionPt`, `find`).
+Dropping the member's record from the local-name set is 23 of the rocksdb sites and 132 of the llvm-project ones; 15 of
+those graded 10 better, 2 the same and 3 worse. Two of the worse ones show a floor this change exposes but does not
+cause: Rule 2c reads a member named like a class (`std::unique_ptr<ToolOutputFile> OutputFile;`) as that class.
+
+Built and rejected: also dropping a DECLARATION's callee name. It moves 89 more llvm-project sites (none on rocksdb), and
+15 graded 11 better, 2 the same and 2 worse. Arm 48 is why it is not shipped: the flat table would hand one block's
+declared type to a sibling block's `auto t = ns::cast<Decoy>( y )`, a precise edge to the wrong class. The unqualified
+`Vec<T>()` constructor spelling left unread by the template-id receiver lane (#276) stays unread. Composed with that lane
+and this change, reading it moves 245 llvm-project sites, and all of them get worse: 170 edges lost and none gained,
+where it lost 779 before this change. The losses left are declaration conflicts, `auto *LI = cast<LoadInst>( … )` beside
+another `LI`.
+
+The bind record gains one byte (`kCacheVersion` 22 → 23). `kParserVer` moves 104 → 105 (the PR declared 99 → 104
+over `main`; integration/train-3 assigns 105 after small-fixes' 104). `test/qschemetrip.hash` is re-pinned, and `test/cachefuzzcheck.sh`'s
+blob walker reads the new byte. Gate: `test/narrowcheck.sh` arms 44–51. On `main`, arms 44, 45, 46, 49 and 50 are red.
+Arm 48 is red on the declaration variant, 46 without the local-name-set change, and 51 on a build that does not persist
+the new byte.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

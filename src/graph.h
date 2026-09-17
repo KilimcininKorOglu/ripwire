@@ -1089,7 +1089,9 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 //     A type written in any other namespace keeps its name and marks the entry qualified: prov="final-segment" (fieldFinalSegmentAt).
 //   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
 //     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
-//     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse.
+//     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse. Not an
+//     assignment's callee-read type no class is called (resolve.h assignmentNamesNoClass): `m_decl = cast<D>( x )`
+//     declares nothing, and counting it refused the member's declared type.
 // Both tables empty on a field-capture-free corpus → the resolve loop's Rule 2b block never fires →
 // byte-identical output there. Deterministic: ing.references / ing.bindings are totally ordered; first
 // type wins, a later conflict tombstones, and set membership is order-independent.
@@ -1099,7 +1101,7 @@ struct FieldNarrowTables
     HashMap<std::string, char>        localNameSet;
 };
 
-inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
+inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const HashMap<std::string, char>& classNames )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2d: Rule-2b field-narrow tables" );
     FieldNarrowTables t;
@@ -1119,7 +1121,7 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
     t.localNameSet.reserve( ing.bindings.size() );
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol == kNoNode || b.var.empty() )
+        if( b.fromSymbol == kNoNode || b.var.empty() || assignmentNamesNoClass( b, classNames ) )
         {
             continue;
         }
@@ -1794,17 +1796,29 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
     }
 
+    // Rule 2c class-name set (docs/EVALS.md "Phase 4b"): every Class/Struct/Interface definition NAME in the corpus, so
+    // `Cls.m()` can read its receiver token as the type it names (Narrower::rule2cClassNameRecv) — and the assignment
+    // guard's (resolve.h assignmentNamesNoClass): Rule 2's table and the local-name set below drop a C++ assignment's
+    // callee-read type that no class is called, `t = llvm::cast<Target>( y )` recording `cast` over the written `Target* t`.
+    HashMap<std::string, char> classNames;
+    {
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/1g: classNames set" );
+        classNames = classNameSet( ing );
+    }
+
     // P2-D Rule 2 binding table: per-scope `(fromSymbol, var) → type` from ingest's local var→type bindings,
     // for receiver-VARIABLE narrowing (`Foo x; x.m()` → `Foo::m`). CONSERVATIVE — a var bound to ≥2 DISTINCT
-    // types in one scope (reassigned to a different type) is TOMBSTONED (value set to ""), so it never narrows;
-    // only an unambiguous single-type binding is usable. A binding's `type` is matched as a SCOPE in canonByName
-    // by Rule 2, so a type that names no class (e.g. inferred from a non-constructor `auto x = makeT()`) simply
-    // never produces a `type::method` hit and degrades to the name-based fallback — the safety net for constructor-inferred types.
+    // types in one scope (two declarations, or a constructor assignment of another class) is TOMBSTONED (value set to
+    // ""), so it never narrows; only an unambiguous single-type binding is usable. A binding's `type` is matched as a
+    // SCOPE in canonByName by Rule 2, so a DECLARATION's type that names no class (`auto x = makeT()`) never produces a
+    // `type::method` hit — but it still conflicts with a sibling declaration of the name, which is the point: that
+    // declaration's type is simply unrecorded (test/narrowcheck.sh arm 48). An ASSIGNMENT's such type is no fact at all
+    // and is skipped (resolve.h assignmentNamesNoClass, arms 44-46).
     // Deterministic: ing.bindings is in (file, byte, var) order; first binding wins, a later conflict tombstones.
     HashMap<std::string, FlatRecvType> varType;
     varType.reserve( ing.bindings.size() );
     {
-        PROFILE_SCOPE_DESCRIBE( "buildGraph/1g: varType binding table" );
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/1h: varType binding table" );
         std::string key;   // reused key buffer — same "<fromSymbol>#var" bytes as before, one alloc amortized
         for( const Binding& b : ing.bindings )
         {
@@ -1812,9 +1826,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 continue; // L3 var→function records live in varFn/varFnFile below — never in Rule 2's table
             }
-            if( b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() )
+            if( b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() || assignmentNamesNoClass( b, classNames ) )
             {
-                continue; // file-scope/empty → unusable
+                continue; // file-scope/empty → unusable; an assignment's callee that no class is called → no type fact
             }
             buildShadowKey( key, b.fromSymbol, b.var );   // "<fromSymbol>#var"
             recordFlatRecvType( varType, key, b );         // a conflicting or `std::` type tombstones (resolve.h)
@@ -1823,21 +1837,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
 
     // P2-D Rule 2b field-narrow tables (class#field → declared type, plus the local-shadow veto set) —
     // built by buildFieldNarrowTables above; consumed via Narrower::rule2bFieldRecvType in the resolve loop.
-    const FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing );
-    // Rule 2c class-name set (docs/EVALS.md "Phase 4b"): every Class/Struct/Interface definition NAME in the
-    // corpus, so `Cls.m()` can read its receiver token as the type it names. Consumed via Narrower::rule2cClassNameRecv.
-    HashMap<std::string, char> classNames;
-    classNames.reserve( N / 8 + 1 );
-    {
-        PROFILE_SCOPE_DESCRIBE( "buildGraph/1h: classNames set" );
-        for( const Symbol& s : ing.symbols )
-        {
-            if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface )
-            {
-                classNames.try_emplace( s.name, '\0' );
-            }
-        }
-    }
+    const FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing, classNames );
 
     // Phase 5 external-name veto evidence (docs/EVALS.md "Phase 5") — built by buildExternalVetoTables above;
     // consumed by the veto step in the resolve loop, after every receiver rule has missed.
@@ -4710,19 +4710,23 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     // constructor-initialised one) PLUS the parameter written types (kind ParamType), folded by Rule 2's own rule
     // (resolve.h recordFlatRecvType): a conflicting re-declaration tombstones, and so does a type written in `std` — it
     // names no in-repo class, and a skip would hand a same-named variable's other declaration every site of the name.
+    // An assignment's callee-read type that no class is called is skipped, as Rule 2's table skips it (test/narrowcheck.sh
+    // arm 49: `t = llvm::cast<Target>( y )` tombstoned `Target* t`, and `t->count` lost its owner).
+    const HashMap<std::string, char> classNames = classNameSet( ing );
     HashMap<std::string, FlatRecvType> localType;
     localType.reserve( ing.bindings.size() );
     std::string key;
     for( const Binding& b : ing.bindings )
     {
-        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() )
+        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty()
+            || assignmentNamesNoClass( b, classNames ) )
         {
             continue;
         }
         buildShadowKey( key, b.fromSymbol, b.var );
         recordFlatRecvType( localType, key, b );
     }
-    const FieldNarrowTables narrow = buildFieldNarrowTables( ing );   // "Class#field" → declared type (S5-E)
+    const FieldNarrowTables narrow = buildFieldNarrowTables( ing, classNames );   // "Class#field" → declared type (S5-E)
 
     const LocalShadowSpans localSpans = localShadowSpans( ing );   // a bare name a LOCAL declaration covers is that local, never the field
 
