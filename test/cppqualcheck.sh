@@ -549,7 +549,8 @@ printf '%s' "$DEFMAP" | grep -qE 'files=1 symbols=30 edges=7 shown=30 est_tokens
 #                                          name arm fails, and tqCallRebind splits onto :133;
 #     callArity's hop bound 4 -> 3      -> tqDepArityCaller splits over :122 and :123;
 #     and the header, which all three move (edges=18 ambiguous=2).
-#   All 90 checks PASS against the fixed binary.
+#   All 90 checks PASS against the fixed binary. (g)'s six documented-absent checks, added later from the
+#   review of #243, pass on the pre-fix binary and the fix alike: they fence a future widening.
 TMPLFIX="$ROOT/test/cppqualtmplfix"
 [ -d "$TMPLFIX" ] || { echo "no test/cppqualtmplfix dir — the member-template fixture is missing"; exit 2; }
 TMPLMAP="$( run "$TMPLFIX" --no-cache )"
@@ -609,11 +610,11 @@ fi
 # (d) PRECISION: the right definition, not merely a definition. Each caller has a same-final-name decoy.
 #     RECEIVER: read as a BARE call, `other.tqPick<int>( 1 )` inside TqDecoy would be pinned to TqDecoy's own
 #     tqPick (:110) by the enclosing-class rule; the receiver's type pins TqTarget's (:105). The receiver is a
-#     LOCAL on purpose: Rule 2's call narrowing reads no PARAMETER type (model.h LocalBindKind::ParamType), so
-#     on a `TqTarget&` parameter the plain `other.pick( 1 )` binds the enclosing class too — on main, before
-#     this round — and an arm there would measure that gap instead of the template_method climb. TqTarget has
-#     ONE tqPick for the same kind of reason: Rule 2 narrows by type without an arity prune, so a plain
-#     `other.pick( 1 )` splits over a same-class two-parameter overload on main as well.
+#     LOCAL on purpose: parameter-type narrowing is a separate resolver rule (measured on main f8e6087c there was
+#     none, and a plain `other.pick( 1 )` on a `TqTarget&` parameter bound the enclosing class; #248 changes
+#     that), so a parameter receiver would measure that rule instead of the template_method climb. TqTarget has
+#     ONE tqPick for the same kind of reason: measured on main f8e6087c, type narrowing had no arity prune, so a
+#     plain `other.pick( 1 )` split over a same-class two-parameter overload as well.
 tmplbinds tqDecoyCaller 105 "the receiver's type, never the enclosing class's same-named :110"
 tmplbinds tqSelfCaller  110 "this->template binds the enclosing class"
 #     ARITY: the call-site argument count survives the wrapper — 3 hops from the name to the call through
@@ -627,9 +628,9 @@ tmplbinds tqCallRebind  132 "the scope behind a template disambiguator keys cano
 # (e) the fixture header, hand-read: 19 distinct caller->callee pairs (1 viaThis + 2 tqCallMember +
 #     2 tqCallDependent + 4 tqCallControls + 3 tqCallDependentQualified + 2 tqCallShapes + 1 each for
 #     tqDecoyCaller, tqSelfCaller, tqArityCaller, tqDepArityCaller, tqCallRebind), none ambiguous, none
-#     unresolved; 43 symbols.
-printf '%s' "$TMPLMAP" | grep -qE 'files=1 symbols=43 edges=19 shown=43 est_tokens=[0-9]+ ambiguous=0 unresolved=0' \
-    && ok "tmpl §12 header: symbols=43 edges=19 ambiguous=0 unresolved=0 (was edges=6 ambiguous=1)" \
+#     unresolved; 54 symbols (43, plus §12e's 3 structs, 4 member functions and 4 callers — which add no edge).
+printf '%s' "$TMPLMAP" | grep -qE 'files=1 symbols=54 edges=19 shown=54 est_tokens=[0-9]+ ambiguous=0 unresolved=0' \
+    && ok "tmpl §12 header: symbols=54 edges=19 ambiguous=0 unresolved=0 (was edges=6 ambiguous=1)" \
     || no "tmpl §12 header wrong: $( printf '%s' "$TMPLMAP" | grep -oE 'files=1 symbols=[0-9]+ edges=[0-9]+ shown=[0-9]+ est_tokens=[0-9]+ ambiguous=[0-9]+ unresolved=[0-9]+' | head -1 )"
 
 # (f) REPO ROOT: src/gitoracle.h's loader reads every field through `r.pod<T>()`, so its only caller-edge to
@@ -643,6 +644,32 @@ if grep -q 'r\.pod<' src/gitoracle.h; then
 else
     no "repo: src/gitoracle.h no longer spells r.pod<…>() — re-point this arm at a live member-template call site"
 fi
+
+# (g) DOCUMENTED-ABSENT (review F4 on #243): the spellings this round does NOT bind, each a literal 0 behind a
+#     SOURCE presence guard — an absence arm is satisfied as well by deleting the spelling as by the tool
+#     behaving (callformcheck.sh's V5 MED-3). Measured 0 on the pre-fix binary and on the fix alike, so these
+#     are fences for a future widening, not evidence of this round: one that starts binding a spelling here,
+#     correctly or not, has to move a pin deliberately.
+tmplabsent(){   # $1 the spelling as written in member.cpp  $2 its caller  $3 prose
+    if ! grep -qF -- "$1" "$TMPLFIX/member.cpp"; then
+        no "tmpl §12 absent: \`$1\` is no longer written in member.cpp — the zero for --callees=$2 would be vacuous"
+        return
+    fi
+    local got; got="$( cnt "$( run "$TMPLFIX" --callees="$2" --no-cache )" )"
+    [ "${got:-REFUSED}" = 0 ] && ok "tmpl §12 absent: --callees=$2 count=0 — $3" \
+        || no "tmpl §12 absent: --callees=$2 expected count=0, got '${got:-REFUSED}' — $3. A widening landed: move this pin on purpose"
+}
+tmplabsent 'r.tqLiteralArgTmpl<0>( x )'                tqCallLiteralArg   "r.f<0>( x ) without \`template\` parses as two comparisons"
+tmplabsent 'r.TqAbsentBase::tqBaseQualTmpl<int>( 1 )'  tqCallBaseQual     "r.Base::f<T>() (the qualified-field family)"
+tmplabsent 'p->TqAbsentBase::tqBaseQualTmpl<int>( 2 )' tqCallBaseQual     "p->Base::f<T>() (the qualified-field family)"
+tmplabsent 'r.TqAbsentBase::tqBasePlain( 1 )'          tqCallBasePlain    "the plain twin r.Base::f() — absent on main too, so the gap is not template-shaped"
+tmplabsent 'r.operator()<int>( 1 )'                    tqCallOperatorTmpl "r.operator()<T>()"
+#     …and the comparison parse is a READ of the member, exactly one row, never a call row.
+LITUSES="$( run "$TMPLFIX" --uses=tqLiteralArgTmpl --no-cache )"
+{ [ "$( cnt "$LITUSES" )" = 1 ] && printf '%s' "$LITUSES" | grep -qE '<u role="read" p="member\.cpp:158"' \
+      && ! printf '%s' "$LITUSES" | grep -oE '<u [^>]*>' | grep -q 'role="call"'; } \
+    && ok "tmpl §12 absent: --uses=tqLiteralArgTmpl is ONE role=\"read\" row at member.cpp:158, no call row" \
+    || no "tmpl §12 absent: --uses=tqLiteralArgTmpl expected one read row at member.cpp:158 and no call row. Rows: $( printf '%s' "$LITUSES" | grep -oE '<u [^>]*>' | tr '\n' ' ' )"
 
 # ── §10 determinism + well-formed XML ───────────────────────────────────────────────────────────────────
 [ "$( run "$FIX" --no-cache )" = "$( run "$FIX" --no-cache )" ] \

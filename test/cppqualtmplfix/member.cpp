@@ -12,7 +12,7 @@
 // §12a: EVERY callee has a UNIQUE name, so `--uses=<name>` is the number of call sites written below for
 // that name, read off this file by hand — never derived by running the query the extractor runs (plan §7
 // trap 1). Spellings 6-9 are CONTROLS the pre-round patterns already bound.
-// §12b: the names are SHARED on purpose — each decoy is a same-final-name definition the call must NOT bind.
+// §12b: the names are SHARED on purpose — each decoy is a same-final-name definition the call must NOT bind. §12e: see the end.
 
 namespace tq
 {
@@ -110,7 +110,7 @@ struct TqDecoy
     template <typename E> E tqPick( int n ) { return E( n ); }                   // RECEIVER decoy: same name, same arity
 
     // `other` is a TqTarget LOCAL, so this binds TqTarget::tqPick; read as a BARE call the enclosing-class
-    // rule pins TqDecoy::tqPick. A local, not a parameter: Rule 2 reads no parameter type (model.h ParamType).
+    // rule pins TqDecoy::tqPick. A local, so the arm measures the climb and not parameter-type narrowing.
     int tqDecoyCaller() { TqTarget other; return other.tqPick<int>( 1 ); }
 
     // `this->template`: the enclosing class is the receiver, so this binds TqDecoy::tqPick.
@@ -135,3 +135,32 @@ struct TqOtherScope { static int tqScopedFn( int n ) { return n; } };           
 // `X::template TqRebind<int>::tqScopedFn` keys on the immediate scope `TqRebind`, so it binds that
 // definition; keyed as `template TqRebind` the canonical tier misses and both definitions tie.
 template <typename X> int tqCallRebind() { return X::template TqRebind<int>::tqScopedFn( 14 ); }
+
+// ── §12e DOCUMENTED-ABSENT: spellings this round does NOT bind, pinned at zero ─────────────────────────
+// Each is a literal 0 in the gate, behind a check that the spelling is still written here, so a later
+// widening that starts binding one of them (correctly or not) has to move a pin instead of slipping in.
+struct TqAbsent
+{
+    template <int N> int tqLiteralArgTmpl( int n ) { return n + N; }
+    template <typename T> int operator()( int n ) { return n; }
+};
+
+struct TqAbsentBase
+{
+    template <typename T> int tqBaseQualTmpl( int n ) { return n; }
+    int tqBasePlain( int n ) { return n; }
+};
+
+struct TqAbsentDerived : TqAbsentBase {};
+
+// A literal non-type argument without `template`: tree-sitter reads `r.tqLiteralArgTmpl < 0 > ( x )` as two
+// comparisons, so the site is a READ of the member, never a call. (`x.template f<0>()` is bound — spelling 3.)
+int tqCallLiteralArg( TqAbsent& r, int x ) { return r.tqLiteralArgTmpl<0>( x ); }
+
+// A base-qualified member name, dot and arrow. The plain twin below is absent on main too: this is the
+// qualified-field family, not a template gap.
+int tqCallBaseQual( TqAbsentDerived& r, TqAbsentDerived* p ) { return r.TqAbsentBase::tqBaseQualTmpl<int>( 1 ) + p->TqAbsentBase::tqBaseQualTmpl<int>( 2 ); }
+int tqCallBasePlain( TqAbsentDerived& r ) { return r.TqAbsentBase::tqBasePlain( 1 ); }
+
+// An operator name with explicit template arguments.
+int tqCallOperatorTmpl( TqAbsent& r ) { return r.operator()<int>( 1 ); }

@@ -30,19 +30,30 @@ resolves to nothing, and `X::template Rebind<int>::f()` keyed its qualifier as `
 definition in another scope split the call. The keyword is now stepped over in both halves. Free `f<T>( x )` and
 qualified `ns::f<T>( x )` (the `std::get<0>( t )` shape) were already bound and are unchanged.
 
-Measured with the pre-fix and fixed binaries on this repository's `src/` (169 files, `--no-cache`): references
-168,457 → 168,463 and edges 18,308 → 18,309, with `ambiguous=` and `unresolved=` unchanged. The six new references are
-exactly the `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod` goes 1 → 7 and `--callers=pod`
-names `loadOracleCache`. `test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per
-spelling plus receiver, arity and qualifier decoys: 19 of its 24 new checks fail on the pre-fix binary, and a
-mutation build that reverts each of the three mechanisms (the receiver step, the keyword skip, `callArity`'s hop
-bound) turns that mechanism's own arms red. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was
-pinned as documented-absent at literal 0 and now pins 1.
+Measured with the pre-fix (`f8e6087c`) and fixed (`1171f775`) binaries, `--no-cache`, map header plus
+`ripwire_probe`'s reference total. On this repository's `src/` (169 files) the change is small: references 168,457 →
+168,463 and edges 18,308 → 18,309 — the six `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod`
+goes 1 → 7. On a template-heavy tree it is not small. `clang/include` plus `clang/lib` from llvm-project `4d5358b1d`
+(2,515 files) gains 10,175 references (1,855,925 → 1,866,100), 3,907 edges (409,860 → 413,767, +0.95%) and 972
+`ambiguous=` (81,601 → 82,573), with `unresolved=` unchanged at 3,893; `--callers=getAs` goes 48 → 492 and
+`--callers=hasAttr` 45 → 377. On `clang/lib/AST` (155 files) the reference delta, 2,027, equals the `--match` hit count
+of the new call shape exactly (`hits_capped="0"`), so extraction moved only the intended class.
 
-Two wrong answers remain, both on main before this change and both shared by the plain member call, so the gate
-routes around them rather than pinning them: Rule 2 narrows a receiver by a local variable's type but reads no
-parameter type, so `other.pick( 1 )` on a `Target&` parameter inside a class with its own `pick` binds the enclosing
-class's method; and a typed receiver splits over a same-class overload set with no arity prune.
+The new sites resolve exactly as a plain member call to the same name does, so a name like `getAs` or `hasAttr` gains
+its real callers and also that resolver's wrong ones. On the same clang tree `FD->hasAttr<PackedAttr>()` in
+`ASTContext::getDeclAlign` binds `Type::hasAttr(attr::Kind)` at `lib/AST/Type.cpp:2026`, not `Decl::hasAttr<T>()`,
+with no `amb=` on the row. The plain spelling does the same on main: in a reduced five-file repro, `FD->plainAttr()`
+binds `Type::plainAttr(int)` rather than `Decl::plainAttr()`. That is a resolver defect this change widens the reach
+of, not one it introduces, and it is not fixed here.
+
+`test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per spelling plus receiver, arity
+and qualifier decoys: 19 of its checks fail on the pre-fix binary, and a mutation build that reverts each of the three
+mechanisms (the receiver step, the keyword skip, `callArity`'s hop bound) turns that mechanism's own arms red. The
+spellings still not bound are pinned at zero behind a check that each is still written in the fixture: `r.f<0>( x )`
+without `template` (tree-sitter reads it as two comparisons, a read of the member), a base-qualified member
+`r.Base::f<T>()` / `p->Base::f<T>()` (the plain `r.Base::f()` is absent too, so the gap is not template-shaped), and
+`r.operator()<T>()`. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was pinned as documented-absent
+at literal 0 and now pins 1.
 
 `kParserVer` 96 → 99 with `quality.h`'s `kIngestParserVerMirror` in the same commit — 97 and 98 are held by open
 pull requests, per the next-free rule in `src/ingest_cache.h`; `kCacheVersion` stays 22, and `test/qschemetrip.hash`
