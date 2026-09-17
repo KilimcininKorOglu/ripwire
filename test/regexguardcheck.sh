@@ -49,6 +49,11 @@
 #   (g) THE STACK BOUND — std::regex compiles by recursion, and a 20,000-byte literal --regex died with SIGBUS in a
 #       512 KiB grep worker. A pattern over kRegexMaxPatternBytes (2,048) or nesting groups deeper than
 #       kRegexMaxGroupDepth (64) is refused by name; exactly at each limit it still compiles.
+#   (h) AN UNDECIDED #match? SAYS WHY — a capture-typed `(#match? @f @s)` compiles each match's own text, and three
+#       different things can stop it: the screen refuses the captured text, the text does not compile, or the engine
+#       abandons the match. One counter and one sentence ("the regex engine abandoned the match") used to cover all
+#       three. Each cause now has its own run, fixture and wording; the refusal names the FIRST site (lowest file, then
+#       byte) with the captured text, is byte-identical run to run, and --lint-rules says the same.
 #   (d) file() IS ROOT-RELATIVE — two clones of one tree at different directory names, each run with an
 #       absolute and a relative root spelling, must give the SAME count for a pattern naming one clone's
 #       directory, and an anchored `^src/` must select the src/ symbols (it selected nothing under an
@@ -367,6 +372,57 @@ if grep -q '<arch ' "$TMP/e.out"; then no "(e) an <arch> answer was printed besi
 rc="$( capRun 20 "$TMP/e2.out" "$TMP/e2.err" "$FIX" --no-cache --arch="$TMP/arch_subst_ok.txt" )"
 if [ "$rc" != 1 ] && [ "$rc" != TIMEOUT ] && grep -q '<arch ' "$TMP/e2.out"; then ok "(e) control: a{1,\\1} substitutes to a valid a{1,1} and the rule is judged (exit $rc)"
 else no "(e) control: exit $rc — $( head -c 200 "$TMP/e2.err" )"; fi
+
+# ── (h) an undecided capture-typed #match? is reported BY CAUSE, naming the first site and the captured text ─────
+CAPQ='((call_expression function: (identifier) @f arguments: (argument_list (string_literal) @s)) (#match? @f @s))'
+HS="$TMP/cap_screen"; HC="$TMP/cap_compile"; HA="$TMP/cap_abandon"; mkdir -p "$HS" "$HC" "$HA" "$TMP/rules_cap"
+printf 'int g(const char* s);\nint f(void)\n{\n    return g("(a+)+z");\n}\n' >"$HS/a.c"
+printf 'int g(const char* s);\nint k(void) { return g("(b+)+z"); }\n' >"$HS/b.c"
+printf 'int g(const char* s);\nint h(void) { return g("foo("); }\n' >"$HC/c.c"
+printf 'int g(const char* s);\nint x(void) { return g("x"); }\n' >"$HA/x.c"
+cat >"$TMP/rules_cap/cap.yml" <<'YML'
+- id: rx-capture
+  language: c
+  severity: warn
+  message: a capture-typed predicate
+  query: |
+    ((call_expression function: (identifier) @f arguments: (argument_list (string_literal) @s)) (#match? @f @s)) @hit
+YML
+causeArm(){                      # causeArm <label> <corpus> <needle cause> <needle text> <args…>
+    local label="$1" corpus="$2" cause="$3" text="$4"; shift 4
+    local rc; rc="$( capRun 20 "$TMP/h.out" "$TMP/h.err" "$corpus" --no-cache "$@" )"
+    if [ "$rc" = 1 ]; then ok "(h) $label: refused at exit 1"; else no "(h) $label: exit $rc — $( head -c 200 "$TMP/h.err" )"; fi
+    if grep -qF -- "$cause" "$TMP/h.err"; then ok "(h) $label: the refusal gives the cause ($cause)"
+    else no "(h) $label: the refusal does not give the cause '$cause': $( head -c 260 "$TMP/h.err" )"; fi
+    if grep -qF -- "$text" "$TMP/h.err"; then ok "(h) $label: the refusal names the captured text / site ($text)"
+    else no "(h) $label: the refusal does not name '$text': $( head -c 260 "$TMP/h.err" )"; fi
+    if [ "$cause" != "the regex engine abandoned" ] && grep -q 'abandoned the match' "$TMP/h.err"; then
+        no "(h) $label: the refusal blames an abandoned match that never happened"
+    else
+        ok "(h) $label: no cause is claimed that did not happen"
+    fi
+    if grep -qE '<match |<lint' "$TMP/h.out"; then no "(h) $label: an answer element was printed beside the refusal"; else ok "(h) $label: no answer element on stdout"; fi
+}
+causeArm "screen-refused text"   "$HS" "captured text(s) the structural screen refused" "a.c:4, used the captured text '\"(a+)+z\"'" "--match=$CAPQ"
+grep -qF '2 captured text(s) the structural screen refused' "$TMP/h.err" \
+    && ok "(h) screen-refused text: both files' texts are counted, and the FIRST site named is the lowest file (a.c, not b.c)" \
+    || no "(h) screen-refused text: count or first site wrong: $( head -c 260 "$TMP/h.err" )"
+cp "$TMP/h.err" "$TMP/h1.err"
+capRun 20 /dev/null "$TMP/h1b.err" "$HS" --no-cache "--match=$CAPQ" >/dev/null
+if cmp -s "$TMP/h1.err" "$TMP/h1b.err"; then ok "(h) the by-cause refusal is byte-identical run to run"; else no "(h) the by-cause refusal differs run to run"; fi
+causeArm "uncompilable text"     "$HC" "captured text(s) that do not compile" "c.c:2, used the captured text '\"foo(\"'" "--match=$CAPQ"
+causeArm "--lint-rules, uncompilable text" "$HC" "captured text(s) that do not compile" "rx-capture" --lint-rules="$TMP/rules_cap"
+if [ "$FAULTS" -eq 1 ]; then
+    rc="$( RIPWIRE_FAULT_REGEX_MATCH=1 capRun 20 "$TMP/h.out" "$TMP/h.err" "$HA" --no-cache "--match=$CAPQ" )"
+    if [ "$rc" = 1 ] && grep -qF "match(es) the regex engine abandoned" "$TMP/h.err" && grep -qF "x.c:2, ran the pattern '\"x\"'" "$TMP/h.err" \
+       && grep -q 'abandoned the match' "$TMP/h.err" && ! grep -q 'captured text(s)' "$TMP/h.err"; then
+        ok "(h) abandoned match: reported as abandoned, naming x.c:2 and the pattern, and no text cause"
+    else
+        no "(h) abandoned match: exit $rc — $( head -c 260 "$TMP/h.err" )"
+    fi
+else
+    printf '  INFO  (h) fault switches compiled out (NDEBUG): the abandoned cause is proved on the plain-flavour leg\n'
+fi
 
 # ── (f) the skill scanner: linear net-exfil agrees with its regex, bounded time, and undecided fails closed ───────
 SK="$TMP/skills"; mkdir -p "$SK"

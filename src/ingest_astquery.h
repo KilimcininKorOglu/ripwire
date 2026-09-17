@@ -149,45 +149,76 @@ inline PredicateRegexTable buildPredicateRegexTable( const TSQuery* q )
 //     group never gets this far: its refusal was collected at compile time and the verb refused).
 //   * slot == -1 — no constant to precompile (a Capture-typed argument, whose pattern is per-match text).
 //     Compile it here, per match, as before — through the guard.
-// A predicate the guard cannot DECIDE — the engine abandoned the match, or the per-match text was refused —
-// filters nothing, as it always did, and is COUNTED into `undecidedOut` when the group is a user's (non-null),
-// so the verb refuses instead of printing rows no predicate judged. `rhs` is only read on the last state.
-inline bool evalMatchPredicate( bool negated, const std::string& lhs, const std::string& rhs,
-                                const PredicateRegexTable& rx, const TSQueryPredicateStep& arg, std::atomic<std::uint64_t>* undecidedOut )
+// A predicate the guard cannot DECIDE filters nothing, as it always did, and says WHY: the per-match text was refused
+// by the screen, the per-match text does not compile, or the engine abandoned the match. The caller records that
+// cause for a user's group (noteUndecidedPredicate), so the verb's refusal names the right fix. `rhs` is the pattern
+// text in every state (the constant, or the per-match capture); it is only COMPILED in the last one.
+enum class MatchPredicateOutcome : std::uint8_t { Pass, Fail, TextScreened, TextUncompilable, Abandoned };
+
+inline MatchPredicateOutcome evalMatchPredicate( bool negated, const std::string& lhs, const std::string& rhs,
+                                                 const PredicateRegexTable& rx, const TSQueryPredicateStep& arg )
 {
     const bool          constant = ( arg.type == TSQueryPredicateStepTypeString && arg.value_id < rx.slotOfStringId.size() );
     const std::int32_t  slot     = constant ? rx.slotOfStringId[ arg.value_id ] : -1;
     if( slot == -2 )
     {
-        return true;                                    // the pattern did not compile ⇒ this predicate filters nothing
+        return MatchPredicateOutcome::Pass;             // the pattern did not compile ⇒ this predicate filters nothing
     }
-    // A Capture-typed argument's pattern is this match's own node text, compiled per match through the guard; a
-    // refusal of that text leaves the predicate exactly as undecided as an abandoned match, and reads the same.
-    RegexVerdict verdict = RegexVerdict::Exhausted;
+    RegexVerdict verdict = RegexVerdict::Miss;
     if( slot >= 0 )
     {
         verdict = rx.res[ std::size_t( slot ) ].search( lhs );
     }
-    else if( const RegexCompile perMatch = compileGuardedRegex( rhs, kRegexEcmaScript ); !perMatch.refusal )
+    else
     {
+        const RegexCompile perMatch = compileGuardedRegex( rhs, kRegexEcmaScript );   // a Capture-typed argument: this match's own text
+        if( perMatch.refusal )
+        {
+            return perMatch.isScreened ? MatchPredicateOutcome::TextScreened : MatchPredicateOutcome::TextUncompilable;
+        }
         verdict = perMatch.regex.search( lhs );
     }
     if( verdict == RegexVerdict::Exhausted )
     {
-        if( undecidedOut != nullptr )
-        {
-            undecidedOut->fetch_add( 1, std::memory_order_relaxed );
-        }
-        return true;                                    // undecided ⇒ filters nothing, the arm the per-match catch always took
+        return MatchPredicateOutcome::Abandoned;
     }
-    const bool mm = ( verdict == RegexVerdict::Hit );
-    return negated ? !mm : mm;
+    return ( ( verdict == RegexVerdict::Hit ) != negated ) ? MatchPredicateOutcome::Pass : MatchPredicateOutcome::Fail;
+}
+
+inline std::uint32_t lineAtByte( const std::vector<std::uint32_t>& nlOffsets, std::uint32_t bytePos ) noexcept;   // defined below
+
+// Where a predicate is being evaluated, for the undecided path only: the user group's sink (null for the built-in
+// packs, which record nothing), the file, and its newline index for the reported line.
+struct PredicateSite
+{
+    AstRegexUndecided*                sink;
+    std::uint32_t                     fileId;
+    const std::vector<std::uint32_t>& nlOffsets;
+};
+
+// Record one undecided evaluation against a user's group. The site's position is the match's first capture; the
+// reason is re-derived here, on the rare path, rather than carried through every evaluation that decided.
+inline void noteUndecidedPredicate( const PredicateSite& site, const TSQueryMatch& m, MatchPredicateOutcome outcome, const std::string& pattern )
+{
+    if( site.sink == nullptr )
+    {
+        return;
+    }
+    const std::uint32_t byte = ( m.capture_count != 0 ) ? ts_node_start_byte( m.captures[0].node ) : 0;
+    if( outcome == MatchPredicateOutcome::Abandoned )
+    {
+        site.sink->note( AstRegexUndecidedCause::Abandoned, site.fileId, byte, lineAtByte( site.nlOffsets, byte ), pattern, kRegexAbandonedReason );
+        return;
+    }
+    const RegexCompile refused = compileGuardedRegex( pattern, kRegexEcmaScript );
+    site.sink->note( outcome == MatchPredicateOutcome::TextScreened ? AstRegexUndecidedCause::TextScreened : AstRegexUndecidedCause::TextUncompilable,
+                     site.fileId, byte, lineAtByte( site.nlOffsets, byte ), pattern, refused.refusal.value_or( std::string() ) );
 }
 
 // evaluate a pattern's query predicates against a match — #eq? / #not-eq? (string/capture equality) and
 // #match? / #not-match? (ECMAScript regex). ts_query never applies these itself; without this, #eq? is a no-op.
 inline bool passesPredicates( const TSQuery* q, const PredicateRegexTable& rx, const TSQueryMatch& m, std::string_view src,
-                              std::atomic<std::uint64_t>* undecidedOut )
+                              const PredicateSite& site )
 {
     std::uint32_t pc = 0;
     const TSQueryPredicateStep* steps = ts_query_predicates_for_pattern( q, m.pattern_index, &pc );
@@ -250,7 +281,12 @@ inline bool passesPredicates( const TSQuery* q, const PredicateRegexTable& rx, c
         }
         else if( op == "match?" || op == "not-match?" )
         {
-            ok = evalMatchPredicate( op == "not-match?", lhs, rhs, rx, pr[2], undecidedOut );
+            const MatchPredicateOutcome outcome = evalMatchPredicate( op == "not-match?", lhs, rhs, rx, pr[2] );
+            ok = ( outcome != MatchPredicateOutcome::Fail );   // undecided ⇒ filters nothing, as it always did
+            if( ok && outcome != MatchPredicateOutcome::Pass )
+            {
+                noteUndecidedPredicate( site, m, outcome, rhs );
+            }
         }
         if( !ok )
         {
@@ -1089,7 +1125,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                                 continue;   // unreachable: patternOwner was verified against ts_query_pattern_count
                             }
                             const GroupedQuery& owner = it->second.perSpec[ it->second.patternOwner[ m.pattern_index ] ];
-                            if( !passesPredicates( q, it->second.combinedRx, m, bytes, groups[ owner.groupIndex ].regexUndecidedOut ) )
+                            if( !passesPredicates( q, it->second.combinedRx, m, bytes, { groups[ owner.groupIndex ].regexUndecidedOut, std::uint32_t( fileId ), nlOffsets } ) )
                             {
                                 continue; // honour #eq? / #match? etc. — predicates are per PATTERN, so this reads the right ones
                             }
@@ -1104,7 +1140,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                             TSQueryMatch m;
                             while( ts_query_cursor_next_match( cur, &m ) )
                             {
-                                if( !passesPredicates( gq.query, gq.rx, m, bytes, groups[ gq.groupIndex ].regexUndecidedOut ) )
+                                if( !passesPredicates( gq.query, gq.rx, m, bytes, { groups[ gq.groupIndex ].regexUndecidedOut, std::uint32_t( fileId ), nlOffsets } ) )
                                 {
                                     continue; // honour #eq? / #match? etc.
                                 }
