@@ -120,6 +120,16 @@ inline LspFrame lspReadMessage( std::FILE* in )
     return f;
 }
 
+// The picker's cap, disclosed (#279 review, @mpapis): a query matching more than kLspWorkspaceCap rows answers the first
+// kLspWorkspaceCap and says how many it left out in a window/logMessage (type 3, Info) sent just before the response,
+// the one channel LSP gives a result that has no truncation field. test/lspcheck.sh arm (17).
+inline std::string lspWorkspaceCapNotice( const std::string& query, std::size_t total )
+{
+    return "{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":3,\"message\":\"ripwire: workspace/symbol shows the first "
+         + std::to_string( kLspWorkspaceCap ) + " of " + std::to_string( total ) + " matches for '" + rw::mcpdetail::jsonEscape( query )
+         + "'; refine the query to see the rest\"}}";
+}
+
 inline void lspWriteMessage( std::FILE* out, const std::string& body )
 {
     char hdr[ 64 ];
@@ -655,10 +665,13 @@ inline std::string lspDocumentSymbol( const rw::IngestResult& ing, const std::st
 }
 
 // workspace/symbol (D9): exact-name resolution first, then case-insensitive substring over NAMES only —
-// no BM25, which is tuned for task prose and would surface non-name rows in a picker.
+// no BM25, which is tuned for task prose and would surface non-name rows in a picker. The list keeps the first
+// kLspWorkspaceCap matches in that order; every match is still COUNTED into `totalOut`, so the caller can disclose a
+// cut (lspWorkspaceCapNotice) — a SymbolInformation[] has no field that could say "and N more".
 inline std::string lspWorkspaceSymbol( const rw::IngestResult& ing, const std::string& cwd, LspDocs& docs,
-                                       std::string_view query )
+                                       std::string_view query, std::size_t& totalOut )
 {
+    totalOut = 0;
     if( query.empty() ) return "[]";   // Q3: an empty picker query is not an outline dump
 
     const auto lowerCopy = [ ]( std::string s )
@@ -686,40 +699,31 @@ inline std::string lspWorkspaceSymbol( const rw::IngestResult& ing, const std::s
         return o;
     };
 
-    for( const rw::NodeId id : rw::resolveAllByName( ing, query ) )
+    const auto take = [ & ]( const rw::Symbol& s )   // count every match; serialize only the first kLspWorkspaceCap
     {
-        if( n >= kLspWorkspaceCap || id >= ing.symbols.size() || seen[ id ] ) continue;
-        seen[ id ] = 1;
+        ++totalOut;
+        if( n >= kLspWorkspaceCap ) return;
         ++n;
         if( !first ) out += ",";
         first = false;
-        out += itemJson( ing.symbols[ id ] );
-    }
-    if( n < kLspWorkspaceCap )
+        out += itemJson( s );
+    };
+    for( const rw::NodeId id : rw::resolveAllByName( ing, query ) )
     {
-        for( std::size_t i = 0; i < ing.symbols.size() && n < kLspWorkspaceCap; ++i )
-        {
-            const rw::Symbol& s = ing.symbols[ i ];
-            if( seen[ i ] ) continue;
-            if( lowerCopy( s.name ).find( qLower ) == std::string::npos ) continue;
-            seen[ i ] = 1;
-            ++n;
-            if( !first ) out += ",";
-            first = false;
-            out += itemJson( s );
-        }
+        if( id >= ing.symbols.size() || seen[ id ] ) continue;
+        seen[ id ] = 1;
+        take( ing.symbols[ id ] );
     }
-    if( n < kLspWorkspaceCap )   // fields join the picker too (D8's spirit — the outline and the picker agree)
+    for( std::size_t i = 0; i < ing.symbols.size(); ++i )
     {
-        for( const rw::Symbol& f : ing.fields )
-        {
-            if( n >= kLspWorkspaceCap ) break;
-            if( lowerCopy( f.name ).find( qLower ) == std::string::npos ) continue;
-            ++n;
-            if( !first ) out += ",";
-            first = false;
-            out += itemJson( f );
-        }
+        const rw::Symbol& s = ing.symbols[ i ];
+        if( seen[ i ] || lowerCopy( s.name ).find( qLower ) == std::string::npos ) continue;
+        seen[ i ] = 1;
+        take( s );
+    }
+    for( const rw::Symbol& f : ing.fields )   // fields join the picker too (D8's spirit — the outline and the picker agree)
+    {
+        if( lowerCopy( f.name ).find( qLower ) != std::string::npos ) take( f );
     }
     out += "]";
     return out;
@@ -1006,7 +1010,11 @@ inline int runLsp( const std::string& cliRoot )
         {
             const rw::McpIndex& mix = rw::getIndex( root );
             LspDocs         docs( mix.ing );
-            resp = lspResultJson( id.token, lspWorkspaceSymbol( mix.ing, cwd, docs, rw::mcpdetail::findString( params, "query" ) ) );
+            const std::string   query = rw::mcpdetail::findString( params, "query" );
+            std::size_t         total = 0;
+            const std::string   items = lspWorkspaceSymbol( mix.ing, cwd, docs, query, total );
+            if( total > kLspWorkspaceCap ) lspWriteMessage( stdout, lspWorkspaceCapNotice( query, total ) );
+            resp = lspResultJson( id.token, items );
         }
         else if( method == "textDocument/hover" )
         {

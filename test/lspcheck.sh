@@ -36,6 +36,8 @@
 #   (16) framing: a missing, non-numeric, negative or over-cap Content-Length, and a header flood with no
 #        terminator, each end the session at exit 1 with nothing on stdout and the framing refusal on stderr,
 #        inside a wall-clock cap (no hang)
+#   (17) workspace/symbol's 20-row cap is DISCLOSED: 25 matches answer 20 rows after a window/logMessage naming
+#        "first 20 of 25"; 10 matches answer all 10 with no notice
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/lspcheck.sh   |   bash test/lspcheck.sh path/to/ripwire
 
@@ -317,5 +319,27 @@ done
 [ -z "$f16" ] && ok "(16) framing: missing / non-numeric / negative / over-cap Content-Length and a header flood each exit 1 within 10 s, stdout empty, the refusal named" \
              || no "(16) framing refusal wrong for:$f16"
 
+# ── (17) workspace/symbol discloses its 20-row cap ──────────────────────────────────────────────────────────
+W17="$( mktemp -d )"
+for k in $( seq 0 24 ); do printf 'int capfn%02d() { return %d; }\n' "$k" "$k"; done > "$W17/caps.cpp"
+{
+  msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"file://$W17\",\"capabilities\":{}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"capfn\"}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"capfn1\"}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+} > "$WORK/d17"
+"$BIN" --lsp < "$WORK/d17" > "$WORK/raw17" 2>/dev/null
+decodeFrames "$WORK/raw17" > "$WORK/r17" 2>/dev/null
+rm -rf "$W17"
+rows30="$( grep '"id":30,' "$WORK/r17" | grep -o '"name":"capfn' | wc -l | tr -d ' ' )"
+rows31="$( grep '"id":31,' "$WORK/r17" | grep -o '"name":"capfn' | wc -l | tr -d ' ' )"
+notices="$( grep -c '"method":"window/logMessage"' "$WORK/r17" )"
+noticeLine="$( grep -n '"method":"window/logMessage"' "$WORK/r17" | cut -d: -f1 )"; resp30Line="$( grep -n '"id":30,' "$WORK/r17" | cut -d: -f1 )"
+[ "$rows30" = 20 ] && [ "$rows31" = 10 ] && [ "$notices" = 1 ] \
+    && grep -q 'shows the first 20 of 25 matches for .capfn.' "$WORK/r17" \
+    && [ -n "$noticeLine" ] && [ "$noticeLine" -lt "$resp30Line" ] \
+    && ok "(17) workspace/symbol: 25 matches → 20 rows after one window/logMessage 'first 20 of 25'; 10 matches (capfn10-19) → 10 rows, no notice" \
+    || { no "(17) cap disclosure wrong: rows30=$rows30 rows31=$rows31 notices=$notices"; head -c 500 "$WORK/r17"; }
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

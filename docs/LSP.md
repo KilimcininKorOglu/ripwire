@@ -24,7 +24,7 @@ same resolvers** the CLI and MCP twins use (one computation, many surfaces — t
 | D6 | Floor honesty (O6): LSP has **no metadata channel** beside a result. The disclosure lives in a standing sentence on every hover — "name-based index: counts are floors, not totals". Revisit after real usage |
 | D7 | Hover = structured gist: verbatim signature, kind, `file:line`, `loc`/`cx`, in/out counts, doc comment **when captured**, the **Used at** (call-role floor) and **Referenced at** (Ruby constant-load directives, `file://…#L` clickable links) tiers, and the standing floor sentence. Never redacted — LSP is a trusted local channel; MCP's redact-by-default posture does not transfer |
 | D8 | `documentSymbol` **merges the field side table** (`IngestResult::fields`) — free (same in-memory index, one request), and outlines stop hiding member variables |
-| D9 | `workspace/symbol`: exact `resolveAllByName` first, then case-insensitive prefix/substring over symbol **names**, cap ~20. No BM25 (it is tuned for task prose, not picker rows) |
+| D9 | `workspace/symbol`: exact `resolveAllByName` first, then case-insensitive prefix/substring over symbol **names**, cap 20 — a query matching more answers the first 20 and says how many it left out in a `window/logMessage` (Info) sent just before the response. No BM25 (it is tuned for task prose, not picker rows) |
 | D10 | Validation: `--lsp` refuses to combine with `--mcp`/`--listen` (one stdin, two protocols; combined transports are a later milestone) |
 | D11 | No cache-format change: the identifier at the cursor is found by a character-class re-scan of the line, not a persisted reference end byte |
 
@@ -57,7 +57,7 @@ flowchart LR
 | `textDocument/definition` | `resolveAllByNameQualified` (`graph.h:4433`), whose `@FILE:LINE` tier is the line-seed resolution; symbol byte spans (`sigStartByte..`, `model.h`) | cursor → file bytes + line table → identifier span (re-scan) → defs → `Location[]`; `null` when nothing resolves (D5) |
 | `textDocument/references` | the use-site stream (`Reference` rows: `fileId, line, startByte, role`) + CSR in/out edges — the `find_referencing_symbols`/`--uses` machinery (`callhierarchy.h`) | defs set → sites → `Location[]`, deduped by file:line (D5, D6) |
 | `textDocument/documentSymbol` | `symbolsByFile` (`model.h:1382`) + `IngestResult::fields` merge (D8), 2-level nesting from `scope` | flat-or-nested outline incl. member variables |
-| `workspace/symbol` | `resolveAllByName` exact; prefix/substring scan (D9) | `SymbolInformation[]`, cap ~20 |
+| `workspace/symbol` | `resolveAllByName` exact; prefix/substring scan (D9) | `SymbolInformation[]`, cap 20, the cut disclosed via `window/logMessage` |
 | `textDocument/hover` | signature `[sigStartByte, sigEndByte)`, `docCommentBefore` (`serialize.h:3212`), `loc`/`cx` at ingest, CSR row-offset counts | the D7 gist, Markdown |
 | `textDocument/didOpen` / `didClose` | — (new) | Track URI set **only**; answers always from disk (D1) |
 | `$/cancelRequest` | — (new) | `-32800` only for queued ids; in-flight ignored (single-threaded) |
