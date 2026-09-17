@@ -793,6 +793,10 @@ fi
 #       never loaded (a key mismatch, an earlier refusal) would otherwise pass while proving nothing.
 # The enumerator counts are DERIVED from src/model.h, not written here, so appending an enumerator without
 # moving its k*Count constant turns (c)'s last-enumerator control red instead of going unnoticed.
+#
+# The same three runs cover the 16-BIT FIELDS the writer stores in a u32 slot (readDef's ppAlt and params,
+# readRef's argCount — hazardpatterncheck.sh rule D). `std::uint16_t( r.u32() )` kept the low bits of 0x10000
+# and believed a 0: (a) values 0x10000 and 0xFFFFFFFF must refuse that record, (c) 0xFFFF must be accepted.
 echo
 echo "=== Part 3: out-of-range enum byte in a checksum-valid ingest-cache record — DEV build ==="
 EFX="$TMP/enumfx"; mkdir -p "$EFX/ffi" "$EFX/routes"
@@ -857,11 +861,14 @@ for i in range(n):
         global p; ln = u32(); p += ln
     def site(cls):
         sites.setdefault(cls, (p, blob[p])); skip(1)
+    def site32(cls, rel):                                                 # a u32 slot `rel` bytes ahead; p does not move
+        sites.setdefault(cls, (p + rel, struct.unpack_from("<I", blob, p + rel)[0]))
     s(); skip(4 * 8 + 5 * 4)                                              # path, hash/size/mtime/ctime, FileHealth
     for _ in range(u32()):                                                # defs (LEAN family: no subtoken rows)
+        site32("def.ppAlt", 9 * 4); site32("def.params", 13 * 4)
         skip(14 * 4 + 5); site("def.kind"); site("def.lang"); s(); s(); skip(8)
     for _ in range(u32()):                                                # refs
-        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); skip(9)
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(9)
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds
@@ -892,8 +899,12 @@ def blob_checksum(data):
         h = ((h ^ lane[k]) * P) & M
     return h
 
-def rebuilt_with(off, value):
-    b = bytearray(blob); b[off] = value
+def rebuilt_with(off, value, width=1):
+    b = bytearray(blob)
+    if width == 1:
+        b[off] = value
+    else:
+        struct.pack_into("<I", b, off, value)
     for i in range(n):
         e = table_off + i * ENTRY
         ro = struct.unpack_from("<Q", b, e + 8)[0]; rl = struct.unpack_from("<I", b, e + 24)[0]
@@ -913,6 +924,14 @@ for cls, enum in ENUM_OF.items():
         path = f"{outdir}/{cls}.{tag}.cache"
         open(path, "wb").write(data)
         print(f"{cls}\t{enum}\t{tag}\t{value}\t{orig}\t{c}")
+for cls in ("def.ppAlt", "def.params", "ref.argCount"):
+    if cls not in sites:
+        print(f"{cls}\tu16\tABSENT\t-\t-\t-")
+        continue
+    off, orig = sites[cls]
+    for tag, value in (("wide", 0x10000), ("allones", 0xFFFFFFFF), ("inrange", 0xFFFF)):
+        open(f"{outdir}/{cls}.{tag}.cache", "wb").write(rebuilt_with(off, value, 4))
+        print(f"{cls}\tu16\t{tag}\t{value}\t{orig}\t65536")
 PYEOF
 planRc=$?
 if [ "$planRc" -ne 0 ]; then
@@ -925,6 +944,7 @@ elif [ -n "$GOOD_RECORDS" ]; then
             continue
         fi
         mutant="$EDIR/$cls.$tag.cache"
+        if [ "$enum" = "u16" ]; then what="16-bit field stored wider than 16 bits"; else what="$enum byte past the last enumerator (count $enumCount)"; fi
         if cmp -s "$mutant" "$EDIR/good.cache"; then
             no "[enum:$cls=$value] the mutation did not take (mutant equals the good cache)"
             continue
@@ -935,23 +955,23 @@ elif [ -n "$GOOD_RECORDS" ]; then
         records="$( cachedRecords "$EDIR/out.err" )"
         if [ "$tag" = "inrange" ]; then
             if [ "$rc" -eq 0 ] && [ "$records" = "$GOOD_RECORDS" ]; then
-                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the enum read"
+                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the field read"
             else
-                no "[enum:$cls control] in-range $enum value $value (last enumerator of $enumCount, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale k*Count bound, or a digest the mutation did not rebuild"
+                no "[enum:$cls control] in-range $enum value $value (the largest value that fits, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale bound, or a digest the mutation did not rebuild"
             fi
             continue
         fi
         if [ "$rc" -ge 128 ]; then
-            no "[enum:$cls=$value] CRASH — exit $rc on a $enum byte past the last enumerator"
+            no "[enum:$cls=$value] CRASH — exit $rc on a $what"
         elif [ "$rc" -ne 0 ]; then
             no "[enum:$cls=$value] nonzero exit ($rc) — an out-of-range cache byte must degrade, not fail the run"
         elif [ "$records" != "$expectRefused" ]; then
-            no "[enum:$cls=$value] $enum byte past the last enumerator (count $enumCount) was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
+            no "[enum:$cls=$value] $what was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
         elif ! cmp -s "$EDIR/truth.xml" "$EDIR/out.xml"; then
             no "[enum:$cls=$value] record refused but the output still differs from --no-cache"
             diff "$EDIR/truth.xml" "$EDIR/out.xml" | head -4
         else
-            ok "[enum:$cls=$value] $enum past the last enumerator: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
+            ok "[enum:$cls=$value] $what: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
         fi
     done <"$EDIR/plan.tsv"
 

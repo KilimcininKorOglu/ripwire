@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>   // std::any_of (H8: findings_capped over the emitted rules)
+#include <charconv>    // std::from_chars — parseProfTsv's line column (never std::atoi: undefined past INT_MAX)
+#include <system_error> // std::errc — from_chars' result
 #include <cstdio>      // stdout / stderr — the two streams the shims below name
 #include <format>      // std::format_string — the shims' format contract (see test/printffmtparitycheck.sh)
 #include "infra/emit.h" // rw::emitTo — THE emitter: std::print where the library has <print>, std::format+fputs
@@ -579,10 +581,20 @@ std::optional<std::vector<ProfScopeRow>> parseProfTsv( const std::string& path )
         {
             continue;   // a short row carries nothing joinable; skip it rather than invent columns
         }
+        // std::from_chars, not std::atoi: atoi is undefined past INT_MAX, and libc kept the low 32 bits, so a line of
+        // 4294967329 read as 33 and joined a finding to a site that is not there. A column that is not wholly a number
+        // in range is a row that carries nothing joinable, like the short row above (test/withprofilecheck.sh arm 8).
+        int                             parsedLine = 0;
+        const std::string&              lineCell   = cells[2];
+        const auto [ lineEnd, lineErr ] = std::from_chars( lineCell.data(), lineCell.data() + lineCell.size(), parsedLine );
+        if( lineErr != std::errc{} || lineEnd != lineCell.data() + lineCell.size() || parsedLine <= 0 )
+        {
+            continue;
+        }
         ProfScopeRow row;
         row.scope = cells[0];
         row.file  = cells[1];
-        row.line  = std::atoi( cells[2].c_str() );
+        row.line  = parsedLine;
         for( std::size_t cellIndex = 3; cellIndex < cells.size() && cellIndex < header.size(); ++cellIndex )
         {
             row.cols.emplace_back( header[cellIndex], cells[cellIndex] );
