@@ -168,6 +168,42 @@ previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refus
 q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
 variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
 
+### Fixed — `--uses=Owner.field` pinned a read through a `std::` local or parameter to an in-repo namesake
+
+The entries above stopped a type written in namespace `std` from narrowing a call through a local, a parameter or a
+member field. The member use-site index keeps its own table of local and parameter types, and that table still read the
+final segment alone. Given an in-repo `struct pair { int first; int second; };` and a second owner of `first`,
+`std::pair<int, int> p; return p.first;` and `const std::pair<int, int>& q` → `q.first` both answered
+`--uses=pair.first` as pinned: one owner, no `owner_candidates=`, and wrong. The table now records a `std::` type as a
+tombstone, as Rule 2's own table does, so such a read is the split it is (`owner_candidates=2`, one per owner of
+`first`). A second declaration of the same name in that function is tombstoned with it rather than handed every site.
+A tombstoned local also no longer falls back to the enclosing class's same-named member. `std::pair<int, int> p`
+inside a method of a class whose member `p` is a `pair` used to answer through the member's type. But the local hides
+that member, and the table cannot tell which of a function's declarations a site sees, so a local declared twice with
+different types now answers the same split. Every other qualifier still narrows: `store::Text t; t.len` pins
+`Text.len` against a second owner of `len`. Ingest already recorded the qualified text on both kinds of record, so the
+parser version does not move.
+
+Measured with a scratch dump of the index for every field whose name is read through a receiver whose type record this
+change can alter (one written in `std`, or two that disagree), the previous commit's binary against this change. Three
+corpora are byte-identical: this repository's `src/` (a frozen copy; 1,169 fields, 57,511 sites), rocksdb (824 fields,
+84,617 sites) and a private C++ corpus (1,811 fields, 393,336 sites). So are `--pin-census` and the default map on
+`src/` and rocksdb; the call graph never reads this table. None of those corpora has an in-repo class named after a
+`std::` type that declares the member read through one. So a probe measured the reach: a copy of rocksdb plus
+`namespace shim { struct pair { int first; int second; }; }` and a second owner of both names. The previous binary
+pinned 110 rocksdb reads to `shim::pair` (53 `.first`, 57 `.second`, such as `std::pair<IOStatus, std::string> res;
+res.first` in `env/env_chroot.cc`), and every one was wrong, because no rocksdb code declares a `shim::pair`. This change
+turns all 110 into two-way splits and pins no site that was not pinned before. Six of them, sampled across files, were
+read against the source, and all six are `std::pair` locals or parameters.
+
+`test/fieldusescheck.sh` arm J is the gate, on its own fixture. It covers a `std::pair` local, a `std::pair` parameter
+and a `::std::pair` local, a `std::string` receiver two hops deep, one function declaring both `std::pair v` and
+`pair v`, `std::` locals and parameters that hide a member, and a non-std double declaration. The previous commit's
+binary fails three of its rows. Three variants of the fix were built to prove each row can fail. Skipping the std
+record turns the double-declaration and member-hiding rows red. Letting a tombstone fall back to the member turns
+exactly the three `std::` member-hiding rows red (measured before the non-std row was added). Refusing every qualifier
+turns only the `store::Text` controls red.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
