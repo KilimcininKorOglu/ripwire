@@ -414,43 +414,99 @@ mechArm archbaseline    src/arch.h    'inline int openArchBaselineSidecar( const
 PG="$ROOT/src/pathguard.h"
 PGCODE="$TMP/pathguard_code.txt"
 grep -v '^[[:space:]]*//' "$PG" >"$PGCODE"
+# Every ::open in the header is pinned to the FUNCTION that owns it and to the flags that make it what it is, and
+# the file-wide total must equal the rows below — so a new open anywhere, or one moved into another function, fails
+# here instead of hiding inside a count that happens to still be right. (Rounds 1-4 counted two opens file-wide;
+# round 5 added the publish temp create and its entropy read, and the edit-plan payload read joined them.)
+pgfn(){ awk -v sig="$1" 'index( $0, sig ) { f = 1 } f { print } f && /^}$/ { exit }' "$PGCODE"; }
+pgopens(){ pgfn "$1" | grep '::open(' ; }
 openLines="$( grep -c '::open(' "$PGCODE" | tr -d ' ' )"
-writeOpens="$( grep '::open(' "$PGCODE" | grep -c 'O_WRONLY' | tr -d ' ' )"
-readOpens="$( grep '::open(' "$PGCODE" | grep -c 'O_RDONLY' | tr -d ' ' )"
+WTRUNC="$TMP/pathguard_truncate_fn.txt"
+pgfn 'inline OpenedFile openNoFollowTruncate(' >"$WTRUNC"
+wOpen="$( pgopens 'inline OpenedFile openNoFollowTruncate(' )"
+rOpen="$( pgopens 'inline NoFollowRead openNoFollowRead(' )"
+xOpen="$( pgopens 'inline int openExclNoFollow(' )"
+eOpen="$( pgopens 'inline std::string randomTempSuffix(' )"
+pOpen="$( pgopens 'inline bool readWholeBeneathNoFollow(' )"
+pOpenAt="$( pgfn 'inline bool readWholeBeneathNoFollow(' | grep '::openat(' )"
+mOpen="$( pgopens 'inline std::optional<std::string> readRegularFileNoFollow(' )"
+EXPECT_OPENS=6
 # The write open does NOT truncate. With O_TRUNC on the open, an existing regular sidecar was emptied before the
 # fstat check had looked at anything; the writer now truncates the descriptor with ftruncate, and only after fstat has
 # confirmed a regular file. (w2) is the behavioural half: a rewrite over a longer planted baseline must still come
 # out byte-identical, which it cannot if the truncation stopped happening.
-WTRUNC="$TMP/pathguard_truncate_fn.txt"
-awk '/inline OpenedFile openNoFollowTruncate\(/ { f = 1 } f { print } f && /^}$/ { exit }' "$PGCODE" >"$WTRUNC"
-if [ "$openLines" = "2" ] && [ "$writeOpens" = "1" ] && [ -s "$WTRUNC" ] \
-   && grep '::open(' "$PGCODE" | grep 'O_WRONLY' | grep -q 'O_CREAT' \
-   && grep '::open(' "$PGCODE" | grep 'O_WRONLY' | grep -q 'O_NOFOLLOW' \
-   && ! grep '::open(' "$PGCODE" | grep 'O_WRONLY' | grep -q 'O_TRUNC' \
+if [ "$openLines" = "$EXPECT_OPENS" ] && [ "$( printf '%s\n' "$wOpen" | grep -c '::open(' )" = "1" ] \
+   && printf '%s' "$wOpen" | grep -q 'O_WRONLY' && printf '%s' "$wOpen" | grep -q 'O_CREAT' \
+   && printf '%s' "$wOpen" | grep -q 'O_NOFOLLOW' && ! printf '%s' "$wOpen" | grep -q 'O_TRUNC' \
    && awk '/S_ISREG/ { seen = 1 } seen && /::ftruncate\(/ { found = 1 } END { exit !found }' "$WTRUNC"; then
-    ok "pathguard: (f1) exactly two ::open; the write open carries O_WRONLY|O_CREAT|O_NOFOLLOW and no O_TRUNC, and ::ftruncate runs only after the S_ISREG check"
+    ok "pathguard: (f1) $EXPECT_OPENS ::open file-wide, each owned below; the sidecar write open carries O_WRONLY|O_CREAT|O_NOFOLLOW and no O_TRUNC, and ::ftruncate runs only after the S_ISREG check"
 else
-    no "pathguard: (f1) expected two ::open, one write open with O_WRONLY|O_CREAT|O_NOFOLLOW and no O_TRUNC, and an ::ftruncate after the S_ISREG check — found $openLines open(s), $writeOpens write, $( wc -l <"$WTRUNC" | tr -d ' ' ) line(s) of openNoFollowTruncate: $( grep '::open(' "$PGCODE" | tr '\n' ' ' | head -c 200 )"
+    no "pathguard: (f1) expected $EXPECT_OPENS ::open file-wide and ONE sidecar write open (O_WRONLY|O_CREAT|O_NOFOLLOW, no O_TRUNC) truncating only after S_ISREG — found $openLines open(s); openNoFollowTruncate: $( printf '%s' "$wOpen" | tr '\n' ' ' | head -c 200 )"
 fi
-if [ "$readOpens" = "1" ] \
-   && grep '::open(' "$PGCODE" | grep 'O_RDONLY' | grep -q 'O_NOFOLLOW' \
-   && ! grep '::open(' "$PGCODE" | grep 'O_RDONLY' | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC'; then
-    ok "pathguard: (f3) exactly one read ::open, carrying O_RDONLY|O_NOFOLLOW and nothing that creates or truncates"
+if [ "$( printf '%s\n' "$rOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$rOpen" | grep -q 'O_RDONLY' \
+   && printf '%s' "$rOpen" | grep -q 'O_NOFOLLOW' && ! printf '%s' "$rOpen" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC'; then
+    ok "pathguard: (f3) the sidecar read seam has exactly one ::open, carrying O_RDONLY|O_NOFOLLOW and nothing that creates or truncates"
 else
-    no "pathguard: (f3) expected exactly one read ::open carrying O_RDONLY|O_NOFOLLOW — found $readOpens: $( grep '::open(' "$PGCODE" | tr '\n' ' ' | head -c 240 )"
+    no "pathguard: (f3) expected exactly one ::open in openNoFollowRead carrying O_RDONLY|O_NOFOLLOW — found: $( printf '%s' "$rOpen" | tr '\n' ' ' | head -c 240 )"
+fi
+# Round 5: the publish temp is created EXCLUSIVELY and without following a link, and never truncates what is there.
+if [ "$( printf '%s\n' "$xOpen" | grep -c '::open(' )" = "1" ] \
+   && printf '%s' "$xOpen" | grep -q 'O_WRONLY' && printf '%s' "$xOpen" | grep -q 'O_CREAT' \
+   && printf '%s' "$xOpen" | grep -q 'O_EXCL' && printf '%s' "$xOpen" | grep -q 'O_NOFOLLOW' \
+   && printf '%s' "$xOpen" | grep -q 'O_CLOEXEC' && ! printf '%s' "$xOpen" | grep -q 'O_TRUNC'; then
+    ok "pathguard: (f6) the publish temp create is one ::open carrying O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC and no O_TRUNC"
+else
+    no "pathguard: (f6) expected one ::open in openExclNoFollow with O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC and no O_TRUNC — found: $( printf '%s' "$xOpen" | tr '\n' ' ' | head -c 240 )"
+fi
+if [ "$( printf '%s\n' "$eOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$eOpen" | grep -q '"/dev/urandom"' \
+   && printf '%s' "$eOpen" | grep -q 'O_RDONLY' && ! printf '%s' "$eOpen" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC'; then
+    ok "pathguard: (f7) the temp-name entropy read is one read-only ::open of /dev/urandom"
+else
+    no "pathguard: (f7) expected one read-only ::open of /dev/urandom in randomTempSuffix — found: $( printf '%s' "$eOpen" | tr '\n' ' ' | head -c 240 )"
+fi
+# The edit-plan payload read is a descriptor chain anchored at the confined directory: ONE ::open (the anchor,
+# O_DIRECTORY, read-only), then every component beneath it through ::openat carrying O_NOFOLLOW — O_DIRECTORY on
+# the intermediate step, O_NONBLOCK on the final one, which fstat must confirm is a regular file.
+if [ "$( printf '%s\n' "$pOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$pOpen" | grep -q 'O_DIRECTORY' \
+   && ! printf '%s' "$pOpen" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC' \
+   && [ "$( printf '%s\n' "$pOpenAt" | grep -c '::openat(' )" = "2" ] \
+   && [ "$( printf '%s\n' "$pOpenAt" | grep -c 'O_NOFOLLOW' )" = "2" ] \
+   && printf '%s' "$pOpenAt" | grep 'O_DIRECTORY' | grep -q 'O_NOFOLLOW' \
+   && printf '%s' "$pOpenAt" | grep 'O_NONBLOCK' | grep -q 'O_NOFOLLOW' \
+   && ! printf '%s' "$pOpenAt" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC' \
+   && pgfn 'inline bool readWholeBeneathNoFollow(' | grep -q 'S_ISREG'; then
+    ok "pathguard: (f8) the edit-plan payload read anchors ONE O_DIRECTORY ::open and walks beneath it with two ::openat, both O_NOFOLLOW (O_DIRECTORY intermediate, O_NONBLOCK final), refusing a non-regular file by fstat"
+else
+    no "pathguard: (f8) expected readWholeBeneathNoFollow to anchor one O_DIRECTORY ::open and walk with two O_NOFOLLOW ::openat plus an S_ISREG check — open: $( printf '%s' "$pOpen" | tr '\n' ' ' | head -c 160 ); openat: $( printf '%s' "$pOpenAt" | tr '\n' ' ' | head -c 240 )"
+fi
+# The metadata read (githarden's config candidates): one ::open carrying O_RDONLY|O_NOFOLLOW|O_NONBLOCK and an
+# fstat S_ISREG check, so a FIFO or other non-regular file at a candidate name is unreadable rather than a stall.
+if [ "$( printf '%s\n' "$mOpen" | grep -c '::open(' )" = "1" ] && printf '%s' "$mOpen" | grep -q 'O_RDONLY' \
+   && printf '%s' "$mOpen" | grep -q 'O_NOFOLLOW' && printf '%s' "$mOpen" | grep -q 'O_NONBLOCK' \
+   && ! printf '%s' "$mOpen" | grep -qE 'O_WRONLY|O_CREAT|O_TRUNC' \
+   && pgfn 'inline std::optional<std::string> readRegularFileNoFollow(' | grep -q 'S_ISREG'; then
+    ok "pathguard: (f10) the metadata read is one ::open carrying O_RDONLY|O_NOFOLLOW|O_NONBLOCK, refusing a non-regular file by fstat"
+else
+    no "pathguard: (f10) expected one ::open in readRegularFileNoFollow with O_RDONLY|O_NOFOLLOW|O_NONBLOCK and an S_ISREG check — found: $( printf '%s' "$mOpen" | tr '\n' ' ' | head -c 240 )"
+fi
+# No ::openat anywhere in the header follows a link.
+openatAll="$( grep -c '::openat(' "$PGCODE" | tr -d ' ' )"
+openatNoFollow="$( grep '::openat(' "$PGCODE" | grep -c 'O_NOFOLLOW' | tr -d ' ' )"
+if [ "$openatAll" -ge 1 ] && [ "$openatAll" = "$openatNoFollow" ]; then
+    ok "pathguard: (f9) every ::openat in the header ($openatAll) carries O_NOFOLLOW"
+else
+    no "pathguard: (f9) $openatAll ::openat in the header, only $openatNoFollow carry O_NOFOLLOW"
 fi
 
 # Round 4: a descriptor that is not a regular file is refused before a byte moves. O_NONBLOCK is what lets the
 # open RETURN for a FIFO with nobody at the other end; the fstat check is what refuses it, and any other
 # non-regular file, once it has. Either half alone is wrong: without the first the open still waits, without
-# the second the tool reads from, or writes into, a pipe.
-nonblockOpens="$( grep '::open(' "$PGCODE" | grep -c 'O_NONBLOCK' | tr -d ' ' )"
-fstatCalls="$( grep -c '::fstat(' "$PGCODE" | tr -d ' ' )"
-regChecks="$( grep -c 'S_ISREG' "$PGCODE" | tr -d ' ' )"
-if [ "$nonblockOpens" = "2" ] && [ "$fstatCalls" -ge 2 ] && [ "$regChecks" -ge 2 ]; then
-    ok "pathguard: (f4) both opens carry O_NONBLOCK, and an fstat S_ISREG check follows each"
+# the second the tool reads from, or writes into, a pipe. Scoped to the two SIDECAR seams, which are what it is about.
+if printf '%s' "$wOpen" | grep -q 'O_NONBLOCK' && printf '%s' "$rOpen" | grep -q 'O_NONBLOCK' \
+   && pgfn 'inline OpenedFile openNoFollowTruncate(' | grep -q 'S_ISREG' && pgfn 'inline NoFollowRead openNoFollowRead(' | grep -q 'S_ISREG'; then
+    ok "pathguard: (f4) both sidecar opens carry O_NONBLOCK, and an fstat S_ISREG check follows each"
 else
-    no "pathguard: (f4) expected O_NONBLOCK on both opens and an fstat S_ISREG check after each — found O_NONBLOCK on $nonblockOpens open(s), $fstatCalls fstat call(s), $regChecks S_ISREG test(s)"
+    no "pathguard: (f4) expected O_NONBLOCK on both sidecar opens and an fstat S_ISREG check in each seam"
 fi
 
 # Round 4: the read half hands its caller a LINE at a time. The round-3 read accumulated the whole file into a
@@ -459,12 +515,14 @@ fi
 # std::ifstream readers. Not rw::readByteSafeLine: a call per byte measured ~15× slower on 64 MB of sidecar
 # lines. Not a custom streambuf under std::getline: libc++ narrows a high byte through its no-get-area fallback,
 # which aborts the sanitizer build (src/infra/stdinline.h). This arm pins the SHAPE; it measures no cost.
-if grep -qE 'std::string[[:space:]]+bytes|resize\( used' "$PGCODE"; then
+RSEAM="$TMP/pathguard_read_seam.txt"
+awk '/struct NoFollowRead/ { f = 1 } f { print } /^inline NoFollowRead openNoFollowRead\(/ { g = 1 } g && /^}$/ { exit }' "$PGCODE" >"$RSEAM"
+if grep -qE 'std::string[[:space:]]+bytes|resize\( used' "$RSEAM"; then
     no "pathguard: (f5) the read half still accumulates the whole file: $( grep -nE 'std::string[[:space:]]+bytes|resize\( used' "$PGCODE" | tr '\n' ' ' | head -c 200 )"
-elif ! grep -q '::getline(' "$PGCODE" || grep -q 'readByteSafeLine(' "$PGCODE"; then
+elif ! grep -q '::getline(' "$RSEAM" || grep -q 'readByteSafeLine(' "$RSEAM"; then
     no "pathguard: (f5) the read half does not read a line at a time through POSIX ::getline — a per-byte reader, or some other shape whose cost is unpinned"
 else
-    ok "pathguard: (f5) the read half holds no whole-file buffer and reads a line at a time through POSIX ::getline"
+    ok "pathguard: (f5) the sidecar read half holds no whole-file buffer and reads a line at a time through POSIX ::getline"
 fi
 
 if grep -rq 'refuseSymlinkWrite' "$ROOT/src"; then

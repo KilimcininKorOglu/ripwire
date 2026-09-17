@@ -161,6 +161,13 @@ unfixed binaries the new arms gave 27 FAIL rows: 20 accepted mutants, the `clone
 `search.h:2174` stack-buffer-overflow, and the memo serving a different answer. Against the fixed build the whole
 gate is 161 PASS, 0 FAIL.
 
+### Fixed — git runs with the file-system monitor off, temp files are created exclusively, and edit-plan reads the path it confined
+
+- ripwire runs its git commands with `--no-optional-locks -c core.fsmonitor=false`; the one read of that setting
+  runs without them, since the flag would mask the value it reads.
+- the atomic-publish writers create their temp file exclusively and without following a symlink.
+- `--edit-plan` reads a payload through the same confined path its containment check judged.
+
 ### Fixed — a `--pin-census` row no longer splits on a line break, TAB or `|` inside an id
 
 A C++ out-of-line member of a class template whose template-argument list spans source lines has a scope that holds
