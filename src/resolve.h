@@ -2356,7 +2356,6 @@ struct ClassIdentity
     HashMap<std::string, rw::SmallVec<NodeId, 4>>         realDown;         // base NAME → derived class ids, namesake edges excluded
     HashMap<NodeId, std::vector<std::string_view>>        realUp;           // derived class id → base names (views into ing.references)
     HashMap<std::string, char>                            declared;         // "Scope::name" of a C-family member DECLARATION (no body)
-    HashMap<std::string, std::uint16_t>                   bodilessInClass;  // "<classId>#name" → bodiless declarations of it inside that class's body
     HashMap<std::string, rw::SmallVec<NodeId, 2>>         specializationDefs; // "Template::name" → definitions scoped to a template-id of that class
     HashMap<std::string, char>                            fileNamespaces;   // "<fileId>#<ns>": the file defines a non-member under namespace scope ns
     std::vector<std::vector<std::string_view>>            namespacesOfFile; // the same evidence per file id (views into Symbol::scope)
@@ -2514,25 +2513,28 @@ inline void sweepFileNesting( const IngestResult& ing, const FileSymbols& list, 
     }
 }
 
-// "<classId>#<member name>" → how many bodiless declarations of that member the class's span holds
-inline void countBodilessMembersByClass( const IngestResult& ing, ClassIdentity& ids )
+// "<classId>#<member name>" for every bodiless member inside that class's span
+inline HashMap<std::string, char> bodilessMembersByClass( const IngestResult& ing, const ClassIdentity& ids )
 {
-    std::string key;
+    HashMap<std::string, char> declaresMember;
+    std::string                key;
     for( const Symbol& s : ing.symbols )
     {
         if( extent::inSet( extent::kHeadRuleLangs, s.lang ) && !extent::inSet( extent::kExtentClassKinds, s.kind ) && ids.ownerClass[ s.id ] != kNoNode && !isDefinitionNotDeclaration( s ) )
         {
             buildShadowKey( key, ids.ownerClass[ s.id ], s.name );
-            ++ids.bodilessInClass[ key ];
+            declaresMember.try_emplace( key, '\0' );
         }
     }
+    return declaresMember;
 }
 
 // one out-of-line member among the classes of its scope's name: the one in its file when there is one; among several there,
 // the nearest PRECEDING one whose body DECLARES it (C++ defines a member out of line only after the class that declares it:
 // `ListRep::Iterator` defines `key` inline, so the out-of-line `key` after `Skip::Iterator` is Skip's); still ambiguous when
 // none decides
-inline void assignOutOfLineOwner( const IngestResult& ing, const Symbol& s, const rw::SmallVec<NodeId, 2>& candidates, ClassIdentity& ids )
+inline void assignOutOfLineOwner( const IngestResult& ing, const Symbol& s, const rw::SmallVec<NodeId, 2>& candidates,
+                                  const HashMap<std::string, char>& declaresMember, ClassIdentity& ids )
 {
     std::string   key;
     std::uint32_t sameFile = 0;
@@ -2546,7 +2548,7 @@ inline void assignOutOfLineOwner( const IngestResult& ing, const Symbol& s, cons
         }
         ids.ownerClass[ s.id ] = ( sameFile++ == 0 ) ? c : ids.ownerClass[ s.id ];
         buildShadowKey( key, c, s.name );
-        const bool precedesAndDeclares = cls.sigStartByte < s.sigStartByte && ids.bodilessInClass.find( key ) != ids.bodilessInClass.end();
+        const bool precedesAndDeclares = cls.sigStartByte < s.sigStartByte && declaresMember.find( key ) != declaresMember.end();
         declarer = ( precedesAndDeclares && ( declarer == kNoNode || ing.symbols[ declarer ].sigStartByte < cls.sigStartByte ) ) ? c : declarer;
     }
     if( sameFile > 1 && declarer != kNoNode )
@@ -2561,7 +2563,7 @@ inline void assignOutOfLineOwner( const IngestResult& ing, const Symbol& s, cons
 // defines no class of its scope's name
 inline void assignOutOfLineOwners( const IngestResult& ing, ClassIdentity& ids )
 {
-    countBodilessMembersByClass( ing, ids );
+    const HashMap<std::string, char> declaresMember = bodilessMembersByClass( ing, ids );
     for( const Symbol& s : ing.symbols )
     {
         if( !extent::inSet( extent::kHeadRuleLangs, s.lang ) || s.scope.empty() || extent::inSet( extent::kExtentClassKinds, s.kind ) || ids.ownerClass[ s.id ] != kNoNode )
@@ -2570,7 +2572,7 @@ inline void assignOutOfLineOwners( const IngestResult& ing, ClassIdentity& ids )
         }
         if( const auto it = ids.classesByName.find( s.scope ); it != ids.classesByName.end() )
         {
-            assignOutOfLineOwner( ing, s, it->second, ids );
+            assignOutOfLineOwner( ing, s, it->second, declaresMember, ids );
         }
     }
 }
@@ -2764,7 +2766,6 @@ struct IdentityNarrower
     mutable std::vector<std::uint32_t>                    seenStamp;       // generation-stamped visited set, one u32 per symbol
     mutable std::uint32_t                                 seenGeneration = 0;
     mutable HashMap<std::string, rw::SmallVec<NodeId, 2>> subclassMemo;    // step 3 per (receiver class, callee)
-    mutable rw::SmallVec<NodeId, 2>                       levelHits;       // step 2's level answer while step 3 joins it
     mutable const Reference*                              claimRef       = nullptr;
     mutable bool                                          lookupLexical  = false;   // classWalk came from an enclosing class or a class qualifier
 
@@ -3165,62 +3166,11 @@ struct IdentityNarrower
             {
                 std::sort( hits.begin(), hits.end() );   // each definition appended once (markSeen): the id order own's hits have
                 ambiguous = definedBySameNamedClasses( hits, ids );
-                if( !ambiguous && levelLeavesOverloadBodiless( r, ids ) )
-                {
-                    joinSubclassDefinitions( r, receiverClass, ids );
-                }
                 return !ambiguous;
             }
             classWalk.swap( classNext );
         }
         return false;
-    }
-
-    // does a class of the defining level (classWalk) declare MORE bodiless overloads of the callee than the level holds bodies
-    // for outside its span? Then an overload the call may reach has no body here — rocksdb's BackupEngineReadOnlyBase pairs a
-    // pure-virtual RestoreDBFromLatestBackup with an inline compat overload — and the inherited body alone would be a guess
-    bool levelLeavesOverloadBodiless( const Reference& r, const ClassIdentity& ids ) const
-    {
-        std::string key;
-        for( NodeId c : classWalk )
-        {
-            buildShadowKey( key, c, r.calleeName );
-            const auto declared = ids.bodilessInClass.find( key );
-            if( declared == ids.bodilessInClass.end() )
-            {
-                continue;
-            }
-            const Symbol& cls       = ( *ids.symbols )[ c ];
-            const auto    outOfLine = std::ranges::count_if( hits, [ & ]( NodeId h )
-            {
-                const Symbol& d = ( *ids.symbols )[ h ];
-                const bool inside = d.fileId == cls.fileId && d.sigStartByte >= cls.sigStartByte && d.sigStartByte < cls.endByte;
-                return !inside && ( ids.ownerClass[ h ] == c || ids.ownerClass[ h ] == kNoNode );
-            } );
-            if( std::size_t( declared->second ) > std::size_t( outOfLine ) )
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // step (2) joined by step (3): the level's bodies plus the callee's definitions in the receiver's real subclasses — the
-    // split that holds whichever overload the call reaches
-    void joinSubclassDefinitions( const Reference& r, NodeId receiverClass, const ClassIdentity& ids ) const
-    {
-        levelHits.assign( hits.begin(), hits.end() );   // subclassDefinitions answers into hits
-        if( !subclassDefinitions( r, receiverClass, ids ) )
-        {
-            hits.assign( levelHits.begin(), levelHits.end() );
-            return;
-        }
-        for( NodeId h : levelHits )
-        {
-            hits.push_back( h );
-        }
-        std::sort( hits.begin(), hits.end() );
-        hits.resize( std::size_t( std::unique( hits.begin(), hits.end() ) - hits.begin() ) );
     }
 
     // the definitions under keyScope that the template's specializations hold (ClassIdentity::specializationDefs), when the

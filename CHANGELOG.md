@@ -540,14 +540,25 @@ Measured with `--pin-census --no-cache`, the stack tip `50129f8c` against this c
 Every change bucket on all three corpora was sampled and read against the source on the final build; the wrong shapes
 the intermediate builds produced are the four guards above. Cost, two cold runs each on llvm-project: user time 52.4 /
 52.9 s before, 50.9 / 55.9 s after; peak RSS 2.37–2.47 GB both; output byte-identical run to run on every corpus.
-`test/narrowcheck.sh` arms 26-36 are the gate: seven rows red on the stack tip — (26) (27) (28) (29) (32) (34) (35) — and
+`test/narrowcheck.sh` arms 26-38 are the gate: seven rows red on the stack tip — (26) (27) (28) (29) (32) (34) (35) — and
 arms 30, 31 and 33 are controls (33 was red on the intermediate build that dropped an aliased nested class). An identity
 claim is a verified answer, not a last-name match, so its edges carry no `prov="final-segment"`; a class-qualified step-1
 narrow keeps that disclosure (arm 36).
+A seeded sample of the retargets graded against source — 30 rocksdb and 30 llvm-project sites — read 56 better, 2 the same
+and 2 worse. One worse shape is fixed here. A class template's specialization has no class symbol, so its members (scope
+`SmallVectorTemplateBase<T, true>`) were never reached: `SmallVectorImpl<FunctionDecl *>& v; v.push_back( FD )` answered
+the primary template alone, while pointer T instantiates the specialization. A defining level now adds its template's
+specialization-scoped definitions — among them a primary template's own `DominatorTreeBase<NodeT, IsPostDom>::verify`
+out-of-line bodies — and the CHA-lite cone prune skips an identity claim, as the ladder and locality already do. This moves
+366 llvm-project sites (a sample of 20 graded: 12 now right, 8 hold the right target in a split; 0 worse) and none on
+rocksdb, the private corpus or `src/` (arm 38).
 FLOORS, stated: namespaces are evidence, not a model — a same-named class in another namespace that the caller's file
 also includes stays a candidate; a type alias is kept rather than read through; an inherited body is the static answer,
-as a class's own body always was (overriders join only a method no ancestor defines); and a dispatch split is as wide as
-the interface's implementations — up to 50 targets on rocksdb and 71 on the private corpus, every one disclosed by `amb=`.
+as a class's own body always was (overriders join only a method no ancestor defines), and it answers for every overload
+of its name. rocksdb's `BackupEngine* e; e->RestoreDBFromLatestBackup( options, db, wal )` therefore takes the inline compat
+overload while the pure-virtual overload it calls goes unjoined. Joining its overriders was built and measured: 2 sites
+better, 5 worse (arm 37). A dispatch split is as wide as the interface's implementations — up to 50 targets on rocksdb
+and 71 on the private corpus, every one disclosed by `amb=`.
 
 ## [0.6.1] — 2026-09-14
 
