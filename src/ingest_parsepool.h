@@ -844,7 +844,7 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
 
         for( unsigned t = 0; t < nthreads; ++t )
         {
-            pool.emplace_back( [ &shared, t ]() { runParseWorker( shared, t ); } );
+            pool.emplace_back( [ &shared, t ]() noexcept { runParseWorker( shared, t ); } );
         }
 
         installCompiledQueriesAndOpenGate( prewarm );   // join async compiles, publish, open the gate (ingest_prewarm.h)

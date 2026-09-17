@@ -112,6 +112,68 @@ the extensions, and only on `--deps`, `--nonlocal-state` and `--quality-panel`. 
 Dart stays outside the dependency denominator, now by a named case instead of a `default:`. Dart has no import capture,
 and a two-file probe showed `--deps` printing no row for `import 'util.dart';`.
 
+### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
+
+Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
+
+- **A checksum-valid qsnap or qchurn cache blob with a huge record count aborted.** `deserializeSnapshot` and
+  `deserializeRawCommitStream` passed a count read from the blob straight to `reserve`: 2^32−1 records is 32 GiB for
+  the qsnap vectors and 96–128 GiB for the qchurn commit and path lists. On Linux that is `std::bad_alloc`, which
+  nothing on the CLI path catches, so `--quality-delta`, `--edit-check`, `--for`, `--metrics` and `--exemplar` died
+  with SIGABRT on every run until the blob was evicted (reproduced on Ubuntu, exit 134). Every count is now measured
+  against the bytes left in the blob first, and a count that cannot fit makes the blob corrupt: recompute, as for any
+  other damage. Gate: `test/cachefuzzcheck.sh`, Part 2's three vector-count rows and the new Part 5. The rows run
+  under an allocation bound (`ulimit -v` on Linux, ASan's `max_allocation_size_mb` anywhere), because macOS
+  overcommits the reservation and exits 0 against the defect. The old map-count and wrong-sha rows wrote at stale
+  offsets, so an earlier guard rejected the blob before the count was ever read; they now write where
+  `deserializeSnapshot` reads, and both tables check the good blob's layout first and fail loudly if a header change
+  would re-aim a row.
+- **A short read leaked a file descriptor.** The parse pool's `readFile` closed its stream inside
+  `( got == want ) && ( std::fclose( fp ) == 0 )`, so a file that came up short (truncated between the size probe
+  and the read) was never closed. A long-lived `--mcp` server re-ingesting such a tree ran out of descriptors, and
+  every file it could then not open dropped out of the answer at exit 0. With an interposed short-read shim, 300 of
+  600 short-read streams stayed open, and under `ulimit -n 200` all 20 ordinary files vanished from a `--grep`
+  answer. The stream now has an owner, `rw::OwnedFile` (`src/infra/ownedfile.h`), whose destructor closes it on
+  every path, and the whole-file readers in `ingest_crawl.h`, `docparse.h` and `editpreview.h` use it. Gate:
+  `test/crashsweepcheck.sh` B1.
+- **A FIFO, a directory or a device link at `.ripwire_config` or `.ripwire_quality_acks` hung or aborted.** Both
+  were read through a blocking open on the name. A FIFO hung `--quality-delta` before any output, and a committed
+  symlink from the acks ledger to `/dev/zero` or `/dev/urandom` never reached end of file. A directory at
+  `.ripwire_config` opens on Linux; where a directory's seek reports `LLONG_MAX` (overlayfs), the string that length
+  asks for aborts, the failure `ingest_crawl.h`'s `PathShape` note measured for `--cache=<dir>`. Both files now go
+  through `docparse::detail::openRegularFileStream`: it opens with `O_NONBLOCK`, asks the descriptor what it opened,
+  and reads anything but a regular file as absent, with a stderr line saying so. The ledger is still read one line at a
+  time. Gate: `test/crashsweepcheck.sh` B2
+  (eight shapes).
+- **`edit_check` with `new_body` raced the HEAD-snapshot prefetch worker.** The preview's two ingests ran after the
+  verb's own ingest had released the process-wide ingest lock, so they could run alongside the detached prefetch
+  worker's ingest. `ingest()` installs compiled tags queries into a process-global cache and deletes the entry each
+  install displaces, and that is single-writer by design. On the ThreadSanitizer build the server reported a data
+  race at the parse-pool call and aborted (exit 134) mid-session. The preview's ingest now takes
+  the same lock as every other ingest a server runs. Gate: `test/qsnapprefetchcheck.sh` (f), whose red needs the
+  TSan build (`RIPWIRE_BIN=tsan/ripwire`).
+- **A file dated after 2262 overflowed a signed multiply.** `tv_sec * 1000000000 + tv_nsec` does not fit in
+  `long long` past 2262-04-11, a date ext4, XFS, tmpfs or a tar restore can store. That is undefined behaviour in
+  release and an abort in the sanitizer build (reproduced on Linux tmpfs: `signed integer overflow: 10000000000 *
+  1000000000`). Both stat readers now saturate through `rw::saturatingNanoseconds` (`src/infra/statclock.h`); size
+  and ctime still tell apart two saturated timestamps. Gate: `test/crashsweepcheck.sh` B3. APFS clamps timestamps
+  at 2262, so on macOS the arm says it cannot build its input.
+
+Three of these shapes can be seen in the source, so `test/crashsweepcheck.sh` now also runs ripwire's own `--match`
+over `src/` and fails on them. Each rule is proven live against a probe tree that holds one violation and one
+compliant twin.
+
+- **S1:** an allocation sized by a count a byte reader decoded must be bounded earlier in the same function.
+- **S2:** every raw `fopen`/`open`/`fdopen`/`opendir`/`open_memstream`/`popen` site must be registered with the fact
+  that makes it safe, and a new one points at `rw::OwnedFile`. A close as the right operand of `&&`/`||` or an arm
+  of `?:` is refused outright.
+- **S3:** every body handed to a `std::thread` must be `noexcept` or a single try block. The eight bodies that were
+  neither are now declared `noexcept`, as are three that were already one try block. None of them had a throw that
+  could escape except allocation failure, which already ended in `std::terminate`.
+
+Red on the base, in order: S1 finds the three unbounded counts, S2 the short-circuited `fclose`, S3 eight bare
+bodies. The gate's header states what each rule catches and what it misses.
+
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of

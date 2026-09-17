@@ -2024,7 +2024,7 @@ inline void forEachIndexParallel( std::size_t count, const char* what, Work&& wo
     }
 
     std::atomic<std::size_t> nextIndex{ 0 };
-    const auto               indexWorker = [ & ]()
+    const auto               indexWorker = [ & ]() noexcept
     {
         try
         {

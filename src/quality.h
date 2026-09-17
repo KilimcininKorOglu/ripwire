@@ -394,7 +394,8 @@ inline void appendConfigValueTokens( std::string_view rest, bool isVendor, Regis
 inline RegisterMacrosConfig readRegisterMacrosConfig( std::string_view root )
 {
     RegisterMacrosConfig out;
-    const std::string    text = docparse::detail::readWholeFile( configPath( root ) ).value_or( std::string() );
+    // readRegularFile: a FIFO at the name hung every --quality-delta, and a directory there aborted on Linux (docparse.h).
+    const std::string    text = docparse::detail::readRegularFile( ".ripwire_config", configPath( root ) ).value_or( std::string() );
     if( text.empty() )
     {
         return out;   // absent/unreadable/empty — inert, never a refusal
@@ -2893,6 +2894,22 @@ inline bool qsnapGet( const char*& p, const char* end, T& out )
     return true;
 }
 
+// A record COUNT read out of a blob is the blob's claim, not a fact: bound it by the bytes that remain BEFORE
+// anything is sized from it. `minRecordBytes` is the smallest encoding one record can have, so a count that
+// passes cannot reserve more records than the blob could possibly hold. Without it a checksum-valid blob
+// whose count reads 0xFFFFFFFF reached `reserve` — 32 GiB for a u64 vector — and on a host that will not
+// overcommit that is std::bad_alloc, which nothing on the CLI path catches: SIGABRT on every run until the
+// blob was evicted. The twin of loadCache's countFits (ingest_cache.h), for the qsnap-format readers.
+inline bool qsnapCountFits( const char* p, const char* end, std::uint32_t count, std::size_t minRecordBytes ) noexcept
+{
+    if( count <= static_cast<std::size_t>( end - p ) / minRecordBytes )
+    {
+        return true;
+    }
+    DEGRADED_PATH_ALERT( "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
+    return false;
+}
+
 // Serialize a Snapshot to a self-validating blob: [magic][scheme][cacheVer][parserVer][fnv(headSha)] then each
 // of the 9 fields as a uint32 count followed by its flat records (btree maps in sorted key order, vectors
 // as-is), then an fnv1a64 checksum over all preceding bytes. Byte-stable for a fixed Snapshot.
@@ -3022,9 +3039,9 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
     const auto getVec = [ & ]( std::vector<std::uint64_t>& v ) -> bool
     {
         std::uint32_t n = 0;
-        if( !qsnapGet( p, end, n ) )
+        if( !qsnapGet( p, end, n ) || !qsnapCountFits( p, end, n, sizeof( std::uint64_t ) ) )
         {
-            return false;
+            return false;   // a corrupt blob: the caller's "cache corrupt — recomputing" path
         }
         v.reserve( n );
         for( std::uint32_t i = 0; i < n; ++i )
@@ -3645,8 +3662,12 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
         return false;
     }
 
+    // Every commit record is at least its epoch plus its path count, and every path at least its length prefix;
+    // both counts are measured against the bytes left before either sizes a reserve (qsnapCountFits).
+    constexpr std::size_t kMinCommitRecordBytes = sizeof( RawCommitStream::Commit::epoch ) + sizeof( std::uint32_t );
+    constexpr std::size_t kMinPathRecordBytes   = sizeof( std::uint32_t );
     std::uint32_t nCommits = 0;
-    if( !qsnapGet( p, end, nCommits ) )
+    if( !qsnapGet( p, end, nCommits ) || !qsnapCountFits( p, end, nCommits, kMinCommitRecordBytes ) )
     {
         return false;
     }
@@ -3660,7 +3681,7 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
             return false;
         }
         std::uint32_t nPaths = 0;
-        if( !qsnapGet( p, end, nPaths ) )
+        if( !qsnapGet( p, end, nPaths ) || !qsnapCountFits( p, end, nPaths, kMinPathRecordBytes ) )
         {
             return false;
         }
@@ -5094,13 +5115,13 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 {
     badLines = 0;
     gtl::btree_map<std::string, AckRecord> out;
-    std::ifstream f( path );
-    if( !f )
-    {
-        return out;
-    }
-    std::string line;
-    while( std::getline( f, line ) )
+    // openRegularFileStream, not a stream opened on the name: a FIFO planted at the ledger's name blocked that open until
+    // a writer appeared, so --quality-delta hung before any output, and a link to /dev/zero never reached end of file.
+    // Anything that is not a regular file now reads as no ledger, and stderr says so (docparse.h). Still one line at a
+    // time, as the std::ifstream it replaces read it: a large ledger is never held whole.
+    rw::pathguard::NoFollowRead ledger = docparse::detail::openRegularFileStream( "the quality-acks ledger", path );
+    std::string                 line;
+    while( ledger.readLine( line ) )
     {
         while( !line.empty() && ( line.back() == '\r' || line.back() == '\n' ) )
         {
