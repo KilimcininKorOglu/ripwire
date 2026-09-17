@@ -42,6 +42,7 @@
 #include "infra/Diagnostics.h"
 #include "regexguard.h"        // every pattern here is compiled and matched through the one regex boundary
 #include "infra/namesplit.h"   // isIdentChar / isIdentStart — the ONE ASCII identifier byte class, which is \b's word class here
+#include "infra/stackthreads.h"   // kCallerStackBytesFloor — this scan runs on the caller's own thread, never one it sized itself
 
 namespace rw
 {
@@ -297,21 +298,26 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
 inline RegexVerdict hasTransmitVerb( std::string_view line ) noexcept
 {
     static const RegexCompile kVerb = compileGuardedRegex( R"(\b(base64|curl|wget|nc|scp|cat|openssl)\b)", kRegexEcmaScript );
-    return kVerb.refusal ? RegexVerdict::Exhausted : kVerb.regex.search( line );
+    return kVerb.refusal ? RegexVerdict::Exhausted : kVerb.regex.search( line, kCallerStackBytesFloor );
 }
 
-// A skill pattern matched through the one regex boundary. Undecided — the engine abandoned the match, or the constant
-// was refused, which no test tree has ever seen — reads Exhausted, and the caller records a fail-closed finding.
+// A skill pattern matched through the one regex boundary. Undecided — the engine abandoned the match, the constant
+// was refused (which no test tree has ever seen), or the line was too long to hand the engine on this thread — reads
+// Exhausted or Skipped, and the caller records a fail-closed finding either way. `kCallerStackBytesFloor`, not
+// SIZE_MAX: a skill file is UNTRUSTED input and this scan runs on the caller's own thread, one this header never
+// sized itself, so it plans for the smallest stack this tree runs work on (src/infra/stackthreads.h) rather than
+// trusting whatever the caller's thread happened to get.
 inline RegexVerdict skillSearch( const RegexCompile& pattern, std::string_view line, RegexCaptures* captures = nullptr ) noexcept
 {
     if( pattern.refusal )
     {
         return RegexVerdict::Exhausted;
     }
-    return captures != nullptr ? pattern.regex.search( line, *captures ) : pattern.regex.search( line );
+    return captures != nullptr ? pattern.regex.search( line, *captures, kCallerStackBytesFloor ) : pattern.regex.search( line, kCallerStackBytesFloor );
 }
 
-static constexpr const char* kScanIncompleteRule = "SCAN-INCOMPLETE:regex-abandoned";
+static constexpr const char* kScanIncompleteRule         = "SCAN-INCOMPLETE:regex-abandoned";
+static constexpr const char* kScanIncompleteRuleOversize = "SCAN-INCOMPLETE:line-oversize";
 
 // True if the byte at [pos] on `line` falls inside a BALANCED inline-code span (`…`) or a balanced
 // double-quoted ("…") span — i.e. the matched text is being SHOWN AS DATA / an example, not stated as an
@@ -504,6 +510,11 @@ inline bool toolAllowed( const std::vector<std::string>& tools, std::string_view
 
 }   // namespace detail
 
+// F-B3 (owner ruling 3): a directory walk that gave up before every entry under it was visited, over content
+// that WOULD BE INSTALLED — the caller (main.cpp's --scan-skills, wrap.h's wrapScanSkillDir) names this rule
+// on a synthetic finding rather than reading a stopped walk as an honest "clean". Public (not detail::) because
+// both those walks live outside this file.
+static constexpr const char* kScanIncompleteRuleWalk = "SCAN-INCOMPLETE:walk-stopped-early";
 
 // ── core scanner ─────────────────────────────────────────────────────────────────────────────────
 
@@ -561,12 +572,19 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         findings.push_back( { sev, lineNum, rule, std::move( excerpt ) } );
     };
     // helper: the regex boundary's answer as a plain hit, failing CLOSED on an undecided match — the line gets a
-    // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean"
+    // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean".
+    // Exhausted (the engine gave up mid-match) and Skipped (the line was too long to hand the engine at all,
+    // F-B3 / owner ruling 3) are both undecided and both fail closed — every line in a skill file IS installable
+    // content, so there is no WARN tier here, only CRITICAL or a real answer.
     const auto isHit = [ & ]( RegexVerdict verdict, int lineNum, std::string_view lineText )
     {
         if( verdict == RegexVerdict::Exhausted )
         {
             addFinding( SkillSeverity::Critical, lineNum, kScanIncompleteRule, lineText );
+        }
+        else if( verdict == RegexVerdict::Skipped )
+        {
+            addFinding( SkillSeverity::Critical, lineNum, kScanIncompleteRuleOversize, lineText );
         }
         return verdict == RegexVerdict::Hit;
     };
@@ -816,10 +834,11 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
     {
         RegexCaptures      m;
         const RegexVerdict verdict = skillSearch( p.re, joinedBody, &m );
-        if( verdict == RegexVerdict::Exhausted )
+        if( verdict == RegexVerdict::Exhausted || verdict == RegexVerdict::Skipped )
         {
             // the joined body has no one line to blame: attribute the unscannable pass to the first body line recorded
-            addFinding( SkillSeverity::Critical, joinedLineOffsets.empty() ? 0 : joinedLineOffsets.front().second, kScanIncompleteRule,
+            addFinding( SkillSeverity::Critical, joinedLineOffsets.empty() ? 0 : joinedLineOffsets.front().second,
+                        verdict == RegexVerdict::Exhausted ? kScanIncompleteRule : kScanIncompleteRuleOversize,
                         "the whitespace-joined body (cross-line injection pass)" );
             continue;
         }

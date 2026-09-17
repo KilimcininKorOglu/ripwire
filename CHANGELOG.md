@@ -15,6 +15,23 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a skill scan that could not finish reading a line, or a directory, still said "clean"
+
+`--scan-skill(s)` skipped a line the regex engine was never handed (too long for this thread's measured-safe
+bound, the same bound `--regex` uses on a long matching line) and read it as an ordinary Miss, and a
+`--scan-skills` walk that stopped early — a descriptor limit, not a permission error — was silently invisible:
+the loop's own error was cleared in the same expression that set it, so the `if( ec )` guarding it could never
+fire. Both are content that WOULD BE INSTALLED and was never actually scanned, so both now fail CLOSED
+(CRITICAL, named `SCAN-INCOMPLETE:line-oversize` / `SCAN-INCOMPLETE:walk-stopped-early`), reconciling the
+walk-only WARN an earlier round gave `ripwire wrap` with the CRITICAL `--scan-skill` already gives an engine
+that gives up mid-match. An unreadable folder — content that install could not have picked up either — is
+unchanged and stays WARN, the owner's own example of what does not need to fail closed.
+`GuardedRegex::search`/`search(subject,captures)` (`src/regexguard.h`) take an optional per-thread stack bound
+(default unbounded, so every existing caller is untouched) and answer `RegexVerdict::Skipped` rather than a
+silent Miss when a subject exceeds it. Gates: `test/skillscanreadcheck.sh` (new §F-B3), `test/codexwrapcheck.sh`
+(new §F-B3), both red on the unfixed binary via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` / the new
+`RIPWIRE_FAULT_SKILL_WALK_STOP=1`.
+
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
 A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles

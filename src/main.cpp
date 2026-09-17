@@ -4025,12 +4025,18 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             };
             isFirstVisit( fs::path( dir ) );                            // the root itself, so a link back to it is a cycle
 
+            // F-B3 (owner ruling 3): the walk's own increment() can fail for a reason skip_permission_denied does
+            // NOT swallow (a descriptor limit, ENAMETOOLONG, an I/O error — codexwrapcheck.sh's wrap-side arm
+            // reaches this with ulimit -n) — content past that point may still be COPIED and installed, just
+            // never scanned, so it fails closed below rather than reading as an honest "clean". The loop
+            // condition checks `!ec` so a failed increment is seen on the NEXT condition test, not thrown away
+            // by an unconditional clear in the same expression that set it (the previous shape cleared `ec`
+            // right after increment(), in the same for-loop update-expression, so the body's own `if( ec )`
+            // could never see it fire — an arm that cannot fail, CONTRIBUTING.md §2).
             fs::recursive_directory_iterator it( dir, fs::directory_options::skip_permission_denied
                                                     | fs::directory_options::follow_directory_symlink, ec );
-            for( ec.clear(); it != fs::recursive_directory_iterator(); it.increment( ec ), ec.clear() )
+            for( ; !ec && it != fs::recursive_directory_iterator(); it.increment( ec ) )
             {
-                if( ec ) { ec.clear(); continue; }
-
                 const fs::path& p = it->path();
                 if( it->is_directory( ec ) && !ec )
                 {
@@ -4044,6 +4050,19 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
 
                 if( rw::binstale::looksBinary( p.string() ) ) { ++filesSkipped;  continue; }
                 skillPaths.push_back( p.string() );
+            }
+            static const bool isWalkStopFaultOn = rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" );
+            if( !ec && isWalkStopFaultOn )
+            {
+                ec = std::make_error_code( std::errc::too_many_files_open );   // any non-permission error the fault stands in for
+            }
+            if( ec )
+            {
+                allRows.push_back( { dir, rw::SkillFinding{ rw::SkillSeverity::Critical, 0, rw::kScanIncompleteRuleWalk,
+                                                             "the walk of " + dir + " stopped early: " + ec.message() } } );
+                if( maxSev < 2 ) { maxSev = 2; }
+                rw::emitTo( stderr, "ripwire scan: CRITICAL — the skill walk of {} stopped early ({}); files past that point may still be installed but were not scanned\n",
+                            dir, ec.message() );
             }
             std::sort( skillPaths.begin(), skillPaths.end() );
 
