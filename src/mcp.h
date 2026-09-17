@@ -1984,6 +1984,20 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
 // same gap this constant does not want to repeat.
 inline constexpr std::size_t kMcpStdioLineMaxBytes = 33554432;   // 32 MiB
 
+// The over-limit-line refusal runMcp()'s stdio loop sends when readByteSafeLineBounded reports overflow.
+// `line` in that case holds only the first kMcpStdioLineMaxBytes bytes, which is not the request, so it
+// is never handed to dispatchMcpLine — this is the whole answer, not a dispatch. id:null per JSON-RPC 2.0
+// (no field in an over-limit line is reliably the caller's id), the same posture dispatchMcpLine's own
+// framing gate takes for a frame it cannot trust (mcpjson.h checkFrame). The caller's loop still owns
+// "keep serving" — this function only writes the one response line.
+inline void emitMcpStdioLineOverflowRefusal()
+{
+    rw::emitTo( stdout, "{{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{{\"code\":-32600,"
+                         "\"message\":\"request line exceeds the {}-byte limit\"}}}}\n",
+                kMcpStdioLineMaxBytes );
+    std::fflush( stdout );
+}
+
 // stdio MCP loop: one JSON object per line. Returns the process exit code. `root`/`roots` are the
 // positional args `ripwire <root> --mcp` was started with (roots.size()>=2 = a multi-root workspace);
 // both default empty for the pre-X7 "no startup root" mode, in which every request must still name its
@@ -2042,15 +2056,8 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
     {
         if( lineOverflowed )
         {
-            // The request line exceeded the bound — `line` holds only its first kMcpStdioLineMaxBytes
-            // bytes, which is not the request, so it is never handed to dispatchMcpLine. id:null per
-            // JSON-RPC 2.0 (no field in an over-limit line is reliably the caller's id), the same posture
-            // dispatchMcpLine's own framing gate takes for a frame it cannot trust (mcpjson.h checkFrame).
             // The server keeps serving: this refusal costs one line, not the connection.
-            rw::emitTo( stdout, "{{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{{\"code\":-32600,"
-                                 "\"message\":\"request line exceeds the {}-byte limit\"}}}}\n",
-                        kMcpStdioLineMaxBytes );
-            std::fflush( stdout );
+            emitMcpStdioLineOverflowRefusal();
             continue;
         }
         if( line.find_first_not_of( " \t\r\n" ) == std::string::npos )
