@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# g1configcheck.sh — millisecond-scale structural gate for sanitizer/fuzzer build contracts, and for the nightly
-# workflow that runs the ThreadSanitizer build against main (.github/workflows/nightly.yml, the last section).
+# g1configcheck.sh — millisecond-scale structural gate for sanitizer/fuzzer build contracts, for the nightly
+# workflow that runs the ThreadSanitizer build against main (.github/workflows/nightly.yml), and for ci.yml's
+# light-set-vs-full-matrix split (owner decision 2026-09-17 — the last section).
 
 set -u
 
@@ -9,6 +10,7 @@ CMAKE="$ROOT/CMakeLists.txt"
 HARNESS="$ROOT/test/fuzz/fuzz_ingest.cpp"
 RUNNER="$ROOT/test/fuzz/run.sh"
 NIGHTLY="$ROOT/.github/workflows/nightly.yml"
+CI="$ROOT/.github/workflows/ci.yml"
 fail=0
 
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
@@ -355,6 +357,263 @@ PY
                 ok "nightly mutation [$row] reds exactly its own row"
             else
                 no "nightly mutation [$row] red rows are [${badRows:-none}], expected exactly [$row]"
+            fi
+        fi
+    done
+fi
+
+# ── ci.yml: the light-set-vs-full-matrix split (owner decision, 2026-09-17 — CI was the bottleneck) ────────
+# These rows pin the properties that make the split trustworthy:
+#   push          a push to main is light: the `plan` job's decide script sets full=false for it
+#   trainmember   a pull_request carrying the `train-member` label is light
+#   otherpr       a pull_request WITHOUT that label stays full
+#   dispatch      workflow_dispatch stays full (the owner requires it on the exact commit before a tag)
+#   schedule      the new nightly `schedule` trigger stays full
+#   triggers      pull_request adds labeled/unlabeled to the default types, workflow_dispatch is declared,
+#                 and schedule carries a valid 5-field cron distinct from nightly.yml's 07:17
+#   heavygate     fallback-emitter/rhel/asan each gate on `plan`'s `full` output, and `release`'s matrix is
+#                 `plan`'s computed `release_matrix` output rather than a second hand-typed full list
+#   reportperms   top-level permissions are exactly `contents: read`, and the ONLY write anywhere is
+#                 `issues: write`, held by report-failure and report-green and nothing else in their blocks
+#   reportscope   report-failure/report-green only act on the scheduled full-matrix run against main
+# push/trainmember/otherpr/dispatch/schedule are not read off the text — they EXTRACT the plan job's one
+# `run: |` step (the real bash GitHub would run) and EXECUTE it under synthetic EVENT/REF/PR_LABELS, then
+# check the `full=` and `release_matrix=` lines it writes to a stand-in $GITHUB_OUTPUT. A regex guess at what
+# the case statement does would trust the same bug it is meant to catch; running it does not.
+if [ ! -f "$CI" ]; then
+    no "ci workflow missing: $CI"
+else
+    CISCAN="$TMP/ciscan.py"
+    cat > "$CISCAN" <<'PY'
+import re, sys, json, os, subprocess, tempfile
+
+def strip_comment(s):
+    quote = None
+    for i, ch in enumerate(s):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or s[i - 1].isspace()):
+            return s[:i].rstrip()
+    return s.rstrip()
+
+def indent(s):
+    return len(s) - len(s.lstrip(" "))
+
+def children(lines, key_index):
+    base = indent(lines[key_index])
+    out = []
+    for s in lines[key_index + 1:]:
+        if strip_comment(s).strip() == "":
+            continue
+        if indent(s) <= base:
+            break
+        out.append(s)
+    return out
+
+def keyed(lines, level):
+    found = {}
+    for i, s in enumerate(lines):
+        t = strip_comment(s)
+        m = re.match(r"^( *)([A-Za-z0-9_-]+):(?:\s+(.*))?$", t)
+        if m and len(m.group(1)) == level and m.group(2) not in found:
+            found[m.group(2)] = ((m.group(3) or "").strip(), i)
+    return found
+
+def mapping(block, level):
+    return {k: v for k, (v, _) in keyed(block, level).items()}
+
+def extract_run_block(block_lines, run_index):
+    # Dedents a YAML `|` block scalar's content by its OWN first line's indent, not a hardcoded column —
+    # this is what makes the extractor survive re-indentation elsewhere in the file.
+    base_indent = indent(block_lines[run_index])
+    content_indent = None
+    out = []
+    for s in block_lines[run_index + 1:]:
+        if s.strip() == "":
+            out.append("")
+            continue
+        i = indent(s)
+        if content_indent is None:
+            if i <= base_indent:
+                break
+            content_indent = i
+        if i < content_indent:
+            break
+        out.append(s[content_indent:])
+    return "\n".join(out)
+
+# name: (event, ref, PR_LABELS json, expected full=, expected release_matrix leg count)
+SCENARIOS = {
+    "push":        ("push", "refs/heads/main", "[]", "false", 4),
+    "trainmember": ("pull_request", "refs/pull/1/merge", '["train-member"]', "false", 4),
+    "otherpr":     ("pull_request", "refs/pull/2/merge", '["other"]', "true", 24),
+    "dispatch":    ("workflow_dispatch", "refs/heads/main", "[]", "true", 24),
+    "schedule":    ("schedule", "refs/heads/main", "[]", "true", 24),
+}
+
+def run_decide(script_text, event, ref, labels_json):
+    with tempfile.TemporaryDirectory() as td:
+        out_path = os.path.join(td, "gh_output")
+        open(out_path, "w", encoding="utf-8").close()
+        env = dict(os.environ)
+        env.update({"EVENT": event, "REF": ref, "PR_LABELS": labels_json, "GITHUB_OUTPUT": out_path})
+        try:
+            proc = subprocess.run(["bash", "-c", script_text], env=env, capture_output=True, text=True, timeout=10)
+        except Exception as e:
+            return 1, {}, "", str(e)
+        outputs = {}
+        for line in open(out_path, encoding="utf-8"):
+            if "=" in line:
+                k, _, v = line.rstrip("\n").partition("=")
+                outputs[k] = v
+        return proc.returncode, outputs, proc.stdout, proc.stderr
+
+def scan(path):
+    lines = open(path, encoding="utf-8").read().split("\n")
+    rows = {}
+    top = keyed(lines, 0)
+
+    on = children(lines, top["on"][1]) if "on" in top else []
+    onKeys = keyed(on, 2)
+    prBlock = children(on, onKeys["pull_request"][1]) if "pull_request" in onKeys else []
+    prKeys = keyed(prBlock, 4)
+    typesLine = prKeys.get("types", ("", 0))[0]
+    hasLabelTypes = "labeled" in typesLine and "unlabeled" in typesLine
+    cron = [s for s in on if re.match(r'^ {4}- cron: "[^"]+"', strip_comment(s))]
+    cronTimes = [re.search(r'"([^"]+)"', s).group(1) for s in cron]
+    cronOk = bool(cronTimes) and all(len(t.split()) == 5 for t in cronTimes)
+    distinctFromNightly = cronOk and all(t != "17 7 * * *" for t in cronTimes)
+    rows["triggers"] = (hasLabelTypes and "workflow_dispatch" in onKeys and cronOk and distinctFromNightly,
+                         f"types=[{typesLine}] dispatch={'workflow_dispatch' in onKeys} cron={cronTimes}")
+
+    jobsBlock = children(lines, top["jobs"][1]) if "jobs" in top else []
+    jobs = {}
+    for name, (_, i) in keyed(jobsBlock, 2).items():
+        jobs[name] = [jobsBlock[i]] + children(jobsBlock, i)
+    def jobKeys(name):
+        return keyed(jobs[name], 4)
+    def jobText(name):
+        return "\n".join(strip_comment(s) for s in jobs.get(name, []))
+
+    gated = [n for n in ("fallback-emitter", "rhel", "asan") if "needs.plan.outputs.full == 'true'" in jobText(n)]
+    releaseMatrixOk = "fromJSON(needs.plan.outputs.release_matrix)" in jobText("release")
+    rows["heavygate"] = (len(gated) == 3 and releaseMatrixOk, f"gated={gated} releaseMatrixOk={releaseMatrixOk}")
+
+    topPerms = mapping(children(lines, top["permissions"][1]), 2) if "permissions" in top and top["permissions"][0] == "" else None
+    writes, blocks = set(), {}
+    for name in jobs:
+        k = jobKeys(name)
+        if "permissions" in k:
+            value, i = k["permissions"]
+            block = mapping(children(jobs[name], i), 6) if value == "" else {"*": value}
+            blocks[name] = block
+            writes |= {(name, p) for p, v in block.items() if v in ("write", "write-all")}
+    reportJobs = {"report-failure", "report-green"}
+    expected = {(n, "issues") for n in reportJobs}
+    permsOk = topPerms == {"contents": "read"} and writes == expected and all(blocks.get(n) == {"issues": "write"} for n in reportJobs)
+    rows["reportperms"] = (permsOk, f"top={topPerms} writes={sorted(writes)}")
+
+    failIf = jobKeys("report-failure").get("if", ("", 0))[0] if "report-failure" in jobs else ""
+    greenIf = jobKeys("report-green").get("if", ("", 0))[0] if "report-green" in jobs else ""
+    reportScopeOk = ("failure()" in failIf and "schedule" in failIf and "refs/heads/main" in failIf
+                      and "success()" in greenIf and "schedule" in greenIf and "refs/heads/main" in greenIf)
+    rows["reportscope"] = (reportScopeOk, f"report-failure if=[{failIf}] report-green if=[{greenIf}]")
+
+    planLines = jobs.get("plan", [])
+    run_idx = next((i for i, s in enumerate(planLines) if re.match(r'^\s*run: \|\s*$', s)), None)
+    script_text = extract_run_block(planLines, run_idx) if run_idx is not None else None
+    for name, (event, ref, labels, expectedFull, expectedCount) in SCENARIOS.items():
+        if script_text is None:
+            rows[name] = (False, "could not extract the plan job's decide script (no 'run: |' step found)")
+            continue
+        rc, outputs, _out, err = run_decide(script_text, event, ref, labels)
+        full = outputs.get("full")
+        matrixRaw = outputs.get("release_matrix")
+        count = None
+        countOk = False
+        if matrixRaw is not None:
+            try:
+                count = len(json.loads(matrixRaw)["include"])
+                countOk = count == expectedCount
+            except Exception:
+                countOk = False
+        ok = rc == 0 and full == expectedFull and countOk
+        detail = f"rc={rc} full={full} (want {expectedFull}) matrix_legs={count} (want {expectedCount})"
+        if rc != 0:
+            detail += f" stderr={err.strip()[:200]}"
+        rows[name] = (ok, detail)
+    return rows
+
+for label, path in zip(sys.argv[1::2], sys.argv[2::2]):
+    for row, (good, detail) in scan(path).items():
+        print(f"{label}\t{row}\t{'ok' if good else 'bad'}\t{detail}")
+PY
+    CIMUT="$TMP/cimut.py"
+    cat > "$CIMUT" <<'PY'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+out = sys.argv[2]
+# row -> (anchor, replacement); every anchor must occur exactly once, or the control refuses instead of passing inert
+mutations = {
+    "push": ('              if [ "$REF" = refs/heads/main ]; then\n                full=false\n              fi',
+             '              if [ "$REF" = refs/heads/main ]; then\n                full=true\n              fi'),
+    "trainmember": ("if jq -e 'index(\"train-member\") != null' <<<\"$PR_LABELS\" >/dev/null; then",
+                     "if jq -e 'index(\"no-such-label\") != null' <<<\"$PR_LABELS\" >/dev/null; then"),
+    "otherpr": ("        run: |\n          full=true\n          case", "        run: |\n          full=false\n          case"),
+    "dispatch": ("            workflow_dispatch|schedule)\n              full=true\n              ;;",
+                 "            workflow_dispatch)\n              full=false\n              ;;\n            schedule)\n              full=true\n              ;;"),
+    "schedule": ("            workflow_dispatch|schedule)\n              full=true\n              ;;",
+                 "            workflow_dispatch)\n              full=true\n              ;;\n            schedule)\n              full=false\n              ;;"),
+    "triggers": ("    types: [opened, synchronize, reopened, labeled, unlabeled]",
+                 "    types: [opened, synchronize, reopened]"),
+    "heavygate": ("  fallback-emitter:\n    needs: plan\n    if: needs.plan.outputs.full == 'true'   # not part of the light set — see the header comment\n",
+                   "  fallback-emitter:\n    needs: plan\n"),
+    "reportperms": ("permissions:\n  contents: read   # least privilege at the top; only report-failure/report-green below widen, and only for themselves\n",
+                     "permissions:\n  contents: read   # least privilege at the top; only report-failure/report-green below widen, and only for themselves\n  issues: write\n"),
+    "reportscope": ("    if: failure() && github.event_name == 'schedule' && github.ref == 'refs/heads/main'",
+                     "    if: failure() && github.ref == 'refs/heads/main'"),
+}
+for row, (anchor, replacement) in mutations.items():
+    count = src.count(anchor)
+    if count != 1:
+        print(f"{row}\tanchor occurs {count} times")
+        continue
+    open(f"{out}/ci-mut-{row}.yml", "w", encoding="utf-8").write(src.replace(anchor, replacement))
+    print(f"{row}\twritten")
+PY
+    ciRows=( push trainmember otherpr dispatch schedule triggers heavygate reportperms reportscope )
+    mutLog="$( python3 "$CIMUT" "$CI" "$TMP" 2>&1 )" || no "ci mutation writer crashed: $mutLog"
+    scanArgs=( real "$CI" )
+    for row in "${ciRows[@]}"; do
+        if [ -f "$TMP/ci-mut-$row.yml" ]; then scanArgs+=( "mut-$row" "$TMP/ci-mut-$row.yml" ); fi
+    done
+    if ! python3 "$CISCAN" "${scanArgs[@]}" >"$TMP/ciscan.tsv" 2>"$TMP/ciscan.err"; then
+        no "ci workflow scanner crashed: $( head -n 3 "$TMP/ciscan.err" | tr '\n' ' ' )"
+    fi
+    for row in "${ciRows[@]}"; do
+        line="$( awk -F'\t' -v r="$row" '$1 == "real" && $2 == r' "$TMP/ciscan.tsv" )"
+        verdict="$( printf '%s' "$line" | cut -f3 )"; detail="$( printf '%s' "$line" | cut -f4- )"
+        if [ "$verdict" = ok ]; then
+            ok "ci.yml [$row] holds ($detail)"
+        else
+            no "ci.yml [$row] does not hold (${detail:-the scanner printed no row})"
+        fi
+    done
+    for row in "${ciRows[@]}"; do
+        mut="$TMP/ci-mut-$row.yml"
+        if [ ! -f "$mut" ]; then
+            no "ci mutation [$row] was not written: $( printf '%s\n' "$mutLog" | awk -F'\t' -v r="$row" '$1 == r { print $2 }' )"
+        elif cmp -s "$CI" "$mut"; then
+            no "ci mutation [$row] did not take — the copy is byte-identical to ci.yml, nothing was checked"
+        else
+            badRows="$( awk -F'\t' -v m="mut-$row" '$1 == m && $3 == "bad" { print $2 }' "$TMP/ciscan.tsv" | paste -sd, - )"
+            if [ "$badRows" = "$row" ]; then
+                ok "ci mutation [$row] reds exactly its own row"
+            else
+                no "ci mutation [$row] red rows are [${badRows:-none}], expected exactly [$row]"
             fi
         fi
     done

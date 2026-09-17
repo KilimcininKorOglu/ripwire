@@ -515,6 +515,32 @@ Both are load-bearing, and the reason is a real regression this project shipped:
 **If you add a degrade path, it is the plain-flavour run that proves it.** Do not assume a green
 Release CI job covered it.
 
+### Light set vs. full matrix
+
+`.github/workflows/ci.yml` does not run the full 31-job matrix on every event. A `plan` job computes one
+`full` output from the event name, the pull request's labels and the ref, and every heavy job reads that
+output (fallback-emitter/rhel/asan through `if:`, `release` through the matrix `plan` itself computes,
+since a job-level `if:` cannot see the matrix context).
+
+- **Push to `main`**, and **pull requests carrying the `train-member` label** (maintainer-only — a fork
+  PR cannot label its own PR), run the **light set**: the `style` job plus the single
+  `ubuntu-24.04`/`Release`/`clang` release leg (all 4 gate shards), which already includes the
+  determinism and G4 XML checks.
+- **Every other pull request** (`integration/*` train PRs, direct-land PRs, contributor PRs),
+  **`workflow_dispatch`**, and a nightly **`schedule`** (05:41 UTC — off `:00`, and a different minute
+  from `nightly.yml`'s own 07:17 TSan run) all run the **full matrix**. Always dispatch a full run against
+  the exact commit you are about to tag; a green light-set push or an earlier nightly does not stand in
+  for it.
+
+A failure on the scheduled full-matrix run opens or updates the same tracking issue `nightly.yml` uses
+(label `nightly-failure`, title "Nightly checks failing on main"). `ci.yml` also carries its own
+green-schedule job that comments and closes that issue: `nightly.yml`'s `report-green` only proves its
+TSan leg is clean, which is not enough to safely close an issue `ci.yml` opened while its own full matrix
+is still red. The two closes are not coordinated with each other, so a day where one workflow is green
+and the other is red can see the green one close an issue the red one is still failing — the red
+workflow's own next scheduled run reopens or comments on it, so the issue self-heals within a day rather
+than staying wrongly closed.
+
 ### What runs nightly instead of on every pull request
 
 `.github/workflows/nightly.yml` runs the slower checks once a day, at 07:17 UTC, against `main`. Today
