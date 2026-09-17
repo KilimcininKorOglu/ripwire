@@ -1368,6 +1368,14 @@ raw form; `selectorrefuse.h::definingFilesOf`'s own "here's a runnable retry" su
 for the same reason — the retry text has to re-match under the fixed rule to still be runnable.
 `test/rootspellingcheck.sh` gained arms for `--affected`/`--exclude`/`--verify`/`--at`/`--callers=file:name`
 across all six root spellings; `test/mcpeditcheck.sh` gained arm (10) for the MCP `file` hint.
+Matching root-relative ONLY dropped the other way a user names a file: from the cwd. `ripwire test/fixture
+--edit-check=test/fixture/geometry.cpp:distance`, `./a.cpp` under `ripwire .`, `../repo/a.cpp` under
+`ripwire ../repo` and an absolute `/…/repo/a.cpp` all resolved in 0.6.1 and refused with this change's first version.
+`filePathContainsRootRel` still tries the root-relative path first; on a miss it strips a root prefix the crawl
+recorded once (the root as typed, the root relative to the cwd, or one of its absolute spellings, `$PWD`'s and
+realpath's alike) and matches the rest root-relative. A path that names no indexed file still refuses.
+`test/rootspellingcheck.sh` arm (6) pins `<root as typed>/`, absolute and cwd-relative selectors on `--edit-check`,
+`--callers`, `--at` and `--affected` under all six spellings, with a refusal control for each form.
 
 ### Fixed — MCP `quality_delta`'s "sidecar present but unreadable" baseline marker now spells the CLI's own wording
 

@@ -3958,6 +3958,36 @@ inline bool filePathContains( std::string_view haystack, std::string_view needle
     return collapsed.find( needle ) != std::string::npos;
 }
 
+// A selector path's part AFTER the crawl root, when the path is spelled from the cwd: it starts with one of the root's
+// recorded prefixes (IngestResult::crawlRootPrefixes — the root as typed, relative to the cwd, or absolute) and a '/'.
+// A relative prefix is compared with the path's leading `./` dropped; the prefix "." (the root IS the cwd) takes a
+// `./`-prefixed path's tail. Empty when no prefix fits — the caller's root-relative reading stands.
+inline std::string_view selectorRootTail( const IngestResult& ing, std::string_view needle ) noexcept
+{
+    std::string_view typed = needle;
+    while( typed.size() >= 2 && typed[0] == '.' && typed[1] == '/' )
+    {
+        typed.remove_prefix( 2 );
+    }
+    for( const std::string& prefix : ing.crawlRootPrefixes )
+    {
+        if( prefix == "." )
+        {
+            if( typed.size() < needle.size() && !typed.empty() )
+            {
+                return typed;   // `./a.cpp` under `ripwire .`
+            }
+            continue;
+        }
+        const std::string_view path = prefix.front() == '/' ? needle : typed;
+        if( path.size() > prefix.size() + 1 && path.compare( 0, prefix.size(), prefix ) == 0 && path[ prefix.size() ] == '/' )
+        {
+            return path.substr( prefix.size() + 1 );
+        }
+    }
+    return {};
+}
+
 // A1 (found-items 2026-09-17, review round): the ROOT-RELATIVE twin of filePathContains, above. Every
 // PATH-PATTERN selector (file:name qualifiers, --verify's FILE argument, --at=FILE:LINE, MCP edit-hint
 // matching, the selector-refusal "is this file even indexed" diagnosis) must match against fileId's
@@ -3966,9 +3996,22 @@ inline bool filePathContains( std::string_view haystack, std::string_view needle
 // directory name one component of the checkout path shares) can match the CHECKOUT LOCATION rather than
 // anything inside the tree, so `--verify`'s FILE argument confirmed a claim about a file that was never
 // indexed. ONE helper so the next path-pattern consumer cannot independently reintroduce the raw form.
+//
+// The ROOT-RELATIVE match is tried first. On a miss, a needle SPELLED FROM THE CWD — the root as typed plus the file
+// (`test/fixture/geometry.cpp` under `ripwire test/fixture`, `./a.cpp` under `ripwire .`, `../repo/a.cpp` under
+// `ripwire ../repo`) or an absolute path under the root — is matched by its root-relative tail (selectorRootTail).
+// A1's first version dropped that second reading, so every file:name selector an agent typed relative to its own cwd
+// refused a file that 0.6.1 found (#281's CI: xmlwellformed `--edit-check=test/fixture/geometry.cpp:distance`).
+// test/rootspellingcheck.sh pins both spellings on --edit-check, --callers, --at and --affected.
 inline bool filePathContainsRootRel( const IngestResult& ing, std::uint32_t fileId, std::string_view needle )
 {
-    return filePathContains( rootRelPath( ing, fileId ), needle );
+    const std::string_view rel = rootRelPath( ing, fileId );
+    if( filePathContains( rel, needle ) )
+    {
+        return true;
+    }
+    const std::string_view tail = selectorRootTail( ing, needle );
+    return !tail.empty() && filePathContains( rel, tail );
 }
 
 // shared "name" | "file:name" spec splitter (X9(b)) — the ONE disambiguation rule --around/--lego/

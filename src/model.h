@@ -1192,6 +1192,13 @@ struct IngestResult
     //    Recorded once by ingest(); a single-file root records the file's directory. EMPTY on a multi-root
     //    merge, whose `files` are already the labeled root-relative identity (rootRelPath is then the identity).
     std::string                crawlRoot;
+    // …and every PREFIX a selector path typed from the cwd can start with before the root-relative part (graph.h
+    // selectorRootTail): the root as typed, then the root expressed relative to the cwd, then its absolute spellings
+    // (joined onto the shell's logical $PWD and onto getcwd, and its realpath — a user types the logical spelling, and
+    // a symlinked prefix such as /tmp vs /private/tmp makes the two differ). "." means the root IS the cwd, so a `./`
+    // path is root-relative. Lexically normalised, no trailing '/', each once. Recorded once by ingest(); empty on a
+    // multi-root merge, like crawlRoot.
+    std::vector<std::string>   crawlRootPrefixes;
 
     // ── P1-15: how many files this run actually RE-EXTRACTED (cache miss / changed / new) rather than
     //    reusing from the content-hash cache — the number RIPWIRE_CACHE_STATS has always printed as
