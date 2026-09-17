@@ -728,6 +728,22 @@ PYEOF
         echo
         echo "=== Part 2: qsnap mutation table — ASan build ==="
         asanq_fail=0
+        # PRESENCE GUARD — the ASan binary must READ the blob these rows mutate. The qsnap filename folds the
+        # PRODUCER IDENTITY (the build's source hash, quality.h producerIdentity), so an ASan binary built from
+        # different sources than $BIN looks up a different key, misses, recomputes cold, and every row below
+        # passes without ever opening its mutant. Measured on integration/train-1: a qsnapCountFits->true stub
+        # in the ASan build left all three huge vector-count rows green here while the qchurn rows (not
+        # producer-keyed) went red. A corrupt blob at $QBLOB must make that binary say so on stderr.
+        cp "$MUTDIR/qsnap_wrong_magic_recomputed_checksum.bin" "$QBLOB"
+        env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$ASAN_BIN" "$QREPO" --quality-delta >/dev/null 2>"$TMP/qasan_guard.err"
+        cp "$TMP/q_good.bin" "$QBLOB"
+        if grep -q 'HEAD Snapshot cache corrupt' "$TMP/qasan_guard.err"; then
+            ok "qsnap ASan sweep reads the blob its rows mutate (a corrupt blob at that path is disclosed by $( basename "$ASAN_BIN" ))"
+        else
+            no "qsnap ASan sweep: $ASAN_BIN never read the blob at the mutated path — it keys a different qsnap blob (built from different sources than $BIN?), so every row below would pass unread. Rebuild both from one tree."
+            asanq_fail=1
+            QMUT_NAMES=()
+        fi
         for name in ${QMUT_NAMES[@]+"${QMUT_NAMES[@]}"}; do
             cp "$MUTDIR/$name.bin" "$QBLOB" 2>/dev/null || { mkdir -p "$( dirname "$QBLOB" )"; cp "$MUTDIR/$name.bin" "$QBLOB"; }
             err="$TMP/qasan_${name}.err"
