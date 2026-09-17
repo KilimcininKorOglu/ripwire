@@ -89,7 +89,7 @@ nothing it means. On ripwire's own tree, five runs each with a private cache, a 
 3.04 s (2.78–3.21) and one whose snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the
 parse cache underneath keeps its key, so that recompute reads a warm parse. On the fixed tree the two-build experiment
 writes one snapshot per build and matches a cold cache in both orders. The snapshot and window-ref body caches move to
-schemes 13 and 4.
+schemes 14 and 4.
 
 Gate: `test/qsnapproducercheck.sh`, 16 rows. Its core is a matched pair over a real cached snapshot: dead entries
 dropped (or added) with the producer bytes kept, a control that must change the answer and does, and the same forgery

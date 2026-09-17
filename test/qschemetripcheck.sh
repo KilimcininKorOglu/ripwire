@@ -38,7 +38,8 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   a new header field — fnv1a64 of the build's source identity (cmake/source_identity.cmake) — and qsnapExclHex /
 #   qbodyExclHex fold it into the key, because a dead set is a function of call RESOLUTION and nothing in the key
 #   moved with it: two builds that resolve differently served each other's dead set. HEADER SHAPE change →
-#   kQSnapCacheScheme 12 -> 13 and kQBodyCacheScheme 3 -> 4, then re-pinned. Extraction unchanged: parserVer 96.
+#   kQSnapCacheScheme -> 14 (13 is #253's root-spelling bump, same integration train) and kQBodyCacheScheme 3 -> 4,
+#   then re-pinned. Extraction unchanged: parserVer 96.
 #   Since this pin a missed bump no longer serves a wrong answer across builds (any source change renames the
 #   blob); this gate still asks the question, and its log still records the answer.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.

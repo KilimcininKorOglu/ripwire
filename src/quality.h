@@ -2742,7 +2742,7 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // NEVER-STALE, on the same two independent guards the ingest cache uses:
 //  1) FILENAME key = (realpath repo-root, HEAD sha, excludes, a qsnap scheme tag, the extraction identity, the
 //     producer identity) — a different HEAD / repo / --exclude set / scheme / BUILD names a different file → the
-//     wrong Snapshot can never be loaded. The producer identity (v13) is what keeps two builds that resolve
+//     wrong Snapshot can never be loaded. The producer identity (v14) is what keeps two builds that resolve
 //     calls differently apart; see producerIdentity.
 //  2) Blob self-validation: a magic + scheme-version header, an embedded fnv1a64(headSha) that must match the
 //     live HEAD, and an fnv1a64 content checksum trailer over the whole body. Any mismatch/truncation → the blob
@@ -2858,19 +2858,20 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // lookup this binary makes, so each Elixir symbol would read as new. Extraction is unchanged (parser version
 // 95 stays), so kParserVer and its mirror deliberately did NOT move. Bumped 10 -> 11.
 // v12 — Python inherited self/cls dispatch excludes possible overrides from the dead set on both sides.
-// v13 (2026-09-16) — the blob header gained the PRODUCER IDENTITY after the extraction identity, and
+// v14 (2026-09-16) — the blob header gained the PRODUCER IDENTITY after the extraction identity, and
 // qsnapExclHex folds it: a HEADER SHAPE change, so bumped by the v4 rule. The defect it closes is one this
 // rule could not have caught: a dead set is a function of call resolution, no version in the key moved with
 // resolution, and so two builds that resolve differently served each other's dead set (see producerIdentity).
-// Since v13 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
+// Since v14 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
 // a semantics change that lands without one leaves this history incomplete, not a wrong answer across builds.
-constexpr std::uint32_t kQSnapCacheScheme = 13;
+// (14, not 13: lane/root-spelling-invariance, #253, took 13 and lands in the same integration train.)
+constexpr std::uint32_t kQSnapCacheScheme = 14;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
 // so a qsnap-format bump renames every file → old-scheme blobs are simply never named again. It also folds the
 // extraction identity + maxFileBytes (see exclConfigHex).
-// v13: and the PRODUCER identity, because a Snapshot's dead set depends on call resolution (producerIdentity).
+// v14: and the PRODUCER identity, because a Snapshot's dead set depends on call resolution (producerIdentity).
 inline std::string qsnapExclHex( const std::vector<std::string>& excludes, std::size_t maxFileBytes = kDefaultMaxFileBytes )
 {
     return exclConfigHex( excludes, "qsnap" + std::to_string( kQSnapCacheScheme ) + '\x1f' + std::string( producerIdentity() ), maxFileBytes );
@@ -2900,7 +2901,7 @@ inline void evictOldQSnapCaches( const std::string& dir, const std::string& repo
 // v3 (W1-S2): bodyHashBySym keys became pathQualifiedKey (see kQSnapCacheScheme v6). The blob header's
 // scheme check would already reject a v2 blob — but as CORRUPT (alert + stderr), not a clean miss; bumping
 // the family renames every file so old blobs are simply never named again.
-// v4 (2026-09-16): the shared blob header gained the producer identity (kQSnapCacheScheme v13), so this family
+// v4 (2026-09-16): the shared blob header gained the producer identity (kQSnapCacheScheme v14), so this family
 // retires with it, as it did at v2. Its facts are extraction-only, yet the key folds the producer identity too:
 // deserializeSnapshot refuses a foreign producer for BOTH families, and a key without it would turn every
 // rebuild's first read into a "corrupt" alert instead of a clean miss.
@@ -2943,7 +2944,7 @@ inline bool qsnapGet( const char*& p, const char* end, T& out )
 // P0.2 (r27): cacheVer/parserVer are the EXTRACTION IDENTITY every field below is a function of — see the note
 // at kIngestCacheVersionMirror. They are in the filename key too; carrying them here as well means a blob
 // reached by any other route (hand-copied, collided) is REJECTED rather than believed.
-// v13: `producer` is fnv1a64 of the producer identity — the build that computed the dead set (producerIdentity).
+// v14: `producer` is fnv1a64 of the producer identity — the build that computed the dead set (producerIdentity).
 inline std::string serializeSnapshot( const Snapshot& s, const std::string& headSha )
 {
     std::string buf;
@@ -3021,7 +3022,7 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
         return false;
     }
 
-    // v13 — the PRODUCER guard. The dead set is a function of call resolution as well as extraction, so a blob
+    // v14 — the PRODUCER guard. The dead set is a function of call resolution as well as extraction, so a blob
     // another build computed describes a different graph; the key already never names one, this refuses one
     // reached any other way (see producerIdentity).
     std::uint64_t blobProducer = 0;
