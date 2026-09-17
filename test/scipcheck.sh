@@ -119,6 +119,32 @@ if grep -qi 'scip' "$TMP/corrupt.err"; then ok "corrupt index → stderr alert e
     && ok "missing index → exit 1, stdout empty, the refusal names --scip" \
     || no "missing index: expected a refusal (exit 1, empty stdout), got exit $rcm with $( wc -c <"$TMP/miss.out" ) B on stdout"
 
+# 5c) OVERLONG VARINT → a corrupt index, never a silently truncated value. A protobuf varint is at most 10 bytes and
+#     its 10th byte may carry ONE payload bit (bit 63). scipwire::Reader::varint shifted whatever that byte held left
+#     by 63, keeping bit 0 and dropping the rest — defined for unsigned, but it accepted a malformed field as a number,
+#     and under the G1 sanitizer build (`integer`) the shift that discards bits aborted the process. Found by the
+#     reader fuzzer (test/fuzz/readers, reader scip). The index here is the valid one with one extra UNKNOWN top-level
+#     varint field appended, so the decoder must SKIP it: 9×0xFF + 0x7F (payload past bit 63) must degrade like arm 5,
+#     while its control 9×0xFF + 0x01 (the largest legal 64-bit varint) must still overlay.
+python3 - "$IDX" "$TMP/overlong.scip" "$TMP/maxvarint.scip" <<'PY'
+import sys
+src, bad, good = sys.argv[1:4]
+data = open(src, "rb").read()
+tag = bytes([(15 << 3) | 0])          # field 15, wire type 0 — a field the decoder skips
+open(bad, "wb").write(data + tag + b"\xff" * 9 + b"\x7f")
+open(good, "wb").write(data + tag + b"\xff" * 9 + b"\x01")
+PY
+"$BIN" "$CORPUS" --scip="$TMP/overlong.scip" $EXC --no-cache >"$TMP/overlong.out" 2>"$TMP/overlong.err"; rco=$?
+if [ $rco -eq 0 ] && diff -q <(printf '%s' "$NOSCIP") "$TMP/overlong.out" >/dev/null && grep -qi 'corrupt' "$TMP/overlong.err"; then
+    ok "overlong varint (10th byte past bit 63) → corrupt index: exit 0, output IDENTICAL to no---scip, stderr names it"
+else
+    no "overlong varint was not refused as corrupt (exit $rco; $( grep -o 'precise=[0-9]*' "$TMP/overlong.out" | head -1 ); stderr: $( head -c 160 "$TMP/overlong.err" ))"
+fi
+"$BIN" "$CORPUS" --scip="$TMP/maxvarint.scip" $EXC --no-cache >"$TMP/maxvarint.out" 2>/dev/null
+grep -q 'precise=1' "$TMP/maxvarint.out" \
+    && ok "control: the largest legal 10-byte varint in the same field is skipped and the overlay still applies (precise=1)" \
+    || no "control: a legal 10-byte varint broke the overlay — the arm above cannot tell a refusal from a broken fixture"
+
 # 6) FUZZ — 20 random truncations / byte-flips of the index must never crash ripwire (it degrades).
 SZ="$( wc -c <"$IDX" | tr -d ' ' )"
 crashes=0
