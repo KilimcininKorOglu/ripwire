@@ -1977,7 +1977,12 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 103;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 104;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 104 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
+                                                          //    gained a kLangTable row (src/ingest_crawl.h), so a
+                                                          //    tree that spells its headers `.hxx` now yields NEW
+                                                          //    files/symbols/edges a pre-bump cache never saw.
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 103 = 2026-09-17 (template arguments in a receiver's type): a
                                                           //    declaration records its type's last name through the
                                                           //    grammar's fields. See ingest_cache.h's kParserVer note.

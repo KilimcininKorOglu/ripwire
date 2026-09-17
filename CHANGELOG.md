@@ -1322,6 +1322,95 @@ Gate: `test/narrowcheck.sh` arms 39–43. They are red on `main` (no edge, or th
 #268's head, where arm 42 also fails: the qualified twin splits and the unqualified twins decline. Arm 40b is red on a fix
 that reads qualification off the whole spelling.
 
+### Fixed — `--affected=`/`--exercises=` and `--exclude=` matched a directory ABOVE the crawl root, not just the tree
+
+Root-spelling-invariance seams #228 missed. `--affected=`/`--exercises=` (`testmap.h`'s
+`resolveAffectedSeeds`/`resolveExerciseSeeds`), `--exclude=` (`ingest_crawl.h`), `--verify`'s FILE argument
+(`verbs_navigate.h`), `--at=FILE:LINE` (`graph.h::resolveAtSeed`), the `file:name` qualifier every
+`--callers`/`--impact`/`--uses`/`--edit-check`/`--around`/`--lego` selector shares
+(`graph.h::resolveAllByNameQualified`), its own refusal diagnosis (`selectorrefuse.h::indexHasFileMatching`
+and `definingFilesOf`), and the MCP write verbs' `file` disambiguation hint
+(`mcpedit.h::editHintMatches`) all `filePathContains`'d the RAW stored path instead of the root-relative one
+— the same seam every other index-builder and path predicate already reads per #228. So a pattern that
+happened to match the CHECKOUT location — never anything inside the tree itself — decided the answer only
+under an absolute or trailing-slash root: `--affected=<marker-above-root>` matched every file instead of
+refusing, `--exclude=<marker-above-root>` silently dropped every file from the map, `--verify`/`--at`/the
+file:name qualifier confirmed or ambiguated claims about files the index never matched, and an MCP edit's
+bogus `file` hint could pass a false disambiguation. Every path-pattern consumer now routes through one
+shared helper, `graph.h::filePathContainsRootRel`, so the next consumer cannot independently reintroduce the
+raw form; `selectorrefuse.h::definingFilesOf`'s own "here's a runnable retry" suggestion is root-relative too,
+for the same reason — the retry text has to re-match under the fixed rule to still be runnable.
+`test/rootspellingcheck.sh` gained arms for `--affected`/`--exclude`/`--verify`/`--at`/`--callers=file:name`
+across all six root spellings; `test/mcpeditcheck.sh` gained arm (10) for the MCP `file` hint.
+
+### Fixed — MCP `quality_delta`'s "sidecar present but unreadable" baseline marker now spells the CLI's own wording
+
+The CLI and MCP arms named the same disk state — a `.ripwire_quality_baseline` sidecar that exists but was
+rejected by `readBaseline` (unrecognizable, an older format, or pre-Q1) — with two different strings:
+`baseline="git-HEAD (sidecar unreadable)"` on the CLI (the spelling `quality::selectBaseline` sets and
+`--help`'s own legend documents) versus `"git-HEAD (unreadable sidecar ignored)"` from MCP's
+`mcpBaselineMarker`, which carries its own local `std::filesystem::exists` fallback for a residual case
+`selectBaseline` cannot flag on its own (§B6 M10). MCP now returns the documented CLI string.
+`test/mcpattrparitycheck.sh` gained a value-level check (its existing arms compare attribute NAMES only,
+deliberately) that pins both surfaces to the identical marker on a pre-stamp v5 sidecar fixture.
+
+### Fixed — `--layout` no longer drops a field decorated with a postfix `__attribute__((...))`
+
+`int x __attribute__((aligned(8)));` reached `layout.h`'s plain-field parser with the attribute still
+attached: the last-identifier scan that splits a declarator into its type and name took the digit inside
+the attribute's own argument list (`8`) as the field NAME and left its closing parens as unparsed trailing
+text, so the whole declaration was refused as `caveat k="unparsed-member"` with no `<f n="x">` row at
+all — unlike every other unmodelable-field shape the fixture covers (`alignas(N)`, `decltype(...)`,
+`std::function<...>`), all of which still count the field. `layout.h` now peels a trailing
+`__attribute__((...))` (balanced parens, same technique as the existing array-extent peel) before the
+name/type split. An attribute that changes the field's own placement (`aligned`/`packed`) still refuses —
+`x` is counted (`<f n="x">`) but `unknown-type`, the same degrade `alignas(N)` already gets, rather than a
+confidently wrong offset; any other attribute (`deprecated`, `unused`, …) is a pure hint and is now modelled
+normally, with no caveat at all. `test/layoutcheck.sh`'s `AttributeFieldCase` gained the same
+field-survives assertion `AlignasFieldCase` already had, and a new `AttributeHarmlessFieldCase` fixture
+pins the fully-modelled path.
+
+The aligned/packed check also missed GNU's reserved-namespace double-underscore spelling
+(`__aligned__`/`__packed__` — what system headers reach for so the keyword cannot collide with a macro of
+the same bare name): `containsWord`'s word-boundary rule treats `_` as an identifier byte, so it does not
+match `aligned` inside `__aligned__` at all, and the field came back `modeled="1"` with a confidently
+wrong `sz`/`al`/`off`. `attrHasKeyword` now checks both spellings. The C++11 standard attribute syntax
+(`[[gnu::aligned(8)]]`/`[[gnu::packed]]`) was checked too: both already refuse, as a side effect of how the
+surrounding text fails to parse as a plain field rather than by design — pinned in the fixture so a later
+change to `[[...]]` handling cannot silently start modelling these as natural. `test/layoutcheck.sh` gained
+`AttributeGnuAlignedFieldCase`/`AttributeGnuPackedFieldCase` (must degrade), `AttributeGnuHarmlessFieldCase`
+(`__unused__`, must stay modelled), and `AttributeStdAlignedFieldCase`/`AttributeStdPackedFieldCase`
+(the `[[gnu::...]]` regression pins).
+
+### Fixed — the crawl now admits `.hxx`, a C++ header spelling every OTHER per-extension table already listed
+
+`src/ingest_crawl.h`'s `kLangTable` — the ONE table that decides whether the crawl looks at a file at
+all — had rows for `.h`/`.hpp`/`.hh` but none for `.hxx`, so a repository that spells its headers `.hxx`
+was invisible to the crawl (`files=0`, `unindexed="hxx:N"`) even though six other per-extension tables in
+the tree (`flipimpact.h`'s dead-code header set, `layout.h`'s `--layout` scan, `lintrules.h`,
+`quality.h`'s header/public-API predicates, `resolve.h`'s include resolver, `verbs_lint.h`) already listed
+`.hxx` alongside `.hpp`/`.hh`. `.hxx` now rides the same `Lang::Cpp` / tree-sitter-cpp grammar as `.h`.
+This changes extraction output for any tree with `.hxx` files (new files, symbols and edges a pre-bump
+cache never saw), so `kParserVer` moves 103 → 104 (the lane declared 99 → 100 over `main`;
+integration/train-3 assigns 104 after #276's 103; mirrored in `kIngestParserVerMirror`, same diff;
+`test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
+single-file root. `taskroute.h::kCodeExtensions` (the FILE:LINE token recognizer behind `--help-task`'s
+at-line routing) was a seventh table listing `.hpp`/`.hh` without `.hxx` — added, with a `test/taskroutecheck.sh`
+arm routing a `.hxx:LINE` token to `--slice=@FILE:LINE`.
+
+### Fixed — `--slice --since` no longer tells the "new code" story about a blob that was never parseable source
+
+A file whose blob at REV held ERROR/MISSING tree-sitter nodes (binary content committed under a source
+extension, a merge gone wrong, anything the grammar's error recovery could not read as this language)
+could leave the REV-side symbol search empty for a reason that has nothing to do with the definition
+being new. `status="sym_absent_at_rev"` claims "the file was there and the definition was not" — every
+row then reads `op="+"`, the reviewer's cue that this is newly-added code — which is a confidently wrong
+story for a blob that was not valid source at all. `slicediff.h`'s `sliceAtRev` now checks the same
+`errNodes > 0` degraded-parse signal `fileParseDegraded` already shares with `--grep`'s `parse_degraded=`
+and the selector refusals, and reports `status="unparsed_at_rev"` (`comparable="0"`, no rows) instead
+when the REV blob's own parse was this degraded. `test/slicediffcheck.sh` gained arm (8c) pinning a
+binary-at-REV case against the (8)/(8b) sym-absent case it must not be confused with.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

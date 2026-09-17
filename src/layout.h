@@ -1190,6 +1190,7 @@ struct Declarator
     std::string_view              typeSpec;        // empty on a follow-on declarator (inherits the first's)
     std::string_view              name;
     std::vector<std::string_view> extents;         // one entry per `[…]`, left to right
+    std::vector<std::string_view> attrGroups;      // A3: peeled `__attribute__((…))` inner text, source order
     bool                          isPointer  = false;
     bool                          isRef      = false;
     bool                          isBitfield = false;
@@ -1214,6 +1215,79 @@ inline bool cutAtTopLevel( std::string_view& s, std::string_view stops )
         return true;
     }
     return false;
+}
+
+// A3 (found-items 2026-09-17): peel trailing `__attribute__((…))` groups off the RIGHT of `s` — GNU/GCC
+// postfix attribute syntax, placed after the declarator name or (per the standard grammar) after its array
+// extents. `int x __attribute__((aligned(8)))` used to reach parseDeclarator's last-identifier scan with the
+// attribute still attached: the scan took "8" (the last identifier-looking token before the attribute's own
+// closing parens) as the field NAME and left `)))` as unparsed trailing junk, so `d.ok` came back false and
+// the whole declaration was refused as "unparsed-member" with no `<f n="x">` row at all — candidateParen
+// already keeps `__attribute__(( … ))` from being misread as a member-function's parameter list (see its own
+// comment above), but nothing removed the group before the name/type split ran. Mirrors peelExtents: balanced
+// parens, returns the peeled groups' INNER text (the attribute-list bytes between the doubled parens, e.g.
+// "aligned(8)") in source order, so the caller can tell an attribute that changes layout (aligned/packed)
+// from one that is purely a hint (deprecated/unused/…) and does not need to touch modeled= at all.
+inline std::vector<std::string_view> peelAttributeGroups( std::string_view& s )
+{
+    static constexpr std::string_view kAttr = "__attribute__";
+    std::vector<std::string_view>     reversed;
+    for( ;; )
+    {
+        s = trimView( s );
+        if( s.empty() || s.back() != ')' )
+        {
+            break;
+        }
+        int         depth = 0;
+        std::size_t open  = std::string_view::npos;
+        for( std::size_t i = s.size(); i-- > 0; )
+        {
+            if( s[i] == ')' )      { ++depth; }
+            else if( s[i] == '(' ) { --depth; if( depth == 0 ) { open = i; break; } }
+        }
+        if( open == std::string_view::npos )
+        {
+            break; // unbalanced — degrade rather than misclassify (same rule matchBracket's callers use)
+        }
+        const std::string_view before = trimView( s.substr( 0, open ) );
+        if( !before.ends_with( kAttr ) )
+        {
+            break; // the trailing (...) group is not an attribute specifier — leave it for the caller
+        }
+        std::string_view inner = trimView( s.substr( open + 1, s.size() - open - 2 ) );
+        if( inner.size() >= 2 && inner.front() == '(' && inner.back() == ')' )
+        {
+            inner = trimView( inner.substr( 1, inner.size() - 2 ) ); // the doubled-paren wrapper `((…))`
+        }
+        reversed.push_back( inner );
+        s = trimView( before.substr( 0, before.size() - kAttr.size() ) );
+    }
+    return { reversed.rbegin(), reversed.rend() };
+}
+
+// A3 (review round, found-items 2026-09-17): a GNU attribute keyword may be spelled bare (`aligned`) OR
+// wrapped in the reserved-namespace double underscore (`__aligned__` — what system headers reach for so
+// the name cannot collide with a macro of the same bare word); the two spell the SAME attribute, but
+// `containsWord` alone cannot see it: `_` counts as an identifier byte, so the underscores that correctly
+// wall "aligned" off from a longer word are exactly what makes `__aligned__` fail to match at all. Checked
+// as two containsWord calls (the bare spelling, then the wrapped one) rather than a hand-rolled tokenizer:
+// a fresh identifier-scanning loop here duplicated gitoracle.h::forEachIdentifier closely enough that
+// quality-delta gated on it (found-items 2026-09-17 review round) — two bounded word checks reuse the
+// primitive layout.h already leans on everywhere else (static/virtual/operator, above) instead of
+// re-deriving a general tokenizer for a two-keyword, fixed-alphabet job.
+inline bool attrHasKeyword( std::string_view attr, std::string_view bare ) noexcept
+{
+    if( containsWord( attr, bare ) )
+    {
+        return true;
+    }
+    std::string wrapped;
+    wrapped.reserve( bare.size() + 4 );
+    wrapped += "__";
+    wrapped += bare;
+    wrapped += "__";
+    return containsWord( attr, wrapped );
 }
 
 // Peel trailing array extents off the RIGHT of `s`: `slots[ 4 ][ 2 ]` → {"4","2"}, leaving `Slot slots`.
@@ -1266,6 +1340,15 @@ inline Declarator parseDeclarator( std::string_view text )
 
     d.isBitfield = cutAtTopLevel( s, ":" );        // a bitfield WIDTH — refused later, but recognised here
     cutAtTopLevel( s, "={" );                      // a default member initializer (`= 0`, `= {}`, `{0}`)
+    if( s.empty() )
+    {
+        return d;
+    }
+
+    // A3: peel a trailing `__attribute__((…))` BEFORE the array extents — the standard grammar (and this
+    // fixture's own `int x[4] __attribute__((packed));` shape) places the attribute AFTER any array bounds,
+    // so it must come off first for peelExtents below to still find `]` at the end of `s`.
+    d.attrGroups = peelAttributeGroups( s );
     if( s.empty() )
     {
         return d;
@@ -1705,6 +1788,23 @@ inline void appendField( BodyWalk& w, const Declarator& d, std::string_view type
     if( d.isRef )
     {
         addCaveat( w.def, "reference-member", f.name + ": a reference member's storage is unspecified" );
+    }
+
+    // A3: a PER-FIELD `__attribute__((aligned(N)))` / `((packed))` (bare OR the GNU reserved-namespace
+    // `__aligned__` / `__packed__` spelling — attrHasKeyword normalises both to one classification, review
+    // round 2026-09-17) changes this field's own placement, and the model has no argument evaluator for
+    // it — degrade to unknown-type exactly like resolveFieldType's own refusal for `alignas(N) int x`
+    // (AlignasFieldCase), an unknown size/align rather than a confidently wrong one. Every OTHER attribute
+    // (deprecated/unused/…) is a pure hint that changes no byte of the layout, so peelAttributeGroups
+    // already dropped it from typeSpec above with no caveat at all — this is the one place that distinction
+    // is made, deliberately narrow to keep a silent attribute silent.
+    for( std::string_view attr : d.attrGroups )
+    {
+        if( attrHasKeyword( attr, "aligned" ) || attrHasKeyword( attr, "packed" ) )
+        {
+            t.known = false;
+            break;
+        }
     }
 
     for( std::string_view e : d.extents )

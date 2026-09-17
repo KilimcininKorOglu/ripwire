@@ -58,7 +58,7 @@ struct LangEntry
 // Order does not matter (linear scan); kept grouped by language for readability.
 // The extent is EXACT, not headroom: it was 32 with 32 rows, .toml made it 33, .pyi made it 34 and the
 // .yml/.yaml pair made it 36, the .php/.phtml/.lua trio made it 40, the .ex/.exs pair made it 42, the
-// .rst/.adoc/.org/.mdx prose quartet made it 46, .dart made it 47 and .kt made it 48. Sizing it to the row count is what
+// .rst/.adoc/.org/.mdx prose quartet made it 46, .dart made it 47, .kt made it 48 and .hxx made it 49. Sizing it to the row count is what
 // makes
 // `std::array<bool, kLangTable.size()> present` (the grammar-prewarm set,
 // below) exact too, and it turns "added a row and forgot the extent" into a compile error rather than a
@@ -87,7 +87,7 @@ struct LangEntry
 // the latter a list item), so those files carry the file-level node alone and serve as ONE whole-file
 // unit. A heading detector per format is a later lane with its own measurement. `.mdx` is markdown with
 // JSX, which the block grammar already reads as html blocks (opaque). Gate: test/textdocscheck.sh.
-constexpr std::array<LangEntry, 48> kLangTable = {{
+constexpr std::array<LangEntry, 49> kLangTable = {{
     { ".cpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".cc",   Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".cxx",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
@@ -143,6 +143,12 @@ constexpr std::array<LangEntry, 48> kLangTable = {{
     { ".h",    Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".hpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".hh",   Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
+    // A4 (found-items 2026-09-17): `.hxx` (a C++ header spelling, same status as `.hpp`/`.hh`) had no row
+    // here — every OTHER per-extension table in the tree (flipimpact.h's dead-code header set, layout.h's
+    // --layout scan, lintrules.h, quality.h's isHeaderPath/isTestScriptPath twin, resolve.h's include
+    // resolver, verbs_lint.h) already lists `.hxx` alongside `.h`/`.hpp`/`.hh`, so a repository that spells
+    // its headers `.hxx` was invisible to the crawl even though every downstream table was ready for it.
+    { ".hxx",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".c",    Lang::C,          &tree_sitter_c,          "c"          },   // plain C (L3) — was entirely invisible before this table gained its own row
     { ".py",   Lang::Python,     &tree_sitter_python,     "python"     },
     { ".pyi",  Lang::Python,     &tree_sitter_python,     "python"     },   // typing stub — often a library's ONLY Python-visible API (a Rust/C core's whole Python surface lives in one .pyi)
@@ -1550,17 +1556,20 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
                 return full;
             };
 
-            // user --exclude substrings prune dirs and drop files (vendored/generated trees). Multi-root (A12):
-            // match against the LABELED spelling so one excludes list applies uniformly across roots.
+            // user --exclude substrings prune dirs and drop files (vendored/generated trees). #228/A1: match
+            // against the ROOT-RELATIVE spelling (relForHash), never the raw typed path — an absolute or
+            // trailing-slash root spelling must not let an --exclude substring hit the checkout location
+            // above the root (the same defect class rootRelPath fixes for the index-builder seams). Multi-root
+            // (A12): match against the LABELED spelling so one excludes list applies uniformly across roots.
             bool excluded = false;
             if( !excludeSubstr.empty() )
             {
-                std::string labeledBuf;
-                std::string_view matchPath = fullPath();
+                std::string             labeledBuf;
+                const std::string_view  rel       = relForHash( fullPath(), rootDir );
+                std::string_view        matchPath = rel;
                 if( !excludeLabel.empty() )
                 {
                     labeledBuf.assign( excludeLabel );
-                    const std::string_view rel = relForHash( fullPath(), rootDir );
                     if( !rel.empty() ) { labeledBuf.push_back( '/' );  labeledBuf.append( rel ); }
                     matchPath = labeledBuf;
                 }

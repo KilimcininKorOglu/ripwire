@@ -127,6 +127,24 @@ every_spelling()
     if [ -z "$missing" ]; then ok "$label"; else no "$label — missing under:$missing"; fi
 }
 
+# refuses_uniformly LABEL DIR VERB-ARGS... — every spelling's exit code is 1 (a uniform refusal). Some
+# CORRECT answers are "refuses, no document at all" (stdout empty, the diagnosis on stderr), which
+# invariant()'s "diff the abs run's stdout" guard has nothing to compare — this asserts the exit code
+# vector instead.
+refuses_uniformly()
+{
+    local label="$1" d="$2"; shift 2
+    local key; key="$( printf '%s' "$label" | tr -c 'A-Za-z0-9' '_' )"
+    local sp rcs="" want=""
+    for sp in $SPELLINGS; do
+        spell "$sp" "$d" "$TMP/out/$key.$sp" "$@"
+        rcs="$rcs$( cat "$TMP/out/$key.$sp.rc" )"
+        want="${want}1"
+    done
+    [ "$rcs" = "$want" ] && ok "$label: refuses (rc=1) identically under every spelling" \
+                         || no "$label: exit codes per spelling ($SPELLINGS) = $rcs, want $want"
+}
+
 # ── (1)+(2) the four-file Python tree (the #228 repro) ───────────────────────────────────────────────
 PY="$TMP/w/pyfour"
 stage "$FIX" "$PY"
@@ -157,6 +175,44 @@ qrc=""
 for sp in $SPELLINGS; do qrc="$qrc$( cat "$TMP/out/pyfour___quality_delta.$sp.rc" )"; done
 [ "$qrc" = "000000" ] && ok "control: --quality-delta exits 0 on the unchanged tree under all six spellings" \
                       || no "control: --quality-delta exit codes per spelling ($SPELLINGS) = $qrc, want 000000"
+
+# ── (1)+(2) A1 residual (found-items 2026-09-17, reports/pr-253.md R1/R2): SELECTOR PATH PATTERNS and
+# --exclude= must match the ROOT-RELATIVE path, not the typed one. testmap.h::resolveAffectedSeeds/
+# resolveExerciseSeeds and ingest_crawl.h's --exclude matcher used to filePathContains() the RAW stored
+# path, so a marker that exists only in the CHECKOUT location above the crawl root — never inside any
+# file's own tree-relative path — decided the answer: `--affected=<marker>` matched every file (seeds
+# nonzero) and `--exclude=<marker>` dropped every file, under an absolute or trailing-slash root spelling,
+# while `.`/`./`/symlink/`..`-spelled runs correctly saw no match at all.
+MARK="$TMP/w/zzzmarker9/pyfour"
+stage "$FIX" "$MARK"
+refuses_uniformly "A1 --affected=<above-root marker>" "$MARK" --affected=zzzmarker9
+invariant "A1 --exclude=<above-root marker> excludes nothing under every spelling" "$MARK" --exclude=zzzmarker9
+
+# review round (2026-09-17): --affected/--exclude were not the only raw filePathContains consumers.
+# graph.h's resolveAtSeed (--at=FILE:LINE) and resolveAllByNameQualified (the file:name qualifier every
+# --callers/--impact/--uses/--edit-check/--around/--lego selector shares), selectorrefuse.h's
+# indexHasFileMatching (the refusal diagnosis those same verbs print — reused by name below, since a
+# wrong-file refusal is silent success from the caller's POV), and verbs_navigate.h's --verify FILE
+# argument all matched the RAW stored path. All four now route through graph.h's shared
+# filePathContainsRootRel; mcpedit.h's editHintMatches (the MCP write verbs' `file` disambiguation hint)
+# is the fifth site and is MCP-only — covered in test/mcpeditcheck.sh instead, where the MCP call harness
+# already lives (arm (14), below its own root-spelling fixture).
+refuses_uniformly "A1 --verify contains(<above-root marker>) FILE half" "$MARK" --verify='contains(zzzmarker9,"x")'
+# --at needs a CONTENT check, not just an exit-code one: a marker that matches several files under an
+# absolute spelling refuses as FileAmbiguous ("'zzzmarker9' matches N indexed files") instead of
+# FileUnmatched ("no indexed file matches 'zzzmarker9'") — a DIFFERENT, wrong reason at the SAME rc=1, so
+# refuses_uniformly's exit-code vector cannot see it (confirmed: this arm passed on the pre-fix binary
+# under a bare rc check and only reds once the reason is compared).
+atReason=""
+for sp in $SPELLINGS; do
+    spell "$sp" "$MARK" "$TMP/out/a1at.$sp" --at=zzzmarker9:1
+    grep -qF "no indexed file matches 'zzzmarker9'" "$TMP/out/a1at.$sp.err" || atReason="$atReason $sp"
+done
+[ -z "$atReason" ] && ok "A1 --at=<above-root marker>:1 (resolveAtSeed): every spelling refuses for the SAME reason (no indexed file matches)" \
+                    || no "A1 --at=<above-root marker>:1: refusal reason differs under:$atReason (a marker matching several files there reads FileAmbiguous, not FileUnmatched)"
+# --callers=<marker>:load exercises BOTH resolveAllByNameQualified (graph.h) and the refusal diagnosis
+# indexHasFileMatching (selectorrefuse.h) prints when the file half matches nothing — one arm, two sites.
+refuses_uniformly "A1 --callers=<above-root marker>:load (resolveAllByNameQualified + refusal diagnosis)" "$MARK" --callers=zzzmarker9:load
 
 # ── (3) sensitivity: an edit that moves the import's target MUST gate, under `.` and absolute alike ─────
 printf 'from app.local import load\n\n\ndef handler():\n    return load(1)\n' >"$PY/app/views.py"

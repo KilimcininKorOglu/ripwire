@@ -232,7 +232,15 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 103;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 104;          // bump on any grammar/.scm/extraction change
+                                                      // 104 = 2026-09-17 (A4, found-items 2026-09-17,
+                                                      //    test/filerootcheck.sh arm 4): `.hxx` gained a kLangTable row
+                                                      //    (Lang::Cpp, same as `.hpp`/`.hh`) — the crawl previously
+                                                      //    skipped every `.hxx` file outright (unindexed), so a repo
+                                                      //    that spells its headers `.hxx` now yields NEW files,
+                                                      //    symbols and edges a pre-bump cache never saw: content
+                                                      //    change, bump required. The lane declared 100 over main's
+                                                      //    99; assigned 104 on integration/train-3 after #276's 103.
                                                       // 103 = 2026-09-17 (template arguments in a receiver's written type,
                                                       //    test/narrowcheck.sh arms 39-43): a C++ declaration's Type/ParamType
                                                       //    record takes its type's LAST NAME through the grammar's fields.

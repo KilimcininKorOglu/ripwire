@@ -6,6 +6,11 @@
 #   - output contains symbols from the file (non-zero symbol count for a known fixture file)
 #   - output is well-formed XML (xmllint --noout)
 #   - determinism: two identical single-file runs produce byte-identical output
+#   - A4 (found-items 2026-09-17): a `.hxx` file — a C++ header spelling that had NO kLangTable row
+#     (src/ingest_crawl.h) before this lane, so the crawl silently skipped it (unindexed) even though
+#     every OTHER per-extension table in the tree already listed `.hxx` alongside `.h`/`.hpp`/`.hh` —
+#     indexes as a single-file root exactly like `.cpp`/`.h` above (the single-file branch runs through
+#     the SAME lookupLang(ext) table a directory crawl does)
 #
 # Usage:
 #   test/filerootcheck.sh                          # uses build/ripwire
@@ -81,6 +86,24 @@ diff -q "$TMP/det1" "$TMP/det2" >/dev/null \
 diff -q "$TMP/dir1" "$TMP/dir2" >/dev/null \
     && ok "directory root: byte-identical output (no regression)" \
     || no "directory root: non-identical output between runs"
+
+# ── (4) A4: a `.hxx` file — no kLangTable row before this lane — indexes as a single-file root ──────
+
+HXX_FILE="$TMP/thing.hxx"
+printf '#pragma once\nint hxxFunc( int a );\n' >"$HXX_FILE"
+"$BIN" "$HXX_FILE" --no-cache >"$TMP/hxxfile" 2>/dev/null
+
+grep -q 'files=1' "$TMP/hxxfile" \
+    && ok "A4: a .hxx file as root is indexed (files=1)" \
+    || no "A4: a .hxx file as root was not indexed: $( grep -oE '<!-- files=[^>]*' "$TMP/hxxfile" | head -1 )"
+
+grep -q '<s [^>]*n="hxxFunc"' "$TMP/hxxfile" \
+    && ok "A4: output contains the .hxx file's own symbol (hxxFunc)" \
+    || { no "A4: no hxxFunc symbol in .hxx output"; head -c 400 "$TMP/hxxfile"; echo; }
+
+xmllint --noout "$TMP/hxxfile" 2>/dev/null \
+    && ok "A4: .hxx single-file output is well-formed XML" \
+    || no "A4: .hxx single-file output is malformed XML"
 
 # ── Summary ───────────────────────────────────────────────────────────────────────────────────────
 
