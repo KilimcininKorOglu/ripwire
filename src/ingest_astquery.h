@@ -775,7 +775,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
         std::vector<std::thread> compilers;  compilers.reserve( compileThreads );
         for( unsigned worker = 0; worker < compileThreads; ++worker )
         {
-            compilers.emplace_back( [ & ]()
+            compilers.emplace_back( [ & ]() noexcept
             {
                 for( ;; )
                 {
@@ -919,7 +919,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
 
     for( unsigned t = 0; t < nthreads; ++t )
     {
-        pool.emplace_back( [ &, t ]()
+        pool.emplace_back( [ &, t ]() noexcept
         {
             ParserGuard pg;
             if( pg.p == nullptr )
@@ -1529,6 +1529,15 @@ inline bool spanTierMemoLoad( const std::string& diskPath, const StatInfo& now, 
     {
         return false;   // truncated / torn blob — re-parse rather than classify from half a map
     }
+    // Every tier byte is external input: the memo carries no checksum, so a flipped or hand-written byte arrives
+    // here intact. A value at or past kSpanTierCount is not a tier, and search.h's grepApplySpanTiers counts hits
+    // into a per-tier array indexed by it — before this check, an out-of-bounds write on the stack.
+    const bool tiersInRange = std::all_of( loaded.tier.begin(), loaded.tier.end(), []( const std::uint8_t tier ) noexcept { return tier < kSpanTierCount; } );
+    if( !tiersInRange )   // VALIDATE-SITE: becomes `if( !VALIDATE( tiersInRange ) )` when the macro vocabulary lands
+    {
+        DEGRADED_PATH_ALERT( "grep: span-tier memo carries a tier byte past SpanTier — memo refused, the file is re-parsed" );
+        return false;
+    }
     loaded.isParsed = true;
     out             = std::move( loaded );
     return true;
@@ -1668,7 +1677,7 @@ SpanTierBatch spanTiersOfFiles( std::span<const std::string> diskPaths, bool use
     const unsigned            threadCount = static_cast<unsigned>( std::min<std::size_t>( hw, fileCount ) );
     std::atomic<std::size_t>  nextSlot{ 0 };
     std::atomic<std::uint64_t> bytesParsed{ 0 };
-    const auto                worker = [ & ]()
+    const auto                worker = [ & ]() noexcept
     {
         ParserGuard pg;
         if( pg.p == nullptr )

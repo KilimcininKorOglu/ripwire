@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -126,6 +127,10 @@ inline constexpr FateSpec kFateTable[] = {
 
 static_assert( std::size( kFateTable ) == std::size_t( Fate::Removed ) + 1,
                "kFateTable drifted from the Fate enum — update both together" );
+// loadOracleCache validates a cached fate byte against this table's size, so the table must also END at the last
+// enumerator. The assert above restates `Removed + 1`; this one asks the compiler (infra/enumcount.h), so a Fate
+// appended after Removed is a build error rather than a fate every cached record is refused for.
+static_assert( enumCountIsExact<Fate, std::size( kFateTable )>(), "kFateTable must end at the LAST Fate enumerator" );
 
 inline const char* fateTag( Fate f ) noexcept
 {
@@ -320,19 +325,22 @@ inline bool saveOracleCache( const std::string& path, const HistoryIndex& idx )
     qsnapPut<std::uint64_t>( body, fnv1a64( body ) );
 
     // Write-then-rename: a reader in another process must never see a half-written blob (the torn-read rule
-    // the rest of the cache families follow).
-    const std::string tmp = path + ".tmp";
-    std::FILE*        fp  = std::fopen( tmp.c_str(), "wb" );
+    // the rest of the cache families follow). The temp is created through the shared exclusive no-follow
+    // helper (rw::pathguard::createExclTempFile), whose RAII holder removes it on any failure; `.tmp` stays
+    // in the name so a residue glob still matches. fdopen keeps the fwrite/fclose bookkeeping.
+    rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0666 );
+    const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+    std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
     if( !fp )
     {
+        if( rawFd >= 0 ) { ::close( rawFd ); }
         DEGRADED_PATH_ALERT( "gitoracle: cannot write the history cache — the probe stays correct but re-runs cold" );
         return false;
     }
-    const bool wrote = std::fwrite( body.data(), 1, body.size(), fp ) == body.size();
-    std::fclose( fp );
-    if( !wrote || std::rename( tmp.c_str(), path.c_str() ) != 0 )
+    const bool wrote  = std::fwrite( body.data(), 1, body.size(), fp ) == body.size();
+    const bool closed = std::fclose( fp ) == 0;
+    if( !wrote || !closed || !temp.commit( path ) )
     {
-        std::remove( tmp.c_str() );
         DEGRADED_PATH_ALERT( "gitoracle: history cache write/rename failed — the probe stays correct but re-runs cold" );
         return false;
     }
@@ -600,7 +608,7 @@ inline HistoryIndex runProbe( const std::string& root )
 {
     HistoryIndex idx;
 
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " log --no-merges --no-color --no-ext-diff --no-textconv --no-renames"
                             " --format='%x01%H %cs' -p -U0 2>/dev/null";
 

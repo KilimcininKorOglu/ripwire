@@ -34,10 +34,17 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, MERGE origin/main into PR #244: RE-DERIVED. Neither side hashed kParserVer 97 over #249's
+#   deserializeSnapshot count-fits check. kParserVer stays 97, kQSnapCacheScheme stays 12.
 # 2026-09-16, TS/JS LITERAL RECEIVERS (issue #163): kParserVer and its quality mirror move 96 -> 97.
 #   RecvKind gains LitString/LitArray/LitRegex/LitNumber/LitBoolean (appended u8). Cache format unchanged
 #   (kCacheVersion stays 22). A `"x".replace()` call no longer takes the bare-name ladder. Extraction
 #   identity moved; snapshot scheme unchanged. Old extraction facts must be re-parsed.
+# 2026-09-16, CRASH LANE (#249; test/cachefuzzcheck.sh Parts 2 and 5): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
+#   deserializeSnapshot now checks each vector count against the bytes left (qsnapCountFits) before it reserves.
+#   The check only refuses a count no blob of that length can hold, and every blob serializeSnapshot writes
+#   passes it. It refuses a corrupt blob earlier, on the path that already refused it, so nothing about what a
+#   cached Snapshot means or how it is laid out changed. Extraction identity is unchanged.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.

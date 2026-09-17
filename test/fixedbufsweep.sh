@@ -146,6 +146,12 @@ TABLE = {
     ( "src/infra/profileScope.h", "nameBuf" ):  ( 2, "not-markup", "nameBuf[160] x2 at :721/:723: '%s [%s]' over trim_pretty's fn[96] plus Site::description, a compile-time string literal from the PROFILE_SCOPE_DESCRIBE call site. Printed as a timing-table row, never emitted as a document." ),
     ( "src/infra/profileScope.h", "locBuf" ):   ( 1, "not-markup", "locBuf[64] at :724: '%s:%d' over Site::file (__FILE__, a compile-time literal) and Site::line. Same timing table; a truncated path costs a developer legibility, nothing else." ),
     ( "src/infra/profileScope.h", "indented" ): ( 1, "not-markup", "indented[208] at :759: '%*s%s%s' — a width-form pad (depth*2, and depth is capped at 64 by print_tree_node's own guard) over nameBuf[160] plus the literal ' *'. Same timing table." ),
+    # ── src/infra/diagnostics.cpp — the Diagnostics reporters (VERIFY / PANIC / VERIFY_SAME_THREAD / DEGRADED_PATH_ALERT) ──
+    # Not markup: both buffers go to STDERR as a diagnostic notice and never into a document. They are TABLE rows, not
+    # NUMERIC_ONLY, for the arch.h `hex` reason: they have no pre-conversion printf format to derive a class from (the
+    # reporters wrote through std::cerr until 2026-09-16, when they began formatting first so a notice is ONE write).
+    ( "src/infra/diagnostics.cpp", "notice" ): ( 1, "not-markup", "notice[4096] in writeNotice: every reporter's whole notice — the assert, panic and thread-violation banners and the one-line degraded notice — interpolating the caller's expression text, file name, __PRETTY_FUNCTION__ and description, none escaped and none needing it, because the bytes go to stderr in one stdio call. A longer notice is cut by markTruncated and the cut is stated on the notice's own last line (test/diagnoticecheck.sh arm L)." ),
+    ( "src/infra/diagnostics.cpp", "marker" ): ( 1, "not-markup", "marker[96] in markTruncated: ' ... [notice truncated: kept {} of {} bytes]\\n' of TWO std::size_t (bytes kept, full length) and no string argument — 42 literal B + two 20-digit counts + NUL = 83 B against 96, so it cannot truncate; formatted twice through one lambda (sized with the largest K first, then the real K), which is one call site. Copied over the tail of notice[] on stderr; never a document." ),
     # ── src/lanes.h — THE REFERENCE SAFE SHAPE ───────────────────────────────────────────────────────────
     ( "src/lanes.h", "buf" ): ( 10, "safe",       "buf[640] x3: snprintf-THEN-escape. :723 interpolates an UNBOUNDED file path and is still safe for exactly that reason — the warning text is escaped downstream, so a cut shortens prose and can never land inside markup. This is the shape §B14's six were not." ),
     # ── src/main.cpp ─────────────────────────────────────────────────────────────────────────────────────
@@ -501,7 +507,14 @@ if not bad:
 #            (S1) confirms the MEMBER SET behind the numbers: 221 sites over 35 hand-classified TABLE rows (33
 #            plus #215's two new ones) and 59 derived NUMERIC_ONLY rows, with (S2) reporting no stale row and
 #            (S1b) nothing breaching. rows is 94 from #215's two additions, which this lane does not touch.
-EXPECTED = { "mentions": 328, "calls": 221, "sites": 221, "rows": 94, "widthforms": 0 }
+#            2026-09-16 (the Diagnostics reporters write each notice ONCE): mentions 328 -> 331, calls 221 -> 223,
+#            sites 221 -> 223, rows 94 -> 96, widthforms unmoved — re-read from `git diff origin/main -- src/`, not
+#            accepted from the delta. src/infra/diagnostics.cpp stopped building notices from std::cerr insertions
+#            and now formats each whole notice into `notice[4096]` (writeNotice) before one stdio call, cutting an
+#            over-long one with a size_t-only marker formatted into `marker[96]` (markTruncated): two calls, two
+#            sites, two NEW TABLE rows above. mentions is +3 because the comment explaining the stack buffer names
+#            rw::formatTo on a third line. No site interpolates escaped text, and neither buffer reaches a document.
+EXPECTED = { "mentions": 331, "calls": 223, "sites": 223, "rows": 96, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,
