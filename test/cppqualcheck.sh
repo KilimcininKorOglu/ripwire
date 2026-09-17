@@ -220,10 +220,15 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # 24 -> 21 2026-09-16 (lane/git-and-tempfile-hardening): githarden.h's three local-config pre-scan reads
 # (the `.git` gitdir file, commondir, each config candidate) moved to pathguard's non-blocking,
 # regular-file-only read, retiring the three sites the 19 -> 22 step added.
-# 21 -> 24: Python runner evidence reads source, pyproject.toml and setup.cfg (#229).
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 24 ] \
-    && ok "repo: --uses=readWholeFile count=24 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 24"
+# 21 -> 19 2026-09-17 (crash lane, #249, merged over the step above): the two fixed-name readers LEFT the canonical
+# whole-file read for its regular-file-only sibling docparse::detail::readRegularFile, because a FIFO or a device link
+# at the name hung the blocking open — quality.h's readRegisterMacrosConfig (.ripwire_config) and verbs_quality.h's
+# ackNothingToAccept (the acks ledger). Disjoint from the three githarden.h sites; re-derived on the merged tree
+# (20 grep lines = 19 call sites + the definition, and --uses answers 19).
+# 19 -> 22: Python runner evidence reads source, pyproject.toml and setup.cfg (#229).
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 22 ] \
+    && ok "repo: --uses=readWholeFile count=22 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 22"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"

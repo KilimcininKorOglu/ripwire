@@ -22,15 +22,16 @@
 #   (a) a HEAD with NO indexable source: findings classify origin="new-symbol", exit 0, and NO pre-Q1 alert.
 #   (b) a 0-byte sidecar is treated as ABSENT (falls back to the git-HEAD auto-baseline) and gives the same
 #       answer as having no sidecar at all.
-#   (c) a genuine pre-Q1 sidecar (records but no `loc ` lines) still fails CLOSED: the alert fires and NO row
-#       of ANY kind — the clone kinds included — carries origin="new-symbol".
+#   (c) a genuine pre-Q1 sidecar (records but no `loc ` lines) is REFUSED (since a8c71a02, 2026-09-07; it used
+#       to be honored fail-closed): named on the root and on stderr, no was=0 now=0 phantom row, and computeDelta's
+#       fail-closed pre-Q1 alert does NOT fire, because the sidecar never reaches the delta.
 #   (d) all-new code that duplicates itself with fan-in >= 3 is reported as `duplication` but NOT as
 #       `new-clone-of-reused-helper`.
 #   (e) a clone of a genuinely PREEXISTING high-fan-in helper IS still reported as new-clone-of-reused-helper
 #       (the enforcement narrows the kind; it must not empty it).
 #
-# Own temp repos. Needs git. The DEGRADED alerts are compiled out under NDEBUG, so (c)'s alert sub-check is
-# skipped when the binary is a Release build (this is the CI-builds-Release blind spot, logged in CLAUDE.md).
+# Own temp repos. Needs git. The DEGRADED alerts are compiled out under NDEBUG, so (c)'s no-alert sub-check is
+# skipped when --version names a Release/RelWithDebInfo/MinSizeRel build (the CI-builds-Release blind spot, CLAUDE.md).
 # Usage:  test/qoriginoraclecheck.sh   |   RIPWIRE_BIN=build/ripwire test/qoriginoraclecheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -134,13 +135,33 @@ PQPHANTOM="$( printf '%s' "$PQ" | tr '<' '\n' | grep '^r kind=' | grep -c 'was="
     && ok "pre-Q1 sidecar: refused and named on the root (sidecar unreadable), no was=0 now=0 phantom row (exit $rcp)" \
     || { no "pre-Q1 sidecar: $PQPHANTOM phantom row(s), root marker: $( printf '%s' "$PQ" | grep -o 'baseline="[^"]*"' )"; printf '%s' "$PQ" | tr '<' '\n' | grep 'was="0" now="0"' | head -3; }
 grep -q 'pre-Q1' "$WORK/pq_err" && grep -q 'quality-baseline' "$WORK/pq_err" \
-    && ok "pre-Q1 sidecar: stderr names the format and the re-pin (Release-visible, not only the debug alert)" \
+    && ok "pre-Q1 sidecar: stderr names the format and the re-pin (the Release-visible line — this refusal raises no debug alert)" \
     || { no "pre-Q1 sidecar: stderr does not name pre-Q1 + the re-pin"; head -3 "$WORK/pq_err"; }
-if "$BIN" --version 2>/dev/null >/dev/null && grep -q 'pre-Q1' "$WORK/pq_err"; then
-    ok "pre-Q1 sidecar emits the degrade alert"
-else
-    echo "  SKIP  pre-Q1 degrade alert not observed (DEGRADED_PATH_ALERT is compiled out under NDEBUG)"
-fi
+# 2026-09-16: the row that stood here was "pre-Q1 sidecar emits the degrade alert", asserted as `--version runs &&
+# stderr says pre-Q1` — the Release-visible line the row above already pins, never the alert (CONTRIBUTING §2 shape
+# 7), with an NDEBUG skip on its else branch that a plain build reached whenever that LINE went missing. And the
+# alert it named cannot fire here: since a8c71a02 readBaseline refuses a pre-Q1 sidecar before computeDelta runs, so
+# computeDelta's fail-closed "baseline has no per-symbol loc map (pre-Q1 format)" alert — the voice of the old
+# honor-and-gate-everything behaviour — is reached only if the sidecar is honored again. Measured on the plain build:
+# stderr carries the refusal line and no alert at all. So the row asserts that the alert does NOT fire. An absent
+# alert is evidence only on a binary that prints alerts: the row decides from --version's build type (kotlincheck
+# §12) and, on a flavour that compiles alerts IN, first proves this binary prints one with a --scip index that opens
+# and fails to decode (the degrade qualitystalecheck.sh probes; the index lives in $WORK, outside the checkout).
+PQ_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+case "$PQ_FLAVOUR" in
+    Release|RelWithDebInfo|MinSizeRel)
+        echo "  SKIP  pre-Q1 sidecar: 'computeDelta's fail-closed pre-Q1 alert does not fire' — this $PQ_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out and the absence is true of every run; the plain-flavour leg proves it" ;;
+    *)
+        printf 'not a scip index at all\n' > "$WORK/probe.scip"
+        "$BIN" "$ROOT/test/fixture" --scip="$WORK/probe.scip" --top-k=1 --no-cache >/dev/null 2>"$WORK/probe.err"
+        if ! grep -qF '[math degraded] --scip: corrupt/truncated index' "$WORK/probe.err"; then
+            no "pre-Q1 sidecar: positive control — '${PQ_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DEGRADED_PATH_ALERT, so an absent pre-Q1 alert proves nothing: $( head -c 200 "$WORK/probe.err" )"
+        elif grep -qF '[math degraded] quality: baseline has no per-symbol loc map (pre-Q1 format)' "$WORK/pq_err"; then
+            no "pre-Q1 sidecar: computeDelta's fail-closed pre-Q1 alert FIRED — the sidecar reached the delta instead of being refused: $( grep -F '[math degraded]' "$WORK/pq_err" | head -1 | head -c 200 )"
+        else
+            ok "pre-Q1 sidecar: refused BEFORE the delta — computeDelta's fail-closed pre-Q1 alert does not fire (on a '${PQ_FLAVOUR:-unknown}' build the --scip decode control proved prints alerts)"
+        fi ;;
+esac
 
 # ── (d) all-new self-duplication with fan-in >= 3 is NOT 'new-clone-of-reused-helper' ──────────────────────
 N="$WORK/allnew"; mkrepo "$N"
