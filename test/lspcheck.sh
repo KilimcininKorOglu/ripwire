@@ -30,6 +30,12 @@
 #   (13) determinism (x2, byte-identical dialogs — the house pattern)
 #   (14) hover, Ruby: a class with no call edges still lists its constant-load uses as links (the sibling
 #        file's `Quota.limit` line)
+#   (15) traversal (#279 review, folded in from the reviewer's adversary driver): hover, definition and
+#        documentSymbol on a file URI OUTSIDE the root — absolute, `..`-escaped, through a symlink inside the root,
+#        and percent-encoded `%2e%2e` — answer null or [], and no response carries a byte of the outside file
+#   (16) framing: a missing, non-numeric, negative or over-cap Content-Length, and a header flood with no
+#        terminator, each end the session at exit 1 with nothing on stdout and the framing refusal on stderr,
+#        inside a wall-clock cap (no hang)
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/lspcheck.sh   |   bash test/lspcheck.sh path/to/ripwire
 
@@ -264,5 +270,52 @@ grep -q '\*\*Referenced at\*\*' "$WORK/r20" \
     && grep -q '#L3' "$WORK/r20" \
     && ok "(14) hover: the Ruby constant tier links Quota's use in the sibling file (ledger.rb:3)" \
     || { no "(14) hover Ruby constant tier missing"; head -c 400 "$WORK/r20"; }
+# ── (15) traversal: a URI outside the root answers nothing, and never the outside file's bytes ─────────────
+SECRET="$( mktemp -d )"; trap 'rm -rf "$WORK" "$SECRET"' EXIT
+printf 'int leakMarkerFn() { return 42; } // LSP-TRAVERSAL-SECRET\n' > "$SECRET/secret.cpp"
+ln -s "$SECRET" "$WORK/src/escape_link" 2>/dev/null
+up=""; for _ in $( seq 1 24 ); do up="$up../"; done
+enc=""; for _ in $( seq 1 24 ); do enc="$enc%2e%2e/"; done
+i=10
+{
+  msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"$uriInit\",\"capabilities\":{}}}"
+  for u in "file://$SECRET/secret.cpp" "file://$WORK/src/$up${SECRET#/}/secret.cpp" "file://$WORK/src/escape_link/secret.cpp" "file://$WORK/src/$enc${SECRET#/}/secret.cpp"; do
+    msg "{\"jsonrpc\":\"2.0\",\"id\":$i,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"$u\"},\"position\":{\"line\":0,\"character\":6}}}"
+    msg "{\"jsonrpc\":\"2.0\",\"id\":$(( i + 1 )),\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"$u\"},\"position\":{\"line\":0,\"character\":6}}}"
+    msg "{\"jsonrpc\":\"2.0\",\"id\":$(( i + 2 )),\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":{\"uri\":\"$u\"}}}"
+    i=$(( i + 3 ))
+  done
+  msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+} > "$WORK/d15"
+"$BIN" --lsp < "$WORK/d15" > "$WORK/raw15" 2>/dev/null; RC15=$?
+decodeFrames "$WORK/raw15" > "$WORK/r15" 2>/dev/null
+n15="$( grep -c '"id":\(1[0-9]\|2[01]\),' "$WORK/r15" )"
+empty15="$( grep '"id":\(1[0-9]\|2[01]\),' "$WORK/r15" | grep -c '"result":\(null\|\[\]\)}' )"
+if grep -q 'LSP-TRAVERSAL-SECRET\|leakMarkerFn' "$WORK/raw15"; then
+    no "(15) traversal: a response carried the outside file's bytes"
+elif [ "$RC15" = 0 ] && [ "$n15" = 12 ] && [ "$empty15" = 12 ]; then
+    ok "(15) traversal: absolute, ..-escaped, symlinked and %2e%2e URIs outside the root answer null/[] (12 of 12), rc 0, no outside bytes"
+else
+    no "(15) traversal: rc=$RC15, $n15 responses, $empty15 empty (want 0 / 12 / 12)"; head -c 600 "$WORK/r15"
+fi
+
+# ── (16) framing refusals: bounded, silent on stdout, named on stderr ───────────────────────────────────────
+CAPRUN="$ROOT/test/lib/caprun.py"
+f16=""
+printf 'Foo: bar\r\n\r\n{}' > "$WORK/f_missing"
+printf 'Content-Length: abc\r\n\r\n{}' > "$WORK/f_nonnum"
+printf 'Content-Length: -5\r\n\r\n{}' > "$WORK/f_negative"
+{ printf 'Content-Length: 40000000\r\n\r\n'; head -c 1000 /dev/zero | tr '\0' x; } > "$WORK/f_overcap"
+{ printf 'X-Pad: '; head -c 70000 /dev/zero | tr '\0' a; } > "$WORK/f_flood"
+for case in missing nonnum negative overcap flood; do
+    res="$( python3 "$CAPRUN" 10 --stdin "$WORK/f_$case" --stdout "$WORK/o_$case" --stderr "$WORK/e_$case" -- "$BIN" --lsp )"
+    if [ "$res" = "${res#rc=1 }" ] || [ -s "$WORK/o_$case" ] || ! grep -q 'malformed Content-Length framing' "$WORK/e_$case"; then
+        f16="$f16 $case[$res stdout=$( wc -c < "$WORK/o_$case" | tr -d ' ' )B]"
+    fi
+done
+[ -z "$f16" ] && ok "(16) framing: missing / non-numeric / negative / over-cap Content-Length and a header flood each exit 1 within 10 s, stdout empty, the refusal named" \
+             || no "(16) framing refusal wrong for:$f16"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
