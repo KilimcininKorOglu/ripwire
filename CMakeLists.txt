@@ -328,6 +328,24 @@ add_custom_target(ripwire_version_stamp ALL
   BYPRODUCTS ${_ripwire_version_header}
   VERBATIM)
 
+# The producer identity (cmake/source_identity.cmake): one generated DEFINITION, compiled into both
+# executables, that src/quality.h keys its Snapshot caches on — so a blob one build computed is never
+# served to a build whose sources differ. A .cpp rather than a header: see src/sourceidentity.h.
+# It is a hash of src/ and queries/ only, the same for every configuration, so it is ONE shared file with its
+# OWN always-run target, never a second COMMAND of ripwire_version_stamp. In a cross-config Ninja Multi-Config
+# build, a target with a shared byproduct runs one configuration's commands only, so it cannot also write the
+# per-configuration version.h. Every other configuration's header is then "missing and no known rule"
+# (test/buildtypestampcheck.sh #6). Collapsing is harmless for the identity alone, whose command does not
+# depend on the configuration. copy_if_different keeps an unchanged tree from recompiling it.
+set(_ripwire_source_identity_cpp "${_ripwire_generated_dir}/source_identity.cpp")
+add_custom_target(ripwire_source_identity ALL
+  COMMAND ${CMAKE_COMMAND}
+    -DRIPWIRE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DRIPWIRE_OUTPUT=${_ripwire_source_identity_cpp}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/source_identity.cmake
+  BYPRODUCTS ${_ripwire_source_identity_cpp}
+  VERBATIM)
+
 # ---- tree-sitter CORE (static) ----
 # MUST precede MakeAvailable: tree-sitter defaults BUILD_SHARED_LIBS ON -> you'd get a dylib.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -575,6 +593,7 @@ find_package(Threads REQUIRED)
 add_executable(ripwire_probe
   src/tsprobe.cpp
   ${RIPWIRE_SRCS}
+  ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire_probe PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire_probe PRIVATE
@@ -583,13 +602,14 @@ target_include_directories(ripwire_probe PRIVATE
   src/infra
   third_party
   src)
-add_dependencies(ripwire_probe ripwire_version_stamp)
+add_dependencies(ripwire_probe ripwire_version_stamp ripwire_source_identity)
 
 # ---- the real ripwire binary: full pipeline (ingest → graph → PageRank → minified XML) ----
 # main.cpp forward-declares rw::ingest(); linking ingest.cpp supplies the real tree-sitter one.
 add_executable(ripwire
   src/main.cpp
   ${RIPWIRE_SRCS}
+  ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire PRIVATE
@@ -598,7 +618,7 @@ target_include_directories(ripwire PRIVATE
   src/infra
   third_party
   src)
-add_dependencies(ripwire ripwire_version_stamp)
+add_dependencies(ripwire ripwire_version_stamp ripwire_source_identity)
 
 # ---- small-vector A/B knobs (bench/svectorab.py drives both; see bench/SVECTORAB.md) ----
 # RIPWIRE_SMALLVEC selects which container src/smallvec.h's `rw::SmallVec` alias resolves to:

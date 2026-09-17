@@ -15,6 +15,37 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
+
+CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
+tested, and a full run per landing-queue lane found almost nothing (measured 2026-09-14). `.github/workflows/ci.yml`
+now computes one `full` output (from the event name, the pull request's labels and the ref) in a new `plan` job,
+and every other job reads it instead of repeating the same condition:
+
+- **Light** (the `style` job plus the single `ubuntu-24.04`/`Release`/`clang` release leg, all 4 shards — it
+  already runs the determinism and G4 XML checks): a push to `main`, or a pull request carrying the
+  `train-member` label. Labelling is maintainer-only by construction — a fork pull request cannot label its own.
+  `pull_request` now also triggers on `labeled`/`unlabeled` (on top of the GitHub default types) so toggling the
+  label re-evaluates the same pull request without a new push.
+- **Full** (all 31 jobs): every other pull request, `workflow_dispatch` — run this against the exact commit
+  before any release tag, not an earlier green nightly — and a new nightly `schedule` at 05:41 UTC (off `:00`,
+  distinct from `nightly.yml`'s own 07:17 TSan run). `release`'s matrix is `plan`'s own computed output rather
+  than a second hand-typed list, because a job-level `if:` cannot see the matrix context to prune legs directly.
+
+A failure on the scheduled full-matrix run opens or updates `ci.yml`'s own tracking issue, titled "Nightly
+checks failing on main (full matrix)" — deliberately separate from `nightly.yml`'s TSan one. Every tracking
+issue carries the shared `nightly-failure` label (so "every nightly-scale failure" is one query) plus a
+workflow-specific second label — `nightly-full-matrix` here, `nightly-tsan` in `nightly.yml` — and every
+open/comment/close filters on both together, so a green run in one workflow can only ever touch the issue
+carrying its own second label. (An earlier draft of this change shared one issue between the two workflows
+with an uncoordinated close each; that let a green TSan night close an issue the full matrix had opened
+while the matrix was still red, and the reverse — caught before merge, not shipped.) Top-level permissions
+are `contents: read`; only the two report jobs widen, and only to `issues: write` on themselves.
+`test/g1configcheck.sh` gates the split with ten new `ciRows` for `ci.yml` and one new `labelscope` row in
+`nightlyRows` for `nightly.yml`, each proven red on its own mutated copy. Five of the ten `ciRows` extract the
+`plan` job's decide script and execute it under synthetic event/label/ref combinations rather than guessing
+at the bash from a regex.
+
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
 Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
@@ -77,6 +108,34 @@ compliant twin.
 Red on the base, in order: S1 finds the three unbounded counts, S2 the short-circuited `fclose`, S3 eight bare
 bodies. The gate's header states what each rule catches and what it misses.
 
+### Added — a nightly ThreadSanitizer run against main, which opens one tracking issue when it fails
+
+ThreadSanitizer had a build mode (`-DRIPWIRE_TSAN=ON`) and one gate written for it, `test/qsnapprefetchcheck.sh` arm
+(e), but nothing ran it against `main`: a data race could reach a tag if nobody happened to build TSan locally in
+between. It is not added as a per-PR leg, because TSan builds already run often on contributors' machines and every PR
+already waits on the macOS runners. `.github/workflows/nightly.yml` runs it once a day at 07:17 UTC instead, and skips
+the heavy job when `main` has not moved since the last green scheduled run and no tracking issue is open.
+
+The job builds TSan with clang in its own tree and runs ten gates against it, chosen for the threads they drive: the MCP
+prefetch worker (`qsnapprefetchcheck`), the edit lock (`mcpeditracecheck`), a server's re-ingest at a 128-fd limit
+(`mcpwatchercheck`), a long-lived server's re-ingest after an edit (`mcpstalecheck`), concurrent `--quality-ack` writers
+(`qackconcurrencycheck`), the private cache directory (`cacheisolationcheck`), the parallel ingest and `--match` fan-out
+over the repository (`det-gate.sh`), `--grep`'s prefetch thread (`grepfastcheck`), the `--doc-drift` workers
+(`docdriftcheck`) and the git-spawn pool (`mergescoutcheck`). A gate's own verdict is not trusted to notice a race:
+reports go to per-gate files, and a wrapper fails the step on a non-zero exit or on any report file. Before any gate
+runs, the job checks that every object of the `ripwire` target references the TSan runtime, and that the wrapper goes
+red on a planted race and stays green on its race-free twin. Locally on Apple clang 21, the same wrapper failed on the
+planted race and on a race whose exit code the command swallowed, and all ten gates passed through it against a TSan
+build of 105666c1 with no report file (4 s to 404 s each, `mergescoutcheck` the slowest, on a machine at load 40-60).
+
+A failing run on `main` opens one issue, "Nightly checks failing on main" (label `nightly-failure`), or comments on the
+open one. The comment names the failing jobs and steps, the commit and the run, and quotes the head of the first report.
+The next green scheduled run comments "green again at <sha>" and closes it. The top-level token is `contents: read`,
+and only the two reporting jobs hold `issues: write`. A pull request that edits the workflow runs it without the
+reporting. A placeholder marks where the Windows full-suite job goes (D3 of the #44 plan). `test/g1configcheck.sh`
+gains six rows that pin the schedule, the skip probe, the TSan wiring, the permission scoping, the report conditions
+and "no secret but `GITHUB_TOKEN`". Each row has a mutated copy that turns exactly that row red.
+
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
@@ -128,6 +187,132 @@ macOS arm64 on a later release) each went red against a mutant installer that re
 the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
 deployment target, retires with it.
 
+### Fixed — `--quality-delta` answered from a dead-code baseline another build computed
+
+`--quality-delta` caches the snapshot it computes for `HEAD`, keyed on the repository, the commit, the excludes, the
+file-size ceiling and the parser version. Its dead-code half also depends on call resolution — a function is dead when
+nothing calls it — and a change to how calls resolve moves none of those, because resolution runs over facts already
+extracted. So two builds that resolve calls differently, sharing a cache directory on one commit, answered from each
+other's snapshot: after an upgrade on a repository whose `HEAD` has not moved, or with an installed `ripwire` and a local
+build on one checkout. Measured on main `a55b118e` against the same tree with the `std::`-qualified call guard switched
+off, over a two-file fixture where `std::launder( &v )` may or may not bind an in-repo `Pool::launder`: on a cold cache
+the guarded build reports `regressions="0"`, and after the unguarded build warmed the cache it reports a gating
+`dead-code` row on the untouched `Pool::launder` and exits 2. The other order hides a real one: deleting the only call is
+a gating regression on a cold cache (exit 2) and nothing on the warm one (exit 0). Both runs used one cache file.
+
+Each build now has a source identity: a SHA-256 over every file under `src/` and `queries/`, computed by
+`cmake/source_identity.cmake` on each build (49 ms on this tree) and compiled in as one generated definition. The
+snapshot and window-ref body caches fold its full 64-hex spelling into the material their filename key hashes, and the
+blob header stores its `fnv1a64`, which a reader must match. It is derived rather than a version to bump because bumps
+are what this cache has missed: an `isDeadCandidate` exemption and a parser-version change each shipped without one, and
+no resolution change ever had one. The price is that any source edit renames the snapshot, including one that changes
+nothing it means. On ripwire's own tree, five runs each with a private cache, a warm `--quality-delta` took a median
+3.04 s (2.78–3.21) and one whose snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the
+parse cache underneath keeps its key, so that recompute reads a warm parse. On the fixed tree the two-build experiment
+writes one snapshot per build and matches a cold cache in both orders. The snapshot and window-ref body caches move to
+schemes 14 and 4.
+
+Gate: `test/qsnapproducercheck.sh`, 16 rows. Its core is a matched pair over a real cached snapshot: dead entries
+dropped (or added) with the producer bytes kept, a control that must change the answer and does, and the same forgery
+with those bytes flipped, which must be refused with output byte-identical to a cold cache. Against main 8 of its 13
+rows failed: the forgery had no producer bytes to flip and was served in both directions, and the key, header,
+derivation and blob arms found nothing. Under ASan the gate passes with no sanitizer report on any child's stderr, and
+`test/cachefuzzcheck.sh`'s snapshot sweep stays clean. Pin moved: `test/qschemetrip.hash`.
+
+### Fixed — a pinned `--quality-baseline` was honored by a build that resolves calls differently
+
+The same defect, in the file you write on purpose. `--quality-baseline` pins a floor to `.ripwire_quality_baseline`,
+dead-code records included, and stamped it with nothing but the `HEAD` commit, so `--quality-delta` honored the pin
+whenever the commit matched, whichever build had written it. Pin with the installed `ripwire`, then check with a local
+build (or upgrade) before the next commit, and the floor's dead set came from one resolver while the working tree's came
+from another. Measured with two builds of the previous commit, `d8c225a2` as built and with the `std::`-qualified call
+guard switched off, over the fixture above: pinned by the unguarded build and checked by the guarded one, an untouched
+tree reported a gating `dead-code` row on `Pool::launder` and exited 2 (the guarded build pinning its own floor: exit 0).
+In the other order a real regression disappeared: deleting the only `std::launder` call exited 0 where the unguarded
+build, against its own pin, exits 2.
+
+The sidecar is now format v6 and carries a `producer` record, the same source identity the snapshot cache uses. A pin at
+the current `HEAD` whose producer is missing or names another build is not the floor: `--quality-delta` falls back to
+the `HEAD` tree this build computes and says so as `baseline="git-HEAD (foreign sidecar ignored)"`, with one stderr line
+and a legend sentence naming the two ways back (run the delta with the build that pinned it, or re-pin on a clean tree
+(commit or stash first)). Unlike a stale pin the file is never deleted, by the CLI or by the MCP `quality_delta` verb,
+because the build that wrote it can still use it. A root with no git has nothing to fall back to and exits 1 naming the
+foreign pin. Demoting the dead-code rows instead was ruled out: it cannot surface a regression whose row never appears,
+and another build can compute any kind differently. A pin at another commit is still stale first and still self-heals.
+On the same two fixed builds all four cross-build runs give the same-build answer: exit 0 and exit 2, both marked
+foreign, the sidecar still on disk.
+
+Every existing sidecar is v5, which only a build without the stamp can have written, so the version rule refuses it.
+That refusal used to be reported as `baseline="git-HEAD"`, which means no sidecar existed, under a stderr line saying
+there was no `.ripwire_quality_baseline`, one line below the line naming the refused file. It now reads
+`baseline="git-HEAD (sidecar unreadable)"` with the matching stderr line, and a root with no git no longer says "no
+<file>" about an unreadable sidecar on either arm. Upgrading costs one re-pin on a clean tree (commit or stash first).
+An older binary also refuses a v6 pin rather than honoring it without its stamp, but reports the refusal the old way, as
+`baseline="git-HEAD"` with a line saying there is no `.ripwire_quality_baseline`; the file is intact. A v5 pin left at
+an older commit is no longer removed by the stale-pin self-heal: it is refused as unreadable, with two stderr lines on
+every run, until it is re-pinned or deleted.
+
+Gate: `test/qbaselineproducercheck.sh`, 26 rows. Matched pairs over a real pin: dead records dropped (or one added)
+with the producer kept, a control that must change the answer and does, and the same forgery with one hex digit of the
+producer flipped, which must give the no-sidecar answer and leave the file byte-identical. Beside them: an unstamped v6
+pin, a v5 pin, a stale foreign pin, a root with no git, the MCP verb, the legend and `--help`. Against the previous
+commit 12 rows failed, both forged directions among them. `test/qrevtokencheck.sh`'s hand-written sidecars move to the
+v6 header so its hostile head stamps still reach the head-stamp path. Pin moved: `test/printf_parity.manifest`
+(`help_all` only, `UPDATE_GOLDEN_EXPECT` matched).
+
+### Fixed — a deep or odd-shaped argument, source file or skills tree could crash or stall a verb
+
+Each of these was reproduced before it was fixed, and the gate that already owns each verb now fails on the old code.
+
+- **`--graph-query` nested deep enough overflowed the stack.** The evaluator recurses once per `(`, and a 50,000-level
+  `kind(kind(…all…))` chain died with SIGSEGV (exit 139). Nesting past 256 levels is now refused before evaluation,
+  exit 1 with the reason. Gate: `test/graphqueryrefusecheck.sh` arm 6.
+- **A `--layout` array extent could crash its evaluator.** A `#define` extent nested 200,000 parentheses deep overflowed
+  the stack (exit 139). `((0-1099511627776)*8388608/(0-1))` divides INT64_MIN by −1, which is SIGFPE (exit 136) on
+  Linux x86-64, and `1099511627776*1099511627776` is signed overflow, which aborts the sanitizer build. Arithmetic is
+  now checked, that quotient is refused, and parenthesis nesting depth is bounded at 64 (a macro of many sibling
+  parenthesised terms nests one level and still sizes). Any of these reads as an unknown extent, with its caveat.
+  Gate: `test/layoutcheck.sh` §12.
+- **`--layout` dropped a data member whose extent or initializer holds a parenthesis, and still said the size was
+  right.** `char a[(4)];`, `int x = (3);` and `int x{ (3) };` were taken for member functions, because the test looked
+  for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
+  short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
+  `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
+- **`--layout` dropped a data member whose declaration carries a `(` that belongs to an `alignas`,
+  `__attribute__` or `decltype` specifier, or sits inside a template argument list, and still said the size was
+  right.** `alignas(8) int x`, `int x __attribute__((aligned(8)))`, `decltype(1) x` and `std::function<void(int)>
+  cb` were all taken for member functions too, for the same reason as the row above: the scan still looked at the
+  first `(` in the statement, whichever `(` that was. The field vanished while the struct reported `modeled="1"`
+  and a size short by its bytes. That first `(` is now skipped when it opens one of those specifiers or sits
+  inside `<…>`; each shape now comes back refused (`modeled="0"`, a named caveat) instead of silently missing.
+  Gate: `test/layoutcheck.sh` §14.
+- **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
+  directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
+  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
+  directory link loop included, and names it on stderr; a skills root that cannot be listed at all says "cannot list".
+  Gate: `test/skillevalcheck.sh`.
+- **`ripwire wrap` aborted on a `./skills` tree it could not descend.** The pre-recipe scan advanced a
+  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree it could not
+  open mid-walk (measured with more nested folders than free descriptors) was `std::terminate` (exit 134). The walk
+  now stops early instead, says so, scores the scan WARN and still prints the recipe. The same scan used to skip a
+  mode-000 skills folder in silence — a skill carrying injection text scored CRITICAL while readable and nothing once
+  sealed — and now names the folder it cannot enter and scores WARN. Gate: `test/codexwrapcheck.sh`.
+- **A deeply nested `--match` query overflowed the query compiler.** `ts_query_new` recurses per level on a worker
+  thread with a 512 KB stack: 4,000 levels died with SIGBUS (exit 138), and 2,000 ran past a minute. A query or
+  `--lint-rules` spec nested past 256 levels is refused before any compile. Gate: `test/matchgrammarcheck.sh` arm 6.
+- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** Every occurrence climbed to its
+  statement anchor through `ts_node_parent`, which descends from the tree root each time, so the walk's cost grew with
+  the cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
+  one call wedged the server, and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s. The
+  scan now builds a parent table in one cursor pass and memoizes the anchor, so the walk is linear: 2,000 / 4,000 /
+  8,000 nested ifs in 0.05 / 0.06 / 0.08 s, the 808-level chain in 0.06 s, and the output is byte-identical. Past
+  2,048 syntax levels the slice is refused by name: the walks still recurse once per level on the main thread, and
+  nested loops, the widest frame per level, need ~1.8 MB at that depth on a plain build and 2-3× under a sanitizer, so
+  this is a stack guard, not a time guard. That is still 2.5× the deepest function in 47,795 parsed files (808).
+  Gate: `test/slicecheck.sh` (15), including 2,040 nested `for` loops that must be answered just under the guard.
+
+The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
+
 ### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
 
 Through 0.6.1 the `macos-arm64` release asset and every macOS CI leg were built with Xcode 16.2 on `macos-14`. Its
@@ -171,6 +356,38 @@ with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of eve
 `sorted()`, a literal, a pinned hash, ripwire's own byte-sorted output, or `git status`. Only that one fails today; the
 other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
 `LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
+
+### Fixed — an answer depended on how the root was typed (`ripwire .` and `ripwire "$PWD"` disagreed)
+
+Reported by **@hnipps** in #228: `--quality-delta` on an unchanged tree gated. Part of that report is how the root is
+spelled, and it was a graph defect, not a delta one. The crawl stores every path with the root exactly as typed, and the
+include/import index and the path predicates read that spelling raw. Three things followed. Python's root-relative
+import probe joined onto an empty base, which is the crawl root only under `ripwire .`. Under `"$PWD"`, which is every
+MCP session and the `--quality-delta` HEAD side (always an absolute temp root), `from pkg.store import load` stopped
+resolving and the name ladder bound a same-directory `load` instead. A root typed `../repo` lost every include and
+import edge in every language, because `lexicalNormalize` refuses a path that starts above its base. And a checkout that
+merely lives under a `tests/` or `fixtures/` directory had every file tagged `layer="test"`, exempted from dead-code and
+seeded as a test under an absolute root, and none of that under `.`. The fix is one seam: `ingest()` records the root
+once, and `rootRelPath` (`src/model.h`) gives the root-relative view (a prefix strip, no syscall, no allocation). The
+include/import index, the Python/JS/C declaration indexes, the module vocabularies, the test, fixture, layer and tier
+predicates, the path-mention and stack-trace suffix matches, the `--lint` byte cap and the map's byte model now read
+that view. Stored and printed paths are unchanged. `rootRelativeUri` also trims a trailing `/`, so `--pack-task` rows
+stop printing the whole absolute path under `"$PWD/"`. On a shallow Django clone (2b30f62, 3,449 indexed files,
+`--no-cache`, map header), `"$PWD"` went from 62,591 edges, `ambiguous=3135` and `declined=49153` to what `.` always
+gave: 74,972, 5,958 and 40,681: 12,381 more (caller, callee) edges, and more calls reaching a definition set at all,
+which is why the ambiguous gauge rises with them. On the same clone, `--quality-delta` with a fresh cache gated 14 rows
+under `.` and `./`, 8 under `../dj` and 0 under `"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped
+to `order=important-last(auto:fill)` under `"$PWD"` alone and now agrees. Rooting at a test directory now answers the
+way `cd tests && ripwire .` does: `ripwire tests/` no longer counts its own files as tests (no `layer="test"`, no test
+seeds for `--affected`/`--test-gate`, no dead-code exemption). The `.` answer itself moves slightly on byte-capped
+output, because the byte models now charge a path as printed: the default `--lint` page on this repo went from 680 to
+689 rows. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is never served.
+`test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and `../name`) to
+byte-identical output, once the printed `root=` and `est_tokens=` are normalised, across the committed four-file repro,
+eight language import fixtures and a C++ header selector whose answer rests on an include proof. It also checks a
+tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme upgrade. On origin/main it
+fails 57 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules, sparse checkouts, skip-worktree,
+`--no-ignore`) stays open.
 
 ### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
 
@@ -257,6 +474,213 @@ re-encode byte-identically and appear verbatim as an `S` id. The `|` target must
 dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
 12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
 
+### Fixed — a member call through a typed parameter was pinned to the caller's own class
+
+`int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` answered `--callees=plainCaller` with one edge
+to `Decoy::pick` — precise, no `amb=`, nothing disclosed, and wrong. Rule 2 narrowed a receiver only through a typed
+LOCAL; a parameter's written type had been captured since the member-variable round but was read only by the field
+use-site index, so the call fell through to the name ladder, whose locality tie-break hands a same-file tie to the
+caller's own class. The same call through `Target other;` resolved correctly.
+
+Rule 2, and CHA-lite with it, now reads the written type of a parameter, a lambda parameter, a typed range-for
+variable and a reference local LEXICALLY: the innermost declaration of the name whose scope covers the call site
+decides, and only a written, unqualified type narrows. Both limits were measured before they were chosen. Folding
+these types into Rule 2's flat per-function table minted three precise wrong edges on the gate fixture — a range-for
+variable's type reaching a later `auto` loop of the same name, a same-named field read after the loop, and a
+parameter hidden by an untyped loop variable. And a written type is recorded as its final segment against class
+names that carry no namespace, so `const std::map<K, V>& ref; ref.lower_bound( q )` narrowed to an unrelated in-repo
+`map`: three such edges on a private C++/ObjC++ corpus of 129,759 call sites, which refusing qualified types removes
+at the cost of 11 correct narrows through namespace- or class-qualified in-repo types (those sites keep their previous
+answer). An include-visibility guard was measured first and rejected: path-precise includes miss include-root
+spellings such as `"LinearMath/btVector3.h"`, and it refused about 150 correct narrows on that corpus to stop the
+same three. The qualified text rides the declaration's record, so **kParserVer moves 96 → 97** and a warm cache is
+reparsed once.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `f8e6087c` against this change, on that corpus: 587 call
+sites change target — 373 splits narrow (300 to a Rule-2 pin or the type's own overload set, 73 through the CHA cone), 147
+calls the ladder had declined gain an edge (`bound=` 80,432 → 80,583, `declined=` 17,552 → 17,401), 66 pins or splits
+that did not contain the parameter's type move to it (40 of them `unique` pins to the one same-file method of the
+wrong class), and one edge is lost — a friend function ripwire scopes inside its class, which the parameter's type
+then names as the caller itself. 956 more sites keep their target and are now decided by Rule 2. Every category was
+sampled and read against the source. On this repository's `src/`, 53 splits become one Rule-2 pin and nothing else
+moves target. Wall time is unchanged within noise (three cold runs each on the same corpus, 1.66–2.51 s both).
+
+`test/narrowcheck.sh` arms 7-18 are the gate: nine rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
+red on the lexical lookup without the qualifier guard, arm 15 asserting through the census that the site is decided
+by Rule 2 rather than the locality tie-break. Five gates' controls were built on "a parameter has no binding" and now
+use an untyped `auto` receiver — `narrowcheck`, `chacheck`, `chaconecheck`, `localitycheck` (whose call no longer
+reached the tie-break it exists to test) and `resolverhonestycheck` F9 (whose `check_signal` row had gone vacuous on a
+single edge). `fieldnarrowcheck`'s ambiguity gauge moves 7 → 6 because `shadowParam( Decoy& m_x )` now resolves to the
+parameter's type, and its arm (s1) now also asserts that the shadowed field's `Pool::acquire` is not linked. Still
+open, and unchanged by this entry: an untyped receiver (`auto x = make(); x.m()`) still reaches the locality
+tie-break, and a typed LOCAL still reads the flat table, qualified-type collision included.
+
+Two floors this change does NOT remove, stated because the first one moves edges the wrong way.
+**An abstract parameter type narrows onto its namesakes.** Rule 2 resolves `m` against definitions only, so a parameter
+typed as an interface whose methods are pure-virtual declarations cannot narrow to it — and when unrelated classes
+share the interface's final name segment and define `m`, the narrow lands on them instead. On rocksdb at
+`0e2801ac3`, `--pin-census --no-cache` with the `main` binary at `f8e6087c` against this change: 79 call sites
+(88 census rows) through an `Iterator*` parameter, such as `AssertItersEqual( Iterator* iter1, Iterator* iter2 )` in
+`utilities/write_batch_with_index/write_batch_with_index_test.cc`, now split five ways over the nested `Iterator` classes in
+`memtable/` (`skiplist.h`, `inlineskiplist.h`, `skiplistrep.cc`, `vectorrep.cc`, `hash_skiplist_rep.cc`), and none of
+the five is right. Before this change 25 of them were a unique pin to a plausible override (`BlobCountingIterator::key`),
+26 were a different split over overrides, and 28 had no edge. Every one is disclosed (`amb=`, `prov="split"`), but
+each is a wrong answer rather than a missing one, and 28 are new edges. It is the same final-segment collision typed
+locals already have on `main`; this change extends it to parameters. **A call in a constructor's member-initializer
+list is not narrowed:** `Decoy( Target& t ) : v( t.pick( 3 ) )` sits outside the parameter's scope span (the body),
+so it keeps `main`'s answer — on a same-named `Decoy::pick`, the locality tie-break's wrong pin.
+
+### Fixed — an explicit receiver of unknown type was pinned to the caller's own class, and a `std::` type narrowed to an in-repo namesake
+
+Two holes the parameter-receiver entry above left open. The S6-C locality tie-break prefers the candidate that shares
+the longest segment prefix with the caller — same file, then same class — and granted the class credit to every
+named receiver on the premise that a typed one had already been narrowed. A receiver no rule typed never was:
+`auto other = make(); return other->pick( 1 );` inside `Decoy` answered one precise edge to `Decoy::pick`, no `amb=`,
+and delegation through a member whose type Rule 2b cannot read (`rep_->Name()` inside `Wrapper::Name`) did the same.
+Such a receiver — an untyped local, a member of an unreadable type, or a typed variable whose type defines no such
+method — now keeps the file and directory credit and loses the scope segments, so the call is the split it is.
+Skipping the tie-break outright for these receivers was measured too: it moved no target on any corpus below, and
+relabelled every tier whose one competitor is the caller itself from `locality` to `unique`, dropping its `lpin=`
+disclosure — so the file credit stays.
+
+The second hole: a written type is recorded as its final segment, matched against class names that carry no
+namespace. The entry above refused every qualified PARAMETER type; typed locals kept narrowing, so
+`std::map<int, int> table; table.find( k )` pinned an in-repo `map::find`. Measurement overturned the blanket rule
+instead of extending it, and **this entry supersedes the parameter rule stated above**: where that entry says only a
+written, unqualified type narrows and that qualified in-repo types keep their previous answer, a parameter now refuses
+only a type written in namespace `std`, exactly as a local does. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
+(`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on this repository's `src/` — every sampled
+one correct — while the only wrong edges it removed on all three were six `std::map` locals. `std` is reserved to the
+implementation, so no in-repo class is a `std::` type: a type written in namespace `std` now never narrows — for a
+parameter, a typed local, a constructor-inferred local, and a C++ assignment from a constructor, whose record did not
+carry the qualified text until now (**kParserVer 97 → 98**). Every other qualifier narrows on its final segment,
+parameters included again. Stated floor, pinned by `test/narrowcheck.sh` arm 24: a qualifier that is neither `std`
+nor the class's own namespace — an external or alias-template type whose final segment an in-repo class shares —
+still narrows by name. Closing it needs the namespace chain in `Symbol::scope`.
+
+That floor is disclosed on every edge it can produce. A narrow decided by a qualified, non-`std` written type matched
+the type's last name and never checked its qualifier, so its edge carries **`prov="final-segment"`** — a parameter or
+a local, through Rule 2 or CHA-lite's cone — and both map legends define it. The wrong edge arm 24 pins and the correct
+`store::tree&` narrow beside it read the same way, as a guess, not as a uniquely resolved name. Byte cost on rocksdb,
+the previous commit's binary against this change, the only differences being the attribute, the legend term and
+`est_tokens`:
+
+| rocksdb output | before | after |
+| --- | --- | --- |
+| default map | 31,366 B | 31,711 B (+345, +1.10%; 14 marked edges) |
+| `--for="write batch handler mark commit"` | 8,746 B | 8,746 B (the bundle carries no `prov=`) |
+| whole graph, `--top-k=100000` | 5,406,160 B | 5,413,666 B (+7,506, +0.14%; 355 marked edges) |
+
+A private C++ corpus's default map pays only the legend term (+51 B, no marked edge printed). The Iterator-shaped
+collision #248 states above is unchanged: those calls stay `amb=`-disclosed splits. A name-only collision guard was
+measured against them and rejected — it moved 967 rocksdb rows off the wrong `memtable` namesakes, but declined 58
+correct platform-alternate splits (`port::Mutex::Lock` over posix and win) and 8 correct `log::Writer` narrows, minted
+10 new wrong unique pins on rocksdb, and declined 132 correct `Template.render` splits on django. The namespace chain
+is the fix for both.
+
+Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
+category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider
+ones (14 of 14 sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard
+refused (`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
+`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins
+were wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
+in-repo `map`, and 12 in-repo qualified parameters narrow, one of them an `ankerl::unordered_dense::map<…>&` alias
+template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits; rails: 145.
+The removed pins were less often wrong in the dynamic languages, as an independent review's samples show: django 8 of 14
+wrong (`target_ids.add`, `params.get`, `form.save`) and 6 right (`copy.set_source_expressions`, `cls._pre_setup()`);
+rails 8 of 12 wrong (`pair.freeze`, `connection.create_table`) and 4 right (`set.each`, `model.history`). Every right
+target stays inside the split that replaces it. Python's `cls` is a named receiver, so a classmethod's `cls.m()` splits
+too (2 of django's 72). This repository's `src/`: 5 splits become Rule-2 pins through `notes::`- and
+`rw::quality::`-qualified parameters. vue-core and Go's `net` package: none. The assignment capture moved no site on
+these corpora; its arm is the only witness. Wall time on rocksdb is within noise (three cold runs each at load average
+42: 1.69–2.19 s before, 1.73–2.80 s after).
+
+`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-25 are the gates: localitycheck 5, 6 and 7 red on
+the previous commit and 8 red on the skip-the-tie-break variant; narrowcheck 19, 20, 21, 23 and 24 red on the previous
+commit, 21 red without the assignment capture, and 25 (the attribute on arms 22-24's edges and in both legends, absent
+from an unqualified narrow and a uniquely named call) red before `prov="final-segment"` existed. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
+three non-firing controls (B), (C), (E) asserted that the caller's own `Box::validate` pin STANDS for
+`item.validate( v )`; they now assert the honest two-way split, which keeps the contrast with the route that fires, and
+(F) reads `ambiguous=3` with no locality pin. localitycheck's HIGH-1 probe was an untyped local that no longer earns
+the scope credit, so it could no longer tell a byte-prefix tie-break from a segment-aware one; it is `this->go()` in a
+class template with a dependent base now, and a census row asserts the call still reaches the tie-break holding both
+candidates. `chacheck`, `chaconecheck`, `resolverhonestycheck` and `fieldnarrowcheck` pass unchanged: their untyped
+controls sit in scope-less free functions, which never reach the tie-break.
+
+### Fixed — a member field typed `std::string` narrowed to an in-repo class named `string`
+
+The entry above stopped a type written in namespace `std` from narrowing a parameter or a local. A member field is the
+third place a written type is read, and it still did. The field capture records a qualified type's final segment, so
+`struct Record { std::string name_; int nameLength() { return name_.size(); } };` recorded `name_` as a `string`, and
+all three readers of that record took it for any in-repo class of that name: Rule 2b pinned `name_.size()` to the
+in-repo `string::size` (census `receiver-rule` — one precise edge, no `amb=`), the HAS-A block drew `Record → string`,
+and `--uses=string.len` pinned both `name_.len` and `this->name_.len` to that class. A field's compose record now
+carries the namespace its type was written in as its qualifier — the same (name, immediate qualifier) pair a call
+carries, so `std::string` is `string` in `std` (**kParserVer 98 → 99**) — and the readers refuse `std`: the field-type
+table records no type for the field, and no HAS-A edge is drawn. Every other qualifier narrows as before:
+`store::Text body_; body_.size()` still reaches `Text::size`.
+
+The std field records an empty type rather than being skipped, and that choice was measured. Dropping it at capture —
+the obvious fix — un-tombstones a same-named class's differently-typed field. rocksdb has two classes named
+`StringSource`: `test_util/testutil.h`'s holds `std::string contents_` and `db/log_test.cc`'s holds `Slice& contents_`.
+Class names carry no namespace, so both share the entry `StringSource#contents_`, and the disagreement is what keeps
+either from narrowing; with the std record skipped, four `contents_.size()` calls in testutil.h pinned `Slice::size`.
+The empty type tombstones the entry exactly as a second real type does.
+
+Measured with `--pin-census --no-cache` and the default map, the previous commit's binary against this change: rocksdb,
+a private C++ corpus and this repository's `src/` (a frozen copy, so both binaries read one tree) are byte-identical in
+both, and so is rocksdb's `--metrics`. None of them has an in-repo class that shares a `std::` field type's name and
+defines the member called on it: counted with `--match`, rocksdb has 1,258 fields whose type is written `std::X`,
+`src/` 1,987 and the private corpus 143, and only rocksdb's 1,116 `std::string`/`std::wstring` fields share a name — with
+gtest's `typedef ::std::string string`, which has no members and drew no HAS-A edge. So a probe measured the reach: a
+copy of rocksdb plus one `namespace shim { struct string { … } }` defining `size`, `empty`, `data`, `c_str`, `clear`,
+`append` and a field `len`. There the previous binary pins 384 call sites to `shim::string` by receiver-rule and this
+change leaves 7, all gtest parameters written `const ::string&` — the global namespace, not `std`, and not fields. Of
+the 357 sites that move, 279 land on exactly the row the unmodified rocksdb census has; the other 78 are `c_str` calls
+the probe's own second `c_str` definition makes ambiguous. 455 class rows lose a composed type from `cbo=` (446 by
+one, 9 by two).
+
+`test/fieldnarrowcheck.sh` arm q is the gate. q1 (Rule 2b), q3 (HAS-A) and both q5 rows (`--uses`) are red on the
+previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refuse-every-qualifier variant; and the four
+q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
+variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
+
+### Fixed — `--uses=Owner.field` pinned a read through a `std::` local or parameter to an in-repo namesake
+
+The entries above stopped a type written in namespace `std` from narrowing a call through a local, a parameter or a
+member field. The member use-site index keeps its own table of local and parameter types, and that table still read the
+final segment alone. Given an in-repo `struct pair { int first; int second; };` and a second owner of `first`,
+`std::pair<int, int> p; return p.first;` and `const std::pair<int, int>& q` → `q.first` both answered
+`--uses=pair.first` as pinned: one owner, no `owner_candidates=`, and wrong. The table now records a `std::` type as a
+tombstone, as Rule 2's own table does, so such a read is the split it is (`owner_candidates=2`, one per owner of
+`first`). A second declaration of the same name in that function is tombstoned with it rather than handed every site.
+A tombstoned local also no longer falls back to the enclosing class's same-named member. `std::pair<int, int> p`
+inside a method of a class whose member `p` is a `pair` used to answer through the member's type. But the local hides
+that member, and the table cannot tell which of a function's declarations a site sees, so a local declared twice with
+different types now answers the same split. Every other qualifier still narrows: `store::Text t; t.len` pins
+`Text.len` against a second owner of `len`. Ingest already recorded the qualified text on both kinds of record, so the
+parser version does not move.
+
+Measured with a scratch dump of the index for every field whose name is read through a receiver whose type record this
+change can alter (one written in `std`, or two that disagree), the previous commit's binary against this change. Three
+corpora are byte-identical: this repository's `src/` (a frozen copy; 1,169 fields, 57,511 sites), rocksdb (824 fields,
+84,617 sites) and a private C++ corpus (1,811 fields, 393,336 sites). So are `--pin-census` and the default map on
+`src/` and rocksdb; the call graph never reads this table. None of those corpora has an in-repo class named after a
+`std::` type that declares the member read through one. So a probe measured the reach: a copy of rocksdb plus
+`namespace shim { struct pair { int first; int second; }; }` and a second owner of both names. The previous binary
+pinned 110 rocksdb reads to `shim::pair` (53 `.first`, 57 `.second`, such as `std::pair<IOStatus, std::string> res;
+res.first` in `env/env_chroot.cc`), and every one was wrong, because no rocksdb code declares a `shim::pair`. This change
+turns all 110 into two-way splits and pins no site that was not pinned before. Six of them, sampled across files, were
+read against the source, and all six are `std::pair` locals or parameters.
+
+`test/fieldusescheck.sh` arm J is the gate, on its own fixture. It covers a `std::pair` local, a `std::pair` parameter
+and a `::std::pair` local, a `std::string` receiver two hops deep, one function declaring both `std::pair v` and
+`pair v`, `std::` locals and parameters that hide a member, and a non-std double declaration. The previous commit's
+binary fails three of its rows. Three variants of the fix were built to prove each row can fail. Skipping the std
+record turns the double-declaration and member-hiding rows red. Letting a tombstone fall back to the member turns
+exactly the three `std::` member-hiding rows red (measured before the non-std row was added). Refusing every qualifier
+turns only the `store::Text` controls red.
+
 ### Fixed — `--version` names the configuration a multi-config generator built, not `dev`
 
 `--version` took its build-type token from `CMAKE_BUILD_TYPE`, which a multi-config generator (Ninja Multi-Config,
@@ -283,6 +707,14 @@ leaves the Debug header's bytes and mtime alone, that re-stamping Debug keeps it
 build gives every configuration its own token. Two controls prove the token extraction and include resolution can
 fail. On the old `CMakeLists.txt`, 6 of its rows failed under Ninja Multi-Config and 5 under Xcode. Against the
 command-only fix, 4 rows still failed.
+
+The source identity from #255 (`generated/source_identity.cpp`) is one shared file for every configuration. It now has
+its own always-run target, `ripwire_source_identity`, instead of being a second command of `ripwire_version_stamp`.
+Both commands in one target made a cross-config Ninja Multi-Config build fail with
+`'generated/RelWithDebInfo/version.h' … missing and no known rule`, and the gate's cross-config row caught it on the
+merged tree. Both stamp scripts also give their temp file a random name. Two builds of one tree used to share
+`<output>.tmp`: in 40 concurrent runs of the old identity script, 10 to 19 failed with "could not write" in each of
+three rounds, and none of the new script's runs did.
 
 ## [0.6.1] — 2026-09-14
 

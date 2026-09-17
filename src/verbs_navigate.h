@@ -1247,6 +1247,12 @@ std::optional<int> runSlice( const MainDispatch& d )
 
     const ::TSLanguage* grammar = sliceGrammarForFile( path );
     slicev::SliceScan   scan    = slicev::sliceScanDefinition( src, sym, fam, grammar, varName );   // re-scanned below on a seed pre-pick
+    if( scan.tooDeep )
+    {
+        rw::emitTo( stderr, "ripwire: --slice: {} in {} nests deeper than {} syntax levels — refused: the slice walks recurse once per "
+                              "level, and a definition this deep would exhaust the stack\n", sym.name, path, slicev::kMaxSliceDepth );
+        return 1;
+    }
     if( !scan.parseOk )
     {
         DEGRADED_PATH_ALERT( "slice: definition re-parse failed" );
@@ -1691,7 +1697,7 @@ std::optional<int> runVerify( const MainDispatch& d )
     for( NodeId n : reach )
     {
         const std::uint32_t fileId = ing.symbols[n].fileId;
-        if( claim.arg2Quoted ? bool( fileFlags[ fileId ] ) : ( builtinLayer( ing.files[ fileId ] ) != nullptr && claim.arg2 == builtinLayer( ing.files[ fileId ] ) ) )
+        if( claim.arg2Quoted ? bool( fileFlags[ fileId ] ) : ( builtinLayer( rootRelPath( ing, fileId ) ) != nullptr && claim.arg2 == builtinLayer( rootRelPath( ing, fileId ) ) ) )
         {
             witnesses.push_back( n );
         }

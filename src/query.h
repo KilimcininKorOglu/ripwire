@@ -116,6 +116,36 @@ bool tryParsePredicateOnAll( Eval& e, std::function<std::vector<NodeId>( std::ve
 // querycheck.sh's and(∅,X) arms, which a "skip the other side" optimization here would silently defeat).
 std::vector<NodeId> evalAnd( Eval& e );
 
+// The deepest parenthesis nesting --graph-query evaluates. The evaluator recurses once per level, and a
+// `not(not(not(…` of ~50,000 levels (a quarter of a megabyte of argument) overflowed the main thread's stack:
+// SIGSEGV, exit 139, before a word of output. 256 levels is far past any composed query a person or an agent
+// writes; deeper is refused with the reason, before evaluation starts.
+inline constexpr std::size_t kMaxQueryNesting = 256;
+
+// The deepest `(` nesting in `expr`, outside "quoted" literals (quoted() takes no escapes, so a quote always
+// toggles). A pure scan, so the refusal never depends on how far the evaluator got.
+inline std::size_t queryParenNesting( std::string_view expr ) noexcept
+{
+    std::size_t depth = 0, deepest = 0;
+    bool        inQuote = false;
+    for( const char c : expr )
+    {
+        if( c == '"' )
+        {
+            inQuote = !inQuote;
+        }
+        else if( !inQuote && c == '(' )
+        {
+            deepest = std::max( deepest, ++depth );
+        }
+        else if( !inQuote && c == ')' && depth > 0 )
+        {
+            --depth;
+        }
+    }
+    return deepest;
+}
+
 // One-pass recursive-descent parse-and-evaluate. The operator set is small and each node-set is
 // materialized eagerly — the graphs ripwire handles fit comfortably in memory.
 struct Eval
@@ -283,7 +313,7 @@ struct Eval
         }
         // Paths are short (<~300 B) so std::regex_search here cannot meaningfully back-track-blow-up.
         set.erase( std::remove_if( set.begin(), set.end(),
-                   [ & ]( NodeId id ) { return !std::regex_search( ing.files[ ing.symbols[id].fileId ], rx ); } ), set.end() );
+                   [ & ]( NodeId id ) { const std::string_view p = rootRelPath( ing, ing.symbols[id].fileId ); return !std::regex_search( p.data(), p.data() + p.size(), rx ); } ), set.end() );
         return set;
     }
 
@@ -309,8 +339,11 @@ struct Eval
         }
         // Does ANY indexed file carry a layer at all? Asked over ing.files rather than over `set`, so a
         // narrowed sub-expression cannot make an unlayered tree look layered or the reverse.
-        const bool treeHasLayers = std::any_of( ing.files.begin(), ing.files.end(),
-                                                []( const std::string& path ) { return *builtinLayer( path ) != '\0'; } );
+        bool treeHasLayers = false;
+        for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ) && !treeHasLayers; ++f )
+        {
+            treeHasLayers = *builtinLayer( rootRelPath( ing, f ) ) != '\0';
+        }
         if( !treeHasLayers )
         {
             DEGRADED_PATH_ALERT( "query: layer() on a tree with no layer taxonomy — refused, not answered 0" );
@@ -320,7 +353,7 @@ struct Eval
             return {};
         }
         set.erase( std::remove_if( set.begin(), set.end(),
-                   [ & ]( NodeId id ) { return std::string_view( builtinLayer( ing.files[ ing.symbols[id].fileId ] ) ) != name; } ), set.end() );
+                   [ & ]( NodeId id ) { return std::string_view( builtinLayer( rootRelPath( ing, ing.symbols[id].fileId ) ) ) != name; } ), set.end() );
         return set;
     }
 
@@ -494,6 +527,11 @@ struct Eval
     // top-level: evaluate the whole expression; require all input consumed.
     std::vector<NodeId> run()
     {
+        if( queryParenNesting( src ) > kMaxQueryNesting )
+        {
+            fail( "the expression nests deeper than " + std::to_string( kMaxQueryNesting ) + " levels — refused before evaluating it" );
+            return {};
+        }
         std::vector<NodeId> r = expr();
         skipWs();
         if( ok && pos != src.size() )

@@ -230,5 +230,112 @@ else
 fi
 if [ "$( grep -c '' "$TMP/a" )" -le 1 ]; then ok "output is minified (no stray newlines)"; else no "output contains newlines outside CDATA"; fi
 
+# ── 12) a hostile extent never takes the process down ────────────────────────────────────────────────
+# The extent evaluator reads source text. Before the fix: a `#define` extent nested 200,000 `(` deep recursed
+# until the stack overflowed (SIGSEGV, exit 139, every platform); `(0-2^40)*2^23/(0-1)` divided INT64_MIN by
+# -1 (SIGFPE on x86-64); and `2^40*2^40` was signed overflow (an abort under the G1 sanitizer build — run this
+# gate with RIPWIRE_BIN=asan/ripwire to see that one). Each is now an UNKNOWN extent: the field is unsized and
+# the struct carries the unknown-extent caveat, exactly like any expression the evaluator cannot read.
+HOSTILE="$TMP/hostile"; mkdir -p "$HOSTILE"
+python3 - "$HOSTILE/deep.h" <<'PYDEEP'
+import sys
+n = 200000
+open(sys.argv[1], "w").write("#define DEEP_EXTENT " + "(" * n + "1" + ")" * n + "\nstruct DeepExtent\n{\n    int n;\n    char a[DEEP_EXTENT];\n};\n")
+PYDEEP
+cat > "$HOSTILE/range.h" <<'EOF'
+#define QUOTIENT_EXTENT ((0-1099511627776)*8388608/(0-1))
+struct QuotientExtent
+{
+    int  n;
+    char a[QUOTIENT_EXTENT];
+};
+struct ProductExtent
+{
+    int  n;
+    char b[1099511627776*1099511627776];
+};
+struct PlainExtent
+{
+    int  n;
+    char c[4*2];
+};
+EOF
+for s in DeepExtent QuotientExtent ProductExtent; do
+    "$BIN" "$HOSTILE" --layout="$s" --no-cache >"$TMP/h_$s" 2>"$TMP/h_$s.err"; rc=$?
+    if [ "$rc" -ne 0 ] || grep -q 'runtime error' "$TMP/h_$s.err"; then
+        no "$s: exit $rc $( grep -m1 'runtime error' "$TMP/h_$s.err" | cut -c1-120 ) — a hostile extent crashed the evaluator"
+    elif grep -q '<caveat k="unknown-extent"' "$TMP/h_$s"; then
+        ok "$s: exit 0, the extent reads as unknown (field unsized, caveat carried)"
+    else
+        no "$s: exit 0 but no unknown-extent caveat: $( grep -o '<def .*</def>' "$TMP/h_$s" | head -c 200 )"
+    fi
+done
+"$BIN" "$HOSTILE" --layout=PlainExtent --no-cache >"$TMP/h_plain" 2>/dev/null
+grep -q '<f n="c" ty="char" x="8" sz="8"' "$TMP/h_plain" && ok "control: an ordinary 4*2 extent still sizes to 8" \
+    || no "control: 4*2 no longer sizes: $( grep -o '<def .*</def>' "$TMP/h_plain" | head -c 200 )"
+# The paren bound is a DEPTH. A first version counted every `(` in the expression, so a legitimate frame-size macro of
+# sixty-six parenthesised sibling terms — nesting one level — came back as an unknown extent where main sized it.
+python3 - "$HOSTILE/wide.h" <<'PYWIDE'
+import sys
+terms = " + ".join("(T%d)" % i for i in range(66))
+consts = "".join("#define T%d 4\n" % i for i in range(66))
+open(sys.argv[1], "w").write(consts + "#define FRAME_BYTES (" + terms + ")\nstruct WideExtent\n{\n    int  n;\n    char a[FRAME_BYTES];\n};\n")
+PYWIDE
+"$BIN" "$HOSTILE" --layout=WideExtent --no-cache >"$TMP/h_wide" 2>/dev/null
+grep -q '<f n="a" ty="char" x="264" sz="264"' "$TMP/h_wide" && grep -q 'modeled="1"' "$TMP/h_wide" \
+    && ok "66 sibling parenthesised terms (one nesting level) still size: a = 264 B, modeled=\"1\"" \
+    || no "66 sibling parenthesised terms no longer size — the paren bound counts terms, not depth: $( grep -o '<def .*</def>' "$TMP/h_wide" | head -c 240 )"
+
+# ── 13) a data member whose `(` sits in its extent or its initializer is a FIELD, not a member function ─────────────
+# The member-function test took the first `(` anywhere in the statement, so `char a[(4)];`, `int x = (3);` and
+# `int x{ (3) };` were skipped as functions: the field vanished while the struct still said modeled="1" and a size
+# short by the field's bytes. A wrong answer with no caveat. `operator=( … )` stays a function.
+cat > "$HOSTILE/parenfield.h" <<'EOF'
+struct ParenExtent   { int n; char a[(4)]; };
+struct ParenInit     { int n; int x = (3); };
+struct ParenBrace    { int n; int x{ (3) }; };
+struct OperatorAssign { int n; OperatorAssign& operator=( const OperatorAssign& ); char c; };
+EOF
+for pair in ParenExtent:8 ParenInit:8 ParenBrace:8 OperatorAssign:8; do
+    s="${pair%%:*}"; want="${pair#*:}"
+    "$BIN" "$HOSTILE" --layout="$s" --no-cache >"$TMP/pf_$s" 2>/dev/null
+    got="$( grep -o '<def [^>]*' "$TMP/pf_$s" | grep -o 'size="[0-9]*"' | tr -dc 0-9 )"
+    fields="$( grep -o '<def [^>]*' "$TMP/pf_$s" | grep -o 'fields="[0-9]*"' | tr -dc 0-9 )"
+    [ "$got" = "$want" ] && [ "$fields" = 2 ] \
+        && ok "$s: both members placed, size=$want" \
+        || no "$s: fields=${fields:-?} size=${got:-?} (want 2 fields, size $want): $( grep -o '<def .*</def>' "$TMP/pf_$s" | head -c 200 )"
+done
+
+# ── 14) a `(` from alignas/__attribute__/decltype, or one inside a template's `<…>`, is not a parameter
+#        list either — counting it as one silently dropped the field it decorates while the struct still
+#        said modeled="1" with a size short by exactly that field's bytes.
+expect_refused AlignasFieldCase     unknown-type
+expect_refused AttributeFieldCase   unparsed-member
+expect_refused DecltypeFieldCase    unknown-type
+expect_refused StdFunctionFieldCase unknown-type
+
+run AlignasFieldCase
+has 'f n="x"' \
+    && ok "AlignasFieldCase: the alignas-decorated field is still COUNTED (not silently dropped)" \
+    || no "AlignasFieldCase: field 'x' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+{ [ "$( field n sz )" = "4" ] && [ "$( field c sz )" = "1" ]; } \
+    && ok "AlignasFieldCase: the plain neighbours (n, c) still size normally" \
+    || no "AlignasFieldCase: a neighbour field lost its size: n=$( field n sz ) c=$( field c sz )"
+
+run AttributeFieldCase
+has 'caveat k="unparsed-member" d="int x __attribute__' \
+    && ok "AttributeFieldCase: the refusal NAMES the dropped declaration text, not a silent size" \
+    || no "AttributeFieldCase: caveat detail did not name the field: $( printf '%s' "$L" | tr '<' '\n' | grep '^caveat' )"
+
+run DecltypeFieldCase
+has 'f n="x"' \
+    && ok "DecltypeFieldCase: the decltype field is still COUNTED (not silently dropped)" \
+    || no "DecltypeFieldCase: field 'x' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+
+run StdFunctionFieldCase
+has 'f n="cb"' \
+    && ok "StdFunctionFieldCase: the std::function field is still COUNTED (not silently dropped)" \
+    || no "StdFunctionFieldCase: field 'cb' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+
 [ $fail -eq 0 ] && echo "layoutcheck: ALL PASS" || echo "layoutcheck: FAILURES"
 exit $fail

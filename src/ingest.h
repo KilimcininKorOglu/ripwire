@@ -667,7 +667,14 @@ struct AstQueryShape
     bool hasCapture       = false;   // an @capture appears outside any string literal
     bool isSingleTopLevel = false;   // exactly one top-level (…) or […] group, with nothing beside it
     bool hasComment = false;         // a `;` line comment — an appended capture could land inside it
+    std::size_t maxDepth = 0;        // the deepest ( / [ nesting outside strings and comments
 };
+
+// The deepest ( / [ nesting a tree-sitter query may carry before ripwire hands it to ts_query_new. The query
+// compiler recurses once per level, and it runs on worker threads with a small stack: a --match query nested
+// 4,000 levels deep died with SIGBUS (exit 138), and 2,000 levels ran for over a minute. A structural query a
+// person or an agent writes nests a few dozen levels; deeper is refused by name before any compile.
+inline constexpr std::size_t kMaxAstQueryNesting = 256;
 
 inline AstQueryShape astQueryShape( std::string_view query )
 {
@@ -710,6 +717,7 @@ inline AstQueryShape astQueryShape( std::string_view query )
                 ++topLevelGroupCount;
             }
             ++depth;
+            shape.maxDepth = std::max( shape.maxDepth, static_cast<std::size_t>( depth ) );
             continue;
         }
         if( c == ')' || c == ']' )
@@ -732,6 +740,11 @@ inline AstQueryShape astQueryShape( std::string_view query )
 
     shape.isSingleTopLevel = ( topLevelGroupCount == 1 ) && ( depth == 0 ) && !inString && !sawContentAfterTopLevelGroup;
     return shape;
+}
+
+inline bool astQueryNestsTooDeep( std::string_view query )
+{
+    return astQueryShape( query ).maxDepth > kMaxAstQueryNesting;
 }
 
 // ---- local-variable-indexing plan, Phase 2 (docs/LOCALS_INDEXING.md) ----
