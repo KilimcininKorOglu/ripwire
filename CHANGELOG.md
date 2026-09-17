@@ -484,6 +484,25 @@ Each of these was reproduced before it was fixed, and the gate that already owns
   nested loops, the widest frame per level, need ~1.8 MB at that depth on a plain build and 2-3× under a sanitizer, so
   this is a stack guard, not a time guard. That is still 2.5× the deepest function in 47,795 parsed files (808).
   Gate: `test/slicecheck.sh` (15), including 2,040 nested `for` loops that must be answered just under the guard.
+- **That stack guard is now a heap one — `--slice`'s walk no longer recurses at all.** The scan above made the walk
+  linear but it still cost one C++ stack frame per loop/if/switch/try/block nesting level, so under ASan (frames
+  2-3× wider) 2,040 nested `for` loops needed 18.8 MB against an 8 MB thread and SIGSEGV'd (reproduced with the
+  caller's stack held to 1 MB, `ulimit -s 1024`: rc 139). `SliceRdWalker` (the reaching-definitions pass) and the
+  occurrence scan's own `sliceWalk` now run on an explicit heap work stack: every descent into a child node pushes a
+  continuation instead of recursing, so nesting depth grows a `std::vector`, never the calling thread's. Two defects
+  surfaced and were fixed before this shipped: passing the pending continuation by value at the one dispatch point
+  reached on every level copied it — and copying a continuation copies everything it closed over, so a 2,040-level
+  chain went quadratic in CLOSURE COPIES (1,000 nested `for` loops: 0.02 s → 12 s); and the loop fixpoint's own
+  per-round locals, arena-allocated like everything else, were never freed when an outer level's fixpoint redid an
+  inner loop's body, so superseded rounds piled up (2,040 nested `for` loops: 2.6 GB against the recursive form's
+  13 MB). Both are fixed — the continuation is passed by reference, and a loop's own per-round state is
+  `shared_ptr`-owned so a superseded round frees the moment its closures finish, the same lifetime the recursive
+  form's stack gave for free. Verified byte-identical to the recursive form on 198 real definitions (790 slice
+  calls: ripwire's own `src/`, two other local C++/Python trees, and the `#252` parity fixture set) and timing-
+  neutral on the same set (interleaved, real total time within 1%). The 2,048-level guard is unchanged: it is a
+  safety margin now rather than a strict necessity, but the walk's fixpoint cost is still super-linear in nesting
+  (measured: 8,192 nested `for` loops, 48 s), so raising it further is a time risk, not a safety win. Gate:
+  `test/slicecheck.sh` (15a)/(15b) run under `ulimit -s 1024` (red on the pre-fix binary at (15b), SIGSEGV).
 
 The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
 
