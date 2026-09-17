@@ -315,9 +315,42 @@ inline std::optional<PathRuleVerdict> undecidedPathRule( PathRuleMatch& match, s
     return std::nullopt;
 }
 
+// DENY FIRST, and refuse only when an undecided rule could change the verdict. The answer is "forbidden" exactly when
+// some deny matches and no allow does, with the FIRST matching deny as the label. So:
+//   * every deny misses            ⇒ permitted, whatever the allows would say — none is consulted (an allow whose
+//                                    pattern the engine cannot finish can no longer turn a determinable "not a
+//                                    violation" into a refusal);
+//   * a deny is undecided before any deny matches ⇒ it might be the matching one (or the label) — it matters
+//                                    unless an allow matches, which permits the edge either way;
+//   * a deny matches               ⇒ consult the allows: any allow that matches permits the edge, even after an
+//                                    earlier allow was undecided; only when none matches does an undecided allow
+//                                    matter, because it might have been the exception.
+// Every decided edge gets the answer the old allow-first order gave, and the same label.
 inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src, std::string_view dst )
 {
-    // 1) is the edge explicitly ALLOWED by any allow path-rule? (exception wins → never a violation)
+    // 1) the first DENY that matches, or the first one that could not be decided before any matched
+    std::optional<PathRuleVerdict> denyVerdict;
+    for( std::size_t i = 0; i < r.pathRules.size() && !denyVerdict; ++i )
+    {
+        const PathRule& pr = r.pathRules[i];
+        if( pr.bad || pr.allow )
+        {
+            continue;
+        }
+        PathRuleMatch match = pathRuleMatches( pr, src, dst );
+        denyVerdict = undecidedPathRule( match, i );
+        if( !denyVerdict && match.verdict == RegexVerdict::Hit )
+        {
+            denyVerdict = PathRuleVerdict{ true, false, false, i, {}, {} };
+        }
+    }
+    if( !denyVerdict )
+    {
+        return {};   // no deny can forbid this edge
+    }
+
+    // 2) an ALLOW that matches is the exception; an undecided one matters only if none matches
+    std::optional<PathRuleVerdict> undecidedAllow;
     for( std::size_t i = 0; i < r.pathRules.size(); ++i )
     {
         const PathRule& pr = r.pathRules[i];
@@ -326,35 +359,16 @@ inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src
             continue;
         }
         PathRuleMatch match = pathRuleMatches( pr, src, dst );
-        if( std::optional<PathRuleVerdict> undecided = undecidedPathRule( match, i ) )
+        if( match.verdict == RegexVerdict::Hit && !match.refusal )
         {
-            return std::move( *undecided );
+            return {};   // an allow rule matches → permitted
         }
-        if( match.verdict == RegexVerdict::Hit )
+        if( !undecidedAllow )
         {
-            return {}; // an allow rule matches → permitted
-        }
-    }
-
-    // 2) does any DENY path-rule match? (first match wins for the label, file order = deterministic)
-    for( std::size_t i = 0; i < r.pathRules.size(); ++i )
-    {
-        const PathRule& pr = r.pathRules[i];
-        if( pr.bad || pr.allow )
-        {
-            continue;
-        }
-        PathRuleMatch match = pathRuleMatches( pr, src, dst );
-        if( std::optional<PathRuleVerdict> undecided = undecidedPathRule( match, i ) )
-        {
-            return std::move( *undecided );
-        }
-        if( match.verdict == RegexVerdict::Hit )
-        {
-            return { true, false, false, i, {}, {} };
+            undecidedAllow = undecidedPathRule( match, i );
         }
     }
-    return {};
+    return undecidedAllow ? std::move( *undecidedAllow ) : std::move( *denyVerdict );
 }
 
 inline int archLayerId( const ArchRules& r, std::string_view name )   // name → id; '*' → -1; unknown → -2

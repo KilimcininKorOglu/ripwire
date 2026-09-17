@@ -54,6 +54,9 @@
 #       abandons the match. One counter and one sentence ("the regex engine abandoned the match") used to cover all
 #       three. Each cause now has its own run, fixture and wording; the refusal names the FIRST site (lowest file, then
 #       byte) with the captured text, is byte-identical run to run, and --lint-rules says the same.
+#   (i) --arch DECIDES DENY FIRST — an allow whose pattern the engine cannot finish must not turn a determinable "no
+#       deny can forbid this edge" into a refusal; an undecided allow matters only when a deny fires and no allow
+#       matches, and a later allow that matches still permits the edge.
 #   (d) file() IS ROOT-RELATIVE — two clones of one tree at different directory names, each run with an
 #       absolute and a relative root spelling, must give the SAME count for a pattern naming one clone's
 #       directory, and an anchored `^src/` must select the src/ symbols (it selected nothing under an
@@ -422,6 +425,27 @@ if [ "$FAULTS" -eq 1 ]; then
     fi
 else
     printf '  INFO  (h) fault switches compiled out (NDEBUG): the abandoned cause is proved on the plain-flavour leg\n'
+fi
+
+# ── (i) --arch decides deny first: an allow that cannot be finished matters only when a deny fires ─────────────────
+printf 'allow path zz/.* -> (a|a)+z\ndeny path nomatch/.* -> .*\n' >"$TMP/arch_allow_nodeny.txt"
+rc="$( capRun 20 "$TMP/i.out" "$TMP/i.err" "$FIX" --no-cache --arch="$TMP/arch_allow_nodeny.txt" )"
+if [ "$rc" = 0 ] && grep -q '<arch ' "$TMP/i.out"; then
+    ok "(i) no deny matches, so the edge is permitted without consulting the unfinishable allow (exit 0)"
+else
+    no "(i) exit $rc — an allow nobody needed refused a determinable answer: $( head -c 200 "$TMP/i.err" )"
+fi
+if [ "$LINKS_LIBCXX" -eq 1 ]; then
+    printf 'allow path zz/.* -> (a|a)+z\nallow path zz/.* -> .*\ndeny path zz/.* -> .*\n' >"$TMP/arch_allow_later.txt"
+    rc="$( capRun 30 "$TMP/i2.out" "$TMP/i2.err" "$FIX" --no-cache --arch="$TMP/arch_allow_later.txt" )"
+    if [ "$rc" = 0 ] && grep -q '<arch ' "$TMP/i2.out"; then ok "(i) a deny fires, the first allow is abandoned, a later allow matches: permitted (exit 0)"
+    else no "(i) later matching allow after an abandoned one: exit $rc — $( head -c 200 "$TMP/i2.err" )"; fi
+    printf 'allow path zz/.* -> (a|a)+z\ndeny path zz/.* -> .*\n' >"$TMP/arch_allow_only.txt"
+    rc="$( capRun 30 "$TMP/i3.out" "$TMP/i3.err" "$FIX" --no-cache --arch="$TMP/arch_allow_only.txt" )"
+    if [ "$rc" = 1 ] && grep -qF "path-rule 'zz/.* -> (a|a)+z'" "$TMP/i3.err"; then ok "(i) a deny fires and the only allow is abandoned: refused, naming the ALLOW rule (exit 1)"
+    else no "(i) deny fires, allow abandoned: exit $rc — $( head -c 200 "$TMP/i3.err" )"; fi
+else
+    printf '  INFO  (i) the two abandoned-allow cases need libc++'"'"'s match budget; the deny-first arm above is the portable half\n'
 fi
 
 # ── (f) the skill scanner: linear net-exfil agrees with its regex, bounded time, and undecided fails closed ───────
