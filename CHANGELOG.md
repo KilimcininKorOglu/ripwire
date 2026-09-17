@@ -735,6 +735,18 @@ merged tree. Both stamp scripts also give their temp file a random name. Two bui
 `<output>.tmp`: in 40 concurrent runs of the old identity script, 10 to 19 failed with "could not write" in each of
 three rounds, and none of the new script's runs did.
 
+### Fixed — `--affected=`/`--exercises=` and `--exclude=` matched a directory ABOVE the crawl root, not just the tree
+
+Two of #228's root-spelling-invariance seams were missed. `--affected=`/`--exercises=` (`testmap.h`'s
+`resolveAffectedSeeds`/`resolveExerciseSeeds`) and `--exclude=` (`ingest_crawl.h`) still `filePathContains`'d
+the RAW stored path instead of the root-relative one (`rootRelPath`/`relForHash`, the same seam every other
+index-builder and path predicate already reads per #228). So a pattern that happened to match the CHECKOUT
+location — never anything inside the tree itself — decided the answer only under an absolute or
+trailing-slash root: `--affected=<marker-above-root>` matched every file (instead of refusing, as `ripwire .`
+correctly does) and `--exclude=<marker-above-root>` silently dropped every file from the map (instead of
+indexing normally). `test/rootspellingcheck.sh` gained two arms pinning both call sites across all six root
+spellings.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

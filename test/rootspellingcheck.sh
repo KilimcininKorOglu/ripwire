@@ -158,6 +158,27 @@ for sp in $SPELLINGS; do qrc="$qrc$( cat "$TMP/out/pyfour___quality_delta.$sp.rc
 [ "$qrc" = "000000" ] && ok "control: --quality-delta exits 0 on the unchanged tree under all six spellings" \
                       || no "control: --quality-delta exit codes per spelling ($SPELLINGS) = $qrc, want 000000"
 
+# ── (1)+(2) A1 residual (found-items 2026-09-17, reports/pr-253.md R1/R2): SELECTOR PATH PATTERNS and
+# --exclude= must match the ROOT-RELATIVE path, not the typed one. testmap.h::resolveAffectedSeeds/
+# resolveExerciseSeeds and ingest_crawl.h's --exclude matcher used to filePathContains() the RAW stored
+# path, so a marker that exists only in the CHECKOUT location above the crawl root — never inside any
+# file's own tree-relative path — decided the answer: `--affected=<marker>` matched every file (seeds
+# nonzero) and `--exclude=<marker>` dropped every file, under an absolute or trailing-slash root spelling,
+# while `.`/`./`/symlink/`..`-spelled runs correctly saw no match at all.
+MARK="$TMP/w/zzzmarker9/pyfour"
+stage "$FIX" "$MARK"
+# --affected refuses (rc=1, its diagnosis on stderr, stdout empty) on a no-match spec, so invariant()'s
+# "nothing to compare on stdout" guard can't be reused here — the CORRECT answer is uniform refusal, not a
+# document to diff. Assert the exit code is identical (and =1, the refusal) across every spelling instead.
+arc=""
+for sp in $SPELLINGS; do
+    spell "$sp" "$MARK" "$TMP/out/a1aff.$sp" --affected=zzzmarker9
+    arc="$arc$( cat "$TMP/out/a1aff.$sp.rc" )"
+done
+[ "$arc" = "111111" ] && ok "A1 --affected=<above-root marker> refuses (rc=1) identically under every spelling" \
+                       || no "A1 --affected=<above-root marker> exit codes per spelling ($SPELLINGS) = $arc, want 111111"
+invariant "A1 --exclude=<above-root marker> excludes nothing under every spelling" "$MARK" --exclude=zzzmarker9
+
 # ── (3) sensitivity: an edit that moves the import's target MUST gate, under `.` and absolute alike ─────
 printf 'from app.local import load\n\n\ndef handler():\n    return load(1)\n' >"$PY/app/views.py"
 for sp in dot abs; do

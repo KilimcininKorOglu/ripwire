@@ -1505,17 +1505,20 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
                 return full;
             };
 
-            // user --exclude substrings prune dirs and drop files (vendored/generated trees). Multi-root (A12):
-            // match against the LABELED spelling so one excludes list applies uniformly across roots.
+            // user --exclude substrings prune dirs and drop files (vendored/generated trees). #228/A1: match
+            // against the ROOT-RELATIVE spelling (relForHash), never the raw typed path — an absolute or
+            // trailing-slash root spelling must not let an --exclude substring hit the checkout location
+            // above the root (the same defect class rootRelPath fixes for the index-builder seams). Multi-root
+            // (A12): match against the LABELED spelling so one excludes list applies uniformly across roots.
             bool excluded = false;
             if( !excludeSubstr.empty() )
             {
-                std::string labeledBuf;
-                std::string_view matchPath = fullPath();
+                std::string             labeledBuf;
+                const std::string_view  rel       = relForHash( fullPath(), rootDir );
+                std::string_view        matchPath = rel;
                 if( !excludeLabel.empty() )
                 {
                     labeledBuf.assign( excludeLabel );
-                    const std::string_view rel = relForHash( fullPath(), rootDir );
                     if( !rel.empty() ) { labeledBuf.push_back( '/' );  labeledBuf.append( rel ); }
                     matchPath = labeledBuf;
                 }
