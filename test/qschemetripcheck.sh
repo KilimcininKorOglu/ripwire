@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 2 (integration/train-2 on main 9f44a363: #248 186fcb84, #254 0585b2f3, #257 50129f8c): RE-DERIVED ON
+#   THE MERGED TREE, carried from no side. kParserVer is assigned in merge order from main's 96: #248 = 97, #254 = 98,
+#   #257 = 99, the numbers each lane already declared. kCacheVersion stays 22; kQSnapCacheScheme stays 12. Main's pin
+#   (37dac79a, #249's qsnapCountFits) hashed parserVer 96 over the new deserializeSnapshot; the lanes' pins (#248
+#   db0e8cce at 97, #254 8ca11f67 at 98, #257 01ea4c63 at 99) hashed their numbers over the manifest before #249,
+#   so none of them hashed the merged declaration lines. #243 also declares 99 and carries #257's pin 01ea4c63: a
+#   clean merge of a wrong population, so it re-bumps over this train's number when it lands.
 # 2026-09-16, STD-TYPED MEMBER FIELDS (test/fieldnarrowcheck.sh arm q): parserVer and its quality mirror move 98 -> 99 —
 #   a C++ field's compose record carries the namespace its type was written in as its qualifier (`std` for
 #   `std::string name_;`). Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key
