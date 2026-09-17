@@ -329,6 +329,7 @@ struct Eval
                 const RegexVerdict     verdict = compiled.regex.search( path );
                 if( verdict == RegexVerdict::Exhausted )
                 {
+                    DEGRADED_PATH_ALERT( "query: file() regex match abandoned by the engine — empty result" );
                     fail( "file(\"" + re + "\") could not be evaluated on " + std::string( path ) + ": " + std::string( kRegexAbandonedReason )
                           + " — refusing rather than reporting a count the engine did not finish" );
                     return {};

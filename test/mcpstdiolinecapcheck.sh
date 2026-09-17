@@ -162,7 +162,7 @@ fi
 # from one that drains past the cap (this fix) on RSS alone, not just on the refusal message.
 # ===================================================================================================
 echo "-- (D) peak RSS on the 160 MB line stays well under the line size"
-if command -v /usr/bin/time >/dev/null 2>&1 && /usr/bin/time -l true >/dev/null 2>/tmp/mcpstdiolinecapcheck_probe.txt; then
+if command -v /usr/bin/time >/dev/null 2>&1 && /usr/bin/time -l true >/dev/null 2>"$TMP/rss_probe.txt"; then
     /usr/bin/time -l "$BIN" "$TMP" --mcp < "$TMP/req_b.txt" >/dev/null 2>"$TMP/time_d.txt"
     RSS_D="$( grep 'maximum resident set size' "$TMP/time_d.txt" | awk '{print $1}' )"
     if [ -n "$RSS_D" ] && [ "$RSS_D" -lt 100000000 ]; then
