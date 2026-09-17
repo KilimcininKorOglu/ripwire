@@ -1729,8 +1729,11 @@ without the template-argument strip.
   **Referenced at** (Ruby constant-load directives, so a class names the files that load it even where no
   call edge exists) — served to editors off the same warm index `--mcp` uses — no second parser, no
   second process. Saved-state answers, UTF-8 positions, every count labelled a floor in place; refuses
-  `--mcp`/`--listen` — one protocol per stdin. The design record is `docs/LSP.md`; the gate is
-  `test/lspcheck.sh` (16 arms, a scripted client speaking real LSP framing).
+  `--mcp`/`--listen` — one protocol per stdin. A `workspace/symbol` query matching more than 20 symbols answers
+  the first 20 and says how many it left out in a `window/logMessage`. A file URI outside the root (absolute,
+  `..`-escaped, through a symlink, or percent-encoded) answers nothing, and malformed `Content-Length` framing ends
+  the session at exit 1. The design record is `docs/LSP.md`; the gate is `test/lspcheck.sh` (17 arms, 19 checks, a
+  scripted client speaking real LSP framing). Thanks to @mpapis.
 
 ### Fixed — a C++ member named like a class was read as that class
 

@@ -109,6 +109,11 @@ The index is **disk-byte-based**. An unsaved (or never-saved) buffer is not "mis
   contains a known fn and a field row; hover carries signature + floor sentence; workspace/symbol
   exact + prefix; `shutdown`/`exit` → exit 0; **determinism**: two identical dialogs
   byte-identical (the house (15) pattern); the server is killed in `trap` (it owns the terminal).
+- As shipped, `test/lspcheck.sh` has **17 arms (19 checks)**: the plan's arms above, plus the
+  didChange/D1, protocol-shape, lifecycle-refusal and D10-refusal arms, the Ruby constant tier (14),
+  and three from the #279 review — URIs outside the root answer nothing (15), malformed framing exits 1
+  (16), and `workspace/symbol`'s 20-row cap is disclosed in a `window/logMessage` (17). The gate's own
+  header is the authoritative list.
 
 ## Manual verification (Zed)
 
