@@ -537,24 +537,19 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
     }
     for( const std::string& p : mdPaths )
     {
-        const std::vector<SkillFinding> findings = scanSkillFile( p );
-        const int code = skillScanExitCode( findings );
-        if( code <= 0 )
+        const SkillFileReadResult res = scanSkillFileChecked( p );
+        if( !res.readable )   // the folder was enterable, so the file is copyable: CRITICAL by name, as --scan-skills scores it
         {
-            continue;
+            rw::emitTo( stderr, "ripwire wrap: CRITICAL — cannot read skill file {}; it was not scanned and may still be installed\n", p );
         }
-        if( code > maxSev )
+        maxSev = std::max( maxSev, res.readable ? skillScanExitCode( res.findings ) : 2 );
+        for( const SkillFinding& f : res.findings )
         {
-            maxSev = code;
-        }
-        for( const SkillFinding& f : findings )
-        {
-            if( f.sev == SkillSeverity::Info )
+            if( f.sev != SkillSeverity::Info )   // silent on INFO
             {
-                continue; // silent on INFO
+                rw::emitTo( stderr, "ripwire wrap: {}  {}:{}  {}  — \"{}\"\n",
+                              skillSeverityStr( f.sev ), p.c_str(), f.line, f.rule, f.excerpt.c_str() );
             }
-            rw::emitTo( stderr, "ripwire wrap: {}  {}:{}  {}  — \"{}\"\n",
-                          skillSeverityStr( f.sev ), p.c_str(), f.line, f.rule, f.excerpt.c_str() );
         }
     }
     return maxSev;

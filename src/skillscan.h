@@ -515,6 +515,11 @@ inline bool toolAllowed( const std::vector<std::string>& tools, std::string_view
 // on a synthetic finding rather than reading a stopped walk as an honest "clean". Public (not detail::) because
 // both those walks live outside this file.
 static constexpr const char* kScanIncompleteRuleWalk = "SCAN-INCOMPLETE:walk-stopped-early";
+// The same ruling for one FILE the walk found and scanSkillFileChecked could not read (mode 000 in an open folder,
+// an I/O error, a descriptor limit): the file is still there to be copied, so the verdict is CRITICAL with this rule
+// on a row naming it, never a skip that leaves the verdict "clean". A folder the walk cannot ENTER is different —
+// its contents cannot be copied either — and stays WARN in wrap.h.
+static constexpr const char* kScanIncompleteRuleUnreadable = "SCAN-INCOMPLETE:file-unreadable";
 
 // ── core scanner ─────────────────────────────────────────────────────────────────────────────────
 
@@ -890,31 +895,13 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
 
 // ── file and directory entry points ──────────────────────────────────────────────────────────────
 
-// Scan a single skill file. Missing/unreadable → DEGRADED_PATH_ALERT + empty vector (never crash).
-inline std::vector<SkillFinding> scanSkillFile( const std::string& path )
-{
-    std::ifstream f( path );
-    if( !f )
-    {
-        DEGRADED_PATH_ALERT( "skillscan: cannot read skill file" );
-        return {};
-    }
-    std::ostringstream buf;
-    buf << f.rdbuf();
-    if( f.bad() )
-    {
-        DEGRADED_PATH_ALERT( "skillscan: I/O error reading skill file" );
-        return {};
-    }
-    return scanSkillText( buf.str() );
-}
-
 // Result of a checked scan: distinguishes "read the file, ran the scan, got N findings" (possibly
 // zero — a legitimate clean scan) from "never scanned it — the path itself could not be read" (missing,
-// permission-denied, or a directory). scanSkillFile() above collapses both cases to an empty vector for
-// callers (wrap.h) that treat "cannot scan" the same as "nothing found"; the --scan-skill/--scan-skills
-// CLI entry points need to tell them apart so an unreadable path can refuse instead of reporting a false
-// clean scan (§P0.5a — a typo'd path must never read as "safe").
+// permission-denied, or a directory). Every entry point needs the two apart: --scan-skill refuses an
+// unreadable path (§P0.5a — a typo'd path must never read as "safe"), and the two directory walks
+// (--scan-skills, wrap.h's wrapScanSkillDir) score a file they found but could not read CRITICAL
+// (kScanIncompleteRuleUnreadable). The unchecked scanSkillFile() that read "cannot scan" as "nothing
+// found" for wrap.h is gone for that reason.
 struct SkillFileReadResult
 {
     bool                        readable = false;   // false = path could not be scanned at all
@@ -923,10 +910,8 @@ struct SkillFileReadResult
 
 // NO DEGRADED_PATH_ALERT on the unreadable paths here, deliberately, and it is not an omission (M7/F20,
 // capture-audit 2026-09-04). That log line means "this run CONTINUED in a reduced mode"; every caller of
-// THIS function refuses instead, so printing it stamped a degrade notice on stderr immediately before a
-// refusal that had degraded nothing — "[math degraded] skillscan: cannot read skill file (skillscan.h:786,
-// …)" ahead of "cannot read '…' — no scan performed". The alert belongs to scanSkillFile() above, which is
-// the entry point that really does swallow the failure and return an empty finding list to wrap.h.
+// THIS function refuses or scores the file CRITICAL by name instead, so the alert would stamp a
+// deduplicated, pathless degrade notice beside a disclosure that already says which file and why.
 inline SkillFileReadResult scanSkillFileChecked( const std::string& path )
 {
     std::error_code ec;
@@ -1044,8 +1029,8 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // `verdict=` is derived from the SAME severities as skillScanExitCode (0/1/2 <-> clean/warn/critical), so
 // it can never disagree with the exit code the caller separately returns.
 //
-// §B13.3: `filesSkipped` is how many files the caller's walk SAW and could not scan (binary content, or
-// unreadable) — the other half of the population `files=` counts. A verdict must not be silently narrower
+// §B13.3: `filesSkipped` is how many files the caller's walk SAW and could not scan (unreadable — each also
+// carries a CRITICAL SCAN-INCOMPLETE:file-unreadable row) — the other half of the population `files=` counts. A verdict must not be silently narrower
 // than its subject, and "clean" over a directory whose executables were never opened is exactly that.
 // Emitted only when non-zero (the house rule: absent = nothing skipped, so every existing artifact and gate
 // stays byte-identical), and defaulted so the single-file entry point — which scans the one file it is given
