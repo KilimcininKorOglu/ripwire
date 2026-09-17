@@ -614,8 +614,8 @@ baseline keyed on a primary template member's old `Box<T>` spelling re-keys once
 
 Gated by `test/cpptmplscopecheck.sh`, 64 checks: main fails 42, and the previous revision fails 6. The gate covers:
 
-- a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact`, `--uses`
-  and the census;
+- a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact` and
+  `--uses`, and on identities in the census;
 - the primary shapes;
 - all three specialization forms;
 - the review's `Traits` probe;

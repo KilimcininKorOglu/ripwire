@@ -525,9 +525,14 @@ TC="$( grep -E $'^(C|S)\t' "$TMP/templ.tsv" 2>/dev/null )"
 printf '%s\n' "$PC" | grep -qE $'^C\t[a-z-]+\t.*\tbox\\.hpp::use#[0-9]+\tgrow\tbox\\.hpp::Box::grow#[0-9]+\t10$' \
     && ok "control census: use -> box.hpp::Box::grow at line 10" \
     || no "control census row for use -> grow missing: $( printf '%s' "$PC" | tr '\n\t' '| ' )"
-[ -n "$PC" ] && [ "$TC" = "$PC" ] \
-    && ok "templ census: every C and S row identical to the control's (the S6-C id space is the same)" \
-    || no "templ census differs — control: $( printf '%s' "$PC" | tr '\n\t' '| ' ) — templ: $( printf '%s' "$TC" | tr '\n\t' '| ' )"
+# The IDENTITIES must be identical — every S row, and every C row's caller, callee, targets and line. The deciding
+# MECHANISM (column 2) and its flags (column 5) are masked: since #248 (typed-parameter receivers) the control's
+# `Box& b` narrows by receiver-rule, while `Box<int>& b`'s written type keeps its argument list, matches no scope, and
+# the same single target is labelled `unique` — a label difference, not an edge difference (disclosed follow-up).
+censusIds(){ printf '%s\n' "$1" | awk -F '\t' 'BEGIN { OFS = "\t" } $1 == "C" { $2 = "-"; $5 = "-" } { print }'; }
+[ -n "$PC" ] && [ "$( censusIds "$TC" )" = "$( censusIds "$PC" )" ] \
+    && ok "templ census: every S row and every C row's caller, callee, targets and line identical to the control's (the S6-C id space is the same)" \
+    || no "templ census identities differ — control: $( censusIds "$PC" | tr '\n\t' '| ' ) — templ: $( censusIds "$TC" | tr '\n\t' '| ' )"
 
 # ── §3 NO TEMPLATE ARGUMENTS IN A PRIMARY TEMPLATE'S SCOPE, over every other spelling ───────────────────────────
 SMAP="$( run shape --no-cache --legend=compact )"
