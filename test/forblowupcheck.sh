@@ -65,12 +65,12 @@ terms(){
 # ===================================================================================================
 echo "-- (A) --for: a task with 5000 unique terms is capped and discloses it"
 TASK_A="$( terms 5000 )"
-OUT_A="$( "$BIN" "$TMP" --for="$TASK_A" --no-cache 2>/tmp/forblowupcheck_a.err )"
+OUT_A="$( "$BIN" "$TMP" --for="$TASK_A" --no-cache 2>"$TMP/a.err" )"
 RC_A=$?
 if [ "$RC_A" = 0 ]; then
     ok "A0: rc=0 on a 5000-unique-term task (no crash, no refusal)"
 else
-    no "A0: --for exited $RC_A on a 5000-unique-term task"; cat /tmp/forblowupcheck_a.err
+    no "A0: --for exited $RC_A on a 5000-unique-term task"; cat "$TMP/a.err"
 fi
 if printf '%s' "$OUT_A" | xmllint --noout - 2>/dev/null; then
     ok "A1: the capped bundle is still well-formed XML"
@@ -115,6 +115,18 @@ if has 'terms_capped="1"' "$OUT_C1025" && [ "$( num terms_total "$OUT_C1025" )" 
     ok "C2: 1025 unique terms trips terms_capped=\"1\" terms_total=\"1025\" exactly"
 else
     no "C2: 1025 unique terms did not trip the cap at the expected boundary"
+fi
+# C3: terms_total is a DISTINCT count, not an occurrence count. 1026 distinct terms, then the two spellings the cap
+# dropped (qterm001024, qterm001025) repeated 40 more times each: the total stays 1026. It read 1106 (1024 kept plus
+# every post-cap OCCURRENCE) while repeats of a dropped spelling missed the kept-terms lookup and counted again
+# (CodeRabbit on #277).
+TASK_C3="$( terms 1026 ) $( python3 -c "print(' '.join(['qterm001024', 'qterm001025'] * 40))" )"
+OUT_C3="$( "$BIN" "$TMP" --for="$TASK_C3" --no-cache 2>/dev/null )"
+TOTAL_C3="$( num terms_total "$OUT_C3" )"
+if has 'terms_capped="1"' "$OUT_C3" && [ "$TOTAL_C3" = "1026" ]; then
+    ok "C3: repeats of a dropped term do not count again — terms_total=\"1026\" for 1026 distinct terms in 1106 occurrences"
+else
+    no "C3: terms_total='$TOTAL_C3' for 1026 distinct terms (1106 occurrences) — want 1026, a distinct count"
 fi
 
 # ===================================================================================================

@@ -252,7 +252,7 @@ struct DedupedQueryTerms
 
     std::vector<std::string> uniqueToks;                // size() <= maxUnique passed to dedupeQueryTerms
     std::vector<std::size_t> uniqueIndexOfQtok;          // one entry per input token; kDroppedTerm past the cap
-    std::size_t              uniqueSeenTotal = 0;        // every DISTINCT term seen, kept or dropped
+    std::size_t              uniqueSeenTotal = 0;        // every DISTINCT term seen, kept or dropped — exact, never an occurrence count
     bool                     capped          = false;    // uniqueSeenTotal > uniqueToks.size()
 };
 
@@ -261,6 +261,12 @@ inline DedupedQueryTerms dedupeQueryTerms( const std::vector<std::string>& qToks
     DedupedQueryTerms out;
     out.uniqueIndexOfQtok.resize( qToks.size() );
     out.uniqueToks.reserve( std::min( qToks.size(), maxUnique ) );
+    // The spellings the cap DROPPED, so a repeat of one is not counted as a new distinct term (the kept-terms scan
+    // below only sees what was kept: every repeat of a dropped term used to miss it and count again, turning the
+    // disclosed terms_total into an occurrence count — CodeRabbit on #277). Views into qToks, which outlives the
+    // loop, so the set costs no copy and never holds more entries than the query has tokens: no memory beyond the
+    // input already in hand, and O(1) per dropped token where the capped linear scan stays bounded by maxUnique.
+    ankerl::unordered_dense::set<std::string_view> droppedSpellings;
     for( std::size_t qi = 0; qi < qToks.size(); ++qi )
     {
         const auto found = std::find( out.uniqueToks.begin(), out.uniqueToks.end(), qToks[qi] );
@@ -269,9 +275,9 @@ inline DedupedQueryTerms dedupeQueryTerms( const std::vector<std::string>& qToks
             out.uniqueIndexOfQtok[qi] = std::size_t( found - out.uniqueToks.begin() );
             continue;
         }
-        ++out.uniqueSeenTotal;                            // a genuinely new distinct term, kept or not
         if( out.uniqueToks.size() < maxUnique )
         {
+            ++out.uniqueSeenTotal;                        // a genuinely new distinct term, kept
             out.uniqueIndexOfQtok[qi] = out.uniqueToks.size();
             out.uniqueToks.push_back( qToks[qi] );
         }
@@ -279,6 +285,10 @@ inline DedupedQueryTerms dedupeQueryTerms( const std::vector<std::string>& qToks
         {
             out.uniqueIndexOfQtok[qi] = DedupedQueryTerms::kDroppedTerm;
             out.capped               = true;
+            if( droppedSpellings.insert( std::string_view( qToks[qi] ) ).second )
+            {
+                ++out.uniqueSeenTotal;                    // a genuinely new distinct term, dropped — counted once
+            }
         }
     }
     return out;
