@@ -36,7 +36,22 @@
 namespace rw
 {
 
-inline constexpr std::size_t kCallerStackBytesFloor = 512 * 1024;   // a macOS secondary thread: the smallest stack a caller here runs on
+// The stack a caller that never sized its own thread plans for, where work bounds itself by it (src/regexguard.h
+// maxEngineSubjectBytes). The number only ever reaches a bound under libstdc++, whose matcher recurses once per visit;
+// libc++'s bound is SIZE_MAX on any stack. So it is chosen per library. libc++ is macOS here, where a secondary thread
+// gets 512 KiB. libstdc++ is glibc here, where the main thread and every std::thread get RLIMIT_STACK's soft limit, 8 MiB
+// unless an operator lowers it. 512 KiB under libstdc++ left NO visits once regexguard.h holds back half the stack and its
+// frame reserve (CI on #283): every #match?, skill-scan line and --arch path subject was Skipped on every Linux leg, a
+// failure a macOS run cannot see. regexguard.h static_asserts the libstdc++ number's budget on every platform. This is
+// still a planning number, not a measurement: running these callers on runOnStackThreads with the SETTLED size (and
+// reading the real thread stack, which glibc does not size at 8 MiB when RLIMIT_STACK is unlimited) is a follow-up.
+inline constexpr std::size_t kCallerStackBytesFloorLibcxx    = 512 * 1024;
+inline constexpr std::size_t kCallerStackBytesFloorLibstdcxx = 8 * 1024 * 1024;
+#if defined( _LIBCPP_VERSION )
+inline constexpr std::size_t kCallerStackBytesFloor = kCallerStackBytesFloorLibcxx;
+#else
+inline constexpr std::size_t kCallerStackBytesFloor = kCallerStackBytesFloorLibstdcxx;
+#endif
 
 // The attribute object, released on every path.
 class StackThreadAttr

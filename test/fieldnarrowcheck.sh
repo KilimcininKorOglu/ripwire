@@ -7,7 +7,8 @@
 # `ambiguous=` gauge. Rule 2b: when the receiver names a field whose DECLARED TYPE is a type the index
 # knows (the S5-E HAS-A field capture), narrow the candidate set to that type's members, walking direct
 # bases (chaUp) when the type itself does not define the method. RESOLVE-stage only — no kParserVer bump
-# (arm q, 2026-09-16, is the exception: the field capture records the namespace a type was written in, kParserVer 99).
+# (arm q, 2026-09-16, is the exception: the field capture records the namespace a type was written in, kParserVer 99;
+# arm t, 2026-09-17, is the second: a C++ typedef / using alias records its target class, kParserVer 112 — declared 105, assigned on integration/train-4).
 #
 # Zero false edges is the bar — narrowing that guesses wrong is worse than ambiguity disclosed:
 #   * a LOCAL (param / declared var) that shadows the field name vetoes the narrow (real C++ lookup);
@@ -345,6 +346,286 @@ if [ -s "$TMP/q3.tsv" ] && cmp -s "$TMP/q3.tsv" "$TMP/q3b.tsv" && cmp -s "$TMP/q
 else
     no "(q8) stdfix census differs across runs or warm vs cold"; diff "$TMP/q3.tsv" "$TMP/q3w.tsv" | head -6
 fi
+
+# ── (u) a using-declaration names the base a member comes from (2026-09-17). C++ lookup stops at the first class that
+#        declares the name, and `using Base::m;` declares it in the class itself. The type-side probe Rules 2b/2c and Rule 1's
+#        base walk share (resolve.h methodOnTypeOrBases) never read it: a class with no `m` of its own went straight to its
+#        bases, where two bases both defining `m` REFUSE — clang's CGNonTrivialStruct.cpp writes `using
+#        StructVisitor<Derived>::asDerived;` for exactly that tie, and its five asDerived() calls split across unrelated
+#        classes. Now the using-declaration answers: (u2) through a field, (u3) through Rule 1's bare call, (u5) with the
+#        qualifier's template arguments stripped. (u4) is the contrast: UTie differs from UPick ONLY by the using line.
+#        (u6) is the floor for a re-export the index cannot reach: ExtBase is not in the tree, so the unchanged walk runs.
+#        (u1) is the DECIDED floor: a class that also defines `m` answers its own definitions alone, though C++ adds the
+#        re-exported base overloads to the same set. That union was built and graded net-worse against source (17 sites on
+#        rocksdb + llvm-project: 5 better, 4 same, 8 worse — resolve.h ownMethodSet says why); flipping (u1) needs that
+#        measurement redone, not this arm deleted. Separate corpus: (h)'s ambiguous= gauge is counted over $FIX.
+#        LINE NUMBERS in u.cpp are asserted below. ──
+FIX5="$TMP/usingfix"
+mkdir -p "$FIX5"
+cat >"$FIX5/u.cpp" <<'EOF'
+struct UBase { void emit( int a ) { } void emit( double d ) { } };
+struct UDecoy { void emit( int a ) { } };
+struct UDerived : UBase {
+    using UBase::emit;
+    void emit( const char* s ) { }
+};
+struct UB1 { void dual() { } };
+struct UB2 { void dual() { } };
+struct UPick : UB1, UB2 { using UB1::dual; void selfPick() { dual(); } };
+struct UTie : UB1, UB2 { void selfTie() { dual(); } };
+struct UExt : ExtBase, UB1, UB2 { using ExtBase::dual; };
+template <typename T> struct UTB { void grab( T t ) { } };
+struct UTC { void grab( int t ) { } };
+struct UTD : UTB<int>, UTC { using UTB<int>::grab; };
+struct UOwner {
+    UDerived m_d;
+    UPick    m_k;
+    UTie     m_i;
+    UExt     m_e;
+    UTD      m_t;
+    void viaReexport() { m_d.emit( 1 ); }
+    void viaPick()     { m_k.dual(); }
+    void viaTie()      { m_i.dual(); }
+    void viaExt()      { m_e.dual(); }
+    void viaTemplate() { m_t.grab( 1 ); }
+};
+EOF
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/u.tsv" >/dev/null 2>&1
+UTSV="$TMP/u.tsv"   # the census uRow reads; (u8)/(u9) point it at their own corpus
+uRow(){  # uRow CLASS::METHOD LINE — "mech/flags|targets": that caller's census row in $UTSV at LINE, target ids without #NODEID, sorted ("" = no row)
+    local rows
+    rows="$( awk -F '\t' -v c="::$1#" -v l="$2" '$1 == "C" && index( $6, c ) && $9 == l { print $2 "/" $5; n = split( $8, t, "|" ); for( i = 1; i <= n; ++i ) { sub( /#[0-9]+$/, "", t[ i ] ); print t[ i ] } }' "$UTSV" 2>/dev/null )"
+    [ -n "$rows" ] || return 0
+    printf '%s|%s' "$( printf '%s\n' "$rows" | head -1 )" "$( printf '%s\n' "$rows" | tail -n +2 | sort | paste -sd , - )"
+}
+uMissing=""
+for want in '::UOwner::viaReexport#' '::UOwner::viaPick#' '::UOwner::viaTie#' '::UOwner::viaExt#' '::UOwner::viaTemplate#' '::UPick::selfPick#' '::UTie::selfTie#' 'dispositions calls=7 '; do
+    grep -qF "$want" "$TMP/u.tsv" 2>/dev/null || uMissing="$uMissing [$want]"
+done
+for site in 'emit|p="u.cpp:4" in_id="u.cpp::UDerived::UDerived"' 'dual|p="u.cpp:9" in_id="u.cpp::UPick::UPick"' 'dual|p="u.cpp:11" in_id="u.cpp::UExt::UExt"' 'grab|p="u.cpp:14" in_id="u.cpp::UTD::UTD"'; do
+    "$BIN" "$FIX5" "--uses=${site%%|*}" --no-cache 2>/dev/null | grep -qF "<u role=\"import\" ${site#*|}/>" \
+        || uMissing="$uMissing [--uses=${site%%|*} has no import row ${site#*|}]"
+done
+[ -z "$uMissing" ] && ok "(u0) presence: the census names all 7 callers and counts 7 calls, and all four using-declarations are indexed import sites of their class" \
+    || no "(u0) presence guard:$uMissing — every (u) arm below would be vacuous"
+uExpect(){  # uExpect ARM CLASS::METHOD LINE WANT WHAT — that caller's row must be exactly WANT
+    local got; got="$( uRow "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "($1) $5: [$got]"
+    else
+        no "($1) $5 — expected [$4], got [${got:-no row}]"
+    fi
+}
+uExpect u1 UOwner::viaReexport 21 'receiver-rule/r|u.cpp::UDerived::emit' \
+    "decided floor: m_d.emit( 1 ) on UDerived (own emit + using UBase::emit) keeps UDerived's own emit — the union graded net-worse"
+uExpect u2 UOwner::viaPick 22 'receiver-rule/r|u.cpp::UB1::dual' \
+    "m_k.dual() on UPick (no own dual, bases UB1 and UB2 both define it, using UB1::dual) pins UB1::dual through the field"
+uExpect u3 UPick::selfPick 9 'receiver-rule/r|u.cpp::UB1::dual' \
+    "bare dual() inside UPick pins UB1::dual through Rule 1's base walk"
+uExpect u4 UOwner::viaTie 23 'split/-|u.cpp::UB1::dual,u.cpp::UB2::dual' \
+    "control: m_i.dual() on UTie (the same two bases, NO using-declaration) keeps the refused tie's honest split"
+uExpect u5 UOwner::viaTemplate 25 'receiver-rule/r|u.cpp::UTB::grab' \
+    "m_t.grab( 1 ) on UTD (bases UTB<int> and UTC both define grab, using UTB<int>::grab) pins UTB::grab — the qualifier's template arguments are stripped"
+uExpect u6 UOwner::viaExt 24 'split/-|u.cpp::UB1::dual,u.cpp::UB2::dual' \
+    "floor: m_e.dual() on UExt (using ExtBase::dual, ExtBase not indexed) adds nothing and keeps the walk's split"
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/u2.tsv" >/dev/null 2>&1
+rm -f "$TMP/uc"
+"$BIN" "$FIX5" --cache="$TMP/uc" >/dev/null 2>&1
+"$BIN" "$FIX5" --cache="$TMP/uc" --pin-census="$TMP/uw.tsv" >/dev/null 2>&1
+if [ -s "$TMP/u.tsv" ] && cmp -s "$TMP/u.tsv" "$TMP/u2.tsv" && cmp -s "$TMP/u.tsv" "$TMP/uw.tsv"; then
+    ok "(u7) usingfix census byte-identical: cold, cold again, and warm (the re-export fact survives the cache)"
+else
+    no "(u7) usingfix census differs across runs or warm vs cold"; diff "$TMP/u.tsv" "$TMP/uw.tsv" | head -6
+fi
+
+# (u8) a using-declaration must name a BASE (review 2026-09-17). `using NotABase::m;` in a class that does not derive from
+#      NotABase is ill-formed C++ — mid-refactor or partial input — and the first cut pinned NotABase::m alone through
+#      receiver-rule, dropping the tie between the two real bases. A named class outside the class's base closure (chaUp)
+#      is ignored, so the walk's refusal and the ladder's split stand exactly as on main. (u9) is the control that the
+#      closure is transitive: `using GB::n;` names a GRAND-base and is honoured. Own corpus: the (u) line pins do not move.
+FIX6="$TMP/usingbasefix"
+mkdir -p "$FIX6"
+cat >"$FIX6/v.cpp" <<'EOF'
+struct RealBase1 { void m() { } };
+struct RealBase2 { void m() { } };
+struct NotABase { void m() { } };
+struct FakeDerived : RealBase1, RealBase2 { using NotABase::m; };
+struct GB { void n() { } };
+struct Mid : GB { };
+struct Mid2 { void n() { } };
+struct Leaf : Mid, Mid2 { using GB::n; };
+struct Holder {
+    FakeDerived f_;
+    Leaf        l_;
+    void viaFake() { f_.m(); }
+    void viaGrand() { l_.n(); }
+};
+EOF
+"$BIN" "$FIX6" --no-cache --pin-census="$TMP/v.tsv" >/dev/null 2>&1
+UTSV="$TMP/v.tsv"
+if grep -qF '::Holder::viaFake#' "$UTSV" 2>/dev/null && grep -qF '::Holder::viaGrand#' "$UTSV" && grep -qF 'dispositions calls=2 ' "$UTSV" \
+   && "$BIN" "$FIX6" --uses=m --no-cache 2>/dev/null | grep -qF '<u role="import" p="v.cpp:4" in_id="v.cpp::FakeDerived::FakeDerived"/>'; then
+    ok "(u8/u9 presence) the census names both Holder callers and counts 2 calls, and FakeDerived's using-declaration is an indexed import site"
+else
+    no "(u8/u9 presence) usingbasefix fixture not observed — (u8)/(u9) would be vacuous"
+fi
+uExpect u8 Holder::viaFake 12 'split/-|v.cpp::NotABase::m,v.cpp::RealBase1::m,v.cpp::RealBase2::m' \
+    "f_.m() on FakeDerived (bases RealBase1, RealBase2; using NotABase::m, NOT a base) ignores the using-declaration and keeps main's split"
+uExpect u9 Holder::viaGrand 13 'receiver-rule/r|v.cpp::GB::n' \
+    "control: l_.n() on Leaf (using GB::n, GB a base of its base Mid) honours the grand-base re-export"
+# ── (t) a base or member type reached through a C++ TYPE ALIAS (2026-09-17) — an EXTRACTION change like (q). The base walk
+#        keys classes by name, and an alias names no class: `class CGBuilderTy : public CGBuilderBaseTy` where
+#        `typedef llvm::IRBuilder<…> CGBuilderBaseTy;` dead-ended at CGBuilderBaseTy, so a member `CGBuilderTy Builder;` never
+#        reached IRBuilderBase::CreateCall (llvm-project clang/lib/CodeGen, ~1,700 sites). The capture now records a plain
+#        alias's target class and the walk continues there: a namespace-scope typedef base (t1), a class-scope typedef member
+#        type (t2), a class-scope `using` (t3), a namespace-qualified target (t4). (t5) a target written in `std` is refused
+#        like a std:: field type (arm q) — an in-repo `vector` is not std::vector. (t6) the alias is not an inheritance or
+#        HAS-A fact: no --lego implementor, no role="extends" use-site, no <compose> row. (t7) presence; (t8) warm == cold.
+#        (t9) an alias NAMED like a real class elsewhere is not followed: the graph keys classes by bare name, so `using Base =
+#        IRBuilder<int>;` inside one class would hand IRBase::CreateMul to Kid : Base, whose real Base defines nothing. (t10) an
+#        alias local to a function body records nothing — it types no member, and the name graph has no scope to keep it local.
+#        (t11) KNOWN FLOOR (independent review of #280): an alias records its target's class NAME without template arguments, so
+#        `typedef SubT<marks> subtree;` — `marks` the enclosing template's own parameter — walks to the primary SubT::is_null
+#        ALONE and drops the explicit specialization SubT<true>::is_null that the dependent argument can also select (rocksdb
+#        omt_impl.h, subtree_templated<true>). A lost candidate, never a wrong-class pin; main split over both. The control
+#        `typedef SubT<false> subtree;` names the primary, so its narrow is right.
+#        The Decoy methods in decoy/ keep every unfixed answer a split, never an accidental receiver-rule pin. ──
+FIX5="$TMP/aliasfix"
+mkdir -p "$FIX5/ir" "$FIX5/decoy" "$FIX5/app"
+cat >"$FIX5/ir/ir.h" <<'EOF'
+struct IRBase { int CreateMul( int a ) { return a; } };
+template <typename F> struct IRBuilder : IRBase { };
+namespace ir { struct QBase { int Flush() { return 1; } }; }
+EOF
+cat >"$FIX5/decoy/other.h" <<'EOF'
+struct Decoy { int CreateMul( int a ) { return a + 1; } int Flush() { return 2; } int size() { return 3; } };
+struct vector { int size() { return 4; } };
+EOF
+cat >"$FIX5/app/owners.h" <<'EOF'
+typedef IRBuilder<int> BaseTy;
+struct CGB : public BaseTy { int CreateStore( int a ) { return a; } };
+struct Owner1 { CGB Builder; int run() { return Builder.CreateMul( 1 ); } };
+struct Owner2 { typedef IRBuilder<int> BuilderType; BuilderType Builder; int run() { return Builder.CreateMul( 2 ); } };
+struct Owner3 { using BuilderTy = IRBuilder<int>; BuilderTy Builder; int run() { return Builder.CreateMul( 3 ); } };
+typedef ir::QBase QAlias;
+struct Owner4 { QAlias Q; int run() { return Q.Flush(); } };
+using Vec = std::vector<int>;
+struct Owner5 { Vec V; int run() { return V.size(); } };
+struct Holder9 { using Base = IRBuilder<int>; };
+struct Kid : Base { };
+struct Owner9 { Kid K; int run() { return K.CreateMul( 9 ); } };
+inline int localAlias() { using KidBase = IRBuilder<int>; return 0; }
+struct Kid10 : KidBase { };
+struct Owner10 { Kid10 K; int run() { return K.CreateMul( 10 ); } };
+EOF
+cat >"$FIX5/decoy/base.h" <<'EOF'
+struct Base { int unrelated() { return 5; } };
+EOF
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/t.tsv" >/dev/null 2>&1
+tRow(){ awk -F '\t' -v c="app/owners.h::$1::run#" -v n="$2" '$1 == "C" && index( $6, c ) == 1 && $7 == n { print $2 "|" $8 }' "$TMP/t.tsv" 2>/dev/null; }
+tMissing=""
+for want in '::Owner1::run#' '::Owner2::run#' '::Owner3::run#' '::Owner4::run#' '::Owner5::run#' '::Owner9::run#' '::Owner10::run#' 'dispositions calls=7 '; do
+    qHas "$TMP/t.tsv" "$want" || tMissing="$tMissing [$want]"
+done
+[ -z "$tMissing" ] && ok "(t7) presence: the alias census names every Owner::run and counts all seven calls" \
+    || no "(t7) presence guard:$tMissing — every (t) arm below would be vacuous"
+for arm in 'Owner9 t9 an alias named like the real class Base (using Base = IRBuilder<int> inside Holder9)' \
+           'Owner10 t10 a function-local alias (using KidBase = IRBuilder<int> inside localAlias)'; do
+    set -- $arm; owner="$1"; label="$2"; shift 2; what="$*"
+    R="$( tRow "$owner" CreateMul )"
+    case "$R" in
+        "receiver-rule|ir/ir.h::IRBase::CreateMul#"*) no "($label) $owner::run -> CreateMul pinned to IRBase::CreateMul through $what: [$R]" ;;
+        *) ok "($label) $owner::run -> CreateMul is not pinned through $what: [${R:-no row}]" ;;
+    esac
+done
+for arm in 'Owner1 CreateMul ir/ir.h::IRBase::CreateMul# t1 a namespace-scope typedef base (CGB : BaseTy, typedef IRBuilder<int> BaseTy)' \
+           'Owner2 CreateMul ir/ir.h::IRBase::CreateMul# t2 a class-scope typedef member type (BuilderType Builder)' \
+           'Owner3 CreateMul ir/ir.h::IRBase::CreateMul# t3 a class-scope using alias member type (BuilderTy Builder)' \
+           'Owner4 Flush ir/ir.h::QBase::Flush# t4 a namespace-qualified alias target (typedef ir::QBase QAlias)'; do
+    set -- $arm; owner="$1"; callee="$2"; want="$3"; label="$4"; shift 4; what="$*"
+    R="$( tRow "$owner" "$callee" )"
+    case "$R" in
+        "receiver-rule|$want"*'|'*) no "($label) $owner::run -> $callee names more than the aliased class's method: [$R]" ;;
+        "receiver-rule|$want"[0-9]*) ok "($label) $owner::run -> $callee narrows through $what: [$R]" ;;
+        *) no "($label) $owner::run -> $callee does not reach ${want%#} through $what: [${R:-no row}]" ;;
+    esac
+done
+T5="$( tRow Owner5 size )"
+case "$T5" in
+    "receiver-rule|decoy/other.h::vector::size#"*) no "(t5) Owner5::run -> V.size() pinned to the in-repo vector::size through using Vec = std::vector<int>: [$T5]" ;;
+    *) ok "(t5) a std:: alias target names no in-repo class: Owner5::run -> V.size() is not pinned to vector::size [${T5:-no row}]" ;;
+esac
+FIX6="$TMP/aliasspecfix"
+mkdir -p "$FIX6/lib" "$FIX6/decoy"
+cat >"$FIX6/lib/sub.h" <<'EOF'
+template <bool marks> struct SubT { int is_null() const { return 0; } };
+template <> struct SubT<true> { int is_null() const { return 1; } };
+EOF
+cat >"$FIX6/lib/tree.h" <<'EOF'
+template <typename D, bool marks> class Tree { typedef SubT<marks> subtree; subtree root; int f() { return root.is_null(); } };
+struct Plain { typedef SubT<false> subtree; subtree root; int g() { return root.is_null(); } };
+EOF
+cat >"$FIX6/decoy/other.h" <<'EOF'
+struct Other { int is_null() const { return 7; } };
+EOF
+"$BIN" "$FIX6" --no-cache --pin-census="$TMP/t11.tsv" >/dev/null 2>&1
+t11Row(){ awk -F '\t' -v c="lib/tree.h::$1#" '$1 == "C" && index( $6, c ) == 1 && $7 == "is_null" { print $2 "|" $8 }' "$TMP/t11.tsv" 2>/dev/null; }
+T11="$( t11Row Tree::f )"
+case "$T11" in
+    "receiver-rule|lib/sub.h::SubT::is_null#"[0-9]*) case "$T11" in *'|'*'|'*) T11MOVED=1 ;; *) T11MOVED=0 ;; esac ;;
+    *) T11MOVED=1 ;;
+esac
+[ "$T11MOVED" = 0 ] \
+    && ok "(t11) KNOWN FLOOR: typedef SubT<marks> (a dependent argument) narrows to the primary SubT::is_null alone and drops SubT<true>::is_null — a lost candidate, not a wrong pin: [$T11]" \
+    || no "(t11) KNOWN FLOOR MOVED: Tree::f -> root.is_null() is no longer the primary alone: [${T11:-no row}] — if it now includes SubT<true>::is_null (and nothing else), rewrite this arm to assert that split"
+T11C="$( t11Row Plain::g )"
+case "$T11C" in
+    "receiver-rule|lib/sub.h::SubT::is_null#"*'|'*) no "(t11) control: typedef SubT<false> names more than the primary: [$T11C]" ;;
+    "receiver-rule|lib/sub.h::SubT::is_null#"[0-9]*) ok "(t11) control: typedef SubT<false> (a concrete argument) narrows to the primary SubT::is_null, which it names: [$T11C]" ;;
+    *) no "(t11) control: Plain::g -> root.is_null() lost its narrow to SubT::is_null: [${T11C:-no row}]" ;;
+esac
+LEGO="$( "$BIN" "$FIX5" --lego=IRBuilder --no-cache 2>/dev/null )"
+printf '%s' "$LEGO" | grep -qE '<impl n="(BaseTy|BuilderType|BuilderTy)"' \
+    && no "(t6) --lego=IRBuilder lists an ALIAS as an implementor: $( printf '%s' "$LEGO" | grep -oE '<impl [^>]*>' | tr '\n' ' ' )" \
+    || ok "(t6) --lego=IRBuilder lists no alias as an implementor"
+USEST="$( "$BIN" "$FIX5" --uses=IRBuilder --no-cache 2>/dev/null )"
+TEXT="$( printf '%s' "$USEST" | grep -oE '<u [^>]*role="extends"[^>]*/>' | tr '\n' ' ' )"   # rows only: the legend itself spells role="extends"
+[ -n "$TEXT" ] \
+    && no "(t6) --uses=IRBuilder reports an alias as role=\"extends\": $TEXT" \
+    || ok "(t6) --uses=IRBuilder has no role=\"extends\" row — an alias is not a base clause"
+# the two probes above can fire: the base clause `CGB : public BaseTy` IS an extends row and a --lego implementor
+"$BIN" "$FIX5" --uses=BaseTy --no-cache 2>/dev/null | grep -qE '<u [^>]*role="extends"[^>]*p="app/owners.h:2"' \
+    && "$BIN" "$FIX5" --lego=BaseTy --no-cache 2>/dev/null | grep -qE '<impl n="CGB"' \
+    && ok "(t6) control: --uses=BaseTy shows CGB's base clause as role=\"extends\" and --lego=BaseTy lists CGB — both probes are live" \
+    || no "(t6) control: CGB's base clause is missing from --uses=BaseTy or --lego=BaseTy — the two no-alias probes above cannot fire"
+TCOMP=""
+for owner in Owner2 Owner3 BaseTy BuilderType BuilderTy QAlias Vec; do
+    TCOMP="$TCOMP$( "$BIN" "$FIX5" --around="$owner" --no-cache 2>/dev/null | grep -o '<compose>.*</compose>' )"
+done
+printf '%s' "$TCOMP" | grep -qE 'name=""|rel="alias"' \
+    && no "(t6) an alias record reached the HAS-A block: $TCOMP" \
+    || ok "(t6) no alias record in any <compose> block (Owner2, Owner3 and the alias names)"
+printf '%s' "$TCOMP" | grep -qF '<field name="Builder" type="BuilderType" owner="Owner2" rel="creates"/>' \
+    && ok "(t6) control: HAS-A keeps Owner2 → BuilderType for its member Builder" \
+    || no "(t6) control: HAS-A lost Owner2's member Builder: [${TCOMP:-no <compose> block}]"
+rm -f "$TMP/tc"
+"$BIN" "$FIX5" --cache="$TMP/tc" >/dev/null 2>&1
+"$BIN" "$FIX5" --cache="$TMP/tc" --pin-census="$TMP/tw.tsv" >/dev/null 2>&1
+[ -s "$TMP/t.tsv" ] && cmp -s "$TMP/t.tsv" "$TMP/tw.tsv" && ok "(t8) aliasfix census byte-identical warm and cold — the alias record rides the cache" \
+    || { no "(t8) aliasfix census differs warm vs cold"; diff "$TMP/t.tsv" "$TMP/tw.tsv" | head -6; }
+
+# ── KNOWN GAP (help wanted: prompts/help-wanted/ts-literal-receivers.md) — issue #59, on receivers whose type is CERTAIN ──
+# A built-in method called on a LITERAL binds an unrelated, same-named, never-imported user function — with the
+# graph's ambiguity gauge at zero, so the answer reads as confident. `"a-b".replace(…)` can only be
+# String.prototype.replace; today it binds src/unrelated.ts's `export function replace`. The arms below assert
+# TODAY's behaviour, so they PASS now. Flipping them is the acceptance test for the prompt: no edge into
+# unrelated.ts, and the call still COUNTED (a named, disclosed disposition — never a silent drop). A FAIL on a
+# KNOWN GAP arm means the gap moved: rewrite that arm to assert the fixed behaviour, never delete it.
+# The two CONTROLS are not gaps. They are TRUE edges any fix must keep: a typed user-object receiver, and a
+# literal receiver whose method the repo itself defines on String.prototype (a literal CAN reach user code).
+# Separate corpora on purpose: (h)'s ambiguous=6 is counted over $FIX and must not move.
+LIT="$TMP/tslitfix"; OBJ="$TMP/tsobjfix"
+mkdir -p "$LIT/src" "$OBJ/src"
 
 # ── (r) prov="final-segment" reaches FIELD narrows (2026-09-17). Test/narrowcheck.sh arm 25 marks an edge that a parameter's
 #        or local's QUALIFIED written type chose by its last name alone: that match never checked the qualifier against the

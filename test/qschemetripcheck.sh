@@ -34,6 +34,23 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 4 (integration/train-4 on main a2b3cd6e: lane/rule2-irbuilder-local 217544bc, lane/using-base-reexport
+#   2ca5fe7a, lane/followups-scan-0917 fee1516b, lane/skillscan-unscanned-file 116ad012, #279 b2514bd2, #280 e5f9a50a,
+#   #231 via lane/finish-231 9eacccc6, #224 e9c5f283): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer
+#   and its mirror over main's 110 in merge order: the vexing-parse locals lane = 111 (it claimed 111), #280 = 112 (it
+#   claimed 111); every other member is resolve-, verb- or test-side and changes no extraction. kCacheVersion stays 23;
+#   kQSnapCacheScheme stays 14 (no member changes a manifest function). #280's entry below is renumbered; the
+#   vexing-parse lane carried no entry of its own.
+# 2026-09-17, BLOCK-SCOPE DIRECT-INITIALIZED LOCALS (test/narrowcheck.sh arms 52-60, lane/rule2-irbuilder-local):
+#   kParserVer and its mirror 110 -> 111 on integration/train-4 — a body-local `IRBuilder<> Builder(Rem);` no longer
+#   mints a function symbol, so its type binding attributes to the enclosing function. Symbols and fact attribution
+#   change; kCacheVersion stays 23, kQSnapCacheScheme stays 14.
+# 2026-09-17, TYPE ALIASES (test/fieldnarrowcheck.sh arm t, PR #280): kParserVer and its quality.h mirror -> 112 on
+#   integration/train-4 after the vexing-parse locals lane's 111 (the PR declared 99 -> 105, then 111 on its merge of main
+#   a2b3cd6e) — a C/C++/ObjC typedef / using
+#   alias of a named class records its target on the compose record shape (format unchanged, kCacheVersion stays 23).
+#   kQSnapCacheScheme stays 14: the extraction identity (the mirrors) keys every blob. Re-pinned on the merged tree; the
+#   landing train assigns the number and re-derives this pin.
 # 2026-09-17, JAVA CATCH / ENHANCED-FOR / RESOURCE SHADOWS (test/javamethodrefcheck.sh, PR #281's CodeRabbit round on
 #   #235's code): kParserVer and its mirror 109 -> 110 on integration/train-3 — three Java declaration forms now emit
 #   VarDecl shadow binds, an extraction change. kCacheVersion stays 23; kQSnapCacheScheme stays 14 (no manifest function

@@ -111,7 +111,9 @@ printf '%s' "$CALLEES" | grep -q 'n="Box"' \
 # pair is separated by the canonical qualifier and so would never reach the ambiguity path at all.
 # That is NOT the claim "different-scope pairs resolve precisely" — §8's decoy fixture exists because for
 # the `>`-family operator names they did NOT, and the mis-binding was silent (ambiguous=0, no amb=).
-printf '%s' "$MAP" | grep -qE 'files=1 symbols=23 edges=11 shown=23 est_tokens=[0-9]+ ambiguous=1 unresolved=0' \
+# symbols=22 since kParserVer 111 (test/narrowcheck.sh arms 52-60): qual.cpp:136's `std::lock_guard<std::mutex> g( … );` is a
+# block-scope direct-initialized local and no longer mints a function symbol `g` — the only symbol that moved (was 23).
+printf '%s' "$MAP" | grep -qE 'files=1 symbols=22 edges=11 shown=22 est_tokens=[0-9]+ ambiguous=1 unresolved=0' \
     && ok "fixture header: edges=11 ambiguous=1 unresolved=0 (was edges=3 ambiguous=0)" \
     || no "fixture header wrong: $( printf '%s' "$MAP" | grep -oE 'files=1 [^-]*' | head -1 )"
 printf '%s' "$MAP" | grep -q '<s t="fn" n="callerQualified" amb="1"' \
@@ -231,9 +233,11 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # ackNothingToAccept (the acks ledger). Disjoint from the three githarden.h sites; re-derived on the merged tree
 # (20 grep lines = 19 call sites + the definition, and --uses answers 19).
 # 19 -> 22: Python runner evidence reads source, pyproject.toml and setup.cfg (#229).
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 22 ] \
-    && ok "repo: --uses=readWholeFile count=22 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 22"
+# 22 -> 23 2026-09-17 (#279 --lsp, @mpapis, on integration/train-4): src/lsp.h's hover reads the whole file through the
+# same canonical detail::readWholeFile helper rather than growing another fopen/fread.
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 23 ] \
+    && ok "repo: --uses=readWholeFile count=23 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 23"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"

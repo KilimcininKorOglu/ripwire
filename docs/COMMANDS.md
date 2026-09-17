@@ -50,7 +50,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **security — scan skill files for injection / exfiltration patterns (exit 2 = CRITICAL, 1 = WARN,** — [`--scan-skill`](#--scan-skillfile) · [`--scan-skills`](#--scan-skillsdir) · [`--force`](#--force)
 
-**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
+**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
 
 ---
 
@@ -785,7 +785,7 @@ $ ./build/ripwire . --callees=rankGraphTeleport
 
 **Answers:** show every place SYM is used, not just called — reads, writes, imports, extends the statically resolvable use-sites of SYM (role=call|macro|read|write|import|extends|type, file:line);
 
-external="1" if SYM has no in-corpus def. file:name narrows defs= AND the role="call" sites (kept only where the call RESOLVES to a chosen def — --callers' own narrowing); read/write/import/extends carry no resolution and stay name-matched. narrowed_roles=/defs_of_name=/call_sites_of_name= (file: qualifier only) disclose what narrowed and the un-narrowed totals; a file: qualifier naming a file with no such def REFUSES, like --callers/--impact Owner.field (also Owner::field, or the id=) — a MEMBER VARIABLE's own use-sites, RESOLVED per site: this->f/self.f/bare f inside the owner pin; v.f pins through v's recorded type, else every owner is a candidate and the row carries amb=K (never a silent pin); write = assignment/compound/++ (address-of and by-reference passing are NOT claimed). A bare field name shared by several owners REFUSES with the Owner.field spellings; C/C++/Python fields only, others refuse
+external="1" if SYM has no in-corpus def. file:name or a "::" spelling narrows defs= AND the role="call" sites (kept only where the call RESOLVES to a chosen def — --callers' own narrowing); read/write/import/extends carry no resolution and stay name-matched. narrowed_roles=/defs_of_name=/call_sites_of_name= (qualifier only) disclose what narrowed and the un-narrowed totals; a file: qualifier naming a file with no such def REFUSES, like --callers/--impact Owner.field (also Owner::field, or the id=) — a MEMBER VARIABLE's own use-sites, RESOLVED per site: this->f/self.f/bare f inside the owner pin; v.f pins through v's recorded type, else every owner is a candidate and the row carries amb=K (never a silent pin); write = assignment/compound/++ (address-of and by-reference passing are NOT claimed). A bare field name shared by several owners REFUSES with the Owner.field spellings; C/C++/Python fields only, others refuse
 
 **Try it**
 
@@ -4710,7 +4710,18 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 ... [28 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--listen`
+**Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--lsp`, `--listen`
+
+### `--lsp`
+
+**Answers:** read-only navigation LSP server over stdio (definition/references/symbols/hover) off the warm index;
+
+saved-state answers, UTF-8 positions, counts are floors. Refuses --mcp/--listen (one protocol per stdin).
+
+**Caveats (stated by the binary):**
+
+- saved-state answers, UTF-8 positions, counts are floors.
+- Refuses --mcp/--listen (one protocol per stdin).
 
 ### `--listen=HOST:PORT`
 
@@ -4718,7 +4729,7 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 
 Binds 127.0.0.1 by default (bare PORT = loopback); one listener serves ONE workspace fixed at startup. A non-loopback host (e.g. 0.0.0.0:8080) REQUIRES --mcp-token and refuses to start without it. No TLS — reverse-proxy it.
 
-**Shaped by:** `--no-stable`, `--allow-remote-edits`
+**Shaped by:** `--no-stable`, `--lsp`, `--allow-remote-edits`
 
 **Caveats (stated by the binary):**
 

@@ -535,6 +535,7 @@ struct MainDispatch
 #include "verbs_change.h"
 #include "verbs_report.h"
 #include "verbs_grep.h"
+#include "lsp.h"                 // the --lsp navigation-server section (Phase 1 PoC — docs/LSP.md); after the verb families so it can reuse the shared use-site scan
 
 // ── LANGUAGE-REGISTRATION COMPLETENESS, at compile time ──────────────────────────────────────────────────────────
 // Appending a Lang is not one table. 02f798e3 left Dart out of kUnanalyzedLangs, kCatalogLangs and langFromToken's map;
@@ -3729,6 +3730,14 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         rw::emitRaw( stderr, "ripwire: --plan-lanes always emits JSON — --json is redundant here and changes nothing\n" );
     }
 
+    // The --lsp navigation server: a third front door onto the SAME warm index the MCP twins use
+    // (getIndex()), answering the five navigation methods over stdio. --mcp/--listen beside it are
+    // refused in validateConfig, so this block's position relative to the --mcp branch below is inert.
+    if( cfg.lsp )
+    {
+        return lsp::runLsp( std::string( cfg.rootPath ) );
+    }
+
     if( cfg.mcp )
     {
         // --listen picks the remote Streamable-HTTP transport; otherwise stdio. Both
@@ -3968,15 +3977,14 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         // An injection scanner's directory verdict silently excluded that directory's two EXECUTABLES, which
         // are the files most worth scanning. The single-file form has no such filter (`--scan-skill=<any
         // file>` scans it), so the two entry points disagreed about their own subject.
-        // They now agree: every regular file is a candidate. The two exclusions that remain are properties of
-        // a RECURSIVE walk, not of what a skill file is, and neither is silent —
-        //   • a file whose first 8 KB contain a NUL is BINARY (git's own buffer_is_binary rule, reused from
-        //     binstale.h): a text-pattern injection scanner cannot read it, and a `.DS_Store` or a packed
-        //     git object is not a skill. COUNTED, and reported as skipped= on the artifact;
-        //   • a file that cannot be READ at all. Previously scanSkillFile collapsed that to "zero findings",
-        //     i.e. a file that could not be opened contributed to a `verdict="clean"`. scanSkillFileChecked
-        //     is the seam that tells the two apart (it exists for exactly this reason on the single-file
-        //     path); such a file is COUNTED as skipped, never scanned-with-zero-findings;
+        // They now agree: every regular file is a candidate. A NUL byte does not change that — the scanner reads
+        // bytes, --scan-skill scans a PNG or an executable without complaint (zero findings on every real one
+        // measured), and the git buffer_is_binary rule this walk once borrowed dropped a text file from the
+        // verdict's subject for one stray NUL in its first 8 KB. What remains outside the scan is never silent —
+        //   • a file that cannot be READ at all (mode 000, an I/O error, a descriptor limit). It is still there
+        //     to be copied, so under owner ruling 3 it is COUNTED as skipped AND scored CRITICAL on a row that
+        //     names it (kScanIncompleteRuleUnreadable) — never scanned-with-zero-findings, and never a skip
+        //     that leaves `verdict="clean"`. scanSkillFileChecked is the seam that tells it apart;
         //   • a denylisted DIRECTORY subtree (.git, node_modules, build, …) is not descended, through the ONE
         //     shared table both crawlers already use (rw::isSkippedCrawlDir). Without it, pointing the verb
         //     at a cloned skill repo means opening every packed object. The number of pruned subtrees is
@@ -4025,12 +4033,18 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             };
             isFirstVisit( fs::path( dir ) );                            // the root itself, so a link back to it is a cycle
 
+            // F-B3 (owner ruling 3): the walk's own increment() can fail for a reason skip_permission_denied does
+            // NOT swallow (a descriptor limit, ENAMETOOLONG, an I/O error — codexwrapcheck.sh's wrap-side arm
+            // reaches this with ulimit -n) — content past that point may still be COPIED and installed, just
+            // never scanned, so it fails closed below rather than reading as an honest "clean". The loop
+            // condition checks `!ec` so a failed increment is seen on the NEXT condition test, not thrown away
+            // by an unconditional clear in the same expression that set it (the previous shape cleared `ec`
+            // right after increment(), in the same for-loop update-expression, so the body's own `if( ec )`
+            // could never see it fire — an arm that cannot fail, CONTRIBUTING.md §2).
             fs::recursive_directory_iterator it( dir, fs::directory_options::skip_permission_denied
                                                     | fs::directory_options::follow_directory_symlink, ec );
-            for( ec.clear(); it != fs::recursive_directory_iterator(); it.increment( ec ), ec.clear() )
+            for( ; !ec && it != fs::recursive_directory_iterator(); it.increment( ec ) )
             {
-                if( ec ) { ec.clear(); continue; }
-
                 const fs::path& p = it->path();
                 if( it->is_directory( ec ) && !ec )
                 {
@@ -4041,16 +4055,36 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 }
                 ec.clear();
                 if( !it->is_regular_file( ec ) || ec ) { ec.clear(); continue; }
-
-                if( rw::binstale::looksBinary( p.string() ) ) { ++filesSkipped;  continue; }
                 skillPaths.push_back( p.string() );
+            }
+            static const bool isWalkStopFaultOn = rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" );
+            if( !ec && isWalkStopFaultOn )
+            {
+                ec = std::make_error_code( std::errc::too_many_files_open );   // any non-permission error the fault stands in for
+            }
+            if( ec )
+            {
+                allRows.push_back( { dir, rw::SkillFinding{ rw::SkillSeverity::Critical, 0, rw::kScanIncompleteRuleWalk,
+                                                             "the walk of " + dir + " stopped early: " + ec.message() } } );
+                ++totalFindings;
+                maxSev = 2;
+                rw::emitTo( stderr, "ripwire scan: CRITICAL — the skill walk of {} stopped early ({}); files past that point may still be installed but were not scanned\n",
+                            dir, ec.message() );
             }
             std::sort( skillPaths.begin(), skillPaths.end() );
 
             for( const std::string& p : skillPaths )
             {
                 const SkillFileReadResult res = scanSkillFileChecked( p );
-                if( !res.readable ) { ++filesSkipped;  continue; }   // never a scanned-with-zero-findings "clean"
+                if( !res.readable )   // found, still copyable, never read: CRITICAL by name (owner ruling 3), not a "clean" skip
+                {
+                    ++filesSkipped;
+                    allRows.push_back( { p, rw::SkillFinding{ rw::SkillSeverity::Critical, 0, rw::kScanIncompleteRuleUnreadable, "cannot read " + p } } );
+                    ++totalFindings;
+                    maxSev = 2;
+                    rw::emitTo( stderr, "ripwire scan: CRITICAL — cannot read skill file {}; it was not scanned and may still be installed\n", p );
+                    continue;
+                }
 
                 ++filesScanned;
                 for( const SkillFinding& f : res.findings )

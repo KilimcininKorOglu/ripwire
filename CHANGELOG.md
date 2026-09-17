@@ -1579,6 +1579,269 @@ repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols ·
 unchanged by it, `kCacheVersion` stays 23; the VALUES of `recv`/`recvVar` move, so Ruby extraction facts are re-parsed),
 with `quality.h`'s mirror and `test/qschemetrip.hash` re-pinned in the same commit. Thanks to @andriytyurnikov.
 
+### Fixed — a C++ local constructed from plain names, `IRBuilder<> Builder(Rem);`, was indexed as a function and hid its type from the receiver rule
+
+The grammar cannot tell a name from a type, so a block-scope direct-initialized local whose every argument is a plain
+name (`std::lock_guard<std::mutex> Lock(Mtx);`, `Slice end(end_str);`) parses as a local function declaration, and the
+tags query minted a function symbol for it. That symbol's span covers the declaration, so the local's type binding was
+filed under the phantom instead of the function the local lives in: Rule 2 found no type for `Builder.CreateSExt()`, and
+the call fell to the name ladder, where it declined or split. The phantoms also answered bare-name lookups: a Python
+`range(...)` read as bound in-repo because a C++ local was named `range`. Such a declarator now mints no symbol unless
+something in it can only be written in a prototype: `extern`/`inline`/`virtual`/`explicit`, a `void` return, anything
+after the parameter list (`const`, `override`, `noexcept`), empty parentheses, or a parameter an argument cannot
+produce (a primitive or cv-qualified type, a named declarator, `*`/`&`, a default, `...`). Measured with
+`--pin-census --no-cache`, main against the change, C rows joined on (caller, callee, line): llvm-project 4d5358b1d
+loses 12,543 function symbols and rocksdb 0e2801ac3 2,443, none added. Excluding rows that only lost a phantom target,
+changed caller when a phantom disappeared, or lost a veto on a phantom name, 2,857 llvm and 1,062 rocksdb call sites
+retarget. A seeded blinded sample of 40 graded 34 better, 0 same, 6 worse, and all 6 came from the 68 llvm sites that
+lost an edge. Those sites are the flat per-function receiver table's existing floor: a sibling block's same-named local
+of another type now tombstones the name. On train 3 (template-id receivers) the change also restores 997 of the 1,937
+llvm sites that refusing Rule 2c for C++ moved, 928 of them `Builder.CreateX()`. `Widget w( a * b )` still reads as a
+pointer parameter and stays a function symbol, a stated floor. Gate: `test/narrowcheck.sh` arms 52-60 (52-58 red on the
+unchanged binary; 59 red on a fix that refuses every body-local declarator).
+
+### Fixed — a class's `using Base::m;` was ignored, so a call its two bases tie on stayed split
+
+llvm-project's `clang/lib/CodeGen/CGNonTrivialStruct.cpp` declares `struct CopyStructVisitor : StructVisitor<Derived>,
+CopiedTypeVisitor<Derived, IsMove> { using StructVisitor<Derived>::asDerived; … }`. Both bases define `asDerived`, and
+the using-declaration is how C++ picks one. The type-side probe that Rules 2b and 2c and Rule 1's base walk share
+(`resolve.h` `methodOnTypeOrBases`) never read it. A class with no `asDerived` of its own went straight to its bases,
+the two-base tie refused, and each of the file's five `asDerived()` calls split three ways: `StructVisitor::asDerived`
+plus same-file namesakes in `GenFuncNameBase` and `GenFuncBase`, classes the caller does not derive from. The tags pass
+has recorded every class-scope using-declaration as an import site all along; the resolver never consulted them.
+
+A class that defines no `m` now answers with what its `using Base::m;` names: the base's own definitions, else the
+result of walking that base. The walk goes one level: that base's own using-declarations are not followed. The
+qualifier loses its template arguments (`using Base<T>::m;` names `Base`). A re-export naming nothing the index reaches
+adds nothing, and the unchanged walk runs. So does one naming a class outside the class's base closure, which C++ forbids: trusting
+`using NotABase::m;` would pin `NotABase::m` over the real bases' tie. The change is resolve-stage only: kParserVer and the cache format do not
+move.
+
+It deliberately does NOT add the base's overloads to a class that also defines `m`, though C++ does. That was measured
+first. Clang's `CGBuilderTy`, for example, writes `using CGBuilderBaseTy::CreateGEP;` next to its own `CreateGEP`
+overloads, yet the resolver answers the class's own overloads alone. The union was built and graded: over the 17 call
+sites it moved (rocksdb 13, llvm-project 4), blinded against source, 5 were better, 4 the same and 8 worse. Three
+causes, none fixable without parameter types:
+- The ladder cannot drop a re-exported overload the class overrides: rocksdb's `WriteBatch::Put` and `Delete` gained
+  `WriteBatchBase`'s.
+- It cannot drop one the argument count rules out, because the arity filter removes only too-many-arguments
+  candidates.
+- One split was cut to its base half by the same-file tier.
+
+That shape stays a stated floor, pinned by `test/fieldnarrowcheck.sh` arm (u1). It would not have reached `CGBuilderTy`'s
+calls in any case. On main, `CGBuilderBaseTy` is a typedef the base walk cannot follow. With a typedef/using alias fact
+applied, the S6-C locality tie-break keeps the `clang/lib/CodeGen` half of the split.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `fe28fd49` against this change, joining call-site rows
+on (caller, callee, line):
+- rocksdb @ `0e2801ac3`: 0 call sites change.
+- llvm-project @ `4d5358b1d`: 5 change, 0 gained, 0 lost. All five `asDerived()` splits become one receiver-rule pin
+  (`receiver-rule=` 520,496 → 520,501, `split=` 256,918 → 256,913). Graded blinded against source: 5 better, 0 same,
+  0 worse.
+- Composed with the typedef/using alias fact then in review (head `36aa4f56`), llvm-project moves one more site:
+  `UsingShadowDecl::getMostRecentDeclImpl` reaches `Redeclarable::getMostRecentDecl` through `using
+  redeclarable_base::getMostRecentDecl;`, graded WRONG → PARTIAL. rocksdb stays at 0.
+
+The ASan build's llvm-project census is byte-identical to the plain build's and reports no sanitizer finding. Re-measured after merging `main` at `a5ce95e2`: the same five llvm-project sites move, and rocksdb still moves none.
+
+The gate is `test/fieldnarrowcheck.sh` arms (u0)–(u7). On `main`, (u2) the field call, (u3) Rule 1's bare call and (u5)
+the template-qualified re-export are red. (u4) is the contrast: the same two bases with no using-declaration keep their
+split. (u6) is an unindexed re-export that keeps the walk. (u1) goes red on the union build, and (u5) on a build
+without the template-argument strip.
+
+### Fixed — an `--arch` TO-template interval was rejected at parse time even when a real capture made it valid
+
+`deny path FROM -> TO` validates a TO template like `a{10,\1}` at parse time by compiling it once with a
+placeholder in `\1`'s place — and used to try two placeholders, `"x"` then `"9"`, rejecting the whole rules
+file (D9) only when BOTH failed. But `"x"` is not a digit, so it fails ANY numeric-interval position on that
+alone (`{10,x}`), whatever the template; `a{10,\1}` failed both placeholders (`{10,x}` non-numeric, `{10,9}`
+since 9<10) and was refused outright — even though `\1="20"` makes `{10,20}` a perfectly valid interval
+(CodeRabbit review on #277). The probe is now a single `"9"` (valid everywhere a placeholder is: ordinary
+literal text, or a genuine interval digit), and a refusal is accepted at parse time only when it is NOT
+`std::regex_constants::error_badbrace` — an out-of-order `{min,max}` is a fact about which digits a specific
+capture supplies, not about the template's structure, so it defers to the edge: `pathRuleMatches` already
+compiles the REAL substitution per edge and refuses by name (`isRefused`) only the edges whose own capture is
+actually invalid. `RegexCompile` (`src/regexguard.h`) gained `isIntervalRangeOnly`, set once at the single
+`std::regex_error` catch site `compileGuardedRegex` already had — no new file spells `std::regex`
+(`test/regexguardcheck.sh` arm (c), which caught the first version of this fix routing the check through a
+second parse in arch.h itself).
+
+Gates: `test/archcheck.sh` (new F-H9 section) — a valid capture applies (a real verdict, not a parse-time
+refusal), an invalid capture refuses that edge by name, and a template broken independent of any capture
+(an unmatched `(`) still refuses at parse time, unchanged.
+
+### Fixed — a `#match?` predicate or an `--arch` path-rule that never reached the engine still filtered nothing
+
+`#match?`/`#not-match?` (a `--match`/`--lint-rules` predicate) and `--arch` path-rules matched a captured node's
+text, or a FROM/TO path, straight through the engine with no length bound — the same crash shape #251/the
+regex-long-lines lane fixed for `--regex`, just not wired to these three entry points yet. A subject too long
+for the engine on its thread now answers `RegexVerdict::Skipped` (never a silent Miss) at both: `#match?`
+refuses like an abandoned match, naming the site (`--match`/`--lint-rules` exit 1); an `--arch` path-rule's
+verdict refuses only when the skip could actually change the edge's answer — a LATER deny rule that decisively
+matches the same edge settles it regardless, and the earlier skip is disclosed on stderr, not refused. That
+"keep scanning past an undecided rule" shape used to stop at the FIRST undecided deny even when a later one
+would have settled things either way; it now mirrors the allow-loop's own shape, which already scanned past an
+undecided allow the same way.
+
+Gates: `test/astqueryregexcheck.sh` (new arm G, red via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1`), `test/archcheck.sh`
+(a new section: arm 1 red via the same fault, arm 2 deterministic via a per-edge TO-template refusal — the
+fault forces every `kCallerStackBytesFloor`-bound match to skip unconditionally, so a differential needs a
+cause that isn't stack-size-uniform). quality-delta gating=0 (short-horizon-churn acked through the binary).
+
+### Fixed — a skill scan that could not finish reading a line, or a directory, still said "clean"
+
+`--scan-skill(s)` skipped a line the regex engine was never handed (too long for this thread's measured-safe
+bound, the same bound `--regex` uses on a long matching line) and read it as an ordinary Miss, and a
+`--scan-skills` walk that stopped early — a descriptor limit, not a permission error — was silently invisible:
+the loop's own error was cleared in the same expression that set it, so the `if( ec )` guarding it could never
+fire. Both are content that WOULD BE INSTALLED and was never actually scanned, so both now fail CLOSED
+(CRITICAL, named `SCAN-INCOMPLETE:line-oversize` / `SCAN-INCOMPLETE:walk-stopped-early`), reconciling the
+walk-only WARN an earlier round gave `ripwire wrap` with the CRITICAL `--scan-skill` already gives an engine
+that gives up mid-match. An unreadable folder — content that install could not have picked up either — is
+unchanged and stays WARN, the owner's own example of what does not need to fail closed.
+`GuardedRegex::search`/`search(subject,captures)` (`src/regexguard.h`) take an optional per-thread stack bound
+(default unbounded, so every existing caller is untouched) and answer `RegexVerdict::Skipped` rather than a
+silent Miss when a subject exceeds it. Gates: `test/skillscanreadcheck.sh` (a new section), `test/codexwrapcheck.sh`
+(a new section), both red on the unfixed binary via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` / the new
+`RIPWIRE_FAULT_SKILL_WALK_STOP=1`.
+
+### Fixed — a skill file the scan could not read, or held a NUL byte, is now reported instead of passing
+
+`--scan-skills` counted an unreadable file (mode 000 in a readable folder, an I/O error) as `skipped=` and still
+answered `verdict="clean"` at exit 0, and `ripwire wrap` read the same file as "no findings", with one pathless
+degrade line on stderr however many files it hit. Both now score such a file CRITICAL and name it — a
+`SCAN-INCOMPLETE:file-unreadable` row on the artifact, a `cannot read skill file <path>` line on stderr — so
+`wrap` no longer emits the recipe over it without `--force`. The single-file `--scan-skill` already refused
+that path. A folder the scan cannot enter stays WARN: its contents cannot be copied either.
+`--scan-skills` also stops skipping a file because its first 8 KB hold a NUL byte: it scans it like any other
+file, as `--scan-skill` and `wrap` already did — a PNG icon a skill bundles is now read (and comes back clean)
+rather than skipped. `skipped=` counts unreadable files only.
+
+Gates: `test/skillscanreadcheck.sh` arms (4) and (5), with the NUL-file arm re-pinned (`files="3"`, no
+`skipped=`); `test/codexwrapcheck.sh` unreadable-file arm (red on the unfixed binary, with a readable control)
+and a NUL-byte arm that pins `wrap`'s existing behaviour.
+
+### Added
+
+- **`--lsp` — a read-only navigation LSP server over stdio (Phase 1).** `definition`, `references`,
+  `documentSymbol` (member variables merged into the outline), workspace symbol, and `hover` — the hover
+  gist carries two clickable link tiers: **Used at** (the same call-role floor `--uses` answers with) and
+  **Referenced at** (Ruby constant-load directives, so a class names the files that load it even where no
+  call edge exists) — served to editors off the same warm index `--mcp` uses — no second parser, no
+  second process. Saved-state answers, UTF-8 positions, every count labelled a floor in place; refuses
+  `--mcp`/`--listen` — one protocol per stdin. A `workspace/symbol` query matching more than 20 symbols answers
+  the first 20 and says how many it left out in a `window/logMessage`. A file URI outside the root (absolute,
+  `..`-escaped, through a symlink, or percent-encoded) answers nothing, and malformed `Content-Length` framing ends
+  the session at exit 1. The design record is `docs/LSP.md`; the gate is `test/lspcheck.sh` (17 arms, 19 checks, a
+  scripted client speaking real LSP framing). Thanks to @mpapis.
+
+### Fixed — a C++ member named like a class was read as that class
+
+Rule 2c reads `Cls.m()` through a class name as a call on that class. It checked that no local shadowed the name, but
+never checked members. Inside a C++ member function, name lookup finds a member of the class or of a base before any
+namespace-scope class, so the token is the member. Two graded llvm-project instances resolved to ONE precise, wrong
+edge:
+
+- `LVReader.cpp:175 OutputFile->keep()`, whose member is `std::unique_ptr<ToolOutputFile> OutputFile`, went to
+  `VirtualOutputFile.cpp OutputFile::keep`.
+- `SampleProfile.cpp:1962 Reader->read()`, whose base-class member is `std::unique_ptr<SampleProfileReader> Reader`,
+  went to msgpack `Reader::read`.
+
+Rule 2c now refuses a C++/ObjC receiver that names a member of the caller's class or of a class up its bases. The
+check reads the member side table, which holds every declarator shape, including the `std::unique_ptr<T>` members
+Rule 2b's type table never records. A walk stopped by its 16-name cap also refuses. A raw-pointer member such as
+`Widget* Raw;` is then typed by Rule 2b. Python keeps the route: its attributes are reached only through `self.`.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), against the alias fix above:
+
+| Corpus | Sites retargeted | Changed target | Lost edge |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 0 | 0 | 0 |
+| llvm-project @ 4d5358b1d | 1,398 | 1,346 | 52 |
+
+Most llvm sites move from a namesake class to the member's real type: `IRBuilderBase` → `CGBuilderTy` overrides,
+`Token` → `MIToken`, `Context` → `ASTContext`. The order matters. Without the alias fix, the same refusal lost 1,772
+llvm edges and graded net-worse (60 blinded sites: 23 better / 3 same / 34 worse), because clang's `CGBuilderTy Builder`
+had reached `IRBuilderBase` only through an unrelated class `Builder : IRBuilder` in HexagonVectorCombine.cpp.
+With the alias fix in place, a seeded, blinded sample of 60 of the 1,398 llvm retargets graded 51 better, 7 same and
+2 worse. The worse sites are one Rule 2b floor: `using CGBuilderBaseTy::CreateGEP;` re-exports base overloads the
+class's own overload set shadows.
+
+Neither instance above gets an edge in a scratch composition with the assignment-type lane, where they surfaced.
+
+Gate: `test/clsrecvcheck.sh` arms H–N (a smart-pointer member, a raw-pointer member, a base's member, a class template
+base's member, a member past the walk cap), red on the unfixed binary. Two controls hold: the same call from a class
+without such a member keeps the route, and a Python `self.Interval` attribute does not veto `Interval.validate(v)`.
+
+### Fixed — a base class or member type reached through a C++ `typedef` or `using` alias ended the base walk
+
+The resolver walks a type's bases by class NAME, and an alias names no class. In llvm-project's clang CodeGen,
+`class CGBuilderTy : public CGBuilderBaseTy` with `typedef llvm::IRBuilder<llvm::TargetFolder, CGBuilderInserterTy>
+CGBuilderBaseTy;` stopped at `CGBuilderBaseTy`, so a member `CGBuilderTy Builder;` never reached
+`IRBuilderBase::CreateCall`. The same happened for `BuilderType Builder;` (a class-scope typedef), `BuilderTy Builder;`
+(a class-scope `using`) and every member or base typed through an alias of a class. Those calls got no edge, or a
+split over every same-named method in the corpus.
+
+The C/C++/ObjC capture now records a plain alias's target class, and the base walk continues at the target. Several
+things are deliberately excluded:
+
+- **Not every alias records.** A pointer, reference, array or function alias records nothing, and neither does a
+  primitive, dependent or `decltype` target, or an alias local to a function body.
+- **A target written in `std` is refused**, as a `std::` member type already is.
+- **An alias named like a real class elsewhere is not followed.** Classes are keyed by bare name, so `using Base = Foo;`
+  would otherwise hand `Foo`'s methods to an unrelated class `Base`.
+- **The alias is not an inheritance fact.** It gains no `--lego` implementor, no `role="extends"` use-site and no
+  HAS-A row.
+
+**Alias templates are covered too.** `template <typename T> using SetTy = SmallPtrSet<T, 8>;` is an `alias_declaration`
+inside a template declaration, so a member typed `SetTy<Foo>` walks on to `SmallPtrSet` and its bases.
+
+The record rides the existing compose record shape, so the cache format is unchanged; `kParserVer` moves to 112 (claimed 111; integration/train-4 assigns 112 after the vexing-parse locals lane's 111).
+
+**Known floor.** An alias records its target's class name without template arguments. So when an argument is the enclosing
+template's own parameter, the walk lands on the primary template alone. For example, with `typedef SubT<marks> subtree;` it
+drops an explicit specialization such as `SubT<true>` that the argument can also select. That is a lost candidate, never a
+wrong-class pin. rocksdb's `omt_impl.h` hits it through `subtree_templated<true>`; before this change those calls split
+over both. It is pinned as `test/fieldnarrowcheck.sh` arm t11, whose control `typedef SubT<false>` narrows correctly.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), main → this change:
+
+| Corpus | Sites retargeted | Newly bound | Lost |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 366 | +111 | 0 |
+| llvm-project @ 4d5358b1d | 2,649 | +1,146 | 0 |
+
+A seeded, blinded sample of 60 retargets (25 rocksdb, 35 llvm) was graded against source: 57 better, 2 same, 1 worse.
+The worse site is a class template specialization that shares the primary template's name.
+
+Gate: `test/fieldnarrowcheck.sh` arm t. Arms t1–t4 are red on the unfixed binary. Arms t5, t9, t10 and t6's HAS-A row
+each went red when the one guard they protect was disabled in a scratch build.
+
+### Fixed — `--uses` on a `::` selector resolved `defs=` and then answered a silent `count="0"`
+
+Every symbol-taking verb resolves the two `::` spellings the tool prints about itself — the canonical id
+`path::scope::name` and `Scope::name` — but `--uses` then matched reference sites against the whole spelling, which
+no call site carries, so a resolving selector answered `count="0"` (issue #164). `resolveUsesSelector` now takes the
+resolved defs and, when they share one name, matches sites by that name and narrows the call role to those defs,
+exactly as a `file:name` selector does; `--safe-delete` and `--verify` get the narrowed scan too. A wrong scope
+(`Nope::ctwin`) still refuses, a member spelling with no symbol behind it still takes the field path, and an
+all-Elixir resolution keeps the Elixir resolver's arity-exact sites. The MCP `uses` verb refuses a resolving `::`
+spelling as CLI-only with the bare-name retry, the way `file:name` already refuses, instead of the silent zero; the
+legend and `--help` name both spellings that narrow. `test/usesselectorcheck.sh` flips every KNOWN GAP arm to its
+fixed answer and asserts the `::` and `file:name` twins give the same rows and that every call row sits inside
+`--callers`. Thanks to @aniruddhaadak80.
+
+### Added — `--doctor` detects a struct layout that differs between translation units
+
+Each translation unit that includes `src/model.h` records `sizeof` and `alignof` for the shared model types
+(`Symbol`, `Reference`, `Include`, `Binding`, `IngestResult` and the rest) in an internal-linkage registry that
+survives Release and LTO, and `--doctor`'s `layout` row compares them: `state="agree"`, `state="disagree"` with
+the first differing type and both units' sizes and alignments plus the rebuild action, or `not-checked` /
+`no-records` when there is too little to compare. A mixed build — the stale-object failure CLAUDE.md warns about —
+is now named rather than debugged. Stated floors: a field reorder that keeps both size and alignment, and a unit
+that never includes the header, are invisible. `test/structlayoutcheck.sh` proves the disagreement on a
+deterministic two-unit fixture (sizes 4 and 8) and the `not-checked` state on one unit. Thanks to @lennix1337.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

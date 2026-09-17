@@ -2220,18 +2220,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const bool ffiActive = !pybindAlias.empty() || !externCAlias.empty();
 
-    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a `this->m()` / `self.m()` call to the
-    // caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call to the variable's type (a parameter's through resolve.h's lexical table);
-    // Rule 3 pins a call to the ONE file the caller includes that defines it — all BEFORE the bare-name spray below. See resolve.h.
+    // P2-D one-hop type narrowing over the canonical scope::name map above (no new pass): Rule 1 pins `this->m()` / `self.m()` to the caller's enclosing class; Rule 2
+    // pins `x.m()` to the variable's type (a parameter's through the lexical table); Rule 3 pins a call to the ONE included file defining it — all BEFORE the spray. See resolve.h.
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
-    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId );
+    const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
+    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
+    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto, "<Owner>#<field>" (C/C++)
     // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
     // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
     // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
     // Java members into the shared map would put them in reach of the Kotlin↔Java bridge's Rule-1 lookups,
     // which is a resolution change #74 does not ask for. Empty map on a Java-free corpus ⇒ never hits.
     const HashMap<std::string, rw::SmallVec<NodeId, 2>> javaTypeMembers = buildJavaTypeMembers( ing );
-    const Narrower javaNarrower( javaTypeMembers, varType, scopedRecvDecls, fileIncludes, symFileId );
+    const Narrower javaNarrower( javaTypeMembers, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The
@@ -2350,7 +2351,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 declared.push_back( ir.calleeName );   // source order (ing.references is in (file, byte) order)
             }
         }
-        // dedup each adjacency list — membership is order-independent, so this stays deterministic.
+        addTypeAliasBases( ing, chaUp );   // a typedef / using alias continues at its target class; dedup below is order-independent
         for( auto& [ k, v ] : chaUp )   { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
         for( auto& [ k, v ] : chaDown ) { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
     }
@@ -2755,12 +2756,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             narrowed = narrowTo( narrower.rule2RecvVarType( r, classIds, chaUp ), r, cand ) || narrower.forgetClaim();
         }
-        // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base
-        // defining `m`) when Cls is an in-repo class no local shadows. After Rule 2 (a typed LOCAL wins), before
-        // 2b (a class name outranks a same-named field). See Narrower::rule2cClassNameRecv.
+        // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base defining `m`) when Cls is an in-repo class that no
+        // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2cClassNameRecv( r, classNames, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }
         // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver
         // names a FIELD of the caller's enclosing class resolves to the method on the field's DECLARED type
@@ -3534,9 +3534,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/7: HAS-A compose edges" );
     for( const Reference& r : ing.references )
     {
-        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) )
+        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) )
         {
-            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment
+            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member
         }
         const auto it = byName.find( r.calleeName );
         if( it == byName.end() )

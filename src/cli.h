@@ -36,6 +36,7 @@ struct Config
     bool             ignoreTests     = false;
     bool             mapDiff         = false;
     bool             mcp             = false;
+    bool             lsp             = false;                    // --lsp: read-only navigation LSP server over stdio (Phase 1 PoC — docs/LSP.md).
     std::string_view listen;                     // --listen=HOST:PORT (or bare PORT ⇒ loopback): serve the MCP
                                                  // server over Streamable HTTP instead of stdio.
                                                  // Implies --mcp. Binds 127.0.0.1 by default; a non-loopback host
@@ -1057,9 +1058,9 @@ inline constexpr char kHelpHead[] =
         "    --callees=SYM              what SYM calls (1-hop out-edges). file:name disambiguates like --callers\n"
         "    --uses=SYM                 show every place SYM is used, not just called — reads, writes, imports, extends\n"
         "                               the statically resolvable use-sites of SYM (role=call|macro|read|write|import|extends|type, file:line); external=\"1\" if SYM has no in-corpus def.\n"
-        "                               file:name narrows defs= AND the role=\"call\" sites (kept only where the call RESOLVES to a chosen def —\n"
+        "                               file:name or a \"::\" spelling narrows defs= AND the role=\"call\" sites (kept only where the call RESOLVES to a chosen def —\n"
         "                               --callers' own narrowing); read/write/import/extends carry no resolution and stay name-matched.\n"
-        "                               narrowed_roles=/defs_of_name=/call_sites_of_name= (file: qualifier only) disclose what narrowed and\n"
+        "                               narrowed_roles=/defs_of_name=/call_sites_of_name= (qualifier only) disclose what narrowed and\n"
         "                               the un-narrowed totals; a file: qualifier naming a file with no such def REFUSES, like --callers/--impact\n"
         "                               Owner.field (also Owner::field, or the id=) — a MEMBER VARIABLE's own use-sites, RESOLVED per site: this->f/self.f/bare f\n"
         "                               inside the owner pin; v.f pins through v's recorded type, else every owner is a candidate and the row carries amb=K\n"
@@ -2536,6 +2537,9 @@ inline constexpr char kHelpTail[] =
         "                               --scip it also writes the index's covered sites, so a precision join needs no\n"
         "                               protobuf reader. stdout is byte-identical with or without it.\n"
         "    --mcp                      persistent index server (parse once, many warm queries) over stdio\n"
+        "    --lsp                      read-only navigation LSP server over stdio (definition/references/symbols/hover)\n"
+        "                               off the warm index; saved-state answers, UTF-8 positions, counts are floors.\n"
+        "                               Refuses --mcp/--listen (one protocol per stdin).\n"
         "    --listen=HOST:PORT         serve the MCP server over Streamable HTTP instead of stdio (implies --mcp).\n"
         "                               Binds 127.0.0.1 by default (bare PORT = loopback); one listener serves ONE\n"
         "                               workspace fixed at startup. A non-loopback host (e.g. 0.0.0.0:8080) REQUIRES\n"
@@ -2869,6 +2873,7 @@ inline constexpr BoolFlag kBoolFlags[] =
 
     // server + self-eval entry points
     { "--mcp",                &Config::mcp                },
+    { "--lsp",                &Config::lsp                },
     { "--allow-remote-edits", &Config::allowRemoteEdits   },
     { "--eval",               &Config::eval               },
     { "--eval-retrieval",     &Config::evalRetrieval      },
@@ -3293,7 +3298,7 @@ inline constexpr IntFlag kIntFlags[] =
 //                              warn once per RUN, not per flag — state a BoolFlag row has nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
 inline constexpr std::size_t kHandWrittenFlagArms = 22;   // +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=)
-inline constexpr std::size_t kTotalFlagArms = 210;  // +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kTotalFlagArms = 211;  // +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -3735,6 +3740,38 @@ inline void validateShapingFlagsHonored( Config& c ) noexcept
     }
 }
 
+// --lsp is a server transport like --mcp/--listen, but unlike those two it is PROBED by
+// test/shapingflagcheck.sh arm (F) — so it must land in one of that arm's three buckets. A shaping knob
+// never reaches a cfg read inside an LSP session (every request carries its own arguments), and unlike
+// the MCP pass-throughs there is no sub-request dialect these could shape, so --lsp REFUSES them outright
+// rather than accepting-and-ignoring. The head phrases are the pinned REFUSEPAT contract strings — the
+// same sentences the honorsPaging family refuses with, so a caller sees one vocabulary.
+inline void refuseLspShapingFlag( Config& c, const char* head ) noexcept
+{
+    rw::emitTo( stderr, "ripwire: {} — --lsp answers LSP requests with per-request arguments; drop it (e.g. ripwire <dir> --callers=SYM --limit=3)\n", head );
+    c.ok = false;
+}
+
+inline void validateLspShaping( Config& c ) noexcept
+{
+    if( !c.lsp )
+    {
+        return;
+    }
+    if( c.topKExplicit )
+    {
+        refuseLspShapingFlag( c, "--top-k narrows only --graph-query" );
+    }
+    if( c.maxTokens > 0 )
+    {
+        refuseLspShapingFlag( c, "--max-tokens is honored by the default map and its shaping riders" );
+    }
+    if( c.tokenBudget != 0 )
+    {
+        refuseLspShapingFlag( c, "--token-budget is honored by the default map and the budgeted verbs" );
+    }
+}
+
 // §B9.2 (capture-audit-4, wave 3) — the shaping flags on verbs OUTSIDE the report/paging family.
 //
 // The two guards above are sound WITHIN honorsPaging (22/22 refuse). The wave-2 verifier then found 14 verbs
@@ -4149,6 +4186,7 @@ inline void validateModifierGuards( Config& c ) noexcept
     validateShapingFlagsHonored( c ); // §B9 + §H4/M-4: --top-k / --max-tokens / --token-budget on a report/
                                       // paging verb that shapes with none of them (one guard, three rows)
     noticeShapingFlagIgnored( c );   // §B9.2:  the same two flags OUTSIDE that family — a NOTICE, never c.ok
+    validateLspShaping( c );         // the server transport refuses the shaping knobs outright — see its header
 
     validateLegendModifier( c );
     validateGrepHandleModifier( c );
@@ -4166,6 +4204,15 @@ inline void validateModifierGuards( Config& c ) noexcept
     if( c.allowRemoteEdits && c.listen.empty() )
     {
         rw::emitRaw( stderr, "ripwire: --allow-remote-edits is read by the --listen HTTP transport only — pass both (e.g. ripwire . --listen=127.0.0.1:8765 --allow-remote-edits --mcp-token=SECRET)\n" );
+        c.ok = false;
+    }
+
+    // --lsp and the MCP transports all own stdin, and --lsp has no socket form in Phase 1 (docs/LSP.md
+    // Non-Goals), so the combination is REFUSED rather than resolved by precedence — the caller must pick
+    // one protocol per stdin rather than discover by silence which one a process actually spoke.
+    if( c.lsp && ( c.mcp || !c.listen.empty() ) )
+    {
+        rw::emitRaw( stderr, "ripwire: --lsp speaks stdio and --mcp/--listen already own it — one protocol per stdin; drop --mcp/--listen to run the LSP server\n" );
         c.ok = false;
     }
 
@@ -4452,7 +4499,7 @@ inline void validateAgent( Config& c ) noexcept
 
 inline void validateConfig( Config& c ) noexcept
 {
-    if( c.rootPath.empty() && !c.mcp && !c.scanSkills && c.scanSkillFile.empty() )   // scan / --mcp may run without a path
+    if( c.rootPath.empty() && !c.mcp && !c.lsp && !c.scanSkills && c.scanSkillFile.empty() )   // scan / --mcp / --lsp may run without a path
     {
         usage();
         c.ok = false;

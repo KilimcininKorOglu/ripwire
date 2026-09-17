@@ -342,15 +342,17 @@ IsolateStats isolateStats( const rw::IngestResult& ing, const rw::Graph& graph,
 }
 
 // --arch: a path-rule that could not be JUDGED on an edge — the engine gave up (src/regexguard.h: RegexVerdict::Exhausted),
-// or the TO pattern this edge's backreferences produced is one the guard refuses — is neither satisfied nor violated
+// its FROM or substituted-TO subject was too long to hand the engine at all (RegexVerdict::Skipped, F-B4), or the
+// TO pattern this edge's backreferences produced is one the guard refuses — is neither satisfied nor violated
 // there, and a CI gate that reports violations="0" or exit 0 over an edge it could not judge is the failure --arch
 // exists to prevent. The caller refuses at exit 1 after this names the rule, the edge and the reason, before any byte
 // of the answer.
 static void refuseUndecidedPathRule( const rw::PathRule& pr, const rw::PathRuleVerdict& verdict, std::string_view src, std::string_view dst )
 {
-    const std::string reason = verdict.isRefused
-                             ? "its TO pattern became '" + verdict.refusedTo + "' after backreference substitution, which is refused: " + verdict.refusal
-                             : std::string( rw::kRegexAbandonedReason );
+    const std::string reason = verdict.isRefused ? "its TO pattern became '" + verdict.refusedTo + "' after backreference substitution, which is refused: " + verdict.refusal
+                                                   + " (a TO template with a backreference is judged per edge: only this edge's capture completed it)"
+                              : verdict.isSkipped ? std::string( rw::kRegexOversizeReason )
+                                                   : std::string( rw::kRegexAbandonedReason );
     rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "
                         "reporting a violation count the rule did not measure\n",
                 pr.from, pr.to, src, dst, reason );
@@ -461,6 +463,7 @@ std::optional<int> runArchViews( const MainDispatch& d )
             std::string   toLayer;       // layer name of `to`   (or the path-rule label)
         };
         std::vector<Viol> viols;
+        std::uint64_t     pathRulesUndecided = 0;   // F-B4: edges settled by a decisive rule despite meeting an undecided one along the way
         for( std::size_t f = 0; f < adj.size(); ++f )
         {
             for( std::uint32_t g : adj[f] )
@@ -486,10 +489,14 @@ std::optional<int> runArchViews( const MainDispatch& d )
                 // path-rule violation even when both files are unlayered). A self-edge can't happen (g!=f
                 // by resolveIncludeAdj), so no same-module guard needed beyond the rule's own regex.
                 const PathRuleVerdict pathVerdict = ar.pathRules.empty() ? PathRuleVerdict{} : pathRuleForbids( ar, relFiles[f], relFiles[g] );
-                if( pathVerdict.isAbandoned || pathVerdict.isRefused )
+                if( pathVerdict.isAbandoned || pathVerdict.isSkipped || pathVerdict.isRefused )
                 {
                     refuseUndecidedPathRule( ar.pathRules[ pathVerdict.ruleIndex ], pathVerdict, relFiles[f], relFiles[g] );
                     return 1;
+                }
+                if( pathVerdict.hadUndecided )
+                {
+                    ++pathRulesUndecided;   // a decisive rule settled this edge anyway — disclosed below, never refused for it
                 }
                 if( pathVerdict.isForbidden )
                 {
@@ -511,6 +518,15 @@ std::optional<int> runArchViews( const MainDispatch& d )
             }
             return a.fromLayer < b.fromLayer;
         } );
+
+        // F-B4: an edge whose verdict a decisive rule already settled, despite an undecided one along the way, is
+        // never refused for it — but "never refused" must not read as "nothing was undecided". Disclosed once,
+        // covering every exit path below (baseline / baseline-update / normal), same as the baseline tally above it.
+        if( pathRulesUndecided != 0 )
+        {
+            rw::emitTo( stderr, "ripwire arch: {} edge(s) met an undecided path-rule evaluation (abandoned, too long "
+                                "for the engine, or a refused substituted TO pattern) that a decisive rule elsewhere settled anyway\n", pathRulesUndecided );
+        }
 
         const std::string sidecarPath = archBaselinePath( std::string( cfg.archRules ) );
 

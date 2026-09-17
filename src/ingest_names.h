@@ -935,22 +935,30 @@ inline bool rubyCallIsAssignmentTarget( TSNode nameNode ) noexcept
 // `statements` live inside its `computed_property` CHILD, below (not above) the property_declaration. So a
 // `statements` ANCESTOR uniquely marks a local binding. Walk up from the property node; a `statements` before
 // any type-body/file scope ⇒ local. Swift-only (gated by the caller); no other grammar reaches here.
-inline bool isSwiftLocalBinding( TSNode declNode ) noexcept
+// Which kind of scope owner an ancestor walk from `node` reaches FIRST: true for one of `inside`, false for one of `outside`
+// (or neither, at the root). The one walk behind "is this declaration local to an executable body" for every grammar that
+// asks it — Swift's local binding below and C++'s block-scope direct-initialized local (cppBlockScopeDirectInit).
+inline bool nearestScopeOwnerIs( TSNode node, std::initializer_list<std::string_view> inside, std::initializer_list<std::string_view> outside ) noexcept
 {
-    for( TSNode p = ts_node_parent( declNode ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
     {
-        const char* t = ts_node_type( p );
-        if( kindIs( t, "statements" ) )
+        const std::string_view kind( ts_node_type( p ) );
+        if( std::find( inside.begin(), inside.end(), kind ) != inside.end() )
         {
-            return true;                                             // inside an executable block → local binding
+            return true;
         }
-        // a member property's wrappers — reaching one first means it is NOT a local.
-        if( kindIs( t, "class_body" ) || kindIs( t, "enum_class_body" ) || kindIs( t, "protocol_body" ) || kindIs( t, "source_file" ) )
+        if( std::find( outside.begin(), outside.end(), kind ) != outside.end() )
         {
             return false;
         }
     }
     return false;
+}
+
+inline bool isSwiftLocalBinding( TSNode declNode ) noexcept
+{
+    // inside an executable block → local binding; a member property's wrappers reached first → NOT a local
+    return nearestScopeOwnerIs( declNode, { "statements" }, { "class_body", "enum_class_body", "protocol_body", "source_file" } );
 }
 
 // ── L8: IN-FILE TEST SCOPE ───────────────────────────────────────────────────────────────────────────
@@ -1599,6 +1607,141 @@ inline std::uint8_t internalLinkageBit( Lang lang, TSNode defNode, std::string_v
     return cppInternalLinkage( defNode, src ) ? std::uint8_t( 1 ) : std::uint8_t( 0 );
 }
 
+// One parameter of a block-scope function declarator that an ARGUMENT expression also produces: a bare, qualified or
+// template-id type name with no declarator (`Rem`, `Env::Default`), read as a function type (`nextSeed()`) or an array
+// (`seeds[ 0 ]`), and nothing else on the node. A primitive type, a cv-qualifier, a named declarator (`Foo other`,
+// `Foo* p`, `Foo& r`), an abstract `*` / `&` and an attribute are written only by a prototype.
+inline bool cppArgumentShapedParameter( TSNode parameter ) noexcept
+{
+    const TSNode type       = fieldChild( parameter, NodeField::Type );
+    const TSNode declarator = fieldChild( parameter, NodeField::Declarator );
+    if( ts_node_is_null( type ) )
+    {
+        return false;
+    }
+    const char* typeKind = ts_node_type( type );
+    if( !kindIs( typeKind, "type_identifier" ) && !kindIs( typeKind, "qualified_identifier" ) && !kindIs( typeKind, "template_type" ) )
+    {
+        return false;
+    }
+    if( !ts_node_is_null( declarator ) && !kindIs( ts_node_type( declarator ), "abstract_function_declarator" )
+        && !kindIs( ts_node_type( declarator ), "abstract_array_declarator" ) )
+    {
+        return false;
+    }
+    bool        onlyTypeAndDeclarator = true;
+    ChildCursor cursor( parameter );
+    forEachChild( parameter, cursor.cur, [ & ]( TSNode child )
+    {
+        if( ts_node_eq( child, type ) || ( !ts_node_is_null( declarator ) && ts_node_eq( child, declarator ) ) || kindIs( ts_node_type( child ), "comment" ) )
+        {
+            return true;
+        }
+        onlyTypeAndDeclarator = false;
+        return false;
+    } );
+    return onlyTypeAndDeclarator;
+}
+
+// cppBlockScopeDirectInit's declaration question: `extern`, `inline`, `virtual` or `explicit` on the declaration, or a `void`
+// return not behind `*` / `&` (`wrapped`) — each written only by a prototype.
+inline bool cppDeclarationPrototypeOnly( TSNode decl, bool wrapped, std::string_view src ) noexcept
+{
+    const TSNode returnType = fieldChild( decl, NodeField::Type );
+    if( !wrapped && !ts_node_is_null( returnType ) && kindIs( ts_node_type( returnType ), "primitive_type" ) && nodeTextOf( returnType, src ) == "void" )
+    {
+        return true;
+    }
+    bool        prototypeOnly = false;
+    ChildCursor cursor( decl );
+    forEachChild( decl, cursor.cur, [ & ]( TSNode child )
+    {
+        const char* kind = ts_node_type( child );
+        prototypeOnly    = kindIs( kind, "explicit_function_specifier" )
+                        || ( !ts_node_is_named( child ) && kindIs( kind, "virtual" ) )
+                        || ( kindIs( kind, "storage_class_specifier" ) && ( nodeTextOf( child, src ) == "extern" || nodeTextOf( child, src ) == "inline" ) );
+        return !prototypeOnly;
+    } );
+    return prototypeOnly;
+}
+
+// cppBlockScopeDirectInit's declarator question: nothing but a name and a parameter list (no `const`, `override`, `noexcept`,
+// ref-qualifier or trailing return type after it), and that list holds at least one parameter, every one argument-shaped,
+// with no `...`.
+inline bool cppArgumentListDeclarator( TSNode fnDeclarator ) noexcept
+{
+    const TSNode name       = fieldChild( fnDeclarator, NodeField::Declarator );
+    const TSNode parameters = fieldChild( fnDeclarator, NodeField::Parameters );
+    if( ts_node_is_null( name ) || ts_node_is_null( parameters ) )
+    {
+        return false;
+    }
+    bool        argumentShaped = true;
+    ChildCursor fnCursor( fnDeclarator );
+    forEachNamedChild( fnDeclarator, fnCursor.cur, [ & ]( TSNode child )
+    {
+        argumentShaped = ts_node_eq( child, name ) || ts_node_eq( child, parameters ) || kindIs( ts_node_type( child ), "comment" );
+        return argumentShaped;
+    } );
+    if( !argumentShaped )
+    {
+        return false;
+    }
+    std::uint32_t argumentCount = 0;
+    ChildCursor   parameterCursor( parameters );
+    forEachChild( parameters, parameterCursor.cur, [ & ]( TSNode child )
+    {
+        const char* kind       = ts_node_type( child );
+        const bool  isArgument = ts_node_is_named( child ) && kindIs( kind, "parameter_declaration" );
+        argumentCount += isArgument ? 1u : 0u;
+        argumentShaped = isArgument ? cppArgumentShapedParameter( child )
+                                    : ( ts_node_is_named( child ) ? kindIs( kind, "comment" ) : ( kindIs( kind, "(" ) || kindIs( kind, ")" ) || kindIs( kind, "," ) ) );
+        return argumentShaped;
+    } );
+    return argumentShaped && argumentCount > 0;
+}
+
+// Most-vexing-parse round (test/narrowcheck.sh arms 52-60) — the C++ twin of F5's Swift local binding. A block-scope
+// DIRECT-INITIALIZED local whose every argument is a plain name — `IRBuilder<> Builder(Rem);`, `std::lock_guard<std::mutex>
+// Lock(Mtx);` — is, to a grammar that cannot tell a name from a type, a local FUNCTION declaration: a function_declarator
+// with one parameter_declaration per argument. queries/cpp/tags.scm minted a function symbol for the variable, and since a
+// symbol's span is the innermost cover of its own declaration, the local's Rule 2 type binding was attributed to that phantom
+// instead of to the function the local lives in: Rule 2 looked up `<enclosing fn>#Builder`, found nothing, and every
+// `Builder.CreateX()` fell to the name ladder. The phantom also answered bare-name lookups for `lock`, `end`, `iter`.
+//
+// The language's own rule — a declaration that CAN be a function declaration IS one — turns on whether `Rem` names a type,
+// which a tags pass cannot know. So the decision is syntactic and one-sided: the declarator reads as a VARIABLE only when it
+// is block-scope (a function or lambda body is the nearest scope owner) and nothing in it is written only by a prototype.
+// Any of these keeps the function symbol, exactly as before:
+//   * `extern`, `inline`, `virtual` or `explicit` on the declaration, or a `void` return not behind `*` / `&`;
+//   * anything after the parameter list — `const`, `override`, `noexcept`, a ref-qualifier, a trailing return type. A class
+//     body the grammar misreads as a function body (an export macro before the class name) lands here with its members;
+//   * an empty parameter list — `Foo x();` declares a function by the language's own rule;
+//   * a parameter an argument cannot produce (cppArgumentShapedParameter), a default value, or `...`.
+// Measured 2026-09-17, --pin-census S rows before and after: 12,543 function symbols gone on llvm-project 4d5358b1d and 2,443
+// on rocksdb 0e2801ac3, none added — every sampled one a direct-initialized local (or a macro statement, which declares no
+// function either). FLOOR, pinned by arm 60: `Widget w( a * b )` parses as the pointer parameter `a* b`, which a prototype
+// writes too, so it stays a function symbol.
+inline bool cppBlockScopeDirectInit( TSNode fnDeclarator, std::string_view src ) noexcept
+{
+    // the declarator of a DECLARATION, through the `*` / `&` it may sit under. A definition's, a member's or a parameter's
+    // function_declarator stops at the first parent — almost every capture this pattern makes.
+    TSNode decl    = ts_node_parent( fnDeclarator );
+    bool   wrapped = false;
+    for( int guard = 0; guard < 8 && !ts_node_is_null( decl ) && ( kindIs( ts_node_type( decl ), "pointer_declarator" ) || kindIs( ts_node_type( decl ), "reference_declarator" ) ); ++guard )
+    {
+        wrapped = true;
+        decl    = ts_node_parent( decl );
+    }
+    if( ts_node_is_null( decl ) || !kindIs( ts_node_type( decl ), "declaration" ) )
+    {
+        return false;
+    }
+    // block scope: a function or lambda body owns the declaration before any class, namespace or file scope does
+    return !cppDeclarationPrototypeOnly( decl, wrapped, src ) && cppArgumentListDeclarator( fnDeclarator )
+        && nearestScopeOwnerIs( decl, { "function_definition", "lambda_expression" }, { "field_declaration_list", "declaration_list", "translation_unit" } );
+}
+
 // forward declarations for dropGatedCapture below — the helpers live after nodeTextOf's section.
 inline bool isCjsExportTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
@@ -1712,6 +1855,10 @@ inline bool yamlKeyCaptureDropped( std::string_view name, TSNode roleNode ) noex
 // above).
 inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_view name, TSNode nameNode, TSNode roleNode, std::string_view src ) noexcept
 {
+    if( defCapSv == "definition.function" )
+    {
+        return lang == Lang::Cpp && cppBlockScopeDirectInit( roleNode, src );   // most-vexing-parse round: a local variable, not a function
+    }
     if( defCapSv == "definition.constant" )
     {
         return dropConstantCapture( lang, name, nameNode, roleNode, src );

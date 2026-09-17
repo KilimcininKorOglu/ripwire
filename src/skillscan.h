@@ -42,6 +42,7 @@
 #include "infra/Diagnostics.h"
 #include "regexguard.h"        // every pattern here is compiled and matched through the one regex boundary
 #include "infra/namesplit.h"   // isIdentChar / isIdentStart — the ONE ASCII identifier byte class, which is \b's word class here
+#include "infra/stackthreads.h"   // rw::runOnStackThreads — the scan runs on a thread whose stack its subject bound is computed for
 
 namespace rw
 {
@@ -294,24 +295,29 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
 // A "command context" for an exfil pattern: the line is inside a fenced code block (where run-commands
 // live) OR it carries a transmit/encode verb (the credential is actually being read + shipped, not merely
 // named in prose). This is what separates a malicious skill from one that documents the attack.
-inline RegexVerdict hasTransmitVerb( std::string_view line ) noexcept
+inline RegexVerdict hasTransmitVerb( std::string_view line, std::size_t stackBytes ) noexcept
 {
     static const RegexCompile kVerb = compileGuardedRegex( R"(\b(base64|curl|wget|nc|scp|cat|openssl)\b)", kRegexEcmaScript );
-    return kVerb.refusal ? RegexVerdict::Exhausted : kVerb.regex.search( line );
+    return kVerb.refusal ? RegexVerdict::Exhausted : kVerb.regex.search( line, stackBytes );
 }
 
-// A skill pattern matched through the one regex boundary. Undecided — the engine abandoned the match, or the constant
-// was refused, which no test tree has ever seen — reads Exhausted, and the caller records a fail-closed finding.
-inline RegexVerdict skillSearch( const RegexCompile& pattern, std::string_view line, RegexCaptures* captures = nullptr ) noexcept
+// A skill pattern matched through the one regex boundary. Undecided — the engine abandoned the match, the constant
+// was refused (which no test tree has ever seen), or the line was too long to hand the engine on this thread — reads
+// Exhausted or Skipped, and the caller records a fail-closed finding either way. `stackBytes` is the stack the scan
+// thread was SETTLED at (scanSkillText, runOnStackThreads), never SIZE_MAX: a skill file is UNTRUSTED input, and a
+// subject longer than that stack's measured-safe bound must be skipped and disclosed, not handed to the engine.
+inline RegexVerdict skillSearch( const RegexCompile& pattern, std::string_view line, std::size_t stackBytes, RegexCaptures* captures = nullptr ) noexcept
 {
     if( pattern.refusal )
     {
         return RegexVerdict::Exhausted;
     }
-    return captures != nullptr ? pattern.regex.search( line, *captures ) : pattern.regex.search( line );
+    return captures != nullptr ? pattern.regex.search( line, *captures, stackBytes ) : pattern.regex.search( line, stackBytes );
 }
 
-static constexpr const char* kScanIncompleteRule = "SCAN-INCOMPLETE:regex-abandoned";
+static constexpr const char* kScanIncompleteRule         = "SCAN-INCOMPLETE:regex-abandoned";
+static constexpr const char* kScanIncompleteRuleOversize = "SCAN-INCOMPLETE:line-oversize";
+static constexpr const char* kScanIncompleteRuleAborted  = "SCAN-INCOMPLETE:scan-aborted";
 
 // True if the byte at [pos] on `line` falls inside a BALANCED inline-code span (`…`) or a balanced
 // double-quoted ("…") span — i.e. the matched text is being SHOWN AS DATA / an example, not stated as an
@@ -504,11 +510,36 @@ inline bool toolAllowed( const std::vector<std::string>& tools, std::string_view
 
 }   // namespace detail
 
+// F-B3 (owner ruling 3): a directory walk that gave up before every entry under it was visited, over content
+// that WOULD BE INSTALLED — the caller (main.cpp's --scan-skills, wrap.h's wrapScanSkillDir) names this rule
+// on a synthetic finding rather than reading a stopped walk as an honest "clean". Public (not detail::) because
+// both those walks live outside this file.
+static constexpr const char* kScanIncompleteRuleWalk = "SCAN-INCOMPLETE:walk-stopped-early";
+// The same ruling for one FILE the walk found and scanSkillFileChecked could not read (mode 000 in an open folder,
+// an I/O error, a descriptor limit): the file is still there to be copied, so the verdict is CRITICAL with this rule
+// on a row naming it, never a skip that leaves the verdict "clean". A folder the walk cannot ENTER is different —
+// its contents cannot be copied either — and stays WARN in wrap.h.
+static constexpr const char* kScanIncompleteRuleUnreadable = "SCAN-INCOMPLETE:file-unreadable";
 
 // ── core scanner ─────────────────────────────────────────────────────────────────────────────────
 
-// Scan the raw text of a skill markdown file line by line. Findings are sorted (line, rule).
-inline std::vector<SkillFinding> scanSkillText( std::string_view text )
+// The joined-body injection pass (below) searches windows of the joined body, never the whole of it: one skill's body
+// is routinely tens of KB, past the engine's measured-safe subject on any stack (41,858 B for INJECTION:ignore-prev at
+// 256 MiB under libstdc++, 1,225 B at 8 MiB), and a skipped body fails the whole skill CLOSED. Every INJECTION match is
+// short once whitespace runs are collapsed to one space: kSkillInjectionSpanBytes, the longest being "ignore the
+// previous instructions" (skillscanreadcheck.sh derives the span from buildInjectionPatterns' sources and fails when a
+// pattern outgrows this constant). Windows overlap by more than that, so each match lies whole in one window. Windows
+// start after, and end at, a space, so a cut never makes a \b where the text has none.
+inline constexpr std::size_t kSkillJoinedWindowBytes  = 1024;
+inline constexpr std::size_t kSkillJoinedOverlapBytes = 128;
+inline constexpr std::size_t kSkillInjectionSpanBytes = 32;
+static_assert( kSkillInjectionSpanBytes < kSkillJoinedOverlapBytes && kSkillJoinedOverlapBytes < kSkillJoinedWindowBytes,
+               "a joined-body window overlap must exceed the longest INJECTION match, or a match across a window edge is lost" );
+inline constexpr std::size_t kSkillScanStackBytes     = 256 * 1024 * 1024;   // the grep scan threads' size (search.h kGrepScanStackBytes)
+
+// Scan the raw text of a skill markdown file line by line, on a thread settled at `stackBytes`. Findings are sorted
+// (line, rule).
+inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::size_t stackBytes )
 {
     using namespace detail;
 
@@ -561,12 +592,19 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         findings.push_back( { sev, lineNum, rule, std::move( excerpt ) } );
     };
     // helper: the regex boundary's answer as a plain hit, failing CLOSED on an undecided match — the line gets a
-    // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean"
+    // CRITICAL scan-incomplete finding (deduped per line below), so an unscannable skill can never read "clean".
+    // Exhausted (the engine gave up mid-match) and Skipped (the line was too long to hand the engine at all,
+    // F-B3 / owner ruling 3) are both undecided and both fail closed — every line in a skill file IS installable
+    // content, so there is no WARN tier here, only CRITICAL or a real answer.
     const auto isHit = [ & ]( RegexVerdict verdict, int lineNum, std::string_view lineText )
     {
         if( verdict == RegexVerdict::Exhausted )
         {
             addFinding( SkillSeverity::Critical, lineNum, kScanIncompleteRule, lineText );
+        }
+        else if( verdict == RegexVerdict::Skipped )
+        {
+            addFinding( SkillSeverity::Critical, lineNum, kScanIncompleteRuleOversize, lineText );
         }
         return verdict == RegexVerdict::Hit;
     };
@@ -667,7 +705,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             // ── FRONTMATTER checks ────────────────────────────────────────────────────────────────
             for( const FrontmatterPattern& p : frontPats )
             {
-                if( isHit( skillSearch( p.re, ln ), lineNum, ln ) )
+                if( isHit( skillSearch( p.re, ln, stackBytes ), lineNum, ln ) )
                 {
                     addFinding( SkillSeverity::Warn, lineNum, p.rule, ln );
                     break;   // one finding per line per category
@@ -681,7 +719,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             for( const InjectionPattern& p : injPats )
             {
                 RegexCaptures m;
-                if( isHit( skillSearch( p.re, ln, &m ), lineNum, ln ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ), /*quotesCountAsData=*/false ) )
+                if( isHit( skillSearch( p.re, ln, stackBytes, &m ), lineNum, ln ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ), /*quotesCountAsData=*/false ) )
                 {
                     addFinding( p.sev, lineNum, p.rule, ln );
                     break;   // one INJECTION finding per line
@@ -707,7 +745,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
                 for( const InjectionPattern& p : injPats )
                 {
                     RegexCaptures m;
-                    if( isHit( skillSearch( p.re, ln, &m ), lineNum, ln ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ) ) )
+                    if( isHit( skillSearch( p.re, ln, stackBytes, &m ), lineNum, ln ) && !isShownAsData( ln, std::size_t( m.position( 0 ) ) ) )
                     {
                         addFinding( p.sev, lineNum, p.rule, ln );
                         break;   // one INJECTION finding per line (highest-priority match)
@@ -762,7 +800,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             // fenceOnly patterns (net-exfil) fire only inside a fenced code block — see buildExfilPatterns().
             for( const ExfilPattern& p : exfilPats )
             {
-                const bool matched = p.isNetExfilShape ? hasNetExfilShape( ln ) : isHit( skillSearch( p.re, ln ), lineNum, ln );
+                const bool matched = p.isNetExfilShape ? hasNetExfilShape( ln ) : isHit( skillSearch( p.re, ln, stackBytes ), lineNum, ln );
                 if( !matched )
                 {
                     continue;
@@ -771,7 +809,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
                 {
                     continue;
                 }
-                if( p.requiresCmdContext && !( lineInFence || isHit( hasTransmitVerb( ln ), lineNum, ln ) ) )
+                if( p.requiresCmdContext && !( lineInFence || isHit( hasTransmitVerb( ln, stackBytes ), lineNum, ln ) ) )
                 {
                     continue;
                 }
@@ -794,9 +832,9 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
                 // ^…$ with a search is the whole-string match the old regex_match asked for: `lv` holds one line, no '\n'.
                 static const RegexCompile kBashFenceRe = compileGuardedRegex( R"(^```\s*(bash|sh|shell|zsh)\s*$)", kRegexEcmaScript );
                 static const RegexCompile kNetToolRe   = compileGuardedRegex( R"(\b(curl|wget|nc)\b)", kRegexEcmaScript );
-                const bool isShellFence     = isHit( skillSearch( kBashFenceRe, lv ), lineNum, ln );
+                const bool isShellFence     = isHit( skillSearch( kBashFenceRe, lv, stackBytes ), lineNum, ln );
                 const bool startsWithDollar = !lv.empty() && lv[0] == '$';
-                const bool hasNetTool       = isHit( skillSearch( kNetToolRe, lv ), lineNum, ln );
+                const bool hasNetTool       = isHit( skillSearch( kNetToolRe, lv, stackBytes ), lineNum, ln );
                 if( isShellFence || startsWithDollar || hasNetTool )
                 {
                     addFinding( SkillSeverity::Warn, lineNum, kScopeCreepRule, ln );
@@ -812,14 +850,64 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
     // now reads as one contiguous run. Only the FIRST occurrence per pattern is reported here (this pass
     // exists to catch the evasion, not to duplicate the exhaustive per-line scan); the (line, rule) dedupe
     // below collapses the case where the same instance was already found per-line.
+    // Map a joined-body offset back to a real line number: the start of the joined-body run whose recorded offset is
+    // the greatest one not exceeding `pos`. Honest fallback: line 0 if somehow no line offset was recorded (joinedBody
+    // is built only from lines we did record, so this shouldn't happen, but a degrade-safe default beats an
+    // out-of-range read).
+    const auto joinedLineOf = [ & ]( std::size_t pos )
+    {
+        const auto it = std::upper_bound( joinedLineOffsets.begin(), joinedLineOffsets.end(), pos,
+            []( std::size_t value, const std::pair<std::size_t,int>& entry ) noexcept { return value < entry.first; } );
+        return it != joinedLineOffsets.begin() ? std::prev( it )->second : 0;
+    };
+    // The windows the pass searches, in order (kSkillJoinedWindowBytes above): each ends at a space (or the body's end)
+    // and the next starts just after the FIRST space at or after end − kSkillJoinedOverlapBytes. A match crossing `end`
+    // is at most kSkillInjectionSpanBytes long, so it starts at a word past end − kSkillInjectionSpanBytes whose
+    // leading space is at or after end − kSkillJoinedOverlapBytes: the next window starts at or before it and holds it
+    // whole. (Searching BACK from end − kSkillJoinedOverlapBytes found no space inside a long spaceless run and jumped
+    // past `end`, missing a phrase that straddled it.) A run with no space
+    // past a full window stretches the window to the next space instead of cutting a word; a window that ends up past
+    // the engine's bound is Skipped and fails the skill closed, as a long line does.
+    std::vector<std::pair<std::size_t, std::size_t>> joinedWindows;
+    for( std::size_t begin = 0; begin < joinedBody.size(); )
+    {
+        std::size_t end = joinedBody.size();
+        if( begin + kSkillJoinedWindowBytes < joinedBody.size() )
+        {
+            const std::size_t lastSpace = joinedBody.rfind( ' ', begin + kSkillJoinedWindowBytes );
+            const std::size_t nextSpace = joinedBody.find( ' ', begin + kSkillJoinedWindowBytes );
+            end = ( lastSpace != std::string::npos && lastSpace > begin + kSkillJoinedOverlapBytes ) ? lastSpace
+                : ( nextSpace != std::string::npos )                                                 ? nextSpace
+                                                                                                     : joinedBody.size();
+        }
+        joinedWindows.push_back( { begin, end } );
+        if( end == joinedBody.size() )
+        {
+            break;
+        }
+        // `end` is a space here and end > begin + kSkillJoinedOverlapBytes, so the search finds one at or before `end`, past
+        // `begin`: every window starts later than the one before it.
+        begin = joinedBody.find( ' ', end - kSkillJoinedOverlapBytes ) + 1;
+    }
     for( const InjectionPattern& p : injPats )
     {
-        RegexCaptures      m;
-        const RegexVerdict verdict = skillSearch( p.re, joinedBody, &m );
-        if( verdict == RegexVerdict::Exhausted )
+        RegexCaptures m;
+        RegexVerdict  verdict     = RegexVerdict::Miss;
+        std::size_t   windowBegin = 0;
+        for( const auto& [ wBegin, wEnd ] : joinedWindows )
         {
-            // the joined body has no one line to blame: attribute the unscannable pass to the first body line recorded
-            addFinding( SkillSeverity::Critical, joinedLineOffsets.empty() ? 0 : joinedLineOffsets.front().second, kScanIncompleteRule,
+            windowBegin = wBegin;
+            verdict     = skillSearch( p.re, std::string_view( joinedBody ).substr( wBegin, wEnd - wBegin ), stackBytes, &m );
+            if( verdict != RegexVerdict::Miss )
+            {
+                break;   // the first hit (or the first undecided window) settles this pattern, as the unwindowed pass did
+            }
+        }
+        if( verdict == RegexVerdict::Exhausted || verdict == RegexVerdict::Skipped )
+        {
+            // the joined window has no one line to blame: attribute the unscannable pass to the window's first line
+            addFinding( SkillSeverity::Critical, joinedLineOf( windowBegin ),
+                        verdict == RegexVerdict::Exhausted ? kScanIncompleteRule : kScanIncompleteRuleOversize,
                         "the whitespace-joined body (cross-line injection pass)" );
             continue;
         }
@@ -827,28 +915,12 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         {
             continue;
         }
-        const std::size_t pos = std::size_t( m.position( 0 ) );
+        const std::size_t pos = windowBegin + std::size_t( m.position( 0 ) );
         if( isShownAsData( joinedBody, pos ) )
         {
             continue;
         }
-
-        // Map the match position back to a real line number: the start of the joined-body run whose
-        // recorded offset is the greatest one not exceeding `pos`. Honest fallback: line 0 if somehow no
-        // line offset was recorded (joinedBody built only from lines we did record, so this shouldn't
-        // happen, but a degrade-safe default beats an out-of-range read).
-        int lineNum = 0;
-        {
-            const auto it = std::upper_bound( joinedLineOffsets.begin(), joinedLineOffsets.end(), pos,
-                []( std::size_t value, const std::pair<std::size_t,int>& entry ) noexcept { return value < entry.first; } );
-            if( it != joinedLineOffsets.begin() )
-            {
-                lineNum = std::prev( it )->second;
-            }
-        }
-
-        std::string matched = m.str( 0 );
-        addFinding( p.sev, lineNum, p.rule, matched );
+        addFinding( p.sev, joinedLineOf( pos ), p.rule, m.str( 0 ) );
     }
 
     // ── sort by (line, rule) for deterministic output, then dedupe on (line, rule) ────────────────
@@ -868,34 +940,40 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
     return findings;
 }
 
+// scanSkillTextOn on one thread with a kSkillScanStackBytes stack (a reservation: pages commit only as deep as a match
+// recurses), so a long skill line gets the bound that stack affords instead of the caller's. A thread the system refuses
+// runs the scan on the caller at kCallerStackBytesFloor, disclosed by stackthreads.h. A throw out of the scan (an
+// allocation failure) cannot leave the thread, so it becomes one CRITICAL scan-aborted finding: a skill whose scan did
+// not finish never reads clean.
+inline std::vector<SkillFinding> scanSkillText( std::string_view text )
+{
+    std::vector<SkillFinding> findings;
+    const auto scan = [ & ]( std::size_t settledBytes )
+    {
+        try
+        {
+            findings = scanSkillTextOn( text, settledBytes );
+        }
+        catch( ... )
+        {
+            findings = std::vector<SkillFinding>( 1, SkillFinding{ SkillSeverity::Critical, 0, detail::kScanIncompleteRuleAborted, "the scan stopped before it finished" } );
+            DEGRADED_PATH_ALERT( "skillscan: the scan threw before it finished — reported as a CRITICAL scan-aborted finding" );
+        }
+    };
+    runOnStackThreads( 1, kSkillScanStackBytes, scan );
+    return findings;
+}
+
 
 // ── file and directory entry points ──────────────────────────────────────────────────────────────
 
-// Scan a single skill file. Missing/unreadable → DEGRADED_PATH_ALERT + empty vector (never crash).
-inline std::vector<SkillFinding> scanSkillFile( const std::string& path )
-{
-    std::ifstream f( path );
-    if( !f )
-    {
-        DEGRADED_PATH_ALERT( "skillscan: cannot read skill file" );
-        return {};
-    }
-    std::ostringstream buf;
-    buf << f.rdbuf();
-    if( f.bad() )
-    {
-        DEGRADED_PATH_ALERT( "skillscan: I/O error reading skill file" );
-        return {};
-    }
-    return scanSkillText( buf.str() );
-}
-
 // Result of a checked scan: distinguishes "read the file, ran the scan, got N findings" (possibly
 // zero — a legitimate clean scan) from "never scanned it — the path itself could not be read" (missing,
-// permission-denied, or a directory). scanSkillFile() above collapses both cases to an empty vector for
-// callers (wrap.h) that treat "cannot scan" the same as "nothing found"; the --scan-skill/--scan-skills
-// CLI entry points need to tell them apart so an unreadable path can refuse instead of reporting a false
-// clean scan (§P0.5a — a typo'd path must never read as "safe").
+// permission-denied, or a directory). Every entry point needs the two apart: --scan-skill refuses an
+// unreadable path (§P0.5a — a typo'd path must never read as "safe"), and the two directory walks
+// (--scan-skills, wrap.h's wrapScanSkillDir) score a file they found but could not read CRITICAL
+// (kScanIncompleteRuleUnreadable). The unchecked scanSkillFile() that read "cannot scan" as "nothing
+// found" for wrap.h is gone for that reason.
 struct SkillFileReadResult
 {
     bool                        readable = false;   // false = path could not be scanned at all
@@ -904,10 +982,8 @@ struct SkillFileReadResult
 
 // NO DEGRADED_PATH_ALERT on the unreadable paths here, deliberately, and it is not an omission (M7/F20,
 // capture-audit 2026-09-04). That log line means "this run CONTINUED in a reduced mode"; every caller of
-// THIS function refuses instead, so printing it stamped a degrade notice on stderr immediately before a
-// refusal that had degraded nothing — "[math degraded] skillscan: cannot read skill file (skillscan.h:786,
-// …)" ahead of "cannot read '…' — no scan performed". The alert belongs to scanSkillFile() above, which is
-// the entry point that really does swallow the failure and return an empty finding list to wrap.h.
+// THIS function refuses or scores the file CRITICAL by name instead, so the alert would stamp a
+// deduplicated, pathless degrade notice beside a disclosure that already says which file and why.
 inline SkillFileReadResult scanSkillFileChecked( const std::string& path )
 {
     std::error_code ec;
@@ -1025,8 +1101,8 @@ inline std::string skillSeverityAttr( SkillSeverity s )
 // `verdict=` is derived from the SAME severities as skillScanExitCode (0/1/2 <-> clean/warn/critical), so
 // it can never disagree with the exit code the caller separately returns.
 //
-// §B13.3: `filesSkipped` is how many files the caller's walk SAW and could not scan (binary content, or
-// unreadable) — the other half of the population `files=` counts. A verdict must not be silently narrower
+// §B13.3: `filesSkipped` is how many files the caller's walk SAW and could not scan (unreadable — each also
+// carries a CRITICAL SCAN-INCOMPLETE:file-unreadable row) — the other half of the population `files=` counts. A verdict must not be silently narrower
 // than its subject, and "clean" over a directory whose executables were never opened is exactly that.
 // Emitted only when non-zero (the house rule: absent = nothing skipped, so every existing artifact and gate
 // stays byte-identical), and defaulted so the single-file entry point — which scans the one file it is given

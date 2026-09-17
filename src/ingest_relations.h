@@ -438,6 +438,132 @@ inline std::string_view writtenTypeNamespace( TSNode typeNode, std::string_view 
     return ( !ts_node_is_null( scope ) && kindIs( ts_node_type( scope ), "namespace_identifier" ) ) ? nodeTextOf( scope, src ) : std::string_view{};
 }
 
+// the class NAME a type specifier denotes by itself — its final segment with template arguments dropped: `IRBuilder<F, I>`
+// and `llvm::IRBuilder<F>` → IRBuilder, `ir::QBase` → QBase, `struct Node` → Node. "" for every specifier that names no class
+// on its own: a primitive, `auto`, `decltype( … )`, a dependent `typename T::X`, an enum, an anonymous struct.
+inline std::string_view aliasTargetName( TSNode spec, std::string_view src ) noexcept
+{
+    for( int guard = 0; guard < 16 && !ts_node_is_null( spec ); ++guard )
+    {
+        const char* kind = ts_node_type( spec );
+        if( kindIs( kind, "type_identifier" ) )
+        {
+            return nodeTextOf( spec, src );
+        }
+        if( !kindIs( kind, "qualified_identifier" ) && !kindIs( kind, "template_type" )
+            && !kindIs( kind, "struct_specifier" ) && !kindIs( kind, "class_specifier" ) && !kindIs( kind, "union_specifier" ) )
+        {
+            return {};
+        }
+        spec = fieldChild( spec, NodeField::Name );
+    }
+    return {};
+}
+
+// captureTypeAlias's arm on the shared side stream (ingest_sidecap.h streamSideCaptures). Records collect in `out` and join `refs`
+// after the walk, so during it `refs` keeps at most one writer per file (EMISSION ORDER there: value-uses on C++).
+struct TypeAliasCtx
+{
+    std::uint32_t       fileId = 0;
+    Lang                lang {};
+    std::string_view    src;
+    std::vector<RawRef> out;
+};
+
+// the {type specifier, alias name} a PLAIN alias node declares; a null specifier when the node is no alias of a class itself. A
+// typedef's names are its plain declarators — it can declare several (`typedef Foo A, *PA;` aliases Foo as A only) — so its name
+// node is null and captureTypeAlias walks them.
+inline std::pair<TSNode, TSNode> aliasSpecifierAndName( TSNode n, const char* t ) noexcept
+{
+    if( kindIs( t, "type_definition" ) )
+    {
+        return { fieldChild( n, NodeField::Type ), TSNode{} };
+    }
+    if( !kindIs( t, "alias_declaration" ) )
+    {
+        return {};
+    }
+    const TSNode descriptor = fieldChild( n, NodeField::Type );
+    if( ts_node_is_null( descriptor ) || !ts_node_is_null( fieldChild( descriptor, NodeField::Declarator ) ) )
+    {
+        return {};   // `using P = Foo*;` / `using F = void( int );` — not the class itself
+    }
+    return { fieldChild( descriptor, NodeField::Type ), fieldChild( n, NodeField::Name ) };
+}
+
+// true ⇒ `n` sits in a function body or a lambda — or deeper than the side stream's own cap, where its enclosure is unknown
+inline bool insideFunctionBody( TSNode n ) noexcept
+{
+    TSNode parent = ts_node_parent( n );
+    for( int depth = 0; !ts_node_is_null( parent ); ++depth, parent = ts_node_parent( parent ) )
+    {
+        const char* pt = ts_node_type( parent );
+        if( depth >= 256 || kindIs( pt, "compound_statement" ) || kindIs( pt, "function_definition" ) || kindIs( pt, "lambda_expression" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
+inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
+{
+    const std::string_view alias = nodeTextOf( aliasNode, cx.src );
+    if( alias.empty() || alias == target )
+    {
+        return;   // a self-alias (`typedef struct Node Node;`) adds nothing to walk
+    }
+    RawRef r;
+    r.fileId     = cx.fileId;
+    r.startByte  = ts_node_start_byte( aliasNode );
+    r.line       = ts_node_start_point( aliasNode ).row + 1;
+    r.lang       = cx.lang;
+    r.isCompose  = true;
+    r.composeRel = "alias";
+    r.name       = target;
+    r.recvVar    = alias;
+    r.qualifier  = writtenTypeNamespace( spec, cx.src );
+    cx.out.push_back( std::move( r ) );
+}
+
+// C/C++/ObjC TYPE ALIAS → the class it names, for the resolver's inheritance NAME graph (resolve.h addTypeAliasBases). An alias
+// declares no class, so a base walk keyed by class names dead-ended at one: `class CGBuilderTy : public CGBuilderBaseTy` with
+// `typedef llvm::IRBuilder<F, I> CGBuilderBaseTy;` stopped at CGBuilderBaseTy, and a member `CGBuilderTy Builder;` never reached
+// IRBuilderBase::CreateCall (test/fieldnarrowcheck.sh arm t). Rides the compose record shape — cached field for field, so the blob
+// format is unchanged — marked composeRel "alias" with an EMPTY fieldName, the one shape no member record has: `recvVar` = the
+// alias, `name` = the target's class name, `qualifier` = the namespace the target was written in (a `std` target is refused by
+// its reader). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
+// class (aliasTargetName), a self-alias and an alias local to a function body (it types no member, and the name graph has no
+// scopes to keep it local) record nothing.
+inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
+{
+    const auto [ spec, nameNode ] = aliasSpecifierAndName( n, t );
+    const std::string_view target = aliasTargetName( spec, cx.src );
+    if( target.empty() || insideFunctionBody( n ) )
+    {
+        return;
+    }
+    if( !ts_node_is_null( nameNode ) )
+    {
+        if( kindIs( ts_node_type( nameNode ), "type_identifier" ) )
+        {
+            emitTypeAlias( cx, nameNode, spec, target );
+        }
+        return;
+    }
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        const char* field = ts_tree_cursor_current_field_name( &cursor.cur );
+        if( field != nullptr && kindIs( field, "declarator" ) && kindIs( ts_node_type( c ), "type_identifier" ) )
+        {
+            emitTypeAlias( cx, c, spec, target );
+        }
+        return true;
+    } );
+}
+
 // S5-E HAS-A composition edges: walk a class/struct node's field_declaration_list and emit a
 // compose RawRef for each typed member variable whose type name matches a known class/struct name.
 // Two sub-relations:

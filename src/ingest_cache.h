@@ -238,7 +238,24 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 110;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 112;          // bump on any grammar/.scm/extraction change
+                                                      // 112 = 2026-09-17 (type aliases, PR #280, test/fieldnarrowcheck.sh
+                                                      //    arm t): a C/C++/ObjC `typedef` / `using` alias of a named class
+                                                      //    emits a compose-shaped RawRef (composeRel "alias", empty
+                                                      //    fieldName) that the base walk follows to its target. Format
+                                                      //    unchanged (kCacheVersion stays 23); an older blob holds no such
+                                                      //    records and would dead-end the walk at the alias on a warm run:
+                                                      //    content change, bump required. The PR declared 105 over main's
+                                                      //    99; re-declared 111 over main's 110 when train 3 merged;
+                                                      //    integration/train-4 assigns 112 after irbuilder-local's 111.
+                                                      // 111 = 2026-09-17 (block-scope direct-initialized locals,
+                                                      //    test/narrowcheck.sh arms 52-60): a C++ function_declarator
+                                                      //    inside a function/lambda body that an argument list also
+                                                      //    produces (`IRBuilder<> Builder(Rem);`) mints no function
+                                                      //    symbol (ingest_names.h cppBlockScopeDirectInit), so the
+                                                      //    local's type binding is attributed to the enclosing function.
+                                                      //    Symbols and fact attribution change; no record layout changes
+                                                      //    (kCacheVersion unchanged). Claimed 111; integration/train-4 keeps it over main 110.
                                                       // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, PR #235
                                                       //    follow-up from CodeRabbit on #281, test/javamethodrefcheck.sh):
                                                       //    a catch parameter, an enhanced-for variable and a try-with-
