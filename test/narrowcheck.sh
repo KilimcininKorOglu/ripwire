@@ -25,9 +25,14 @@
 #     commit): a range-for variable's type leaking to a later `auto` loop of the same name (12), to a
 #     same-named FIELD read outside the loop (13), and an untyped nested redeclaration of a parameter (14);
 #     plus (10), where the flat table's tombstone would throw away two precise answers.
-#   * Arms 17-18 — a QUALIFIED written type (`ext::map<int, int>&`) never narrows, because the recorded type is
-#     its final segment and class names carry no namespace (kParserVer 97 records the qualified text); (17) is
-#     RED on the lexical lookup without that guard, (18) is its unqualified control.
+#   * Arms 17-24 — a written type is recorded as its final segment and class names carry no namespace, so a type
+#     written in namespace `std` (`std::map<int, int>`) matched an unrelated in-repo class `map`. `std` is reserved
+#     to the implementation — a program declares no class in it — so a `std::`-led written type never narrows, for
+#     a parameter (17), a typed local (19), a constructor-inferred local (20) and a C++ assignment (21). Every other
+#     qualifier keeps its narrow: an in-repo namespace is the common case (22, 23). (24) pins the stated floor.
+#   * Arm 25 — DISCLOSURE: a narrow decided by a qualified written type matched only its final segment, so it never reads
+#     as precise. Its edge carries prov="final-segment" (the floor's wrong edge, a correct parameter narrow and the local
+#     twin alike); an unqualified narrow and a uniquely named call carry no prov=, and both legends define the value.
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -206,39 +211,120 @@ else
     no "(16) paramfix --callees=nestedTyped differs across runs or warm vs cold"; diff "$TMP/p1" "$TMP/pwarm" | head -6
 fi
 
-# ── Arms 17-18: a written parameter type is only its FINAL segment (`ext::map<int, int>&` records `map`), and class
-#    names carry no namespace, so a QUALIFIED parameter type cannot be told apart from an unrelated same-named in-repo
-#    class — measured on a private C++ corpus as precise wrong edges from `ankerl::unordered_dense::map<…>& t; t.find()`
-#    and `const std::map<K, V>& ref; ref.lower_bound()` to an in-repo `map`. Rule 2 does not narrow on a qualified
-#    written type (the qualified text rides the record, kParserVer 97). An include-visibility guard was measured first
-#    and rejected: path-precise includes miss include-root spellings (`"LinearMath/btVector3.h"`), so it refused ~150
-#    correct narrows on that corpus to stop these two. Candidates live in two directories apart from the caller, so a
-#    refused narrow declines (no edge) instead of landing on a same-file or same-directory guess.
+# ── Arms 17-24: a written type is only its FINAL segment (`std::map<int, int>` records `map`), and class names carry no
+#    namespace, so a type written in namespace `std` cannot be told apart from an unrelated same-named in-repo class by
+#    its name — measured on a private C++ corpus as precise wrong edges from `const std::map<K, V>& ref; ref.lower_bound()`
+#    and six `std::map<…> m; m.find()` LOCALS to an in-repo `map`. `std` is reserved to the implementation
+#    ([namespace.std]: a program adds no declaration to it but a specialization), so no in-repo class IS `std::map`, and
+#    a `std::`-led written type never narrows (the qualified text rides the record: kParserVer 97, and 98 for the
+#    assignment). EVERY OTHER QUALIFIER KEEPS ITS NARROW, and that is measured, not assumed: refusing any qualifier —
+#    this gate's rule for parameters until 2026-09-16 — refused 424 in-repo narrows on rocksdb (`ROCKSDB_NAMESPACE::
+#    Status s; s.ok()`, `test::SleepingBackgroundTask`) and 9 on this repo's src/ (`rw::notes::NoteIndex`), every
+#    sampled one correct, while fixing no wrong edge outside `std` on any of the three corpora. An include-visibility
+#    guard was measured and rejected before that: path-precise includes miss include-root spellings. Candidates live in
+#    two directories apart from the caller, so a refused narrow declines (no edge) instead of landing on a same-file or
+#    same-directory guess.
 VFIX="$TMP/visfix"
-mkdir -p "$VFIX/lib" "$VFIX/lib2" "$VFIX/app"
+mkdir -p "$VFIX/lib" "$VFIX/lib2" "$VFIX/lib3" "$VFIX/app"
 printf 'struct map { int find( int k ) { return k; } };\n'  >"$VFIX/lib/map.h"
 printf 'struct dict { int find( int k ) { return k; } };\n' >"$VFIX/lib2/dict.h"
-printf 'int lookupHidden( ext::map<int, int>& table ) { return table.find( 1 ); }\n' >"$VFIX/app/hidden.cpp"
+printf 'namespace store { struct tree { int find( int k ) { return k; } }; }\n' >"$VFIX/lib3/tree.h"
+printf 'int lookupHidden( std::map<int, int>& table ) { return table.find( 1 ); }\n' >"$VFIX/app/hidden.cpp"
 printf '#include "../lib/map.h"\nint lookupSeen( map& table ) { return table.find( 1 ); }\n' >"$VFIX/app/seen.cpp"
+printf 'int lookupLocal() { std::map<int, int> table; return table.find( 1 ); }\n' >"$VFIX/app/local.cpp"
+printf 'int lookupCtor() { auto table = std::map<int, int>(); return table.find( 1 ); }\n' >"$VFIX/app/ctor.cpp"
+printf 'std::map<int, int> cache;\nint lookupAssign() { cache = std::map<int, int>(); return cache.find( 1 ); }\n' >"$VFIX/app/assign.cpp"
+printf 'int lookupInRepoLocal() { store::tree table; return table.find( 1 ); }\nint lookupInRepoParam( const store::tree& table ) { return table.find( 1 ); }\n' >"$VFIX/app/inrepo.cpp"
+printf 'int lookupExternal( ext::map<int, int>& table ) { return table.find( 1 ); }\n' >"$VFIX/app/external.cpp"
+printf 'int helperOnly() { return 1; }\nint callsHelper() { return helperOnly(); }\n' >"$VFIX/app/plain.cpp"
 visRows(){   # the find@<file> rows one caller's callees answer; NO-CALLEES-ANSWER when the probe did not run
     local out
     out="$( "$BIN" "$VFIX" "--callees=$1" --no-cache 2>/dev/null )"
     printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
     printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="find".* p="\([^"]*\)".*/find@\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
-# ── 17) `ext::map<int, int>&` is qualified: no narrow to the unrelated in-repo lib/map.h `map`. ──────────────────
-got="$( visRows lookupHidden )"
-case "$got" in
-    NO-CALLEES-ANSWER) no "(17) lookupHidden(): --callees did not answer" ;;
-    "find@lib/map.h:1") no "(17) lookupHidden(): ext::map<int, int>& narrowed to the unrelated in-repo lib/map.h map::find" ;;
-    *) ok "(17) lookupHidden(): a qualified written type is not a narrow -> [${got:-no edge}]" ;;
-esac
-# ── 18) control — the same call shape with an UNQUALIFIED `map&` narrows to lib/map.h exactly. ──────────────────
-got="$( visRows lookupSeen )"
-if [ "$got" = "find@lib/map.h:1" ]; then
-    ok "(18) lookupSeen(): the unqualified map& narrows -> [$got]"
+expectNoStdNarrow(){   # arm label, caller, what the declaration writes
+    local got
+    got="$( visRows "$2" )"
+    case "$got" in
+        NO-CALLEES-ANSWER) no "$1 $2(): --callees did not answer" ;;
+        "find@lib/map.h:1") no "$1 $2(): $3 narrowed to the unrelated in-repo lib/map.h map::find" ;;
+        *) ok "$1 $2(): $3 is not a narrow -> [${got:-no edge}]" ;;
+    esac
+}
+expectNarrow(){   # arm label, caller, the one expected row
+    local got
+    got="$( visRows "$2" )"
+    if [ "$got" = "$3" ]; then
+        ok "$1 $2(): narrows -> [$got]"
+    else
+        no "$1 $2(): -> [$got], want [$3]"
+    fi
+}
+# ── 17) a PARAMETER written `std::map<int, int>&`: no narrow to the unrelated in-repo lib/map.h `map`. ────────────────
+expectNoStdNarrow "(17)" lookupHidden "a std::-qualified parameter type"
+# ── 18) control — the same call shape with an UNQUALIFIED `map&` narrows to lib/map.h exactly. ──────────────────────
+expectNarrow "(18)" lookupSeen "find@lib/map.h:1"
+# ── 19) a typed LOCAL `std::map<int, int> table;` — Rule 2's flat per-function table, not the lexical one. ──────────
+expectNoStdNarrow "(19)" lookupLocal "a std::-qualified local type"
+# ── 20) a local typed by its constructor, `auto table = std::map<int, int>()`. ──────────────────────────────────────
+expectNoStdNarrow "(20)" lookupCtor "a std::-qualified constructor"
+# ── 21) a C++ ASSIGNMENT from a constructor, `cache = std::map<int, int>()` (its record carried no qualified text
+#        until kParserVer 98). ───────────────────────────────────────────────────────────────────────────────────────
+expectNoStdNarrow "(21)" lookupAssign "a std::-qualified constructor assignment"
+# ── 22) control — an IN-REPO namespace qualifier narrows a typed local, as it always did. ───────────────────────────
+expectNarrow "(22)" lookupInRepoLocal "find@lib3/tree.h:1"
+# ── 23) the same in-repo qualifier on a PARAMETER narrows too (RED while a parameter refused every qualifier). ──────
+expectNarrow "(23)" lookupInRepoParam "find@lib3/tree.h:1"
+# ── 24) STATED FLOOR, pinned so it stays a decision: a qualifier that is neither `std` nor the class's own namespace
+#        (`ext::map<int, int>&`, an external or aliased type whose final segment an unrelated in-repo class shares) still
+#        narrows on the final segment. Measured once on a private corpus (an alias template); closing it needs the
+#        namespace chain in Symbol::scope, planned on its own. If this arm goes red, the floor moved: rewrite it to
+#        assert the fixed behaviour, never delete it. ────────────────────────────────────────────────────────────────
+expectNarrow "(24)" lookupExternal "find@lib/map.h:1"
+
+# ── 25) DISCLOSURE (2026-09-16): the narrows arms 22-24 keep matched a QUALIFIED written type by its final segment alone —
+#        the qualifier is never checked against the class's namespace (arm 24's is wrong) — so their edges must not read
+#        as uniquely resolved. Each carries prov="final-segment"; arm 18's unqualified narrow and a uniquely named call
+#        carry no prov=; the map legend and the compact legend define the value on the document that carries it. RED
+#        before the attribute existed: (25) rows a, b, c and both legend rows. ─────────────────────────────────────────
+"$BIN" "$VFIX" --no-cache >"$TMP/vis.map" 2>/dev/null
+"$BIN" "$VFIX" --no-cache --legend=compact >"$TMP/vis.compact" 2>/dev/null
+provOf(){   # the prov= of caller $1's <c n="$2"> edge in the map: a word, "none" when absent, NO-EDGE when the row or edge is missing
+    local row
+    row="$( tr '<' '\n' <"$TMP/vis.map" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
+    row="$( printf '%s\n' "$row" | grep "^c n=\"$2\"" | head -1 )"
+    if [ -z "$row" ]; then
+        printf 'NO-EDGE'
+    elif printf '%s' "$row" | grep -q ' prov="'; then
+        printf '%s' "$row" | sed -n 's/.* prov="\([^"]*\)".*/\1/p'
+    else
+        printf 'none'
+    fi
+}
+expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent)
+    local got
+    got="$( provOf "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2() -> $3: prov=[$got]"
+    else
+        no "$1 $2() -> $3: prov=[$got], want [$4]"
+    fi
+}
+expectProv "(25a)" lookupExternal find final-segment      # the floor's WRONG edge is disclosed, never precise
+expectProv "(25b)" lookupInRepoParam find final-segment   # a CORRECT qualified parameter narrow: still a final-segment match
+expectProv "(25c)" lookupInRepoLocal find final-segment   # the typed LOCAL twin says the same
+expectProv "(25d)" lookupSeen find none                   # an unqualified narrow: no qualifier was ever skipped
+expectProv "(25e)" callsHelper helperOnly none            # a uniquely named call
+if grep -q 'final-segment(' "$TMP/vis.map"; then
+    ok "(25f) the map legend defines prov=final-segment on the map that carries it"
 else
-    no "(18) lookupSeen(): -> [$got], want [find@lib/map.h:1]"
+    no "(25f) the map legend does not define prov=final-segment"
+fi
+if grep -q 'final-segment' "$TMP/vis.compact"; then
+    ok "(25g) the compact legend defines prov=final-segment"
+else
+    no "(25g) the compact legend does not define prov=final-segment"
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

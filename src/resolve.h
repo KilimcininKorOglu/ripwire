@@ -56,6 +56,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>       // fopen/fread — workspace-only config-file evidence (go.mod / tsconfig.json), §3.2
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -2013,6 +2014,26 @@ inline std::string canonicalIdForEmit( const IngestResult& ing, const Symbol& s,
                         : canonicalIdRelTo( ing, s, root );
 }
 
+// The most shared-locality credit (sharedLocality below) the S6-C tie-break may give a candidate for this call: the whole
+// canonical id, except for a NamedVar receiver whose type no receiver rule (2, 2c, 2b) established — an untyped local, a
+// member Rule 2b cannot read, a typed variable whose type defines no such method. That receiver stops at the end of the
+// caller's FILE segment, `path::` (`callerPath` is the path localityKeyOf built the caller's key from), so same-file and
+// same-directory locality still count and the CLASS segment does not (2026-09-16, test/localitycheck.sh arms 5-9). The
+// receiver names SOME object and nothing says it is one of the caller's class, so the caller's own class winning the
+// scope credit is anti-evidence — the tie-break used to grant it on the premise "a typed var already narrowed above",
+// and a receiver no rule typed never narrowed. Measured in isolation with --pin-census (before vs after): rocksdb 121
+// call sites leave a locality decision for a split, a private C++ corpus 71, django 72, rails 145; this repo's src/,
+// vue-core and go/net 0. Read samples: 14 of 14 rocksdb pins and 14 of 16 private ones were wrong, mostly delegation
+// (`rep_->Name()` inside `Wrapper::Name`). Dropping the tie-break outright for these receivers moved no target on any of
+// those seven corpora; it only relabelled the tiers whose one competitor is the caller itself (scored zero there) from
+// `locality` to `unique`, losing their lpin= disclosure — so the file credit stays.
+// STATED FLOOR, not closed here: the ladder's tier 1 still admits same-file candidates alone, so a delegation whose true
+// target lives in another file lands on a same-file namesake before the tie-break runs.
+inline std::size_t receiverLocalityCap( const Reference& r, bool receiverTypeNarrowed, std::string_view callerPath ) noexcept
+{
+    return ( r.recv == RecvKind::NamedVar && !receiverTypeNarrowed ) ? callerPath.size() + 2 : std::numeric_limits<std::size_t>::max();
+}
+
 // Shared-locality score of two canonical ids — counted in characters, but ONLY over WHOLE matching SEGMENTS.
 // A canonical id is `path/to/file.ext::scope::name`, so its real structural boundaries are the `/` (directory)
 // and `::` (scope/name) delimiters. The resolution tie-break wants "nearer" = same file > same class/scope >
@@ -2058,6 +2079,96 @@ inline std::size_t sharedLocality( std::string_view a, std::string_view b ) noex
     return cut;
 }
 
+// Rule 2's qualifier guard (test/narrowcheck.sh arms 17-24): whether a declaration's written QUALIFIED type text
+// (Binding::importedName, "" when unqualified) names namespace `std`. A recorded type is its final segment and class
+// names carry no namespace, so `std::map<K, V> m; m.find( k )` narrowed to any in-repo class named `map`. `std` is
+// reserved to the implementation ([namespace.std]: a program adds nothing to it but specializations), so no in-repo
+// class IS the `std::` type — refusing costs nothing but the rare standard-library source tree's own narrows.
+// EVERY OTHER QUALIFIER STILL NARROWS, measured: refusing them all refused 424 in-repo narrows on rocksdb
+// (`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on src/, every sampled one correct,
+// and fixed no wrong edge outside `std`. STATED FLOOR: a qualifier that is neither `std` nor the class's own
+// namespace (an external or alias-template type whose final segment an in-repo class shares) still narrows on the
+// name — closing it needs the namespace chain in Symbol::scope (arm 24 pins it). The text is ingest_binds.h
+// qualifiedNameText's, which already dropped a leading global `::` (`::std::map` arrives as `std::map`).
+// Readers: the lexical lookup (Narrower::recvVarTypeName) answers "" for such a declaration; buildGraph's flat varType
+// table TOMBSTONES the variable rather than skipping the record, because it cannot tell which of a function's
+// declarations of the name is in scope at a call site (six `std::map` locals narrowed wrong on a private C++ corpus).
+inline bool namesStdType( std::string_view qualified ) noexcept
+{
+    return qualified.starts_with( "std::" );
+}
+
+// One entry of Rule 2's FLAT per-function type table (buildGraph's varType): the variable's type name — "" is a TOMBSTONE,
+// an ambiguous or `std::`-typed variable that never narrows — and whether a declaration wrote that type QUALIFIED, the
+// fact prov="final-segment" discloses (Narrower::finalSegmentTypeAt).
+struct FlatRecvType
+{
+    std::string type;
+    bool        writtenQualified = false;
+};
+
+// fold one Type binding into the flat table: the first type wins, a different later type or a `std::` one tombstones
+inline void recordFlatRecvType( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Binding& b )
+{
+    const std::string_view type = namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName );
+    const auto [ it, inserted ] = table.try_emplace( key );
+    if( inserted )
+    {
+        it->second.type.assign( type );
+        it->second.writtenQualified = !b.importedName.empty();
+    }
+    else if( !it->second.type.empty() && it->second.type != type )
+    {
+        it->second.type.clear();   // conflicting types for one var in one scope → tombstone (never narrow this var)
+    }
+    else
+    {
+        it->second.writtenQualified = it->second.writtenQualified || !b.importedName.empty();
+    }
+}
+
+// what Rule 2 and CHA-lite read for one named receiver at one site: its type name ("" = none) and whether the declaration
+// that decided it wrote the type QUALIFIED — a match on the final segment alone, whose qualifier nothing checked
+struct RecvVarType
+{
+    std::string_view name;
+    bool             writtenQualified = false;
+};
+
+// The provenance value of one resolved edge (Graph::outProv; graph.h provLabel spells it) from the edge sets the resolve loop
+// filled. The precedence is deliberate: scip PINS an edge (precise); binding and import NAME the mechanism that resolved it;
+// split says the resolver could not choose; final-segment says it chose by a qualified written type's last name alone
+// (test/narrowcheck.sh arm 25). prov= is single-valued and a symbol's amb= counts a split arm either way, so nothing is
+// lost by the ordering. 0 = a uniquely resolved name-based edge, which no emitter writes.
+struct EdgeProvenanceSets
+{
+    const HashMap<std::uint64_t, char>& binding;
+    const HashMap<std::uint64_t, char>& import;
+    const HashMap<std::uint64_t, char>& split;
+    const HashMap<std::uint64_t, char>& finalSegment;
+};
+inline std::uint8_t edgeProvenance( bool scipPrecise, const EdgeProvenanceSets& sets, std::uint64_t edgeKey ) noexcept
+{
+    const auto holds = [ edgeKey ]( const HashMap<std::uint64_t, char>& set ) { return set.find( edgeKey ) != set.end(); };
+    if( scipPrecise )
+    {
+        return 1u;
+    }
+    if( holds( sets.binding ) )
+    {
+        return 2u;
+    }
+    if( holds( sets.import ) )
+    {
+        return 4u;
+    }
+    if( holds( sets.split ) )
+    {
+        return 3u;
+    }
+    return holds( sets.finalSegment ) ? 5u : 0u;
+}
+
 // P2-D Rule 2, PARAMETER receivers (2026-09-16, test/narrowcheck.sh arms 7-18): one DECLARATION of a receiver
 // name inside one definition — the scope its VarDecl record covers and the written type its Type/ParamType
 // record carries, joined on the record position the two share (Binding::startByte).
@@ -2092,10 +2203,10 @@ struct ScopedRecvDecls
 // name, a same-named field read after the loop, and a parameter hidden by an untyped loop variable). So for every
 // name with a ParamType record, this lists ALL its declarations in the definition — each VarDecl with its scope
 // span — and attaches each Type/ParamType record to the declaration whose VarDecl shares its record position;
-// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type only when the type
-// was written UNQUALIFIED — a written type is its final segment alone, and a parameter's is often a library container
-// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (measured: three such precise wrong edges on a
-// private C++ corpus, arm 17; the qualified text rides Binding::importedName). A typed record with no VarDecl at its
+// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type unless the type was
+// written in namespace `std` — a written type is its final segment alone, and a parameter's is often a library container
+// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (namesStdType above, arm 17; the qualified
+// text rides Binding::importedName). A typed record with no VarDecl at its
 // position (a shape the shadow capture refuses) types nothing: a lost narrow, never a wrong one. Names with no
 // ParamType record are absent and keep the flat varType answer, byte-identically. Deterministic: ing.bindings is
 // totally ordered, lists are appended in that order, and nothing iterates the map into output.
@@ -2206,7 +2317,7 @@ struct Narrower
     // canonByName), or the empty string as a TOMBSTONE marking an AMBIGUOUS var (bound to ≥2 distinct types in
     // one scope) — looked up but never narrowed. buildGraph builds it from IngestResult::bindings. Empty when
     // there are no bindings, so Rule 2 simply never fires (degrades to the unchanged ladder).
-    const HashMap<std::string, std::string>&             varType;
+    const HashMap<std::string, FlatRecvType>&            varType;
     // Rule 2's LEXICAL table for names with a ParamType declaration (see ScopedRecvDecl above). A name found here is
     // answered here ONLY — varType is not consulted.
     const ScopedRecvDecls&                               scopedDecls;
@@ -2230,7 +2341,7 @@ struct Narrower
     mutable rw::SmallVec<NodeId, 2>       walkUnion;   // Phase 5: the union of a multi-base hit level (super() only) — an honest split
 
     explicit Narrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon,
-                       const HashMap<std::string, std::string>&             vt,
+                       const HashMap<std::string, FlatRecvType>&            vt,
                        const ScopedRecvDecls&                               scoped,
                        const std::vector<std::vector<NodeId>>&              incl,
                        const std::vector<std::uint32_t>&                    symFile ) noexcept
@@ -2661,13 +2772,31 @@ struct Narrower
     // disagree about a receiver. A name with a ParamType declaration in this definition is answered LEXICALLY: the
     // innermost declaration whose scope covers the site decides, and only its own written type counts — a
     // parameter shadowed by an `auto` loop variable, a range-for variable read after its loop, and two declarations
-    // with one scope all answer "" — and so does a QUALIFIED written type (`const std::map<K, V>&`): the type name is
-    // its final segment and class names carry no namespace, so `map` cannot be told apart from an unrelated in-repo
-    // `map` (ingest_binds.h qualifiedNameText). Every other name reads the flat varType table exactly as before
-    // ("" = tombstone).
+    // with one scope all answer "" — and so does a type written in namespace `std` (`const std::map<K, V>&`, see
+    // namesStdType). Every other name reads the flat varType table, where buildGraph tombstones a `std::` type the
+    // same way ("" = tombstone).
     // KNOWN FLOOR, the span model's own: a range-for variable's span is the whole loop statement, so a same-named
     // outer variable used inside the loop's own range expression reads as the loop variable.
     std::string_view recvVarTypeName( const Reference& r ) const
+    {
+        return recvVarType( r ).name;
+    }
+
+    // prov="final-segment" (test/narrowcheck.sh arm 25): whether a named receiver's type at this site — the one Rule 2 narrows
+    // on and CHA-lite prunes by — was written QUALIFIED. Such a narrow matched the type's final segment alone and never
+    // checked its qualifier against the class's namespace (arm 24's wrong edge is exactly that), so the edge must not read
+    // as uniquely resolved. `this`, a field, a bare call or an explicit `A::m()` answer false.
+    bool finalSegmentTypeAt( const Reference& r ) const
+    {
+        if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode )
+        {
+            return false;
+        }
+        const RecvVarType t = recvVarType( r );
+        return t.writtenQualified && !t.name.empty();
+    }
+
+    RecvVarType recvVarType( const Reference& r ) const
     {
         // key built in the reused buffer (identical bytes to `std::to_string( r.fromSymbol ) + "#" + r.recvVar`)
         keyBind.clear();
@@ -2679,13 +2808,13 @@ struct Narrower
             const ScopedRecvDecl* const innermost = innermostCoveringDecl( sit->second, r.startByte );
             if( innermost == nullptr || innermost->typeBinding >= kRecvDeclConflicted )
             {
-                return {};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
+                return RecvVarType{};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
-            return declared.importedName.empty() ? std::string_view( declared.typeName ) : std::string_view{};   // qualified → no narrow
+            return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, !declared.importedName.empty() };
         }
         const auto vit = varType.find( keyBind );
-        return ( vit == varType.end() ) ? std::string_view{} : std::string_view( vit->second );
+        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second.type, vit->second.writtenQualified };
     }
 
     // the innermost declaration whose span covers `siteByte`, or nullptr when none does or two declarations share

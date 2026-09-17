@@ -232,7 +232,13 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 97;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 98;           // bump on any grammar/.scm/extraction change
+                                                      // 98 = 2026-09-16 (std-qualified receivers, test/narrowcheck.sh
+                                                      //    arm 21): a C++ ASSIGNMENT from a constructor (`x = std::
+                                                      //    map<K, V>()`) records the constructor's qualified text in
+                                                      //    importedName, like a declaration's record. Format unchanged;
+                                                      //    a 97 blob holds "" there and would let Rule 2 narrow `x` to
+                                                      //    an in-repo `map` on a warm run: content change, bump required.
                                                       // 97 = 2026-09-16 (parameter receivers, test/narrowcheck.sh arm
                                                       //    17): a declaration's Type/ParamType RawBind records its
                                                       //    written type WHOLE in importedName when the type is
