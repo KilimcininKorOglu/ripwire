@@ -1297,6 +1297,15 @@ struct RegexCompile
     GuardedRegex               regex;                // an empty slot whenever `refusal` is set — never matched
     std::optional<std::string> refusal;              // the named reason, in the words --regex has always printed
     bool                       isScreened = false;   // true ⇒ a structural screen refused it; false ⇒ the engine's parser did
+
+    // F-H9 (CodeRabbit on #277): true only when the ENGINE'S OWN parser refused with error_badbrace — a
+    // syntactically well-formed {min,max} whose bound ORDER is wrong for the digits THIS pattern happened to
+    // hold (e.g. "9" substituted for a backreference where the template needed \1 >= 10). That is a fact about
+    // which digits landed there, never about the pattern's structure, so a caller building a template from a
+    // placeholder (arch.h's TO-template parse-time probe) can treat this refusal as "maybe valid for a
+    // DIFFERENT value" rather than "invalid for every value" — every other refusal (a screen refusal, or any
+    // other engine error) still means the same thing for any value that could ever be substituted.
+    bool                       isIntervalRangeOnly = false;
 };
 
 // Screen, then compile. The screen's verdict is platform-independent, so it decides first; only a pattern it
@@ -1314,7 +1323,12 @@ inline RegexCompile compileGuardedRegex( const std::string& pattern, RegexSyntax
         return out;
     }
     try                                { out.regex.engine.assign( pattern, syntax ); }
-    catch( const std::regex_error& e ) { out.refusal = std::string( e.what() ); return out; }
+    catch( const std::regex_error& e )
+    {
+        out.refusal             = std::string( e.what() );
+        out.isIntervalRangeOnly = e.code() == std::regex_constants::error_badbrace;
+        return out;
+    }
     catch( const std::bad_alloc& )     { out.refusal = std::string( "invalid regular expression: the engine ran out of memory compiling it" ); return out; }
     out.regex.paths.plan     = regexLiteralPlanOf( pattern, syntax );
     out.regex.paths.required = regexRequiredLiteralsOf( pattern, syntax );

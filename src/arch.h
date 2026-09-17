@@ -231,28 +231,27 @@ inline std::string substituteBackrefs( std::string_view toTemplate, const RegexC
 
 // Can this TO template compile for ANY edge? A captured segment arrives as a run of escaped literal ATOMS, so the
 // template's structure — group and class balance, what a quantifier applies to — does not depend on the capture.
-// It is therefore judged at parse time with a placeholder atom in every \1..\9: "x", and "9" for the one position
-// where a capture's content (not just its presence) decides validity — an interval such as a{2,\1}. A template that
-// compiles with neither can compile for no edge, and rejects the rules file with the line named (the D9 rule), where
-// it used to be stored and then skipped on every edge. What still depends on the capture is refused per edge
-// (pathRuleForbids' isRefused). The screen runs inside compileGuardedRegex, so its refusal wins as before.
+// It is therefore judged at parse time with a single placeholder atom, "9", in every \1..\9: valid as ordinary
+// literal text ANYWHERE a capture can sit, and also a valid interval digit at the one position where a capture's
+// content (not just its presence) decides validity — an interval such as a{2,\1}. "9" specifically, not the
+// older two-placeholder "x"-then-"9": "x" is not a digit, so it FAILS every numeric-interval position on its own
+// non-numeric-ness (error_brace) whether or not the template is otherwise sound — a{10,\1} rejected BOTH ({10,x}
+// non-numeric, {10,9} since 9<10) at parse time even though \1="20" is a perfectly valid edge (CodeRabbit #277).
+// So: a template that fails to compile with "9" is refused for every edge UNLESS the ONLY reason is
+// error_badbrace — an out-of-order {min,max}, a fact about the digits "9" happened to supply, not about the
+// template — in which case it is accepted here and pathRuleMatches/pathRuleForbids judge each edge's REAL
+// capture, refusing by name (isRefused) only the edges whose own digits are invalid, never every edge for an
+// order only one arbitrary placeholder had wrong. Any OTHER failure (unbalanced groups, a bad escape — nothing a
+// real capture's digits could fix either) still condemns the template for every edge, exactly as before.
 inline std::optional<std::string> toTemplateRefusal( std::string_view toTemplate )
 {
-    std::optional<std::string> firstRefusal;
-    for( const char* const placeholder : { "x", "9" } )
+    const std::string substituted = substituteBackrefsWith( toTemplate, []( std::size_t ) { return std::string( "9" ); } );
+    RegexCompile       compiled   = compileGuardedRegex( substituted, kRegexEcmaScript );
+    if( !compiled.refusal || compiled.isIntervalRangeOnly )
     {
-        RegexCompile compiled = compileGuardedRegex( substituteBackrefsWith( toTemplate, [ & ]( std::size_t ) { return std::string( placeholder ); } ),
-                                                     kRegexEcmaScript );
-        if( !compiled.refusal )
-        {
-            return std::nullopt;
-        }
-        if( !firstRefusal )
-        {
-            firstRefusal = std::move( compiled.refusal );
-        }
+        return std::nullopt;   // compiles outright, or an interval order a DIFFERENT capture's digits could satisfy — defer to the edge
     }
-    return firstRefusal;
+    return std::move( compiled.refusal );
 }
 
 // Does the regex path-rule set FORBID the edge src→dst? deny path-rule matches the (src,dst) pair AND no

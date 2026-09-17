@@ -15,6 +15,27 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — an `--arch` TO-template interval was rejected at parse time even when a real capture made it valid
+
+`deny path FROM -> TO` validates a TO template like `a{10,\1}` at parse time by compiling it once with a
+placeholder in `\1`'s place — and used to try two placeholders, `"x"` then `"9"`, rejecting the whole rules
+file (D9) only when BOTH failed. But `"x"` is not a digit, so it fails ANY numeric-interval position on that
+alone (`{10,x}`), whatever the template; `a{10,\1}` failed both placeholders (`{10,x}` non-numeric, `{10,9}`
+since 9<10) and was refused outright — even though `\1="20"` makes `{10,20}` a perfectly valid interval
+(CodeRabbit review on #277). The probe is now a single `"9"` (valid everywhere a placeholder is: ordinary
+literal text, or a genuine interval digit), and a refusal is accepted at parse time only when it is NOT
+`std::regex_constants::error_badbrace` — an out-of-order `{min,max}` is a fact about which digits a specific
+capture supplies, not about the template's structure, so it defers to the edge: `pathRuleMatches` already
+compiles the REAL substitution per edge and refuses by name (`isRefused`) only the edges whose own capture is
+actually invalid. `RegexCompile` (`src/regexguard.h`) gained `isIntervalRangeOnly`, set once at the single
+`std::regex_error` catch site `compileGuardedRegex` already had — no new file spells `std::regex`
+(`test/regexguardcheck.sh` arm (c), which caught the first version of this fix routing the check through a
+second parse in arch.h itself).
+
+Gates: `test/archcheck.sh` (new F-H9 section) — a valid capture applies (a real verdict, not a parse-time
+refusal), an invalid capture refuses that edge by name, and a template broken independent of any capture
+(an unmatched `(`) still refuses at parse time, unchanged.
+
 ### Fixed — a `#match?` predicate or an `--arch` path-rule that never reached the engine still filtered nothing
 
 `#match?`/`#not-match?` (a `--match`/`--lint-rules` predicate) and `--arch` path-rules matched a captured node's

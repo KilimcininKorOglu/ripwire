@@ -278,6 +278,60 @@ grep -qE 'edge\(s\) met an undecided' "$TMP/skip_then_decide.err" \
     && ok "F-B4(2): stderr discloses that an undecided evaluation occurred" \
     || no "F-B4(2): the undecided evaluation was not disclosed: $( head -c 300 "$TMP/skip_then_decide.err" )"
 
+# ══ F-H9 (CodeRabbit on #277) — a TO-template interval's validity is judged PER EDGE, not guessed at parse ═══
+# `a{10,\1}` used to be refused at PARSE TIME (rejecting the whole rules file) even though \1="20" makes it a
+# perfectly valid interval — the parse-time probe tried \1="x" (non-numeric: {10,x} always fails, whatever the
+# template) and \1="9" (9<10: {10,9} fails on ORDER, a fact about "9" specifically). Two edges, two capture
+# values, prove the fix: v20 is a VALID instance (applies — a real verdict, not a refusal); v5 is INVALID for
+# its own capture (refuses THAT edge by name).
+echo
+echo "--- F-H9: TO-template interval validity is decided per edge, with the real capture ---"
+H9RULES="$TMP/h9_interval.txt"
+cat >"$H9RULES" <<'EOF'
+deny path test/v(\d+)/main\.cpp -> render/shader\.h{10,\1}
+EOF
+
+H9V20="$TMP/h9_v20"; mkdir -p "$H9V20/test/v20" "$H9V20/render"
+: > "$H9V20/render/shader.h"
+printf '#include "../../render/shader.h"\n' > "$H9V20/test/v20/main.cpp"
+( cd "$H9V20" && "$BIN" . --arch="$H9RULES" --no-cache >"$TMP/h9_v20.out" 2>"$TMP/h9_v20.err" )
+rc_h9v20=$?
+[ "$rc_h9v20" -eq 0 ] \
+    && ok "F-H9: a valid instance (\\1=\"20\": {10,20}) applies — a real verdict, not a parse-time refusal (exit 0)" \
+    || no "F-H9: \\1=\"20\" should give a real verdict, got exit $rc_h9v20: $( head -c 300 "$TMP/h9_v20.err" )"
+grep -q 'pathRules="1"' "$TMP/h9_v20.out" \
+    && ok "F-H9: the rules file LOADED (pathRules=\"1\") — was rejected outright pre-fix" \
+    || no "F-H9: the rules file did not load: $( head -c 200 "$TMP/h9_v20.out" )$( head -c 200 "$TMP/h9_v20.err" )"
+
+H9V5="$TMP/h9_v5"; mkdir -p "$H9V5/test/v5" "$H9V5/render"
+: > "$H9V5/render/shader.h"
+printf '#include "../../render/shader.h"\n' > "$H9V5/test/v5/main.cpp"
+( cd "$H9V5" && "$BIN" . --arch="$H9RULES" --no-cache >"$TMP/h9_v5.out" 2>"$TMP/h9_v5.err" )
+rc_h9v5=$?
+[ "$rc_h9v5" -eq 1 ] \
+    && ok "F-H9: an invalid instance (\\1=\"5\": {10,5}) refuses THAT edge (exit 1)" \
+    || no "F-H9: \\1=\"5\" should refuse the edge, got exit $rc_h9v5: $( head -c 300 "$TMP/h9_v5.err" )"
+grep -q 'test/v5/main.cpp -> render/shader.h' "$TMP/h9_v5.err" \
+    && ok "F-H9: the refusal names the specific edge, not just the template" \
+    || no "F-H9: the refusal does not name the edge: $( head -c 300 "$TMP/h9_v5.err" )"
+[ ! -s "$TMP/h9_v5.out" ] \
+    && ok "F-H9: no XML emitted on the per-edge refusal" \
+    || no "F-H9: XML emitted alongside the per-edge refusal"
+
+# control: a template invalid for EVERY capture (an unmatched '(' has nothing to do with \1 at all) still
+# refuses the whole rules file at parse time — the fix must not have over-relaxed the D9 rule generally.
+cat >"$TMP/h9_structural.txt" <<'EOF'
+deny path test/(\w+)\.cpp -> render/sha(der\.h{10,\1}
+EOF
+"$BIN" . --arch="$TMP/h9_structural.txt" --no-cache >"$TMP/h9_structural.out" 2>"$TMP/h9_structural.err"
+rc_h9struct=$?
+[ "$rc_h9struct" -eq 1 ] \
+    && ok "F-H9 control: a template broken independent of any capture (unmatched '(') still refuses at parse time" \
+    || no "F-H9 control: a genuinely-always-invalid template loaded (exit $rc_h9struct) — the D9 rule over-relaxed"
+[ ! -s "$TMP/h9_structural.out" ] \
+    && ok "F-H9 control: no XML emitted on the parse-time refusal" \
+    || no "F-H9 control: XML emitted alongside the parse-time refusal"
+
 # ── summary ───────────────────────────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then
