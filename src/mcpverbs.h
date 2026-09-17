@@ -3357,24 +3357,24 @@ inline const char* mcpBaselineMarker( const rw::quality::BaselineSelection& sele
 //   * The producer rule (quality.h BaselineSource): a foreign pin is a real floor for another build, left on disk.
 inline std::string mcpNoBaselineMessage( const rw::quality::BaselineSelection& baseSel )
 {
-    const std::string file( rw::quality::kBaselineFile );
+    const std::string sidecarName = rw::quality::kBaselineFile;
     if( baseSel.sidecarSymlinkRefused )
     {
-        return file + " is a symlink, which is refused on read exactly as on write (it was not opened), and there is no git HEAD to auto-compare against — replace the link with a regular copy of its target, or remove it and run the quality_baseline verb";
+        return sidecarName + " is a symlink, which is refused on read exactly as on write (it was not opened), and there is no git HEAD to auto-compare against — replace the link with a regular copy of its target, or remove it and run the quality_baseline verb";
     }
     if( baseSel.sidecarUnreadable )
     {
-        return file + " exists but is not a readable baseline (unrecognizable, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc records) and there is no git HEAD to auto-compare against — re-pin it with the quality_baseline verb BEFORE the change you want to measure";
+        return sidecarName + " exists but is not a readable baseline (unrecognizable, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc records) and there is no git HEAD to auto-compare against — re-pin it with the quality_baseline verb BEFORE the change you want to measure";
     }
     if( baseSel.isSidecarForeign() )
     {
-        return file + " was pinned by another ripwire build (its producer stamp does not name this server's sources, and a dead set depends on how calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run quality_delta with the build that pinned it, or re-pin with the quality_baseline verb BEFORE the change you want to measure";
+        return sidecarName + " was pinned by another ripwire build (its producer stamp does not name this server's sources, and a dead set depends on how calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run quality_delta with the build that pinned it, or re-pin with the quality_baseline verb BEFORE the change you want to measure";
     }
     if( baseSel.isSidecarStale() )
     {
-        return file + " is STALE (pinned at a different HEAD) and there is no current HEAD tree to fall back to — delete it or re-run the quality_baseline verb";
+        return sidecarName + " is STALE (pinned at a different HEAD) and there is no current HEAD tree to fall back to — delete it or re-run the quality_baseline verb";
     }
-    return "no " + file + " and no git HEAD to auto-compare against — run the quality_baseline verb BEFORE the change you want to measure";
+    return "no " + sidecarName + " and no git HEAD to auto-compare against — run the quality_baseline verb BEFORE the change you want to measure";
 }
 
 inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
