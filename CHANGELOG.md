@@ -1396,7 +1396,9 @@ integration/train-3 assigns 104 after #276's 103; mirrored in `kIngestParserVerM
 `test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
 single-file root. `taskroute.h::kCodeExtensions` (the FILE:LINE token recognizer behind `--help-task`'s
 at-line routing) was a seventh table listing `.hpp`/`.hh` without `.hxx` — added, with a `test/taskroutecheck.sh`
-arm routing a `.hxx:LINE` token to `--slice=@FILE:LINE`.
+arm routing a `.hxx:LINE` token to `--slice=@FILE:LINE`. Two of the six had just dropped their `.hxx` rows as unreachable
+(`langOfPath`'s and `includeLangOf`'s, in the five-extensions entry above), and the compile-time check between the crawl's
+table and `langOfPath`'s refuses a crawl row without its classifier row, so both rows are restored with it.
 
 ### Fixed — `--slice --since` no longer tells the "new code" story about a blob that was never parseable source
 

@@ -129,8 +129,9 @@ inline bool langFromToken( std::string_view tok, Lang& out ) noexcept
 // under their language, and langOfPath called them Unknown. So a `language: cpp` rule silently dropped every match in a
 // CUDA or Metal file, `--deps`/`--arch` left them out of the dependency denominator, --nonlocal-state left `.pyi` stubs
 // and Metal/CUDA state unanalysed while never naming them unanalysed, and a `.phtml` corpus was not disclosed as PHP.
-// atoms.h carried a private workaround for the first three. The check also found `.hxx` HERE and not in the crawl: the
-// crawl admits no `.hxx` file, so no indexed path could ever reach that row, and it is gone.
+// atoms.h carried a private workaround for the first three. The check also found `.hxx` HERE and not in the crawl, whose
+// then-missing row made this one unreachable, so it was dropped; the crawl now admits `.hxx` (A4, lane/small-fixes-0917),
+// and the same check requires the row back.
 //
 // A header (.h) is Cpp here, the same conservative choice kLangTable makes (`.h` ownership is inherently ambiguous; see
 // model.h's Lang-enum comment). Documented degrade: an ObjC .h rule may not match, so prefer .m/.mm fixtures for ObjC.
@@ -142,7 +143,7 @@ struct LintExtRow
 };
 inline constexpr LintExtRow kLintExtRows[] = {
     { ".cpp", Lang::Cpp }, { ".cc", Lang::Cpp }, { ".cxx", Lang::Cpp }, { ".metal", Lang::Cpp }, { ".cu", Lang::Cpp }, { ".cuh", Lang::Cpp },
-    { ".h", Lang::Cpp }, { ".hpp", Lang::Cpp }, { ".hh", Lang::Cpp }, { ".c", Lang::C },
+    { ".h", Lang::Cpp }, { ".hpp", Lang::Cpp }, { ".hh", Lang::Cpp }, { ".hxx", Lang::Cpp }, { ".c", Lang::C },
     { ".py", Lang::Python }, { ".pyi", Lang::Python },
     { ".go", Lang::Go },
     { ".rs", Lang::Rust },
