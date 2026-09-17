@@ -34,6 +34,17 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 5 (integration/train-5 on main a6868f75: #282 ad7a9d56, lane/rule2b-assignment-veto 626810b3,
+#   lane/field-base-member 6b8f539e): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its
+#   mirror in merge order over main's 112: #282 = 113, the veto lane = 114 (its ingest fix records a reference-returning
+#   definition's parameters); field-base-member is resolve-side and changes no extraction. kCacheVersion is #282's 24
+#   (the ref record gained viaArrow) and its mirror moves with it; kQSnapCacheScheme stays 14 (no member changes a
+#   manifest function). The member entries below are renumbered to the train's numbers.
+# 2026-09-17, REFERENCE-RETURNING DEFINITIONS (test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am and q8,
+#   lane/rule2b-assignment-veto): kParserVer and its mirror -> 114 on integration/train-5 after #282's 113 (the lane
+#   declared 112 over its own base) — a C++/ObjC definition returning `T&`/`T&&` records its parameters, and an
+#   attributed declarator its VarDecl, so Rule 2b's declaration-only veto has the records it reads. The extracted bind
+#   SET changes; kCacheVersion stays 24, kQSnapCacheScheme stays 14.
 # 2026-09-17, SMART-POINTER MEMBERS (test/fieldnarrowcheck.sh arm p, PR #282): kParserVer and its mirror -> 113 and
 #   kCacheVersion and its mirror -> 24 on integration/train-5 (the PR declared 103 -> 104 and 22 -> 23 over its base; main
 #   had spent 112 and 23). A member written `std::unique_ptr<T>` / `std::shared_ptr<T>` records T, reached through `->`
