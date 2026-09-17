@@ -842,7 +842,9 @@ fi
 #        and stderr says the map was withheld — against an undegraded control that prints the map at exit 0.
 #    (g) --from-trace, whose <trace> map and signature/body section are rendered only into their buffers: the same
 #        refusal as (f). It used to print the bundle without either block at exit 0, which a Release build never told.
-#    These arms cover those four surfaces, not every MemoryStream holder; #14g is the fence over the rest.
+#    (h) the MCP `uses` verb answers -32603 under the fault, never a success with empty text;
+#    (i) the --for lens (XML and --json) reports each redacted secret once when a degraded pre-render renders again.
+#    These arms cover those surfaces, not every MemoryStream holder; #14g is the fence over the rest.
 mask_est(){ sed -E 's/est_tokens(="?|":)[0-9]+/est_tokens\1N/g' "$1"; }
 INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf.out" 2>"$TMP/mf.err"
 rc_mf=$?
@@ -899,6 +901,41 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
     else
         no "#14f(g) --from-trace under the finish fault: control rc=$rc_mftr_ctl ($( bytes_of "$TMP/mftr_ctl.out" ) B), faulted rc=$rc_mftr with $( bytes_of "$TMP/mftr.out" ) B on stdout — want 0 with a <trace> block, then 1/empty with the withheld line (a bundle without its blocks is the defect)"
     fi
+    # (h) the MCP `uses` verb, whose answer buffer is the answer: under the fault it answers the internal error, never a
+    #     SUCCESS result with empty text (an empty answer reads as "no use sites").
+    python3 - "$BIN" "$ROOT/test/fixture" >"$TMP/mfuses.txt" 2>&1 <<'PY'
+import json, os, subprocess, sys
+b, root = sys.argv[1], sys.argv[2]
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "g", "version": "0" } } },
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "uses", "arguments": { "path": root, "symbol": "distance" } } } ]
+inp = ''.join( json.dumps( m ) + '\n' for m in msgs )
+for label, extra in ( ( 'ctl', {} ), ( 'fault', { 'INFRA_FAULT_MEMSTREAM_FINISH': '1' } ) ):
+    out = subprocess.run( [ b, '--mcp' ], input=inp, capture_output=True, text=True, env=dict( os.environ, **extra ), timeout=120 ).stdout
+    reply = next( ( json.loads( l ) for l in out.splitlines() if l.strip().startswith( '{' ) and json.loads( l ).get( 'id' ) == 2 ), {} )
+    text = ( ( reply.get( 'result' ) or {} ).get( 'content' ) or [ {} ] )[ 0 ].get( 'text', '' )
+    print( f"{label} error={( reply.get( 'error' ) or {} ).get( 'code', 'none' )} result_text_bytes={len( text )} uses_element={int( '<uses ' in text )}" )
+PY
+    if grep -q '^ctl error=none result_text_bytes=[1-9][0-9]* uses_element=1$' "$TMP/mfuses.txt" && grep -q '^fault error=-32603 ' "$TMP/mfuses.txt"; then
+        ok "#14f(h) MCP uses: the control answers a <uses> element; under the fault it answers -32603, not an empty success"
+    else
+        no "#14f(h) MCP uses under the finish fault: $( tr '\n' ';' < "$TMP/mfuses.txt" ) — want the control's <uses> answer, then error -32603 (an empty success reads as no use sites)"
+    fi
+    # (i) one redaction tally per secret: a degraded pre-render renders its rows again, and the stderr summary must
+    #     count what was emitted once. XML --for and --json, each against its own undegraded control.
+    mkdir -p "$TMP/mfred"
+    printf 'def probeVaultHelper( token = "%s" ):\n    return token\n\ndef probeVaultLoader( key = "%s", label = "rotate-quarterly" ):\n    return probeVaultHelper( key )\n' \
+        "ghp_""ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" "AKIA""IOSFODNN7EXAMPLE" > "$TMP/mfred/app.py"
+    for mfredMode in xml json; do
+        mfredFlag=""; [ "$mfredMode" = json ] && mfredFlag="--json"
+        "$BIN" "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
+        INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_f.err"
+        mfredCtl="$( grep -a '^ripwire: redacted ' "$TMP/mfred_ctl.err" )"; mfredF="$( grep -a '^ripwire: redacted ' "$TMP/mfred_f.err" )"
+        if [ -n "$mfredCtl" ] && [ "$mfredCtl" = "$mfredF" ]; then
+            ok "#14f(i) --for ($mfredMode): the redaction summary under the fault equals the control's ($mfredCtl)"
+        else
+            no "#14f(i) --for ($mfredMode): control says [${mfredCtl:-no summary}], faulted run says [${mfredF:-no summary}] — a re-rendered block counted its secrets twice"
+        fi
+    done
 elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
     skip "#14f memstream finish degrade arms — this NDEBUG binary has neither DEGRADED_PATH_ALERT nor the INFRA_FAULT_MEMSTREAM_FINISH switch (build type \"$BUILD_FLAVOUR\"); the PLAIN-flavour CI leg proves them"
 else

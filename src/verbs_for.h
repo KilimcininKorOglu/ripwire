@@ -5,6 +5,7 @@
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
+#include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 // verbs_for.h — the QUERY family (§A2's contiguous dispatch block), moved VERBATIM from main.cpp in
@@ -1368,6 +1369,8 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     {
         rw::MemoryStream sigsStream;
         bool             isSigsBuffered = false;
+        // the buffered render redacts into the run's tally; a fallback that renders the rows again must not count them twice
+        const std::optional<rw::RedactCounts> redactBeforeSigs = in.redact != nullptr ? std::optional<rw::RedactCounts>( *in.redact ) : std::nullopt;
         if( std::FILE* const jm = rw::openChargeStream( sigsStream ) )
         {
             packSigs( jm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds );
@@ -1383,6 +1386,10 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
             // ENOMEM-class, at the open or inside the buffer: emit unbudgeted rather than nothing, and report no
             // est_tokens/capped at all — a number this path cannot compute must never be fabricated.
             DEGRADED_PATH_ALERT( "main: open_memstream failed (or its buffer lost a write) for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
+            if( redactBeforeSigs )
+            {
+                *in.redact = *redactBeforeSigs;   // the rows below are the ones the summary counts
+            }
             std::fputs( header.c_str(), out );
             std::fwrite( kJsonBundleSigsKey.data(), 1, kJsonBundleSigsKey.size(), out );   // the posture disclosure survives the degrade (a plain constant — nothing here can fail to compute it)
             std::fwrite( surfaceCountsStanza.data(), 1, surfaceCountsStanza.size(), out );
@@ -2456,13 +2463,18 @@ std::optional<int> runForLens( const MainDispatch& d )
         // ONE pre-render for the four blocks below: into a charge buffer, and into `into` only when the buffer finished
         // whole. false means the open failed or a write was lost inside the buffer (rw::MemoryStream::finish), and the
         // direct-emission path further down renders that block straight to stdout, whole — the budget just cannot see it.
+        // A false return also restores the run's redaction tally to what it was before the render: the direct path
+        // renders the block again, and a secret it redacts must be counted once, not once per rendering.
         const auto preRender = [ & ]( const auto& render, std::string& into, const char* degradeMsg ) -> bool
         {
+            const std::optional<RedactCounts> redactBefore = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
+            const auto restoreRedact = [ & ]() noexcept { if( redactBefore ) { *redactPtr = *redactBefore; } };
             rw::MemoryStream stream;
             std::FILE* const buffer = rw::openChargeStream( stream );
             if( buffer == nullptr )
             {
                 DEGRADED_PATH_ALERT( degradeMsg );
+                restoreRedact();
                 return false;
             }
             render( buffer );
@@ -2470,6 +2482,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             if( !block.isWhole )
             {
                 DEGRADED_PATH_ALERT( degradeMsg );
+                restoreRedact();
                 return false;
             }
             into.assign( block.bytes );

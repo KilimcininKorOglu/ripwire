@@ -73,7 +73,9 @@ flag, closes, and reports by value, and it is `[[nodiscard]]`. The destructor cl
 buffer on every path, so no site frees or closes anything by hand. A buffer that did not finish whole takes the path a
 failed open already took. The map and the JSON map are rendered again, straight to the output, with the modelled
 `est_tokens`: the children became one renderer both paths call. A charged section streams uncharged, and a probe answers
-"unmeasured". The `--for` blocks are emitted directly, and the MCP answers answer as they do when the open fails. Two surfaces have
+"unmeasured". The `--for` blocks are emitted directly, and a secret redacted in the failed buffer is not counted again when the block
+re-renders. The MCP answers answer as they do when the open fails, except `uses`, which answers `-32603` instead of an
+empty success. Two surfaces have
 no second path, because the buffer holds the answer itself, and both refuse in every build instead of printing short.
 The `--token-budget` map prints nothing, says `write error — the --token-budget buffer lost bytes` on stderr, and exits
 1. `--from-trace` and `--run-trace` do the same when the `<trace>` map, the test hop or the signature/body section loses
@@ -84,7 +86,8 @@ out of a bundle printed at exit 0, which no Release build disclosed.
 which makes every finish really close its stream and then report failure. It asserts four surfaces, not every site. The
 `--pack-signatures` map and the `--json` map come out byte-identical to the undegraded run outside `est_tokens`,
 well-formed, at exit 0. The `--token-budget` run and a `--from-trace` run each print 0 bytes and exit 1 where their
-controls print the answer. **#14g** reads `src/` and refuses an `open_memstream`, a direct call of the charge opener, or
+controls print the answer. Under the same switch, MCP `uses` answers `-32603`, and the `--for` redaction summary
+matches its control in XML and `--json`. **#14g** reads `src/` and refuses an `open_memstream`, a direct call of the charge opener, or
 an `fflush`/`fclose` of a memory stream anywhere outside the type. On `f8e6087c` it reports 46 such lines. Its positive
 control puts the two lines of one site back by hand, once per spelling of the opener (bare, `::`, `os::`, `rw::os::`),
 and must report exactly those two each time.
