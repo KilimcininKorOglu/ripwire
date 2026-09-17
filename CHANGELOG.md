@@ -41,9 +41,10 @@ carrying its own second label. (An earlier draft of this change shared one issue
 with an uncoordinated close each; that let a green TSan night close an issue the full matrix had opened
 while the matrix was still red, and the reverse — caught before merge, not shipped.) Top-level permissions
 are `contents: read`; only the two report jobs widen, and only to `issues: write` on themselves.
-`test/g1configcheck.sh` gates the split: ten rows, each proven red on its own mutated copy, five of them by
-extracting the `plan` job's decide script and actually executing it under synthetic event/label/ref
-combinations rather than guessing at the bash from a regex.
+`test/g1configcheck.sh` gates the split with ten new `ciRows` for `ci.yml` and one new `labelscope` row in
+`nightlyRows` for `nightly.yml`, each proven red on its own mutated copy. Five of the ten `ciRows` extract the
+`plan` job's decide script and execute it under synthetic event/label/ref combinations rather than guessing
+at the bash from a regex.
 
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
