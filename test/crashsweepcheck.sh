@@ -351,9 +351,10 @@ S1ALLOW
 # instance of B1's exact shape until #250 made its fclose unconditional, and a stale row now fails the gate.
 cat > "$TMP/s2_shortcircuit_allow.tsv" <<'S2ALLOW'
 S2ALLOW
-# Thread bodies S3 reports as bare, with why each is accepted.
+# Thread bodies S3 reports as bare, with why each is accepted. Empty: the one row this held (search.h grepCollect,
+# accepted because every throwing statement sat inside a catch(...) that recorded the degrade) excused nothing once
+# lane/regex-long-lines moved the scan threads onto src/infra/stackthreads.h, and a stale row fails the gate.
 cat > "$TMP/s3_allow.tsv" <<'S3ALLOW'
-search.h	grepCollect	every statement that can throw sits inside a catch(...) that records the degrade
 S3ALLOW
 
 judge_static(){   # $1 = scan output dir, $2 = label; echoes one line per violation, returns 0
