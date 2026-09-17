@@ -379,12 +379,22 @@ else
     no "cited query: pageRankDouble r=${PRRANK:-absent} vs best fixture/deck row r=${FIXRANK:-none} — §P4 repro is back"
 fi
 
-# 6b — mention anchor beats the tier penalty: a fixture file literally NAMED in the task still surfaces
-#      in the top 5 (de-prioritized is not unanchorable).
-"$BIN" . --for="fix the virtual dispatch in test/chafix/cha.cpp" --format=candidates --top-k=5 >"$CAND" 2>/dev/null
-tr '<' '\n' <"$CAND" | grep -E '^cand ' | grep -q 'p="\(\./\)\?test/chafix/cha\.cpp"' \
-    && ok "mention anchor survives the penalty: task naming test/chafix/cha.cpp surfaces it in the top 5" \
-    || no "mention anchor lost to the tier penalty: test/chafix/cha.cpp absent from its own task's top 5"
+# 6b — mention anchor beats the tier penalty: a fixture file literally NAMED in the task keeps the anchor's PUBLISHED
+#      promise — its best row scores within 5% of the top score (--help, the `for` header: a score promise, not a rank
+#      one; mentioncheck pins the rank behaviour on frozen fixtures). De-prioritized is still not unanchorable: with the
+#      anchor off (RIPWIRE_NO_MENTION=1) the fixture falls out of the top 50 and this arm is red. It asserted a top-5 RANK
+#      until 2026-09-17, read off the LIVE repo, where unanchored near-ties move with any lane's text: main passed by a 0.7%
+#      score margin and a resolver lane's "virtual"/"dispatch" comments flipped it by 0.013 with no ranking change.
+"$BIN" . --for="fix the virtual dispatch in test/chafix/cha.cpp" --format=candidates --top-k=50 >"$CAND" 2>/dev/null
+TOPSCORE="$( tr '<' '\n' <"$CAND" | grep -E '^cand r="1" ' | sed -n 's/.* s="\([0-9.]*\)".*/\1/p' )"
+FIXSCORE="$( tr '<' '\n' <"$CAND" | grep -E '^cand ' | grep 'p="\(\./\)\?test/chafix/cha\.cpp"' | head -1 | sed -n 's/.* s="\([0-9.]*\)".*/\1/p' )"
+ANCHORED="$( tr '<' '\n' <"$CAND" | grep -E '^candidates ' | sed -n 's/.* anchored="\([0-9]*\)".*/\1/p' )"
+if [ -n "$TOPSCORE" ] && [ -n "$FIXSCORE" ] && [ "${ANCHORED:-0}" -gt 0 ] \
+    && awk -v f="$FIXSCORE" -v t="$TOPSCORE" 'BEGIN { exit !( f >= 0.95 * t - 0.001 ) }'; then
+    ok "mention anchor survives the penalty: test/chafix/cha.cpp scores $FIXSCORE >= 0.95 x top $TOPSCORE (anchored=$ANCHORED)"
+else
+    no "mention anchor lost to the tier penalty: test/chafix/cha.cpp score=${FIXSCORE:-absent from the top 50} vs 0.95 x top ${TOPSCORE:-none} (anchored=${ANCHORED:-none})"
+fi
 
 # 6c — name-exact route beats the tier penalty: a fixture symbol queried by its EXACT name is still rank 1
 #      (its competitors score 0 — shrinking the only hit must not bury it).
