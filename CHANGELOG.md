@@ -15,6 +15,37 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
+
+CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
+tested, and a full run per landing-queue lane found almost nothing (measured 2026-09-14). `.github/workflows/ci.yml`
+now computes one `full` output (from the event name, the pull request's labels and the ref) in a new `plan` job,
+and every other job reads it instead of repeating the same condition:
+
+- **Light** (the `style` job plus the single `ubuntu-24.04`/`Release`/`clang` release leg, all 4 shards — it
+  already runs the determinism and G4 XML checks): a push to `main`, or a pull request carrying the
+  `train-member` label. Labelling is maintainer-only by construction — a fork pull request cannot label its own.
+  `pull_request` now also triggers on `labeled`/`unlabeled` (on top of the GitHub default types) so toggling the
+  label re-evaluates the same pull request without a new push.
+- **Full** (all 31 jobs): every other pull request, `workflow_dispatch` — run this against the exact commit
+  before any release tag, not an earlier green nightly — and a new nightly `schedule` at 05:41 UTC (off `:00`,
+  distinct from `nightly.yml`'s own 07:17 TSan run). `release`'s matrix is `plan`'s own computed output rather
+  than a second hand-typed list, because a job-level `if:` cannot see the matrix context to prune legs directly.
+
+A failure on the scheduled full-matrix run opens or updates `ci.yml`'s own tracking issue, titled "Nightly
+checks failing on main (full matrix)" — deliberately separate from `nightly.yml`'s TSan one. Every tracking
+issue carries the shared `nightly-failure` label (so "every nightly-scale failure" is one query) plus a
+workflow-specific second label — `nightly-full-matrix` here, `nightly-tsan` in `nightly.yml` — and every
+open/comment/close filters on both together, so a green run in one workflow can only ever touch the issue
+carrying its own second label. (An earlier draft of this change shared one issue between the two workflows
+with an uncoordinated close each; that let a green TSan night close an issue the full matrix had opened
+while the matrix was still red, and the reverse — caught before merge, not shipped.) Top-level permissions
+are `contents: read`; only the two report jobs widen, and only to `issues: write` on themselves.
+`test/g1configcheck.sh` gates the split with ten new `ciRows` for `ci.yml` and one new `labelscope` row in
+`nightlyRows` for `nightly.yml`, each proven red on its own mutated copy. Five of the ten `ciRows` extract the
+`plan` job's decide script and execute it under synthetic event/label/ref combinations rather than guessing
+at the bash from a regex.
+
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
 Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
