@@ -271,6 +271,9 @@ chmod 755 "$HOSTILE/zz-sealed"
 grep -q "skipping '.*zz-looped-skillmd/SKILL.md'" "$TMP/hostile.err" \
     && ok "the looped SKILL.md is named on stderr as skipped" \
     || no "the looped SKILL.md was skipped silently: $( head -c 300 "$TMP/hostile.err" )"
+grep -q "skipping '.*zz-loop-a'" "$TMP/hostile.err" && grep -q "skipping '.*zz-loop-b'" "$TMP/hostile.err" \
+    && ok "both ends of the directory link loop are named on stderr as skipped" \
+    || no "the directory link loop was skipped silently: $( head -c 300 "$TMP/hostile.err" )"
 
 [ $fail -eq 0 ] && echo "skillevalcheck: ALL PASS" || echo "skillevalcheck: FAILURES"
 exit $fail

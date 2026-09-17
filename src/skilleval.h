@@ -180,10 +180,23 @@ inline SkillSet discoverSkills( const std::string& root )
     // directory_entry::is_directory(), filesystem::exists() — turned a symlink loop at SKILL.md, a mode-000 skill
     // directory or a directory link loop into an uncaught filesystem_error: SIGABRT, exit 134, on a directory the
     // caller names. Such an entry is not a readable skill: it is skipped, and stderr names it and why.
-    for( std::filesystem::directory_iterator it( root, ec ), end; !ec && it != end; it.increment( ec ) )
+    std::filesystem::directory_iterator it( root, ec ), end;
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire --eval-skills: cannot list '{}': {} — no skills were read\n", root, ec.message() );
+        return set;
+    }
+    for( ; !ec && it != end; it.increment( ec ) )
     {
         std::error_code entryEc;
-        if( !it->is_directory( entryEc ) )
+        const bool      isDirectory = it->is_directory( entryEc );
+        if( entryEc && entryEc != std::errc::no_such_file_or_directory )
+        {
+            // a directory symlink loop (ELOOP) or an entry that cannot be stat'd: not a readable skill, and said so
+            rw::emitTo( stderr, "ripwire --eval-skills: skipping '{}': {}\n", it->path().string(), entryEc.message() );
+            continue;
+        }
+        if( !isDirectory )
         {
             continue;
         }
