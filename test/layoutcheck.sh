@@ -286,5 +286,25 @@ grep -q '<f n="a" ty="char" x="264" sz="264"' "$TMP/h_wide" && grep -q 'modeled=
     && ok "66 sibling parenthesised terms (one nesting level) still size: a = 264 B, modeled=\"1\"" \
     || no "66 sibling parenthesised terms no longer size — the paren bound counts terms, not depth: $( grep -o '<def .*</def>' "$TMP/h_wide" | head -c 240 )"
 
+# ── 13) a data member whose `(` sits in its extent or its initializer is a FIELD, not a member function ─────────────
+# The member-function test took the first `(` anywhere in the statement, so `char a[(4)];`, `int x = (3);` and
+# `int x{ (3) };` were skipped as functions: the field vanished while the struct still said modeled="1" and a size
+# short by the field's bytes. A wrong answer with no caveat. `operator=( … )` stays a function.
+cat > "$HOSTILE/parenfield.h" <<'EOF'
+struct ParenExtent   { int n; char a[(4)]; };
+struct ParenInit     { int n; int x = (3); };
+struct ParenBrace    { int n; int x{ (3) }; };
+struct OperatorAssign { int n; OperatorAssign& operator=( const OperatorAssign& ); char c; };
+EOF
+for pair in ParenExtent:8 ParenInit:8 ParenBrace:8 OperatorAssign:8; do
+    s="${pair%%:*}"; want="${pair#*:}"
+    "$BIN" "$HOSTILE" --layout="$s" --no-cache >"$TMP/pf_$s" 2>/dev/null
+    got="$( grep -o '<def [^>]*' "$TMP/pf_$s" | grep -o 'size="[0-9]*"' | tr -dc 0-9 )"
+    fields="$( grep -o '<def [^>]*' "$TMP/pf_$s" | grep -o 'fields="[0-9]*"' | tr -dc 0-9 )"
+    [ "$got" = "$want" ] && [ "$fields" = 2 ] \
+        && ok "$s: both members placed, size=$want" \
+        || no "$s: fields=${fields:-?} size=${got:-?} (want 2 fields, size $want): $( grep -o '<def .*</def>' "$TMP/pf_$s" | head -c 200 )"
+done
+
 [ $fail -eq 0 ] && echo "layoutcheck: ALL PASS" || echo "layoutcheck: FAILURES"
 exit $fail

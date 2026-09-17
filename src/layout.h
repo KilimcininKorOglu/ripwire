@@ -1754,6 +1754,30 @@ inline void appendField( BodyWalk& w, const Declarator& d, std::string_view type
 
 // The statement forms that contribute NO storage and are simply skipped, plus the ones that withdraw the
 // numbers. Returns true when the statement was consumed here and holds no field declarators.
+// Where a member declaration's parameter list opens, or npos when it has none. Only a `(` that comes BEFORE the first
+// `[`, `=`, `{` or bitfield `:` can open one: `char a[(4)];`, `int x = (3);` and `int x{ (3) };` are data members whose
+// parenthesis sits in an extent or an initializer. Reading those as member functions dropped the field from the layout
+// while the struct still reported modeled="1" and a size four bytes short. `operator=`, `operator[]` and `operator()`
+// are functions whose own name holds one of those characters, so an `operator` word decides first.
+inline std::size_t parameterListParen( std::string_view s )
+{
+    const std::size_t paren = s.find( '(' );
+    if( paren == std::string_view::npos || containsWord( s, "operator" ) )
+    {
+        return paren;
+    }
+    for( std::size_t i = 0; i < paren; ++i )
+    {
+        const char c = s[i];
+        const bool scopeColon = c == ':' && ( ( i + 1 < s.size() && s[i + 1] == ':' ) || ( i > 0 && s[i - 1] == ':' ) );
+        if( c == '[' || c == '=' || c == '{' || ( c == ':' && !scopeColon ) )
+        {
+            return std::string_view::npos;
+        }
+    }
+    return paren;
+}
+
 inline bool modelNonFieldStatement( BodyWalk& w, std::string_view s )
 {
     // Access specifiers change nothing this model computes, but MIXED access makes the class non-standard-
@@ -1796,7 +1820,7 @@ inline bool modelNonFieldStatement( BodyWalk& w, std::string_view s )
     // storage, so it is simply skipped. A function POINTER member does contribute — but a pointer to a
     // MEMBER function is 16 bytes, not 8, and the two are not reliably distinguishable here, so the
     // aggregate withdraws its numbers rather than pick.
-    const std::size_t paren = s.find( '(' );
+    const std::size_t paren = parameterListParen( s );
     if( paren == std::string_view::npos )
     {
         return false;
