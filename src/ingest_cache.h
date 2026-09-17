@@ -1395,9 +1395,14 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     std::memcpy( &entryCount,  trailer +  8, 4 );
     std::memcpy( &tableSum,    trailer + 16, 8 );
 
+    // Every term below is written so it cannot wrap: the file is at least a header plus a trailer (checked above) and the
+    // entry clause bounds the table by the bytes between them, so the right-hand side of the exact-fit compare is never
+    // negative. The earlier `tableOffset + entries + trailer != fileBytes` wrapped for a trailer naming an offset near
+    // 2^64 — still refused, but through a sum the G1 sanitizer build (-fsanitize=integer) aborts on
+    // (test/cachefuzzcheck.sh mutation table_offset_near_u64_max; found by test/fuzz/readers, reader ingestframe).
     if( entryCount != headerEntryCount || tableOffset < kCacheHeaderBytes
         || entryCount > ( fileBytes - kCacheHeaderBytes - kCacheTrailerBytes ) / kCacheEntryBytes
-        || tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes != fileBytes )
+        || tableOffset != fileBytes - kCacheTrailerBytes - std::uint64_t( entryCount ) * kCacheEntryBytes )
     {
         DEGRADED_PATH_ALERT( "ingest: cache blob trailer does not describe the file (torn write) — cache treated as corrupt" );
         frame.reason = CacheReject::CorruptFrame;
@@ -1434,7 +1439,7 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     {
         const CacheEntry& e = frame.entries[i];
         if( e.recOffset < kCacheHeaderBytes || e.recLength == 0
-            || e.recOffset + e.recLength > tableOffset
+            || e.recLength > tableOffset || e.recOffset > tableOffset - e.recLength   // recOffset + recLength > tableOffset, without the wrap
             || ( i != 0 && frame.entries[ i - 1 ].pathHash > e.pathHash ) )
         {
             DEGRADED_PATH_ALERT( "ingest: cache offset-table entry out of bounds or out of order — cache treated as corrupt" );

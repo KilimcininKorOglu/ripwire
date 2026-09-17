@@ -293,6 +293,25 @@ def mut_record_offset_inside_table(b):
     return with_recomputed_trailer(p)
 mutations["record_range_overlaps_table"] = mut_record_offset_inside_table
 
+def mut_table_offset_near_u64_max(b):
+    # a trailer naming a table offset one short of 2^64. The exact-fit check refused it, but through
+    # `tableOffset + entries + trailer`, a sum that wraps — which the G1 sanitizer build's -fsanitize=integer aborts on.
+    # Found by the reader fuzzer (test/fuzz/readers, reader ingestframe); the check is now written without the wrap.
+    p = bytearray(b)
+    struct.pack_into("<Q", p, len(p) - TRAILER, (1 << 64) - 1)
+    return bytes(p)
+mutations["table_offset_near_u64_max"] = mut_table_offset_near_u64_max
+
+def mut_record_offset_near_u64_max(b):
+    # a table entry whose record offset is 16 short of 2^64 with a 64-byte length: `recOffset + recLength` wrapped to 48,
+    # which is below the table offset, so the per-entry bound ACCEPTED the entry. The frame is rebuilt so every digest
+    # agrees; only a wrap-free bound can refuse it.
+    p = bytearray(b[:payload_len])
+    struct.pack_into("<Q", p, TABLE_OFF + 8, (1 << 64) - 16)
+    struct.pack_into("<I", p, TABLE_OFF + 24, 64)
+    return with_recomputed_trailer(p)
+mutations["record_offset_near_u64_max"] = mut_record_offset_near_u64_max
+
 # -- checksum mismatch only: a single deep bit flip, checksum left STALE (the shallowest guard alone) --
 def mut_deep_bitflip_stale(b):
     # inside record[0], leaving BOTH digests stale: the table is untouched so tableSum still verifies,
@@ -430,6 +449,44 @@ for dname in trailer_bytes_corrupted empty_file; do
         ok "[disclose:$dname] stderr names the cache file and the reject reason"
     else
         no "[disclose:$dname] no disclosure on stderr for a rejected cache: $(head -c 200 "$TMP/disc_$dname.err")"
+    fi
+done
+# A record offset near 2^64 is a CORRUPT FRAME, refused whole — not a table entry whose read fails later. The per-entry
+# bound was `recOffset + recLength > tableOffset`; at recOffset = 2^64-16, recLength = 64 the sum wrapped to 48 and the
+# entry was accepted (blob_entries=6, one "read failed mid-load" reparse). Its control is the non-wrapping twin already in
+# the table, a record range reaching into the table, which both forms refuse. Cut fresh from $GOOD like the two above.
+python3 - "$GOOD" "$DISCDIR" <<'PYWRAP'
+import struct, sys
+good, outdir = sys.argv[1], sys.argv[2]
+b = open(good, "rb").read()
+TABLE_OFF, N = struct.unpack_from("<QI", b, len(b) - 24)[0:2]
+def blob_checksum(data):
+    P, M = 1099511628211, (1 << 64) - 1
+    lane = [1469598103934665603, 1099511628211, 0x100000001b3, 0x9e3779b97f4a7c15,
+            0xc2b2ae3d27d4eb4f, 0x165667b19e3779f9, 0xff51afd7ed558ccd, 0xc4ceb9fe1a85ec53]
+    k8 = len(data) - len(data) % 8
+    for i in range(0, k8, 8):
+        for k in range(8):
+            lane[k] = ((lane[k] ^ data[i + k]) * P) & M
+    for k, i in enumerate(range(k8, len(data))):
+        lane[k] = ((lane[k] ^ data[i]) * P) & M
+    h = 1469598103934665603
+    for k in range(8):
+        h = ((h ^ lane[k]) * P) & M
+    return h
+for name, off in (("record_offset_near_u64_max", (1 << 64) - 16), ("record_range_overlaps_table", TABLE_OFF)):
+    p = bytearray(b[:len(b) - 24])
+    struct.pack_into("<Q", p, TABLE_OFF + 8, off)
+    struct.pack_into("<I", p, TABLE_OFF + 24, 64)
+    tbl = bytes(p[:25]) + bytes(p[TABLE_OFF:TABLE_OFF + N * 32])
+    open("%s/%s.cache" % (outdir, name), "wb").write(bytes(p) + struct.pack("<QIIQ", TABLE_OFF, N, 0, blob_checksum(tbl)))
+PYWRAP
+for dname in record_range_overlaps_table record_offset_near_u64_max; do
+    RIPWIRE_CACHE_STATS=1 "$BIN" "$FIXTURE" --cache="$DISCDIR/$dname.cache" --no-stable >/dev/null 2>"$TMP/disc_$dname.err"
+    if grep -q "ripwire: cache .*$dname.cache: corrupt-frame — not used" "$TMP/disc_$dname.err" && grep -q 'blob_entries=0' "$TMP/disc_$dname.err"; then
+        ok "[disclose:$dname] refused whole as corrupt-frame (blob_entries=0), never read entry by entry"
+    else
+        no "[disclose:$dname] expected a corrupt-frame refusal with blob_entries=0, got: $( grep -E 'ripwire: cache|cache-stats' "$TMP/disc_$dname.err" | tr '\n' ' ' | cut -c1-220 )"
     fi
 done
 "$BIN" "$FIXTURE" --cache="$GOOD" --no-stable >/dev/null 2>"$TMP/disc_good.err"
