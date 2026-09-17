@@ -115,6 +115,7 @@ struct SliceParentIndex
     // sliceStmtAnchorLine's answers, per node: the climb to the nearest statement container would otherwise repeat the
     // same ancestors for every occurrence nested under them (quadratic in the nesting even with the parent table).
     mutable HashMap<const void*, std::uint32_t> anchorLineOf;
+    mutable std::vector<const void*>            climbScratch;   // sliceStmtAnchorLine's per-call climb, reused across calls
 };
 
 inline thread_local const SliceParentIndex* tlSliceParentIndex = nullptr;
@@ -955,7 +956,8 @@ inline std::uint32_t sliceStmtAnchorLine( TSNode node, SliceFam fam )
     {
         return sliceStmtAnchorLineUncached( node, fam );
     }
-    std::vector<const void*> climbed;
+    std::vector<const void*>& climbed = index->climbScratch;
+    climbed.clear();
     TSNode                   cur    = node;
     std::uint32_t            anchor = 0;
     bool                     found  = false;
@@ -2073,11 +2075,13 @@ inline void sliceComputeReach( SliceScan& scan, TSNode root, const SliceWalkCtx&
 // The deepest syntax-tree nesting a definition may reach before the slice refuses it. This is a STACK guard, not a time
 // guard: with the parent table and the memoized statement anchor the walk is linear in the nesting (measured on a
 // plain build: 2,000 / 4,000 / 8,000 nested ifs in 0.05 / 0.06 / 0.08 s, where the parent-climbing walk took 48 s at
-// 2,000 and did not finish at 4,000), but the walks still recurse once per level on the calling thread. 8,100 nested
-// ifs overflowed a 2 MB stack and fit in 4 MB, so 4,096 levels stays inside half the default 8 MB main-thread stack,
-// with room for a sanitizer build's wider frames. The deepest function measured in 47,795 parsed files across 90
-// repositories is 808 levels (a CPython chained assignment), so no real definition comes near it.
-inline constexpr std::uint32_t kMaxSliceDepth = 4096;
+// 2,000 and did not finish at 4,000), but the walks still recurse once per level on the calling thread, and every
+// slice path (CLI and MCP) runs on the main thread's ~8 MB stack. The worst measured shape per level is nested loops:
+// ~4,085 nested for/while needed 3,660 KB on a plain arm64 build (~870 B a level), ifs 2,012 KB, blocks 1,362 KB, and a
+// sanitizer build's frames are 2-3x wider. 2,048 levels keeps the worst shape near 1.8 MB plain, inside 8 MB under
+// ASan with margin, and is still 2.5x the deepest function measured in 47,795 parsed files across 90 repositories
+// (808 levels, a CPython chained assignment).
+inline constexpr std::uint32_t kMaxSliceDepth = 2048;
 
 // One cursor pass over the nodes overlapping [spanStart, spanEnd) and their ancestors: every visited node's parent,
 // and the deepest overlapping node's depth. The ancestor chain is an explicit vector, so the pass cannot recurse.
@@ -2085,6 +2089,10 @@ inline SliceParentIndex sliceBuildParentIndex( TSNode root, std::uint32_t spanSt
 {
     SliceParentIndex    index;
     std::vector<TSNode> ancestors;
+    // Sized once from the definition's own node count, so neither table rehashes while the pass fills it.
+    const std::size_t   nodeCount = ts_node_descendant_count( ts_node_descendant_for_byte_range( root, spanStart, spanEnd > spanStart ? spanEnd - 1 : spanStart ) );
+    index.parentOf.reserve( nodeCount );
+    index.anchorLineOf.reserve( nodeCount );
     TSTreeCursor        cursor = ts_tree_cursor_new( root );
     for( ;; )
     {

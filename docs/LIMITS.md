@@ -834,7 +834,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kMaxSliceDepth` | `4096` | BOUNDARY | — |
+| `kMaxSliceDepth` | `2048` | BOUNDARY | — |
 | `kSliceFlowDefaultDepth` | `8` | — | the disclosed default bound (depth= always states it) |
 | `kSliceFlowDepthMax` | `32` | — | — |
 | `kSliceFlowDepthMin` | `1` | — | — |

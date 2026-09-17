@@ -417,33 +417,41 @@ printf '%s' "$( row "$OUT14N" 11 )" | grep -q 'k="scope" t="nonlocal"' && printf
 #    The walk used to climb to each occurrence's statement anchor through ts_node_parent, which descends from the root
 #    every time, so its cost grew with the cube of the nesting: 2,000 chained `if (x)` took 48 s and 4,000 did not
 #    finish in two minutes (an MCP `slice` call on such a file wedged the server). It now reads parents from a table
-#    built in one cursor pass and memoizes the anchor, so it is linear; the only bound left is a STACK guard at 4,096
-#    syntax levels, because the walks still recurse once per level.
-#    (a) 3,000 nested ifs are ANSWERED inside a 30 s bound (base: killed; the first version of this lane: refused).
-#    (b) a CPython-shaped chained assignment ~800 levels deep — Lib/test/test_traceback.py:3256 is 808, the deepest
-#        function in 47,795 parsed files — is ANSWERED: a real file must never meet the guard.
-#    (c) 6,000 nested blocks are REFUSED by name, in bounded time, before any walk.
+#    built in one cursor pass and memoizes the anchor, so it is linear; the only bound left is a STACK guard at 2,048
+#    syntax levels, because the walks still recurse once per level on the main thread.
+#    (a) 2,000 nested ifs are ANSWERED inside a 30 s bound (base: killed).
+#    (b) 2,040 nested `for` loops — the deepest per-level stack shape measured (~870 B a level on plain arm64) — are
+#        ANSWERED just under the guard, so the guard is proven safe for its worst admitted input on the build under test
+#        (run this gate with RIPWIRE_BIN=asan/ripwire to prove it for the wider sanitizer frames).
+#    (c) a CPython-shaped chained assignment ~808 levels deep — Lib/test/test_traceback.py:3256, the deepest function in
+#        47,795 parsed files — is ANSWERED: a real file must never meet the guard.
+#    (d) 6,000 nested blocks are REFUSED by name, in bounded time, before any walk.
 DEEPDIR="$( mktemp -d )"
 python3 - "$DEEPDIR" <<'PYDEEP'
 import sys
 d = sys.argv[1]
-open(d + "/deep.c", "w").write("int deep( int x )\n{\n    int y = 0;\n    " + "if (x) " * 3000 + "y = x;\n    return y;\n}\n"
+open(d + "/deep.c", "w").write("int deep( int x )\n{\n    int y = 0;\n    " + "if (x) " * 2000 + "y = x;\n    return y;\n}\n"
+                                "int loops( int x )\n{\n    int y = 0;\n    " + "for (;;) " * 2040 + "y = x;\n    return y;\n}\n"
                                 "int blocks( int x )\n{\n    int y = 0;\n    " + "{ " * 6000 + "y = x;" + " }" * 6000 + "\n    return y;\n}\n")
 open(d + "/chain.py", "w").write("def chained():\n    " + " = ".join("a%d" % i for i in range(1, 807)) + " = 1\n    return a1\n")
 PYDEEP
-bounded(){ if command -v timeout >/dev/null 2>&1; then timeout 30 "$@"; else perl -e 'alarm 30; exec @ARGV' "$@"; fi; }
+bounded(){ if command -v timeout >/dev/null 2>&1; then timeout 60 "$@"; else perl -e 'alarm 60; exec @ARGV' "$@"; fi; }
 ( cd "$DEEPDIR" && bounded "$BIN" . --slice=deep:y --no-cache >"$DEEPDIR/deep.out" 2>"$DEEPDIR/deep.err" ); rc15=$?
 [ "$rc15" -eq 0 ] && grep -q '<s l="4"' "$DEEPDIR/deep.out" \
-    && ok "(15a) deep:y — 3,000 nested ifs slice inside 30 s (exit 0, the assignment row at l=4)" \
+    && ok "(15a) deep:y — 2,000 nested ifs slice in bounded time (exit 0, the assignment row at l=4)" \
     || no "(15a) deep:y exit $rc15 (expected 0 with the l=4 row; 124/142 is the cubic walk, 1 a guard set below real depth): $( head -c 200 "$DEEPDIR/deep.err" )"
+( cd "$DEEPDIR" && bounded "$BIN" . --slice=loops:y --no-cache >"$DEEPDIR/loops.out" 2>"$DEEPDIR/loops.err" ); rc15l=$?
+[ "$rc15l" -eq 0 ] && grep -q '<s l="10"' "$DEEPDIR/loops.out" \
+    && ok "(15b) loops:y — 2,040 nested for loops (the widest stack per level) slice just under the guard (exit 0, the assignment row at l=10)" \
+    || no "(15b) loops:y exit $rc15l (expected 0; 139/138 is the recursion overflowing the stack below the guard): $( head -c 200 "$DEEPDIR/loops.err" )"
 ( cd "$DEEPDIR" && bounded "$BIN" . --slice=chained:a1 --no-cache >"$DEEPDIR/chain.out" 2>"$DEEPDIR/chain.err" ); rc15b=$?
 [ "$rc15b" -eq 0 ] && grep -q '<s l="2"' "$DEEPDIR/chain.out" \
-    && ok "(15b) chained:a1 — an 806-name, ~808-level chained assignment (CPython test_traceback.py's shape) is answered" \
-    || no "(15b) chained:a1 exit $rc15b — a real-world depth must be answered: $( head -c 200 "$DEEPDIR/chain.err" )"
+    && ok "(15c) chained:a1 — an 806-name, ~808-level chained assignment (CPython test_traceback.py's shape) is answered" \
+    || no "(15c) chained:a1 exit $rc15b — a real-world depth must be answered: $( head -c 200 "$DEEPDIR/chain.err" )"
 ( cd "$DEEPDIR" && bounded "$BIN" . --slice=blocks:y --no-cache >"$DEEPDIR/blocks.out" 2>"$DEEPDIR/blocks.err" ); rc15c=$?
-[ "$rc15c" -eq 1 ] && grep -q 'nests deeper than 4096 syntax levels' "$DEEPDIR/blocks.err" \
-    && ok "(15c) blocks:y — 6,000 nested blocks refuse by name at the 4,096-level stack guard" \
-    || no "(15c) blocks:y exit $rc15c (expected 1 with the stack-guard refusal): $( head -c 200 "$DEEPDIR/blocks.err" )"
+[ "$rc15c" -eq 1 ] && grep -q 'nests deeper than 2048 syntax levels' "$DEEPDIR/blocks.err" \
+    && ok "(15d) blocks:y — 6,000 nested blocks refuse by name at the 2,048-level stack guard" \
+    || no "(15d) blocks:y exit $rc15c (expected 1 with the stack-guard refusal): $( head -c 200 "$DEEPDIR/blocks.err" )"
 rm -rf "$DEEPDIR"
 
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'

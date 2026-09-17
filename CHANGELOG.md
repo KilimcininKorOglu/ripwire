@@ -104,8 +104,10 @@ Each of these was reproduced before it was fixed, and the gate that already owns
   one call wedged the server, and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s. The
   scan now builds a parent table in one cursor pass and memoizes the anchor, so the walk is linear: 2,000 / 4,000 /
   8,000 nested ifs in 0.05 / 0.06 / 0.08 s, the 808-level chain in 0.06 s, and the output is byte-identical. Past
-  4,096 syntax levels the slice is refused by name, because the walks still recurse once per level and that is a stack
-  guard, not a time guard; no function in 47,795 parsed files comes near it. Gate: `test/slicecheck.sh` (15).
+  2,048 syntax levels the slice is refused by name: the walks still recurse once per level on the main thread, and
+  nested loops, the widest frame per level, need ~1.8 MB at that depth on a plain build and 2-3× under a sanitizer, so
+  this is a stack guard, not a time guard. That is still 2.5× the deepest function in 47,795 parsed files (808).
+  Gate: `test/slicecheck.sh` (15), including 2,040 nested `for` loops that must be answered just under the guard.
 
 The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
 
