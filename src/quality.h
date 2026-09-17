@@ -1971,8 +1971,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // suite the moment the two disagree, and `test/qschemetripcheck.sh` (which previously hashed only quality.h
 // functions and never looked at ingest.cpp — precisely why this shipped) now hashes the ingest-side constant
 // lines too. Bumping kParserVer without updating these two lines is a hard gate failure, not a silent miss.
-// The FOLLOW-UP this note asked for is done the other way round: ingest_cache.h, which includes this header, holds
-// `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build.
+// The FOLLOW-UP this note asked for is done the other way round: ingest_cache.h holds
+// `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
+// not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
+// that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
 constexpr std::uint32_t kIngestParserVerMirror    = 96;   // MUST equal ingest.cpp's kParserVer   (gated)
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):

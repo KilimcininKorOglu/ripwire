@@ -20,7 +20,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 Each check below is written against a defect this repository shipped or nearly shipped, and each was shown failing on a
 deliberate break before it landed. None of them changes output. They are `static_assert`s, one template constraint, one
 link-time stamp and two warning flags. Output was compared with the base binary on every fixture corpus, stdout and exit
-code, and the only differences are the extension fix above.
+code, and the only differences are the extension fix below.
 
 - **Language registration.** Appending a `Lang` meant updating five tables in four files. 02f798e3 (Dart), 9418e35e (five
   unanalysed languages) and PR #233's `.gd` row each stayed one language short. `src/main.cpp` now asserts that every
@@ -49,8 +49,9 @@ code, and the only differences are the extension fix above.
   their own declaration, and let a missing row compile as a null pointer. `kNodeFieldNames` rows now name their
   enumerator, because the enum and the table are paired by index. `skilleval`'s provenance counters were `[3]` for a
   four-value `Prov`. A new gate, `test/enumtablecheck.sh`, refuses a literal-extent table indexed by an enum. It reports 14
-  subscripts over five tables on `f8e6087c`, and each of its three positive controls puts one real literal back and must
-  report exactly that table.
+  subscripts over five tables on `f8e6087c`. Each of its three positive controls puts one real literal back and must
+  report exactly that table among the violations the literal adds, so a violation already in the tree fails the rule
+  arm alone instead of every control.
 
 ### Fixed — a memory buffer that lost a write was read back as a whole document
 
@@ -72,16 +73,21 @@ flag, closes, and reports by value, and it is `[[nodiscard]]`. The destructor cl
 buffer on every path, so no site frees or closes anything by hand. A buffer that did not finish whole takes the path a
 failed open already took. The map and the JSON map are rendered again, straight to the output, with the modelled
 `est_tokens`: the children became one renderer both paths call. A charged section streams uncharged, and a probe answers
-"unmeasured". The `--for` blocks are emitted directly, and the trace blocks and MCP answers answer as they do when the open
-fails. The `--token-budget` buffer is the one with no second path, because it holds the map itself: it prints nothing,
-says `write error — the --token-budget buffer lost bytes` on stderr in every build, and exits 1.
+"unmeasured". The `--for` blocks are emitted directly, and the MCP answers answer as they do when the open fails. Two surfaces have
+no second path, because the buffer holds the answer itself, and both refuse in every build instead of printing short.
+The `--token-budget` map prints nothing, says `write error — the --token-budget buffer lost bytes` on stderr, and exits
+1. `--from-trace` and `--run-trace` do the same when the `<trace>` map, the test hop or the signature/body section loses
+its buffer, at the open or at the finish, and the MCP `from_trace` verb answers `-32603`. Those blocks used to be left
+out of a bundle printed at exit 0, which no Release build disclosed.
 
-`test/estchargecheck.sh` gains two arms. **#14f** drives every site's degrade through a new debug-only fault switch,
-`INFRA_FAULT_MEMSTREAM_FINISH=1`, which really closes each stream and then reports failure. The `--pack-signatures` map and
-the `--json` map come out byte-identical to the undegraded run outside `est_tokens`, well-formed, at exit 0. The
-`--token-budget` run prints 0 bytes and exits 1 where its control prints the map. **#14g** reads `src/` and refuses an
-`open_memstream`, a direct call of the charge opener, or an `fflush`/`fclose` of a memory stream anywhere outside the
-type. On `f8e6087c` it reports 46 such lines, and its positive control reports the two lines of one site put back by hand.
+`test/estchargecheck.sh` gains two arms. **#14f** uses a new debug-only fault switch, `INFRA_FAULT_MEMSTREAM_FINISH=1`,
+which makes every finish really close its stream and then report failure. It asserts four surfaces, not every site. The
+`--pack-signatures` map and the `--json` map come out byte-identical to the undegraded run outside `est_tokens`,
+well-formed, at exit 0. The `--token-budget` run and a `--from-trace` run each print 0 bytes and exit 1 where their
+controls print the answer. **#14g** reads `src/` and refuses an `open_memstream`, a direct call of the charge opener, or
+an `fflush`/`fclose` of a memory stream anywhere outside the type. On `f8e6087c` it reports 46 such lines. Its positive
+control puts the two lines of one site back by hand, once per spelling of the opener (bare, `::`, `os::`, `rw::os::`),
+and must report exactly those two each time.
 
 ### Fixed — five code extensions the index parses were no language at all to the dependency, state and lint verbs
 
@@ -92,10 +98,10 @@ by hand", that table had drifted, and it called those five extensions Unknown. E
 files out. `includeLangOf` (`src/resolve.h`) had the same four C++ and Python gaps, so even a counted file could not
 resolve its includes.
 
-Both tables now know all five, and the crawl's table and `langOfPath`'s are asserted equal at compile time (below).
+Both tables now know all five, and the crawl's table and `langOfPath`'s are asserted equal at compile time (above).
 `test/deplangscheck.sh` arm (G) requires every dependency-counted extension to resolve too. It went red with only the
-classifier rows added, naming exactly `.cu`, `.cuh`, `.metal` and `.pyi`, which is why the resolver rows land in the same
-change. `.hxx` left both tables: the crawl admits no `.hxx` file, so neither row could ever be reached.
+classifier rows added, naming `.cu`, `.cuh`, `.metal` and `.pyi` as counted but unresolvable (and `.hxx` the other way
+round), which is why the resolver rows land in the same change. `.hxx` left both tables: the crawl admits no `.hxx` file, so neither row could ever be reached.
 
 Measured by comparing stdout and exit code, `--no-cache`, between the base binary (`f8e6087c`) and this change, over all
 162 fixture corpora under `test/` and eight verbs: 1,296 runs. 14 differ. All 14 are on the six corpora that hold one of
@@ -104,10 +110,16 @@ the extensions, and only on `--deps`, `--nonlocal-state` and `--quality-panel`. 
 - `test/cudafix` `--nonlocal-state`: `cells="0" functions="0"` became `cells="5" functions="4"`. The CUDA kernel's
   `rk_scaleTable`, read through `rk_clampScale`, was invisible.
 - `test/cudafix` `--deps`: `dep_files="1"` became `3`, and the kernel's include of `reduceShared.cuh` now counts
-  (`afferent` 1 → 2, `transitive` 1 → 2). `test/metalfix` gains the `.metal` shader's row with its two includes.
+  (`afferent` 1 → 2, `transitive` 1 → 2). `test/metalfix` already printed the `.metal` shader's row. The shader now
+  counts in `dep_files` (2 → 3), and its quote include of `AAPLSharedTypes.h` resolves (the header's `afferent` 1 → 2).
   `test/phpfix`, `pyshapefix`, `stdqualfix` and `macroreparsefix` each gain the one file their denominator was missing.
 - `test/phpfix` `--nonlocal-state`: `unanalyzed_files="4"` became `5`. The `.phtml` view is disclosed as unanalysed PHP.
 - A user rule with `language: cpp` run over a `.metal` shader and a `.cu` kernel reported `findings="0"`. It now reports 16.
+- `.pyi` typing stubs. A stub restates its module's globals (`COUNT: int` beside `m.py`'s `COUNT = 0`), so reading
+  both files counted one global twice: a two-file probe went from `cells="1"` to `cells="2"` with every row still bound to
+  `m.py`. `--nonlocal-state` and `--quality-panel` now skip a stub whose `.py` is indexed beside it. A stub with no
+  source, the shape a C extension ships, is the only declaration of its module and keeps its cells: `test/pyshapefix`'s
+  `stubs.pyi` adds one (`cells` 5 → 6). Gate: `test/nonlocalstatecheck.sh` arm (J), red at `cells="2"` before the skip.
 
 Dart stays outside the dependency denominator, now by a named case instead of a `default:`. Dart has no import capture,
 and a two-file probe showed `--deps` printing no row for `import 'util.dart';`.

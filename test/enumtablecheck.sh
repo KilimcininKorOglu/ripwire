@@ -165,12 +165,17 @@ control(){   # $1 label  $2 file  $3 python-literal FROM  $4 python-literal TO  
     if cmp -s "$ROOT/src/$2" "$TMP/src/$2"; then
         no "(4) $1: the mutation did not take ($2 unchanged) — this control proves nothing"; return
     fi
-    scan "$TMP/src" "${EXEMPT[@]}" >"$TMP/ctl.txt" 2>&1
+    scan "$TMP/src" "${EXEMPT[@]}" >"$TMP/ctl_raw.txt" 2>&1
+    # Only the violations the MUTATION added count: a real violation already in the live tree (arm 3's red) must not
+    # also turn every control red and blame the scan for a blindness it does not have. The mutation replaces one line
+    # with one line, so live rows keep their line numbers and a set difference isolates the control's own rows.
+    grep '^VIOLATION' "$TMP/live.txt" | sort > "$TMP/live_v.txt"
+    grep '^VIOLATION' "$TMP/ctl_raw.txt" | sort | comm -13 "$TMP/live_v.txt" - > "$TMP/ctl.txt"
     local hits total
     hits="$( grep -c "^VIOLATION $2:[0-9]*: $5\[" "$TMP/ctl.txt" )"; total="$( grep -c '^VIOLATION' "$TMP/ctl.txt" )"
     { [ "$hits" -ge 1 ] && [ "$hits" = "$total" ]; } \
         && ok "(4) $1: the scan reports exactly $2's $6 ($hits subscript(s)): $( grep '^VIOLATION' "$TMP/ctl.txt" | head -1 | sed 's/^VIOLATION //' )" \
-        || no "(4) $1: expected only $2's $6, got $hits of $total violation(s) — the scan cannot see the defect it exists for"
+        || no "(4) $1: expected only $2's $6 among the violations the mutation added, got $hits of $total — the scan cannot see the defect it exists for"
 }
 control "enumerator path" search.h "'std::uint32_t             tierHitCount[kSpanTierCount] = {};'" "'std::uint32_t             tierHitCount[3] = { 0, 0, 0 };'" tierHitCount tierHitCount
 control "unscoped-enumerator path" qualitypanel.h "'inline constexpr const char* kNewFamilyNames[] = { \"colocation\", \"state\" };'" "'inline constexpr std::array<const char*, 2> kNewFamilyNames = { { \"colocation\", \"state\" } };'" kNewFamilyNames kNewFamilyNames

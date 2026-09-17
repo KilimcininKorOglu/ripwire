@@ -832,6 +832,9 @@ fi
 #    (e) --json: the same whole-document identity on the other serializer, and the document parses;
 #    (f) --token-budget, where the buffer IS the answer and nothing can render it again: nothing reaches stdout, exit 1,
 #        and stderr says the map was withheld — against an undegraded control that prints the map at exit 0.
+#    (g) --from-trace, whose <trace> map and signature/body section are rendered only into their buffers: the same
+#        refusal as (f). It used to print the bundle without either block at exit 0, which a Release build never told.
+#    These arms cover those four surfaces, not every MemoryStream holder; #14g is the fence over the rest.
 mask_est(){ sed -E 's/est_tokens(="?|":)[0-9]+/est_tokens\1N/g' "$1"; }
 INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf.out" 2>"$TMP/mf.err"
 rc_mf=$?
@@ -879,6 +882,15 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
     else
         no "#14f(f) --token-budget under the finish fault: control rc=$rc_mft_ctl ($( bytes_of "$TMP/mft_ctl.out" ) B), faulted rc=$rc_mft with $( bytes_of "$TMP/mft.out" ) B on stdout — want 0/non-empty and 1/empty with the withheld line"
     fi
+    printf 'Traceback (most recent call last):\n  File "test/fixture/app.py", line 10, in total_area\n    return sum(area_of_triangle(b, h) for b, h in triangles)\n  File "test/fixture/app.py", line 5, in area_of_triangle\n    return 0.5 * base * height\nZeroDivisionError: boom\n' >"$TMP/mftr.txt"
+    "$BIN" test/fixture --from-trace="$TMP/mftr.txt" --no-cache >"$TMP/mftr_ctl.out" 2>/dev/null; rc_mftr_ctl=$?
+    INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" test/fixture --from-trace="$TMP/mftr.txt" --no-cache >"$TMP/mftr.out" 2>"$TMP/mftr.err"; rc_mftr=$?
+    if [ "$rc_mftr_ctl" -eq 0 ] && grep -aq '<trace ' "$TMP/mftr_ctl.out" && [ "$rc_mftr" -eq 1 ] && [ ! -s "$TMP/mftr.out" ] \
+       && grep -aq 'a --from-trace buffer lost bytes; the bundle is withheld' "$TMP/mftr.err"; then
+        ok "#14f(g) --from-trace: the control prints its <trace> bundle ($( bytes_of "$TMP/mftr_ctl.out" ) B) at exit 0; under the fault stdout is EMPTY, exit 1, and stderr says the bundle was withheld"
+    else
+        no "#14f(g) --from-trace under the finish fault: control rc=$rc_mftr_ctl ($( bytes_of "$TMP/mftr_ctl.out" ) B), faulted rc=$rc_mftr with $( bytes_of "$TMP/mftr.out" ) B on stdout — want 0 with a <trace> block, then 1/empty with the withheld line (a bundle without its blocks is the defect)"
+    fi
 elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
     skip "#14f memstream finish degrade arms — this NDEBUG binary has neither DEGRADED_PATH_ALERT nor the INFRA_FAULT_MEMSTREAM_FINISH switch (build type \"$BUILD_FLAVOUR\"); the PLAIN-flavour CI leg proves them"
 else
@@ -893,7 +905,7 @@ fi
 #          handed, serialize.h's fault-injectable openChargeBuffer;
 #      (B) openChargeBuffer is called only by openChargeStream, which hands it to MemoryStream::open;
 #      (C) no fflush/fclose names a FILE* that came from a memory stream (`= x.open(…)`, `= openChargeStream(…)` or
-#          `= open_memstream(…)`).
+#          `= open_memstream(…)`, spelled bare, `::`, `os::` or `rw::os::`).
 #    Presence guards first (the class and its [[nodiscard]] finish exist, and the population is real), then the rule,
 #    then a POSITIVE CONTROL: the same scan over a copy of src/ with one real site turned back into the hand-written
 #    open and close it replaced must report exactly that site — a scan that cannot fail is not a fence.
@@ -919,7 +931,7 @@ strm = region( ser, r'inline std::FILE\* openChargeStream\s*\(', '}' )
 inside = lambda rel, i, r, want: rel == want and r[0] is not None and r[1] is not None and r[0] <= i <= r[1]
 finish = cls[1] is not None and any( re.search( r'\[\[nodiscard\]\]\s*MemoryStreamBytes\s+finish\s*\(', l ) for l in texts[ emit ][ cls[0]:cls[1] ] )
 holders, violations = 0, []
-OPENED = re.compile( r'([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\.open\s*\(|(?:rw::)?(?:open_memstream|openChargeStream)\s*\()' )
+OPENED = re.compile( r'([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\.open\s*\(|(?:::)?(?:rw::)?(?:os::)?(?:open_memstream|openChargeStream)\s*\()' )
 for rel, lines in sorted( texts.items() ):
     holders += sum( len( re.findall( r'\bMemoryStream\s+[A-Za-z_]\w*\s*;', code( l ) ) ) for l in lines )
     names = { m.group( 1 ) for l in lines for m in OPENED.finditer( code( l ) ) }
@@ -951,26 +963,34 @@ grep -q 'class=1 finish_nodiscard=1 opener=1' "$TMP/ms_live.txt" \
 [ "$MS_VIOL" = "0" ] \
     && ok "#14g the rule: 0 hand-written open_memstream / openChargeBuffer / fflush / fclose of a memory stream outside MemoryStream" \
     || no "#14g a memory stream handled by hand outside MemoryStream: $( grep '^VIOLATION' "$TMP/ms_live.txt" | tr '\n' ';' )"
-#    positive control: turn tracelocus.h's first MemoryStream back into the hand-written open and close it replaced
-cp -R "$ROOT/src" "$TMP/ms_src"
-python3 - "$TMP/ms_src/tracelocus.h" <<'PY'
+#    positive control: turn tracelocus.h's first MemoryStream back into the hand-written open and close it replaced, once
+#    per spelling of the opener a call site can use — (C) keys the close on the name the open assigned, so a spelling the
+#    OPENED pattern does not know hides the close even while (A) still reports the open. The hand-opened FILE* gets a
+#    name no other site in the file assigns (`hand`): (C)'s names are per file, and tracelocus.h's other holders all
+#    call theirs `m`, so a control that reused `m` would pass on a sibling's open and prove nothing about this one.
+for MS_SPELL in open_memstream ::open_memstream os::open_memstream rw::os::open_memstream; do
+    rm -rf "$TMP/ms_src"; cp -R "$ROOT/src" "$TMP/ms_src"
+    python3 - "$TMP/ms_src/tracelocus.h" "$MS_SPELL" <<'PY'
 import sys
-p = sys.argv[1]; t = open( p ).read()
-t = t.replace( 'rw::MemoryStream stream;\n    std::FILE* const m = stream.open();', 'char* buf = nullptr;  std::size_t sz = 0;\n    std::FILE* m = open_memstream( &buf, &sz );', 1 )
-t = t.replace( 'const rw::MemoryStreamBytes block = stream.finish();', 'std::fclose( m );  const rw::MemoryStreamBytes block{ std::string_view( buf, sz ), buf != nullptr };', 1 )
+p, spell = sys.argv[1], sys.argv[2]; t = open( p ).read()
+t = t.replace( 'rw::MemoryStream stream;\n    std::FILE* const m = stream.open();', 'char* buf = nullptr;  std::size_t sz = 0;\n    std::FILE* hand = ' + spell + '( &buf, &sz );\n    std::FILE* const m = hand;', 1 )
+t = t.replace( 'const rw::MemoryStreamBytes block = stream.finish();', 'std::fclose( hand );  const rw::MemoryStreamBytes block{ std::string_view( buf, sz ), buf != nullptr };', 1 )
 open( p, 'w' ).write( t )
 PY
-if cmp -s "$ROOT/src/tracelocus.h" "$TMP/ms_src/tracelocus.h"; then
-    no "#14g positive control: the mutation did not take (tracelocus.h unchanged) — the control proves nothing"
-else
+    if cmp -s "$ROOT/src/tracelocus.h" "$TMP/ms_src/tracelocus.h"; then
+        no "#14g positive control ($MS_SPELL): the mutation did not take (tracelocus.h unchanged) — the control proves nothing"
+        continue
+    fi
     memstream_scan "$TMP/ms_src" >"$TMP/ms_ctl.txt" 2>&1
     MS_CA="$( grep -c '^VIOLATION tracelocus.h:[0-9]*: (A)' "$TMP/ms_ctl.txt" )"
-    MS_CC="$( grep -c '^VIOLATION tracelocus.h:[0-9]*: (C) fclose( m )' "$TMP/ms_ctl.txt" )"
+    MS_CC="$( grep -c '^VIOLATION tracelocus.h:[0-9]*: (C) fclose( hand )' "$TMP/ms_ctl.txt" )"
     MS_CT="$( grep -c '^VIOLATION' "$TMP/ms_ctl.txt" )"
-    [ "$MS_CA" = "1" ] && [ "$MS_CC" = "1" ] && [ "$MS_CT" = "2" ] \
-        && ok "#14g positive control: the same scan over a copy with one site hand-opened and hand-closed again reports exactly those two lines ($( grep '^VIOLATION' "$TMP/ms_ctl.txt" | sed 's/^VIOLATION //' | tr '\n' ' '))" \
-        || no "#14g positive control: expected tracelocus.h (A)=1 (C)=1 and 2 in total, got $MS_CA, $MS_CC and $MS_CT — the scan cannot see the defect it exists for"
-fi
+    if [ "$MS_CA" = "1" ] && [ "$MS_CC" = "1" ] && [ "$MS_CT" = "2" ]; then
+        ok "#14g positive control ($MS_SPELL): the same scan over a copy with one site hand-opened and hand-closed again reports exactly those two lines ($( grep '^VIOLATION' "$TMP/ms_ctl.txt" | sed 's/^VIOLATION //' | tr '\n' ' '))"
+    else
+        no "#14g positive control ($MS_SPELL): expected tracelocus.h (A)=1 (C)=1 and 2 in total, got $MS_CA, $MS_CC and $MS_CT — the scan cannot see the defect it exists for"
+    fi
+done
 
 # ── §C1 + §C2 (capture-audit-4, wave 3): --for --json's ENVELOPE is charged, and so is over_ceiling ─────
 #
