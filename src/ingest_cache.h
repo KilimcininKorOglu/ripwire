@@ -232,7 +232,13 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 98;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 99;           // bump on any grammar/.scm/extraction change
+                                                      // 99 = 2026-09-16 (std-typed member fields, test/fieldnarrowcheck.sh
+                                                      //    arm q): a C++ field's compose RawRef records the namespace its
+                                                      //    type was written in as `qualifier` (`std` for `std::string
+                                                      //    name_;`). Format unchanged; a 98 blob holds "" there and would
+                                                      //    let Rule 2b and the HAS-A edges read `string` as an in-repo
+                                                      //    class on a warm run: content change, bump required.
                                                       // 98 = 2026-09-16 (std-qualified receivers, test/narrowcheck.sh
                                                       //    arm 21): a C++ ASSIGNMENT from a constructor (`x = std::
                                                       //    map<K, V>()`) records the constructor's qualified text in

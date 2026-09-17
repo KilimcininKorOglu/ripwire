@@ -390,6 +390,44 @@ class template with a dependent base now, and a census row asserts the call stil
 candidates. `chacheck`, `chaconecheck`, `resolverhonestycheck` and `fieldnarrowcheck` pass unchanged: their untyped
 controls sit in scope-less free functions, which never reach the tie-break.
 
+### Fixed — a member field typed `std::string` narrowed to an in-repo class named `string`
+
+The entry above stopped a type written in namespace `std` from narrowing a parameter or a local. A member field is the
+third place a written type is read, and it still did. The field capture records a qualified type's final segment, so
+`struct Record { std::string name_; int nameLength() { return name_.size(); } };` recorded `name_` as a `string`, and
+all three readers of that record took it for any in-repo class of that name: Rule 2b pinned `name_.size()` to the
+in-repo `string::size` (census `receiver-rule` — one precise edge, no `amb=`), the HAS-A block drew `Record → string`,
+and `--uses=string.len` pinned both `name_.len` and `this->name_.len` to that class. A field's compose record now
+carries the namespace its type was written in as its qualifier — the same (name, immediate qualifier) pair a call
+carries, so `std::string` is `string` in `std` (**kParserVer 98 → 99**) — and the readers refuse `std`: the field-type
+table records no type for the field, and no HAS-A edge is drawn. Every other qualifier narrows as before:
+`store::Text body_; body_.size()` still reaches `Text::size`.
+
+The std field records an empty type rather than being skipped, and that choice was measured. Dropping it at capture —
+the obvious fix — un-tombstones a same-named class's differently-typed field. rocksdb has two classes named
+`StringSource`: `test_util/testutil.h`'s holds `std::string contents_` and `db/log_test.cc`'s holds `Slice& contents_`.
+Class names carry no namespace, so both share the entry `StringSource#contents_`, and the disagreement is what keeps
+either from narrowing; with the std record skipped, four `contents_.size()` calls in testutil.h pinned `Slice::size`.
+The empty type tombstones the entry exactly as a second real type does.
+
+Measured with `--pin-census --no-cache` and the default map, the previous commit's binary against this change: rocksdb,
+a private C++ corpus and this repository's `src/` (a frozen copy, so both binaries read one tree) are byte-identical in
+both, and so is rocksdb's `--metrics`. None of them has an in-repo class that shares a `std::` field type's name and
+defines the member called on it: counted with `--match`, rocksdb has 1,258 fields whose type is written `std::X`,
+`src/` 1,987 and the private corpus 143, and only rocksdb's 1,116 `std::string`/`std::wstring` fields share a name — with
+gtest's `typedef ::std::string string`, which has no members and drew no HAS-A edge. So a probe measured the reach: a
+copy of rocksdb plus one `namespace shim { struct string { … } }` defining `size`, `empty`, `data`, `c_str`, `clear`,
+`append` and a field `len`. There the previous binary pins 384 call sites to `shim::string` by receiver-rule and this
+change leaves 7, all gtest parameters written `const ::string&` — the global namespace, not `std`, and not fields. Of
+the 357 sites that move, 279 land on exactly the row the unmodified rocksdb census has; the other 78 are `c_str` calls
+the probe's own second `c_str` definition makes ambiguous. 455 class rows lose a composed type from `cbo=` (446 by
+one, 9 by two).
+
+`test/fieldnarrowcheck.sh` arm q is the gate. q1 (Rule 2b), q3 (HAS-A) and both q5 rows (`--uses`) are red on the
+previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refuse-every-qualifier variant; and the four
+q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
+variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

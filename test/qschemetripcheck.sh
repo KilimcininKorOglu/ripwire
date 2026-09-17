@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, STD-TYPED MEMBER FIELDS (test/fieldnarrowcheck.sh arm q): parserVer and its quality mirror move 98 -> 99 —
+#   a C++ field's compose record carries the namespace its type was written in as its qualifier (`std` for
+#   `std::string name_;`). Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key
+#   or snapshot semantics changed, only the extraction identity. Old extraction facts must be re-parsed.
 # 2026-09-16, RECEIVER QUALIFIERS (test/narrowcheck.sh arms 17-24): parserVer and its quality mirror move 97 -> 98 — a
 #   C++ assignment from a constructor (`x = std::map<K, V>()`) records the constructor's qualified text, as a
 #   declaration's record already did at 97 (parameter receivers, lane/param-receiver-binding, re-pinned there).

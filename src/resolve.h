@@ -2098,6 +2098,17 @@ inline bool namesStdType( std::string_view qualified ) noexcept
     return qualified.starts_with( "std::" );
 }
 
+// The same fact for a member FIELD (test/fieldnarrowcheck.sh arm q): a compose reference for `std::string name_;` carries the
+// type's final segment as its name and the namespace the type was written in as its qualifier (ingest_relations.h
+// writtenTypeNamespace). The capture reads only the two-segment spelling, so that qualifier is one written namespace — never
+// a nested one, and never an inline ABI namespace, which no conforming program spells. graph.h's two readers of the capture
+// refuse it: buildFieldNarrowTables records no type for it (a tombstone when a same-named class's same-named field has a real
+// type — a skip would hand that type to this field's calls), and the HAS-A edges draw none.
+inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
+{
+    return r.isCompose && r.qualifier == "std";
+}
+
 // One entry of Rule 2's FLAT per-function type table (buildGraph's varType): the variable's type name — "" is a TOMBSTONE,
 // an ambiguous or `std::`-typed variable that never narrows — and whether a declaration wrote that type QUALIFIED, the
 // fact prov="final-segment" discloses (Narrower::finalSegmentTypeAt).

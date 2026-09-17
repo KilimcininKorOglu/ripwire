@@ -1080,13 +1080,12 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 
 // ── P2-D Rule 2b field-narrow tables (W1-P1-12) — built once per buildGraph, consumed via
 // Narrower::rule2bFieldRecvType in the resolve loop. Two tables, Rule 2's exact conservatism:
-//   fieldTypeByClass — "ClassName#fieldName" → the field's DECLARED type name, from the S5-E HAS-A field
-//     captures (isCompose refs: fromSymbol = the declaring class def, fieldName = the member, calleeName =
-//     the written type's name). Symbol scopes drop namespaces, so two same-NAMED classes collapse onto one
-//     key here — a same-named field bound to two DIFFERENT types is TOMBSTONED ("" value) and never
-//     narrows; a duplicate declaration of the SAME type (header re-parse, repeated patterns across roots)
-//     is harmless and keeps the entry. The type name is only ever USED as a canonByName scope, so an
-//     unindexed type simply never hits and degrades to the unchanged ladder.
+//   fieldTypeByClass — "ClassName#fieldName" → the field's DECLARED type name, from the S5-E HAS-A field captures (isCompose refs: fromSymbol = the
+//     declaring class def, fieldName = the member, calleeName = the written type's name). Symbol scopes drop namespaces, so two same-NAMED classes
+//     collapse onto one key here — a same-named field bound to two DIFFERENT types is TOMBSTONED ("" value) and never narrows; a duplicate declaration
+//     of the SAME type (header re-parse, repeated patterns across roots) is harmless and keeps the entry. The type name is only ever USED as a canonByName
+//     scope, so an unindexed type simply never hits and degrades to the unchanged ladder. A type written in `std` records "" (resolve.h
+//     fieldTypeWrittenInStd): it names no in-repo class, and it still tombstones a same-named class's other type, which a skip would not.
 //   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
 //     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
 //     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse.
@@ -1113,8 +1112,9 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        const auto [ it, inserted ] = t.fieldTypeByClass.try_emplace( key, cr.calleeName );
-        if( !inserted && !it->second.empty() && it->second != cr.calleeName )
+        const std::string_view type = fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName );
+        const auto [ it, inserted ] = t.fieldTypeByClass.try_emplace( key, type );
+        if( !inserted && !it->second.empty() && it->second != type )
         {
             it->second.clear();   // same class-name#field-name, different declared types → tombstone
         }
@@ -3176,9 +3176,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/7: HAS-A compose edges" );
     for( const Reference& r : ing.references )
     {
-        if( !r.isCompose || r.fromSymbol == kNoNode )
+        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) )
         {
-            continue;
+            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment
         }
         const auto it = byName.find( r.calleeName );
         if( it == byName.end() )
