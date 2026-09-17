@@ -1644,6 +1644,17 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // The CLI twin's lr.capAttrs: the INDEXING caps that cut this ranking, same names, same order, so the
     // two surfaces cannot disagree about what was dropped (mention.h CapDisclosure). "" unless one bit.
     std::string   capAttrs;
+
+    // input blow-up guard disclosure (lexical.h kMaxUniqueQueryTerms/dedupeQueryTerms) — same channel and
+    // same attribute names as the CLI twin (verbs_for.h computeLensRanking), so a capped task reads
+    // identically on both surfaces.
+    std::string termsCapNote;
+    {
+        CapDisclosure termsCap;
+        termsCap.note( "terms_capped", "terms_total", mcpEvidence.termsCapped, mcpEvidence.termsSeenTotal );
+        absorbCapDisclosure( termsCap, termsCapNote, capAttrs );
+    }
+
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {
         MentionBoostInfo mentionInfo;
@@ -1871,7 +1882,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
     const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
     std::string headerStr = rootOpenStr
-                          + "<!-- ripwire lens for \"" + safeTask + "\"" + mentionNote + boostNote + docMentionNote + floorNote
+                          + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
                           + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
@@ -3635,9 +3646,18 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     const queryshape::Verdict shape   = queryshape::classify( task );
     const std::vector<float>  tierMul = rankTierSymbolMultipliersShaped( ing, !noRoute && shape.fires() );
     lr.rank      = ( rc.which == LexMode::NameExact ) ? lexicalScoresNameExactRanked( ing, task, &tierMul )
-                                                       : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul );
+                                                       : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul,
+                                                                              0, 0, {}, &lr.evidence );
     // §L10b + verify-wave2 F6: same trim as the other route= construction sites — neither bracket.
     lr.routeNote = routeNoteOf( rc, shape, noRoute );   // row 6: the route CODE, ONE producer (filter.h)
+
+    // input blow-up guard disclosure (lexical.h kMaxUniqueQueryTerms/dedupeQueryTerms) — same channel/
+    // attribute names as the other two --for/--pack-task surfaces.
+    {
+        CapDisclosure termsCap;
+        termsCap.note( "terms_capped", "terms_total", lr.evidence.termsCapped, lr.evidence.termsSeenTotal );
+        absorbCapDisclosure( termsCap, lr.capNote, lr.capAttrs, lr.capJson );
+    }
 
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {

@@ -227,19 +227,86 @@ inline std::optional<ParsedFrame> parseAsan( std::string_view line )
     ParsedFrame fr;
     fr.format = FrameFormat::Asan;
 
-    // §A2a: the source location is the LAST space-separated token that parses as path:line[:col], so scan from
-    // the RIGHT. Splitting at the FIRST space cut a DEMANGLED C++ name in half — `runDefaultMap(MainDispatch
-    // const&) src/main.cpp:5155` yielded func="runDefaultMap(MainDispatch" and path="const&) src/main.cpp",
-    // which still suffix-matched the file while destroying the one thing name resolution needs. Trailing
-    // non-location junk (a `(BuildId: …)` tail) just fails the probe and the scan steps left.
-    for( std::size_t sp = after.rfind( ' ' ); sp != std::string_view::npos; sp = sp == 0 ? std::string_view::npos : after.rfind( ' ', sp - 1 ) )
+    // §A2a / L5 (input blow-up guard): the source location is the LAST space-separated token that parses
+    // as path:line[:col], so the scan goes from the RIGHT. Splitting at the FIRST space cut a DEMANGLED
+    // C++ name in half — `runDefaultMap(MainDispatch const&) src/main.cpp:5155` yielded
+    // func="runDefaultMap(MainDispatch" and path="const&) src/main.cpp" — so this still tries every
+    // trailing token, widest-first, until one parses.
+    //
+    // The straightforward way to write that (re-derive `splitPathLine` on a growing right-anchored
+    // suffix, one call per candidate) redoes the SAME work on every widening try: `rfind(':')`/`rfind(' ')`
+    // over a substring that only grows. Every quantity that re-derivation recomputes is actually INVARIANT
+    // once the growing window first reaches it — a colon's position never moves, and "does this stretch
+    // contain '.'/'/'" can only flip false→true as the window grows left, never back — so a candidate
+    // that fails at a given boundary fails at EVERY later (wider) boundary too, and the naive rescan is
+    // pure waste: O(k^2) in the space-separated word count k. A pathological line (thousands of short
+    // "words", no valid trailing location) turned 160 KB of trace text into ~4 s of it. One backward pass
+    // over `after` computes every invariant once, then a second pass — each byte visited by at most one of
+    // the two find_last_of/find_last_not_of calls below, so O(after.size()) total, not O(words^2) —
+    // walks word boundaries right to left applying them:
+    const std::size_t lastColon = after.rfind( ':' );
+    if( lastColon == std::string_view::npos )
     {
-        if( !splitPathLine( trim( after.substr( sp + 1 ) ), fr.path, fr.line, fr.lineOverflowed ) )
+        return std::nullopt;                              // no colon anywhere -> no candidate can ever parse
+    }
+    const std::string_view tailAfterLastColon = after.substr( lastColon + 1 );
+    if( !isDigits( tailAfterLastColon ) )
+    {
+        return std::nullopt;   // this segment is the SAME bytes for every candidate (every candidate
+                                // shares `after`'s right edge), so one check retires every candidate the
+                                // naive per-word rescan would have tried
+    }
+
+    // the `path:line:col` shape's second colon, and its own (also fixed) digit run
+    const std::size_t secondColon = ( lastColon == 0 ) ? std::string_view::npos : after.rfind( ':', lastColon - 1 );
+    const bool        colDigits   = secondColon != std::string_view::npos
+                                  && isDigits( after.substr( secondColon + 1, lastColon - secondColon - 1 ) );
+
+    // the RIGHTMOST path-shaped byte ('.' or '/') strictly before each colon: looksLikePath's answer for a
+    // window that grows LEFTWARD from a fixed right edge is exactly "has the window reached this position
+    // yet", so the rightmost occurrence below a colon IS the threshold at which a growing window first
+    // qualifies — found once, never rescanned.
+    const std::size_t pathCharBeforeLast   = ( lastColon == 0 ) ? std::string_view::npos : after.find_last_of( "./", lastColon - 1 );
+    const std::size_t pathCharBeforeSecond = ( secondColon == std::string_view::npos || secondColon == 0 )
+                                            ? std::string_view::npos : after.find_last_of( "./", secondColon - 1 );
+    if( pathCharBeforeLast == std::string_view::npos )
+    {
+        return std::nullopt;                              // no candidate, however wide, could ever look path-shaped
+    }
+
+    // word boundaries (maximal runs of non-space bytes), right to left — the same ' '-delimited candidates
+    // the naive per-space loop tried, just visited via one shrinking window instead of a rescan per space.
+    for( std::size_t searchEnd = after.size(); searchEnd > 0; )
+    {
+        const std::size_t wordLast = after.find_last_not_of( ' ', searchEnd - 1 );
+        if( wordLast == std::string_view::npos )
         {
-            continue;
+            break;                                          // nothing but spaces remain
         }
-        fr.func.assign( trim( after.substr( 0, sp ) ) );
-        return fr;
+        const std::size_t sp = after.find_last_of( ' ', wordLast );
+        if( sp == std::string_view::npos )
+        {
+            break;                                          // this word starts at 0 — no space precedes it,
+                                                              // so the naive loop could never reach it either
+        }
+        const std::size_t start = sp + 1;
+
+        if( colDigits && pathCharBeforeSecond != std::string_view::npos && start <= pathCharBeforeSecond )
+        {
+            fr.path.assign( trim( after.substr( start, secondColon - start ) ) );
+            fr.line = toUint( after.substr( secondColon + 1, lastColon - secondColon - 1 ), fr.lineOverflowed );
+            fr.func.assign( trim( after.substr( 0, sp ) ) );
+            return fr;
+        }
+        if( start <= pathCharBeforeLast )
+        {
+            fr.path.assign( trim( after.substr( start, lastColon - start ) ) );
+            fr.line = toUint( tailAfterLastColon, fr.lineOverflowed );
+            fr.func.assign( trim( after.substr( 0, sp ) ) );
+            return fr;
+        }
+
+        searchEnd = sp;
     }
     return std::nullopt;                                             // no source location → an in-module-only frame
 }

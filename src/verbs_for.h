@@ -165,6 +165,16 @@ rw::LensRanking computeLensRanking( const MainDispatch& d, std::string_view task
         lensRank = lexicalScoresTiered( ing, g.outOff, g.outTargets, task, forPruneK, ifaceExactPtr, &tierMul, 0, 0, {}, &out.evidence );
     }
 
+    // input blow-up guard disclosure (lexical.h kMaxUniqueQueryTerms/dedupeQueryTerms): a task string with
+    // more distinct terms than the cap allows still scores — on the terms it kept — rather than refusing, so
+    // the cut rides the SAME CapDisclosure channel every other indexing cap on this bundle uses (mention.h),
+    // never a silent truncation.
+    {
+        CapDisclosure termsCap;
+        termsCap.note( "terms_capped", "terms_total", out.evidence.termsCapped, out.evidence.termsSeenTotal );
+        absorbCapDisclosure( termsCap, out.capNote, out.capAttrs, out.capJson );
+    }
+
     // R4: capture the RAW routed lexical score's max BEFORE --anchor/mention/cochange reshape lensRank — the
     // honesty signal reads the actual textual evidence, not a graph-expanded or query-mention-boosted number
     // (those can promote a symbol the query's words never touched, which would mask a genuinely weak query).

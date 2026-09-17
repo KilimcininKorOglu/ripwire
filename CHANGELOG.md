@@ -96,6 +96,35 @@ frame is corrupt). Both are fixed without the wrap, with red-first arms: `scipch
 `*_near_u64_max` mutations plus a disclosure arm (`corrupt-frame`, `blob_entries=0`), and the minimized inputs are
 `regress-*` replay seeds. The qsnap and qchurn readers hit the unbounded-count `reserve` #249 fixes (18 GB and 40 GB
 allocations) within seconds.
+
+### Fixed — a term-rich `--for`/`--pack-task` query, an unbounded MCP stdio request line, or a pathological ASan trace could exhaust memory or stall the process
+
+- **A `--for`/`--pack-task` task string with many distinct terms could cost gigabytes of RAM.** The task
+  string is agent-supplied text, not a hand-typed query — an agent can paste a whole file, log or issue
+  body — and the query's DISTINCT term count had no ceiling: `lexicalScoresTiered`'s `tfFlat` allocation
+  (symbols × unique query terms × 4 bytes) grew with the paste, not with the corpus. A measured 480 KB
+  task string cost 5.2 GB RSS on one request. `dedupeQueryTerms` now caps the kept unique-term count at
+  `kMaxUniqueQueryTerms` (1024 — about 102× the longest real `--for`/`--pack-task` query on record in
+  `bench/` and `docs/`), disclosed as `terms_capped="1" terms_total="N"` on the CLI's `--for` root and on
+  the MCP `for`/`explore`/`pack_task` responses, never a silent truncation. Gate: `test/forblowupcheck.sh`.
+- **An MCP stdio request line had no size bound, unlike the HTTP transport.** `runMcp()`'s read loop grew
+  its line buffer without limit, so one long-lived `--mcp` server could be pushed toward OOM one
+  oversized line at a time by a runaway or hostile peer — HTTP already bounded a request body at 8 MiB
+  before it reached the JSON-RPC layer, stdio had no equivalent. `readByteSafeLineBounded`
+  (`src/infra/stdinline.h`) now bounds a stdio request line at `kMcpStdioLineMaxBytes` (32 MiB) and drains
+  the remainder of an over-limit line without buffering it; `runMcp()` refuses it with a named JSON-RPC
+  error (`code=-32600`, `id:null`) and keeps serving the next request on the same connection. Gate:
+  `test/mcpstdiolinecapcheck.sh`.
+- **A pathological `--from-trace` line could turn 160 KB of text into ~4 s of CPU.** `parseAsan`'s search
+  for an ASan/UBSan frame's source location re-derived the whole candidate on every widening try
+  (a demangled C++ function name can itself contain spaces, so the split cannot just be the first one) —
+  O(k²) in the space-separated word count k. A line built from thousands of short, non-path-shaped
+  "words" with no valid trailing location (a fuzzer or minified-diagnostic shape) showed the worst case.
+  Every quantity the rescan recomputed is actually invariant once the growing window first reaches it, so
+  `parseAsan` now computes each once and walks word boundaries in a single backward pass — O(size), not
+  O(words²) — landing on the exact same candidate the original rescan would have found first. Gate:
+  `test/traceasanlinearcheck.sh` (40 KB/160 KB/640 KB/2.5 MB timing; the baseline binary times out past
+  640 KB on the same fixture).
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
 Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
