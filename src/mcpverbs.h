@@ -3917,6 +3917,11 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
 
     const ::TSLanguage* grammar = sliceGrammarForFile( path );
     slicev::SliceScan   scan    = slicev::sliceScanDefinition( src, sym, fam, grammar, varName );
+    if( scan.tooDeep )
+    {
+        return SliceReply{ {}, "'" + sym.name + "' in " + path + " nests deeper than " + std::to_string( slicev::kMaxSliceDepth )
+                               + " syntax levels — refused: the slice walks recurse once per level, and a definition this deep would exhaust the stack" };
+    }
     if( !scan.parseOk )
     {
         DEGRADED_PATH_ALERT( "mcp slice: definition re-parse failed" );
