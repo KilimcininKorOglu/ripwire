@@ -290,14 +290,31 @@ file(APPEND "${_ripwire_embedded_queries}" "}};\n\ninline constexpr std::string_
 # -DCMAKE_BUILD_TYPE=Release" locally — Release defines NDEBUG, which compiles DEGRADED_PATH_ALERT out).
 # "unspecified" told a bug reporter nothing about what they actually ran; "dev" is the honest, specific
 # label for that configure (§P6.10, 2026-07-28 output audit) — it is the first thing a bug report pastes.
-if(NOT CMAKE_BUILD_TYPE)
-  set(_ripwire_build_type_str "dev")
+# A MULTI-CONFIG generator (Ninja Multi-Config, Xcode) has no CMAKE_BUILD_TYPE: the configuration is picked at
+# build time (`cmake --build b --config Release`), so "dev" would mislabel an NDEBUG binary, and gates that read
+# the token to decide whether alerts are compiled in would believe it. The token is `$<CONFIG>` there, and the
+# header is per-configuration too: one shared version.h is rewritten by whichever configuration stamped last, and
+# a cross-config Ninja Multi-Config build collapses the stamp into ONE command, so every configuration's binary
+# carried the first one's token. Each configuration owns generated/<Config>/version.h, searched ahead of
+# generated/. A single-config tree keeps generated/version.h and its exact command line
+# (test/buildtypestampcheck.sh).
+get_property(_ripwire_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_ripwire_multi_config)
+  set(_ripwire_build_type_str "$<CONFIG>")
+  set(_ripwire_version_header "${_ripwire_generated_dir}/$<CONFIG>/version.h")
+  set(_ripwire_generated_include_dirs "${_ripwire_generated_dir}/$<CONFIG>" "${_ripwire_generated_dir}")
 else()
-  set(_ripwire_build_type_str "${CMAKE_BUILD_TYPE}")
+  if(NOT CMAKE_BUILD_TYPE)
+    set(_ripwire_build_type_str "dev")
+  else()
+    set(_ripwire_build_type_str "${CMAKE_BUILD_TYPE}")
+  endif()
+  set(_ripwire_version_header "${_ripwire_generated_dir}/version.h")
+  set(_ripwire_generated_include_dirs "${_ripwire_generated_dir}")
 endif()
-set(_ripwire_version_header "${_ripwire_generated_dir}/version.h")
 # Always run before the two executable targets. copy_if_different inside the script keeps the header's
-# mtime stable when neither HEAD nor tracked bytes changed, so this gives exact provenance without
+# mtime stable when neither HEAD nor tracked bytes changed (per configuration on a multi-config generator,
+# so switching --config does not rewrite the other's header), so this gives exact provenance without
 # recompiling main.cpp on every incremental build.
 add_custom_target(ripwire_version_stamp ALL
   COMMAND ${CMAKE_COMMAND}
@@ -562,7 +579,7 @@ add_executable(ripwire_probe
 target_link_libraries(ripwire_probe PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire_probe PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
-  ${_ripwire_generated_dir}
+  ${_ripwire_generated_include_dirs}
   src/infra
   third_party
   src)
@@ -577,7 +594,7 @@ add_executable(ripwire
 target_link_libraries(ripwire PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
-  ${_ripwire_generated_dir}
+  ${_ripwire_generated_include_dirs}
   src/infra
   third_party
   src)

@@ -257,6 +257,33 @@ re-encode byte-identically and appear verbatim as an `S` id. The `|` target must
 dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
 12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
 
+### Fixed — `--version` names the configuration a multi-config generator built, not `dev`
+
+`--version` took its build-type token from `CMAKE_BUILD_TYPE`, which a multi-config generator (Ninja Multi-Config,
+Xcode) leaves empty. So a `cmake --build b --config Release` binary said `dev`, although it defines `NDEBUG` and
+compiles `DEGRADED_PATH_ALERT` out. Gates that read the token to decide whether the binary can print alerts
+(`test/pargates.py`, `kotlincheck` §12 and others) failed loudly on such a binary, so none passed for the wrong
+reason, but the token was wrong. Reported by CodeRabbit on #261. On a multi-config generator the token is now the
+configuration built (`Debug`, `Release`, …). A single-config configure is unchanged: `cmake -S . -B build` still says
+`dev`, and `-DCMAKE_BUILD_TYPE=Release` still says `Release`. The stamp command and both targets' compile flags are
+byte-identical to before.
+
+Passing the configuration into the stamp command was not enough, because `version.h` was one file shared by every
+configuration. In a cross-config Ninja Multi-Config build (`CMAKE_CROSS_CONFIGS=all`), CMake runs a shared byproduct's
+command once. On a two-file probe, the Debug, Release and RelWithDebInfo binaries all printed `Debug`, and against the
+real tree the gate read `Release="Debug" RelWithDebInfo="Debug"`. Each configuration now writes its own
+`generated/<Config>/version.h`, found before `generated/`. Stamping one configuration no longer rewrites another's
+header, so switching `--config` does not recompile `main.cpp` either.
+
+Gate: `test/buildtypestampcheck.sh`. It configures the real `CMakeLists.txt` in scratch trees and builds only the stamp
+target. It then asks CMake's File API which `version.h` each configuration's `ripwire` compile would include, and reads
+the token from that file. It checks both single-config spellings, and under Ninja Multi-Config (or Xcode when ninja is
+absent) that Debug and Release each see their own token in different files. It also checks that stamping Release
+leaves the Debug header's bytes and mtime alone, that re-stamping Debug keeps its mtime, and that one cross-config
+build gives every configuration its own token. Two controls prove the token extraction and include resolution can
+fail. On the old `CMakeLists.txt`, 6 of its rows failed under Ninja Multi-Config and 5 under Xcode. Against the
+command-only fix, 4 rows still failed.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
