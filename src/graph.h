@@ -4660,9 +4660,10 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     out.ownersOfName = everyOwner.size();
 
     // "<fromSymbol>#<var>" → the var's declared type: Rule 2's own binding table (kind Type — a typed local, a
-    // constructor-initialised one) PLUS the parameter written types (kind ParamType, captured for this index
-    // alone); a conflicting re-declaration tombstones.
-    HashMap<std::string, std::string> localType;
+    // constructor-initialised one) PLUS the parameter written types (kind ParamType), folded by Rule 2's own rule
+    // (resolve.h recordFlatRecvType): a conflicting re-declaration tombstones, and so does a type written in `std` — it
+    // names no in-repo class, and a skip would hand a same-named variable's other declaration every site of the name.
+    HashMap<std::string, FlatRecvType> localType;
     localType.reserve( ing.bindings.size() );
     std::string key;
     for( const Binding& b : ing.bindings )
@@ -4672,11 +4673,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             continue;
         }
         buildShadowKey( key, b.fromSymbol, b.var );
-        const auto [ it, inserted ] = localType.try_emplace( key, b.typeName );
-        if( !inserted && !it->second.empty() && it->second != b.typeName )
-        {
-            it->second.clear();
-        }
+        recordFlatRecvType( localType, key, b );
     }
     const FieldNarrowTables narrow = buildFieldNarrowTables( ing );   // "Class#field" → declared type (S5-E)
 
@@ -4704,15 +4701,20 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         const auto it = narrow.fieldTypeByClass.find( key );
         return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second );
     };
-    const auto localTypeOf = [ & ]( NodeId encl, std::string_view var ) -> std::string_view
+    // a receiver variable's type: a local or parameter declaration of the name in this definition decides, and a
+    // tombstoned one answers "" — never the same-named member of the enclosing class, which that declaration
+    // shadows; with no declaration the name is that member
+    const auto receiverTypeOf = [ & ]( NodeId encl, std::string_view var, std::string_view ctxOwner ) -> std::string_view
     {
-        if( encl == kNoNode || var.empty() )
+        if( encl != kNoNode && !var.empty() )
         {
-            return {};
+            buildShadowKey( key, encl, var );
+            if( const auto it = localType.find( key ); it != localType.end() )
+            {
+                return it->second.type;
+            }
         }
-        buildShadowKey( key, encl, var );
-        const auto it = localType.find( key );
-        return it == localType.end() ? std::string_view{} : std::string_view( it->second );
+        return fieldTypeOf( ctxOwner, var );
     };
 
     std::vector<FieldId> cand;
@@ -4781,12 +4783,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             break;
             case RecvKind::NamedVar:
             {
-                std::string_view type = localTypeOf( r.fromSymbol, r.recvVar );
-                if( type.empty() )
-                {
-                    type = fieldTypeOf( ctxOwner, r.recvVar );   // the receiver is a member of the enclosing class
-                }
-                candidatesIn( type, r.lang );
+                candidatesIn( receiverTypeOf( r.fromSymbol, r.recvVar, ctxOwner ), r.lang );
                 if( cand.empty() )
                 {
                     everyCompatibleOwner( r.lang );
@@ -4804,12 +4801,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             break;
             case RecvKind::FieldOfVar:
             {
-                std::string_view baseType = localTypeOf( r.fromSymbol, r.recvVar );
-                if( baseType.empty() )
-                {
-                    baseType = fieldTypeOf( ctxOwner, r.recvVar );
-                }
-                candidatesIn( fieldTypeOf( baseType, r.fieldName ), r.lang );
+                candidatesIn( fieldTypeOf( receiverTypeOf( r.fromSymbol, r.recvVar, ctxOwner ), r.fieldName ), r.lang );
                 if( cand.empty() )
                 {
                     everyCompatibleOwner( r.lang );   // includes the "receiver too rich to classify" shape (empty recvVar)
