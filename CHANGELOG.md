@@ -15,6 +15,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
+
+A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles
+the alert out. `test/churnjoincheck.sh` (G2), `test/preproccondcheck.sh` (the 600-deep guard stack) and
+`test/w3fixlegendcheck.sh` (arm 6) found out by running `--rank-by=churn --since=notadate` and looking for an alert.
+Since `--since` became a refusal (exit 1, before any degrade path runs), that run prints no alert on any build, so
+all three skipped their alert arm on the plain build too: one SKIP each, zero failures, on the leg CI keeps
+precisely to prove degrade paths. The build type `--version` names decides now, as in `kotlincheck` and
+`estchargecheck`: Release, RelWithDebInfo and MinSizeRel skip, every other flavour asserts. G2 also asserts the join
+alert itself, on the line after the NFD disclosure, where any `[math degraded]` line used to do. Arm 6's subject,
+the wording of the `--since` alert, no longer exists, so it pins the refusal that replaced it: exit 1, no document,
+one stderr line, and no alert, next to a positive control proving the binary prints alerts at all.
+
+The suite could not see this, because an arm-level skip inside a passing gate counts as a pass. `test/pargates.py`
+now reads the binary's build type once and fails any gate whose skip row blames NDEBUG or compiled-out alerts on a
+build type that does not define NDEBUG. A skip for any other reason is untouched, and a binary that names no build
+type disarms the check with a line in the summary. Gate: `test/skipclassifycheck.sh` arm (I), red on the old harness,
+and the new harness fails all three unfixed gates ([#261](https://github.com/redhat-et/ripwire/pull/261)).
+
+### Fixed — the churn join gate read "2 weeks ago" twice, and checked the default window against the wall clock
+
+`test/churnjoincheck.sh` compared ripwire's churn with git's own count, but the two did not always ask about the same
+window. The live audit passed `--since="2 weeks ago"` to ripwire and `"2 weeks ago"` to git, and each evaluated it when
+it ran, so a commit on the edge fell inside one window and outside the other: #265 went red on `src/slice.h` churn 15 vs
+14. Every default-window oracle asked git for wall-clock `"12 months ago"`, while ripwire anchors that window on HEAD,
+so the fixtures' 2026-06 commits would have failed the gate from 2027-06-01. The offset arm beside them still selected a
+retired `p="./…"` spelling and passed on zero rows. The gate now reads the clock once and hands one ISO-8601 instant to
+both sides, computes the HEAD-anchored start for the default window, and re-derives all 163 offset rows. A new arm pins
+both window edges to the second, with controls that stage the double reading through git's `GIT_TEST_DATE_NOW`. Measured
+on the old gate with that staging: 4 FAIL rows for #265's straddle (`src/slice.h` 12 vs 11) and 12 FAIL rows with git's
+clock at 2027-07-01; the new gate is 78 PASS under both stagings and without them
+([#271](https://github.com/redhat-et/ripwire/pull/271)).
+
 ### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
 
 CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
