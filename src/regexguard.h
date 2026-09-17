@@ -47,17 +47,21 @@
 // under NDEBUG, so the branch and the getenv are deleted from a release build. Measured in the lane that made
 // this seam: byte-identical output on every touched verb, release __text size in the CHANGELOG entry.
 //
-// THE ALLOWLIST, and why it is one row. src/redact.h compiles a CONSTANT rule table written in its own file, once,
-// on the redaction hot path, so it keeps std::regex directly (arm (c) names the reason). src/skillscan.h was the
-// second row until its patterns moved behind this header: a skill file is untrusted input, so an abandoned match
-// there must fail closed rather than abort wrap's noexcept scan. A new constant table may join redact.h only on the
-// same argument; a pattern a user can type may not.
+// THE ALLOWLIST, and why it is empty. src/skillscan.h was a row until its patterns moved behind this header: a skill
+// file is untrusted input, so an abandoned match there must fail closed rather than abort wrap's noexcept scan.
+// src/redact.h was the last row — a constant rule table — until libstdc++'s per-state recursion made it the same Linux
+// crash on a long token run in a default run's emitted bodies; its rules are now matched structurally, with each
+// regex kept as the specification arm (o) diffs against. A new constant table needs a reason at least that strong; a
+// pattern a user can type never gets a row.
 
-#include "infra/emit.h"   // rw::faultSwitchOn — the one reader every non-NDEBUG fault switch goes through
+#include "infra/emit.h"      // rw::faultSwitchOn — the one reader every non-NDEBUG fault switch goes through
+#include "infra/strkern.h"   // findByte / find3 / findByteset / lowerFoldedEquals — the literal paths' byte kernels
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <locale>     // std::locale::classic — icase folds through the regex's locale, and only the classic one is ASCII-only
 #include <new>        // std::bad_alloc — the one other exception type the engine raises, caught here by type
 #include <optional>
 #include <regex>
@@ -410,7 +414,783 @@ inline constexpr std::string_view kRegexAbandonedReason =
     "screen cannot see, such as overlapping alternation like (a|a)+z where two branches match the same text, or "
     "its stack or memory limit)";
 
+// ── THE PATTERN'S SHAPE, read once when it compiles ─────────────────────────────────────────────────────────────
+//
+// libstdc++'s matcher is a depth-first search that RECURSES once for every state it steps through, so a match that
+// consumes a long run recurses once per byte or more: on Linux's 8 MiB stack `--regex='a*b'` died with SIGSEGV on a
+// matching line of about 26 KB (27–45 KB across this tool's own gcc and clang builds). No pattern bound reaches
+// that — the depth is set by the SUBJECT. Three facts about the pattern let a match avoid the engine or bound it:
+//
+//   1. THE LITERAL PLAN. A pattern that is one literal, or an alternation of literals (one literal may carry `^`
+//      and `$`), matches exactly where a byte search finds it, in the engine's own order: leftmost start first,
+//      and at one start the first alternative written. Nothing recurses and no line is too long for it.
+//   2. THE REQUIRED LITERALS. Every match of `foo.*bar` contains "foo": a run of plain literal bytes with no
+//      quantifier on any of them, outside every group, in each top-level alternative. A subject holding none of
+//      an alternation's runs cannot match, so the engine is never asked. Under icase the runs are ASCII-lowered
+//      and compared folded, and only while the global locale is the classic one — std::regex folds through the
+//      locale the regex was built under, and the classic locale folds A–Z and nothing else.
+//   3. THE RECURSION COST. An upper bound on how many states libstdc++'s matcher can have on its stack for a
+//      subject of N bytes, `fixedVisits + visitsPerByte × N`, which the caller turns into the longest subject
+//      its thread's stack can take (maxEngineSubjectBytes).
+//
+// The reader below is conservative, not a second regex parser: a token it cannot vouch for (a bracket nested in a
+// class, a `{` that is not a quantifier, a bare `]` or `}`) ends the literal plan and the required run, and still
+// counts as a state for the cost. test/regexguardcheck.sh arm (j) runs every fact against the engine itself.
+
+enum class RegexTokenKind : std::uint8_t
+{
+    Literal,         // one byte that matches only itself
+    Atom,            // consumes one byte some other way: `.`, a class, `\d`, `\xHH`, or a byte this reader will not vouch for
+    Assertion,       // zero width: ^ $ \b \B
+    Backref,         // \1 …: consumes what a group captured, possibly nothing
+    GroupOpen,       // ( or (?:
+    LookaheadOpen,   // (?= or (?!
+    GroupClose,
+    Alternation,
+    Quantifier,
+};
+
+inline constexpr std::uint64_t kRegexCountCap = std::uint64_t( 1 ) << 40;   // state counts saturate here, far past any stack
+
+struct RegexToken
+{
+    RegexTokenKind kind        = RegexTokenKind::Atom;
+    std::size_t    lengthCount = 1;
+    char           literal     = 0;               // Literal only
+    bool           isVouched   = true;            // false ⇒ the literal plan and the required run stop here
+    std::uint64_t  minCount    = 0;               // Quantifier only
+    std::uint64_t  maxCount    = 0;               // Quantifier only; kRegexCountCap when unbounded
+};
+
+inline std::uint64_t regexCountAdd( std::uint64_t a, std::uint64_t b ) noexcept { return std::min( a + b, kRegexCountCap ); }
+inline std::uint64_t regexCountMul( std::uint64_t a, std::uint64_t b ) noexcept
+{
+    return ( a == 0 || b == 0 ) ? 0 : ( a > kRegexCountCap / b ) ? kRegexCountCap : std::min( a * b, kRegexCountCap );
+}
+
+// A character class from its `[` to one past its `]`. ECMAScript closes on the first unescaped `]`, even straight after
+// `[` or `[^` (`[]` is the empty class on both standard libraries); `[:alpha:]`-style names are stepped over whole. A
+// `[` inside the class makes the token unvouched: the two libraries do not read nested brackets the same way.
+inline RegexToken regexClassTokenAt( const std::string& pat, std::size_t at ) noexcept
+{
+    RegexToken  token;
+    std::size_t i = at + 1;
+    if( i < pat.size() && pat[ i ] == '^' )
+    {
+        ++i;
+    }
+    while( i < pat.size() )
+    {
+        if( pat[ i ] == '\\' )
+        {
+            i += 2;
+            continue;
+        }
+        if( pat[ i ] == '[' )
+        {
+            token.isVouched = false;
+            const bool isNamed = i + 1 < pat.size() && ( pat[ i + 1 ] == ':' || pat[ i + 1 ] == '.' || pat[ i + 1 ] == '=' );
+            const std::size_t close = isNamed ? pat.find( std::string{ pat[ i + 1 ], ']' }, i + 2 ) : std::string::npos;
+            i = ( close == std::string::npos ) ? i + 1 : close + 2;
+            continue;
+        }
+        if( pat[ i ] == ']' )
+        {
+            token.lengthCount = i + 1 - at;
+            return token;
+        }
+        ++i;
+    }
+    token.lengthCount = std::max<std::size_t>( pat.size() - at, 1 );
+    token.isVouched   = false;
+    return token;
+}
+
+inline RegexToken regexEscapeTokenAt( const std::string& pat, std::size_t at ) noexcept
+{
+    RegexToken token;
+    if( at + 1 >= pat.size() )
+    {
+        token.isVouched = false;
+        return token;
+    }
+    const char escaped = pat[ at + 1 ];
+    token.lengthCount  = 2;
+    switch( escaped )
+    {
+    case 'b': case 'B':
+        token.kind = RegexTokenKind::Assertion;
+        return token;
+    case 'd': case 'D': case 's': case 'S': case 'w': case 'W': case '0':
+        return token;
+    case 'f': token.kind = RegexTokenKind::Literal; token.literal = '\f'; return token;
+    case 'n': token.kind = RegexTokenKind::Literal; token.literal = '\n'; return token;
+    case 'r': token.kind = RegexTokenKind::Literal; token.literal = '\r'; return token;
+    case 't': token.kind = RegexTokenKind::Literal; token.literal = '\t'; return token;
+    case 'v': token.kind = RegexTokenKind::Literal; token.literal = '\v'; return token;
+    case 'c': token.lengthCount = std::min<std::size_t>( 3, pat.size() - at ); return token;
+    case 'x': token.lengthCount = std::min<std::size_t>( 4, pat.size() - at ); return token;
+    case 'u': token.lengthCount = std::min<std::size_t>( 6, pat.size() - at ); return token;
+    default:
+        break;
+    }
+    if( escaped >= '1' && escaped <= '9' )
+    {
+        token.kind = RegexTokenKind::Backref;
+        while( at + token.lengthCount < pat.size() && pat[ at + token.lengthCount ] >= '0' && pat[ at + token.lengthCount ] <= '9' )
+        {
+            ++token.lengthCount;
+        }
+        return token;
+    }
+    const unsigned char byte          = static_cast<unsigned char>( escaped );
+    const bool          isPunctuation = byte > 0x20 && byte < 0x7F && byte != '_' && !( byte >= '0' && byte <= '9' )
+                                        && !( ( byte | 0x20 ) >= 'a' && ( byte | 0x20 ) <= 'z' );
+    if( isPunctuation )
+    {
+        token.kind    = RegexTokenKind::Literal;                      // an identity escape: `\.` is a dot, on both libraries
+        token.literal = escaped;
+        return token;
+    }
+    token.isVouched = false;
+    return token;
+}
+
+inline RegexToken regexTokenAt( const std::string& pat, std::size_t at ) noexcept
+{
+    RegexToken token;
+    const char c = pat[ at ];
+    switch( c )
+    {
+    case '(':
+        token.kind = RegexTokenKind::GroupOpen;
+        if( at + 2 < pat.size() && pat[ at + 1 ] == '?' )
+        {
+            const char kind   = pat[ at + 2 ];
+            token.kind        = ( kind == '=' || kind == '!' ) ? RegexTokenKind::LookaheadOpen : RegexTokenKind::GroupOpen;
+            token.lengthCount = ( kind == '=' || kind == '!' || kind == ':' ) ? 3 : 1;
+            token.isVouched   = ( kind == '=' || kind == '!' || kind == ':' );
+        }
+        return token;
+    case ')': token.kind = RegexTokenKind::GroupClose;  return token;
+    case '|': token.kind = RegexTokenKind::Alternation; return token;
+    case '^': case '$': token.kind = RegexTokenKind::Assertion; return token;
+    case '.': return token;
+    case '[': return regexClassTokenAt( pat, at );
+    case '\\': return regexEscapeTokenAt( pat, at );
+    case ']': case '}': case '\0':
+        token.isVouched = false;
+        return token;
+    case '*': case '+': case '?': case '{':
+    {
+        const RegexQuantifier quant = regexQuantifierAt( pat, at );
+        if( !quant.isPresent )
+        {
+            token.isVouched = false;                                   // a `{` that is not an interval
+            return token;
+        }
+        token.kind        = RegexTokenKind::Quantifier;
+        token.lengthCount = quant.lengthCount;
+        token.minCount    = ( c == '+' ) ? 1 : 0;
+        token.maxCount    = ( c == '?' ) ? 1 : kRegexCountCap;
+        if( c == '{' )
+        {
+            std::size_t cursor = at + 1;
+            std::uint64_t lower = 0, upper = 0;
+            for( ; pat[ cursor ] >= '0' && pat[ cursor ] <= '9'; ++cursor ) { lower = std::min( lower * 10 + std::uint64_t( pat[ cursor ] - '0' ), kRegexCountCap ); }
+            token.minCount = lower;
+            token.maxCount = quant.isUnbounded ? kRegexCountCap : lower;
+            if( pat[ cursor ] == ',' && !quant.isUnbounded )
+            {
+                for( ++cursor; pat[ cursor ] >= '0' && pat[ cursor ] <= '9'; ++cursor ) { upper = std::min( upper * 10 + std::uint64_t( pat[ cursor ] - '0' ), kRegexCountCap ); }
+                token.maxCount = std::max( upper, lower );
+            }
+        }
+        if( at + token.lengthCount < pat.size() && pat[ at + token.lengthCount ] == '?' )
+        {
+            ++token.lengthCount;                                       // lazy: the same states, visited in another order
+        }
+        return token;
+    }
+    default:
+        token.kind    = RegexTokenKind::Literal;
+        token.literal = c;
+        return token;
+    }
+}
+
+// ── 1. the literal plan ─────────────────────────────────────────────────────────────────────────────────────────
+struct RegexLiteralPlan
+{
+    std::vector<std::string> alternatives;              // in pattern order; empty ⇒ no plan
+    bool                     isAnchoredBegin = false;   // `^lit` (one alternative only)
+    bool                     isAnchoredEnd   = false;   // `lit$` (one alternative only)
+    bool                     isLineFree      = false;   // unanchored, and no alternative holds '\n' or '\r'
+};
+
+inline RegexLiteralPlan regexLiteralPlanOf( const std::string& pat, RegexSyntax syntax ) noexcept
+{
+    RegexLiteralPlan plan;
+    if( ( syntax & ~( kRegexEcmaScript | kRegexOptimize | std::regex_constants::nosubs ) ) != RegexSyntax{} || pat.empty() )
+    {
+        return plan;
+    }
+    std::size_t at = 0;
+    plan.isAnchoredBegin = pat[ 0 ] == '^';
+    at += plan.isAnchoredBegin ? 1 : 0;
+    std::vector<std::string> alternatives( 1 );
+    while( at < pat.size() )
+    {
+        const RegexToken token = regexTokenAt( pat, at );
+        const std::size_t next = at + token.lengthCount;
+        if( token.kind == RegexTokenKind::Literal && token.isVouched
+            && !( next < pat.size() && regexTokenAt( pat, next ).kind == RegexTokenKind::Quantifier ) )
+        {
+            alternatives.back().push_back( token.literal );
+        }
+        else if( token.kind == RegexTokenKind::Alternation )
+        {
+            alternatives.emplace_back();
+        }
+        else if( token.kind == RegexTokenKind::Assertion && pat[ at ] == '$' && next == pat.size() )
+        {
+            plan.isAnchoredEnd = true;
+        }
+        else
+        {
+            return plan;
+        }
+        at = next;
+    }
+    const bool hasEmpty = std::any_of( alternatives.begin(), alternatives.end(), []( const std::string& a ) { return a.empty(); } );
+    if( hasEmpty || ( ( plan.isAnchoredBegin || plan.isAnchoredEnd ) && alternatives.size() > 1 ) )
+    {
+        return RegexLiteralPlan{};
+    }
+    plan.isLineFree   = !plan.isAnchoredBegin && !plan.isAnchoredEnd
+                      && std::none_of( alternatives.begin(), alternatives.end(),
+                                       []( const std::string& a ) { return a.find_first_of( "\r\n" ) != std::string::npos; } );
+    plan.alternatives = std::move( alternatives );
+    return plan;
+}
+
+// ── 2. the required literals ────────────────────────────────────────────────────────────────────────────────────
+struct RegexRequiredLiterals
+{
+    std::vector<std::string> anyOf;                  // empty ⇒ no prefilter; else every match contains one of these
+    bool                     isCaseFolded = false;   // ASCII-lowered, compared folded (icase under the classic locale)
+    bool                     isLineFree   = false;   // not folded, and no literal holds '\n' or '\r' (the whole-text jump)
+};
+
+inline RegexRequiredLiterals regexRequiredLiteralsOf( const std::string& pat, RegexSyntax syntax ) noexcept
+{
+    RegexRequiredLiterals out;
+    const bool isFolded = ( syntax & kRegexIcase ) != RegexSyntax{};
+    if( ( syntax & ~( kRegexEcmaScript | kRegexOptimize | kRegexIcase | std::regex_constants::nosubs ) ) != RegexSyntax{}
+        || ( isFolded && std::locale() != std::locale::classic() ) )
+    {
+        return out;
+    }
+    std::vector<std::string> anyOf;
+    std::string              best, run;
+    const auto               commit = [ & ] { if( run.size() > best.size() ) { best = run; } run.clear(); };
+    const auto               finish = [ & ] { commit(); anyOf.push_back( std::move( best ) ); best.clear(); };
+    std::size_t              at     = 0;
+    while( at < pat.size() )
+    {
+        const RegexToken token = regexTokenAt( pat, at );
+        std::size_t      next  = at + token.lengthCount;
+        if( !token.isVouched || token.kind == RegexTokenKind::GroupClose )
+        {
+            return out;                                                  // unreadable here, or unbalanced: no prefilter
+        }
+        const bool isQuantified = next < pat.size() && regexTokenAt( pat, next ).kind == RegexTokenKind::Quantifier;
+        switch( token.kind )
+        {
+        case RegexTokenKind::Literal:
+            if( isQuantified )
+            {
+                commit();
+            }
+            else
+            {
+                const char byte = token.literal;
+                run.push_back( ( isFolded && byte >= 'A' && byte <= 'Z' ) ? char( byte + 0x20 ) : byte );
+            }
+            break;
+        case RegexTokenKind::Alternation:
+            finish();
+            break;
+        case RegexTokenKind::GroupOpen:
+        case RegexTokenKind::LookaheadOpen:
+        {
+            commit();
+            std::size_t depth = 1;                                       // step over the group whole
+            while( next < pat.size() && depth > 0 )
+            {
+                const RegexToken inner = regexTokenAt( pat, next );
+                if( !inner.isVouched )
+                {
+                    return out;
+                }
+                depth += ( inner.kind == RegexTokenKind::GroupOpen || inner.kind == RegexTokenKind::LookaheadOpen ) ? 1 : 0;
+                depth -= ( inner.kind == RegexTokenKind::GroupClose ) ? 1 : 0;
+                next  += inner.lengthCount;
+            }
+            if( depth != 0 )
+            {
+                return out;
+            }
+            break;
+        }
+        default:
+            commit();                                                    // an atom, an assertion, a backref, a quantifier
+            break;
+        }
+        at = next;
+    }
+    finish();
+    if( std::any_of( anyOf.begin(), anyOf.end(), []( const std::string& s ) { return s.empty(); } ) )
+    {
+        return out;
+    }
+    out.isCaseFolded = isFolded;
+    out.isLineFree   = !isFolded && std::none_of( anyOf.begin(), anyOf.end(),
+                                                  []( const std::string& s ) { return s.find_first_of( "\r\n" ) != std::string::npos; } );
+    out.anyOf        = std::move( anyOf );
+    return out;
+}
+
+// ── 3. the recursion cost ───────────────────────────────────────────────────────────────────────────────────────
+//
+// What libstdc++'s executor does (bits/regex_executor.tcc, _M_dfs and its handlers): every state it steps into is a
+// nested call, and a call returns only when that branch is decided. So the stack holds the current PATH from the
+// start state. On that path:
+//   * a state on no cycle appears at most once — only an unbounded repeat (`*`, `+`, `{n,}`) closes a cycle;
+//   * the subject position never moves backwards, and each consuming state moves it by one byte;
+//   * at one position, a repeat state descends into its body at most twice (_M_rep_once_more's count is saved and
+//     restored only when the frame unwinds), so a state on a cycle appears at most 2 + 1 + 2 = 5 times per position:
+//     two descents, one entry by consuming the previous byte, and (for the repeat state itself) two loop-backs;
+//   * a lookahead runs a separate executor nested on the same stack, which returns before the path continues.
+// So for a subject of N bytes the path is at most  T + N + 5·C·(N + 1)  states, T = every state and C = the
+// non-consuming states on a cycle, plus the deepest lookahead's own bound. The model below uses 6 for that 5, a
+// margin against a counting slip, and test/regexguardcheck.sh arm (l) measures the real depth on the real engine.
+struct RegexRecursionCost
+{
+    std::uint64_t fixedVisits   = 0;
+    std::uint64_t visitsPerByte = 0;
+};
+
+inline constexpr std::uint64_t kRegexVisitsPerCycleState = 6;
+inline constexpr std::uint64_t kRegexLookaheadFrameVisits = 8;   // the nested executor object lives in the lookahead's frame
+
+struct RegexShapeCount
+{
+    std::uint64_t states       = 0;   // every NFA state on the outer path, clones counted
+    std::uint64_t nonConsuming = 0;   // states that do not advance the subject by exactly one byte
+    std::uint64_t cycleStates  = 0;   // non-consuming states inside an unbounded repeat, the repeat state included
+    std::uint64_t lookFixed    = 0;   // the deepest lookahead's own bound: fixed…
+    std::uint64_t lookPerByte  = 0;   // …and per subject byte
+};
+
+inline RegexShapeCount regexShapeSequence( const RegexShapeCount& a, const RegexShapeCount& b ) noexcept
+{
+    return { regexCountAdd( a.states, b.states ), regexCountAdd( a.nonConsuming, b.nonConsuming ), regexCountAdd( a.cycleStates, b.cycleStates ),
+             std::max( a.lookFixed, b.lookFixed ), std::max( a.lookPerByte, b.lookPerByte ) };
+}
+
+inline RegexShapeCount regexShapeRepeat( const RegexShapeCount& body, std::uint64_t minCount, std::uint64_t maxCount ) noexcept
+{
+    RegexShapeCount out = body;
+    if( maxCount >= kRegexCountCap )
+    {
+        const std::uint64_t copies = regexCountAdd( minCount, 1 );    // n plain copies, then one looped copy and its repeat state
+        out.states       = regexCountAdd( regexCountMul( body.states, copies ), 1 );
+        out.nonConsuming = regexCountAdd( regexCountMul( body.nonConsuming, copies ), 1 );
+        out.cycleStates  = regexCountAdd( regexCountAdd( regexCountMul( body.cycleStates, minCount ), body.nonConsuming ), 1 );
+        return out;
+    }
+    const std::uint64_t optional = maxCount - std::min( minCount, maxCount );
+    out.states       = regexCountAdd( regexCountMul( body.states, maxCount ), optional );
+    out.nonConsuming = regexCountAdd( regexCountMul( body.nonConsuming, maxCount ), optional );
+    out.cycleStates  = regexCountMul( body.cycleStates, maxCount );
+    return out;
+}
+
+inline RegexShapeCount regexShapeDisjunction( const std::string& pat, std::size_t& at, bool isNested ) noexcept;
+
+inline RegexShapeCount regexShapeAlternative( const std::string& pat, std::size_t& at, bool isNested ) noexcept
+{
+    RegexShapeCount acc;
+    while( at < pat.size() )
+    {
+        const RegexToken token = regexTokenAt( pat, at );
+        if( token.kind == RegexTokenKind::Alternation || ( token.kind == RegexTokenKind::GroupClose && isNested ) )
+        {
+            break;
+        }
+        at += token.lengthCount;
+        RegexShapeCount term;
+        switch( token.kind )
+        {
+        case RegexTokenKind::Literal:
+        case RegexTokenKind::Atom:
+            term = { 1, 0, 0, 0, 0 };
+            break;
+        case RegexTokenKind::GroupOpen:
+        case RegexTokenKind::LookaheadOpen:
+        {
+            const RegexShapeCount inner = regexShapeDisjunction( pat, at, /*isNested=*/true );
+            at += ( at < pat.size() && pat[ at ] == ')' ) ? 1 : 0;
+            if( token.kind == RegexTokenKind::GroupOpen )
+            {
+                term = regexShapeSequence( inner, { 2, 2, 0, 0, 0 } );
+                break;
+            }
+            const std::uint64_t cycleVisits = regexCountMul( kRegexVisitsPerCycleState, inner.cycleStates );
+            term.states       = 1;
+            term.nonConsuming = 1;
+            term.lookFixed    = regexCountAdd( regexCountAdd( regexCountAdd( inner.states, 1 ), cycleVisits ),
+                                               regexCountAdd( kRegexLookaheadFrameVisits, inner.lookFixed ) );
+            term.lookPerByte  = regexCountAdd( inner.cycleStates > 0 ? regexCountAdd( cycleVisits, 1 ) : 0, inner.lookPerByte );
+            break;
+        }
+        default:                                                     // an assertion, a backref, a stray `)` or quantifier
+            term = { 1, 1, 0, 0, 0 };
+            break;
+        }
+        while( at < pat.size() )
+        {
+            const RegexToken quant = regexTokenAt( pat, at );
+            if( quant.kind != RegexTokenKind::Quantifier )
+            {
+                break;
+            }
+            term = regexShapeRepeat( term, quant.minCount, quant.maxCount );
+            at  += quant.lengthCount;
+        }
+        acc = regexShapeSequence( acc, term );
+    }
+    return acc;
+}
+
+inline RegexShapeCount regexShapeDisjunction( const std::string& pat, std::size_t& at, bool isNested ) noexcept
+{
+    RegexShapeCount total = regexShapeAlternative( pat, at, isNested );
+    while( at < pat.size() && pat[ at ] == '|' )
+    {
+        ++at;
+        total = regexShapeSequence( regexShapeSequence( total, regexShapeAlternative( pat, at, isNested ) ), { 2, 2, 0, 0, 0 } );
+    }
+    return total;
+}
+
+inline RegexRecursionCost regexRecursionCostOf( const std::string& pat ) noexcept
+{
+    std::size_t           at          = 0;
+    const RegexShapeCount shape       = regexShapeDisjunction( pat, at, /*isNested=*/false );   // a stray top-level `)` reads as one more state
+    const std::uint64_t   cycleVisits = regexCountMul( kRegexVisitsPerCycleState, shape.cycleStates );
+    RegexRecursionCost    cost;
+    cost.fixedVisits   = regexCountAdd( regexCountAdd( regexCountAdd( shape.states, 3 ), cycleVisits ), shape.lookFixed );
+    cost.visitsPerByte = regexCountAdd( shape.cycleStates > 0 ? regexCountAdd( cycleVisits, 1 ) : 0, shape.lookPerByte );
+    return cost;
+}
+
 struct RegexCompile;
+
+// ── the engine's stack, per standard library ────────────────────────────────────────────────────────────────────
+//
+// libstdc++ recurses once per state visit (the cost model above); libc++ keeps its matcher's states in a heap vector
+// and recurses only into a lookahead, by pattern nesting, so no subject is too long for its stack (measured: `a*b` and
+// `(a|b)*c` on a 512 KiB libc++ thread did not crash on any subject length, they were only slow). An unknown library is
+// assumed to recurse.
+#if defined( _LIBCPP_VERSION )
+inline constexpr bool kRegexEngineRecursesPerVisit = false;
+#else
+inline constexpr bool kRegexEngineRecursesPerVisit = true;
+#endif
+
+// Stack bytes one MODELLED visit can take on libstdc++ 13 (_M_dfs, the handler it dispatches to, _M_rep_once_more).
+// MEASURED, not derived: for 35 shapes (plain and lazy repeats, 1- to 16-way alternation loops, nested and non-capturing
+// groups, \b/\B/$ inside loops, lookaheads, a backreference loop) the smallest crashing subject on an 8 MiB thread gives
+// stack ÷ ( crash length × visitsPerByte ). The largest over gcc -O0/-O2, clang -O2 and -O3 -flto, and gcc and clang
+// under -fsanitize=address was 100.7 (gcc -O2 ASan, `a*b`); the next was 63.3 (clang -O3 -flto). Rounded up to 128.
+// Half of every stack is held back on top of this, so the engine's measured crash sits at 2 × 128 ÷ 100.7 = 2.5× the
+// bound or further; at 256 MiB `a*b` was run at twice its bound on all three of those builds without a crash.
+inline constexpr std::uint64_t kRegexStackBytesPerVisit = 128;
+inline constexpr std::uint64_t kRegexStackReserveBytes  = 256 * 1024;   // the frames below the match: the scan, the worker, regex_search
+
+// How a line scan treats the engine. `engineLineBytesMax` is the longest line the engine may be handed on this thread
+// (maxEngineSubjectBytes of its stack); a longer one is SKIPPED and counted, never matched. `useLiteralPaths` false sends
+// every line to the engine — the oracle a gate diffs the literal paths against (--no-prefilter).
+struct RegexLinePolicy
+{
+    std::size_t engineLineBytesMax = SIZE_MAX;
+    bool        useLiteralPaths    = true;
+};
+
+struct RegexLineScan
+{
+    RegexVerdict  verdict          = RegexVerdict::Miss;
+    std::uint32_t skippedLineCount = 0;   // lines longer than engineLineBytesMax that could have matched: never matched
+};
+
+// The longest subject the engine may be handed on a thread whose stack is `stackBytes`: SIZE_MAX where the engine does not
+// recurse per visit (libc++) or where this pattern's recursion does not grow with the subject.
+inline std::size_t regexMaxSubjectBytes( const RegexRecursionCost& cost, std::size_t stackBytes ) noexcept
+{
+    if( !kRegexEngineRecursesPerVisit )
+    {
+        return SIZE_MAX;
+    }
+    const std::uint64_t half   = stackBytes / 2;
+    const std::uint64_t visits = ( half > kRegexStackReserveBytes ? half - kRegexStackReserveBytes : 0 ) / kRegexStackBytesPerVisit;
+    if( visits <= cost.fixedVisits )
+    {
+        return 0;
+    }
+    return cost.visitsPerByte == 0 ? SIZE_MAX : std::size_t( ( visits - cost.fixedVisits ) / cost.visitsPerByte );
+}
+
+// ── the literal paths: byte search, in the engine's own order ──────────────────────────────────────────────────────
+
+// The first occurrence of `literal` in [p, p + n), or n. strkern's byte kernels find a candidate; the rest is compared.
+inline std::size_t regexFindLiteral( const char* p, std::size_t n, const std::string& literal ) noexcept
+{
+    const std::size_t m = literal.size();
+    if( m > n )
+    {
+        return n;
+    }
+    if( m < 3 )
+    {
+        for( std::size_t k = 0; k + m <= n; ++k )
+        {
+            const std::size_t at = k + strkern::findByte( p + k, n - m + 1 - k, literal[ 0 ] );
+            if( at > n - m )
+            {
+                return n;
+            }
+            if( m == 1 || p[ at + 1 ] == literal[ 1 ] )
+            {
+                return at;
+            }
+            k = at;
+        }
+        return n;
+    }
+    const std::size_t span = n - m + 3;                                 // a 3-byte head found below span leaves room for the tail
+    for( std::size_t k = 0; k + m <= n; ++k )
+    {
+        const std::size_t at = k + strkern::find3( p + k, span - k, literal.data() );
+        if( at >= span )
+        {
+            return n;
+        }
+        if( std::memcmp( p + at + 3, literal.data() + 3, m - 3 ) == 0 )
+        {
+            return at;
+        }
+        k = at;
+    }
+    return n;
+}
+
+// Whether [p, p + n) holds `lowered` compared ASCII-folded (the icase required literal).
+inline bool regexHoldsFoldedLiteral( const char* p, std::size_t n, const std::string& lowered ) noexcept
+{
+    const std::size_t m = lowered.size();
+    if( m > n )
+    {
+        return false;
+    }
+    strkern::Byteset256 head;
+    const unsigned char first = static_cast<unsigned char>( lowered[ 0 ] );
+    head.add( first );
+    head.add( ( first >= 'a' && first <= 'z' ) ? static_cast<unsigned char>( first - 0x20 ) : first );
+    for( std::size_t k = 0; k + m <= n; ++k )
+    {
+        k += strkern::findByteset( p + k, n - m + 1 - k, head );
+        if( k + m > n )
+        {
+            return false;
+        }
+        if( strkern::lowerFoldedEquals( p + k, lowered.data(), m ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A compiled pattern's literal plan and required literals, and the searches that use them.
+struct RegexLiteralPaths
+{
+    RegexLiteralPlan      plan;
+    strkern::Byteset256   planHeads;   // the first byte of every plan alternative
+    RegexRequiredLiterals required;
+
+    bool hasPlan() const noexcept { return !plan.alternatives.empty(); }
+
+    // The first occurrence of any required literal in [p, p + n), or n (not folded: the whole-text jump).
+    std::size_t findRequired( const char* p, std::size_t n ) const noexcept
+    {
+        std::size_t first = n;
+        for( const std::string& literal : required.anyOf )
+        {
+            first = std::min( first, regexFindLiteral( p, first == n ? n : std::min( n, first + literal.size() ), literal ) );
+        }
+        return first;
+    }
+
+    bool holdsRequired( const char* p, std::size_t n ) const noexcept
+    {
+        return required.anyOf.empty()
+            || std::any_of( required.anyOf.begin(), required.anyOf.end(), [ & ]( const std::string& literal )
+                            { return required.isCaseFolded ? regexHoldsFoldedLiteral( p, n, literal ) : regexFindLiteral( p, n, literal ) < n; } );
+    }
+
+    bool findsPlanMatch( const char* p, std::size_t n ) const noexcept
+    {
+        bool isFound = false;
+        forEachPlanMatch( p, n, [ & ]( std::size_t ) { isFound = true; return false; } );
+        return isFound;
+    }
+
+    // The plan's matches in [p, p + n), non-overlapping, leftmost start first and at one start the first alternative
+    // written — std::regex's ECMAScript order. onMatch( offset ) returns false to stop.
+    template<typename OnOffset>
+    void forEachPlanMatch( const char* p, std::size_t n, OnOffset&& onMatch ) const noexcept
+    {
+        const std::string& only = plan.alternatives[ 0 ];
+        if( plan.isAnchoredBegin || plan.isAnchoredEnd )
+        {
+            const std::size_t m      = only.size();
+            const bool        fits   = ( plan.isAnchoredBegin && plan.isAnchoredEnd ) ? n == m : m <= n;
+            const std::size_t offset = plan.isAnchoredBegin ? 0 : n - std::min( n, m );
+            if( fits && std::memcmp( p + offset, only.data(), m ) == 0 )
+            {
+                onMatch( offset );
+            }
+            return;
+        }
+        for( std::size_t k = 0; k < n; )
+        {
+            const std::size_t at = k + ( plan.alternatives.size() == 1 ? regexFindLiteral( p + k, n - k, only )
+                                                                       : strkern::findByteset( p + k, n - k, planHeads ) );
+            if( at >= n )
+            {
+                return;
+            }
+            const auto chosen = std::find_if( plan.alternatives.begin(), plan.alternatives.end(), [ & ]( const std::string& a )
+                                              { return a.size() <= n - at && std::memcmp( p + at, a.data(), a.size() ) == 0; } );
+            if( chosen == plan.alternatives.end() )
+            {
+                k = at + 1;
+                continue;
+            }
+            if( !onMatch( at ) )
+            {
+                return;
+            }
+            k = at + chosen->size();
+        }
+    }
+};
+
+// The line loop behind GuardedRegex::forEachLineMatch. The engine may throw here; the member holds the boundary, and
+// `scan` keeps what was counted before a throw.
+template<typename OnMatch>
+void regexScanLines( const std::regex& engine, const RegexLiteralPaths& paths, std::string_view text, RegexLinePolicy policy,
+                     OnMatch& onMatch, RegexLineScan& scan )
+{
+    const char*   base      = text.data();
+    bool          isStopped = false;
+    std::uint32_t line      = 1;
+    const auto    report    = [ & ]( std::size_t byteOffset )
+    {
+        scan.verdict = RegexVerdict::Hit;
+        isStopped    = !onMatch( line, byteOffset );
+        return !isStopped;
+    };
+    const bool hasPlan = policy.useLiteralPaths && paths.hasPlan();
+    if( hasPlan && paths.plan.isLineFree )
+    {
+        std::size_t counted = 0;
+        paths.forEachPlanMatch( base, text.size(), [ & ]( std::size_t at )
+        {
+            line   += std::uint32_t( std::count( base + counted, base + at, '\n' ) );
+            counted = at;
+            return report( at );
+        } );
+        return;
+    }
+    const bool  canJump   = policy.useLiteralPaths && !hasPlan && paths.required.isLineFree;
+    const bool  canFilter = policy.useLiteralPaths && !hasPlan && !paths.required.anyOf.empty();
+    std::size_t lineBegin = 0;
+    while( !isStopped )
+    {
+        if( canJump )
+        {
+            const std::size_t found = lineBegin + paths.findRequired( base + lineBegin, text.size() - lineBegin );
+            if( found >= text.size() )
+            {
+                return;                                                  // no line past here can match
+            }
+            const std::size_t lastBreak = found == 0 ? std::string_view::npos : text.rfind( '\n', found - 1 );
+            const std::size_t landing   = ( lastBreak == std::string_view::npos || lastBreak < lineBegin ) ? lineBegin : lastBreak + 1;
+            line     += std::uint32_t( std::count( base + lineBegin, base + landing, '\n' ) );
+            lineBegin = landing;
+        }
+        const std::size_t nl       = text.find( '\n', lineBegin );
+        std::size_t       matchEnd = ( nl == std::string_view::npos ) ? text.size() : nl;
+        matchEnd -= ( matchEnd > lineBegin && text[ matchEnd - 1 ] == '\r' ) ? 1 : 0;
+        const std::size_t lineBytes = matchEnd - lineBegin;
+        const bool        isCandidate = !hasPlan && ( canJump || !canFilter || paths.holdsRequired( base + lineBegin, lineBytes ) );
+        if( hasPlan )
+        {
+            paths.forEachPlanMatch( base + lineBegin, lineBytes, [ & ]( std::size_t offset ) { return report( lineBegin + offset ); } );
+        }
+        else if( isCandidate && lineBytes > policy.engineLineBytesMax )
+        {
+            ++scan.skippedLineCount;
+        }
+        else if( isCandidate )
+        {
+            for( auto it = std::cregex_iterator( base + lineBegin, base + matchEnd, engine ); it != std::cregex_iterator(); ++it )
+            {
+                if( !report( lineBegin + std::size_t( it->position() ) ) )
+                {
+                    break;
+                }
+            }
+        }
+        if( nl == std::string_view::npos || nl + 1 >= text.size() )
+        {
+            return;                                                      // last line, or the newline that ended it was the final byte
+        }
+        lineBegin = nl + 1;
+        ++line;
+    }
+}
+
+inline constexpr unsigned kRegexFaultStackShift = 22;   // RIPWIRE_FAULT_REGEX_LINE_BOUND=1: the engine line bound is stack >> 22 (64 B at 256 MiB)
+
+// FAULT INJECTION, because the only real trigger is one standard library's budget and the other has none:
+// RIPWIRE_FAULT_REGEX_MATCH=1 makes every guarded match throw regex_error(error_complexity) inside its own try,
+// so every entry point's Exhausted path is reachable on every platform. Non-NDEBUG only (rw::faultSwitchOn is
+// `constexpr false` under NDEBUG, and the static is then a constant — no guard, no getenv, no branch in
+// release), read ONCE per process (determinism), exact "1" (the rule faultSwitchOn owns). Called ONLY inside
+// the try of a noexcept GuardedRegex member, so the throw it raises never leaves the seam — and before any literal
+// path, so a pattern the engine never sees still reaches it.
+inline void throwIfMatchFaultInjected()
+{
+    static const bool isOn = rw::faultSwitchOn( "RIPWIRE_FAULT_REGEX_MATCH" );
+    if( isOn )
+    {
+        throw std::regex_error( std::regex_constants::error_complexity );
+    }
+}
 
 // A compiled user pattern. Default-constructed it is an EMPTY slot (a member waiting to be filled); only
 // compileGuardedRegex fills one, which is what keeps the screen in front of every engine that can be reached.
@@ -419,12 +1199,17 @@ class GuardedRegex
 public:
     GuardedRegex() = default;
 
+    // Whether `subject` holds a match. A literal plan answers without the engine; a subject holding none of the
+    // required literals is a Miss without it.
     RegexVerdict search( std::string_view subject ) const noexcept
     {
         try
         {
             throwIfMatchFaultInjected();
-            return std::regex_search( subject.data(), subject.data() + subject.size(), engine ) ? RegexVerdict::Hit : RegexVerdict::Miss;
+            const bool isHit = paths.hasPlan() ? paths.findsPlanMatch( subject.data(), subject.size() )
+                                               : paths.holdsRequired( subject.data(), subject.size() )
+                                                 && std::regex_search( subject.data(), subject.data() + subject.size(), engine );
+            return isHit ? RegexVerdict::Hit : RegexVerdict::Miss;
         }
         catch( const std::regex_error& ) { return RegexVerdict::Exhausted; }   // error_complexity / error_stack
         catch( const std::bad_alloc& )   { return RegexVerdict::Exhausted; }   // the matcher's state stack outgrew memory
@@ -442,50 +1227,49 @@ public:
         catch( const std::bad_alloc& )   { return RegexVerdict::Exhausted; }
     }
 
-    // Every non-overlapping match in [first, last), in order: onMatch( offsetFromFirst ) returns false to stop.
-    // Exhausted means the matches reported before the engine gave up are the ones that exist so far and no more
-    // is known. onMatch runs inside the boundary, so an allocation failure in it (a caller appending the site)
-    // is an unfinished scan too, and reads the same way; it must throw nothing else.
+    // Every non-overlapping match in `text` read ONE LINE AT A TIME, in order: onMatch( line, byteOffset ) with a 1-based
+    // line and the match's offset in `text`, returning false to stop. A line is the bytes before its '\n' less one
+    // trailing '\r'; a trailing '\n' ends the last line rather than starting an empty one, and empty text has no lines
+    // (src/search.h's grepScanText says why grep reads lines). Exhausted means the matches reported before the engine
+    // gave up are the ones known, and no more; onMatch runs inside the boundary and must throw nothing but bad_alloc.
+    //
+    // The literal paths, in order: a literal plan with no line break in any alternative scans the whole text once; any
+    // other plan answers each line itself; required literals holding no line break jump from occurrence to occurrence
+    // and hand only those lines on; folded ones are checked per line. What is left goes to the engine — unless the line
+    // is longer than `policy.engineLineBytesMax`, and then it is skipped and counted.
     template<typename OnMatch>
-    RegexVerdict forEachMatch( const char* first, const char* last, OnMatch&& onMatch ) const noexcept
+    RegexLineScan forEachLineMatch( std::string_view text, RegexLinePolicy policy, OnMatch&& onMatch ) const noexcept
     {
+        RegexLineScan scan;
+        if( text.empty() )
+        {
+            return scan;                                                 // no lines, so nothing to match (and nothing to fault)
+        }
         try
         {
             throwIfMatchFaultInjected();
-            RegexVerdict verdict = RegexVerdict::Miss;
-            for( auto it = std::cregex_iterator( first, last, engine ); it != std::cregex_iterator(); ++it )
-            {
-                verdict = RegexVerdict::Hit;
-                if( !onMatch( std::size_t( it->position() ) ) )
-                {
-                    break;
-                }
-            }
-            return verdict;
+            regexScanLines( engine, paths, text, policy, onMatch, scan );
         }
-        catch( const std::regex_error& ) { return RegexVerdict::Exhausted; }
-        catch( const std::bad_alloc& )   { return RegexVerdict::Exhausted; }
+        catch( const std::regex_error& ) { scan.verdict = RegexVerdict::Exhausted; }
+        catch( const std::bad_alloc& )   { scan.verdict = RegexVerdict::Exhausted; }
+        return scan;
+    }
+
+    // regexMaxSubjectBytes for this pattern. The non-NDEBUG fault switch RIPWIRE_FAULT_REGEX_LINE_BOUND=1 caps it at
+    // stackBytes >> kRegexFaultStackShift on every library (64 B on a 256 MiB stack, and proportionally less on a smaller
+    // one), so the skip path, its disclosure and its dependence on the stack are reachable where the engine never needs them.
+    std::size_t maxEngineSubjectBytes( std::size_t stackBytes ) const noexcept
+    {
+        static const bool isCapped = rw::faultSwitchOn( "RIPWIRE_FAULT_REGEX_LINE_BOUND" );
+        return isCapped ? std::min( regexMaxSubjectBytes( cost, stackBytes ), stackBytes >> kRegexFaultStackShift ) : regexMaxSubjectBytes( cost, stackBytes );
     }
 
 private:
     friend RegexCompile compileGuardedRegex( const std::string& pattern, RegexSyntax syntax ) noexcept;
 
-    // FAULT INJECTION, because the only real trigger is one standard library's budget and the other has none:
-    // RIPWIRE_FAULT_REGEX_MATCH=1 makes every guarded match throw regex_error(error_complexity) inside its own try,
-    // so every entry point's Exhausted path is reachable on every platform. Non-NDEBUG only (rw::faultSwitchOn is
-    // `constexpr false` under NDEBUG, and the static is then a constant — no guard, no getenv, no branch in
-    // release), read ONCE per process (determinism), exact "1" (the rule faultSwitchOn owns). Called ONLY inside
-    // the try of a noexcept member above, so the throw it raises never leaves the seam.
-    static void throwIfMatchFaultInjected()
-    {
-        static const bool isOn = rw::faultSwitchOn( "RIPWIRE_FAULT_REGEX_MATCH" );
-        if( isOn )
-        {
-            throw std::regex_error( std::regex_constants::error_complexity );
-        }
-    }
-
-    std::regex engine;
+    std::regex         engine;
+    RegexLiteralPaths  paths;
+    RegexRecursionCost cost;
 };
 
 struct RegexCompile
@@ -498,7 +1282,8 @@ struct RegexCompile
 // Screen, then compile. The screen's verdict is platform-independent, so it decides first; only a pattern it
 // passes is handed to the engine's parser, whose diagnostic is returned verbatim — or, when the parser ran out
 // of memory (a huge bracket expression or repeat count), a fixed sentence saying so. The value carries the
-// verdict; nothing is thrown past this function.
+// verdict; nothing is thrown past this function. A compiled pattern also carries its shape (the literal plan,
+// the required literals, the recursion cost), read here once.
 inline RegexCompile compileGuardedRegex( const std::string& pattern, RegexSyntax syntax ) noexcept
 {
     RegexCompile out;
@@ -509,8 +1294,15 @@ inline RegexCompile compileGuardedRegex( const std::string& pattern, RegexSyntax
         return out;
     }
     try                                { out.regex.engine.assign( pattern, syntax ); }
-    catch( const std::regex_error& e ) { out.refusal = std::string( e.what() ); }
-    catch( const std::bad_alloc& )     { out.refusal = std::string( "invalid regular expression: the engine ran out of memory compiling it" ); }
+    catch( const std::regex_error& e ) { out.refusal = std::string( e.what() ); return out; }
+    catch( const std::bad_alloc& )     { out.refusal = std::string( "invalid regular expression: the engine ran out of memory compiling it" ); return out; }
+    out.regex.paths.plan     = regexLiteralPlanOf( pattern, syntax );
+    out.regex.paths.required = regexRequiredLiteralsOf( pattern, syntax );
+    out.regex.cost           = regexRecursionCostOf( pattern );
+    for( const std::string& alternative : out.regex.paths.plan.alternatives )
+    {
+        out.regex.paths.planHeads.add( static_cast<unsigned char>( alternative[ 0 ] ) );
+    }
     return out;
 }
 
@@ -519,6 +1311,7 @@ inline RegexCompile compileGuardedRegex( const std::string& pattern, RegexSyntax
 static_assert( noexcept( compileGuardedRegex( std::declval<const std::string&>(), kRegexEcmaScript ) ) );
 static_assert( noexcept( std::declval<const GuardedRegex&>().search( std::string_view() ) ) );
 static_assert( noexcept( std::declval<const GuardedRegex&>().search( std::string_view(), std::declval<RegexCaptures&>() ) ) );
-static_assert( noexcept( std::declval<const GuardedRegex&>().forEachMatch( nullptr, nullptr, []( std::size_t ) { return true; } ) ) );
+static_assert( noexcept( std::declval<const GuardedRegex&>().forEachLineMatch( std::string_view(), RegexLinePolicy{},
+                                                                              []( std::uint32_t, std::size_t ) { return true; } ) ) );
 
 }   // namespace rw

@@ -15,9 +15,10 @@
 // credential assignment (api_key/secret/token/password …), so a 40-char git SHA in prose or a base64
 // test vector without keyword context is left intact.
 //
-// Determinism: pure function of the input bytes. std::regex objects are compiled ONCE (function-local
-// statics) and reused; the same bytes redact to the same bytes on every run, warm or cold, so the
-// det-gate and warm==cold both hold with redaction active.
+// Determinism: pure function of the input bytes. The rules are matched STRUCTURALLY (redactdetail::
+// shapeMatchLength), not by std::regex: the same bytes redact to the same bytes on every run, warm or cold,
+// so the det-gate and warm==cold both hold with redaction active. Each rule's regex stays in the table as
+// its specification, and test/regexguardcheck.sh arm (o) diffs every rule against it.
 //
 // Replacement is length-independent: a stable short PREFIX of the original match + a fixed marker, e.g.
 //   AKIAIOSFODNN7EXAMPLE  ->  AKIA…[REDACTED:aws-key]
@@ -32,8 +33,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>        // std::numeric_limits — the rule-mask width assert beside buildFirstByteRuleMask
-#include <regex>
-#include <span>
 #include <string>
 #include <string_view>
 
@@ -82,7 +81,7 @@ struct RedactCounts
 // tightness of each pattern is documented inline — this is where "precision over recall" is enforced.
 struct RedactRule
 {
-    const char* pattern;    // ECMAScript regex; compiled ONCE into a static std::regex (see redactSecrets)
+    const char* pattern;    // the ECMAScript regex this rule's structural matcher answers exactly (the spec; arm (o) is the oracle)
     SecretKind  kind;
     const char* marker;     // fixed replacement tail, e.g. "[REDACTED:aws-key]"
     std::size_t keepPrefix; // how many leading bytes of the match to keep before "…<marker>"
@@ -456,21 +455,158 @@ struct SweepState
     ClassRun run;
 };
 
-// The length of rule `ruleIndex`'s match starting EXACTLY at `pos`, or 0 if that rule does not match
-// there. One contract, two answering paths:
+// ── the shapes, answered structurally ──────────────────────────────────────────────────────────────────
 //
-//   • GenericAssigned — answered structurally, never by the regex. Its pattern is a bare greedy class run
-//     ([A-Za-z0-9+/=_\-]{32,}), so a regex anchored at the cursor re-consumes the entire run at EVERY
-//     position inside it; ClassRun finds that run's end once instead. It is also the one GATED rule: a
-//     run only counts as a secret when its line names a credential assignment (LineGate), which is what
-//     keeps a git SHA or a base64 test vector in prose whole. A declined gate reads as "no match", which
-//     is exactly what it was before — the byte then takes the verbatim-copy path.
-//   • every other rule — regex_search anchored with match_continuous. They are all self-anchoring on a
-//     distinctive literal prefix, so they fail within a byte or two and need no structural shortcut.
-inline std::size_t matchLengthAtCursor( std::size_t ruleIndex, std::string_view in, std::size_t pos,
-                                        std::span<const std::regex> compiled, SweepState& state )
+// WHY NOT std::regex. libstdc++'s matcher recurses once for every state it visits, so `sk-[A-Za-z0-9_\-]{20,}` over a
+// 30 KB token run — minified or vendored text, handed here whole — overflowed Linux's 8 MiB stack, and redaction is ON
+// by default for every emitted body up to 4 MB. Every rule is a literal prefix followed by character-class runs, and
+// no class holds the byte that follows its run, so the regex's own backtracking can never pick a shorter run: the match
+// is found by reading each run once. One exception needs a loop, the PEM banner's `(?:[A-Z]+ )*`, and it is answered
+// with the regex's greedy choice (the most words that still leave the fixed tail). Linear, no recursion, no stack
+// bound, nothing skipped — the same match lengths the regexes give (arm (o), both standard libraries).
+enum class ShapeClass : std::uint8_t
 {
-    // the GenericAssigned class table — built once, and the same table buildFirstByteRuleMask read.
+    UpperDigit,   // [0-9A-Z]
+    Word,         // [A-Za-z0-9_]
+    SlackBody,    // [A-Za-z0-9-]
+    KeyBody,      // [A-Za-z0-9_-]
+};
+
+inline bool isShapeClassByte( ShapeClass cls, unsigned char b ) noexcept
+{
+    const bool isDigit = b >= '0' && b <= '9';
+    const bool isUpper = b >= 'A' && b <= 'Z';
+    const bool isAlnum = isDigit || isUpper || ( b >= 'a' && b <= 'z' );
+    switch( cls )
+    {
+    case ShapeClass::UpperDigit: return isDigit || isUpper;
+    case ShapeClass::Word:       return isAlnum || b == '_';
+    case ShapeClass::SlackBody:  return isAlnum || b == '-';
+    case ShapeClass::KeyBody:    return isAlnum || b == '_' || b == '-';
+    }
+    return false;
+}
+
+// The length of the class run starting at `at`, read no further than `cap` bytes.
+inline std::size_t shapeRunLength( std::string_view in, std::size_t at, ShapeClass cls, std::size_t cap = SIZE_MAX ) noexcept
+{
+    std::size_t n = 0;
+    while( at + n < in.size() && n < cap && isShapeClassByte( cls, static_cast<unsigned char>( in[ at + n ] ) ) )
+    {
+        ++n;
+    }
+    return n;
+}
+
+inline bool shapeHasLiteral( std::string_view in, std::size_t at, std::string_view literal ) noexcept
+{
+    return at <= in.size() && in.substr( at ).starts_with( literal );
+}
+
+// `prefix` then a greedy run of at least `minCount` class bytes (a `{min,}` rule), or exactly `minCount` when `isExact`.
+inline std::size_t shapePrefixRun( std::string_view in, std::size_t pos, std::string_view prefix, ShapeClass cls, std::size_t minCount,
+                                   bool isExact ) noexcept
+{
+    if( !shapeHasLiteral( in, pos, prefix ) )
+    {
+        return 0;
+    }
+    const std::size_t run = shapeRunLength( in, pos + prefix.size(), cls, isExact ? minCount : SIZE_MAX );
+    return run >= minCount ? prefix.size() + run : 0;
+}
+
+// `-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----`: the word boundaries the group can stop at, and the LAST of them (greedy)
+// where the fixed tail follows.
+inline std::size_t shapePrivateKeyBanner( std::string_view in, std::size_t pos ) noexcept
+{
+    constexpr std::string_view kHead = "-----BEGIN ";
+    constexpr std::string_view kTail = "PRIVATE KEY-----";
+    if( !shapeHasLiteral( in, pos, kHead ) )
+    {
+        return 0;
+    }
+    std::size_t matchEnd = 0;
+    for( std::size_t boundary = pos + kHead.size(); ; )
+    {
+        matchEnd = shapeHasLiteral( in, boundary, kTail ) ? boundary + kTail.size() : matchEnd;
+        std::size_t word = 0;
+        while( boundary + word < in.size() && in[ boundary + word ] >= 'A' && in[ boundary + word ] <= 'Z' )
+        {
+            ++word;
+        }
+        if( word == 0 || boundary + word >= in.size() || in[ boundary + word ] != ' ' )
+        {
+            break;
+        }
+        boundary += word + 1;
+    }
+    return matchEnd == 0 ? 0 : matchEnd - pos;
+}
+
+// `gh[posur]_`, `xox[baprs]-`: a two- or three-byte stem, one byte from a set, then a separator.
+inline bool shapeHasStem( std::string_view in, std::size_t pos, std::string_view stem, std::string_view oneOf, char separator ) noexcept
+{
+    const std::size_t at = pos + stem.size();
+    return shapeHasLiteral( in, pos, stem ) && at + 1 < in.size() && oneOf.find( in[ at ] ) != std::string_view::npos && in[ at + 1 ] == separator;
+}
+
+// `eyJ` then three KeyBody runs of at least 4 joined by '.'.
+inline std::size_t shapeJwt( std::string_view in, std::size_t pos ) noexcept
+{
+    if( !shapeHasLiteral( in, pos, "eyJ" ) )
+    {
+        return 0;
+    }
+    std::size_t at = pos + 3;
+    for( int segment = 0; segment < 3; ++segment )
+    {
+        if( segment > 0 )
+        {
+            if( at >= in.size() || in[ at ] != '.' )
+            {
+                return 0;
+            }
+            ++at;
+        }
+        const std::size_t run = shapeRunLength( in, at, ShapeClass::KeyBody );
+        if( run < 4 )
+        {
+            return 0;
+        }
+        at += run;
+    }
+    return at - pos;
+}
+
+// The match length of every rule but GenericAssigned, in kRedactRules order, at `pos` — 0 where it does not match.
+inline std::size_t shapeMatchLength( std::size_t ruleIndex, std::string_view in, std::size_t pos ) noexcept
+{
+    switch( ruleIndex )
+    {
+    case 0: return shapePrefixRun( in, pos, "AKIA", ShapeClass::UpperDigit, 16, /*isExact=*/true );
+    case 1: return shapePrivateKeyBanner( in, pos );
+    case 2: { const std::size_t run = shapeHasStem( in, pos, "gh", "posur", '_' ) ? shapeRunLength( in, pos + 4, ShapeClass::Word ) : 0; return run >= 20 ? 4 + run : 0; }
+    case 3: return shapePrefixRun( in, pos, "github_pat_", ShapeClass::Word, 20, /*isExact=*/false );
+    case 4: { const std::size_t run = shapeHasStem( in, pos, "xox", "baprs", '-' ) ? shapeRunLength( in, pos + 5, ShapeClass::SlackBody ) : 0; return run >= 10 ? 5 + run : 0; }
+    case 5: return shapePrefixRun( in, pos, "AIza", ShapeClass::KeyBody, 35, /*isExact=*/true );
+    case 6: return shapePrefixRun( in, pos, "sk-ant-", ShapeClass::KeyBody, 20, /*isExact=*/false );
+    case 7: return shapePrefixRun( in, pos, "sk-", ShapeClass::KeyBody, 20, /*isExact=*/false );
+    case 8: return shapeJwt( in, pos );
+    default: return 0;
+    }
+}
+static_assert( kRedactRules.size() == 10 && kRedactRules[ 9 ].kind == SecretKind::GenericAssigned,
+               "shapeMatchLength answers rules 0-8 by index: a new or reordered rule needs its shape here and an arm (o) row" );
+
+// The length of rule `ruleIndex`'s match starting EXACTLY at `pos`, or 0 if that rule does not match there.
+//
+//   • GenericAssigned — a bare greedy class run ([A-Za-z0-9+/=_\-]{32,}); ClassRun finds that run's end once per run.
+//     It is also the one GATED rule: a run only counts as a secret when its line names a credential assignment
+//     (LineGate), which is what keeps a git SHA or a base64 test vector in prose whole. A declined gate reads as
+//     "no match" — the byte then takes the verbatim-copy path.
+//   • every other rule — shapeMatchLength, the structural answer to the rule's regex.
+inline std::size_t matchLengthAtCursor( std::size_t ruleIndex, std::string_view in, std::size_t pos, SweepState& state )
+{
     static constexpr std::array<bool, 256> kGenericClass = buildGenericClassTable();   // constant data: no guard, no per-process build
 
     if( kRedactRules[ruleIndex].kind == SecretKind::GenericAssigned )
@@ -482,27 +618,18 @@ inline std::size_t matchLengthAtCursor( std::size_t ruleIndex, std::string_view 
         }
         return state.gate.query( in, pos ) ? runLength : 0;
     }
-
-    std::cmatch m;
-    // match_continuous: the regex must match STARTING AT the cursor (not later in the string), so the sweep
-    // advances one candidate position at a time and rule priority (table order) is honoured.
-    if( !std::regex_search( in.data() + pos, in.data() + in.size(), m, compiled[ruleIndex],
-                            std::regex_constants::match_continuous ) )
-    {
-        return 0;
-    }
-    return std::size_t( m.length( 0 ) );
+    return shapeMatchLength( ruleIndex, in, pos );
 }
 
 }   // namespace redactdetail
 
 // redactSecrets — scan `in` for credential shapes; write the redacted text to `out`; bump `counts` per
-// redaction. Returns true iff at least one redaction was made. Pure function of `in`: the regexes are
-// compiled ONCE (function-local statics) so the transform is deterministic run-to-run (det-gate + warm==cold).
+// redaction. Returns true iff at least one redaction was made. Pure function of `in`, so the transform is deterministic
+// run-to-run (det-gate + warm==cold).
 //
 // Algorithm: a single left-to-right sweep. At each position we try the rules the first-byte mask says can
-// start here (table order = priority) anchored at the cursor with match_continuous; the first that matches
-// wins. The GenericAssigned rule is answered by ClassRun rather than by the regex, and additionally
+// start here (table order = priority) anchored at the cursor; the first that matches wins. Every rule is
+// answered structurally (matchLengthAtCursor); the GenericAssigned rule by ClassRun, and it additionally
 // requires its enclosing line to name a credential (LineGate), else it is skipped so ordinary long tokens
 // are preserved. A match is replaced by keepPrefix bytes of the original + "…" + the marker; non-matching
 // bytes are copied verbatim.
@@ -513,18 +640,6 @@ inline std::size_t matchLengthAtCursor( std::size_t ruleIndex, std::string_view 
 // kilobytes and --expand hands the whole file to this function.
 inline bool redactSecrets( std::string_view in, std::string& out, RedactCounts& counts )
 {
-    // compile once — a static array of {regex, ruleIndex}. std::regex construction is not cheap, but it
-    // happens exactly once per process; every call reuses the compiled objects (determinism + speed).
-    static const std::array<std::regex, kRedactRules.size()> kCompiled = [] {
-        std::array<std::regex, kRedactRules.size()> a{};
-        for( std::size_t i = 0; i < kRedactRules.size(); ++i )
-        {
-            a[i] = std::regex( kRedactRules[i].pattern, std::regex::ECMAScript | std::regex::optimize );
-        }
-        return a;
-    }();
-
-    // first-byte dispatch mask (see buildFirstByteRuleMask) — also compiled/built exactly once.
     static constexpr std::array<std::uint16_t, 256> kFirstByteMask = redactdetail::buildFirstByteRuleMask();   // checked at compile time beside its builder
 
     out.clear();
@@ -543,7 +658,7 @@ inline bool redactSecrets( std::string_view in, std::string& out, RedactCounts& 
 
         // first-byte dispatch: only the rules whose first-byte set contains bytes[i] can possibly
         // match_continuous here (every rule's shape is anchored to a literal prefix or, for the one
-        // unprefixed rule, its own leading character class) — skip the rest without ever calling regex_search.
+        // unprefixed rule, its own leading character class) — skip the rest without ever trying their shapes.
         const std::uint16_t candidateRules = kFirstByteMask[ static_cast<unsigned char>( in[i] ) ];
 
         for( std::size_t r = 0; candidateRules != 0 && r < kRedactRules.size(); ++r )
@@ -555,7 +670,7 @@ inline bool redactSecrets( std::string_view in, std::string& out, RedactCounts& 
 
             // 0 = this rule does not match at the cursor — no match, an empty match (zero progress is never
             // allowed), or the GenericAssigned gate declining a run whose line names no credential.
-            const std::size_t len = redactdetail::matchLengthAtCursor( r, in, i, kCompiled, state );
+            const std::size_t len = redactdetail::matchLengthAtCursor( r, in, i, state );
             if( len == 0 )
             {
                 continue;
