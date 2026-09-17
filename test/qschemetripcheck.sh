@@ -34,6 +34,14 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, PRODUCER IDENTITY (test/qsnapproducercheck.sh): serializeSnapshot/deserializeSnapshot write and refuse
+#   a new header field — fnv1a64 of the build's source identity (cmake/source_identity.cmake) — and qsnapExclHex /
+#   qbodyExclHex fold it into the key, because a dead set is a function of call RESOLUTION and nothing in the key
+#   moved with it: two builds that resolve differently served each other's dead set. HEADER SHAPE change →
+#   kQSnapCacheScheme 13 -> 14 (13 is the root-spelling bump below; the two landed in one integration train) and
+#   kQBodyCacheScheme 3 -> 4, then re-pinned. Extraction unchanged: parserVer 96.
+#   Since this pin a missed bump no longer serves a wrong answer across builds (any source change renames the
+#   blob); this gate still asks the question, and its log still records the answer.
 # 2026-09-16, ROOT-SPELLING INVARIANCE (#228, test/rootspellingcheck.sh): isDeadCandidate reads the fixture and
 #   test-script exemptions off model.h::rootRelPath instead of the path as the root was typed, and the call graph
 #   a Snapshot is built from now resolves root-relative imports under every root spelling (resolve.h, graph.h —

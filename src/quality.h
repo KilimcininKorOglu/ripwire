@@ -32,6 +32,7 @@
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
+#include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
 
 #include "btree.hpp"              // gtl btree_map — sorted like std::map, cache-friendly nodes (house rule: never std::map)
 #include "infra/dynamic_map.hpp"  // S+tree scratch maps — bounded, no per-operation allocation in hot seen-set paths
@@ -2147,6 +2148,41 @@ inline std::string extractionIdentityTag()
     return "x" + std::to_string( kIngestCacheVersionMirror ) + "." + std::to_string( kIngestParserVerMirror );
 }
 
+// ─── the PRODUCER IDENTITY — which build computed a cached Snapshot ─────────────────────────────────────
+//
+// THE BUG THIS CLOSES. A qsnap blob's dead set is a function of CALL RESOLUTION, not only of extraction:
+// isDeadCandidate reads g.inEdges, and pythonDispatchedMethodIds reads the graph. The key above holds the
+// extraction identity, and a resolution change moves none of it — by rule, since a resolver runs over cached
+// ingest facts (d39554dd's std::-qualified call guard said so in its own message: "no graph or edge blob is
+// cached"). So two builds that resolve differently, sharing one cache dir on one repo HEAD, served each other's
+// dead set. Measured on main a55b118e with that guard switched off in a second build, over a two-file fixture:
+// a cold run reports regressions="0"; the same run after the unguarded build warmed the cache reports a GATING
+// dead-code row on an untouched symbol and exits 2. The other order HIDES a real gating regression (exit 2
+// cold, exit 0 warm). test/qsnapproducercheck.sh pins both directions.
+//
+// WHY DERIVED, NOT A kResolverVer TO BUMP. A constant holds only while every lane remembers it, and this cache's
+// record says how that goes: B10.1a's isDeadCandidate exemption (retired late, at v3) and 28c7d32's kParserVer
+// bump (P0.2) each changed what a blob means without the bump that would have retired it, and none of the twelve
+// scheme versions below cites a resolution change — d39554dd weighed the caches and still missed this one. The
+// identity is instead the SHA-256 of every file under src/ and queries/ (cmake/source_identity.cmake, computed on
+// every build), so ANY change to what a Snapshot means — resolution, the dead predicate, clone identity, a key
+// rule the qschemetrip manifest does not list — names a new blob without anyone deciding to. The price is that an
+// edit which changes no meaning renames the blob too: one cold HEAD snapshot after a rebuild that touched a source
+// file. The ingest blob underneath (qheadsnap) stays on the extraction identity alone, because it holds
+// extraction facts only, so that cold snapshot re-reads a warm ingest.
+//
+// Folded into the qsnap and qbody filename keys (qsnapExclHex, qbodyExclHex) and carried in the shared blob
+// header, the same two guards P0.2 gave the extraction identity: never NAMED again, and REFUSED if reached.
+inline std::string_view producerIdentity() noexcept
+{
+    return std::string_view( rw::kRipwireSourceIdentity );
+}
+
+inline std::uint64_t producerIdentityHash() noexcept
+{
+    return fnv1a64( producerIdentity() );
+}
+
 // The 16-hex EXCLUDES-config key: fnv1a64 of the exact exclude set + the family's scheme tag + the extraction
 // identity + the file-size ceiling. This is the SECOND filename field so eviction groups per (repo, config) —
 // different --exclude sets are independent cache families that never evict one another (mirrors the
@@ -2705,8 +2741,10 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // working-tree side legitimately still pays its own clone pass + ingest (it changes between runs).
 //
 // NEVER-STALE, on the same two independent guards the ingest cache uses:
-//  1) FILENAME key = (realpath repo-root, HEAD sha, excludes, a qsnap scheme tag) — a different HEAD / repo /
-//     --exclude set / scheme names a different file → the wrong Snapshot can never be loaded.
+//  1) FILENAME key = (realpath repo-root, HEAD sha, excludes, a qsnap scheme tag, the extraction identity, the
+//     producer identity) — a different HEAD / repo / --exclude set / scheme / BUILD names a different file → the
+//     wrong Snapshot can never be loaded. The producer identity (v14) is what keeps two builds that resolve
+//     calls differently apart; see producerIdentity.
 //  2) Blob self-validation: a magic + scheme-version header, an embedded fnv1a64(headSha) that must match the
 //     live HEAD, and an fnv1a64 content checksum trailer over the whole body. Any mismatch/truncation → the blob
 //     is rejected and the full compute runs (which then rewrites a correct blob) — a stale/foreign blob can
@@ -2828,15 +2866,22 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // for an UNCHANGED sha — and served to this binary, the pre-fix Snapshot is exactly the phantom row #228 reported
 // (test/rootspellingcheck.sh arm 5 watched it served: exit 2 on an unchanged four-file tree). No extraction
 // change: parser version and its mirror stay. Bumped 12 -> 13.
-constexpr std::uint32_t kQSnapCacheScheme = 13;
+// v14 (2026-09-16) — the blob header gained the PRODUCER IDENTITY after the extraction identity, and
+// qsnapExclHex folds it: a HEADER SHAPE change, so bumped by the v4 rule. The defect it closes is one this
+// rule could not have caught: a dead set is a function of call resolution, no version in the key moved with
+// resolution, and so two builds that resolve differently served each other's dead set (see producerIdentity).
+// Since v14 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
+// a semantics change that lands without one leaves this history incomplete, not a wrong answer across builds.
+constexpr std::uint32_t kQSnapCacheScheme = 14;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
 // so a qsnap-format bump renames every file → old-scheme blobs are simply never named again. It also folds the
 // extraction identity + maxFileBytes (see exclConfigHex).
+// v14: and the PRODUCER identity, because a Snapshot's dead set depends on call resolution (producerIdentity).
 inline std::string qsnapExclHex( const std::vector<std::string>& excludes, std::size_t maxFileBytes = kDefaultMaxFileBytes )
 {
-    return exclConfigHex( excludes, "qsnap" + std::to_string( kQSnapCacheScheme ), maxFileBytes );
+    return exclConfigHex( excludes, "qsnap" + std::to_string( kQSnapCacheScheme ) + '\x1f' + std::string( producerIdentity() ), maxFileBytes );
 }
 
 // a distinct "qsnap" family prefix so the ingest and Snapshot families never collide and evict independently.
@@ -2863,11 +2908,15 @@ inline void evictOldQSnapCaches( const std::string& dir, const std::string& repo
 // v3 (W1-S2): bodyHashBySym keys became pathQualifiedKey (see kQSnapCacheScheme v6). The blob header's
 // scheme check would already reject a v2 blob — but as CORRUPT (alert + stderr), not a clean miss; bumping
 // the family renames every file so old blobs are simply never named again.
-constexpr std::uint32_t kQBodyCacheScheme = 3;
+// v4 (2026-09-16): the shared blob header gained the producer identity (kQSnapCacheScheme v14), so this family
+// retires with it, as it did at v2. Its facts are extraction-only, yet the key folds the producer identity too:
+// deserializeSnapshot refuses a foreign producer for BOTH families, and a key without it would turn every
+// rebuild's first read into a "corrupt" alert instead of a clean miss.
+constexpr std::uint32_t kQBodyCacheScheme = 4;
 
 inline std::string qbodyExclHex( const std::vector<std::string>& excludes, std::size_t maxFileBytes = kDefaultMaxFileBytes )
 {
-    return exclConfigHex( excludes, "qbody" + std::to_string( kQBodyCacheScheme ), maxFileBytes );
+    return exclConfigHex( excludes, "qbody" + std::to_string( kQBodyCacheScheme ) + '\x1f' + std::string( producerIdentity() ), maxFileBytes );
 }
 
 inline std::string qbodyCachePath( const std::string& repoHex, const std::string& exclHex, const std::string& refSha )
@@ -2896,12 +2945,13 @@ inline bool qsnapGet( const char*& p, const char* end, T& out )
     return true;
 }
 
-// Serialize a Snapshot to a self-validating blob: [magic][scheme][cacheVer][parserVer][fnv(headSha)] then each
+// Serialize a Snapshot to a self-validating blob: [magic][scheme][cacheVer][parserVer][producer][fnv(headSha)] then each
 // of the 9 fields as a uint32 count followed by its flat records (btree maps in sorted key order, vectors
 // as-is), then an fnv1a64 checksum over all preceding bytes. Byte-stable for a fixed Snapshot.
 // P0.2 (r27): cacheVer/parserVer are the EXTRACTION IDENTITY every field below is a function of — see the note
 // at kIngestCacheVersionMirror. They are in the filename key too; carrying them here as well means a blob
 // reached by any other route (hand-copied, collided) is REJECTED rather than believed.
+// v14: `producer` is fnv1a64 of the producer identity — the build that computed the dead set (producerIdentity).
 inline std::string serializeSnapshot( const Snapshot& s, const std::string& headSha )
 {
     std::string buf;
@@ -2909,6 +2959,7 @@ inline std::string serializeSnapshot( const Snapshot& s, const std::string& head
     qsnapPut( buf, kQSnapCacheScheme );
     qsnapPut( buf, kIngestCacheVersionMirror );
     qsnapPut( buf, kIngestParserVerMirror );
+    qsnapPut( buf, producerIdentityHash() );
     qsnapPut( buf, fnv1a64( headSha ) );
 
     const auto putValMap = [ & ]( const gtl::btree_map<std::uint64_t, std::uint32_t>& m )
@@ -2939,9 +2990,9 @@ inline std::string serializeSnapshot( const Snapshot& s, const std::string& head
 // miss. Vectors are re-sorted so computeDelta's binary_search invariant holds regardless of on-disk order.
 inline bool deserializeSnapshot( const std::string& blob, const std::string& headSha, Snapshot& out )
 {
-    if( blob.size() < 4 + 3 * sizeof( std::uint32_t ) + sizeof( std::uint64_t ) + sizeof( std::uint64_t ) )
+    if( blob.size() < 4 + 3 * sizeof( std::uint32_t ) + 3 * sizeof( std::uint64_t ) )
     {
-        return false;                                          // smaller than magic+scheme+cacheVer+parserVer+sha+trailer
+        return false;                                          // smaller than magic+scheme+cacheVer+parserVer+producer+sha+trailer
     }
     const char*       data    = blob.data();
     const std::size_t bodyLen = blob.size() - sizeof( std::uint64_t );   // trailer = last 8 bytes
@@ -2974,6 +3025,15 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
         return false;
     }
     if( !qsnapGet( p, end, blobParserVer ) || blobParserVer != kIngestParserVerMirror )
+    {
+        return false;
+    }
+
+    // v14 — the PRODUCER guard. The dead set is a function of call resolution as well as extraction, so a blob
+    // another build computed describes a different graph; the key already never names one, this refuses one
+    // reached any other way (see producerIdentity).
+    std::uint64_t blobProducer = 0;
+    if( !qsnapGet( p, end, blobProducer ) || blobProducer != producerIdentityHash() )
     {
         return false;
     }

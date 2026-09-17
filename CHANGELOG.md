@@ -66,6 +66,38 @@ macOS arm64 on a later release) each went red against a mutant installer that re
 the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
 deployment target, retires with it.
 
+### Fixed — `--quality-delta` answered from a dead-code baseline another build computed
+
+`--quality-delta` caches the snapshot it computes for `HEAD`, keyed on the repository, the commit, the excludes, the
+file-size ceiling and the parser version. Its dead-code half also depends on call resolution — a function is dead when
+nothing calls it — and a change to how calls resolve moves none of those, because resolution runs over facts already
+extracted. So two builds that resolve calls differently, sharing a cache directory on one commit, answered from each
+other's snapshot: after an upgrade on a repository whose `HEAD` has not moved, or with an installed `ripwire` and a local
+build on one checkout. Measured on main `a55b118e` against the same tree with the `std::`-qualified call guard switched
+off, over a two-file fixture where `std::launder( &v )` may or may not bind an in-repo `Pool::launder`: on a cold cache
+the guarded build reports `regressions="0"`, and after the unguarded build warmed the cache it reports a gating
+`dead-code` row on the untouched `Pool::launder` and exits 2. The other order hides a real one: deleting the only call is
+a gating regression on a cold cache (exit 2) and nothing on the warm one (exit 0). Both runs used one cache file.
+
+Each build now has a source identity: a SHA-256 over every file under `src/` and `queries/`, computed by
+`cmake/source_identity.cmake` on each build (49 ms on this tree) and compiled in as one generated definition. The
+snapshot and window-ref body caches fold its full 64-hex spelling into the material their filename key hashes, and the
+blob header stores its `fnv1a64`, which a reader must match. It is derived rather than a version to bump because bumps
+are what this cache has missed: an `isDeadCandidate` exemption and a parser-version change each shipped without one, and
+no resolution change ever had one. The price is that any source edit renames the snapshot, including one that changes
+nothing it means. On ripwire's own tree, five runs each with a private cache, a warm `--quality-delta` took a median
+3.04 s (2.78–3.21) and one whose snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the
+parse cache underneath keeps its key, so that recompute reads a warm parse. On the fixed tree the two-build experiment
+writes one snapshot per build and matches a cold cache in both orders. The snapshot and window-ref body caches move to
+schemes 14 and 4.
+
+Gate: `test/qsnapproducercheck.sh`, 16 rows. Its core is a matched pair over a real cached snapshot: dead entries
+dropped (or added) with the producer bytes kept, a control that must change the answer and does, and the same forgery
+with those bytes flipped, which must be refused with output byte-identical to a cold cache. Against main 8 of its 13
+rows failed: the forgery had no producer bytes to flip and was served in both directions, and the key, header,
+derivation and blob arms found nothing. Under ASan the gate passes with no sanitizer report on any child's stderr, and
+`test/cachefuzzcheck.sh`'s snapshot sweep stays clean. Pin moved: `test/qschemetrip.hash`.
+
 ### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
 
 Through 0.6.1 the `macos-arm64` release asset and every macOS CI leg were built with Xcode 16.2 on `macos-14`. Its
