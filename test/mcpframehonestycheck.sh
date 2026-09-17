@@ -503,14 +503,17 @@ print( json.loads( r["result"]["content"][0]["text"] )["baseline"] )
     || no "(H) no-sidecar marker is $( marker ), want git-HEAD"
 printf 'not a baseline at all\nzzz\n' >"$WQ/.ripwire_quality_baseline"
 CORRUPT="$( marker )"
+# The marker is the CLI's documented spelling, `git-HEAD (sidecar unreadable)` (verbs_quality.h's legend,
+# quality::selectBaseline). MCP used to say `git-HEAD (unreadable sidecar ignored)`; lane/small-fixes-0917's A2
+# (ac94ed8f) unified it with the CLI, and test/mcpattrparitycheck.sh pins the two surfaces equal.
 case "$CORRUPT" in
-    *"unreadable sidecar"*) ok "(H) a CORRUPT sidecar is disclosed in the marker: \"$CORRUPT\"";;
+    "git-HEAD (sidecar unreadable)") ok "(H) a CORRUPT sidecar is disclosed in the marker: \"$CORRUPT\"";;
     "git-HEAD") no "(H) a corrupt sidecar still reads as NO sidecar — the only disclosure is a stderr alert no client sees";;
     *) no "(H) corrupt-sidecar marker: $CORRUPT";;
 esac
 : >"$WQ/.ripwire_quality_baseline"
 case "$( marker )" in
-    *"unreadable sidecar"*) ok "(H) an EMPTY sidecar reports the same state (readBaseline rejects both identically)";;
+    "git-HEAD (sidecar unreadable)") ok "(H) an EMPTY sidecar reports the same state (readBaseline rejects both identically)";;
     *) no "(H) empty-sidecar marker: $( marker )";;
 esac
 [ -s "$WQ/.ripwire_quality_baseline" ] || [ -f "$WQ/.ripwire_quality_baseline" ] \
