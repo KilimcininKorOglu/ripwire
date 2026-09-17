@@ -73,6 +73,36 @@ had reached only because the parameter's name spells the class.
 `test/fieldnarrowcheck.sh` arm s3 are the gates, all red on the previous commit. `qschemetripcheck` is re-pinned for the
 parser version.
 
+### Fixed — a member declared in a base class had no type in the derived class, so every call through it guessed
+
+Rule 2b types a bare member receiver from the `Class#field` table, and it looked the field up on the caller's own class
+only. A member the class inherits was never found: in `class SampleProfileLoader final : public
+SampleProfileLoaderBaseImpl<Function>`, `Reader->getSummary()` names the base's `std::unique_ptr<SampleProfileReader>
+Reader;` and took the bare-name ladder, which gave a split over every `getSummary`, a locality pick, or no edge. When the
+class declares no member of that name, Rule 2b now walks its bases breadth-first, the way it already walks a type's bases
+for a method. The shallowest level with a base declaring the member decides, and it has to be exactly one base whose
+member type was captured. A member counts as declared when it is in the field side table, typed or not. So an own
+`std::optional<Widget> Reader;` whose type the capture skips still hides the base's `Reader`, and so does one at any
+base level before the hit. Two bases declaring the member at one level refuse, and so does a walk the 16-name cap cut
+short. A local of that name still vetoes the narrow. A class template's dependent base is walked like any other base,
+though C++ lookup never searches one for a bare name. This is a disclosed floor. It was measured first: 5 of the
+2,203 sites this change moves sit in such a template, and all 5 are right. Three reach the template's non-dependent
+base, and two reach a `using Base::G;`.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 374 sites (236 gain an edge, 138 change target, 0 lose one; bound +236), and
+llvm-project @ 4d5358b1d retargets 1,829 (731 gained, 1,098 changed, 0 lost; bound +735). A seeded, blinded, stratified
+sample of 60 retargets graded against source came out 52 better, 3 same and 5 worse, and in all 60 the grader traced the
+receiver to a member of a base class. The 5 worse sites are limits Rule 2b already had, now reached through a base
+member: a type name shared by classes in two namespaces (`llvm::Module` and `sandboxir::Module` twice, `Sema` and
+`comments::Sema` once), and two overload picks that ignore the argument count. `SampleProfile.cpp:1962`, the
+`Reader->read()` that motivated the change, still gets no edge. The assignment `Reader = std::move(...)` five lines up
+records a local binding, and the local-shadow veto refuses the member; a fixture with the assignment deleted narrows.
+
+`test/fieldnarrowcheck.sh` arm w is the gate. w1, w2, w4 (the narrow and its `prov="final-segment"`), w10 and the w12
+floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
+members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
+
 ### Fixed — a member held by `std::unique_ptr` or `std::shared_ptr` had no type, so every call through it guessed
 
 The member-field capture that feeds Rule 2b read a qualified type only when a plain name sat directly under the `::`.

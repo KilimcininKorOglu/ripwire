@@ -2226,7 +2226,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
     const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
-    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto, "<Owner>#<field>" (C/C++)
+    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
     // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
     // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
     // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
@@ -2763,19 +2763,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }
-        // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver
-        // names a FIELD of the caller's enclosing class resolves to the method on the field's DECLARED type
-        // (walking direct bases when the type itself doesn't define it), BEFORE the bare-name spray — the
-        // bare-field member call is the idiomatic C++ shape Rule 2's local-binding table can never see. Fires
-        // only when NO local binding shadows the name, the class#field→type fact is unambiguous corpus-wide
-        // (tombstoned otherwise), and the type (or exactly one base) defines the method — every other shape
-        // degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
+        // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver names a FIELD of the caller's
+        // enclosing class — or of the one base declaring it, when the class declares none — resolves to the method on the field's DECLARED
+        // type (walking direct bases when the type itself doesn't define it), BEFORE the bare-name spray: the bare-field member call is the
+        // idiomatic C++ shape Rule 2's local-binding table can never see. Fires only when NO local binding shadows the name, the
+        // class#field→type fact is unambiguous corpus-wide (tombstoned otherwise), and the type (or exactly one base) defines the method —
+        // every other shape degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
         // (Rule 2 first: a typed LOCAL beats a same-named field in real C++ lookup, and the veto inside 2b
         // refuses any locally-declared name outright).
         bool fieldTypeNarrowed = false;   // Rule 2b decided the site: its prov="final-segment" question reads the field entry
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp }, fieldNarrow.localNameSet ), r, cand );
             fieldTypeNarrowed = narrowed;
         }
         const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
@@ -3272,7 +3271,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so every edge it
         // commits is prov="final-segment" (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt); never a class-identity CLAIM, whose one class was verified
         const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && !identityClaim && narrower.finalSegmentTypeAt( r ) )
-                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass ) );
+                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp } ) );
         for( NodeId to : tier )
         {
             if( to == r.fromSymbol )
