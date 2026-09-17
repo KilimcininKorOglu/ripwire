@@ -310,7 +310,7 @@ done
 #        list either — counting it as one silently dropped the field it decorates while the struct still
 #        said modeled="1" with a size short by exactly that field's bytes.
 expect_refused AlignasFieldCase     unknown-type
-expect_refused AttributeFieldCase   unparsed-member
+expect_refused AttributeFieldCase   unknown-type
 expect_refused DecltypeFieldCase    unknown-type
 expect_refused StdFunctionFieldCase unknown-type
 
@@ -322,10 +322,23 @@ has 'f n="x"' \
     && ok "AlignasFieldCase: the plain neighbours (n, c) still size normally" \
     || no "AlignasFieldCase: a neighbour field lost its size: n=$( field n sz ) c=$( field c sz )"
 
+# A3 (found-items 2026-09-17): a postfix `__attribute__((aligned(8)))` used to confuse parseDeclarator's
+# last-identifier scan (the attribute's own trailing parens read as unparsed junk after a digit mistaken for
+# the field name), so the field never reached appendField at all — refused as "unparsed-member" with NO
+# `<f n="x">` row, unlike every other unmodelable-field shape in this fixture. peelAttributeGroups now peels
+# the attribute before the name/type split, so `x` is COUNTED (like AlignasFieldCase) and refused the same
+# way alignas is: unknown-type, not silently trusted at align=4.
 run AttributeFieldCase
-has 'caveat k="unparsed-member" d="int x __attribute__' \
-    && ok "AttributeFieldCase: the refusal NAMES the dropped declaration text, not a silent size" \
-    || no "AttributeFieldCase: caveat detail did not name the field: $( printf '%s' "$L" | tr '<' '\n' | grep '^caveat' )"
+has 'f n="x"' \
+    && ok "AttributeFieldCase: the __attribute__((aligned(8)))-decorated field is still COUNTED (not silently dropped)" \
+    || no "AttributeFieldCase: field 'x' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+{ [ "$( field n sz )" = "4" ] && [ "$( field c sz )" = "1" ]; } \
+    && ok "AttributeFieldCase: the plain neighbours (n, c) still size normally" \
+    || no "AttributeFieldCase: a neighbour field lost its size: n=$( field n sz ) c=$( field c sz )"
+
+# the other half of A3: a LAYOUT-IRRELEVANT attribute (deprecated, not aligned/packed) must not refuse at all.
+expect_size  AttributeHarmlessFieldCase 12 4
+expect_field AttributeHarmlessFieldCase x 4 4
 
 run DecltypeFieldCase
 has 'f n="x"' \

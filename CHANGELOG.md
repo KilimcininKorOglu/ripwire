@@ -758,6 +758,22 @@ rejected by `readBaseline` (unrecognizable, an older format, or pre-Q1) — with
 `test/mcpattrparitycheck.sh` gained a value-level check (its existing arms compare attribute NAMES only,
 deliberately) that pins both surfaces to the identical marker on a pre-stamp v5 sidecar fixture.
 
+### Fixed — `--layout` no longer drops a field decorated with a postfix `__attribute__((...))`
+
+`int x __attribute__((aligned(8)));` reached `layout.h`'s plain-field parser with the attribute still
+attached: the last-identifier scan that splits a declarator into its type and name took the digit inside
+the attribute's own argument list (`8`) as the field NAME and left its closing parens as unparsed trailing
+text, so the whole declaration was refused as `caveat k="unparsed-member"` with no `<f n="x">` row at
+all — unlike every other unmodelable-field shape the fixture covers (`alignas(N)`, `decltype(...)`,
+`std::function<...>`), all of which still count the field. `layout.h` now peels a trailing
+`__attribute__((...))` (balanced parens, same technique as the existing array-extent peel) before the
+name/type split. An attribute that changes the field's own placement (`aligned`/`packed`) still refuses —
+`x` is counted (`<f n="x">`) but `unknown-type`, the same degrade `alignas(N)` already gets, rather than a
+confidently wrong offset; any other attribute (`deprecated`, `unused`, …) is a pure hint and is now modelled
+normally, with no caveat at all. `test/layoutcheck.sh`'s `AttributeFieldCase` gained the same
+field-survives assertion `AlignasFieldCase` already had, and a new `AttributeHarmlessFieldCase` fixture
+pins the fully-modelled path.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

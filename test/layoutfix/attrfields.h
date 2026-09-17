@@ -24,6 +24,16 @@ struct AttributeFieldCase
     char c;
 };
 
+// A3 (found-items 2026-09-17): the SAME postfix `__attribute__((...))` shape, but one that changes no byte
+// of the layout (a hint attribute, not aligned/packed). This must come back fully MODELLED — peeling the
+// attribute must not make every attribute-decorated field look unmodelable.
+struct AttributeHarmlessFieldCase
+{
+    int n;
+    int x __attribute__( ( deprecated ) );
+    char c;
+};
+
 struct DecltypeFieldCase
 {
     int            n;
