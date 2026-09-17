@@ -2658,7 +2658,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             // transitive descendants. A virtual call on static type T can only dispatch to T, a subtype (an
             // override), or the definition T inherits from an ancestor — so the cone NEVER excludes the true
             // target; it drops only same-name methods of UNRELATED classes. Empty intersection ⇒ degrade.
-            if( tier.size() > 1 )
+            if( tier.size() > 1 && !identityClaim )   // a class-identity claim is type-verified; the cone cannot name `TBase<T, true>`
             {
                 const std::string_view recvType = narrower.receiverStaticType( r, ing.symbols[ r.fromSymbol ].scope );
                 if( !recvType.empty() )

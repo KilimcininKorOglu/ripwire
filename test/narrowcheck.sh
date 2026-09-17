@@ -508,5 +508,32 @@ expectDispatch "(36a)" nsHealthy fine "fine@status/ns.h:5"
 expectProv "(36b)" nsHealthy fine none "$TMP/dispatch.map"
 expectProv "(36c)" useQualified key final-segment "$TMP/dispatch.map"
 
+# ── 37) an inherited body is not the answer when the defining class only DECLARES the overload the call can reach: rocksdb's
+#        `BackupEngine* e; e->RestoreDBFromLatestBackup( opts, dir, dir )` claimed BackupEngineReadOnlyBase's inline compat
+#        overload while the overload called is pure virtual there (sampled: none -> wrong). A level with more bodiless
+#        overloads of the name than out-of-line bodies adds the receiver's subclass definitions — a disclosed split holding
+#        the right one; (37c) when the call's argument count rules the joined override out, B2.2 arity still does. (37b)
+#        control: a declaration whose body is out of line elsewhere is not a missing body, so FastMeter's hiding read() never
+#        joins. RED before: (37a). ──────────────────────────────────────────────────────────────────────────────────────────
+mkdir -p "$DFIX/backup" "$DFIX/vecs"
+printf 'struct ReadOnlyBase\n{\n    virtual ~ReadOnlyBase() {}\n    virtual int Restore( int opts, int dir ) = 0;\n    int Restore( int dir, int wal = 0 ) { return Restore( wal, dir ); }\n    int Rewind( int opts, int dir ) { return opts; }\n    virtual int Rewind( int dir ) = 0;\n};\nstruct Engine : ReadOnlyBase {};\n' >"$DFIX/backup/engine.h"
+printf '#include "engine.h"\nstruct EngineImpl : Engine\n{\n    int Restore( int opts, int dir ) override { return opts + dir; }\n    int Rewind( int dir ) override { return dir; }\n};\n' >"$DFIX/backup/impl.cc"
+printf '#include "../backup/engine.h"\nint restoreAll( Engine* e ) { return e->Restore( 1, 2 ); }\nint rewindAll( Engine* e ) { return e->Rewind( 1, 2 ); }\n' >"$DFIX/app/restore.cc"
+printf 'struct MeterBase\n{\n    int read() const;\n    int read( int unit ) const { return unit; }\n};\nstruct Meter : MeterBase {};\nstruct FastMeter : Meter\n{\n    int read() const { return 9; }\n};\n' >"$DFIX/backup/meter.h"
+printf '#include "meter.h"\nint MeterBase::read() const { return 1; }\n' >"$DFIX/backup/meter.cc"
+printf '#include "../backup/meter.h"\nint readAll( Meter& m ) { return m.read(); }\n' >"$DFIX/app/meter.cc"
+expectDispatch "(37a)" restoreAll Restore "Restore@backup/engine.h:5 Restore@backup/impl.cc:4"   # a defaulted compat overload: arity cannot decide
+expectDispatch "(37b)" readAll read "read@backup/meter.cc:2 read@backup/meter.h:4"
+expectDispatch "(37c)" rewindAll Rewind "Rewind@backup/engine.h:6"   # joined, then B2.2 arity drops the one-parameter override
+# ── 38) a class template's SPECIALIZATION defines the method too: llvm's `SmallVectorImpl<FunctionDecl *>& v; v.push_back( FD )`
+#        claimed the primary SmallVectorTemplateBase::push_back, while pointer T selects SmallVectorTemplateBase<T, true> —
+#        whose members have no class symbol (scope `TBase<T, true>`), so the ancestor walk never saw them (sampled: none ->
+#        wrong, 133 llvm sites). The defining level now adds its template's specialization-scoped definitions: the family
+#        split, holding the one the instantiation picks. RED before: (38). ───────────────────────────────────────────────────
+printf 'namespace ll\n{\ntemplate <typename T, bool = false>\nclass TBase\n{\npublic:\n    void push_back( const T& x ) {}\n};\ntemplate <typename T>\nclass TBase<T, true>\n{\npublic:\n    void push_back( T x ) {}\n};\ntemplate <typename T>\nclass VecImpl : public TBase<T>\n{\n};\ninline int version() { return 1; }\n}\n' >"$DFIX/vecs/adt.h"
+printf 'struct Log { void push_back( int ) {} };\n' >"$DFIX/probe/log.h"
+printf '#include "../vecs/adt.h"\n#include "../probe/log.h"\nstruct Decl;\nvoid fillQ( ll::VecImpl<Decl *> &v, Decl* d )\n{\n    v.push_back( d );\n}\n' >"$DFIX/app/fill.cc"
+expectDispatch "(38)" fillQ push_back "push_back@vecs/adt.h:13 push_back@vecs/adt.h:7"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
