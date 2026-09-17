@@ -234,17 +234,14 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
 constexpr std::uint32_t kParserVer    = 100;          // bump on any grammar/.scm/extraction change
                                                       // 100 = 2026-09-16 (C++ template scopes, test/cpptmplscopecheck.sh):
-                                                      //    a scope read off a `template_type` keeps only its `name:` —
-                                                      //    `void Box<T>::grow()` scopes to Box, not Box<T>, so the
-                                                      //    out-of-line body and its in-class declaration are ONE
-                                                      //    identity; a class specialization's members and a
-                                                      //    `Tree<T>::Leaf` class name likewise; and a two-segment call
-                                                      //    `Factory<int>::make()` qualifies as Factory. Symbol scopes and
-                                                      //    RawRef::qualifier change, so old extraction facts must be
+                                                      //    a primary template's out-of-line member keys the bare template
+                                                      //    name (`void Box<T>::grow()` joins its declaration `Box::grow`);
+                                                      //    a specialization keeps its canonical template-id; a reference
+                                                      //    keeps the template-id it writes (3+ segments too). Symbol scopes
+                                                      //    and RawRef::qualifier change, so old extraction facts must be
                                                       //    re-parsed; no record layout changes (kCacheVersion stays 22).
-                                                      //    97..99 are held by open lanes (#248, #244 at 97; #235, #233 at
-                                                      //    98; #243 at 99), so this takes the next free number over
-                                                      //    them; quality.h's kIngestParserVerMirror in the SAME commit.
+                                                      //    97..99 were held by open lanes, and the landing train assigns
+                                                      //    the final number; quality.h's kIngestParserVerMirror moves with it.
                                                       // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm
                                                       //    B2): every C/C++ def carries a new syntactic
                                                       //    `internalLinkage` bit — inside an anonymous namespace at any
