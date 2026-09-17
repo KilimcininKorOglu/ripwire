@@ -133,7 +133,7 @@ inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, 
         docPool.reserve( nDocThreads );
         for( unsigned t = 0; t < nDocThreads; ++t )
         {
-            docPool.emplace_back( [ & ]()
+            docPool.emplace_back( [ & ]() noexcept
             {
                 // B0.2: doc Sections are indexed by their EXTRACTED text (docText override), so their
                 // stats come from that text — computed here, in the worker that owns the slot, so the
