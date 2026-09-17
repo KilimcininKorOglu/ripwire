@@ -15,6 +15,64 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a member the method assigned before calling it read as a local, so Rule 2b refused its declared type
+
+Rule 2b narrows `m_p->m()` to the member's declared type unless a local of that name hides the member, and it decided
+"local" from ANY binding record for the name in the method. Ingest records assignments too: `x = Foo()` and
+`x = std::make_unique<T>( … )` record the callee's name as a Type binding, `x = other` an L3 function-pointer binding,
+and `x = nullptr` a clobber once the file binds `x` to a function. An assignment declares nothing, so every member a
+method assigned before calling it lost its narrow — llvm-project's `LVSplitContext::open`, `OutputFile =
+std::make_unique<ToolOutputFile>( … ); OutputFile->keep();`, had no edge. The veto now reads declaration records alone
+(VarDecl, ParamType, FnDecl); every local-declaring shape emits one once the entry below lets a reference-returning
+definition's parameters and an attributed declarator record theirs. Rule 2c and the Phase 5 external-name veto still read
+every record: they ask whether the name is a variable at all, and an assignment says so. Letting Rule 2c ignore
+assignments too was measured and rejected — it moved 7 llvm-project sites and no rocksdb site, 6 worse and 1 same, each
+reading a member such as `OutputFile`, `Context` or `Section` as the class it spells.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 118 sites (67 gained, 51 changed, 0 lost), and llvm-project @ 4d5358b1d retargets 683
+(521 gained, 162 changed, 0 lost); every one is decided by Rule 2b. What used to veto them: an L3 FnAssign or clobber
+record for 88 rocksdb and 479 llvm-project sites, a Type record naming a class for 13 llvm-project sites, and only a
+Type record naming no class for 30 and 191 — the sites #278's assignment-type guard also releases. A seeded, blinded
+sample of 40 graded against source came out 35 better, 4 same and 1 worse; the worse site is a member `Instruction *`
+whose name-based base walk reaches a namesake `Value` class in another namespace, a Rule 2b limit this change only
+exposes.
+
+One declaration still records none, and is pinned as a floor: a direct-initialised local whose arguments are plain
+names, `Foo x( a, b );`, parses as a function declarator, so a call inside its scope takes the member's type. No
+retargeted site on either corpus has such a receiver. Composed with the branch that stops minting a phantom function for
+that declarator, the change retargets 24 more llvm-project sites, and all 24 name the member outside the local's block
+(`MIB.buildInstr( … )` in `AArch64InstructionSelector::select`), which the previous veto refused across the whole method.
+
+`test/fieldnarrowcheck.sh` arm v is the gate. v1 (five assignment shapes) and v3's member pickup are red on the previous
+commit; the v2 declaration controls are red on a build without the veto, three of them (the reference-returning
+parameters and the attributed declarator) on this veto without the entry below; v3's class-name rows are red on a build
+whose Rule 2c ignores assignments. v4 pins the floor.
+
+### Fixed — a function definition returning a reference recorded none of its parameters
+
+A C++ function definition finds its parameter list by walking its declarator chain down to the function declarator, and
+the walk read only each declarator's `declarator` field. A definition returning `T&` or `T&&` reaches its function
+declarator through a `reference_declarator`, which holds it as an unnamed child, so the walk stopped there and the
+parameters recorded nothing: no declaration for shadow suppression, no written type for Rule 2's parameter receivers or
+the field use-site index. `Target& Decoy::refCaller( Target& other ) { other.pick( 1 ); … }` fell to the locality
+tie-break and linked `Decoy::pick`, and `int& refRet( int run ) { run += 1; … }` listed its own parameter's write under
+`--uses=run`. The walk now unwraps reference, parenthesized and attributed declarators, as the shadow capture already did
+for the first two, and the shadow capture unwraps `attributed_declarator` too, so `int run [[maybe_unused]] = 0;`
+declares `run`. kParserVer 104 → 112 (the numbers between are declared by lanes queued ahead); no record layout changes.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 28 sites (1 gained, 27 changed, 0 lost), and llvm-project @ 4d5358b1d retargets 1,318
+(977 gained, 331 changed, 10 lost; `calls=` falls by 11). Of the 10 lost, 5 were Rule 2c reading a parameter named like
+a class as that class (`QualType Type`, `MaybeAlign Align`), and the rest were calls through a callable parameter
+(`Compute()`, `Pred( Str )`) linked to a same-named function. A seeded, blinded sample of 26 graded against source came
+out 24 better, 1 same and 1 worse; the worse site is `Type->isRecordType()` on a `QualType Type` parameter, which Rule 2c
+had reached only because the parameter's name spells the class.
+
+`test/narrowcheck.sh` arms 61-63, `test/shadowcheck.sh` arm am plus a body write in arm q8's attributed declarator, and
+`test/fieldnarrowcheck.sh` arm s3 are the gates, all red on the previous commit. `qschemetripcheck` is re-pinned for the
+parser version.
+
 ### Fixed — a member held by `std::unique_ptr` or `std::shared_ptr` had no type, so every call through it guessed
 
 The member-field capture that feeds Rule 2b read a qualified type only when a plain name sat directly under the `::`.

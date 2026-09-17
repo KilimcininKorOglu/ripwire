@@ -1087,11 +1087,9 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 //     scope, so an unindexed type simply never hits and degrades to the unchanged ladder. A type written in `std` records "" (resolve.h
 //     fieldTypeWrittenInStd): it names no in-repo class, and it still tombstones a same-named class's other type, which a skip would not.
 //     A type written in any other namespace keeps its name and marks the entry qualified: prov="final-segment" (fieldFinalSegmentAt).
-//   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
-//     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
-//     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse. Not an
-//     assignment's callee-read type no class is called (resolve.h assignmentNamesNoClass): `m_decl = cast<D>( x )`
-//     declares nothing, and counting it refused the member's declared type.
+//   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind, valued by the evidence it holds (resolve.h localNameEvidence):
+//     any record makes the name a VARIABLE (Rule 2c, the Phase 5 veto); only a DECLARATION makes it a LOCAL, which hides a
+//     same-named field in real C++ lookup, so Rule 2b refuses on that bit alone — `m_p = makePool();` declares nothing.
 // Both tables empty on a field-capture-free corpus → the resolve loop's Rule 2b block never fires →
 // byte-identical output there. Deterministic: ing.references / ing.bindings are totally ordered; first
 // type wins, a later conflict tombstones, and set membership is order-independent.
@@ -1212,7 +1210,10 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
     t.localShadowSpans.reserve( ing.bindings.size() );
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol == kNoNode || b.var.empty() || assignmentNamesNoClass( b, classNames ) )
+        // Every record, an assignment's included: localNameEvidence keeps an assignment out of Rule 2b's declared bit (the
+        // member it assigns stays typed, which is what assignmentNamesNoClass guarded here), while Rule 2c still reads it as
+        // proof the token is a variable (test/fieldnarrowcheck.sh arm v3).
+        if( b.fromSymbol == kNoNode || b.var.empty() )
         {
             continue;
         }
@@ -1220,7 +1221,7 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         Narrower::appendUint( key, b.fromSymbol );
         key.push_back( '#' );
         key.append( b.var );
-        t.localNameSet.try_emplace( key, 1 );
+        t.localNameSet[ key ] |= localNameEvidence( b.kind );
         if( b.kind == LocalBindKind::VarDecl )
         {
             t.localShadowSpans[ key ].push_back( VarSpan{ b.spanStart, b.spanEnd } );

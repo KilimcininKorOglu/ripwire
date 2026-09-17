@@ -131,6 +131,9 @@ struct Decoy
     int localCaller() { Target other; return other.pick( 1 ); }
     int nestedTyped( Target& other, Other* os[] ) { int n = 0; for( const Other* other : os ) { n += other->peek( 1 ); } return n + other.pick( 2 ); }
     int lambdaCaller() { auto f = []( Target& t ) { return t.pick( 1 ); }; Target held; return f( held ); }
+    Target& refCaller( Target& other ) { other.pick( 1 ); return other; }
+    Target&& rvalueCaller( Target&& other ) { other.pick( 1 ); return static_cast<Target&&>( other ); }
+    Target& outOfLineCaller( Target& other );
 };
 struct Box
 {
@@ -141,6 +144,7 @@ struct Box
     int fieldLeak() { int n = 0; for( const Target& item : ts ) { n += item.pick( 1 ); } return n + item->peek( 2 ); }
     int untypedShadow( Target& other ) { int n = 0; for( auto other : os ) { n += other->peek( 1 ); } return n + other.pick( 2 ); }
 };
+Target& Decoy::outOfLineCaller( Target& other ) { other.pick( 1 ); return other; }
 EOF
 
 # one caller's callee rows as sorted `name@line` words, restricted to one method name. The probe must RUN:
@@ -175,7 +179,8 @@ PMAP="$( "$BIN" "$PFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
 pmiss=0
 for want in 'n="pick" sc="Target"' 'n="peek" sc="Target"' 'n="pick" sc="Other"' 'n="peek" sc="Other"' 'n="pick" sc="Decoy"' 'n="peek" sc="Decoy"' \
             'n="plainCaller" sc="Decoy"' 'n="ptrCaller" sc="Decoy"' 'n="localCaller" sc="Decoy"' 'n="nestedTyped" sc="Decoy"' \
-            'n="lambdaCaller" sc="Decoy"' 'n="loopLeak" sc="Box"' 'n="fieldLeak" sc="Box"' 'n="untypedShadow" sc="Box"'; do
+            'n="lambdaCaller" sc="Decoy"' 'n="loopLeak" sc="Box"' 'n="fieldLeak" sc="Box"' 'n="untypedShadow" sc="Box"' \
+            'n="refCaller" sc="Decoy"' 'n="rvalueCaller" sc="Decoy"' 'n="outOfLineCaller" sc="Decoy"'; do
     printf '%s\n' "$PMAP" | grep -qF "$want" || { no "presence guard: paramfix symbol $want not indexed"; pmiss=1; }
 done
 [ "$pmiss" = 0 ] && ok "presence: all paramfix symbols indexed"
@@ -204,6 +209,12 @@ expectIncludes "(13)" fieldLeak peek "peek@2"
 #        no narrow there; after the loop the parameter is back in scope and narrows. ───────────────────────────
 expectIncludes "(14)" untypedShadow peek "peek@2"
 expectRows "(14)" untypedShadow pick "pick@1"
+# ── 61)-63) a definition RETURNING a reference records its parameters as well (2026-09-17, test/fieldnarrowcheck.sh arm v).
+#        Its declarator chain reaches the function declarator through a reference_declarator, whose inner declarator is an
+#        UNNAMED child, so the parameter list was never found: no ParamType, no VarDecl, and `other.pick( 1 )` fell to the
+#        locality tie-break exactly as arm 7's did — inline `T&` (61), `T&&` (62), and out of line (63, after the census). ──
+expectRows "(61)" refCaller pick "pick@1"
+expectRows "(62)" rvalueCaller pick "pick@1"
 
 # ── 15) the mechanism, not just the answer: the census names Rule 2 (receiver-rule) for plainCaller's site, where
 #        the unfixed binary names the locality tie-break. ─────────────────────────────────────────────────────────
@@ -212,6 +223,12 @@ mech="$( awk -F '\t' '$1 == "C" && $6 ~ /::Decoy::plainCaller#/ && $7 == "pick" 
 [ "$mech" = "receiver-rule" ] \
     && ok "(15) plainCaller's pick site is decided by receiver-rule (Rule 2), not the locality tie-break" \
     || no "(15) plainCaller's pick site mech=[${mech:-NO-CENSUS-ROW}], want [receiver-rule]"
+# (63) an out-of-line definition has two defs (the in-class declaration too), which rowsOf refuses — read its census row
+row63="$( awk -F '\t' '$1 == "C" && $6 ~ /::Decoy::outOfLineCaller#/ && $7 == "pick" { print $2 "|" $8 }' "$TMP/census.tsv" 2>/dev/null )"
+case "$row63" in
+    "receiver-rule|c.cpp::Target::pick#"*) ok "(63) Target& Decoy::outOfLineCaller( Target& other ) pins other.pick( 1 ) to Target::pick (receiver-rule)" ;;
+    *) no "(63) Target& Decoy::outOfLineCaller( Target& other ): other.pick( 1 ) -> [${row63:-NO-CENSUS-ROW}], want [receiver-rule|c.cpp::Target::pick]" ;;
+esac
 
 # ── 16) determinism + cache transparency on the parameter fixture: the declaration byte Rule 2 now matches on is
 #        re-derived from the cached record, so warm must equal cold. ─────────────────────────────────────────────
