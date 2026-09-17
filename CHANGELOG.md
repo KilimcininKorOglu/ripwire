@@ -1350,7 +1350,7 @@ rejected by `readBaseline` (unrecognizable, an older format, or pre-Q1) — with
 `baseline="git-HEAD (sidecar unreadable)"` on the CLI (the spelling `quality::selectBaseline` sets and
 `--help`'s own legend documents) versus `"git-HEAD (unreadable sidecar ignored)"` from MCP's
 `mcpBaselineMarker`, which carries its own local `std::filesystem::exists` fallback for a residual case
-`selectBaseline` cannot flag on its own (§B6 M10). MCP now returns the documented CLI string.
+`selectBaseline` cannot flag on its own. MCP now returns the documented CLI string.
 `test/mcpattrparitycheck.sh` gained a value-level check (its existing arms compare attribute NAMES only,
 deliberately) that pins both surfaces to the identical marker on a pre-stamp v5 sidecar fixture.
 
@@ -1454,6 +1454,44 @@ blob walker reads the new byte. Gate: `test/narrowcheck.sh` arms 44–51. On `ma
 Arm 48 is red on the declaration variant, 46 without the local-name-set change, and 51 on a build that does not persist
 the new byte.
 
+### Added — a Java `Type::method` reference is a call site for `--uses` and `--callers` (parser version 106)
+
+`Widget.makeFn()` minted a call edge and `Widget::makeFn` did not, so a lambda and the method reference beside it
+disagreed about who calls `makeFn` (issue #74). The receiver is a type and the member a literal identifier, so the
+target is fixed at compile time. `queries/java/tags.scm` now captures the member name after `::` on a
+`method_reference`, and ingest stamps the site `RecvKind::JavaTypeCandidate`: the pinned grammar spells `Widget` and
+`widget` with the same `identifier` node, so the query alone proves nothing about the receiver. `src/graph.h` admits
+an ordinary call edge only when the receiver denotes an indexed Java type; a Java parameter, local or field binding of
+that name in scope vetoes it, and nested and package-qualified type receivers are handled explicitly. Java shadow
+binds now carry lexical spans and capture inferred lambda parameters, and the C-family shadow pass refuses Java
+outright (a Java call never resolves to a local). `widget::instanceFn`, `this::thisFn`, `super::superFn` and
+`Widget::new` stay unresolved, and the receiver identifier is never the callee.
+
+`test/javamethodrefcheck.sh` is the gate: the callers of `makeFn` are exactly `genericTypeMethod`, `lambdaForm`,
+`nestedTypeMethod` and `typeMethod`, nothing calls `instanceFn`, `thisFn`, `superFn`, `Widget` or `widget`, and
+rewriting `Widget::makeFn` removes only `typeMethod`. `test/callformcheck.sh`'s Java `--uses=makeFn` is 2.
+`kParserVer` 105 → 106 (the PR declared 96 → 97 → 98 over `main`; integration/train-3 assigns 106). Thanks to
+@rainhuang0220.
+
+### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 107)
+
+A Godot repository was invisible: `.gd` fell out at crawl time as an unsupported extension, so every ranked lens
+answered `reason="no_candidates"`, while `--grep`'s unindexed-text fallback still scanned the files and made the gap
+read as a ranking problem. ripwire now vendors `PrestonKnopp/tree-sitter-gdscript` and extracts `class_name`, inner
+classes, functions and methods, constants, enums and their members, variables and signals, plus call edges. A `.gd`
+file is a class body: `class_name` names it and its file-scope `func`/`var` are its members. Measured on 13
+open-source Godot projects outside this tree: 3,525 files, 58,128 symbols and 27,768 edges, indexed cold in 0.82 s,
+and 98.81% of their 2,611 `.gd` files parse clean.
+
+STATED FLOORS: three upstream grammar bugs are not patched here (G3) — a `%` scene-unique name inside a node path, a
+column-0 comment inside an indented block, and Godot 3 keywords that are still reserved (`remote = {}`). tree-sitter's
+recovery is local, and `test/gdscriptcheck.sh` asserts that every definition and call edge in a fixture holding them
+survives. `preload`/`load("res://…")` dependency edges are a later round, so GDScript is not dependency-capable, and
+`.tscn`, `.tres` and `.gdshader` are not indexed. `test/gdscriptcheck.sh` is the gate, and it is red on a
+pre-GDScript binary. On integration/train-3 the language registers through train 1's compile-time-checked tables
+(`isCodeLang`, `kLintExtRows`, `kLangTokenRows`, `kNodeFieldNames`, `kLangTable`'s exact extent), and `kParserVer`
+106 → 107 (the PR declared 96 → 98 over `main`). Thanks to @sclyde.
+
 ### Added — a Ruby constant receiver now pins the call, instead of splitting it across every same-named method
 
 `Calc.add( 1, 2 )`, `Outer::Engine.run( 3 )`, `::Top.ping` and `Util.format( 5 )` resolved to EVERY
@@ -1490,16 +1528,18 @@ Stated floors, each pinned by an arm of `test/rubyrecvnarrowcheck.sh`: Ruby feed
 class-hierarchy edges (`captureBases` has no Ruby arm), so a method inherited from a superclass does
 not narrow — this is what holds the gem numbers down, where deep `ActiveRecord::Base` hierarchies are
 the idiom; matching is by final segment, so two same-named classes in different namespaces both
-defining the callee keep both candidates; and a variable receiver (`c.scale`) or a chained one
-(`Calc.new.scale`) is untouched. A narrow that misses degrades to the unchanged ladder — it never
+defining the callee keep both candidates; a variable receiver (`c.scale`) or a chained one
+(`Calc.new.scale`) is untouched; and a constant receiver whose class defines both `def self.x` and `def x` gets an
+honest two-way split that includes the instance method (rails `Journey::Parser.parse`) — a split, not a pin, because
+telling `method` from `singleton_method` apart is a later round. A narrow that misses degrades to the unchanged ladder — it never
 deletes an edge and never invents one (`Time.now` still mints nothing).
 
 The default map is byte-identical to the previous build on five Ruby-free corpora (this repo's
 `src/`, npm, a Clojure project, CPython 3.14's stdlib, and this whole repository), and this
 repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols · 22,529 edges.
-`kParserVer` 96 → 97 (record layout unchanged, `kCacheVersion` stays 22; the VALUES of `recv`/
-`recvVar` move, so Ruby extraction facts are re-parsed), with `quality.h`'s mirror and
-`test/qschemetrip.hash` re-pinned in the same commit.
+`kParserVer` 107 → 108 (the PR declared 96 → 97 over `main`; integration/train-3 assigns 108; record layout
+unchanged by it, `kCacheVersion` stays 23; the VALUES of `recv`/`recvVar` move, so Ruby extraction facts are re-parsed),
+with `quality.h`'s mirror and `test/qschemetrip.hash` re-pinned in the same commit. Thanks to @andriytyurnikov.
 
 ## [0.6.1] — 2026-09-14
 

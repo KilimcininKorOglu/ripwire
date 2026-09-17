@@ -33,6 +33,9 @@
 #   (b) Matching is by FINAL SEGMENT, so two classes with the same last name in different namespaces
 #       both defining the callee keep BOTH candidates (an honest split), exactly as Rule 2c documents.
 #   (c) A variable receiver (`c.scale`) and a chained one (`Calc.new.scale`) are untouched by this round.
+#   (d) A constant receiver whose class defines BOTH `def self.x` and `def x` gets an honest two-way split that
+#       includes the instance method (rails `Journey::Parser.parse`): a split, not a pin. Ruby's tags.scm gives
+#       `method` and `singleton_method` one kind, so telling them apart is a later round.
 #
 # Usage:  test/rubyrecvnarrowcheck.sh   |   RIPWIRE_BIN=asan/ripwire test/rubyrecvnarrowcheck.sh
 # Exits non-zero on any failure. Does NOT edit test/regression.sh. Self-contained via mktemp.
