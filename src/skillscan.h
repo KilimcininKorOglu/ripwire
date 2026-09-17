@@ -526,11 +526,15 @@ static constexpr const char* kScanIncompleteRuleUnreadable = "SCAN-INCOMPLETE:fi
 // The joined-body injection pass (below) searches windows of the joined body, never the whole of it: one skill's body
 // is routinely tens of KB, past the engine's measured-safe subject on any stack (41,858 B for INJECTION:ignore-prev at
 // 256 MiB under libstdc++, 1,225 B at 8 MiB), and a skipped body fails the whole skill CLOSED. Every INJECTION match is
-// short once whitespace runs are collapsed to one space (the longest, "ignore the previous instructions", is 32 B), so
-// windows that overlap by kSkillJoinedOverlapBytes contain every match whole. Windows start after, and end at, a
-// space, so a cut never makes a \b where the text has none.
+// short once whitespace runs are collapsed to one space: kSkillInjectionSpanBytes, the longest being "ignore the
+// previous instructions" (skillscanreadcheck.sh derives the span from buildInjectionPatterns' sources and fails when a
+// pattern outgrows this constant). Windows overlap by more than that, so each match lies whole in one window. Windows
+// start after, and end at, a space, so a cut never makes a \b where the text has none.
 inline constexpr std::size_t kSkillJoinedWindowBytes  = 1024;
 inline constexpr std::size_t kSkillJoinedOverlapBytes = 128;
+inline constexpr std::size_t kSkillInjectionSpanBytes = 32;
+static_assert( kSkillInjectionSpanBytes < kSkillJoinedOverlapBytes && kSkillJoinedOverlapBytes < kSkillJoinedWindowBytes,
+               "a joined-body window overlap must exceed the longest INJECTION match, or a match across a window edge is lost" );
 inline constexpr std::size_t kSkillScanStackBytes     = 256 * 1024 * 1024;   // the grep scan threads' size (search.h kGrepScanStackBytes)
 
 // Scan the raw text of a skill markdown file line by line, on a thread settled at `stackBytes`. Findings are sorted
@@ -857,7 +861,11 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
         return it != joinedLineOffsets.begin() ? std::prev( it )->second : 0;
     };
     // The windows the pass searches, in order (kSkillJoinedWindowBytes above): each ends at a space (or the body's end)
-    // and the next starts just after a space at least kSkillJoinedOverlapBytes before that end. A run with no space
+    // and the next starts just after the FIRST space at or after end − kSkillJoinedOverlapBytes. A match crossing `end`
+    // is at most kSkillInjectionSpanBytes long, so it starts at a word past end − kSkillInjectionSpanBytes whose
+    // leading space is at or after end − kSkillJoinedOverlapBytes: the next window starts at or before it and holds it
+    // whole. (Searching BACK from end − kSkillJoinedOverlapBytes found no space inside a long spaceless run and jumped
+    // past `end`, missing a phrase that straddled it.) A run with no space
     // past a full window stretches the window to the next space instead of cutting a word; a window that ends up past
     // the engine's bound is Skipped and fails the skill closed, as a long line does.
     std::vector<std::pair<std::size_t, std::size_t>> joinedWindows;
@@ -877,8 +885,9 @@ inline std::vector<SkillFinding> scanSkillTextOn( std::string_view text, std::si
         {
             break;
         }
-        const std::size_t overlapSpace = joinedBody.rfind( ' ', end - kSkillJoinedOverlapBytes );
-        begin = ( overlapSpace != std::string::npos && overlapSpace + 1 > begin ) ? overlapSpace + 1 : end + 1;
+        // `end` is a space here and end > begin + kSkillJoinedOverlapBytes, so the search finds one at or before `end`, past
+        // `begin`: every window starts later than the one before it.
+        begin = joinedBody.find( ' ', end - kSkillJoinedOverlapBytes ) + 1;
     }
     for( const InjectionPattern& p : injPats )
     {
