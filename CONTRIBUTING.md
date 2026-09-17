@@ -515,6 +515,35 @@ Both are load-bearing, and the reason is a real regression this project shipped:
 **If you add a degrade path, it is the plain-flavour run that proves it.** Do not assume a green
 Release CI job covered it.
 
+### What runs nightly instead of on every pull request
+
+`.github/workflows/nightly.yml` runs the slower checks once a day, at 07:17 UTC, against `main`. Today
+that is a ThreadSanitizer build (`-DRIPWIRE_TSAN=ON`) and the gates that drive ripwire's threads: the
+MCP prefetch worker, the edit lock, a long-lived server's re-ingest, concurrent `--quality-ack` writers, the parallel
+ingest and `--match` fan-out, `--grep`'s prefetch thread, the `--doc-drift` workers and the git-spawn
+pool. Each gate runs through a wrapper that fails on a non-zero exit or on any TSan report file, and the
+job first proves that check can fail: a planted race must be reported and its race-free twin must not.
+
+It is not a per-PR leg on purpose. TSan builds already run often on contributors' and maintainers' own
+machines, and every PR already waits on the macOS runners, so a TSan leg on each push would cost more
+CI than it adds coverage. What a local run cannot promise is that someone ran it on what is actually on
+`main` before a tag, and once a day covers that. A scheduled run skips the heavy jobs when `main` has
+not moved since the last green scheduled run and no `nightly-failure` issue is open; while that issue is open,
+every scheduled run checks again.
+
+**Where failures appear:** the workflow's run in the Actions tab, and one issue titled "Nightly checks
+failing on main" (label `nightly-failure`). A failing night on `main` opens it, or comments on it if it
+is already open, with the failing jobs and steps, the commit, the run link and the head of the first
+TSan report. The next green scheduled run comments "green again at <sha>" and closes it. A pull request
+that edits the workflow runs it too, without the issue reporting. To reproduce a TSan failure locally,
+route the reports to files the way the job does, because many gates discard the server's stderr:
+
+```bash
+cmake -S . -B tsan -DRIPWIRE_TSAN=ON && cmake --build tsan -j
+TSAN_OPTIONS=halt_on_error=1:log_path=/tmp/tsanlog RIPWIRE_BIN=tsan/ripwire bash test/qsnapprefetchcheck.sh
+ls /tmp/tsanlog.*     # one file per process that raced; none means no report
+```
+
 ---
 
 ## 6. Submitting a change
