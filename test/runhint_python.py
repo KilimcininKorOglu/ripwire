@@ -69,6 +69,21 @@ for config, content in (
 check("nested", {"package/pytest.ini": "", "package/tests/test_answer.py": test_source},
       "pytest package/tests/test_answer.py", "package/tests/test_answer.py")
 check("plain-module", {"tests/test_answer.py": test_source}, None)
+# Same-root runner evidence still belongs to one file: neither a matching basename nor a
+# substring in another script proves that script runs this Python module.
+same_name = {"a/pytest.ini": "", "a/tests/test_answer.py": test_source,
+             "b/tests/test_answer.py": test_source}
+check("sibling-pytest-unknown", same_name, None, "b/tests/test_answer.py")
+check("sibling-pytest-known", same_name, "pytest a/tests/test_answer.py", "a/tests/test_answer.py")
+same_name_main = {"a/tests/test_answer.py": test_source + 'if __name__ == "__main__":\n    test_answer()\n',
+                  "b/tests/test_answer.py": test_source}
+check("sibling-main-unknown", same_name_main, None, "b/tests/test_answer.py")
+check("sibling-main-known", same_name_main, "python3 a/tests/test_answer.py", "a/tests/test_answer.py")
+check("shell-stem-unknown", {"tests/test_answer.py": test_source,
+                             "scripts/test_answer.sh": "exit 0\n"}, None)
+check("substring-mention-unknown", {"app/tests/test_answer.py": test_source,
+                                    "scripts/test_other.sh": "# Run runtest_answer.py for another suite\nexit 0\n"},
+      None, "app/tests/test_answer.py")
 check("unittest", {"tests/test_answer.py": "import unittest\nclass TestAnswer(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(42, 42)\n"}, None)
 check("django", {"manage.py": "# Django launcher\n", "tests/test_answer.py": "from django.test import TestCase\nclass TestAnswer(TestCase):\n    def test_answer(self):\n        self.assertEqual(42, 42)\n"}, None)
 check("unrelated-config", {"pyproject.toml": "[tool.ruff]\nline-length = 100\n", "setup.cfg": "[metadata]\nname = example\n", "tests/test_answer.py": test_source}, None)

@@ -591,8 +591,8 @@ private:
         }
     }
 
-    /// Prefer the file's own command, then a same-root stem match, then a same-root text mention.
-    /// fileId must be valid; return empty when none of those candidates has a supported runner.
+    /// Script kinds use only their own runner evidence; other files try same-root stem/text matches.
+    /// fileId must be valid; return empty when the applicable evidence cannot establish a command.
     std::string derive( std::uint32_t fileId ) const
     {
         const std::string& target = ing_->files[ fileId ];
@@ -603,10 +603,8 @@ private:
             // moment "" acquired a MEANING: run_unknown="1" asserts no runner is derivable, and for a row
             // whose own path is directly runnable that assertion is simply false. So the self-runnable case
             // now spells its own command, exactly as commandForScript already does for a shell gate.
-            if( std::string command = spell( fileId ); !command.empty() )
-            {
-                return command;
-            }
+            // Missing Python evidence means unknown, not permission to borrow another file's runner.
+            return spell( fileId );
         }
 
         if( std::string command = matchingRunner( fileId, true ); !command.empty() )
