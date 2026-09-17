@@ -1550,8 +1550,12 @@ struct ByteR
     // and believed them (test/hazardpatterncheck.sh rule D, test/cachefuzzcheck.sh Part 3).
     std::uint16_t u16Of32()
     {
-        const std::uint32_t v = u32();
-        return fitsBelow( v, 0x10000u ) ? std::uint16_t( v ) : std::uint16_t( 0 );
+        std::uint32_t v = u32();
+        if( !fitsBelow( v, 0x10000u ) )
+        {
+            v = 0;
+        }
+        return std::uint16_t( v );
     }
 };
 
