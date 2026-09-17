@@ -2110,33 +2110,40 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
     return r.isCompose && r.qualifier == "std";
 }
 
-// One entry of Rule 2's FLAT per-function type table (buildGraph's varType): the variable's type name — "" is a TOMBSTONE,
-// an ambiguous or `std::`-typed variable that never narrows — and whether a declaration wrote that type QUALIFIED, the
-// fact prov="final-segment" discloses (Narrower::finalSegmentTypeAt).
+// One entry of Rule 2's FLAT per-function type table (buildGraph's varType) and of Rule 2b's "Class#field" table
+// (buildFieldNarrowTables): the declared type name — "" is a TOMBSTONE, an ambiguous or `std::`-typed name that never
+// narrows — and whether a declaration wrote that type QUALIFIED, the fact prov="final-segment" discloses
+// (Narrower::finalSegmentTypeAt for a parameter or local, Narrower::fieldFinalSegmentAt for a field).
 struct FlatRecvType
 {
     std::string type;
     bool        writtenQualified = false;
 };
 
-// fold one Type binding into the flat table: the first type wins, a different later type or a `std::` one tombstones
-inline void recordFlatRecvType( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Binding& b )
+// fold one declared type into a flat table: the first type wins, a different later type tombstones, and an agreeing
+// declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too.
+inline void recordFlatRecvTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, std::string_view type, bool writtenQualified )
 {
-    const std::string_view type = namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName );
     const auto [ it, inserted ] = table.try_emplace( key );
     if( inserted )
     {
         it->second.type.assign( type );
-        it->second.writtenQualified = !b.importedName.empty();
+        it->second.writtenQualified = writtenQualified;
     }
     else if( !it->second.type.empty() && it->second.type != type )
     {
-        it->second.type.clear();   // conflicting types for one var in one scope → tombstone (never narrow this var)
+        it->second.type.clear();   // conflicting types for one name in one scope → tombstone (never narrow on it)
     }
     else
     {
-        it->second.writtenQualified = it->second.writtenQualified || !b.importedName.empty();
+        it->second.writtenQualified = it->second.writtenQualified || writtenQualified;
     }
+}
+
+// fold one Type binding into the flat table: the first type wins, a different later type or a `std::` one tombstones
+inline void recordFlatRecvType( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Binding& b )
+{
+    recordFlatRecvTypeFact( table, key, namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName ), !b.importedName.empty() );
 }
 
 // what Rule 2 and CHA-lite read for one named receiver at one site: its type name ("" = none) and whether the declaration
@@ -2524,7 +2531,7 @@ struct Narrower
     // Deterministic: chaUp lists are sorted+deduped, the frontier is expanded in stored order with a fixed
     // visit cap, and canonByName insertion order = symbol-id order.
     const rw::SmallVec<NodeId, 2>* rule2bFieldRecvType( const Reference& r, const std::string& callerScope,
-                                                        const HashMap<std::string, std::string>&              fieldTypes,
+                                                        const HashMap<std::string, FlatRecvType>&             fieldTypes,
                                                         const HashMap<std::string, char>&                     localNames,
                                                         const HashMap<std::string, std::vector<std::string>>& chaUp ) const
     {
@@ -2551,25 +2558,15 @@ struct Narrower
             return nullptr;
         }
 
-        // (3) the enclosing class's field entry — keyed by the scope's FINAL segment (Symbol::scope is the
-        // bare class name for methods; a nested scope's last segment is the innermost class), "" = tombstone.
-        std::string_view scopeFinal( callerScope );
-        if( const std::size_t cut = scopeFinal.rfind( "::" ); cut != std::string_view::npos )
-        {
-            scopeFinal.remove_prefix( cut + 2 );
-        }
-        keyBind.clear();
-        keyBind.append( scopeFinal );
-        keyBind.push_back( '#' );
-        keyBind.append( r.recvVar );
-        const auto fit = fieldTypes.find( keyBind );
-        if( fit == fieldTypes.end() || fit->second.empty() )
+        // (3) the enclosing class's field entry (fieldEntryAt), "" = tombstone.
+        const FlatRecvType* field = fieldEntryAt( r, callerScope, fieldTypes );
+        if( field == nullptr || field->type.empty() )
         {
             return nullptr;
         }
 
         // (4) the declared type's own method set, then its bases — shared with Rule 2c below.
-        return methodOnTypeOrBases( fit->second, r, chaUp );
+        return methodOnTypeOrBases( field->type, r, chaUp );
     }
 
     // The type-side probe Rules 2b and 2c share: `type::callee` in the type's OWN method set first (canonByName,
@@ -2830,6 +2827,33 @@ struct Narrower
     std::string_view recvVarTypeName( const Reference& r ) const
     {
         return recvVarType( r ).name;
+    }
+
+    // prov="final-segment" for a FIELD (test/fieldnarrowcheck.sh arm r): whether the field Rule 2b narrowed on was declared
+    // QUALIFIED. `store::Text body_; body_.size()` matched `Text` alone, exactly the guess finalSegmentTypeAt discloses for a
+    // parameter or a local, so the edge must not read as uniquely resolved. Asked only for a site Rule 2b decided.
+    bool fieldFinalSegmentAt( const Reference& r, const std::string& callerScope, const HashMap<std::string, FlatRecvType>& fieldTypes ) const
+    {
+        const FlatRecvType* field = fieldEntryAt( r, callerScope, fieldTypes );
+        return field != nullptr && field->writtenQualified && !field->type.empty();
+    }
+
+    // Rule 2b's "Class#field" entry for a named receiver, or nullptr: keyed by the caller scope's FINAL segment (Symbol::scope
+    // is the bare class name for methods; a nested scope's last segment is the innermost class). Shared by the narrow and its
+    // prov="final-segment" question, so the two cannot read different entries.
+    const FlatRecvType* fieldEntryAt( const Reference& r, const std::string& callerScope, const HashMap<std::string, FlatRecvType>& fieldTypes ) const
+    {
+        std::string_view scopeFinal( callerScope );
+        if( const std::size_t cut = scopeFinal.rfind( "::" ); cut != std::string_view::npos )
+        {
+            scopeFinal.remove_prefix( cut + 2 );
+        }
+        keyBind.clear();
+        keyBind.append( scopeFinal );
+        keyBind.push_back( '#' );
+        keyBind.append( r.recvVar );
+        const auto fit = fieldTypes.find( keyBind );
+        return fit == fieldTypes.end() ? nullptr : &fit->second;
     }
 
     // prov="final-segment" (test/narrowcheck.sh arm 25): whether a named receiver's type at this site — the one Rule 2 narrows

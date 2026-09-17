@@ -1086,6 +1086,7 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 //     of the SAME type (header re-parse, repeated patterns across roots) is harmless and keeps the entry. The type name is only ever USED as a canonByName
 //     scope, so an unindexed type simply never hits and degrades to the unchanged ladder. A type written in `std` records "" (resolve.h
 //     fieldTypeWrittenInStd): it names no in-repo class, and it still tombstones a same-named class's other type, which a skip would not.
+//     A type written in any other namespace keeps its name and marks the entry qualified: prov="final-segment" (fieldFinalSegmentAt).
 //   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
 //     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
 //     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse.
@@ -1094,7 +1095,7 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 // type wins, a later conflict tombstones, and set membership is order-independent.
 struct FieldNarrowTables
 {
-    HashMap<std::string, std::string> fieldTypeByClass;
+    HashMap<std::string, FlatRecvType> fieldTypeByClass;
     HashMap<std::string, char>        localNameSet;
 };
 
@@ -1112,12 +1113,8 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        const std::string_view type = fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName );
-        const auto [ it, inserted ] = t.fieldTypeByClass.try_emplace( key, type );
-        if( !inserted && !it->second.empty() && it->second != type )
-        {
-            it->second.clear();   // same class-name#field-name, different declared types → tombstone
-        }
+        // same class-name#field-name with different declared types → tombstone (resolve.h recordFlatRecvTypeFact)
+        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty() );
     }
     t.localNameSet.reserve( ing.bindings.size() );
     for( const Binding& b : ing.bindings )
@@ -2453,9 +2450,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
         // (Rule 2 first: a typed LOCAL beats a same-named field in real C++ lookup, and the veto inside 2b
         // refuses any locally-declared name outright).
+        bool fieldTypeNarrowed = false;   // Rule 2b decided the site: its prov="final-segment" question reads the field entry
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            fieldTypeNarrowed = narrowed;
         }
         const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
         // P2-D Rule 3 (import/include-based file narrow): when the name is ambiguous (K same-name defs) but the
@@ -2945,9 +2944,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
         const float base = conf / float( nReal );              // split over real (non-self) targets
-        // the receiver's qualified written type decided this site by its last name — Rule 2 narrowed on it, or CHA-lite pruned
-        // by it — so every edge it commits is marked prov="final-segment" below (resolve.h Narrower::finalSegmentTypeAt)
-        const bool  finalSegmentType = ( receiverTypeNarrowed || censusCone ) && narrower.finalSegmentTypeAt( r );
+        // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so
+        // every edge it commits is marked prov="final-segment" below (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt)
+        const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && narrower.finalSegmentTypeAt( r ) )
+                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass ) );
         for( NodeId to : tier )
         {
             if( to == r.fromSymbol )
@@ -4736,7 +4736,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         key.append( owner ).push_back( '#' );
         key.append( member );
         const auto it = narrow.fieldTypeByClass.find( key );
-        return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second );
+        return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second.type );
     };
     const auto localTypeOf = [ & ]( NodeId encl, std::string_view var ) -> std::string_view
     {
