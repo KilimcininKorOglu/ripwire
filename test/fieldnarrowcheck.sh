@@ -530,6 +530,114 @@ else
     no "(p9) ptrfix census differs across runs or warm vs cold, or the warm run lost w_->read()'s narrow"; diff "$TMP/p5.tsv" "$TMP/p5w.tsv" | head -6
 fi
 
+# ── (v) a member declared in a BASE class (2026-09-17). Rule 2b looked the receiver up as "EnclosingClass#field" only, so a bare
+#        member the class inherits was never typed: `Reader->read()` inside `class SampleProfileLoader final : public
+#        SampleProfileLoaderBaseImpl<Function>`, whose `std::unique_ptr<SampleProfileReader> Reader;` the base declares, took the
+#        bare-name ladder. When the enclosing class declares no member of that name, Rule 2b now walks its bases breadth-first
+#        (chaUp, the final-segment class names the method walk uses): the shallowest level with a base DECLARING the member
+#        decides, and it must be exactly one base whose member type was captured (v1-v4). Refusals, each a C++ lookup fact:
+#        the class's own member hides every base's (v5), and it hides them even when its type was not captured — the "declares"
+#        set is the field side table, not the typed one, or `std::optional<DecoyReader> Raw;` would be walked past (v6); the
+#        same holds at any base level before the hit (v7); two bases at one level are an ambiguous lookup (v8); a local still
+#        vetoes (v9); and a walk the 16-name cap stopped cannot prove the member unhidden or unambiguous (v10, v10w).
+#        LINE NUMBERS are not asserted — the census target ids are. ──
+FIX7="$TMP/basefix"
+mkdir -p "$FIX7/lib" "$FIX7/app"
+cat >"$FIX7/lib/types.h" <<'EOF'
+struct SampleReader { int read() { return 1; } void reset() { } };
+struct DecoyReader { int read() { return 2; } void reset() { } };
+struct OtherReader { int read() { return 3; } void reset() { } };
+namespace store { struct Blob { int read() { return 4; } }; }
+EOF
+cat >"$FIX7/lib/base.h" <<'EOF'
+template <typename FT> class LoaderBase {
+protected:
+    std::unique_ptr<SampleReader> Held;
+    SampleReader* Raw;
+    store::Blob* Stored;
+};
+struct MidBase : LoaderBase<int> { };
+struct UntypedMid : LoaderBase<int> { std::optional<OtherReader> Raw; };
+struct LeftBase { SampleReader* Dual; };
+struct RightBase { DecoyReader* Dual; };
+EOF
+{   # K0 : K1 : … : K16 — K15 is the 16th name a walk from K0 visits, K16 the 17th
+    printf 'struct K16 { SampleReader* Far; };\nstruct K15 : K16 { SampleReader* Near; };\n'
+    k=14; while [ "$k" -ge 1 ]; do printf 'struct K%d : K%d { };\n' "$k" "$(( k + 1 ))"; k=$(( k - 1 )); done
+    printf 'struct K0 : K1 { int viaNear() { return Near->read(); } int viaFar() { return Far->read(); } };\n'
+    # Wide's direct bases B00…B15 are one level, and the cap stops it at B14: B14 declares Wid, the unvisited B15 does too
+    k=0; while [ "$k" -le 13 ]; do printf 'struct B%02d { };\n' "$k"; k=$(( k + 1 )); done
+    printf 'struct B14 { SampleReader* Wid; };\nstruct B15 { DecoyReader* Wid; };\nstruct Wide :'
+    k=0; while [ "$k" -le 15 ]; do printf ' B%02d%s' "$k" "$( [ "$k" -lt 15 ] && printf ',' )"; k=$(( k + 1 )); done
+    printf ' { int viaWide() { return Wid->read(); } };\n'
+} >"$FIX7/lib/chain.h"
+cat >"$FIX7/app/loader.cpp" <<'EOF'
+class Loader final : public LoaderBase<Function> {
+    int viaHeld() { return Held->read(); }
+    int viaRaw() { return Raw->read(); }
+    void viaHeldDot() { Held.reset(); }
+    int viaStored() { return Stored->read(); }
+    int viaOutOfLine();
+};
+int Loader::viaOutOfLine() { return Raw->read(); }
+struct Grand : MidBase { int viaGrand() { return Raw->read(); } };
+struct Redecl : LoaderBase<int> { OtherReader* Raw; int viaRedecl() { return Raw->read(); } };
+struct OwnUntyped : LoaderBase<int> { std::optional<DecoyReader> Raw; int viaOwnUntyped() { return Raw->read(); } };
+struct BelowUntyped : UntypedMid { int viaBelow() { return Raw->read(); } };
+struct Both : LeftBase, RightBase { int viaDual() { return Dual->read(); } };
+struct Shadow : LoaderBase<int> { int viaShadow() { auto Raw = makeDecoy(); return Raw->read(); } };
+template <typename T> struct DepLoader : LoaderBase<T> { int viaDependent() { return Raw->read(); } };
+EOF
+"$BIN" "$FIX7" --no-cache --pin-census="$TMP/v7.tsv" >/dev/null 2>&1
+"$BIN" "$FIX7" --no-cache >"$TMP/v7.map" 2>/dev/null
+vMissing=""
+for want in '::Loader::viaHeld#' '::Loader::viaOutOfLine#' '::Grand::viaGrand#' '::OwnUntyped::viaOwnUntyped#' '::BelowUntyped::viaBelow#' \
+            '::Both::viaDual#' '::Shadow::viaShadow#' '::K0::viaNear#' '::K0::viaFar#' '::DepLoader::viaDependent#' '::Wide::viaWide#' 'dispositions calls=16 '; do
+    qHas "$TMP/v7.tsv" "$want" || vMissing="$vMissing [$want]"
+done
+[ -z "$vMissing" ] && ok "(v0) presence: the census names every base-member fixture caller and counts every call" \
+    || no "(v0) presence guard:$vMissing — every (v) arm below would be vacuous"
+vPinned(){  # vPinned ARM CALLER CALLEE TARGET-ERE WHAT
+    local got; got="$( pRows "$TMP/v7.tsv" "$2" "$3" )"
+    if printf '%s\n' "$got" | grep -qE "^receiver-rule\\|$4#[0-9]+\$"; then
+        ok "($1) $5 narrows to the member's declared type (receiver-rule)"
+    else
+        no "($1) $5 did not narrow to the member's declared type: [${got:-no row}]"
+    fi
+}
+vPinned v1 '::Loader::viaHeld#'      read 'lib/types\.h::SampleReader::read' 'base std::unique_ptr<SampleReader> Held; Held->read()'
+vPinned v1 '::Loader::viaRaw#'       read 'lib/types\.h::SampleReader::read' 'base SampleReader* Raw; Raw->read()'
+vPinned v1 '::Loader::viaOutOfLine#' read 'lib/types\.h::SampleReader::read' 'base SampleReader* Raw; Raw->read() in an out-of-line Loader::viaOutOfLine'
+vPinned v2 '::Grand::viaGrand#'      read 'lib/types\.h::SampleReader::read' 'Grand : MidBase : LoaderBase — Raw->read() two levels up'
+vPinned v4 '::Loader::viaStored#'    read 'lib/types\.h::Blob::read'         'base store::Blob* Stored; Stored->read()'
+vPinned v5 '::Redecl::viaRedecl#'    read 'lib/types\.h::OtherReader::read'  "control: Redecl's own OtherReader* Raw hides the base's; Raw->read()"
+vPinned v10 '::K0::viaNear#'         read 'lib/types\.h::SampleReader::read' 'K15 (the 16th name walked) declares Near; Near->read()'
+pNotPinned v3 "$TMP/v7.tsv" '::Loader::viaHeldDot#'         reset 'lib/types\.h::SampleReader::reset' "base std::unique_ptr<SampleReader> Held; Held.reset() — the smart pointer's own reset"
+pNotPinned v6 "$TMP/v7.tsv" '::OwnUntyped::viaOwnUntyped#'  read  'lib/types\.h::SampleReader::read'  "OwnUntyped's own std::optional<DecoyReader> Raw (type not captured) hides the base's; Raw->read()"
+pNotPinned v7 "$TMP/v7.tsv" '::BelowUntyped::viaBelow#'     read  'lib/types\.h::SampleReader::read'  "base UntypedMid's std::optional<OtherReader> Raw hides LoaderBase's; Raw->read()"
+pNotPinned v8 "$TMP/v7.tsv" '::Both::viaDual#'              read  'lib/types\.h::SampleReader::read'  'LeftBase and RightBase both declare Dual; Dual->read()'
+pNotPinned v8 "$TMP/v7.tsv" '::Both::viaDual#'              read  'lib/types\.h::DecoyReader::read'   'LeftBase and RightBase both declare Dual; Dual->read()'
+pNotPinned v9 "$TMP/v7.tsv" '::Shadow::viaShadow#'          read  'lib/types\.h::SampleReader::read'  'a local auto Raw shadows the base member; Raw->read()'
+pNotPinned v10 "$TMP/v7.tsv" '::K0::viaFar#'                read  'lib/types\.h::SampleReader::read'  'K16 (the 17th name, past the walk cap) declares Far; Far->read()'
+pNotPinned v10w "$TMP/v7.tsv" '::Wide::viaWide#'            read  'lib/types\.h::SampleReader::read'  'the cap cut Wide'"'"'s base level after B14 (declares Wid) before B15 (declares it too); Wid->read()'
+# (v4) the base member's type was written qualified, so the narrow matched its last name alone — the same disclosure as arm (r1)
+expectFieldProv "(v4)" "$TMP/v7.map" viaStored read final-segment
+# (v12) KNOWN FLOOR, pinned so a change to it is deliberate: a class template's DEPENDENT base (`LoaderBase<T>`) is walked like any
+#       other, though C++ lookup of a bare name never searches one — the code compiles only if `Raw` is found elsewhere, as
+#       `this->Raw` or through a `using` declaration. The base clause records no template arguments, so refusing needs an extraction
+#       change, and it was measured first (2026-09-17, a source scan of every retarget this walk adds): 5 of 2,203 rocksdb and
+#       llvm-project sites sit in a class template with a dependent base, all five correct — three reach PtrUseVisitorBase, the
+#       template's NON-dependent base, and two reach `using Base::G;`. A refusal would lose five right edges and fix none.
+vPinned v12 '::DepLoader::viaDependent#' read 'lib/types\.h::SampleReader::read' 'KNOWN FLOOR: template DepLoader : LoaderBase<T> — Raw->read() through the dependent base'
+
+# (v11) determinism: the base walk visits chaUp in stored order
+"$BIN" "$FIX7" --no-cache --pin-census="$TMP/v7b.tsv" >/dev/null 2>&1
+if [ -s "$TMP/v7.tsv" ] && cmp -s "$TMP/v7.tsv" "$TMP/v7b.tsv"; then
+    ok "(v11) basefix census byte-identical across two cold runs"
+else
+    no "(v11) basefix census differs across two cold runs"; diff "$TMP/v7.tsv" "$TMP/v7b.tsv" | head -6
+fi
+
 # ── TS/JS literal receivers (issue #163, first step on #59) ──
 # A built-in method on a LITERAL must not bind an unrelated same-named user function. Covered calls
 # (replace/split/padStart/map/test/toFixed/toString/join) go External; a builtin name with NO in-repo
