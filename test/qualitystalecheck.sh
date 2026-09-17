@@ -173,7 +173,7 @@ if [ "$r1" = "$r2" ]; then ok "--quality-delta deterministic run-to-run"; else n
 # ── DEGRADE-OBSERVABILITY / BUILD-FLAVOUR PROBE (for arms 7 and 8c) ───────────────────────────────────────
 # Arms 7 and 8c assert a DEGRADED_PATH_ALERT, which a Release/NDEBUG build compiles OUT ("if you add a
 # degrade path, it is the PLAIN run that proves it" — CLAUDE.md). Probe the flavour with an UNRELATED,
-# already-gated degrading invocation (--since=notadate) so that a missing alert INSIDE arm 7 is a genuine
+# degrading invocation (a --scip index that opens and fails to decode — see RE-POINTED below) so that a missing alert INSIDE arm 7 is a genuine
 # FAILURE rather than a silent skip — the whole point of the finding is that no alert fired where one was owed.
 #
 # What the missing alert MEANS still has to be decided, and that needs a second, independent reading:
@@ -205,7 +205,7 @@ case "$BUILD_FLAVOUR" in
     *)                                 ndebug_flavour=0 ;;
 esac
 skip(){ printf '  SKIP  %s\n' "$*"; }
-DEGRADE_SKIP_WHY="DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --since=notadate degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). Proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
+DEGRADE_SKIP_WHY="DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). Proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
 
 # 7) w1 MED #1 — the self-heal unlink FAILS (read-only parent dir). The marker used to say "stale sidecar
 #    removed" on the strength of the CLI's INTENT while the file was demonstrably still on disk (the unlink's
