@@ -408,7 +408,11 @@ done
     || no "(u0) presence guard:$uMissing — every (u) arm below would be vacuous"
 uExpect(){  # uExpect ARM CLASS::METHOD LINE WANT WHAT — that caller's row must be exactly WANT
     local got; got="$( uRow "$2" "$3" )"
-    [ "$got" = "$4" ] && ok "($1) $5: [$got]" || no "($1) $5 — expected [$4], got [${got:-no row}]"
+    if [ "$got" = "$4" ]; then
+        ok "($1) $5: [$got]"
+    else
+        no "($1) $5 — expected [$4], got [${got:-no row}]"
+    fi
 }
 uExpect u1 UOwner::viaReexport 21 'receiver-rule/r|u.cpp::UDerived::emit' \
     "decided floor: m_d.emit( 1 ) on UDerived (own emit + using UBase::emit) keeps UDerived's own emit — the union graded net-worse"
