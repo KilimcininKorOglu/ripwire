@@ -79,15 +79,17 @@ the guarded build reports `regressions="0"`, and after the unguarded build warme
 `dead-code` row on the untouched `Pool::launder` and exits 2. The other order hides a real one: deleting the only call is
 a gating regression on a cold cache (exit 2) and nothing on the warm one (exit 0). Both runs used one cache file.
 
-The snapshot's cache key and blob header now carry the build's source identity, a SHA-256 over every file under `src/`
-and `queries/` that `cmake/source_identity.cmake` computes on each build (49 ms on this tree) and compiles in as one generated
-definition. It is derived rather than a version to bump because bumps are what this cache has missed: an
-`isDeadCandidate` exemption and a parser-version change each shipped without one, and no resolution change ever had
-one. The price is that any source edit renames the snapshot, including one that changes nothing it means. On ripwire's
-own tree, five runs each with a private cache, a warm `--quality-delta` took a median 3.04 s (2.78–3.21) and one whose
-snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the parse cache underneath keeps its
-key, so that recompute reads a warm parse. On the fixed tree the two-build experiment writes one snapshot per build and
-matches a cold cache in both orders. The snapshot and window-ref body caches move to schemes 13 and 4.
+Each build now has a source identity: a SHA-256 over every file under `src/` and `queries/`, computed by
+`cmake/source_identity.cmake` on each build (49 ms on this tree) and compiled in as one generated definition. The
+snapshot and window-ref body caches fold its full 64-hex spelling into the material their filename key hashes, and the
+blob header stores its `fnv1a64`, which a reader must match. It is derived rather than a version to bump because bumps
+are what this cache has missed: an `isDeadCandidate` exemption and a parser-version change each shipped without one, and
+no resolution change ever had one. The price is that any source edit renames the snapshot, including one that changes
+nothing it means. On ripwire's own tree, five runs each with a private cache, a warm `--quality-delta` took a median
+3.04 s (2.78–3.21) and one whose snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the
+parse cache underneath keeps its key, so that recompute reads a warm parse. On the fixed tree the two-build experiment
+writes one snapshot per build and matches a cold cache in both orders. The snapshot and window-ref body caches move to
+schemes 13 and 4.
 
 Gate: `test/qsnapproducercheck.sh`, 16 rows. Its core is a matched pair over a real cached snapshot: dead entries
 dropped (or added) with the producer bytes kept, a control that must change the answer and does, and the same forgery
