@@ -232,7 +232,21 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 102;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 103;          // bump on any grammar/.scm/extraction change
+                                                      // 103 = 2026-09-17 (template arguments in a receiver's written type,
+                                                      //    test/narrowcheck.sh arms 39-43): a C++ declaration's Type/ParamType
+                                                      //    record takes its type's LAST NAME through the grammar's fields.
+                                                      //    An unqualified template-id (`Vec<Decl *>& v`, `Vec<T> v;`)
+                                                      //    recorded nothing and now records `Vec`; `Outer<int>::Inner`
+                                                      //    recorded `Outer` (finalSegment cut at the first `<`) and now
+                                                      //    records `Inner`, written or constructed (`Outer<int>::Inner()`,
+                                                      //    and `Foo<T>::create()` records `create`, not `Foo`); an
+                                                      //    unqualified `Vec<T>()` stays unread (ingest_binds.h
+                                                      //    ctorNameNode's floor); `Vec<std::string>` no longer records a
+                                                      //    qualified text for its argument's `::`. No record changes shape
+                                                      //    (kCacheVersion stays 22). The PR declared 103 over main's 99;
+                                                      //    assigned 103 on integration/train-3 over train 2b's 102.
+                                                      //    quality.h's kIngestParserVerMirror moves in the SAME commit.
                                                       // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
                                                       //    PR #256): a primary template's out-of-line member keys the bare
                                                       //    template name (`void Box<T>::grow()` joins `Box::grow`); a

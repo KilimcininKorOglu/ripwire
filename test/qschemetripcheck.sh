@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TEMPLATE ARGUMENTS IN A RECEIVER'S TYPE (test/narrowcheck.sh arms 39-43, PR #276): parserVer and its quality
+#   mirror move to 103 on integration/train-3 (the PR declared 99 -> 103 over main; train 2b's 102 is ahead of it) — a C++
+#   declaration's Type/ParamType record takes its type's last name through the grammar's fields, so an unqualified
+#   template-id records a type at last and `Outer<int>::Inner` records `Inner`, not `Outer`. Record layouts are unchanged,
+#   so kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14: no key or snapshot semantics changed, only the
+#   extraction identity. Old extraction facts must be re-parsed. The train re-derives this pin on the merged tree.
 # 2026-09-17, TRAIN 2b (integration/train-2b: #244 a948bf46, #243 6b234717, #256 8464f3be, lane/field-final-segment
 #   a23f4ec3, built on main bcd3b016, then merged with main ea03af88 and b09b53a9 = train 1): RE-DERIVED ON THE FINAL
 #   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over trains 1 and 2's 99:
