@@ -3920,7 +3920,7 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     if( scan.tooDeep )
     {
         return SliceReply{ {}, "'" + sym.name + "' in " + path + " nests deeper than " + std::to_string( slicev::kMaxSliceDepth )
-                               + " syntax levels — refused: the slice walk's cost grows with the cube of the nesting" };
+                               + " syntax levels — refused: the slice walks recurse once per level, and a definition this deep would exhaust the stack" };
     }
     if( !scan.parseOk )
     {

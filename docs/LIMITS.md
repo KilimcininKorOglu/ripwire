@@ -501,7 +501,7 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kMaxAssertChars` | `220` | OUTPUT | the displayed prefix of a static_assert's text |
 | `kMaxDefsShown` | `24` | BOUNDARY | a name defined more often than this is a generic, not a mirror |
-| `kMaxExtentParens` | `64` | BOUNDARY | `(` nesting an extent expression may use (IntEval recurses per level) |
+| `kMaxExtentParens` | `64` | BOUNDARY | `(` nesting DEPTH an extent expression may reach (IntEval recurses per level) |
 | `kMaxMacroDepth` | `4` | INDEXING | object-like macro expansion depth for a type name |
 | `kMaxNestDepth` | `8` | INDEXING | nested-aggregate resolution depth (a cycle stops here) |
 
@@ -834,7 +834,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kMaxSliceDepth` | `512` | BOUNDARY | — |
+| `kMaxSliceDepth` | `4096` | BOUNDARY | — |
 | `kSliceFlowDefaultDepth` | `8` | — | the disclosed default bound (depth= always states it) |
 | `kSliceFlowDepthMax` | `32` | — | — |
 | `kSliceFlowDepthMin` | `1` | — | — |
