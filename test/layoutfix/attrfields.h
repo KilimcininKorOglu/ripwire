@@ -93,3 +93,20 @@ struct StdFunctionFieldCase
     int                       n;
     std::function<void(int)> cb;
 };
+
+// CodeRabbit on #281: a string ARGUMENT inside a layout-neutral attribute is inert text. Its `)` used to unbalance the
+// group match (the field was refused as unparsed-member) and its "packed" used to read as the packed keyword (refused
+// as unknown-type). Both are a deprecated hint and must stay fully modelled, exactly like AttributeHarmlessFieldCase.
+struct AttributeStringParenCase
+{
+    int n;
+    int x __attribute__( ( deprecated( ")" ) ) );
+    char c;
+};
+
+struct AttributeStringKeywordCase
+{
+    int n;
+    int x __attribute__( ( deprecated( "packed" ) ) );
+    char c;
+};

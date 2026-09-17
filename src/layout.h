@@ -1217,6 +1217,40 @@ inline bool cutAtTopLevel( std::string_view& s, std::string_view stops )
     return false;
 }
 
+// `s` with the CONTENTS of every string literal, character literal and comment blanked to spaces — same length, the
+// delimiters kept. The attribute scans below read this mask and slice the ORIGINAL at the same offsets, so an argument
+// such as `deprecated( ")" )` cannot unbalance a group and `deprecated( "packed" )` cannot spell a layout keyword
+// (CodeRabbit on #281, test/layoutcheck.sh AttributeString*Case). An unterminated literal blanks to the end.
+inline std::string lexicalMask( std::string_view s )
+{
+    std::string mask( s );
+    for( std::size_t i = 0; i < mask.size(); ++i )
+    {
+        const char c = mask[i];
+        if( c == '"' || c == '\'' )
+        {
+            for( ++i; i < mask.size() && mask[i] != c; ++i )
+            {
+                if( mask[i] == '\\' && i + 1 < mask.size() )
+                {
+                    mask[i++] = ' ';   // the escape and the byte it escapes are both content
+                }
+                mask[i] = ' ';
+            }
+        }
+        else if( c == '/' && i + 1 < mask.size() && ( mask[ i + 1 ] == '/' || mask[ i + 1 ] == '*' ) )
+        {
+            const bool line = mask[ i + 1 ] == '/';
+            for( i += 2; i < mask.size() && !( line ? mask[i] == '\n' : ( mask[i] == '*' && i + 1 < mask.size() && mask[ i + 1 ] == '/' ) ); ++i )
+            {
+                mask[i] = ' ';
+            }
+            i += line ? 0 : 1;   // leave a block comment's `*/` in place
+        }
+    }
+    return mask;
+}
+
 // A3 (found-items 2026-09-17): peel trailing `__attribute__((…))` groups off the RIGHT of `s` — GNU/GCC
 // postfix attribute syntax, placed after the declarator name or (per the standard grammar) after its array
 // extents. `int x __attribute__((aligned(8)))` used to reach parseDeclarator's last-identifier scan with the
@@ -1235,23 +1269,24 @@ inline std::vector<std::string_view> peelAttributeGroups( std::string_view& s )
     for( ;; )
     {
         s = trimView( s );
-        if( s.empty() || s.back() != ')' )
+        const std::string mask = lexicalMask( s );   // parens and the keyword are read here; slices come from `s`
+        if( mask.empty() || mask.back() != ')' )
         {
             break;
         }
         int         depth = 0;
         std::size_t open  = std::string_view::npos;
-        for( std::size_t i = s.size(); i-- > 0; )
+        for( std::size_t i = mask.size(); i-- > 0; )
         {
-            if( s[i] == ')' )      { ++depth; }
-            else if( s[i] == '(' ) { --depth; if( depth == 0 ) { open = i; break; } }
+            if( mask[i] == ')' )      { ++depth; }
+            else if( mask[i] == '(' ) { --depth; if( depth == 0 ) { open = i; break; } }
         }
         if( open == std::string_view::npos )
         {
             break; // unbalanced — degrade rather than misclassify (same rule matchBracket's callers use)
         }
         const std::string_view before = trimView( s.substr( 0, open ) );
-        if( !before.ends_with( kAttr ) )
+        if( !trimView( std::string_view( mask ).substr( 0, open ) ).ends_with( kAttr ) )
         {
             break; // the trailing (...) group is not an attribute specifier — leave it for the caller
         }
@@ -1278,7 +1313,8 @@ inline std::vector<std::string_view> peelAttributeGroups( std::string_view& s )
 // re-deriving a general tokenizer for a two-keyword, fixed-alphabet job.
 inline bool attrHasKeyword( std::string_view attr, std::string_view bare ) noexcept
 {
-    if( containsWord( attr, bare ) )
+    const std::string code = lexicalMask( attr );   // a keyword spelled inside a string argument is not the keyword
+    if( containsWord( code, bare ) )
     {
         return true;
     }
@@ -1287,7 +1323,7 @@ inline bool attrHasKeyword( std::string_view attr, std::string_view bare ) noexc
     wrapped += "__";
     wrapped += bare;
     wrapped += "__";
-    return containsWord( attr, wrapped );
+    return containsWord( code, wrapped );
 }
 
 // Peel trailing array extents off the RIGHT of `s`: `slots[ 4 ][ 2 ]` → {"4","2"}, leaving `Slot slots`.

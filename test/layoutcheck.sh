@@ -364,6 +364,13 @@ has 'f n="x"' \
 expect_size  AttributeGnuHarmlessFieldCase 12 4
 expect_field AttributeGnuHarmlessFieldCase x 4 4
 
+# CodeRabbit on #281: a string argument is inert. `deprecated( ")" )` must not unbalance the attribute group and
+# `deprecated( "packed" )` must not spell the packed keyword; both stay modelled like AttributeHarmlessFieldCase.
+expect_size  AttributeStringParenCase 12 4
+expect_field AttributeStringParenCase x 4 4
+expect_size  AttributeStringKeywordCase 12 4
+expect_field AttributeStringKeywordCase x 4 4
+
 # A3 (review round): the C++11 standard attribute syntax ([[gnu::aligned(8)]] / [[gnu::packed]]) is never
 # specially peeled — pinned here so it cannot silently start being modelled as natural. Both already refuse
 # as a side effect of how the surrounding text fails to parse as a plain field.
