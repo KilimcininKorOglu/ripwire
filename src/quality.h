@@ -1974,7 +1974,11 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
 // `static_assert` — this lane's file boundary forbade editing those files.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 100;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 101;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                          //    §12, PR #243): `r.f<T>()` / `x.template f<T>()` mint call
+                                                          //    references; the `template` disambiguator leaves names and
+                                                          //    qualifiers. See ingest_cache.h's kParserVer note.
                                                           // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
                                                           //    Lit* appended; extraction identity moves, cache format does not.
                                                           // 99 = 2026-09-16 (std-typed member fields): a field's compose

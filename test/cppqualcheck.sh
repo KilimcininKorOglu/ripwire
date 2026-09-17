@@ -13,10 +13,15 @@
 # definition written with two or more qualifier segments was dropped by the mirror-image defect in the
 # definition pattern, just as silently. Read its own section header for that round's evidence.
 #
-# THREE CORPORA. test/cppqualfix/ proves each CALL SPELLING extracts and resolves; every name in it has
+# §12 (added 2026-09-16) carries the MEMBER half of the explicit-template-argument drop: `r.f<T>( x )`,
+# `p->f<T>( x )` and `x.template f<T>()` minted no reference, and the `template` disambiguator corrupted the
+# name or qualifier of the qualified form. Read its own section header for that round's evidence.
+#
+# FOUR CORPORA. test/cppqualfix/ proves each CALL SPELLING extracts and resolves; every name in it has
 # exactly one definition, so those arms cannot prove the re-split chose the RIGHT def. test/cppqualdecoyfix/
 # (§8) gives each name a same-final-name DECOY in another scope, so a wrong qualifier binds provably wrong.
 # test/cppqualdeffix/ (§11) is the definition-side corpus, with its own same-final-name decoy.
+# test/cppqualtmplfix/ (§12) is the member-template corpus, with receiver, arity and qualifier decoys.
 #
 # EVERY expected count below is a LITERAL, read by hand off the fixtures (plan §7 trap 1: a gate that derives
 # its expected number the way the code does cannot catch the derivation). Each fixture's header comment maps
@@ -528,15 +533,165 @@ printf '%s' "$DEFMAP" | grep -qE 'files=1 symbols=30 edges=7 shown=30 est_tokens
     && ok "def §11 header: symbols=30 edges=7 ambiguous=0 unresolved=0 (was symbols=24 edges=1)" \
     || no "def §11 header wrong: $( printf '%s' "$DEFMAP" | grep -oE 'files=1 [^-]*' | head -1 )"
 
+# ── §12 MEMBER calls with explicit template arguments, and the `template` disambiguator ─────────────────
+# §1 proved `freeTmpl<int>()` and `a::scopedTmpl<int>()` extract. The MEMBER spelling of the same call —
+# `r.get<K>( 1 )`, `p->get<K>( 1 )`, `x.template get<K>()` — never did: its callee parses as
+# `field_expression field: (template_method …)`, or `field: (dependent_name (template_method …))` behind the
+# disambiguator, and no C++ reference pattern bound either. Measured 2026-09-16 on main 3bf884e2: a
+# four-line repro answered `--callers=get` count="0" beside `--callers=plain` count="1", and in the wild
+# --quality-delta reported a method reached ONLY this way as kind="dead-code". The QUALIFIED dependent form
+# did extract, but wrong: `X::template f<int>()` minted a reference NAMED `template f`, and
+# `X::template Rebind<int>::g()` keyed its qualifier as `template Rebind`, which no definition carries.
+#
+# FOURTH CORPUS: test/cppqualtmplfix/ — its own directory for the reason §11 gives (§3's header literal).
+# Every literal below is read by hand off that fixture; its header maps each spelling to its line.
+#
+# RED-FIRST (recorded 2026-09-16, plain builds, two reference binaries, each pinned to what it proves):
+#   vs the pre-fix binary (main f8e6087c): 19 of this section's 24 new checks FAIL — all but the four
+#     controls (a) and the determinism arm. Header `edges=6 ambiguous=1` (now 19 / 0); every member-template
+#     --uses/--callers reads 0; --callees=tqCallRebind is 2 rows (:132 and the decoy :133); --callers=pod
+#     names only Reader::str.
+#   vs a MUTATION build of the fix (the same tree with three one-line reversions; 8 checks FAIL):
+#     receiverOf reading the raw parent -> tqDecoyCaller binds the decoy :110;
+#     skipTemplateDisambiguator inert   -> --uses=tqDepQualTmpl/tqDeepDepTmpl/tqCommentDepTmpl read 0, the probe
+#                                          name arm fails, and tqCallRebind splits onto :133;
+#     callArity's hop bound 4 -> 3      -> tqDepArityCaller splits over :122 and :123;
+#     and the header, which all three move (edges=18 ambiguous=2).
+#   All 90 checks PASS against the fixed binary. (g)'s six documented-absent checks, added later from the
+#   review of #243, pass on the pre-fix binary and the fix alike: they fence a future widening.
+TMPLFIX="$ROOT/test/cppqualtmplfix"
+[ -d "$TMPLFIX" ] || { echo "no test/cppqualtmplfix dir — the member-template fixture is missing"; exit 2; }
+TMPLMAP="$( run "$TMPLFIX" --no-cache )"
+
+tmplexpect(){   # $1 verb  $2 sym  $3 want  $4 prose
+    local got; got="$( cnt "$( run "$TMPLFIX" "--$1=$2" --no-cache )" )"
+    [ "${got:-REFUSED}" = "$3" ] && ok "tmpl §12 --$1=$2 count=$3 — $4" \
+        || no "tmpl §12 --$1=$2 expected count=$3, got '${got:-REFUSED}' — $4"
+}
+# --callees=<caller> must be exactly ONE row, at member.cpp:<line> — the def the call must bind.
+tmplbinds(){    # $1 caller  $2 line  $3 prose
+    local out; out="$( run "$TMPLFIX" --callees="$1" --no-cache )"
+    { [ "$( cnt "$out" )" = 1 ] && printf '%s' "$out" | grep -qE "<s [^>]*p=\"member\.cpp:$2\""; } \
+        && ok "tmpl §12 precision: --callees=$1 is ONE row, member.cpp:$2 — $3" \
+        || no "tmpl §12 precision: --callees=$1 expected one row at member.cpp:$2 — $3. Got count='$( cnt "$out" )' rows: $( printf '%s' "$out" | grep -oE '<s [^>]*>' | tr '\n' ' ' )"
+}
+
+# (a) POSITIVE CONTROLS first (L-6 vacuity guard): spellings the pre-round patterns already bound. A 0 here
+#     means the corpus or the run is broken, and every arm below would be vacuous.
+tmplexpect uses tqFreeTmpl   1 "6. CONTROL: free f<T>( x )"
+tmplexpect uses tqQualTmpl   1 "7. CONTROL: ns::f<T>( x )"
+tmplexpect uses tqIndexTmpl  1 "8. CONTROL: ns::f<0>( x ), the std::get<0>( t ) shape"
+tmplexpect uses tqStaticTmpl 1 "9. CONTROL: ns::Holder::f<T>( x )"
+
+# (b) one literal per MEMBER spelling. `--uses` counts SITES, so a site double-minted (a call row plus a
+#     read row for the same field_identifier) would read one high rather than pass.
+tmplexpect uses    tqDotTmpl       2 "1. r.f<T>( x ) AND 13. o.reader.f<T>( x ) — both call rows, no read row"
+tmplexpect uses    tqArrowTmpl     1 "2. p->f<T>( x )"
+tmplexpect uses    tqDepDotTmpl    1 "3. x.template f<T>()"
+tmplexpect uses    tqDepArrowTmpl  1 "4. p->template f<T>()"
+tmplexpect uses    tqThisTmpl      1 "5. this->template f<T>()"
+tmplexpect uses    tqNestedArgTmpl 1 "12. r.f<Pair<int, Pair<K, int>>>( x ) — arguments closing on >>"
+tmplexpect callers tqDotTmpl       2 "the defect's own verb: both member-template callers are named"
+tmplexpect callers tqArrowTmpl     1 "p->f<T>( x ) names its caller"
+
+# (c) the QUALIFIED dependent form extracted under the wrong NAME. Resolution alone cannot prove the name
+#     is clean — a `template tqDepQualTmpl` reference resolves to nothing and vanishes from every graph
+#     verb — so the name is read PRE-resolution from the probe's raw reference list, after a presence guard.
+tmplexpect uses tqDepQualTmpl 1 "10. X::template f<T>() resolves (was named \`template tqDepQualTmpl\`)"
+tmplexpect uses tqDeepDepTmpl 1 "11. X::Y::template f<T>() resolves through the re-split"
+tmplexpect uses tqCommentDepTmpl 1 "15. X::template /* c */ f<T>() — a comment between the keyword and the name"
+if [ -x "$PROBE" ]; then
+    TMPLREFS="$( perl -e 'alarm 30; exec @ARGV' "$PROBE" "$TMPLFIX" 2>/dev/null | grep -A1 ' tqCallDependentQualified ' | grep 'calls:' )"
+    if [ -z "$TMPLREFS" ]; then
+        no "tmpl §12 probe: tqCallDependentQualified has no reference list — the name arm would be vacuous"
+    else
+        { printf '%s' "$TMPLREFS" | grep -qw 'tqDepQualTmpl' && printf '%s' "$TMPLREFS" | grep -qw 'tqDeepDepTmpl' \
+              && printf '%s' "$TMPLREFS" | grep -qw 'tqCommentDepTmpl' \
+              && ! printf '%s' "$TMPLREFS" | grep -qw 'template' && ! printf '%s' "$TMPLREFS" | grep -q '/\*'; } \
+            && ok "tmpl §12 probe: the dependent qualified calls extract as tqDepQualTmpl/tqDeepDepTmpl/tqCommentDepTmpl — no keyword, no comment" \
+            || no "tmpl §12 probe: a \`template\` disambiguator leaked into a reference NAME: $TMPLREFS"
+    fi
+else
+    no "ripwire_probe missing at $PROBE — the pre-resolution name arm cannot run, and a gate that cannot run must say so"
+fi
+
+# (d) PRECISION: the right definition, not merely a definition. Each caller has a same-final-name decoy.
+#     RECEIVER: read as a BARE call, `other.tqPick<int>( 1 )` inside TqDecoy would be pinned to TqDecoy's own
+#     tqPick (:110) by the enclosing-class rule; the receiver's type pins TqTarget's (:105). The receiver is a
+#     LOCAL on purpose: parameter-type narrowing is a separate resolver rule (measured on main f8e6087c there was
+#     none, and a plain `other.pick( 1 )` on a `TqTarget&` parameter bound the enclosing class; #248 changes
+#     that), so a parameter receiver would measure that rule instead of the template_method climb. TqTarget has
+#     ONE tqPick for the same kind of reason: measured on main f8e6087c, type narrowing had no arity prune, so a
+#     plain `other.pick( 1 )` split over a same-class two-parameter overload as well.
+tmplbinds tqDecoyCaller 105 "the receiver's type, never the enclosing class's same-named :110"
+tmplbinds tqSelfCaller  110 "this->template binds the enclosing class"
+#     ARITY: the call-site argument count survives the wrapper — 3 hops from the name to the call through
+#     template_method, 4 behind `template` (callArity's whole bound). Unknown arity splits over :122 and :123.
+tmplbinds tqArityCaller    123 "a.f<T>( 3, 4 ) binds the two-parameter overload only"
+tmplbinds tqDepArityCaller 123 "a.template f<T>( 5, 6 ) binds the two-parameter overload only, at the hop bound"
+#     QUALIFIER: `X::template TqRebind<int>::tqScopedFn` keys as TqRebind::tqScopedFn (:132); keyed as
+#     `template TqRebind` the canonical tier missed and the call split over :132 and the decoy :133.
+tmplbinds tqCallRebind  132 "the scope behind a template disambiguator keys canonically, no split onto :133"
+
+# (e) the fixture header, hand-read: 19 distinct caller->callee pairs (1 viaThis + 2 tqCallMember +
+#     2 tqCallDependent + 4 tqCallControls + 3 tqCallDependentQualified + 2 tqCallShapes + 1 each for
+#     tqDecoyCaller, tqSelfCaller, tqArityCaller, tqDepArityCaller, tqCallRebind), none ambiguous, none
+#     unresolved; 54 symbols (43, plus §12e's 3 structs, 4 member functions and 4 callers — which add no edge).
+printf '%s' "$TMPLMAP" | grep -qE 'files=1 symbols=54 edges=19 shown=54 est_tokens=[0-9]+ ambiguous=0 unresolved=0' \
+    && ok "tmpl §12 header: symbols=54 edges=19 ambiguous=0 unresolved=0 (was edges=6 ambiguous=1)" \
+    || no "tmpl §12 header wrong: $( printf '%s' "$TMPLMAP" | grep -oE 'files=1 symbols=[0-9]+ edges=[0-9]+ shown=[0-9]+ est_tokens=[0-9]+ ambiguous=[0-9]+ unresolved=[0-9]+' | head -1 )"
+
+# (f) REPO ROOT: src/gitoracle.h's loader reads every field through `r.pod<T>()`, so its only caller-edge to
+#     the reader was the one spelled bare inside Reader::str. Presence guard first: the arm proves nothing
+#     once the loader stops spelling the member form.
+if grep -q 'r\.pod<' src/gitoracle.h; then
+    POD="$( run . --callers=pod --no-cache )"
+    printf '%s' "$POD" | grep -qE '<s [^>]*n="loadOracleCache"' \
+        && ok "repo: --callers=pod names loadOracleCache (was only Reader::str — the r.pod<T>() sites minted nothing)" \
+        || no "repo: --callers=pod does not name loadOracleCache. Rows: $( printf '%s' "$POD" | grep -oE '<s [^>]*>' | tr '\n' ' ' )"
+else
+    no "repo: src/gitoracle.h no longer spells r.pod<…>() — re-point this arm at a live member-template call site"
+fi
+
+# (g) DOCUMENTED-ABSENT (review F4 on #243): the spellings this round does NOT bind, each a literal 0 behind a
+#     SOURCE presence guard — an absence arm is satisfied as well by deleting the spelling as by the tool
+#     behaving (callformcheck.sh's V5 MED-3). Measured 0 on the pre-fix binary and on the fix alike, so these
+#     are fences for a future widening, not evidence of this round: one that starts binding a spelling here,
+#     correctly or not, has to move a pin deliberately.
+tmplabsent(){   # $1 the spelling as written in member.cpp  $2 its caller  $3 prose
+    if ! grep -qF -- "$1" "$TMPLFIX/member.cpp"; then
+        no "tmpl §12 absent: \`$1\` is no longer written in member.cpp — the zero for --callees=$2 would be vacuous"
+        return
+    fi
+    local got; got="$( cnt "$( run "$TMPLFIX" --callees="$2" --no-cache )" )"
+    [ "${got:-REFUSED}" = 0 ] && ok "tmpl §12 absent: --callees=$2 count=0 — $3" \
+        || no "tmpl §12 absent: --callees=$2 expected count=0, got '${got:-REFUSED}' — $3. A widening landed: move this pin on purpose"
+}
+tmplabsent 'r.tqLiteralArgTmpl<0>( x )'                tqCallLiteralArg   "r.f<0>( x ) without \`template\` parses as two comparisons"
+tmplabsent 'r.TqAbsentBase::tqBaseQualTmpl<int>( 1 )'  tqCallBaseQual     "r.Base::f<T>() (the qualified-field family)"
+tmplabsent 'p->TqAbsentBase::tqBaseQualTmpl<int>( 2 )' tqCallBaseQual     "p->Base::f<T>() (the qualified-field family)"
+tmplabsent 'r.TqAbsentBase::tqBasePlain( 1 )'          tqCallBasePlain    "the plain twin r.Base::f() — absent on main too, so the gap is not template-shaped"
+tmplabsent 'r.operator()<int>( 1 )'                    tqCallOperatorTmpl "r.operator()<T>()"
+#     …and the comparison parse is a READ of the member, exactly one row, never a call row.
+LITUSES="$( run "$TMPLFIX" --uses=tqLiteralArgTmpl --no-cache )"
+{ [ "$( cnt "$LITUSES" )" = 1 ] && printf '%s' "$LITUSES" | grep -qE '<u role="read" p="member\.cpp:158"' \
+      && ! printf '%s' "$LITUSES" | grep -oE '<u [^>]*>' | grep -q 'role="call"'; } \
+    && ok "tmpl §12 absent: --uses=tqLiteralArgTmpl is ONE role=\"read\" row at member.cpp:158, no call row" \
+    || no "tmpl §12 absent: --uses=tqLiteralArgTmpl expected one read row at member.cpp:158 and no call row. Rows: $( printf '%s' "$LITUSES" | grep -oE '<u [^>]*>' | tr '\n' ' ' )"
+
 # ── §10 determinism + well-formed XML ───────────────────────────────────────────────────────────────────
 [ "$( run "$FIX" --no-cache )" = "$( run "$FIX" --no-cache )" ] \
     && ok "determinism: the fixture map is byte-identical run-to-run" \
     || no "determinism: the fixture map is not byte-identical"
+[ "$TMPLMAP" = "$( run "$TMPLFIX" --no-cache )" ] \
+    && ok "determinism: the §12 member-template fixture map is byte-identical run-to-run" \
+    || no "determinism: the §12 member-template fixture map is not byte-identical"
 # V4 MED-1: a missing xmllint is a FAILURE, not a silent skip — G4 is a hard guardrail and a PASS
 # count that silently shrinks hides the hole (same law floormarkcheck/rustqualcheck already follow).
 if command -v xmllint >/dev/null 2>&1; then
     printf '%s' "$MAP" | xmllint --noout - 2>/dev/null && printf '%s' "$CALLEES" | xmllint --noout - 2>/dev/null \
-        && ok "xml well-formed (fixture map + --callees)" || no "xml malformed"
+        && printf '%s' "$TMPLMAP" | xmllint --noout - 2>/dev/null \
+        && ok "xml well-formed (fixture map + --callees + the §12 member-template map)" || no "xml malformed"
 else
     no "xmllint not on PATH — the G4 arm cannot run; install libxml2/xmllint (a gate that cannot run must say so)"
 fi

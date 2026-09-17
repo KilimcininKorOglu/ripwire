@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, MEMBER TEMPLATE CALLS (lane/template-call-edges; test/cppqualcheck.sh §12): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
+#   kParserVer and kIngestParserVerMirror -> 101 on integration/train-2b (the PR declared 96 -> 99); kCacheVersion STAYS 22. A C++ member call with explicit
+#   template arguments (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) now mints a call reference, and the `template`
+#   disambiguator no longer leaks into a qualified call's name or qualifier, so the extracted SET and names change and
+#   only the parser version can reject a v96 blob; no record changes shape. No manifest function changed.
 # 2026-09-16, TS/JS LITERAL RECEIVERS (issue #163, PR #244): kParserVer and its quality mirror move to 100 on
 #   integration/train-2b (the PR declared 96 -> 97; renumbered in merge order over train 2's 99).
 #   RecvKind gains LitString/LitArray/LitRegex/LitNumber/LitBoolean (appended u8). Cache format unchanged

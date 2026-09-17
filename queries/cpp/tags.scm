@@ -355,6 +355,28 @@
   function: (template_function
     (identifier) @name)) @reference.call
 
+; MEMBER CALLS WITH EXPLICIT TEMPLATE ARGUMENTS: `r.f<T>( x )` / `p->f<T>( x )` parse as
+; call_expression function: (field_expression field: (template_method name: (field_identifier) arguments: …)),
+; and the disambiguated `x.template f<T>()` / `this->template f<T>()` wrap that template_method in a
+; dependent_name. The member pattern above binds `field: (field_identifier)` and the pattern just above binds
+; a template_function, so neither shape minted a reference (measured 2026-09-16: `--callers=get` count="0"
+; for `r.get<K>( 1 )` beside count="1" for `r.plain( 1 )`, and --quality-delta read a method reached only
+; this way as dead code). test/cppqualcheck.sh §12.
+;
+; @name is the field_identifier, as in the plain member pattern, so the NAME needs no text surgery. What the
+; wrapper does change is every parent walk that starts at @name: receiverOf (ingest_binds.h) climbs through
+; template_method/dependent_name to the field_expression — otherwise `other.f<T>()` reads as a BARE call and
+; the enclosing-class rule pins it to the caller's own same-named method — and callArity's bounded parent
+; walk still reaches the call node (3 hops, 4 behind `template`).
+;
+; One alternation, one pattern: a node matches exactly one branch, so each call is minted once.
+(call_expression
+  function: (field_expression
+    field: [
+      (template_method name: (field_identifier) @name)
+      (dependent_name (template_method name: (field_identifier) @name))
+    ])) @reference.call
+
 ; MACRO-DEFINED TEST BODIES (LB-E, r10 gitnexus harvest 2026-08-20): `TEST_CASE( "title" ) { … }` —
 ; doctest/Catch2's block-forming test macros — cannot be expanded by tree-sitter, so the source parses
 ; as TWO SIBLING nodes: an (expression_statement (call_expression …) (MISSING ";")) and a bare

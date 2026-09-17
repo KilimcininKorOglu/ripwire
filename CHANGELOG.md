@@ -501,6 +501,50 @@ previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refus
 q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
 variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
 
+### Fixed — a C++ member call with explicit template arguments is a call (parser version 101)
+
+`r.get<K>( 1 )`, `p->get<K>( 1 )` and `x.template get<K>()` minted no reference at all. Their callee parses as a
+`template_method` under the member access — inside a `dependent_name` when the `template` keyword is spelled — and no
+C++ reference pattern bound either shape, so the call was dropped at extraction, before `ambiguous=`/`unresolved=`
+could count it: a four-line repro answered `--callers=get` count="0" beside count="1" for `r.plain( 1 )`,
+`--callers`/`--uses`/`--impact`/`--safe-delete` under-counted every such call, and `--quality-delta` could report a
+method reached only this way as `kind="dead-code"`. A new `queries/cpp/tags.scm` pattern binds both shapes, and the
+receiver reader now steps over the wrapper — without that step `other.pick<int>()` reads as a bare call and the
+enclosing-class rule binds it to the caller's own same-named method. The qualified dependent spelling had the same
+defect family in another place: `X::template make<int>()` was extracted under the NAME `template make`, which
+resolves to nothing, and `X::template Rebind<int>::f()` keyed its qualifier as `template Rebind`, so a same-named
+definition in another scope split the call. The keyword is now stepped over in both halves. Free `f<T>( x )` and
+qualified `ns::f<T>( x )` (the `std::get<0>( t )` shape) were already bound and are unchanged.
+
+Measured with the pre-fix (`f8e6087c`) and fixed (`1171f775`) binaries, `--no-cache`, map header plus
+`ripwire_probe`'s reference total. On this repository's `src/` (169 files) the change is small: references 168,457 →
+168,463 and edges 18,308 → 18,309 — the six `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod`
+goes 1 → 7. On a template-heavy tree it is not small. `clang/include` plus `clang/lib` from llvm-project `4d5358b1d`
+(2,515 files) gains 10,175 references (1,855,925 → 1,866,100), 3,907 edges (409,860 → 413,767, +0.95%) and 972
+`ambiguous=` (81,601 → 82,573), with `unresolved=` unchanged at 3,893; `--callers=getAs` goes 48 → 492 and
+`--callers=hasAttr` 45 → 377. On `clang/lib/AST` (155 files) the reference delta, 2,027, equals the `--match` hit count
+of the new call shape exactly (`hits_capped="0"`), so extraction moved only the intended class.
+
+The new sites resolve exactly as a plain member call to the same name does, so a name like `getAs` or `hasAttr` gains
+its real callers and also that resolver's wrong ones. On the same clang tree `FD->hasAttr<PackedAttr>()` in
+`ASTContext::getDeclAlign` binds `Type::hasAttr(attr::Kind)` at `lib/AST/Type.cpp:2026`, not `Decl::hasAttr<T>()`,
+with no `amb=` on the row. The plain spelling does the same on main: in a reduced five-file repro, `FD->plainAttr()`
+binds `Type::plainAttr(int)` rather than `Decl::plainAttr()`. That is a resolver defect this change widens the reach
+of, not one it introduces, and it is not fixed here.
+
+`test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per spelling plus receiver, arity
+and qualifier decoys: 19 of its checks fail on the pre-fix binary, and a mutation build that reverts each of the three
+mechanisms (the receiver step, the keyword skip, `callArity`'s hop bound) turns that mechanism's own arms red. The
+spellings still not bound are pinned at zero behind a check that each is still written in the fixture: `r.f<0>( x )`
+without `template` (tree-sitter reads it as two comparisons, a read of the member), a base-qualified member
+`r.Base::f<T>()` / `p->Base::f<T>()` (the plain `r.Base::f()` is absent too, so the gap is not template-shaped), and
+`r.operator()<T>()`. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was pinned as documented-absent
+at literal 0 and now pins 1.
+
+`kParserVer` → 101 with `quality.h`'s `kIngestParserVerMirror` in the same commit, assigned in merge order on
+integration train 2b (after #244's 100); `kCacheVersion` stays 22, and `test/qschemetrip.hash` is re-derived once on the
+train's merged tree with a RE-PIN LOG line.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

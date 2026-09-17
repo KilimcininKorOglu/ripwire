@@ -282,6 +282,29 @@ inline RecvKind classifyJsTsLiteralRecv( TSNode node, std::string_view src, int 
     return jsLitChainResult( inner, pattern::nodeText( prop, src ) );
 }
 
+// The node a call's @name hangs under once the C++ template-argument wrappers are stepped over. For
+// `x.m()` that is the name's own parent. `x.m<T>()` puts ONE wrapper between them — field_expression
+// field: (template_method name: m arguments: …) — and the disambiguated `x.template m<T>()` a second —
+// field: (dependent_name (template_method …)) — so the climb steps over exactly those two kinds, in that
+// order, and a name under any other parent keeps the parent it had. Both kinds are tree-sitter-cpp's (the
+// CUDA grammar is generated from it); no other grammar names either, so the climb is inert everywhere else.
+// A template_method that is not a member callee (a qualified definition's declarator) climbs to a parent
+// that is no member access, which every caller already reads as "not a member call".
+inline TSNode calleeAccessParent( TSNode nameNode ) noexcept
+{
+    TSNode parent = ts_node_parent( nameNode );
+    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "template_method" ) )
+    {
+        return parent;
+    }
+    parent = ts_node_parent( parent );
+    if( !ts_node_is_null( parent ) && kindIs( ts_node_type( parent ), "dependent_name" ) )
+    {
+        parent = ts_node_parent( parent );
+    }
+    return parent;
+}
+
 // P2-D RECEIVER capture: classify the call-site receiver of `recv.method()` / `recv->method()` so
 // resolve.h can narrow before the ambiguous §2a name spray. `nameNode` is the @name capture (the called
 // identifier). When it is the `.field`/`.attribute` of a member-access node, inspect that node's
@@ -307,9 +330,14 @@ inline RecvKind classifyJsTsLiteralRecv( TSNode node, std::string_view src, int 
 // TS/JS: a member_expression whose object is a certain literal (or a chain that stays certain) returns
 // LitString/LitArray/LitRegex/LitNumber/LitBoolean instead of None. isMemberAccessNode stays false for
 // TS/JS so every other member call is still RecvKind::None.
+//
+// The parent it inspects is calleeAccessParent's, not the raw parent: a C++ member call with explicit
+// template arguments puts a template_method (and, behind `template`, a dependent_name) between the name and
+// its field_expression. Read through the raw parent, `other.f<T>()` classified None — a BARE call — and the
+// enclosing-class rule pinned it to the caller's own same-named method (test/cppqualcheck.sh §12 (d)).
 inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
 {
-    const TSNode parent = ts_node_parent( nameNode );
+    const TSNode parent = calleeAccessParent( nameNode );
     if( ts_node_is_null( parent ) )
     {
         return {};
