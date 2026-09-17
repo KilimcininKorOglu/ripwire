@@ -2073,6 +2073,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const std::vector<std::string> specializationsWithBases = sortedSpecializationNames( chaUp );   // resolve.h: what a C++ specialization inherits
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
+    const ClassIdentity      classIds = buildClassIdentity( ing, chaUp );   // Rule 2's class identity: nesting, owners, real inheritance (resolve.h)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
 
     // ---- census arming + the ORACLE side (eval-only; src/pincensus.h) ------------------------------
@@ -2424,15 +2425,14 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             disposition = vetoExternal( r );
             continue;
         }
-        // P2-D Rule 2 (receiver-variable type): a named-receiver call `x.m()` / `x->m()` resolves to the method
-        // on the VARIABLE's type (`Foo::m` for `Foo x;`), BEFORE the bare-name spray — the other half of the
-        // [TYPE] cut. Only when the var has a single unambiguous in-scope binding AND that type defines `m`
-        // (canonByName, defs only); otherwise narrowed stays false and we fall through to the name-based fallback. Skipped when the
-        // call was already pinned canonically or by Rule 1 (those are the more specific / already-resolved signals).
+        // P2-D Rule 2 (receiver-variable type): a named-receiver call `x.m()` / `x->m()` resolves to the method on the VARIABLE's type (`Foo::m`
+        // for `Foo x;`), BEFORE the bare-name spray — the other half of the [TYPE] cut — read through class identity (resolve.h identityNarrow:
+        // nested namesakes dropped, an inherited body, an interface's dispatch split); otherwise narrowed stays false and the name-based fallback
+        // runs. Skipped when the call was already pinned canonically or by Rule 1 (the more specific / already-resolved signals).
         const bool narrowedBeforeReceiverRules = narrowed;
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2RecvVarType( r ), r, cand );
+            narrowed = narrowTo( narrower.rule2RecvVarType( r, classIds, chaUp ), r, cand ) || narrower.forgetClaim();
         }
         // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base
         // defining `m`) when Cls is an in-repo class no local shadows. After Rule 2 (a typed LOCAL wins), before
@@ -2581,10 +2581,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             continue;
         }
 
-        // ---- tier ladder (the name-based fallback) — SKIPPED when the SCIP overlay pinned this site (tier already holds the
-        // precise target(s) at full confidence; the ladder would only re-derive a guess). -----------------
-        if( !scipPinned && r.lang == Lang::Elixir ) { tier = cand; }
-        if( !scipPinned && r.lang != Lang::Elixir )
+        // ---- tier ladder (the name-based fallback) — SKIPPED when SCIP pinned this site, and for Rule 2's class-identity CLAIM (a type fact, not a locality guess)
+        const bool identityClaim = narrowed && narrower.identityClaimFor( r );
+        if( !scipPinned && ( r.lang == Lang::Elixir || identityClaim ) ) { tier = cand; }
+        if( !scipPinned && r.lang != Lang::Elixir && !identityClaim )
         {
             if( cand.empty() )
             {
@@ -2690,7 +2690,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             // transitive descendants. A virtual call on static type T can only dispatch to T, a subtype (an
             // override), or the definition T inherits from an ancestor — so the cone NEVER excludes the true
             // target; it drops only same-name methods of UNRELATED classes. Empty intersection ⇒ degrade.
-            if( tier.size() > 1 )
+            if( tier.size() > 1 && !identityClaim )   // a class-identity claim is type-verified; the cone cannot name `TBase<T, true>`
             {
                 const std::string_view recvType = narrower.receiverStaticType( r, ing.symbols[ r.fromSymbol ].scope );
                 if( !recvType.empty() )
@@ -2775,7 +2775,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
-         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj
+         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj && !identityClaim
          && !isJsTsLitRecv( r.recv ) )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
@@ -2944,9 +2944,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
         const float base = conf / float( nReal );              // split over real (non-self) targets
-        // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so
-        // every edge it commits is marked prov="final-segment" below (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt)
-        const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && narrower.finalSegmentTypeAt( r ) )
+        // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so every edge it
+        // commits is prov="final-segment" (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt); never a class-identity CLAIM, whose one class was verified
+        const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && !identityClaim && narrower.finalSegmentTypeAt( r ) )
                                     || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass ) );
         for( NodeId to : tier )
         {
