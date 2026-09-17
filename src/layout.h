@@ -82,7 +82,7 @@ namespace layout
 
 constexpr std::size_t   kMaxNestDepth   = 8;          // nested-aggregate resolution depth (a cycle stops here)
 constexpr std::size_t   kMaxMacroDepth  = 4;          // object-like macro expansion depth for a type name
-constexpr std::size_t   kMaxExtentParens = 64;        // `(` nesting an extent expression may use (IntEval recurses per level)
+constexpr std::size_t   kMaxExtentParens = 64;        // `(` nesting DEPTH an extent expression may reach (IntEval recurses per level)
 constexpr std::size_t   kMaxDefScan     = 1u << 20;   // bytes scanned forward from a def start looking for its body
 constexpr std::size_t   kMaxAssertChars = 220;        // the displayed prefix of a static_assert's text
 constexpr std::uint32_t kMaxArrayElems  = 1u << 24;   // refusal bound: past this the extent is a parse artefact
@@ -633,7 +633,7 @@ struct IntEval
     const ConstTable& table;
     std::size_t       depth = 0;
     bool              ok    = true;
-    std::size_t       parens = 0;   // `(` levels entered so far in this expression — kMaxExtentParens bounds the recursion
+    std::size_t       parenDepth = 0;   // `(` levels OPEN at this point of the parse — kMaxExtentParens bounds the recursion
 
     std::int64_t parse( std::string_view s )
     {
@@ -710,9 +710,13 @@ private:
         if( s[i] == '(' )
         {
             // A bounded recursion: `#define N ((((…1))))` 200,000 levels deep overflowed the stack (SIGSEGV, exit 139).
-            if( ++parens > kMaxExtentParens ) { ok = false; return 0; }
+            // The bound is the DEPTH of open parentheses, restored when this level closes: `(A)+(B)+…` with sixty-six
+            // sibling terms nests one level, and must size exactly as it did before the bound existed.
+            if( parenDepth >= kMaxExtentParens ) { ok = false; return 0; }
+            ++parenDepth;
             ++i;
             const std::int64_t v = level( s, i, 0 );
+            --parenDepth;
             skipWs( s, i );
             if( i < s.size() && s[i] == ')' ) { ++i; }
             else

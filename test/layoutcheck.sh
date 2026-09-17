@@ -273,6 +273,18 @@ done
 "$BIN" "$HOSTILE" --layout=PlainExtent --no-cache >"$TMP/h_plain" 2>/dev/null
 grep -q '<f n="c" ty="char" x="8" sz="8"' "$TMP/h_plain" && ok "control: an ordinary 4*2 extent still sizes to 8" \
     || no "control: 4*2 no longer sizes: $( grep -o '<def .*</def>' "$TMP/h_plain" | head -c 200 )"
+# The paren bound is a DEPTH. A first version counted every `(` in the expression, so a legitimate frame-size macro of
+# sixty-six parenthesised sibling terms — nesting one level — came back as an unknown extent where main sized it.
+python3 - "$HOSTILE/wide.h" <<'PYWIDE'
+import sys
+terms = " + ".join("(T%d)" % i for i in range(66))
+consts = "".join("#define T%d 4\n" % i for i in range(66))
+open(sys.argv[1], "w").write(consts + "#define FRAME_BYTES (" + terms + ")\nstruct WideExtent\n{\n    int  n;\n    char a[FRAME_BYTES];\n};\n")
+PYWIDE
+"$BIN" "$HOSTILE" --layout=WideExtent --no-cache >"$TMP/h_wide" 2>/dev/null
+grep -q '<f n="a" ty="char" x="264" sz="264"' "$TMP/h_wide" && grep -q 'modeled="1"' "$TMP/h_wide" \
+    && ok "66 sibling parenthesised terms (one nesting level) still size: a = 264 B, modeled=\"1\"" \
+    || no "66 sibling parenthesised terms no longer size — the paren bound counts terms, not depth: $( grep -o '<def .*</def>' "$TMP/h_wide" | head -c 240 )"
 
 [ $fail -eq 0 ] && echo "layoutcheck: ALL PASS" || echo "layoutcheck: FAILURES"
 exit $fail
