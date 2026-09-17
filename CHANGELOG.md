@@ -1226,6 +1226,29 @@ Both commands in one target made a cross-config Ninja Multi-Config build fail wi
 merged tree. Both stamp scripts also give their temp file a random name. Two builds of one tree used to share
 `<output>.tmp`: in 40 concurrent runs of the old identity script, 10 to 19 failed with "could not write" in each of
 three rounds, and none of the new script's runs did.
+### Fixed — a TS/JS call on a literal no longer pins an unrelated same-named function (parser versions 100 and 103)
+
+`"=".repeat( 50 )` bound webpack's in-repo CssSyntax `repeat`, and `/^@/.exec( … )` its DefinePlugin `exec` (issue
+#163): a member call whose receiver is a literal took the bare-name ladder like any receiver of unknown type. A string,
+template, array, regex, number or boolean literal's type is certain from the syntax, and so is a chain that keeps it
+certain; certainty ends at `find`, `at`, `pop`, `shift`, `reduce`, a subscript, `!`, `as`, `satisfies` or `<T>x`.
+`RecvKind` gains LitString, LitArray, LitRegex, LitNumber and LitBoolean, and only a name that really is a member of that
+built-in (sorted per-type tables in `src/model.h`) leaves the ladder: a JS `Foo.prototype.NAME` polyfill binds first,
+otherwise the call is External when the name exists in the repository and Undefined when it does not. A name that is not
+a member of the built-in (`shout`, `Object.assign`, a TS `declare global { interface String { loud() } }`) keeps its old
+path. Object literals, `this.replace()`, `helpers.transform()`, `JSON.stringify` and a typed `text: string` are out of
+scope.
+
+Measured with `--pin-census`: on webpack `a943d69c4`, 139 previously bound sites become External (sort 46, repeat 32,
+join 25, exec 17, test 13, split 3, slice 3), edges go 23,970 → 23,823 and `--callers=stringify` stays 361; node's `lib/`
+loses 10 wrong pins (`regex.test` had bound the test runner's `test`); zod's `external=` rises 112 → 192. A signed number,
+`(-1).toFixed()`, was no literal in the first version and could still bind an unrelated `toFixed`: the grammar spells the
+sign as a unary expression over the number, and a unary `+` or `-` over a number now classifies as LitNumber while every
+other unary expression (`!1`, `typeof 1`, `-x`) stays unclassified. `test/fieldnarrowcheck.sh`'s literal-receiver arm is
+the gate, with `viaNegative` and `viaPositive` in its TS, JS and TSX fixtures. `kParserVer` moved to 100 on
+integration/train-2b (the PR declared 97) and 102 → 103 on integration/train-1b for the signed-number fix. Thanks to
+@csy20.
+
 ### Fixed — a call through an interface pointer landed on unrelated nested classes of the same name
 
 `void AssertItersEqual( Iterator* iter1, Iterator* iter2 ) { … iter1->key() … }` in rocksdb answered with five edges to
