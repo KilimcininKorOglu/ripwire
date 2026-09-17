@@ -73,7 +73,16 @@ things are deliberately excluded:
 - **The alias is not an inheritance fact.** It gains no `--lego` implementor, no `role="extends"` use-site and no
   HAS-A row.
 
+**Alias templates are covered too.** `template <typename T> using SetTy = SmallPtrSet<T, 8>;` is an `alias_declaration`
+inside a template declaration, so a member typed `SetTy<Foo>` walks on to `SmallPtrSet` and its bases.
+
 The record rides the existing compose record shape, so the cache format is unchanged; `kParserVer` moves to 105.
+
+**Known floor.** An alias records its target's class name without template arguments. So when an argument is the enclosing
+template's own parameter, the walk lands on the primary template alone. For example, with `typedef SubT<marks> subtree;` it
+drops an explicit specialization such as `SubT<true>` that the argument can also select. That is a lost candidate, never a
+wrong-class pin. rocksdb's `omt_impl.h` hits it through `subtree_templated<true>`; before this change those calls split
+over both. It is pinned as `test/fieldnarrowcheck.sh` arm t11, whose control `typedef SubT<false>` narrows correctly.
 
 Measured with `--pin-census --no-cache`, joined on (caller, callee, line), main → this change:
 

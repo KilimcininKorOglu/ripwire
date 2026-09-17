@@ -358,6 +358,11 @@ fi
 #        (t9) an alias NAMED like a real class elsewhere is not followed: the graph keys classes by bare name, so `using Base =
 #        IRBuilder<int>;` inside one class would hand IRBase::CreateMul to Kid : Base, whose real Base defines nothing. (t10) an
 #        alias local to a function body records nothing — it types no member, and the name graph has no scope to keep it local.
+#        (t11) KNOWN FLOOR (independent review of #280): an alias records its target's class NAME without template arguments, so
+#        `typedef SubT<marks> subtree;` — `marks` the enclosing template's own parameter — walks to the primary SubT::is_null
+#        ALONE and drops the explicit specialization SubT<true>::is_null that the dependent argument can also select (rocksdb
+#        omt_impl.h, subtree_templated<true>). A lost candidate, never a wrong-class pin; main split over both. The control
+#        `typedef SubT<false> subtree;` names the primary, so its narrow is right.
 #        The Decoy methods in decoy/ keep every unfixed answer a split, never an accidental receiver-rule pin. ──
 FIX5="$TMP/aliasfix"
 mkdir -p "$FIX5/ir" "$FIX5/decoy" "$FIX5/app"
@@ -423,6 +428,35 @@ T5="$( tRow Owner5 size )"
 case "$T5" in
     "receiver-rule|decoy/other.h::vector::size#"*) no "(t5) Owner5::run -> V.size() pinned to the in-repo vector::size through using Vec = std::vector<int>: [$T5]" ;;
     *) ok "(t5) a std:: alias target names no in-repo class: Owner5::run -> V.size() is not pinned to vector::size [${T5:-no row}]" ;;
+esac
+FIX6="$TMP/aliasspecfix"
+mkdir -p "$FIX6/lib" "$FIX6/decoy"
+cat >"$FIX6/lib/sub.h" <<'EOF'
+template <bool marks> struct SubT { int is_null() const { return 0; } };
+template <> struct SubT<true> { int is_null() const { return 1; } };
+EOF
+cat >"$FIX6/lib/tree.h" <<'EOF'
+template <typename D, bool marks> class Tree { typedef SubT<marks> subtree; subtree root; int f() { return root.is_null(); } };
+struct Plain { typedef SubT<false> subtree; subtree root; int g() { return root.is_null(); } };
+EOF
+cat >"$FIX6/decoy/other.h" <<'EOF'
+struct Other { int is_null() const { return 7; } };
+EOF
+"$BIN" "$FIX6" --no-cache --pin-census="$TMP/t11.tsv" >/dev/null 2>&1
+t11Row(){ awk -F '\t' -v c="lib/tree.h::$1#" '$1 == "C" && index( $6, c ) == 1 && $7 == "is_null" { print $2 "|" $8 }' "$TMP/t11.tsv" 2>/dev/null; }
+T11="$( t11Row Tree::f )"
+case "$T11" in
+    "receiver-rule|lib/sub.h::SubT::is_null#"[0-9]*) case "$T11" in *'|'*'|'*) T11MOVED=1 ;; *) T11MOVED=0 ;; esac ;;
+    *) T11MOVED=1 ;;
+esac
+[ "$T11MOVED" = 0 ] \
+    && ok "(t11) KNOWN FLOOR: typedef SubT<marks> (a dependent argument) narrows to the primary SubT::is_null alone and drops SubT<true>::is_null — a lost candidate, not a wrong pin: [$T11]" \
+    || no "(t11) KNOWN FLOOR MOVED: Tree::f -> root.is_null() is no longer the primary alone: [${T11:-no row}] — if it now includes SubT<true>::is_null (and nothing else), rewrite this arm to assert that split"
+T11C="$( t11Row Plain::g )"
+case "$T11C" in
+    "receiver-rule|lib/sub.h::SubT::is_null#"*'|'*) no "(t11) control: typedef SubT<false> names more than the primary: [$T11C]" ;;
+    "receiver-rule|lib/sub.h::SubT::is_null#"[0-9]*) ok "(t11) control: typedef SubT<false> (a concrete argument) narrows to the primary SubT::is_null, which it names: [$T11C]" ;;
+    *) no "(t11) control: Plain::g -> root.is_null() lost its narrow to SubT::is_null: [${T11C:-no row}]" ;;
 esac
 LEGO="$( "$BIN" "$FIX5" --lego=IRBuilder --no-cache 2>/dev/null )"
 printf '%s' "$LEGO" | grep -qE '<impl n="(BaseTy|BuilderType|BuilderTy)"' \
