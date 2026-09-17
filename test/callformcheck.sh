@@ -13,9 +13,10 @@
 # cannot be expressed inside a single-directory fixture.
 #
 # THE DOCUMENTED-ABSENT ROWS ARE THE POINT. Roughly a quarter of the arms below assert that a
-# spelling produces NOTHING: C++ casts, most-vexing-parse declarations, member-templates and
-# destructor spellings; Go's explicit generic instantiation; Java's method references and both
-# generic `new` forms; Ruby's bare paren-less call; Swift's explicit specialization; computed
+# spelling produces NOTHING: C++ casts, most-vexing-parse declarations and destructor spellings (the
+# member-template row left this list 2026-09-16, when the spelling started to extract); Go's explicit
+# generic instantiation; Java's method references and both generic `new` forms; Ruby's bare paren-less
+# call; Swift's explicit specialization; computed
 # `new a.b[c]()` in TS and JS. Those are honest rejects — several of them unfixable by any query —
 # and an arm that fences them goes RED if a naive widening lands. A matrix that only recorded the
 # successes would be a celebration, not a gate.
@@ -218,12 +219,15 @@ calleeRow cpp callerOperator 'operator&gt;' "14. …and it is operator> itself"
 # tier misses and the call resolves by the bare-name ladder — precise here because aliasFn is unique,
 # and exactly as precise as a bare call elsewhere. That residual is why this arm exists.
 uses cpp aliasFn      1 "15. NOT-CHECKED->MEASURED: namespace-alias call qa::aliasFn() is CAPTURED (resolves bare, not canonically)"
-# 11. NOT-CHECKED in the survey — the member-template spelling. MEASURED: DROPPED, entirely.
-# `b.template memberTmpl<int>()` yields no reference of any name; the `template` disambiguator makes
-# the callee child a shape none of the three C++ reference patterns bind.
+# 11. NOT-CHECKED in the survey — the member-template spelling. MEASURED: DROPPED, entirely, until
+# 2026-09-16, when this row was a documented-absent literal 0 (plus a probeBlind): the callee of
+# `b.template memberTmpl<int>()` parses as field_expression field: (dependent_name (template_method …)), and
+# of `r.f<T>()` as field: (template_method …) — shapes no C++ reference pattern bound. The member-template
+# pattern binds both now. test/cppqualcheck.sh §12 owns the spelling matrix and the receiver/arity/qualifier
+# decoys; this row only pins that the matrix's own spelling extracts and resolves.
 fixtureHasLit cpp/main.cpp 'b.template memberTmpl<int>()' "11. the member-template spelling is still WRITTEN"
-uses      cpp memberTmpl 0 "11. NOT-CHECKED->MEASURED: obj.template f<T>() is ABSENT (literal 0)"
-probeBlind cpp callerTemplates memberTmpl "11. …and it is absent at EXTRACTION, not lost in resolution"
+uses      cpp memberTmpl 1 "11. obj.template f<T>() resolves (was ABSENT, literal 0, before the member-template pattern)"
+probeSees cpp callerTemplates memberTmpl "11. …and it is extracted under its own name, not merely resolved"
 # 16. cast keywords. tree-sitter-cpp parses every cast as call_expression function: template_function
 # — the same node shape as spelling 9 — so the exclusion lives at capture time in ingest.cpp. Asserted
 # pre-resolution: a cast ref resolves to nothing and would vanish while still inflating every count.

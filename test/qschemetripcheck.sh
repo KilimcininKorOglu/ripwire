@@ -34,6 +34,28 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 2b (integration/train-2b: #244 a948bf46, #243 6b234717, #256 8464f3be, lane/field-final-segment
+#   a23f4ec3, built on main bcd3b016, then merged with main ea03af88 and b09b53a9 = train 1): RE-DERIVED ON THE FINAL
+#   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over trains 1 and 2's 99:
+#   #244 = 100, #243 = 101, #256 = 102 (the lanes declared 97, 99 and 100); the field lane does not bump.
+#   kCacheVersion stays 22; kQSnapCacheScheme is train 1's 14 (this train changes no snapshot semantics). Every lane pin hashed its
+#   own number over its own base, so none hashed the merged declaration lines; the three lane entries below are
+#   renumbered to the train's numbers.
+# 2026-09-16, C++ TEMPLATE SCOPES (test/cpptmplscopecheck.sh, PR #256): parserVer and its quality mirror move to 102 on
+#   integration/train-2b (the PR declared 100) — a primary template's out-of-line member keys the bare template name,
+#   a specialization keeps its canonical template-id, a reference keeps the template-id it writes, and a class
+#   specialization header's base clause is captured as inherit refs. No record layout changes: kCacheVersion stays 22. kQSnapCacheScheme stays
+#   12: no manifest function changed, only extraction identity. Old extraction facts must be re-parsed.
+# 2026-09-16, MEMBER TEMPLATE CALLS (lane/template-call-edges; test/cppqualcheck.sh §12): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
+#   kParserVer and kIngestParserVerMirror -> 101 on integration/train-2b (the PR declared 96 -> 99); kCacheVersion STAYS 22. A C++ member call with explicit
+#   template arguments (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) now mints a call reference, and the `template`
+#   disambiguator no longer leaks into a qualified call's name or qualifier, so the extracted SET and names change and
+#   only the parser version can reject a v96 blob; no record changes shape. No manifest function changed.
+# 2026-09-16, TS/JS LITERAL RECEIVERS (issue #163, PR #244): kParserVer and its quality mirror move to 100 on
+#   integration/train-2b (the PR declared 96 -> 97; renumbered in merge order over train 2's 99).
+#   RecvKind gains LitString/LitArray/LitRegex/LitNumber/LitBoolean (appended u8). Cache format unchanged
+#   (kCacheVersion stays 22). A `"x".replace()` call no longer takes the bare-name ladder. Extraction
+#   identity moved; snapshot scheme unchanged. Old extraction facts must be re-parsed.
 # 2026-09-17, TRAIN 1 x TRAIN 2 (integration/train-1 merging main bcd3b016 = #265): RE-DERIVED ON THE MERGED TREE,
 #   carried from neither side. Train 1 pinned a37d1539 over kQSnapCacheScheme 14 (#253 13, #255 14) with parserVer 96;
 #   train 2 pinned 95818fe5 over parserVer 99 (#248 97, #254 98, #257 99) with the scheme at 12. Neither hashed the

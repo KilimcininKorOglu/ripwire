@@ -1086,6 +1086,7 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 //     of the SAME type (header re-parse, repeated patterns across roots) is harmless and keeps the entry. The type name is only ever USED as a canonByName
 //     scope, so an unindexed type simply never hits and degrades to the unchanged ladder. A type written in `std` records "" (resolve.h
 //     fieldTypeWrittenInStd): it names no in-repo class, and it still tombstones a same-named class's other type, which a skip would not.
+//     A type written in any other namespace keeps its name and marks the entry qualified: prov="final-segment" (fieldFinalSegmentAt).
 //   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
 //     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
 //     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse.
@@ -1094,7 +1095,7 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 // type wins, a later conflict tombstones, and set membership is order-independent.
 struct FieldNarrowTables
 {
-    HashMap<std::string, std::string> fieldTypeByClass;
+    HashMap<std::string, FlatRecvType> fieldTypeByClass;
     HashMap<std::string, char>        localNameSet;
 };
 
@@ -1112,12 +1113,8 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        const std::string_view type = fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName );
-        const auto [ it, inserted ] = t.fieldTypeByClass.try_emplace( key, type );
-        if( !inserted && !it->second.empty() && it->second != type )
-        {
-            it->second.clear();   // same class-name#field-name, different declared types → tombstone
-        }
+        // same class-name#field-name with different declared types → tombstone (resolve.h recordFlatRecvTypeFact)
+        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty() );
     }
     t.localNameSet.reserve( ing.bindings.size() );
     for( const Binding& b : ing.bindings )
@@ -1784,19 +1781,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ambiguity. Definitions only (body present); the obj.method()/unqualified halves stay bare-name (and
     // keep their honest `amb`). C++ only (scope is populated for Lang::Cpp).
     HashMap<std::string, rw::SmallVec<NodeId, 2>> canonByName;
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> canonFamilyByName;   // C++ specializations under their template's `T::name`, plus existence markers (resolve.h)
     canonByName.reserve( N );
     std::string canonKey;
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1f: canonByName (scope::name -> def ids)" );
         for( const Symbol& s : ing.symbols )
         {
-            if( s.scope.empty() || !isDefinitionNotDeclaration( s ) )
-            {
-                continue;
-            }
-            canonKey.clear();
-            canonKey.append( s.scope ).append( "::" ).append( s.name );
-            canonByName[ canonKey ].push_back( s.id );
+            // a definition under scope::name; a C++ specialization's definition again under its template's family key, and
+            // any symbol a specialization scopes (declarations too) as that specialization's existence marker
+            indexCanonicalScope( canonByName, canonFamilyByName, canonKey, s );
         }
     }
 
@@ -2029,7 +2023,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
-    std::vector<std::size_t> locShare;   // reused per-candidate sharedLocality memo (computed once per tier, below)
+    std::vector<std::size_t> locShare;   // reused per-candidate localityRank memo (computed once per tier, below)
 
     // ── B2.1 CHA-lite inheritance NAME graph (built once, consumed in the resolve loop below). A class is
     // keyed by its final-segment NAME, exactly like byName — so a same-name collision only ever ENLARGES a
@@ -2077,6 +2071,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         for( auto& [ k, v ] : chaUp )   { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
         for( auto& [ k, v ] : chaDown ) { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
     }
+    const std::vector<std::string> specializationsWithBases = sortedSpecializationNames( chaUp );   // resolve.h: what a C++ specialization inherits
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
 
@@ -2261,21 +2256,23 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             canonical = true;
         }
+        // E#4 canonical tier (resolve.h appendCanonicalCandidates): the defs keyed "qualifier::name", built in the reused
+        // qkey buffer and admitted by language and root. An exact template-id keys exactly its specialization
+        // (`Traits<int>::encode`), which is what keeps a delegation between specializations an edge. A C++ template-id
+        // qualifier that keys nothing is answered from its template's FAMILY only when that answer cannot be missing
+        // a body the call may reach:
+        //   * the id names a specialization that exists but does not define the name → what IT inherits (chaUp holds
+        //     specialization headers' base clauses), or no answer;
+        //   * otherwise what the PRIMARY supplies, itself or through its bases — `CastInfo` defines no `isPossible` but
+        //     inherits `CastIsPossible::isPossible` — joined by every specialization's own or inherited member; more
+        //     than one candidate is a disclosed split;
+        //   * with nothing visible from the primary, only a split of two or more specializations answers.
+        // No answer leaves `cand` empty, so the bare-name ladder decides exactly as it did before the family fallback,
+        // and no family answer ever reaches a same-named definition outside the template.
         if( !scipPinned && r.lang != Lang::Elixir && !r.qualifier.empty() )
         {
-            qkey.clear();                                       // "qualifier::name" — reused buffer, identical bytes
-            qkey.append( r.qualifier ).append( "::" ).append( r.calleeName );
-            const auto cit = canonByName.find( qkey );
-            if( cit != canonByName.end() )
-            {
-                for( NodeId c : cit->second )
-                {
-                    if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
-                    {
-                        cand.push_back( c );
-                    }
-                }
-            }
+            appendCanonicalCandidates( cand, qkey, r, CanonicalScopes { canonByName, canonFamilyByName, specializationsWithBases, narrower, chaUp, ing.symbols },
+                                       [ & ]( NodeId c ) { return langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ); } );
             canonical = !cand.empty();
         }
         // ── L3 fn-pointer/callback binding resolve — BEFORE Rule 1, because a local variable shadows a
@@ -2289,6 +2286,39 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // keeps role="call": it IS a real call; only the RESOLUTION came from the binding — the same trust
         // level as Rule 2 receiver narrowing.
         bool narrowed = false;
+        // TS/JS literal receivers (issue #163): only names that really are members of the literal's
+        // built-in type leave the ladder. Bind a scope-matched polyfill first (JS `Foo.prototype.NAME`,
+        // TS has no protomethod capture); else External if the name exists in-repo, Undefined if it
+        // does not. A name that is NOT a member of that type (`shout`, named-function proto, Object.assign)
+        // falls through to today's path. !ctor.empty() stays: a future Lit* kind without a ctor must not
+        // match every unscoped method.
+        if( !scipPinned && r.role == RefRole::Call && isJsTsLitRecv( r.recv ) )
+        {
+            const std::string_view ctor = jsLitCtorName( r.recv );
+            if( !ctor.empty() && isJsTsBuiltinMember( ctor, r.calleeName ) )
+            {
+                if( it == byName.end() )
+                {
+                    disposition = CallDisposition::Undefined;   // no in-repo def of this builtin name — not external=
+                    continue;
+                }
+                for( NodeId c : it->second )
+                {
+                    const Symbol& sy = ing.symbols[c];
+                    if( sy.kind == SymKind::Method && sy.scope == ctor
+                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        cand.push_back( c );
+                    }
+                }
+                if( cand.empty() )
+                {
+                    disposition = vetoExternal( r );
+                    continue;
+                }
+                narrowed = true;
+            }
+        }
         // ── ES named-import binding resolve — the JS/TS twin of the L3 block above, and BEFORE every
         // receiver rule for the same reason: `import { f } from './m.js'` is a name-lookup FACT, so a
         // bound ES name never falls through to the global spelling ladder. SCIP remains authoritative.
@@ -2420,9 +2450,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
         // (Rule 2 first: a typed LOCAL beats a same-named field in real C++ lookup, and the veto inside 2b
         // refuses any locally-declared name outright).
+        bool fieldTypeNarrowed = false;   // Rule 2b decided the site: its prov="final-segment" question reads the field entry
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            fieldTypeNarrowed = narrowed;
         }
         const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
         // P2-D Rule 3 (import/include-based file narrow): when the name is ambiguous (K same-name defs) but the
@@ -2743,7 +2775,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
-         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
+         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj
+         && !isJsTsLitRecv( r.recv ) )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
             const std::size_t localityCap = receiverLocalityCap( r, receiverTypeNarrowed, ing.files[ ing.symbols[ r.fromSymbol ].fileId ] );
@@ -2774,7 +2807,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 // another — rubygems' composed_set.rb). Widening tier 1 past the caller would invent a
                 // cross-file edge the SAME-FILE tier already outranked, and `other.each` on a second instance
                 // of the caller's own class is a genuine self-loop, so the honest nothing stands.
-                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : std::min( sharedLocality( callerCanon, g.localityKey[c] ), localityCap );   // path-scoped even for a free function
+                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKey[c], ( r.recv == RecvKind::None && r.qualifier.empty() ) || r.recv == RecvKind::ThisObj, localityCap );   // path-scoped even for a free function
                 locShare.push_back( sh );
                 if( sh > bestShare )
                 {
@@ -2911,9 +2944,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
         const float base = conf / float( nReal );              // split over real (non-self) targets
-        // the receiver's qualified written type decided this site by its last name — Rule 2 narrowed on it, or CHA-lite pruned
-        // by it — so every edge it commits is marked prov="final-segment" below (resolve.h Narrower::finalSegmentTypeAt)
-        const bool  finalSegmentType = ( receiverTypeNarrowed || censusCone ) && narrower.finalSegmentTypeAt( r );
+        // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so
+        // every edge it commits is marked prov="final-segment" below (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt)
+        const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && narrower.finalSegmentTypeAt( r ) )
+                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass ) );
         for( NodeId to : tier )
         {
             if( to == r.fromSymbol )
@@ -4699,7 +4733,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         key.append( owner ).push_back( '#' );
         key.append( member );
         const auto it = narrow.fieldTypeByClass.find( key );
-        return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second );
+        return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second.type );
     };
     // a receiver variable's type: a local or parameter declaration of the name in this definition decides, and a
     // tombstoned one answers "" — never the same-named member of the enclosing class, which that declaration
@@ -4808,6 +4842,12 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
                 }
             }
             break;
+            case RecvKind::LitString:
+            case RecvKind::LitArray:
+            case RecvKind::LitRegex:
+            case RecvKind::LitNumber:
+            case RecvKind::LitBoolean:
+            break; // a certain built-in receiver is not a field owner
         }
         if( std::find( cand.begin(), cand.end(), fieldId ) == cand.end() )
         {

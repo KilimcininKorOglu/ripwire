@@ -139,6 +139,172 @@ inline RecvShape classifyReceiver( TSNode node, Lang lang, std::string_view src,
     return {};   // parenthesized / subscripted / call receiver → not one-hop
 }
 
+// TS/JS literal-receiver kinds (issue #163). A member call whose receiver type the syntax already
+// proves is a built-in; it must not take the bare-name ladder. Object literals, identifier
+// receivers, this, casts, and element-returning links stay RecvKind::None. Do NOT widen
+// isMemberAccessNode — every recv==None guard would then see every TS/JS member call.
+inline RecvKind jsLiteralKindOf( const char* t ) noexcept
+{
+    if( kindIs( t, "string" ) || kindIs( t, "template_string" ) )
+    {
+        return RecvKind::LitString;
+    }
+    if( kindIs( t, "array" ) )
+    {
+        return RecvKind::LitArray;
+    }
+    if( kindIs( t, "regex" ) )
+    {
+        return RecvKind::LitRegex;
+    }
+    if( kindIs( t, "number" ) )
+    {
+        return RecvKind::LitNumber;
+    }
+    if( kindIs( t, "true" ) || kindIs( t, "false" ) )
+    {
+        return RecvKind::LitBoolean;
+    }
+    return RecvKind::None;
+}
+
+struct JsLitChainRow
+{
+    RecvKind    from;
+    const char* method;
+    RecvKind    to;
+};
+
+// Certain (from, method) → result kind. Anything not listed ends certainty (find/at/pop/shift/reduce,
+// subscript, non-null !, casts). Keep this table the single place a chain link is decided.
+inline RecvKind jsLitChainResult( RecvKind from, std::string_view method ) noexcept
+{
+    static constexpr JsLitChainRow kRows[] = {
+        { RecvKind::LitString,  "charAt",             RecvKind::LitString  },
+        { RecvKind::LitString,  "concat",             RecvKind::LitString  },
+        { RecvKind::LitString,  "normalize",          RecvKind::LitString  },
+        { RecvKind::LitString,  "padEnd",             RecvKind::LitString  },
+        { RecvKind::LitString,  "padStart",           RecvKind::LitString  },
+        { RecvKind::LitString,  "repeat",             RecvKind::LitString  },
+        { RecvKind::LitString,  "replace",            RecvKind::LitString  },
+        { RecvKind::LitString,  "replaceAll",         RecvKind::LitString  },
+        { RecvKind::LitString,  "slice",              RecvKind::LitString  },
+        { RecvKind::LitString,  "split",              RecvKind::LitArray   },
+        { RecvKind::LitString,  "substr",             RecvKind::LitString  },
+        { RecvKind::LitString,  "substring",          RecvKind::LitString  },
+        { RecvKind::LitString,  "toLocaleLowerCase",  RecvKind::LitString  },
+        { RecvKind::LitString,  "toLocaleUpperCase",  RecvKind::LitString  },
+        { RecvKind::LitString,  "toLowerCase",        RecvKind::LitString  },
+        { RecvKind::LitString,  "toString",           RecvKind::LitString  },
+        { RecvKind::LitString,  "toUpperCase",        RecvKind::LitString  },
+        { RecvKind::LitString,  "trim",               RecvKind::LitString  },
+        { RecvKind::LitString,  "trimEnd",            RecvKind::LitString  },
+        { RecvKind::LitString,  "trimLeft",           RecvKind::LitString  },
+        { RecvKind::LitString,  "trimRight",          RecvKind::LitString  },
+        { RecvKind::LitString,  "trimStart",          RecvKind::LitString  },
+        { RecvKind::LitString,  "valueOf",            RecvKind::LitString  },
+        { RecvKind::LitArray,   "concat",             RecvKind::LitArray   },
+        { RecvKind::LitArray,   "copyWithin",         RecvKind::LitArray   },
+        { RecvKind::LitArray,   "fill",               RecvKind::LitArray   },
+        { RecvKind::LitArray,   "filter",             RecvKind::LitArray   },
+        { RecvKind::LitArray,   "flat",               RecvKind::LitArray   },
+        { RecvKind::LitArray,   "flatMap",            RecvKind::LitArray   },
+        { RecvKind::LitArray,   "join",               RecvKind::LitString  },
+        { RecvKind::LitArray,   "map",                RecvKind::LitArray   },
+        { RecvKind::LitArray,   "reverse",            RecvKind::LitArray   },
+        { RecvKind::LitArray,   "slice",              RecvKind::LitArray   },
+        { RecvKind::LitArray,   "sort",               RecvKind::LitArray   },
+        { RecvKind::LitArray,   "toLocaleString",     RecvKind::LitString  },
+        { RecvKind::LitArray,   "toReversed",         RecvKind::LitArray   },
+        { RecvKind::LitArray,   "toSorted",           RecvKind::LitArray   },
+        { RecvKind::LitArray,   "toSpliced",          RecvKind::LitArray   },
+        { RecvKind::LitArray,   "toString",           RecvKind::LitString  },
+        { RecvKind::LitArray,   "with",               RecvKind::LitArray   },
+        { RecvKind::LitRegex,   "test",               RecvKind::LitBoolean },
+        { RecvKind::LitNumber,  "toExponential",      RecvKind::LitString  },
+        { RecvKind::LitNumber,  "toFixed",            RecvKind::LitString  },
+        { RecvKind::LitNumber,  "toPrecision",        RecvKind::LitString  },
+        { RecvKind::LitNumber,  "toString",           RecvKind::LitString  },
+        { RecvKind::LitBoolean, "toString",           RecvKind::LitString  },
+    };
+    for( const JsLitChainRow& row : kRows )
+    {
+        if( row.from == from && method == row.method )
+        {
+            return row.to;
+        }
+    }
+    return RecvKind::None;
+}
+
+inline RecvKind classifyJsTsLiteralRecv( TSNode node, std::string_view src, int depth ) noexcept
+{
+    if( depth > 16 || ts_node_is_null( node ) )
+    {
+        return RecvKind::None;
+    }
+    const char* t = ts_node_type( node );
+    if( kindIs( t, "parenthesized_expression" ) )
+    {
+        return classifyJsTsLiteralRecv( ts_node_named_child( node, 0 ), src, depth + 1 );
+    }
+    if( kindIs( t, "as_expression" ) || kindIs( t, "satisfies_expression" )
+        || kindIs( t, "type_assertion" ) || kindIs( t, "non_null_expression" )
+        || kindIs( t, "subscript_expression" ) )
+    {
+        return RecvKind::None;
+    }
+    const RecvKind lit = jsLiteralKindOf( t );
+    if( lit != RecvKind::None )
+    {
+        return lit;
+    }
+    if( !kindIs( t, "call_expression" ) )
+    {
+        return RecvKind::None;
+    }
+    const TSNode fn = fieldChild( node, NodeField::Function );
+    if( ts_node_is_null( fn ) || !kindIs( ts_node_type( fn ), "member_expression" ) )
+    {
+        return RecvKind::None;
+    }
+    const TSNode prop = fieldChild( fn, NodeField::Property );
+    const TSNode obj  = fieldChild( fn, NodeField::Object );
+    if( ts_node_is_null( prop ) || ts_node_is_null( obj ) )
+    {
+        return RecvKind::None;
+    }
+    const RecvKind inner = classifyJsTsLiteralRecv( obj, src, depth + 1 );
+    if( inner == RecvKind::None )
+    {
+        return RecvKind::None;
+    }
+    return jsLitChainResult( inner, pattern::nodeText( prop, src ) );
+}
+
+// The node a call's @name hangs under once the C++ template-argument wrappers are stepped over. For
+// `x.m()` that is the name's own parent. `x.m<T>()` puts ONE wrapper between them — field_expression
+// field: (template_method name: m arguments: …) — and the disambiguated `x.template m<T>()` a second —
+// field: (dependent_name (template_method …)) — so the climb steps over exactly those two kinds, in that
+// order, and a name under any other parent keeps the parent it had. Both kinds are tree-sitter-cpp's (the
+// CUDA grammar is generated from it); no other grammar names either, so the climb is inert everywhere else.
+// A template_method that is not a member callee (a qualified definition's declarator) climbs to a parent
+// that is no member access, which every caller already reads as "not a member call".
+inline TSNode calleeAccessParent( TSNode nameNode ) noexcept
+{
+    TSNode parent = ts_node_parent( nameNode );
+    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "template_method" ) )
+    {
+        return parent;
+    }
+    parent = ts_node_parent( parent );
+    if( !ts_node_is_null( parent ) && kindIs( ts_node_type( parent ), "dependent_name" ) )
+    {
+        parent = ts_node_parent( parent );
+    }
+    return parent;
+}
+
 // P2-D RECEIVER capture: classify the call-site receiver of `recv.method()` / `recv->method()` so
 // resolve.h can narrow before the ambiguous §2a name spray. `nameNode` is the @name capture (the called
 // identifier). When it is the `.field`/`.attribute` of a member-access node, inspect that node's
@@ -161,12 +327,34 @@ inline RecvShape classifyReceiver( TSNode node, Lang lang, std::string_view src,
 //     bound: the depth-3 call now takes the honest ladder, never Rule 1's enclosing-class pin.
 // Pure-syntactic, deterministic, allocation-light: at most two short identifier copies, and none at all
 // for the None/ThisObj shapes that dominate.
+// TS/JS: a member_expression whose object is a certain literal (or a chain that stays certain) returns
+// LitString/LitArray/LitRegex/LitNumber/LitBoolean instead of None. isMemberAccessNode stays false for
+// TS/JS so every other member call is still RecvKind::None.
+//
+// The parent it inspects is calleeAccessParent's, not the raw parent: a C++ member call with explicit
+// template arguments puts a template_method (and, behind `template`, a dependent_name) between the name and
+// its field_expression. Read through the raw parent, `other.f<T>()` classified None — a BARE call — and the
+// enclosing-class rule pinned it to the caller's own same-named method (test/cppqualcheck.sh §12 (d)).
 inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
 {
-    const TSNode parent = ts_node_parent( nameNode );
+    const TSNode parent = calleeAccessParent( nameNode );
     if( ts_node_is_null( parent ) )
     {
         return {};
+    }
+    if( ( lang == Lang::TypeScript || lang == Lang::JavaScript )
+        && kindIs( ts_node_type( parent ), "member_expression" ) )
+    {
+        const TSNode obj = fieldChild( parent, NodeField::Object );
+        if( !ts_node_is_null( obj ) )
+        {
+            const RecvKind lit = classifyJsTsLiteralRecv( obj, src, 0 );
+            if( lit != RecvKind::None )
+            {
+                return { lit, {}, {} };
+            }
+        }
+        return {};   // non-literal TS/JS member call: today's RecvKind::None
     }
     if( !isMemberAccessNode( ts_node_type( parent ), lang ) )
     {

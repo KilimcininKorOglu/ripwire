@@ -1977,7 +1977,15 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 99;   // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 102;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                          //    PR #256). See ingest_cache.h's kParserVer note.
+                                                          // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                          //    §12, PR #243): `r.f<T>()` / `x.template f<T>()` mint call
+                                                          //    references; the `template` disambiguator leaves names and
+                                                          //    qualifiers. See ingest_cache.h's kParserVer note.
+                                                          // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                          //    Lit* appended; extraction identity moves, cache format does not.
                                                           // 99 = 2026-09-16 (std-typed member fields): a field's compose
                                                           //    record carries its written namespace as its qualifier.
                                                           //    See ingest_cache.h's kParserVer note.

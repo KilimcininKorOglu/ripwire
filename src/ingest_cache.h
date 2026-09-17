@@ -232,7 +232,33 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 99;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 102;          // bump on any grammar/.scm/extraction change
+                                                      // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                      //    PR #256): a primary template's out-of-line member keys the bare
+                                                      //    template name (`void Box<T>::grow()` joins `Box::grow`); a
+                                                      //    specialization keeps its canonical template-id; a reference
+                                                      //    keeps the template-id it writes (3+ segments too); and a class
+                                                      //    specialization HEADER's base clause is captured as inherit
+                                                      //    refs (tags.scm @definition.specialization). Symbol scopes,
+                                                      //    RawRef::qualifier and the extracted refs change; no record
+                                                      //    layout changes (kCacheVersion stays 22). The PR declared 100;
+                                                      //    assigned 102 on integration/train-2b after #243's 101.
+                                                      // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                      //    §12, PR #243): a C++ member call with explicit template arguments
+                                                      //    (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) mints a
+                                                      //    call reference with its receiver, where it minted none;
+                                                      //    a `template` disambiguator no longer leaks into a qualified
+                                                      //    call's name (`template f`) or qualifier (`template Rebind`).
+                                                      //    The extracted SET and names change; no record changes shape
+                                                      //    (kCacheVersion stays 22). The PR declared 99; assigned 101 on
+                                                      //    integration/train-2b in merge order after #244's 100.
+                                                      //    quality.h's kIngestParserVerMirror moves in the SAME commit.
+                                                      // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                      //    gains LitString/LitArray/LitRegex/LitNumber/LitBoolean
+                                                      //    (appended u8, no RawRef field, kCacheVersion stays 22).
+                                                      //    A `"x".replace()` call no longer takes the bare-name ladder.
+                                                      //    The PR declared 97; assigned 100 on integration/train-2b in
+                                                      //    merge order over train 2's 99.
                                                       // 99 = 2026-09-16 (std-typed member fields, test/fieldnarrowcheck.sh
                                                       //    arm q): a C++ field's compose RawRef records the namespace its
                                                       //    type was written in as `qualifier` (`std` for `std::string

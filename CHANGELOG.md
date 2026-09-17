@@ -1049,6 +1049,149 @@ record turns the double-declaration and member-hiding rows red. Letting a tombst
 exactly the three `std::` member-hiding rows red (measured before the non-std row was added). Refusing every qualifier
 turns only the `store::Text` controls red.
 
+### Fixed — a C++ member call with explicit template arguments is a call (parser version 101)
+
+`r.get<K>( 1 )`, `p->get<K>( 1 )` and `x.template get<K>()` minted no reference at all. Their callee parses as a
+`template_method` under the member access — inside a `dependent_name` when the `template` keyword is spelled — and no
+C++ reference pattern bound either shape, so the call was dropped at extraction, before `ambiguous=`/`unresolved=`
+could count it: a four-line repro answered `--callers=get` count="0" beside count="1" for `r.plain( 1 )`,
+`--callers`/`--uses`/`--impact`/`--safe-delete` under-counted every such call, and `--quality-delta` could report a
+method reached only this way as `kind="dead-code"`. A new `queries/cpp/tags.scm` pattern binds both shapes, and the
+receiver reader now steps over the wrapper — without that step `other.pick<int>()` reads as a bare call and the
+enclosing-class rule binds it to the caller's own same-named method. The qualified dependent spelling had the same
+defect family in another place: `X::template make<int>()` was extracted under the NAME `template make`, which
+resolves to nothing, and `X::template Rebind<int>::f()` keyed its qualifier as `template Rebind`, so a same-named
+definition in another scope split the call. The keyword is now stepped over in both halves. Free `f<T>( x )` and
+qualified `ns::f<T>( x )` (the `std::get<0>( t )` shape) were already bound and are unchanged.
+
+Measured with the pre-fix (`f8e6087c`) and fixed (`1171f775`) binaries, `--no-cache`, map header plus
+`ripwire_probe`'s reference total. On this repository's `src/` (169 files) the change is small: references 168,457 →
+168,463 and edges 18,308 → 18,309 — the six `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod`
+goes 1 → 7. On a template-heavy tree it is not small. `clang/include` plus `clang/lib` from llvm-project `4d5358b1d`
+(2,515 files) gains 10,175 references (1,855,925 → 1,866,100), 3,907 edges (409,860 → 413,767, +0.95%) and 972
+`ambiguous=` (81,601 → 82,573), with `unresolved=` unchanged at 3,893; `--callers=getAs` goes 48 → 492 and
+`--callers=hasAttr` 45 → 377. On `clang/lib/AST` (155 files) the reference delta, 2,027, equals the `--match` hit count
+of the new call shape exactly (`hits_capped="0"`), so extraction moved only the intended class.
+
+The new sites resolve exactly as a plain member call to the same name does, so a name like `getAs` or `hasAttr` gains
+its real callers and also that resolver's wrong ones. On the same clang tree `FD->hasAttr<PackedAttr>()` in
+`ASTContext::getDeclAlign` binds `Type::hasAttr(attr::Kind)` at `lib/AST/Type.cpp:2026`, not `Decl::hasAttr<T>()`,
+with no `amb=` on the row. The plain spelling does the same on main: in a reduced five-file repro, `FD->plainAttr()`
+binds `Type::plainAttr(int)` rather than `Decl::plainAttr()`. That is a resolver defect this change widens the reach
+of, not one it introduces, and it is not fixed here.
+
+`test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per spelling plus receiver, arity
+and qualifier decoys: 19 of its checks fail on the pre-fix binary, and a mutation build that reverts each of the three
+mechanisms (the receiver step, the keyword skip, `callArity`'s hop bound) turns that mechanism's own arms red. The
+spellings still not bound are pinned at zero behind a check that each is still written in the fixture: `r.f<0>( x )`
+without `template` (tree-sitter reads it as two comparisons, a read of the member), a base-qualified member
+`r.Base::f<T>()` / `p->Base::f<T>()` (the plain `r.Base::f()` is absent too, so the gap is not template-shaped), and
+`r.operator()<T>()`. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was pinned as documented-absent
+at literal 0 and now pins 1.
+
+`kParserVer` → 101 with `quality.h`'s `kIngestParserVerMirror` in the same commit, assigned in merge order on
+integration train 2b (after #244's 100); `kCacheVersion` stays 22, and `test/qschemetrip.hash` is re-derived once on the
+train's merged tree with a RE-PIN LOG line.
+
+### Fixed — a class template's out-of-line member is the same symbol as its declaration, and a specialization stays its own (parser version 102)
+
+A C++ member defined out of line on a class template kept the template-argument list in its scope, so `template <class
+T> void Box<T>::grow() {}` produced a `sc="Box&lt;T&gt;"` row next to the in-class declaration's `sc="Box"`. One member
+was two identities. `--callers=Box::grow` resolved to the declaration and answered `count="0"` while `use( Box<int>& b
+) { b.grow(); }` sat three lines below, and `--impact`, `--uses` and the S6-C locality tie-break missed it the same
+way. An argument list broken over lines put the line break into the `--pin-census` id, and a list that itself holds
+`::` was cut inside it: `template<> void Slot<std::string>::clear()` was scoped `string>`. On the reference side,
+`Factory<int>::make()` qualified as `Factory<int>`, which keyed nothing, so the call split onto an unrelated
+`Decoy::make`.
+
+Scopes now follow what the declaration is:
+
+- A primary template's out-of-line member keys the bare template name, because its template-id names exactly the
+  parameters its own `template <…>` introduces (`template <class T, int N> void Box<T, N>::grow()`).
+- An explicit or partial specialization keeps its template-id, spelled canonically. Whitespace and comments are dropped
+  except between two identifier characters, and a comma is followed by one space, so `Traits< int >` and a list broken
+  over lines key the same identity as `Traits<int>`.
+- A call keeps the template-id it writes. `Traits<int>::encode( 1 )` resolves precisely to the int specialization,
+  including from a 3-segment spelling.
+- When no definition is keyed by the written id, the resolver answers from the template's family (the primary and its
+  specializations), but only when that answer cannot be missing a body the call may reach. The family is the primary's
+  own or inherited member (`CastInfo` inherits `CastIsPossible::isPossible`) plus every specialization's own or
+  inherited member, and a member reached through a base is widened to that base template's specializations. A written
+  id that names an existing specialization which does not define the member answers with what that specialization
+  inherits. With nothing visible from the primary, only a split of two or more specializations answers.
+- Anything else goes to the bare-name ladder, exactly as before, so a same-named definition outside the template never
+  joins a family answer.
+- A specialization header's base clause (`template <> struct Info<char> : CharBase {}`) is now read, as inherit
+  references with no new symbol.
+- The locality tie-break prefers a candidate declared in the caller's own scope over one nested inside it, for an
+  unqualified bare or `this->` call only. Both ids share the caller's `Outer::` segment, so segment counting tied
+  `Outer::start` with `Outer::Inner::start`.
+
+Two earlier revisions of this change were measured and revised before merge. Joining every specialization to the
+primary made precise edges splits and dropped a delegation between specializations (`DenseMapInfo<APSInt>` calling
+`DenseMapInfo<APInt, void>::getHashValue`, APSInt.h:371). A family fallback that ignored inherited members pinned `isa`
+(Casting.h:548) to one rare specialization.
+
+Measured with `--pin-census --no-cache` on the same frozen corpus through main (`31e788ce`) and this change, with sites
+joined on (caller symbol id, callee, line); symbol ids are identical across the two binaries. On llvm `ADT` + `Support`
++ `lib/Support` (590 files, 37,055 calls), edges moved from 45,768 to 45,001 and ambiguous from 7,247 to 7,237, and
+`--callers=lib/Support/APInt.cpp:getHashValue` answers 5, as on main.
+
+Wins: 37 splits became precise, 12 sites that had no edge gained a precise one, 12 external sites resolved in-repo, and
+5 precise edges were retargeted. All 66 were read against the source and are correct: 64 in the independent review of
+the previous revision (unchanged here), and the 2 new ones, `cast`/`dyn_cast` through `CastInfo<To,
+std::unique_ptr<From>>`, which inherits `UniquePtrCast`. The Casting.h `isa` site is now a split that contains the
+inherited `CastIsPossible::isPossible`, and the 8 `list_storage` calls that an earlier revision pinned to
+`list_storage<DataType, bool>` are splits.
+
+Costs and differences, reported apart:
+
+- 14 sites main resolved precisely now split. In 10 of them main had pinned the wrong class, one correct pin
+  (`RHS.branched()`) is a 2-way split that contains it, and 3 are `DominatorTreeBase::dominates` overloads that are now
+  one identity.
+- One edge is gone: `simple_ilist::sort`, which is a genuine recursive call.
+- 4 sites with no edge and 9 external sites became splits.
+- One call through `list_storage<DataType, StorageClass>::clear()` (CommandLine.h:1760) keeps main's locality pin to
+  `list::clear`, because that primary's members are extracted under `cl` and the template supplies nothing visible.
+
+On dgl (`f0b7cc9`, 343 C, C++ and CUDA files; main at `b1489df4`, whose resolver is identical), edges moved from 20,829
+to 20,733 and ambiguous from 1,891 to 1,882. 11 splits became precise. 12 precise edges moved from a specialization's
+own `Call` to the `_Sum`/`_Max`/`_Min` base it calls. 3 calls through a dependent template-id that main had pinned to
+the primary now split over the primary and its specialization. On this repository nothing changes. An ack or saved
+baseline keyed on a primary template member's old `Box<T>` spelling re-keys once.
+
+Gated by `test/cpptmplscopecheck.sh`, 64 checks: main fails 42, and the previous revision fails 6. The gate covers:
+
+- a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact` and
+  `--uses`, and on identities in the census;
+- the primary shapes;
+- all three specialization forms;
+- the review's `Traits` probe;
+- an APSInt-shaped delegation;
+- the inherited-member shapes (a primary that inherits the member, a specialization that only inherits it, a primary
+  with nothing visible, a primary that defines nothing);
+- the two-segment decoy;
+- the nested-class tie.
+
+### Fixed — a narrow through a qualified field type read as a uniquely resolved edge
+
+The receiver-qualifier entry above marks an edge **`prov="final-segment"`** when the qualified written type of a parameter or a local chose it by its last name alone. A member field is the third place that guess is made, and its edge still read as uniquely resolved. `struct Record { store::Text body_; int bodyLength() { return body_.size(); } };` is an example: Rule 2b narrowed on `Text` and never checked `store`. The disclosure now covers fields as well. Since the std-typed-field entry above, a field's compose record carries the namespace its type was written in. Rule 2b's `Class#field` table now keeps whether any agreeing declaration wrote the type qualified, and every edge a Rule 2b narrow commits on such a field carries `prov="final-segment"`. The narrow itself is unchanged: the mark discloses, it never demotes. An unqualified field narrow skipped no qualifier and stays unmarked, and a `std::` field never narrows. Extraction is unchanged, so kParserVer stays.
+
+Measured with `--no-cache`, the `integration/train-2` binary (92b4c91d) against this change:
+- **Decisions:** `--pin-census` is byte-identical on rocksdb, a private C++ corpus and this repository's `src/` (a frozen copy), so no decision moved.
+- **Default map:** byte-identical on all three (rocksdb 31,711 bytes), because no newly marked edge sits on a row the default map shows.
+- **Full map (`--top-k=1000000`):** marked edges grow 355 → 382 on rocksdb (+27, 567 bytes), 98 → 143 on the private corpus and 80 → 81 on `src/`.
+
+Every sampled new mark is a qualified field type:
+- `InternalStats::CompactionStatsFull compaction_stats_` → `SetMicros`
+- `toku::locktree_manager ltm_` → `set_max_lock_memory`
+- `strkern::Byteset256 heads` → `contains`
+
+`test/fieldnarrowcheck.sh` arm r is the gate:
+- (r1) the qualified field's mark and (r5) the compact legend term are red on the train binary.
+- (r3), an unqualified field narrow staying unmarked, is red on a variant that marks every Rule 2b narrow and on nothing else.
+- (r2) the refused std field and (r4) the unchanged census decision are the controls.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
