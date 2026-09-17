@@ -79,6 +79,23 @@ fails, except a row marked PENDING, whose fix is already written on another bran
 it lands. Red on the base: 6 rule-C sites (four of them the `--eval-skills` and `ripwire wrap` filesystem throws that
 the parser-crash lane fixes) and 6 rule-D sites; green after. A probe tree with one violation and one compliant twin
 per rule proves each rule fires (13 planted violations, nothing else).
+
+### Added — reader fuzzers for ripwire's own parsers of bytes it did not create, and the two crashes they found
+
+The fuzz suite fuzzed only the vendored tree-sitter grammars. `test/fuzz/readers/` adds 16 libFuzzer targets
+(`ripwire_fuzz_reader_<name>`, `RIPWIRE_FUZZ_READERS` in CMakeLists.txt) over the code hostile input reaches: the MCP
+JSON-RPC scanner and HTTP request reader, the ipynb/HTML/CSV extractors, `--from-trace`, the skill scanner, the SCIP
+decoder, tsconfig/go.mod aliases, lint-rule files, the qsnap/qchurn/history-oracle caches (header and digest rebuilt so
+the fuzzer reaches the parse), the committed sidecars, `--scope`, ingest-cache records and frames, and the span-tier memo.
+Seeds are 54 blobs the real writers produced (`make_seeds.sh`); `run.sh replay` fails a reader that ran 0 inputs or
+refused a valid seed. Five minutes per reader under ASan, UBSan (with `integer`) and libc++ extensive hardening, Homebrew
+clang 22, found: a SCIP varint whose 10th byte carried payload past bit 63 was accepted as a truncated number (and
+aborted the G1 build); and `openCacheFrame`'s exact-fit check summed a table offset near 2^64 through a wrap, while its
+per-entry bound `recOffset + recLength` wrapped far enough to ACCEPT a record at 2^64-16 (`blob_entries=6` where the
+frame is corrupt). Both are fixed without the wrap, with red-first arms: `scipcheck` 5c and `cachefuzzcheck`'s two
+`*_near_u64_max` mutations plus a disclosure arm (`corrupt-frame`, `blob_entries=0`), and the minimized inputs are
+`regress-*` replay seeds. The qsnap and qchurn readers hit the unbounded-count `reserve` #249 fixes (18 GB and 40 GB
+allocations) within seconds.
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
 Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
