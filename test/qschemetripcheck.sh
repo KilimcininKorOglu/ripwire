@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, A4 (lane/small-fixes-0917, found-items 2026-09-17): kParserVer 99 -> 100, mirrored in
+#   src/quality.h's kIngestParserVerMirror in the same diff (test/qextractionkeycheck.sh asserts the
+#   equality) — `.hxx` gained a src/ingest_crawl.h kLangTable row (Lang::Cpp, same as .hpp/.hh); the crawl
+#   previously skipped every `.hxx` file outright, so a tree that spells its headers `.hxx` now yields NEW
+#   files/symbols/edges a pre-bump cache never saw. kQSnapCacheScheme stays 14: no cache KEY or blob-shape
+#   semantics changed, only the extraction identity (old extraction facts must be re-parsed, not re-keyed).
 # 2026-09-17, TRAIN 1 x TRAIN 2 (integration/train-1 merging main bcd3b016 = #265): RE-DERIVED ON THE MERGED TREE,
 #   carried from neither side. Train 1 pinned a37d1539 over kQSnapCacheScheme 14 (#253 13, #255 14) with parserVer 96;
 #   train 2 pinned 95818fe5 over parserVer 99 (#248 97, #254 98, #257 99) with the scheme at 12. Neither hashed the

@@ -774,6 +774,19 @@ normally, with no caveat at all. `test/layoutcheck.sh`'s `AttributeFieldCase` ga
 field-survives assertion `AlignasFieldCase` already had, and a new `AttributeHarmlessFieldCase` fixture
 pins the fully-modelled path.
 
+### Fixed — the crawl now admits `.hxx`, a C++ header spelling every OTHER per-extension table already listed
+
+`src/ingest_crawl.h`'s `kLangTable` — the ONE table that decides whether the crawl looks at a file at
+all — had rows for `.h`/`.hpp`/`.hh` but none for `.hxx`, so a repository that spells its headers `.hxx`
+was invisible to the crawl (`files=0`, `unindexed="hxx:N"`) even though six other per-extension tables in
+the tree (`flipimpact.h`'s dead-code header set, `layout.h`'s `--layout` scan, `lintrules.h`,
+`quality.h`'s header/public-API predicates, `resolve.h`'s include resolver, `verbs_lint.h`) already listed
+`.hxx` alongside `.hpp`/`.hh`. `.hxx` now rides the same `Lang::Cpp` / tree-sitter-cpp grammar as `.h`.
+This changes extraction output for any tree with `.hxx` files (new files, symbols and edges a pre-bump
+cache never saw), so `kParserVer` moves 99 → 100 (mirrored in `kIngestParserVerMirror`, same diff;
+`test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
+single-file root.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
