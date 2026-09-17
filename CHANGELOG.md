@@ -83,9 +83,11 @@ stderr and exit code) across `--grep`/`--regex` (prefiltered and full-scan, cont
 existing refusals, JSON), `--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` (incl. SARIF), `--scan-skill`
 and `--scan-skills` over every scanner fixture and this repository's own skills, and the map, plus a three-request
 `--mcp` grep session; the only differences are the fixes above. Instructions retired (Release, `/usr/bin/time -l`,
-median of 5, interleaved): `--regex` over an llvm-project checkout of 8,837 C/C++ files −2.6% to −4.4%, over this
-repository within ±0.2%, the literal `--grep` and map controls within ±0.8%. No compile was added: once per query, per
-rule and per grep worker as before, and `file()` now decides each FILE once instead of each symbol.
+median of 5, interleaved, the final commit against origin/main): `--regex` over an llvm-project checkout of 8,837
+C/C++ files −2.4% to −3.3%, over this repository within ±0.5%, the literal `--grep` and map controls +0.3% to +1.6%;
+release `__TEXT,__text` 8,684,280 → 8,704,196 bytes (+0.23%, the refusal texts and the scanner), `grepScanText` 443 →
+437 instructions. No compile was added: once per query, per rule and per grep worker as before, and `file()` now
+decides each FILE once instead of each symbol.
 
 Gate: `test/regexguardcheck.sh` — (a) a catastrophic pattern refused by name on all five entry points, each with a
 positive control; (b1) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_MATCH=1` makes every guarded match throw and
