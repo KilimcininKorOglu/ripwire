@@ -77,6 +77,34 @@ compliant twin.
 Red on the base, in order: S1 finds the three unbounded counts, S2 the short-circuited `fclose`, S3 eight bare
 bodies. The gate's header states what each rule catches and what it misses.
 
+### Added — a nightly ThreadSanitizer run against main, which opens one tracking issue when it fails
+
+ThreadSanitizer had a build mode (`-DRIPWIRE_TSAN=ON`) and one gate written for it, `test/qsnapprefetchcheck.sh` arm
+(e), but nothing ran it against `main`: a data race could reach a tag if nobody happened to build TSan locally in
+between. It is not added as a per-PR leg, because TSan builds already run often on contributors' machines and every PR
+already waits on the macOS runners. `.github/workflows/nightly.yml` runs it once a day at 07:17 UTC instead, and skips
+the heavy job when `main` has not moved since the last green scheduled run and no tracking issue is open.
+
+The job builds TSan with clang in its own tree and runs ten gates against it, chosen for the threads they drive: the MCP
+prefetch worker (`qsnapprefetchcheck`), the edit lock (`mcpeditracecheck`), a server's re-ingest at a 128-fd limit
+(`mcpwatchercheck`), a long-lived server's re-ingest after an edit (`mcpstalecheck`), concurrent `--quality-ack` writers
+(`qackconcurrencycheck`), the private cache directory (`cacheisolationcheck`), the parallel ingest and `--match` fan-out
+over the repository (`det-gate.sh`), `--grep`'s prefetch thread (`grepfastcheck`), the `--doc-drift` workers
+(`docdriftcheck`) and the git-spawn pool (`mergescoutcheck`). A gate's own verdict is not trusted to notice a race:
+reports go to per-gate files, and a wrapper fails the step on a non-zero exit or on any report file. Before any gate
+runs, the job checks that every object of the `ripwire` target references the TSan runtime, and that the wrapper goes
+red on a planted race and stays green on its race-free twin. Locally on Apple clang 21, the same wrapper failed on the
+planted race and on a race whose exit code the command swallowed, and all ten gates passed through it against a TSan
+build of 105666c1 with no report file (4 s to 404 s each, `mergescoutcheck` the slowest, on a machine at load 40-60).
+
+A failing run on `main` opens one issue, "Nightly checks failing on main" (label `nightly-failure`), or comments on the
+open one. The comment names the failing jobs and steps, the commit and the run, and quotes the head of the first report.
+The next green scheduled run comments "green again at <sha>" and closes it. The top-level token is `contents: read`,
+and only the two reporting jobs hold `issues: write`. A pull request that edits the workflow runs it without the
+reporting. A placeholder marks where the Windows full-suite job goes (D3 of the #44 plan). `test/g1configcheck.sh`
+gains six rows that pin the schedule, the skip probe, the TSan wiring, the permission scoping, the report conditions
+and "no secret but `GITHUB_TOKEN`". Each row has a mutated copy that turns exactly that row red.
+
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
@@ -200,6 +228,51 @@ pin, a v5 pin, a stale foreign pin, a root with no git, the MCP verb, the legend
 commit 12 rows failed, both forged directions among them. `test/qrevtokencheck.sh`'s hand-written sidecars move to the
 v6 header so its hostile head stamps still reach the head-stamp path. Pin moved: `test/printf_parity.manifest`
 (`help_all` only, `UPDATE_GOLDEN_EXPECT` matched).
+
+### Fixed — a deep or odd-shaped argument, source file or skills tree could crash or stall a verb
+
+Each of these was reproduced before it was fixed, and the gate that already owns each verb now fails on the old code.
+
+- **`--graph-query` nested deep enough overflowed the stack.** The evaluator recurses once per `(`, and a 50,000-level
+  `kind(kind(…all…))` chain died with SIGSEGV (exit 139). Nesting past 256 levels is now refused before evaluation,
+  exit 1 with the reason. Gate: `test/graphqueryrefusecheck.sh` arm 6.
+- **A `--layout` array extent could crash its evaluator.** A `#define` extent nested 200,000 parentheses deep overflowed
+  the stack (exit 139). `((0-1099511627776)*8388608/(0-1))` divides INT64_MIN by −1, which is SIGFPE (exit 136) on
+  Linux x86-64, and `1099511627776*1099511627776` is signed overflow, which aborts the sanitizer build. Arithmetic is
+  now checked, that quotient is refused, and parenthesis nesting depth is bounded at 64 (a macro of many sibling
+  parenthesised terms nests one level and still sizes). Any of these reads as an unknown extent, with its caveat.
+  Gate: `test/layoutcheck.sh` §12.
+- **`--layout` dropped a data member whose extent or initializer holds a parenthesis, and still said the size was
+  right.** `char a[(4)];`, `int x = (3);` and `int x{ (3) };` were taken for member functions, because the test looked
+  for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
+  short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
+  `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
+- **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
+  directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
+  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
+  directory link loop included, and names it on stderr; a skills root that cannot be listed at all says "cannot list".
+  Gate: `test/skillevalcheck.sh`.
+- **`ripwire wrap` aborted on a `./skills` tree it could not descend.** The pre-recipe scan advanced a
+  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree it could not
+  open mid-walk (measured with more nested folders than free descriptors) was `std::terminate` (exit 134). The walk
+  now stops early instead, says so, scores the scan WARN and still prints the recipe. The same scan used to skip a
+  mode-000 skills folder in silence — a skill carrying injection text scored CRITICAL while readable and nothing once
+  sealed — and now names the folder it cannot enter and scores WARN. Gate: `test/codexwrapcheck.sh`.
+- **A deeply nested `--match` query overflowed the query compiler.** `ts_query_new` recurses per level on a worker
+  thread with a 512 KB stack: 4,000 levels died with SIGBUS (exit 138), and 2,000 ran past a minute. A query or
+  `--lint-rules` spec nested past 256 levels is refused before any compile. Gate: `test/matchgrammarcheck.sh` arm 6.
+- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** Every occurrence climbed to its
+  statement anchor through `ts_node_parent`, which descends from the tree root each time, so the walk's cost grew with
+  the cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
+  one call wedged the server, and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s. The
+  scan now builds a parent table in one cursor pass and memoizes the anchor, so the walk is linear: 2,000 / 4,000 /
+  8,000 nested ifs in 0.05 / 0.06 / 0.08 s, the 808-level chain in 0.06 s, and the output is byte-identical. Past
+  2,048 syntax levels the slice is refused by name: the walks still recurse once per level on the main thread, and
+  nested loops, the widest frame per level, need ~1.8 MB at that depth on a plain build and 2-3× under a sanitizer, so
+  this is a stack guard, not a time guard. That is still 2.5× the deepest function in 47,795 parsed files (808).
+  Gate: `test/slicecheck.sh` (15), including 2,040 nested `for` loops that must be answered just under the guard.
+
+The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
 
 ### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
 
