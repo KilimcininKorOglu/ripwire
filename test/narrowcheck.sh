@@ -33,6 +33,12 @@
 #   * Arm 25 — DISCLOSURE: a narrow decided by a qualified written type matched only its final segment, so it never reads
 #     as precise. Its edge carries prov="final-segment" (the floor's wrong edge, a correct parameter narrow and the local
 #     twin alike); an unqualified narrow and a uniquely named call carry no prov=, and both legends define the value.
+#   * Arms 39-43 — TEMPLATE ARGUMENTS in a written type (2026-09-17). An unqualified template-id (`Vec<Decl *>& v`) recorded
+#     no type at all, so `v.size()` never reached Rule 2, while its qualified twin (`ll::Vec<Decl *>&`) did; and a type
+#     whose arguments sit before its last name (`Outer<int>::Inner& in`) recorded `Outer` — a precise edge to the wrong
+#     class wherever `Outer` defines the method. The recorded name is now the type's LAST NAME read through the grammar's
+#     fields, never cut from its text.
+#     (39d) pins the stated floor: an unqualified template-id CONSTRUCTOR (`auto v = Vec<Decl *>()`) infers nothing.
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -290,9 +296,9 @@ expectNarrow "(24)" lookupExternal "find@lib/map.h:1"
 #        before the attribute existed: (25) rows a, b, c and both legend rows. ─────────────────────────────────────────
 "$BIN" "$VFIX" --no-cache >"$TMP/vis.map" 2>/dev/null
 "$BIN" "$VFIX" --no-cache --legend=compact >"$TMP/vis.compact" 2>/dev/null
-provOf(){   # the prov= of caller $1's <c n="$2"> edge in the map: a word, "none" when absent, NO-EDGE when the row or edge is missing
+provOf(){   # the prov= of caller $1's <c n="$2"> edge in map $3 (default: the VFIX map): a word, "none" when absent, NO-EDGE when missing
     local row
-    row="$( tr '<' '\n' <"$TMP/vis.map" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
+    row="$( tr '<' '\n' <"${3:-$TMP/vis.map}" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
     row="$( printf '%s\n' "$row" | grep "^c n=\"$2\"" | head -1 )"
     if [ -z "$row" ]; then
         printf 'NO-EDGE'
@@ -302,9 +308,9 @@ provOf(){   # the prov= of caller $1's <c n="$2"> edge in the map: a word, "none
         printf 'none'
     fi
 }
-expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent)
+expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent), optional map file (provOf's $3)
     local got
-    got="$( provOf "$2" "$3" )"
+    got="$( provOf "$2" "$3" "${5:-}" )"
     if [ "$got" = "$4" ]; then
         ok "$1 $2() -> $3: prov=[$got]"
     else
@@ -326,6 +332,150 @@ if grep -q 'final-segment' "$TMP/vis.compact"; then
 else
     no "(25g) the compact legend does not define prov=final-segment"
 fi
+
+# ── Arms 39-43: TEMPLATE ARGUMENTS in a receiver's written type (see the header). The record keeps the type's last name, and
+#    finalSegment() cut a spelling at its FIRST `<`: an unqualified template-id (a `template_type` node) was refused outright,
+#    and `Outer<int>::Inner` was cut to `Outer`. llvm-project writes the first shape wherever code sits inside `namespace llvm`
+#    or imports the name (`SmallVectorImpl<FunctionDecl *> &Decls; Decls.push_back( FD )`). Every candidate lives in a header
+#    two directories from the caller, beside a same-named decoy the caller also includes, so a call Rule 2 cannot type
+#    declines instead of landing on a locality guess. LINE NUMBERS ARE ASSERTED: vecs/adt.h:7 Vec::size, :13 TBase::push_back,
+#    :19 TBase<T, true>::push_back, :28 Outer::size, :31 Outer::Inner::size; probe/log.h:3-4 the Log decoys.
+TFIX="$TMP/tmplfix"
+mkdir -p "$TFIX/vecs" "$TFIX/probe" "$TFIX/app"
+cat >"$TFIX/vecs/adt.h" <<'EOF'
+namespace ll
+{
+template <typename T>
+class Vec
+{
+public:
+    int size() const { return 0; }
+};
+template <typename T, bool = false>
+class TBase
+{
+public:
+    void push_back( const T& x ) {}
+};
+template <typename T>
+class TBase<T, true>
+{
+public:
+    void push_back( T x ) {}
+};
+template <typename T>
+class VecImpl : public TBase<T>
+{
+};
+template <typename T>
+struct Outer
+{
+    int size() const { return 1; }
+    struct Inner
+    {
+        int size() const { return 2; }
+    };
+};
+inline int version() { return 1; }
+}
+EOF
+cat >"$TFIX/probe/log.h" <<'EOF'
+struct Log
+{
+    void push_back( int ) {}
+    int size() const { return 3; }
+};
+EOF
+cat >"$TFIX/app/sizes.cc" <<'EOF'
+#include "../vecs/adt.h"
+#include "../probe/log.h"
+struct Decl;
+using namespace ll;
+int sizeParam( Vec<Decl *>& v ) { return v.size(); }
+int sizeLocal() { Vec<Decl *> v; return v.size(); }
+int sizeLoop() { int n = 0; for( const Vec<int>& v : table ) { n += v.size(); } return n; }
+int sizeCtor() { auto v = Vec<Decl *>(); return v.size(); }
+int sizeStdArg( const Vec<std::string>& v ) { return v.size(); }
+int sizeInner( Outer<int>::Inner& in ) { return in.size(); }
+int sizeInnerLocal() { Outer<int>::Inner in; return in.size(); }
+int sizeInnerCtor() { auto in = Outer<int>::Inner(); return in.size(); }
+EOF
+cat >"$TFIX/app/fill.cc" <<'EOF'
+#include "../vecs/adt.h"
+#include "../probe/log.h"
+struct Decl;
+using namespace ll;
+void fillQ( ll::VecImpl<Decl *>& v, Decl* d ) { v.push_back( d ); }
+void fillU( VecImpl<Decl *>& v, Decl* d ) { v.push_back( d ); }
+void fillL( Decl* d ) { VecImpl<Decl *> v; v.push_back( d ); }
+namespace ll
+{
+void fillN( VecImpl<Decl *>& v, Decl* d ) { v.push_back( d ); }
+}
+EOF
+tmplRows(){   # caller, callee name → its sorted `name@path:line` rows, or NO-CALLEES-ANSWER when the probe did not run
+    local out
+    out="$( "$BIN" "$TFIX" "--callees=$1" --no-cache 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="\([^"]*\)".* p="\([^"]*\)".*/\1@\2/p' | grep "^$2@" | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectTmpl(){   # arm label, caller, callee, the exact expected row set
+    local got
+    got="$( tmplRows "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2(): $3 -> [$got]"
+    else
+        no "$1 $2(): $3 -> [${got:-no edge}], want [$4]"
+    fi
+}
+# presence guard: the fixture's definitions and callers are indexed, or the arms below prove nothing
+TMAP="$( "$BIN" "$TFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+tmiss=0
+for want in 'n="Vec"' 'n="VecImpl"' 'n="Outer"' 'n="Inner"' 'n="Log"' 'n="sizeParam"' 'n="sizeInnerCtor"' 'n="fillQ"' 'n="fillN"'; do
+    printf '%s\n' "$TMAP" | grep -qF "$want" || { no "presence guard: tmplfix symbol $want not indexed"; tmiss=1; }
+done
+[ "$tmiss" = 0 ] && ok "presence: all tmplfix symbols indexed"
+# ── 39) THE DEFECT: an UNQUALIFIED template-id types its receiver like any class name — as a parameter (a), a local (b) and a
+#        range-for variable (c). RED before: no edge. (d) is a STATED FLOOR: a constructor spelled as an unqualified
+#        template-id, `auto v = Vec<Decl *>()`, infers nothing, because that spelling is every cast helper — reading it
+#        recorded `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )` and lost 779 edges on llvm-project to the
+#        tombstones (ingest_binds.h ctorNameNode). If (d) goes red, the floor moved: rewrite it to assert the fixed behaviour,
+#        never delete it. ────────────────────────────────────────────────────────────────────────────────────────────────────
+expectTmpl "(39a)" sizeParam size "size@vecs/adt.h:7"
+expectTmpl "(39b)" sizeLocal size "size@vecs/adt.h:7"
+expectTmpl "(39c)" sizeLoop size "size@vecs/adt.h:7"
+expectTmpl "(39d)" sizeCtor size ""
+# ── 40) a `std::` template ARGUMENT does not make the type qualified: `const Vec<std::string>& v` narrows, is not refused as
+#        a standard type, and its edge carries no prov="final-segment" (no qualifier was skipped). RED on a fix that reads
+#        qualification off the whole spelling: prov=final-segment. ───────────────────────────────────────────────────────────
+expectTmpl "(40a)" sizeStdArg size "size@vecs/adt.h:7"
+"$BIN" "$TFIX" --no-cache >"$TMP/tmpl.map" 2>/dev/null
+expectProv "(40b)" sizeStdArg size none "$TMP/tmpl.map"
+# ── 41) template arguments BEFORE the last name: `Outer<int>::Inner` is Inner, not Outer — a parameter (a), a local (b) and a
+#        constructor (c). RED before: one precise edge to Outer::size, line 28. ───────────────────────────────────────────
+expectTmpl "(41a)" sizeInner size "size@vecs/adt.h:31"
+expectTmpl "(41b)" sizeInnerLocal size "size@vecs/adt.h:31"
+expectTmpl "(41c)" sizeInnerCtor size "size@vecs/adt.h:31"
+# ── 42) the SPELLING never decides: the unqualified parameter, local and in-namespace twins of fillQ's
+#        `ll::VecImpl<Decl *>&` resolve exactly as it does. VecImpl defines no push_back, so the answer is whatever the
+#        resolver makes of an inherited member — its base template's family split where class identity walks the bases,
+#        a decline where nothing does; either way one answer for every spelling. RED before on a resolver that walks the
+#        bases: the qualified twin resolved and the unqualified ones declined. ──────────────────────────────────────────────
+twinQ="$( tmplRows fillQ push_back )"
+for twin in fillU fillL fillN; do
+    got="$( tmplRows "$twin" push_back )"
+    if [ "$twinQ" = NO-CALLEES-ANSWER ] || [ "$got" != "$twinQ" ]; then
+        no "(42) $twin(): push_back -> [${got:-no edge}], its qualified twin fillQ() -> [${twinQ:-no edge}]"
+    else
+        ok "(42) $twin(): push_back -> [${got:-no edge}], as its qualified twin fillQ()"
+    fi
+done
+# ── 43) the mechanism, not just the answer: the census names Rule 2 (receiver-rule) for sizeParam's site. ─────────────────
+"$BIN" "$TFIX" --no-cache --pin-census="$TMP/tmpl.tsv" >/dev/null 2>&1
+mech="$( awk -F '\t' '$1 == "C" && $6 ~ /::sizeParam#/ && $7 == "size" { print $2 }' "$TMP/tmpl.tsv" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//' )"
+[ "$mech" = "receiver-rule" ] \
+    && ok "(43) sizeParam's size site is decided by receiver-rule (Rule 2)" \
+    || no "(43) sizeParam's size site mech=[${mech:-NO-CENSUS-ROW}], want [receiver-rule]"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

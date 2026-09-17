@@ -242,10 +242,30 @@ inline std::string_view paramDeclaratorVarName( TSNode decl, std::string_view sr
     return declaratorVarName( decl, src );
 }
 
+// the node a C++ type or constructor NAME ends in, read through the grammar's own fields — a qualified name's `name`,
+// then a template-id's `name`: `Vec<Decl *>` and `ll::Vec<Decl *>` end in `Vec`, `Outer<int>::Inner` in `Inner`. The
+// spelling is never cut as text: finalSegment() truncates at the FIRST `<`, which read `Outer<int>::Inner` as `Outer`
+// (test/narrowcheck.sh arm 41). Every other kind is its own last name. Each step moves to a child, so the walk ends; a
+// missing `name` field (error recovery) reads as a null node, whose text is "".
+inline TSNode lastNameNode( TSNode n ) noexcept
+{
+    while( !ts_node_is_null( n ) )
+    {
+        const char* t = ts_node_type( n );
+        if( !kindIs( t, "qualified_identifier" ) && !kindIs( t, "template_type" ) && !kindIs( t, "template_function" ) )
+        {
+            break;
+        }
+        n = fieldChild( n, NodeField::Name );
+    }
+    return n;
+}
+
 // the type NAME of a constructor-style RHS value node: `Foo()` (call_expression) or `new Foo()`
-// (new_expression). Final segment of the callee/constructor identifier. "" if the value isn't a
-// plain constructor call (so `auto x = makeFoo()` infers nothing here unless `makeFoo` names a class —
-// and the class-name filter in buildGraph is what makes that safe).
+// (new_expression). Last name of the callee/constructor identifier. "" if the value isn't a
+// plain constructor call. A plain FUNCTION call is not told apart: `auto x = makeFoo()` records `makeFoo`, which names
+// no class and never narrows (graph.h's varType note) — but it still conflicts with the variable's other declarations
+// in Rule 2's flat table, and a conflict tombstones the variable.
 inline TSNode ctorNameNode( TSNode value )
 {
     if( ts_node_is_null( value ) )
@@ -267,6 +287,12 @@ inline TSNode ctorNameNode( TSNode value )
         return TSNode{};
     }
     const char* it = ts_node_type( idn );
+    // An unqualified template-id callee (`Vec<T>()`) is refused, a STATED FLOOR (test/narrowcheck.sh arm 39d): the same
+    // spelling is every cast helper, and accepting it recorded `dyn_cast` / `cast` as the type of `auto *CI =
+    // dyn_cast<CallInst>( I )` and `Spec = cast<FunctionDecl>( F )`, tombstoning the variable's real written type —
+    // measured on llvm-project (2026-09-17) as 994 retargeted call sites, 779 of them edges lost. The class a cast names
+    // is its template ARGUMENT, which a name-only record cannot tell from a constructor's. The QUALIFIED spelling
+    // (`llvm::cast<T>( x )`) still records its last name the same way, as it did before this floor was written.
     if( !kindIs( it, "identifier" ) && !kindIs( it, "type_identifier" ) && !kindIs( it, "qualified_identifier" ) && !kindIs( it, "scoped_identifier" ) )
     {
         return TSNode{};
@@ -276,11 +302,12 @@ inline TSNode ctorNameNode( TSNode value )
 
 inline std::string ctorTypeOf( TSNode value, std::string_view src )
 {
-    return finalSegment( nodeTextOf( ctorNameNode( value ), src ) );   // a null node reads "", and "" splits to ""
+    return finalSegment( nodeTextOf( lastNameNode( ctorNameNode( value ) ), src ) );   // a null node reads "", and "" splits to ""
 }
 
-// the written type name of a `type:`-field type node (`type_identifier`, or a qualified/scoped one). "" for
-// `auto`/`placeholder_type_specifier`/templated/decltype types — those fall back to constructor inference.
+// the written type name of a `type:`-field type node — a `type_identifier`, a qualified one or a template-id — as its
+// last name (lastNameNode: `Vec<Decl *>` → `Vec`, `Outer<int>::Inner` → `Inner`). "" for `auto`/decltype/dependent
+// types — those fall back to constructor inference.
 inline std::string writtenTypeOf( TSNode typeNode, std::string_view src )
 {
     if( ts_node_is_null( typeNode ) )
@@ -288,29 +315,37 @@ inline std::string writtenTypeOf( TSNode typeNode, std::string_view src )
         return {};
     }
     const char* tt = ts_node_type( typeNode );
-    if( kindIs( tt, "type_identifier" ) || kindIs( tt, "qualified_identifier" )
-        || kindIs( tt, "scoped_type_identifier" ) )
+    if( kindIs( tt, "type_identifier" ) || kindIs( tt, "qualified_identifier" ) || kindIs( tt, "template_type" ) )
     {
-        const std::uint32_t a = ts_node_start_byte( typeNode ), b = ts_node_end_byte( typeNode );
-        return ( a <= b && b <= src.size() ) ? finalSegment( src.substr( a, b - a ) ) : std::string{};
+        return finalSegment( nodeTextOf( lastNameNode( typeNode ), src ) );
     }
-    return {};   // auto / template / decltype — type not directly written → try the initializer
+    return {};   // auto / decltype / dependent — type not directly written → try the initializer
 }
 
 // Rule 2's qualifier guard (2026-09-16, test/narrowcheck.sh arms 17-24): the text of a type or constructor NAME node
-// when it is QUALIFIED — it carries `::` past a leading global `::` (`std::map<K, V>`, `ext::Widget`,
-// `Outer<int>::Inner`) — else "". writtenTypeOf/ctorTypeOf keep the final segment alone, and Rule 2 matches that
-// segment against class names that carry no namespace, so `const std::map<K, V>& ref` read as `map` and narrowed to
-// an unrelated in-repo `map` (measured on a private C++ corpus). The whole text rides the Type/ParamType record in
-// RawBind::importedName; Rule 2 refuses to narrow on a `std::` one (resolve.h namesStdType) and keeps every other.
+// when it is QUALIFIED — a qualified name on its way to the last name has a scope (`std::map<K, V>`, `ext::Widget`,
+// `Outer<int>::Inner`; a leading global `::` alone has none) — else "". writtenTypeOf/ctorTypeOf keep the last name
+// alone, and Rule 2 matches it against class names that carry no namespace, so `const std::map<K, V>& ref` read as
+// `map` and narrowed to an unrelated in-repo `map` (measured on a private C++ corpus). The whole text rides the
+// Type/ParamType record in RawBind::importedName; Rule 2 refuses to narrow on a `std::` one (resolve.h namesStdType)
+// and keeps every other. A template ARGUMENT's `::` qualifies nothing: `Vec<std::string>` is unqualified (arm 40).
 inline std::string qualifiedNameText( TSNode nameNode, std::string_view src )
 {
+    bool scoped = false;
+    for( TSNode n = nameNode; !scoped && !ts_node_is_null( n ) && kindIs( ts_node_type( n ), "qualified_identifier" ); n = fieldChild( n, NodeField::Name ) )
+    {
+        scoped = !ts_node_is_null( fieldChild( n, NodeField::Scope ) );
+    }
+    if( !scoped )
+    {
+        return {};
+    }
     std::string_view text = nodeTextOf( nameNode, src );
     while( !text.empty() && ( text.front() == ' ' || text.front() == ':' ) )
     {
         text.remove_prefix( 1 );   // a leading `::` names the global namespace — not a qualifier
     }
-    return ( text.find( "::" ) != std::string_view::npos ) ? std::string( text ) : std::string{};
+    return std::string( text );
 }
 
 // one declaration's recorded type: the name Rule 2 matches (the final segment) and, when the type was written

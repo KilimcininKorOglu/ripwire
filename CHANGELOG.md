@@ -15,6 +15,43 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a receiver typed with template arguments got no type, or the wrong class's
+
+`void f( SmallVectorImpl<FunctionDecl *> &Decls ) { Decls.push_back( FD ); }` bound nothing on llvm-project unless the
+parameter was spelled `llvm::SmallVectorImpl<…>`. Rule 2 reads a receiver's type off its declaration, and that capture
+recorded a type only for a plain or a qualified name: an unqualified template-id (`SmallVectorImpl<FunctionDecl *>`,
+`Expected<unsigned>`, rocksdb's `autovector<VersionEdit*>`) recorded none, and that is how code inside its own namespace
+writes nearly all of them. A qualified name was read by cutting its text at the first `<`, so a type whose template
+arguments come before its last name — `SkipList<Key, TestComparator>::Iterator iter` — recorded `SkipList`. `SkipList`
+defines no `key`, so `iter.key()` fell to the name ladder, which picked the test's own `ConcurrentTest::key` (86 such
+receivers changed target: 76 on rocksdb, 10 on llvm-project). Where the outer class does define the method, the edge was
+precise and wrong: `Outer<int>::Inner& in; in.size()` went to `Outer::size`. Neither corpus has an instance of that; arm
+41 pins it. The last name is now read through the grammar's own fields (`Vec<T>`
+and `ll::Vec<T>` are `Vec`, `Outer<int>::Inner` is `Inner`), and a `::` inside a template argument (`Vec<std::string>`)
+no longer marks the type qualified, so its edge carries no `prov="final-segment"`.
+
+Measured with `--pin-census --no-cache`, call sites joined on (caller id, callee, line), `main` 13a19162 against this
+change. rocksdb `0e2801ac3`: 640 sites change target and bound calls rise by 347. llvm-project `4d5358b1d`: 5,231 sites
+and +3,589. Composed with the class-identity resolver (#268), whose inherited-member walk these bindings feed, it is 657
+and 18,050 sites, +12,702 bound on llvm-project. A seeded sample of 100 of those sites (seed 20260917: 20 + 30
+standalone, 12 + 38 composed) was graded blind against source, each grader seeing the two answers as A and B in random
+order: 99 better, 1 the same, none worse (62 NONE → RIGHT, 24 WRONG → RIGHT, 5 PARTIAL → RIGHT, 1 WRONG → PARTIAL, 7
+NONE → PARTIAL where #268's template-family split lists the specialization a trivially copyable element does not select,
+and 1 PARTIAL either way). Nine edges are lost, all on llvm-project, and all nine were read. Seven are a name declared
+twice in one function with different types (`APInt Mask` beside `SmallVector<int> Mask`): Rule 2's per-function table
+cannot tell which declaration covers a call, so it drops both, as it always has for two plain types. Two are
+`auto Table = EytzingerTable<…>::create( … )`, which recorded `EytzingerTable` only because the cut stopped at `<`; it
+now reads `create`, as `Foo::create()` always did.
+
+STATED FLOOR: an unqualified template-id constructor, `auto v = Vec<T>()`, still infers nothing. It is the spelling of
+every cast helper. Reading it recorded `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )` and `Spec =
+cast<FunctionDecl>( F )`, which tombstoned those variables' written types, and changed 994 more llvm-project sites, 779 of
+them lost edges. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 99 → 103 (past
+the 100–102 the lanes ahead of this one declare; the landing train assigns it) and `test/qschemetrip.hash` is re-pinned.
+Gate: `test/narrowcheck.sh` arms 39–43. They are red on `main` (no edge, or the precise edge to `Outer::size`) and on
+#268's head, where arm 42 also fails: the qualified twin splits and the unqualified twins decline. Arm 40b is red on a fix
+that reads qualification off the whole spelling.
+
 ### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
 
 CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
