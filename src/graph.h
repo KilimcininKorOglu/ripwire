@@ -1139,6 +1139,24 @@ inline JavaFieldOwnerGroups buildJavaFieldOwnerGroups( const IngestResult& ing )
     return groups;
 }
 
+// the "<symbolId>#<field>" key of each of one Java owner's field names, into the Java field-shadow set — and first into
+// Rule 2b's local-name set when `alsoLocalName` (a method or function inside the owner, never the owner itself)
+inline void addJavaFieldShadowKeys( std::string& key, NodeId symbolId, const std::vector<std::string_view>& fields, FieldNarrowTables& t, bool alsoLocalName )
+{
+    for( std::string_view field : fields )
+    {
+        key.clear();
+        Narrower::appendUint( key, symbolId );
+        key.push_back( '#' );
+        key.append( field );
+        if( alsoLocalName )
+        {
+            t.localNameSet.try_emplace( key, 1 );
+        }
+        t.javaFieldShadow.try_emplace( key, 1 );
+    }
+}
+
 // Issue #74: copy each Java class's field names onto the class and onto every method or function inside its byte range,
 // in Rule 2b's local-name set and the Java field-shadow set (buildFieldNarrowTables' note says why). `key` is the
 // caller's reused key buffer.
@@ -1156,14 +1174,7 @@ inline void shadowJavaFieldsOntoMethods( const IngestResult& ing, const JavaFiel
     {
         const Symbol&                          owner  = ing.symbols[ groups.owners[ oi ] ];
         const std::vector<std::string_view>&   fields = groups.fields[ oi ];
-        for( std::string_view field : fields )
-        {
-            key.clear();
-            Narrower::appendUint( key, owner.id );
-            key.push_back( '#' );
-            key.append( field );
-            t.javaFieldShadow.try_emplace( key, 1 );
-        }
+        addJavaFieldShadowKeys( key, owner.id, fields, t, false );
         if( owner.fileId >= byFile.size() )
         {
             continue;
@@ -1175,15 +1186,7 @@ inline void shadowJavaFieldsOntoMethods( const IngestResult& ing, const JavaFiel
             {
                 continue;
             }
-            for( std::string_view field : fields )
-            {
-                key.clear();
-                Narrower::appendUint( key, s.id );
-                key.push_back( '#' );
-                key.append( field );
-                t.localNameSet.try_emplace( key, 1 );
-                t.javaFieldShadow.try_emplace( key, 1 );
-            }
+            addJavaFieldShadowKeys( key, s.id, fields, t, true );
         }
     }
 }
