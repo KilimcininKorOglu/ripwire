@@ -646,9 +646,10 @@ done
 # ── 39) THE DEFECT: an UNQUALIFIED template-id types its receiver like any class name — as a parameter (a), a local (b) and a
 #        range-for variable (c). RED before: no edge. (d) is a STATED FLOOR: a constructor spelled as an unqualified
 #        template-id, `auto v = Vec<Decl *>()`, infers nothing, because that spelling is every cast helper — reading it
-#        recorded `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )` and lost 779 edges on llvm-project to the
-#        tombstones (ingest_binds.h ctorNameNode). If (d) goes red, the floor moved: rewrite it to assert the fixed behaviour,
-#        never delete it. ────────────────────────────────────────────────────────────────────────────────────────────────────
+#        records `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )`, whose conflict with a written type or a
+#        second declaration tombstones the variable: 324 edges lost on llvm-project on integration/train-3, 779 on main
+#        before #278 dropped an assignment's callee name (ingest_binds.h ctorNameNode). If (d) goes red, the floor moved:
+#        rewrite it to assert the fixed behaviour, never delete it. ──────────────────────────────────────────────────────────
 expectTmpl "(39a)" sizeParam size "size@vecs/adt.h:7"
 expectTmpl "(39b)" sizeLocal size "size@vecs/adt.h:7"
 expectTmpl "(39c)" sizeLoop size "size@vecs/adt.h:7"

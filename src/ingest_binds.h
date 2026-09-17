@@ -534,9 +534,12 @@ inline TSNode ctorNameNode( TSNode value )
     }
     const char* it = ts_node_type( idn );
     // An unqualified template-id callee (`Vec<T>()`) is refused, a STATED FLOOR (test/narrowcheck.sh arm 39d): the same
-    // spelling is every cast helper, and accepting it recorded `dyn_cast` / `cast` as the type of `auto *CI =
-    // dyn_cast<CallInst>( I )` and `Spec = cast<FunctionDecl>( F )`, tombstoning the variable's real written type —
-    // measured on llvm-project (2026-09-17) as 994 retargeted call sites, 779 of them edges lost. The class a cast names
+    // spelling is every cast helper, and accepting it records `dyn_cast` / `cast` as the type of `auto *CI =
+    // dyn_cast<CallInst>( I )` — a name that conflicts with the declaration's written type (`const ConstantInt *CI =
+    // dyn_cast<ConstantInt>( V )`) or with a second declaration of the variable, and the conflict tombstones it. Measured on
+    // integration/train-3 (llvm-project 4d5358b1d, 2026-09-17): accepting it moves 463 call sites, 324 of them edges lost
+    // and 2 gained; rocksdb moves none. (On main, before #278 dropped an ASSIGNMENT's callee name, `Spec =
+    // cast<FunctionDecl>( F )` tombstoned too: 994 moved, 779 lost.) The class a cast names
     // is its template ARGUMENT, which a name-only record cannot tell from a constructor's. The QUALIFIED spelling
     // (`llvm::cast<T>( x )`) still records its last name the same way, as it did before this floor was written.
     if( !kindIs( it, "identifier" ) && !kindIs( it, "type_identifier" ) && !kindIs( it, "qualified_identifier" ) && !kindIs( it, "scoped_identifier" ) )

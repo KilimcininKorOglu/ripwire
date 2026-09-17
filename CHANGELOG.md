@@ -1314,9 +1314,12 @@ cannot tell which declaration covers a call, so it drops both, as it always has 
 now reads `create`, as `Foo::create()` always did.
 
 STATED FLOOR: an unqualified template-id constructor, `auto v = Vec<T>()`, still infers nothing. It is the spelling of
-every cast helper. Reading it recorded `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )` and `Spec =
-cast<FunctionDecl>( F )`, which tombstoned those variables' written types, and changed 994 more llvm-project sites, 779 of
-them lost edges. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 102 → 103 (the PR
+every cast helper. Reading it records `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )`, a name that
+conflicts with the declaration's written type (`const ConstantInt *CI = dyn_cast<ConstantInt>( V )`) or with a second
+declaration of the variable, and the conflict tombstones it. Measured on integration/train-3 (llvm-project `4d5358b1d`,
+`--pin-census --no-cache`), reading it moves 463 sites: 324 edges lost, 137 retargeted and 2 gained, and rocksdb moves
+none. On `main` 13a19162, before #278 dropped an assignment's callee name (`Spec = cast<FunctionDecl>( F )`), it moved 994
+and lost 779. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 102 → 103 (the PR
 declared 99 → 103 over `main`; integration/train-3 assigns 103 after train 2b's 102) and `test/qschemetrip.hash` is re-pinned.
 Gate: `test/narrowcheck.sh` arms 39–43. They are red on `main` (no edge, or the precise edge to `Outer::size`) and on
 #268's head, where arm 42 also fails: the qualified twin splits and the unqualified twins decline. Arm 40b is red on a fix
@@ -1444,8 +1447,8 @@ Built and rejected: also dropping a DECLARATION's callee name. It moves 89 more 
 15 graded 11 better, 2 the same and 2 worse. Arm 48 is why it is not shipped: the flat table would hand one block's
 declared type to a sibling block's `auto t = ns::cast<Decoy>( y )`, a precise edge to the wrong class. The unqualified
 `Vec<T>()` constructor spelling left unread by the template-id receiver lane (#276) stays unread. Composed with that lane
-and this change, reading it moves 245 llvm-project sites, and all of them get worse: 170 edges lost and none gained,
-where it lost 779 before this change. The losses left are declaration conflicts, `auto *LI = cast<LoadInst>( … )` beside
+and this change on #276's head, reading it moves 245 llvm-project sites, and all of them get worse: 170 edges lost and none
+gained, where it lost 779 before this change (on integration/train-3, with the class-identity resolver, 463 and 324). The losses left are declaration conflicts, `auto *LI = cast<LoadInst>( … )` beside
 another `LI`.
 
 The bind record gains one byte (`kCacheVersion` 22 → 23). `kParserVer` moves 104 → 105 (the PR declared 99 → 104
