@@ -29,6 +29,7 @@
 #include "preprocdead.h"       // #62: the ONE literal `#if 0` rule (shared with slice.h) — dead call sites never become edges
 #include "extentsuspect.h"     // extent honesty: the containment rules + the recovered/suspect bit vocabulary
 #include "macroreparse.h"      // member-macro re-parse: the scanner, the offset-preserving blank, the adoption rule
+#include "regexguard.h"        // #match?/#not-match?: the screen, the compile and the guarded match (ingest_astquery.h)
 
 #include "infra/Diagnostics.h"
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -56,7 +57,6 @@
 #include <span>
 #include <string_view>
 #include <atomic>
-#include <regex>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -80,7 +80,8 @@ namespace fs = std::filesystem;
 namespace fuseprobe
 {
 enum PassId : int { kInc = 0, kFfi = 1, kRoutes = 2, kRustImpls = 3, kBinds = 4, kUses = 5, kPassCount = 6 };
-inline const char* const kPassName[ kPassCount ] = { "captureIncludes", "captureFfi", "captureRoutes", "captureRustImpls", "captureBindings", "captureUses" };
+inline const char* const kPassName[] = { "captureIncludes", "captureFfi", "captureRoutes", "captureRustImpls", "captureBindings", "captureUses" };
+static_assert( std::size( kPassName ) == kPassCount, "kPassName is indexed by PassId — one name per pass" );
 
 inline thread_local std::uint64_t tlNodes[ kPassCount ] = {};   // visitor calls, this thread, cumulative
 inline std::atomic<std::uint64_t> gNodes[ kPassCount ];         // visitor calls per pass, corpus-wide
@@ -220,7 +221,8 @@ const char* cacheArtifactVerdict( const std::string& path, bool captureValueUses
 }
 
 IngestResult ingest( const char* rootDir, const std::vector<std::string>& excludeSubstr, std::string_view cacheFile,
-                     std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore )
+                     std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore,
+                     IngestLayout )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest: total (crawl + parse + model)" );
     // Cheap (a handful of bytes serialized twice) and runs once per invocation — catches a

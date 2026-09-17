@@ -1972,10 +1972,20 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // suite the moment the two disagree, and `test/qschemetripcheck.sh` (which previously hashed only quality.h
 // functions and never looked at ingest.cpp — precisely why this shipped) now hashes the ingest-side constant
 // lines too. Bumping kParserVer without updating these two lines is a hard gate failure, not a silent miss.
-// FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
-// `static_assert` — this lane's file boundary forbade editing those files.
+// The FOLLOW-UP this note asked for is done the other way round: ingest_cache.h holds
+// `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
+// not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
+// that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 99;   // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 103;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                          //    PR #256). See ingest_cache.h's kParserVer note.
+                                                          // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                          //    §12, PR #243): `r.f<T>()` / `x.template f<T>()` mint call
+                                                          //    references; the `template` disambiguator leaves names and
+                                                          //    qualifiers. See ingest_cache.h's kParserVer note.
+                                                          // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                          //    Lit* appended; extraction identity moves, cache format does not.
                                                           // 99 = 2026-09-16 (std-typed member fields): a field's compose
                                                           //    record carries its written namespace as its qualifier.
                                                           //    See ingest_cache.h's kParserVer note.
@@ -2934,11 +2944,15 @@ inline std::string qbodyCachePath( const std::string& repoHex, const std::string
     return shaKeyedCachePath( "qbody", repoHex, exclHex, refSha );
 }
 
-// append one trivially-copyable POD to the blob buffer (native layout; see the determinism note above).
+// append one POD to the blob buffer (native layout; see the determinism note above). CONSTRAINED, not merely asserted
+// trivially copyable: a trivially copyable struct can still carry padding bytes, whose values are indeterminate, and a
+// float has more than one byte spelling of one value (-0.0 beside 0.0, many NaNs). Either would write a blob whose
+// bytes differ between two runs over the same facts. Every call site passes a fixed-width integer, and the constraint
+// keeps it that way: has_unique_object_representations is false for any type with padding or a floating-point member.
 template<class T>
+    requires std::has_unique_object_representations_v<T>
 inline void qsnapPut( std::string& buf, const T& v )
 {
-    static_assert( std::is_trivially_copyable_v<T>, "qsnap serializes PODs only" );
     buf.append( reinterpret_cast<const char*>( &v ), sizeof( T ) );
 }
 

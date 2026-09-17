@@ -62,7 +62,9 @@ namespace scipwire
         bool atEnd()  const noexcept { return p >= end; }
         bool ok()     const noexcept { return p <= end; }
 
-        // LEB128 varint (≤ 10 bytes). Returns false on truncation / overlong encoding.
+        // LEB128 varint (≤ 10 bytes). Returns false on truncation / overlong encoding. The 10th byte (shift 63) may carry
+        // ONE payload bit: anything more does not fit a uint64, so it is a malformed field, never a value to keep the low
+        // bit of (the shift that dropped it was also a G1 `integer` abort — test/scipcheck.sh arm 5c).
         bool varint( std::uint64_t& out ) noexcept
         {
             std::uint64_t v = 0;
@@ -73,6 +75,10 @@ namespace scipwire
                     return false; // truncated
                 }
                 const std::uint8_t b = *p++;
+                if( shift == 63 && ( b & 0x7F ) > 1 )
+                {
+                    return false; // payload past bit 63 → corrupt
+                }
                 v |= std::uint64_t( b & 0x7F ) << shift;
                 if( ( b & 0x80 ) == 0 ) { out = v; return true; }
             }

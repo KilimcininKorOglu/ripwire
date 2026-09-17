@@ -284,29 +284,21 @@ gitmine.h	popenTrimmed	popen	1	closes	no exit between popen and pclose
 gitoracle.h	loadOracleCache	fopen	1	closes	returns only on a failed open; fclose after the read loop
 gitoracle.h	saveOracleCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 gitoracle.h	walkGitPatch	popen	1	closes	break-only loops, a drain, then pclose; no return between
-infra/emit.h	renderToString	open_memstream	1	closes	the catch at the seam fcloses; the success path always fcloses
+infra/emit.h	open	open_memstream	1	owned	rw::MemoryStream: the destructor fcloses a stream nobody finished and frees the buffer on every path; finish() closes exactly once
 ingest_cache.h	openOnce	open	1	owned	ReadFd's destructor closes it
 ingest_cache.h	saveCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 ingest_crawl.h	collectGitIgnored	popen	1	closes	the overflow break still reaches pclose
 ingest_docpass.h	publishDocBridgeBlob	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 lintrules.h	loadLintRules	fopen	1	closes	skips only a failed open; fclose after the sized read
 main.cpp	dispatchMain	fopen	1	closes	returns only on a failed open; fclose after the read loop
-main.cpp	openTokenBudgetBuffer	open_memstream	1	transferred	finishTokenBudgetGate fcloses it; the caller has no return between
 main.cpp	resolveRemoteRoot	popen	1	closes	no exit between popen and pclose
 main.cpp	runDefaultMap	fopen	1	closes	returns only on a failed open; fclose after the render
 main.cpp	scipIndexUnreadableReason	open	1	closes	close right after fstat, before every return
 mcpedit.h	EditLock	open	1	owned	EditLock's destructor unlocks and closes
 mcpindex.h	arm	open	1	owned	held in FsWatcher::dirFds, closed by reset and the destructor
 mcpindex.h	readFileBytes	fopen	1	closes	fclose before both returns
-mcpverbs.h	connectText	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
-mcpverbs.h	exemplarText	open_memstream	1	closes	no return between open and fclose
-mcpverbs.h	forTaskText	open_memstream	1	closes	no return between open and fclose
-mcpverbs.h	impactText	open_memstream	1	closes	no return between open and fclose
-mcpverbs.h	ownersText	open_memstream	1	closes	no return between open and fclose
 mcpverbs.h	packConnect	fopen	1	closes	if-scoped; fclose after the read
-mcpverbs.h	pathText	open_memstream	1	closes	no return between open and fclose
 mcpverbs.h	sliceText	fopen	1	closes	if-scoped; fclose after the read loop
-mcpverbs.h	usesText	open_memstream	1	closes	no return between open and fclose
 naminglens.h	namingLensChecks	fopen	1	closes	if-scoped; fclose after the sized read
 packtask.h	d1ReadSrcCached	fopen	1	closes	if-scoped; fclose after the read loop
 pathguard.h	openExclNoFollow	open	1	transferred	returned to createExclTempFile, which adopts it into ExclTempFile (closes and unlinks)
@@ -328,7 +320,7 @@ scip.h	scipReadFile	fdopen	1	closes	fclose before each of the three returns
 scip.h	scipReadFile	open	1	closes	::close when fstat, fcntl or fdopen fails; otherwise the stream owns it
 serialize.h	collectJsonSigEntries	fopen	1	closes	skips only a failed open; fclose after the read loop
 serialize.h	estimateExpandBodyTokens	fopen	1	closes	if-scoped; fclose after the read loop
-serialize.h	openChargeBuffer	open_memstream	1	transferred	every caller fcloses it; their only early returns are on a null stream
+serialize.h	openChargeBuffer	open_memstream	1	transferred	its only caller is openChargeStream, which hands it to rw::MemoryStream::openWith; the MemoryStream owns it from there
 serialize.h	packBodies	fopen	1	closes	if-scoped; fclose after the read loop
 serialize.h	packCandidates	fopen	1	closes	if-scoped; fclose after the read loop
 serialize.h	packHops	fopen	1	closes	if-scoped; fclose after the read loop
@@ -337,9 +329,6 @@ serialize.h	packOutline	fopen	1	closes	skips only a failed open; fclose after th
 serialize.h	packSignatures	fopen	2	closes	both skip only a failed open; fclose after each read loop
 serialize.h	packSource	fopen	1	closes	skips only a failed open; fclose after the read loop
 serialize.h	renderWholeFiles	fopen	1	closes	returns only on a failed open; fclose before the empty-body return
-tracelocus.h	fromTraceBundleText	open_memstream	1	closes	if-scoped; fclose after the pack calls
-tracelocus.h	renderTestHopBlock	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
-tracelocus.h	renderTraceBlock	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
 verbs_change.h	readBriefFile	fopen	1	closes	continue-only loop; fclose before the return
 verbs_change.h	readTraceText	fopen	1	closes	returns only on a failed open; fclose after the read loop
 verbs_change.h	runChangeViews	fopen	1	closes	returns only on a failed open; fclose after the write
@@ -362,9 +351,10 @@ S1ALLOW
 # instance of B1's exact shape until #250 made its fclose unconditional, and a stale row now fails the gate.
 cat > "$TMP/s2_shortcircuit_allow.tsv" <<'S2ALLOW'
 S2ALLOW
-# Thread bodies S3 reports as bare, with why each is accepted.
+# Thread bodies S3 reports as bare, with why each is accepted. Empty: the one row this held (search.h grepCollect,
+# accepted because every throwing statement sat inside a catch(...) that recorded the degrade) excused nothing once
+# lane/regex-long-lines moved the scan threads onto src/infra/stackthreads.h, and a stale row fails the gate.
 cat > "$TMP/s3_allow.tsv" <<'S3ALLOW'
-search.h	grepCollect	every statement that can throw sits inside a catch(...) that records the degrade
 S3ALLOW
 
 judge_static(){   # $1 = scan output dir, $2 = label; echoes one line per violation, returns 0

@@ -15,6 +15,151 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
+
+A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles
+the alert out. `test/churnjoincheck.sh` (G2), `test/preproccondcheck.sh` (the 600-deep guard stack) and
+`test/w3fixlegendcheck.sh` (arm 6) found out by running `--rank-by=churn --since=notadate` and looking for an alert.
+Since `--since` became a refusal (exit 1, before any degrade path runs), that run prints no alert on any build, so
+all three skipped their alert arm on the plain build too: one SKIP each, zero failures, on the leg CI keeps
+precisely to prove degrade paths. The build type `--version` names decides now, as in `kotlincheck` and
+`estchargecheck`: Release, RelWithDebInfo and MinSizeRel skip, every other flavour asserts. G2 also asserts the join
+alert itself, on the line after the NFD disclosure, where any `[math degraded]` line used to do. Arm 6's subject,
+the wording of the `--since` alert, no longer exists, so it pins the refusal that replaced it: exit 1, no document,
+one stderr line, and no alert, next to a positive control proving the binary prints alerts at all.
+
+The suite could not see this, because an arm-level skip inside a passing gate counts as a pass. `test/pargates.py`
+now reads the binary's build type once and fails any gate whose skip row blames NDEBUG or compiled-out alerts on a
+build type that does not define NDEBUG. A skip for any other reason is untouched, and a binary that names no build
+type disarms the check with a line in the summary. Gate: `test/skipclassifycheck.sh` arm (I), red on the old harness,
+and the new harness fails all three unfixed gates ([#261](https://github.com/redhat-et/ripwire/pull/261)).
+
+### Fixed — the churn join gate read "2 weeks ago" twice, and checked the default window against the wall clock
+
+`test/churnjoincheck.sh` compared ripwire's churn with git's own count, but the two did not always ask about the same
+window. The live audit passed `--since="2 weeks ago"` to ripwire and `"2 weeks ago"` to git, and each evaluated it when
+it ran, so a commit on the edge fell inside one window and outside the other: #265 went red on `src/slice.h` churn 15 vs
+14. Every default-window oracle asked git for wall-clock `"12 months ago"`, while ripwire anchors that window on HEAD,
+so the fixtures' 2026-06 commits would have failed the gate from 2027-06-01. The offset arm beside them still selected a
+retired `p="./…"` spelling and passed on zero rows. The gate now reads the clock once and hands one ISO-8601 instant to
+both sides, computes the HEAD-anchored start for the default window, and re-derives all 163 offset rows. A new arm pins
+both window edges to the second, with controls that stage the double reading through git's `GIT_TEST_DATE_NOW`. Measured
+on the old gate with that staging: 4 FAIL rows for #265's straddle (`src/slice.h` 12 vs 11) and 12 FAIL rows with git's
+clock at 2027-07-01; the new gate is 78 PASS under both stagings and without them
+([#271](https://github.com/redhat-et/ripwire/pull/271)).
+
+### Changed — the compiler checks the tables, switches, masks and layouts this tree's defects came from
+
+Each check below is written against a defect this repository shipped or nearly shipped, and each was shown failing on a
+deliberate break before it landed. None of them changes output. They are `static_assert`s, one template constraint, one
+link-time stamp and two warning flags. Output was compared with the base binary on every fixture corpus, stdout and exit
+code, and the only differences are the extension fix below.
+
+- **Language registration.** Appending a `Lang` meant updating five tables in four files. 02f798e3 (Dart), 9418e35e (five
+  unanalysed languages) and PR #233's `.gd` row each stayed one language short. `src/main.cpp` now asserts that every
+  code language is analysed or disclosed as unanalysed by `--nonlocal-state`, and that it is named by the lint vocabulary,
+  the lint catalog and `langOfPath`. `src/ingest_crawl.h` asserts that `langOfPath`'s extensions and the crawl's are the
+  same. Each check returns the first INDEX that is wrong, so a zero-filled row cannot pass. `isCodeLang` (`src/model.h`)
+  is the one declared exemption, and it has no `default:`.
+- **`-Werror=switch -Werror=implicit-fallthrough`** on ripwire's own C++ targets, for every compiler. GCC ran no
+  `-Wswitch` at all before this, because it enables it only under `-Wall`. The warning count was measured at 0 on
+  AppleClang 21 and Homebrew clang 22, debug and `-DNDEBUG`, for both binaries and the four test harnesses. A switch that
+  returns one answer per enumerator carries no `default:` any more. Eleven did, including `dependencyCapable` and
+  `dependencyDialect`, where Dart was the one language never decided.
+- **Cache and layout facts.** `quality.h`'s mirror of `kParserVer` and `kCacheVersion` is asserted equal to the real
+  constants; only `test/qextractionkeycheck.sh` held that before. `CacheEntry` must have unique object representations,
+  because `sizeof == 32` did not prove "no padding". `qsnapPut` is constrained the same way, so a padded struct or a float
+  cannot reach a byte-stable blob. `ingest()` carries `sizeof( Symbol )` and `sizeof( IngestResult )` in its mangled name.
+  CLAUDE.md records three mixed-layout builds that linked "successfully". Measured on this tree, an object pair compiled
+  against two `Symbol` layouts now fails to link, where the same pair without the stamp linked and died with SIGBUS.
+- **The redaction first-byte mask** is compared bit for bit with the rule table it hand-numbers, so an inserted rule
+  cannot leave a later rule tried only at bytes its pattern cannot start with.
+- **Shift width against count.** Every mask a runtime value is shifted into has its count pinned to its width: the
+  language masks, the ensemble and quality-panel family masks, the naming-rule mask, the redaction rule mask, the
+  pack-task subset enumeration and `strkern`'s block masks.
+- **Tables indexed by an enum.** A table's extent is deduced and asserted against the enum's count, and the count is
+  proven exact beside the enum with `infra/enumcount.h` (#241). A spelled extent had let several of these asserts restate
+  their own declaration, and let a missing row compile as a null pointer. `kNodeFieldNames` rows now name their
+  enumerator, because the enum and the table are paired by index. `skilleval`'s provenance counters were `[3]` for a
+  four-value `Prov`. A new gate, `test/enumtablecheck.sh`, refuses a literal-extent table indexed by an enum. It reports 14
+  subscripts over five tables on `f8e6087c`. Each of its three positive controls puts one real literal back and must
+  report exactly that table among the violations the literal adds, so a violation already in the tree fails the rule
+  arm alone instead of every control.
+
+### Fixed — a memory buffer that lost a write was read back as a whole document
+
+Twenty-three places render into an `open_memstream` buffer and then read it back: the map's own children (XML and JSON),
+the `est_tokens` payload charges, the `--max-tokens` fit probes, the `--token-budget` buffer, the `--for` lens's pre-rendered
+blocks, the `--from-trace` blocks and seven MCP answers. Twenty-two of them flushed and closed the buffer without looking
+at either result. The one that did look, `renderToString`, could not see the failure it looked for.
+
+Measured, not assumed: a `DYLD_INSERT_LIBRARIES` interposer failed one chosen `realloc` inside an `open_memstream` on macOS
+26.5.1 (Apple libc), over 5 KB, 50 KB and 200 KB streams written in 1 KB chunks. In all 19 runs where the failure landed
+inside the stream, one `fwrite` came back short and the stream's error flag was set. Each run lost 152 to 976 bytes, as
+late as chunk 177 of 200, so the hole sat in the middle of the document. `fflush` and `fclose` both returned 0 every time.
+Read after that, the buffer is a shorter document with no sign that it is one. What that meant per site: a map or `--json`
+map with a hole in it; a payload section, trace block or MCP answer cut mid-element; a `--max-tokens` probe that read a
+too-small size as fitting; and a `--token-budget` map printed short at exit 0.
+
+Every buffer is now owned by one type, `rw::MemoryStream` (`src/infra/emit.h`). Its `finish()` flushes, reads the error
+flag, closes, and reports by value, and it is `[[nodiscard]]`. The destructor closes a stream nobody finished and frees the
+buffer on every path, so no site frees or closes anything by hand. A buffer that did not finish whole takes the path a
+failed open already took. The map and the JSON map are rendered again, straight to the output, with the modelled
+`est_tokens`: the children became one renderer both paths call. A charged section streams uncharged, and a probe answers
+"unmeasured". The `--for` blocks are emitted directly, and a secret redacted in the failed buffer is not counted again when the block
+re-renders. The MCP answers answer as they do when the open fails, except `uses`, which answers `-32603` instead of an
+empty success. Two surfaces have
+no second path, because the buffer holds the answer itself, and both refuse in every build instead of printing short.
+The `--token-budget` map prints nothing, says `write error — the --token-budget buffer lost bytes` on stderr, and exits
+1. `--from-trace` and `--run-trace` do the same when the `<trace>` map, the test hop or the signature/body section loses
+its buffer, at the open or at the finish, and the MCP `from_trace` verb answers `-32603`. Those blocks used to be left
+out of a bundle printed at exit 0, which no Release build disclosed.
+
+`test/estchargecheck.sh` gains two arms. **#14f** uses a new debug-only fault switch, `INFRA_FAULT_MEMSTREAM_FINISH=1`,
+which makes every finish really close its stream and then report failure. It asserts four surfaces, not every site. The
+`--pack-signatures` map and the `--json` map come out byte-identical to the undegraded run outside `est_tokens`,
+well-formed, at exit 0. The `--token-budget` run and a `--from-trace` run each print 0 bytes and exit 1 where their
+controls print the answer. Under the same switch, MCP `uses` answers `-32603`, and the `--for` redaction summary
+matches its control in XML and `--json`. **#14g** reads `src/` and refuses an `open_memstream`, a direct call of the charge opener, or
+an `fflush`/`fclose` of a memory stream anywhere outside the type. On `f8e6087c` it reports 46 such lines. Its positive
+control puts the two lines of one site back by hand, once per spelling of the opener (bare, `::`, `os::`, `rw::os::`),
+and must report exactly those two each time.
+
+### Fixed — five code extensions the index parses were no language at all to the dependency, state and lint verbs
+
+The crawl indexes `.metal`, `.cu` and `.cuh` as C++, `.pyi` as Python and `.phtml` as PHP. `langOfPath`
+(`src/lintrules.h`) is the verb-time classifier that `--deps`, `--arch`, co-change's `dep_capable=`, `--nonlocal-state`,
+`--quality-panel`, the lint catalog and user `--lint-rules` use to bucket a file. It kept its own extension table "in sync
+by hand", that table had drifted, and it called those five extensions Unknown. Every one of those verbs quietly left the
+files out. `includeLangOf` (`src/resolve.h`) had the same four C++ and Python gaps, so even a counted file could not
+resolve its includes.
+
+Both tables now know all five, and the crawl's table and `langOfPath`'s are asserted equal at compile time (above).
+`test/deplangscheck.sh` arm (G) requires every dependency-counted extension to resolve too. It went red with only the
+classifier rows added, naming `.cu`, `.cuh`, `.metal` and `.pyi` as counted but unresolvable (and `.hxx` the other way
+round), which is why the resolver rows land in the same change. `.hxx` left both tables: the crawl admits no `.hxx` file, so neither row could ever be reached.
+
+Measured by comparing stdout and exit code, `--no-cache`, between the base binary (`f8e6087c`) and this change, over all
+162 fixture corpora under `test/` and eight verbs: 1,296 runs. 14 differ. All 14 are on the six corpora that hold one of
+the extensions, and only on `--deps`, `--nonlocal-state` and `--quality-panel`. The map, `--json`, `--lint`,
+`--lint-catalog` and `--pack-signatures` are byte-identical everywhere.
+- `test/cudafix` `--nonlocal-state`: `cells="0" functions="0"` became `cells="5" functions="4"`. The CUDA kernel's
+  `rk_scaleTable`, read through `rk_clampScale`, was invisible.
+- `test/cudafix` `--deps`: `dep_files="1"` became `3`, and the kernel's include of `reduceShared.cuh` now counts
+  (`afferent` 1 → 2, `transitive` 1 → 2). `test/metalfix` already printed the `.metal` shader's row. The shader now
+  counts in `dep_files` (2 → 3), and its quote include of `AAPLSharedTypes.h` resolves (the header's `afferent` 1 → 2).
+  `test/phpfix`, `pyshapefix`, `stdqualfix` and `macroreparsefix` each gain the one file their denominator was missing.
+- `test/phpfix` `--nonlocal-state`: `unanalyzed_files="4"` became `5`. The `.phtml` view is disclosed as unanalysed PHP.
+- A user rule with `language: cpp` run over a `.metal` shader and a `.cu` kernel reported `findings="0"`. It now reports 16.
+- `.pyi` typing stubs. A stub restates its module's globals (`COUNT: int` beside `m.py`'s `COUNT = 0`), so reading
+  both files counted one global twice: a two-file probe went from `cells="1"` to `cells="2"` with every row still bound to
+  `m.py`. `--nonlocal-state` and `--quality-panel` now skip a stub whose `.py` is indexed beside it. A stub with no
+  source, the shape a C extension ships, is the only declaration of its module and keeps its cells: `test/pyshapefix`'s
+  `stubs.pyi` adds one (`cells` 5 → 6). Gate: `test/nonlocalstatecheck.sh` arm (J), red at `cells="2"` before the skip.
+
+Dart stays outside the dependency denominator, now by a named case instead of a `default:`. Dart has no import capture,
+and a two-file probe showed `--deps` printing no row for `import 'util.dart';`.
+
 ### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
 
 CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
@@ -46,6 +191,85 @@ are `contents: read`; only the two report jobs widen, and only to `issues: write
 `plan` job's decide script and execute it under synthetic event/label/ref combinations rather than guessing
 at the bash from a regex.
 
+### Fixed — a cached 16-bit field wider than 16 bits was believed, and a `--with-profile` line past INT_MAX joined the wrong site
+
+Two defects found by a new static gate that asks, of the crashes fixed this cycle, whether their shapes were visible
+in source before they shipped. **The ingest cache stores five def fields (`ppAlt`, `humps`, `deepLoc`, `ev`,
+`params`) and a reference's `argCount` as 16-bit values in u32 slots, and read them back with
+`std::uint16_t( r.u32() )`**, which keeps the low bits of a value the writer can never have produced: a
+checksum-valid record carrying 0x10000 was served as 0. `ByteR::u16Of32` refuses such a record the way `enumU8`
+refuses an enum byte past its count (that file reparses, the rest of the blob stands). Measured on the
+`cachefuzzcheck` Part 3 fixture (15 files): 0x10000 and 0xFFFFFFFF in `ppAlt`, `params` and `argCount` were accepted
+before (`cached_records=15 of 15`, 6 FAIL rows) and are refused after (`14 of 15`, output byte-identical to
+`--no-cache`, clean under ASan/UBSan), while 0xFFFF is still accepted. Cost, Apple clang 21 `-O2 -DNDEBUG` on the
+ingest TU: `loadCache` 3,962 → 3,992 instructions (+0.8%, six branchless compare-and-selects); no other function changed.
+**`--with-profile` read its `#PROF_TSV` line column with `std::atoi`**, which is undefined past INT_MAX; libc kept
+the low 32 bits, so a line of 4294967329 read as 33 and annotated the finding at line 38 with a site that is not
+there (`heat_joined="1"`). The column now goes through `std::from_chars`, and a value that is not wholly a positive
+int is a row that carries nothing joinable, like a short row (`test/withprofilecheck.sh` arm 8: red on the base,
+`heat_joined="0"` after, with the same row at line 33 still joining as its control). `--plan-lint`'s
+`std::filesystem::absolute` fallback takes an `std::error_code` too.
+
+The new gate `test/hazardpatterncheck.sh` runs ripwire's own `--match` over `src/` (19 queries, about 5 s) for the
+hazard classes no other gate holds, and registers every site it finds with the fact that makes it safe: (A) an enum
+built from a byte reader outside `ByteR::enumU8` (1 site, validated in place); (B) every `catch` handler that
+records nothing (11 of 27 — 6 of them rows naming a drop that is silent in Release, for the disclosure lane) and
+every `throw` with no `try` in its own function (3, all permitted seams); (C) a throwing or overflow-undefined
+standard call where nothing may throw — `std::sto*`, `.at( )`, `.value( )`, the `atoi` family, `std::filesystem`
+without its error_code (72 calls read), a range-for over a directory iterator; (D) a decoded value narrowed without a
+check (1,269 casts read, 0 left); (E) a raw acquisition `crashsweepcheck` does not name — descriptors, the malloc
+family, `new`, tree-sitter parsers, queries, cursors and trees — without an owning destructor (36 sites registered,
+2 owned). Every registry is exact both ways: a new site fails, a moved count fails, and a row that matches no site
+fails, except a row marked PENDING, whose fix is already written on another branch and which asks to be deleted once
+it lands. Red on the base: 6 rule-C sites (four of them the `--eval-skills` and `ripwire wrap` filesystem throws that
+the parser-crash lane fixes) and 6 rule-D sites; green after. A probe tree with one violation and one compliant twin
+per rule proves each rule fires (13 planted violations, nothing else).
+
+### Added — reader fuzzers for ripwire's own parsers of bytes it did not create, and the two crashes they found
+
+The fuzz suite fuzzed only the vendored tree-sitter grammars. `test/fuzz/readers/` adds 16 libFuzzer targets
+(`ripwire_fuzz_reader_<name>`, `RIPWIRE_FUZZ_READERS` in CMakeLists.txt) over the code hostile input reaches: the MCP
+JSON-RPC scanner and HTTP request reader, the ipynb/HTML/CSV extractors, `--from-trace`, the skill scanner, the SCIP
+decoder, tsconfig/go.mod aliases, lint-rule files, the qsnap/qchurn/history-oracle caches (header and digest rebuilt so
+the fuzzer reaches the parse), the committed sidecars, `--scope`, ingest-cache records and frames, and the span-tier memo.
+Seeds are 54 blobs the real writers produced (`make_seeds.sh`); `run.sh replay` fails a reader that ran 0 inputs or
+refused a valid seed. Five minutes per reader under ASan, UBSan (with `integer`) and libc++ extensive hardening, Homebrew
+clang 22, found: a SCIP varint whose 10th byte carried payload past bit 63 was accepted as a truncated number (and
+aborted the G1 build); and `openCacheFrame`'s exact-fit check summed a table offset near 2^64 through a wrap, while its
+per-entry bound `recOffset + recLength` wrapped far enough to ACCEPT a record at 2^64-16 (`blob_entries=6` where the
+frame is corrupt). Both are fixed without the wrap, with red-first arms: `scipcheck` 5c and `cachefuzzcheck`'s two
+`*_near_u64_max` mutations plus a disclosure arm (`corrupt-frame`, `blob_entries=0`), and the minimized inputs are
+`regress-*` replay seeds. The qsnap and qchurn readers hit the unbounded-count `reserve` #249 fixes (18 GB and 40 GB
+allocations) within seconds.
+
+### Fixed — a term-rich `--for`/`--pack-task` query, an unbounded MCP stdio request line, or a pathological ASan trace could exhaust memory or stall the process
+
+- **A `--for`/`--pack-task` task string with many distinct terms could cost gigabytes of RAM.** The task
+  string is agent-supplied text, not a hand-typed query — an agent can paste a whole file, log or issue
+  body — and the query's DISTINCT term count had no ceiling: `lexicalScoresTiered`'s `tfFlat` allocation
+  (symbols × unique query terms × 4 bytes) grew with the paste, not with the corpus. A measured 480 KB
+  task string cost 5.2 GB RSS on one request. `dedupeQueryTerms` now caps the kept unique-term count at
+  `kMaxUniqueQueryTerms` (1024 — about 102× the longest real `--for`/`--pack-task` query on record in
+  `bench/` and `docs/`), disclosed as `terms_capped="1" terms_total="N"` on the CLI's `--for` root and on
+  the MCP `for`/`explore`/`pack_task` responses, never a silent truncation. Gate: `test/forblowupcheck.sh`.
+- **An MCP stdio request line had no size bound, unlike the HTTP transport.** `runMcp()`'s read loop grew
+  its line buffer without limit, so one long-lived `--mcp` server could be pushed toward OOM one
+  oversized line at a time by a runaway or hostile peer — HTTP already bounded a request body at 8 MiB
+  before it reached the JSON-RPC layer, stdio had no equivalent. `readByteSafeLineBounded`
+  (`src/infra/stdinline.h`) now bounds a stdio request line at `kMcpStdioLineMaxBytes` (32 MiB) and drains
+  the remainder of an over-limit line without buffering it; `runMcp()` refuses it with a named JSON-RPC
+  error (`code=-32600`, `id:null`) and keeps serving the next request on the same connection. Gate:
+  `test/mcpstdiolinecapcheck.sh`.
+- **A pathological `--from-trace` line could turn 160 KB of text into ~4 s of CPU.** `parseAsan`'s search
+  for an ASan/UBSan frame's source location re-derived the whole candidate on every widening try
+  (a demangled C++ function name can itself contain spaces, so the split cannot just be the first one) —
+  O(k²) in the space-separated word count k. A line built from thousands of short, non-path-shaped
+  "words" with no valid trailing location (a fuzzer or minified-diagnostic shape) showed the worst case.
+  Every quantity the rescan recomputed is actually invariant once the growing window first reaches it, so
+  `parseAsan` now computes each once and walks word boundaries in a single backward pass — O(size), not
+  O(words²) — landing on the exact same candidate the original rescan would have found first. Gate:
+  `test/traceasanlinearcheck.sh` (40 KB/160 KB/640 KB/2.5 MB timing; the baseline binary times out past
+  640 KB on the same fixture).
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
 Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
@@ -162,6 +386,131 @@ arm (global `operator new`) measured with `src/alloccount.cpp` as a delta betwee
 ASan/UBSan pass. kotlincheck §12 now prints the first five lines of stderr when that arm fails, because
 none of the eight CI logs could show what the notice had looked like. Not fixed here: the default map over the same
 fixture says `files=4` with no sign of the two refused files, a disclosure gap tracked by #157.
+
+### Fixed — a user's regular expression could abort the process, hang the skill scanner, or answer a question it never finished; one header owns them now
+
+Only `--regex` screened a user's pattern before handing it to `std::regex`. Three other entry points took the same
+engine unscreened and caught nothing at match time, so on Apple libc++ — whose engine throws `error_complexity` when
+it gives up — `ripwire <dir> --graph-query='file(all,"(a+)+z")'` and an `--arch` rules file holding `deny path zz/.*
+-> (a+)+z` both died with an uncaught `std::regex_error` (rc 134), over a fixture whose directory name is a run of 44
+`a`. `--match` swallowed the same throw and KEPT every row the `#match?` predicate never decided, at rc 0; a malformed
+`#match?` pattern kept every row too. On libstdc++, which has no budget, each of these backtracks without end. A
+`--regex` of 20,000 bytes died with SIGBUS (rc 138): `std::regex` compiles by recursion, and a grep worker runs on a
+512 KiB stack. The skill scanner's `EXFILTRATE:net-exfil` regex was quadratic in the line — a 20,000-byte fenced `curl
+curl …` line took 5.9 s and a 200,000-byte one was still running at 60 s — and an engine throw inside it would have
+ended `wrap`'s `noexcept` scan. And `file()` matched the path with the checkout's own directories in front of it:
+`file(all,"alpha")` selected every symbol in a clone named `repo_alpha` and none in `repo_beta`, and
+`file(all,"^src/")` selected nothing under an absolute root.
+
+`src/regexguard.h` now owns the screen (moved verbatim from `src/search.h`), the compile and the match, and is the one
+place that catches `std::regex_error` and `std::bad_alloc` — by type, converted to a value behind a `noexcept` API
+that `static_assert`s pin. A pattern the screen or the parser rejects is refused by name at exit 1 on every entry
+point (`--graph-query file()`, an `--arch` FROM or TO path-rule, a `#match?` in `--match` or `--lint-rules`), in the
+words `--regex` already printed. The screen also bounds a pattern at 2,048 bytes and 64 nested groups, under the
+smallest stack overflow measured with a standalone probe (a 3,392-deep nesting and a 16,896-byte literal on a 512 KiB
+libc++ thread; 960 and 3,648 on a 512 KiB libstdc++ one). A match the engine abandons part-way — overlapping
+alternation such as `(a|a)+z` passes the structural screen — is refused by name at exit 1, never read as "no match":
+the regex scan used to skip the rest of that file behind a `DEGRADED_PATH_ALERT`, which a Release build compiles out,
+and still print `hits=` as a complete count. An `--arch` TO template that compiles for no capture rejects the rules
+file at parse, and one that only breaks once an edge's captures are substituted (`a{2,\1}` becoming `a{2,1}`) is
+refused naming the substituted text, where both used to leave the rule silently inert. `file()` matches the
+root-relative path its own `p=` prints, the rule `--arch` adopted for its rules. The skill scanner's patterns go
+through the same boundary and fail CLOSED — an undecided line is a CRITICAL `SCAN-INCOMPLETE:regex-abandoned` finding
+— and `net-exfil` is decided by a linear scan derived from its regex. The built-in lint packs keep the old
+keep-the-row fallback for their constant patterns.
+
+Not fixed here, measured and disclosed: libstdc++'s matcher recurses once per consumed character, so on Linux a
+`--regex` such as `a*b` crashes on a long enough matching line with an 8 MiB stack — from about 26 KB, build-dependent
+(a standalone probe: 26,624 bytes, 13,312 for `(a|b)*c`; this tool's own earlier Linux builds: between 27 KB and 35 KB
+for a gcc dev build, 35 KB and 45 KB for a clang Release one); a pattern bound cannot reach that.
+
+Byte-identical: 45 of 45 comparisons of the origin/main binary against this one (dev build, one checkout, stdout,
+stderr and exit code) across `--grep`/`--regex` (prefiltered and full-scan, context, compact, unindexed, the three
+existing refusals, JSON), `--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` (incl. SARIF), `--scan-skill`
+and `--scan-skills` over every scanner fixture and this repository's own skills, and the map, plus a three-request
+`--mcp` grep session; the only differences are the fixes above. Instructions retired (Release, `/usr/bin/time -l`,
+median of 5, interleaved, the final commit against origin/main): `--regex` over an llvm-project checkout of 8,837
+C/C++ files −2.4% to −3.3%, over this repository within ±0.5%, the literal `--grep` and map controls +0.3% to +1.6%;
+release `__TEXT,__text` 8,684,280 → 8,704,196 bytes (+0.23%, the refusal texts and the scanner), `grepScanText` 443 →
+437 instructions. No compile was added: once per query, per rule and per grep worker as before, and `file()` now
+decides each FILE once instead of each symbol.
+
+Gate: `test/regexguardcheck.sh` — (a) a catastrophic pattern refused by name on all five entry points, each with a
+positive control; (b1) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_MATCH=1` makes every guarded match throw and
+each entry point must refuse naming the pattern (or, for `--lint-rules`, the rule); (b2) `(a|a)+z` against libc++'s
+real engine; (c) no `std::regex` spelled in `src/` outside the owner and a one-row allowlist (the constant redaction
+table), with planted-file controls; (e) the `--arch` TO template refused at parse and after substitution; (f) the
+linear `net-exfil` agrees with its regex over 1,200 generated lines, a 200,000-byte line scans in bounded time, and an
+abandoned match fails closed; (g) the size and depth bounds, each with its limit still compiling; (h) an undecided
+capture-typed `#match?` is reported by cause — a captured text the screen refused, one that does not compile, or an
+abandoned match — naming the first site and its text; (i) `--arch` decides deny rules first, so an allow the engine
+cannot finish refuses only when a deny fires and no allow matches; (d) two clones at different directory names,
+absolute and relative roots, agree. Red on origin/main: 72 failures, ten of them a signal death (rc 134 or 138).
+`test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern refusal, and its golden's `match-malformed` section
+is empty.
+
+### Fixed — `--regex` crashed on a long matching line on Linux; a literal pattern skips the engine, and a line too long for the engine's stack is skipped and counted
+
+libstdc++'s regex matcher recurses once for every state it visits, so on Linux `--regex='a*b'` died with SIGSEGV
+(exit 139) in a grep worker on a matching line of about 26–45 KB — the residual the entry above disclosed. Measured on
+this lane's own gcc 13 Linux build before the fix: exit 139 on a 300 KB matching line, and again on a 2 MB line that
+could not match at all. Three changes, in this order:
+
+- **The engine is not asked when the answer is a byte search.** `src/regexguard.h` reads each compiled pattern once. A
+  literal, or literals joined by `|` (one of them optionally `^`/`$`-anchored), is matched with `strkern.h`'s byte
+  kernels in the engine's own order — leftmost start first, then the first alternative written — so no line is too long
+  for it. Any other pattern's required literals (the unquantified literal runs outside groups, one set per top-level
+  alternative) rule out every line that holds none of them before the engine sees it: `a*b` never reads a line with no
+  `b`. The full-scan switch the gates use turns both paths off, so `test/regexcheck.sh`'s prefiltered-versus-full-scan
+  diff checks them too.
+- **The scan threads get a stack they can state.** grep's workers and its unindexed scan run on 256 MiB POSIX threads
+  (`src/infra/stackthreads.h`), halving on refusal down to 8 MiB; pages are committed only as deep as a match recurses.
+  Starting 16 of them costs the same at 8 MiB and 256 MiB, within run-to-run noise, on macOS and on Linux. ONE size is
+  settled — the smallest any thread got — before a single file is read, and every thread is held to it, so no file's
+  answer depends on which thread picked it up; a size below 256 MiB is disclosed on the answer as `regex_stack_bytes=`,
+  with `regex_line_max=` beside it even when nothing was skipped.
+- **A line past the measured bound is skipped and said so.** A per-pattern model bounds the matcher's recursion; the
+  bytes one modelled visit may take (128) is the largest need measured over 35 pattern shapes and six builds — gcc
+  -O0/-O2, clang -O2 and -O3 -flto, gcc and clang under AddressSanitizer — rounded up, with half of every stack held
+  back, so the engine's measured crash is at least 2.5× the bound. On gcc 13 at 256 MiB the bound is 149,502 bytes
+  for `a*b` and 33,757 for `(a|b)*c`. A longer line is never handed to the engine: every `--regex` root now carries
+  `regex_lines_skipped=` (0 means none was), and when it is not 0, `regex_line_max=` and `counts_floor="1"` ride with
+  it — hits= is a floor — defined in the full legend and the compact one. libc++ does not recurse per character, so
+  macOS has no bound and skips nothing.
+- **Secret redaction no longer runs the engine.** `src/redact.h` redacts every emitted body by default, up to 4 MB, and
+  its rules went straight to `std::regex`: on the gcc 13 Linux build, `--expand` over a file holding `sk-` and a 200 KB
+  token run died with exit 139. Every rule is a literal prefix and character-class runs, so each is now matched by
+  reading its runs once (the PEM banner's word loop takes the regex's greedy choice); the regexes stay in the table as
+  the specification. Nothing is skipped, so there is no unscanned line to withhold. `src/regexguard.h`'s allowlist of
+  files that may spell the engine is now empty.
+
+Byte-identical: 61 of 61 comparisons against this lane's parent (dev builds, one checkout, stdout, stderr and exit
+code) — 42 unchanged to the byte (`--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` with SARIF, the map,
+`--scan-skill(s)`, the literal `--grep`, and every redaction seam: `--pack-top-n`, `--expand` and `--recall` over the
+secrets fixture and this tree), and 19 `--regex` answers (literal, alternation, anchored, required-literal,
+prefiltered and full-scan, context, compact, unindexed) identical once the new `regex_lines_skipped="0"` and its legend
+sentence are removed. Instructions retired (Release, `/usr/bin/time -l`, median of 5, interleaved, against the parent):
+`--regex` over an llvm-project checkout of 8,837 C/C++ files −83% to −90% (`getOperand\w*\(` 224.5G → 28.3G), over
+this repository −80% to −93%; the full-scan switch, where every line still reaches the engine, −8% and −14%; the literal
+`--grep` and map controls within ±0.7%. Release `__TEXT,__text` 8,715,336 → 8,732,840 bytes (+0.20%); `grepScanText`
+437 → 1,609 instructions, because the line loop, the literal searches and their kernels now inline into it.
+
+Gate: `test/regexguardcheck.sh` — (j) `test/regexlines_harness.cpp` diffs the literal plan, the required-literal filter
+and the skip policy against `std::regex` itself: adversarial, generated and corpus patterns (every `--regex` the docs,
+skills and gates spell, every `#match?` a query or lint pack carries) over CRLF, LF and empty-line texts, under both
+syntax sets; 0 mismatches over about 80,000 cases on libc++ and on libstdc++, and a copy of the header whose
+alternation resumes one byte past a match must go red; (k) a 300 KB matching line is matched or skipped-and-disclosed,
+a 2 MB line with no `b` is ruled out in bounded time, a literal alternation over a 3 MB line answers, and a literal
+`--grep` is unchanged; (n) with a test switch that gives half the scan threads half the stack, 48 files are answered
+identically over five runs at one bound and the smaller stack is disclosed (the per-thread bound it replaced skipped 24
+to 27 of the 48, varying run to run); (o) `test/redactshape_harness.cpp` gives each redaction rule's regex match length
+at every position over 30,000 generated texts (682,859 checks, 0 mismatches on libc++ and libstdc++; a threshold moved
+by one goes red), and the 200 KB `sk-` file exits 0 with the key redacted; (l) on a recursing engine, for three shapes, a line of exactly `regex_line_max` bytes is matched
+at exit 0 and one byte more is skipped; (m) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` reaches the
+skip path and its disclosure on every engine. Red on this lane's parent: 8 failures on macOS (a TIMEOUT on the 2 MB
+line), and 8 on the gcc 13 Linux build, two of them a signal death (exit 139). `test/emittertruthcheck.sh` (Z2h) holds the
+new "always present" claim at zero; `test/compactlegendcheck.sh` re-pins `ripwire.grep/v1` 360 → 440 (measured 422 on
+`--regex`).
 
 ### Changed — Intel macOS binaries end with 0.6.1
 
@@ -699,6 +1048,149 @@ binary fails three of its rows. Three variants of the fix were built to prove ea
 record turns the double-declaration and member-hiding rows red. Letting a tombstone fall back to the member turns
 exactly the three `std::` member-hiding rows red (measured before the non-std row was added). Refusing every qualifier
 turns only the `store::Text` controls red.
+
+### Fixed — a C++ member call with explicit template arguments is a call (parser version 101)
+
+`r.get<K>( 1 )`, `p->get<K>( 1 )` and `x.template get<K>()` minted no reference at all. Their callee parses as a
+`template_method` under the member access — inside a `dependent_name` when the `template` keyword is spelled — and no
+C++ reference pattern bound either shape, so the call was dropped at extraction, before `ambiguous=`/`unresolved=`
+could count it: a four-line repro answered `--callers=get` count="0" beside count="1" for `r.plain( 1 )`,
+`--callers`/`--uses`/`--impact`/`--safe-delete` under-counted every such call, and `--quality-delta` could report a
+method reached only this way as `kind="dead-code"`. A new `queries/cpp/tags.scm` pattern binds both shapes, and the
+receiver reader now steps over the wrapper — without that step `other.pick<int>()` reads as a bare call and the
+enclosing-class rule binds it to the caller's own same-named method. The qualified dependent spelling had the same
+defect family in another place: `X::template make<int>()` was extracted under the NAME `template make`, which
+resolves to nothing, and `X::template Rebind<int>::f()` keyed its qualifier as `template Rebind`, so a same-named
+definition in another scope split the call. The keyword is now stepped over in both halves. Free `f<T>( x )` and
+qualified `ns::f<T>( x )` (the `std::get<0>( t )` shape) were already bound and are unchanged.
+
+Measured with the pre-fix (`f8e6087c`) and fixed (`1171f775`) binaries, `--no-cache`, map header plus
+`ripwire_probe`'s reference total. On this repository's `src/` (169 files) the change is small: references 168,457 →
+168,463 and edges 18,308 → 18,309 — the six `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod`
+goes 1 → 7. On a template-heavy tree it is not small. `clang/include` plus `clang/lib` from llvm-project `4d5358b1d`
+(2,515 files) gains 10,175 references (1,855,925 → 1,866,100), 3,907 edges (409,860 → 413,767, +0.95%) and 972
+`ambiguous=` (81,601 → 82,573), with `unresolved=` unchanged at 3,893; `--callers=getAs` goes 48 → 492 and
+`--callers=hasAttr` 45 → 377. On `clang/lib/AST` (155 files) the reference delta, 2,027, equals the `--match` hit count
+of the new call shape exactly (`hits_capped="0"`), so extraction moved only the intended class.
+
+The new sites resolve exactly as a plain member call to the same name does, so a name like `getAs` or `hasAttr` gains
+its real callers and also that resolver's wrong ones. On the same clang tree `FD->hasAttr<PackedAttr>()` in
+`ASTContext::getDeclAlign` binds `Type::hasAttr(attr::Kind)` at `lib/AST/Type.cpp:2026`, not `Decl::hasAttr<T>()`,
+with no `amb=` on the row. The plain spelling does the same on main: in a reduced five-file repro, `FD->plainAttr()`
+binds `Type::plainAttr(int)` rather than `Decl::plainAttr()`. That is a resolver defect this change widens the reach
+of, not one it introduces, and it is not fixed here.
+
+`test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per spelling plus receiver, arity
+and qualifier decoys: 19 of its checks fail on the pre-fix binary, and a mutation build that reverts each of the three
+mechanisms (the receiver step, the keyword skip, `callArity`'s hop bound) turns that mechanism's own arms red. The
+spellings still not bound are pinned at zero behind a check that each is still written in the fixture: `r.f<0>( x )`
+without `template` (tree-sitter reads it as two comparisons, a read of the member), a base-qualified member
+`r.Base::f<T>()` / `p->Base::f<T>()` (the plain `r.Base::f()` is absent too, so the gap is not template-shaped), and
+`r.operator()<T>()`. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was pinned as documented-absent
+at literal 0 and now pins 1.
+
+`kParserVer` → 101 with `quality.h`'s `kIngestParserVerMirror` in the same commit, assigned in merge order on
+integration train 2b (after #244's 100); `kCacheVersion` stays 22, and `test/qschemetrip.hash` is re-derived once on the
+train's merged tree with a RE-PIN LOG line.
+
+### Fixed — a class template's out-of-line member is the same symbol as its declaration, and a specialization stays its own (parser version 102)
+
+A C++ member defined out of line on a class template kept the template-argument list in its scope, so `template <class
+T> void Box<T>::grow() {}` produced a `sc="Box&lt;T&gt;"` row next to the in-class declaration's `sc="Box"`. One member
+was two identities. `--callers=Box::grow` resolved to the declaration and answered `count="0"` while `use( Box<int>& b
+) { b.grow(); }` sat three lines below, and `--impact`, `--uses` and the S6-C locality tie-break missed it the same
+way. An argument list broken over lines put the line break into the `--pin-census` id, and a list that itself holds
+`::` was cut inside it: `template<> void Slot<std::string>::clear()` was scoped `string>`. On the reference side,
+`Factory<int>::make()` qualified as `Factory<int>`, which keyed nothing, so the call split onto an unrelated
+`Decoy::make`.
+
+Scopes now follow what the declaration is:
+
+- A primary template's out-of-line member keys the bare template name, because its template-id names exactly the
+  parameters its own `template <…>` introduces (`template <class T, int N> void Box<T, N>::grow()`).
+- An explicit or partial specialization keeps its template-id, spelled canonically. Whitespace and comments are dropped
+  except between two identifier characters, and a comma is followed by one space, so `Traits< int >` and a list broken
+  over lines key the same identity as `Traits<int>`.
+- A call keeps the template-id it writes. `Traits<int>::encode( 1 )` resolves precisely to the int specialization,
+  including from a 3-segment spelling.
+- When no definition is keyed by the written id, the resolver answers from the template's family (the primary and its
+  specializations), but only when that answer cannot be missing a body the call may reach. The family is the primary's
+  own or inherited member (`CastInfo` inherits `CastIsPossible::isPossible`) plus every specialization's own or
+  inherited member, and a member reached through a base is widened to that base template's specializations. A written
+  id that names an existing specialization which does not define the member answers with what that specialization
+  inherits. With nothing visible from the primary, only a split of two or more specializations answers.
+- Anything else goes to the bare-name ladder, exactly as before, so a same-named definition outside the template never
+  joins a family answer.
+- A specialization header's base clause (`template <> struct Info<char> : CharBase {}`) is now read, as inherit
+  references with no new symbol.
+- The locality tie-break prefers a candidate declared in the caller's own scope over one nested inside it, for an
+  unqualified bare or `this->` call only. Both ids share the caller's `Outer::` segment, so segment counting tied
+  `Outer::start` with `Outer::Inner::start`.
+
+Two earlier revisions of this change were measured and revised before merge. Joining every specialization to the
+primary made precise edges splits and dropped a delegation between specializations (`DenseMapInfo<APSInt>` calling
+`DenseMapInfo<APInt, void>::getHashValue`, APSInt.h:371). A family fallback that ignored inherited members pinned `isa`
+(Casting.h:548) to one rare specialization.
+
+Measured with `--pin-census --no-cache` on the same frozen corpus through main (`31e788ce`) and this change, with sites
+joined on (caller symbol id, callee, line); symbol ids are identical across the two binaries. On llvm `ADT` + `Support`
++ `lib/Support` (590 files, 37,055 calls), edges moved from 45,768 to 45,001 and ambiguous from 7,247 to 7,237, and
+`--callers=lib/Support/APInt.cpp:getHashValue` answers 5, as on main.
+
+Wins: 37 splits became precise, 12 sites that had no edge gained a precise one, 12 external sites resolved in-repo, and
+5 precise edges were retargeted. All 66 were read against the source and are correct: 64 in the independent review of
+the previous revision (unchanged here), and the 2 new ones, `cast`/`dyn_cast` through `CastInfo<To,
+std::unique_ptr<From>>`, which inherits `UniquePtrCast`. The Casting.h `isa` site is now a split that contains the
+inherited `CastIsPossible::isPossible`, and the 8 `list_storage` calls that an earlier revision pinned to
+`list_storage<DataType, bool>` are splits.
+
+Costs and differences, reported apart:
+
+- 14 sites main resolved precisely now split. In 10 of them main had pinned the wrong class, one correct pin
+  (`RHS.branched()`) is a 2-way split that contains it, and 3 are `DominatorTreeBase::dominates` overloads that are now
+  one identity.
+- One edge is gone: `simple_ilist::sort`, which is a genuine recursive call.
+- 4 sites with no edge and 9 external sites became splits.
+- One call through `list_storage<DataType, StorageClass>::clear()` (CommandLine.h:1760) keeps main's locality pin to
+  `list::clear`, because that primary's members are extracted under `cl` and the template supplies nothing visible.
+
+On dgl (`f0b7cc9`, 343 C, C++ and CUDA files; main at `b1489df4`, whose resolver is identical), edges moved from 20,829
+to 20,733 and ambiguous from 1,891 to 1,882. 11 splits became precise. 12 precise edges moved from a specialization's
+own `Call` to the `_Sum`/`_Max`/`_Min` base it calls. 3 calls through a dependent template-id that main had pinned to
+the primary now split over the primary and its specialization. On this repository nothing changes. An ack or saved
+baseline keyed on a primary template member's old `Box<T>` spelling re-keys once.
+
+Gated by `test/cpptmplscopecheck.sh`, 64 checks: main fails 42, and the previous revision fails 6. The gate covers:
+
+- a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact` and
+  `--uses`, and on identities in the census;
+- the primary shapes;
+- all three specialization forms;
+- the review's `Traits` probe;
+- an APSInt-shaped delegation;
+- the inherited-member shapes (a primary that inherits the member, a specialization that only inherits it, a primary
+  with nothing visible, a primary that defines nothing);
+- the two-segment decoy;
+- the nested-class tie.
+
+### Fixed — a narrow through a qualified field type read as a uniquely resolved edge
+
+The receiver-qualifier entry above marks an edge **`prov="final-segment"`** when the qualified written type of a parameter or a local chose it by its last name alone. A member field is the third place that guess is made, and its edge still read as uniquely resolved. `struct Record { store::Text body_; int bodyLength() { return body_.size(); } };` is an example: Rule 2b narrowed on `Text` and never checked `store`. The disclosure now covers fields as well. Since the std-typed-field entry above, a field's compose record carries the namespace its type was written in. Rule 2b's `Class#field` table now keeps whether any agreeing declaration wrote the type qualified, and every edge a Rule 2b narrow commits on such a field carries `prov="final-segment"`. The narrow itself is unchanged: the mark discloses, it never demotes. An unqualified field narrow skipped no qualifier and stays unmarked, and a `std::` field never narrows. Extraction is unchanged, so kParserVer stays.
+
+Measured with `--no-cache`, the `integration/train-2` binary (92b4c91d) against this change:
+- **Decisions:** `--pin-census` is byte-identical on rocksdb, a private C++ corpus and this repository's `src/` (a frozen copy), so no decision moved.
+- **Default map:** byte-identical on all three (rocksdb 31,711 bytes), because no newly marked edge sits on a row the default map shows.
+- **Full map (`--top-k=1000000`):** marked edges grow 355 → 382 on rocksdb (+27, 567 bytes), 98 → 143 on the private corpus and 80 → 81 on `src/`.
+
+Every sampled new mark is a qualified field type:
+- `InternalStats::CompactionStatsFull compaction_stats_` → `SetMicros`
+- `toku::locktree_manager ltm_` → `set_max_lock_memory`
+- `strkern::Byteset256 heads` → `contains`
+
+`test/fieldnarrowcheck.sh` arm r is the gate:
+- (r1) the qualified field's mark and (r5) the compact legend term are red on the train binary.
+- (r3), an unqualified field narrow staying unmarked, is red on a variant that marks every Rule 2b narrow and on nothing else.
+- (r2) the refused std field and (r4) the unchanged census decision are the controls.
 
 ### Fixed — `--version` names the configuration a multi-config generator built, not `dev`
 
@@ -3370,7 +3862,6 @@ order, and `<recent>`.
 
 Each release leg's gates split across runner jobs, so the workflow's wall clock is one shard rather
 than one suite. Main runs are no longer cancelled by the next push.
-
 
 ### Changed — every skill description rewritten under the client budget, and one skill folded away
 

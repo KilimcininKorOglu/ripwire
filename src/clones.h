@@ -14,6 +14,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -112,6 +113,13 @@ inline std::size_t multiByteOperatorLen( const std::string& src, std::size_t i, 
 // re-derived shape in the tree, and --quality-delta names each new copy of it. The mask is one shift and one
 // AND with no branch, so it is also the cheapest form for something called once per indexed symbol.
 inline constexpr std::uint32_t langBit( Lang lang ) noexcept { return std::uint32_t( 1 ) << std::uint32_t( lang ); }
+// SHIFT WIDTH vs ENUM COUNT. A shift by a value at or past the mask's width is undefined behaviour, and the language
+// masks are shifted by a Lang at RUNTIME (usesHashLineComments below, lintcatalog.h's corpusLangMask), where no
+// constant evaluation refuses it. So the count every such mask is built over is pinned to the mask type's width: a
+// 33rd language is a build error here, beside the shift, not UB in a lens. (A Lang byte past the enum from a corrupt
+// cache is the cache reader's to refuse; this is the bound for every value the enum can name.)
+static_assert( kLangCount <= std::numeric_limits<decltype( langBit( Lang::Cpp ) )>::digits,
+               "Lang outgrew the 32-bit language masks (langBit, kHashLineCommentLangMask, LintCatalogRow::langMask) — widen them" );
 // Toml and Yaml belong here and Json/Markdown deliberately do not: `#` opens a real line comment in TOML
 // and YAML alike, whereas
 // JSON has no comment syntax at all and markdown's `#` is a heading. The distinction is load-bearing rather
@@ -128,7 +136,8 @@ inline constexpr std::uint32_t langBit( Lang lang ) noexcept { return std::uint3
 // Kotlin is not in this mask: its line comment is `//`, handled unconditionally by the scanner below.
 inline constexpr std::uint32_t kHashLineCommentLangMask = langBit( Lang::Python ) | langBit( Lang::Bash ) | langBit( Lang::Ruby ) | langBit( Lang::Toml ) | langBit( Lang::Yaml )
                                                        | langBit( Lang::Php ) | langBit( Lang::Elixir );
-static_assert( kLangCount <= 32, "Lang outgrew a 32-bit mask — widen kHashLineCommentLangMask" );
+static_assert( kLangCount <= std::numeric_limits<decltype( kHashLineCommentLangMask )>::digits,
+               "Lang outgrew a 32-bit mask — widen kHashLineCommentLangMask" );
 
 inline bool usesHashLineComments( Lang lang ) noexcept
 {

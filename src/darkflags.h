@@ -62,12 +62,13 @@ constexpr std::size_t kMaxSitesShown    = 8;          // <read> sites per gate; 
 constexpr std::size_t kMaxEnvNameLen    = 128;        // longest plausible environment-variable name
 
 enum class GateKind : std::uint8_t { Compile = 0, CMake, Env };
+inline constexpr std::size_t kGateKindCount = static_cast<std::size_t>( GateKind::Env ) + 1;
+static_assert( enumCountIsExact<GateKind, kGateKindCount>(), "kGateKindCount must name the LAST GateKind — move it with the append" );
 
-inline const char* gateKindTag( GateKind k ) noexcept
-{
-    static const char* kTag[] = { "compile", "cmake", "env" };
-    return kTag[ std::size_t( k ) ];
-}
+inline constexpr const char* kGateKindTag[] = { "compile", "cmake", "env" };
+static_assert( std::size( kGateKindTag ) == kGateKindCount, "kGateKindTag is indexed by GateKind — one tag per enumerator" );
+
+inline const char* gateKindTag( GateKind k ) noexcept { return kGateKindTag[ std::size_t( k ) ]; }
 
 struct Site
 {

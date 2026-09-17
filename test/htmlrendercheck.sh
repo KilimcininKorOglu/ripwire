@@ -388,7 +388,7 @@ grep -q 'data-module-card' "$PAGE" && ok "(M2) control: the data-module-card ATT
 # ── (N) every langTag value has a swatch — DERIVED from model.h's own switch ─────────────────────────
 #     langColor had 9 keys and the static legend 8, against langTag's 19 tags: eleven languages fell
 #     through to an unlabelled #999 that the legend never explained.
-awk '/^inline const char\* langTag\(/,/^}/' "$ROOT/src/model.h" \
+awk '/^inline (constexpr )?const char\* langTag\(/,/^}/' "$ROOT/src/model.h" \
     | grep -oE 'return "[a-z]+";' | grep -oE '"[a-z]+"' | tr -d '"' | sort -u > "$TMP/tags.txt"
 NTAGS="$( grep -c . "$TMP/tags.txt" )"
 if [ "$NTAGS" -lt 15 ]; then

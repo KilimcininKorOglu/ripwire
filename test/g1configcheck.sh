@@ -140,23 +140,31 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/build/.cmake/api/v1/query"
 touch "$TMP/build/.cmake/api/v1/query/codemodel-v2"
 if cmake -S "$ROOT" -B "$TMP/build" -DRIPWIRE_FUZZ=ON >"$TMP/configure.log" 2>&1; then
-    if python3 - "$TMP/build/.cmake/api/v1/reply" <<'PY'
+    if python3 - "$TMP/build/.cmake/api/v1/reply" "$CMAKE" <<'PY'
 import json, pathlib, sys
 reply = pathlib.Path(sys.argv[1])
 index = json.loads(next(reply.glob('index-*.json')).read_text())
 model = json.loads((reply / index['reply']['codemodel-v2']['jsonFile']).read_text())
 expected = {'ripwire_fuzz_' + name for name in
             'cpp python go rust typescript tsx swift objc javascript bash java ruby json toml yaml csharp c php elixir lua dart kotlin'.split()}
+cmake_text = pathlib.Path(sys.argv[2]).read_text()
+readers = cmake_text.split('set(RIPWIRE_FUZZ_READERS', 1)[1].split(')', 1)[0].split()
+expected_readers = {'ripwire_fuzz_reader_' + name for name in readers}
+assert len(readers) >= 16, readers
 assert model['configurations']
 for config in model['configurations']:
     targets = [json.loads((reply / t['jsonFile']).read_text()) for t in config['targets']]
-    actual = {t['name'] for t in targets if t['type'] == 'EXECUTABLE' and t['name'].startswith('ripwire_fuzz_')}
+    executables = {t['name'] for t in targets if t['type'] == 'EXECUTABLE'}
+    actual = {n for n in executables if n.startswith('ripwire_fuzz_') and not n.startswith('ripwire_fuzz_reader_')}
     assert actual == expected, (actual, expected)
+    actual_readers = {n for n in executables if n.startswith('ripwire_fuzz_reader_')}
+    assert actual_readers == expected_readers, (actual_readers, expected_readers)
+print(len(readers))
 PY
     then
-        ok "configured model contains all 22 grammar fuzz executables"
+        ok "configured model contains all 22 grammar fuzz executables and one ripwire_fuzz_reader_<name> per RIPWIRE_FUZZ_READERS entry"
     else
-        no "configured grammar fuzz executable set differs"
+        no "configured grammar or reader fuzz executable set differs from the grammar list / RIPWIRE_FUZZ_READERS"
     fi
 elif grep -Eq 'RIPWIRE_FUZZ requires (Clang|a Clang toolchain)' "$TMP/configure.log"; then
     printf '  SKIP  configured fuzz targets require a Clang toolchain with libFuzzer\n'
@@ -655,5 +663,26 @@ PY
     done
 fi
 
+# Reader fuzzers (test/fuzz/readers/): ripwire's own parsers of bytes it did not create. The reader list lives ONCE in
+# CMakeLists.txt; every entry must have a harness function, committed seeds, and the runner must read the same list.
+READERS_DIR="$ROOT/test/fuzz/readers"
+readerList="$( sed -n '/set(RIPWIRE_FUZZ_READERS/,/)/p' "$CMAKE" | tr -d '()' | sed 's/setRIPWIRE_FUZZ_READERS//' | tr -s ' \n' ' ' )"
+readerCount=0; readerMissing=""
+for reader in $readerList; do
+    readerCount=$(( readerCount + 1 ))
+    grep -qE "^int $reader\( const std::uint8_t\* data, std::size_t size \)" "$READERS_DIR"/readers_*.cpp || readerMissing="$readerMissing harness:$reader"
+    [ -n "$( ls -A "$READERS_DIR/seeds/$reader" 2>/dev/null )" ] || readerMissing="$readerMissing seeds:$reader"
+done
+if [ "$readerCount" -ge 16 ] && [ -z "$readerMissing" ]; then
+    ok "every one of the $readerCount RIPWIRE_FUZZ_READERS has a harness entry point and committed seeds"
+else
+    no "reader fuzzers incomplete ($readerCount listed):$readerMissing"
+fi
+grep -q 'LLVMFuzzerTestOneInput' "$READERS_DIR/fuzz_reader.cpp" && grep -q 'RIPWIRE_FUZZ_READER' "$READERS_DIR/fuzz_reader.cpp" \
+    && ok "the reader entry TU dispatches to one compile-selected reader" || no "reader entry TU (fuzz_reader.cpp) incomplete"
+grep -q 'set(RIPWIRE_FUZZ_READERS' "$READERS_DIR/run.sh" && grep -q 'executed 0 inputs' "$READERS_DIR/run.sh" \
+    && grep -q 'max_total_time=' "$READERS_DIR/run.sh" && grep -q 'nice -n 10' "$READERS_DIR/run.sh" \
+    && ok "reader runner reads the CMake list, refuses a 0-input replay, and fuzzes time-boxed and niced" \
+    || no "reader runner (test/fuzz/readers/run.sh) contract missing"
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"
