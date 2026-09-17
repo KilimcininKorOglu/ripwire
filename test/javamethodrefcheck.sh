@@ -75,6 +75,9 @@ for spelling in \
     'Outer.Inner::nestedInnerFn' 'Outer.Inner::leadingShadowFn' \
     'Widget -> Widget::lambdaInfFn' '(Widget) -> Widget::lambdaParenFn' \
     'Widget::nestedInnerFn' 'item -> Util.conv(item)' 'Util::conv' \
+    'catch (RuntimeException Widget)' 'Widget::catchShadowFn' 'Widget::catchAfterFn' \
+    'for (RuntimeException Widget : errors)' 'Widget::forEachShadowFn' 'Widget::forEachAfterFn' \
+    'try (AutoCloseable Widget = null)' 'Widget::resourceShadowFn' 'Widget::resourceAfterFn' \
     'b.name(name)'; do
     grep -qF "$spelling" "$FIX/A.java" \
         && ok "fixture still spells $spelling" \
@@ -242,6 +245,17 @@ expect_callers localShadowFn ""
 expect_callers fieldShadowFn ""
 expect_callers lambdaInfFn ""
 expect_callers lambdaParenFn ""
+
+# A catch parameter, an enhanced-for variable and a try-with-resources resource shadow the type inside
+# their own clause, loop or statement, and only there (CodeRabbit on #281: none of the three emitted a
+# declaration, so all three references resolved as the class). The references after each scope closes
+# are the controls: a span widened to the enclosing block would empty those sets too.
+expect_callers catchShadowFn ""
+expect_callers forEachShadowFn ""
+expect_callers resourceShadowFn ""
+expect_callers catchAfterFn "catchShadowedTypeName"
+expect_callers forEachAfterFn "enhancedForShadowedTypeName"
+expect_callers resourceAfterFn "resourceShadowedTypeName"
 
 # Precision: expression receivers and constructors mint no ordinary call edge.
 expect_callers instanceFn ""

@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, JAVA CATCH / ENHANCED-FOR / RESOURCE SHADOWS (test/javamethodrefcheck.sh, PR #281's CodeRabbit round on
+#   #235's code): kParserVer and its mirror 109 -> 110 on integration/train-3 — three Java declaration forms now emit
+#   VarDecl shadow binds, an extraction change. kCacheVersion stays 23; kQSnapCacheScheme stays 14 (no manifest function
+#   changed). Re-pinned on the train tree.
 # 2026-09-17, TRAIN 3 (integration/train-3 on integration/train-1b a9549214, then 1b's fix push 30f6893c: #268 e5ca33b5,
 #   #276 50b97b7b + 97b499f0, lane/small-fixes-0917 d33e4522, #278 379d9faa, #235 caaf84e2, #233 1ca964b8, #267 b3270335):
 #   RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over

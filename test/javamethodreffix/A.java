@@ -49,6 +49,33 @@ public class A extends Base {
         return Widget::siblingFn;
     }
 
+    // Three more declaration forms in scope at the reference (CodeRabbit on #281): a catch parameter, an
+    // enhanced-for variable and a try-with-resources resource. Each vetoes only inside its own clause,
+    // loop or statement — the reference after it names the type again.
+    public Function<Object, String> catchShadowedTypeName() {
+        try {
+            String.valueOf(0);
+        } catch (RuntimeException Widget) {
+            return Widget::catchShadowFn;
+        }
+        return Widget::catchAfterFn;
+    }
+
+    public Function<Object, String> enhancedForShadowedTypeName(List<RuntimeException> errors) {
+        for (RuntimeException Widget : errors) {
+            return Widget::forEachShadowFn;
+        }
+        return Widget::forEachAfterFn;
+    }
+
+    public Function<Object, String> resourceShadowedTypeName() throws Exception {
+        Function<Object, String> ref = null;
+        try (AutoCloseable Widget = null) {
+            ref = Widget::resourceShadowFn;
+        }
+        return Widget::resourceAfterFn;
+    }
+
     public List<String> packageQualified(List<Object> in) {
         return in.stream().map(com.example.Widget::pkgFn).toList();
     }

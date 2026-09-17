@@ -1496,6 +1496,10 @@ outright (a Java call never resolves to a local). `widget::instanceFn`, `this::t
 `test/javamethodrefcheck.sh` is the gate: the callers of `makeFn` are exactly `genericTypeMethod`, `lambdaForm`,
 `nestedTypeMethod` and `typeMethod`, nothing calls `instanceFn`, `thisFn`, `superFn`, `Widget` or `widget`, and
 rewriting `Widget::makeFn` removes only `typeMethod`. `test/callformcheck.sh`'s Java `--uses=makeFn` is 2.
+A catch parameter, an enhanced-for variable and a try-with-resources resource declare names as well, and none of the
+three was read, so `catch (RuntimeException Widget) { return Widget::m; }` still resolved `Widget` as the class
+(CodeRabbit on #281). All three now shadow, each inside its own clause, loop or statement only; the gate pins both
+the shadowed reference and the one after the scope closes, and `kParserVer` moves 109 → 110.
 `kParserVer` 106 → 107 (the PR declared 96 → 97 → 98 over `main`; integration/train-3 assigns 107). Thanks to
 @rainhuang0220.
 

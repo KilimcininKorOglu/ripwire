@@ -238,7 +238,13 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 109;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 110;          // bump on any grammar/.scm/extraction change
+                                                      // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, PR #235
+                                                      //    follow-up from CodeRabbit on #281, test/javamethodrefcheck.sh):
+                                                      //    a catch parameter, an enhanced-for variable and a try-with-
+                                                      //    resources resource now emit Java VarDecl shadow binds, so a
+                                                      //    `Widget` declared there vetoes `Widget::m` inside that scope.
+                                                      //    The extracted bind SET changes; no record changes shape.
                                                       // 109 = 2026-09-17 (Ruby constant receivers narrow calls, PR #267,
                                                       //    test/rubyrecvnarrowcheck.sh): classifyReceiver classifies a
                                                       //    Ruby (constant)/(scope_resolution) receiver as NamedVar with

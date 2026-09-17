@@ -1493,10 +1493,22 @@ inline void emitJavaShadowName( std::uint32_t fileId, Lang lang, TSNode declNode
 inline void captureJavaShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang,
                                    std::string_view src, std::vector<RawBind>& binds )
 {
-    if( kindIs( t, "formal_parameter" ) || kindIs( t, "spread_parameter" )
-        || kindIs( t, "variable_declarator" ) )
+    // A catch parameter and a try-with-resources `resource` declare a name the same way (a `name:` field; a resource
+    // that only NAMES an existing variable has none, and emits nothing). Their scope is the catch clause or the whole
+    // try-with-resources statement, which javaShadowSite reaches through enclosingShadowScope.
+    if( kindIs( t, "formal_parameter" ) || kindIs( t, "spread_parameter" ) || kindIs( t, "variable_declarator" )
+        || kindIs( t, "catch_formal_parameter" ) || kindIs( t, "resource" ) )
     {
         emitJavaShadowName( fileId, lang, n, fieldChild( n, NodeField::Name ), src, binds );
+        return;
+    }
+    // `for ( T x : xs )` — the loop itself declares x, so the NAME is passed as the declaration node: its parent is the
+    // loop, whose span is x's scope. Passing the statement would start the walk at the enclosing block and widen the
+    // veto to every reference after the loop (test/javamethodrefcheck.sh forEachAfterFn).
+    if( kindIs( t, "enhanced_for_statement" ) )
+    {
+        const TSNode name = fieldChild( n, NodeField::Name );
+        emitJavaShadowName( fileId, lang, name, name, src, binds );
         return;
     }
     // `Widget -> ...` — the inferred parameter is the `parameters:` identifier of the lambda.
