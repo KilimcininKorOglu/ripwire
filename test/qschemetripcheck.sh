@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, ROOT-SPELLING INVARIANCE (#228, test/rootspellingcheck.sh): isDeadCandidate reads the fixture and
+#   test-script exemptions off model.h::rootRelPath instead of the path as the root was typed, and the call graph
+#   a Snapshot is built from now resolves root-relative imports under every root spelling (resolve.h, graph.h —
+#   files this manifest cannot hash, which is why the bump is argued here rather than detected). A v12 blob for an
+#   unchanged sha can carry the pre-fix dead set: kQSnapCacheScheme moves 12 -> 13. Extraction identity unchanged.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.

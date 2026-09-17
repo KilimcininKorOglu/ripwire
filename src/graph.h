@@ -726,7 +726,7 @@ inline bool keepRustQualifiedCandidates( const IngestResult& ing, ChaConeMemo& c
         // a scope-less def answers ONLY for the file module it actually lives in — never for any qualifier.
         const bool memberOfFileModule =    candScope.empty()
                                         && cs.fileId < ing.files.size()
-                                        && rustFileModuleOf( ing.files[ cs.fileId ] ) == qualifier;
+                                        && rustFileModuleOf( rootRelPath( ing, cs.fileId ) ) == qualifier;
         if( candScope == qualifier || memberOfFileModule || implementsQualifier( candScope ) )
         {
             survivors.push_back( c );
@@ -1188,7 +1188,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
     {
         for( std::uint32_t f = 0; f < ing.files.size(); ++f )
         {
-            const std::string_view path = ing.files[ f ];
+            const std::string_view path = rootRelPath( ing, f );   // #228: segments ABOVE the root are not this tree's modules
             fileIndex.emplace( lexicalNormalize( path ), f );
             std::size_t seg = 0;
             while( seg <= path.size() )
@@ -1221,7 +1221,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
             {
                 verdict = 'i';   // a relative import cannot leave the package
             }
-            else if( resolvePreciseInclude( ing.files[ b.fileId ], b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )
+            else if( resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )   // same view as fileIndex's keys
             {
                 verdict = 'i';
             }
@@ -1469,7 +1469,7 @@ inline HashMap<std::string, char> jsModuleVocabulary( const IngestResult& ing )
     names.reserve( ing.files.size() * 2 );
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
-        const std::string_view path = ing.files[ f ];
+        const std::string_view path = rootRelPath( ing, f );   // #228: segments ABOVE the root are not this tree's modules
         std::size_t seg = 0;
         while( seg <= path.size() )
         {
@@ -1579,7 +1579,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
     files.reserve( ing.files.size() );
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
-        files.emplace( lexicalNormalize( ing.files[ fileId ] ), fileId );
+        files.emplace( lexicalNormalize( rootRelPath( ing, fileId ) ), fileId );
     }
     // Two views of the same export bindings: by the EXPORTED name (what an importer writes) and by the
     // LOCAL one (what the definition is called). `export { f as g }` makes them different words, so a
@@ -1634,7 +1634,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
         // this import's call, and there is no module question to ask.
         const auto [ moduleFile, moduleOutcome ] = b.importedName.empty()
             ? std::pair<std::uint32_t, JsImportOutcome>{ kNoFile, JsImportOutcome::Refused }
-            : resolveJsImportModule( ing.files[ b.fileId ], b.typeName, b.fileId, ctx );
+            : resolveJsImportModule( rootRelPath( ing, b.fileId ), b.typeName, b.fileId, ctx );
         target.outcome = moduleOutcome;
         if( moduleFile != kNoFile )
         {
@@ -4196,7 +4196,7 @@ inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std:
     {
         if( isDecl[ f ] != 0 )
         {
-            declIndex.emplace( lexicalNormalize( ing.files[ f ] ), f );
+            declIndex.emplace( lexicalNormalize( rootRelPath( ing, f ) ), f );
         }
     }
     // Multi-root: fileRoot/rootLabels/rootAbs reproduce the same-root soundness gate and the root-relative
@@ -4224,7 +4224,7 @@ inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std:
         {
             continue;
         }
-        const std::uint32_t to = resolvePreciseInclude( ing.files[ inc.fileId ], inc.target, inc.isAngle, declIndex,
+        const std::uint32_t to = resolvePreciseInclude( rootRelPath( ing, inc.fileId ), inc.target, inc.isAngle, declIndex,   // same view as declIndex's keys
                                                         {}, false, ws, inc.fileId, nullptr );
         if( to != kNoFile && to < isDecl.size() && isDecl[ to ] != 0 )
         {
