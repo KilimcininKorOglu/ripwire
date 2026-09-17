@@ -2140,7 +2140,7 @@ inline void recordFlatRecvTypeFact( HashMap<std::string, FlatRecvType>& table, c
     }
 }
 
-// fold one Type binding into the flat table: the first type wins, a different later type or a `std::` one tombstones
+// fold one Type binding into a flat table (buildGraph's varType; also collectFieldUseSites' Type+ParamType table): the first type wins, a different later type or a `std::` one tombstones
 inline void recordFlatRecvType( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Binding& b )
 {
     recordFlatRecvTypeFact( table, key, namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName ), !b.importedName.empty() );
