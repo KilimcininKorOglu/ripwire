@@ -43,6 +43,8 @@ kParserVer 103 → 104.
 cache) are red on the previous commit. p5 (`w_.reset()`) is red on a build that ignores the `->` bit, the p6 in-repo
 template controls on a build that reads through any template, and a p8 row on a build without the new tombstone.
 `qschemetripcheck` is re-pinned for both versions, and `cachefuzzcheck`'s record walker learns the new byte.
+`localitycheck` arm 6 had used a `std::unique_ptr` member as its example of a type Rule 2b cannot read; it now holds a
+qualified non-std template, and new arm 6b asserts the smart-pointer member narrows (red on the previous commit).
 
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
