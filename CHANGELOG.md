@@ -76,23 +76,36 @@ Each of these was reproduced before it was fixed, and the gate that already owns
 - **A `--layout` array extent could crash its evaluator.** A `#define` extent nested 200,000 parentheses deep overflowed
   the stack (exit 139). `((0-1099511627776)*8388608/(0-1))` divides INT64_MIN by −1, which is SIGFPE (exit 136) on
   Linux x86-64, and `1099511627776*1099511627776` is signed overflow, which aborts the sanitizer build. Arithmetic is
-  now checked, that quotient is refused, and parentheses are bounded at 64. Any of these reads as an unknown extent,
-  with its caveat. Gate: `test/layoutcheck.sh` §12.
+  now checked, that quotient is refused, and parenthesis nesting depth is bounded at 64 (a macro of many sibling
+  parenthesised terms nests one level and still sizes). Any of these reads as an unknown extent, with its caveat.
+  Gate: `test/layoutcheck.sh` §12.
+- **`--layout` dropped a data member whose extent or initializer holds a parenthesis, and still said the size was
+  right.** `char a[(4)];`, `int x = (3);` and `int x{ (3) };` were taken for member functions, because the test looked
+  for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
+  short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
+  `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
 - **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
   directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
-  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry and
-  names it on stderr. Gate: `test/skillevalcheck.sh`.
+  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
+  directory link loop included, and names it on stderr; a skills root that cannot be listed at all says "cannot list".
+  Gate: `test/skillevalcheck.sh`.
 - **`ripwire wrap` aborted on a `./skills` tree it could not descend.** The pre-recipe scan advanced a
-  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree nested past
-  the path-name limit was `std::terminate` (exit 134). The walk now stops early instead, says so, scores the scan WARN
-  and still prints the recipe. Gate: `test/codexwrapcheck.sh`.
+  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree it could not
+  open mid-walk (measured with more nested folders than free descriptors) was `std::terminate` (exit 134). The walk
+  now stops early instead, says so, scores the scan WARN and still prints the recipe. The same scan used to skip a
+  mode-000 skills folder in silence — a skill carrying injection text scored CRITICAL while readable and nothing once
+  sealed — and now names the folder it cannot enter and scores WARN. Gate: `test/codexwrapcheck.sh`.
 - **A deeply nested `--match` query overflowed the query compiler.** `ts_query_new` recurses per level on a worker
   thread with a 512 KB stack: 4,000 levels died with SIGBUS (exit 138), and 2,000 ran past a minute. A query or
   `--lint-rules` spec nested past 256 levels is refused before any compile. Gate: `test/matchgrammarcheck.sh` arm 6.
-- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** The slice walk's cost grows with the
-  cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
-  one call wedged the server. The definition's syntax depth is now measured first, and past 512 levels the slice is
-  refused. Gate: `test/slicecheck.sh` (15).
+- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** Every occurrence climbed to its
+  statement anchor through `ts_node_parent`, which descends from the tree root each time, so the walk's cost grew with
+  the cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
+  one call wedged the server, and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s. The
+  scan now builds a parent table in one cursor pass and memoizes the anchor, so the walk is linear: 2,000 / 4,000 /
+  8,000 nested ifs in 0.05 / 0.06 / 0.08 s, the 808-level chain in 0.06 s, and the output is byte-identical. Past
+  4,096 syntax levels the slice is refused by name, because the walks still recurse once per level and that is a stack
+  guard, not a time guard; no function in 47,795 parsed files comes near it. Gate: `test/slicecheck.sh` (15).
 
 The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
 
