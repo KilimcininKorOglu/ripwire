@@ -28,7 +28,8 @@ has recorded every class-scope using-declaration as an import site all along; th
 A class that defines no `m` now answers with what its `using Base::m;` names: the base's own definitions, else the
 result of walking that base. The walk goes one level: that base's own using-declarations are not followed. The
 qualifier loses its template arguments (`using Base<T>::m;` names `Base`). A re-export naming nothing the index reaches
-adds nothing, and the unchanged walk runs. The change is resolve-stage only: kParserVer and the cache format do not
+adds nothing, and the unchanged walk runs. So does one naming a class outside the class's base closure, which C++ forbids: trusting
+`using NotABase::m;` would pin `NotABase::m` over the real bases' tie. The change is resolve-stage only: kParserVer and the cache format do not
 move.
 
 It deliberately does NOT add the base's overloads to a class that also defines `m`, though C++ does. That was measured

@@ -390,9 +390,10 @@ struct UOwner {
 };
 EOF
 "$BIN" "$FIX5" --no-cache --pin-census="$TMP/u.tsv" >/dev/null 2>&1
-uRow(){  # uRow CLASS::METHOD LINE — "mech/flags|targets": that caller's census row at u.cpp:LINE, target ids without #NODEID, sorted ("" = no row)
+UTSV="$TMP/u.tsv"   # the census uRow reads; (u8)/(u9) point it at their own corpus
+uRow(){  # uRow CLASS::METHOD LINE — "mech/flags|targets": that caller's census row in $UTSV at LINE, target ids without #NODEID, sorted ("" = no row)
     local rows
-    rows="$( awk -F '\t' -v c="::$1#" -v l="$2" '$1 == "C" && index( $6, c ) && $9 == l { print $2 "/" $5; n = split( $8, t, "|" ); for( i = 1; i <= n; ++i ) { sub( /#[0-9]+$/, "", t[ i ] ); print t[ i ] } }' "$TMP/u.tsv" 2>/dev/null )"
+    rows="$( awk -F '\t' -v c="::$1#" -v l="$2" '$1 == "C" && index( $6, c ) && $9 == l { print $2 "/" $5; n = split( $8, t, "|" ); for( i = 1; i <= n; ++i ) { sub( /#[0-9]+$/, "", t[ i ] ); print t[ i ] } }' "$UTSV" 2>/dev/null )"
     [ -n "$rows" ] || return 0
     printf '%s|%s' "$( printf '%s\n' "$rows" | head -1 )" "$( printf '%s\n' "$rows" | tail -n +2 | sort | paste -sd , - )"
 }
@@ -435,6 +436,42 @@ if [ -s "$TMP/u.tsv" ] && cmp -s "$TMP/u.tsv" "$TMP/u2.tsv" && cmp -s "$TMP/u.ts
 else
     no "(u7) usingfix census differs across runs or warm vs cold"; diff "$TMP/u.tsv" "$TMP/uw.tsv" | head -6
 fi
+
+# (u8) a using-declaration must name a BASE (review 2026-09-17). `using NotABase::m;` in a class that does not derive from
+#      NotABase is ill-formed C++ — mid-refactor or partial input — and the first cut pinned NotABase::m alone through
+#      receiver-rule, dropping the tie between the two real bases. A named class outside the class's base closure (chaUp)
+#      is ignored, so the walk's refusal and the ladder's split stand exactly as on main. (u9) is the control that the
+#      closure is transitive: `using GB::n;` names a GRAND-base and is honoured. Own corpus: the (u) line pins do not move.
+FIX6="$TMP/usingbasefix"
+mkdir -p "$FIX6"
+cat >"$FIX6/v.cpp" <<'EOF'
+struct RealBase1 { void m() { } };
+struct RealBase2 { void m() { } };
+struct NotABase { void m() { } };
+struct FakeDerived : RealBase1, RealBase2 { using NotABase::m; };
+struct GB { void n() { } };
+struct Mid : GB { };
+struct Mid2 { void n() { } };
+struct Leaf : Mid, Mid2 { using GB::n; };
+struct Holder {
+    FakeDerived f_;
+    Leaf        l_;
+    void viaFake() { f_.m(); }
+    void viaGrand() { l_.n(); }
+};
+EOF
+"$BIN" "$FIX6" --no-cache --pin-census="$TMP/v.tsv" >/dev/null 2>&1
+UTSV="$TMP/v.tsv"
+if grep -qF '::Holder::viaFake#' "$UTSV" 2>/dev/null && grep -qF '::Holder::viaGrand#' "$UTSV" && grep -qF 'dispositions calls=2 ' "$UTSV" \
+   && "$BIN" "$FIX6" --uses=m --no-cache 2>/dev/null | grep -qF '<u role="import" p="v.cpp:4" in_id="v.cpp::FakeDerived::FakeDerived"/>'; then
+    ok "(u8/u9 presence) the census names both Holder callers and counts 2 calls, and FakeDerived's using-declaration is an indexed import site"
+else
+    no "(u8/u9 presence) usingbasefix fixture not observed — (u8)/(u9) would be vacuous"
+fi
+uExpect u8 Holder::viaFake 12 'split/-|v.cpp::NotABase::m,v.cpp::RealBase1::m,v.cpp::RealBase2::m' \
+    "f_.m() on FakeDerived (bases RealBase1, RealBase2; using NotABase::m, NOT a base) ignores the using-declaration and keeps main's split"
+uExpect u9 Holder::viaGrand 13 'receiver-rule/r|v.cpp::GB::n' \
+    "control: l_.n() on Leaf (using GB::n, GB a base of its base Mid) honours the grand-base re-export"
 
 # ── (r) prov="final-segment" reaches FIELD narrows (2026-09-17). Test/narrowcheck.sh arm 25 marks an edge that a parameter's
 #        or local's QUALIFIED written type chose by its last name alone: that match never checked the qualifier against the

@@ -2657,6 +2657,52 @@ struct Narrower
         return { found, multi };
     }
 
+    // One level of the base walk: append the direct bases (chaUp) of fieldWalk[ lvlBegin, lvlEnd ) as the next level,
+    // deduped against every visited name (cycles too), and never past kFieldWalkCap names in total.
+    void expandWalkLevel( std::size_t lvlBegin, std::size_t lvlEnd, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    {
+        constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together
+        for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
+        {
+            const auto uit = chaUp.find( std::string( fieldWalk[ i ] ) );
+            if( uit == chaUp.end() )
+            {
+                continue;
+            }
+            for( const std::string& base : uit->second )
+            {
+                if( fieldWalk.size() >= kFieldWalkCap )
+                {
+                    break;
+                }
+                if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) == fieldWalk.end() )
+                {
+                    fieldWalk.push_back( base );
+                }
+            }
+        }
+    }
+
+    // TRUE when `base` is in `typeName`'s base closure over chaUp: a direct base, a base's base, and so on. The walk is
+    // expandWalkLevel's, so a closure the name cap truncates answers false — the caller treats that as "not a base".
+    bool inBaseClosure( std::string_view typeName, std::string_view base, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    {
+        fieldWalk.clear();
+        fieldWalk.push_back( typeName );
+        std::size_t lvlBegin = 0;
+        while( lvlBegin < fieldWalk.size() )
+        {
+            const std::size_t lvlEnd = fieldWalk.size();
+            expandWalkLevel( lvlBegin, lvlEnd, chaUp );
+            if( std::find( fieldWalk.begin() + std::ptrdiff_t( lvlEnd ), fieldWalk.end(), base ) != fieldWalk.end() )
+            {
+                return true;
+            }
+            lvlBegin = lvlEnd;
+        }
+        return false;
+    }
+
     // `name::callee`'s definitions (canonByName, DEFS only), or nullptr when the scope defines none.
     const rw::SmallVec<NodeId, 2>* definitionsIn( std::string_view scope, std::string_view callee ) const
     {
@@ -2673,7 +2719,9 @@ struct Narrower
     // probed by name, its own definitions else its base walk, ONE level deep: that base's own using-declarations are
     // not followed. Several using-declarations for one name answer the union of what they reach (an honest split); one
     // naming nothing the index reaches (a base outside the tree, an alias the resolver cannot follow) adds nothing, and
-    // the unchanged walk runs.
+    // the unchanged walk runs. So does one naming a class OUTSIDE the class's base closure (inBaseClosure): C++ requires a
+    // base there, so `using NotABase::m;` is mid-refactor or partial input, and trusting it pinned NotABase::m alone over
+    // the real bases' tie (fieldnarrowcheck (u8); a grand-base is honoured, (u9)).
     // STATED FLOOR, decided by measurement: a class that DEFINES the callee answers its own definitions alone, even
     // when it also re-exports base overloads — which C++ puts in the same overload set. The union was built and graded
     // net-WORSE (2026-09-17, --pin-census rocksdb 0e2801ac3 + llvm-project 4d5358b1d, the 17 sites it moved, blinded
@@ -2699,6 +2747,10 @@ struct Narrower
         reexportUnion.clear();
         for( const std::string& base : rit->second )
         {
+            if( !inBaseClosure( typeName, base, chaUp ) )
+            {
+                continue;   // not a base of the class: ill-formed or partial input, and the walk below decides as it always did
+            }
             const rw::SmallVec<NodeId, 2>* baseDefs = definitionsIn( base, r.calleeName );
             if( baseDefs == nullptr )
             {
@@ -2735,33 +2787,13 @@ struct Narrower
             }
         }
 
-        constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together
         fieldWalk.clear();
         fieldWalk.push_back( typeName );
         std::size_t lvlBegin = 0;
         while( lvlBegin < fieldWalk.size() )
         {
             const std::size_t lvlEnd = fieldWalk.size();
-            // expand this level's bases into the next level (dedup against every visited name — cycles too)
-            for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
-            {
-                const auto uit = chaUp.find( std::string( fieldWalk[ i ] ) );
-                if( uit == chaUp.end() )
-                {
-                    continue;
-                }
-                for( const std::string& base : uit->second )
-                {
-                    if( fieldWalk.size() >= kFieldWalkCap )
-                    {
-                        break;
-                    }
-                    if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) == fieldWalk.end() )
-                    {
-                        fieldWalk.push_back( base );
-                    }
-                }
-            }
+            expandWalkLevel( lvlBegin, lvlEnd, chaUp );
             // probe the NEW level's names; the shallowest level with any hit decides
             const auto [ found, multi ] = probeWalkLevel( lvlEnd, r.calleeName );
             if( multi )
