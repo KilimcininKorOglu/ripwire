@@ -294,6 +294,22 @@ def scan(path):
                 and "github.event_name == 'schedule'" in greenIf)
     rows["report"] = (reportOk, f"report-failure if=[{failIf}] report-green if=[{greenIf}]")
 
+    # labelscope: this workflow's tracking issue is its OWN (nightly-tsan alongside the shared
+    # nightly-failure), never ci.yml's (nightly-full-matrix) — the fix for a green run in one workflow
+    # being able to close an issue the other opened while it was still red. The skip probe above must
+    # read the SAME pair, or main could sit on an open ci.yml-only issue while nightly.yml's own checks
+    # go on skipping past it.
+    failText = jobText("report-failure")
+    greenText = jobText("report-green")
+    pairUses = failText.count('"$label,$ownLabel"')
+    labelscopeOk = ("ownLabel=nightly-tsan" in failText and pairUses == 2 and "(TSan)" in failText
+                     and "nightly-failure,nightly-tsan" in greenText
+                     and "labels=nightly-failure,nightly-tsan" in changedText)
+    rows["labelscope"] = (labelscopeOk,
+                           f"ownLabel_decl={'ownLabel=nightly-tsan' in failText} pairUses={pairUses} "
+                           f"title_ok={'(TSan)' in failText} green_ok={'nightly-failure,nightly-tsan' in greenText} "
+                           f"probe_ok={'labels=nightly-failure,nightly-tsan' in changedText}")
+
     named = re.findall(r"\bsecrets\b(\.[A-Za-z_][A-Za-z0-9_]*)?", "\n".join(strip_comment(s) for s in lines))
     extra = sorted({n or "<bare>" for n in named if n != ".GITHUB_TOKEN"})
     rows["secrets"] = (not extra, f"other secrets={extra or '-'}")
@@ -318,6 +334,10 @@ mutations = {
     "report":   ("if: failure() && github.event_name != 'pull_request' && ", "if: failure() && "),
     "secrets":  ("          GH_TOKEN: ${{ github.token }}\n          EVENT: ${{ github.event_name }}\n",
                  "          GH_TOKEN: ${{ secrets.NIGHTLY_PAT }}\n          EVENT: ${{ github.event_name }}\n"),
+    # Regressing report-green to the bare shared label is exactly the bug the two-label split fixes: it
+    # would let a green TSan night close ci.yml's still-red full-matrix issue (or vice versa).
+    "labelscope": ("gh issue list --repo \"$REPO\" --label nightly-failure,nightly-tsan --state open --json number --jq '.[].number'",
+                   "gh issue list --repo \"$REPO\" --label nightly-failure --state open --json number --jq '.[].number'"),
 }
 for row, (anchor, replacement) in mutations.items():
     count = src.count(anchor)
@@ -327,7 +347,7 @@ for row, (anchor, replacement) in mutations.items():
     open(f"{out}/nightly-mut-{row}.yml", "w", encoding="utf-8").write(src.replace(anchor, replacement))
     print(f"{row}\twritten")
 PY
-    nightlyRows=( triggers skip tsan perms report secrets )
+    nightlyRows=( triggers skip tsan perms report secrets labelscope )
     mutLog="$( python3 "$NIGHTLYMUT" "$NIGHTLY" "$TMP" 2>&1 )" || no "nightly mutation writer crashed: $mutLog"
     scanArgs=( real "$NIGHTLY" )
     for row in "${nightlyRows[@]}"; do
@@ -522,6 +542,18 @@ def scan(path):
                       and "success()" in greenIf and "schedule" in greenIf and "refs/heads/main" in greenIf)
     rows["reportscope"] = (reportScopeOk, f"report-failure if=[{failIf}] report-green if=[{greenIf}]")
 
+    # labelscope: this workflow's tracking issue is its OWN (nightly-full-matrix alongside the shared
+    # nightly-failure), never nightly.yml's (nightly-tsan) — a green run here must not be able to close an
+    # issue the TSan nightly opened while TSan is still red, and the reverse.
+    failText = jobText("report-failure")
+    greenText = jobText("report-green")
+    pairUses = failText.count('"$label,$ownLabel"')
+    labelscopeOk = ("ownLabel=nightly-full-matrix" in failText and pairUses == 2 and "(full matrix)" in failText
+                     and "nightly-failure,nightly-full-matrix" in greenText)
+    rows["labelscope"] = (labelscopeOk,
+                           f"ownLabel_decl={'ownLabel=nightly-full-matrix' in failText} pairUses={pairUses} "
+                           f"title_ok={'(full matrix)' in failText} green_ok={'nightly-failure,nightly-full-matrix' in greenText}")
+
     planLines = jobs.get("plan", [])
     run_idx = next((i for i, s in enumerate(planLines) if re.match(r'^\s*run: \|\s*$', s)), None)
     script_text = extract_run_block(planLines, run_idx) if run_idx is not None else None
@@ -575,6 +607,10 @@ mutations = {
                      "permissions:\n  contents: read   # least privilege at the top; only report-failure/report-green below widen, and only for themselves\n  issues: write\n"),
     "reportscope": ("    if: failure() && github.event_name == 'schedule' && github.ref == 'refs/heads/main'",
                      "    if: failure() && github.ref == 'refs/heads/main'"),
+    # Regressing report-green to the bare shared label is exactly the bug the two-label split fixes: it
+    # would let a green full-matrix night close nightly.yml's still-red TSan issue (or vice versa).
+    "labelscope": ("gh issue list --repo \"$REPO\" --label nightly-failure,nightly-full-matrix --state open --json number --jq '.[].number'",
+                   "gh issue list --repo \"$REPO\" --label nightly-failure --state open --json number --jq '.[].number'"),
 }
 for row, (anchor, replacement) in mutations.items():
     count = src.count(anchor)
@@ -584,7 +620,7 @@ for row, (anchor, replacement) in mutations.items():
     open(f"{out}/ci-mut-{row}.yml", "w", encoding="utf-8").write(src.replace(anchor, replacement))
     print(f"{row}\twritten")
 PY
-    ciRows=( push trainmember otherpr dispatch schedule triggers heavygate reportperms reportscope )
+    ciRows=( push trainmember otherpr dispatch schedule triggers heavygate reportperms reportscope labelscope )
     mutLog="$( python3 "$CIMUT" "$CI" "$TMP" 2>&1 )" || no "ci mutation writer crashed: $mutLog"
     scanArgs=( real "$CI" )
     for row in "${ciRows[@]}"; do

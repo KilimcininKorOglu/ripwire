@@ -32,14 +32,18 @@ and every other job reads it instead of repeating the same condition:
   distinct from `nightly.yml`'s own 07:17 TSan run). `release`'s matrix is `plan`'s own computed output rather
   than a second hand-typed list, because a job-level `if:` cannot see the matrix context to prune legs directly.
 
-A failure on the scheduled full-matrix run reports to the same tracking issue `nightly.yml` uses (label
-`nightly-failure`, title "Nightly checks failing on main"): `ci.yml` gets its own `report-failure` and, because
-`nightly.yml`'s `report-green` closing on a green TSan run is not evidence this workflow's matrix is also clean,
-its own `report-green` too — each workflow closes only on its own verdict, and the two are not coordinated with
-each other (see `CONTRIBUTING.md` §5). Top-level permissions are `contents: read`; only the two report jobs widen,
-and only to `issues: write` on themselves. `test/g1configcheck.sh` gates the split: nine rows, each proven red on
-its own mutated copy, five of them by extracting the `plan` job's decide script and actually executing it under
-synthetic event/label/ref combinations rather than guessing at the bash from a regex.
+A failure on the scheduled full-matrix run opens or updates `ci.yml`'s own tracking issue, titled "Nightly
+checks failing on main (full matrix)" — deliberately separate from `nightly.yml`'s TSan one. Every tracking
+issue carries the shared `nightly-failure` label (so "every nightly-scale failure" is one query) plus a
+workflow-specific second label — `nightly-full-matrix` here, `nightly-tsan` in `nightly.yml` — and every
+open/comment/close filters on both together, so a green run in one workflow can only ever touch the issue
+carrying its own second label. (An earlier draft of this change shared one issue between the two workflows
+with an uncoordinated close each; that let a green TSan night close an issue the full matrix had opened
+while the matrix was still red, and the reverse — caught before merge, not shipped.) Top-level permissions
+are `contents: read`; only the two report jobs widen, and only to `issues: write` on themselves.
+`test/g1configcheck.sh` gates the split: ten rows, each proven red on its own mutated copy, five of them by
+extracting the `plan` job's decide script and actually executing it under synthetic event/label/ref
+combinations rather than guessing at the bash from a regex.
 
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 

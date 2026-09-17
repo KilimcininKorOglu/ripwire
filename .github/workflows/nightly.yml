@@ -17,8 +17,10 @@ name: Nightly
 #               ripwire's threads, each against the TSan binary. See the job comment for the list and the reasons.
 #   - windows:  NOT YET. A placeholder comment marks where the full-suite windows-latest job lands (D3 of the #44 plan).
 #   - report-failure / report-green: the only jobs that may write, and only to issues. A failing run on main opens
-#               ONE issue titled "Nightly checks failing on main" (label nightly-failure) or comments on the open one;
-#               the next green scheduled run comments "green again at <sha>" and closes it.
+#               this workflow's OWN issue, titled "Nightly checks failing on main (TSan)" (labels nightly-failure
+#               AND nightly-tsan) or comments on the open one; the next green scheduled run comments "green again
+#               at <sha>" and closes it. ci.yml's full-matrix schedule keeps a SEPARATE issue (nightly-full-matrix)
+#               so a green run in one workflow never closes an issue the other opened while it is still red.
 #
 # WHERE FAILURES APPEAR. The Actions tab (this workflow's run), and the tracking issue above. A pull request that
 # edits this file runs it too (paths filter below), so the change is validated before main ever schedules it; the
@@ -82,14 +84,17 @@ jobs:
             exit 0
           fi
           # A failure opened by a workflow_dispatch run at this same commit must not be skipped past until it goes green.
-          if ! open="$( gh api "repos/$REPO/issues?labels=nightly-failure&state=open&per_page=1" --jq 'length' )"; then
-            echo "::warning::could not read the open nightly-failure issues; running the checks instead of skipping"
+          # Scoped to THIS workflow's own tracking issue (nightly-failure AND nightly-tsan, both labels — see
+          # report-failure/report-green below): ci.yml's full-matrix schedule keeps its own separate issue now, and an
+          # open ci.yml issue must not hold nightly.yml's TSan leg back from running.
+          if ! open="$( gh api "repos/$REPO/issues?labels=nightly-failure,nightly-tsan&state=open&per_page=1" --jq 'length' )"; then
+            echo "::warning::could not read the open nightly-tsan issues; running the checks instead of skipping"
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "main HEAD: $HEAD_SHA"
           echo "last successful scheduled run checked: ${last:-<none>}"
-          echo "open nightly-failure issues: $open"
+          echo "open nightly-tsan issues: $open"
           if [ -n "$last" ] && [ "$last" = "$HEAD_SHA" ] && [ "$open" = 0 ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "main has not moved since the last green nightly; the heavy jobs are skipped"
@@ -373,6 +378,11 @@ jobs:
   # joins `needs:` in BOTH report jobs below, so a red Windows night opens the issue and only an all-green night closes
   # it. Until then nothing here claims Windows coverage.
 
+  # report-failure/report-green use TWO labels: the shared `nightly-failure` (so "every nightly-scale
+  # failure" is one query) AND `nightly-tsan` (so THIS workflow only ever opens, comments on or closes an
+  # issue that also carries nightly-tsan). ci.yml's full-matrix schedule keeps its own separate tracking
+  # issue tagged `nightly-full-matrix` instead — before this split, a green TSan run here could close an
+  # issue ci.yml's full matrix had opened (and still was red for), and the reverse. See CONTRIBUTING.md §5.
   report-failure:
     name: report-failure (open or update the tracking issue)
     needs: [changed, tsan]
@@ -381,7 +391,7 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Open "Nightly checks failing on main", or comment on the open one
+      - name: Open "Nightly checks failing on main (TSan)", or comment on the open one
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -393,6 +403,7 @@ jobs:
           REPORT_B64: ${{ needs.tsan.outputs.report_excerpt }}
         run: |
           label=nightly-failure
+          ownLabel=nightly-tsan
           body="$RUNNER_TEMP/body.md"
           failed_jobs="$( jq -r 'to_entries[] | select(.value.result == "failure") | .key' <<<"$NEEDS_JSON" | paste -sd, - )"
           {
@@ -414,13 +425,17 @@ jobs:
           } > "$body"
           if ! gh api "repos/$REPO/labels/$label" --silent 2>/dev/null; then
             gh label create "$label" --repo "$REPO" --color B60205 \
-              --description "A nightly workflow run failed on main; opened and closed by .github/workflows/nightly.yml"
+              --description "A nightly-scale workflow run failed on main; see the workflow-specific label for which one"
           fi
-          open="$( gh issue list --repo "$REPO" --label "$label" --state open --json number --jq '.[0].number // empty' )"
+          if ! gh api "repos/$REPO/labels/$ownLabel" --silent 2>/dev/null; then
+            gh label create "$ownLabel" --repo "$REPO" --color 5319E7 \
+              --description "The ThreadSanitizer nightly failed on main; opened and closed by .github/workflows/nightly.yml only"
+          fi
+          open="$( gh issue list --repo "$REPO" --label "$label,$ownLabel" --state open --json number --jq '.[0].number // empty' )"
           if [ -n "$open" ]; then
             gh issue comment "$open" --repo "$REPO" --body-file "$body"
           else
-            gh issue create --repo "$REPO" --title "Nightly checks failing on main" --label "$label" --body-file "$body"
+            gh issue create --repo "$REPO" --title "Nightly checks failing on main (TSan)" --label "$label,$ownLabel" --body-file "$body"
           fi
 
   report-green:
@@ -438,9 +453,9 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          numbers="$( gh issue list --repo "$REPO" --label nightly-failure --state open --json number --jq '.[].number' )"
+          numbers="$( gh issue list --repo "$REPO" --label nightly-failure,nightly-tsan --state open --json number --jq '.[].number' )"
           if [ -z "$numbers" ]; then
-            echo "no open nightly-failure issue; nothing to close"
+            echo "no open nightly-tsan issue; nothing to close"
             exit 0
           fi
           for n in $numbers; do

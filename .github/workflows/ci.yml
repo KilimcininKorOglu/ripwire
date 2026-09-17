@@ -42,7 +42,8 @@ name: CI
 #   PRs), workflow_dispatch — the owner requires a full build and test on the EXACT commit before any
 #   release tag, so dispatch this manually against the commit you are about to tag rather than trusting an
 #   earlier green nightly — and a nightly `schedule` against main. See the report-failure/report-green jobs
-#   at the bottom for where a red scheduled run is reported.
+#   at the bottom for where a red scheduled run is reported: its OWN tracking issue (label
+#   nightly-full-matrix, alongside the shared nightly-failure), separate from nightly.yml's TSan issue.
 
 on:
   push:
@@ -736,25 +737,24 @@ jobs:
           path: /tmp/asanlog*
           if-no-files-found: ignore
 
-  # ─── report-failure / report-green: the full-matrix schedule's own verdict on the SAME tracking issue ────
-  # ─── nightly.yml uses ──────────────────────────────────────────────────────────────────────────────────
+  # ─── report-failure / report-green: this schedule's OWN tracking issue, separate from nightly.yml's ─────
   #
   # ci.yml's 05:41 UTC schedule and nightly.yml's 07:17 UTC schedule are two independent full runs against
-  # main, and both report to ONE issue (label `nightly-failure`, title "Nightly checks failing on main") so
-  # a maintainer has a single place to look. Neither job here runs for push, pull_request or
-  # workflow_dispatch — only the scheduled full-matrix run reports, matching the "scheduled full-matrix
-  # failures" scope this pair exists for; a workflow_dispatch run is watched live by whoever triggered it.
+  # main. They used to report to the SAME issue, and that was a bug: nightly.yml's report-green closes on a
+  # green TSan run alone, which is not evidence THIS workflow's full matrix is also clean, so a green TSan
+  # night could close an issue this workflow opened while its own matrix was still red — and the reverse,
+  # a green full-matrix night closing an issue TSan opened while TSan was still red. Neither green run has
+  # any way to know the other workflow's current state.
   #
-  # THE RULE, documented because it is not obvious: nightly.yml's own report-green closes the issue on a
-  # green TSan run, but that only proves TSan is clean — it does NOT prove THIS workflow's full matrix is
-  # clean. Relying on nightly.yml alone could close an issue this workflow opened while its own matrix is
-  # STILL red. So this workflow carries its own report-green too: a green run here closes (or re-closes) the
-  # issue on its own evidence, independent of nightly.yml's TSan verdict. The two closes are NOT coordinated
-  # with each other — on a day where TSan is green but this matrix is red (or the reverse), one workflow's
-  # green run can close an issue the other is still failing. The still-red workflow's own next scheduled run
-  # reopens or comments on its own result within a day, so the issue self-heals rather than staying wrongly
-  # closed, but a reader who finds it closed right after such a run should check both workflows' latest
-  # scheduled run, not just the issue state.
+  # THE FIX: two labels, not one. `nightly-failure` stays as the SHARED label (so "every nightly-scale
+  # failure on main" is still one query), but every open/comment/close here also requires
+  # `nightly-full-matrix` — the label ONLY this workflow's report-failure applies, and ONLY this workflow's
+  # report-green matches on. nightly.yml's own pair does the same with `nightly-tsan` instead, on ITS own
+  # issue titled "Nightly checks failing on main (TSan)". The two issues, two titles, two label pairs: a
+  # green run in one workflow can now only ever touch the issue carrying ITS OWN second label. Neither job
+  # here runs for push, pull_request or workflow_dispatch — only the scheduled full-matrix run reports,
+  # matching the "scheduled full-matrix failures" scope this pair exists for; a workflow_dispatch run is
+  # watched live by whoever triggered it. See CONTRIBUTING.md §5 for the paragraph-length version.
   report-failure:
     name: report-failure (open or update the tracking issue)
     needs: [plan, style, release, fallback-emitter, rhel, asan]
@@ -763,7 +763,7 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Open "Nightly checks failing on main", or comment on the open one
+      - name: Open "Nightly checks failing on main (full matrix)", or comment on the open one
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -772,6 +772,7 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           label=nightly-failure
+          ownLabel=nightly-full-matrix
           body="$RUNNER_TEMP/body.md"
           failed_jobs="$( jq -r 'to_entries[] | select(.value.result == "failure") | .key' <<<"$NEEDS_JSON" | paste -sd, - )"
           {
@@ -785,13 +786,17 @@ jobs:
           } > "$body"
           if ! gh api "repos/$REPO/labels/$label" --silent 2>/dev/null; then
             gh label create "$label" --repo "$REPO" --color B60205 \
-              --description "A nightly-scale workflow run failed on main; opened and closed by .github/workflows/nightly.yml and .github/workflows/ci.yml"
+              --description "A nightly-scale workflow run failed on main; see the workflow-specific label for which one"
           fi
-          open="$( gh issue list --repo "$REPO" --label "$label" --state open --json number --jq '.[0].number // empty' )"
+          if ! gh api "repos/$REPO/labels/$ownLabel" --silent 2>/dev/null; then
+            gh label create "$ownLabel" --repo "$REPO" --color 1D76DB \
+              --description "The full-matrix nightly failed on main; opened and closed by .github/workflows/ci.yml only"
+          fi
+          open="$( gh issue list --repo "$REPO" --label "$label,$ownLabel" --state open --json number --jq '.[0].number // empty' )"
           if [ -n "$open" ]; then
             gh issue comment "$open" --repo "$REPO" --body-file "$body"
           else
-            gh issue create --repo "$REPO" --title "Nightly checks failing on main" --label "$label" --body-file "$body"
+            gh issue create --repo "$REPO" --title "Nightly checks failing on main (full matrix)" --label "$label,$ownLabel" --body-file "$body"
           fi
 
   report-green:
@@ -809,9 +814,9 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          numbers="$( gh issue list --repo "$REPO" --label nightly-failure --state open --json number --jq '.[].number' )"
+          numbers="$( gh issue list --repo "$REPO" --label nightly-failure,nightly-full-matrix --state open --json number --jq '.[].number' )"
           if [ -z "$numbers" ]; then
-            echo "no open nightly-failure issue; nothing to close"
+            echo "no open nightly-full-matrix issue; nothing to close"
             exit 0
           fi
           for n in $numbers; do
