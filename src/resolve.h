@@ -1717,17 +1717,21 @@ inline std::pair<std::vector<std::vector<std::uint32_t>>, WsIncludeCtx> buildPre
         return { std::move( adj ), {} };
     }
 
-    // path → fileId over the canonical (sorted) file list. The KEY is the LEXICALLY-NORMALIZED file path,
-    // NOT the raw ing.files spelling: a crawl rooted at `.` stores paths with a leading `./` (`./test/main.cpp`),
-    // but a resolved include candidate is always `lexicalNormalize`d — which strips `.`/`./` segments — so the
-    // candidate `render/shader.h` would NOT byte-match a raw key `./render/shader.h` and the edge would be
-    // silently DROPPED (a false negative under a `.` root). Normalizing BOTH sides through the same lexical
-    // rule makes them agree with no re-rooting. Pure + deterministic (lexicalNormalize is I/O-free).
+    // path → fileId over the canonical (sorted) file list. The KEY is the LEXICALLY-NORMALIZED ROOT-RELATIVE
+    // path (rootRelPath, model.h), NOT the raw ing.files spelling, and every includer path handed to a Step-A
+    // below is the same view. Two defects this closes, both of the "answer moves with how the root was typed"
+    // kind (#228): a Python absolute import probes an EMPTY base, which named the crawl root only when the root
+    // was typed `.`, so "$PWD" (and every MCP session, and the --quality-delta HEAD side) lost the edge; and a
+    // root typed `../repo` stores `../repo/x.h`, which lexicalNormalize refuses as an escape — every key came
+    // out empty and every include in the tree went unresolved. Relative to the root, both spellings are the
+    // `.` spelling, and a `..` that climbs above the root is unresolved under all of them. Normalizing BOTH
+    // sides through the same lexical rule still makes `./render/shader.h` and a resolved `render/shader.h`
+    // agree. Pure + deterministic (no I/O). Multi-root keeps its labeled keys: rootRelPath is the identity there.
     HashMap<std::string, std::uint32_t> fileIndex;
     fileIndex.reserve( F );
     for( std::uint32_t f = 0; f < F; ++f )
     {
-        fileIndex.emplace( lexicalNormalize( ing.files[f] ), f );
+        fileIndex.emplace( lexicalNormalize( rootRelPath( ing, f ) ), f );
     }
 
     // ── Multi-root workspace context (§3.1): built ONLY for a merged workspace ingest — nullptr on every
@@ -1793,7 +1797,7 @@ inline std::pair<std::vector<std::vector<std::uint32_t>>, WsIncludeCtx> buildPre
     }
     for( std::uint32_t f = 0; f < F; ++f )
     {
-        const std::string_view p = ing.files[f];
+        const std::string_view p = rootRelPath( ing, f );
         const bool isLib  = ( p == "lib.rs"  || ( p.size() >= 7 && p.substr( p.size() - 7 ) == "/lib.rs"  ) );
         const bool isMain = ( p == "main.rs" || ( p.size() >= 8 && p.substr( p.size() - 8 ) == "/main.rs" ) );
         if( !( isLib || isMain ) )
@@ -1864,7 +1868,7 @@ inline std::pair<std::vector<std::vector<std::uint32_t>>, WsIncludeCtx> buildPre
             crd    = crateRootByRoot[ r ];
             hasCrd = hasCrateByRoot[ r ] != 0;
         }
-        const std::uint32_t to = resolvePreciseInclude( ing.files[ inc.fileId ], inc.target, inc.isAngle,
+        const std::uint32_t to = resolvePreciseInclude( rootRelPath( ing, inc.fileId ), inc.target, inc.isAngle,
                                                          fileIndex, crd, hasCrd, ws, inc.fileId, moduleIndex );
         if( to == kNoFile || to == inc.fileId )
         {
