@@ -169,7 +169,7 @@ jobs:
       # makes this leg independent of that image setting. The runner is discarded after the job.
       - name: Pin mmap randomisation to what TSan's shadow layout accepts
         run: |
-          sysctl vm.mmap_rnd_bits
+          sudo sysctl vm.mmap_rnd_bits      # the key is root-readable on the hosted runner: a plain read is EACCES
           sudo sysctl -w vm.mmap_rnd_bits=28
 
       # Clang, as ci.yml's asan job: the leg means the same thing on every run whatever the image's default cc is.
