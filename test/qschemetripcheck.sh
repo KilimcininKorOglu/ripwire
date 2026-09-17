@@ -40,6 +40,15 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   declared 103 and 100 over main's 99, and pinned 95a27416 and 6fa4c131 over those numbers; neither hashed 104).
 #   kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14 (no member changes a manifest function). The two lane
 #   entries below are renumbered to the train's numbers.
+# 2026-09-15, JAVA TYPE::METHOD REVIEW (test/javamethodrefcheck.sh, issue #74, PR #235): parserVer and its quality mirror
+#   move to 106 on integration/train-3 after #278's 105 (the PR declared two steps, 96 -> 97 -> 98, over main) — Java
+#   shadow binds gain lexical spans and inferred lambda parameters are captured. Extracted bind facts change; kCacheVersion
+#   stays #278's 23 and kQSnapCacheScheme stays train 1's 14 (Binding already has spans).
+# 2026-09-15, JAVA TYPE::METHOD (test/javamethodrefcheck.sh, issue #74, PR #235): the PR's first step (declared 96 -> 97;
+#   106 with the review step on the train) — method_reference member names after `::` plus declaration-aware resolver
+#   gating. #216 had already spent 96 on internalLinkage, so the PR re-bumped (never-reuse). RecvKind::JavaTypeCandidate
+#   is appended (after train 2b's literal kinds), record shapes and snapshot semantics are unchanged. Old extraction facts
+#   must be re-parsed.
 # 2026-09-17, ASSIGNMENT TYPES (test/narrowcheck.sh arms 44-51, PR #278): kCacheVersion 22 -> 23 and kParserVer -> 105 on
 #   integration/train-3 after small-fixes' 104 (the PR declared 99 -> 104 over main), with both quality.h mirrors — a C++
 #   assignment's bind record gains the isFromAssignment u8, and buildGraph keeps its callee-read type only when a class of

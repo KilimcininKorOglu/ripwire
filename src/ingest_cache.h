@@ -238,7 +238,26 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 105;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 106;          // bump on any grammar/.scm/extraction change
+                                                      // 106 = 2026-09-17 (Java Type::method, issue #74, PR #235): the PR's
+                                                      //    two steps below, declared 97 and 98 over main's 96, land as one;
+                                                      //    assigned 106 on integration/train-3 after #278's 105.
+                                                      //    RecvKind::JavaTypeCandidate is appended after train 2b's Lit*
+                                                      //    kinds (kRecvKindCount follows it); kCacheVersion stays 23.
+                                                      //    PR step 98, 2026-09-15 (Java Type::method review,
+                                                      //    test/javamethodrefcheck.sh): Java shadow binds carry
+                                                      //    lexical spans (block / lambda / method body) and inferred
+                                                      //    lambda parameters (`Widget ->`, `(Widget) ->`) are captured.
+                                                      //    Extracted bind SET and span values change, so a v97 blob
+                                                      //    must be rejected. kCacheVersion stays 22 — Binding already
+                                                      //    has spans; RecvKind and record shapes are unchanged.
+                                                      //    PR step 97, 2026-09-15 (Java Type::method candidates,
+                                                      //    test/javamethodrefcheck.sh): method_reference member names
+                                                      //    after `::` plus declaration-aware resolver gating. The query
+                                                      //    cannot distinguish a type identifier from a value identifier.
+                                                      //    #216 already spent 96 on internalLinkage, so this RE-BUMPS
+                                                      //    (never-reuse / collision). kCacheVersion stays 22 — RecvKind
+                                                      //    is appended, record shapes are unchanged.
                                                       // 105 = 2026-09-17 (assignment types, PR #278, test/narrowcheck.sh arms
                                                       //    44-51): a C++ ASSIGNMENT's Type RawBind is marked
                                                       //    isFromAssignment, and buildGraph keeps its callee-read name

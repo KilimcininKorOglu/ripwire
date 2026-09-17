@@ -214,9 +214,13 @@ inline constexpr bool isCodeLang( Lang l ) noexcept
 //              classifies these beside that function, TS/JS only. A matching Foo.prototype.NAME extension
 //              may bind; anything else is vetoExternal. Object literals, identifier receivers, this, casts,
 //              and element-returning links (find/at/pop/shift/reduce/subscript/!) stay None.
-enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean };
+//   JavaTypeCandidate — Java `identifier::method` (issue #74): syntax alone cannot say type or value. Ingest stamps
+//              the candidate; graph resolution admits it only when the identifier names an indexed class and no Java
+//              declaration in the caller shadows that name. APPENDED after the literal kinds: persisted values stay stable.
+enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean,
+    JavaTypeCandidate };
 // The number of RecvKind enumerators — the bound readRef validates a cached receiver byte against (see kSymKindCount).
-inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::LitBoolean ) + 1;
+inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::JavaTypeCandidate ) + 1;
 static_assert( enumCountIsExact<RecvKind, kRecvKindCount>(), "kRecvKindCount must name the LAST RecvKind enumerator — move it with the append" );
 
 inline bool isJsTsLitRecv( RecvKind k ) noexcept
@@ -1527,6 +1531,20 @@ inline bool shadowSuppressedSite( const Reference& r, const ShadowEvidence& ev, 
     if( r.recv != RecvKind::None || !r.qualifier.empty() )
     {
         return false;   // a receiver- or scope-qualified name can never resolve to a plain local
+    }
+    // JAVA IS REFUSED OUTRIGHT, and this arm is load-bearing rather than defensive. This pass is
+    // C++/ObjC evidence: it deletes a reference because a declared local of that name shadows it at
+    // that byte. Java's VarDecl records (ingest_binds.h captureJavaShadowDecls) exist for one
+    // unrelated consumer — the JavaTypeCandidate receiver proof for issue #74 — and Java call sites
+    // carry no classified receiver, so `b.name(name)` inside `make( Builder b, String name )` reaches
+    // here as a BARE call whose name a parameter declares, and lost its call edge and its `--uses`
+    // row. The refusal is not a heuristic: Java has no free functions and no callable locals, so a
+    // Java call NEVER resolves to a local and there is nothing here to prevent. Python keeps its
+    // veto-only evidence at an empty span for the same reason (ingest_binds.h, the note above
+    // capturePythonParamShadowDecls); Java needs real spans, so the refusal lives at the consumer.
+    if( r.lang == Lang::Java )
+    {
+        return false;
     }
     // ORDER IS A COST DECISION, not a semantic one: all four guards are pure predicates ANDed together, so
     // any order gives the same verdict — but they are not equally selective. `varSpans` is keyed on

@@ -1977,7 +1977,16 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 105;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 106;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 106 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
+                                                          //    steps below (declared 97, 98) land as one on integration/train-3.
+                                                          //    PR step 98, 2026-09-15 (Java Type::method review):
+                                                          //    Java shadow binds carry lexical spans and inferred
+                                                          //    lambda parameters are captured. See ingest_cache.h.
+                                                          //    PR step 97, 2026-09-15 (Java Type::method candidates):
+                                                          //    method_reference member capture plus indexed-class +
+                                                          //    no-shadow resolver gating. #216 spent 96, so this
+                                                          //    RE-BUMPS. See ingest_cache.h's kParserVer note.
                                                           // 105 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
                                                           //    record carries isFromAssignment (cache version 23).
                                                           //    See ingest_cache.h's kParserVer note.
@@ -2005,6 +2014,8 @@ constexpr std::uint32_t kIngestParserVerMirror    = 105;  // MUST equal ingest.c
                                                           //    See ingest_cache.h's kParserVer note.
                                                           // 97 = 2026-09-16 (parameter receivers): a declaration's qualified
                                                           //    written type rides its Type/ParamType RawBind (importedName).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm B2):
                                                           //    See ingest_cache.h's kParserVer note.
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
                                                           //    RE-BUMPED from the branch's 87 over #139's 93 and #172's 94.
