@@ -633,17 +633,28 @@ if [ -n "$GITSPELL" ] && [ "$GITSPELL" != "$NFDSPELL" ]; then
     grep -q "git spells it" "$TMP/h8b.err" \
         && ok "G2: the disclosure names BOTH spellings (the two look identical; only the bytes differ)" \
         || no "G2: the disclosure does not name git's own spelling, so the reader cannot act on it"
-    # trap #3: an alert arm must establish that this build CAN observe alerts with its OWN probe before it
-    # believes its own silence — a Release/NDEBUG build compiles DEGRADED_PATH_ALERT out and this arm would
-    # then pass for the wrong reason (the 2026-07-27 CI trap). Probe with an unrelated, already-gated degrade.
-    "$BIN" "$R8B" --rank-by=churn --since=notadate >/dev/null 2>"$TMP/h8b.probe"
-    if grep -q 'math degraded' "$TMP/h8b.probe"; then
-        grep -q 'math degraded' "$TMP/h8b.err" \
-            && ok "G2: the plain build's DEGRADED_PATH_ALERT fires too (the surface that gates degrade paths)" \
-            || no "G2: no DEGRADED_PATH_ALERT for the NFD join loss on a build that CAN observe them (probe confirmed)"
-    else
-        printf '  SKIP  G2: alerts are compiled out on this build (NDEBUG) — the alert arm cannot observe anything\n'
-    fi
+    # trap #3: an alert arm must know whether this build CAN print alerts before it believes its own silence —
+    # a Release/NDEBUG build compiles DEGRADED_PATH_ALERT out and this arm would then pass for the wrong reason
+    # (the 2026-07-27 CI trap). --version's build-type token decides, the reading kotlincheck §12 and
+    # estchargecheck share: CMakeLists defines NDEBUG for Release / RelWithDebInfo / MinSizeRel and nothing else.
+    #
+    # RE-POINTED 2026-09-16. This used to probe `--rank-by=churn --since=notadate` and skip when it printed no
+    # alert. e7688981 (M8) made that value a refusal that exits 1 before any degrade path runs, so the probe was
+    # silent on every flavour and this arm skipped on the plain build too. Two tightenings came with the fix:
+    # the alert must be noteGitJoinDegradeOnce's own (gitmine.h), and it must be the line right AFTER the NFD
+    # sentence, which is where that function writes it — any "[math degraded]" line used to satisfy this arm,
+    # so an unrelated degrade on the same run would have stood in for the join loss.
+    G2_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+    case "$G2_FLAVOUR" in
+        Release|RelWithDebInfo|MinSizeRel)
+            printf '  SKIP  %s\n' "G2: this $G2_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out — the plain-flavour leg proves the alert arm" ;;
+        *)
+            if grep -A1 'DECOMPOSED (NFD) filename' "$TMP/h8b.err" | grep -qF '[math degraded] gitmine: a git-history path join was left unmade'; then
+                ok "G2: the NFD join loss raises its DEGRADED_PATH_ALERT on this '${G2_FLAVOUR:-unknown}' (non-NDEBUG) build"
+            else
+                no "G2: '${G2_FLAVOUR:-unknown}' is a non-NDEBUG build, yet no join DEGRADED_PATH_ALERT follows the NFD disclosure: $( grep -F '[math degraded]' "$TMP/h8b.err" | head -1 )"
+            fi ;;
+    esac
 else
     ok "G2 premise: this platform's git records the on-disk NFD bytes verbatim — the mismatch cannot arise here"
     C8B="$( churn_of "$TMP/h8b.out" "/$NFDSPELL" )"

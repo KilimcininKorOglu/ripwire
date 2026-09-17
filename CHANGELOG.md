@@ -31,6 +31,67 @@ frame is corrupt). Both are fixed without the wrap, with red-first arms: `scipch
 `*_near_u64_max` mutations plus a disclosure arm (`corrupt-frame`, `blob_entries=0`), and the minimized inputs are
 `regress-*` replay seeds. The qsnap and qchurn readers hit the unbounded-count `reserve` #249 fixes (18 GB and 40 GB
 allocations) within seconds.
+### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
+
+Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
+
+- **A checksum-valid qsnap or qchurn cache blob with a huge record count aborted.** `deserializeSnapshot` and
+  `deserializeRawCommitStream` passed a count read from the blob straight to `reserve`: 2^32−1 records is 32 GiB for
+  the qsnap vectors and 96–128 GiB for the qchurn commit and path lists. On Linux that is `std::bad_alloc`, which
+  nothing on the CLI path catches, so `--quality-delta`, `--edit-check`, `--for`, `--metrics` and `--exemplar` died
+  with SIGABRT on every run until the blob was evicted (reproduced on Ubuntu, exit 134). Every count is now measured
+  against the bytes left in the blob first, and a count that cannot fit makes the blob corrupt: recompute, as for any
+  other damage. Gate: `test/cachefuzzcheck.sh`, Part 2's three vector-count rows and the new Part 5. The rows run
+  under an allocation bound (`ulimit -v` on Linux, ASan's `max_allocation_size_mb` anywhere), because macOS
+  overcommits the reservation and exits 0 against the defect. The old map-count and wrong-sha rows wrote at stale
+  offsets, so an earlier guard rejected the blob before the count was ever read; they now write where
+  `deserializeSnapshot` reads, and both tables check the good blob's layout first and fail loudly if a header change
+  would re-aim a row.
+- **A short read leaked a file descriptor.** The parse pool's `readFile` closed its stream inside
+  `( got == want ) && ( std::fclose( fp ) == 0 )`, so a file that came up short (truncated between the size probe
+  and the read) was never closed. A long-lived `--mcp` server re-ingesting such a tree ran out of descriptors, and
+  every file it could then not open dropped out of the answer at exit 0. With an interposed short-read shim, 300 of
+  600 short-read streams stayed open, and under `ulimit -n 200` all 20 ordinary files vanished from a `--grep`
+  answer. The stream now has an owner, `rw::OwnedFile` (`src/infra/ownedfile.h`), whose destructor closes it on
+  every path, and the whole-file readers in `ingest_crawl.h`, `docparse.h` and `editpreview.h` use it. Gate:
+  `test/crashsweepcheck.sh` B1.
+- **A FIFO, a directory or a device link at `.ripwire_config` or `.ripwire_quality_acks` hung or aborted.** Both
+  were read through a blocking open on the name. A FIFO hung `--quality-delta` before any output, and a committed
+  symlink from the acks ledger to `/dev/zero` or `/dev/urandom` never reached end of file. A directory at
+  `.ripwire_config` opens on Linux; where a directory's seek reports `LLONG_MAX` (overlayfs), the string that length
+  asks for aborts, the failure `ingest_crawl.h`'s `PathShape` note measured for `--cache=<dir>`. Both files now go
+  through `docparse::detail::openRegularFileStream`: it opens with `O_NONBLOCK`, asks the descriptor what it opened,
+  and reads anything but a regular file as absent, with a stderr line saying so. The ledger is still read one line at a
+  time. Gate: `test/crashsweepcheck.sh` B2
+  (eight shapes).
+- **`edit_check` with `new_body` raced the HEAD-snapshot prefetch worker.** The preview's two ingests ran after the
+  verb's own ingest had released the process-wide ingest lock, so they could run alongside the detached prefetch
+  worker's ingest. `ingest()` installs compiled tags queries into a process-global cache and deletes the entry each
+  install displaces, and that is single-writer by design. On the ThreadSanitizer build the server reported a data
+  race at the parse-pool call and aborted (exit 134) mid-session. The preview's ingest now takes
+  the same lock as every other ingest a server runs. Gate: `test/qsnapprefetchcheck.sh` (f), whose red needs the
+  TSan build (`RIPWIRE_BIN=tsan/ripwire`).
+- **A file dated after 2262 overflowed a signed multiply.** `tv_sec * 1000000000 + tv_nsec` does not fit in
+  `long long` past 2262-04-11, a date ext4, XFS, tmpfs or a tar restore can store. That is undefined behaviour in
+  release and an abort in the sanitizer build (reproduced on Linux tmpfs: `signed integer overflow: 10000000000 *
+  1000000000`). Both stat readers now saturate through `rw::saturatingNanoseconds` (`src/infra/statclock.h`); size
+  and ctime still tell apart two saturated timestamps. Gate: `test/crashsweepcheck.sh` B3. APFS clamps timestamps
+  at 2262, so on macOS the arm says it cannot build its input.
+
+Three of these shapes can be seen in the source, so `test/crashsweepcheck.sh` now also runs ripwire's own `--match`
+over `src/` and fails on them. Each rule is proven live against a probe tree that holds one violation and one
+compliant twin.
+
+- **S1:** an allocation sized by a count a byte reader decoded must be bounded earlier in the same function.
+- **S2:** every raw `fopen`/`open`/`fdopen`/`opendir`/`open_memstream`/`popen` site must be registered with the fact
+  that makes it safe, and a new one points at `rw::OwnedFile`. A close as the right operand of `&&`/`||` or an arm
+  of `?:` is refused outright.
+- **S3:** every body handed to a `std::thread` must be `noexcept` or a single try block. The eight bodies that were
+  neither are now declared `noexcept`, as are three that were already one try block. None of them had a throw that
+  could escape except allocation failure, which already ended in `std::terminate`.
+
+Red on the base, in order: S1 finds the three unbounded counts, S2 the short-circuited `fclose`, S3 eight bare
+bodies. The gate's header states what each rule catches and what it misses.
 
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
@@ -184,6 +245,33 @@ gate is 161 PASS, 0 FAIL.
   runs without them, since the flag would mask the value it reads.
 - the atomic-publish writers create their temp file exclusively and without following a symlink.
 - `--edit-plan` reads a payload through the same confined path its containment check judged.
+
+### Fixed — a `--pin-census` row no longer splits on a line break, TAB or `|` inside an id
+
+A C++ out-of-line member of a class template whose template-argument list spans source lines has a scope that holds
+the line break verbatim, and the census wrote it raw. One `C` row became a six-field line plus a continuation line
+starting with neither `C`, `S`, `O` nor `#`, and the symbol's `S` row broke the same way; a reader splitting lines
+dropped or mis-keyed the site. It was seen once, on a large private C++ corpus. The map was never affected: it writes
+the same scope as `&#10;`. Five more spellings of the defect reproduce on the pre-fix binary: a TAB or a form feed
+inside the argument list, a backslash line splice, CRLF source, and a `|` inside an id. `|` separates targets, and on
+this repository that case is real: Markdown heading symbols such as ``--token-budget=N[K|M|G]`` made a `|`-split read
+18 single-target rows as two to six targets.
+
+Every id and callee field is now escaped. A backslash is written `\\`, TAB, LF and CR are `\t`, `\n` and `\r`, and every
+other control byte and `|` is `\xHH`. Nothing else changes, so the columns are the same and an id without those bytes
+is spelled exactly as before. The first line now reads `pin-census v3` and the header documents the escape.
+`bench/scip_match_diag.py` decodes the fields, because it opens files by an id's path; `bench/scip_pin_precision.py`
+joins ids as opaque keys and needs no decode.
+
+Measured by running the pre-fix and fixed binaries with `--pin-census --no-cache` over a clean export of this
+repository at `a55b118e`: 99 of 51,821 rows change, 18 `C` and 81 `S`. 98 of them hold a `|` and one holds a backslash,
+each decodes back to its pre-fix bytes exactly, and every other row is byte-identical. Before the fix all 18 of those
+`C` rows had target lists a `|`-split misread; after it, none do. Gate: `test/pincensuscheck.sh`
+arm (L), over a generated fixture. Every non-comment line must be a `C`, `S` or `O` row with its full field count, and
+the check also runs over arm (B)'s and arm (G)'s censuses. Each awkward caller id must decode to its source bytes,
+re-encode byte-identically and appear verbatim as an `S` id. The `|` target must split into one id, and the
+dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
+12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
 
 ## [0.6.1] — 2026-09-14
 

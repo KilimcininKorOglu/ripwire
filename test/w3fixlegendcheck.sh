@@ -16,7 +16,7 @@
 #   4  situ H6/M9  sections [2] and [3] disclose their caps; the JSON twin carries script_gates_unmodelled
 #                  and agrees with --test-gate's.
 #   5  ID leak     an automated sweep over LIVE emitted text (legends + refusals) for internal audit IDs.
-#   6  gitmine     the --since degrade ALERT agrees with the stderr line and with window= (PLAIN build only).
+#   6  gitmine     an unresolvable --since REFUSES with one line and no degrade alert (the alert half: PLAIN build).
 #   7  ext-surface the showcase caption names the attributes the unpaged root actually emits.
 #   8  --help      the redaction paragraph's coverage list matches what is really redacted.
 #   9  selector    an UNINDEXED file half says so; the five newly-routed arms carry the shared diagnosis.
@@ -26,9 +26,9 @@
 #   RIPWIRE_BIN=build/ripwire      bash test/w3fixlegendcheck.sh
 #   RIPWIRE_BIN=build_base/ripwire bash test/w3fixlegendcheck.sh   # must FAIL (pre-fix binary)
 #
-# NOTE arm 6 observes a DEGRADED_PATH_ALERT, which -DNDEBUG compiles out. It runs only when the binary can
-# emit one (probed, not assumed) and says so loudly when it skips, so a Release build cannot make it pass for
-# the wrong reason.
+# NOTE arm 6's alert half asserts that NO DEGRADED_PATH_ALERT fires, which -DNDEBUG makes true of every run. It
+# asserts only where --version names a non-NDEBUG build type, beside a positive control proving this binary prints
+# alerts at all, and says so loudly when it skips, so a Release build cannot make it pass for the wrong reason.
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -440,24 +440,48 @@ else
     ok "--edit-check's legend states the arity RULE + the name-binding limit, with no plan ID and no proof claim"
 fi
 
-# ══ 6. gitmine --since degrade alert (PLAIN build only — NDEBUG deletes the observation) ═══════════════════
-echo "── 6. --since degrade alert (needs the PLAIN build)"
-"$BIN" "$ROOT" --rank-by=churn --since=notadate >"$TMP/since.out" 2>"$TMP/since.err"
-if ! grep -q 'math degraded' "$TMP/since.err"; then
-    skip "no DEGRADED_PATH_ALERT observed — this binary is a Release/NDEBUG build; run this arm against the PLAIN build"
+# ══ 6. gitmine --since: the degrade alert is GONE, and only the refusal speaks ═══════════════════════════════
+# This arm pinned the WORDING of the alert an unresolvable --since raised: it must not promise 'all-history' while
+# the stderr line and window= said the verb's own window applied. e7688981 (M8) deleted that alert and the note
+# beside it — the value is refused now, once, before any verb runs — so the old wording has nothing left to agree
+# with. The arm pins what replaced it, the strongest form of "the alert cannot contradict the answer": no answer,
+# no window=, one stderr line, and no alert at all.
+#
+# RE-POINTED 2026-09-16. The old arm SKIPPED whenever that run printed no alert, reading the silence as "Release
+# build". After M8 the silence was the design, so it skipped on the plain build too and asserted nothing. The
+# absence of an alert is now a CLAIM, and a claim that no alert fired is evidence only on a binary that prints
+# alerts: --version's build type decides whether one could (kotlincheck §12, estchargecheck), and a positive
+# control — a --scip index that opens and fails to decode, the degrade qualitystalecheck probes — proves this
+# binary really does, so the absence below cannot pass on a build whose alerts broke.
+echo "── 6. --since: one refusal, no degrade alert (the alert half needs the PLAIN build)"
+"$BIN" "$ROOT" --rank-by=churn --since=notadate >"$TMP/since.out" 2>"$TMP/since.err"; SINCE_RC=$?
+if [ "$SINCE_RC" -eq 1 ] && [ ! -s "$TMP/since.out" ] \
+   && grep -qF "since='notadate' is neither a git revision nor a real calendar date — refusing" "$TMP/since.err"; then
+    ok "--rank-by=churn --since=notadate refuses (exit 1, no document, so no window= to contradict) naming the value"
 else
-    if grep -q 'all-history' "$TMP/since.err"; then
-        no "the --since alert still promises 'all-history', contradicting the stderr line and window="
-    elif grep -q "calling verb's own default window applies" "$TMP/since.err"; then
-        ok "the --since alert says the calling verb's own default window applies (agrees with the stderr line)"
-    else
-        no "the --since alert wording is neither the old nor the corrected one: $( grep 'math degraded' "$TMP/since.err" | head -1 )"
-    fi
-    WIN="$( grep -oE 'window="[^"]*"' "$TMP/since.out" | head -1 | sed -E 's/^[^"]*"//; s/"$//' )"
-    [ -n "$WIN" ] && [ "$WIN" != "all" ] \
-        && ok "…and the run it describes really used a bounded window (window=\"$WIN\"), so all-history was never true" \
-        || no "expected a bounded window= on the churn root, got '${WIN:-<none>}'"
+    no "--rank-by=churn --since=notadate: exit $SINCE_RC, $( wc -c < "$TMP/since.out" | tr -d ' ' ) B on stdout, stderr: $( head -c 200 "$TMP/since.err" )"
 fi
+SINCE_LINES="$( wc -l < "$TMP/since.err" | tr -d ' ' )"
+if [ "$SINCE_LINES" = 1 ] && ! grep -qE "all-history|ignoring it|default window applies" "$TMP/since.err"; then
+    ok "…with ONE stderr line, and nothing claims the value was ignored or that a default window applies"
+else
+    no "…the refusal is not the only voice ($SINCE_LINES stderr lines): $( head -c 300 "$TMP/since.err" )"
+fi
+SINCE_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+case "$SINCE_FLAVOUR" in
+    Release|RelWithDebInfo|MinSizeRel)
+        skip "this $SINCE_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out and 'the --since refusal raises no alert' is true of every run; the plain-flavour leg proves it" ;;
+    *)
+        printf 'not a scip index at all\n' > "$TMP/probe.scip"
+        "$BIN" "$ROOT/test/fixture" --scip="$TMP/probe.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/probe.err"
+        if ! grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/probe.err"; then
+            no "positive control: '${SINCE_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DEGRADED_PATH_ALERT — this binary prints no alerts, so an absent one proves nothing: $( head -c 200 "$TMP/probe.err" )"
+        elif grep -qF '[math degraded]' "$TMP/since.err"; then
+            no "the --since refusal still raises a degrade alert on its way to refusing: $( grep -F '[math degraded]' "$TMP/since.err" | head -1 )"
+        else
+            ok "on this '${SINCE_FLAVOUR:-unknown}' (non-NDEBUG) build alerts ARE printed (the --scip decode control raised one) and the --since refusal raises none"
+        fi ;;
+esac
 
 # ══ 7. --external-surface caption names the attributes the unpaged root emits ══════════════════════════════
 echo "── 7. external-surface caption"
