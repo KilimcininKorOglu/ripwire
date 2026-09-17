@@ -3736,7 +3736,6 @@ struct Narrower
     // deduped against every visited name (cycles too), and never past kFieldWalkCap names in total.
     void expandWalkLevel( std::size_t lvlBegin, std::size_t lvlEnd, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
     {
-        constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together
         for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
         {
             const auto uit = chaUp.find( std::string( fieldWalk[ i ] ) );
