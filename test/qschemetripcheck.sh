@@ -38,7 +38,7 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   99 -> 103 — a C++ declaration's Type/ParamType record takes its type's last name through the grammar's fields, so an
 #   unqualified template-id records a type at last and `Outer<int>::Inner` records `Inner`, not `Outer`. 103 is declared past
 #   the 100-102 the lanes queued ahead of this one declare; the landing train assigns the number and re-derives this pin on the
-#   merged tree. Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key or snapshot
+#   merged tree. Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 14: no key or snapshot
 #   semantics changed, only the extraction identity. Old extraction facts must be re-parsed.
 # 2026-09-17, TRAIN 1 x TRAIN 2 (integration/train-1 merging main bcd3b016 = #265): RE-DERIVED ON THE MERGED TREE,
 #   carried from neither side. Train 1 pinned a37d1539 over kQSnapCacheScheme 14 (#253 13, #255 14) with parserVer 96;
