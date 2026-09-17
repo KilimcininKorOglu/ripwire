@@ -51,8 +51,10 @@
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 #include "infra/Diagnostics.h"   // VERIFY — buildScopedRecvDecls' index-range precondition
+#include "extentsuspect.h"       // extent::inSet with kHeadRuleLangs / kExtentClassKinds — class identity's C-family and class-kind tables
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>       // fopen/fread — workspace-only config-file evidence (go.mod / tsconfig.json), §3.2
@@ -61,6 +63,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace rw
@@ -2248,6 +2251,910 @@ inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
     return table;
 }
 
+// ── P2-D Rule 2 CLASS IDENTITY (2026-09-16, test/narrowcheck.sh arms 25-34) ──────────────────────────────────────────
+// Rule 2 keys a receiver's type by its final class-name segment, and a NESTED class keeps only that segment in its
+// scope: `SkipList<Key, Comparator>::Iterator::key` and a namespace-level `Iterator`'s methods share the key
+// `Iterator::key`. Measured on rocksdb @ 0e2801ac3: a call through `Iterator* it` — an abstract interface whose methods
+// are pure-virtual DECLARATIONS, never in the definitions-only canonByName — narrowed onto the five unrelated nested
+// `Iterator` classes in memtable/ that define `key`, and none was right. This index restores the class identity the key
+// dropped, from facts ingest already has: byte spans (a class inside another class's span is nested in it), the scope a
+// member names, the inherit references, the include targets and the namespace scopes of non-members. IdentityNarrower
+// below reads it for Rule 2. C-family only (C, C++, ObjC): every other language keeps unknown owners and an unchanged answer.
+// FLOORS, stated: namespaces are evidence, not a model (a same-named class in another namespace the caller also includes
+// stays a candidate); a nested class's out-of-line member defined in a different FILE than the class has no known owner;
+// a base the inherit reference records only by its final segment (`public Outer::Iterator`) is judged by nesting alone;
+// a type alias is kept rather than read through.
+using ChaUpNames = HashMap<std::string, std::vector<std::string>>;
+
+struct ClassIdentity
+{
+    struct FlatQualifier
+    {
+        std::string text;             // the written type WHOLE when qualified, "" when written bare
+        bool        conflicting = false;
+    };
+    const std::vector<Symbol>*                            symbols = nullptr;
+    const std::vector<std::string>*                       files   = nullptr;
+    std::vector<NodeId>                                   enclosingClass;   // class id → innermost enclosing class, kNoNode at namespace scope
+    std::vector<NodeId>                                   ownerClass;       // member id → the class that owns it, kNoNode when unknown
+    std::vector<std::uint8_t>                             ownerAmbiguous;   // 1: an out-of-line member whose file holds SEVERAL classes of its scope's name
+    HashMap<std::string, rw::SmallVec<NodeId, 2>>         classesByName;    // C-family class DEFINITIONS by name, in id order
+    HashMap<std::string, rw::SmallVec<NodeId, 2>>         nestedByName;     // the NESTED ones among them, by name
+    HashMap<std::string, rw::SmallVec<NodeId, 4>>         realDown;         // base NAME → derived class ids, namesake edges excluded
+    HashMap<NodeId, std::vector<std::string_view>>        realUp;           // derived class id → base names (views into ing.references)
+    HashMap<std::string, char>                            declared;         // "Scope::name" of a C-family member DECLARATION (no body)
+    HashMap<std::string, char>                            fileNamespaces;   // "<fileId>#<ns>": the file defines a non-member under namespace scope ns
+    std::vector<std::vector<std::string_view>>            namespacesOfFile; // the same evidence per file id (views into Symbol::scope)
+    struct IncludeTarget
+    {
+        std::uint32_t    fileId;
+        std::string_view target;   // as written (a view into ing.includes)
+    };
+    std::vector<IncludeTarget>                            includeTargets;   // every direct #include, ordered by including file
+    HashMap<std::string, FlatQualifier>                   flatQualifier;    // "<fromSymbol>#var" → the flat-table records' written qualifier
+};
+
+// the positions of the last two top-level `::` separators of a qualified name; template arguments are skipped by bracket
+// depth, so a `::` inside them (`Map<std::string>::Iterator`) is never a boundary. npos where there is none.
+inline std::pair<std::size_t, std::size_t> lastTwoTopLevelSeparators( std::string_view qualified ) noexcept
+{
+    std::size_t prevSep = std::string_view::npos;
+    std::size_t lastSep = std::string_view::npos;
+    int         depth   = 0;
+    for( std::size_t i = 0; i + 1 < qualified.size(); ++i )
+    {
+        const char c = qualified[ i ];
+        depth += ( c == '<' ) ? 1 : ( ( c == '>' && depth > 0 ) ? -1 : 0 );
+        if( depth == 0 && c == ':' && qualified[ i + 1 ] == ':' )
+        {
+            prevSep = lastSep;
+            lastSep = i++;
+        }
+    }
+    return { prevSep, lastSep };
+}
+
+// the class a written qualifier's LAST segment names: `Skip::Iterator` → `Skip`, `SkipList<Key, Comparator>::Iterator` →
+// `SkipList`, `ns::Outer::Iterator` → `Outer`; "" for a bare name
+inline std::string_view qualifierOuterName( std::string_view qualified ) noexcept
+{
+    const auto [ prevSep, lastSep ] = lastTwoTopLevelSeparators( qualified );
+    if( lastSep == std::string_view::npos )
+    {
+        return {};
+    }
+    const std::size_t start = ( prevSep == std::string_view::npos ) ? 0 : prevSep + 2;
+    const std::string_view outer = qualified.substr( start, lastSep - start );
+    return trimWs( outer.substr( 0, std::min( outer.size(), outer.find( '<' ) ) ) );
+}
+
+// does class NAME `derived` reach class NAME `base` up the name-keyed chaUp graph? Bounded. A same-name collision only ever
+// ENLARGES the answer, which on both callers is the conservative side (a class stays nameable, an edge stays a namesake).
+inline bool derivesFromName( std::string_view derived, std::string_view base, const ChaUpNames& chaUp )
+{
+    std::vector<std::string_view> frontier{ derived };
+    std::vector<std::string_view> next;
+    for( int depth = 0; depth < 12 && !frontier.empty(); ++depth )
+    {
+        next.clear();
+        for( std::string_view name : frontier )
+        {
+            const auto it = chaUp.find( std::string( name ) );
+            if( it == chaUp.end() )
+            {
+                continue;
+            }
+            if( std::ranges::find( it->second, base ) != it->second.end() )
+            {
+                return true;
+            }
+            next.insert( next.end(), it->second.begin(), it->second.end() );
+        }
+        frontier.swap( next );
+    }
+    return false;
+}
+
+// a class DEFINITION only: a forward declaration (`class Iterator;`, five at rocksdb's namespace scope) names no class body,
+// and counted as one it made every bare `Iterator` look like several namesakes
+inline void addClassDefinitions( const IngestResult& ing, ClassIdentity& ids )
+{
+    for( const Symbol& s : ing.symbols )
+    {
+        if( extent::inSet( extent::kHeadRuleLangs, s.lang ) && extent::inSet( extent::kExtentClassKinds, s.kind ) && isDefinitionNotDeclaration( s ) )
+        {
+            ids.classesByName[ s.name ].push_back( s.id );
+        }
+    }
+}
+
+// the member DECLARATIONS ("Scope::name", bodiless) and each file's namespace evidence: a scope no class carries is a namespace
+inline void addDeclarationsAndNamespaces( const IngestResult& ing, ClassIdentity& ids )
+{
+    std::string key;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( !extent::inSet( extent::kHeadRuleLangs, s.lang ) || extent::inSet( extent::kExtentClassKinds, s.kind ) || s.scope.empty() )
+        {
+            continue;
+        }
+        if( !isDefinitionNotDeclaration( s ) )
+        {
+            key.assign( s.scope ).append( "::" ).append( s.name );
+            ids.declared.try_emplace( key, '\0' );
+        }
+        if( ids.classesByName.find( s.scope ) != ids.classesByName.end() )
+        {
+            continue;
+        }
+        buildShadowKey( key, s.fileId, s.scope );
+        if( ids.fileNamespaces.try_emplace( key, '\0' ).second && s.fileId < ids.namespacesOfFile.size() )
+        {
+            ids.namespacesOfFile[ s.fileId ].push_back( s.scope );
+        }
+    }
+}
+
+// per file, the C-family symbols in (start, end descending, id) order — the order a containment sweep needs
+inline SymbolsByFile cFamilySymbolsBySpan( const IngestResult& ing )
+{
+    SymbolsByFile perFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return extent::inSet( extent::kHeadRuleLangs, s.lang ); } );
+    const auto spanOrder = [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& x = ing.symbols[ a ];
+        const Symbol& y = ing.symbols[ b ];
+        if( x.sigStartByte != y.sigStartByte ) { return x.sigStartByte < y.sigStartByte; }
+        if( x.endByte != y.endByte )           { return x.endByte > y.endByte; }
+        return a < b;
+    };
+    for( FileSymbols& list : perFile )
+    {
+        std::sort( list.begin(), list.end(), spanOrder );
+    }
+    return perFile;
+}
+
+// one file's containment sweep with a stack of open classes: every class gets its innermost enclosing class, every member
+// the innermost enclosing class of its scope's name
+inline void sweepFileNesting( const IngestResult& ing, const FileSymbols& list, ClassIdentity& ids )
+{
+    std::vector<NodeId> open;
+    for( NodeId id : list )
+    {
+        const Symbol& s = ing.symbols[ id ];
+        while( !open.empty() && ing.symbols[ open.back() ].endByte < s.endByte )
+        {
+            open.pop_back();   // the innermost open class ends before this symbol does: it cannot contain it
+        }
+        if( extent::inSet( extent::kExtentClassKinds, s.kind ) )
+        {
+            ids.enclosingClass[ id ] = open.empty() ? kNoNode : open.back();
+            open.push_back( id );
+        }
+        else if( !s.scope.empty() )
+        {
+            const auto owner = std::find_if( open.rbegin(), open.rend(), [ & ]( NodeId c ) { return ing.symbols[ c ].name == s.scope; } );
+            ids.ownerClass[ id ] = ( owner == open.rend() ) ? kNoNode : *owner;
+        }
+    }
+}
+
+// "<classId>#<member name>" for every bodiless member inside that class's span
+inline HashMap<std::string, char> bodilessMembersByClass( const IngestResult& ing, const ClassIdentity& ids )
+{
+    HashMap<std::string, char> declaresMember;
+    std::string                key;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( extent::inSet( extent::kHeadRuleLangs, s.lang ) && !extent::inSet( extent::kExtentClassKinds, s.kind ) && ids.ownerClass[ s.id ] != kNoNode && !isDefinitionNotDeclaration( s ) )
+        {
+            buildShadowKey( key, ids.ownerClass[ s.id ], s.name );
+            declaresMember.try_emplace( key, '\0' );
+        }
+    }
+    return declaresMember;
+}
+
+// one out-of-line member among the classes of its scope's name: the one in its file when there is one; among several there,
+// the nearest PRECEDING one whose body DECLARES it (C++ defines a member out of line only after the class that declares it:
+// `ListRep::Iterator` defines `key` inline, so the out-of-line `key` after `Skip::Iterator` is Skip's); still ambiguous when
+// none decides
+inline void assignOutOfLineOwner( const IngestResult& ing, const Symbol& s, const rw::SmallVec<NodeId, 2>& candidates,
+                                  const HashMap<std::string, char>& declaresMember, ClassIdentity& ids )
+{
+    std::string   key;
+    std::uint32_t sameFile = 0;
+    NodeId        declarer = kNoNode;
+    for( NodeId c : candidates )
+    {
+        const Symbol& cls = ing.symbols[ c ];
+        if( cls.fileId != s.fileId )
+        {
+            continue;
+        }
+        ids.ownerClass[ s.id ] = ( sameFile++ == 0 ) ? c : ids.ownerClass[ s.id ];
+        buildShadowKey( key, c, s.name );
+        const bool precedesAndDeclares = cls.sigStartByte < s.sigStartByte && declaresMember.find( key ) != declaresMember.end();
+        declarer = ( precedesAndDeclares && ( declarer == kNoNode || ing.symbols[ declarer ].sigStartByte < cls.sigStartByte ) ) ? c : declarer;
+    }
+    if( sameFile > 1 && declarer != kNoNode )
+    {
+        ids.ownerClass[ s.id ] = declarer;
+        sameFile               = 1;
+    }
+    ids.ownerAmbiguous[ s.id ] = std::uint8_t( sameFile > 1 ? 1 : 0 );
+}
+
+// an out-of-line member (`inline int Skip::Iterator::key() const { … }`) sits in no class span; unknown when its file
+// defines no class of its scope's name
+inline void assignOutOfLineOwners( const IngestResult& ing, ClassIdentity& ids )
+{
+    const HashMap<std::string, char> declaresMember = bodilessMembersByClass( ing, ids );
+    for( const Symbol& s : ing.symbols )
+    {
+        if( !extent::inSet( extent::kHeadRuleLangs, s.lang ) || s.scope.empty() || extent::inSet( extent::kExtentClassKinds, s.kind ) || ids.ownerClass[ s.id ] != kNoNode )
+        {
+            continue;
+        }
+        if( const auto it = ids.classesByName.find( s.scope ); it != ids.classesByName.end() )
+        {
+            assignOutOfLineOwner( ing, s, it->second, declaresMember, ids );
+        }
+    }
+}
+
+inline void addNestedByName( ClassIdentity& ids )
+{
+    for( const auto& [ name, classIds ] : ids.classesByName )
+    {
+        for( NodeId c : classIds )
+        {
+            if( ids.enclosingClass[ c ] != kNoNode )
+            {
+                ids.nestedByName[ name ].push_back( c );
+            }
+        }
+    }
+    for( auto& [ name, nestedIds ] : ids.nestedByName )
+    {
+        std::sort( nestedIds.begin(), nestedIds.end() );   // hash-map iteration filled it: restore id order for determinism
+    }
+}
+
+// an include written against an include ROOT (`"LinearMath/btVector3.h"`) resolves to no file path-precisely; as a PATH
+// SUFFIX it still says which file it names — a preference between namesakes, never a narrow on its own
+inline void addIncludeTargets( const IngestResult& ing, ClassIdentity& ids )
+{
+    ids.includeTargets.resize( ing.includes.size() );
+    std::ranges::transform( ing.includes, ids.includeTargets.begin(), []( const Include& inc ) { return ClassIdentity::IncludeTarget{ inc.fileId, inc.target }; } );
+    std::ranges::stable_sort( ids.includeTargets, {}, &ClassIdentity::IncludeTarget::fileId );
+}
+
+// is `baseName`, written in derived class `derived`'s base clause, a NESTED class by C++ lookup — nested in a class that
+// encloses `derived`, or inherited into one? `class Iterator : public MemTableRep::Iterator` inside SkipListRep (which
+// derives from MemTableRep) is; `class DBIter : public Iterator` at namespace scope is not. `derived` itself never counts:
+// a class cannot be its own base, so a bare self-name must mean some other class.
+inline bool isNamesakeBaseEdge( const IngestResult& ing, const ClassIdentity& ids, NodeId derived, std::string_view baseName, const ChaUpNames& chaUp )
+{
+    const auto nested = ids.nestedByName.find( std::string( baseName ) );
+    if( nested == ids.nestedByName.end() )
+    {
+        return false;
+    }
+    for( NodeId outer = ids.enclosingClass[ derived ]; outer != kNoNode; outer = ids.enclosingClass[ outer ] )
+    {
+        const std::string& outerName = ing.symbols[ outer ].name;
+        const auto         inScope   = [ & ]( NodeId n )
+        {
+            const std::string& nOuter = ing.symbols[ ids.enclosingClass[ n ] ].name;
+            return n != derived && ( nOuter == outerName || derivesFromName( outerName, nOuter, chaUp ) );
+        };
+        if( std::ranges::any_of( nested->second, inScope ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// the inheritance graph with namesake edges removed: `realDown` by base NAME (the walk to subclasses), `realUp` by derived
+// class id (the walk to ancestors)
+inline void addRealInheritance( const IngestResult& ing, ClassIdentity& ids, const ChaUpNames& chaUp )
+{
+    for( const Reference& ir : ing.references )
+    {
+        if( !ir.isInherit || ir.fromSymbol == kNoNode || ir.calleeName.empty() || !ir.qualifier.empty() )
+        {
+            continue;
+        }
+        const Symbol& d = ing.symbols[ ir.fromSymbol ];
+        if( !extent::inSet( extent::kHeadRuleLangs, d.lang ) || !extent::inSet( extent::kExtentClassKinds, d.kind ) || isNamesakeBaseEdge( ing, ids, d.id, ir.calleeName, chaUp ) )
+        {
+            continue;
+        }
+        rw::SmallVec<NodeId, 4>& down = ids.realDown[ ir.calleeName ];
+        if( down.empty() || down.back() != d.id )
+        {
+            down.push_back( d.id );
+        }
+        std::vector<std::string_view>& up = ids.realUp[ d.id ];
+        if( std::ranges::find( up, std::string_view( ir.calleeName ) ) == up.end() )
+        {
+            up.push_back( ir.calleeName );
+        }
+    }
+}
+
+// Rule 2's flat table (typed LOCALS) keeps only the final segment; the qualifier its records wrote is kept here, keyed like
+// it, so class identity reads `Skip::Iterator it;` the way the lexical table reads a parameter. Two records of one variable
+// writing different qualifiers are conflicting: identity then stays out and Rule 2 answers as before.
+inline void addFlatQualifiers( const IngestResult& ing, ClassIdentity& ids )
+{
+    std::string key;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::Type || b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() || !extent::inSet( extent::kHeadRuleLangs, ing.symbols[ b.fromSymbol ].lang ) )
+        {
+            continue;
+        }
+        buildShadowKey( key, b.fromSymbol, b.var );
+        const auto [ it, inserted ] = ids.flatQualifier.try_emplace( key, ClassIdentity::FlatQualifier{ b.importedName, false } );
+        if( !inserted && it->second.text != b.importedName )
+        {
+            it->second.conflicting = true;
+        }
+    }
+}
+
+inline ClassIdentity buildClassIdentity( const IngestResult& ing, const ChaUpNames& chaUp )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2k: Rule-2 class identity" );
+    ClassIdentity ids;
+    ids.symbols = &ing.symbols;
+    ids.files   = &ing.files;
+    addClassDefinitions( ing, ids );
+    if( ids.classesByName.empty() )
+    {
+        return ids;   // no C-family class: Rule 2 reads nothing from the index and answers exactly as before
+    }
+    ids.enclosingClass.assign( ing.symbols.size(), kNoNode );
+    ids.namespacesOfFile.assign( ing.files.size(), {} );
+    ids.ownerClass.assign( ing.symbols.size(), kNoNode );
+    ids.ownerAmbiguous.assign( ing.symbols.size(), std::uint8_t( 0 ) );
+    addDeclarationsAndNamespaces( ing, ids );
+    for( const FileSymbols& list : cFamilySymbolsBySpan( ing ) )
+    {
+        sweepFileNesting( ing, list, ids );
+    }
+    assignOutOfLineOwners( ing, ids );
+    addNestedByName( ids );
+    addIncludeTargets( ing, ids );
+    addRealInheritance( ing, ids, chaUp );
+    addFlatQualifiers( ing, ids );
+    return ids;
+}
+
+// the receiver's WRITTEN type as Rule 2 recorded it: the final class-name segment it matches, and the declaration's
+// qualifier text ("" when written bare)
+struct WrittenType
+{
+    std::string_view name;
+    std::string_view qualifier;
+};
+
+// Rule 2 through class identity — the narrowing half, owned by the Narrower and called from rule2RecvVarType. References
+// buildGraph's tables plus reused scratch; one instance drives the single-threaded resolve loop.
+//   (1) keep the final-segment hits whose owning class the written type NAMES (C++ lookup outward from the caller; a
+//       qualifier naming the enclosing class) — every one kept returns `own` itself, byte-identical;
+//   (2) with none left and one claimable class, the shallowest REAL ancestor level that defines the callee;
+//   (3) with no body along the ancestry but a DECLARATION on it, the callee's definitions in the class's real subclasses:
+//       the dispatch split a virtual call through an interface is.
+// Steps 2-3 are CLAIMS, marked for claimFor so the ladder keeps them whole. Namesakes are told apart by evidence: a class
+// visible from the file (the same file, a path-resolved include, a direct include read as a path suffix), else a shared
+// namespace. EXPLAIN OR KEEP: identity replaces `own` only with an answer it can explain; a nested class visible through the
+// caller's includes is never dropped (a type ALIAS the index does not see may name it: `using NodeSet =
+// MachineGadgetGraph::NodeSet;`, measured on llvm); several claimable namesakes, or two same-named classes defining the
+// callee at one ancestor level, leave `own` standing.
+struct IdentityNarrower
+{
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canonByName;
+    const std::vector<std::vector<NodeId>>&              fileIncludes;
+    const std::vector<std::uint32_t>&                    symFileId;
+
+    mutable std::string                                   keyScope;        // "Class::callee"
+    mutable rw::SmallVec<NodeId, 2>                       hits;            // the answer, copied out by the caller at once
+    mutable std::vector<NodeId>                           classWalk;       // nameable classes, then a walk frontier
+    mutable std::vector<NodeId>                           classNext;
+    mutable std::vector<NodeId>                           plausible;       // plausibleClasses' answer
+    mutable std::vector<std::uint32_t>                    seenStamp;       // generation-stamped visited set, one u32 per symbol
+    mutable std::uint32_t                                 seenGeneration = 0;
+    mutable HashMap<std::string, rw::SmallVec<NodeId, 2>> subclassMemo;    // step 3 per (receiver class, callee)
+    mutable const Reference*                              claimRef       = nullptr;
+    mutable bool                                          lookupLexical  = false;   // classWalk came from an enclosing class or a class qualifier
+
+    IdentityNarrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon, const std::vector<std::vector<NodeId>>& incl,
+                      const std::vector<std::uint32_t>& symFile ) noexcept
+        : canonByName( canon ), fileIncludes( incl ), symFileId( symFile ) {}
+
+    bool claimFor( const Reference& r ) const noexcept
+    {
+        return claimRef == &r;
+    }
+
+    bool forgetClaim() const noexcept
+    {
+        claimRef = nullptr;
+        return false;
+    }
+
+    const rw::SmallVec<NodeId, 2>* narrow( const Reference& r, WrittenType type, const rw::SmallVec<NodeId, 2>* own, const ClassIdentity& ids,
+                                           const ChaUpNames& chaUp ) const
+    {
+        claimRef = nullptr;
+        nameableClasses( type, r, ids, chaUp, /*verifiedNamespace=*/ false );
+        if( own != nullptr )
+        {
+            if( const rw::SmallVec<NodeId, 2>* const kept = keepNameableHits( r, *own, ids ); kept != nullptr )
+            {
+                return kept;
+            }
+        }
+        return claimFromAncestry( r, type, own, ids, chaUp );
+    }
+
+    // step (1): `own` itself when every hit's owner is nameable — or when a nested namesake is in the caller's sight, which
+    // a type alias may name — the nameable subset otherwise, nullptr when none is
+    const rw::SmallVec<NodeId, 2>* keepNameableHits( const Reference& r, const rw::SmallVec<NodeId, 2>& own, const ClassIdentity& ids ) const
+    {
+        const std::uint32_t callerFile = symFileId[ r.fromSymbol ];
+        if( !lookupLexical && std::ranges::any_of( own, [ & ]( NodeId h ) { return nestedNamesakeInSight( h, callerFile, ids ); } ) )
+        {
+            return &own;
+        }
+        hits.clear();
+        for( NodeId h : own )
+        {
+            if( memberNameable( h, ids ) ) { hits.push_back( h ); }
+        }
+        if( hits.size() == own.size() )
+        {
+            return &own;
+        }
+        return hits.empty() ? nullptr : &hits;
+    }
+
+    // steps (2)-(3), from the one class a claim can stand on; `own` when there is none or the ancestry explains nothing
+    const rw::SmallVec<NodeId, 2>* claimFromAncestry( const Reference& r, WrittenType type, const rw::SmallVec<NodeId, 2>* own,
+                                                      const ClassIdentity& ids, const ChaUpNames& chaUp ) const
+    {
+        if( !type.qualifier.empty() )
+        {
+            nameableClasses( type, r, ids, chaUp, /*verifiedNamespace=*/ true );   // a claim needs evidence
+        }
+        const NodeId receiverClass = claimableClass( type.name, r, ids );
+        if( receiverClass == kNoNode )
+        {
+            return own;
+        }
+        bool declaredAlong = false;
+        bool ambiguous     = false;
+        if( inheritedDefinitions( r, receiverClass, ids, declaredAlong, ambiguous )
+         || ( !ambiguous && declaredAlong && subclassDefinitions( r, receiverClass, ids ) ) )
+        {
+            claimRef = &r;
+            return &hits;
+        }
+        return own;
+    }
+
+    // the one class a claim stands on: the single plausible nameable class, unless another class of that name is in the
+    // caller's sight and this one shows no sign of being meant; kNoNode otherwise
+    NodeId claimableClass( std::string_view typeName, const Reference& r, const ClassIdentity& ids ) const
+    {
+        const std::uint32_t callerFile = symFileId[ r.fromSymbol ];
+        plausibleClasses( classWalk, callerFile, ids );
+        const auto sameName = ids.classesByName.find( std::string( typeName ) );
+        if( plausible.size() != 1 || sameName == ids.classesByName.end() )
+        {
+            return kNoNode;
+        }
+        const NodeId claimed         = plausible.front();
+        const bool   namesakeInSight = std::ranges::any_of( sameName->second, [ & ]( NodeId c )
+        {
+            return c != claimed && fileVisibleFrom( callerFile, fileOf( c, ids ), ids );
+        } );
+        return ( lookupLexical || !namesakeInSight || classEvidenced( claimed, callerFile, ids ) ) ? claimed : kNoNode;
+    }
+
+    static std::uint32_t fileOf( NodeId symbol, const ClassIdentity& ids ) noexcept
+    {
+        return ( *ids.symbols )[ symbol ].fileId;
+    }
+
+    static std::string_view outerNameOf( NodeId cls, const ClassIdentity& ids ) noexcept
+    {
+        const NodeId outer = ids.enclosingClass[ cls ];
+        return ( outer == kNoNode ) ? std::string_view{} : std::string_view( ( *ids.symbols )[ outer ].name );
+    }
+
+    // the caller's own class: itself when it is a class, its owner otherwise (kNoNode when unknown or ambiguous)
+    static NodeId callerClassOf( NodeId from, const ClassIdentity& ids ) noexcept
+    {
+        if( extent::inSet( extent::kExtentClassKinds, ( *ids.symbols )[ from ].kind ) )
+        {
+            return from;
+        }
+        return ( ids.ownerAmbiguous[ from ] != 0 ) ? kNoNode : ids.ownerClass[ from ];
+    }
+
+    static bool nestedInAncestorOf( NodeId cls, std::string_view className, const ClassIdentity& ids, const ChaUpNames& chaUp )
+    {
+        const std::string_view outer = outerNameOf( cls, ids );
+        return !outer.empty() && derivesFromName( className, outer, chaUp );
+    }
+
+    bool collectIf( const rw::SmallVec<NodeId, 2>& named, const auto& pick ) const
+    {
+        for( NodeId c : named )
+        {
+            if( pick( c ) ) { classWalk.push_back( c ); }
+        }
+        return !classWalk.empty();
+    }
+
+    // the classes the written type NAMES at this call, into classWalk in id order: through a qualifier; bare, outward from the
+    // caller's class — a class nested directly in an enclosing class wins, then one nested in that class's ancestors — then
+    // from an unknown caller's written scope; past all of those the namespace-level classes of that name. `verifiedNamespace`
+    // separates an EXCLUSION from a CLAIM: to drop a hit, a namespace qualifier names every namespace-level class of its name
+    // (none is provably excluded); to claim, only those whose file shows it defines something in that namespace.
+    void nameableClasses( WrittenType type, const Reference& r, const ClassIdentity& ids, const ChaUpNames& chaUp, bool verifiedNamespace ) const
+    {
+        classWalk.clear();
+        lookupLexical    = false;
+        const auto named = ids.classesByName.find( std::string( type.name ) );
+        if( named == ids.classesByName.end() )
+        {
+            return;
+        }
+        if( !type.qualifier.empty() )
+        {
+            nameableThroughQualifier( named->second, type.qualifier, ids, verifiedNamespace );
+            return;
+        }
+        if( nameableFromCallerClass( named->second, r, ids, chaUp ) )
+        {
+            lookupLexical = true;
+            return;
+        }
+        if( !nameableFromCallerScope( named->second, type.name, r, ids, chaUp ) )
+        {
+            collectIf( named->second, [ & ]( NodeId c ) { return ids.enclosingClass[ c ] == kNoNode; } );
+        }
+    }
+
+    void nameableThroughQualifier( const rw::SmallVec<NodeId, 2>& named, std::string_view qualifier, const ClassIdentity& ids, bool verifiedNamespace ) const
+    {
+        const std::string_view q = qualifierOuterName( qualifier );
+        if( ids.classesByName.find( std::string( q ) ) != ids.classesByName.end() )
+        {
+            lookupLexical = collectIf( named, [ & ]( NodeId c ) { return outerNameOf( c, ids ) == q; } );
+            return;
+        }
+        // `ns::T` names a namespace-level T; claimed only from a file showing it defines things in `ns` — an
+        // `ankerl::unordered_dense::map` must not become amc's `map` (measured on a private corpus)
+        std::string nsKey;
+        collectIf( named, [ & ]( NodeId c )
+        {
+            buildShadowKey( nsKey, fileOf( c, ids ), q );
+            return ids.enclosingClass[ c ] == kNoNode && ( !verifiedNamespace || ids.fileNamespaces.find( nsKey ) != ids.fileNamespaces.end() );
+        } );
+    }
+
+    bool nameableFromCallerClass( const rw::SmallVec<NodeId, 2>& named, const Reference& r, const ClassIdentity& ids, const ChaUpNames& chaUp ) const
+    {
+        for( NodeId sc = callerClassOf( r.fromSymbol, ids ); sc != kNoNode; sc = ids.enclosingClass[ sc ] )
+        {
+            const std::string& scName = ( *ids.symbols )[ sc ].name;
+            if( collectIf( named, [ & ]( NodeId c ) { return ids.enclosingClass[ c ] == sc; } )
+             || collectIf( named, [ & ]( NodeId c ) { return nestedInAncestorOf( c, scName, ids, chaUp ); } ) )
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // an out-of-line caller of unknown class: its written scope's name is the only evidence of where it sits
+    bool nameableFromCallerScope( const rw::SmallVec<NodeId, 2>& named, std::string_view typeName, const Reference& r, const ClassIdentity& ids,
+                                  const ChaUpNames& chaUp ) const
+    {
+        const std::string& scope = ( *ids.symbols )[ r.fromSymbol ].scope;
+        if( callerClassOf( r.fromSymbol, ids ) != kNoNode || scope.empty() || ids.classesByName.find( scope ) == ids.classesByName.end() )
+        {
+            return false;
+        }
+        if( scope == typeName )
+        {
+            return collectIf( named, []( NodeId ) { return true; } );   // a member of a class of that very name: any of them, as before
+        }
+        return collectIf( named, [ & ]( NodeId c ) { return outerNameOf( c, ids ) == scope; } )
+            || collectIf( named, [ & ]( NodeId c ) { return nestedInAncestorOf( c, scope, ids, chaUp ); } );
+    }
+
+    // a hit owned by a NESTED class outside the nameable set whose file is visible from the caller
+    bool nestedNamesakeInSight( NodeId hit, std::uint32_t callerFile, const ClassIdentity& ids ) const
+    {
+        const NodeId owner = ids.ownerClass[ hit ];
+        return ids.ownerAmbiguous[ hit ] == 0 && owner != kNoNode && ids.enclosingClass[ owner ] != kNoNode
+            && !std::binary_search( classWalk.begin(), classWalk.end(), owner ) && fileVisibleFrom( callerFile, fileOf( owner, ids ), ids );
+    }
+
+    // a hit's owning class among the nameable ones? An unknown owner keeps the hit; an ambiguous out-of-line owner is
+    // nameable when any same-file class of its scope's name is
+    bool memberNameable( NodeId member, const ClassIdentity& ids ) const
+    {
+        const NodeId owner = ids.ownerClass[ member ];
+        if( owner == kNoNode )
+        {
+            return true;
+        }
+        if( ids.ownerAmbiguous[ member ] == 0 )
+        {
+            return std::binary_search( classWalk.begin(), classWalk.end(), owner );
+        }
+        const Symbol& m      = ( *ids.symbols )[ member ];
+        const auto    scoped = ids.classesByName.find( m.scope );
+        return scoped != ids.classesByName.end() && std::ranges::any_of( scoped->second, [ & ]( NodeId c )
+        {
+            return fileOf( c, ids ) == m.fileId && std::binary_search( classWalk.begin(), classWalk.end(), c );
+        } );
+    }
+
+    // is `defFile` visible from `fromFile` — the same file, one it path-resolvably includes, or one a DIRECT include of it
+    // names as a path suffix (an include-root spelling, `"clang/Interpreter/Value.h"`; a suffix, not a basename: three
+    // `Value.h` headers hold three `Value` classes in llvm)?
+    bool fileVisibleFrom( std::uint32_t fromFile, std::uint32_t defFile, const ClassIdentity& ids ) const
+    {
+        if( fromFile == defFile || ( fromFile < fileIncludes.size() && std::binary_search( fileIncludes[ fromFile ].begin(), fileIncludes[ fromFile ].end(), defFile ) ) )
+        {
+            return true;
+        }
+        if( ids.files == nullptr || defFile >= ids.files->size() )
+        {
+            return false;
+        }
+        const std::string_view path             = ( *ids.files )[ defFile ];
+        const auto [ firstInclude, endInclude ] = std::ranges::equal_range( ids.includeTargets, fromFile, {}, &ClassIdentity::IncludeTarget::fileId );
+        return std::any_of( firstInclude, endInclude, [ & ]( const ClassIdentity::IncludeTarget& include )
+        {
+            std::string_view target = include.target;
+            while( target.starts_with( "./" ) )
+            {
+                target.remove_prefix( 2 );
+            }
+            return !target.empty() && path.ends_with( target ) && ( path.size() == target.size() || path[ path.size() - target.size() - 1 ] == '/' );
+        } );
+    }
+
+    static bool filesShareNamespace( std::uint32_t a, std::uint32_t b, const ClassIdentity& ids ) noexcept
+    {
+        if( a >= ids.namespacesOfFile.size() || b >= ids.namespacesOfFile.size() )
+        {
+            return false;
+        }
+        return std::ranges::any_of( ids.namespacesOfFile[ a ], [ & ]( std::string_view x )
+        {
+            return std::ranges::find( ids.namespacesOfFile[ b ], x ) != ids.namespacesOfFile[ b ].end();
+        } );
+    }
+
+    // does a use in file `fromFile` have EVIDENCE it means class `cls` — visible from it, or a namespace in common?
+    bool classEvidenced( NodeId cls, std::uint32_t fromFile, const ClassIdentity& ids ) const
+    {
+        return fileVisibleFrom( fromFile, fileOf( cls, ids ), ids ) || filesShareNamespace( fromFile, fileOf( cls, ids ), ids );
+    }
+
+    // among same-named classes, the ones a use in file `fromFile` most plausibly means: those visible from it, else those
+    // sharing a namespace with it, else all — a preference that orders namesakes, never one that removes the last candidate
+    void plausibleClasses( std::span<const NodeId> named, std::uint32_t fromFile, const ClassIdentity& ids ) const
+    {
+        plausible.clear();
+        for( NodeId c : named )
+        {
+            if( named.size() == 1 || fileVisibleFrom( fromFile, fileOf( c, ids ), ids ) ) { plausible.push_back( c ); }
+        }
+        for( NodeId c : ( plausible.empty() ? named : std::span<const NodeId>{} ) )
+        {
+            if( filesShareNamespace( fromFile, fileOf( c, ids ), ids ) ) { plausible.push_back( c ); }
+        }
+        if( plausible.empty() )
+        {
+            plausible.assign( named.begin(), named.end() );
+        }
+    }
+
+    // the definitions under keyScope ("Class::callee") owned by class `cls` — or, when their owner is ambiguous or unknown,
+    // plausibly it — appended to hits
+    void appendOwnedDefinitions( NodeId cls, const ClassIdentity& ids ) const
+    {
+        const auto it    = canonByName.find( keyScope );
+        const auto named = ids.classesByName.find( ( *ids.symbols )[ cls ].name );
+        if( it == canonByName.end() )
+        {
+            return;
+        }
+        for( NodeId d : it->second )
+        {
+            if( ownedBy( d, cls, named == ids.classesByName.end() ? nullptr : &named->second, ids ) && markSeen( d ) )
+            {
+                hits.push_back( d );   // a definition plausible for two same-named classes of one walk is appended once
+            }
+        }
+    }
+
+    bool ownedBy( NodeId def, NodeId cls, const rw::SmallVec<NodeId, 2>* sameNamed, const ClassIdentity& ids ) const
+    {
+        const NodeId owner = ids.ownerClass[ def ];
+        if( owner == cls )
+        {
+            return true;
+        }
+        if( ids.ownerAmbiguous[ def ] != 0 )
+        {
+            return fileOf( def, ids ) == fileOf( cls, ids );   // one of several same-file classes of the name
+        }
+        if( owner != kNoNode || sameNamed == nullptr )
+        {
+            return false;
+        }
+        plausibleClasses( std::span<const NodeId>( sameNamed->data(), sameNamed->size() ), fileOf( def, ids ), ids );   // defined out of line in another file
+        return std::ranges::find( plausible, cls ) != plausible.end();
+    }
+
+    // a fresh visited generation over the symbol ids (the stamp vector is sized once, never cleared)
+    void nextSeenGeneration( const ClassIdentity& ids ) const
+    {
+        if( seenStamp.size() != ids.symbols->size() || seenGeneration == 0xFFFFFFFFu )
+        {
+            seenStamp.assign( ids.symbols->size(), 0u );
+            seenGeneration = 0;
+        }
+        ++seenGeneration;
+    }
+
+    bool markSeen( NodeId id ) const noexcept
+    {
+        const bool fresh = seenStamp[ id ] != seenGeneration;
+        seenStamp[ id ] = seenGeneration;
+        return fresh;
+    }
+
+    // two KNOWN, distinct owning classes that share a name among the definitions — a union of namesakes, not one type's answer
+    // (an unknown owner was admitted only as plausibly the walked class, so it never counts against it)
+    static bool definedBySameNamedClasses( const rw::SmallVec<NodeId, 2>& defs, const ClassIdentity& ids ) noexcept
+    {
+        for( std::size_t a = 0; a < defs.size(); ++a )
+        {
+            const NodeId oa         = ids.ownerClass[ defs[ a ] ];
+            const auto   namesakeOf = [ & ]( NodeId d )
+            {
+                const NodeId ob = ids.ownerClass[ d ];
+                return ob != kNoNode && ob != oa && ( *ids.symbols )[ oa ].name == ( *ids.symbols )[ ob ].name;
+            };
+            if( oa != kNoNode && std::any_of( defs.begin() + a + 1, defs.end(), namesakeOf ) )
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // step (2): from the receiver class up the REAL inheritance level by level; the shallowest level whose classes define the
+    // callee answers into hits (several defining classes at one level: their union, an honest split — unless two of them are
+    // namesakes, then `ambiguous`). `declaredAlong` reports a bodiless declaration of the callee on any class visited.
+    bool inheritedDefinitions( const Reference& r, NodeId receiverClass, const ClassIdentity& ids, bool& declaredAlong, bool& ambiguous ) const
+    {
+        nextSeenGeneration( ids );
+        markSeen( receiverClass );
+        classWalk.assign( 1, receiverClass );
+        for( int depth = 0; depth < 16 && !classWalk.empty(); ++depth )
+        {
+            hits.clear();
+            classNext.clear();
+            for( NodeId c : classWalk )
+            {
+                declaredAlong = visitAncestor( r, c, depth > 0, ids ) || declaredAlong;
+            }
+            if( !hits.empty() )
+            {
+                std::sort( hits.begin(), hits.end() );   // each definition appended once (markSeen): the id order own's hits have
+                ambiguous = definedBySameNamedClasses( hits, ids );
+                return !ambiguous;
+            }
+            classWalk.swap( classNext );
+        }
+        return false;
+    }
+
+    // one class of the ancestor walk: whether it DECLARES the callee; its definitions appended (not at the receiver's own
+    // level, which step 1 judged); its plausible direct bases queued
+    bool visitAncestor( const Reference& r, NodeId c, bool appendDefinitions, const ClassIdentity& ids ) const
+    {
+        keyScope.assign( ( *ids.symbols )[ c ].name ).append( "::" ).append( r.calleeName );
+        const bool declares = ids.declared.find( keyScope ) != ids.declared.end();
+        if( appendDefinitions )
+        {
+            appendOwnedDefinitions( c, ids );
+        }
+        const auto up = ids.realUp.find( c );
+        for( std::string_view base : ( up == ids.realUp.end() ) ? std::span<const std::string_view>{} : std::span<const std::string_view>( up->second ) )
+        {
+            const auto bases = ids.classesByName.find( std::string( base ) );
+            if( bases == ids.classesByName.end() )
+            {
+                continue;
+            }
+            plausibleClasses( std::span<const NodeId>( bases->second.data(), bases->second.size() ), fileOf( c, ids ), ids );
+            for( NodeId b : plausible )
+            {
+                if( markSeen( b ) ) { classNext.push_back( b ); }
+            }
+        }
+        return declares;
+    }
+
+    // step (3): the callee's definitions in the REAL subclasses of the receiver class, transitively — every runtime target of a
+    // virtual call on a type whose ancestry declares the callee but defines it nowhere. Memoised per (class, callee).
+    bool subclassDefinitions( const Reference& r, NodeId receiverClass, const ClassIdentity& ids ) const
+    {
+        std::string memoKey = std::to_string( receiverClass ).append( "#" ).append( r.calleeName );
+        if( const auto hit = subclassMemo.find( memoKey ); hit != subclassMemo.end() )
+        {
+            hits = hit->second;
+            return !hits.empty();
+        }
+        hits.clear();
+        nextSeenGeneration( ids );
+        classWalk.assign( 1, receiverClass );
+        for( int depth = 0; depth < 32 && !classWalk.empty(); ++depth )
+        {
+            classNext.clear();
+            for( NodeId c : classWalk )
+            {
+                visitSubclassesOf( r, c, ids );
+            }
+            classWalk.swap( classNext );
+        }
+        std::sort( hits.begin(), hits.end() );   // each definition appended once (markSeen)
+        subclassMemo.emplace( std::move( memoKey ), hits );
+        return !hits.empty();
+    }
+
+    // the real subclasses of `c` whose base clause, read from their own file, plausibly means `c`: their definitions of the
+    // callee appended, each queued once
+    void visitSubclassesOf( const Reference& r, NodeId c, const ClassIdentity& ids ) const
+    {
+        const std::string& cname = ( *ids.symbols )[ c ].name;
+        const auto         down  = ids.realDown.find( cname );
+        const auto         named = ids.classesByName.find( cname );
+        if( down == ids.realDown.end() || named == ids.classesByName.end() )
+        {
+            return;
+        }
+        for( NodeId d : down->second )
+        {
+            plausibleClasses( std::span<const NodeId>( named->second.data(), named->second.size() ), fileOf( d, ids ), ids );
+            if( std::ranges::find( plausible, c ) == plausible.end() || !markSeen( d ) )
+            {
+                continue;   // d derives from another class of that name, or was reached already
+            }
+            keyScope.assign( ( *ids.symbols )[ d ].name ).append( "::" ).append( r.calleeName );
+            appendOwnedDefinitions( d, ids );
+            classNext.push_back( d );
+        }
+    }
+};
+
 // One-hop receiver narrowing over the canonical scope::name → definition-ids map (built once by buildGraph).
 // Holds only const references to maps buildGraph owns — no state, no allocation, no copy of the symbol table.
 struct Narrower
@@ -2279,13 +3186,14 @@ struct Narrower
     mutable std::string keyBind;    // "<fromSymbolId>#var" for the varType binding lookup (Rule 2 + L3)
     mutable std::vector<std::string_view> fieldWalk;   // Rule 2b reused base-walk frontier (views into chaUp's stored strings)
     mutable rw::SmallVec<NodeId, 2>       walkUnion;   // Phase 5: the union of a multi-base hit level (super() only) — an honest split
+    IdentityNarrower identity;   // Rule 2 through class identity: its scratch, memo and claim flag live there
 
     explicit Narrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon,
                        const HashMap<std::string, std::string>&             vt,
                        const ScopedRecvDecls&                               scoped,
                        const std::vector<std::vector<NodeId>>&              incl,
                        const std::vector<std::uint32_t>&                    symFile ) noexcept
-        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), fileIncludes( incl ), symFileId( symFile ) {}
+        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), fileIncludes( incl ), symFileId( symFile ), identity( canon, incl, symFile ) {}
 
     // append base-10 `n` to `dst` without an intermediate std::to_string allocation (matches to_string bytes).
     static void appendUint( std::string& dst, std::uint32_t n )
@@ -2356,8 +3264,9 @@ struct Narrower
     // returned ids are always real `Foo::m` definitions the bare ladder could also reach — Rule 2 just picks the
     // type-correct one earlier. Any uncertainty (no binding, conflicting bindings, type has no such method) →
     // honest ambiguity via §2a, never a guess. Deterministic: canonByName insertion order = symbol-id order.
-    const rw::SmallVec<NodeId, 2>* rule2RecvVarType( const Reference& r ) const
+    const rw::SmallVec<NodeId, 2>* rule2RecvVarType( const Reference& r, const ClassIdentity& ids, const ChaUpNames& chaUp ) const
     {
+        identity.forgetClaim();
         if( r.recv != RecvKind::NamedVar || r.recvVar.empty() )
         {
             return nullptr; // not a named-receiver call
@@ -2372,22 +3281,37 @@ struct Narrower
         }
 
         // the var's type at THIS site. Empty = unbound, tombstoned, or an untyped declaration in scope → no narrow.
-        const std::string_view boundType = recvVarTypeName( r );
-        if( boundType.empty() )
+        const RecvVarType bound = recvVarType( r );
+        if( bound.name.empty() )
         {
             return nullptr;
         }
+        const auto [ qualifierKnown, qualifier ] = writtenQualifier( bound, ids );
 
-        // resolve `m` against the bound type's own methods (defs only). Miss ⇒ degrade to §2a. Reused buffer,
-        // identical bytes to `boundType + "::" + r.calleeName`.
+        // resolve `m` against the bound type's own methods (defs only). Reused buffer, identical bytes to
+        // `bound.name + "::" + r.calleeName`.
         keyScope.clear();
-        keyScope.append( boundType ).append( "::" ).append( r.calleeName );
+        keyScope.append( bound.name ).append( "::" ).append( r.calleeName );
         const auto it = canonByName.find( keyScope );
-        if( it == canonByName.end() || it->second.size() == 0 )
+        const rw::SmallVec<NodeId, 2>* const own = ( it == canonByName.end() || it->second.size() == 0 ) ? nullptr : &it->second;
+        if( ids.classesByName.empty() || !extent::inSet( extent::kHeadRuleLangs, r.lang ) || !qualifierKnown )
         {
-            return nullptr;
+            return own;   // no class identity to consult: the final-segment answer — overloads split 1/k within the type
         }
-        return &it->second;   // real `Foo::m` definition(s) — overloads stay split 1/k, but only within the type
+        return identity.narrow( r, WrittenType{ bound.name, qualifier }, own, ids, chaUp );
+    }
+
+    // true iff THIS reference's Rule 2 answer was a class-identity CLAIM (an inherited body or an interface dispatch split)
+    // that survived the caller's language/root filter — a type fact, which the ladder keeps whole instead of trimming it by
+    // file locality. forgetClaim: the caller's filter emptied Rule 2's answer; false, to close `narrowed = narrowTo( … ) || …`.
+    bool identityClaimFor( const Reference& r ) const noexcept
+    {
+        return identity.claimFor( r );
+    }
+
+    bool forgetClaim() const noexcept
+    {
+        return identity.forgetClaim();
     }
 
     // Rule 2b — receiver-FIELD type narrow (W1-P1-12). For a member call `f.m()` / `f->m()` (recv==NamedVar,
@@ -2717,7 +3641,16 @@ struct Narrower
     // same way ("" = tombstone).
     // KNOWN FLOOR, the span model's own: a range-for variable's span is the whole loop statement, so a same-named
     // outer variable used inside the loop's own range expression reads as the loop variable.
+    struct RecvVarType
+    {
+        std::string_view name;                // the final class-name segment Rule 2 matches, "" when none is usable
+        const Binding*   declared = nullptr;  // the lexical declaration's typed record; nullptr on the flat table
+    };
     std::string_view recvVarTypeName( const Reference& r ) const
+    {
+        return recvVarType( r ).name;
+    }
+    RecvVarType recvVarType( const Reference& r ) const
     {
         // key built in the reused buffer (identical bytes to `std::to_string( r.fromSymbol ) + "#" + r.recvVar`)
         keyBind.clear();
@@ -2732,10 +3665,26 @@ struct Narrower
                 return {};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
-            return namesStdType( declared.importedName ) ? std::string_view{} : std::string_view( declared.typeName );
+            return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, &declared };
         }
         const auto vit = varType.find( keyBind );
-        return ( vit == varType.end() ) ? std::string_view{} : std::string_view( vit->second );
+        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second, nullptr };
+    }
+
+    // the qualifier the receiver's declaration wrote — the lexical record's own, else the flat table's kept one (read while
+    // keyBind still holds this site's key) — and false when the flat table's records disagree: identity then stays out
+    std::pair<bool, std::string_view> writtenQualifier( const RecvVarType& bound, const ClassIdentity& ids ) const
+    {
+        if( bound.declared != nullptr )
+        {
+            return { true, bound.declared->importedName };
+        }
+        const auto flat = ids.flatQualifier.find( keyBind );
+        if( flat == ids.flatQualifier.end() )
+        {
+            return { true, std::string_view{} };
+        }
+        return { !flat->second.conflicting, flat->second.text };
     }
 
     // the innermost declaration whose span covers `siteByte`, or nullptr when none does or two declarations share
