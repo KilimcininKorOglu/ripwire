@@ -108,6 +108,8 @@ callers_set() {
         printf 'ERR:exit%s\n' "$rc"
         return 0
     fi
+    # every failure prints a token of its own, the python process's included: a traceback prints
+    # nothing on stdout, and an empty stdout is exactly what an expected-empty caller set reads as
     printf '%s' "$out" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
@@ -115,11 +117,12 @@ try:
     obj = json.loads(raw)
 except Exception:
     print("ERR:json"); sys.exit(0)
-if not isinstance(obj, dict) or "callers" not in obj:
+rows = obj.get("callers") if isinstance(obj, dict) else None
+if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
     print("ERR:shape"); sys.exit(0)
-names = sorted({ row.get("n","") for row in obj.get("callers", []) if row.get("n") })
+names = sorted({ row["n"] for row in rows if isinstance(row.get("n"), str) and row["n"] })
 print(" ".join(names))
-'
+' || printf 'ERR:python\n'
 }
 
 # --uses in_id values for role=call sites of a named symbol (default XML). Same taxonomy: a refusal
@@ -132,15 +135,39 @@ uses_in_ids() {
         printf 'ERR:exit%s\n' "$rc"
         return 0
     fi
+    # the document is PARSED before an id is read: a substring match accepted malformed XML whose text
+    # merely contained `<uses ` and some in_id="…"
     printf '%s' "$out" | python3 -c '
-import re, sys
-xml = sys.stdin.read()
-if "<uses " not in xml:
+import sys, xml.etree.ElementTree as ET
+try:
+    root = ET.fromstring(sys.stdin.read())
+except ET.ParseError:
+    print("ERR:xml"); sys.exit(0)
+if root.tag != "uses":
     print("ERR:shape"); sys.exit(0)
-ids = sorted(set(re.findall(r"in_id=\"([^\"]+)\"", xml)))
+ids = sorted({ e.get("in_id") for e in root.iter() if e.get("in_id") })
 print(" ".join(ids))
-'
+' || printf 'ERR:python\n'
 }
+
+# MUTATION CONTROL for both helpers (CodeRabbit on #281): a stub binary answers with documents that parse but
+# are the wrong shape, or do not parse at all. Each must come back as an ERR: token, never as an id or name list
+# an expected-empty assertion could accept. The stub replaces $BIN only inside this block.
+helper_controls() {
+    local stub="$TMP/stubbin" realBin="$BIN" got
+    for doc in '{"callers": 5}' '{"callers": [7]}' '[1, 2]'; do
+        printf '#!/bin/sh\nprintf %%s %s\n' "'$doc'" >"$stub"; chmod +x "$stub"; BIN="$stub"
+        got="$( callers_set "$FIX" makeFn )"
+        case "$got" in ERR:*) ok "control: callers_set refuses $doc as [$got]" ;; *) no "control: callers_set accepted $doc as [$got]" ;; esac
+    done
+    for doc in '<uses in_id="typeMethod"' '<callers in_id="typeMethod"/>'; do
+        printf '#!/bin/sh\nprintf %%s %s\n' "'$doc'" >"$stub"; chmod +x "$stub"; BIN="$stub"
+        got="$( uses_in_ids "$FIX" makeFn )"
+        case "$got" in ERR:*) ok "control: uses_in_ids refuses $doc as [$got]" ;; *) no "control: uses_in_ids accepted $doc as [$got]" ;; esac
+    done
+    BIN="$realBin"
+}
+helper_controls
 
 contains_id() {
     case " $1 " in
