@@ -747,6 +747,17 @@ correctly does) and `--exclude=<marker-above-root>` silently dropped every file 
 indexing normally). `test/rootspellingcheck.sh` gained two arms pinning both call sites across all six root
 spellings.
 
+### Fixed — MCP `quality_delta`'s "sidecar present but unreadable" baseline marker now spells the CLI's own wording
+
+The CLI and MCP arms named the same disk state — a `.ripwire_quality_baseline` sidecar that exists but was
+rejected by `readBaseline` (unrecognizable, an older format, or pre-Q1) — with two different strings:
+`baseline="git-HEAD (sidecar unreadable)"` on the CLI (the spelling `quality::selectBaseline` sets and
+`--help`'s own legend documents) versus `"git-HEAD (unreadable sidecar ignored)"` from MCP's
+`mcpBaselineMarker`, which carries its own local `std::filesystem::exists` fallback for a residual case
+`selectBaseline` cannot flag on its own (§B6 M10). MCP now returns the documented CLI string.
+`test/mcpattrparitycheck.sh` gained a value-level check (its existing arms compare attribute NAMES only,
+deliberately) that pins both surfaces to the identical marker on a pre-stamp v5 sidecar fixture.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
