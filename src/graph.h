@@ -2220,18 +2220,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const bool ffiActive = !pybindAlias.empty() || !externCAlias.empty();
 
-    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a `this->m()` / `self.m()` call to the
-    // caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call to the variable's type (a parameter's through resolve.h's lexical table);
-    // Rule 3 pins a call to the ONE file the caller includes that defines it — all BEFORE the bare-name spray below. See resolve.h.
+    // P2-D one-hop type narrowing over the canonical scope::name map above (no new pass): Rule 1 pins `this->m()` / `self.m()` to the caller's enclosing class; Rule 2
+    // pins `x.m()` to the variable's type (a parameter's through the lexical table); Rule 3 pins a call to the ONE included file defining it — all BEFORE the spray. See resolve.h.
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
-    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId );
+    const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
+    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
     // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
     // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
     // Java members into the shared map would put them in reach of the Kotlin↔Java bridge's Rule-1 lookups,
     // which is a resolution change #74 does not ask for. Empty map on a Java-free corpus ⇒ never hits.
     const HashMap<std::string, rw::SmallVec<NodeId, 2>> javaTypeMembers = buildJavaTypeMembers( ing );
-    const Narrower javaNarrower( javaTypeMembers, varType, scopedRecvDecls, fileIncludes, symFileId );
+    const Narrower javaNarrower( javaTypeMembers, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The

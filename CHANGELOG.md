@@ -15,27 +15,6 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — a C++ local constructed from plain names, `IRBuilder<> Builder(Rem);`, was indexed as a function and hid its type from the receiver rule
-
-The grammar cannot tell a name from a type, so a block-scope direct-initialized local whose every argument is a plain
-name (`std::lock_guard<std::mutex> Lock(Mtx);`, `Slice end(end_str);`) parses as a local function declaration, and the
-tags query minted a function symbol for it. That symbol's span covers the declaration, so the local's type binding was
-filed under the phantom instead of the function the local lives in: Rule 2 found no type for `Builder.CreateSExt()`, and
-the call fell to the name ladder, where it declined or split. The phantoms also answered bare-name lookups: a Python
-`range(...)` read as bound in-repo because a C++ local was named `range`. Such a declarator now mints no symbol unless
-something in it can only be written in a prototype: `extern`/`inline`/`virtual`/`explicit`, a `void` return, anything
-after the parameter list (`const`, `override`, `noexcept`), empty parentheses, or a parameter an argument cannot
-produce (a primitive or cv-qualified type, a named declarator, `*`/`&`, a default, `...`). Measured with
-`--pin-census --no-cache`, main against the change, C rows joined on (caller, callee, line): llvm-project 4d5358b1d
-loses 12,543 function symbols and rocksdb 0e2801ac3 2,443, none added. Excluding rows that only lost a phantom target,
-changed caller when a phantom disappeared, or lost a veto on a phantom name, 2,857 llvm and 1,062 rocksdb call sites
-retarget. A seeded blinded sample of 40 graded 34 better, 0 same, 6 worse, and all 6 came from the 68 llvm sites that
-lost an edge. Those sites are the flat per-function receiver table's existing floor: a sibling block's same-named local
-of another type now tombstones the name. On train 3 (template-id receivers) the change also restores 997 of the 1,937
-llvm sites that refusing Rule 2c for C++ moved, 928 of them `Builder.CreateX()`. `Widget w( a * b )` still reads as a
-pointer parameter and stays a function symbol, a stated floor. Gate: `test/narrowcheck.sh` arms 52-60 (52-58 red on the
-unchanged binary; 59 red on a fix that refuses every body-local declarator).
-
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
 A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles
@@ -1599,6 +1578,76 @@ repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols ·
 `kParserVer` 108 → 109 (the PR declared 96 → 97 over `main`; integration/train-3 assigns 109; record layout
 unchanged by it, `kCacheVersion` stays 23; the VALUES of `recv`/`recvVar` move, so Ruby extraction facts are re-parsed),
 with `quality.h`'s mirror and `test/qschemetrip.hash` re-pinned in the same commit. Thanks to @andriytyurnikov.
+
+### Fixed — a C++ local constructed from plain names, `IRBuilder<> Builder(Rem);`, was indexed as a function and hid its type from the receiver rule
+
+The grammar cannot tell a name from a type, so a block-scope direct-initialized local whose every argument is a plain
+name (`std::lock_guard<std::mutex> Lock(Mtx);`, `Slice end(end_str);`) parses as a local function declaration, and the
+tags query minted a function symbol for it. That symbol's span covers the declaration, so the local's type binding was
+filed under the phantom instead of the function the local lives in: Rule 2 found no type for `Builder.CreateSExt()`, and
+the call fell to the name ladder, where it declined or split. The phantoms also answered bare-name lookups: a Python
+`range(...)` read as bound in-repo because a C++ local was named `range`. Such a declarator now mints no symbol unless
+something in it can only be written in a prototype: `extern`/`inline`/`virtual`/`explicit`, a `void` return, anything
+after the parameter list (`const`, `override`, `noexcept`), empty parentheses, or a parameter an argument cannot
+produce (a primitive or cv-qualified type, a named declarator, `*`/`&`, a default, `...`). Measured with
+`--pin-census --no-cache`, main against the change, C rows joined on (caller, callee, line): llvm-project 4d5358b1d
+loses 12,543 function symbols and rocksdb 0e2801ac3 2,443, none added. Excluding rows that only lost a phantom target,
+changed caller when a phantom disappeared, or lost a veto on a phantom name, 2,857 llvm and 1,062 rocksdb call sites
+retarget. A seeded blinded sample of 40 graded 34 better, 0 same, 6 worse, and all 6 came from the 68 llvm sites that
+lost an edge. Those sites are the flat per-function receiver table's existing floor: a sibling block's same-named local
+of another type now tombstones the name. On train 3 (template-id receivers) the change also restores 997 of the 1,937
+llvm sites that refusing Rule 2c for C++ moved, 928 of them `Builder.CreateX()`. `Widget w( a * b )` still reads as a
+pointer parameter and stays a function symbol, a stated floor. Gate: `test/narrowcheck.sh` arms 52-60 (52-58 red on the
+unchanged binary; 59 red on a fix that refuses every body-local declarator).
+
+### Fixed — a class's `using Base::m;` was ignored, so a call its two bases tie on stayed split
+
+llvm-project's `clang/lib/CodeGen/CGNonTrivialStruct.cpp` declares `struct CopyStructVisitor : StructVisitor<Derived>,
+CopiedTypeVisitor<Derived, IsMove> { using StructVisitor<Derived>::asDerived; … }`. Both bases define `asDerived`, and
+the using-declaration is how C++ picks one. The type-side probe that Rules 2b and 2c and Rule 1's base walk share
+(`resolve.h` `methodOnTypeOrBases`) never read it. A class with no `asDerived` of its own went straight to its bases,
+the two-base tie refused, and each of the file's five `asDerived()` calls split three ways: `StructVisitor::asDerived`
+plus same-file namesakes in `GenFuncNameBase` and `GenFuncBase`, classes the caller does not derive from. The tags pass
+has recorded every class-scope using-declaration as an import site all along; the resolver never consulted them.
+
+A class that defines no `m` now answers with what its `using Base::m;` names: the base's own definitions, else the
+result of walking that base. The walk goes one level: that base's own using-declarations are not followed. The
+qualifier loses its template arguments (`using Base<T>::m;` names `Base`). A re-export naming nothing the index reaches
+adds nothing, and the unchanged walk runs. So does one naming a class outside the class's base closure, which C++ forbids: trusting
+`using NotABase::m;` would pin `NotABase::m` over the real bases' tie. The change is resolve-stage only: kParserVer and the cache format do not
+move.
+
+It deliberately does NOT add the base's overloads to a class that also defines `m`, though C++ does. That was measured
+first. Clang's `CGBuilderTy`, for example, writes `using CGBuilderBaseTy::CreateGEP;` next to its own `CreateGEP`
+overloads, yet the resolver answers the class's own overloads alone. The union was built and graded: over the 17 call
+sites it moved (rocksdb 13, llvm-project 4), blinded against source, 5 were better, 4 the same and 8 worse. Three
+causes, none fixable without parameter types:
+- The ladder cannot drop a re-exported overload the class overrides: rocksdb's `WriteBatch::Put` and `Delete` gained
+  `WriteBatchBase`'s.
+- It cannot drop one the argument count rules out, because the arity filter removes only too-many-arguments
+  candidates.
+- One split was cut to its base half by the same-file tier.
+
+That shape stays a stated floor, pinned by `test/fieldnarrowcheck.sh` arm (u1). It would not have reached `CGBuilderTy`'s
+calls in any case. On main, `CGBuilderBaseTy` is a typedef the base walk cannot follow. With a typedef/using alias fact
+applied, the S6-C locality tie-break keeps the `clang/lib/CodeGen` half of the split.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `fe28fd49` against this change, joining call-site rows
+on (caller, callee, line):
+- rocksdb @ `0e2801ac3`: 0 call sites change.
+- llvm-project @ `4d5358b1d`: 5 change, 0 gained, 0 lost. All five `asDerived()` splits become one receiver-rule pin
+  (`receiver-rule=` 520,496 → 520,501, `split=` 256,918 → 256,913). Graded blinded against source: 5 better, 0 same,
+  0 worse.
+- Composed with the typedef/using alias fact then in review (head `36aa4f56`), llvm-project moves one more site:
+  `UsingShadowDecl::getMostRecentDeclImpl` reaches `Redeclarable::getMostRecentDecl` through `using
+  redeclarable_base::getMostRecentDecl;`, graded WRONG → PARTIAL. rocksdb stays at 0.
+
+The ASan build's llvm-project census is byte-identical to the plain build's and reports no sanitizer finding. Re-measured after merging `main` at `a5ce95e2`: the same five llvm-project sites move, and rocksdb still moves none.
+
+The gate is `test/fieldnarrowcheck.sh` arms (u0)–(u7). On `main`, (u2) the field call, (u3) Rule 1's bare call and (u5)
+the template-qualified re-export are red. (u4) is the contrast: the same two bases with no using-declaration keep their
+split. (u6) is an unindexed re-export that keeps the walk. (u1) goes red on the union build, and (u5) on a build
+without the template-argument strip.
 
 ## [0.6.1] — 2026-09-14
 

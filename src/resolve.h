@@ -48,7 +48,7 @@
 #include "model.h"
 #include "arch.h"        // §B1.3: relForHash — the root-relative path segment canonicalIdRelTo keys on
 #include "smallvec.h"
-#include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey)
+#include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports)
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 #include "infra/Diagnostics.h"   // VERIFY — buildScopedRecvDecls' index-range precondition
@@ -2381,6 +2381,46 @@ inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
     return table;
 }
 
+// ── using-declaration re-exports — built once per buildGraph, consumed via Narrower::ownMethodSet (the type-side
+// probe Rules 2b/2c and Rule 1's base walk share). "Class::m" → the sorted, deduped names of the classes a class-scope
+// `using Base::m;` names for `m`. In C++ a class's own `m` HIDES every base `m`; the using-declaration puts the named
+// base's members into the class's own scope (clang's CGNonTrivialStruct.cpp: `using StructVisitor<Derived>::asDerived;`
+// in a class whose two bases both define asDerived). ownMethodSet reads it only for a class with no `m` of its own.
+// The facts are the import refs the tags pass already mints (queries/cpp/tags.scm using_declaration → RefRole::Import): one whose enclosing symbol is a Class/Struct sits
+// at class scope. The key is that class's NAME — the scope string its methods carry — so it is byte-identical to the
+// canonByName key of the class's own `m`. The qualifier is the IMMEDIATE scope (ingest's re-split) and loses its
+// template arguments here, where the 2-segment spelling `using Base<T>::m;` still carries them. An inheriting
+// constructor `using Base::Base;` records nothing: no member call names it. RESOLVE-stage only — every input is a
+// field the cache already stores. Deterministic: pure function of ing.references; each list sorted and deduped.
+inline HashMap<std::string, std::vector<std::string>> buildUsingReexports( const IngestResult& ing )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2k: using-declaration re-exports" );
+    HashMap<std::string, std::vector<std::string>> reexports;
+    std::string                                    key;   // reused "Class::m" buffer
+    for( const Reference& ur : ing.references )
+    {
+        if( ur.role != RefRole::Import || ur.fromSymbol == kNoNode || ur.qualifier.empty() || ( ur.lang != Lang::Cpp && ur.lang != Lang::ObjC ) )
+        {
+            continue;
+        }
+        const Symbol& cls = ing.symbols[ ur.fromSymbol ];
+        const std::string_view base = namesplit::stripTemplateArgs( ur.qualifier );
+        if( ( cls.kind != SymKind::Class && cls.kind != SymKind::Struct ) || base.empty() || base == ur.calleeName || base == cls.name )
+        {
+            continue;   // not at class scope, an inheriting constructor, or a class naming itself
+        }
+        key.clear();
+        key.append( cls.name ).append( "::" ).append( ur.calleeName );
+        reexports[ key ].emplace_back( base );
+    }
+    for( auto& [ k, bases ] : reexports )
+    {
+        std::sort( bases.begin(), bases.end() );
+        bases.erase( std::unique( bases.begin(), bases.end() ), bases.end() );
+    }
+    return reexports;
+}
+
 // S6-C's ranking key for one candidate: sharedLocality doubled, plus one when a BARE or `this->` call's candidate is
 // declared in the caller's OWN scope rather than in a scope nested inside it. Both share the caller's whole
 // `path::Scope::` prefix, so counting segments ties `Outer::start` with `Outer::Inner::start` for a `start()` written in
@@ -3390,6 +3430,9 @@ struct Narrower
     // per-symbol fileId (view into ing.symbols' fileIds), so Rule 3 can group candidate defs by their file
     // without a reference to the whole IngestResult. buildGraph owns the backing vector.
     const std::vector<std::uint32_t>&                    symFileId;
+    // "Class::m" → the classes a class-scope `using Base::m;` re-exports `m` from (buildUsingReexports above). Read by
+    // ownMethodSet only; empty on a corpus without one, where every probe is the plain canonByName hit it always was.
+    const HashMap<std::string, std::vector<std::string>>& usingReexports;
 
     // reused key-assembly buffers — one `Narrower` drives the whole (single-threaded) resolve loop, so the
     // `scope::name` / `<fromSymbol>#var` lookup keys are built IN PLACE (clear()+append(), capacity kept) into
@@ -3400,13 +3443,16 @@ struct Narrower
     mutable std::vector<std::string_view> fieldWalk;   // Rule 2b reused base-walk frontier (views into chaUp's stored strings)
     mutable rw::SmallVec<NodeId, 2>       walkUnion;   // Phase 5: the union of a multi-base hit level (super() only) — an honest split
     IdentityNarrower identity;   // Rule 2 through class identity: its scratch, memo and claim flag live there
+    mutable rw::SmallVec<NodeId, 2>       reexportUnion;   // what a type's `using Base::m;` declarations reach when it defines no `m` itself
 
     explicit Narrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon,
                        const HashMap<std::string, FlatRecvType>&            vt,
                        const ScopedRecvDecls&                               scoped,
                        const std::vector<std::vector<NodeId>>&              incl,
-                       const std::vector<std::uint32_t>&                    symFile ) noexcept
-        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), fileIncludes( incl ), symFileId( symFile ), identity( canon, incl, symFile ) {}
+                       const std::vector<std::uint32_t>&                    symFile,
+                       const HashMap<std::string, std::vector<std::string>>& reexports ) noexcept
+        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), fileIncludes( incl ), symFileId( symFile ), usingReexports( reexports ),
+          identity( canon, incl, symFile ) {}
 
     // append base-10 `n` to `dst` without an intermediate std::to_string allocation (matches to_string bytes).
     static void appendUint( std::string& dst, std::uint32_t n )
@@ -3589,12 +3635,12 @@ struct Narrower
         return methodOnTypeOrBases( field->type, r, chaUp );
     }
 
-    // The type-side probe Rules 2b and 2c share: `type::callee` in the type's OWN method set first (canonByName,
-    // DEFS only), then a bounded breadth-first DIRECT-base walk (frontier levels over chaUp). The SHALLOWEST
-    // level with a hit decides: exactly one hitting base name → those definitions; two or more at one level →
-    // nullptr (honest ambiguity, the caller's ladder stays unchanged). Deterministic: chaUp lists are
-    // sorted+deduped, the frontier is expanded in stored order with a fixed visit cap, and canonByName
-    // insertion order = symbol-id order.
+    // The type-side probe Rules 2b and 2c share: `type::callee` in the type's OWN method set first (ownMethodSet: its
+    // definitions plus what its using-declarations re-export), then a bounded breadth-first DIRECT-base walk (frontier
+    // levels over chaUp). The SHALLOWEST level with a hit decides: exactly one hitting base name → those
+    // definitions; two or more at one level → nullptr (honest ambiguity, the caller's ladder stays unchanged).
+    // Deterministic: chaUp lists are sorted+deduped, the frontier is expanded in stored order with a fixed visit cap,
+    // and canonByName insertion order = symbol-id order.
     // One level of the base walk: probe `name::callee` for every frontier name from `lvlEnd` on. Returns the
     // single hitting definition list and whether a SECOND base hit at this level (`multi`); every hit's
     // definitions are also appended to `walkUnion`, which the caller returns when it asked for the union.
@@ -3622,53 +3668,143 @@ struct Narrower
         return { found, multi };
     }
 
-    // `skipSelf` (Phase 5): start at the BASES — the type's own method set is not probed. The `super()`
-    // receiver needs exactly that: `super().m()` inside class C names the first `m` in C's MRO AFTER C.
-    // `unionOnMulti` (Phase 5): when two or more bases at the shallowest hit level define the callee, return the
-    // UNION of their definitions instead of refusing — the `super()` walk needs it: a multi-base tie is an in-repo
-    // ambiguity (Python's C3 order is not modelled), NOT a sign the MRO left the tree, and the caller's veto
-    // must not fire on it. The union reaches the ladder as a narrowed multi-candidate set → an honest split.
-    const rw::SmallVec<NodeId, 2>* methodOnTypeOrBases( std::string_view typeName, const Reference& r,
-                                                         const HashMap<std::string, std::vector<std::string>>& chaUp,
-                                                         bool skipSelf = false, bool unionOnMulti = false ) const
+    // One level of the base walk: append the direct bases (chaUp) of fieldWalk[ lvlBegin, lvlEnd ) as the next level,
+    // deduped against every visited name (cycles too), and never past kFieldWalkCap names in total.
+    void expandWalkLevel( std::size_t lvlBegin, std::size_t lvlEnd, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
     {
-        if( !skipSelf )
+        constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together
+        for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
         {
-            keyScope.clear();
-            keyScope.append( typeName ).append( "::" ).append( r.calleeName );
-            if( const auto it = canonByName.find( keyScope ); it != canonByName.end() && it->second.size() != 0 )
+            const auto uit = chaUp.find( std::string( fieldWalk[ i ] ) );
+            if( uit == chaUp.end() )
             {
-                return &it->second;
+                continue;
+            }
+            for( const std::string& base : uit->second )
+            {
+                if( fieldWalk.size() >= kFieldWalkCap )
+                {
+                    break;
+                }
+                if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) == fieldWalk.end() )
+                {
+                    fieldWalk.push_back( base );
+                }
             }
         }
+    }
 
-        constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together
+    // TRUE when `base` is in `typeName`'s base closure over chaUp: a direct base, a base's base, and so on. The walk is
+    // expandWalkLevel's, so a closure the name cap truncates answers false — the caller treats that as "not a base".
+    bool inBaseClosure( std::string_view typeName, std::string_view base, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    {
         fieldWalk.clear();
         fieldWalk.push_back( typeName );
         std::size_t lvlBegin = 0;
         while( lvlBegin < fieldWalk.size() )
         {
             const std::size_t lvlEnd = fieldWalk.size();
-            // expand this level's bases into the next level (dedup against every visited name — cycles too)
-            for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
+            expandWalkLevel( lvlBegin, lvlEnd, chaUp );
+            if( std::find( fieldWalk.begin() + std::ptrdiff_t( lvlEnd ), fieldWalk.end(), base ) != fieldWalk.end() )
             {
-                const auto uit = chaUp.find( std::string( fieldWalk[ i ] ) );
-                if( uit == chaUp.end() )
-                {
-                    continue;
-                }
-                for( const std::string& base : uit->second )
-                {
-                    if( fieldWalk.size() >= kFieldWalkCap )
-                    {
-                        break;
-                    }
-                    if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) == fieldWalk.end() )
-                    {
-                        fieldWalk.push_back( base );
-                    }
-                }
+                return true;
             }
+            lvlBegin = lvlEnd;
+        }
+        return false;
+    }
+
+    // `name::callee`'s definitions (canonByName, DEFS only), or nullptr when the scope defines none.
+    const rw::SmallVec<NodeId, 2>* definitionsIn( std::string_view scope, std::string_view callee ) const
+    {
+        keyScope.clear();
+        keyScope.append( scope ).append( "::" ).append( callee );
+        const auto it = canonByName.find( keyScope );
+        return ( it != canonByName.end() && it->second.size() != 0 ) ? &it->second : nullptr;
+    }
+
+    // The type's OWN method set for the callee: its own definitions — or, when it defines none, the base members a
+    // class-scope `using Base::callee;` names (usingReexports). C++ lookup stops at the first class that declares the
+    // name, and a using-declaration declares it in the class itself, so `using B1::m;` in `D : B1, B2` answers B1::m
+    // where the base walk refuses the two-base tie, and reaches a base the walk cannot name. A re-exported base is
+    // probed by name, its own definitions else its base walk, ONE level deep: that base's own using-declarations are
+    // not followed. Several using-declarations for one name answer the union of what they reach (an honest split); one
+    // naming nothing the index reaches (a base outside the tree, an alias the resolver cannot follow) adds nothing, and
+    // the unchanged walk runs. So does one naming a class OUTSIDE the class's base closure (inBaseClosure): C++ requires a
+    // base there, so `using NotABase::m;` is mid-refactor or partial input, and trusting it pinned NotABase::m alone over
+    // the real bases' tie (fieldnarrowcheck (u8); a grand-base is honoured, (u9)).
+    // STATED FLOOR, decided by measurement: a class that DEFINES the callee answers its own definitions alone, even
+    // when it also re-exports base overloads — which C++ puts in the same overload set. The union was built and graded
+    // net-WORSE (2026-09-17, --pin-census rocksdb 0e2801ac3 + llvm-project 4d5358b1d, the 17 sites it moved, blinded
+    // against source: 5 better, 4 same, 8 worse). With no parameter types the ladder cannot drop a re-exported base
+    // overload the class OVERRIDES (rocksdb WriteBatch::Put's WriteBatchBase overloads) or one the arguments rule out
+    // by count (the arity filter drops only too-many-arguments), and a split whose base half shares the caller's file
+    // is cut to that half by the ladder's same-file tier. A call that selects the re-exported overload stays on the
+    // class's own — fieldnarrowcheck (u1) pins that floor.
+    // Returns canonByName storage for the class's own definitions, else `reexportUnion` (sorted by id, deduped).
+    const rw::SmallVec<NodeId, 2>* ownMethodSet( std::string_view typeName, const Reference& r,
+                                                  const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    {
+        const rw::SmallVec<NodeId, 2>* own = definitionsIn( typeName, r.calleeName );
+        if( own != nullptr || usingReexports.empty() || ( r.lang != Lang::Cpp && r.lang != Lang::ObjC ) )
+        {
+            return own;   // the facts are C-family: a same-named Python/Ruby class keeps its own walk
+        }
+        const auto rit = usingReexports.find( keyScope );   // definitionsIn left `typeName::callee` in keyScope
+        if( rit == usingReexports.end() )
+        {
+            return nullptr;
+        }
+        reexportUnion.clear();
+        for( const std::string& base : rit->second )
+        {
+            if( !inBaseClosure( typeName, base, chaUp ) )
+            {
+                continue;   // not a base of the class: ill-formed or partial input, and the walk below decides as it always did
+            }
+            const rw::SmallVec<NodeId, 2>* baseDefs = definitionsIn( base, r.calleeName );
+            if( baseDefs == nullptr )
+            {
+                baseDefs = methodOnTypeOrBases( base, r, chaUp, /*skipSelf=*/ true );   // the walk alone: canonByName storage or nullptr, never a buffer
+            }
+            if( baseDefs != nullptr )
+            {
+                reexportUnion.insert( reexportUnion.end(), baseDefs->begin(), baseDefs->end() );
+            }
+        }
+        std::sort( reexportUnion.begin(), reexportUnion.end() );
+        reexportUnion.erase( std::unique( reexportUnion.begin(), reexportUnion.end() ), reexportUnion.end() );
+        return reexportUnion.empty() ? nullptr : &reexportUnion;
+    }
+
+    // `skipSelf` (Phase 5): start at the BASES — the type's own method set is not probed. The `super()`
+    // receiver needs exactly that: `super().m()` inside class C names the first `m` in C's MRO AFTER C.
+    // `unionOnMulti` (Phase 5): when two or more bases at the shallowest hit level define the callee, return the
+    // UNION of their definitions instead of refusing — the `super()` walk needs it: a multi-base tie is an in-repo
+    // ambiguity (Python's C3 order is not modelled), NOT a sign the MRO left the tree, and the caller's veto
+    // must not fire on it. The union reaches the ladder as a narrowed multi-candidate set → an honest split.
+    // A class that defines no `m` answers what its `using Base::m;` names (ownMethodSet), so `using B1::m;` in
+    // `D : B1, B2` settles the two-base tie a walk would refuse. Only the type itself is read that way: a base the
+    // walk reaches is probed for its own definitions, and that base's using-declarations are not read.
+    const rw::SmallVec<NodeId, 2>* methodOnTypeOrBases( std::string_view typeName, const Reference& r,
+                                                         const HashMap<std::string, std::vector<std::string>>& chaUp,
+                                                         bool skipSelf = false, bool unionOnMulti = false ) const
+    {
+        if( !skipSelf )
+        {
+            if( const rw::SmallVec<NodeId, 2>* own = ownMethodSet( typeName, r, chaUp ) )
+            {
+                return own;
+            }
+        }
+
+        fieldWalk.clear();
+        fieldWalk.push_back( typeName );
+        std::size_t lvlBegin = 0;
+        while( lvlBegin < fieldWalk.size() )
+        {
+            const std::size_t lvlEnd = fieldWalk.size();
+            expandWalkLevel( lvlBegin, lvlEnd, chaUp );
             // probe the NEW level's names; the shallowest level with any hit decides
             const auto [ found, multi ] = probeWalkLevel( lvlEnd, r.calleeName );
             if( multi )

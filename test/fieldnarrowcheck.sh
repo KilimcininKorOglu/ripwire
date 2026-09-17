@@ -346,6 +346,133 @@ else
     no "(q8) stdfix census differs across runs or warm vs cold"; diff "$TMP/q3.tsv" "$TMP/q3w.tsv" | head -6
 fi
 
+# ── (u) a using-declaration names the base a member comes from (2026-09-17). C++ lookup stops at the first class that
+#        declares the name, and `using Base::m;` declares it in the class itself. The type-side probe Rules 2b/2c and Rule 1's
+#        base walk share (resolve.h methodOnTypeOrBases) never read it: a class with no `m` of its own went straight to its
+#        bases, where two bases both defining `m` REFUSE — clang's CGNonTrivialStruct.cpp writes `using
+#        StructVisitor<Derived>::asDerived;` for exactly that tie, and its five asDerived() calls split across unrelated
+#        classes. Now the using-declaration answers: (u2) through a field, (u3) through Rule 1's bare call, (u5) with the
+#        qualifier's template arguments stripped. (u4) is the contrast: UTie differs from UPick ONLY by the using line.
+#        (u6) is the floor for a re-export the index cannot reach: ExtBase is not in the tree, so the unchanged walk runs.
+#        (u1) is the DECIDED floor: a class that also defines `m` answers its own definitions alone, though C++ adds the
+#        re-exported base overloads to the same set. That union was built and graded net-worse against source (17 sites on
+#        rocksdb + llvm-project: 5 better, 4 same, 8 worse — resolve.h ownMethodSet says why); flipping (u1) needs that
+#        measurement redone, not this arm deleted. Separate corpus: (h)'s ambiguous= gauge is counted over $FIX.
+#        LINE NUMBERS in u.cpp are asserted below. ──
+FIX5="$TMP/usingfix"
+mkdir -p "$FIX5"
+cat >"$FIX5/u.cpp" <<'EOF'
+struct UBase { void emit( int a ) { } void emit( double d ) { } };
+struct UDecoy { void emit( int a ) { } };
+struct UDerived : UBase {
+    using UBase::emit;
+    void emit( const char* s ) { }
+};
+struct UB1 { void dual() { } };
+struct UB2 { void dual() { } };
+struct UPick : UB1, UB2 { using UB1::dual; void selfPick() { dual(); } };
+struct UTie : UB1, UB2 { void selfTie() { dual(); } };
+struct UExt : ExtBase, UB1, UB2 { using ExtBase::dual; };
+template <typename T> struct UTB { void grab( T t ) { } };
+struct UTC { void grab( int t ) { } };
+struct UTD : UTB<int>, UTC { using UTB<int>::grab; };
+struct UOwner {
+    UDerived m_d;
+    UPick    m_k;
+    UTie     m_i;
+    UExt     m_e;
+    UTD      m_t;
+    void viaReexport() { m_d.emit( 1 ); }
+    void viaPick()     { m_k.dual(); }
+    void viaTie()      { m_i.dual(); }
+    void viaExt()      { m_e.dual(); }
+    void viaTemplate() { m_t.grab( 1 ); }
+};
+EOF
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/u.tsv" >/dev/null 2>&1
+UTSV="$TMP/u.tsv"   # the census uRow reads; (u8)/(u9) point it at their own corpus
+uRow(){  # uRow CLASS::METHOD LINE — "mech/flags|targets": that caller's census row in $UTSV at LINE, target ids without #NODEID, sorted ("" = no row)
+    local rows
+    rows="$( awk -F '\t' -v c="::$1#" -v l="$2" '$1 == "C" && index( $6, c ) && $9 == l { print $2 "/" $5; n = split( $8, t, "|" ); for( i = 1; i <= n; ++i ) { sub( /#[0-9]+$/, "", t[ i ] ); print t[ i ] } }' "$UTSV" 2>/dev/null )"
+    [ -n "$rows" ] || return 0
+    printf '%s|%s' "$( printf '%s\n' "$rows" | head -1 )" "$( printf '%s\n' "$rows" | tail -n +2 | sort | paste -sd , - )"
+}
+uMissing=""
+for want in '::UOwner::viaReexport#' '::UOwner::viaPick#' '::UOwner::viaTie#' '::UOwner::viaExt#' '::UOwner::viaTemplate#' '::UPick::selfPick#' '::UTie::selfTie#' 'dispositions calls=7 '; do
+    grep -qF "$want" "$TMP/u.tsv" 2>/dev/null || uMissing="$uMissing [$want]"
+done
+for site in 'emit|p="u.cpp:4" in_id="u.cpp::UDerived::UDerived"' 'dual|p="u.cpp:9" in_id="u.cpp::UPick::UPick"' 'dual|p="u.cpp:11" in_id="u.cpp::UExt::UExt"' 'grab|p="u.cpp:14" in_id="u.cpp::UTD::UTD"'; do
+    "$BIN" "$FIX5" "--uses=${site%%|*}" --no-cache 2>/dev/null | grep -qF "<u role=\"import\" ${site#*|}/>" \
+        || uMissing="$uMissing [--uses=${site%%|*} has no import row ${site#*|}]"
+done
+[ -z "$uMissing" ] && ok "(u0) presence: the census names all 7 callers and counts 7 calls, and all four using-declarations are indexed import sites of their class" \
+    || no "(u0) presence guard:$uMissing — every (u) arm below would be vacuous"
+uExpect(){  # uExpect ARM CLASS::METHOD LINE WANT WHAT — that caller's row must be exactly WANT
+    local got; got="$( uRow "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "($1) $5: [$got]"
+    else
+        no "($1) $5 — expected [$4], got [${got:-no row}]"
+    fi
+}
+uExpect u1 UOwner::viaReexport 21 'receiver-rule/r|u.cpp::UDerived::emit' \
+    "decided floor: m_d.emit( 1 ) on UDerived (own emit + using UBase::emit) keeps UDerived's own emit — the union graded net-worse"
+uExpect u2 UOwner::viaPick 22 'receiver-rule/r|u.cpp::UB1::dual' \
+    "m_k.dual() on UPick (no own dual, bases UB1 and UB2 both define it, using UB1::dual) pins UB1::dual through the field"
+uExpect u3 UPick::selfPick 9 'receiver-rule/r|u.cpp::UB1::dual' \
+    "bare dual() inside UPick pins UB1::dual through Rule 1's base walk"
+uExpect u4 UOwner::viaTie 23 'split/-|u.cpp::UB1::dual,u.cpp::UB2::dual' \
+    "control: m_i.dual() on UTie (the same two bases, NO using-declaration) keeps the refused tie's honest split"
+uExpect u5 UOwner::viaTemplate 25 'receiver-rule/r|u.cpp::UTB::grab' \
+    "m_t.grab( 1 ) on UTD (bases UTB<int> and UTC both define grab, using UTB<int>::grab) pins UTB::grab — the qualifier's template arguments are stripped"
+uExpect u6 UOwner::viaExt 24 'split/-|u.cpp::UB1::dual,u.cpp::UB2::dual' \
+    "floor: m_e.dual() on UExt (using ExtBase::dual, ExtBase not indexed) adds nothing and keeps the walk's split"
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/u2.tsv" >/dev/null 2>&1
+rm -f "$TMP/uc"
+"$BIN" "$FIX5" --cache="$TMP/uc" >/dev/null 2>&1
+"$BIN" "$FIX5" --cache="$TMP/uc" --pin-census="$TMP/uw.tsv" >/dev/null 2>&1
+if [ -s "$TMP/u.tsv" ] && cmp -s "$TMP/u.tsv" "$TMP/u2.tsv" && cmp -s "$TMP/u.tsv" "$TMP/uw.tsv"; then
+    ok "(u7) usingfix census byte-identical: cold, cold again, and warm (the re-export fact survives the cache)"
+else
+    no "(u7) usingfix census differs across runs or warm vs cold"; diff "$TMP/u.tsv" "$TMP/uw.tsv" | head -6
+fi
+
+# (u8) a using-declaration must name a BASE (review 2026-09-17). `using NotABase::m;` in a class that does not derive from
+#      NotABase is ill-formed C++ — mid-refactor or partial input — and the first cut pinned NotABase::m alone through
+#      receiver-rule, dropping the tie between the two real bases. A named class outside the class's base closure (chaUp)
+#      is ignored, so the walk's refusal and the ladder's split stand exactly as on main. (u9) is the control that the
+#      closure is transitive: `using GB::n;` names a GRAND-base and is honoured. Own corpus: the (u) line pins do not move.
+FIX6="$TMP/usingbasefix"
+mkdir -p "$FIX6"
+cat >"$FIX6/v.cpp" <<'EOF'
+struct RealBase1 { void m() { } };
+struct RealBase2 { void m() { } };
+struct NotABase { void m() { } };
+struct FakeDerived : RealBase1, RealBase2 { using NotABase::m; };
+struct GB { void n() { } };
+struct Mid : GB { };
+struct Mid2 { void n() { } };
+struct Leaf : Mid, Mid2 { using GB::n; };
+struct Holder {
+    FakeDerived f_;
+    Leaf        l_;
+    void viaFake() { f_.m(); }
+    void viaGrand() { l_.n(); }
+};
+EOF
+"$BIN" "$FIX6" --no-cache --pin-census="$TMP/v.tsv" >/dev/null 2>&1
+UTSV="$TMP/v.tsv"
+if grep -qF '::Holder::viaFake#' "$UTSV" 2>/dev/null && grep -qF '::Holder::viaGrand#' "$UTSV" && grep -qF 'dispositions calls=2 ' "$UTSV" \
+   && "$BIN" "$FIX6" --uses=m --no-cache 2>/dev/null | grep -qF '<u role="import" p="v.cpp:4" in_id="v.cpp::FakeDerived::FakeDerived"/>'; then
+    ok "(u8/u9 presence) the census names both Holder callers and counts 2 calls, and FakeDerived's using-declaration is an indexed import site"
+else
+    no "(u8/u9 presence) usingbasefix fixture not observed — (u8)/(u9) would be vacuous"
+fi
+uExpect u8 Holder::viaFake 12 'split/-|v.cpp::NotABase::m,v.cpp::RealBase1::m,v.cpp::RealBase2::m' \
+    "f_.m() on FakeDerived (bases RealBase1, RealBase2; using NotABase::m, NOT a base) ignores the using-declaration and keeps main's split"
+uExpect u9 Holder::viaGrand 13 'receiver-rule/r|v.cpp::GB::n' \
+    "control: l_.n() on Leaf (using GB::n, GB a base of its base Mid) honours the grand-base re-export"
+
 # ── (r) prov="final-segment" reaches FIELD narrows (2026-09-17). Test/narrowcheck.sh arm 25 marks an edge that a parameter's
 #        or local's QUALIFIED written type chose by its last name alone: that match never checked the qualifier against the
 #        class's namespace, so the edge must not read as uniquely resolved. Rule 2b makes exactly the same guess for a field —
