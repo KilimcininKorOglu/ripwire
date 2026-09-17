@@ -372,9 +372,9 @@ EOF
     chmod 000 "$UNREADDIR/sealed"
     "$BIN" "--scan-skills=$UNREADDIR" >"$TMP/unread.out" 2>"$TMP/unread.err"; UNREADRC=$?
     chmod 755 "$UNREADDIR/sealed"
-    [ "$UNREADRC" != "2" ] \
+    { [ "$UNREADRC" -eq 0 ] || [ "$UNREADRC" -eq 1 ]; } \
         && ok "F-B3(3): an unreadable, non-installable dir does not score CRITICAL (exit $UNREADRC)" \
-        || no "F-B3(3): an unreadable dir that could not be installed either scored CRITICAL (exit 2) — over-refused"
+        || no "F-B3(3): expected a non-CRITICAL verdict (exit 0 or 1), got $UNREADRC: $( head -c 200 "$TMP/unread.err" )"
 fi
 
 # (4) an unreadable FILE inside a readable skills dir → CRITICAL, named. The folder above could not be copied, so it

@@ -108,7 +108,7 @@ check_doctor(){
     printf '%s' "$row" | grep -q 'checked="1"' \
         && ok "$label layout row is checked" \
         || no "$label layout row is not checked"
-    printf '%s' "$row" | grep -q 'units="[2-9][0-9]*"' \
+    printf '%s' "$row" | grep -Eq 'units="([2-9]|[1-9][0-9]+)"' \
         && ok "$label layout row compares at least two translation units" \
         || no "$label layout row has fewer than two translation units"
     printf '%s' "$row" | grep -q "types=\"$LAYOUT_TYPE_COUNT\"" \

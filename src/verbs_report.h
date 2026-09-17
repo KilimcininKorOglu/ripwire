@@ -523,8 +523,8 @@ std::optional<int> runArchViews( const MainDispatch& d )
         // covering every exit path below (baseline / baseline-update / normal), same as the baseline tally above it.
         if( pathRulesUndecided != 0 )
         {
-            rw::emitTo( stderr, "ripwire arch: {} edge(s) met an undecided path-rule evaluation (abandoned or too long "
-                                "for the engine) that a decisive rule elsewhere settled anyway\n", pathRulesUndecided );
+            rw::emitTo( stderr, "ripwire arch: {} edge(s) met an undecided path-rule evaluation (abandoned, too long "
+                                "for the engine, or a refused substituted TO pattern) that a decisive rule elsewhere settled anyway\n", pathRulesUndecided );
         }
 
         const std::string sidecarPath = archBaselinePath( std::string( cfg.archRules ) );

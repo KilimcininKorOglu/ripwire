@@ -8,7 +8,7 @@
 # knows (the S5-E HAS-A field capture), narrow the candidate set to that type's members, walking direct
 # bases (chaUp) when the type itself does not define the method. RESOLVE-stage only — no kParserVer bump
 # (arm q, 2026-09-16, is the exception: the field capture records the namespace a type was written in, kParserVer 99;
-# arm t, 2026-09-17, is the second: a C++ typedef / using alias records its target class, kParserVer 105).
+# arm t, 2026-09-17, is the second: a C++ typedef / using alias records its target class, kParserVer 112 — declared 105, assigned on integration/train-4).
 #
 # Zero false edges is the bar — narrowing that guesses wrong is worse than ambiguity disclosed:
 #   * a LOCAL (param / declared var) that shadows the field name vetoes the narrow (real C++ lookup);
