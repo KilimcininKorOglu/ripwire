@@ -238,8 +238,9 @@ jobs:
       # The wrapper's red state, observed on this runner before any gate relies on it: a planted data race must fail it
       # WITH a data-race report, and the same program with an atomic counter must pass it clean. `volatile` keeps a load
       # and a store in every iteration; with a plain int the optimizer folds each loop into one store, and TSan missed
-      # that single pair 1 time in 300 on the dev machine. Up to three attempts cover what is left, so a false red
-      # night needs three misses in a row, while a runtime that never reports still fails all three.
+      # that single pair 8 times in 900 on the dev machine (the volatile form: 0 in 600). Up to three attempts cover
+      # what is left, so a false red night needs three misses in a row, while a runtime that never reports still
+      # fails all three.
       - name: Positive control — a planted race is reported, its race-free twin is not
         id: control
         run: |
