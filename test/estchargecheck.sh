@@ -52,17 +52,25 @@ TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 # from the other side: it made the Release CI leg unconditionally red, so the leg could never be trusted.)
 #
 # Two INDEPENDENT readings, because either alone can lie:
-#   (1) an unrelated, already-gated degrade path (--since=<not a date> → "[math degraded]"). If THAT one
-#       is silent too, this binary compiles alerts out globally rather than #14's own seam having broken.
+#   (1) an unrelated degrade path: a --scip index that OPENS and fails to DECODE ("[math degraded] --scip:
+#       corrupt/truncated index"). If THAT one is silent too, this binary compiles alerts out globally
+#       rather than #14's own seam having broken.
 #   (2) --version's build-type token — versioncheck's source of truth, set by CMakeLists from
 #       CMAKE_BUILD_TYPE ("dev" for the plain configure). Release/RelWithDebInfo/MinSizeRel define
 #       NDEBUG; nothing else does.
 # Only when BOTH agree — no alert observable anywhere AND an NDEBUG-defining flavour — is a skip honest.
 # A binary that CLAIMS to be dev/asan yet observes no alerts is a real FAILURE, and so is one that can
 # observe the unrelated alert but not #14's own.
+#
+# RE-POINTED 2026-09-16. Reading (1) used to be `--rank-by=churn --since=notadate`, which e7688981 (M8,
+# 2026-09-04) made a refusal that exits 1 before any degrade path runs: silent on EVERY flavour, so the two
+# readings had collapsed into one — measured: a Release-labelled binary that still printed every alert except
+# #14's SKIPPED #14 instead of failing it. The replacement is the probe qualitystalecheck.sh uses; its index
+# file lives in $TMP, outside the checkout, and --no-cache keeps the probe from writing next to test/fixture.
 alerts_observable=0
-"$BIN" test/fixture --rank-by=churn --since=notadate >/dev/null 2>"$TMP/flavour.err"
-grep -q 'math degraded' "$TMP/flavour.err" && alerts_observable=1
+printf 'not a scip index at all\n' > "$TMP/flavour.scip"
+"$BIN" test/fixture --scip="$TMP/flavour.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/flavour.err"
+grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/flavour.err" && alerts_observable=1
 BUILD_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
 case "$BUILD_FLAVOUR" in
     Release|RelWithDebInfo|MinSizeRel) ndebug_flavour=1 ;;
@@ -814,7 +822,7 @@ PY
     done
     [ "$g4fail" = 0 ] && ok "#14e the fault switch is exact-match: 8 non-\"1\" values (incl. 10 / 1x / 1000000) are byte-identical to unset"
 elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
-    skip "#14 open_memstream degrade arms — DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --since=notadate degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). The RIPWIRE_FAULT_CHARGE_BUFFER switch does not exist on this flavour either. These arms are proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
+    skip "#14 open_memstream degrade arms — DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). The RIPWIRE_FAULT_CHARGE_BUFFER switch does not exist on this flavour either. These arms are proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
 else
     no "#14a observability probe FAILED: RIPWIRE_FAULT_CHARGE_BUFFER=1 produced no DEGRADED_PATH_ALERT on a build that CAN observe alerts (--version build type \"$BUILD_FLAVOUR\", unrelated-degrade-path observable=$alerts_observable) — the openChargeBuffer seam regressed. This is a FAILURE, not a skip."
 fi
