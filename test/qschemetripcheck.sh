@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 3 (integration/train-3: #268 e5ca33b5, #276 50b97b7b, lane/small-fixes-0917 d33e4522, built on
+#   integration/train-1b a9549214): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its mirror are
+#   assigned in merge order over train 2b's 102: #268 changes no extraction, #276 = 103, small-fixes = 104 (the lanes
+#   declared 103 and 100 over main's 99, and pinned 95a27416 and 6fa4c131 over those numbers; neither hashed 104).
+#   kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14 (no member changes a manifest function). The two lane
+#   entries below are renumbered to the train's numbers.
 # 2026-09-17, A4 (lane/small-fixes-0917, found-items 2026-09-17): kParserVer -> 104 on integration/train-3 after
 #   #276's 103 (the lane declared 99 -> 100 over main), mirrored in
 #   src/quality.h's kIngestParserVerMirror in the same diff (test/qextractionkeycheck.sh asserts the
