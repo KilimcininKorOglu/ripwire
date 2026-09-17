@@ -391,6 +391,7 @@
 "pyshapecheck.sh": 0.5,
 "qackconcurrencycheck.sh": 13.2,
 "qackorigincheck.sh": 5.7,
+"qbaselineproducercheck.sh": 5.0,
 "qchurncheck.sh": 3.7,
 "qchurnmemocheck.sh": 4.3,
 "qdrefpaircheck.sh": 92.2,
