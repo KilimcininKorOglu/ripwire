@@ -60,6 +60,7 @@
 // pattern a user can type never gets a row.
 
 #include "infra/emit.h"      // rw::faultSwitchOn — the one reader every non-NDEBUG fault switch goes through
+#include "infra/stackthreads.h"   // kCallerStackBytesFloorLibstdcxx — the caller floor's engine budget is asserted below
 #include "infra/strkern.h"   // findByte / find3 / findByteset / lowerFoldedEquals — the literal paths' byte kernels
 
 #include <algorithm>
@@ -934,6 +935,15 @@ inline constexpr bool kRegexEngineRecursesPerVisit = true;
 inline constexpr std::uint64_t kRegexStackBytesPerVisit = 128;
 inline constexpr std::uint64_t kRegexStackReserveBytes  = 256 * 1024;   // the frames below the match: the scan, the worker, regex_search
 
+// A caller off a sized thread bounds its subjects by kCallerStackBytesFloor (src/infra/stackthreads.h). Under libstdc++ that
+// floor must leave the engine a real budget after the half held back and the reserve. At 512 KiB it left 0 visits, so every
+// subject was Skipped on Linux (CI on #283). Asserted on the libstdc++ number on EVERY platform, so a macOS build refuses
+// the regression too: at least 16,384 visits, which is a few thousand bytes of subject for a simple loop.
+inline constexpr std::uint64_t kRegexCallerFloorVisitsMin = 16384;
+static_assert( ( kCallerStackBytesFloorLibstdcxx / 2 > kRegexStackReserveBytes )
+                   && ( kCallerStackBytesFloorLibstdcxx / 2 - kRegexStackReserveBytes ) / kRegexStackBytesPerVisit >= kRegexCallerFloorVisitsMin,
+               "kCallerStackBytesFloor under libstdc++ leaves the regex engine no subject budget: every caller-thread match would be Skipped" );
+
 // How a line scan treats the engine. `engineLineBytesMax` is the longest line the engine may be handed on this thread
 // (maxEngineSubjectBytes of its stack); a longer one is SKIPPED and counted, never matched. `useLiteralPaths` false sends
 // every line to the engine — the oracle a gate diffs the literal paths against (--no-prefilter).
@@ -1233,14 +1243,18 @@ public:
         catch( const std::bad_alloc& )   { return RegexVerdict::Exhausted; }   // the matcher's state stack outgrew memory
     }
 
-    // `captures` index into `subject`'s bytes, so the subject must outlive every read of them. No literal-plan
-    // fast path here — every subject reaches the engine, so `stackBytes` is what keeps a long one from it.
+    // `captures` index into `subject`'s bytes, so the subject must outlive every read of them. No literal-plan fast
+    // path here (a Hit must fill `captures`, which only the engine does), but the required-literals prefilter still
+    // answers a Miss without the engine: a subject missing a literal every match needs has no match, and a Miss fills
+    // nothing. Only a subject that could match meets `stackBytes`' bound — so a long line without the pattern's
+    // literals is a decided Miss, not a Skip (CI on #283: every long skill line was skipped on libstdc++).
     RegexVerdict search( std::string_view subject, RegexCaptures& captures, std::size_t stackBytes = SIZE_MAX ) const noexcept
     {
         try
         {
             throwIfMatchFaultInjected();
-            return subject.size() > maxEngineSubjectBytes( stackBytes ) ? RegexVerdict::Skipped
+            return !paths.holdsRequired( subject.data(), subject.size() )                          ? RegexVerdict::Miss
+                 : subject.size() > maxEngineSubjectBytes( stackBytes )                           ? RegexVerdict::Skipped
                  : std::regex_search( subject.data(), subject.data() + subject.size(), captures, engine ) ? RegexVerdict::Hit : RegexVerdict::Miss;
         }
         catch( const std::regex_error& ) { return RegexVerdict::Exhausted; }

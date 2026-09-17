@@ -241,19 +241,67 @@ CTRL_RC=0
     && ok "G control: the same #match? probe with no fault answers normally (exit 0, a <match> element)" \
     || no "G control: the probe is not a genuine control (exit $CTRL_RC): $( head -c 200 "$TMP/g_ctrl.err" )"
 
-FAULT_RC=0
-RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"o+\"))" >"$TMP/g_fault.out" 2>"$TMP/g_fault.err" || FAULT_RC=$?
-[ "$FAULT_RC" -eq 1 ] \
-    && ok "G: a forced too-long #match? subject refuses (exit 1), not a silent non-match" \
-    || no "G: forced skip exited $FAULT_RC, expected 1 (refusal)"
-if grep -q '<match ' "$TMP/g_fault.out"; then
-    no "G: a refused --match still emitted a <match> element: $( head -c 200 "$TMP/g_fault.out" )"
+# RIPWIRE_FAULT_* switches are compiled out under NDEBUG (src/infra/emit.h faultSwitchOn), so on a Release leg the fault
+# run IS the control run. Probe the switch itself (the regexguardcheck.sh (m) fixture: one line past the 64-byte forced bound).
+FAULTS=0; mkdir -p "$TMP/faultprobe"
+{ head -c 100 /dev/zero | tr '\0' 'x'; printf ' aab\naab\n'; } >"$TMP/faultprobe/f.md"
+RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$TMP/faultprobe" --no-cache --regex='a+b' 2>/dev/null | grep -q 'regex_lines_skipped="[1-9]' && FAULTS=1
+if [ "$FAULTS" -eq 1 ]; then
+    FAULT_RC=0
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"o+\"))" >"$TMP/g_fault.out" 2>"$TMP/g_fault.err" || FAULT_RC=$?
+    [ "$FAULT_RC" -eq 1 ] \
+        && ok "G: a forced too-long #match? subject refuses (exit 1), not a silent non-match" \
+        || no "G: forced skip exited $FAULT_RC, expected 1 (refusal)"
+    if grep -q '<match ' "$TMP/g_fault.out"; then
+        no "G: a refused --match still emitted a <match> element: $( head -c 200 "$TMP/g_fault.out" )"
+    else
+        ok "G: no <match> element on the refused run"
+    fi
+    grep -qE 'could not be decided|too long' "$TMP/g_fault.err" \
+        && ok "G: the refusal names the reason on stderr" \
+        || no "G: stderr does not name a reason: $( head -c 300 "$TMP/g_fault.err" )"
 else
-    ok "G: no <match> element on the refused run"
+    printf '  INFO  G: this binary compiles fault switches out (NDEBUG); the forced skip is proved on the plain-flavour leg\n'
 fi
-grep -qE 'could not be decided|too long' "$TMP/g_fault.err" \
-    && ok "G: the refusal names the reason on stderr" \
-    || no "G: stderr does not name a reason: $( head -c 300 "$TMP/g_fault.err" )"
+
+# ── H (CI on #283) — an ordinary short subject is DECIDED on the caller's own thread, on every leg ───────────────
+# #match?, the skill scan and --arch path rules bound their subjects by kCallerStackBytesFloor (src/infra/stackthreads.h).
+# Under libstdc++ a 512 KiB floor left the engine 0 visits, so every subject was Skipped: #match? refused, every skill
+# scored CRITICAL, every path rule went undecided — on every Linux leg, and invisibly on macOS, where libc++ has no bound.
+# No fault switch here: a few-byte identifier, a clean skill's prose lines and a short path must each reach the engine
+# and get a real answer. Each pattern is quantified or captures, so no literal fast path answers in the engine's place.
+# regexguard.h static_asserts the libstdc++ floor's budget on every platform; this arm proves the behaviour on each leg.
+echo "--- H: a short subject is decided (not Skipped) by #match?, --scan-skill and --arch on the caller's thread ---"
+H_RC=0
+"$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"^[a-z]+[0-9]\"))" >"$TMP/h_match.out" 2>"$TMP/h_match.err" || H_RC=$?
+[ "$H_RC" -eq 0 ] && grep -q '<match ' "$TMP/h_match.out" && ! grep -qE 'could not be decided|too long' "$TMP/h_match.err" \
+    && ok "H: #match? with a quantified pattern decides every short identifier (exit 0, a <match>, no undecided disclosure)" \
+    || no "H: #match? on short identifiers did not decide (exit $H_RC): $( head -c 300 "$TMP/h_match.err" )"
+
+H_SKILL="$TMP/h_skill/plain-skill/SKILL.md"; mkdir -p "$( dirname "$H_SKILL" )"
+cat >"$H_SKILL" <<'EOF'
+---
+name: plain-skill
+description: an ordinary skill whose every line must be scanned and found clean.
+---
+
+Read the map, then open the file it names. Nothing here asks for anything unusual.
+EOF
+H_RC=0
+"$BIN" "--scan-skill=$H_SKILL" >"$TMP/h_skill.out" 2>"$TMP/h_skill.err" || H_RC=$?
+[ "$H_RC" -eq 0 ] && ! grep -q 'SCAN-INCOMPLETE' "$TMP/h_skill.out" \
+    && ok "H: --scan-skill scans every line of a plain skill and finds it clean (exit 0, no SCAN-INCOMPLETE)" \
+    || no "H: --scan-skill did not fully scan a plain skill (exit $H_RC): $( head -c 300 "$TMP/h_skill.out" )"
+
+H_ARCH="$TMP/h_arch"; mkdir -p "$H_ARCH/test/v25" "$H_ARCH/render"
+: >"$H_ARCH/render/shader.h"
+printf '#include "../../render/shader.h"\nint h_arch_main() { return 0; }\n' >"$H_ARCH/test/v25/main.cpp"
+printf 'deny path test/(\\w+)/main\\.cpp -> render/shader\\.h\n' >"$TMP/h_arch_rules.txt"
+H_RC=0
+( cd "$H_ARCH" && "$BIN" . "--arch=$TMP/h_arch_rules.txt" --no-cache >"$TMP/h_arch.out" 2>"$TMP/h_arch.err" ) || H_RC=$?
+[ "$H_RC" -eq 2 ] && ! grep -qE 'undecided|could not be evaluated' "$TMP/h_arch.err" \
+    && ok "H: an --arch path rule decides its edge and reports the violation (exit 2, no undecided disclosure)" \
+    || no "H: an --arch path rule did not decide its edge (exit $H_RC, want 2): $( head -c 300 "$TMP/h_arch.err" )"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi
