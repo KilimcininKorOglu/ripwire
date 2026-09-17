@@ -379,12 +379,32 @@ else
     no "cited query: pageRankDouble r=${PRRANK:-absent} vs best fixture/deck row r=${FIXRANK:-none} — §P4 repro is back"
 fi
 
-# 6b — mention anchor beats the tier penalty: a fixture file literally NAMED in the task still surfaces
-#      in the top 5 (de-prioritized is not unanchorable).
-"$BIN" . --for="fix the virtual dispatch in test/chafix/cha.cpp" --format=candidates --top-k=5 >"$CAND" 2>/dev/null
-tr '<' '\n' <"$CAND" | grep -E '^cand ' | grep -q 'p="\(\./\)\?test/chafix/cha\.cpp"' \
-    && ok "mention anchor survives the penalty: task naming test/chafix/cha.cpp surfaces it in the top 5" \
-    || no "mention anchor lost to the tier penalty: test/chafix/cha.cpp absent from its own task's top 5"
+# 6b — mention anchor beats the tier penalty: a fixture file literally NAMED in the task is lifted to within 5% of the
+#      top score (de-prioritized is not unanchorable). That band is the whole promise: --help calls the anchor "a score
+#      promise, not a rank one", so the arm asserts the score. It used to assert a top-5 rank, which held only while at most
+#      four unanchored symbols sat inside the band; one more there (2026-09-17, a resolve.h edit) put the anchored fixture
+#      at rank 6 with the anchor intact. The second pass is the control: with --no-mention-boost the fixture must fall
+#      outside the band, or the first could not tell a working anchor from a lucky score. File scope on purpose — a shell
+#      function holding the query text is itself an indexed symbol, and ranked first for it.
+for anchorFlag in "" --no-mention-boost; do
+    "$BIN" . --for="fix the virtual dispatch in test/chafix/cha.cpp" --format=candidates --top-k=50 $anchorFlag >"$CAND" 2>/dev/null
+    BAND="$( tr '<' '\n' <"$CAND" | grep -E '^cand ' | awk '
+        { s = ""; r = "" }
+        match( $0, / s="[0-9.]+"/ ) { s = substr( $0, RSTART + 4, RLENGTH - 5 ) + 0 }
+        match( $0, /^cand r="[0-9]+"/ ) { r = substr( $0, RSTART + 8, RLENGTH - 9 ) }
+        r == "1" { top = s }
+        !seen && /p="(\.\/)?test\/chafix\/cha\.cpp"/ { fix = s; rank = r; seen = 1 }
+        END {
+            band = ( top > 0 && seen && fix >= 0.95 * top - 0.001 ) ? "in" : "out"
+            printf "%s r=%s s=%s top=%s\n", band, ( seen ? rank : "absent" ), ( seen ? fix : "-" ), top
+        }' )"
+    case "${anchorFlag:-anchor}:$BAND" in
+        anchor:in*)            ok "mention anchor survives the penalty: task naming test/chafix/cha.cpp lifts it to within 5% of the top score ($BAND)" ;;
+        anchor:*)              no "mention anchor lost to the tier penalty: test/chafix/cha.cpp is not within 5% of its own task's top score ($BAND)" ;;
+        --no-mention-boost:out*) ok "control: with --no-mention-boost the fixture falls outside the band, so the lift above is the anchor's ($BAND)" ;;
+        *)                     no "control: with --no-mention-boost the fixture is still within 5% of the top ($BAND) — the arm above cannot see the anchor" ;;
+    esac
+done
 
 # 6c — name-exact route beats the tier penalty: a fixture symbol queried by its EXACT name is still rank 1
 #      (its competitors score 0 — shrinking the only hit must not bury it).
