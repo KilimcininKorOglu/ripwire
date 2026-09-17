@@ -34,12 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
-# 2026-09-17, TRAIN 3 (integration/train-3: #268 e5ca33b5, #276 50b97b7b, lane/small-fixes-0917 d33e4522, built on
-#   integration/train-1b a9549214): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its mirror are
-#   assigned in merge order over train 2b's 102: #268 changes no extraction, #276 = 103, small-fixes = 104 (the lanes
-#   declared 103 and 100 over main's 99, and pinned 95a27416 and 6fa4c131 over those numbers; neither hashed 104).
-#   kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14 (no member changes a manifest function). The two lane
-#   entries below are renumbered to the train's numbers.
+# 2026-09-17, TRAIN 3 (integration/train-3 on integration/train-1b a9549214: #268 e5ca33b5, #276 50b97b7b + 97b499f0,
+#   lane/small-fixes-0917 d33e4522, #278 379d9faa, #235 caaf84e2, #233 1ca964b8, #267 b3270335): RE-DERIVED ON THE FINAL
+#   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over train 2b's 102: #268
+#   changes no extraction, #276 = 103, small-fixes = 104, #278 = 105, #235 = 106 (two PR steps land as one), #233 = 107,
+#   #267 = 108. The members declared 103, 100, 104, 98, 98 and 97 over their own bases and pinned their own hashes; none
+#   hashed 108. kCacheVersion is #278's 23 and its mirror moves with it; kQSnapCacheScheme stays train 1's 14 (no member
+#   changes a manifest function). The member entries below are renumbered to the train's numbers.
 # 2026-09-15, JAVA TYPE::METHOD REVIEW (test/javamethodrefcheck.sh, issue #74, PR #235): parserVer and its quality mirror
 #   move to 106 on integration/train-3 after #278's 105 (the PR declared two steps, 96 -> 97 -> 98, over main) — Java
 #   shadow binds gain lexical spans and inferred lambda parameters are captured. Extracted bind facts change; kCacheVersion
