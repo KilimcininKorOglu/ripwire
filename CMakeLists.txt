@@ -1073,4 +1073,51 @@ if(RIPWIRE_FUZZ)
   add_ripwire_fuzzer(lua        tree_sitter_lua        lua)
   add_ripwire_fuzzer(kotlin     tree_sitter_kotlin     kotlin)
   add_custom_target(ripwire_fuzzers DEPENDS ${RIPWIRE_FUZZ_TARGETS})
+
+  # ---- reader fuzzers: ripwire's OWN parsers of bytes it did not create (test/fuzz/readers/) ----
+  # The grammar targets above fuzz the vendored parsers; these fuzz the code a hostile cache blob, sidecar, SCIP
+  # index, MCP frame or repository document actually reaches. Each reader family compiles ONCE into the static
+  # library (readers_ingest.cpp IS the ingest translation unit, instrumented); each ripwire_fuzz_reader_<name> is one
+  # tiny entry TU that names its reader, so the linker pulls only the family it calls. Crash oracles only — the
+  # correctness oracles are help-wanted issue #149's.
+  set(RIPWIRE_FUZZ_READER_SOURCES
+    test/fuzz/readers/readers_light.cpp
+    test/fuzz/readers/readers_domain.cpp
+    test/fuzz/readers/readers_mcphttp.cpp
+    test/fuzz/readers/readers_ingest.cpp
+    src/pagerank.cpp
+    src/infra/diagnostics.cpp)
+  set(RIPWIRE_FUZZ_READER_INCLUDES
+    ${tree_sitter_SOURCE_DIR}/lib/include ${_ripwire_generated_dir} src/infra third_party src test/fuzz/readers)
+  add_library(ripwire_fuzz_readers STATIC EXCLUDE_FROM_ALL ${RIPWIRE_FUZZ_READER_SOURCES})
+  target_include_directories(ripwire_fuzz_readers PRIVATE ${RIPWIRE_FUZZ_READER_INCLUDES})
+  target_compile_definitions(ripwire_fuzz_readers PRIVATE PROFILE_ENABLED=0)
+  target_compile_options(ripwire_fuzz_readers PRIVATE ${RIPWIRE_FUZZ_COMPILE_OPTIONS})
+  if(RIPWIRE_HAS_CLANG_INTEGER_SANITIZER)
+    target_compile_options(ripwire_fuzz_readers PRIVATE "-fsanitize-ignorelist=${_ripwire_libstdcxx_ignorelist}")
+  endif()
+  add_dependencies(ripwire_fuzz_readers ripwire_version_stamp)
+  add_library(ripwire_fuzz_reader_grammars STATIC EXCLUDE_FROM_ALL ${RIPWIRE_TS_OBJECTS})
+  set_target_properties(ripwire_fuzz_reader_grammars PROPERTIES LINKER_LANGUAGE C)
+
+  set(RIPWIRE_FUZZ_READER_TARGETS)
+  function(add_ripwire_reader_fuzzer NAME)
+    set(_ripwire_reader_target "ripwire_fuzz_reader_${NAME}")
+    add_executable(${_ripwire_reader_target} EXCLUDE_FROM_ALL test/fuzz/readers/fuzz_reader.cpp)
+    target_compile_definitions(${_ripwire_reader_target} PRIVATE RIPWIRE_FUZZ_READER=${NAME})
+    target_compile_options(${_ripwire_reader_target} PRIVATE ${RIPWIRE_FUZZ_COMPILE_OPTIONS})
+    target_link_options(${_ripwire_reader_target} PRIVATE ${RIPWIRE_FUZZ_LINK_OPTIONS})
+    target_link_libraries(${_ripwire_reader_target} PRIVATE
+      ripwire_fuzz_readers ripwire_fuzz_reader_grammars ripwire_tree_sitter_fuzz Threads::Threads)
+    set(RIPWIRE_FUZZ_READER_TARGETS ${RIPWIRE_FUZZ_READER_TARGETS} ${_ripwire_reader_target} PARENT_SCOPE)
+  endfunction()
+
+  # The reader list is declared ONCE, here; test/fuzz/readers/run.sh and test/g1configcheck.sh derive theirs from it.
+  set(RIPWIRE_FUZZ_READERS
+    mcpjson mcphttp docparse tracein skillscan scip resolvecfg lintrules
+    qsnap qchurn oracle sidecars qscope ingestrecord ingestframe stiermemo)
+  foreach(_ripwire_reader IN LISTS RIPWIRE_FUZZ_READERS)
+    add_ripwire_reader_fuzzer(${_ripwire_reader})
+  endforeach()
+  add_custom_target(ripwire_reader_fuzzers DEPENDS ${RIPWIRE_FUZZ_READER_TARGETS})
 endif()

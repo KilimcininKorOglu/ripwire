@@ -15,6 +15,23 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — reader fuzzers for ripwire's own parsers of bytes it did not create, and the two crashes they found
+
+The fuzz suite fuzzed only the vendored tree-sitter grammars. `test/fuzz/readers/` adds 16 libFuzzer targets
+(`ripwire_fuzz_reader_<name>`, `RIPWIRE_FUZZ_READERS` in CMakeLists.txt) over the code hostile input reaches: the MCP
+JSON-RPC scanner and HTTP request reader, the ipynb/HTML/CSV extractors, `--from-trace`, the skill scanner, the SCIP
+decoder, tsconfig/go.mod aliases, lint-rule files, the qsnap/qchurn/history-oracle caches (header and digest rebuilt so
+the fuzzer reaches the parse), the committed sidecars, `--scope`, ingest-cache records and frames, and the span-tier memo.
+Seeds are 54 blobs the real writers produced (`make_seeds.sh`); `run.sh replay` fails a reader that ran 0 inputs or
+refused a valid seed. Five minutes per reader under ASan, UBSan (with `integer`) and libc++ extensive hardening, Homebrew
+clang 22, found: a SCIP varint whose 10th byte carried payload past bit 63 was accepted as a truncated number (and
+aborted the G1 build); and `openCacheFrame`'s exact-fit check summed a table offset near 2^64 through a wrap, while its
+per-entry bound `recOffset + recLength` wrapped far enough to ACCEPT a record at 2^64-16 (`blob_entries=6` where the
+frame is corrupt). Both are fixed without the wrap, with red-first arms: `scipcheck` 5c and `cachefuzzcheck`'s two
+`*_near_u64_max` mutations plus a disclosure arm (`corrupt-frame`, `blob_entries=0`), and the minimized inputs are
+`regress-*` replay seeds. The qsnap and qchurn readers hit the unbounded-count `reserve` #249 fixes (18 GB and 40 GB
+allocations) within seconds.
+
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
