@@ -96,6 +96,52 @@ inline SliceFam sliceFamilyOf( Lang l ) noexcept
     }
 }
 
+// ── parent lookup: one table per scan, not a descent from the root per question ─────────────────────────
+//
+// ts_node_parent answers by walking DOWN from the tree root to the node, so it costs the node's depth. Every helper
+// below climbs through it — the statement anchor, the scope of a declaration, the classifier's parent/grandparent
+// shape tests — once per occurrence, and a climb of k levels costs k × depth. On a deeply nested definition that
+// made the slice cubic in the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, 4,000 did not finish,
+// and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s.
+//
+// sliceScanDefinition builds this table in ONE cursor pass over the nodes overlapping the definition (plus their
+// ancestors), so a parent is a hash lookup. A TSNode's `id` is the address of its slot in the parent's child array,
+// unique for the life of the tree, which is what ts_node_eq compares too. A node the pass did not visit (a climb
+// above the span, or a walk outside any scan) falls back to ts_node_parent, so the answer never depends on the table.
+struct SliceParentIndex
+{
+    HashMap<const void*, TSNode> parentOf;
+    std::uint32_t                deepest = 0;   // the deepest overlapping node, counted from the root
+    // sliceStmtAnchorLine's answers, per node: the climb to the nearest statement container would otherwise repeat the
+    // same ancestors for every occurrence nested under them (quadratic in the nesting even with the parent table).
+    mutable HashMap<const void*, std::uint32_t> anchorLineOf;
+    mutable std::vector<const void*>            climbScratch;   // sliceStmtAnchorLine's per-call climb, reused across calls
+};
+
+inline thread_local const SliceParentIndex* tlSliceParentIndex = nullptr;
+
+inline TSNode sliceParent( TSNode n ) noexcept
+{
+    if( tlSliceParentIndex != nullptr )
+    {
+        if( const auto it = tlSliceParentIndex->parentOf.find( n.id ); it != tlSliceParentIndex->parentOf.end() )
+        {
+            return it->second;
+        }
+    }
+    return ts_node_parent( n );
+}
+
+// Installs an index for the duration of one scan, and restores whatever was installed before on every exit path.
+struct SliceParentIndexScope
+{
+    const SliceParentIndex* previous;
+    explicit SliceParentIndexScope( const SliceParentIndex& index ) noexcept : previous( tlSliceParentIndex ) { tlSliceParentIndex = &index; }
+    SliceParentIndexScope( const SliceParentIndexScope& )            = delete;
+    SliceParentIndexScope& operator=( const SliceParentIndexScope& ) = delete;
+    ~SliceParentIndexScope() { tlSliceParentIndex = previous; }
+};
+
 // the served-set spelling for the unsupported-language refusal — kept beside the switch it restates
 inline constexpr const char* kSliceServedList = "c/cpp/objc (+cuda/metal), py, js/ts, go, java, rs";
 
@@ -258,6 +304,7 @@ struct SliceNamedOcc
 struct SliceScan
 {
     bool                       parseOk = false;   // grammar present + file parsed + span located
+    bool                       tooDeep = false;   // parsed, but the definition nests past kMaxSliceDepth — refused, never walked
     std::vector<SliceOcc>      occ;               // VAR-mode occurrences, source order (empty when var empty)
     std::vector<SliceLocal>    locals;            // the sliceable-locals NAMES, first-def order (refusal text, seed pick)
     std::vector<SliceBinding>  bindings;          // the sliceable-locals inventory, one per VARIABLE (a shadowed name lists twice)
@@ -454,22 +501,22 @@ inline bool sliceOperatorIsPlainAssign( TSNode assignNode, std::string_view src 
 // hangs off a function_definition, not a declaration) never matches.
 inline bool sliceIsDirectInitCtorArg( TSNode n ) noexcept
 {
-    const TSNode p = ts_node_parent( n );
+    const TSNode p = sliceParent( n );
     if( ts_node_is_null( p ) || !sliceKindIs( p, "parameter_declaration" ) || !sliceIsField( p, NodeField::Type, n ) )
     {
         return false;
     }
-    const TSNode paramList = ts_node_parent( p );
+    const TSNode paramList = sliceParent( p );
     if( ts_node_is_null( paramList ) || !sliceKindIs( paramList, "parameter_list" ) )
     {
         return false;
     }
-    const TSNode fnDecl = ts_node_parent( paramList );
+    const TSNode fnDecl = sliceParent( paramList );
     if( ts_node_is_null( fnDecl ) || !sliceKindIs( fnDecl, "function_declarator" ) )
     {
         return false;
     }
-    const TSNode decl = ts_node_parent( fnDecl );
+    const TSNode decl = sliceParent( fnDecl );
     return !ts_node_is_null( decl ) && sliceKindIs( decl, "declaration" );
 }
 
@@ -491,7 +538,7 @@ inline bool sliceClassifyJsBinder( TSNode n, TSNode p, const char* pk, SliceOcc&
             return false;   // the key / default side: a read
         }
         d  = pp;
-        pp = ts_node_parent( pp );
+        pp = sliceParent( pp );
         dk = ts_node_is_null( pp ) ? "" : ts_node_type( pp );
     }
     if( ts_node_is_null( pp ) )
@@ -537,7 +584,7 @@ inline SliceOcc sliceClassify( TSNode n, SliceFam fam, std::string_view src ) no
     SliceOcc o;
     o.line = ts_node_start_point( n ).row + 1;
 
-    TSNode p = ts_node_parent( n );
+    TSNode p = sliceParent( n );
     if( ts_node_is_null( p ) )
     {
         o.isUse = true;
@@ -562,7 +609,7 @@ inline SliceOcc sliceClassify( TSNode n, SliceFam fam, std::string_view src ) no
                    || std::strcmp( dk, "structured_binding_declarator" ) == 0 )
             {
                 d  = pp;
-                pp = ts_node_parent( pp );
+                pp = sliceParent( pp );
                 if( ts_node_is_null( pp ) )
                 {
                     break;
@@ -638,7 +685,7 @@ inline SliceOcc sliceClassify( TSNode n, SliceFam fam, std::string_view src ) no
             if( ( std::strcmp( pk, "pattern_list" ) == 0 || std::strcmp( pk, "tuple_pattern" ) == 0 ) )
             {
                 // a, b = …  /  for a, b in …: the list itself sits in the enclosing left/target field
-                const TSNode gp = ts_node_parent( p );
+                const TSNode gp = sliceParent( p );
                 if( !ts_node_is_null( gp )
                     && ( ( sliceKindIs( gp, "assignment" ) && sliceInField( gp, NodeField::Left, n ) )
                          || ( sliceKindIs( gp, "for_statement" ) && sliceInField( gp, NodeField::Left, n ) )
@@ -706,7 +753,7 @@ inline SliceOcc sliceClassify( TSNode n, SliceFam fam, std::string_view src ) no
             TSNode      effChild = n;
             if( std::strcmp( pk, "expression_list" ) == 0 )
             {
-                const TSNode gp = ts_node_parent( p );
+                const TSNode gp = sliceParent( p );
                 if( !ts_node_is_null( gp ) )
                 {
                     eff      = gp;
@@ -780,7 +827,7 @@ inline SliceOcc sliceClassify( TSNode n, SliceFam fam, std::string_view src ) no
         {
             // `let mut count = 0;` — the identifier sits inside the pattern field, possibly under
             // mut_pattern/reference_pattern wrappers, so containment (not identity) is the right arm
-            const TSNode gp = ts_node_parent( p );
+            const TSNode gp = sliceParent( p );
             if( std::strcmp( pk, "let_declaration" ) == 0 || ( !ts_node_is_null( gp ) && sliceKindIs( gp, "let_declaration" ) ) )
             {
                 const TSNode letNode = std::strcmp( pk, "let_declaration" ) == 0 ? p : gp;
@@ -887,10 +934,10 @@ inline bool sliceKindInFamilyTable( TSNode n, SliceFam fam, const char* const ( 
 // the enclosing statement's first line, 1-based; an identifier with no container above it (a degraded
 // parse, or a signature identifier whose statement IS the definition head) anchors to the outermost
 // node below the boundary — and when even that is absent, to its own line (behaves as before)
-inline std::uint32_t sliceStmtAnchorLine( TSNode node, SliceFam fam ) noexcept
+inline std::uint32_t sliceStmtAnchorLineUncached( TSNode node, SliceFam fam ) noexcept
 {
     TSNode cur    = node;
-    TSNode parent = ts_node_parent( cur );
+    TSNode parent = sliceParent( cur );
     while( !ts_node_is_null( parent ) )
     {
         if( sliceKindInFamilyTable( parent, fam, kSliceStmtContainers ) )
@@ -898,9 +945,57 @@ inline std::uint32_t sliceStmtAnchorLine( TSNode node, SliceFam fam ) noexcept
             return std::uint32_t( ts_node_start_point( cur ).row ) + 1;
         }
         cur    = parent;
-        parent = ts_node_parent( cur );
+        parent = sliceParent( cur );
     }
     return std::uint32_t( ts_node_start_point( node ).row ) + 1;
+}
+
+// The same answer, climbing only until an ancestor whose anchor is already known: every node on the climb shares the
+// anchor of the first node below the nearest statement container, so one climb fills them all. One scan uses one
+// family, so the memo needs no family key; outside a scan (no index installed) it is the uncached climb.
+inline std::uint32_t sliceStmtAnchorLine( TSNode node, SliceFam fam )
+{
+    const SliceParentIndex* index = tlSliceParentIndex;
+    if( index == nullptr )
+    {
+        return sliceStmtAnchorLineUncached( node, fam );
+    }
+    std::vector<const void*>& climbed = index->climbScratch;
+    climbed.clear();
+    TSNode                   cur    = node;
+    std::uint32_t            anchor = 0;
+    bool                     found  = false;
+    for( ;; )
+    {
+        if( const auto memo = index->anchorLineOf.find( cur.id ); memo != index->anchorLineOf.end() )
+        {
+            anchor = memo->second;
+            found  = true;
+            break;
+        }
+        climbed.push_back( cur.id );
+        const TSNode parent = sliceParent( cur );
+        if( ts_node_is_null( parent ) )
+        {
+            break;
+        }
+        if( sliceKindInFamilyTable( parent, fam, kSliceStmtContainers ) )
+        {
+            anchor = std::uint32_t( ts_node_start_point( cur ).row ) + 1;
+            found  = true;
+            break;
+        }
+        cur = parent;
+    }
+    if( !found )
+    {
+        return std::uint32_t( ts_node_start_point( node ).row ) + 1;   // no container above: each node anchors to itself
+    }
+    for( const void* id : climbed )
+    {
+        index->anchorLineOf.emplace( id, anchor );
+    }
+    return anchor;
 }
 
 // ── block-scope separation (audit 2026-09-02, F-02) ──────────────────────────────────────────────────
@@ -943,16 +1038,16 @@ inline bool sliceIsJsFunctionKind( TSNode n ) noexcept
 // JS: `var x` (variable_declaration) is function-scoped; `let`/`const` (lexical_declaration) block-scoped
 inline bool sliceJsIsVarBinding( TSNode declIdent ) noexcept
 {
-    TSNode cur = ts_node_parent( declIdent );
+    TSNode cur = sliceParent( declIdent );
     while( !ts_node_is_null( cur ) && sliceIsJsPatternKind( cur ) )
     {
-        cur = ts_node_parent( cur );
+        cur = sliceParent( cur );
     }
     if( ts_node_is_null( cur ) || !sliceKindIs( cur, "variable_declarator" ) )
     {
         return false;
     }
-    const TSNode decl = ts_node_parent( cur );
+    const TSNode decl = sliceParent( cur );
     return !ts_node_is_null( decl ) && sliceKindIs( decl, "variable_declaration" );
 }
 
@@ -961,7 +1056,7 @@ inline bool sliceJsIsVarBinding( TSNode declIdent ) noexcept
 inline std::pair<std::uint32_t, std::uint32_t> sliceScopeOf( TSNode declIdent, SliceFam fam, std::uint32_t spanStart, std::uint32_t spanEnd ) noexcept
 {
     const bool fnScoped = fam == SliceFam::Js && sliceJsIsVarBinding( declIdent );
-    TSNode     cur      = ts_node_parent( declIdent );
+    TSNode     cur      = sliceParent( declIdent );
     while( !ts_node_is_null( cur ) && ts_node_start_byte( cur ) >= spanStart )
     {
         const bool isScope = fnScoped ? sliceIsJsFunctionKind( cur ) : sliceKindInFamilyTable( cur, fam, kSliceScopeKinds );
@@ -969,7 +1064,7 @@ inline std::pair<std::uint32_t, std::uint32_t> sliceScopeOf( TSNode declIdent, S
         {
             return { ts_node_start_byte( cur ), ts_node_end_byte( cur ) };
         }
-        cur = ts_node_parent( cur );
+        cur = sliceParent( cur );
     }
     return { spanStart, spanEnd };
 }
@@ -981,14 +1076,14 @@ inline std::uint32_t sliceVisibleFrom( TSNode declIdent, SliceFam fam ) noexcept
 {
     if( fam == SliceFam::Go || fam == SliceFam::Rust )
     {
-        TSNode cur = ts_node_parent( declIdent );
+        TSNode cur = sliceParent( declIdent );
         for( int hop = 0; hop < 4 && !ts_node_is_null( cur ); ++hop )
         {
             if( sliceKindIs( cur, "short_var_declaration" ) || sliceKindIs( cur, "var_spec" ) || sliceKindIs( cur, "let_declaration" ) )
             {
                 return ts_node_end_byte( cur );
             }
-            cur = ts_node_parent( cur );
+            cur = sliceParent( cur );
         }
     }
     return ts_node_end_byte( declIdent );
@@ -1986,9 +2081,60 @@ inline void sliceComputeReach( SliceScan& scan, TSNode root, const SliceWalkCtx&
     w.structure( ts_node_is_null( defn ) ? root : defn, state );
 }
 
+// The deepest syntax-tree nesting a definition may reach before the slice refuses it. This is a STACK guard, not a time
+// guard: with the parent table and the memoized statement anchor the walk is linear in the nesting (measured on a
+// plain build: 2,000 / 4,000 / 8,000 nested ifs in 0.05 / 0.06 / 0.08 s, where the parent-climbing walk took 48 s at
+// 2,000 and did not finish at 4,000), but the walks still recurse once per level on the calling thread, and every
+// slice path (CLI and MCP) runs on the main thread's ~8 MB stack. The worst measured shape per level is nested loops:
+// ~4,085 nested for/while needed 3,660 KB on a plain arm64 build (~870 B a level), ifs 2,012 KB, blocks 1,362 KB, and a
+// sanitizer build's frames are 2-3x wider. 2,048 levels keeps the worst shape near 1.8 MB plain, inside 8 MB under
+// ASan with margin, and is still 2.5x the deepest function measured in 47,795 parsed files across 90 repositories
+// (808 levels, a CPython chained assignment).
+inline constexpr std::uint32_t kMaxSliceDepth = 2048;
+
+// One cursor pass over the nodes overlapping [spanStart, spanEnd) and their ancestors: every visited node's parent,
+// and the deepest overlapping node's depth. The ancestor chain is an explicit vector, so the pass cannot recurse.
+inline SliceParentIndex sliceBuildParentIndex( TSNode root, std::uint32_t spanStart, std::uint32_t spanEnd )
+{
+    SliceParentIndex    index;
+    std::vector<TSNode> ancestors;
+    // Sized once from the definition's own node count, so neither table rehashes while the pass fills it.
+    const std::size_t   nodeCount = ts_node_descendant_count( ts_node_descendant_for_byte_range( root, spanStart, spanEnd > spanStart ? spanEnd - 1 : spanStart ) );
+    index.parentOf.reserve( nodeCount );
+    index.anchorLineOf.reserve( nodeCount );
+    TSTreeCursor        cursor = ts_tree_cursor_new( root );
+    for( ;; )
+    {
+        const TSNode node = ts_tree_cursor_current_node( &cursor );
+        if( !ancestors.empty() )
+        {
+            index.parentOf.emplace( node.id, ancestors.back() );
+        }
+        const bool overlaps = ts_node_start_byte( node ) < spanEnd && ts_node_end_byte( node ) > spanStart;
+        if( overlaps )
+        {
+            index.deepest = std::max( index.deepest, std::uint32_t( ancestors.size() ) );
+            if( ts_tree_cursor_goto_first_child( &cursor ) )
+            {
+                ancestors.push_back( node );
+                continue;
+            }
+        }
+        while( !ts_tree_cursor_goto_next_sibling( &cursor ) )
+        {
+            if( ancestors.empty() || !ts_tree_cursor_goto_parent( &cursor ) )
+            {
+                ts_tree_cursor_delete( &cursor );
+                return index;
+            }
+            ancestors.pop_back();
+        }
+    }
+}
+
 // parse + walk. `src` is the WHOLE file (symbol byte offsets are file-absolute). parseOk=false means
 // the grammar refused or the span is out of range — the caller refuses loudly, never emits an empty
-// success.
+// success. tooDeep=true (with parseOk=false) means the definition nests past kMaxSliceDepth.
 inline SliceScan sliceScanDefinition( const std::string& src, const Symbol& sym, SliceFam fam,
                                       const ::TSLanguage* grammar, std::string_view varName )
 {
@@ -2025,6 +2171,15 @@ inline SliceScan sliceScanDefinition( const std::string& src, const Symbol& sym,
     ctx.lang      = sym.lang;
     ctx.src       = src;
     ctx.selfName  = sym.name;
+    const SliceParentIndex parents = sliceBuildParentIndex( ts_tree_root_node( tree ), ctx.spanStart, ctx.spanEnd );
+    if( parents.deepest > kMaxSliceDepth )
+    {
+        scan.tooDeep = true;
+        ts_tree_delete( tree );
+        ts_parser_delete( parser );
+        return scan;
+    }
+    const SliceParentIndexScope parentScope( parents );
     sliceWalk( ts_tree_root_node( tree ), ctx, scan, SlicePp::Live );
     sliceResolveBindings( scan );
     sliceComputeReach( scan, ts_tree_root_node( tree ), ctx );   // rung 3: needs the bindings resolved and the tree still alive

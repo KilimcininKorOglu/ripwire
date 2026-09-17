@@ -347,6 +347,10 @@ GrammarQueries compileGrammarQueries( const TSLanguage* g, const std::vector<Ast
         }
         for( const AstQuerySpec& spec : *groups[groupIndex].specs )
         {
+            if( astQueryNestsTooDeep( spec.query ) )
+            {
+                continue;   // never handed to the compiler — reported once, by name, where uncompiled specs are
+            }
             std::uint32_t off = 0;  TSQueryError err = TSQueryErrorNone;
             TSQuery*      q   = ts_query_new( g, spec.query.data(), static_cast<std::uint32_t>( spec.query.size() ), &off, &err );
             if( q == nullptr )
@@ -653,6 +657,10 @@ static void computeGrammarDisclosure( const IngestResult& ing, const std::vector
             bool compiledAny = false;
             for( const AstQuerySpec& spec : *grp.specs )
             {
+                if( astQueryNestsTooDeep( spec.query ) )
+                {
+                    continue;
+                }
                 std::uint32_t off = 0; TSQueryError err = TSQueryErrorNone;
                 if( TSQuery* probe = ts_query_new( g, spec.query.data(), static_cast<std::uint32_t>( spec.query.size() ), &off, &err ) )
                 {
@@ -809,6 +817,16 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
         }
         for( const AstQuerySpec& spec : *groups[groupIndex].specs )
         {
+            if( astQueryNestsTooDeep( spec.query ) )
+            {
+                rw::emitTo( stderr, "ripwire: AST query refused: it nests deeper than {} levels, and the query compiler recurses per level\n",
+                            kMaxAstQueryNesting );
+                if( groups[groupIndex].uncompiledOut )
+                {
+                    groups[groupIndex].uncompiledOut->push_back( spec.query );
+                }
+                continue;
+            }
             bool any = false;
             for( const auto& [g, qs] : byGrammar )
             {

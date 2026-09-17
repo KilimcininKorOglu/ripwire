@@ -67,6 +67,7 @@
 #include <cctype>
 #include <cstdio>
 #include <functional>
+#include <limits>       // std::numeric_limits — IntEval::apply refuses the one quotient int64 cannot hold
 #include <string>
 #include <string_view>
 #include <utility>
@@ -81,6 +82,7 @@ namespace layout
 
 constexpr std::size_t   kMaxNestDepth   = 8;          // nested-aggregate resolution depth (a cycle stops here)
 constexpr std::size_t   kMaxMacroDepth  = 4;          // object-like macro expansion depth for a type name
+constexpr std::size_t   kMaxExtentParens = 64;        // `(` nesting DEPTH an extent expression may reach (IntEval recurses per level)
 constexpr std::size_t   kMaxDefScan     = 1u << 20;   // bytes scanned forward from a def start looking for its body
 constexpr std::size_t   kMaxAssertChars = 220;        // the displayed prefix of a static_assert's text
 constexpr std::uint32_t kMaxArrayElems  = 1u << 24;   // refusal bound: past this the extent is a parse artefact
@@ -631,6 +633,7 @@ struct IntEval
     const ConstTable& table;
     std::size_t       depth = 0;
     bool              ok    = true;
+    std::size_t       parenDepth = 0;   // `(` levels OPEN at this point of the parse — kMaxExtentParens bounds the recursion
 
     std::int64_t parse( std::string_view s )
     {
@@ -658,16 +661,30 @@ private:
         }
     }
 
+    // Every operator is checked: an extent is source text, so `(0-1099511627776)*8388608` reaches INT64_MIN and a
+    // following `/(0-1)` is the one quotient int64 cannot hold (SIGFPE on x86-64), and a plain `1<<40 * 1<<40`
+    // product is signed overflow (an abort in the sanitizer build). An expression that leaves the range is not a
+    // knowable extent, so it un-sizes the field exactly like any other expression this evaluator cannot read.
     std::int64_t apply( char op, std::int64_t a, std::int64_t b )
     {
-        if( ( op == '/' ) && b == 0 ) { ok = false; return 0; }        // never divide by zero under G1
+        std::int64_t r = 0;
+        bool         outOfRange = false;
         switch( op )
         {
-            case '+': return a + b;
-            case '-': return a - b;
-            case '*': return a * b;
-            default:  return a / b;
+            case '+': outOfRange = __builtin_add_overflow( a, b, &r ); break;
+            case '-': outOfRange = __builtin_sub_overflow( a, b, &r ); break;
+            case '*': outOfRange = __builtin_mul_overflow( a, b, &r ); break;
+            default:
+                outOfRange = b == 0 || ( b == -1 && a == std::numeric_limits<std::int64_t>::min() );   // never divide by zero under G1
+                r          = outOfRange ? 0 : a / b;
+                break;
         }
+        if( outOfRange )
+        {
+            ok = false;
+            return 0;
+        }
+        return r;
     }
 
     std::int64_t level( std::string_view s, std::size_t& i, std::size_t rank )
@@ -692,8 +709,14 @@ private:
         if( i >= s.size() || !ok ) { ok = false; return 0; }
         if( s[i] == '(' )
         {
+            // A bounded recursion: `#define N ((((…1))))` 200,000 levels deep overflowed the stack (SIGSEGV, exit 139).
+            // The bound is the DEPTH of open parentheses, restored when this level closes: `(A)+(B)+…` with sixty-six
+            // sibling terms nests one level, and must size exactly as it did before the bound existed.
+            if( parenDepth >= kMaxExtentParens ) { ok = false; return 0; }
+            ++parenDepth;
             ++i;
             const std::int64_t v = level( s, i, 0 );
+            --parenDepth;
             skipWs( s, i );
             if( i < s.size() && s[i] == ')' ) { ++i; }
             else
@@ -1731,6 +1754,30 @@ inline void appendField( BodyWalk& w, const Declarator& d, std::string_view type
 
 // The statement forms that contribute NO storage and are simply skipped, plus the ones that withdraw the
 // numbers. Returns true when the statement was consumed here and holds no field declarators.
+// Where a member declaration's parameter list opens, or npos when it has none. Only a `(` that comes BEFORE the first
+// `[`, `=`, `{` or bitfield `:` can open one: `char a[(4)];`, `int x = (3);` and `int x{ (3) };` are data members whose
+// parenthesis sits in an extent or an initializer. Reading those as member functions dropped the field from the layout
+// while the struct still reported modeled="1" and a size four bytes short. `operator=`, `operator[]` and `operator()`
+// are functions whose own name holds one of those characters, so an `operator` word decides first.
+inline std::size_t parameterListParen( std::string_view s )
+{
+    const std::size_t paren = s.find( '(' );
+    if( paren == std::string_view::npos || containsWord( s, "operator" ) )
+    {
+        return paren;
+    }
+    for( std::size_t i = 0; i < paren; ++i )
+    {
+        const char c = s[i];
+        const bool scopeColon = c == ':' && ( ( i + 1 < s.size() && s[i + 1] == ':' ) || ( i > 0 && s[i - 1] == ':' ) );
+        if( c == '[' || c == '=' || c == '{' || ( c == ':' && !scopeColon ) )
+        {
+            return std::string_view::npos;
+        }
+    }
+    return paren;
+}
+
 inline bool modelNonFieldStatement( BodyWalk& w, std::string_view s )
 {
     // Access specifiers change nothing this model computes, but MIXED access makes the class non-standard-
@@ -1773,7 +1820,7 @@ inline bool modelNonFieldStatement( BodyWalk& w, std::string_view s )
     // storage, so it is simply skipped. A function POINTER member does contribute — but a pointer to a
     // MEMBER function is 16 bytes, not 8, and the two are not reliably distinguishable here, so the
     // aggregate withdraws its numbers rather than pick.
-    const std::size_t paren = s.find( '(' );
+    const std::size_t paren = parameterListParen( s );
     if( paren == std::string_view::npos )
     {
         return false;
