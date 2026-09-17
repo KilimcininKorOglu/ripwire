@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# g1configcheck.sh — millisecond-scale structural gate for sanitizer/fuzzer build contracts.
+# g1configcheck.sh — millisecond-scale structural gate for sanitizer/fuzzer build contracts, and for the nightly
+# workflow that runs the ThreadSanitizer build against main (.github/workflows/nightly.yml, the last section).
 
 set -u
 
@@ -7,6 +8,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 CMAKE="$ROOT/CMakeLists.txt"
 HARNESS="$ROOT/test/fuzz/fuzz_ingest.cpp"
 RUNNER="$ROOT/test/fuzz/run.sh"
+NIGHTLY="$ROOT/.github/workflows/nightly.yml"
 fail=0
 
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
@@ -171,6 +173,192 @@ grep -q 'max_total_time=' "$RUNNER" && grep -q 'max_len=65536' "$RUNNER" && grep
 
 seedCount="$( find "$ROOT/test/fuzz/seeds" -mindepth 2 -maxdepth 2 -name valid | wc -l | tr -d ' ' )"
 if [ "$seedCount" = 22 ]; then ok "all 22 grammars have valid seeds"; else no "expected 22 grammar seeds, found $seedCount"; fi
+
+# ── the nightly workflow: the TSan build runs against main once a day, and nothing about it can quietly widen ─────────
+# ThreadSanitizer is not a per-PR leg (owner decision, 2026-09-17): it runs from .github/workflows/nightly.yml. These
+# rows pin the properties that make that workflow trustworthy, each read off the file's own structure rather than
+# retyped here:
+#   triggers  a daily `schedule` cron, plus workflow_dispatch and a pull_request filtered to the workflow itself
+#   skip      a `changed` job asks the Actions API for the last successful scheduled run's head_sha, and every heavy
+#             job is gated on its `run` output (a future windows job included)
+#   tsan      the tsan job configures -DRIPWIRE_TSAN=ON, halts on the first report, runs the planted-race positive
+#             control, and sends every `bash test/...` gate through tsanrun.sh, which is what reads the report files
+#   perms     top-level permissions are exactly `contents: read`, and the ONLY write anywhere is `issues: write`, held
+#             by report-failure and report-green and nothing else in their blocks
+#   report    report-failure runs on failure() and never for a pull_request; report-green only on a scheduled run
+#   secrets   no `secrets.` reference other than GITHUB_TOKEN (the workflow itself uses github.token)
+# Python without PyYAML (not on every CI leg): a line scanner over the indentation GitHub's own files use. Six mutated
+# copies prove each row can fail, and that each mutation reds exactly its own row.
+if [ ! -f "$NIGHTLY" ]; then
+    no "nightly workflow missing: $NIGHTLY"
+else
+    NIGHTLYSCAN="$TMP/nightlyscan.py"
+    cat > "$NIGHTLYSCAN" <<'PY'
+import re, sys
+
+def strip_comment(s):
+    quote = None
+    for i, ch in enumerate(s):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or s[i - 1].isspace()):
+            return s[:i].rstrip()
+    return s.rstrip()
+
+def indent(s):
+    return len(s) - len(s.lstrip(" "))
+
+def children(lines, key_index):
+    # the lines of a block key (everything more indented than the key, up to the next line at its indent or less)
+    base = indent(lines[key_index])
+    out = []
+    for s in lines[key_index + 1:]:
+        if strip_comment(s).strip() == "":
+            continue
+        if indent(s) <= base:
+            break
+        out.append(s)
+    return out
+
+def keyed(lines, level):
+    # {key: (value, index)} for `key: value` lines at exactly this indent
+    found = {}
+    for i, s in enumerate(lines):
+        t = strip_comment(s)
+        m = re.match(r"^( *)([A-Za-z0-9_-]+):(?:\s+(.*))?$", t)
+        if m and len(m.group(1)) == level and m.group(2) not in found:
+            found[m.group(2)] = ((m.group(3) or "").strip(), i)
+    return found
+
+def mapping(block, level):
+    return {k: v for k, (v, _) in keyed(block, level).items()}
+
+def scan(path):
+    lines = open(path, encoding="utf-8").read().split("\n")
+    rows = {}
+    top = keyed(lines, 0)
+    on = children(lines, top["on"][1]) if "on" in top else []
+    onKeys = keyed(on, 2)
+    cron = [s for s in on if re.match(r'^ {4}- cron: "[^"]+"', strip_comment(s))]
+    cronOk = bool(cron) and all(len(re.search(r'"([^"]+)"', s).group(1).split()) == 5 for s in cron)
+    prPaths = children(on, onKeys["pull_request"][1]) if "pull_request" in onKeys else []
+    selfFiltered = any(strip_comment(s).strip() == "- .github/workflows/nightly.yml" for s in prPaths)
+    rows["triggers"] = (cronOk and "workflow_dispatch" in onKeys and selfFiltered,
+                        f"cron={len(cron)} valid={cronOk} dispatch={'workflow_dispatch' in onKeys} pr-self-filter={selfFiltered}")
+
+    jobsBlock = children(lines, top["jobs"][1]) if "jobs" in top else []
+    jobs = {}
+    for name, (_, i) in keyed(jobsBlock, 2).items():
+        jobs[name] = [jobsBlock[i]] + children(jobsBlock, i)
+    def jobKeys(name):
+        return keyed(jobs[name], 4)
+    def jobText(name):
+        return "\n".join(strip_comment(s) for s in jobs.get(name, []))
+
+    reports = {"report-failure", "report-green"}
+    changedText = jobText("changed")
+    probe = all(t in changedText for t in ("actions/workflows/nightly.yml/runs", "event=schedule", "status=success",
+                                            "head_sha", "run=false"))
+    heavy = [n for n in jobs if n != "changed" and n not in reports]
+    ungated = [n for n in heavy if "needs.changed.outputs.run == 'true'" not in jobKeys(n).get("if", ("", 0))[0]]
+    rows["skip"] = (probe and bool(heavy) and not ungated, f"probe={probe} heavy={','.join(heavy) or '-'} ungated={','.join(ungated) or '-'}")
+
+    tsanText = jobText("tsan")
+    gateLines = [s for s in tsanText.split("\n") if "bash test/" in s]
+    unwrapped = [s.strip() for s in gateLines if "tsanrun.sh" not in s]
+    tsanOk = ("-DRIPWIRE_TSAN=ON" in tsanText and "halt_on_error=1" in tsanText and "control-race" in tsanText
+              and bool(gateLines) and not unwrapped)
+    rows["tsan"] = (tsanOk, f"gates={len(gateLines)} unwrapped={len(unwrapped)} configure={'-DRIPWIRE_TSAN=ON' in tsanText}")
+
+    topPerms = mapping(children(lines, top["permissions"][1]), 2) if "permissions" in top and top["permissions"][0] == "" else None
+    writes, blocks = set(), {}
+    for name in jobs:
+        k = jobKeys(name)
+        if "permissions" in k:
+            value, i = k["permissions"]
+            block = mapping(children(jobs[name], i), 6) if value == "" else {"*": value}
+            blocks[name] = block
+            writes |= {(name, p) for p, v in block.items() if v in ("write", "write-all")}
+    expected = {(n, "issues") for n in reports}
+    permsOk = topPerms == {"contents": "read"} and writes == expected and all(blocks.get(n) == {"issues": "write"} for n in reports)
+    rows["perms"] = (permsOk, f"top={topPerms} writes={sorted(writes)}")
+
+    failIf = jobKeys("report-failure").get("if", ("", 0))[0] if "report-failure" in jobs else ""
+    greenIf = jobKeys("report-green").get("if", ("", 0))[0] if "report-green" in jobs else ""
+    reportOk = ("failure()" in failIf and "github.event_name != 'pull_request'" in failIf
+                and "github.event_name == 'schedule'" in greenIf)
+    rows["report"] = (reportOk, f"report-failure if=[{failIf}] report-green if=[{greenIf}]")
+
+    named = re.findall(r"\bsecrets\b(\.[A-Za-z_][A-Za-z0-9_]*)?", "\n".join(strip_comment(s) for s in lines))
+    extra = sorted({n or "<bare>" for n in named if n != ".GITHUB_TOKEN"})
+    rows["secrets"] = (not extra, f"other secrets={extra or '-'}")
+    return rows
+
+for label, path in zip(sys.argv[1::2], sys.argv[2::2]):
+    for row, (good, detail) in scan(path).items():
+        print(f"{label}\t{row}\t{'ok' if good else 'bad'}\t{detail}")
+PY
+    NIGHTLYMUT="$TMP/nightlymut.py"
+    cat > "$NIGHTLYMUT" <<'PY'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+out = sys.argv[2]
+# row -> (anchor, replacement); every anchor must occur exactly once, or the control refuses instead of passing inert
+mutations = {
+    "triggers": ('    - cron: "17 7 * * *"   # 07:17 UTC daily\n', ""),
+    "skip":     ("    needs: changed\n    if: needs.changed.outputs.run == 'true'\n", "    needs: changed\n"),
+    "tsan":     ('"$RUNNER_TEMP/tsanrun.sh" det-gate bash test/det-gate.sh', "bash test/det-gate.sh"),
+    "perms":    ("    permissions:\n      contents: read\n    outputs:\n",
+                 "    permissions:\n      contents: read\n      issues: write\n    outputs:\n"),
+    "report":   ("if: failure() && github.event_name != 'pull_request' && ", "if: failure() && "),
+    "secrets":  ("          GH_TOKEN: ${{ github.token }}\n          EVENT: ${{ github.event_name }}\n",
+                 "          GH_TOKEN: ${{ secrets.NIGHTLY_PAT }}\n          EVENT: ${{ github.event_name }}\n"),
+}
+for row, (anchor, replacement) in mutations.items():
+    count = src.count(anchor)
+    if count != 1:
+        print(f"{row}\tanchor occurs {count} times")
+        continue
+    open(f"{out}/nightly-mut-{row}.yml", "w", encoding="utf-8").write(src.replace(anchor, replacement))
+    print(f"{row}\twritten")
+PY
+    nightlyRows=( triggers skip tsan perms report secrets )
+    mutLog="$( python3 "$NIGHTLYMUT" "$NIGHTLY" "$TMP" 2>&1 )" || no "nightly mutation writer crashed: $mutLog"
+    scanArgs=( real "$NIGHTLY" )
+    for row in "${nightlyRows[@]}"; do
+        if [ -f "$TMP/nightly-mut-$row.yml" ]; then scanArgs+=( "mut-$row" "$TMP/nightly-mut-$row.yml" ); fi
+    done
+    if ! python3 "$NIGHTLYSCAN" "${scanArgs[@]}" >"$TMP/nightlyscan.tsv" 2>"$TMP/nightlyscan.err"; then
+        no "nightly workflow scanner crashed: $( head -n 3 "$TMP/nightlyscan.err" | tr '\n' ' ' )"
+    fi
+    for row in "${nightlyRows[@]}"; do
+        line="$( awk -F'\t' -v r="$row" '$1 == "real" && $2 == r' "$TMP/nightlyscan.tsv" )"
+        verdict="$( printf '%s' "$line" | cut -f3 )"; detail="$( printf '%s' "$line" | cut -f4- )"
+        if [ "$verdict" = ok ]; then
+            ok "nightly.yml [$row] holds ($detail)"
+        else
+            no "nightly.yml [$row] does not hold (${detail:-the scanner printed no row})"
+        fi
+    done
+    for row in "${nightlyRows[@]}"; do
+        mut="$TMP/nightly-mut-$row.yml"
+        if [ ! -f "$mut" ]; then
+            no "nightly mutation [$row] was not written: $( printf '%s\n' "$mutLog" | awk -F'\t' -v r="$row" '$1 == r { print $2 }' )"
+        elif cmp -s "$NIGHTLY" "$mut"; then
+            no "nightly mutation [$row] did not take — the copy is byte-identical to nightly.yml, nothing was checked"
+        else
+            badRows="$( awk -F'\t' -v m="mut-$row" '$1 == m && $3 == "bad" { print $2 }' "$TMP/nightlyscan.tsv" | paste -sd, - )"
+            if [ "$badRows" = "$row" ]; then
+                ok "nightly mutation [$row] reds exactly its own row"
+            else
+                no "nightly mutation [$row] red rows are [${badRows:-none}], expected exactly [$row]"
+            fi
+        fi
+    done
+fi
 
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

@@ -15,6 +15,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — a nightly ThreadSanitizer run against main, which opens one tracking issue when it fails
+
+ThreadSanitizer had a build mode (`-DRIPWIRE_TSAN=ON`) and one gate written for it, `test/qsnapprefetchcheck.sh` arm
+(e), but nothing ran it against `main`: a data race could reach a tag if nobody happened to build TSan locally in
+between. It is not added as a per-PR leg, because TSan builds already run often on contributors' machines and every PR
+already waits on the macOS runners. `.github/workflows/nightly.yml` runs it once a day at 07:17 UTC instead, and skips
+the heavy job when `main` has not moved since the last green scheduled run and no tracking issue is open.
+
+The job builds TSan with clang in its own tree and runs ten gates against it, chosen for the threads they drive: the MCP
+prefetch worker (`qsnapprefetchcheck`), the edit lock (`mcpeditracecheck`), a server's re-ingest at a 128-fd limit
+(`mcpwatchercheck`), a long-lived server's re-ingest after an edit (`mcpstalecheck`), concurrent `--quality-ack` writers
+(`qackconcurrencycheck`), the private cache directory (`cacheisolationcheck`), the parallel ingest and `--match` fan-out
+over the repository (`det-gate.sh`), `--grep`'s prefetch thread (`grepfastcheck`), the `--doc-drift` workers
+(`docdriftcheck`) and the git-spawn pool (`mergescoutcheck`). A gate's own verdict is not trusted to notice a race:
+reports go to per-gate files, and a wrapper fails the step on a non-zero exit or on any report file. Before any gate
+runs, the job checks that every object of the `ripwire` target references the TSan runtime, and that the wrapper goes
+red on a planted race and stays green on its race-free twin. Locally on Apple clang 21, the same wrapper failed on the
+planted race and on a race whose exit code the command swallowed, and all ten gates passed through it against a TSan
+build of 105666c1 with no report file (4 s to 404 s each, `mergescoutcheck` the slowest, on a machine at load 40-60).
+
+A failing run on `main` opens one issue, "Nightly checks failing on main" (label `nightly-failure`), or comments on the
+open one. The comment names the failing jobs and steps, the commit and the run, and quotes the head of the first report.
+The next green scheduled run comments "green again at <sha>" and closes it. The top-level token is `contents: read`,
+and only the two reporting jobs hold `issues: write`. A pull request that edits the workflow runs it without the
+reporting. A placeholder marks where the Windows full-suite job goes (D3 of the #44 plan). `test/g1configcheck.sh`
+gains six rows that pin the schedule, the skip probe, the TSan wiring, the permission scoping, the report conditions
+and "no secret but `GITHUB_TOKEN`". Each row has a mutated copy that turns exactly that row red.
+
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 
 The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
