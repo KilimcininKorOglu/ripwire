@@ -115,3 +115,4 @@
 --porcelain	git's own flag ("git status --porcelain", the command src/gitstamp.h runs for the at="…+dirty" bit) quoted in CONTRIBUTING.md §1's rule against writing into the shared checkout, not a ripwire flag
 --stats	tgrep's own flag ("tgrep --stats", which prints its query plan) quoted in docs/EVALS.md's tgrep head-to-head where the plan line is the evidence, not a ripwire flag
 --no-index	tgrep's own flag ("tgrep --no-index", its brute-force scanner) named in docs/EVALS.md and bench/tgrep-h2h/README.md as the control arm of that head-to-head, not a ripwire flag
+--no-optional-locks	git's own global option, named in the CHANGELOG entry that records the prefix every git child now carries (`git --no-optional-locks -c core.fsmonitor=false`), not a ripwire flag
