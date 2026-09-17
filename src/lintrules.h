@@ -103,6 +103,7 @@ inline constexpr LangTokenRow kLangTokenRows[] = {
     { "elixir",     Lang::Elixir     },
     { "dart",       Lang::Dart       },
     { "kotlin",     Lang::Kotlin     },
+    { "gdscript",   Lang::GDScript   },
 };
 
 /// Parse a supported language token; assign out only on success and otherwise return false.
@@ -160,6 +161,7 @@ inline constexpr LintExtRow kLintExtRows[] = {
     { ".ex", Lang::Elixir }, { ".exs", Lang::Elixir },
     { ".dart", Lang::Dart },
     { ".kt", Lang::Kotlin },
+    { ".gd", Lang::GDScript },
 };
 
 /// Classify a path by its supported extension, returning Unknown when no extension matches.

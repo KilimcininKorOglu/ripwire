@@ -76,6 +76,7 @@ enum class NodeField : std::uint8_t
     Receiver, Right, Scope, Source, Subject,
     Superclasses, Target, Trait, Type, Update,
     Value,
+    Op,
     Count
 };
 
@@ -107,6 +108,7 @@ inline constexpr std::array<NodeFieldName, kNodeFieldCount> kNodeFieldNames = { 
     { NodeField::Scope, "scope", 5 },                 { NodeField::Source, "source", 6 },               { NodeField::Subject, "subject", 7 },
     { NodeField::Superclasses, "superclasses", 12 },  { NodeField::Target, "target", 6 },               { NodeField::Trait, "trait", 5 },
     { NodeField::Type, "type", 4 },                   { NodeField::Update, "update", 6 },               { NodeField::Value, "value", 5 },
+    { NodeField::Op, "op", 2 },
 } };
 
 // ORDER, COUNT AND LENGTH, checked at compile time. The old assert compared kNodeFieldNames.size() with the extent the

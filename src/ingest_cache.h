@@ -238,7 +238,13 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 106;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 107;          // bump on any grammar/.scm/extraction change
+                                                      // 107 = 2026-09-17 (GDScript, PR #233, test/gdscriptcheck.sh): a
+                                                      //    new grammar (third_party/deps/gdscript) and queries/gdscript/
+                                                      //    tags.scm, `.gd` a kLangTable row, and NodeField::Op appended:
+                                                      //    a tree with `.gd` files yields new files, symbols and edges.
+                                                      //    The PR declared 96 -> 98 over main; assigned 107 on
+                                                      //    integration/train-3 after #235's 106. kCacheVersion stays 23.
                                                       // 106 = 2026-09-17 (Java Type::method, issue #74, PR #235): the PR's
                                                       //    two steps below, declared 97 and 98 over main's 96, land as one;
                                                       //    assigned 106 on integration/train-3 after #278's 105.

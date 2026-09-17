@@ -66,6 +66,10 @@ inline bool isDecisionType( const char* t, Lang lang ) noexcept
            // to two already-shipped languages, out of scope for the Kotlin port. `lang` scopes it to Kotlin
            // only, same carve-out shape as the Lua `do_statement` guard above.
            || ( lang == Lang::Kotlin && ( kindIs( t, "when_entry" ) || kindIs( t, "catch_block" ) ) )
+           // GDScript: `pattern_section` is one `match` ARM — the decision, exactly as Kotlin's
+           // when_entry and the C-family case_statement are. The `match_statement` CONTAINER scores
+           // flat +1 in cc_isNestingControl instead, so the two never double-count the same arm.
+           || ( lang == Lang::GDScript && kindIs( t, "pattern_section" ) )
            // Ruby (tree-sitter-ruby node kinds): block `if`/`elsif`/`unless`/`while`/`until`/`for`, the
            // trailing modifier forms (`x if a`), each `when`/`in_clause` arm, `rescue`, and the `? :`
            // `conditional`. Ruby's `case`/`case_match` head is a nesting container (see cc_isNestingControl),
@@ -124,6 +128,9 @@ inline bool cc_isNestingControl( const char* t, Lang lang ) noexcept
            // disclosed gap there, out of scope for the Kotlin port — see isDecisionType's matching comment),
            // so `lang` scopes it to Kotlin only.
            || ( lang == Lang::Kotlin && ( kindIs( t, "when_expression" ) || kindIs( t, "catch_block" ) ) )
+           // GDScript: `match_statement` is the switch-equivalent CONTAINER (flat +1; the arms score
+           // through isDecisionType's pattern_section) — mirrors switch_statement/when_expression.
+           || ( lang == Lang::GDScript && kindIs( t, "match_statement" ) )
            // Ruby (tree-sitter-ruby): the block control forms each open a nested body, so they raise nesting
            // AND score. `case`/`case_match` is the switch-equivalent container (flat +1, arms score via
            // isDecisionType — mirrors switch_statement). The trailing MODIFIER forms (`x if a`) have no nested
@@ -186,7 +193,16 @@ inline TSNode firstChildOfType( TSNode n, const char* type ) noexcept
 // hand-copied spans — a duplication --quality-delta scored the moment the second one grew a case.
 inline std::string_view cc_operatorText( TSNode n, std::string_view src ) noexcept
 {
-    return nodeFieldText( n, NodeField::Operator, src );
+    const std::string_view viaOperator = nodeFieldText( n, NodeField::Operator, src );
+    if( !viaOperator.empty() )
+    {
+        return viaOperator;
+    }
+    // tree-sitter-gdscript names the field `op`, not `operator` — its binary_operator carries
+    // left/op/right. Every language that resolves through `operator` above is untouched by this
+    // fallback (it only runs when that field is absent), so the widening cannot move an existing
+    // score; without it GDScript's `and`/`or`/`&&`/`||` joins read as empty and never count.
+    return nodeFieldText( n, NodeField::Op, src );
 }
 
 // the boolean-operator spelling of a node, or "" if it isn't one (&&/|| for C-family, and/or for Python)
@@ -211,7 +227,8 @@ inline std::string_view cc_boolOp( TSNode n, std::string_view src ) noexcept
 inline bool cc_isBooleanJoin( TSNode n, std::string_view src, Lang lang ) noexcept
 {
     const std::string_view o        = cc_operatorText( n, src );
-    const bool             wordLang = ( lang == Lang::Lua || lang == Lang::Php || lang == Lang::Elixir );
+    const bool             wordLang = ( lang == Lang::Lua || lang == Lang::Php || lang == Lang::Elixir
+                                       || lang == Lang::GDScript );
     return    o == "&&" || o == "||"
            || ( wordLang && ( o == "and" || o == "or" ) )
            || ( lang == Lang::Php && o == "xor" );
@@ -1088,7 +1105,9 @@ inline void cc_walk( TSNode start, std::uint32_t startNesting, std::string_view 
         {
             acc.locals += cc_countLocalDeclarators( n );
         }
-        else if( ( kindIs( t, "binary_expression" ) || ( lang == Lang::Elixir && kindIs( t, "binary_operator" ) ) ) && cc_isBooleanJoin( n, src, lang ) )
+        else if( ( kindIs( t, "binary_expression" )
+                   || ( ( lang == Lang::Elixir || lang == Lang::GDScript ) && kindIs( t, "binary_operator" ) ) )
+                 && cc_isBooleanJoin( n, src, lang ) )
         {
             ++acc.cyclo;   // Myers' &&/|| extension — see cc_isBooleanJoin for the two spelling families
         }
