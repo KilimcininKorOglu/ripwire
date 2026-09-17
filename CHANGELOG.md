@@ -15,78 +15,6 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Fixed — a skill file the scan could not read, or held a NUL byte, is now reported instead of passing
-
-`--scan-skills` counted an unreadable file (mode 000 in a readable folder, an I/O error) as `skipped=` and still
-answered `verdict="clean"` at exit 0, and `ripwire wrap` read the same file as "no findings", with one pathless
-degrade line on stderr however many files it hit. Both now score such a file CRITICAL and name it — a
-`SCAN-INCOMPLETE:file-unreadable` row on the artifact, a `cannot read skill file <path>` line on stderr — so
-`wrap` no longer emits the recipe over it without `--force`. The single-file `--scan-skill` already refused
-that path. A folder the scan cannot enter stays WARN: its contents cannot be copied either.
-`--scan-skills` also stops skipping a file because its first 8 KB hold a NUL byte: it scans it like any other
-file, as `--scan-skill` and `wrap` already did — a PNG icon a skill bundles is now read (and comes back clean)
-rather than skipped. `skipped=` counts unreadable files only.
-
-Gates: `test/skillscanreadcheck.sh` F-B3 (4) and (5), with the §B13.3 NUL-file arm re-pinned (`files="3"`, no
-`skipped=`); `test/codexwrapcheck.sh` unreadable-file arm (red on the unfixed binary, with a readable control)
-and a NUL-byte arm that pins `wrap`'s existing behaviour.
-
-### Fixed — an `--arch` TO-template interval was rejected at parse time even when a real capture made it valid
-
-`deny path FROM -> TO` validates a TO template like `a{10,\1}` at parse time by compiling it once with a
-placeholder in `\1`'s place — and used to try two placeholders, `"x"` then `"9"`, rejecting the whole rules
-file (D9) only when BOTH failed. But `"x"` is not a digit, so it fails ANY numeric-interval position on that
-alone (`{10,x}`), whatever the template; `a{10,\1}` failed both placeholders (`{10,x}` non-numeric, `{10,9}`
-since 9<10) and was refused outright — even though `\1="20"` makes `{10,20}` a perfectly valid interval
-(CodeRabbit review on #277). The probe is now a single `"9"` (valid everywhere a placeholder is: ordinary
-literal text, or a genuine interval digit), and a refusal is accepted at parse time only when it is NOT
-`std::regex_constants::error_badbrace` — an out-of-order `{min,max}` is a fact about which digits a specific
-capture supplies, not about the template's structure, so it defers to the edge: `pathRuleMatches` already
-compiles the REAL substitution per edge and refuses by name (`isRefused`) only the edges whose own capture is
-actually invalid. `RegexCompile` (`src/regexguard.h`) gained `isIntervalRangeOnly`, set once at the single
-`std::regex_error` catch site `compileGuardedRegex` already had — no new file spells `std::regex`
-(`test/regexguardcheck.sh` arm (c), which caught the first version of this fix routing the check through a
-second parse in arch.h itself).
-
-Gates: `test/archcheck.sh` (new F-H9 section) — a valid capture applies (a real verdict, not a parse-time
-refusal), an invalid capture refuses that edge by name, and a template broken independent of any capture
-(an unmatched `(`) still refuses at parse time, unchanged.
-
-### Fixed — a `#match?` predicate or an `--arch` path-rule that never reached the engine still filtered nothing
-
-`#match?`/`#not-match?` (a `--match`/`--lint-rules` predicate) and `--arch` path-rules matched a captured node's
-text, or a FROM/TO path, straight through the engine with no length bound — the same crash shape #251/the
-regex-long-lines lane fixed for `--regex`, just not wired to these three entry points yet. A subject too long
-for the engine on its thread now answers `RegexVerdict::Skipped` (never a silent Miss) at both: `#match?`
-refuses like an abandoned match, naming the site (`--match`/`--lint-rules` exit 1); an `--arch` path-rule's
-verdict refuses only when the skip could actually change the edge's answer — a LATER deny rule that decisively
-matches the same edge settles it regardless, and the earlier skip is disclosed on stderr, not refused. That
-"keep scanning past an undecided rule" shape used to stop at the FIRST undecided deny even when a later one
-would have settled things either way; it now mirrors the allow-loop's own shape, which already scanned past an
-undecided allow the same way.
-
-Gates: `test/astqueryregexcheck.sh` (new arm G, red via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1`), `test/archcheck.sh`
-(new F-B4 section: arm 1 red via the same fault, arm 2 deterministic via a per-edge TO-template refusal — the
-fault forces every `kCallerStackBytesFloor`-bound match to skip unconditionally, so a differential needs a
-cause that isn't stack-size-uniform). quality-delta gating=0 (short-horizon-churn acked through the binary).
-
-### Fixed — a skill scan that could not finish reading a line, or a directory, still said "clean"
-
-`--scan-skill(s)` skipped a line the regex engine was never handed (too long for this thread's measured-safe
-bound, the same bound `--regex` uses on a long matching line) and read it as an ordinary Miss, and a
-`--scan-skills` walk that stopped early — a descriptor limit, not a permission error — was silently invisible:
-the loop's own error was cleared in the same expression that set it, so the `if( ec )` guarding it could never
-fire. Both are content that WOULD BE INSTALLED and was never actually scanned, so both now fail CLOSED
-(CRITICAL, named `SCAN-INCOMPLETE:line-oversize` / `SCAN-INCOMPLETE:walk-stopped-early`), reconciling the
-walk-only WARN an earlier round gave `ripwire wrap` with the CRITICAL `--scan-skill` already gives an engine
-that gives up mid-match. An unreadable folder — content that install could not have picked up either — is
-unchanged and stays WARN, the owner's own example of what does not need to fail closed.
-`GuardedRegex::search`/`search(subject,captures)` (`src/regexguard.h`) take an optional per-thread stack bound
-(default unbounded, so every existing caller is untouched) and answer `RegexVerdict::Skipped` rather than a
-silent Miss when a subject exceeds it. Gates: `test/skillscanreadcheck.sh` (new §F-B3), `test/codexwrapcheck.sh`
-(new §F-B3), both red on the unfixed binary via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` / the new
-`RIPWIRE_FAULT_SKILL_WALK_STOP=1`.
-
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
 A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles
@@ -1721,6 +1649,78 @@ the template-qualified re-export are red. (u4) is the contrast: the same two bas
 split. (u6) is an unindexed re-export that keeps the walk. (u1) goes red on the union build, and (u5) on a build
 without the template-argument strip.
 
+### Fixed — an `--arch` TO-template interval was rejected at parse time even when a real capture made it valid
+
+`deny path FROM -> TO` validates a TO template like `a{10,\1}` at parse time by compiling it once with a
+placeholder in `\1`'s place — and used to try two placeholders, `"x"` then `"9"`, rejecting the whole rules
+file (D9) only when BOTH failed. But `"x"` is not a digit, so it fails ANY numeric-interval position on that
+alone (`{10,x}`), whatever the template; `a{10,\1}` failed both placeholders (`{10,x}` non-numeric, `{10,9}`
+since 9<10) and was refused outright — even though `\1="20"` makes `{10,20}` a perfectly valid interval
+(CodeRabbit review on #277). The probe is now a single `"9"` (valid everywhere a placeholder is: ordinary
+literal text, or a genuine interval digit), and a refusal is accepted at parse time only when it is NOT
+`std::regex_constants::error_badbrace` — an out-of-order `{min,max}` is a fact about which digits a specific
+capture supplies, not about the template's structure, so it defers to the edge: `pathRuleMatches` already
+compiles the REAL substitution per edge and refuses by name (`isRefused`) only the edges whose own capture is
+actually invalid. `RegexCompile` (`src/regexguard.h`) gained `isIntervalRangeOnly`, set once at the single
+`std::regex_error` catch site `compileGuardedRegex` already had — no new file spells `std::regex`
+(`test/regexguardcheck.sh` arm (c), which caught the first version of this fix routing the check through a
+second parse in arch.h itself).
+
+Gates: `test/archcheck.sh` (new F-H9 section) — a valid capture applies (a real verdict, not a parse-time
+refusal), an invalid capture refuses that edge by name, and a template broken independent of any capture
+(an unmatched `(`) still refuses at parse time, unchanged.
+
+### Fixed — a `#match?` predicate or an `--arch` path-rule that never reached the engine still filtered nothing
+
+`#match?`/`#not-match?` (a `--match`/`--lint-rules` predicate) and `--arch` path-rules matched a captured node's
+text, or a FROM/TO path, straight through the engine with no length bound — the same crash shape #251/the
+regex-long-lines lane fixed for `--regex`, just not wired to these three entry points yet. A subject too long
+for the engine on its thread now answers `RegexVerdict::Skipped` (never a silent Miss) at both: `#match?`
+refuses like an abandoned match, naming the site (`--match`/`--lint-rules` exit 1); an `--arch` path-rule's
+verdict refuses only when the skip could actually change the edge's answer — a LATER deny rule that decisively
+matches the same edge settles it regardless, and the earlier skip is disclosed on stderr, not refused. That
+"keep scanning past an undecided rule" shape used to stop at the FIRST undecided deny even when a later one
+would have settled things either way; it now mirrors the allow-loop's own shape, which already scanned past an
+undecided allow the same way.
+
+Gates: `test/astqueryregexcheck.sh` (new arm G, red via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1`), `test/archcheck.sh`
+(a new section: arm 1 red via the same fault, arm 2 deterministic via a per-edge TO-template refusal — the
+fault forces every `kCallerStackBytesFloor`-bound match to skip unconditionally, so a differential needs a
+cause that isn't stack-size-uniform). quality-delta gating=0 (short-horizon-churn acked through the binary).
+
+### Fixed — a skill scan that could not finish reading a line, or a directory, still said "clean"
+
+`--scan-skill(s)` skipped a line the regex engine was never handed (too long for this thread's measured-safe
+bound, the same bound `--regex` uses on a long matching line) and read it as an ordinary Miss, and a
+`--scan-skills` walk that stopped early — a descriptor limit, not a permission error — was silently invisible:
+the loop's own error was cleared in the same expression that set it, so the `if( ec )` guarding it could never
+fire. Both are content that WOULD BE INSTALLED and was never actually scanned, so both now fail CLOSED
+(CRITICAL, named `SCAN-INCOMPLETE:line-oversize` / `SCAN-INCOMPLETE:walk-stopped-early`), reconciling the
+walk-only WARN an earlier round gave `ripwire wrap` with the CRITICAL `--scan-skill` already gives an engine
+that gives up mid-match. An unreadable folder — content that install could not have picked up either — is
+unchanged and stays WARN, the owner's own example of what does not need to fail closed.
+`GuardedRegex::search`/`search(subject,captures)` (`src/regexguard.h`) take an optional per-thread stack bound
+(default unbounded, so every existing caller is untouched) and answer `RegexVerdict::Skipped` rather than a
+silent Miss when a subject exceeds it. Gates: `test/skillscanreadcheck.sh` (a new section), `test/codexwrapcheck.sh`
+(a new section), both red on the unfixed binary via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` / the new
+`RIPWIRE_FAULT_SKILL_WALK_STOP=1`.
+
+### Fixed — a skill file the scan could not read, or held a NUL byte, is now reported instead of passing
+
+`--scan-skills` counted an unreadable file (mode 000 in a readable folder, an I/O error) as `skipped=` and still
+answered `verdict="clean"` at exit 0, and `ripwire wrap` read the same file as "no findings", with one pathless
+degrade line on stderr however many files it hit. Both now score such a file CRITICAL and name it — a
+`SCAN-INCOMPLETE:file-unreadable` row on the artifact, a `cannot read skill file <path>` line on stderr — so
+`wrap` no longer emits the recipe over it without `--force`. The single-file `--scan-skill` already refused
+that path. A folder the scan cannot enter stays WARN: its contents cannot be copied either.
+`--scan-skills` also stops skipping a file because its first 8 KB hold a NUL byte: it scans it like any other
+file, as `--scan-skill` and `wrap` already did — a PNG icon a skill bundles is now read (and comes back clean)
+rather than skipped. `skipped=` counts unreadable files only.
+
+Gates: `test/skillscanreadcheck.sh` arms (4) and (5), with the NUL-file arm re-pinned (`files="3"`, no
+`skipped=`); `test/codexwrapcheck.sh` unreadable-file arm (red on the unfixed binary, with a readable control)
+and a NUL-byte arm that pins `wrap`'s existing behaviour.
+
 ### Added
 
 - **`--lsp` — a read-only navigation LSP server over stdio (Phase 1).** `definition`, `references`,
@@ -1816,6 +1816,31 @@ The worse site is a class template specialization that shares the primary templa
 
 Gate: `test/fieldnarrowcheck.sh` arm t. Arms t1–t4 are red on the unfixed binary. Arms t5, t9, t10 and t6's HAS-A row
 each went red when the one guard they protect was disabled in a scratch build.
+
+### Fixed — `--uses` on a `::` selector resolved `defs=` and then answered a silent `count="0"`
+
+Every symbol-taking verb resolves the two `::` spellings the tool prints about itself — the canonical id
+`path::scope::name` and `Scope::name` — but `--uses` then matched reference sites against the whole spelling, which
+no call site carries, so a resolving selector answered `count="0"` (issue #164). `resolveUsesSelector` now takes the
+resolved defs and, when they share one name, matches sites by that name and narrows the call role to those defs,
+exactly as a `file:name` selector does; `--safe-delete` and `--verify` get the narrowed scan too. A wrong scope
+(`Nope::ctwin`) still refuses, a member spelling with no symbol behind it still takes the field path, and an
+all-Elixir resolution keeps the Elixir resolver's arity-exact sites. The MCP `uses` verb refuses a resolving `::`
+spelling as CLI-only with the bare-name retry, the way `file:name` already refuses, instead of the silent zero; the
+legend and `--help` name both spellings that narrow. `test/usesselectorcheck.sh` flips every KNOWN GAP arm to its
+fixed answer and asserts the `::` and `file:name` twins give the same rows and that every call row sits inside
+`--callers`. Thanks to @aniruddhaadak80.
+
+### Added — `--doctor` detects a struct layout that differs between translation units
+
+Each translation unit that includes `src/model.h` records `sizeof` and `alignof` for the shared model types
+(`Symbol`, `Reference`, `Include`, `Binding`, `IngestResult` and the rest) in an internal-linkage registry that
+survives Release and LTO, and `--doctor`'s `layout` row compares them: `state="agree"`, `state="disagree"` with
+the first differing type and both units' sizes and alignments plus the rebuild action, or `not-checked` /
+`no-records` when there is too little to compare. A mixed build — the stale-object failure CLAUDE.md warns about —
+is now named rather than debugged. Stated floors: a field reorder that keeps both size and alignment, and a unit
+that never includes the header, are invisible. `test/structlayoutcheck.sh` proves the disagreement on a
+deterministic two-unit fixture (sizes 4 and 8) and the `not-checked` state on one unit. Thanks to @lennix1337.
 
 ## [0.6.1] — 2026-09-14
 
