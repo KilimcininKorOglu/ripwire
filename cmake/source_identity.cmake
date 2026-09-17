@@ -44,7 +44,11 @@ if(NOT RIPWIRE_OUTPUT)
 endif()
 
 set(_body "// Generated at build time by cmake/source_identity.cmake — do not edit.\n// ${_count} files under src/ and queries/.\nnamespace rw\n{\nextern const char kRipwireSourceIdentity[];\nconst char kRipwireSourceIdentity[] = \"${_identity}\";\n} // namespace rw\n")
-set(_tmp "${RIPWIRE_OUTPUT}.tmp")
+# A tmp name of its own, next to the output (same filesystem for the copy): two builds of one tree running this at
+# once (separate `cmake --build --config X` invocations) shared "<output>.tmp", so one could REMOVE the other's tmp
+# before its copy, or copy it half-written. string(RANDOM) is seeded per process. Every path below removes the tmp.
+string(RANDOM LENGTH 12 _tmp_tag)
+set(_tmp "${RIPWIRE_OUTPUT}.${_tmp_tag}.tmp")
 file(WRITE "${_tmp}" "${_body}")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_tmp}" "${RIPWIRE_OUTPUT}" RESULT_VARIABLE _copy_rc)
 file(REMOVE "${_tmp}")

@@ -36,6 +36,7 @@
 "bodiesshowncheck.sh": 11.6,
 "bodydialectcheck.sh": 54.1,
 "budgetpolicycheck.sh": 50.2,
+"buildtypestampcheck.sh": 7.0,
 "bundleidcheck.sh": 8.9,
 "cachefuzzcheck.sh": 56.9,
 "cachehashcheck.sh": 2.1,
