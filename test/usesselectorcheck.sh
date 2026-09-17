@@ -183,14 +183,22 @@ if [ -n "$CANON_A" ]; then
         no "(d) FIXED (issue #164): canonical-id rows and file:name rows for one definition differ"
     fi
     # FIXED, the two verbs agree: every role="call" row sits inside a caller the --callers answer lists
-    # (the relation test/declinecheck.sh's call_sites helper reads).
-    "$BIN" "$ROOT" --uses="$CANON_ID" --no-cache >"$TMP/d_uses.xml" 2>/dev/null
-    "$BIN" "$ROOT" --callers="$CANON_ID" --no-cache >"$TMP/d_callers.xml" 2>/dev/null
-    DU="$( call_sites "$TMP/d_uses.xml" "$TMP/d_callers.xml" )"
-    if [ -z "$DU" ]; then
-        ok "(d) FIXED: every role=\"call\" row of the canonical-id answer sits inside a --callers-listed caller"
+    # (the relation test/declinecheck.sh's call_sites helper reads). Both runs take --limit=100000 (the
+    # house "effectively unbounded" idiom, e.g. defaultceilingcheck.sh), so the comparison is not an
+    # artifact of --uses' 100-row default window against --callers' 40-row one (kUseSiteRowCap vs
+    # kCallHierarchyRowCap, src/pageview.h) — on this self-hosted symbol's real caller count the two
+    # defaults disagree, and the unwindowed check below is the one that can actually FAIL on a real gap.
+    "$BIN" "$ROOT" --uses="$CANON_ID" --no-cache --limit=100000 >"$TMP/d_uses.xml" 2>/dev/null
+    "$BIN" "$ROOT" --callers="$CANON_ID" --no-cache --limit=100000 >"$TMP/d_callers.xml" 2>/dev/null
+    DU="$( call_sites "$TMP/d_uses.xml" "$TMP/d_callers.xml" )"; DU_RC=$?
+    D_CALL_ROWS="$( grep -c '<u role="call"' "$TMP/d_uses.xml" )"
+    # call_sites exits 1 on unreadable/malformed XML — treat that as a FAIL, not vacuous agreement (issue
+    # #164 F6/CodeRabbit 4007001071): empty $DU only means something when call_sites actually ran, and at
+    # least one role="call" row must exist or the "every row sits inside a caller" claim is unfalsifiable.
+    if [ "$DU_RC" = 0 ] && [ -z "$DU" ] && [ "${D_CALL_ROWS:-0}" -ge 1 ]; then
+        ok "(d) FIXED: every role=\"call\" row ($D_CALL_ROWS) of the canonical-id answer sits inside a --callers-listed caller"
     else
-        no "(d) FIXED (issue #164): call rows with no --callers edge: $( printf '%s' "$DU" | tr '\n' ' ' )"
+        no "(d) FIXED (issue #164): call_sites rc=$DU_RC, call rows=${D_CALL_ROWS:-0}, unaccounted: $( printf '%s' "$DU" | tr '\n' ' ' )"
     fi
 fi
 
@@ -244,7 +252,7 @@ command -v python3 >/dev/null 2>&1 || no "(f) python3 is required by the MCP arm
 # inside a caller that ALSO calls Widget::new. That is the file:name rule's own granularity, not this gap.
 while IFS='|' read -r fix sel bare site ncall shape; do
     [ -z "$fix" ] && continue
-    fx "$fix" --callers="$sel" >"$TMP/callers.xml" 2>/dev/null
+    fx "$fix" --callers="$sel" --limit=100000 >"$TMP/callers.xml" 2>/dev/null
     CR="$( tag_of "$( cat "$TMP/callers.xml" )" callers )"
     [ "$( val_of "$CR" count )" = "$ncall" ] \
         && ok "(f) premise, $shape: --callers=$sel resolves and counts $ncall caller(s)" \
@@ -254,7 +262,7 @@ while IFS='|' read -r fix sel bare site ncall shape; do
         && ok "(f) control, $shape: the bare --uses=$bare lists $site" \
         || no "(f) control, $shape: the bare --uses=$bare no longer lists $site: $( tag_of "$BARE" uses )"
     BARE_COUNT="$( val_of "$( tag_of "$BARE" uses )" count )"
-    OUT="$( fx "$fix" --uses="$sel" )"; RC=$?
+    OUT="$( fx "$fix" --uses="$sel" --limit=100000 )"; RC=$?
     printf '%s' "$OUT" >"$TMP/uses.xml"
     U="$( tag_of "$OUT" uses )"
     C="$( val_of "$U" count )"
@@ -269,11 +277,14 @@ while IFS='|' read -r fix sel bare site ncall shape; do
         no "(f) FIXED ($UQ_PROMPT), $shape: --uses=$sel should list $site with 1 <= count <= ${BARE_COUNT:-?} plus narrowed_roles=/call_sites_of_name=: rc=$RC ${U:-no <uses> root}"
     fi
     # FIXED, the two verbs agree: every role="call" row sits inside a caller the --callers answer lists.
-    UNACC="$( call_sites "$TMP/uses.xml" "$TMP/callers.xml" )"
-    if [ -z "$UNACC" ]; then
-        ok "(f) FIXED, $shape: every role=\"call\" row sits inside a --callers-listed caller"
+    # Same rc/row-count guard as arm (d) (issue #164 F6): call_sites exits 1 on unreadable/malformed XML,
+    # and an empty $UNACC only means agreement when call_sites actually ran over at least one call row.
+    UNACC="$( call_sites "$TMP/uses.xml" "$TMP/callers.xml" )"; UNACC_RC=$?
+    F_CALL_ROWS="$( grep -c '<u role="call"' "$TMP/uses.xml" )"
+    if [ "$UNACC_RC" = 0 ] && [ -z "$UNACC" ] && [ "${F_CALL_ROWS:-0}" -ge 1 ]; then
+        ok "(f) FIXED, $shape: every role=\"call\" row ($F_CALL_ROWS) sits inside a --callers-listed caller"
     else
-        no "(f) FIXED ($UQ_PROMPT), $shape: call rows with no --callers edge: $( printf '%s' "$UNACC" | tr '\n' ' ' )"
+        no "(f) FIXED ($UQ_PROMPT), $shape: call_sites rc=$UNACC_RC, call rows=${F_CALL_ROWS:-0}, unaccounted: $( printf '%s' "$UNACC" | tr '\n' ' ' )"
     fi
 done <<'EOF'
 declinefix|cpp/pair/one.cpp::One::ctwin|ctwin|cpp/pair/user.cpp:3|1|C++ canonical id

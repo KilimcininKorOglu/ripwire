@@ -373,6 +373,12 @@ inline UsesSelector resolveUsesSelector( const rw::IngestResult& ing, std::strin
     UsesSelector u{};   // both narrowing flags start false; every arm below sets what it means
     u.elixirDefs = rw::resolveAllByNameQualified( ing, sym );
     std::erase_if( u.elixirDefs, [ & ]( rw::NodeId node ) { return ing.symbols[ node ].lang != rw::Lang::Elixir; } );
+    // Every resolved def Elixir? Then `defs` (the caller's resolution of the same spelling) is the same
+    // population as u.elixirDefs. Both surfaces already answer that population correctly through the
+    // Elixir resolver path (usesText's elixirDefs, mirrored above), so scopeNarrowed must NOT fire for it —
+    // narrowing here would key the site scan on the bare trailing name and silently drop the very
+    // arity-suffixed references (f/1 vs f/2) the Elixir resolver exists to keep apart (elixirsemanticcheck).
+    const bool allDefsElixir = !defs.empty() && u.elixirDefs.size() == defs.size();
     if( !sym.empty() && sym.front() == '@' )
     {
         // @FILE:LINE line-seed: the site scan matches NAMES, so the seed must rebind to the innermost
@@ -403,13 +409,15 @@ inline UsesSelector resolveUsesSelector( const rw::IngestResult& ing, std::strin
     {
         rw::splitQualifiedSpec( sym, file, u.siteMatchName );
     }
-    else if( sym.find( "::" ) != std::string_view::npos && commonDefsName( ing, defs, u.siteMatchName ) )
+    else if( sym.find( "::" ) != std::string_view::npos && !allDefsElixir && commonDefsName( ing, defs, u.siteMatchName ) )
     {
         // A "::" spelling whose defs share one name narrows exactly like a file:name selector: the site
         // scan matches that name, and the call role narrows to the defs through usesChosenCallers. Set
         // only on a non-empty, single-named resolution, so a wrong scope (Nope::ctwin) keeps the
         // whole-spelling key and the generic refusal's bytes. A member spelling backed by no symbol
         // (empty defs) never sets the flag, so memberUsesArm still serves it upstream exactly as today.
+        // An all-Elixir resolution is excluded (see allDefsElixir above) and falls to the plain-key arm
+        // below, keeping it byte-identical to main.
         u.scopeNarrowed = true;
     }
     else
