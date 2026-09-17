@@ -1730,8 +1730,10 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // (fromTraceBundleText, tracelocus.h) — the SAME assembler --from-trace's CLI path calls.
                 else if( name == "from_trace" && !path.empty() && !trace.empty() )
                 {
-                    const std::string t = fromTraceText( path, trace, budgetTokens, redactPtr );
-                    resp = t.empty() ? errResult( -32602, "no stack-trace / sanitizer / compiler frames found in `trace` — nothing to map" ) : textResult( t );
+                    const FromTraceResult r = fromTraceText( path, trace, budgetTokens, redactPtr );
+                    resp = r.isBufferLost ? errResult( -32603, "internal error: a from_trace buffer lost bytes — the bundle is withheld, not served without its blocks" )
+                         : !r.ok          ? errResult( -32602, "no stack-trace / sanitizer / compiler frames found in `trace` — nothing to map" )
+                                          : textResult( r.xml );
                 }
                 // L4: `edit_check` — did SYM's contract (params/publicness) change vs git HEAD (editCheckBundleText,
                 // editcheck.h) — the SAME contract-comparison core --edit-check's CLI path calls.

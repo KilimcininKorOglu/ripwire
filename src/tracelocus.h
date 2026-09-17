@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdint>
+#include <optional>   // renderTraceBlock / renderTestHopBlock: nullopt is a buffer that failed
 #include <string>
 #include <string_view>
 #include <utility>
@@ -760,12 +761,14 @@ inline std::string_view hopLegendOf( const TestHop& hop ) noexcept { return hop.
 
 // render the <test_hop> block — <trace>'s sibling, never a rewrite of it. Empty string when the hop did not
 // fire, which is what keeps every non-test trace byte-identical to the pre-hop bundle. Built through
-// open_memstream for renderTraceBlock's reason: no attribute may be truncated mid-value (F6).
-inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& hop, std::string_view rootArg )
+// open_memstream for renderTraceBlock's reason: no attribute may be truncated mid-value (F6). nullopt when the
+// buffer failed (at the open, or a write lost inside it): the block the bundle needed does not exist, and the
+// caller withholds the bundle rather than serve it without the block (fromTraceBundleText).
+inline std::optional<std::string> renderTestHopBlock( const IngestResult& ing, const TestHop& hop, std::string_view rootArg )
 {
     if( !hop.isFired )
     {
-        return {};
+        return std::string();
     }
 
     std::vector<char> esc;
@@ -780,8 +783,8 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
     std::FILE* const m = stream.open();
     if( !m )
     {
-        DEGRADED_PATH_ALERT( "renderTestHopBlock: open_memstream failed — hop block omitted" );
-        return {};
+        DEGRADED_PATH_ALERT( "renderTestHopBlock: open_memstream failed — the bundle is withheld" );
+        return std::nullopt;
     }
 
     const Symbol&     fromSym  = ing.symbols[ hop.fromSymbolId ];
@@ -800,9 +803,9 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
     const rw::MemoryStreamBytes block = stream.finish();
     if( !block.isWhole )
     {
-        // a lost write left a hole in the block, and a half <test_hop> element is not XML: omit it, as a failed open does
-        DEGRADED_PATH_ALERT( "renderTestHopBlock: the buffer did not finish whole — hop block omitted" );
-        return {};
+        // a lost write left a hole in the block: never serve it, and never serve the bundle without it
+        DEGRADED_PATH_ALERT( "renderTestHopBlock: the buffer did not finish whole — the bundle is withheld" );
+        return std::nullopt;
     }
     return std::string( block.bytes );
 }
@@ -811,7 +814,7 @@ inline std::string renderTestHopBlock( const IngestResult& ing, const TestHop& h
 // the caller can subtract its exact byte cost from the sigs budget. Built through open_memstream so no
 // attribute is ever truncated regardless of path length (F6: a fixed-size row buffer truncated long
 // sanitizer paths mid-attribute, dropping the closing `"/>` and breaking G4).
-inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameFormat dominant, std::string_view srcNote,
+inline std::optional<std::string> renderTraceBlock( const IngestResult& ing, tracein::FrameFormat dominant, std::string_view srcNote,
                                      const TracePartition& part )
 {
     std::vector<char> esc;
@@ -821,8 +824,8 @@ inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameForm
     std::FILE* const m = stream.open();
     if( !m )
     {
-        DEGRADED_PATH_ALERT( "renderTraceBlock: open_memstream failed — trace block omitted" );
-        return {};
+        DEGRADED_PATH_ALERT( "renderTraceBlock: open_memstream failed — the bundle is withheld" );
+        return std::nullopt;
     }
     rw::emitTo( m, "<trace src=\"{}\" format=\"{}\" frame_lines=\"{}\" parsed=\"{}\" in_corpus=\"{}\" skipped=\"{}\" merged=\"{}\" unresolved=\"{}\" suspects=\"{}\">",
         ex( srcNote ).c_str(), tracein::formatSpec( dominant ).label, part.frameLinesSeen, part.parsedCount, part.inCorpusCount,
@@ -863,8 +866,8 @@ inline std::string renderTraceBlock( const IngestResult& ing, tracein::FrameForm
     const rw::MemoryStreamBytes block = stream.finish();
     if( !block.isWhole )
     {
-        DEGRADED_PATH_ALERT( "renderTraceBlock: the buffer did not finish whole — trace block omitted" );
-        return {};
+        DEGRADED_PATH_ALERT( "renderTraceBlock: the buffer did not finish whole — the bundle is withheld" );
+        return std::nullopt;
     }
     return std::string( block.bytes );
 }
@@ -921,7 +924,12 @@ struct FromTraceInputs
 
 struct FromTraceResult
 {
-    bool        ok         = false;   // false = zero parseable frames — caller refuses loudly, xml is empty
+    bool        ok         = false;   // false = zero parseable frames, or isBufferLost — caller refuses loudly, xml is empty
+    // true when a block's memory buffer failed (at the open, or a write lost inside it — rw::MemoryStream::finish). The
+    // <trace> map, the test hop and the signature/body section are the answer, and this bundle cannot render them
+    // another way, so it is WITHHELD rather than served without them: the caller says so on stderr / as an MCP error.
+    // It used to omit the block and serve the rest, a bundle missing its trace map that no Release build disclosed.
+    bool        isBufferLost = false;
     std::size_t frameCount = 0;
     std::size_t inCorpus   = 0;
     std::string xml;                  // the <ctx>…</ctx> bundle; only meaningful when ok
@@ -1071,9 +1079,16 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         return h;
     };
 
-    std::string       headerStr = buildTraceHeader( /*withSrcEcho=*/true, {} );
-    const std::string traceStr  = renderTraceBlock( ing, dominant, srcNote, part );
-    const std::string hopStr    = renderTestHopBlock( ing, hop, in.rootArg );   // LB-A; empty unless the hop fired
+    std::string                      headerStr   = buildTraceHeader( /*withSrcEcho=*/true, {} );
+    const std::optional<std::string> traceBlock  = renderTraceBlock( ing, dominant, srcNote, part );
+    const std::optional<std::string> hopBlock    = renderTestHopBlock( ing, hop, in.rootArg );   // LB-A; empty unless the hop fired
+    if( !traceBlock || !hopBlock )
+    {
+        res.isBufferLost = true;   // withheld, not served without the block (see FromTraceResult)
+        return res;
+    }
+    const std::string& traceStr = *traceBlock;
+    const std::string& hopStr   = *hopBlock;
 
     // VT-1: the caller's prelude (--run-trace's <run> + <lines>) is fixed bytes exactly like the header and
     // the trace block — charged against the same ledger, so the sigs/bodies section shrinks to make room
@@ -1112,12 +1127,16 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
             }
             else
             {
-                DEGRADED_PATH_ALERT( "from-trace: the signature/body buffer did not finish whole — section skipped" );
+                DEGRADED_PATH_ALERT( "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
+                res.isBufferLost = true;
+                return res;
             }
         }
         else
         {
-            DEGRADED_PATH_ALERT( "from-trace: open_memstream failed — signature/body section skipped" );
+            DEGRADED_PATH_ALERT( "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
+            res.isBufferLost = true;
+            return res;
         }
     }
     whole += "</ctx>";

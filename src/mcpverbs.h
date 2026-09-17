@@ -3687,9 +3687,9 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
 // `from_trace` verb: the MCP twin of --from-trace — maps a pasted stack trace / sanitizer report / compiler
 // error onto indexed symbols, ranked INNERMOST-first, via fromTraceBundleText() (tracelocus.h) — the SAME
 // assembler the CLI --from-trace handler calls. `trace` is the raw trace TEXT (no stdin/file reading over
-// MCP — the caller pastes it as a request argument, unlike the CLI's FILE/'-' arg). "" ⇒ zero parseable
-// frames (caller → error, mirroring the CLI's loud refusal).
-inline std::string fromTraceText( const std::string& root, const std::string& trace, std::size_t budgetTokens, RedactCounts* redact = nullptr )
+// MCP — the caller pastes it as a request argument, unlike the CLI's FILE/'-' arg). Returns the assembler's own
+// result: !ok ⇒ zero parseable frames or a withheld bundle (isBufferLost), and the dispatcher words each refusal.
+inline FromTraceResult fromTraceText( const std::string& root, const std::string& trace, std::size_t budgetTokens, RedactCounts* redact = nullptr )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -3717,7 +3717,7 @@ inline std::string fromTraceText( const std::string& root, const std::string& tr
     in.rootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();   // R-R
 
     const FromTraceResult res = fromTraceBundleText( ing, g, trace, "mcp trace input", in );
-    return res.ok ? res.xml : std::string();
+    return res;
 }
 
 // `edit_check` verb: the MCP twin of --edit-check=SYM — "did MY edit change a contract someone depends on",
