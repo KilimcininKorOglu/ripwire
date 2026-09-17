@@ -685,6 +685,9 @@ struct Binding
     NodeId        fromSymbol = kNoNode;   // enclosing function/method (the binding's scope); kNoNode if file-scope
     std::uint32_t fileId     = 0;
     LocalBindKind kind       = LocalBindKind::Type;
+    bool          isFromAssignment = false;   // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
+                                              //   a function's name as often as a class's, so buildGraph drops it unless a class of
+                                              //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
                                           //   VarDecl and its typed record (Type or ParamType) carry the SAME
                                           //   value — that shared byte is how Rule 2's lexical receiver lookup
@@ -707,7 +710,7 @@ struct Binding
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
 static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
-               "Binding's scalars are five u32 and a u8 kind in 24 bytes — startByte rides the padding after `kind`" );
+               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT

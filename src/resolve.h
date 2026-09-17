@@ -2113,6 +2113,38 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
     return r.isCompose && r.qualifier == "std";
 }
 
+// Every Class/Struct/Interface NAME in the corpus: Rule 2c's receiver-token test (Narrower::rule2cClassNameRecv) and the
+// assignment guard below. Names carry no namespace, so this answers "some class is called that", never which one.
+inline HashMap<std::string, char> classNameSet( const IngestResult& ing )
+{
+    HashMap<std::string, char> classNames;
+    classNames.reserve( ing.symbols.size() / 8 + 1 );
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface )
+        {
+            classNames.try_emplace( s.name, '\0' );
+        }
+    }
+    return classNames;
+}
+
+// Rule 2's assignment guard (test/narrowcheck.sh arms 44-51): whether a Type record a C++ ASSIGNMENT emitted names no class.
+// `x = f( … )` records the callee's last name as x's type (ingest_binds.h assignedTypeOf), because a constructor call and
+// a function call are one grammar node: `t = llvm::cast<Target>( y )` recorded `cast`, `t = makeTarget( y )` recorded
+// `makeTarget`. An assignment declares nothing, so such a name is no fact about the variable, and every reader of the
+// record drops it — buildGraph's flat varType table and collectFieldUseSites' table, where it tombstoned the declaration's
+// written `Target* t` (a lost narrow, a lost field pin), and the local-name set, where it made a MEMBER assigned from a
+// call read as a local, so Rule 2b refused the member's declared type. A DECLARATION's callee-read name is kept: that
+// declaration exists with a type nothing recorded, and its conflict with a sibling declaration of the name is the tombstone
+// that keeps one block's type off the other block's calls (arm 48). An assignment from a class keeps its record, conflict
+// included (arm 47). The lexical table (buildScopedRecvDecls) never attaches an assignment's record: no declaration shares
+// its byte.
+inline bool assignmentNamesNoClass( const Binding& b, const HashMap<std::string, char>& classNames )
+{
+    return b.isFromAssignment && classNames.find( b.typeName ) == classNames.end();
+}
+
 // One entry of Rule 2's FLAT per-function type table (buildGraph's varType): the variable's type name — "" is a TOMBSTONE,
 // an ambiguous or `std::`-typed variable that never narrows — and whether a declaration wrote that type QUALIFIED, the
 // fact prov="final-segment" discloses (Narrower::finalSegmentTypeAt).
