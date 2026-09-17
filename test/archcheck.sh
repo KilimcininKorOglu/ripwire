@@ -224,14 +224,23 @@ echo "--- F-B4: a skipped path-rule subject refuses only when a deny would have 
 cat >"$TMP/skip_only.txt" <<'EOF'
 deny path test/(\w+)\.cpp -> render/(\w+)\.h
 EOF
-RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" . --arch="$TMP/skip_only.txt" --no-cache >"$TMP/skip_only.out" 2>"$TMP/skip_only.err"
-rc_skiponly=$?
-[ "$rc_skiponly" -eq 1 ] \
-    && ok "F-B4(1): a skip with nothing else to decide the edge refuses (exit 1)" \
-    || no "F-B4(1): expected exit 1 (refusal), got $rc_skiponly: $( head -c 200 "$TMP/skip_only.err" )"
-[ ! -s "$TMP/skip_only.out" ] \
-    && ok "F-B4(1): no XML emitted on refusal" \
-    || no "F-B4(1): XML emitted alongside the refusal"
+# RIPWIRE_FAULT_* switches are compiled out under NDEBUG (src/infra/emit.h faultSwitchOn), so on a Release leg the fault
+# run IS the control run. Probe the switch itself (the regexguardcheck.sh (m) fixture: one line past the 64-byte forced bound).
+FAULTS=0; mkdir -p "$TMP/faultprobe"
+{ head -c 100 /dev/zero | tr '\0' 'x'; printf ' aab\naab\n'; } >"$TMP/faultprobe/f.md"
+RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$TMP/faultprobe" --no-cache --regex='a+b' 2>/dev/null | grep -q 'regex_lines_skipped="[1-9]' && FAULTS=1
+if [ "$FAULTS" -eq 1 ]; then
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" . --arch="$TMP/skip_only.txt" --no-cache >"$TMP/skip_only.out" 2>"$TMP/skip_only.err"
+    rc_skiponly=$?
+    [ "$rc_skiponly" -eq 1 ] \
+        && ok "F-B4(1): a skip with nothing else to decide the edge refuses (exit 1)" \
+        || no "F-B4(1): expected exit 1 (refusal), got $rc_skiponly: $( head -c 200 "$TMP/skip_only.err" )"
+    [ ! -s "$TMP/skip_only.out" ] \
+        && ok "F-B4(1): no XML emitted on refusal" \
+        || no "F-B4(1): XML emitted alongside the refusal"
+else
+    printf '  INFO  F-B4(1): this binary compiles fault switches out (NDEBUG); the forced skip is proved on the plain-flavour leg\n'
+fi
 # control: the SAME rule with no fault decides normally (a real violation, exit 2) — proves (1) is a genuine skip,
 # not a rule that was already broken.
 "$BIN" . --arch="$TMP/skip_only.txt" --no-cache >/dev/null 2>"$TMP/skip_only_ctrl.err"
@@ -242,8 +251,8 @@ rc_skiponly_ctrl=$?
 
 # (2) TWO deny rules on the same edge, the first genuinely UNDECIDED, the second DECISIVE — the edge must stay
 # forbidden and DISCLOSE the undecided one, never refuse for it. RIPWIRE_FAULT_REGEX_LINE_BOUND=1 forces every
-# FROM/TO match on kCallerStackBytesFloor (524288 B) to Skip UNCONDITIONALLY (524288 >> 22 == 0 — a caller-floor
-# stack this small has no non-zero bound to spare once forced), which would skip BOTH rules' FROM evaluation and
+# FROM/TO match on kCallerStackBytesFloor to Skip (524288 >> 22 == 0 under libc++; 8 MiB >> 22 == 2 B under libstdc++,
+# shorter than any path here), which would skip BOTH rules' FROM evaluation and
 # so cannot build a differential within one run. A per-edge TO-refusal (arch.h's own documented `a{2,\1}` shape)
 # is undecided the same way — pathRuleForbids treats isRefused/isAbandoned/isSkipped identically — and unlike the
 # fault it is deterministic and per-RULE, so it is used here to prove the scan-past-the-undecided-one behavior.
@@ -314,6 +323,9 @@ rc_h9v5=$?
 grep -q 'test/v5/main.cpp -> render/shader.h' "$TMP/h9_v5.err" \
     && ok "F-H9: the refusal names the specific edge, not just the template" \
     || no "F-H9: the refusal does not name the edge: $( head -c 300 "$TMP/h9_v5.err" )"
+grep -q 'a TO template with a backreference is judged per edge' "$TMP/h9_v5.err" \
+    && ok "F-H9: the per-edge refusal names why it was deferred to the edge (the template has a backreference)" \
+    || no "F-H9: the per-edge refusal does not name the backreference deferral: $( head -c 300 "$TMP/h9_v5.err" )"
 [ ! -s "$TMP/h9_v5.out" ] \
     && ok "F-H9: no XML emitted on the per-edge refusal" \
     || no "F-H9: XML emitted alongside the per-edge refusal"
@@ -328,6 +340,19 @@ rc_h9struct=$?
 [ "$rc_h9struct" -eq 1 ] \
     && ok "F-H9 control: a template broken independent of any capture (unmatched '(') still refuses at parse time" \
     || no "F-H9 control: a genuinely-always-invalid template loaded (exit $rc_h9struct) — the D9 rule over-relaxed"
+
+# CodeRabbit on #283: the interval deferral needs a backreference. `{2,1}` with no \1..\9 anywhere is out of order
+# for every edge, so the rules file is refused at load even though its FROM side matches no file in the tree (a
+# deferred rule would sit loaded and silently inert). The \1 template above is the control that still defers.
+cat >"$TMP/h9_nobackref.txt" <<'EOF'
+deny path nosuchdir/never\.cpp -> render/shader\.h{2,1}
+EOF
+"$BIN" . --arch="$TMP/h9_nobackref.txt" --no-cache >"$TMP/h9_nobackref.out" 2>"$TMP/h9_nobackref.err"
+rc_h9nob=$?
+[ "$rc_h9nob" -eq 1 ] && [ ! -s "$TMP/h9_nobackref.out" ] \
+    && ok "F-H9: an out-of-order interval with NO backreference ({2,1}) refuses the rules file at load (exit 1), though no FROM path matches" \
+    || no "F-H9: {2,1} without a backreference loaded (exit $rc_h9nob) — a rule no capture can make valid sits inert"
+
 [ ! -s "$TMP/h9_structural.out" ] \
     && ok "F-H9 control: no XML emitted on the parse-time refusal" \
     || no "F-H9 control: XML emitted alongside the parse-time refusal"

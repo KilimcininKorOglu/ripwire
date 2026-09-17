@@ -350,6 +350,7 @@ IsolateStats isolateStats( const rw::IngestResult& ing, const rw::Graph& graph,
 static void refuseUndecidedPathRule( const rw::PathRule& pr, const rw::PathRuleVerdict& verdict, std::string_view src, std::string_view dst )
 {
     const std::string reason = verdict.isRefused ? "its TO pattern became '" + verdict.refusedTo + "' after backreference substitution, which is refused: " + verdict.refusal
+                                                   + " (a TO template with a backreference is judged per edge: only this edge's capture completed it)"
                               : verdict.isSkipped ? std::string( rw::kRegexOversizeReason )
                                                    : std::string( rw::kRegexAbandonedReason );
     rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "

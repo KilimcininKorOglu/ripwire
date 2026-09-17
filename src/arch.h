@@ -243,11 +243,16 @@ inline std::string substituteBackrefs( std::string_view toTemplate, const RegexC
 // capture, refusing by name (isRefused) only the edges whose own digits are invalid, never every edge for an
 // order only one arbitrary placeholder had wrong. Any OTHER failure (unbalanced groups, a bad escape — nothing a
 // real capture's digits could fix either) still condemns the template for every edge, exactly as before.
+// The deferral needs a backreference to defer TO (CodeRabbit on #283): a template with no \1..\9 has digits no
+// capture can change, so `a{2,1}` is refused at load like any other broken template — otherwise a rule whose FROM
+// side never matches would sit loaded and silently inert. Whether a backreference actually reaches the offending
+// interval is not analysed; a template that has one still defers, and each edge's real capture decides.
 inline std::optional<std::string> toTemplateRefusal( std::string_view toTemplate )
 {
-    const std::string substituted = substituteBackrefsWith( toTemplate, []( std::size_t ) { return std::string( "9" ); } );
+    bool              hasBackref  = false;
+    const std::string substituted = substituteBackrefsWith( toTemplate, [ & ]( std::size_t ) { hasBackref = true; return std::string( "9" ); } );
     RegexCompile       compiled   = compileGuardedRegex( substituted, kRegexEcmaScript );
-    if( !compiled.refusal || compiled.isIntervalRangeOnly )
+    if( !compiled.refusal || ( compiled.isIntervalRangeOnly && hasBackref ) )
     {
         return std::nullopt;   // compiles outright, or an interval order a DIFFERENT capture's digits could satisfy — defer to the edge
     }
