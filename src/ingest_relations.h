@@ -438,6 +438,57 @@ inline std::string_view writtenTypeNamespace( TSNode typeNode, std::string_view 
     return ( !ts_node_is_null( scope ) && kindIs( ts_node_type( scope ), "namespace_identifier" ) ) ? nodeTextOf( scope, src ) : std::string_view{};
 }
 
+// The std smart pointers whose `->` reaches their FIRST template argument. No other template is read through: an in-repo
+// Holder<T> or util::Box<T> may overload `->` onto anything, std::weak_ptr has no `->`, and std::auto_ptr left in C++17.
+inline constexpr std::array<std::string_view, 2> kStdSmartPointers{ "unique_ptr", "shared_ptr" };
+
+// The pointee of a member type written `std::unique_ptr<T>` / `std::shared_ptr<T>`, spelled the way a compose ref spells a type:
+// T's final segment and the namespace T was written in (`std` for `std::unique_ptr<std::string>`, which the readers refuse like
+// any std type). An empty name for every other type — including a global `::std::…`, which the two-segment capture does not read
+// (see writtenTypeNamespace) — and when T is not a plain type: `Widget`, `const gfx::Widget` and `Gen<int>` are; `Widget[]` (it
+// has no `->`), `int`, an expression, a comment and a qualified template are not.
+struct WrittenPointee
+{
+    std::string_view name;
+    std::string_view qualifier;
+};
+
+inline WrittenPointee stdSmartPointee( TSNode typeNode, std::string_view src ) noexcept
+{
+    const TSNode tmpl = writtenTypeNamespace( typeNode, src ) == "std" ? fieldChild( typeNode, NodeField::Name ) : TSNode{};
+    if( ts_node_is_null( tmpl ) || !kindIs( ts_node_type( tmpl ), "template_type" ) )
+    {
+        return {};
+    }
+    const std::string_view tmplName = nodeFieldText( tmpl, NodeField::Name, src );
+    if( std::find( kStdSmartPointers.begin(), kStdSmartPointers.end(), tmplName ) == kStdSmartPointers.end() )
+    {
+        return {};
+    }
+    const TSNode args  = fieldChild( tmpl, NodeField::Arguments );
+    const TSNode first = ( ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 ) ? TSNode{} : ts_node_named_child( args, 0 );
+    if( ts_node_is_null( first ) || !kindIs( ts_node_type( first ), "type_descriptor" ) || !ts_node_is_null( fieldChild( first, NodeField::Declarator ) ) )
+    {
+        return {};
+    }
+    const TSNode      type = fieldChild( first, NodeField::Type );
+    const char* const kind = ts_node_is_null( type ) ? "" : ts_node_type( type );
+    if( kindIs( kind, "type_identifier" ) )
+    {
+        return { nodeTextOf( type, src ), {} };
+    }
+    if( kindIs( kind, "template_type" ) )
+    {
+        return { nodeFieldText( type, NodeField::Name, src ), {} };
+    }
+    const TSNode name = kindIs( kind, "qualified_identifier" ) ? fieldChild( type, NodeField::Name ) : TSNode{};
+    if( !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "type_identifier" ) )
+    {
+        return { nodeTextOf( name, src ), writtenTypeNamespace( type, src ) };
+    }
+    return {};
+}
+
 // S5-E HAS-A composition edges: walk a class/struct node's field_declaration_list and emit a
 // compose RawRef for each typed member variable whose type name matches a known class/struct name.
 // Two sub-relations:
@@ -446,7 +497,9 @@ inline std::string_view writtenTypeNamespace( TSNode typeNode, std::string_view 
 // These edges carry isCompose=true and are NEVER inserted into the call graph CSR; they live only in
 // Graph::composeEdges for the <compose> block in --for and --around. C++ only (priority per PLAN).
 // The name is the type's final segment and the qualifier the NAMESPACE it was written in (writtenTypeNamespace):
-// the same (name, immediate qualifier) pair a call ref carries, so `std::string name_;` is `string` in `std`.
+// the same (name, immediate qualifier) pair a call ref carries, so `std::string name_;` is `string` in `std`. A std smart
+// pointer records its POINTEE with viaArrow set: `std::unique_ptr<Widget> w_;` is `Widget`, which `w_->m()` reaches and
+// `w_.m()` does not (kParserVer 104). Every other qualified template (`std::vector<Widget> v_;`) still records nothing.
 void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
 {
     if( lang != Lang::Cpp )
@@ -489,8 +542,9 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
             const char* tnType = ts_node_type( typeNode );
 
             // Determine the type name and whether this is a reference/pointer (uses) or value (creates).
-            std::string typeName;
-            bool isRefOrPtr = false;   // reference (&) or pointer (*) → "uses"; else "creates"
+            std::string    typeName;
+            bool           isRefOrPtr = false;   // reference (&) or pointer (*) → "uses"; else "creates"
+            WrittenPointee pointee;              // `std::unique_ptr<Widget>` / `std::shared_ptr<Widget>`: Widget
 
             if( kindIs( tnType, "type_identifier" ) )
             {
@@ -511,6 +565,13 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
                 // In practice tree-sitter-cpp puts the ref/ptr in the "declarator" field, not "type".
                 // This branch covers unusual parses; the main path is via the declarator below.
                 continue;
+            }
+            else if( pointee = stdSmartPointee( typeNode, src ); !pointee.name.empty() )
+            {
+                // `std::unique_ptr<Widget> w_;` records Widget, reached through `->` alone (arm p). Not the other std templates:
+                // recording `std::vector<Widget> v_;` as a std type would only tombstone same-named classes' same-named members,
+                // and on rocksdb and llvm-project that lost six correct narrows and refused no wrong one (2026-09-17).
+                typeName = std::string( pointee.name );
             }
             else
             {
@@ -569,6 +630,10 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
                 fieldName = std::string( src.substr( da, db - da ) );
                 declIsRefOrPtr = false;
             }
+            else if( !pointee.name.empty() && kindIs( dt, "pointer_declarator" ) )
+            {
+                continue;   // `std::unique_ptr<Widget>* p_;` — `p_->` reaches the smart pointer, not Widget
+            }
             else if( kindIs( dt, "reference_declarator" ) || kindIs( dt, "pointer_declarator" ) )
             {
                 declIsRefOrPtr = true;
@@ -606,6 +671,11 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
             r.qualifier  = writtenTypeNamespace( typeNode, src );   // `std` for `std::string name_;`, "" unqualified
             r.fieldName  = std::move( fieldName );
             r.composeRel = ( isRefOrPtr || declIsRefOrPtr ) ? "uses" : "creates";
+            if( !pointee.name.empty() )
+            {
+                r.qualifier = std::string( pointee.qualifier );   // the POINTEE's namespace: `std` for `std::unique_ptr<std::string>`
+                r.viaArrow  = true;
+            }
             refs.push_back( std::move( r ) );
         }
     }

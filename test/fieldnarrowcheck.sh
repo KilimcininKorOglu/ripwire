@@ -391,6 +391,145 @@ else
     no "(r5) the compact legend does not define prov=final-segment on a map whose field edge carries it"
 fi
 
+# ── (p) a member held by a std smart pointer (2026-09-17) — an EXTRACTION change, like (q). The field capture read a qualified
+#        type only when a plain name sat directly under the `::`, and in `std::unique_ptr<Widget> w_;` that name is a template,
+#        so the member recorded no type at all and every `w_->read()` took the bare-name split. `->` on a std::unique_ptr or
+#        std::shared_ptr reaches the pointee, so the member now records the FIRST template argument, marked as reached through
+#        `->` only, and the call carries whether it was written with `->`: `w_.reset()` is the smart pointer's own member, never
+#        Widget::reset. No other template is read through: std::vector has no `->`, and an in-repo Holder<T> or util::Box<T> may
+#        overload it to reach anything (p6). (p8) is the tombstone rule both new facts need: a same-named class whose same-named
+#        member is typed differently — a std pointee, or the same class reached through `.` instead of `->` — refuses both.
+#        LINE NUMBERS in app/owner.cpp are asserted below. ──
+FIX5="$TMP/ptrfix"; FIX6="$TMP/ptrtomb"
+mkdir -p "$FIX5/lib" "$FIX5/app" "$FIX6/0" "$FIX6/a" "$FIX6/b" "$FIX6/c" "$FIX6/d" "$FIX6/e" "$FIX6/f"
+cat >"$FIX5/lib/widget.h" <<'EOF'
+struct Widget { int read() { return 1; } void reset() { } int size() { return 2; } int level; };
+struct Decoy { int read() { return 3; } void reset() { } int size() { return 4; } int level; };
+template <class T> struct Holder { T* operator->() { return p; } T* p; };
+namespace util { template <class T> struct Box { T* operator->() { return p; } T* p; }; }
+namespace store { struct Blob { int read() { return 5; } }; }
+EOF
+cat >"$FIX5/app/owner.cpp" <<'EOF'
+struct Owner {
+    std::unique_ptr<Widget> w_;
+    std::shared_ptr<Widget> s_;
+    std::unique_ptr<store::Blob> bl_;
+    std::vector<Widget> v_;
+    Holder<Widget> h_;
+    util::Box<Widget> b_;
+    int viaUnique() { return w_->read(); }
+    int viaShared() { return s_->read(); }
+    int viaQualified() { return bl_->read(); }
+    void resetPointee() { w_->reset(); }
+    void resetOwner() { w_.reset(); }
+    int viaVector() { return v_.size(); }
+    int viaHolder() { return h_->read(); }
+    int viaBox() { return b_->read(); }
+    int levelUnique() { return w_->level; }
+};
+EOF
+cat >"$FIX6/a/types.h" <<'EOF'
+struct Slice { int size() const { return 2; } };
+struct Other { int size() const { return 3; } };
+struct Widget2 { int read() { return 1; } void reset() { } };
+struct Decoy2 { int read() { return 2; } void reset() { } };
+EOF
+cat >"$FIX6/b/src.cc" <<'EOF'
+struct Source { Slice* buf_; int left() { return buf_->size(); } };
+EOF
+cat >"$FIX6/c/src.h" <<'EOF'
+struct Source { std::unique_ptr<std::string> buf_; int used() { return buf_->size(); } };
+EOF
+cat >"$FIX6/0/sink.h" <<'EOF'
+struct Sink { std::shared_ptr<std::string> buf_; int drained() { return buf_->size(); } };
+EOF
+cat >"$FIX6/f/sink.cc" <<'EOF'
+struct Sink { Slice* buf_; int filled() { return buf_->size(); } };
+EOF
+cat >"$FIX6/d/keep.h" <<'EOF'
+struct Keeper { Widget2 w_; int byValue() { return w_.read(); } };
+struct Minder { std::unique_ptr<Widget2> w_; void dropOwned() { w_.reset(); } };
+EOF
+cat >"$FIX6/e/keep.h" <<'EOF'
+struct Keeper { std::unique_ptr<Widget2> w_; void dropHeld() { w_.reset(); } };
+struct Minder { Widget2 w_; int byValue2() { return w_.read(); } };
+EOF
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/p5.tsv" >/dev/null 2>&1
+"$BIN" "$FIX6" --no-cache --pin-census="$TMP/p6.tsv" >/dev/null 2>&1
+pRows(){  # pRows TSV CALLER CALLEE — "mech|targets" for each of CALLER's CALLEE census rows ("" = no row: declined)
+    awk -F '\t' -v c="$2" -v n="$3" '$1 == "C" && index( $6, c ) && $7 == n { print $2 "|" $8 }' "$1" 2>/dev/null
+}
+pMissing=""
+for want in '::Owner::viaUnique#' '::Owner::resetOwner#' '::Owner::viaBox#' '::Owner::levelUnique#' 'dispositions calls=8 '; do
+    qHas "$TMP/p5.tsv" "$want" || pMissing="$pMissing [ptrfix $want]"
+done
+for want in 'c/src.h::Source::used#' '0/sink.h::Sink::drained#' 'e/keep.h::Keeper::dropHeld#' 'd/keep.h::Minder::dropOwned#' 'dispositions calls=8 '; do
+    qHas "$TMP/p6.tsv" "$want" || pMissing="$pMissing [ptrtomb $want]"
+done
+[ -z "$pMissing" ] && ok "(p0) presence: both census files name every fixture caller and count every call" \
+    || no "(p0) presence guard:$pMissing — every (p) arm below would be vacuous"
+
+# (p1)-(p4) the defect: a call through the pointer narrows to the pointee's own member, the pointee written plain or qualified
+pPinned(){  # pPinned ARM CALLER CALLEE TARGET-ERE WHAT
+    local got; got="$( pRows "$TMP/p5.tsv" "$2" "$3" )"
+    if printf '%s\n' "$got" | grep -qE "^receiver-rule\\|$4#[0-9]+\$"; then
+        ok "($1) $5 narrows to the pointee's member (receiver-rule)"
+    else
+        no "($1) $5 did not narrow to the pointee's member: [${got:-no row}]"
+    fi
+}
+pPinned p1 '::Owner::viaUnique#'    read  'lib/widget\.h::Widget::read'  'std::unique_ptr<Widget> w_; w_->read()'
+pPinned p2 '::Owner::viaShared#'    read  'lib/widget\.h::Widget::read'  'std::shared_ptr<Widget> s_; s_->read()'
+pPinned p3 '::Owner::viaQualified#' read  'lib/widget\.h::Blob::read'    'std::unique_ptr<store::Blob> bl_; bl_->read()'
+pPinned p4 '::Owner::resetPointee#' reset 'lib/widget\.h::Widget::reset' 'std::unique_ptr<Widget> w_; w_->reset()'
+
+# (p5) `.` reaches the smart pointer itself; (p6) no other template is read through, std or in-repo
+pNotPinned(){  # pNotPinned ARM TSV CALLER CALLEE TARGET-ERE WHAT
+    local got; got="$( pRows "$2" "$3" "$4" )"
+    if printf '%s\n' "$got" | grep -qE "^receiver-rule\\|$5#[0-9]+\$"; then
+        no "($1) $6 was narrowed by the field's type: [$got]"
+    else
+        ok "($1) $6 is not narrowed by the field's type: [${got:-no row}]"
+    fi
+}
+pNotPinned p5 "$TMP/p5.tsv" '::Owner::resetOwner#' reset 'lib/widget\.h::Widget::reset' "std::unique_ptr<Widget> w_; w_.reset() — the smart pointer's own reset"
+pNotPinned p6 "$TMP/p5.tsv" '::Owner::viaVector#'  size  'lib/widget\.h::Widget::size'  'control: std::vector<Widget> v_; v_.size()'
+pNotPinned p6 "$TMP/p5.tsv" '::Owner::viaHolder#'  read  'lib/widget\.h::Widget::read'  'control: in-repo Holder<Widget> h_; h_->read()'
+pNotPinned p6 "$TMP/p5.tsv" '::Owner::viaBox#'     read  'lib/widget\.h::Widget::read'  'control: in-repo util::Box<Widget> b_; b_->read()'
+
+# (p7) the member index reads the same record: `w_->level` is Widget's level, and no longer every owner's
+USES7="$( "$BIN" "$FIX5" --uses=Widget.level --no-cache 2>/dev/null | grep -oE '<u [^>]*p="app/owner.cpp:16"[^>]*/>' )"
+if [ -n "$USES7" ] && ! printf '%s' "$USES7" | grep -q 'owner_candidates='; then
+    ok "(p7) --uses=Widget.level pins w_->level (app/owner.cpp:16) through the unique_ptr"
+else
+    no "(p7) --uses=Widget.level does not pin w_->level (app/owner.cpp:16): [${USES7:-no row}]"
+fi
+DECOY7="$( "$BIN" "$FIX5" --uses=Decoy.level --no-cache 2>/dev/null | grep -oE '<u [^>]*p="app/owner.cpp:16"[^>]*/>' )"
+if [ -z "$DECOY7" ] || printf '%s' "$DECOY7" | grep -q 'owner_candidates='; then
+    ok "(p7) control: --uses=Decoy.level does not pin app/owner.cpp:16: [${DECOY7:-no row}]"
+else
+    no "(p7) control: --uses=Decoy.level PINS w_->level (app/owner.cpp:16): $DECOY7"
+fi
+
+# (p8) tombstones, each collision in both record orders: a std pointee (std::string) against Slice*, and the same
+#      class reached through `->` against `.` — a `.reset()` that took the value member's type would bind Widget2::reset
+pNotPinned p8 "$TMP/p6.tsv" 'c/src.h::Source::used#'      size  'a/types\.h::Slice::size'    'std::unique_ptr<std::string> buf_ (sorts after Source'"'"'s Slice* buf_); buf_->size()'
+pNotPinned p8 "$TMP/p6.tsv" '0/sink.h::Sink::drained#'    size  'a/types\.h::Slice::size'    'std::shared_ptr<std::string> buf_ (sorts before Sink'"'"'s Slice* buf_); buf_->size()'
+pNotPinned p8 "$TMP/p6.tsv" 'e/keep.h::Keeper::dropHeld#' reset 'a/types\.h::Widget2::reset' 'std::unique_ptr<Widget2> w_ (after Keeper'"'"'s Widget2 w_); w_.reset()'
+pNotPinned p8 "$TMP/p6.tsv" 'd/keep.h::Minder::dropOwned#' reset 'a/types\.h::Widget2::reset' 'std::unique_ptr<Widget2> w_ (before Minder'"'"'s Widget2 w_); w_.reset()'
+
+# (p9) determinism + cache transparency: the pointee fact and the call's `->` both ride the cached records
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/p5b.tsv" >/dev/null 2>&1
+rm -f "$TMP/pc"
+"$BIN" "$FIX5" --cache="$TMP/pc" >/dev/null 2>&1
+"$BIN" "$FIX5" --cache="$TMP/pc" --pin-census="$TMP/p5w.tsv" >/dev/null 2>&1
+if [ -s "$TMP/p5.tsv" ] && cmp -s "$TMP/p5.tsv" "$TMP/p5b.tsv" && cmp -s "$TMP/p5.tsv" "$TMP/p5w.tsv" \
+   && pRows "$TMP/p5w.tsv" '::Owner::viaUnique#' read | grep -qE '^receiver-rule\|lib/widget\.h::Widget::read#[0-9]+$'; then
+    ok "(p9) ptrfix census byte-identical cold, cold again and warm, and the warm run still narrows w_->read()"
+else
+    no "(p9) ptrfix census differs across runs or warm vs cold, or the warm run lost w_->read()'s narrow"; diff "$TMP/p5.tsv" "$TMP/p5w.tsv" | head -6
+fi
+
 # ── TS/JS literal receivers (issue #163, first step on #59) ──
 # A built-in method on a LITERAL must not bind an unrelated same-named user function. Covered calls
 # (replace/split/padStart/map/test/toFixed/toString/join) go External; a builtin name with NO in-repo

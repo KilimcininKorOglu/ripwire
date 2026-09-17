@@ -2122,25 +2122,31 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
 
 // One entry of Rule 2's FLAT per-function type table (buildGraph's varType) and of Rule 2b's "Class#field" table
 // (buildFieldNarrowTables): the declared type name — "" is a TOMBSTONE, an ambiguous or `std::`-typed name that never
-// narrows — and whether a declaration wrote that type QUALIFIED, the fact prov="final-segment" discloses
-// (Narrower::finalSegmentTypeAt for a parameter or local, Narrower::fieldFinalSegmentAt for a field).
+// narrows — whether a declaration wrote that type QUALIFIED, the fact prov="final-segment" discloses
+// (Narrower::finalSegmentTypeAt for a parameter or local, Narrower::fieldFinalSegmentAt for a field), and, for a field only,
+// whether the type is the POINTEE of a std smart pointer member, which a call reaches through `->` alone (test/fieldnarrowcheck.sh
+// arm p): `w_.reset()` on `std::unique_ptr<Widget> w_;` is the smart pointer's own member, never Widget::reset.
 struct FlatRecvType
 {
     std::string type;
     bool        writtenQualified = false;
+    bool        arrowOnly        = false;
 };
 
 // fold one declared type into a flat table: the first type wins, a different later type tombstones, and an agreeing
-// declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too.
-inline void recordFlatRecvTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, std::string_view type, bool writtenQualified )
+// declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too. A type
+// reached through `->` alone (`arrowOnly`) and the same type reached as the member itself are different facts, and tombstone too.
+inline void recordFlatRecvTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, std::string_view type, bool writtenQualified,
+                                    bool arrowOnly = false )
 {
     const auto [ it, inserted ] = table.try_emplace( key );
     if( inserted )
     {
         it->second.type.assign( type );
         it->second.writtenQualified = writtenQualified;
+        it->second.arrowOnly        = arrowOnly;
     }
-    else if( !it->second.type.empty() && it->second.type != type )
+    else if( !it->second.type.empty() && ( it->second.type != type || it->second.arrowOnly != arrowOnly ) )
     {
         it->second.type.clear();   // conflicting types for one name in one scope → tombstone (never narrow on it)
     }
@@ -2573,6 +2579,10 @@ struct Narrower
         if( field == nullptr || field->type.empty() )
         {
             return nullptr;
+        }
+        if( field->arrowOnly && !r.viaArrow )
+        {
+            return nullptr; // a std smart pointer's pointee: `.` names the smart pointer's own member (arm p)
         }
 
         // (4) the declared type's own method set, then its bases — shared with Rule 2c below.

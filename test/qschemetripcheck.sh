@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, SMART-POINTER MEMBERS (test/fieldnarrowcheck.sh arm p): kParserVer and its mirror 103 -> 104 and kCacheVersion
+#   and its mirror 22 -> 23. A member written `std::unique_ptr<T>` / `std::shared_ptr<T>` records T, reached through `->`
+#   alone, and every call reference records whether its member access was `->`: the ref record grows one u8, a FORMAT
+#   change. The qsnap scheme does not move — the snapshot LAYOUT is unchanged, and the producer identity already keys every
+#   blob to the build whose resolution made it. 104 is the next free number over main's 103; a train renumbers it.
 # 2026-09-17, TRAIN 1b (#277, integration/train-1b, built on train 2b): kParserVer and its mirror 102 -> 103 for the
 #   maintainer fix on #244's JS/TS literal receivers (a signed numeric literal, (-1).toFixed(), is a number receiver;
 #   CodeRabbit on #277). An extraction change, so the parser version moves and the mirror moves with it; the qsnap
