@@ -4660,10 +4660,10 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     out.ownersOfName = everyOwner.size();
 
     // "<fromSymbol>#<var>" → the var's declared type: Rule 2's own binding table (kind Type — a typed local, a
-    // constructor-initialised one) PLUS the parameter written types (kind ParamType); a conflicting re-declaration
-    // tombstones, and so does a type written in `std` (resolve.h namesStdType): it names no in-repo class, and a
-    // skip would hand a same-named variable's other declaration every site of the name.
-    HashMap<std::string, std::string> localType;
+    // constructor-initialised one) PLUS the parameter written types (kind ParamType), folded by Rule 2's own rule
+    // (resolve.h recordFlatRecvType): a conflicting re-declaration tombstones, and so does a type written in `std` — it
+    // names no in-repo class, and a skip would hand a same-named variable's other declaration every site of the name.
+    HashMap<std::string, FlatRecvType> localType;
     localType.reserve( ing.bindings.size() );
     std::string key;
     for( const Binding& b : ing.bindings )
@@ -4673,12 +4673,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             continue;
         }
         buildShadowKey( key, b.fromSymbol, b.var );
-        const std::string_view type = namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName );
-        const auto [ it, inserted ] = localType.try_emplace( key, type );
-        if( !inserted && !it->second.empty() && it->second != type )
-        {
-            it->second.clear();
-        }
+        recordFlatRecvType( localType, key, b );
     }
     const FieldNarrowTables narrow = buildFieldNarrowTables( ing );   // "Class#field" → declared type (S5-E)
 
@@ -4716,7 +4711,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             buildShadowKey( key, encl, var );
             if( const auto it = localType.find( key ); it != localType.end() )
             {
-                return it->second;
+                return it->second.type;
             }
         }
         return fieldTypeOf( ctxOwner, var );
