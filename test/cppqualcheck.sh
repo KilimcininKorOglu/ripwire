@@ -183,6 +183,8 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # every file through ifstream + ostringstream << rdbuf() + str(), two copies, on the BM25 scan path);
 # 23 -> 24 when src/quality.h's error-masking confirm read a block's RAW bytes through it (CodeRabbit on
 # #127: a flattened block loses the newline that ends a // comment, so comment-only had to be confirmed raw).
+# 24 -> 27 for #229: spellUncached reads the Python test source; pytestConfigAt reads pyproject.toml and
+# setup.cfg through the same helper. All three qualified call sites were checked in --uses output.
 # The literal counts REAL call sites, so it moves when a real call site is
 # added; what it pins is that the qualified `docparse::detail::` spelling still RESOLVES, which is the defect
 # this arm was written for. Bumping it is correct; changing it to a >= would retire the arm.
@@ -223,9 +225,10 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # at the name hung the blocking open — quality.h's readRegisterMacrosConfig (.ripwire_config) and verbs_quality.h's
 # ackNothingToAccept (the acks ledger). Disjoint from the three githarden.h sites; re-derived on the merged tree
 # (20 grep lines = 19 call sites + the definition, and --uses answers 19).
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 19 ] \
-    && ok "repo: --uses=readWholeFile count=19 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 19"
+# 19 -> 22: Python runner evidence reads source, pyproject.toml and setup.cfg (#229).
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 22 ] \
+    && ok "repo: --uses=readWholeFile count=22 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 22"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"
