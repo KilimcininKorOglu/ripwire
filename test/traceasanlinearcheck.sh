@@ -51,6 +51,24 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 command -v python3 >/dev/null 2>&1 || { echo "traceasanlinearcheck: python3 required"; exit 2; }
 echo "traceasanlinearcheck: BIN=$BIN"
 
+# ===================================================================================================
+# (P) THE RUNNER — arm B times every run through test/lib/caprun.py, never timeout(1). Stock macOS ships no
+# timeout(1), and `timeout 20 …` then answered 127 in about a millisecond: arm B read that as a 1 ms TIMING SAMPLE for
+# all four sizes and passed without parsing a single trace (CodeRabbit on #277). The runner is proven on this host
+# first: it passes an exit status through, enforces its cap, and reports a command it cannot start as EXECFAIL.
+# ===================================================================================================
+echo "-- (P) the capped runner works on this host"
+CAPRUN="$ROOT/test/lib/caprun.py"
+capRun(){ python3 "$CAPRUN" "$@" 2>&1 | tail -1; }   # capRun SECONDS [opts] -- CMD… -> "rc=N ms=M" | "TIMEOUT ms=M" | "EXECFAIL …"
+if [ ! -f "$CAPRUN" ]; then
+    no "P0: the runner test/lib/caprun.py is missing — arm B cannot time anything"
+else
+    P1="$( capRun 5 -- sh -c 'exit 3' )"; P2="$( capRun 1 -- sleep 5 )"; P3="$( capRun 5 -- "$TMP/no-such-binary" )"
+    case "$P1" in "rc=3 "*) ok "P1: an exit status passes through the runner ($P1)" ;; *) no "P1: the runner did not report rc=3: $P1" ;; esac
+    case "$P2" in "TIMEOUT "*) ok "P2: the runner enforces its cap ($P2)" ;; *) no "P2: the runner did not time out a 5 s sleep under a 1 s cap: $P2" ;; esac
+    case "$P3" in "EXECFAIL "*) ok "P3: a command that cannot start is EXECFAIL, never a timing" ;; *) no "P3: a missing command was not reported as EXECFAIL: $P3" ;; esac
+fi
+
 mkdir -p "$TMP/corpus"
 run_trace(){ # $1 = trace file NAME, written under $TMP (an absolute --from-trace path, so this never
              # depends on the corpus cwd the way a relative one silently would if the fixture and the
@@ -118,50 +136,54 @@ gen 160000   "$TMP/patho_160k.txt"
 gen 640000   "$TMP/patho_640k.txt"
 gen 2500000  "$TMP/patho_2500k.txt"
 
-nowms(){ python3 -c 'import time; print(int(time.time()*1000))'; }
-
 # TIMED_OUT_MS: a hang is not "slow", it is the O(k^2) failure mode itself — a per-file 20s ceiling (the
 # fixed implementation takes tens of MILLIseconds even at 2.5 MB) turns "the process never returned" into
 # an explicit, ranked-huge timing number instead of killing this whole gate out from under the harness.
 TIMED_OUT_MS=99999999
-timed_trace(){ # $1 = fixture name -> prints elapsed ms on stdout
-    local t0 t1 rc
-    t0=$(nowms)
-    timeout 20 bash -c "$( printf 'cd %q && %q . --from-trace=%q --no-cache' "$TMP/corpus" "$BIN" "$TMP/$1" )" >/dev/null 2>&1
-    rc=$?
-    t1=$(nowms)
-    if [ "$rc" = 124 ]; then
-        echo "$TIMED_OUT_MS"
-    else
-        local d=$(( t1 - t0 )); [ "$d" -lt 1 ] && d=1
-        echo "$d"
-    fi
+# A timing is only a sample when the run COMPLETED with rc=0: a crash, a non-zero exit or a command that never started
+# is a failure of this arm, never a fast measurement. timed_trace echoes the runner's line; msOf turns it into a number.
+timed_trace(){ # $1 = fixture name -> the runner's one-line result
+    capRun 20 --cwd "$TMP/corpus" -- "$BIN" . --from-trace="$TMP/$1" --no-cache
 }
-
-ms40=$(timed_trace   patho_40k.txt)
-ms160=$(timed_trace  patho_160k.txt)
-ms640=$(timed_trace  patho_640k.txt)
-ms2500=$(timed_trace patho_2500k.txt)
+msOf(){ # $1 = label, $2 = runner line -> prints ms, or TIMED_OUT_MS for a timeout or a failed run (the B0 loop above records that FAIL)
+    case "$2" in
+        "rc=0 ms="*) printf '%s' "${2#rc=0 ms=}" ;;
+        "TIMEOUT "*) printf '%s' "$TIMED_OUT_MS" ;;
+        *)           printf '%s' "$TIMED_OUT_MS" ;;
+    esac
+}
+R40="$( timed_trace patho_40k.txt )"; R160="$( timed_trace patho_160k.txt )"; R640="$( timed_trace patho_640k.txt )"; R2500="$( timed_trace patho_2500k.txt )"
+samplesOk=1
+for pair in "40 KB|$R40" "160 KB|$R160" "640 KB|$R640" "2.5 MB|$R2500"; do
+    case "${pair#*|}" in
+        "rc=0 ms="*|"TIMEOUT "*) ;;
+        *) samplesOk=0; no "B0: the ${pair%%|*} run is not a timing sample — ${pair#*|} (a failed or unstarted run must never read as fast)" ;;
+    esac
+done
+ms40=$(msOf 40k "$R40"); ms160=$(msOf 160k "$R160"); ms640=$(msOf 640k "$R640"); ms2500=$(msOf 2500k "$R2500")
 
 echo "     40 KB: ${ms40} ms   160 KB: ${ms160} ms   640 KB: ${ms640} ms   2.5 MB: ${ms2500} ms"
 
-# linear ~= 4x per step; quadratic ~= 16x per step. 8x is generous slack over linear while still well
-# below what even ONE quadratic doubling would show, so this does not flake on a loaded CI box.
-if [ "$ms640" -le $(( ms160 * 8 )) ]; then
-    ok "B1: 160 KB -> 640 KB (4x size) cost <= 8x time (${ms160}ms -> ${ms640}ms) — not quadratic"
-else
-    no "B1: 160 KB -> 640 KB cost ${ms160}ms -> ${ms640}ms, more than 8x — looks quadratic"
-fi
-if [ "$ms2500" -le $(( ms640 * 12 )) ]; then
-    ok "B2: 640 KB -> 2.5 MB (~4x size) cost <= 12x time (${ms640}ms -> ${ms2500}ms) — not quadratic"
-else
-    no "B2: 640 KB -> 2.5 MB cost ${ms640}ms -> ${ms2500}ms, more than 12x — looks quadratic"
-fi
-# absolute ceiling: the whole point is that 2.5 MB must not take seconds
-if [ "$ms2500" -le 3000 ]; then
-    ok "B3: the 2.5 MB pathological trace parses in ${ms2500} ms (<=3000 ms)"
-else
-    no "B3: the 2.5 MB pathological trace took ${ms2500} ms — looks unbounded"
+# B1-B3 compare real samples only: with a B0 failure above they would compare the sentinel with itself.
+if [ "$samplesOk" = 1 ]; then
+    # linear ~= 4x per step; quadratic ~= 16x per step. 8x is generous slack over linear while still well
+    # below what even ONE quadratic doubling would show, so this does not flake on a loaded CI box.
+    if [ "$ms640" -le $(( ms160 * 8 )) ]; then
+        ok "B1: 160 KB -> 640 KB (4x size) cost <= 8x time (${ms160}ms -> ${ms640}ms) — not quadratic"
+    else
+        no "B1: 160 KB -> 640 KB cost ${ms160}ms -> ${ms640}ms, more than 8x — looks quadratic"
+    fi
+    if [ "$ms2500" -le $(( ms640 * 12 )) ]; then
+        ok "B2: 640 KB -> 2.5 MB (~4x size) cost <= 12x time (${ms640}ms -> ${ms2500}ms) — not quadratic"
+    else
+        no "B2: 640 KB -> 2.5 MB cost ${ms640}ms -> ${ms2500}ms, more than 12x — looks quadratic"
+    fi
+    # absolute ceiling: the whole point is that 2.5 MB must not take seconds
+    if [ "$ms2500" -le 3000 ]; then
+        ok "B3: the 2.5 MB pathological trace parses in ${ms2500} ms (<=3000 ms)"
+    else
+        no "B3: the 2.5 MB pathological trace took ${ms2500} ms — looks unbounded"
+    fi
 fi
 
 if [ "$fail" = 0 ]; then
