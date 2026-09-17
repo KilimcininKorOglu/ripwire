@@ -26,9 +26,9 @@ name: Nightly
 #
 # SCHEDULE SEMANTICS. GitHub runs `schedule` only from the workflow file on the DEFAULT branch, at main's latest
 # commit, so this file schedules nothing until it is merged. Scheduled runs start late under load at the top of the
-# hour, hence :17. GitHub also disables schedules in a public repository after 60 days without activity; a fork's
-# schedule is ignored by the `changed` job's repository guard, so a fork that enables Actions does not open issues
-# against itself every night.
+# hour, hence :17. GitHub also disables schedules in a public repository after 60 days without activity. There is no
+# repository-name guard: GitHub does not run a fork's schedules until its owner enables them, and a guard keyed on
+# the name would turn a rename or transfer into a nightly that skips every job and still reports success.
 #
 # Security conventions follow ci.yml: actions pinned the same way, no secret beyond the automatic GITHUB_TOKEN, every
 # value that reaches a shell passed through env and quoted, and the top-level token is read-only. Each job widens only
@@ -54,7 +54,6 @@ concurrency:
 jobs:
   changed:
     name: changed (is there anything new on main to check?)
-    if: github.event_name != 'schedule' || github.repository == 'redhat-et/ripwire'
     runs-on: ubuntu-24.04
     permissions:
       actions: read   # the last successful scheduled run of this workflow
