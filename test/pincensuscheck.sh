@@ -115,7 +115,7 @@ if [ -s "$TMP/c1.tsv" ]; then
 else
     no "(B) no census file at $TMP/c1.tsv"
 fi
-head -1 "$TMP/c1.tsv" 2>/dev/null | grep -q '^# ripwire pin-census v2' \
+head -1 "$TMP/c1.tsv" 2>/dev/null | grep -q '^# ripwire pin-census v3' \
     && ok "(B) census declares its own format in a header line" \
     || no "(B) census header line missing/unrecognized: $( head -1 "$TMP/c1.tsv" 2>/dev/null )"
 
@@ -243,6 +243,185 @@ N_SYM="$( printf '%s' "$MAP" | grep -o 'symbols=[0-9]*' | head -1 | cut -d= -f2 
     || no "(K) $N_S S rows but the map header says symbols=$N_SYM"
 grep -q "symbols=$N_SYM" <( tail -1 "$TMP/c1.tsv" ) && ok "(K) the summary line counts the S rows" \
     || no "(K) summary line lacks symbols=$N_SYM: $( tail -1 "$TMP/c1.tsv" )"
+
+# ── (L) a field never holds a row separator: every id and callee is ESCAPED (format v3) ───────────
+# WHY. A C++ out-of-line member of a class template whose template-argument list spans source lines gets
+# a scope that holds the line break verbatim — `SmallVec<T, Alloc, SizeType,\n    GrowingPolicy, N>`. The
+# map has always escaped it (`sc="…&#10;…"`); the census wrote it RAW, so one C row became a 6-field line
+# plus a continuation line starting with neither C, S, O nor #, and the S row for the same symbol broke
+# the same way. A reader splitting lines drops or mis-keys the site (observed 2026-09-16: exactly one such
+# row on a large private C++ corpus). The same exposure had five more spellings, each reproduced below on
+# the pre-fix binary: a TAB inside the argument list (a 10-field row), a form feed (a line end to Python's
+# splitlines(), and the one case here on the \xHH path with a leading 0), a backslash line splice, CRLF
+# source (a raw CR, which Python's text mode also reads as a line end), and a `|` in a PATH — `|` is the
+# targets separator, so `pipe|dir/far.hpp::far_helper#N` read back as TWO targets.
+#
+# THE FIXTURE is generated here, never committed: a directory named `pipe|dir` and CRLF bytes do not
+# belong in the tree. The checker decodes and re-encodes with its OWN implementation of the rule the
+# census header documents, so the round trip is asserted against the documented rule and not against
+# the writer's reading of it; the presence guards read the MAP's sc=, an independent surface, to prove
+# each awkward byte really reaches a symbol before the census is judged on it.
+ESC="$TMP/esc"
+mkdir -p "$ESC/pipe|dir"
+printf '#include <cstddef>\nnamespace inplace {\ninline void grow_storage() {}\n}\n' >"$ESC/smallvec.hpp"
+printf 'template <class T, class Alloc, class SizeType,\n          class GrowingPolicy, std::size_t N>\nclass SmallVec\n{\npublic:\n    void grow();\n    void shrink();\n    void tabbed();\n    void paged();\n};\n' >>"$ESC/smallvec.hpp"
+printf 'template <class T, class Alloc, class SizeType,\n          class GrowingPolicy, std::size_t N>\nvoid SmallVec<T, Alloc, SizeType,\n              GrowingPolicy, N>::grow()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
+printf 'template <class T, class Alloc, class SizeType, class GrowingPolicy, std::size_t N>\nvoid SmallVec<T, Alloc, \\\nSizeType, GrowingPolicy, N>::shrink()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
+printf 'template <class T, class Alloc, class SizeType, class GrowingPolicy, std::size_t N>\nvoid SmallVec<T,\tAlloc, SizeType, GrowingPolicy, N>::tabbed()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
+printf 'template <class T, class Alloc, class SizeType, class GrowingPolicy, std::size_t N>\nvoid SmallVec<T,\fAlloc, SizeType, GrowingPolicy, N>::paged()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
+printf 'inline void crlf_sink() {}\r\ntemplate <class K,\r\n          class V>\r\nclass Table\r\n{\r\npublic:\r\n    void put();\r\n};\r\ntemplate <class K, class V>\r\nvoid Table<K,\r\n           V>::put()\r\n{\r\n    crlf_sink();\r\n}\r\n' >"$ESC/crlf.hpp"
+printf 'inline void far_helper() {}\n' >"$ESC/pipe|dir/far.hpp"
+printf '#include "pipe|dir/far.hpp"\nvoid near_caller()\n{\n    far_helper();\n}\n' >"$ESC/near.cpp"
+cat >"$TMP/censusfields.py" <<'PY'
+import re, sys
+
+WIDTH = { b"C": 9, b"S": 4, b"O": 4 }
+
+def rows( data ):
+    body = data.split( b"\n" )
+    if body and body[ -1 ] == b"":
+        body.pop()
+    return [ ( i + 1, l ) for i, l in enumerate( body ) if not l.startswith( b"#" ) ]
+
+def misshapen( data ):
+    """(line, head) of every non-comment line that is not a C/S/O row with that kind's full field count."""
+    return [ ( n, l[ :60 ] ) for n, l in rows( data ) if l[ :2 ] not in ( b"C\t", b"S\t", b"O\t" ) or len( l.split( b"\t" ) ) != WIDTH[ l[ :1 ] ] ]
+
+def decode( field ):
+    out, i = bytearray(), 0
+    while i < len( field ):
+        if field[ i ] != 0x5C:
+            out.append( field[ i ] )
+            i += 1
+            continue
+        e = field[ i + 1 : i + 2 ]
+        if e in ( b"\\", b"t", b"n", b"r" ):
+            out.append( { b"\\": 0x5C, b"t": 0x09, b"n": 0x0A, b"r": 0x0D }[ e ] )
+            i += 2
+        elif e == b"x" and re.fullmatch( rb"[0-9a-f]{2}", field[ i + 2 : i + 4 ] ):
+            out.append( int( field[ i + 2 : i + 4 ], 16 ) )
+            i += 4
+        else:
+            raise ValueError( "undecodable escape at byte %d of %r" % ( i, field ) )
+    return bytes( out )
+
+def encode( raw ):
+    out = bytearray()
+    for b in raw:
+        if b == 0x5C:
+            out += b"\\\\"
+        elif b in ( 0x09, 0x0A, 0x0D ):
+            out += { 0x09: b"\\t", 0x0A: b"\\n", 0x0D: b"\\r" }[ b ]
+        elif b < 0x20 or b == 0x7C:
+            out += b"\\x%02x" % b
+        else:
+            out.append( b )
+    return bytes( out )
+
+def say( passed, text ):
+    print( ( "PASS " if passed else "FAIL " ) + text )
+
+mode, tsv = sys.argv[ 1 ], sys.argv[ 2 ]
+data = open( tsv, "rb" ).read()
+bad = misshapen( data )
+say( not bad, "(L) %s: all %d non-comment lines are C/S/O rows with their full field count (C=9 S=4 O=4)%s"
+     % ( tsv.rsplit( "/", 1 )[ -1 ], len( rows( data ) ), "" if not bad else "; misshapen: %r" % bad[ :3 ] ) )
+if mode == "shape":
+    sys.exit( 0 )
+
+xml = open( sys.argv[ 3 ], "rb" ).read()
+good = [ l.split( b"\t" ) for n, l in rows( data ) if ( n, l[ :60 ] ) not in bad ]
+crows = [ p for p in good if p[ 0 ] == b"C" ]
+sids = { p[ 1 ] for p in good if p[ 0 ] == b"S" }
+
+def xmlspell( raw ):
+    # escapeXml's rule: TAB/LF/CR become character references, every OTHER C0 byte is scrubbed to a space
+    # (xmlSafeByte). So for the form feed the map proves only that the scope spans that position; the
+    # round-trip verdict, which must decode \x0c out of the census, is what proves the byte itself.
+    raw = bytes( b if b >= 0x20 or b in ( 0x09, 0x0A, 0x0D ) else 0x20 for b in raw )
+    return raw.replace( b"&", b"&amp;" ).replace( b"<", b"&lt;" ).replace( b">", b"&gt;" ).replace( b"\t", b"&#9;" ).replace( b"\n", b"&#10;" ).replace( b"\r", b"&#13;" )
+
+# (label, the raw caller id before #NODEID, the scope the map must spell, the callee)
+CALLERS = [
+    ( "a template-argument list spanning two lines (LF)", b"smallvec.hpp::SmallVec<T, Alloc, SizeType,\n              GrowingPolicy, N>::grow",
+      b"SmallVec<T, Alloc, SizeType,\n              GrowingPolicy, N>", b"grow_storage" ),
+    ( "a backslash line splice", b"smallvec.hpp::SmallVec<T, Alloc, \\\nSizeType, GrowingPolicy, N>::shrink",
+      b"SmallVec<T, Alloc, \\\nSizeType, GrowingPolicy, N>", b"grow_storage" ),
+    ( "a TAB inside the argument list", b"smallvec.hpp::SmallVec<T,\tAlloc, SizeType, GrowingPolicy, N>::tabbed",
+      b"SmallVec<T,\tAlloc, SizeType, GrowingPolicy, N>", b"grow_storage" ),
+    ( "a FORM FEED inside the argument list (the \\xHH path, a zero-padded low byte)",
+      b"smallvec.hpp::SmallVec<T,\x0cAlloc, SizeType, GrowingPolicy, N>::paged",
+      b"SmallVec<T,\x0cAlloc, SizeType, GrowingPolicy, N>", b"grow_storage" ),
+    ( "CRLF source", b"crlf.hpp::Table<K,\r\n           V>::put", b"Table<K,\r\n           V>", b"crlf_sink" ),
+]
+for label, raw, scope, callee in CALLERS:
+    say( b' sc="' + xmlspell( scope ) + b'"' in xml, "(L) presence: the map's sc= holds %s — the fixture reaches the byte" % label )
+    hit = [ p for p in crows if p[ 6 ] == callee and re.fullmatch( re.escape( raw ) + rb"#[0-9]+", decode( p[ 5 ] ) ) ]
+    if len( hit ) != 1:
+        say( False, "(L) %s: want ONE C row whose caller_id decodes to %r, found %d" % ( label, raw, len( hit ) ) )
+        continue
+    field = hit[ 0 ][ 5 ]
+    say( encode( decode( field ) ) == field and field in sids and not re.search( rb"[\x00-\x1f|]", field ),
+         "(L) %s: caller_id %s round-trips (decode, re-encode byte-identical), is an S row id verbatim, holds no raw separator"
+         % ( label, field.decode( "utf-8", "replace" ) ) )
+
+far = [ p for p in crows if p[ 5 ].startswith( b"near.cpp::near_caller#" ) and p[ 6 ] == b"far_helper" ]
+say( b'p="pipe|dir/far.hpp"' in xml, "(L) presence: the map carries p=\"pipe|dir/far.hpp\" — a `|` reaches a target id" )
+if len( far ) == 1:
+    parts = far[ 0 ][ 7 ].split( b"|" )
+    say( len( parts ) == 1 and re.fullmatch( rb"pipe\|dir/far\.hpp::far_helper#[0-9]+", decode( parts[ 0 ] ) ) is not None and parts[ 0 ] in sids,
+         "(L) a `|` in a path: the targets field splits on | into ONE id (%s), which decodes to pipe|dir/far.hpp::far_helper and is an S row id"
+         % far[ 0 ][ 7 ].decode() )
+else:
+    say( False, "(L) want ONE near_caller -> far_helper C row, found %d" % len( far ) )
+
+# THE CONSERVATION LINE still closes on the escaped file, and the summary counts what a line reader reads.
+disp = dict( kv.split( b"=" ) for kv in re.search( rb"^# dispositions (.*)$", data, re.M ).group( 1 ).split() )
+summ = dict( kv.split( b"=" ) for kv in re.search( rb"^# summary (.*)$", data, re.M ).group( 1 ).split() )
+buckets = sum( int( v ) for k, v in disp.items() if k != b"calls" )
+bound = sum( 1 for p in crows if p[ 1 ] != b"external" )
+say( int( disp[ b"calls" ] ) == buckets and disp[ b"unaccounted" ] == b"0" and int( disp[ b"bound" ] ) == bound,
+     "(L) dispositions reconcile: calls=%s == bucket sum %d, unaccounted=%s, bound=%s == %d non-external C rows"
+     % ( disp[ b"calls" ].decode(), buckets, disp[ b"unaccounted" ].decode(), disp[ b"bound" ].decode(), bound ) )
+say( int( summ[ b"rows" ] ) == len( crows ) and int( summ[ b"symbols" ] ) == len( sids ),
+     "(L) summary rows=%s symbols=%s == the %d C rows and %d S ids a line reader parses"
+     % ( summ[ b"rows" ].decode(), summ[ b"symbols" ].decode(), len( crows ), len( sids ) ) )
+
+# CONTROL: undo ONE escape inside a C ROW of the real census (never a `#` line, whose prose spells the
+# escape too) and re-run the identical shape extraction over it. If the splitter could not see a raw line
+# break, every PASS above would be a reading of nothing.
+m = re.search( rb"^C\t[^\n]*?(\\n)", data, re.M )
+mutated = data[ :m.start( 1 ) ] + b"\n" + data[ m.end( 1 ): ] if m else data
+say( m is not None and mutated != data and len( misshapen( mutated ) ) >= 1,
+     "(L) control: one escape un-done in a real C row -> the same shape check reports %d misshapen line(s)" % len( misshapen( mutated ) ) )
+PY
+"$BIN" "$ESC" --no-cache --pin-census="$TMP/esc.tsv" >"$TMP/esc.xml" 2>"$TMP/esc.err" || no "(L) the escape-fixture run exited non-zero: $( head -1 "$TMP/esc.err" )"
+"$BIN" "$ESC" --no-cache --pin-census="$TMP/esc2.tsv" >/dev/null 2>&1
+cmp -s "$TMP/esc.tsv" "$TMP/esc2.tsv" && ok "(L) the escaped census is byte-identical across two runs" \
+    || no "(L) the escaped census differs between two runs"
+head -1 "$TMP/esc.tsv" 2>/dev/null | grep -q '^# ripwire pin-census v3' && grep -q '^# v3 field escape' "$TMP/esc.tsv" \
+    && ok "(L) the header declares format v3 and documents the field escape" \
+    || no "(L) the header does not declare v3 + its field escape: $( head -1 "$TMP/esc.tsv" 2>/dev/null )"
+# Verdicts go to a FILE and are read back on fd 3, never through a pipe: a row printed in a pipeline
+# subshell would set fail=1 in a copy of this shell and exit 0. The count is pinned so a checker that
+# stops early cannot shrink the arm to the verdicts it happened to reach.
+python3 "$TMP/censusfields.py" escape "$TMP/esc.tsv" "$TMP/esc.xml" >"$TMP/esc.verdicts" 2>&1; prc=$?
+python3 "$TMP/censusfields.py" shape "$TMP/c1.tsv" >>"$TMP/esc.verdicts" 2>&1 || prc=1
+if [ -f "$TMP/o.tsv" ]; then
+    python3 "$TMP/censusfields.py" shape "$TMP/o.tsv" >>"$TMP/esc.verdicts" 2>&1 || prc=1
+else
+    no "(L) no --scip census from (G) — the O-row shape cannot be checked"
+fi
+while IFS= read -r v <&3; do
+    case "$v" in
+        "PASS "*) ok "${v#PASS }" ;;
+        "FAIL "*) no "${v#FAIL }" ;;
+        *)        no "(L) checker: $v" ;;
+    esac
+done 3<"$TMP/esc.verdicts"
+N_VERDICTS="$( grep -cE '^(PASS|FAIL) ' "$TMP/esc.verdicts" )"
+[ "$prc" = 0 ] && [ "$N_VERDICTS" = 18 ] && ok "(L) the field checker ran to the end (18 verdicts, exit 0)" \
+    || no "(L) the field checker exited $prc with $N_VERDICTS verdicts, want 0 and 18"
 
 # ── (H) an empty value is REFUSED, never silently treated as "no census" ──────────────────────────
 "$BIN" "$CORPUS" --pin-census= --no-cache >/dev/null 2>"$TMP/empty.err"
