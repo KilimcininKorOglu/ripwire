@@ -104,6 +104,55 @@ absolute and relative roots, agree. Red on origin/main: 72 failures, ten of them
 `test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern refusal, and its golden's `match-malformed` section
 is empty.
 
+### Fixed — `--regex` crashed on a long matching line on Linux; a literal pattern skips the engine, and a line too long for the engine's stack is skipped and counted
+
+libstdc++'s regex matcher recurses once for every state it visits, so on Linux `--regex='a*b'` died with SIGSEGV
+(exit 139) in a grep worker on a matching line of about 26–45 KB — the residual the entry above disclosed. Measured on
+this lane's own gcc 13 Linux build before the fix: exit 139 on a 300 KB matching line, and again on a 2 MB line that
+could not match at all. Three changes, in this order:
+
+- **The engine is not asked when the answer is a byte search.** `src/regexguard.h` reads each compiled pattern once. A
+  literal, or literals joined by `|` (one of them optionally `^`/`$`-anchored), is matched with `strkern.h`'s byte
+  kernels in the engine's own order — leftmost start first, then the first alternative written — so no line is too long
+  for it. Any other pattern's required literals (the unquantified literal runs outside groups, one set per top-level
+  alternative) rule out every line that holds none of them before the engine sees it: `a*b` never reads a line with no
+  `b`. The full-scan switch the gates use turns both paths off, so `test/regexcheck.sh`'s prefiltered-versus-full-scan
+  diff checks them too.
+- **The scan threads get a stack they can state.** grep's workers and its unindexed scan run on 256 MiB POSIX threads
+  (`src/infra/stackthreads.h`), halving on refusal down to 8 MiB; pages are committed only as deep as a match recurses.
+  Starting 16 of them costs the same at 8 MiB and 256 MiB, within run-to-run noise, on macOS and on Linux.
+- **A line past the measured bound is skipped and said so.** A per-pattern model bounds the matcher's recursion; the
+  bytes one modelled visit may take (128) is the largest need measured over 35 pattern shapes and six builds — gcc
+  -O0/-O2, clang -O2 and -O3 -flto, gcc and clang under AddressSanitizer — rounded up, with half of every stack held
+  back, so the engine's measured crash is at least 2.5× the bound. On gcc 13 at 256 MiB the bound is 149,502 bytes
+  for `a*b` and 33,757 for `(a|b)*c`. A longer line is never handed to the engine: every `--regex` root now carries
+  `regex_lines_skipped=` (0 means none was), and when it is not 0, `regex_line_max=` and `counts_floor="1"` ride with
+  it — hits= is a floor — defined in the full legend and the compact one. libc++ does not recurse per character, so
+  macOS has no bound and skips nothing.
+
+Byte-identical: 55 of 55 comparisons against this lane's parent (dev builds, one checkout, stdout, stderr and exit
+code) — 36 unchanged to the byte (`--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` with SARIF, the map,
+`--scan-skill(s)`, the literal `--grep`), and 19 `--regex` answers (literal, alternation, anchored, required-literal,
+prefiltered and full-scan, context, compact, unindexed) identical once the new `regex_lines_skipped="0"` and its legend
+sentence are removed. Instructions retired (Release, `/usr/bin/time -l`, median of 5, interleaved, against the parent):
+`--regex` over an llvm-project checkout of 8,837 C/C++ files −83% to −90% (`getOperand\w*\(` 224.5G → 28.3G), over
+this repository −80% to −93%; the full-scan switch, where every line still reaches the engine, −8% and −14%; the literal
+`--grep` and map controls within ±0.7%. Release `__TEXT,__text` 8,715,336 → 8,732,840 bytes (+0.20%); `grepScanText`
+437 → 1,609 instructions, because the line loop, the literal searches and their kernels now inline into it.
+
+Gate: `test/regexguardcheck.sh` — (j) `test/regexlines_harness.cpp` diffs the literal plan, the required-literal filter
+and the skip policy against `std::regex` itself: adversarial, generated and corpus patterns (every `--regex` the docs,
+skills and gates spell, every `#match?` a query or lint pack carries) over CRLF, LF and empty-line texts, under both
+syntax sets; 0 mismatches over about 80,000 cases on libc++ and on libstdc++, and a copy of the header whose
+alternation resumes one byte past a match must go red; (k) a 300 KB matching line is matched or skipped-and-disclosed,
+a 2 MB line with no `b` is ruled out in bounded time, a literal alternation over a 3 MB line answers, and a literal
+`--grep` is unchanged; (l) on a recursing engine, for three shapes, a line of exactly `regex_line_max` bytes is matched
+at exit 0 and one byte more is skipped; (m) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` reaches the
+skip path and its disclosure on every engine. Red on this lane's parent: 8 failures on macOS (a TIMEOUT on the 2 MB
+line), and 8 on the gcc 13 Linux build, two of them a signal death (exit 139). `test/emittertruthcheck.sh` (Z2h) holds the
+new "always present" claim at zero; `test/compactlegendcheck.sh` re-pins `ripwire.grep/v1` 360 → 440 (measured 422 on
+`--regex`).
+
 ### Changed — Intel macOS binaries end with 0.6.1
 
 0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
