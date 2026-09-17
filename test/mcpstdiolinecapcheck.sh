@@ -49,6 +49,28 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 command -v python3 >/dev/null 2>&1 || { echo "mcpstdiolinecapcheck: python3 required"; exit 2; }
 echo "mcpstdiolinecapcheck: BIN=$BIN"
 
+# ===================================================================================================
+# (P) THE RUNNER — every --mcp run below goes through test/lib/caprun.py, never timeout(1). Stock macOS ships no
+# timeout(1): on the macOS CI legs `timeout 30 …` answered 127 and every arm below failed on "timeout: command not
+# found" (#277, release macos-26 Release shard 3/4). The runner is proven here on this host before any arm trusts it:
+# it passes an exit status through, it enforces the cap, and it reports a command it cannot start as EXECFAIL, which
+# no arm below can read as an rc.
+# ===================================================================================================
+echo "-- (P) the capped runner works on this host"
+CAPRUN="$ROOT/test/lib/caprun.py"
+capRun(){ python3 "$CAPRUN" "$@" 2>&1 | tail -1; }   # capRun SECONDS [opts] -- CMD… -> "rc=N ms=M" | "TIMEOUT ms=M" | "EXECFAIL …"
+if [ ! -f "$CAPRUN" ]; then
+    no "P0: the runner test/lib/caprun.py is missing — no arm below can run"
+else
+    P1="$( capRun 5 -- sh -c 'exit 3' )"; P2="$( capRun 1 -- sleep 5 )"; P3="$( capRun 5 -- "$TMP/no-such-binary" )"
+    case "$P1" in "rc=3 "*) ok "P1: an exit status passes through the runner ($P1)" ;; *) no "P1: the runner did not report rc=3: $P1" ;; esac
+    case "$P2" in "TIMEOUT "*) ok "P2: the runner enforces its cap ($P2)" ;; *) no "P2: the runner did not time out a 5 s sleep under a 1 s cap: $P2" ;; esac
+    case "$P3" in "EXECFAIL "*) ok "P3: a command that cannot start is EXECFAIL, never an exit status" ;; *) no "P3: a missing command was not reported as EXECFAIL: $P3" ;; esac
+fi
+# rcOf RESULT -> the exit status, or empty when the run did not complete (TIMEOUT / EXECFAIL), so a caller compares
+# against a real number and an unfinished run can never equal one.
+rcOf(){ case "$1" in "rc="*) printf '%s' "${1#rc=}" | cut -d' ' -f1 ;; *) printf '' ;; esac; }
+
 mkdir -p "$TMP/pkg"
 cat > "$TMP/pkg/mod.py" <<'PY'
 def hello():
@@ -94,12 +116,13 @@ open('$TMP/req_b_followup.txt', 'w').write(chr(10).join([
     '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}',
 ]) + chr(10))
 "
-OUT_B="$( timeout 30 "$BIN" "$TMP" --mcp < "$TMP/req_b.txt" 2>"$TMP/req_b.err" )"
-RC_B=$?
+RUN_B="$( capRun 30 --stdin "$TMP/req_b.txt" --stdout "$TMP/req_b.out" --stderr "$TMP/req_b.err" -- "$BIN" "$TMP" --mcp )"
+OUT_B="$( cat "$TMP/req_b.out" 2>/dev/null )"
+RC_B="$( rcOf "$RUN_B" )"
 if [ "$RC_B" = 0 ]; then
     ok "B1: rc=0 on the over-limit line (no crash, no hang)"
 else
-    no "B1: --mcp exited $RC_B (or timed out) on a 160 MB request line"; cat "$TMP/req_b.err"
+    no "B1: --mcp did not finish with rc=0 on a 160 MB request line ($RUN_B)"; cat "$TMP/req_b.err" 2>/dev/null
 fi
 if printf '%s' "$OUT_B" | grep -q '"code":-32600' && printf '%s' "$OUT_B" | grep -q "$CAP"; then
     ok "B2: the refusal is JSON-RPC code -32600 and NAMES the $CAP-byte limit"
@@ -117,13 +140,14 @@ fi
 # the SAME stdin stream / SAME process
 # ===================================================================================================
 echo "-- (C) the server keeps serving after an over-limit line"
-OUT_C="$( timeout 30 "$BIN" "$TMP" --mcp < "$TMP/req_b_followup.txt" 2>"$TMP/req_c.err" )"
-RC_C=$?
+RUN_C="$( capRun 30 --stdin "$TMP/req_b_followup.txt" --stdout "$TMP/req_c.out" --stderr "$TMP/req_c.err" -- "$BIN" "$TMP" --mcp )"
+OUT_C="$( cat "$TMP/req_c.out" 2>/dev/null )"
+RC_C="$( rcOf "$RUN_C" )"
 LINES_C="$( printf '%s\n' "$OUT_C" | wc -l | tr -d ' ' )"
 if [ "$RC_C" = 0 ] && [ "$LINES_C" -ge 2 ]; then
     ok "C1: the process emitted 2 response lines (the refusal, then the next request's real answer)"
 else
-    no "C1: expected 2 response lines after the oversized line, got $LINES_C (rc=$RC_C)"; cat "$TMP/req_c.err"
+    no "C1: expected 2 response lines after the oversized line, got $LINES_C ($RUN_C)"; cat "$TMP/req_c.err" 2>/dev/null
 fi
 if printf '%s' "$OUT_C" | grep -q '"id":2' && printf '%s' "$OUT_C" | grep -q '"result"'; then
     ok "C2: the follow-up request (id=2, a plain ping) got a real result — the connection was not dropped"
@@ -138,7 +162,7 @@ fi
 # from one that drains past the cap (this fix) on RSS alone, not just on the refusal message.
 # ===================================================================================================
 echo "-- (D) peak RSS on the 160 MB line stays well under the line size"
-if command -v /usr/bin/time >/dev/null 2>&1 && /usr/bin/time -l true >/dev/null 2>/tmp/mcpstdiolinecapcheck_probe.txt; then
+if command -v /usr/bin/time >/dev/null 2>&1 && /usr/bin/time -l true >/dev/null 2>"$TMP/rss_probe.txt"; then
     /usr/bin/time -l "$BIN" "$TMP" --mcp < "$TMP/req_b.txt" >/dev/null 2>"$TMP/time_d.txt"
     RSS_D="$( grep 'maximum resident set size' "$TMP/time_d.txt" | awk '{print $1}' )"
     if [ -n "$RSS_D" ] && [ "$RSS_D" -lt 100000000 ]; then

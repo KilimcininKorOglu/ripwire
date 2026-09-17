@@ -125,7 +125,7 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFromAssignment` (parser version 105, a u8 after
+constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFromAssignment` (parser version 106, a u8 after
                                                       //    `kind` in the bind record, 26 -> 27 bytes lean) — a C++
                                                       //    assignment's callee-read type is kept only when it names a
                                                       //    class (test/narrowcheck.sh arms 44-51). A FORMAT change: v22
@@ -238,8 +238,8 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 108;          // bump on any grammar/.scm/extraction change
-                                                      // 108 = 2026-09-17 (Ruby constant receivers narrow calls, PR #267,
+constexpr std::uint32_t kParserVer    = 109;          // bump on any grammar/.scm/extraction change
+                                                      // 109 = 2026-09-17 (Ruby constant receivers narrow calls, PR #267,
                                                       //    test/rubyrecvnarrowcheck.sh): classifyReceiver classifies a
                                                       //    Ruby (constant)/(scope_resolution) receiver as NamedVar with
                                                       //    the FINAL constant segment, so `Calc.add(…)` /
@@ -249,16 +249,16 @@ constexpr std::uint32_t kParserVer    = 108;          // bump on any grammar/.sc
                                                       //    their VALUES change, so old Ruby extraction facts must be
                                                       //    re-parsed. quality.h's kIngestParserVerMirror bumped in the
                                                       //    SAME commit. The PR declared 96 -> 97 over main; assigned
-                                                      //    108 on integration/train-3 after #233's 107.
-                                                      // 107 = 2026-09-17 (GDScript, PR #233, test/gdscriptcheck.sh): a
+                                                      //    109 on integration/train-3 after #233's 108.
+                                                      // 108 = 2026-09-17 (GDScript, PR #233, test/gdscriptcheck.sh): a
                                                       //    new grammar (third_party/deps/gdscript) and queries/gdscript/
                                                       //    tags.scm, `.gd` a kLangTable row, and NodeField::Op appended:
                                                       //    a tree with `.gd` files yields new files, symbols and edges.
-                                                      //    The PR declared 96 -> 98 over main; assigned 107 on
-                                                      //    integration/train-3 after #235's 106. kCacheVersion stays 23.
-                                                      // 106 = 2026-09-17 (Java Type::method, issue #74, PR #235): the PR's
+                                                      //    The PR declared 96 -> 98 over main; assigned 108 on
+                                                      //    integration/train-3 after #235's 107. kCacheVersion stays 23.
+                                                      // 107 = 2026-09-17 (Java Type::method, issue #74, PR #235): the PR's
                                                       //    two steps below, declared 97 and 98 over main's 96, land as one;
-                                                      //    assigned 106 on integration/train-3 after #278's 105.
+                                                      //    assigned 107 on integration/train-3 after #278's 106.
                                                       //    RecvKind::JavaTypeCandidate is appended after train 2b's Lit*
                                                       //    kinds (kRecvKindCount follows it); kCacheVersion stays 23.
                                                       //    PR step 98, 2026-09-15 (Java Type::method review,
@@ -275,23 +275,23 @@ constexpr std::uint32_t kParserVer    = 108;          // bump on any grammar/.sc
                                                       //    #216 already spent 96 on internalLinkage, so this RE-BUMPS
                                                       //    (never-reuse / collision). kCacheVersion stays 22 — RecvKind
                                                       //    is appended, record shapes are unchanged.
-                                                      // 105 = 2026-09-17 (assignment types, PR #278, test/narrowcheck.sh arms
+                                                      // 106 = 2026-09-17 (assignment types, PR #278, test/narrowcheck.sh arms
                                                       //    44-51): a C++ ASSIGNMENT's Type RawBind is marked
                                                       //    isFromAssignment, and buildGraph keeps its callee-read name
                                                       //    only when a class of that name exists (`t = llvm::cast<T>( y )`
                                                       //    recorded `cast` and tombstoned `T* t`). The bind record grows
                                                       //    one u8 (kCacheVersion 22 -> 23 in the same commit). The PR
-                                                      //    declared 104 over main's 99; assigned 105 on integration/
-                                                      //    train-3 after small-fixes' 104.
-                                                      // 104 = 2026-09-17 (A4, found-items 2026-09-17,
+                                                      //    declared 104 over main's 99; assigned 106 on integration/
+                                                      //    train-3 after small-fixes' 105.
+                                                      // 105 = 2026-09-17 (A4, found-items 2026-09-17,
                                                       //    test/filerootcheck.sh arm 4): `.hxx` gained a kLangTable row
                                                       //    (Lang::Cpp, same as `.hpp`/`.hh`) — the crawl previously
                                                       //    skipped every `.hxx` file outright (unindexed), so a repo
                                                       //    that spells its headers `.hxx` now yields NEW files,
                                                       //    symbols and edges a pre-bump cache never saw: content
                                                       //    change, bump required. The lane declared 100 over main's
-                                                      //    99; assigned 104 on integration/train-3 after #276's 103.
-                                                      // 103 = 2026-09-17 (template arguments in a receiver's written type,
+                                                      //    99; assigned 105 on integration/train-3 after #276's 104.
+                                                      // 104 = 2026-09-17 (template arguments in a receiver's written type,
                                                       //    test/narrowcheck.sh arms 39-43): a C++ declaration's Type/ParamType
                                                       //    record takes its type's LAST NAME through the grammar's fields.
                                                       //    An unqualified template-id (`Vec<Decl *>& v`, `Vec<T> v;`)
@@ -303,8 +303,12 @@ constexpr std::uint32_t kParserVer    = 108;          // bump on any grammar/.sc
                                                       //    ctorNameNode's floor); `Vec<std::string>` no longer records a
                                                       //    qualified text for its argument's `::`. No record changes shape
                                                       //    (kCacheVersion stays 22). The PR declared 103 over main's 99;
-                                                      //    assigned 103 on integration/train-3 over train 2b's 102.
+                                                      //    assigned 104 on integration/train-3 over train 1b's 103.
                                                       //    quality.h's kIngestParserVerMirror moves in the SAME commit.
+                                                      // 103 = 2026-09-17 (TS/JS signed numeric literal receivers, train 1b
+                                                      //    #277): `(-1).toFixed()` is a Number receiver, not an unrelated
+                                                      //    `toFixed`. An extraction change on #244's literal receivers;
+                                                      //    no record changes shape.
                                                       // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
                                                       //    PR #256): a primary template's out-of-line member keys the bare
                                                       //    template name (`void Box<T>::grow()` joins `Box::grow`); a

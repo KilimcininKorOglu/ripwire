@@ -65,6 +65,24 @@ inline constexpr std::size_t kStackThreadBytesFloor = 8 * 1024 * 1024;   // the 
 // system would have granted, so the degrade is reachable on demand; the default refuses nothing.
 inline bool isStackNeverRefused( std::size_t, std::size_t, std::size_t ) noexcept { return false; }
 
+// The size a refused try retries with: half, but never past the floor — the floor itself is always tried, so a request
+// that is not a power-of-two multiple of it (12 MiB -> 8 MiB, where plain halving went 12 -> 6 and stopped) still gets
+// a floor-sized thread before the work falls back to the caller's stack. 0 once the floor has been tried. A request
+// below the floor is its own floor and is tried once.
+inline constexpr std::size_t nextStackTryBytes( std::size_t tryBytes, std::size_t askedBytes ) noexcept
+{
+    const std::size_t floorBytes = askedBytes < kStackThreadBytesFloor ? askedBytes : kStackThreadBytesFloor;
+    if( tryBytes <= floorBytes )
+    {
+        return 0;
+    }
+    return ( tryBytes / 2 < floorBytes ) ? floorBytes : tryBytes / 2;
+}
+static_assert( nextStackTryBytes( 12 * 1024 * 1024, 12 * 1024 * 1024 ) == kStackThreadBytesFloor, "a 12 MiB request retries at the 8 MiB floor" );
+static_assert( nextStackTryBytes( kStackThreadBytesFloor, 12 * 1024 * 1024 ) == 0, "the floor is the last try" );
+static_assert( nextStackTryBytes( 256 * 1024 * 1024, 256 * 1024 * 1024 ) == 128 * 1024 * 1024, "a power-of-two request still halves" );
+static_assert( nextStackTryBytes( 4 * 1024 * 1024, 4 * 1024 * 1024 ) == 0, "a request below the floor is tried once" );
+
 template<typename Work, typename RefusePolicy = decltype( &isStackNeverRefused )>
 std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, Work& work, RefusePolicy isRefused = &isStackNeverRefused ) noexcept
 {
@@ -101,7 +119,7 @@ std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, 
         {
             Launch& launch    = launches[ startedCount ];
             bool    isStarted = false;
-            for( std::size_t tryBytes = stackBytes; !isStarted && tryBytes > 0 && tryBytes >= std::min( stackBytes, kStackThreadBytesFloor ); tryBytes /= 2 )
+            for( std::size_t tryBytes = stackBytes; !isStarted && tryBytes > 0; tryBytes = nextStackTryBytes( tryBytes, stackBytes ) )
             {
                 const StackThreadAttr attr( tryBytes );
                 isStarted     = attr.isSized && !isRefused( t, tryBytes, stackBytes ) && pthread_create( &launch.thread, &attr.attr, entry, &launch ) == 0;

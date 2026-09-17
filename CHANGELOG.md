@@ -1319,8 +1319,8 @@ conflicts with the declaration's written type (`const ConstantInt *CI = dyn_cast
 declaration of the variable, and the conflict tombstones it. Measured on integration/train-3 (llvm-project `4d5358b1d`,
 `--pin-census --no-cache`), reading it moves 463 sites: 324 edges lost, 137 retargeted and 2 gained, and rocksdb moves
 none. On `main` 13a19162, before #278 dropped an assignment's callee name (`Spec = cast<FunctionDecl>( F )`), it moved 994
-and lost 779. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 102 → 103 (the PR
-declared 99 → 103 over `main`; integration/train-3 assigns 103 after train 2b's 102) and `test/qschemetrip.hash` is re-pinned.
+and lost 779. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 103 → 104 (the PR
+declared 99 → 103 over `main`; integration/train-3 assigns 104 after train 1b's 103) and `test/qschemetrip.hash` is re-pinned.
 Gate: `test/narrowcheck.sh` arms 39–43. They are red on `main` (no edge, or the precise edge to `Outer::size`) and on
 #268's head, where arm 42 also fails: the qualified twin splits and the unqualified twins decline. Arm 40b is red on a fix
 that reads qualification off the whole spelling.
@@ -1394,8 +1394,8 @@ the tree (`flipimpact.h`'s dead-code header set, `layout.h`'s `--layout` scan, `
 `quality.h`'s header/public-API predicates, `resolve.h`'s include resolver, `verbs_lint.h`) already listed
 `.hxx` alongside `.hpp`/`.hh`. `.hxx` now rides the same `Lang::Cpp` / tree-sitter-cpp grammar as `.h`.
 This changes extraction output for any tree with `.hxx` files (new files, symbols and edges a pre-bump
-cache never saw), so `kParserVer` moves 103 → 104 (the lane declared 99 → 100 over `main`;
-integration/train-3 assigns 104 after #276's 103; mirrored in `kIngestParserVerMirror`, same diff;
+cache never saw), so `kParserVer` moves 104 → 105 (the lane declared 99 → 100 over `main`;
+integration/train-3 assigns 105 after #276's 104; mirrored in `kIngestParserVerMirror`, same diff;
 `test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
 single-file root. `taskroute.h::kCodeExtensions` (the FILE:LINE token recognizer behind `--help-task`'s
 at-line routing) was a seventh table listing `.hpp`/`.hh` without `.hxx` — added, with a `test/taskroutecheck.sh`
@@ -1451,13 +1451,13 @@ and this change on #276's head, reading it moves 245 llvm-project sites, and all
 gained, where it lost 779 before this change (on integration/train-3, with the class-identity resolver, 463 and 324). The losses left are declaration conflicts, `auto *LI = cast<LoadInst>( … )` beside
 another `LI`.
 
-The bind record gains one byte (`kCacheVersion` 22 → 23). `kParserVer` moves 104 → 105 (the PR declared 99 → 104
-over `main`; integration/train-3 assigns 105 after small-fixes' 104). `test/qschemetrip.hash` is re-pinned, and `test/cachefuzzcheck.sh`'s
+The bind record gains one byte (`kCacheVersion` 22 → 23). `kParserVer` moves 105 → 106 (the PR declared 99 → 104
+over `main`; integration/train-3 assigns 106 after small-fixes' 105). `test/qschemetrip.hash` is re-pinned, and `test/cachefuzzcheck.sh`'s
 blob walker reads the new byte. Gate: `test/narrowcheck.sh` arms 44–51. On `main`, arms 44, 45, 46, 49 and 50 are red.
 Arm 48 is red on the declaration variant, 46 without the local-name-set change, and 51 on a build that does not persist
 the new byte.
 
-### Added — a Java `Type::method` reference is a call site for `--uses` and `--callers` (parser version 106)
+### Added — a Java `Type::method` reference is a call site for `--uses` and `--callers` (parser version 107)
 
 `Widget.makeFn()` minted a call edge and `Widget::makeFn` did not, so a lambda and the method reference beside it
 disagreed about who calls `makeFn` (issue #74). The receiver is a type and the member a literal identifier, so the
@@ -1473,10 +1473,10 @@ outright (a Java call never resolves to a local). `widget::instanceFn`, `this::t
 `test/javamethodrefcheck.sh` is the gate: the callers of `makeFn` are exactly `genericTypeMethod`, `lambdaForm`,
 `nestedTypeMethod` and `typeMethod`, nothing calls `instanceFn`, `thisFn`, `superFn`, `Widget` or `widget`, and
 rewriting `Widget::makeFn` removes only `typeMethod`. `test/callformcheck.sh`'s Java `--uses=makeFn` is 2.
-`kParserVer` 105 → 106 (the PR declared 96 → 97 → 98 over `main`; integration/train-3 assigns 106). Thanks to
+`kParserVer` 106 → 107 (the PR declared 96 → 97 → 98 over `main`; integration/train-3 assigns 107). Thanks to
 @rainhuang0220.
 
-### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 107)
+### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 108)
 
 A Godot repository was invisible: `.gd` fell out at crawl time as an unsupported extension, so every ranked lens
 answered `reason="no_candidates"`, while `--grep`'s unindexed-text fallback still scanned the files and made the gap
@@ -1493,7 +1493,7 @@ survives. `preload`/`load("res://…")` dependency edges are a later round, so G
 `.tscn`, `.tres` and `.gdshader` are not indexed. `test/gdscriptcheck.sh` is the gate, and it is red on a
 pre-GDScript binary. On integration/train-3 the language registers through train 1's compile-time-checked tables
 (`isCodeLang`, `kLintExtRows`, `kLangTokenRows`, `kNodeFieldNames`, `kLangTable`'s exact extent), and `kParserVer`
-106 → 107 (the PR declared 96 → 98 over `main`). Thanks to @sclyde.
+107 → 108 (the PR declared 96 → 98 over `main`). Thanks to @sclyde.
 
 ### Added — a Ruby constant receiver now pins the call, instead of splitting it across every same-named method
 
@@ -1540,7 +1540,7 @@ deletes an edge and never invents one (`Time.now` still mints nothing).
 The default map is byte-identical to the previous build on five Ruby-free corpora (this repo's
 `src/`, npm, a Clojure project, CPython 3.14's stdlib, and this whole repository), and this
 repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols · 22,529 edges.
-`kParserVer` 107 → 108 (the PR declared 96 → 97 over `main`; integration/train-3 assigns 108; record layout
+`kParserVer` 108 → 109 (the PR declared 96 → 97 over `main`; integration/train-3 assigns 109; record layout
 unchanged by it, `kCacheVersion` stays 23; the VALUES of `recv`/`recvVar` move, so Ruby extraction facts are re-parsed),
 with `quality.h`'s mirror and `test/qschemetrip.hash` re-pinned in the same commit. Thanks to @andriytyurnikov.
 

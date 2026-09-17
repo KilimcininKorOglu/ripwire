@@ -901,25 +901,37 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
     else
         no "#14f(g) --from-trace under the finish fault: control rc=$rc_mftr_ctl ($( bytes_of "$TMP/mftr_ctl.out" ) B), faulted rc=$rc_mftr with $( bytes_of "$TMP/mftr.out" ) B on stdout — want 0 with a <trace> block, then 1/empty with the withheld line (a bundle without its blocks is the defect)"
     fi
-    # (h) the MCP `uses` verb, whose answer buffer is the answer: under the fault it answers the internal error, never a
-    #     SUCCESS result with empty text (an empty answer reads as "no use sites").
+    # (h) the MCP verbs whose answer buffer IS the answer: under the fault each answers the internal error, -32603 —
+    #     never a SUCCESS with empty text (an empty answer reads as "no use sites") and never the verb's not-found refusal
+    #     (-32602, "no symbols found" / an unknown symbol), which is what impact, exemplar, path_between and for answered
+    #     until CodeRabbit on #277: their builders collapsed a lost buffer into "" and the dispatch read "" as not-found.
+    #     One control per verb proves the fixture answers its element with the fault OFF, so a -32603 below is the fault.
     python3 - "$BIN" "$ROOT/test/fixture" >"$TMP/mfuses.txt" 2>&1 <<'PY'
 import json, os, subprocess, sys
 b, root = sys.argv[1], sys.argv[2]
-msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "g", "version": "0" } } },
-         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "uses", "arguments": { "path": root, "symbol": "distance" } } } ]
-inp = ''.join( json.dumps( m ) + '\n' for m in msgs )
+verbs = [ ( "uses",         { "symbol": "distance" },                     "<uses " ),
+          ( "impact",       { "symbol": "distance" },                     "<impact " ),
+          ( "exemplar",     { "kind": "fn" },                             "<exemplar " ),
+          ( "path_between", { "from": "total_area", "to": "distance" },   "<path " ),
+          ( "for",          { "task": "area distance" },                  "<ctx " ) ]
+init = { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "g", "version": "0" } } }
+calls = [ { "jsonrpc": "2.0", "id": 2 + i, "method": "tools/call", "params": { "name": v, "arguments": dict( { "path": root }, **a ) } } for i, ( v, a, _ ) in enumerate( verbs ) ]
+inp = ''.join( json.dumps( m ) + '\n' for m in [ init ] + calls )
 for label, extra in ( ( 'ctl', {} ), ( 'fault', { 'INFRA_FAULT_MEMSTREAM_FINISH': '1' } ) ):
     out = subprocess.run( [ b, '--mcp' ], input=inp, capture_output=True, text=True, env=dict( os.environ, **extra ), timeout=120 ).stdout
-    reply = next( ( json.loads( l ) for l in out.splitlines() if l.strip().startswith( '{' ) and json.loads( l ).get( 'id' ) == 2 ), {} )
-    text = ( ( reply.get( 'result' ) or {} ).get( 'content' ) or [ {} ] )[ 0 ].get( 'text', '' )
-    print( f"{label} error={( reply.get( 'error' ) or {} ).get( 'code', 'none' )} result_text_bytes={len( text )} uses_element={int( '<uses ' in text )}" )
+    replies = { json.loads( l ).get( 'id' ): json.loads( l ) for l in out.splitlines() if l.strip().startswith( '{' ) }
+    for i, ( v, _, element ) in enumerate( verbs ):
+        reply = replies.get( 2 + i, {} )
+        text = ( ( reply.get( 'result' ) or {} ).get( 'content' ) or [ {} ] )[ 0 ].get( 'text', '' )
+        print( f"{label} verb={v} error={( reply.get( 'error' ) or {} ).get( 'code', 'none' )} result_text_bytes={len( text )} element={int( element in text )}" )
 PY
-    if grep -q '^ctl error=none result_text_bytes=[1-9][0-9]* uses_element=1$' "$TMP/mfuses.txt" && grep -q '^fault error=-32603 ' "$TMP/mfuses.txt"; then
-        ok "#14f(h) MCP uses: the control answers a <uses> element; under the fault it answers -32603, not an empty success"
-    else
-        no "#14f(h) MCP uses under the finish fault: $( tr '\n' ';' < "$TMP/mfuses.txt" ) — want the control's <uses> answer, then error -32603 (an empty success reads as no use sites)"
-    fi
+    for mfVerb in uses impact exemplar path_between for; do
+        if grep -q "^ctl verb=$mfVerb error=none result_text_bytes=[1-9][0-9]* element=1\$" "$TMP/mfuses.txt" && grep -q "^fault verb=$mfVerb error=-32603 " "$TMP/mfuses.txt"; then
+            ok "#14f(h) MCP $mfVerb: the control answers its element; under the fault it answers -32603, not an empty success or a not-found"
+        else
+            no "#14f(h) MCP $mfVerb under the finish fault: $( grep " verb=$mfVerb " "$TMP/mfuses.txt" | tr '\n' ';' ) — want the control's element, then error -32603"
+        fi
+    done
     # (i) one redaction tally per secret: a degraded pre-render renders its rows again, and the stderr summary must
     #     count what was emitted once. XML --for and --json, each against its own undegraded control.
     mkdir -p "$TMP/mfred"

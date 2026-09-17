@@ -34,40 +34,44 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
-# 2026-09-17, TRAIN 3 (integration/train-3 on integration/train-1b a9549214: #268 e5ca33b5, #276 50b97b7b + 97b499f0,
-#   lane/small-fixes-0917 d33e4522, #278 379d9faa, #235 caaf84e2, #233 1ca964b8, #267 b3270335): RE-DERIVED ON THE FINAL
-#   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over train 2b's 102: #268
-#   changes no extraction, #276 = 103, small-fixes = 104, #278 = 105, #235 = 106 (two PR steps land as one), #233 = 107,
-#   #267 = 108. The members declared 103, 100, 104, 98, 98 and 97 over their own bases and pinned their own hashes; none
-#   hashed 108. kCacheVersion is #278's 23 and its mirror moves with it; kQSnapCacheScheme stays train 1's 14 (no member
-#   changes a manifest function). The member entries below are renumbered to the train's numbers.
+# 2026-09-17, TRAIN 3 (integration/train-3 on integration/train-1b a9549214, then 1b's fix push 30f6893c: #268 e5ca33b5,
+#   #276 50b97b7b + 97b499f0, lane/small-fixes-0917 d33e4522, #278 379d9faa, #235 caaf84e2, #233 1ca964b8, #267 b3270335):
+#   RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over
+#   train 1b's 103: #268 changes no extraction, #276 = 104, small-fixes = 105, #278 = 106, #235 = 107 (two PR steps land as
+#   one), #233 = 108, #267 = 109. The members declared 103, 100, 104, 98, 98 and 97 over their own bases and pinned their
+#   own hashes; none hashed 109. kCacheVersion is #278's 23 and its mirror moves with it; kQSnapCacheScheme stays train 1's
+#   14 (no member changes a manifest function). The member entries below are renumbered to the train's numbers.
 # 2026-09-15, JAVA TYPE::METHOD REVIEW (test/javamethodrefcheck.sh, issue #74, PR #235): parserVer and its quality mirror
-#   move to 106 on integration/train-3 after #278's 105 (the PR declared two steps, 96 -> 97 -> 98, over main) — Java
+#   move to 107 on integration/train-3 after #278's 106 (the PR declared two steps, 96 -> 97 -> 98, over main) — Java
 #   shadow binds gain lexical spans and inferred lambda parameters are captured. Extracted bind facts change; kCacheVersion
 #   stays #278's 23 and kQSnapCacheScheme stays train 1's 14 (Binding already has spans).
 # 2026-09-15, JAVA TYPE::METHOD (test/javamethodrefcheck.sh, issue #74, PR #235): the PR's first step (declared 96 -> 97;
-#   106 with the review step on the train) — method_reference member names after `::` plus declaration-aware resolver
+#   107 with the review step on the train) — method_reference member names after `::` plus declaration-aware resolver
 #   gating. #216 had already spent 96 on internalLinkage, so the PR re-bumped (never-reuse). RecvKind::JavaTypeCandidate
 #   is appended (after train 2b's literal kinds), record shapes and snapshot semantics are unchanged. Old extraction facts
 #   must be re-parsed.
-# 2026-09-17, ASSIGNMENT TYPES (test/narrowcheck.sh arms 44-51, PR #278): kCacheVersion 22 -> 23 and kParserVer -> 105 on
-#   integration/train-3 after small-fixes' 104 (the PR declared 99 -> 104 over main), with both quality.h mirrors — a C++
+# 2026-09-17, ASSIGNMENT TYPES (test/narrowcheck.sh arms 44-51, PR #278): kCacheVersion 22 -> 23 and kParserVer -> 106 on
+#   integration/train-3 after small-fixes' 105 (the PR declared 99 -> 104 over main), with both quality.h mirrors — a C++
 #   assignment's bind record gains the isFromAssignment u8, and buildGraph keeps its callee-read type only when a class of
 #   that name exists. kQSnapCacheScheme stays train 1's 14: the extraction identity (the two mirrors) and the producer
 #   identity already key every blob, and no snapshot semantics changed.
-# 2026-09-17, A4 (lane/small-fixes-0917, found-items 2026-09-17): kParserVer -> 104 on integration/train-3 after
-#   #276's 103 (the lane declared 99 -> 100 over main), mirrored in
+# 2026-09-17, A4 (lane/small-fixes-0917, found-items 2026-09-17): kParserVer -> 105 on integration/train-3 after
+#   #276's 104 (the lane declared 99 -> 100 over main), mirrored in
 #   src/quality.h's kIngestParserVerMirror in the same diff (test/qextractionkeycheck.sh asserts the
 #   equality) — `.hxx` gained a src/ingest_crawl.h kLangTable row (Lang::Cpp, same as .hpp/.hh); the crawl
 #   previously skipped every `.hxx` file outright, so a tree that spells its headers `.hxx` now yields NEW
 #   files/symbols/edges a pre-bump cache never saw. kQSnapCacheScheme stays 14: no cache KEY or blob-shape
 #   semantics changed, only the extraction identity (old extraction facts must be re-parsed, not re-keyed).
 # 2026-09-17, TEMPLATE ARGUMENTS IN A RECEIVER'S TYPE (test/narrowcheck.sh arms 39-43, PR #276): parserVer and its quality
-#   mirror move to 103 on integration/train-3 (the PR declared 99 -> 103 over main; train 2b's 102 is ahead of it) — a C++
+#   mirror move to 104 on integration/train-3 (the PR declared 99 -> 103 over main; train 1b's 103 is ahead of it) — a C++
 #   declaration's Type/ParamType record takes its type's last name through the grammar's fields, so an unqualified
 #   template-id records a type at last and `Outer<int>::Inner` records `Inner`, not `Outer`. Record layouts are unchanged,
 #   so kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14: no key or snapshot semantics changed, only the
 #   extraction identity. Old extraction facts must be re-parsed. The train re-derives this pin on the merged tree.
+# 2026-09-17, TRAIN 1b (#277, integration/train-1b, built on train 2b): kParserVer and its mirror 102 -> 103 for the
+#   maintainer fix on #244's JS/TS literal receivers (a signed numeric literal, (-1).toFixed(), is a number receiver;
+#   CodeRabbit on #277). An extraction change, so the parser version moves and the mirror moves with it; the qsnap
+#   scheme does not (the snapshot LAYOUT is unchanged, only which extraction produced it). Re-pinned on the train tree.
 # 2026-09-17, TRAIN 2b (integration/train-2b: #244 a948bf46, #243 6b234717, #256 8464f3be, lane/field-final-segment
 #   a23f4ec3, built on main bcd3b016, then merged with main ea03af88 and b09b53a9 = train 1): RE-DERIVED ON THE FINAL
 #   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over trains 1 and 2's 99:

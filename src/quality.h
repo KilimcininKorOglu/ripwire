@@ -1977,13 +1977,13 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 108;  // MUST equal ingest.cpp's kParserVer   (gated)
-                                                          // 108 = 2026-09-17 (Ruby constant receivers, PR #267): a constant or
+constexpr std::uint32_t kIngestParserVerMirror    = 109;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 109 = 2026-09-17 (Ruby constant receivers, PR #267): a constant or
                                                           //    scope_resolution receiver is NamedVar with its final segment.
                                                           //    See ingest_cache.h's kParserVer note.
-                                                          // 107 = 2026-09-17 (GDScript, PR #233): a new grammar, tags.scm and
+                                                          // 108 = 2026-09-17 (GDScript, PR #233): a new grammar, tags.scm and
                                                           //    `.gd` crawl row. See ingest_cache.h's kParserVer note.
-                                                          // 106 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
+                                                          // 107 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
                                                           //    steps below (declared 97, 98) land as one on integration/train-3.
                                                           //    PR step 98, 2026-09-15 (Java Type::method review):
                                                           //    Java shadow binds carry lexical spans and inferred
@@ -1992,17 +1992,19 @@ constexpr std::uint32_t kIngestParserVerMirror    = 108;  // MUST equal ingest.c
                                                           //    method_reference member capture plus indexed-class +
                                                           //    no-shadow resolver gating. #216 spent 96, so this
                                                           //    RE-BUMPS. See ingest_cache.h's kParserVer note.
-                                                          // 105 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
+                                                          // 106 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
                                                           //    record carries isFromAssignment (cache version 23).
                                                           //    See ingest_cache.h's kParserVer note.
-                                                          // 104 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
+                                                          // 105 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
                                                           //    gained a kLangTable row (src/ingest_crawl.h), so a
                                                           //    tree that spells its headers `.hxx` now yields NEW
                                                           //    files/symbols/edges a pre-bump cache never saw.
                                                           //    See ingest_cache.h's kParserVer note.
-                                                          // 103 = 2026-09-17 (template arguments in a receiver's type): a
+                                                          // 104 = 2026-09-17 (template arguments in a receiver's type): a
                                                           //    declaration records its type's last name through the
                                                           //    grammar's fields. See ingest_cache.h's kParserVer note.
+                                                          // 103 = 2026-09-17 (TS/JS signed numeric literal receivers, train 1b
+                                                          //    #277). See ingest_cache.h's kParserVer note.
                                                           // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
                                                           //    PR #256). See ingest_cache.h's kParserVer note.
                                                           // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
