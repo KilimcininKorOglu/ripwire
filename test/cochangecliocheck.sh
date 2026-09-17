@@ -294,7 +294,7 @@ if m:
 PY
     # RE-PINNED 2026-08-19 (R-E CORRECTION): p= is root-relative, so the members read "src/g1.cpp" and
     # the old 's#.*/src/##' (which needs a slash BEFORE src/) stripped nothing. Anchored to the start.
-    members="$( tail -n +2 "$TMP/coremembers" | sed -E 's#^(.*/)?src/##' | sort | tr '\n' ' ' )"
+    members="$( tail -n +2 "$TMP/coremembers" | sed -E 's#^(.*/)?src/##' | LC_ALL=C sort | tr '\n' ' ' )"
     if [ "$members" = "g1.cpp g2.cpp g3.cpp " ]; then
         ok "(3c) the core group names exactly {g1,g2,g3} — one actionable row instead of three pair rows"
     else

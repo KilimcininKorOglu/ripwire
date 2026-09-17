@@ -43,7 +43,7 @@ printf 'void helper()    { lonely(); }\n'                           > "$R/test/h
 run(){   perl -e 'alarm 20; exec @ARGV' "$BIN" "$R" "$@" --no-cache 2>/dev/null; }
 runec(){ perl -e 'alarm 20; exec @ARGV' "$BIN" "$R" "$@" --no-cache >/dev/null 2>"$TMP/err.txt"; }
 # the emitted symbol names, sorted+joined — the set this test exercises
-sset(){ printf '%s' "$1" | grep -oE '<s [^>]*n="[^"]*"' | grep -oE 'n="[^"]*"$' | sed 's/n="//;s/"//' | sort | tr '\n' ','; }
+sset(){ printf '%s' "$1" | grep -oE '<s [^>]*n="[^"]*"' | grep -oE 'n="[^"]*"$' | sed 's/n="//;s/"//' | LC_ALL=C sort | tr '\n' ','; }
 attr(){ printf '%s' "$2" | grep -oE " $1=\"[^\"]*\"" | head -1 | sed "s/ $1=\"//;s/\"//"; }
 
 # ── 1) the forward answer is exact, transitive, and excludes the test's OWN code ──────────────────────
