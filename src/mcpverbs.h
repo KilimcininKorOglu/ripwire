@@ -2483,6 +2483,45 @@ inline std::string qualifiedSelectorRefusal( const IngestResult& ing, const std:
          + "` for the narrowed answer";
 }
 
+// Issue #164 option (b), folded out of usesSelectorRefusal so that function stays under the quality-delta
+// bars (F8/nice-to-have): the "::" refusal fires only when the whole spelling RESOLVES to at least one
+// def and at least one of those defs is not Elixir. An all-Elixir resolution is answerable on both
+// surfaces without narrowing — usesText/collectUseSites already match it through the Elixir resolver
+// (elixirDefs, mirrored in resolveUsesSelector) — so refusing it would reintroduce the exact silent
+// count="0" this verb exists to fix, for a population that never had it (elixirsemanticcheck). Unlike the
+// prior shape, this no longer consults resolveFieldSelector first: the CLI's own precedence
+// (memberUsesArm) only looks at fields once defs is empty, so a "::" spelling that resolves to a SYMBOL
+// refuses here regardless of also matching a field name.
+inline std::string qualifiedColonSelectorRefusal( const IngestResult& ing, const std::string& symbol )
+{
+    if( symbol.find( "::" ) == std::string::npos )
+    {
+        return {};
+    }
+    const std::vector<NodeId> defs = resolveAllByName( ing, symbol );
+    if( defs.empty() )
+    {
+        return {}; // does not resolve as a whole spelling — falls through to the generic refusal below
+    }
+    bool allElixir = true;
+    for( NodeId n : defs )
+    {
+        if( n >= ing.symbols.size() || ing.symbols[ n ].lang != Lang::Elixir )
+        {
+            allElixir = false;
+            break;
+        }
+    }
+    if( allElixir )
+    {
+        return {}; // main's byte-identical answer for this population
+    }
+    const std::string bareName = symbol.substr( symbol.rfind( ':' ) + 1 );
+    return "qualified '::' selectors are CLI-only on this verb — pass the bare name '" + bareName
+         + "' (the union across its defs), or use the CLI form `ripwire <dir> --uses=" + symbol
+         + "` for the narrowed answer";
+}
+
 inline std::string usesSelectorRefusal( const IngestResult& ing, const std::string& symbol )
 {
     if( !symbol.empty() && symbol.front() == '@' )
@@ -2501,6 +2540,15 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
     const std::size_t lastColon = symbol.rfind( ':' );
     if( lastColon != std::string::npos && lastColon + 1 < symbol.size() )
     {
+        // Issue #164, option (b): a RESOLVING "::" spelling (canonical id or Scope::name) is the one
+        // qualified shape the CLI answers and this verb cannot narrow — its scan is name-wide with no
+        // narrowing machinery, so serving it is the silent count="0" the CLI just fixed. Refuse with the
+        // retry instead, the way a file:name spelling already refuses below. A non-resolving "::" spelling,
+        // and an all-Elixir resolution, both fall through to the shared refusal / no-op below (byte-identical).
+        if( const std::string colonRefusal = qualifiedColonSelectorRefusal( ing, symbol ); !colonRefusal.empty() )
+        {
+            return colonRefusal;
+        }
         return qualifiedSelectorRefusal( ing, symbol, "--uses=" );   // "" when the qualified spelling resolves
     }
 
@@ -2638,11 +2686,11 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
     // §H4 §3.4 item 2: the opener is the SHARED one (src/graphlegend.h) — this copy and the CLI's were the
     // same false "every use-site of SYM" promise emitted twice, and a fix applied to one of two echo sites
     // is the §B4 failure family. The BODY deliberately stays surface-specific: the CLI legend documents the
-    // file:name selector attributes, which this verb has no selector for and does not emit.
+    // qualified-selector attributes, which this verb has no selector for and does not emit.
     rw::emitTo( mem, "{}"
                        "Reference-name-based (same heuristic level as call edges) — verify in source if a name is overloaded. "
                        "external=\"1\" means SYM has no definition in the indexed tree under ANY spelling (stdlib/third-party); "
-                       "a qualified file:name spelling whose bare name IS defined refuses instead (the CLI uses verb narrows it). "
+                       "qualified file:name and \"::\" spellings whose bare name IS defined refuse instead (the CLI uses verb narrows them). "
                        "{}{}-->{}", kUsesLegendOpen,
                   capLegendClause( computePageDisclosure( upageRows, sites.size(), upw.end,
                                                           page.limit, page.offset, usDiscloseCap ).active ),
