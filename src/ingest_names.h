@@ -1412,6 +1412,35 @@ inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noe
     return nodeTextOf( fieldChild( obj, NodeField::Property ), src ) == "prototype";
 }
 
+// Constructor identifier of `Foo.prototype.NAME` (the object of the inner `.prototype` member).
+// `String.prototype.shout` → "String"; `net.Socket.prototype.x` → "Socket". Empty if the shape
+// is not a prototype member. Used as RawDef::scope so a Lit* call can bind only an extension of
+// that built-in (issue #163).
+inline std::string_view prototypeCtorName( TSNode nameNode, std::string_view src ) noexcept
+{
+    if( !isPrototypeMemberTarget( nameNode, src ) )
+    {
+        return {};
+    }
+    const TSNode member     = ts_node_parent( nameNode );
+    const TSNode protoMember = fieldChild( member, NodeField::Object );
+    const TSNode ctor       = fieldChild( protoMember, NodeField::Object );
+    if( ts_node_is_null( ctor ) )
+    {
+        return {};
+    }
+    const char* ct = ts_node_type( ctor );
+    if( kindIs( ct, "identifier" ) )
+    {
+        return nodeTextOf( ctor, src );
+    }
+    if( kindIs( ct, "member_expression" ) )
+    {
+        return nodeTextOf( fieldChild( ctor, NodeField::Property ), src );
+    }
+    return {};
+}
+
 // Python shape round (test/pyshapecheck.sh): `NAME = value` in a class body is a definition only when
 // the class IS an enum table — otherwise it is the plain data attr the tags.scm scope line keeps out
 // (12 131 django sites, re-measured 2026-08-10 at @c334c1a8ff). Enum-ness is read off the base NAME

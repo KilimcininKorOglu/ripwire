@@ -2289,6 +2289,39 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // keeps role="call": it IS a real call; only the RESOLUTION came from the binding — the same trust
         // level as Rule 2 receiver narrowing.
         bool narrowed = false;
+        // TS/JS literal receivers (issue #163): only names that really are members of the literal's
+        // built-in type leave the ladder. Bind a scope-matched polyfill first (JS `Foo.prototype.NAME`,
+        // TS has no protomethod capture); else External if the name exists in-repo, Undefined if it
+        // does not. A name that is NOT a member of that type (`shout`, named-function proto, Object.assign)
+        // falls through to today's path. !ctor.empty() stays: a future Lit* kind without a ctor must not
+        // match every unscoped method.
+        if( !scipPinned && r.role == RefRole::Call && isJsTsLitRecv( r.recv ) )
+        {
+            const std::string_view ctor = jsLitCtorName( r.recv );
+            if( !ctor.empty() && isJsTsBuiltinMember( ctor, r.calleeName ) )
+            {
+                if( it == byName.end() )
+                {
+                    disposition = CallDisposition::Undefined;   // no in-repo def of this builtin name — not external=
+                    continue;
+                }
+                for( NodeId c : it->second )
+                {
+                    const Symbol& sy = ing.symbols[c];
+                    if( sy.kind == SymKind::Method && sy.scope == ctor
+                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        cand.push_back( c );
+                    }
+                }
+                if( cand.empty() )
+                {
+                    disposition = vetoExternal( r );
+                    continue;
+                }
+                narrowed = true;
+            }
+        }
         // ── ES named-import binding resolve — the JS/TS twin of the L3 block above, and BEFORE every
         // receiver rule for the same reason: `import { f } from './m.js'` is a name-lookup FACT, so a
         // bound ES name never falls through to the global spelling ladder. SCIP remains authoritative.
@@ -2743,7 +2776,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
-         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
+         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj
+         && !isJsTsLitRecv( r.recv ) )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
             const std::size_t localityCap = receiverLocalityCap( r, receiverTypeNarrowed, ing.files[ ing.symbols[ r.fromSymbol ].fileId ] );
@@ -4816,6 +4850,12 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
                 }
             }
             break;
+            case RecvKind::LitString:
+            case RecvKind::LitArray:
+            case RecvKind::LitRegex:
+            case RecvKind::LitNumber:
+            case RecvKind::LitBoolean:
+            break; // a certain built-in receiver is not a field owner
         }
         if( std::find( cand.begin(), cand.end(), fieldId ) == cand.end() )
         {

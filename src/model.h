@@ -10,13 +10,15 @@
 
 #include "infra/profileScope.h"
 #include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
+#include "infra/sortutil.h"  // svLess — JS/TS builtin-member tables below (binary_search, no signed-char wrap)
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 
-#include <algorithm>   // std::sort — symbolsByFile below
+#include <algorithm>   // std::sort — symbolsByFile below; std::binary_search — isJsTsBuiltinMember
 #include <tuple>       // std::tie — lessUnindexedExt's mixed-direction compare
 #include <array>       // Symbol::evWhy — the fixed-size ev_why tag counters
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>   // std::is_trivially_copyable_v — the VarSpan layout pin below
 #include <vector>
 
@@ -183,10 +185,104 @@ inline const char* langTag( Lang l ) noexcept
 //              `@external` veto, never a spray. APPENDED so no persisted value renumbers (RawRef rides the
 //              cache with recv as a u8). Python only: isMemberAccessNode classifies C++/Python receivers and
 //              C++ has no `super`.
-enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule };
+//   LitString / LitArray / LitRegex / LitNumber / LitBoolean — TS/JS member call whose receiver type the
+//              syntax already proves (a literal, or a chain of built-in methods that stay certain). APPENDED
+//              so the cache u8 does not renumber. isMemberAccessNode stays false for TS/JS; receiverOf
+//              classifies these beside that function, TS/JS only. A matching Foo.prototype.NAME extension
+//              may bind; anything else is vetoExternal. Object literals, identifier receivers, this, casts,
+//              and element-returning links (find/at/pop/shift/reduce/subscript/!) stay None.
+enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean };
 // The number of RecvKind enumerators — the bound readRef validates a cached receiver byte against (see kSymKindCount).
-inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::ElixirSelfModule ) + 1;
+inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::LitBoolean ) + 1;
 static_assert( enumCountIsExact<RecvKind, kRecvKindCount>(), "kRecvKindCount must name the LAST RecvKind enumerator — move it with the append" );
+
+inline bool isJsTsLitRecv( RecvKind k ) noexcept
+{
+    return k == RecvKind::LitString || k == RecvKind::LitArray || k == RecvKind::LitRegex
+        || k == RecvKind::LitNumber || k == RecvKind::LitBoolean;
+}
+
+inline std::string_view jsLitCtorName( RecvKind k ) noexcept
+{
+    switch( k )
+    {
+        case RecvKind::LitString:  return "String";
+        case RecvKind::LitArray:   return "Array";
+        case RecvKind::LitRegex:   return "RegExp";
+        case RecvKind::LitNumber:  return "Number";
+        case RecvKind::LitBoolean: return "Boolean";
+        default:                   return {};
+    }
+}
+
+inline bool isJsTsBuiltinCtor( std::string_view ctor ) noexcept
+{
+    return ctor == "String" || ctor == "Array" || ctor == "RegExp" || ctor == "Number" || ctor == "Boolean";
+}
+
+// Names that really are members of the literal's built-in type. A Lit* call whose callee is in the
+// matching table may bind a scope-matched polyfill or go External/Undefined; any other name keeps
+// today's ladder (so String.prototype.shout / named-function / Object.assign / declare global survive).
+inline constexpr std::string_view kJsTsStringMembers[] = {
+    "anchor", "at", "big", "blink", "bold", "charAt", "charCodeAt", "codePointAt", "concat", "endsWith",
+    "fixed", "fontcolor", "fontsize", "includes", "indexOf", "isWellFormed", "italics", "lastIndexOf",
+    "link", "localeCompare", "match", "matchAll", "normalize", "padEnd", "padStart", "repeat", "replace",
+    "replaceAll", "search", "slice", "small", "split", "startsWith", "strike", "sub", "substr", "substring",
+    "sup", "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toString", "toUpperCase", "toWellFormed",
+    "trim", "trimEnd", "trimLeft", "trimRight", "trimStart", "valueOf",
+};
+inline constexpr std::string_view kJsTsArrayMembers[] = {
+    "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast",
+    "findLastIndex", "flat", "flatMap", "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf",
+    "map", "pop", "push", "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort", "splice",
+    "toLocaleString", "toReversed", "toSorted", "toSpliced", "toString", "unshift", "values", "with",
+};
+inline constexpr std::string_view kJsTsRegExpMembers[] = {
+    "compile", "exec", "test", "toString",
+};
+inline constexpr std::string_view kJsTsNumberMembers[] = {
+    "toExponential", "toFixed", "toLocaleString", "toPrecision", "toString", "valueOf",
+};
+inline constexpr std::string_view kJsTsBooleanMembers[] = {
+    "toString", "valueOf",
+};
+
+static_assert( std::is_sorted( std::begin( kJsTsStringMembers ),  std::end( kJsTsStringMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsArrayMembers ),   std::end( kJsTsArrayMembers ),   rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsRegExpMembers ),  std::end( kJsTsRegExpMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsNumberMembers ),  std::end( kJsTsNumberMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsBooleanMembers ), std::end( kJsTsBooleanMembers ), rw::sortutil::svLess ) );
+
+inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) noexcept
+{
+    const std::string_view* b = nullptr;
+    const std::string_view* e = nullptr;
+    if( ctor == "String" )
+    {
+        b = std::begin( kJsTsStringMembers );  e = std::end( kJsTsStringMembers );
+    }
+    else if( ctor == "Array" )
+    {
+        b = std::begin( kJsTsArrayMembers );   e = std::end( kJsTsArrayMembers );
+    }
+    else if( ctor == "RegExp" )
+    {
+        b = std::begin( kJsTsRegExpMembers );  e = std::end( kJsTsRegExpMembers );
+    }
+    else if( ctor == "Number" )
+    {
+        b = std::begin( kJsTsNumberMembers );  e = std::end( kJsTsNumberMembers );
+    }
+    else if( ctor == "Boolean" )
+    {
+        b = std::begin( kJsTsBooleanMembers ); e = std::end( kJsTsBooleanMembers );
+    }
+    else
+    {
+        return false;
+    }
+    return std::binary_search( b, e, name, rw::sortutil::svLess );
+}
 
 // ABS-3 reference / use-site ROLE: WHAT a reference does at the use site, captured at ingest so a
 // use-site index (`--uses=SYM`) can report the resolvable places a name is referenced, not just calls.

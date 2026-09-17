@@ -346,24 +346,23 @@ else
     no "(q8) stdfix census differs across runs or warm vs cold"; diff "$TMP/q3.tsv" "$TMP/q3w.tsv" | head -6
 fi
 
-# ── KNOWN GAP (help wanted: prompts/help-wanted/ts-literal-receivers.md) — issue #59, on receivers whose type is CERTAIN ──
-# A built-in method called on a LITERAL binds an unrelated, same-named, never-imported user function — with the
-# graph's ambiguity gauge at zero, so the answer reads as confident. `"a-b".replace(…)` can only be
-# String.prototype.replace; today it binds src/unrelated.ts's `export function replace`. The arms below assert
-# TODAY's behaviour, so they PASS now. Flipping them is the acceptance test for the prompt: no edge into
-# unrelated.ts, and the call still COUNTED (a named, disclosed disposition — never a silent drop). A FAIL on a
-# KNOWN GAP arm means the gap moved: rewrite that arm to assert the fixed behaviour, never delete it.
-# The two CONTROLS are not gaps. They are TRUE edges any fix must keep: a typed user-object receiver, and a
-# literal receiver whose method the repo itself defines on String.prototype (a literal CAN reach user code).
-# Separate corpora on purpose: (h)'s ambiguous=6 is counted over $FIX and must not move.
-LIT="$TMP/tslitfix"; OBJ="$TMP/tsobjfix"
-mkdir -p "$LIT/src" "$OBJ/src"
+# ── TS/JS literal receivers (issue #163, first step on #59) ──
+# A built-in method on a LITERAL must not bind an unrelated same-named user function. Covered calls
+# (replace/split/padStart/map/test/toFixed/toString/join) go External; a builtin name with NO in-repo
+# def (charCodeAt) is Undefined, not external=. A name that is NOT a member of the literal's type
+# keeps today's ladder. RED on a pre-change binary. Separate corpora: (h)'s ambiguous=7 is over $FIX.
+LIT="$TMP/tslitfix"; OBJ="$TMP/tsobjfix"; JSLIT="$TMP/jslitfix"; TSLIT="$TMP/tsxlitfix"; CTRL="$TMP/tsctrlfix"; POLY="$TMP/jspolyfix"
+mkdir -p "$LIT/src" "$OBJ/src" "$JSLIT/src" "$TSLIT/src" "$CTRL/src" "$POLY"
 cat >"$LIT/src/literals.ts" <<'EOF'
 export function viaString(): string { return "a-b".replace(/-/g, " "); }
 export function viaChain(): string[] { return "a b".replace(/x/g, "").split(" "); }
 export function viaTemplate(n: number): string { return `n=${n}`.padStart(8); }
 export function viaArray(): number[] { return [3, 1, 2].map(v => v * 2); }
 export function viaRegex(s: string): boolean { return /x/.test(s); }
+export function viaNumber(): string { return (1).toFixed(0); }
+export function viaBoolean(): string { return true.toString(); }
+export function viaJoin(): string { return "a b".split(" ").join("-"); }
+export function viaCharCode(): number { return "x".charCodeAt(0); }
 EOF
 cat >"$LIT/src/unrelated.ts" <<'EOF'
 export function replace(value: number): number { return value; }
@@ -371,6 +370,51 @@ export function split(value: number): number { return value; }
 export function padStart(value: number): number { return value; }
 export function map(value: number): number { return value; }
 export function test(value: number): number { return value; }
+export function toFixed(value: number): number { return value; }
+export function toString(value: number): number { return value; }
+export function join(value: number): number { return value; }
+EOF
+cat >"$JSLIT/src/literals.js" <<'EOF'
+export function viaString() { return "a-b".replace(/-/g, " "); }
+export function viaChain() { return "a b".replace(/x/g, "").split(" "); }
+export function viaTemplate(n) { return `n=${n}`.padStart(8); }
+export function viaArray() { return [3, 1, 2].map(v => v * 2); }
+export function viaRegex(s) { return /x/.test(s); }
+export function viaNumber() { return (1).toFixed(0); }
+export function viaBoolean() { return true.toString(); }
+export function viaJoin() { return "a b".split(" ").join("-"); }
+export function viaCharCode() { return "x".charCodeAt(0); }
+EOF
+cat >"$JSLIT/src/unrelated.js" <<'EOF'
+export function replace(value) { return value; }
+export function split(value) { return value; }
+export function padStart(value) { return value; }
+export function map(value) { return value; }
+export function test(value) { return value; }
+export function toFixed(value) { return value; }
+export function toString(value) { return value; }
+export function join(value) { return value; }
+EOF
+cat >"$TSLIT/src/literals.tsx" <<'EOF'
+export function viaString(): string { return "a-b".replace(/-/g, " "); }
+export function viaChain(): string[] { return "a b".replace(/x/g, "").split(" "); }
+export function viaTemplate(n: number): string { return `n=${n}`.padStart(8); }
+export function viaArray(): number[] { return [3, 1, 2].map(v => v * 2); }
+export function viaRegex(s: string): boolean { return /x/.test(s); }
+export function viaNumber(): string { return (1).toFixed(0); }
+export function viaBoolean(): string { return true.toString(); }
+export function viaJoin(): string { return "a b".split(" ").join("-"); }
+export function viaCharCode(): number { return "x".charCodeAt(0); }
+EOF
+cat >"$TSLIT/src/unrelated.ts" <<'EOF'
+export function replace(value: number): number { return value; }
+export function split(value: number): number { return value; }
+export function padStart(value: number): number { return value; }
+export function map(value: number): number { return value; }
+export function test(value: number): number { return value; }
+export function toFixed(value: number): number { return value; }
+export function toString(value: number): number { return value; }
+export function join(value: number): number { return value; }
 EOF
 cat >"$OBJ/src/rewriter.ts" <<'EOF'
 export class Rewriter {
@@ -381,40 +425,84 @@ cat >"$OBJ/src/user.ts" <<'EOF'
 import { Rewriter } from "./rewriter";
 export function viaObjectReceiver(r: Rewriter): string { return r.replace("a", "b"); }
 EOF
+cat >"$CTRL/src/widget.ts" <<'EOF'
+export class Widget { render(): string { return ""; } }
+export function transform(): number { return 1; }
+export function replace(a: string): string { return a; }
+EOF
+cat >"$CTRL/src/user.ts" <<'EOF'
+import { Widget } from "./widget";
+import * as helpers from "./widget";
+export function viaOwnLiteral(): string { return ({ replace(a: string) { return a; } }).replace("q"); }
+export function viaFindRender(): string { return [new Widget()].find(w => true)!.render(); }
+export class AMD { replace(s: string) { return s; } apply() { this.replace("x"); } }
+export function viaNs(): number { return helpers.transform(); }
+export function viaCast(): string { return ("x" as unknown as Widget).render(); }
+EOF
 cat >"$OBJ/src/proto.js" <<'EOF'
 String.prototype.shout = function () { return "!"; };
 function viaPrototypeExtension() { return "x".shout(); }
-module.exports = { viaPrototypeExtension };
+String.prototype.namedX = function namedX() { return "!"; };
+function viaNamedProto() { return "x".namedX(); }
+Object.assign(Array.prototype, { last() { return this[this.length - 1]; } });
+function viaAssign() { return [1, 2].last(); }
+Object.defineProperty(String.prototype, "defx", { value: function defx() { return "!"; } });
+function viaDefine() { return "x".defx(); }
+module.exports = { viaPrototypeExtension, viaNamedProto, viaAssign, viaDefine };
+EOF
+cat >"$POLY/proto.js" <<'EOF'
+String.prototype.replace = function () { return "p"; };
+function viaPolyfill() { return "x".replace("a", "b"); }
+module.exports = { viaPolyfill };
+EOF
+cat >"$CTRL/src/loud.ts" <<'EOF'
+declare global { interface String { loud(): string } }
+export function viaLoud(): string { return "x".loud(); }
 EOF
 LITMAP="$( "$BIN" "$LIT" --no-cache 2>/dev/null )"
 litMissing=""
-for want in viaString viaChain viaTemplate viaArray viaRegex replace split padStart map test; do
+for want in viaString viaChain viaTemplate viaArray viaRegex viaNumber viaBoolean viaJoin viaCharCode replace split padStart map test toFixed toString join; do
     printf '%s' "$LITMAP" | grep -q "n=\"$want\"" || litMissing="$litMissing $want"
 done
 [ -z "$litMissing" ] && ok "(kg-ts) presence: every literal-receiver fixture symbol is indexed" \
     || no "(kg-ts) presence guard: fixture symbols not indexed:$litMissing — every arm below would be vacuous"
-litGap(){  # litGap CALLER "LINE:NAME ..." — CALLER's literal-receiver calls each bind unrelated.ts:LINE, gauge at zero
-    local out root want line name missed=""
-    out="$( "$BIN" "$LIT" "--callees=src/literals.ts:$1" --no-cache 2>/dev/null )"
+litExt(){  # litExt ROOT EXPECTED — exact external=N on the files= stats line (not a substring of 60–69)
+    local map stats ext
+    map="$( "$BIN" "$1" --no-cache 2>/dev/null )"
+    stats="$( printf '%s' "$map" | grep -oE 'files=[0-9]+ symbols=[0-9]+ edges=[0-9]+[^<]*' | head -1 )"
+    ext="$( printf '%s' "$stats" | grep -oE 'external=[0-9]+' | head -1 )"
+    if [ "$ext" = "external=$2" ]; then
+        ok "(kg-ts) $3 external=$2 ($stats)"
+    else
+        no "(kg-ts) $3 external= want $2 got '${ext:-absent}': $stats"
+    fi
+    printf '%s' "$stats" | grep -q 'ambiguous=0' \
+        && ok "(kg-ts) $3 ambiguous=0" \
+        || no "(kg-ts) $3 ambiguous= moved: $stats"
+}
+litExt "$LIT"   10 "TS literal corpus"
+litExt "$JSLIT" 10 "JS literal corpus"
+litExt "$TSLIT" 10 "TSX literal corpus"
+litFixed(){  # litFixed ROOT FILE CALLER — no edge into unrelated, count="0", gauge at zero
+    local out root
+    out="$( "$BIN" "$1" "--callees=$2:$3" --no-cache 2>/dev/null )"
     root="$( printf '%s' "$out" | grep -oE '<callees [^>]*>' | head -1 )"
     if [ -z "$root" ]; then
-        no "(kg-ts) $1: no <callees> root — the arm cannot observe the gap"; return
+        no "(kg-ts) $3: no <callees> root"; return
     fi
-    for want in $2; do
-        line="${want%%:*}"; name="${want#*:}"
-        printf '%s' "$out" | grep -q "n=\"$name\" p=\"src/unrelated.ts:$line\"" || missed="$missed .$name()"
-    done
-    if [ -z "$missed" ] && printf '%s' "$root" | grep -q 'graph_ambiguous="0"'; then
-        ok "KNOWN GAP (help wanted: prompts/help-wanted/ts-literal-receivers.md): $1's literal-receiver call(s) bind unrelated.ts ($2) with graph_ambiguous=\"0\" — flipping this is the acceptance test"
+    if printf '%s' "$out" | grep -q 'unrelated\.' ; then
+        no "(kg-ts) $3 still binds unrelated: $root $( printf '%s' "$out" | grep -oE '<s [^>]*/>' | tr '\n' ' ' )"
+    elif printf '%s' "$root" | grep -q 'count="0"' && printf '%s' "$root" | grep -q 'graph_ambiguous="0"'; then
+        ok "(kg-ts) $3: no edge into unrelated, count=\"0\", graph_ambiguous=\"0\""
     else
-        no "KNOWN GAP (help wanted: prompts/help-wanted/ts-literal-receivers.md) MOVED for $1:${missed:- the gauge} no longer binds unrelated.ts confidently — if the fix landed, rewrite this arm to assert no edge AND a counted disposition: $root"
+        no "(kg-ts) $3 expected count=\"0\" graph_ambiguous=\"0\": $root"
     fi
 }
-litGap viaString   "1:replace"
-litGap viaChain    "1:replace 2:split"
-litGap viaTemplate "3:padStart"
-litGap viaArray    "4:map"
-litGap viaRegex    "5:test"
+for caller in viaString viaChain viaTemplate viaArray viaRegex viaNumber viaBoolean viaJoin viaCharCode; do
+    litFixed "$LIT"   src/literals.ts  "$caller"
+    litFixed "$JSLIT" src/literals.js  "$caller"
+    litFixed "$TSLIT" src/literals.tsx "$caller"
+done
 OBJOUT="$( "$BIN" "$OBJ" --callees=src/user.ts:viaObjectReceiver --no-cache 2>/dev/null )"
 printf '%s' "$OBJOUT" | grep -q 'n="replace" p="src/rewriter.ts:2"' \
     && ok "(kg-ts control) a typed user-object receiver r.replace() keeps its edge to Rewriter.replace (rewriter.ts:2)" \
@@ -423,6 +511,46 @@ PROTOOUT="$( "$BIN" "$OBJ" --callees=src/proto.js:viaPrototypeExtension --no-cac
 printf '%s' "$PROTOOUT" | grep -q 'n="shout" p="src/proto.js:1"' \
     && ok "(kg-ts control) \"x\".shout() keeps its edge to the repo's own String.prototype.shout (proto.js:1) — a literal receiver can reach user code" \
     || no "(kg-ts control) \"x\".shout() lost its edge to String.prototype.shout — a literal-receiver veto must let prototype extensions through: $( printf '%s' "$PROTOOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+NAMEDOUT="$( "$BIN" "$OBJ" --callees=src/proto.js:viaNamedProto --no-cache 2>/dev/null )"
+printf '%s' "$NAMEDOUT" | grep -q 'n="namedX"' \
+    && ok "(kg-ts control) String.prototype.x = function x(){} keeps its edge (named function, not a String builtin)" \
+    || no "(kg-ts control) viaNamedProto lost namedX: $( printf '%s' "$NAMEDOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+POLYOUT="$( "$BIN" "$POLY" --callees=viaPolyfill --no-cache 2>/dev/null )"
+printf '%s' "$POLYOUT" | grep -q 'n="replace"' \
+    && ok "(kg-ts control) JS String.prototype.replace polyfill binds (JS-only; TS has no protomethod capture)" \
+    || no "(kg-ts control) viaPolyfill lost the JS replace polyfill: $( printf '%s' "$POLYOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+ASSIGNOUT="$( "$BIN" "$OBJ" --callees=src/proto.js:viaAssign --no-cache 2>/dev/null )"
+printf '%s' "$ASSIGNOUT" | grep -q 'n="last"' \
+    && ok "(kg-ts control) Object.assign(Array.prototype, { last(){} }) keeps its edge" \
+    || no "(kg-ts control) viaAssign lost last: $( printf '%s' "$ASSIGNOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+DEFOUT="$( "$BIN" "$OBJ" --callees=src/proto.js:viaDefine --no-cache 2>/dev/null )"
+printf '%s' "$DEFOUT" | grep -q 'n="defx"' \
+    && ok "(kg-ts control) Object.defineProperty(String.prototype, 'x', { value: function x(){} }) keeps its edge" \
+    || no "(kg-ts control) viaDefine lost defx: $( printf '%s' "$DEFOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+LOUDOUT="$( "$BIN" "$CTRL" --callees=src/loud.ts:viaLoud --no-cache 2>/dev/null )"
+printf '%s' "$LOUDOUT" | grep -q 'n="loud"' \
+    && ok "(kg-ts control) TS declare global { interface String { loud() } } keeps its edge" \
+    || no "(kg-ts control) viaLoud lost loud: $( printf '%s' "$LOUDOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+OWNOUT="$( "$BIN" "$CTRL" --callees=src/user.ts:viaOwnLiteral --no-cache 2>/dev/null )"
+printf '%s' "$OWNOUT" | grep -q 'n="replace" p="src/user.ts:3"' \
+    && ok "(kg-ts control) object-literal own method ({ replace(){} }).replace() keeps its edge" \
+    || no "(kg-ts control) viaOwnLiteral lost the object-literal replace edge: $( printf '%s' "$OWNOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+FINDOUT="$( "$BIN" "$CTRL" --callees=src/user.ts:viaFindRender --no-cache 2>/dev/null )"
+printf '%s' "$FINDOUT" | grep -q 'n="render" p="src/widget.ts:1"' \
+    && ok "(kg-ts control) [new Widget()].find(...)!.render() keeps Widget.render — certainty ends at find/!" \
+    || no "(kg-ts control) viaFindRender lost Widget.render: $( printf '%s' "$FINDOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+THISOUT="$( "$BIN" "$CTRL" --callees=src/user.ts:apply --no-cache 2>/dev/null )"
+printf '%s' "$THISOUT" | grep -q 'n="replace" p="src/user.ts:5"' \
+    && ok "(kg-ts control) this.replace() inside a class that defines replace keeps its edge" \
+    || no "(kg-ts control) AMD.apply lost this.replace() at user.ts:5: $( printf '%s' "$THISOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+NSOUT="$( "$BIN" "$CTRL" --callees=src/user.ts:viaNs --no-cache 2>/dev/null )"
+printf '%s' "$NSOUT" | grep -q 'n="transform"' \
+    && ok "(kg-ts control) helpers.transform() namespace import keeps its edge" \
+    || no "(kg-ts control) viaNs lost helpers.transform(): $( printf '%s' "$NSOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
+CASTOUT="$( "$BIN" "$CTRL" --callees=src/user.ts:viaCast --no-cache 2>/dev/null )"
+printf '%s' "$CASTOUT" | grep -q 'n="render" p="src/widget.ts:1"' \
+    && ok "(kg-ts control) (\"x\" as unknown as Widget).render() keeps Widget.render — a cast ends certainty" \
+    || no "(kg-ts control) viaCast lost Widget.render: $( printf '%s' "$CASTOUT" | grep -oE '<callees [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
 
 # ── (i) determinism — narrowed candidate order must be byte-stable run-to-run ──
 "$BIN" "$FIX" --no-cache >"$TMP/m1" 2>/dev/null
@@ -437,6 +565,13 @@ rm -f "$TMP/cc"
 "$BIN" "$FIX" --no-cache        >"$TMP/cold" 2>/dev/null
 diff -q "$TMP/warm" "$TMP/cold" >/dev/null && ok "(j) cache-transparent (warm == cold)" \
     || { no "(j) cache changes output (warm != cold)"; diff "$TMP/cold" "$TMP/warm" | head -6; }
+
+rm -f "$TMP/litcc"
+"$BIN" "$LIT" --cache="$TMP/litcc" >/dev/null 2>&1
+"$BIN" "$LIT" --cache="$TMP/litcc" >"$TMP/litwarm" 2>/dev/null
+"$BIN" "$LIT" --no-cache           >"$TMP/litcold" 2>/dev/null
+diff -q "$TMP/litwarm" "$TMP/litcold" >/dev/null && ok "(kg-ts) literal corpus warm == cold (Lit* kinds round-trip the cache)" \
+    || { no "(kg-ts) literal corpus warm != cold"; diff "$TMP/litcold" "$TMP/litwarm" | head -6; }
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

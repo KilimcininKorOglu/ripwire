@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, TS/JS LITERAL RECEIVERS (issue #163, PR #244): kParserVer and its quality mirror move to 100 on
+#   integration/train-2b (the PR declared 96 -> 97; renumbered in merge order over train 2's 99).
+#   RecvKind gains LitString/LitArray/LitRegex/LitNumber/LitBoolean (appended u8). Cache format unchanged
+#   (kCacheVersion stays 22). A `"x".replace()` call no longer takes the bare-name ladder. Extraction
+#   identity moved; snapshot scheme unchanged. Old extraction facts must be re-parsed.
 # 2026-09-17, TRAIN 2 (integration/train-2 on main 9f44a363: #248 186fcb84, #254 0585b2f3, #257 50129f8c): RE-DERIVED ON
 #   THE MERGED TREE, carried from no side. kParserVer is assigned in merge order from main's 96: #248 = 97, #254 = 98,
 #   #257 = 99, the numbers each lane already declared. kCacheVersion stays 22; kQSnapCacheScheme stays 12. Main's pin
