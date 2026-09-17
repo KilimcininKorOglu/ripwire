@@ -232,7 +232,17 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 96;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 97;           // bump on any grammar/.scm/extraction change
+                                                      // 97 = 2026-09-17 (Ruby constant receivers narrow calls,
+                                                      //    test/rubyrecvnarrowcheck.sh): classifyReceiver classifies a
+                                                      //    Ruby (constant)/(scope_resolution) receiver as NamedVar with
+                                                      //    the FINAL constant segment, so `Calc.add(…)` /
+                                                      //    `Outer::Engine.run(…)` reach resolve.h's Rule 2c instead of
+                                                      //    the §2a name spray. RECORD LAYOUT unchanged — recv/recvVar
+                                                      //    are fields RawRef already had (kCacheVersion stays 22) — but
+                                                      //    their VALUES change, so old Ruby extraction facts must be
+                                                      //    re-parsed. quality.h's kIngestParserVerMirror bumped in the
+                                                      //    SAME commit.
                                                       // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm
                                                       //    B2): every C/C++ def carries a new syntactic
                                                       //    `internalLinkage` bit — inside an anonymous namespace at any

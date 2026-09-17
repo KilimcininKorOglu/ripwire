@@ -15,6 +15,53 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — a Ruby constant receiver now pins the call, instead of splitting it across every same-named method
+
+`Calc.add( 1, 2 )`, `Outer::Engine.run( 3 )`, `::Top.ping` and `Util.format( 5 )` resolved to EVERY
+method of that name in the corpus, each edge marked `prov="split"`. The resolver's Rule 2c already
+says "the receiver token IS the type" (`docs/EVALS.md` "Phase 4b"), but it could not fire for Ruby:
+`classifyReceiver` accepted a receiver node of kind `(identifier)` only, and Ruby's class/module
+receiver is its own node kind — `(constant)` for `Calc`, `(scope_resolution)` for `Outer::Engine`
+and `::Top`. Every such call classified `RecvKind::None`, and the resolver fell through to the
+name spray. Ruby's one call form that carries a type was the one the type rule never saw.
+
+The receiver's FINAL constant segment is the type name (`Outer::Engine` → `Engine`), the same
+final-segment convention the existing type bindings use (`ns::Foo` → `Foo`), because `Symbol::scope`
+is the IMMEDIATE enclosing name by design. A Ruby MODULE is a receiver of class methods as much as
+a class is (`Util.format`), so Ruby's `SymKind::Other` symbols — which `queries/ruby/tags.scm` can
+only reach through `module` — join Rule 2c's class-name set.
+
+Measured with `--no-cache` on five Ruby corpora, before → after (map header gauges):
+
+| corpus | files | edges | ambiguous | declined |
+| --- | --- | --- | --- | --- |
+| activesupport 8.1.3 `lib` | 290 | 3,868 → 3,912 | 468 → 434 | 1,022 → 985 |
+| activerecord 8.1.3 `lib` | 398 | 9,116 → 9,152 | 1,496 → 1,479 | 4,576 → 4,497 |
+| actionpack 8.1.3 `lib` | 157 | 3,151 → 3,140 | 390 → 364 | 943 → 923 |
+| Rails app A | 4,683 | 23,784 → 24,376 | 1,328 → 1,263 | 12,485 → 11,624 |
+| Rails app B | 2,174 | 14,859 → 15,257 | 275 → 431 | 3,264 → 3,050 |
+
+`declined` falls on all five: those are call sites the resolver refused to guess at and now has
+evidence for. Edges fall on actionpack because a pinned call is ONE edge where a two-way split was
+two. App B's `ambiguous` rises while its `declined` falls by 214: a receiver that names two
+same-final-segment classes both defining the callee produces an honest split where there was
+previously no edge at all — the disclosed floor below, not a regression.
+
+Stated floors, each pinned by an arm of `test/rubyrecvnarrowcheck.sh`: Ruby feeds no
+class-hierarchy edges (`captureBases` has no Ruby arm), so a method inherited from a superclass does
+not narrow — this is what holds the gem numbers down, where deep `ActiveRecord::Base` hierarchies are
+the idiom; matching is by final segment, so two same-named classes in different namespaces both
+defining the callee keep both candidates; and a variable receiver (`c.scale`) or a chained one
+(`Calc.new.scale`) is untouched. A narrow that misses degrades to the unchanged ladder — it never
+deletes an edge and never invents one (`Time.now` still mints nothing).
+
+The default map is byte-identical to the previous build on five Ruby-free corpora (this repo's
+`src/`, npm, a Clojure project, CPython 3.14's stdlib, and this whole repository), and this
+repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols · 22,529 edges.
+`kParserVer` 96 → 97 (record layout unchanged, `kCacheVersion` stays 22; the VALUES of `recv`/
+`recvVar` move, so Ruby extraction facts are re-parsed), with `quality.h`'s mirror and
+`test/qschemetrip.hash` re-pinned in the same commit.
+
 ### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
 
 Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.

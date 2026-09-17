@@ -84,6 +84,31 @@ inline RecvShape classifyReceiver( TSNode node, Lang lang, std::string_view src,
     {
         return { RecvKind::ThisObj, {}, {} }; // Ruby `self` — its own node kind, not an identifier
     }
+    // Ruby: a class/module RECEIVER is its own node kind too — `Calc` is (constant), `Outer::Engine` and
+    // `::Top` are (scope_resolution) — never an (identifier). Without this arm every `Cls.m(…)` call
+    // classified None, receiverOf stamped it FieldOfVar with an empty recvVar, and resolve.h's Rule 2c
+    // ("the receiver token IS the type") could not fire on the one Ruby call form that carries a type.
+    // The type name is the FINAL constant segment (`Outer::Engine` → `Engine`, `::Top` → `Top`): the same
+    // final-segment convention Rule 2's type bindings use (`ns::Foo` → `Foo`), and the one that meets
+    // Symbol::scope, which is the IMMEDIATE enclosing name by design (ingest_sidecap.h). A
+    // (scope_resolution) whose `name:` child is not a (constant) is not a constant receiver and falls
+    // through to the honest ladder. `Outer::run( 1 )` never arrives as a scope_resolution at all —
+    // tree-sitter-ruby parses it as an ordinary (call) with a (constant) receiver, exactly like
+    // `Outer.run( 1 )`, so both spellings narrow through the (constant) arm. test/rubyrecvnarrowcheck.sh.
+    if( lang == Lang::Ruby && ( kindIs( rt, "constant" ) || kindIs( rt, "scope_resolution" ) ) )
+    {
+        const TSNode leaf = kindIs( rt, "constant" ) ? node : fieldChild( node, NodeField::Name );
+        if( ts_node_is_null( leaf ) || !kindIs( ts_node_type( leaf ), "constant" ) )
+        {
+            return {};
+        }
+        const std::string_view v = pattern::nodeText( leaf, src );
+        if( v.empty() )
+        {
+            return {};
+        }
+        return { RecvKind::NamedVar, std::string( v ), {} };                          // Rule 2c fuel
+    }
     if( kindIs( rt, "identifier" ) )
     {
         const std::string_view v = pattern::nodeText( node, src );

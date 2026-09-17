@@ -1838,13 +1838,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     const FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing );
     // Rule 2c class-name set (docs/EVALS.md "Phase 4b"): every Class/Struct/Interface definition NAME in the
     // corpus, so `Cls.m()` can read its receiver token as the type it names. Consumed via Narrower::rule2cClassNameRecv.
+    // A Ruby MODULE joins that set. It is a receiver of class methods exactly as a class is (`Util.format`,
+    // the service-object idiom), and `@definition.module` maps to SymKind::Other (ingest_crawl.h::defKind)
+    // for every language rather than to a kind of its own. Restricted to Ruby because there the implication
+    // runs both ways: queries/ruby/tags.scm emits class, module, method and constant, and the other three
+    // have kinds of their own, so a Ruby SymKind::Other symbol IS a module. test/rubyrecvnarrowcheck.sh.
     HashMap<std::string, char> classNames;
     classNames.reserve( N / 8 + 1 );
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1h: classNames set" );
         for( const Symbol& s : ing.symbols )
         {
-            if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface )
+            const bool rubyModule = ( s.lang == Lang::Ruby && s.kind == SymKind::Other );
+            if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface || rubyModule )
             {
                 classNames.try_emplace( s.name, '\0' );
             }
