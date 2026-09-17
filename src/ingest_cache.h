@@ -240,7 +240,15 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 104;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 112;          // bump on any grammar/.scm/extraction change
+                                                      // 112 = 2026-09-17 (reference-returning definitions,
+                                                      //    test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am
+                                                      //    and q8): a C++/ObjC function definition returning `T&` or
+                                                      //    `T&&` records its parameters (VarDecl + ParamType; it recorded
+                                                      //    none — the declarator walk stopped at reference_declarator),
+                                                      //    and an attributed declarator records its VarDecl. No record
+                                                      //    layout changes (kCacheVersion stays 23). 105-111 are declared
+                                                      //    by lanes queued ahead; the landing train assigns.
                                                       // 104 = 2026-09-17 (smart-pointer members, test/fieldnarrowcheck.sh
                                                       //    arm p): a C++ member written `std::unique_ptr<T>` /
                                                       //    `std::shared_ptr<T>` records T with viaArrow set (it recorded

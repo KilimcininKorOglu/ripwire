@@ -71,6 +71,7 @@ struct Owner7 { D2 m_dd; void multi() { m_dd.dual(); } };
 
 Unknown gg;
 void freeuse() { gg.acquire(); }
+struct Owner8 { Pool m_z; Decoy& shadowRef( Decoy& m_z ) { m_z.acquire(); return m_z; } };
 EOF
 
 cat >"$FIX/p.py" <<'EOF'
@@ -188,6 +189,16 @@ printf '%s\n' "$SHL" | grep -q 'a.cpp:2"' \
 printf '%s\n' "$SHL" | grep -q 'a.cpp:1"' \
     && no "(s2) shadowLocal linked to Pool::acquire — the FIELD type beat the shadowing local" \
     || ok "(s2) shadowLocal field type Pool NOT linked (local shadows field)"
+# (s3) a method RETURNING a reference declares its parameters like any other (2026-09-17): the declarator chain reaches the
+#      function declarator through reference_declarator, which holds it by no field, so `Decoy& m_z` recorded nothing — no
+#      parameter type for Rule 2, no veto for Rule 2b — and the call took the FIELD's Pool::acquire
+SHR="$( callees shadowRef )"
+printf '%s\n' "$SHR" | grep -q 'a.cpp:2"' \
+    && ok "(s3) Decoy& shadowRef( Decoy& m_z ) keeps its Decoy::acquire edge — the parameter of a reference-returning method shadows field m_z" \
+    || no "(s3) Decoy& shadowRef( Decoy& m_z ) lost Decoy::acquire — the reference-returning method's parameter was not recorded"
+printf '%s\n' "$SHR" | grep -q 'a.cpp:1"' \
+    && no "(s3) shadowRef linked to Pool::acquire — the FIELD type beat the parameter of a reference-returning method" \
+    || ok "(s3) shadowRef field type Pool NOT linked"
 
 # ── (e) cross-language honesty: Python/TS field receivers are chained accesses — NOT narrowed, stays split ──
 PY="$( callees po_go )"
