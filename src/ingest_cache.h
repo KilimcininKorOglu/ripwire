@@ -238,7 +238,18 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 107;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 108;          // bump on any grammar/.scm/extraction change
+                                                      // 108 = 2026-09-17 (Ruby constant receivers narrow calls, PR #267,
+                                                      //    test/rubyrecvnarrowcheck.sh): classifyReceiver classifies a
+                                                      //    Ruby (constant)/(scope_resolution) receiver as NamedVar with
+                                                      //    the FINAL constant segment, so `Calc.add(…)` /
+                                                      //    `Outer::Engine.run(…)` reach resolve.h's Rule 2c instead of
+                                                      //    the §2a name spray. RECORD LAYOUT unchanged — recv/recvVar
+                                                      //    are fields RawRef already had (kCacheVersion stays 23) — but
+                                                      //    their VALUES change, so old Ruby extraction facts must be
+                                                      //    re-parsed. quality.h's kIngestParserVerMirror bumped in the
+                                                      //    SAME commit. The PR declared 96 -> 97 over main; assigned
+                                                      //    108 on integration/train-3 after #233's 107.
                                                       // 107 = 2026-09-17 (GDScript, PR #233, test/gdscriptcheck.sh): a
                                                       //    new grammar (third_party/deps/gdscript) and queries/gdscript/
                                                       //    tags.scm, `.gd` a kLangTable row, and NodeField::Op appended:

@@ -2126,13 +2126,19 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
 
 // Every Class/Struct/Interface NAME in the corpus: Rule 2c's receiver-token test (Narrower::rule2cClassNameRecv) and the
 // assignment guard below. Names carry no namespace, so this answers "some class is called that", never which one.
+// A Ruby MODULE joins that set. It is a receiver of class methods exactly as a class is (`Util.format`, the service-object
+// idiom), and `@definition.module` maps to SymKind::Other (ingest_crawl.h::defKind) for every language rather than to a
+// kind of its own. Restricted to Ruby because there the implication runs both ways: queries/ruby/tags.scm emits class,
+// module, method and constant, and the other three have kinds of their own, so a Ruby SymKind::Other symbol IS a module.
+// test/rubyrecvnarrowcheck.sh.
 inline HashMap<std::string, char> classNameSet( const IngestResult& ing )
 {
     HashMap<std::string, char> classNames;
     classNames.reserve( ing.symbols.size() / 8 + 1 );
     for( const Symbol& s : ing.symbols )
     {
-        if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface )
+        const bool rubyModule = ( s.lang == Lang::Ruby && s.kind == SymKind::Other );
+        if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface || rubyModule )
         {
             classNames.try_emplace( s.name, '\0' );
         }

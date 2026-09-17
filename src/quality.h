@@ -1977,7 +1977,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 107;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 108;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 108 = 2026-09-17 (Ruby constant receivers, PR #267): a constant or
+                                                          //    scope_resolution receiver is NamedVar with its final segment.
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 107 = 2026-09-17 (GDScript, PR #233): a new grammar, tags.scm and
                                                           //    `.gd` crawl row. See ingest_cache.h's kParserVer note.
                                                           // 106 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
