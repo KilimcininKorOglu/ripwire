@@ -3600,6 +3600,19 @@ inline bool filePathContains( std::string_view haystack, std::string_view needle
     return collapsed.find( needle ) != std::string::npos;
 }
 
+// A1 (found-items 2026-09-17, review round): the ROOT-RELATIVE twin of filePathContains, above. Every
+// PATH-PATTERN selector (file:name qualifiers, --verify's FILE argument, --at=FILE:LINE, MCP edit-hint
+// matching, the selector-refusal "is this file even indexed" diagnosis) must match against fileId's
+// ROOT-RELATIVE spelling — never `filePathContains( ing.files[fileId], … )` directly, which is exactly the
+// #228-class defect A1 found: under an absolute or trailing-slash root spelling, a short pattern (e.g. a
+// directory name one component of the checkout path shares) can match the CHECKOUT LOCATION rather than
+// anything inside the tree, so `--verify`'s FILE argument confirmed a claim about a file that was never
+// indexed. ONE helper so the next path-pattern consumer cannot independently reintroduce the raw form.
+inline bool filePathContainsRootRel( const IngestResult& ing, std::uint32_t fileId, std::string_view needle )
+{
+    return filePathContains( rootRelPath( ing, fileId ), needle );
+}
+
 // shared "name" | "file:name" spec splitter (X9(b)) — the ONE disambiguation rule --around/--lego/
 // --edit-check (via resolveFocus, single lowest-id pick) and --callers/--impact (via
 // resolveAllByNameQualified, every match) now both route through, so a same-named-across-files symbol
@@ -3700,7 +3713,7 @@ inline AtSeed resolveAtSeed( const IngestResult& ing, std::string_view spec )
 
     for( std::uint32_t fileId = 0; fileId < std::uint32_t( ing.files.size() ); ++fileId )
     {
-        if( filePathContains( ing.files[ fileId ], r.fileHalf ) )
+        if( filePathContainsRootRel( ing, fileId, r.fileHalf ) )
         {
             r.fileMatches.push_back( fileId );
         }
@@ -4471,7 +4484,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     std::vector<NodeId> out;
     for( const Symbol& s : ing.symbols )
     {
-        if( elixirNameMatches( s, name ) && ( file.empty() || filePathContains( ing.files[ s.fileId ], file ) ) )
+        if( elixirNameMatches( s, name ) && ( file.empty() || filePathContainsRootRel( ing, s.fileId, file ) ) )
         {
             out.push_back( s.id );
         }

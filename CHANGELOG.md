@@ -737,15 +737,24 @@ three rounds, and none of the new script's runs did.
 
 ### Fixed — `--affected=`/`--exercises=` and `--exclude=` matched a directory ABOVE the crawl root, not just the tree
 
-Two of #228's root-spelling-invariance seams were missed. `--affected=`/`--exercises=` (`testmap.h`'s
-`resolveAffectedSeeds`/`resolveExerciseSeeds`) and `--exclude=` (`ingest_crawl.h`) still `filePathContains`'d
-the RAW stored path instead of the root-relative one (`rootRelPath`/`relForHash`, the same seam every other
-index-builder and path predicate already reads per #228). So a pattern that happened to match the CHECKOUT
-location — never anything inside the tree itself — decided the answer only under an absolute or
-trailing-slash root: `--affected=<marker-above-root>` matched every file (instead of refusing, as `ripwire .`
-correctly does) and `--exclude=<marker-above-root>` silently dropped every file from the map (instead of
-indexing normally). `test/rootspellingcheck.sh` gained two arms pinning both call sites across all six root
-spellings.
+Root-spelling-invariance seams #228 missed. `--affected=`/`--exercises=` (`testmap.h`'s
+`resolveAffectedSeeds`/`resolveExerciseSeeds`), `--exclude=` (`ingest_crawl.h`), `--verify`'s FILE argument
+(`verbs_navigate.h`), `--at=FILE:LINE` (`graph.h::resolveAtSeed`), the `file:name` qualifier every
+`--callers`/`--impact`/`--uses`/`--edit-check`/`--around`/`--lego` selector shares
+(`graph.h::resolveAllByNameQualified`), its own refusal diagnosis (`selectorrefuse.h::indexHasFileMatching`
+and `definingFilesOf`), and the MCP write verbs' `file` disambiguation hint
+(`mcpedit.h::editHintMatches`) all `filePathContains`'d the RAW stored path instead of the root-relative one
+— the same seam every other index-builder and path predicate already reads per #228. So a pattern that
+happened to match the CHECKOUT location — never anything inside the tree itself — decided the answer only
+under an absolute or trailing-slash root: `--affected=<marker-above-root>` matched every file instead of
+refusing, `--exclude=<marker-above-root>` silently dropped every file from the map, `--verify`/`--at`/the
+file:name qualifier confirmed or ambiguated claims about files the index never matched, and an MCP edit's
+bogus `file` hint could pass a false disambiguation. Every path-pattern consumer now routes through one
+shared helper, `graph.h::filePathContainsRootRel`, so the next consumer cannot independently reintroduce the
+raw form; `selectorrefuse.h::definingFilesOf`'s own "here's a runnable retry" suggestion is root-relative too,
+for the same reason — the retry text has to re-match under the fixed rule to still be runnable.
+`test/rootspellingcheck.sh` gained arms for `--affected`/`--exclude`/`--verify`/`--at`/`--callers=file:name`
+across all six root spellings; `test/mcpeditcheck.sh` gained arm (10) for the MCP `file` hint.
 
 ### Fixed — MCP `quality_delta`'s "sidecar present but unreadable" baseline marker now spells the CLI's own wording
 
@@ -774,6 +783,18 @@ normally, with no caveat at all. `test/layoutcheck.sh`'s `AttributeFieldCase` ga
 field-survives assertion `AlignasFieldCase` already had, and a new `AttributeHarmlessFieldCase` fixture
 pins the fully-modelled path.
 
+The aligned/packed check also missed GNU's reserved-namespace double-underscore spelling
+(`__aligned__`/`__packed__` — what system headers reach for so the keyword cannot collide with a macro of
+the same bare name): `containsWord`'s word-boundary rule treats `_` as an identifier byte, so it does not
+match `aligned` inside `__aligned__` at all, and the field came back `modeled="1"` with a confidently
+wrong `sz`/`al`/`off`. `attrHasKeyword` now checks both spellings. The C++11 standard attribute syntax
+(`[[gnu::aligned(8)]]`/`[[gnu::packed]]`) was checked too: both already refuse, as a side effect of how the
+surrounding text fails to parse as a plain field rather than by design — pinned in the fixture so a later
+change to `[[...]]` handling cannot silently start modelling these as natural. `test/layoutcheck.sh` gained
+`AttributeGnuAlignedFieldCase`/`AttributeGnuPackedFieldCase` (must degrade), `AttributeGnuHarmlessFieldCase`
+(`__unused__`, must stay modelled), and `AttributeStdAlignedFieldCase`/`AttributeStdPackedFieldCase`
+(the `[[gnu::...]]` regression pins).
+
 ### Fixed — the crawl now admits `.hxx`, a C++ header spelling every OTHER per-extension table already listed
 
 `src/ingest_crawl.h`'s `kLangTable` — the ONE table that decides whether the crawl looks at a file at
@@ -785,7 +806,9 @@ the tree (`flipimpact.h`'s dead-code header set, `layout.h`'s `--layout` scan, `
 This changes extraction output for any tree with `.hxx` files (new files, symbols and edges a pre-bump
 cache never saw), so `kParserVer` moves 99 → 100 (mirrored in `kIngestParserVerMirror`, same diff;
 `test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
-single-file root.
+single-file root. `taskroute.h::kCodeExtensions` (the FILE:LINE token recognizer behind `--help-task`'s
+at-line routing) was a seventh table listing `.hpp`/`.hh` without `.hxx` — added, with a `test/taskroutecheck.sh`
+arm routing a `.hxx:LINE` token to `--slice=@FILE:LINE`.
 
 ### Fixed — `--slice --since` no longer tells the "new code" story about a blob that was never parseable source
 

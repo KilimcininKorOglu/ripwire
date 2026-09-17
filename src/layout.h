@@ -1266,6 +1266,30 @@ inline std::vector<std::string_view> peelAttributeGroups( std::string_view& s )
     return { reversed.rbegin(), reversed.rend() };
 }
 
+// A3 (review round, found-items 2026-09-17): a GNU attribute keyword may be spelled bare (`aligned`) OR
+// wrapped in the reserved-namespace double underscore (`__aligned__` — what system headers reach for so
+// the name cannot collide with a macro of the same bare word); the two spell the SAME attribute, but
+// `containsWord` alone cannot see it: `_` counts as an identifier byte, so the underscores that correctly
+// wall "aligned" off from a longer word are exactly what makes `__aligned__` fail to match at all. Checked
+// as two containsWord calls (the bare spelling, then the wrapped one) rather than a hand-rolled tokenizer:
+// a fresh identifier-scanning loop here duplicated gitoracle.h::forEachIdentifier closely enough that
+// quality-delta gated on it (found-items 2026-09-17 review round) — two bounded word checks reuse the
+// primitive layout.h already leans on everywhere else (static/virtual/operator, above) instead of
+// re-deriving a general tokenizer for a two-keyword, fixed-alphabet job.
+inline bool attrHasKeyword( std::string_view attr, std::string_view bare ) noexcept
+{
+    if( containsWord( attr, bare ) )
+    {
+        return true;
+    }
+    std::string wrapped;
+    wrapped.reserve( bare.size() + 4 );
+    wrapped += "__";
+    wrapped += bare;
+    wrapped += "__";
+    return containsWord( attr, wrapped );
+}
+
 // Peel trailing array extents off the RIGHT of `s`: `slots[ 4 ][ 2 ]` → {"4","2"}, leaving `Slot slots`.
 inline std::vector<std::string_view> peelExtents( std::string_view& s )
 {
@@ -1766,15 +1790,17 @@ inline void appendField( BodyWalk& w, const Declarator& d, std::string_view type
         addCaveat( w.def, "reference-member", f.name + ": a reference member's storage is unspecified" );
     }
 
-    // A3: a PER-FIELD `__attribute__((aligned(N)))` / `((packed))` changes this field's own placement, and
-    // the model has no argument evaluator for it — degrade to unknown-type exactly like resolveFieldType's
-    // own refusal for `alignas(N) int x` (AlignasFieldCase), an unknown size/align rather than a confidently
-    // wrong one. Every OTHER attribute (deprecated/unused/…) is a pure hint that changes no byte of the
-    // layout, so peelAttributeGroups already dropped it from typeSpec above with no caveat at all — this is
-    // the one place that distinction is made, deliberately narrow to keep a silent attribute silent.
+    // A3: a PER-FIELD `__attribute__((aligned(N)))` / `((packed))` (bare OR the GNU reserved-namespace
+    // `__aligned__` / `__packed__` spelling — attrHasKeyword normalises both to one classification, review
+    // round 2026-09-17) changes this field's own placement, and the model has no argument evaluator for
+    // it — degrade to unknown-type exactly like resolveFieldType's own refusal for `alignas(N) int x`
+    // (AlignasFieldCase), an unknown size/align rather than a confidently wrong one. Every OTHER attribute
+    // (deprecated/unused/…) is a pure hint that changes no byte of the layout, so peelAttributeGroups
+    // already dropped it from typeSpec above with no caveat at all — this is the one place that distinction
+    // is made, deliberately narrow to keep a silent attribute silent.
     for( std::string_view attr : d.attrGroups )
     {
-        if( containsWord( attr, "aligned" ) || containsWord( attr, "packed" ) )
+        if( attrHasKeyword( attr, "aligned" ) || attrHasKeyword( attr, "packed" ) )
         {
             t.known = false;
             break;

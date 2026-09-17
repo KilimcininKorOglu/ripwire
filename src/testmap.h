@@ -125,12 +125,13 @@ inline AffectedSeeds resolveAffectedSeeds( const IngestResult& ing, std::string_
         // the item VERBATIM — its own `file:NAME` colon must survive.
         const std::string_view pathPattern = stripLineLocator( item );
         bool                   fileMatched = false;
-        // #228/A1: matched against the ROOT-RELATIVE spelling (rootRelPath), never ing.files[f] raw — a
-        // directory above the crawl root (the checkout location under an absolute or trailing-slash root)
-        // must decide nothing, exactly like the isTestPath/isFixturePath call sites elsewhere in this file.
+        // #228/A1: matched against the ROOT-RELATIVE spelling (filePathContainsRootRel, graph.h), never
+        // ing.files[f] raw — a directory above the crawl root (the checkout location under an absolute or
+        // trailing-slash root) must decide nothing, exactly like the isTestPath/isFixturePath call sites
+        // elsewhere in this file.
         for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
         {
-            if( filePathContains( rootRelPath( ing, f ), pathPattern ) )
+            if( filePathContainsRootRel( ing, f, pathPattern ) )
             {
                 fileMatched = true;
                 break;
@@ -141,7 +142,7 @@ inline AffectedSeeds resolveAffectedSeeds( const IngestResult& ing, std::string_
             sel.sawFileItem = true;
             for( NodeId i = 0; i < NodeId( ing.symbols.size() ); ++i )
             {
-                if( filePathContains( rootRelPath( ing, ing.symbols[i].fileId ), pathPattern ) )
+                if( filePathContainsRootRel( ing, ing.symbols[i].fileId, pathPattern ) )
                 {
                     sel.seeds.push_back( i );
                 }
@@ -438,7 +439,7 @@ inline ExerciseSeeds resolveExerciseSeeds( const IngestResult& ing, std::string_
     for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
     {
         // #228/A1: same seam as resolveAffectedSeeds above — match the root-relative spelling.
-        if( !filePathContains( rootRelPath( ing, f ), pathPattern ) )
+        if( !filePathContainsRootRel( ing, f, pathPattern ) )
         {
             continue;
         }

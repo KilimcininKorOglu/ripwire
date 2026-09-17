@@ -340,6 +340,40 @@ has 'f n="x"' \
 expect_size  AttributeHarmlessFieldCase 12 4
 expect_field AttributeHarmlessFieldCase x 4 4
 
+# A3 (review round, found-items 2026-09-17): the GNU reserved-namespace double-underscore spelling
+# (`__aligned__`/`__packed__`) is the SAME attribute as the bare form and must degrade identically —
+# containsWord's word-boundary rule (an underscore counts as an identifier byte) missed it entirely, so
+# the field read modeled="1" with a confidently wrong sz/al/off. attrHasKeyword now strips one matching
+# leading+trailing "__" pair before comparing.
+expect_refused AttributeGnuAlignedFieldCase unknown-type
+expect_refused AttributeGnuPackedFieldCase  unknown-type
+run AttributeGnuAlignedFieldCase
+has 'f n="x"' \
+    && ok "AttributeGnuAlignedFieldCase: the __aligned__-decorated field is still COUNTED (not silently dropped)" \
+    || no "AttributeGnuAlignedFieldCase: field 'x' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+{ [ "$( field n sz )" = "4" ] && [ "$( field c sz )" = "1" ]; } \
+    && ok "AttributeGnuAlignedFieldCase: the plain neighbours (n, c) still size normally" \
+    || no "AttributeGnuAlignedFieldCase: a neighbour field lost its size: n=$( field n sz ) c=$( field c sz )"
+run AttributeGnuPackedFieldCase
+has 'f n="x"' \
+    && ok "AttributeGnuPackedFieldCase: the __packed__-decorated field is still COUNTED (not silently dropped)" \
+    || no "AttributeGnuPackedFieldCase: field 'x' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+
+# the layout-NEUTRAL half in the GNU spelling too: normalising __unused__ to "unused" must not make it
+# newly match aligned/packed by accident — this must stay fully modelled, same as AttributeHarmlessFieldCase.
+expect_size  AttributeGnuHarmlessFieldCase 12 4
+expect_field AttributeGnuHarmlessFieldCase x 4 4
+
+# A3 (review round): the C++11 standard attribute syntax ([[gnu::aligned(8)]] / [[gnu::packed]]) is never
+# specially peeled — pinned here so it cannot silently start being modelled as natural. Both already refuse
+# as a side effect of how the surrounding text fails to parse as a plain field.
+expect_refused AttributeStdAlignedFieldCase unknown-extent
+expect_refused AttributeStdPackedFieldCase  unknown-extent
+run AttributeStdAlignedFieldCase
+has 'f n="x"' \
+    && ok "AttributeStdAlignedFieldCase: the [[gnu::aligned(8)]]-decorated field is still COUNTED" \
+    || no "AttributeStdAlignedFieldCase: field 'x' vanished with no trace: $( printf '%s' "$L" | tr '<' '\n' | grep '^f ' )"
+
 run DecltypeFieldCase
 has 'f n="x"' \
     && ok "DecltypeFieldCase: the decltype field is still COUNTED (not silently dropped)" \
