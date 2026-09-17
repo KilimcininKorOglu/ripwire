@@ -528,7 +528,8 @@ It is not a per-PR leg on purpose. TSan builds already run often on contributors
 machines, and every PR already waits on the macOS runners, so a TSan leg on each push would cost more
 CI than it adds coverage. What a local run cannot promise is that someone ran it on what is actually on
 `main` before a tag, and once a day covers that. A scheduled run skips the heavy jobs when `main` has
-not moved since the last green scheduled run.
+not moved since the last green scheduled run and no `nightly-failure` issue is open; while that issue is open,
+every scheduled run checks again.
 
 **Where failures appear:** the workflow's run in the Actions tab, and one issue titled "Nightly checks
 failing on main" (label `nightly-failure`). A failing night on `main` opens it, or comments on it if it
