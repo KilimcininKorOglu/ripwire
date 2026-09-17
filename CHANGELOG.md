@@ -15,6 +15,22 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a skill file the scan could not read, or held a NUL byte, is now reported instead of passing
+
+`--scan-skills` counted an unreadable file (mode 000 in a readable folder, an I/O error) as `skipped=` and still
+answered `verdict="clean"` at exit 0, and `ripwire wrap` read the same file as "no findings", with one pathless
+degrade line on stderr however many files it hit. Both now score such a file CRITICAL and name it — a
+`SCAN-INCOMPLETE:file-unreadable` row on the artifact, a `cannot read skill file <path>` line on stderr — so
+`wrap` no longer emits the recipe over it without `--force`. The single-file `--scan-skill` already refused
+that path. A folder the scan cannot enter stays WARN: its contents cannot be copied either.
+`--scan-skills` also stops skipping a file because its first 8 KB hold a NUL byte: it scans it like any other
+file, as `--scan-skill` and `wrap` already did — a PNG icon a skill bundles is now read (and comes back clean)
+rather than skipped. `skipped=` counts unreadable files only.
+
+Gates: `test/skillscanreadcheck.sh` F-B3 (4) and (5), with the §B13.3 NUL-file arm re-pinned (`files="3"`, no
+`skipped=`); `test/codexwrapcheck.sh` unreadable-file arm (red on the unfixed binary, with a readable control)
+and a NUL-byte arm that pins `wrap`'s existing behaviour.
+
 ### Fixed — an `--arch` TO-template interval was rejected at parse time even when a real capture made it valid
 
 `deny path FROM -> TO` validates a TO template like `a{10,\1}` at parse time by compiling it once with a
