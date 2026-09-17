@@ -50,13 +50,16 @@
 #include "smallvec.h"
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
+#include "infra/Diagnostics.h"   // VERIFY — buildScopedRecvDecls' index-range precondition
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>       // fopen/fread — workspace-only config-file evidence (go.mod / tsconfig.json), §3.2
+#include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace rw
@@ -2055,6 +2058,145 @@ inline std::size_t sharedLocality( std::string_view a, std::string_view b ) noex
     return cut;
 }
 
+// P2-D Rule 2, PARAMETER receivers (2026-09-16, test/narrowcheck.sh arms 7-18): one DECLARATION of a receiver
+// name inside one definition — the scope its VarDecl record covers and the written type its Type/ParamType
+// record carries, joined on the record position the two share (Binding::startByte).
+// buildScopedRecvDecls (below) builds the table; Narrower::recvVarTypeName reads it.
+struct ScopedRecvDecl
+{
+    std::uint32_t declByte;      // Binding::startByte of the declaration's records
+    std::uint32_t spanStart;     // the VarDecl span: where the name denotes THIS declaration
+    std::uint32_t spanEnd;
+    std::uint32_t typeBinding;   // index into ing.bindings of the typed record, or one of the two sentinels below
+};
+static_assert( std::is_trivially_copyable_v<ScopedRecvDecl> && sizeof( ScopedRecvDecl ) == 16, "four u32 — an rw::svector element" );
+inline constexpr std::uint32_t kRecvDeclUntyped    = 0xFFFFFFFFu;   // no typed record at this declaration (`auto`, a capture)
+inline constexpr std::uint32_t kRecvDeclConflicted = 0xFFFFFFFEu;   // two typed records disagree — never narrows
+
+// the lexical table and the bindings its typeBinding indices point into, held together so they cannot be paired wrong
+struct ScopedRecvDecls
+{
+    // "<fromSymbol>#<var>" → that name's declarations in the definition, in declaration-byte order. Holds ONLY names
+    // with at least one ParamType record; every other name keeps the flat varType table, byte-identical.
+    HashMap<std::string, rw::SmallVec<ScopedRecvDecl, 1>> byName;
+    const std::vector<Binding>*                           bindings = nullptr;
+};
+
+// ── P2-D Rule 2 PARAMETER receivers: building the lexical declaration table (2026-09-16, test/narrowcheck.sh arms 7-18) ──
+// A ParamType record — a definition or lambda parameter, a typed range-for variable, a reference local — was read
+// by the field use-site index alone, so `int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` fell
+// through Rule 2 and the S6-C locality tie-break handed the site to Decoy::pick: one precise wrong edge, no amb=.
+// It cannot simply join the flat per-definition varType table: every one of those shapes is scoped narrower than
+// the definition or can be hidden by a nested redeclaration, and the naive fold was MEASURED to mint three precise
+// wrong edges on the gate fixture (arms 12-14: a range-for variable's type reaching a later `auto` loop of the same
+// name, a same-named field read after the loop, and a parameter hidden by an untyped loop variable). So for every
+// name with a ParamType record, this lists ALL its declarations in the definition — each VarDecl with its scope
+// span — and attaches each Type/ParamType record to the declaration whose VarDecl shares its record position;
+// Narrower::recvVarTypeName asks which one is innermost at the call site, and narrows on its type only when the type
+// was written UNQUALIFIED — a written type is its final segment alone, and a parameter's is often a library container
+// (`const std::map<K, V>&`) whose name an unrelated in-repo class shares (measured: three such precise wrong edges on a
+// private C++ corpus, arm 17; the qualified text rides Binding::importedName). A typed record with no VarDecl at its
+// position (a shape the shadow capture refuses) types nothing: a lost narrow, never a wrong one. Names with no
+// ParamType record are absent and keep the flat varType answer, byte-identically. Deterministic: ing.bindings is
+// totally ordered, lists are appended in that order, and nothing iterates the map into output.
+inline void attachRecvDeclType( ScopedRecvDecl& decl, std::uint32_t bindIndex, const std::vector<Binding>& bindings ) noexcept
+{
+    if( decl.typeBinding == kRecvDeclUntyped )
+    {
+        decl.typeBinding = bindIndex;
+    }
+    else if( decl.typeBinding != kRecvDeclConflicted && bindings[ decl.typeBinding ].typeName != bindings[ bindIndex ].typeName )
+    {
+        decl.typeBinding = kRecvDeclConflicted;   // one declaration, two written types — trust neither
+    }
+}
+
+// a binding record the lexical table can key: attributed to a definition, naming a variable
+inline bool isScopedBindRecord( const Binding& b ) noexcept
+{
+    return b.fromSymbol != kNoNode && !b.var.empty();
+}
+
+// the names the table covers: every "<fromSymbol>#<var>" with a ParamType record
+inline void addParamTypedNames( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    const auto isParamType = []( const Binding& b ) noexcept { return b.kind == LocalBindKind::ParamType && isScopedBindRecord( b ); };
+    table.byName.reserve( std::size_t( std::ranges::count_if( ing.bindings, isParamType ) ) );
+    for( const Binding& b : ing.bindings )
+    {
+        if( isParamType( b ) )
+        {
+            buildShadowKey( key, b.fromSymbol, b.var );
+            table.byName.try_emplace( key );
+        }
+    }
+}
+
+// every declaration of those names: the VarDecl records, in (file, byte) order — an exact repeat of the previous one
+// (the same declaration captured twice) is dropped, or it would tie with itself and refuse the site
+inline void addRecvDeclScopes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::VarDecl || !isScopedBindRecord( b ) )
+        {
+            continue;
+        }
+        buildShadowKey( key, b.fromSymbol, b.var );
+        const auto it = table.byName.find( key );
+        if( it == table.byName.end() )
+        {
+            continue;
+        }
+        const ScopedRecvDecl decl{ b.startByte, b.spanStart, b.spanEnd, kRecvDeclUntyped };
+        const bool repeat = !it->second.empty() && it->second.back().declByte == decl.declByte && it->second.back().spanStart == decl.spanStart
+                         && it->second.back().spanEnd == decl.spanEnd;
+        if( !repeat )
+        {
+            it->second.push_back( decl );
+        }
+    }
+}
+
+// each written type onto the declaration that shares its record position
+inline void attachRecvDeclTypes( const IngestResult& ing, ScopedRecvDecls& table, std::string& key )
+{
+    for( std::uint32_t bindIndex = 0; bindIndex < std::uint32_t( ing.bindings.size() ); ++bindIndex )
+    {
+        const Binding& b = ing.bindings[ bindIndex ];
+        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || !isScopedBindRecord( b ) || b.typeName.empty() )
+        {
+            continue;
+        }
+        buildShadowKey( key, b.fromSymbol, b.var );
+        const auto it = table.byName.find( key );
+        if( it == table.byName.end() )
+        {
+            continue;
+        }
+        for( ScopedRecvDecl& decl : it->second )
+        {
+            if( decl.declByte == b.startByte ) { attachRecvDeclType( decl, bindIndex, ing.bindings ); }
+        }
+    }
+}
+
+inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: Rule-2 lexical receiver declarations" );
+    VERIFY( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
+    ScopedRecvDecls table;
+    table.bindings = &ing.bindings;
+    std::string key;
+    addParamTypedNames( ing, table, key );
+    if( !table.byName.empty() )
+    {
+        addRecvDeclScopes( ing, table, key );
+        attachRecvDeclTypes( ing, table, key );
+    }
+    return table;
+}
+
 // One-hop receiver narrowing over the canonical scope::name → definition-ids map (built once by buildGraph).
 // Holds only const references to maps buildGraph owns — no state, no allocation, no copy of the symbol table.
 struct Narrower
@@ -2065,6 +2207,9 @@ struct Narrower
     // one scope) — looked up but never narrowed. buildGraph builds it from IngestResult::bindings. Empty when
     // there are no bindings, so Rule 2 simply never fires (degrades to the unchanged ladder).
     const HashMap<std::string, std::string>&             varType;
+    // Rule 2's LEXICAL table for names with a ParamType declaration (see ScopedRecvDecl above). A name found here is
+    // answered here ONLY — varType is not consulted.
+    const ScopedRecvDecls&                               scopedDecls;
     // P2-D Rule 3 include table: caller fileId → the sorted, deduped set of fileIds it #includes / imports
     // (resolved file→file by basename, exactly like graph.h::resolveIncludeAdj; the caller's own file is NEVER
     // in its own set). buildGraph builds it once from IngestResult::includes. Empty when the repo has no
@@ -2086,9 +2231,10 @@ struct Narrower
 
     explicit Narrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon,
                        const HashMap<std::string, std::string>&             vt,
+                       const ScopedRecvDecls&                               scoped,
                        const std::vector<std::vector<NodeId>>&              incl,
                        const std::vector<std::uint32_t>&                    symFile ) noexcept
-        : canonByName( canon ), varType( vt ), fileIncludes( incl ), symFileId( symFile ) {}
+        : canonByName( canon ), varType( vt ), scopedDecls( scoped ), fileIncludes( incl ), symFileId( symFile ) {}
 
     // append base-10 `n` to `dst` without an intermediate std::to_string allocation (matches to_string bytes).
     static void appendUint( std::string& dst, std::uint32_t n )
@@ -2154,7 +2300,8 @@ struct Narrower
     //
     // Airtight "no wrong narrow" (the contract): it narrows ONLY when ALL hold — (1) the call has a named
     // receiver variable; (2) that var has EXACTLY ONE type binding in this scope (an ambiguous var is tombstoned
-    // by buildGraph → empty type → no narrow); (3) the bound type defines `m` (canonByName, DEFS only). So the
+    // by buildGraph → empty type → no narrow) — or, for a name with a PARAMETER-typed declaration, the declaration
+    // in scope AT THE SITE has a written type (recvVarTypeName); (3) the bound type defines `m` (canonByName, DEFS only). So the
     // returned ids are always real `Foo::m` definitions the bare ladder could also reach — Rule 2 just picks the
     // type-correct one earlier. Any uncertainty (no binding, conflicting bindings, type has no such method) →
     // honest ambiguity via §2a, never a guess. Deterministic: canonByName insertion order = symbol-id order.
@@ -2173,22 +2320,17 @@ struct Narrower
             return nullptr; // file-scope call: no per-def binding scope
         }
 
-        // the var's resolved type in THIS scope. Empty value = tombstone (ambiguous var) → no narrow. Key built
-        // in the reused buffer (identical bytes to `std::to_string( r.fromSymbol ) + "#" + r.recvVar`).
-        keyBind.clear();
-        appendUint( keyBind, r.fromSymbol );
-        keyBind.push_back( '#' );
-        keyBind.append( r.recvVar );
-        const auto vit = varType.find( keyBind );
-        if( vit == varType.end() || vit->second.empty() )
+        // the var's type at THIS site. Empty = unbound, tombstoned, or an untyped declaration in scope → no narrow.
+        const std::string_view boundType = recvVarTypeName( r );
+        if( boundType.empty() )
         {
             return nullptr;
         }
 
         // resolve `m` against the bound type's own methods (defs only). Miss ⇒ degrade to §2a. Reused buffer,
-        // identical bytes to `vit->second + "::" + r.calleeName`.
+        // identical bytes to `boundType + "::" + r.calleeName`.
         keyScope.clear();
-        keyScope.append( vit->second ).append( "::" ).append( r.calleeName );
+        keyScope.append( boundType ).append( "::" ).append( r.calleeName );
         const auto it = canonByName.find( keyScope );
         if( it == canonByName.end() || it->second.size() == 0 )
         {
@@ -2510,18 +2652,66 @@ struct Narrower
         }
         if( r.recv == RecvKind::NamedVar && !r.recvVar.empty() && r.fromSymbol != kNoNode )
         {
-            keyBind.clear();
-            appendUint( keyBind, r.fromSymbol );
-            keyBind.push_back( '#' );
-            keyBind.append( r.recvVar );
-            const auto vit = varType.find( keyBind );
-            if( vit == varType.end() || vit->second.empty() )
-            {
-                return {}; // unbound or tombstoned (ambiguous) → no type
-            }
-            return std::string_view( vit->second );
+            return recvVarTypeName( r );   // unbound, tombstoned or untyped-in-scope → "" → no CHA-lite
         }
         return {};
+    }
+
+    // Rule 2's receiver-VARIABLE type at one call site — the ONE lookup Rule 2 and CHA-lite share, so they can never
+    // disagree about a receiver. A name with a ParamType declaration in this definition is answered LEXICALLY: the
+    // innermost declaration whose scope covers the site decides, and only its own written type counts — a
+    // parameter shadowed by an `auto` loop variable, a range-for variable read after its loop, and two declarations
+    // with one scope all answer "" — and so does a QUALIFIED written type (`const std::map<K, V>&`): the type name is
+    // its final segment and class names carry no namespace, so `map` cannot be told apart from an unrelated in-repo
+    // `map` (ingest_binds.h qualifiedNameText). Every other name reads the flat varType table exactly as before
+    // ("" = tombstone).
+    // KNOWN FLOOR, the span model's own: a range-for variable's span is the whole loop statement, so a same-named
+    // outer variable used inside the loop's own range expression reads as the loop variable.
+    std::string_view recvVarTypeName( const Reference& r ) const
+    {
+        // key built in the reused buffer (identical bytes to `std::to_string( r.fromSymbol ) + "#" + r.recvVar`)
+        keyBind.clear();
+        appendUint( keyBind, r.fromSymbol );
+        keyBind.push_back( '#' );
+        keyBind.append( r.recvVar );
+        if( const auto sit = scopedDecls.byName.find( keyBind ); sit != scopedDecls.byName.end() )
+        {
+            const ScopedRecvDecl* const innermost = innermostCoveringDecl( sit->second, r.startByte );
+            if( innermost == nullptr || innermost->typeBinding >= kRecvDeclConflicted )
+            {
+                return {};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
+            }
+            const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
+            return declared.importedName.empty() ? std::string_view( declared.typeName ) : std::string_view{};   // qualified → no narrow
+        }
+        const auto vit = varType.find( keyBind );
+        return ( vit == varType.end() ) ? std::string_view{} : std::string_view( vit->second );
+    }
+
+    // the innermost declaration whose span covers `siteByte`, or nullptr when none does or two declarations share
+    // the innermost span (one scope cannot declare a name twice, so a tie is evidence we mis-read — refuse). Spans
+    // inside one definition nest, so the innermost covering span is the one that starts LAST.
+    static const ScopedRecvDecl* innermostCoveringDecl( std::span<const ScopedRecvDecl> decls, std::uint32_t siteByte ) noexcept
+    {
+        const ScopedRecvDecl* best = nullptr;
+        bool                  tied = false;
+        for( const ScopedRecvDecl& d : decls )
+        {
+            if( siteByte < d.spanStart || siteByte >= d.spanEnd )
+            {
+                continue;
+            }
+            if( best == nullptr || d.spanStart > best->spanStart || ( d.spanStart == best->spanStart && d.spanEnd < best->spanEnd ) )
+            {
+                best = &d;
+                tied = false;
+            }
+            else if( d.spanStart == best->spanStart && d.spanEnd == best->spanEnd )
+            {
+                tied = true;
+            }
+        }
+        return tied ? nullptr : best;
     }
 
     // Rule 3 — import/include-based FILE narrow. Given the bare-name candidate defs `cands` for a call inside

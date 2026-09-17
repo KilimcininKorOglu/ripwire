@@ -1956,11 +1956,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const bool ffiActive = !pybindAlias.empty() || !externCAlias.empty();
 
-    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a
-    // `this->m()` / `self.m()` call to the caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call
-    // to the variable's type; Rule 3 pins a call to the ONE file the caller includes that defines it — all
-    // BEFORE the bare-name spray below. See resolve.h.
-    const Narrower narrower( canonByName, varType, fileIncludes, symFileId );
+    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a `this->m()` / `self.m()` call to the
+    // caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call to the variable's type (a parameter's through resolve.h's lexical table);
+    // Rule 3 pins a call to the ONE file the caller includes that defines it — all BEFORE the bare-name spray below. See resolve.h.
+    const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
+    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The

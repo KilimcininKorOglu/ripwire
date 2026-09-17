@@ -175,6 +175,11 @@ SHP="$( callees shadowParam )"
 printf '%s\n' "$SHP" | grep -q 'a.cpp:2"' \
     && ok "(s1) shadowParam( Decoy& m_x ) keeps its Decoy::acquire edge — the param shadows field m_x" \
     || no "(s1) shadowParam lost Decoy::acquire — the field type was wrongly narrowed over the shadowing param"
+# since 2026-09-16 Rule 2 reads the parameter's written type (narrowcheck arms 7-18), so the parameter's Decoy is
+# the WHOLE answer — main's binary still linked the field's Pool::acquire here as half of a split
+printf '%s\n' "$SHP" | grep -q 'a.cpp:1"' \
+    && no "(s1) shadowParam linked to Pool::acquire — the FIELD type beat the shadowing Decoy& parameter" \
+    || ok "(s1) shadowParam field type Pool NOT linked (the typed parameter shadows the field)"
 SHL="$( callees shadowLocal )"
 printf '%s\n' "$SHL" | grep -q 'a.cpp:2"' \
     && ok "(s2) shadowLocal's local Decoy m_y still wins (Rule 2 narrow preserved)" \
@@ -193,13 +198,14 @@ TS="$( callees to_go )"
     && ok "(e-ts) to_go() this.member.compute() stays honestly split (TS receivers uncaptured — disclosed limit)" \
     || no "(e-ts) to_go() lost its honest split — TS receiver behavior must be unchanged this round"
 
-# ── (h) the header gauge agrees with the arms above: exactly the 7 honest splits remain ambiguous
-#        (expl, unk, freeuse, multi, shadowParam, po_go, to_go — run/ptr/inh_go narrowed, shadowLocal was Rule 2).
+# ── (h) the header gauge agrees with the arms above: exactly the 6 honest splits remain ambiguous
+#        (expl, unk, freeuse, multi, po_go, to_go — run/ptr/inh_go narrowed, shadowLocal and shadowParam are
+#        Rule 2; shadowParam was a split until Rule 2 read parameter types, 2026-09-16, which moved this from 7).
 #        Counted from the fixture, not guessed: flip arms above before touching this number. ──
 AMB="$( printf '%s\n' "$MAP" | grep -o 'ambiguous=[0-9]*' | head -1 )"
-[ "$AMB" = "ambiguous=7" ] \
-    && ok "(h) header gauge ambiguous=7 — only the honest splits remain" \
-    || no "(h) header gauge is '$AMB', expected ambiguous=7 (3 field-typed calls narrowed, 7 honest splits kept)"
+[ "$AMB" = "ambiguous=6" ] \
+    && ok "(h) header gauge ambiguous=6 — only the honest splits remain" \
+    || no "(h) header gauge is '$AMB', expected ambiguous=6 (3 field-typed calls narrowed, 6 honest splits kept)"
 
 # ── (n) same-NAMED class collision (FIX2): conflicting same-named fields tombstone — NEITHER Dup::go narrows ──
 MAP2="$( "$BIN" "$FIX2" --no-cache 2>/dev/null | tr '>' '\n' )"
@@ -222,7 +228,7 @@ GO2="$( "$BIN" "$FIX2" --callees=go --no-cache 2>/dev/null | grep -o '<callees.*
 # KNOWN GAP arm means the gap moved: rewrite that arm to assert the fixed behaviour, never delete it.
 # The two CONTROLS are not gaps. They are TRUE edges any fix must keep: a typed user-object receiver, and a
 # literal receiver whose method the repo itself defines on String.prototype (a literal CAN reach user code).
-# Separate corpora on purpose: (h)'s ambiguous=7 is counted over $FIX and must not move.
+# Separate corpora on purpose: (h)'s ambiguous=6 is counted over $FIX and must not move.
 LIT="$TMP/tslitfix"; OBJ="$TMP/tsobjfix"
 mkdir -p "$LIT/src" "$OBJ/src"
 cat >"$LIT/src/literals.ts" <<'EOF'
