@@ -3019,7 +3019,7 @@ Input file:
 AddressSanitizer:DEADLYSIGNAL
 =================================================================
 ==41337==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000018 (pc 0x000102f4a1c8 bp 0x00016d2f1a40 sp 0x00016d2f19e0 T0)
-    #0 0x102f4a1c8 in rw::rankGraphTeleport(Graph const&, std::vector<float> const&, float) src/graph.h:3766
+    #0 0x102f4a1c8 in rw::rankGraphTeleport(Graph const&, std::vector<float> const&, float) src/graph.h:3764
     #1 0x102f3e884 in rw::rankGraph(Graph const&, float) src/graph.h:3447
     #2 0x102e11f30 in runDefaultMap(MainDispatch const&) src/main.cpp:1441
     #3 0x102e01a44 in main src/main.cpp:3475
@@ -3028,10 +3028,10 @@ AddressSanitizer:DEADLYSIGNAL
 `````
 
 `````
-<ctx task="&lt;stdin&gt;" next="--slice=@src/graph.h:3766" est_tokens="2266">
+<ctx task="&lt;stdin&gt;" next="--slice=@src/graph.h:3764" est_tokens="2266">
 <!-- ripwire trace-to-locus for "<stdin>": frames of a asan trace mapped onto indexed symbols, ranked INNERMOST-first. frame_lines=5 parsed=4 in_corpus=4 skipped=0 (out of every root - listed, never ranked) merged=0 unresolved=0. frame_lines = frame-shaped lines the INPUT presented (a #N marker, a leading "at ", or a Python File "..." line, plus every line that did extract); parsed = how many of them yielded a usable path:line, so frame_lines - parsed is the count that matched no format shape and enters no bucket below. in_corpus = suspects + merged + unresolved, so every file-matched frame is visible: merged= folded into an already-claimed symbol, unresolved= listed as <unresolved> (indexed file, no def by name or by line). resolved_by="name" means the frame's OWN function name bound to a unique def (line_encloses=, when present, names the different symbol today's line sits in: the tell that the trace predates this checkout); resolved_by="line" means the name was absent, unknown or ambiguous, so the def enclosing that line was used. p= on a frame is the FRAME's own locator (the trace's path:line, verbatim); definition sites live in <sigs> l=. On a <sigs> row (rows in r= order): n=name, sc=enclosing scope (when scoped; the full id is p::sc::n), p=file, t=kind, cx=cyclomatic complexity, ccx=cognitive complexity, in=reuse-count (absent = not measured, never a false 0). rank 1 = the innermost in-corpus frame; its FULL body follows, other suspects as signatures. budget=7500 bytes (allowance 9583 bytes = ceiling + the single-entry overshoot a whole first signature costs). On the root: est_tokens= prices the delivered bundle in tokens, budget_tokens= is the token target you passed (absent when none), max_tokens= is the body ceiling you passed via the max_tokens flag (absent when none); over_ceiling= is 1 when est_tokens exceeds the smallest ceiling named here (the bundle is then complete, not trimmed). next= is the one pasteable follow-up: the slice at the innermost in-corpus frame (@FILE:LINE); absent when none landed. -->
 <trace src="&lt;stdin&gt;" format="asan" frame_lines="5" parsed="4" in_corpus="4" skipped="0" merged="0" unresolved="0" suspects="4">
-<frame rank="1" n="rankGraphTeleport" t="fn" p="src/graph.h:3766" resolved_by="name" innermost="1"/>
+<frame rank="1" n="rankGraphTeleport" t="fn" p="src/graph.h:3764" resolved_by="name" innermost="1"/>
 <frame rank="2" n="rankGraph" t="fn" p="src/graph.h:3447" resolved_by="name"/>
 <frame rank="3" n="runDefaultMap" t="fn" p="src/main.cpp:1441" resolved_by="name"/>
 <frame rank="4" n="main" t="fn" p="src/main.cpp:3475" resolved_by="name"/>
@@ -3921,29 +3921,29 @@ ripwire 0.6.1 (dev, AppleClang 21.0.0.21000101, emit=std::print, built_from=f8d4
 
 # navigate — seeds, claims, slices, shapes
 
-## `./build/ripwire . --at=src/graph.h:3766`
+## `./build/ripwire . --at=src/graph.h:3764`
 
 *Hold a LOCATION, not a name: the enclosing-definition chain at FILE:LINE (a compiler error, a diff hunk, a stack frame), outermost -> innermost.*
 
 `````
 <!-- ripwire at: the ENCLOSING-DEFINITION CHAIN at one FILE:LINE seed. p= the resolved file, l= the 1-based seed line, sym= the innermost enclosing definition's name (what the same seed resolves to in a selector position), chain= the row count. Rows are INDEXED definitions only, outermost first, innermost last: n= the definition's name, t= its kind tag, l= its own start line, el= its end line (1-based, inclusive). A namespace or any construct the index does not carry is NOT a row, so an outer scope can be absent rather than misnamed; a seed line inside no indexed definition is refused, never served as an empty chain. The same seed composes into any SYM selector as @FILE:LINE (callers, callees, impact, around, expand, uses, edit-check, slice, safe-delete, path, connect) and resolves to the innermost row. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<at p="src/graph.h" l="3766" sym="rankGraphTeleport" chain="1" root=".">
-<s n="rankGraphTeleport" t="fn" l="3764" el="3792"/>
+<at p="src/graph.h" l="3764" sym="rankGraphTeleport" chain="1" root=".">
+<s n="rankGraphTeleport" t="fn" l="3762" el="3790"/>
 </at>
 `````
 
-## `./build/ripwire . --callers=@src/graph.h:3766`
+## `./build/ripwire . --callers=@src/graph.h:3764`
 
 *The same seed in a SELECTOR position: @FILE:LINE resolves to the innermost enclosing definition, then --callers runs on it.*
 
 `````
 <!-- ripwire callers/callees: the 1-hop call hierarchy read off the call graph — the callers form lists symbols that CALL of=; the callees form lists symbols of= itself calls. of= is the selector you passed, defs= how many DEFINITIONS it resolved to (rows UNION every def's neighbours), count= the DISTINCT neighbour symbols (a floor, per counts_floor=), windowed by limit= and offset=. A neighbour that is an indexed function-like #define is a macro row (t="macro", role="macro" on the XML row): the edge crosses a macro expansion, not a plain call — rows carry no role= otherwise. Rows are ordered SOURCE first, then test/bench, then docs, by path within a tier. hop_tested=/hop_untested= partition count= by the tested= lens below (1-hop, never transitive). tested="1" on a row means an indexed test transitively reaches it (never 0, omitted when it does not). BLIND SPOT the test-gate legend also names: only a CALL EDGE from an INDEXED test symbol counts here, so a shell or CLI-level test running a built binary as a SUBPROCESS is invisible to it and a repo tested that way reads all-untested. Read untested= as no in-process test reaches it, not as no test covers it. next= is the one pasteable follow-up (the uses verb on this selector: the call sites). counts_floor="1" means every count here is a FLOOR, never a total: edges are extracted from source TEXT by NAME. Missing: dynamic dispatch (virtual/interface/duck-typed), a most-vexing-parse declaration with no call expression, a function-pointer/callback bound to more than one function in scope (reassigned, table-indexed, lambda-bound, or address-taken/reference-bound), and a plain-name binding (fp=handler) whose variable type is not PROVABLY a function pointer (a same-file typedef/declarator; a HEADER typedef is missed; auto/template types are read as unpinned, so KEPT). A macro-generated call site is role="macro" only when its name uniquely names an indexed function-like #define (C-family, t="macro"); a shared name stays a plain call, an unindexed macro is no edge. Read a zero as "none found", never as "none exists". graph_ambiguous=/graph_unresolved= are the whole graph's resolver gauge (calls split over several defs / calls whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved=. graph_unindexed=N is a third gauge: files no grammar could read (the map header's unindexed=), whose calls raise neither gauge above; absent when zero, and so is this sentence. COUNTING UNIT differs by verb: callers, callees, edit-check, graph-query and pr-context counts are DISTINCT SYMBOLS (repeated calls from one caller, and calls to two overloads, collapse into ONE row; multiplicity survives only in the call graph's edge weight). The reach counts (impact's reaches=, pr-context's dependents=) are the size of a transitive reach SET, each symbol counted once. The uses verb counts call SITES, one row per occurrence — a larger count there for the same symbol is these units agreeing, not disagreeing. The map header's edges= is a unit again different — distinct (caller,callee) PAIRS — and that document carries neither this marker nor this clause. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<callers of="@src/graph.h:3766" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="8132" graph_unresolved="5156" graph_unindexed="221" counts_floor="1" next="--uses=@src/graph.h:3766">
+<callers of="@src/graph.h:3764" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="8142" graph_unresolved="5170" graph_unindexed="221" counts_floor="1" next="--uses=@src/graph.h:3764">
 <s t="fn" n="runEval" p="src/eval.h:171"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3805"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:4368"/>
+<s t="fn" n="rankGraph" p="src/graph.h:3803"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:4409"/>
 <s t="fn" n="churnDecayRanking" p="src/main.cpp:1281"/>
 <s t="fn" n="churnRankedGraph" p="src/main.cpp:1316"/>
 <s t="fn" n="runDefaultMap" p="src/main.cpp:1503"/>
@@ -4840,14 +4840,14 @@ ripwire: --no-stable is read only by --mcp/--listen (it opts out of the stable o
 **exit code: 4**
 
 `````
-<ctx task="run-trace: cat <scratch>/aux/asan_trace_now.txt; exit 1" next="--slice=@src/graph.h:3766" est_tokens="3227">
+<ctx task="run-trace: cat <scratch>/aux/asan_trace_now.txt; exit 1" next="--slice=@src/graph.h:3764" est_tokens="3227">
 <!-- ripwire trace-to-locus for "run-trace: cat <scratch>/aux/asan_trace_now.txt; exit 1": frames of a asan trace mapped onto indexed symbols, ranked INNERMOST-first. frame_lines=5 parsed=4 in_corpus=4 skipped=0 (out of every root - listed, never ranked) merged=0 unresolved=0. frame_lines = frame-shaped lines the INPUT presented (a #N marker, a leading "at ", or a Python File "..." line, plus every line that did extract); parsed = how many of them yielded a usable path:line, so frame_lines - parsed is the count that matched no format shape and enters no bucket below. in_corpus = suspects + merged + unresolved, so every file-matched frame is visible: merged= folded into an already-claimed symbol, unresolved= listed as <unresolved> (indexed file, no def by name or by line). resolved_by="name" means the frame's OWN function name bound to a unique def (line_encloses=, when present, names the different symbol today's line sits in: the tell that the trace predates this checkout); resolved_by="line" means the name was absent, unknown or ambiguous, so the def enclosing that line was used. p= on a frame is the FRAME's own locator (the trace's path:line, verbatim); definition sites live in <sigs> l=. On a <sigs> row (rows in r= order): n=name, sc=enclosing scope (when scoped; the full id is p::sc::n), p=file, t=kind, cx=cyclomatic complexity, ccx=cognitive complexity, in=reuse-count (absent = not measured, never a false 0). rank 1 = the innermost in-corpus frame; its FULL body follows, other suspects as signatures. budget=7500 bytes (allowance 9583 bytes = ceiling + the single-entry overshoot a whole first signature costs). On the root: est_tokens= prices the delivered bundle in tokens, budget_tokens= is the token target you passed (absent when none), max_tokens= is the body ceiling you passed via the max_tokens flag (absent when none); over_ceiling= is 1 when est_tokens exceeds the smallest ceiling named here (the bundle is then complete, not trimmed). next= is the one pasteable follow-up: the slice at the innermost in-corpus frame (@FILE:LINE); absent when none landed. -->
 <!-- ripwire run-trace: executed "cat <scratch>/aux/asan_trace_now.txt; exit 1" under sh -c (the make trust model: your user, inherited environment, stdin=/dev/null, NO sandbox), stdout+stderr captured interleaved. On <run>: exit= the command's OWN exit code; signal= the signal that killed it; timed_out="1" = the timeout_s= cap killed the whole process group (an honest TIMEOUT, never an empty success); duration_ms= wall clock; lines= the capture's non-empty line count; bytes= the whole capture; dropped_bytes= middle bytes the capture cap dropped (head+tail kept). duration_ms and the captured output are MEASURED, not deterministic (and not claimed to be); every byte derived FROM the captured text - the <lines> cut and any mapping - is a deterministic function of it. <lines view="tail"> = the last shown= of total= output lines; view="relevant" = shown= of the relevant= error-marked / frame-shaped lines out of total= (capped="1" = first+last halves kept, the omitted middle disclosed inline). The command FAILED and the captured text carried mappable frames: the <trace>/<sigs>/<bodies> bundle below is the byte-deterministic from-trace mapping of that text (its own legend precedes it above). est_tokens= on the root prices duration_ms= at a fixed width (6 digits), so the price is deterministic while the value is measured. -->
 <run exit="1" duration_ms="6" timeout_s="600" lines="9" bytes="604"/>
 <lines view="relevant" shown="7" relevant="7" total="9">
 <![CDATA[AddressSanitizer:DEADLYSIGNAL
 ==41337==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000018 (pc 0x000102f4a1c8 bp 0x00016d2f1a40 sp 0x00016d2f19e0 T0)
-    #0 0x102f4a1c8 in rw::rankGraphTeleport(Graph const&, std::vector<float> const&, float) src/graph.h:3766
+    #0 0x102f4a1c8 in rw::rankGraphTeleport(Graph const&, std::vector<float> const&, float) src/graph.h:3764
     #1 0x102f3e884 in rw::rankGraph(Graph const&, float) src/graph.h:3447
     #2 0x102e11f30 in runDefaultMap(MainDispatch const&) src/main.cpp:1441
     #3 0x102e01a44 in main src/main.cpp:3475
