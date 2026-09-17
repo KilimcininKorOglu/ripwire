@@ -1732,6 +1732,88 @@ without the template-argument strip.
   `--mcp`/`--listen` — one protocol per stdin. The design record is `docs/LSP.md`; the gate is
   `test/lspcheck.sh` (16 arms, a scripted client speaking real LSP framing).
 
+### Fixed — a C++ member named like a class was read as that class
+
+Rule 2c reads `Cls.m()` through a class name as a call on that class. It checked that no local shadowed the name, but
+never checked members. Inside a C++ member function, name lookup finds a member of the class or of a base before any
+namespace-scope class, so the token is the member. Two graded llvm-project instances resolved to ONE precise, wrong
+edge:
+
+- `LVReader.cpp:175 OutputFile->keep()`, whose member is `std::unique_ptr<ToolOutputFile> OutputFile`, went to
+  `VirtualOutputFile.cpp OutputFile::keep`.
+- `SampleProfile.cpp:1962 Reader->read()`, whose base-class member is `std::unique_ptr<SampleProfileReader> Reader`,
+  went to msgpack `Reader::read`.
+
+Rule 2c now refuses a C++/ObjC receiver that names a member of the caller's class or of a class up its bases. The
+check reads the member side table, which holds every declarator shape, including the `std::unique_ptr<T>` members
+Rule 2b's type table never records. A walk stopped by its 16-name cap also refuses. A raw-pointer member such as
+`Widget* Raw;` is then typed by Rule 2b. Python keeps the route: its attributes are reached only through `self.`.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), against the alias fix above:
+
+| Corpus | Sites retargeted | Changed target | Lost edge |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 0 | 0 | 0 |
+| llvm-project @ 4d5358b1d | 1,398 | 1,346 | 52 |
+
+Most llvm sites move from a namesake class to the member's real type: `IRBuilderBase` → `CGBuilderTy` overrides,
+`Token` → `MIToken`, `Context` → `ASTContext`. The order matters. Without the alias fix, the same refusal lost 1,772
+llvm edges and graded net-worse (60 blinded sites: 23 better / 3 same / 34 worse), because clang's `CGBuilderTy Builder`
+had reached `IRBuilderBase` only through an unrelated class `Builder : IRBuilder` in HexagonVectorCombine.cpp.
+With the alias fix in place, a seeded, blinded sample of 60 of the 1,398 llvm retargets graded 51 better, 7 same and
+2 worse. The worse sites are one Rule 2b floor: `using CGBuilderBaseTy::CreateGEP;` re-exports base overloads the
+class's own overload set shadows.
+
+Neither instance above gets an edge in a scratch composition with the assignment-type lane, where they surfaced.
+
+Gate: `test/clsrecvcheck.sh` arms H–N (a smart-pointer member, a raw-pointer member, a base's member, a class template
+base's member, a member past the walk cap), red on the unfixed binary. Two controls hold: the same call from a class
+without such a member keeps the route, and a Python `self.Interval` attribute does not veto `Interval.validate(v)`.
+
+### Fixed — a base class or member type reached through a C++ `typedef` or `using` alias ended the base walk
+
+The resolver walks a type's bases by class NAME, and an alias names no class. In llvm-project's clang CodeGen,
+`class CGBuilderTy : public CGBuilderBaseTy` with `typedef llvm::IRBuilder<llvm::TargetFolder, CGBuilderInserterTy>
+CGBuilderBaseTy;` stopped at `CGBuilderBaseTy`, so a member `CGBuilderTy Builder;` never reached
+`IRBuilderBase::CreateCall`. The same happened for `BuilderType Builder;` (a class-scope typedef), `BuilderTy Builder;`
+(a class-scope `using`) and every member or base typed through an alias of a class. Those calls got no edge, or a
+split over every same-named method in the corpus.
+
+The C/C++/ObjC capture now records a plain alias's target class, and the base walk continues at the target. Several
+things are deliberately excluded:
+
+- **Not every alias records.** A pointer, reference, array or function alias records nothing, and neither does a
+  primitive, dependent or `decltype` target, or an alias local to a function body.
+- **A target written in `std` is refused**, as a `std::` member type already is.
+- **An alias named like a real class elsewhere is not followed.** Classes are keyed by bare name, so `using Base = Foo;`
+  would otherwise hand `Foo`'s methods to an unrelated class `Base`.
+- **The alias is not an inheritance fact.** It gains no `--lego` implementor, no `role="extends"` use-site and no
+  HAS-A row.
+
+**Alias templates are covered too.** `template <typename T> using SetTy = SmallPtrSet<T, 8>;` is an `alias_declaration`
+inside a template declaration, so a member typed `SetTy<Foo>` walks on to `SmallPtrSet` and its bases.
+
+The record rides the existing compose record shape, so the cache format is unchanged; `kParserVer` moves to 112 (claimed 111; integration/train-4 assigns 112 after the vexing-parse locals lane's 111).
+
+**Known floor.** An alias records its target's class name without template arguments. So when an argument is the enclosing
+template's own parameter, the walk lands on the primary template alone. For example, with `typedef SubT<marks> subtree;` it
+drops an explicit specialization such as `SubT<true>` that the argument can also select. That is a lost candidate, never a
+wrong-class pin. rocksdb's `omt_impl.h` hits it through `subtree_templated<true>`; before this change those calls split
+over both. It is pinned as `test/fieldnarrowcheck.sh` arm t11, whose control `typedef SubT<false>` narrows correctly.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), main → this change:
+
+| Corpus | Sites retargeted | Newly bound | Lost |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 366 | +111 | 0 |
+| llvm-project @ 4d5358b1d | 2,649 | +1,146 | 0 |
+
+A seeded, blinded sample of 60 retargets (25 rocksdb, 35 llvm) was graded against source: 57 better, 2 same, 1 worse.
+The worse site is a class template specialization that shares the primary template's name.
+
+Gate: `test/fieldnarrowcheck.sh` arm t. Arms t1–t4 are red on the unfixed binary. Arms t5, t9, t10 and t6's HAS-A row
+each went red when the one guard they protect was disabled in a scratch build.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
