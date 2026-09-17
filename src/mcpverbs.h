@@ -3368,7 +3368,7 @@ inline std::string mcpNoBaselineMessage( const rw::quality::BaselineSelection& b
     }
     if( baseSel.isSidecarForeign() )
     {
-        return sidecarName + " was pinned by another ripwire build (its producer stamp does not name this server's sources, and a dead set depends on how calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run quality_delta with the build that pinned it, or re-pin with the quality_baseline verb BEFORE the change you want to measure";
+        return sidecarName + " was pinned by another ripwire build (its producer stamp does not name this server's sources, and a dead set depends on how calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run quality_delta with the build that pinned it, or re-pin on a clean tree (commit or stash first) with the quality_baseline verb BEFORE the change you want to measure";
     }
     if( baseSel.isSidecarStale() )
     {

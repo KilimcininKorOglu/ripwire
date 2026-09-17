@@ -110,22 +110,26 @@ tree reported a gating `dead-code` row on `Pool::launder` and exited 2 (the guar
 In the other order a real regression disappeared: deleting the only `std::launder` call exited 0 where the unguarded
 build, against its own pin, exits 2.
 
-The sidecar is now format v6 and carries a `producer` record, the same source identity the snapshot cache uses. A pin
-at the current `HEAD` whose producer is missing or names another build is not the floor: `--quality-delta` falls back to
+The sidecar is now format v6 and carries a `producer` record, the same source identity the snapshot cache uses. A pin at
+the current `HEAD` whose producer is missing or names another build is not the floor: `--quality-delta` falls back to
 the `HEAD` tree this build computes and says so as `baseline="git-HEAD (foreign sidecar ignored)"`, with one stderr line
-and a legend sentence naming the two ways back (run the delta with the build that pinned it, or re-pin). Unlike a stale
-pin the file is never deleted, by the CLI or by the MCP `quality_delta` verb, because the build that wrote it can still
-use it. A root with no git has nothing to fall back to and exits 1 naming the foreign pin. Demoting the dead-code rows
-instead was ruled out: it cannot surface a regression whose row never appears, and another build can compute any kind
-differently. A pin at another commit is still stale first and still self-heals. On the same two fixed builds all four
-cross-build runs give the same-build answer: exit 0 and exit 2, both marked foreign, the sidecar still on disk.
+and a legend sentence naming the two ways back (run the delta with the build that pinned it, or re-pin on a clean tree
+(commit or stash first)). Unlike a stale pin the file is never deleted, by the CLI or by the MCP `quality_delta` verb,
+because the build that wrote it can still use it. A root with no git has nothing to fall back to and exits 1 naming the
+foreign pin. Demoting the dead-code rows instead was ruled out: it cannot surface a regression whose row never appears,
+and another build can compute any kind differently. A pin at another commit is still stale first and still self-heals.
+On the same two fixed builds all four cross-build runs give the same-build answer: exit 0 and exit 2, both marked
+foreign, the sidecar still on disk.
 
 Every existing sidecar is v5, which only a build without the stamp can have written, so the version rule refuses it.
 That refusal used to be reported as `baseline="git-HEAD"`, which means no sidecar existed, under a stderr line saying
 there was no `.ripwire_quality_baseline`, one line below the line naming the refused file. It now reads
 `baseline="git-HEAD (sidecar unreadable)"` with the matching stderr line, and a root with no git no longer says "no
-<file>" about an unreadable sidecar on either arm. Upgrading costs one re-pin. A v6 pin read by an older binary is
-refused the same way rather than honored without its stamp.
+<file>" about an unreadable sidecar on either arm. Upgrading costs one re-pin on a clean tree (commit or stash first).
+An older binary also refuses a v6 pin rather than honoring it without its stamp, but reports the refusal the old way, as
+`baseline="git-HEAD"` with a line saying there is no `.ripwire_quality_baseline`; the file is intact. A v5 pin left at
+an older commit is no longer removed by the stale-pin self-heal: it is refused as unreadable, with two stderr lines on
+every run, until it is re-pinned or deleted.
 
 Gate: `test/qbaselineproducercheck.sh`, 26 rows. Matched pairs over a real pin: dead records dropped (or one added)
 with the producer kept, a control that must change the answer and does, and the same forgery with one hex digit of the
@@ -181,32 +185,35 @@ other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, a
 
 ### Fixed — an answer depended on how the root was typed (`ripwire .` and `ripwire "$PWD"` disagreed)
 
-Reported by **@hnipps** in #228: `--quality-delta` on an unchanged tree gated. Part of that report is how the
-root is spelled, and it was a graph defect, not a delta one. The crawl stores every path with the root exactly
-as typed, and the include/import index and the path predicates read that spelling raw. Three things followed.
-Python's root-relative import probe joined onto an empty base, which is the crawl root only under `ripwire .`.
-Under `"$PWD"`, which is every MCP session and the `--quality-delta` HEAD side (always an absolute temp root),
-`from pkg.store import load` stopped resolving and the name ladder bound a same-directory `load` instead. A root
-typed `../repo` lost every include and import edge in every language, because `lexicalNormalize` refuses a path
-that starts above its base. And a checkout that merely lives under a `tests/` or `fixtures/` directory had every
-file tagged `layer="test"`, exempted from dead-code and seeded as a test under an absolute root, and none of that
-under `.`. The fix is one seam: `ingest()` records the root once, and `rootRelPath` (`src/model.h`) gives the
-root-relative view (a prefix strip, no syscall, no allocation). The include/import index, the Python/JS/C
-declaration indexes, the module vocabularies, the test, fixture, layer and tier predicates, the path-mention
-and stack-trace suffix matches, the `--lint` byte cap and the map's byte model now read that view. Stored and
-printed paths are unchanged. `rootRelativeUri` also trims a trailing `/`, so `--pack-task` rows stop printing the
-whole absolute path under `"$PWD/"`. On a shallow Django clone (2b30f62, 3,449 indexed files, `--no-cache`, map
-header), `"$PWD"` went from 62,591 edges, `ambiguous=3135` and `declined=49153` to what `.` always gave: 74,972,
-5,958 and 40,681: 12,381 more (caller, callee) edges, and more calls reaching a definition set at all, which is
-why the ambiguous gauge rises with them. On the
-same clone, `--quality-delta` with a fresh cache gated 14 rows under `.` and `./`, 8 under `../dj` and 0 under
-`"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped to `order=important-last(auto:fill)` under
-`"$PWD"` alone and now agrees. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is
-never served. `test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and
-`../name`) to byte-identical output across the committed four-file repro, eight language import fixtures and a
-C++ header selector whose answer rests on an include proof. It also checks a tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme
-upgrade. On origin/main it fails 57 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules,
-sparse checkouts, skip-worktree, `--no-ignore`) stays open.
+Reported by **@hnipps** in #228: `--quality-delta` on an unchanged tree gated. Part of that report is how the root is
+spelled, and it was a graph defect, not a delta one. The crawl stores every path with the root exactly as typed, and the
+include/import index and the path predicates read that spelling raw. Three things followed. Python's root-relative
+import probe joined onto an empty base, which is the crawl root only under `ripwire .`. Under `"$PWD"`, which is every
+MCP session and the `--quality-delta` HEAD side (always an absolute temp root), `from pkg.store import load` stopped
+resolving and the name ladder bound a same-directory `load` instead. A root typed `../repo` lost every include and
+import edge in every language, because `lexicalNormalize` refuses a path that starts above its base. And a checkout that
+merely lives under a `tests/` or `fixtures/` directory had every file tagged `layer="test"`, exempted from dead-code and
+seeded as a test under an absolute root, and none of that under `.`. The fix is one seam: `ingest()` records the root
+once, and `rootRelPath` (`src/model.h`) gives the root-relative view (a prefix strip, no syscall, no allocation). The
+include/import index, the Python/JS/C declaration indexes, the module vocabularies, the test, fixture, layer and tier
+predicates, the path-mention and stack-trace suffix matches, the `--lint` byte cap and the map's byte model now read
+that view. Stored and printed paths are unchanged. `rootRelativeUri` also trims a trailing `/`, so `--pack-task` rows
+stop printing the whole absolute path under `"$PWD/"`. On a shallow Django clone (2b30f62, 3,449 indexed files,
+`--no-cache`, map header), `"$PWD"` went from 62,591 edges, `ambiguous=3135` and `declined=49153` to what `.` always
+gave: 74,972, 5,958 and 40,681: 12,381 more (caller, callee) edges, and more calls reaching a definition set at all,
+which is why the ambiguous gauge rises with them. On the same clone, `--quality-delta` with a fresh cache gated 14 rows
+under `.` and `./`, 8 under `../dj` and 0 under `"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped
+to `order=important-last(auto:fill)` under `"$PWD"` alone and now agrees. Rooting at a test directory now answers the
+way `cd tests && ripwire .` does: `ripwire tests/` no longer counts its own files as tests (no `layer="test"`, no test
+seeds for `--affected`/`--test-gate`, no dead-code exemption). The `.` answer itself moves slightly on byte-capped
+output, because the byte models now charge a path as printed: the default `--lint` page on this repo went from 680 to
+689 rows. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is never served.
+`test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and `../name`) to
+byte-identical output, once the printed `root=` and `est_tokens=` are normalised, across the committed four-file repro,
+eight language import fixtures and a C++ header selector whose answer rests on an include proof. It also checks a
+tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme upgrade. On origin/main it
+fails 57 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules, sparse checkouts, skip-worktree,
+`--no-ignore`) stays open.
 
 ### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
 

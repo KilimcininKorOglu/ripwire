@@ -1067,10 +1067,11 @@ struct IngestResult
 // handful of checkouts is the use case; hundreds of roots is a mis-glued path list, refused loudly.
 inline constexpr std::size_t kMaxWorkspaceRoots = 16;
 
-// ── S2: root-relative path for BASELINE HASHING (committed-sidecar portability) ───────────────────────
+// ── S2: root-relative path for BASELINE HASHING (root-spelling portability) ─────────────────────────────
 //
-// Both baseline sidecars (.ripwire_arch_baseline, .ripwire_quality_baseline) are meant to be COMMITTED and
-// portable. But every path in ing.files is spelled `<ingest-root>/<relative>` verbatim — the crawl just
+// .ripwire_arch_baseline is meant to be COMMITTED and portable; .ripwire_quality_baseline is gitignored,
+// re-pinned before a change, and stamped with the build that pinned it (a dead set depends on call resolution),
+// but both must still hash the same file the same way under every root spelling. And every path in ing.files is spelled `<ingest-root>/<relative>` verbatim — the crawl just
 // prepends the root argument. So `ripwire .` embeds `./game/x.cpp` while `ripwire /abs/repo` embeds
 // `/abs/repo/game/x.cpp`, giving DIFFERENT hashes for the same file → a baseline written under one root
 // spelling falsely fails enforcement under another (exit 0 vs 2 for a teammate/CI with a different root).

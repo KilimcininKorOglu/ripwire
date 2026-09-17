@@ -47,7 +47,7 @@ std::string noBaselineFatalMessage( const std::string& baselineFile, const rw::q
         // build's — "no <file>" would be false, and so would "delete it", since the build that pinned it may run.
         return "ripwire: " + baselineFile + " was pinned by another ripwire build (its producer stamp does not name this binary's sources, and a dead set depends on how "
                "calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run --quality-delta with the build that pinned it, "
-               "or re-pin with `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
+               "or re-pin on a clean tree (commit or stash first) with `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
     }
     if( !sel.isSidecarStale() )
     {
@@ -270,7 +270,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
             // silence costs one run, while a foreign pin stays on disk and is ignored on every run until re-pinned.
             rw::emitTo( stderr, "ripwire: {} was pinned by another ripwire build (its producer stamp does not name this binary's sources, and a dead set depends on how "
                                   "calls were resolved) — IGNORED and left on disk; auto-comparing the working tree vs git HEAD; run --quality-delta with the build that "
-                                  "pinned it, or re-pin with --quality-baseline\n", baselineFile.c_str() );
+                                  "pinned it, or re-pin on a clean tree (commit or stash first) with --quality-baseline\n", baselineFile.c_str() );
         }
         else if( !out.baseSel.isSidecarStale() && !out.baseSel.sidecarSymlinkRefused )
         { // the stale/healed case is silent by design — only the true "never baselined" case is informative. A refused
@@ -561,7 +561,8 @@ inline constexpr const char* kQdBaseHeadRemoved =
 inline constexpr const char* kQdBaseHeadUnreadable =
     "baseline=\"git-HEAD (sidecar unreadable)\" means a .ripwire_quality_baseline EXISTS but could not be read as one "
     "(no recognizable structure, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc records), so it was IGNORED and the "
-    "working tree was compared against the HEAD tree — re-pin it with quality-baseline. baseline_bad_lines= and "
+    "working tree was compared against the HEAD tree, and an allow-dirty pin's absorbed findings are not in force — re-pin it on a "
+    "clean tree (commit or stash first) with quality-baseline. baseline_bad_lines= and "
     "acks_bad_lines=, when present, count sidecar lines of a known kind whose payload did not parse and were "
     "skipped (absent means none). ";
 inline constexpr const char* kQdBaseHeadSymlinkRefused =
@@ -580,7 +581,7 @@ inline constexpr const char* kQdBaseHeadForeign =
     "set depends on how calls were resolved, so that floor could invent a dead-code regression or hide a real one; it "
     "was IGNORED, left on disk, and the working tree was compared against the HEAD tree this build computed — so "
     "anything already committed cannot appear, and an allow-dirty pin's absorbed findings are not in force. Run the "
-    "delta with the build that pinned it, or re-pin with quality-baseline. ";
+    "delta with the build that pinned it, or re-pin on a clean tree (commit or stash first) with quality-baseline. ";
 // H11 — emitted ONLY when baseline_absorbed= is on the root, i.e. when the honored sidecar was pinned with
 // --allow-dirty on a tree that already gated. NB: the sentence itself spells the flag WITHOUT its leading
 // dashes, because this text lands inside an XML comment and G4 forbids a literal double-hyphen there (the
