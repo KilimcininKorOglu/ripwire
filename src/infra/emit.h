@@ -290,10 +290,10 @@ public:
         std::free( m_buf );
     }
 
-    [[nodiscard]] std::FILE* open() noexcept { return open( []( char** buf, std::size_t* size ) noexcept { return open_memstream( buf, size ); } ); }
+    [[nodiscard]] std::FILE* open() noexcept { return openWith( []( char** buf, std::size_t* size ) noexcept { return open_memstream( buf, size ); } ); }
 
     template<class Opener>
-    [[nodiscard]] std::FILE* open( Opener&& opener ) noexcept
+    [[nodiscard]] std::FILE* openWith( Opener&& opener ) noexcept
     {
         if( m_file == nullptr && !m_isFinished )
         {

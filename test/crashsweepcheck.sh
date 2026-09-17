@@ -320,7 +320,7 @@ scip.h	scipReadFile	fdopen	1	closes	fclose before each of the three returns
 scip.h	scipReadFile	open	1	closes	::close when fstat, fcntl or fdopen fails; otherwise the stream owns it
 serialize.h	collectJsonSigEntries	fopen	1	closes	skips only a failed open; fclose after the read loop
 serialize.h	estimateExpandBodyTokens	fopen	1	closes	if-scoped; fclose after the read loop
-serialize.h	openChargeBuffer	open_memstream	1	transferred	its only caller is openChargeStream, which hands it to rw::MemoryStream::open; the MemoryStream owns it from there
+serialize.h	openChargeBuffer	open_memstream	1	transferred	its only caller is openChargeStream, which hands it to rw::MemoryStream::openWith; the MemoryStream owns it from there
 serialize.h	packBodies	fopen	1	closes	if-scoped; fclose after the read loop
 serialize.h	packCandidates	fopen	1	closes	if-scoped; fclose after the read loop
 serialize.h	packHops	fopen	1	closes	if-scoped; fclose after the read loop

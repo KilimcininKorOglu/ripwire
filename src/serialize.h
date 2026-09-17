@@ -1282,7 +1282,7 @@ inline std::FILE* openChargeBuffer( char** bufOut, std::size_t* sizeOut ) noexce
 // fault switch above reaches every one of them, and no site calls the opener by hand (test/estchargecheck.sh #14g).
 inline std::FILE* openChargeStream( rw::MemoryStream& stream ) noexcept
 {
-    return stream.open( []( char** bufOut, std::size_t* sizeOut ) noexcept { return openChargeBuffer( bufOut, sizeOut ); } );
+    return stream.openWith( []( char** bufOut, std::size_t* sizeOut ) noexcept { return openChargeBuffer( bufOut, sizeOut ); } );
 }
 
 // ── §B4b: the <ctx> WRAPPER RULE for a verb that appends a section beside serialize()'s root ─────────────

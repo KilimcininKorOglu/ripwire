@@ -911,8 +911,8 @@ fi
 #    src/, with comments stripped:
 #      (A) `open_memstream(` appears only inside `class MemoryStream` (src/infra/emit.h) and inside the one opener it is
 #          handed, serialize.h's fault-injectable openChargeBuffer;
-#      (B) openChargeBuffer is called only by openChargeStream, which hands it to MemoryStream::open;
-#      (C) no fflush/fclose names a FILE* that came from a memory stream (`= x.open(…)`, `= openChargeStream(…)` or
+#      (B) openChargeBuffer is called only by openChargeStream, which hands it to MemoryStream::openWith;
+#      (C) no fflush/fclose names a FILE* that came from a memory stream (`= x.open(…)` or `x.openWith(…)`, `= openChargeStream(…)` or
 #          `= open_memstream(…)`, spelled bare, `::`, `os::` or `rw::os::`).
 #    Presence guards first (the class and its [[nodiscard]] finish exist, and the population is real), then the rule,
 #    then a POSITIVE CONTROL: the same scan over a copy of src/ with one real site turned back into the hand-written
@@ -939,7 +939,7 @@ strm = region( ser, r'inline std::FILE\* openChargeStream\s*\(', '}' )
 inside = lambda rel, i, r, want: rel == want and r[0] is not None and r[1] is not None and r[0] <= i <= r[1]
 finish = cls[1] is not None and any( re.search( r'\[\[nodiscard\]\]\s*MemoryStreamBytes\s+finish\s*\(', l ) for l in texts[ emit ][ cls[0]:cls[1] ] )
 holders, violations = 0, []
-OPENED = re.compile( r'([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\.open\s*\(|(?:::)?(?:rw::)?(?:os::)?(?:open_memstream|openChargeStream)\s*\()' )
+OPENED = re.compile( r'([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\.open(?:With)?\s*\(|(?:::)?(?:rw::)?(?:os::)?(?:open_memstream|openChargeStream)\s*\()' )
 for rel, lines in sorted( texts.items() ):
     holders += sum( len( re.findall( r'\bMemoryStream\s+[A-Za-z_]\w*\s*;', code( l ) ) ) for l in lines )
     names = { m.group( 1 ) for l in lines for m in OPENED.finditer( code( l ) ) }
