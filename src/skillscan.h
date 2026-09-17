@@ -41,6 +41,7 @@
 
 #include "infra/Diagnostics.h"
 #include "regexguard.h"        // every pattern here is compiled and matched through the one regex boundary
+#include "infra/namesplit.h"   // isIdentChar / isIdentStart — the ONE ASCII identifier byte class, which is \b's word class here
 
 namespace rw
 {
@@ -143,8 +144,8 @@ inline std::vector<InjectionPattern> buildInjectionPatterns()
 struct ExfilPattern
 {
     const char*  rule;
-    RegexCompile re;                    // empty (and unused) when `shape` decides the rule instead
-    bool         ( *shape )( std::string_view line ) noexcept;   // non-null ⇒ a linear decision replaces the regex
+    RegexCompile re;                    // empty (and unused) when isNetExfilShape decides the rule instead
+    bool         isNetExfilShape;       // true ⇒ hasNetExfilShape's linear decision replaces the regex
     bool         requiresCmdContext;  // true ⇒ fires only in a fence OR alongside a transmit verb elsewhere on
                                       // the line (see hasTransmitVerb) — a bare prose mention is documentation.
     bool         fenceOnly;           // true ⇒ fires only inside a fenced code block (see net-exfil below).
@@ -167,55 +168,72 @@ struct ExfilPattern
 // [A-Za-z0-9_]* can always backtrack to empty, so that is its shortest form — or the substring "base64", which needs
 // no boundary. The first alternative holds iff some tool ENDS at or before some var STARTS; the second iff some var's
 // shortest END is at or before some tool STARTS. So one pass keeps four numbers per segment.
+// What one '\r'-free segment holds, in the four positions the decision needs. A segment is bounded by '\r' or the line
+// ends, both non-word, so a word run inside it is maximal in the line too and the \b rule can be read locally.
+struct NetExfilPositions
+{
+    std::size_t earliestToolEnd = std::string_view::npos, latestToolStart = 0;
+    std::size_t earliestVarEnd  = std::string_view::npos, latestVarStart  = 0;
+    bool        hasTool = false, hasVar = false;
+
+    void noteTool( std::size_t start, std::size_t end ) noexcept
+    {
+        hasTool         = true;
+        earliestToolEnd = std::min( earliestToolEnd, end );
+        latestToolStart = std::max( latestToolStart, start );
+    }
+    void noteVar( std::size_t start, std::size_t shortestEnd ) noexcept
+    {
+        hasVar         = true;
+        latestVarStart = std::max( latestVarStart, start );
+        earliestVarEnd = std::min( earliestVarEnd, shortestEnd );
+    }
+    bool isExfil() const noexcept
+    {
+        return hasTool && hasVar && ( earliestToolEnd <= latestVarStart || earliestVarEnd <= latestToolStart );
+    }
+};
+
+inline NetExfilPositions netExfilPositions( std::string_view segment ) noexcept
+{
+    NetExfilPositions positions;
+    for( std::size_t i = 0; i < segment.size(); )
+    {
+        if( !namesplit::isIdentChar( segment[i] ) )
+        {
+            if( segment[i] == '$' && i + 1 < segment.size() && namesplit::isIdentStart( segment[ i + 1 ] ) )
+            {
+                positions.noteVar( i, i + 2 );
+            }
+            ++i;
+            continue;
+        }
+        std::size_t runEnd = i;
+        while( runEnd < segment.size() && namesplit::isIdentChar( segment[runEnd] ) )
+        {
+            ++runEnd;
+        }
+        const std::string_view word = segment.substr( i, runEnd - i );
+        if( word == "curl" || word == "wget" || word == "nc" )
+        {
+            positions.noteTool( i, runEnd );
+        }
+        for( std::size_t at = word.find( "base64" ); at != std::string_view::npos; at = word.find( "base64", at + 1 ) )
+        {
+            positions.noteVar( i + at, i + at + 6 );
+        }
+        i = runEnd;
+    }
+    return positions;
+}
+
 inline bool hasNetExfilShape( std::string_view line ) noexcept
 {
-    const auto isWordByte  = []( char c ) noexcept { return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' ) || c == '_'; };
-    const auto isVarLead   = []( char c ) noexcept { return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || c == '_'; };
-    constexpr std::size_t kNone = std::string_view::npos;
-
-    std::size_t segBegin = 0;
-    for( ;; )
+    for( std::size_t segBegin = 0;; )
     {
         const std::size_t cr     = line.find( '\r', segBegin );
-        const std::size_t segEnd = ( cr == kNone ) ? line.size() : cr;
-        std::size_t earliestToolEnd = kNone, latestToolStart = 0, earliestVarEnd = kNone, latestVarStart = 0;
-        bool        hasTool = false, hasVar = false;
-        const auto  noteVar = [ & ]( std::size_t start, std::size_t shortestEnd ) noexcept
-        {
-            hasVar         = true;
-            latestVarStart = std::max( latestVarStart, start );
-            earliestVarEnd = std::min( earliestVarEnd, shortestEnd );
-        };
-        for( std::size_t i = segBegin; i < segEnd; )
-        {
-            if( !isWordByte( line[i] ) )
-            {
-                if( line[i] == '$' && i + 1 < segEnd && isVarLead( line[ i + 1 ] ) )
-                {
-                    noteVar( i, i + 2 );
-                }
-                ++i;
-                continue;
-            }
-            std::size_t runEnd = i;
-            while( runEnd < segEnd && isWordByte( line[runEnd] ) )
-            {
-                ++runEnd;
-            }
-            const std::string_view word = line.substr( i, runEnd - i );
-            if( word == "curl" || word == "wget" || word == "nc" )
-            {
-                hasTool         = true;
-                earliestToolEnd = std::min( earliestToolEnd, runEnd );
-                latestToolStart = std::max( latestToolStart, i );
-            }
-            for( std::size_t at = word.find( "base64" ); at != kNone; at = word.find( "base64", at + 1 ) )
-            {
-                noteVar( i + at, i + at + 6 );
-            }
-            i = runEnd;
-        }
-        if( hasTool && hasVar && ( earliestToolEnd <= latestVarStart || earliestVarEnd <= latestToolStart ) )
+        const std::size_t segEnd = ( cr == std::string_view::npos ) ? line.size() : cr;
+        if( netExfilPositions( line.substr( segBegin, segEnd - segBegin ) ).isExfil() )
         {
             return true;
         }
@@ -236,7 +254,7 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
     // run-block or a co-occurring transmit verb on the line). See scanSkillText's cmdContext gate.
     v.push_back( {
         "EXFILTRATE:api-key",
-        compileGuardedRegex( R"(\$ANTHROPIC_API_KEY)", kRegexEcmaScript | kRegexIcase ), nullptr,
+        compileGuardedRegex( R"(\$ANTHROPIC_API_KEY)", kRegexEcmaScript | kRegexIcase ), /*isNetExfilShape=*/false,
         /*requiresCmdContext=*/true, /*fenceOnly=*/false
     } );
 
@@ -244,7 +262,7 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
     // documentation; `cat ~/.ssh/id_rsa | base64 | nc …` in a fenced block is the real thing.
     v.push_back( {
         "EXFILTRATE:ssh-aws-creds",
-        compileGuardedRegex( R"((\$HOME/\.ssh|~/\.ssh|~/\.aws))", kRegexEcmaScript ), nullptr,
+        compileGuardedRegex( R"((\$HOME/\.ssh|~/\.ssh|~/\.aws))", kRegexEcmaScript ), /*isNetExfilShape=*/false,
         /*requiresCmdContext=*/true, /*fenceOnly=*/false
     } );
 
@@ -263,7 +281,7 @@ inline std::vector<ExfilPattern> buildExfilPatterns()
     // Decided by hasNetExfilShape (below), not by its regex — see there for why and for the exact equivalence.
     v.push_back( {
         "EXFILTRATE:net-exfil",
-        RegexCompile{}, &hasNetExfilShape,
+        RegexCompile{}, /*isNetExfilShape=*/true,
         /*requiresCmdContext=*/false, /*fenceOnly=*/true
     } );
 
@@ -386,26 +404,18 @@ struct FrontmatterPattern
 
 inline std::vector<FrontmatterPattern> buildFrontmatterPatterns()
 {
+    struct Row { const char* rule; const char* regexSrc; };
+    static constexpr Row kRows[] = {
+        { "FRONTMATTER:model-override",       R"(^\s*model\s*:)" },         // override the model at the harness level
+        { "FRONTMATTER:system-override",      R"(^\s*system\s*:)" },        // inject a system prompt above the harness
+        { "FRONTMATTER:temperature-override", R"(^\s*temperature\s*:)" },   // override inference parameters
+    };
     std::vector<FrontmatterPattern> v;
-
-    // model: something (attempting to override the model at the harness level)
-    v.push_back( {
-        "FRONTMATTER:model-override",
-        compileGuardedRegex( R"(^\s*model\s*:)", kRegexEcmaScript )
-    } );
-
-    // system: something (attempting to inject a system prompt above the harness)
-    v.push_back( {
-        "FRONTMATTER:system-override",
-        compileGuardedRegex( R"(^\s*system\s*:)", kRegexEcmaScript )
-    } );
-
-    // temperature: (attempting to override inference parameters)
-    v.push_back( {
-        "FRONTMATTER:temperature-override",
-        compileGuardedRegex( R"(^\s*temperature\s*:)", kRegexEcmaScript )
-    } );
-
+    v.reserve( std::size( kRows ) );
+    for( const Row& row : kRows )
+    {
+        v.push_back( { row.rule, compileGuardedRegex( row.regexSrc, kRegexEcmaScript ) } );
+    }
     return v;
 }
 
@@ -749,7 +759,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
             // fenceOnly patterns (net-exfil) fire only inside a fenced code block — see buildExfilPatterns().
             for( const ExfilPattern& p : exfilPats )
             {
-                const bool matched = ( p.shape != nullptr ) ? p.shape( ln ) : isHit( skillSearch( p.re, ln ), lineNum, ln );
+                const bool matched = p.isNetExfilShape ? hasNetExfilShape( ln ) : isHit( skillSearch( p.re, ln ), lineNum, ln );
                 if( !matched )
                 {
                     continue;

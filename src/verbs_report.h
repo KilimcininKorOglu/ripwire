@@ -341,6 +341,21 @@ IsolateStats isolateStats( const rw::IngestResult& ing, const rw::Graph& graph,
     return stats;
 }
 
+// --arch: a path-rule that could not be JUDGED on an edge — the engine gave up (src/regexguard.h: RegexVerdict::Exhausted),
+// or the TO pattern this edge's backreferences produced is one the guard refuses — is neither satisfied nor violated
+// there, and a CI gate that reports violations="0" or exit 0 over an edge it could not judge is the failure --arch
+// exists to prevent. The caller refuses at exit 1 after this names the rule, the edge and the reason, before any byte
+// of the answer.
+static void refuseUndecidedPathRule( const rw::PathRule& pr, const rw::PathRuleVerdict& verdict, std::string_view src, std::string_view dst )
+{
+    const std::string reason = verdict.isRefused
+                             ? "its TO pattern became '" + verdict.refusedTo + "' after backreference substitution, which is refused: " + verdict.refusal
+                             : std::string( rw::kRegexAbandonedReason );
+    rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "
+                        "reporting a violation count the rule did not measure\n",
+                pr.from, pr.to, src, dst, reason );
+}
+
 std::optional<int> runArchViews( const MainDispatch& d )
 {
     using namespace rw;
@@ -473,18 +488,7 @@ std::optional<int> runArchViews( const MainDispatch& d )
                 const PathRuleVerdict pathVerdict = ar.pathRules.empty() ? PathRuleVerdict{} : pathRuleForbids( ar, relFiles[f], relFiles[g] );
                 if( pathVerdict.isAbandoned || pathVerdict.isRefused )
                 {
-                    // The rule could not be JUDGED on this edge — the engine gave up (src/regexguard.h:
-                    // RegexVerdict::Exhausted), or the TO pattern this edge's backreferences produced is one the guard
-                    // refuses — so it is neither satisfied nor violated here, and a CI gate that reports
-                    // violations="0" or exit 0 over an edge it could not judge is the failure --arch exists to
-                    // prevent. Refuse, name the rule, the edge and the reason, before any byte of the answer.
-                    const PathRule&   pr     = ar.pathRules[ pathVerdict.ruleIndex ];
-                    const std::string reason = pathVerdict.isRefused
-                                             ? "its TO pattern became '" + pathVerdict.refusedTo + "' after backreference substitution, which is refused: " + pathVerdict.refusal
-                                             : std::string( rw::kRegexAbandonedReason );
-                    rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "
-                                        "reporting a violation count the rule did not measure\n",
-                                pr.from, pr.to, relFiles[f], relFiles[g], reason );
+                    refuseUndecidedPathRule( ar.pathRules[ pathVerdict.ruleIndex ], pathVerdict, relFiles[f], relFiles[g] );
                     return 1;
                 }
                 if( pathVerdict.isForbidden )
