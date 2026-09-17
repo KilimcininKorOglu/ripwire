@@ -65,4 +65,51 @@ inline bool readByteSafeLine( std::FILE* in, std::string& line )
     return didReadAnyByte;
 }
 
+// ── input blow-up guard: a BOUNDED line reader for peers whose line length is NOT the caller's own
+// invariant to keep unbounded (the MCP stdio request line — readByteSafeLine's own parity contract above
+// is deliberate for the trusted callers that need it: a git-pipe reader must never split a long path, so
+// growing without limit is the CORRECT behaviour there, not a bug to fix everywhere).
+//
+// A stdio JSON-RPC peer is untrusted the same way an HTTP client is (mcpserver.h bounds a request body at
+// kMaxBodyBytes before it ever reaches the JSON-RPC layer — see runMcp()'s own comment on this reader),
+// but stdio had no equivalent: one line with no '\n' grows the buffer for as long as the peer keeps
+// writing, so a single hostile or runaway request can exhaust memory on a long-lived server that would
+// otherwise happily keep serving every request after it.
+//
+// Same fgetc contract and the same byte-safety as readByteSafeLine (explicit unsigned-char narrowing —
+// see that function's header comment); the only difference is what happens once `line` reaches maxBytes:
+// further bytes of THIS line are read and DISCARDED (not buffered) rather than growing `line`, so memory
+// stays bounded at maxBytes regardless of how long the peer's line actually is, and the stream position
+// still recovers at the next '\n' — the call after an overflowed line reads the NEXT real line, never a
+// decoded fragment of the runaway one. `line` holds only the first maxBytes bytes when overflowed is set;
+// callers must not dispatch it as if it were the whole request (it isn't).
+inline bool readByteSafeLineBounded( std::FILE* in, std::string& line, std::size_t maxBytes, bool& overflowed )
+{
+    VERIFY( in != nullptr );
+
+    line.clear();
+    overflowed = false;
+
+    bool didReadAnyByte = false;
+    for( int byteOrEof = std::fgetc( in ); byteOrEof != EOF; byteOrEof = std::fgetc( in ) )
+    {
+        didReadAnyByte = true;
+        if( byteOrEof == '\n' )
+        {
+            return true; // delimiter consumed, not appended
+        }
+
+        if( line.size() < maxBytes )
+        {
+            line.push_back( static_cast<char>( static_cast<unsigned char>( byteOrEof ) ) );
+        }
+        else
+        {
+            overflowed = true; // keep draining to the delimiter — never grow past maxBytes
+        }
+    }
+
+    return didReadAnyByte;
+}
+
 } // namespace rw

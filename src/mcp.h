@@ -1965,6 +1965,19 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
     }
 }
 
+// input blow-up guard: the stdio transport's own bound on a single request LINE, mirroring
+// mcpserver.h's kMaxBodyBytes (8 MiB) for the HTTP transport — HTTP was already immune (a
+// Content-Length-short/over-limit body never reaches dispatch), stdio was not: readByteSafeLine grows
+// without limit by design (the right contract for its OTHER callers, gitmine.h's pipe readers), so a
+// runaway or hostile stdio peer could exhaust memory one line at a time on a long-lived server. Sized a
+// little above HTTP's bound rather than equal to it: a stdio edit-verb call (replace_symbol_body /
+// insert_*_symbol) carries its payload inline in the SAME line as the rest of the request, where an HTTP
+// JSON-RPC body is comparably sized — "tens of MB", not the same single figure. A plain decimal literal
+// (not `32u * 1024u * 1024u`) on purpose: docs/limits_build.py's DECL regex only captures a bare number,
+// and kMaxBodyBytes above being spelled as an expression is why that cap is undocumented today — the
+// same gap this constant does not want to repeat.
+inline constexpr std::size_t kMcpStdioLineMaxBytes = 33554432;   // 32 MiB
+
 // stdio MCP loop: one JSON object per line. Returns the process exit code. `root`/`roots` are the
 // positional args `ripwire <root> --mcp` was started with (roots.size()>=2 = a multi-root workspace);
 // both default empty for the pre-X7 "no startup root" mode, in which every request must still name its
@@ -2011,13 +2024,29 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
         policy.assumedRoot = mcpResolveAssumedRoot();
     }
 
-    // R4: readByteSafeLine, NOT std::getline( std::cin, ... ) — libc++'s getline narrows int_type→char on
-    // every std::cin byte, so a single 0x80..0xFF request byte aborted the sanitizer build and left this
-    // whole server surface dark for non-ASCII input. Same parity contract (see stdinline.h): grows
-    // dynamically — a >1MB request is not split into garbage — delimiter consumed, trailing '\r' kept.
+    // R4: readByteSafeLineBounded, NOT std::getline( std::cin, ... ) — libc++'s getline narrows
+    // int_type→char on every std::cin byte, so a single 0x80..0xFF request byte aborted the sanitizer
+    // build and left this whole server surface dark for non-ASCII input. Same byte-safety and delimiter
+    // contract as readByteSafeLine (stdinline.h) — delimiter consumed, trailing '\r' kept — bounded at
+    // kMcpStdioLineMaxBytes (see its own comment) rather than growing without limit: a stdio peer is
+    // untrusted the same way an HTTP one is, and HTTP has had a body cap since mcpserver.h existed.
     std::string line;
-    while( readByteSafeLine( stdin, line ) )
+    bool        lineOverflowed = false;
+    while( readByteSafeLineBounded( stdin, line, kMcpStdioLineMaxBytes, lineOverflowed ) )
     {
+        if( lineOverflowed )
+        {
+            // The request line exceeded the bound — `line` holds only its first kMcpStdioLineMaxBytes
+            // bytes, which is not the request, so it is never handed to dispatchMcpLine. id:null per
+            // JSON-RPC 2.0 (no field in an over-limit line is reliably the caller's id), the same posture
+            // dispatchMcpLine's own framing gate takes for a frame it cannot trust (mcpjson.h checkFrame).
+            // The server keeps serving: this refusal costs one line, not the connection.
+            rw::emitTo( stdout, "{{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{{\"code\":-32600,"
+                                 "\"message\":\"request line exceeds the {}-byte limit\"}}}}\n",
+                        kMcpStdioLineMaxBytes );
+            std::fflush( stdout );
+            continue;
+        }
         if( line.find_first_not_of( " \t\r\n" ) == std::string::npos )
         {
             continue;
