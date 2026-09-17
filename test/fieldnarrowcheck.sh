@@ -346,6 +346,51 @@ else
     no "(q8) stdfix census differs across runs or warm vs cold"; diff "$TMP/q3.tsv" "$TMP/q3w.tsv" | head -6
 fi
 
+# ── (r) prov="final-segment" reaches FIELD narrows (2026-09-17). Test/narrowcheck.sh arm 25 marks an edge that a parameter's
+#        or local's QUALIFIED written type chose by its last name alone: that match never checked the qualifier against the
+#        class's namespace, so the edge must not read as uniquely resolved. Rule 2b makes exactly the same guess for a field —
+#        `store::Text body_; body_.size()` narrows on `Text` — and the field record carries the namespace it was written in
+#        (arm q), so its edge is marked too. An UNQUALIFIED field narrow skipped no qualifier and stays unmarked, and a
+#        `std::` field never narrows at all (arm q), so it has no edge to mark. ──
+"$BIN" "$FIX3" --no-cache >"$TMP/r.map" 2>/dev/null
+"$BIN" "$FIX3" --no-cache --legend=compact >"$TMP/r.compact" 2>/dev/null
+"$BIN" "$FIX" --no-cache >"$TMP/r.fix.map" 2>/dev/null
+fieldProvOf(){   # MAP CALLER CALLEE — the prov= of CALLER's <c n="CALLEE"> edge: a word, "none" when absent, NO-EDGE when missing
+    local row
+    row="$( tr '<' '\n' <"$1" | awk -v c="$2" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
+    row="$( printf '%s\n' "$row" | grep "^c n=\"$3\"" | head -1 )"
+    if [ -z "$row" ]; then
+        printf 'NO-EDGE'
+    elif printf '%s' "$row" | grep -q ' prov="'; then
+        printf '%s' "$row" | sed -n 's/.* prov="\([^"]*\)".*/\1/p'
+    else
+        printf 'none'
+    fi
+}
+expectFieldProv(){   # LABEL MAP CALLER CALLEE WANT
+    local got
+    got="$( fieldProvOf "$2" "$3" "$4" )"
+    if [ "$got" = "$5" ]; then
+        ok "$1 $3() -> $4: prov=[$got]"
+    else
+        no "$1 $3() -> $4: prov=[$got], want [$5]"
+    fi
+}
+expectFieldProv "(r1)" "$TMP/r.map" bodyLength size final-segment   # store::Text body_: a qualified field type's last name decided it
+expectFieldProv "(r2)" "$TMP/r.map" nameLength size NO-EDGE         # std::string name_: refused (arm q), nothing to mark
+expectFieldProv "(r3)" "$TMP/r.fix.map" run acquire none            # Pool m_pool: unqualified, no qualifier was skipped
+# the narrow itself is unchanged — the mark is a disclosure, never a demotion: the census still names Rule 2b for it
+R4="$( awk -F '\t' '$1 == "C" && index( $6, "::Record::bodyLength#" ) && $7 == "size" { print $2 "|" $8 }' "$TMP/q3.tsv" 2>/dev/null )"
+case "$R4" in
+    "receiver-rule|store/text.h::Text::size#"*) ok "(r4) the marked narrow is still Rule 2b's single edge to store/text.h Text::size (census receiver-rule)" ;;
+    *) no "(r4) the marked narrow changed its decision — the attribute must disclose, never demote: [${R4:-no row}]" ;;
+esac
+if grep -q 'final-segment' "$TMP/r.compact"; then
+    ok "(r5) the compact legend defines prov=final-segment on the field fixture's map"
+else
+    no "(r5) the compact legend does not define prov=final-segment on a map whose field edge carries it"
+fi
+
 # ── KNOWN GAP (help wanted: prompts/help-wanted/ts-literal-receivers.md) — issue #59, on receivers whose type is CERTAIN ──
 # A built-in method called on a LITERAL binds an unrelated, same-named, never-imported user function — with the
 # graph's ambiguity gauge at zero, so the answer reads as confident. `"a-b".replace(…)` can only be

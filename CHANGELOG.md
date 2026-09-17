@@ -428,6 +428,25 @@ previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refus
 q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
 variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
 
+### Fixed — a narrow through a qualified field type read as a uniquely resolved edge
+
+The receiver-qualifier entry above marks an edge **`prov="final-segment"`** when the qualified written type of a parameter or a local chose it by its last name alone. A member field is the third place that guess is made, and its edge still read as uniquely resolved. `struct Record { store::Text body_; int bodyLength() { return body_.size(); } };` is an example: Rule 2b narrowed on `Text` and never checked `store`. The disclosure now covers fields as well. Since the std-typed-field entry above, a field's compose record carries the namespace its type was written in. Rule 2b's `Class#field` table now keeps whether any agreeing declaration wrote the type qualified, and every edge a Rule 2b narrow commits on such a field carries `prov="final-segment"`. The narrow itself is unchanged: the mark discloses, it never demotes. An unqualified field narrow skipped no qualifier and stays unmarked, and a `std::` field never narrows. Extraction is unchanged, so kParserVer stays.
+
+Measured with `--no-cache`, the `integration/train-2` binary (92b4c91d) against this change:
+- **Decisions:** `--pin-census` is byte-identical on rocksdb, a private C++ corpus and this repository's `src/` (a frozen copy), so no decision moved.
+- **Default map:** byte-identical on all three (rocksdb 31,711 bytes), because no newly marked edge sits on a row the default map shows.
+- **Full map (`--top-k=1000000`):** marked edges grow 355 → 382 on rocksdb (+27, 567 bytes), 98 → 143 on the private corpus and 80 → 81 on `src/`.
+
+Every sampled new mark is a qualified field type:
+- `InternalStats::CompactionStatsFull compaction_stats_` → `SetMicros`
+- `toku::locktree_manager ltm_` → `set_max_lock_memory`
+- `strkern::Byteset256 heads` → `contains`
+
+`test/fieldnarrowcheck.sh` arm r is the gate:
+- (r1) the qualified field's mark and (r5) the compact legend term are red on the train binary.
+- (r3), an unqualified field narrow staying unmarked, is red on a variant that marks every Rule 2b narrow and on nothing else.
+- (r2) the refused std field and (r4) the unchanged census decision are the controls.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
