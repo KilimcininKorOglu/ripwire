@@ -70,7 +70,7 @@ then names as the caller itself. 956 more sites keep their target and are now de
 sampled and read against the source. On this repository's `src/`, 53 splits become one Rule-2 pin and nothing else
 moves target. Wall time is unchanged within noise (three cold runs each on the same corpus, 1.66–2.51 s both).
 
-`test/narrowcheck.sh` arms 7-18 are the gate: ten rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
+`test/narrowcheck.sh` arms 7-18 are the gate: nine rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
 red on the lexical lookup without the qualifier guard, arm 15 asserting through the census that the site is decided
 by Rule 2 rather than the locality tie-break. Five gates' controls were built on "a parameter has no binding" and now
 use an untyped `auto` receiver — `narrowcheck`, `chacheck`, `chaconecheck`, `localitycheck` (whose call no longer
@@ -79,6 +79,21 @@ single edge). `fieldnarrowcheck`'s ambiguity gauge moves 7 → 6 because `shadow
 parameter's type, and its arm (s1) now also asserts that the shadowed field's `Pool::acquire` is not linked. Still
 open, and unchanged by this entry: an untyped receiver (`auto x = make(); x.m()`) still reaches the locality
 tie-break, and a typed LOCAL still reads the flat table, qualified-type collision included.
+
+Two floors this change does NOT remove, stated because the first one moves edges the wrong way.
+**An abstract parameter type narrows onto its namesakes.** Rule 2 resolves `m` against definitions only, so a parameter
+typed as an interface whose methods are pure-virtual declarations cannot narrow to it — and when unrelated classes
+share the interface's final name segment and define `m`, the narrow lands on them instead. On rocksdb at
+`0e2801ac3`, `--pin-census --no-cache` with the `main` binary at `f8e6087c` against this change: 79 call sites
+(88 census rows) through an `Iterator*` parameter, such as `AssertItersEqual( Iterator* iter1, Iterator* iter2 )` in
+`utilities/write_batch_with_index/write_batch_with_index_test.cc`, now split five ways over the nested `Iterator` classes in
+`memtable/` (`skiplist.h`, `inlineskiplist.h`, `skiplistrep.cc`, `vectorrep.cc`, `hash_skiplist_rep.cc`), and none of
+the five is right. Before this change 25 of them were a unique pin to a plausible override (`BlobCountingIterator::key`),
+26 were a different split over overrides, and 28 had no edge. Every one is disclosed (`amb=`, `prov="split"`), but
+each is a wrong answer rather than a missing one, and 28 are new edges. It is the same final-segment collision typed
+locals already have on `main`; this change extends it to parameters. **A call in a constructor's member-initializer
+list is not narrowed:** `Decoy( Target& t ) : v( t.pick( 3 ) )` sits outside the parameter's scope span (the body),
+so it keeps `main`'s answer — on a same-named `Decoy::pick`, the locality tie-break's wrong pin.
 
 ## [0.6.1] — 2026-09-14
 
