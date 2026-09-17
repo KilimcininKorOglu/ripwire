@@ -47,9 +47,11 @@
 // under NDEBUG, so the branch and the getenv are deleted from a release build. Measured in the lane that made
 // this seam: byte-identical output on every touched verb, release __text size in the CHANGELOG entry.
 //
-// THE ALLOWLIST, and why it is short. src/redact.h and src/skillscan.h compile CONSTANT rule tables written in
-// their own files — no user text reaches either engine — so they keep std::regex directly (arm (c) names the
-// reason per row). A new constant table may join them; a pattern a user can type may not.
+// THE ALLOWLIST, and why it is one row. src/redact.h compiles a CONSTANT rule table written in its own file, once,
+// on the redaction hot path, so it keeps std::regex directly (arm (c) names the reason). src/skillscan.h was the
+// second row until its patterns moved behind this header: a skill file is untrusted input, so an abandoned match
+// there must fail closed rather than abort wrap's noexcept scan. A new constant table may join redact.h only on the
+// same argument; a pattern a user can type may not.
 
 #include "infra/emit.h"   // rw::faultSwitchOn — the one reader every non-NDEBUG fault switch goes through
 

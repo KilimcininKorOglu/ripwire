@@ -75,8 +75,9 @@ through the same boundary and fail CLOSED — an undecided line is a CRITICAL `S
 keep-the-row fallback for their constant patterns.
 
 Not fixed here, measured and disclosed: libstdc++'s matcher recurses once per consumed character, so on Linux a
-`--regex` such as `a*b` crashes on a line of 26,624 matching bytes (13,312 for `(a|b)*c`) with an 8 MiB stack; a
-pattern bound cannot reach that.
+`--regex` such as `a*b` crashes on a long enough matching line with an 8 MiB stack — from about 26 KB, build-dependent
+(a standalone probe: 26,624 bytes, 13,312 for `(a|b)*c`; this tool's own earlier Linux builds: between 27 KB and 35 KB
+for a gcc dev build, 35 KB and 45 KB for a clang Release one); a pattern bound cannot reach that.
 
 Byte-identical: 45 of 45 comparisons of the origin/main binary against this one (dev build, one checkout, stdout,
 stderr and exit code) across `--grep`/`--regex` (prefiltered and full-scan, context, compact, unindexed, the three
@@ -95,10 +96,13 @@ each entry point must refuse naming the pattern (or, for `--lint-rules`, the rul
 real engine; (c) no `std::regex` spelled in `src/` outside the owner and a one-row allowlist (the constant redaction
 table), with planted-file controls; (e) the `--arch` TO template refused at parse and after substitution; (f) the
 linear `net-exfil` agrees with its regex over 1,200 generated lines, a 200,000-byte line scans in bounded time, and an
-abandoned match fails closed; (g) the size and depth bounds, each with its limit still compiling; (d) two clones at
-different directory names, absolute and relative roots, agree. Red on origin/main: 55 failures, seven of them a signal
-death (rc 134 or 138). `test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern refusal, and its golden's
-`match-malformed` section is empty.
+abandoned match fails closed; (g) the size and depth bounds, each with its limit still compiling; (h) an undecided
+capture-typed `#match?` is reported by cause — a captured text the screen refused, one that does not compile, or an
+abandoned match — naming the first site and its text; (i) `--arch` decides deny rules first, so an allow the engine
+cannot finish refuses only when a deny fires and no allow matches; (d) two clones at different directory names,
+absolute and relative roots, agree. Red on origin/main: 72 failures, ten of them a signal death (rc 134 or 138).
+`test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern refusal, and its golden's `match-malformed` section
+is empty.
 
 ### Changed — Intel macOS binaries end with 0.6.1
 

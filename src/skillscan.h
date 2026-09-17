@@ -231,7 +231,9 @@ inline bool hasNetExfilShape( std::string_view line ) noexcept
 {
     for( std::size_t segBegin = 0;; )
     {
-        const std::size_t cr     = line.find( '\r', segBegin );
+        // `.` excludes both terminators, so a segment ends at either. scanSkillText hands over one line with no '\n',
+        // but splitting on it too keeps this function equal to the regex on ANY input, not only on the one caller's.
+        const std::size_t cr     = line.find_first_of( "\r\n", segBegin );
         const std::size_t segEnd = ( cr == std::string_view::npos ) ? line.size() : cr;
         if( netExfilPositions( line.substr( segBegin, segEnd - segBegin ) ).isExfil() )
         {
