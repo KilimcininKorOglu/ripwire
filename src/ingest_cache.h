@@ -232,7 +232,15 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 99;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 105;          // bump on any grammar/.scm/extraction change
+                                                      // 105 = 2026-09-17 (type aliases, test/fieldnarrowcheck.sh arm t):
+                                                      //    a C/C++/ObjC `typedef` / `using` alias of a named class emits
+                                                      //    a compose-shaped RawRef (composeRel "alias", empty fieldName)
+                                                      //    that the base walk follows to its target. Format unchanged; a
+                                                      //    99 blob holds no such records and would dead-end the walk at
+                                                      //    the alias on a warm run: content change, bump required. 105 is
+                                                      //    declared past the 100-104 the lanes queued ahead declare; the
+                                                      //    landing train assigns the number.
                                                       // 99 = 2026-09-16 (std-typed member fields, test/fieldnarrowcheck.sh
                                                       //    arm q): a C++ field's compose RawRef records the namespace its
                                                       //    type was written in as `qualifier` (`std` for `std::string

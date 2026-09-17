@@ -2073,7 +2073,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 declared.push_back( ir.calleeName );   // source order (ing.references is in (file, byte) order)
             }
         }
-        // dedup each adjacency list — membership is order-independent, so this stays deterministic.
+        addTypeAliasBases( ing, chaUp );   // a typedef / using alias continues at its target class; dedup below is order-independent
         for( auto& [ k, v ] : chaUp )   { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
         for( auto& [ k, v ] : chaDown ) { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
     }
@@ -3176,9 +3176,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/7: HAS-A compose edges" );
     for( const Reference& r : ing.references )
     {
-        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) )
+        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) )
         {
-            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment
+            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member
         }
         const auto it = byName.find( r.calleeName );
         if( it == byName.end() )

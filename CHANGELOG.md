@@ -15,6 +15,41 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a base class or member type reached through a C++ `typedef` or `using` alias ended the base walk
+
+The resolver walks a type's bases by class NAME, and an alias names no class. In llvm-project's clang CodeGen,
+`class CGBuilderTy : public CGBuilderBaseTy` with `typedef llvm::IRBuilder<llvm::TargetFolder, CGBuilderInserterTy>
+CGBuilderBaseTy;` stopped at `CGBuilderBaseTy`, so a member `CGBuilderTy Builder;` never reached
+`IRBuilderBase::CreateCall`. The same happened for `BuilderType Builder;` (a class-scope typedef), `BuilderTy Builder;`
+(a class-scope `using`) and every member or base typed through an alias of a class. Those calls got no edge, or a
+split over every same-named method in the corpus.
+
+The C/C++/ObjC capture now records a plain alias's target class, and the base walk continues at the target. Several
+things are deliberately excluded:
+
+- **Not every alias records.** A pointer, reference, array or function alias records nothing, and neither does a
+  primitive, dependent or `decltype` target, or an alias local to a function body.
+- **A target written in `std` is refused**, as a `std::` member type already is.
+- **An alias named like a real class elsewhere is not followed.** Classes are keyed by bare name, so `using Base = Foo;`
+  would otherwise hand `Foo`'s methods to an unrelated class `Base`.
+- **The alias is not an inheritance fact.** It gains no `--lego` implementor, no `role="extends"` use-site and no
+  HAS-A row.
+
+The record rides the existing compose record shape, so the cache format is unchanged; `kParserVer` moves to 105.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), main → this change:
+
+| Corpus | Sites retargeted | Newly bound | Lost |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 366 | +111 | 0 |
+| llvm-project @ 4d5358b1d | 2,649 | +1,146 | 0 |
+
+A seeded, blinded sample of 60 retargets (25 rocksdb, 35 llvm) was graded against source: 57 better, 2 same, 1 worse.
+The worse site is a class template specialization that shares the primary template's name.
+
+Gate: `test/fieldnarrowcheck.sh` arm t. Arms t1–t4 are red on the unfixed binary. Arms t5, t9, t10 and t6's HAS-A row
+each went red when the one guard they protect was disabled in a scratch build.
+
 ### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
 
 CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already

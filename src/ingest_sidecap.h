@@ -1320,6 +1320,7 @@ struct SideArms
     RustImplCtx* rust  = nullptr;
     BindCtx*     bind  = nullptr;
     UseCtx*      uses  = nullptr;
+    TypeAliasCtx* alias = nullptr;   // C/C++/ObjC typedef / using → target class (writes its own vector, not refs)
 };
 
 // see EMISSION ORDER above: the two passes that write `refs` must never be armed together.
@@ -1337,6 +1338,7 @@ void streamSideCaptures( TSNode root, const SideArms& arms )
     if( arms.route != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.bind  != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.uses  != nullptr ) { deepest = std::max( deepest, kSideDepthUses ); }
+    if( arms.alias != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.rust  != nullptr ) { deepest = kSideDepthUnbounded; }
     if( deepest == 0 )
     {
@@ -1366,12 +1368,13 @@ void streamSideCaptures( TSNode root, const SideArms& arms )
         const TSNode n = frame.node;
         const char*  t = ts_node_type( n );
 
-        // original pass order: FFI, routes, Rust impls, bindings, value-uses.
+        // original pass order: FFI, routes, Rust impls, bindings, value-uses; type aliases (2026-09-17) last.
         if( arms.ffi   != nullptr && frame.depth <= kSideDepthStd )  { ffiVisitNode   ( *arms.ffi,   n, t ); }
         if( arms.route != nullptr && frame.depth <= kSideDepthStd )  { routesVisitNode( *arms.route, n, t ); }
         if( arms.rust  != nullptr )                                  { rustImplVisitNode( *arms.rust, n, t ); }
         if( arms.bind  != nullptr && frame.depth <= kSideDepthStd )  { bindsVisitNode ( *arms.bind,  n, t ); }
         if( arms.uses  != nullptr && frame.depth <= kSideDepthUses ) { usesVisitNode  ( *arms.uses,  n, t ); }
+        if( arms.alias != nullptr && frame.depth <= kSideDepthStd )  { captureTypeAlias( *arms.alias, n, t ); }
 
         collectChildren( n, cursor.cur, kids );
         for( std::size_t i = kids.size(); i > 0; --i )
@@ -1435,6 +1438,9 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         // enter the call graph (buildGraph skips role != Call), so PageRank and the default map are unchanged.
         UseCtx useCtx { fileId, le.lang, src, &refs };
 
+        // C/C++/ObjC type aliases → their target class, for the resolver's base walk (ingest_relations.h captureTypeAlias).
+        TypeAliasCtx aliasCtx { fileId, le.lang, src, {} };
+
         SideArms arms;
         if( ffiCtx.cish || ffiCtx.py )
         {
@@ -1457,6 +1463,10 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         {
             arms.uses = &useCtx;
         }
+        if( le.lang == Lang::Cpp || le.lang == Lang::ObjC || le.lang == Lang::C )
+        {
+            arms.alias = &aliasCtx;
+        }
 
         streamSideCaptures( root, arms );
 
@@ -1464,6 +1474,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         {
             bindsFinalize( bindCtx );   // L3 noise gates + clobber sweep — the tail of the old captureBindings
         }
+        refs.insert( refs.end(), std::make_move_iterator( aliasCtx.out.begin() ), std::make_move_iterator( aliasCtx.out.end() ) );
 
 #ifdef RIPWIRE_FUSE_PROBE
         {
@@ -1491,7 +1502,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
 
         // #72 follow-up: everything the side passes just appended for THIS file, filtered through the one
         // decided-dead rule.
-        //   refs  — captureIncludes' import sites plus the value-use / type-mention rows.
+        //   refs  — captureIncludes' import sites plus the value-use / type-mention rows and the type-alias records.
         //   incs  — the FILE dependency the same directive minted. Dropping the use-site while keeping
         //           the dependency would leave the two halves of one `#include` disagreeing about
         //           whether the line exists.

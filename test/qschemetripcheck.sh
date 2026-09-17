@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TYPE ALIASES (test/fieldnarrowcheck.sh arm t): kParserVer 99 -> 105 with the quality.h mirror — a C/C++/ObjC
+#   typedef / using alias of a named class records its target on the compose record shape (format unchanged, kCacheVersion
+#   stays 22). 105 is declared past the 100-104 the lanes queued ahead declare; the landing train assigns the number and
+#   re-derives this pin on the merged tree. kQSnapCacheScheme stays: the extraction identity (the mirrors) keys every blob.
 # 2026-09-17, TRAIN 1 x TRAIN 2 (integration/train-1 merging main bcd3b016 = #265): RE-DERIVED ON THE MERGED TREE,
 #   carried from neither side. Train 1 pinned a37d1539 over kQSnapCacheScheme 14 (#253 13, #255 14) with parserVer 96;
 #   train 2 pinned 95818fe5 over parserVer 99 (#248 97, #254 98, #257 99) with the scheme at 12. Neither hashed the

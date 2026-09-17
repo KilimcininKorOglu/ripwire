@@ -2113,6 +2113,70 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
     return r.isCompose && r.qualifier == "std";
 }
 
+// A C/C++/ObjC TYPE ALIAS record (ingest_relations.h captureTypeAlias): `typedef llvm::IRBuilder<F, I> CGBuilderBaseTy;` rides the
+// compose shape as recvVar CGBuilderBaseTy, calleeName IRBuilder, qualifier llvm — with an EMPTY fieldName, so buildFieldNarrowTables
+// never reads it as a member, and composeRel "alias", which the HAS-A edges refuse. addTypeAliasBases is its one reader.
+inline bool isTypeAliasRecord( const Reference& r ) noexcept
+{
+    return r.isCompose && r.fieldName.empty() && r.composeRel == "alias";
+}
+
+// The inheritance NAME graph's alias edges (graph.h chaUp): an alias NAME gains its target as a direct base, so a base walk that
+// reaches the alias continues at the class it names — `class CGBuilderTy : public CGBuilderBaseTy` walks on to IRBuilder and
+// IRBuilderBase (test/fieldnarrowcheck.sh arm t). chaUp ONLY: an alias is not a subclass, so no cone, --lego implementor or
+// role="extends" use-site gains a member. Refused, as a written type is elsewhere: a target written in `std` (it names no in-repo
+// class). NOT followed: an alias NAME that is also a real class somewhere in the corpus — a class-like symbol of that name at a
+// line no alias record holds (a typedef is itself a Struct symbol at its name's line). The graph keys classes by bare name, so
+// `using Base = Foo;` in one class would otherwise hand Foo's methods to every class that derives from an unrelated `Base`.
+// Same-named aliases with different targets keep BOTH as bases: the walk's one-hit-per-level rule refuses a real tie.
+inline void addTypeAliasBases( const IngestResult& ing, HashMap<std::string, std::vector<std::string>>& chaUp )
+{
+    const auto followable = []( const Reference& r ) noexcept
+    {
+        return isTypeAliasRecord( r ) && !fieldTypeWrittenInStd( r ) && !r.recvVar.empty() && !r.calleeName.empty();
+    };
+    const auto siteKey = []( std::string& key, std::uint32_t fileId, std::uint32_t line, std::string_view name )
+    {
+        key.assign( std::to_string( fileId ) ).push_back( ':' );
+        key.append( std::to_string( line ) ).push_back( ':' );
+        key.append( name );
+    };
+    std::vector<std::uint32_t> aliasRefs;
+    HashMap<std::string, char> aliasSites;
+    HashMap<std::string, char> aliasNames;
+    std::string                key;
+    for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
+    {
+        if( const Reference& r = ing.references[ refIndex ]; followable( r ) )
+        {
+            aliasRefs.push_back( refIndex );
+            siteKey( key, r.fileId, r.line, r.recvVar );
+            aliasSites.try_emplace( key, '\0' );
+            aliasNames.try_emplace( r.recvVar, '\0' );
+        }
+    }
+    HashMap<std::string, char> realClassNames;   // alias names some class-like symbol at a non-alias site also carries
+    for( const Symbol& s : ing.symbols )
+    {
+        const bool classLike = s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface;
+        if( classLike && aliasNames.find( s.name ) != aliasNames.end() )
+        {
+            siteKey( key, s.fileId, s.line, s.name );
+            if( aliasSites.find( key ) == aliasSites.end() )
+            {
+                realClassNames.try_emplace( s.name, '\0' );
+            }
+        }
+    }
+    for( std::uint32_t refIndex : aliasRefs )
+    {
+        if( const Reference& r = ing.references[ refIndex ]; realClassNames.find( r.recvVar ) == realClassNames.end() )
+        {
+            chaUp[ r.recvVar ].push_back( r.calleeName );   // the caller sorts and dedups every adjacency list
+        }
+    }
+}
+
 // One entry of Rule 2's FLAT per-function type table (buildGraph's varType): the variable's type name — "" is a TOMBSTONE,
 // an ambiguous or `std::`-typed variable that never narrows — and whether a declaration wrote that type QUALIFIED, the
 // fact prov="final-segment" discloses (Narrower::finalSegmentTypeAt).

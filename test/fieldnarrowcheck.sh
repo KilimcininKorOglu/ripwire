@@ -7,7 +7,8 @@
 # `ambiguous=` gauge. Rule 2b: when the receiver names a field whose DECLARED TYPE is a type the index
 # knows (the S5-E HAS-A field capture), narrow the candidate set to that type's members, walking direct
 # bases (chaUp) when the type itself does not define the method. RESOLVE-stage only — no kParserVer bump
-# (arm q, 2026-09-16, is the exception: the field capture records the namespace a type was written in, kParserVer 99).
+# (arm q, 2026-09-16, is the exception: the field capture records the namespace a type was written in, kParserVer 99;
+# arm t, 2026-09-17, is the second: a C++ typedef / using alias records its target class, kParserVer 105).
 #
 # Zero false edges is the bar — narrowing that guesses wrong is worse than ambiguity disclosed:
 #   * a LOCAL (param / declared var) that shadows the field name vetoes the narrow (real C++ lookup);
@@ -345,6 +346,113 @@ if [ -s "$TMP/q3.tsv" ] && cmp -s "$TMP/q3.tsv" "$TMP/q3b.tsv" && cmp -s "$TMP/q
 else
     no "(q8) stdfix census differs across runs or warm vs cold"; diff "$TMP/q3.tsv" "$TMP/q3w.tsv" | head -6
 fi
+
+# ── (t) a base or member type reached through a C++ TYPE ALIAS (2026-09-17) — an EXTRACTION change like (q). The base walk
+#        keys classes by name, and an alias names no class: `class CGBuilderTy : public CGBuilderBaseTy` where
+#        `typedef llvm::IRBuilder<…> CGBuilderBaseTy;` dead-ended at CGBuilderBaseTy, so a member `CGBuilderTy Builder;` never
+#        reached IRBuilderBase::CreateCall (llvm-project clang/lib/CodeGen, ~1,700 sites). The capture now records a plain
+#        alias's target class and the walk continues there: a namespace-scope typedef base (t1), a class-scope typedef member
+#        type (t2), a class-scope `using` (t3), a namespace-qualified target (t4). (t5) a target written in `std` is refused
+#        like a std:: field type (arm q) — an in-repo `vector` is not std::vector. (t6) the alias is not an inheritance or
+#        HAS-A fact: no --lego implementor, no role="extends" use-site, no <compose> row. (t7) presence; (t8) warm == cold.
+#        (t9) an alias NAMED like a real class elsewhere is not followed: the graph keys classes by bare name, so `using Base =
+#        IRBuilder<int>;` inside one class would hand IRBase::CreateMul to Kid : Base, whose real Base defines nothing. (t10) an
+#        alias local to a function body records nothing — it types no member, and the name graph has no scope to keep it local.
+#        The Decoy methods in decoy/ keep every unfixed answer a split, never an accidental receiver-rule pin. ──
+FIX5="$TMP/aliasfix"
+mkdir -p "$FIX5/ir" "$FIX5/decoy" "$FIX5/app"
+cat >"$FIX5/ir/ir.h" <<'EOF'
+struct IRBase { int CreateMul( int a ) { return a; } };
+template <typename F> struct IRBuilder : IRBase { };
+namespace ir { struct QBase { int Flush() { return 1; } }; }
+EOF
+cat >"$FIX5/decoy/other.h" <<'EOF'
+struct Decoy { int CreateMul( int a ) { return a + 1; } int Flush() { return 2; } int size() { return 3; } };
+struct vector { int size() { return 4; } };
+EOF
+cat >"$FIX5/app/owners.h" <<'EOF'
+typedef IRBuilder<int> BaseTy;
+struct CGB : public BaseTy { int CreateStore( int a ) { return a; } };
+struct Owner1 { CGB Builder; int run() { return Builder.CreateMul( 1 ); } };
+struct Owner2 { typedef IRBuilder<int> BuilderType; BuilderType Builder; int run() { return Builder.CreateMul( 2 ); } };
+struct Owner3 { using BuilderTy = IRBuilder<int>; BuilderTy Builder; int run() { return Builder.CreateMul( 3 ); } };
+typedef ir::QBase QAlias;
+struct Owner4 { QAlias Q; int run() { return Q.Flush(); } };
+using Vec = std::vector<int>;
+struct Owner5 { Vec V; int run() { return V.size(); } };
+struct Holder9 { using Base = IRBuilder<int>; };
+struct Kid : Base { };
+struct Owner9 { Kid K; int run() { return K.CreateMul( 9 ); } };
+inline int localAlias() { using KidBase = IRBuilder<int>; return 0; }
+struct Kid10 : KidBase { };
+struct Owner10 { Kid10 K; int run() { return K.CreateMul( 10 ); } };
+EOF
+cat >"$FIX5/decoy/base.h" <<'EOF'
+struct Base { int unrelated() { return 5; } };
+EOF
+"$BIN" "$FIX5" --no-cache --pin-census="$TMP/t.tsv" >/dev/null 2>&1
+tRow(){ awk -F '\t' -v c="app/owners.h::$1::run#" -v n="$2" '$1 == "C" && index( $6, c ) == 1 && $7 == n { print $2 "|" $8 }' "$TMP/t.tsv" 2>/dev/null; }
+tMissing=""
+for want in '::Owner1::run#' '::Owner2::run#' '::Owner3::run#' '::Owner4::run#' '::Owner5::run#' '::Owner9::run#' '::Owner10::run#' 'dispositions calls=7 '; do
+    qHas "$TMP/t.tsv" "$want" || tMissing="$tMissing [$want]"
+done
+[ -z "$tMissing" ] && ok "(t7) presence: the alias census names every Owner::run and counts all seven calls" \
+    || no "(t7) presence guard:$tMissing — every (t) arm below would be vacuous"
+for arm in 'Owner9 t9 an alias named like the real class Base (using Base = IRBuilder<int> inside Holder9)' \
+           'Owner10 t10 a function-local alias (using KidBase = IRBuilder<int> inside localAlias)'; do
+    set -- $arm; owner="$1"; label="$2"; shift 2; what="$*"
+    R="$( tRow "$owner" CreateMul )"
+    case "$R" in
+        "receiver-rule|ir/ir.h::IRBase::CreateMul#"*) no "($label) $owner::run -> CreateMul pinned to IRBase::CreateMul through $what: [$R]" ;;
+        *) ok "($label) $owner::run -> CreateMul is not pinned through $what: [${R:-no row}]" ;;
+    esac
+done
+for arm in 'Owner1 CreateMul ir/ir.h::IRBase::CreateMul# t1 a namespace-scope typedef base (CGB : BaseTy, typedef IRBuilder<int> BaseTy)' \
+           'Owner2 CreateMul ir/ir.h::IRBase::CreateMul# t2 a class-scope typedef member type (BuilderType Builder)' \
+           'Owner3 CreateMul ir/ir.h::IRBase::CreateMul# t3 a class-scope using alias member type (BuilderTy Builder)' \
+           'Owner4 Flush ir/ir.h::QBase::Flush# t4 a namespace-qualified alias target (typedef ir::QBase QAlias)'; do
+    set -- $arm; owner="$1"; callee="$2"; want="$3"; label="$4"; shift 4; what="$*"
+    R="$( tRow "$owner" "$callee" )"
+    case "$R" in
+        "receiver-rule|$want"*'|'*) no "($label) $owner::run -> $callee names more than the aliased class's method: [$R]" ;;
+        "receiver-rule|$want"[0-9]*) ok "($label) $owner::run -> $callee narrows through $what: [$R]" ;;
+        *) no "($label) $owner::run -> $callee does not reach ${want%#} through $what: [${R:-no row}]" ;;
+    esac
+done
+T5="$( tRow Owner5 size )"
+case "$T5" in
+    "receiver-rule|decoy/other.h::vector::size#"*) no "(t5) Owner5::run -> V.size() pinned to the in-repo vector::size through using Vec = std::vector<int>: [$T5]" ;;
+    *) ok "(t5) a std:: alias target names no in-repo class: Owner5::run -> V.size() is not pinned to vector::size [${T5:-no row}]" ;;
+esac
+LEGO="$( "$BIN" "$FIX5" --lego=IRBuilder --no-cache 2>/dev/null )"
+printf '%s' "$LEGO" | grep -qE '<impl n="(BaseTy|BuilderType|BuilderTy)"' \
+    && no "(t6) --lego=IRBuilder lists an ALIAS as an implementor: $( printf '%s' "$LEGO" | grep -oE '<impl [^>]*>' | tr '\n' ' ' )" \
+    || ok "(t6) --lego=IRBuilder lists no alias as an implementor"
+USEST="$( "$BIN" "$FIX5" --uses=IRBuilder --no-cache 2>/dev/null )"
+TEXT="$( printf '%s' "$USEST" | grep -oE '<u [^>]*role="extends"[^>]*/>' | tr '\n' ' ' )"   # rows only: the legend itself spells role="extends"
+[ -n "$TEXT" ] \
+    && no "(t6) --uses=IRBuilder reports an alias as role=\"extends\": $TEXT" \
+    || ok "(t6) --uses=IRBuilder has no role=\"extends\" row — an alias is not a base clause"
+# the two probes above can fire: the base clause `CGB : public BaseTy` IS an extends row and a --lego implementor
+"$BIN" "$FIX5" --uses=BaseTy --no-cache 2>/dev/null | grep -qE '<u [^>]*role="extends"[^>]*p="app/owners.h:2"' \
+    && "$BIN" "$FIX5" --lego=BaseTy --no-cache 2>/dev/null | grep -qE '<impl n="CGB"' \
+    && ok "(t6) control: --uses=BaseTy shows CGB's base clause as role=\"extends\" and --lego=BaseTy lists CGB — both probes are live" \
+    || no "(t6) control: CGB's base clause is missing from --uses=BaseTy or --lego=BaseTy — the two no-alias probes above cannot fire"
+TCOMP=""
+for owner in Owner2 Owner3 BaseTy BuilderType BuilderTy QAlias Vec; do
+    TCOMP="$TCOMP$( "$BIN" "$FIX5" --around="$owner" --no-cache 2>/dev/null | grep -o '<compose>.*</compose>' )"
+done
+printf '%s' "$TCOMP" | grep -qE 'name=""|rel="alias"' \
+    && no "(t6) an alias record reached the HAS-A block: $TCOMP" \
+    || ok "(t6) no alias record in any <compose> block (Owner2, Owner3 and the alias names)"
+printf '%s' "$TCOMP" | grep -qF '<field name="Builder" type="BuilderType" owner="Owner2" rel="creates"/>' \
+    && ok "(t6) control: HAS-A keeps Owner2 → BuilderType for its member Builder" \
+    || no "(t6) control: HAS-A lost Owner2's member Builder: [${TCOMP:-no <compose> block}]"
+rm -f "$TMP/tc"
+"$BIN" "$FIX5" --cache="$TMP/tc" >/dev/null 2>&1
+"$BIN" "$FIX5" --cache="$TMP/tc" --pin-census="$TMP/tw.tsv" >/dev/null 2>&1
+[ -s "$TMP/t.tsv" ] && cmp -s "$TMP/t.tsv" "$TMP/tw.tsv" && ok "(t8) aliasfix census byte-identical warm and cold — the alias record rides the cache" \
+    || { no "(t8) aliasfix census differs warm vs cold"; diff "$TMP/t.tsv" "$TMP/tw.tsv" | head -6; }
 
 # ── KNOWN GAP (help wanted: prompts/help-wanted/ts-literal-receivers.md) — issue #59, on receivers whose type is CERTAIN ──
 # A built-in method called on a LITERAL binds an unrelated, same-named, never-imported user function — with the

@@ -1975,7 +1975,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
 // `static_assert` — this lane's file boundary forbade editing those files.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 99;   // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 105;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 105 = 2026-09-17 (type aliases): a typedef / using alias of a
+                                                          //    named class records its target for the base walk.
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 99 = 2026-09-16 (std-typed member fields): a field's compose
                                                           //    record carries its written namespace as its qualifier.
                                                           //    See ingest_cache.h's kParserVer note.
