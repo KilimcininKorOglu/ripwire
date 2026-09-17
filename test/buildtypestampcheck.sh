@@ -24,7 +24,7 @@
 # include path in order, first hit wins. No ripwire binary is built or run.
 #
 # Checks:
-#   1) single-config, no CMAKE_BUILD_TYPE (the house dev configure): token `dev`, at <build>/generated/version.h.
+#   1) single-config (Unix Makefiles), no CMAKE_BUILD_TYPE (the house dev configure): token `dev`, at <build>/generated/version.h.
 #   2) single-config, -DCMAKE_BUILD_TYPE=Release (a scratch tree — never the dev tree): token `Release`, same path.
 #   3) multi-config (Ninja Multi-Config if ninja is on PATH, else Xcode, else a named SKIP): Debug then Release,
 #      each configuration's compile resolves a header naming itself.
@@ -58,22 +58,32 @@ command -v cmake >/dev/null 2>&1 || { echo "no cmake on PATH"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "no python3 on PATH"; exit 2; }
 echo "buildtypestampcheck: ROOT=$ROOT"
 
+# CMake also takes its generator, build type and configuration list from the ENVIRONMENT (CMAKE_GENERATOR; since 3.22
+# CMAKE_BUILD_TYPE and CMAKE_CONFIGURATION_TYPES). Observed RED 2026-09-17 with each exported: CMAKE_GENERATOR="Ninja
+# Multi-Config" made both single-config trees multi-config, CMAKE_BUILD_TYPE=Release turned `dev` into `Release`, and
+# CMAKE_CONFIGURATION_TYPES=RelWithDebInfo removed Debug and Release. So every cmake call scrubs those three, and every
+# configure names its generator (CodeRabbit on #264). CMAKE_CONFIG_TYPE, CMAKE_GENERATOR_PLATFORM and
+# CMAKE_GENERATOR_TOOLSET were tried too and changed nothing, so they are not scrubbed.
+cleanCmake(){
+    env -u CMAKE_GENERATOR -u CMAKE_BUILD_TYPE -u CMAKE_CONFIGURATION_TYPES cmake "$@"
+}
+
 # Configure the real tree into $1 with the File API codemodel query planted first, so the reply exists.
 configure(){
     local dir="$1"
     shift
     mkdir -p "$dir/.cmake/api/v1/query"
     : >"$dir/.cmake/api/v1/query/codemodel-v2"
-    cmake -S "$ROOT" -B "$dir" "$@" >"$dir.configure.log" 2>&1
+    cleanCmake -S "$ROOT" -B "$dir" "$@" >"$dir.configure.log" 2>&1
 }
 
 # Build ONLY the stamp target; $2 is the configuration (empty for a single-config tree).
 stamp(){
     local dir="$1" config="$2"
     if [ -n "$config" ]; then
-        cmake --build "$dir" --config "$config" --target ripwire_version_stamp >>"$dir.build.log" 2>&1
+        cleanCmake --build "$dir" --config "$config" --target ripwire_version_stamp >>"$dir.build.log" 2>&1
     else
-        cmake --build "$dir" --target ripwire_version_stamp >>"$dir.build.log" 2>&1
+        cleanCmake --build "$dir" --target ripwire_version_stamp >>"$dir.build.log" 2>&1
     fi
 }
 
@@ -164,8 +174,9 @@ singleArm(){
         no "single-config $label: the header moved to $header (single-config layout must not change)"
     fi
 }
-singleArm dev dev
-singleArm Release Release -DCMAKE_BUILD_TYPE=Release
+# The house dev configure's generator on every supported host, named rather than inherited.
+singleArm dev dev -G "Unix Makefiles"
+singleArm Release Release -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 
 # ── #3-#6 multi-config ────────────────────────────────────────────────────────────────────────────────────────────
 MULTI_GEN=""
