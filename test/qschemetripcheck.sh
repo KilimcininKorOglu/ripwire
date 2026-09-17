@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 1b (#277, integration/train-1b, built on train 2b): kParserVer and its mirror 102 -> 103 for the
+#   maintainer fix on #244's JS/TS literal receivers (a signed numeric literal, (-1).toFixed(), is a number receiver;
+#   CodeRabbit on #277). An extraction change, so the parser version moves and the mirror moves with it; the qsnap
+#   scheme does not (the snapshot LAYOUT is unchanged, only which extraction produced it). Re-pinned on the train tree.
 # 2026-09-17, TRAIN 2b (integration/train-2b: #244 a948bf46, #243 6b234717, #256 8464f3be, lane/field-final-segment
 #   a23f4ec3, built on main bcd3b016, then merged with main ea03af88 and b09b53a9 = train 1): RE-DERIVED ON THE FINAL
 #   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over trains 1 and 2's 99:

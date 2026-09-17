@@ -405,6 +405,8 @@ export function viaTemplate(n: number): string { return `n=${n}`.padStart(8); }
 export function viaArray(): number[] { return [3, 1, 2].map(v => v * 2); }
 export function viaRegex(s: string): boolean { return /x/.test(s); }
 export function viaNumber(): string { return (1).toFixed(0); }
+export function viaNegative(): string { return (-1).toFixed(0); }
+export function viaPositive(): string { return (+2).toFixed(0); }
 export function viaBoolean(): string { return true.toString(); }
 export function viaJoin(): string { return "a b".split(" ").join("-"); }
 export function viaCharCode(): number { return "x".charCodeAt(0); }
@@ -426,6 +428,8 @@ export function viaTemplate(n) { return `n=${n}`.padStart(8); }
 export function viaArray() { return [3, 1, 2].map(v => v * 2); }
 export function viaRegex(s) { return /x/.test(s); }
 export function viaNumber() { return (1).toFixed(0); }
+export function viaNegative() { return (-1).toFixed(0); }
+export function viaPositive() { return (+2).toFixed(0); }
 export function viaBoolean() { return true.toString(); }
 export function viaJoin() { return "a b".split(" ").join("-"); }
 export function viaCharCode() { return "x".charCodeAt(0); }
@@ -447,6 +451,8 @@ export function viaTemplate(n: number): string { return `n=${n}`.padStart(8); }
 export function viaArray(): number[] { return [3, 1, 2].map(v => v * 2); }
 export function viaRegex(s: string): boolean { return /x/.test(s); }
 export function viaNumber(): string { return (1).toFixed(0); }
+export function viaNegative(): string { return (-1).toFixed(0); }
+export function viaPositive(): string { return (+2).toFixed(0); }
 export function viaBoolean(): string { return true.toString(); }
 export function viaJoin(): string { return "a b".split(" ").join("-"); }
 export function viaCharCode(): number { return "x".charCodeAt(0); }
@@ -506,7 +512,7 @@ export function viaLoud(): string { return "x".loud(); }
 EOF
 LITMAP="$( "$BIN" "$LIT" --no-cache 2>/dev/null )"
 litMissing=""
-for want in viaString viaChain viaTemplate viaArray viaRegex viaNumber viaBoolean viaJoin viaCharCode replace split padStart map test toFixed toString join; do
+for want in viaString viaChain viaTemplate viaArray viaRegex viaNumber viaNegative viaPositive viaBoolean viaJoin viaCharCode replace split padStart map test toFixed toString join; do
     printf '%s' "$LITMAP" | grep -q "n=\"$want\"" || litMissing="$litMissing $want"
 done
 [ -z "$litMissing" ] && ok "(kg-ts) presence: every literal-receiver fixture symbol is indexed" \
@@ -525,9 +531,12 @@ litExt(){  # litExt ROOT EXPECTED — exact external=N on the files= stats line 
         && ok "(kg-ts) $3 ambiguous=0" \
         || no "(kg-ts) $3 ambiguous= moved: $stats"
 }
-litExt "$LIT"   10 "TS literal corpus"
-litExt "$JSLIT" 10 "JS literal corpus"
-litExt "$TSLIT" 10 "TSX literal corpus"
+# 12 = the 10 covered builtin calls, plus (-1).toFixed() and (+2).toFixed(): a SIGNED numeric literal is a number
+# receiver too (CodeRabbit on #277 — a unary +/- over a number used to classify as no literal at all and could bind
+# the unrelated toFixed below).
+litExt "$LIT"   12 "TS literal corpus"
+litExt "$JSLIT" 12 "JS literal corpus"
+litExt "$TSLIT" 12 "TSX literal corpus"
 litFixed(){  # litFixed ROOT FILE CALLER — no edge into unrelated, count="0", gauge at zero
     local out root
     out="$( "$BIN" "$1" "--callees=$2:$3" --no-cache 2>/dev/null )"
@@ -543,7 +552,7 @@ litFixed(){  # litFixed ROOT FILE CALLER — no edge into unrelated, count="0", 
         no "(kg-ts) $3 expected count=\"0\" graph_ambiguous=\"0\": $root"
     fi
 }
-for caller in viaString viaChain viaTemplate viaArray viaRegex viaNumber viaBoolean viaJoin viaCharCode; do
+for caller in viaString viaChain viaTemplate viaArray viaRegex viaNumber viaNegative viaPositive viaBoolean viaJoin viaCharCode; do
     litFixed "$LIT"   src/literals.ts  "$caller"
     litFixed "$JSLIT" src/literals.js  "$caller"
     litFixed "$TSLIT" src/literals.tsx "$caller"

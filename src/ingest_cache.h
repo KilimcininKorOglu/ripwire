@@ -232,7 +232,7 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 102;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 103;          // bump on any grammar/.scm/extraction change
                                                       // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
                                                       //    PR #256): a primary template's out-of-line member keys the bare
                                                       //    template name (`void Box<T>::grow()` joins `Box::grow`); a

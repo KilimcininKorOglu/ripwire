@@ -248,6 +248,23 @@ inline RecvKind classifyJsTsLiteralRecv( TSNode node, std::string_view src, int 
     {
         return classifyJsTsLiteralRecv( ts_node_named_child( node, 0 ), src, depth + 1 );
     }
+    // A SIGNED numeric literal — (-1).toFixed(), (+2).toFixed() — is a number receiver: the grammar spells the sign as a
+    // unary operator over a `number` node, so without this it classified as no literal at all and the call could bind an
+    // unrelated in-repo toFixed. Only + and - over a number: `!1`, `typeof 1` and `-x` are not number literals.
+    if( kindIs( t, "unary_expression" ) )
+    {
+        const TSNode sign = fieldChild( node, NodeField::Operator );
+        const TSNode arg  = fieldChild( node, NodeField::Argument );
+        if( !ts_node_is_null( sign ) && !ts_node_is_null( arg ) && kindIs( ts_node_type( arg ), "number" ) )
+        {
+            const std::string_view op = pattern::nodeText( sign, src );
+            if( op == "-" || op == "+" )
+            {
+                return RecvKind::LitNumber;
+            }
+        }
+        return RecvKind::None;
+    }
     if( kindIs( t, "as_expression" ) || kindIs( t, "satisfies_expression" )
         || kindIs( t, "type_assertion" ) || kindIs( t, "non_null_expression" )
         || kindIs( t, "subscript_expression" ) )
