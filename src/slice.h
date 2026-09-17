@@ -2478,15 +2478,16 @@ inline void sliceComputeReach( SliceScan& scan, TSNode root, const SliceWalkCtx&
     w.run();
 }
 
-// The deepest syntax-tree nesting a definition may reach before the slice refuses it. This is a STACK guard, not a time
-// guard: with the parent table and the memoized statement anchor the walk is linear in the nesting (measured on a
-// plain build: 2,000 / 4,000 / 8,000 nested ifs in 0.05 / 0.06 / 0.08 s, where the parent-climbing walk took 48 s at
-// 2,000 and did not finish at 4,000), but the walks still recurse once per level on the calling thread, and every
-// slice path (CLI and MCP) runs on the main thread's ~8 MB stack. The worst measured shape per level is nested loops:
-// ~4,085 nested for/while needed 3,660 KB on a plain arm64 build (~870 B a level), ifs 2,012 KB, blocks 1,362 KB, and a
-// sanitizer build's frames are 2-3x wider. 2,048 levels keeps the worst shape near 1.8 MB plain, inside 8 MB under
-// ASan with margin, and is still 2.5x the deepest function measured in 47,795 parsed files across 90 repositories
-// (808 levels, a CPython chained assignment).
+// The deepest syntax-tree nesting a definition may reach before the slice refuses it. lane/slice-iterative
+// made both walks below iterative — an explicit heap work stack, never the calling thread's — so this is a
+// TIME/MEMORY guard now, not a stack one: the occurrence scan (sliceWalk) is linear regardless of depth
+// (measured on a plain build: 2,000 / 4,000 / 8,000 nested ifs in 0.05 / 0.06 / 0.08 s, where the old
+// parent-climbing walk took 48 s at 2,000 and did not finish at 4,000), but SliceRdWalker's reaching-
+// definitions fixpoint is inherently super-linear in nesting — an outer level's fixpoint redo re-walks its
+// entire nested subtree, and a chain of nested loops is the shape that costs: 8,192 nested `for` loops
+// measured 48 s. 2,048 keeps that cost small on any real input — still 2.5x the deepest function measured
+// in 47,795 parsed files across 90 repositories (808 levels, a CPython chained assignment) — while refusing
+// the pathological depths where the fixpoint's own cost, not any stack, would make the slice hang.
 inline constexpr std::uint32_t kMaxSliceDepth = 2048;
 
 // One cursor pass over the nodes overlapping [spanStart, spanEnd) and their ancestors: every visited node's parent,
