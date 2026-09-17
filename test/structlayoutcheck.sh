@@ -116,6 +116,18 @@ check_doctor(){
         || no "$label layout row did not report types=\"$LAYOUT_TYPE_COUNT\""
 }
 
+# ── B2: a disagreement carries no types= (CodeRabbit on #283) ───────────────────────────────────────
+# compare() takes typeCount from the first sorted record; records that disagree need not register the same types,
+# so on state="disagree" that count is not a total. No binary can be built mixed on purpose, so read the row source.
+DISAGREE_SRC="$( awk '/case CheckState::Disagree:/{on=1} on{print} on&&/break;/{exit}' "$ROOT/src/verbs_doctor.h" )"
+if [ -z "$DISAGREE_SRC" ]; then
+    no "could not find the CheckState::Disagree row in src/verbs_doctor.h"
+elif printf '%s' "$DISAGREE_SRC" | grep -q 'types=\\"'; then
+    no "the --doctor disagree row still emits types=, one record's count presented as a total"
+else
+    ok "the --doctor disagree row omits types= (one record's type count is not a total)"
+fi
+
 # ── C: the actual binary carries the records in the plain build ───────────────────────────────────
 check_doctor plain "$BIN"
 

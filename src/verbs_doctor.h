@@ -289,7 +289,8 @@ inline const char* doctorLegendComment()
                        "layout's state=\"agree\" means the layout records match; agree compares only the types= registered in src/model.h; "
                        "a same-size layout change or a stale constant is invisible, so agree does not rule out a mixed binary; "
                        "checked=\"1\" means the comparison ran; "
-                       "units=\"N\" counts translation units and types=\"N\" counts recorded types. On state=\"disagree\", "
+                       "units=\"N\" counts translation units and types=\"N\" counts recorded types. On state=\"disagree\", types= is omitted, because the "
+                       "disagreeing records need not register the same types and no one count is a total; "
                        "type= names the first differing type, unit0=/unit1= name the two records, and "
                        "present0=/present1=, size0=/size1=, and align0=/align1= disclose their values; the row gives the rebuild action; "
                        "state=\"not-checked\" means records exist but fewer than two records with a recorded type could be compared; "
@@ -684,9 +685,11 @@ inline DoctorLayoutCheck doctorLayoutCheck( std::vector<char>& esc )
         }
         case CheckState::Disagree:
         {
+            // No types= here (CodeRabbit on #283): compare() takes typeCount from the first sorted record, and records
+            // that disagree may not register the same types, so that one record's count is not a total.
             const LayoutMismatch& mismatch = check.mismatch;
             out.attrs = "state=\"disagree\" checked=\"1\" units=\"" + std::to_string( check.unitCount )
-                      + "\" types=\"" + std::to_string( check.typeCount ) + "\" type=\"" + escaped( mismatch.typeName )
+                      + "\" type=\"" + escaped( mismatch.typeName )
                       + "\" unit0=\"" + escaped( mismatch.unit0 ) + "\" unit1=\"" + escaped( mismatch.unit1 )
                       + "\" present0=\"" + std::string( mismatch.present0 ? "1" : "0" )
                       + "\" present1=\"" + std::string( mismatch.present1 ? "1" : "0" )
