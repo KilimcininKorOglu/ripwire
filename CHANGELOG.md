@@ -123,6 +123,26 @@ parameters included again. Stated floor, pinned by `test/narrowcheck.sh` arm 24:
 nor the class's own namespace — an external or alias-template type whose final segment an in-repo class shares —
 still narrows by name. Closing it needs the namespace chain in `Symbol::scope`.
 
+That floor is disclosed on every edge it can produce. A narrow decided by a qualified, non-`std` written type matched
+the type's last name and never checked its qualifier, so its edge carries **`prov="final-segment"`** — a parameter or
+a local, through Rule 2 or CHA-lite's cone — and both map legends define it. The wrong edge arm 24 pins and the correct
+`store::tree&` narrow beside it read the same way, as a guess, not as a uniquely resolved name. Byte cost on rocksdb,
+the previous commit's binary against this change, the only differences being the attribute, the legend term and
+`est_tokens`:
+
+| rocksdb output | before | after |
+| --- | --- | --- |
+| default map | 31,366 B | 31,711 B (+345, +1.10%; 14 marked edges) |
+| `--for="write batch handler mark commit"` | 8,746 B | 8,746 B (the bundle carries no `prov=`) |
+| whole graph, `--top-k=100000` | 5,406,160 B | 5,413,666 B (+7,506, +0.14%; 355 marked edges) |
+
+A private C++ corpus's default map pays only the legend term (+51 B, no marked edge printed). The Iterator-shaped
+collision #248 states above is unchanged: those calls stay `amb=`-disclosed splits. A name-only collision guard was
+measured against them and rejected — it moved 967 rocksdb rows off the wrong `memtable` namesakes, but declined 58
+correct platform-alternate splits (`port::Mutex::Lock` over posix and win) and 8 correct `log::Writer` narrows, minted
+10 new wrong unique pins on rocksdb, and declined 132 correct `Template.render` splits on django. The namespace chain
+is the fix for both.
+
 Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
 category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider
 ones (14 of 14 sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard
@@ -140,9 +160,10 @@ too (2 of django's 72). This repository's `src/`: 5 splits become Rule-2 pins th
 these corpora; its arm is the only witness. Wall time on rocksdb is within noise (three cold runs each at load average
 42: 1.69–2.19 s before, 1.73–2.80 s after).
 
-`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-24 are the gates: localitycheck 5, 6 and 7 red on
+`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-25 are the gates: localitycheck 5, 6 and 7 red on
 the previous commit and 8 red on the skip-the-tie-break variant; narrowcheck 19, 20, 21, 23 and 24 red on the previous
-commit and 21 red without the assignment capture. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
+commit, 21 red without the assignment capture, and 25 (the attribute on arms 22-24's edges and in both legends, absent
+from an unqualified narrow and a uniquely named call) red before `prov="final-segment"` existed. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
 three non-firing controls (B), (C), (E) asserted that the caller's own `Box::validate` pin STANDS for
 `item.validate( v )`; they now assert the honest two-way split, which keeps the contrast with the route that fires, and
 (F) reads `ambiguous=3` with no locality pin. localitycheck's HIGH-1 probe was an untyped local that no longer earns
