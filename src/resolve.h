@@ -48,6 +48,7 @@
 #include "model.h"
 #include "arch.h"        // §B1.3: relForHash — the root-relative path segment canonicalIdRelTo keys on
 #include "smallvec.h"
+#include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey)
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 #include "infra/Diagnostics.h"   // VERIFY — buildScopedRecvDecls' index-range precondition
@@ -2319,6 +2320,44 @@ inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
     return table;
 }
 
+// S6-C's ranking key for one candidate: sharedLocality doubled, plus one when a BARE or `this->` call's candidate is
+// declared in the caller's OWN scope rather than in a scope nested inside it. Both share the caller's whole
+// `path::Scope::` prefix, so counting segments ties `Outer::start` with `Outer::Inner::start` for a `start()` written in
+// `Outer::operator=`; but a nested class's non-static member needs an object, so the bare call names Outer's. The
+// bonus never separates candidates the segment count already ranks, never applies to an explicit receiver (whose
+// type, not the enclosing scope, decides), and never fires when either id's NAME holds `::` (a conversion operator's
+// type) — that case keeps the plain tie. test/cpptmplscopecheck.sh §6. `shareCap` is receiverLocalityCap's limit on the
+// shared credit (an untyped NamedVar receiver stops at the caller's file segment); it binds only a receiver the bonus
+// never applies to, so the two rules cannot meet on one call.
+inline std::size_t localityRank( std::string_view caller, std::string_view cand, bool lexicalCall, std::size_t shareCap ) noexcept
+{
+    const std::size_t shared   = std::min( sharedLocality( caller, cand ), shareCap );
+    const std::size_t scopeEnd = caller.rfind( "::" );
+    const bool        ownScope = lexicalCall && scopeEnd != std::string_view::npos && shared == scopeEnd + 2
+                              && cand.find( "::", shared ) == std::string_view::npos;
+    return 2 * shared + ( ownScope ? 1u : 0u );
+}
+
+// The FAMILY key of a C++ template-id scope: `Traits<int>` + `encode` → "Traits::encode" written into `key`, true;
+// false with `key` untouched for a scope that is not a template-id. Ingest keys a primary template's out-of-line
+// member by the bare template name and a specialization by its canonical template-id (ingest_names.h), so the family
+// of `Traits::encode` is the defs keyed by it plus every specialization def whose own family key it is.
+inline bool appendTemplateFamilyKey( std::string& key, std::string_view scope, std::string_view name )
+{
+    if( scope.empty() || scope.back() != '>' )
+    {
+        return false;
+    }
+    const std::string_view family = namesplit::stripTemplateArgs( scope );
+    if( family.empty() || family.size() == scope.size() )
+    {
+        return false;
+    }
+    key.clear();
+    key.append( family ).append( "::" ).append( name );
+    return true;
+}
+
 // One-hop receiver narrowing over the canonical scope::name → definition-ids map (built once by buildGraph).
 // Holds only const references to maps buildGraph owns — no state, no allocation, no copy of the symbol table.
 struct Narrower
@@ -2945,5 +2984,175 @@ struct Narrower
         return !out.empty();
     }
 };
+
+// ── C++ template families: the canonical tier's fallback when a template-id qualifier keys no definition ──────────
+// Ingest keys a primary template's out-of-line member by the bare template name and a specialization by its canonical
+// template-id (ingest_names.h); a specialization header's base clause arrives as an inherit ref whose derived name is
+// that template-id, so buildGraph's chaUp holds `Info<char>` → its bases too. What a call through `F<args>::name`
+// can reach, when no definition is keyed `F<args>::name`, is decided here and nowhere else.
+
+// Index one symbol into buildGraph's two canonical maps: a DEFINITION under "scope::name" (byScope) and, when its
+// scope is a template-id, again under its template's family key (byFamily). Any symbol scoped by a template-id —
+// a declaration too — also marks that specialization as EXISTING, under the scope text prefixed with '\x01' (a byte
+// no scope or family key can hold): a call through an existing specialization that does not itself define the name
+// must never fall back to its siblings.
+inline void indexCanonicalScope( HashMap<std::string, rw::SmallVec<NodeId, 2>>& byScope, HashMap<std::string, rw::SmallVec<NodeId, 2>>& byFamily,
+                                 std::string& key, const Symbol& s )
+{
+    if( s.scope.empty() )
+    {
+        return;
+    }
+    if( s.scope.back() == '>' )
+    {
+        key.assign( 1, '\x01' ).append( s.scope );
+        byFamily[ key ];
+    }
+    if( !isDefinitionNotDeclaration( s ) )
+    {
+        return;
+    }
+    key.clear();
+    key.append( s.scope ).append( "::" ).append( s.name );
+    byScope[ key ].push_back( s.id );
+    if( appendTemplateFamilyKey( key, s.scope, s.name ) )
+    {
+        byFamily[ key ].push_back( s.id );
+    }
+}
+
+// The template-id class names chaUp holds — specializations with a base clause — byte-sorted, so the specializations
+// of one template are one contiguous range (specializationsOf).
+inline std::vector<std::string> sortedSpecializationNames( const HashMap<std::string, std::vector<std::string>>& chaUp )
+{
+    std::vector<std::string> names;
+    for( const auto& [ derived, bases ] : chaUp )
+    {
+        if( !derived.empty() && derived.back() == '>' )
+        {
+            names.push_back( derived );
+        }
+    }
+    std::sort( names.begin(), names.end() );
+    return names;
+}
+
+// Everything the family fallback reads, owned by buildGraph.
+struct CanonicalScopes
+{
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>>&  byScope;
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>>&  byFamily;
+    const std::vector<std::string>&                       specializationsWithBases;   // sortedSpecializationNames( chaUp )
+    const Narrower&                                       narrower;                   // methodOnTypeOrBases — the CHA base walk
+    const HashMap<std::string, std::vector<std::string>>& chaUp;
+    const std::vector<Symbol>&                            symbols;                    // a candidate's scope, to widen it to its family
+};
+
+// Appends candidate ids to `cand` once each, past `before`, when `admit` accepts them.
+template< class Admit >
+struct CandidateSink
+{
+    std::vector<NodeId>& cand;
+    std::size_t          before;
+    Admit&               admit;
+
+    void add( const rw::SmallVec<NodeId, 2>* ids )
+    {
+        for( std::size_t i = 0; ids != nullptr && i < ids->size(); ++i )
+        {
+            const NodeId c = ( *ids )[ i ];
+            if( admit( c ) && std::find( cand.begin() + std::ptrdiff_t( before ), cand.end(), c ) == cand.end() )
+            {
+                cand.push_back( c );
+            }
+        }
+    }
+};
+
+// The members of template `family` that supply `r.calleeName` beyond its primary: every specialization that defines it
+// (byFamily) and every specialization with a base clause, through its own member or its bases.
+template< class Admit >
+inline void appendSpecializationMembers( CandidateSink<Admit>& sink, std::string& key, std::string_view family, const Reference& r,
+                                         const CanonicalScopes& scopes )
+{
+    key.assign( family ).append( "::" ).append( r.calleeName );
+    if( const auto it = scopes.byFamily.find( key ); it != scopes.byFamily.end() )
+    {
+        sink.add( &it->second );
+    }
+    key.assign( family ).push_back( '<' );
+    const auto& specs = scopes.specializationsWithBases;
+    for( auto it = std::lower_bound( specs.begin(), specs.end(), key ); it != specs.end() && it->starts_with( key ); ++it )
+    {
+        sink.add( scopes.narrower.methodOnTypeOrBases( *it, r, scopes.chaUp, /*skipSelf=*/false, /*unionOnMulti=*/true ) );
+    }
+}
+
+// A member reached through a BASE may belong to a template family itself — `ImutContainerInfo<T>` inherits
+// `ImutProfileInfo<T>::Profile`, and `ImutProfileInfo` has specializations — so each candidate a primary contributed is
+// widened ONCE to its own template's specializations. The widening adds specialization members only, which a second
+// pass would not widen again, so one pass is the fixpoint.
+template< class Admit >
+inline void widenToTemplateFamilies( CandidateSink<Admit>& sink, std::string& key, const Reference& r, const CanonicalScopes& scopes )
+{
+    const std::size_t assembled = sink.cand.size();
+    for( std::size_t i = sink.before; i < assembled; ++i )
+    {
+        const std::string& scope = scopes.symbols[ sink.cand[ i ] ].scope;
+        if( !scope.empty() && scope.back() != '>' )
+        {
+            appendSpecializationMembers( sink, key, scope, r, scopes );
+        }
+    }
+}
+
+// E#4's canonical tier: the defs keyed `qualifier::name` that `admit` (the caller's language/root filter) accepts,
+// appended to `cand`. A C++ template-id qualifier that keys none is answered from its template's family, and only when
+// the answer cannot be missing a body the call may reach:
+//   * the written id names an EXISTING specialization (a member or a base clause says so) that does not define the
+//     name → what that specialization inherits; if it inherits nothing, no answer;
+//   * otherwise every specialization's own or inherited member joins what the PRIMARY supplies, itself or through its
+//     bases. When the primary supplies nothing visible, the specializations alone answer only as a SPLIT of two or
+//     more: a traits template whose primary defines no member (`DenseMapInfo<T>::getHashValue`) is answered by its
+//     specializations, but a lone specialization beside a primary whose members are not visible — declared only, or
+//     mis-scoped like llvm's `list_storage` — is no answer, because that primary may be the one the call reaches;
+//   * either way a member reached through a base is widened to that base template's specializations.
+// "No answer" leaves `cand` untouched, so the bare-name ladder decides exactly as it did before this fallback existed.
+// More than one candidate is a split the caller discloses with amb=; a call through a template-id never lands on a
+// same-named definition outside the template. `key` is the caller's reused buffer.
+template< class Admit >
+inline void appendCanonicalCandidates( std::vector<NodeId>& cand, std::string& key, const Reference& r, const CanonicalScopes& scopes, Admit&& admit )
+{
+    CandidateSink<Admit> sink { cand, cand.size(), admit };
+    key.clear();
+    key.append( r.qualifier ).append( "::" ).append( r.calleeName );
+    if( const auto it = scopes.byScope.find( key ); it != scopes.byScope.end() )
+    {
+        sink.add( &it->second );
+    }
+    if( cand.size() != sink.before || !appendTemplateFamilyKey( key, r.qualifier, r.calleeName ) )
+    {
+        return;
+    }
+    key.assign( 1, '\x01' ).append( r.qualifier );
+    const bool existingSpecialization = scopes.byFamily.find( key ) != scopes.byFamily.end() || scopes.chaUp.find( r.qualifier ) != scopes.chaUp.end();
+    const std::string_view family = existingSpecialization ? std::string_view( r.qualifier ) : namesplit::stripTemplateArgs( r.qualifier );
+    sink.add( scopes.narrower.methodOnTypeOrBases( family, r, scopes.chaUp, /*skipSelf=*/existingSpecialization, /*unionOnMulti=*/true ) );
+    const bool primarySupplies = cand.size() != sink.before;
+    if( existingSpecialization && !primarySupplies )
+    {
+        return;
+    }
+    if( !existingSpecialization )
+    {
+        appendSpecializationMembers( sink, key, family, r, scopes );
+    }
+    if( !primarySupplies && cand.size() < sink.before + 2 )
+    {
+        cand.resize( sink.before );   // a lone specialization with no visible primary member is no answer (see above)
+        return;
+    }
+    widenToTemplateFamilies( sink, key, r, scopes );
+}
 
 }   // namespace rw

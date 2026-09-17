@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-16, C++ TEMPLATE SCOPES (test/cpptmplscopecheck.sh, PR #256): parserVer and its quality mirror move to 102 on
+#   integration/train-2b (the PR declared 100) — a primary template's out-of-line member keys the bare template name,
+#   a specialization keeps its canonical template-id, a reference keeps the template-id it writes, and a class
+#   specialization header's base clause is captured as inherit refs. No record layout changes: kCacheVersion stays 22. kQSnapCacheScheme stays
+#   12: no manifest function changed, only extraction identity. Old extraction facts must be re-parsed.
 # 2026-09-16, MEMBER TEMPLATE CALLS (lane/template-call-edges; test/cppqualcheck.sh §12): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
 #   kParserVer and kIngestParserVerMirror -> 101 on integration/train-2b (the PR declared 96 -> 99); kCacheVersion STAYS 22. A C++ member call with explicit
 #   template arguments (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) now mints a call reference, and the `template`
