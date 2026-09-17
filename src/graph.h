@@ -221,12 +221,11 @@ inline bool langCompatible( Lang a, Lang b ) noexcept
 // disagreeing. Like langCompatible it can only ever REMOVE a candidate, never invent one, and it preserves
 // candidate order, so it is safe to `&&` into any admission site.
 //
-// RefRole::Call is UN-NARROWED, deliberately and permanently. In C++ the spelling `Foo( x )` is legitimately
-// a constructor call, a functional cast, OR a free function; narrowing Call to Function|Method would DROP
-// real edges, and resolve.h's standing doctrine is that a WRONG narrow is worse than no narrow. Read/Write
-// are un-narrowed for the same reason one step down — a value read can name a variable, a function used as
-// a value, or an enumerator — and Import names a FILE, not a kind. test/nsfiltercheck.sh arm 2 is the
-// executable form of this paragraph.
+// RefRole::Call is UN-NARROWED, deliberately and permanently. In C++ the spelling `Foo( x )` is legitimately a
+// constructor call, a functional cast, OR a free function; narrowing Call to Function|Method would DROP real edges,
+// and resolve.h's standing doctrine is that a WRONG narrow is worse than no narrow. Read/Write are un-narrowed for
+// the same reason one step down — a value read can name a variable, a function used as a value, or an enumerator —
+// and Import names a FILE, not a kind. test/nsfiltercheck.sh arm 2 is the executable form of this paragraph.
 //
 // MEASURED, and stated here so the next round does not re-derive it: inside buildGraph's call-edge loop
 // this predicate is a PROVABLE NO-OP. That loop admits only role=Call (un-narrowed above) and role=Macro,
@@ -254,11 +253,12 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         {
             return kind == SymKind::Macro;
         }
-        default:
+        case RefRole::Call: case RefRole::Read: case RefRole::Write: case RefRole::Import:
         {
-            return true;   // Call / Read / Write / Import — see the doctrine above
+            return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }
     }
+    return true;
 }
 
 // ---- aider-style name-quality prior weights --------------------------------------------------------

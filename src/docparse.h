@@ -669,13 +669,16 @@ inline std::string parseDocFile( const std::string& path, std::string_view extLo
                 case DocKind::Ipynb: return extractIpynb( *bytes );
                 case DocKind::Html:  return extractHtml( *bytes );
                 case DocKind::Csv:   return extractCsv( *bytes );
-                default:             return {};
+                case DocKind::Markitdown:                       // routed by the outer switch, never read here
+                case DocKind::None:  return {};
             }
+            return {};
         }
 
-        default:
+        case DocKind::None:
             return {};
     }
+    return {};
 }
 
 // ── generated-document signals ───────────────────────────────────────────────────────────────────────

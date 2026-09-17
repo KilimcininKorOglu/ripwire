@@ -175,9 +175,15 @@ inline IncludeLang includeLangOf( std::string_view path ) noexcept
     {
         { ".c",   IncludeLang::CFamily }, { ".cc",  IncludeLang::CFamily }, { ".cpp", IncludeLang::CFamily },
         { ".cxx", IncludeLang::CFamily }, { ".h",   IncludeLang::CFamily }, { ".hpp", IncludeLang::CFamily },
-        { ".hh",  IncludeLang::CFamily }, { ".hxx", IncludeLang::CFamily }, { ".m",   IncludeLang::CFamily },
-        { ".mm",  IncludeLang::CFamily },
-        { ".py",  IncludeLang::Python },
+        { ".hh",  IncludeLang::CFamily }, { ".m",   IncludeLang::CFamily }, { ".mm",  IncludeLang::CFamily },
+        // The shader/CUDA trio the crawl indexes as C++ and the Python typing stub. Their files entered the
+        // dependency denominator when langOfPath learned their extensions (lintrules.h), so their includer
+        // dialect joins in the same change: a quote `#include "x.cuh"` is the C tier's exact relative-path
+        // hit, and a stub's `import` is Python's Step-A. Without these rows they would be counted and never
+        // resolve, which test/deplangscheck.sh arm (G) refuses. `.hxx` left this table with langOfPath's row:
+        // the crawl admits no `.hxx` file, so no includer could ever have that extension.
+        { ".metal", IncludeLang::CFamily }, { ".cu", IncludeLang::CFamily }, { ".cuh", IncludeLang::CFamily },
+        { ".py",  IncludeLang::Python },    { ".pyi", IncludeLang::Python },
         { ".ts",  IncludeLang::Ts },      { ".tsx", IncludeLang::Ts },      { ".mts", IncludeLang::Ts },
         { ".cts", IncludeLang::Ts },      { ".js",  IncludeLang::Ts },      { ".jsx", IncludeLang::Ts },
         { ".mjs", IncludeLang::Ts },      { ".cjs", IncludeLang::Ts },

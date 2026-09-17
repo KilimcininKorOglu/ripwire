@@ -48,6 +48,118 @@ on the old gate with that staging: 4 FAIL rows for #265's straddle (`src/slice.h
 clock at 2027-07-01; the new gate is 78 PASS under both stagings and without them
 ([#271](https://github.com/redhat-et/ripwire/pull/271)).
 
+### Changed — the compiler checks the tables, switches, masks and layouts this tree's defects came from
+
+Each check below is written against a defect this repository shipped or nearly shipped, and each was shown failing on a
+deliberate break before it landed. None of them changes output. They are `static_assert`s, one template constraint, one
+link-time stamp and two warning flags. Output was compared with the base binary on every fixture corpus, stdout and exit
+code, and the only differences are the extension fix below.
+
+- **Language registration.** Appending a `Lang` meant updating five tables in four files. 02f798e3 (Dart), 9418e35e (five
+  unanalysed languages) and PR #233's `.gd` row each stayed one language short. `src/main.cpp` now asserts that every
+  code language is analysed or disclosed as unanalysed by `--nonlocal-state`, and that it is named by the lint vocabulary,
+  the lint catalog and `langOfPath`. `src/ingest_crawl.h` asserts that `langOfPath`'s extensions and the crawl's are the
+  same. Each check returns the first INDEX that is wrong, so a zero-filled row cannot pass. `isCodeLang` (`src/model.h`)
+  is the one declared exemption, and it has no `default:`.
+- **`-Werror=switch -Werror=implicit-fallthrough`** on ripwire's own C++ targets, for every compiler. GCC ran no
+  `-Wswitch` at all before this, because it enables it only under `-Wall`. The warning count was measured at 0 on
+  AppleClang 21 and Homebrew clang 22, debug and `-DNDEBUG`, for both binaries and the four test harnesses. A switch that
+  returns one answer per enumerator carries no `default:` any more. Eleven did, including `dependencyCapable` and
+  `dependencyDialect`, where Dart was the one language never decided.
+- **Cache and layout facts.** `quality.h`'s mirror of `kParserVer` and `kCacheVersion` is asserted equal to the real
+  constants; only `test/qextractionkeycheck.sh` held that before. `CacheEntry` must have unique object representations,
+  because `sizeof == 32` did not prove "no padding". `qsnapPut` is constrained the same way, so a padded struct or a float
+  cannot reach a byte-stable blob. `ingest()` carries `sizeof( Symbol )` and `sizeof( IngestResult )` in its mangled name.
+  CLAUDE.md records three mixed-layout builds that linked "successfully". Measured on this tree, an object pair compiled
+  against two `Symbol` layouts now fails to link, where the same pair without the stamp linked and died with SIGBUS.
+- **The redaction first-byte mask** is compared bit for bit with the rule table it hand-numbers, so an inserted rule
+  cannot leave a later rule tried only at bytes its pattern cannot start with.
+- **Shift width against count.** Every mask a runtime value is shifted into has its count pinned to its width: the
+  language masks, the ensemble and quality-panel family masks, the naming-rule mask, the redaction rule mask, the
+  pack-task subset enumeration and `strkern`'s block masks.
+- **Tables indexed by an enum.** A table's extent is deduced and asserted against the enum's count, and the count is
+  proven exact beside the enum with `infra/enumcount.h` (#241). A spelled extent had let several of these asserts restate
+  their own declaration, and let a missing row compile as a null pointer. `kNodeFieldNames` rows now name their
+  enumerator, because the enum and the table are paired by index. `skilleval`'s provenance counters were `[3]` for a
+  four-value `Prov`. A new gate, `test/enumtablecheck.sh`, refuses a literal-extent table indexed by an enum. It reports 14
+  subscripts over five tables on `f8e6087c`. Each of its three positive controls puts one real literal back and must
+  report exactly that table among the violations the literal adds, so a violation already in the tree fails the rule
+  arm alone instead of every control.
+
+### Fixed — a memory buffer that lost a write was read back as a whole document
+
+Twenty-three places render into an `open_memstream` buffer and then read it back: the map's own children (XML and JSON),
+the `est_tokens` payload charges, the `--max-tokens` fit probes, the `--token-budget` buffer, the `--for` lens's pre-rendered
+blocks, the `--from-trace` blocks and seven MCP answers. Twenty-two of them flushed and closed the buffer without looking
+at either result. The one that did look, `renderToString`, could not see the failure it looked for.
+
+Measured, not assumed: a `DYLD_INSERT_LIBRARIES` interposer failed one chosen `realloc` inside an `open_memstream` on macOS
+26.5.1 (Apple libc), over 5 KB, 50 KB and 200 KB streams written in 1 KB chunks. In all 19 runs where the failure landed
+inside the stream, one `fwrite` came back short and the stream's error flag was set. Each run lost 152 to 976 bytes, as
+late as chunk 177 of 200, so the hole sat in the middle of the document. `fflush` and `fclose` both returned 0 every time.
+Read after that, the buffer is a shorter document with no sign that it is one. What that meant per site: a map or `--json`
+map with a hole in it; a payload section, trace block or MCP answer cut mid-element; a `--max-tokens` probe that read a
+too-small size as fitting; and a `--token-budget` map printed short at exit 0.
+
+Every buffer is now owned by one type, `rw::MemoryStream` (`src/infra/emit.h`). Its `finish()` flushes, reads the error
+flag, closes, and reports by value, and it is `[[nodiscard]]`. The destructor closes a stream nobody finished and frees the
+buffer on every path, so no site frees or closes anything by hand. A buffer that did not finish whole takes the path a
+failed open already took. The map and the JSON map are rendered again, straight to the output, with the modelled
+`est_tokens`: the children became one renderer both paths call. A charged section streams uncharged, and a probe answers
+"unmeasured". The `--for` blocks are emitted directly, and a secret redacted in the failed buffer is not counted again when the block
+re-renders. The MCP answers answer as they do when the open fails, except `uses`, which answers `-32603` instead of an
+empty success. Two surfaces have
+no second path, because the buffer holds the answer itself, and both refuse in every build instead of printing short.
+The `--token-budget` map prints nothing, says `write error — the --token-budget buffer lost bytes` on stderr, and exits
+1. `--from-trace` and `--run-trace` do the same when the `<trace>` map, the test hop or the signature/body section loses
+its buffer, at the open or at the finish, and the MCP `from_trace` verb answers `-32603`. Those blocks used to be left
+out of a bundle printed at exit 0, which no Release build disclosed.
+
+`test/estchargecheck.sh` gains two arms. **#14f** uses a new debug-only fault switch, `INFRA_FAULT_MEMSTREAM_FINISH=1`,
+which makes every finish really close its stream and then report failure. It asserts four surfaces, not every site. The
+`--pack-signatures` map and the `--json` map come out byte-identical to the undegraded run outside `est_tokens`,
+well-formed, at exit 0. The `--token-budget` run and a `--from-trace` run each print 0 bytes and exit 1 where their
+controls print the answer. Under the same switch, MCP `uses` answers `-32603`, and the `--for` redaction summary
+matches its control in XML and `--json`. **#14g** reads `src/` and refuses an `open_memstream`, a direct call of the charge opener, or
+an `fflush`/`fclose` of a memory stream anywhere outside the type. On `f8e6087c` it reports 46 such lines. Its positive
+control puts the two lines of one site back by hand, once per spelling of the opener (bare, `::`, `os::`, `rw::os::`),
+and must report exactly those two each time.
+
+### Fixed — five code extensions the index parses were no language at all to the dependency, state and lint verbs
+
+The crawl indexes `.metal`, `.cu` and `.cuh` as C++, `.pyi` as Python and `.phtml` as PHP. `langOfPath`
+(`src/lintrules.h`) is the verb-time classifier that `--deps`, `--arch`, co-change's `dep_capable=`, `--nonlocal-state`,
+`--quality-panel`, the lint catalog and user `--lint-rules` use to bucket a file. It kept its own extension table "in sync
+by hand", that table had drifted, and it called those five extensions Unknown. Every one of those verbs quietly left the
+files out. `includeLangOf` (`src/resolve.h`) had the same four C++ and Python gaps, so even a counted file could not
+resolve its includes.
+
+Both tables now know all five, and the crawl's table and `langOfPath`'s are asserted equal at compile time (above).
+`test/deplangscheck.sh` arm (G) requires every dependency-counted extension to resolve too. It went red with only the
+classifier rows added, naming `.cu`, `.cuh`, `.metal` and `.pyi` as counted but unresolvable (and `.hxx` the other way
+round), which is why the resolver rows land in the same change. `.hxx` left both tables: the crawl admits no `.hxx` file, so neither row could ever be reached.
+
+Measured by comparing stdout and exit code, `--no-cache`, between the base binary (`f8e6087c`) and this change, over all
+162 fixture corpora under `test/` and eight verbs: 1,296 runs. 14 differ. All 14 are on the six corpora that hold one of
+the extensions, and only on `--deps`, `--nonlocal-state` and `--quality-panel`. The map, `--json`, `--lint`,
+`--lint-catalog` and `--pack-signatures` are byte-identical everywhere.
+- `test/cudafix` `--nonlocal-state`: `cells="0" functions="0"` became `cells="5" functions="4"`. The CUDA kernel's
+  `rk_scaleTable`, read through `rk_clampScale`, was invisible.
+- `test/cudafix` `--deps`: `dep_files="1"` became `3`, and the kernel's include of `reduceShared.cuh` now counts
+  (`afferent` 1 → 2, `transitive` 1 → 2). `test/metalfix` already printed the `.metal` shader's row. The shader now
+  counts in `dep_files` (2 → 3), and its quote include of `AAPLSharedTypes.h` resolves (the header's `afferent` 1 → 2).
+  `test/phpfix`, `pyshapefix`, `stdqualfix` and `macroreparsefix` each gain the one file their denominator was missing.
+- `test/phpfix` `--nonlocal-state`: `unanalyzed_files="4"` became `5`. The `.phtml` view is disclosed as unanalysed PHP.
+- A user rule with `language: cpp` run over a `.metal` shader and a `.cu` kernel reported `findings="0"`. It now reports 16.
+- `.pyi` typing stubs. A stub restates its module's globals (`COUNT: int` beside `m.py`'s `COUNT = 0`), so reading
+  both files counted one global twice: a two-file probe went from `cells="1"` to `cells="2"` with every row still bound to
+  `m.py`. `--nonlocal-state` and `--quality-panel` now skip a stub whose `.py` is indexed beside it. A stub with no
+  source, the shape a C extension ships, is the only declaration of its module and keeps its cells: `test/pyshapefix`'s
+  `stubs.pyi` adds one (`cells` 5 → 6). Gate: `test/nonlocalstatecheck.sh` arm (J), red at `cells="2"` before the skip.
+
+Dart stays outside the dependency denominator, now by a named case instead of a `default:`. Dart has no import capture,
+and a two-file probe showed `--deps` printing no row for `import 'util.dart';`.
+
 ### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
 
 CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already

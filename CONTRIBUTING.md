@@ -296,13 +296,15 @@ already knew about the others, several while fixing one. So the rule is mechanic
   until someone adds an early `return` above it. One owner whose destructor releases what it holds
   collapses that to a single handler whose only job is the conversion this codebase actually wants: a
   recoverable error becomes a degrade, returned, never propagated. Measured on `216802ad`, 2026-09-14:
-  of **27 `catch` blocks under `src/`, exactly one releases a resource by hand** — `infra/emit.h`'s
-  `renderToString`, which `fclose`s a memstream and `free`s its buffer. The other 26 convert a throw
-  into a degrade, set a flag, return a message, or `continue`; they own nothing, which is why they are
-  one line each. Re-derive rather than trust: a bare `grep -cE '\bcatch[[:space:]]*\('` over `src/`
-  reports **35**, and 8 of those hits are the word inside a `//` comment or inside a tree-sitter query
-  string — most of them in `lintrules.h`, whose subject is *detecting* empty catch blocks in other
-  people's code. Exclude comment and string context, then read each surviving handler's first body
+  of 27 `catch` blocks under `src/`, exactly one released a resource by hand — `infra/emit.h`'s
+  `renderToString`, which `fclose`d a memstream and `free`d its buffer. Re-derived after that buffer
+  moved into `rw::MemoryStream` (2026-09-16, `lane/compile-time-checks`): **26 `catch` blocks, and none
+  releases a resource by hand** — `renderToString`'s two handlers now leave the stream and its buffer to
+  the owner's destructor. Every handler converts a throw into a degrade, sets a flag, returns a message,
+  or `continue`s; they own nothing, which is why they are one line each. Re-derive rather than trust: a
+  bare `grep -cE '\bcatch[[:space:]]*\('` over `src/` reports **34** there, and 8 of those hits are the
+  word inside a `//` comment or inside a tree-sitter query string — most of them in `lintrules.h`, whose
+  subject is *detecting* empty catch blocks in other people's code. Exclude comment and string context, then read each surviving handler's first body
   line, because the resource question is answered by reading it and not by counting.
 
 ### Naming encodes what the type cannot

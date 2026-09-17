@@ -362,10 +362,26 @@ inline bool crawlPathStaysInRoot( const std::string& path, const std::string& ro
 // ignored subtree all keep TODAY'S FULL WALK and say which (CrawlSkips::ignoreMode). Default true: the
 // HEAD-snapshot and edit-preview callers re-ingest a `git archive` extraction, which holds tracked files
 // only, so the two sides of a --quality-delta compare the same population either way.
+//
+// THE LAYOUT LINK STAMP (the trailing IngestLayout argument, which every caller defaults). CLAUDE.md records builds that
+// linked objects compiled against two different struct layouts and reported success: sizeof( Symbol ) 96 in one object
+// and 104 in another gave a real ASan report of a fake bug, and an "impossible" std::length_error. The empty tag type
+// carries both sizes in its template arguments, so they enter ingest()'s MANGLED NAME: an object compiled against a
+// stale layout references an ingest() that no fresh object defines, and the link fails instead.
+// MEASURED 2026-09-16 on this tree, with the dev build's own flags and link line: main.o compiled with the stamp at
+// sizeof( Symbol ) 112, ingest.o at 120 (one u64 added) -> ld: undefined symbol
+// rw::ingest(…, IngestLayoutStamp<112, 848>) against a defined …<120, 848>. The same mixed pair WITHOUT the stamp linked
+// at exit 0, and the binary died with SIGBUS (exit 138) on test/fixture. The consistent stamped pair links and prints
+// byte-identical output. Symbol is named separately because sizeof( IngestResult ) does not move when an element type
+// held in one of its vectors grows (848 on both sides above). An empty class argument: at most one ignored register,
+// on a function called once per run.
+template<std::size_t kSymbolBytes, std::size_t kIngestResultBytes> struct IngestLayoutStamp {};
+using IngestLayout = IngestLayoutStamp<sizeof( Symbol ), sizeof( IngestResult )>;
+
 IngestResult ingest( const char* rootDir, const std::vector<std::string>& excludeSubstr = {},
                      std::string_view cacheFile = {}, std::size_t maxFileBytes = kDefaultMaxFileBytes,
                      bool captureValueUses = true, std::string_view excludeLabel = {},
-                     bool respectGitignore = true );
+                     bool respectGitignore = true, IngestLayout = {} );
 
 // ---- index-identity disclosure (the two functions behind --doctor's index-cache row) ----
 //

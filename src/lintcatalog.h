@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <string>
 #include <string_view>
 #include <vector>
@@ -96,6 +97,9 @@ struct LintCatalogRow
     std::uint32_t     langMask;   // bitmask over kCatalogLangs — which grammars can ever satisfy this rule's query/scan
     std::string_view since;       // the ripwire release the rule first shipped in (git archaeology on the literal, not a guess)
 };
+// langMask holds one bit per Lang (clones.h langBit), and corpusLangMask builds a mask of the same type at runtime.
+static_assert( kLangCount <= std::numeric_limits<decltype( LintCatalogRow::langMask )>::digits,
+               "LintCatalogRow::langMask holds one bit per Lang — widen it before the enum outgrows it" );
 
 // Declaration order here IS the order `--lint`'s tally and `--lint-catalog`'s listing both use — the
 // same 24 base names main.cpp's allRuleNames builds, then the atoms pack's 7, then the cache pack's 8.

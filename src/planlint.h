@@ -147,8 +147,9 @@ inline const char* glyphName( Glyph g ) noexcept
         case Glyph::Hourglass: return "hourglass";
         case Glyph::Check:     return "check";
         case Glyph::Cross:     return "cross";
-        default:                return "missing";
+        case Glyph::None:      return "missing";
     }
+    return "missing";
 }
 
 struct CardRow

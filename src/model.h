@@ -79,8 +79,9 @@ inline const char* symTag( SymKind k ) noexcept
         case SymKind::Section:   return "sec";    // markdown heading (doc structure; isolated in the graph)
         case SymKind::Macro:     return "macro";  // #define (disclosed-degraded: replacement text, not a parsed body)
         case SymKind::Field:     return "field";  // member variable (id=path::Owner::field; use-sites via --uses=Owner.field)
-        default:                 return "other";
+        case SymKind::Other:     return "other";
     }
+    return "other";   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent "other"
 }
 
 // NOTE: Json sits AFTER Unknown deliberately. serialize.h pins `static_assert( int(Lang::Unknown)==12 )`
@@ -128,7 +129,8 @@ static_assert( enumCountIsExact<Lang, kLangCount>(), "kLangCount must name the L
 // The canonical home for this switch: previously duplicated privately in htmlexport.h, moved here so a THIRD
 // caller (naming-consistency's per-language vote groups) reuses it instead of growing a second copy.
 /// Return the stable short output label for a language, or "?" for an unknown value.
-inline const char* langTag( Lang l ) noexcept
+/// constexpr so main.cpp's registration asserts can ask it about the value one past kLangCount.
+inline constexpr const char* langTag( Lang l ) noexcept
 {
     switch( l )
     {
@@ -154,8 +156,29 @@ inline const char* langTag( Lang l ) noexcept
         case Lang::Elixir:     return "ex";
         case Lang::Dart:       return "dart";
         case Lang::Kotlin:     return "kt";
-        default:               return "?";
+        case Lang::Unknown:    return "?";
     }
+    return "?";   // a byte past the enum (a corrupt cache value) still reads "?"; a NEW Lang is a -Werror=switch error above
+}
+
+// Is this a CODE language (functions, calls, state), as opposed to a data or document format or no language at all?
+// It is the ONE declared exemption the per-language registration checks read: main.cpp's asserts and ingest_crawl.h's
+// kLangTable mirror check. Appending a Lang used to mean remembering five tables in four files, and three shipped or
+// nearly shipped one language short (02f798e3 Dart, 9418e35e five unanalyzed languages, PR #233's `.gd` row).
+// There is no `default:` here on purpose: a new enumerator is a -Wswitch error on this switch, so whether it is code is
+// a decision, and every table the checks read then has to agree with that decision at compile time.
+inline constexpr bool isCodeLang( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Cpp: case Lang::Python: case Lang::TypeScript: case Lang::Go: case Lang::Rust: case Lang::Swift:
+        case Lang::ObjC: case Lang::JavaScript: case Lang::Bash: case Lang::Java: case Lang::Ruby: case Lang::CSharp:
+        case Lang::C: case Lang::Php: case Lang::Lua: case Lang::Elixir: case Lang::Dart: case Lang::Kotlin:
+            return true;
+        case Lang::Markdown: case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Unknown:
+            return false;
+    }
+    return false;   // a byte past the enum (a corrupt cache value) is not a language
 }
 
 // Call-site RECEIVER classification (P2-D one-hop type narrowing). Captured at ingest from the AST shape
@@ -235,8 +258,8 @@ inline const char* refRoleTag( RefRole r ) noexcept
         case RefRole::Extends: return "extends";
         case RefRole::Macro:   return "macro";
         case RefRole::Type:    return "type";
-        default:               return "read";
     }
+    return "read";   // a byte past the enum; every enumerator is named above, so a NEW role is a -Werror=switch error
 }
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
@@ -244,7 +267,7 @@ inline const char* refRoleTag( RefRole r ) noexcept
 // adding a tag later is a compatible extension, renaming one is not. Declaration order MUST track the
 // EvWhyTag indices ingest.cpp writes — the table is the single source both emitters read.
 inline constexpr std::size_t kEvWhyTagCount = 8;
-inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
+inline constexpr const char* kEvWhyTagTable[] = {
     "guard-return",     // return/throw whose escape crosses at least one construct (incl. §1.3's guard clause)
     "loop-escape",      // break/continue out of a loop from under an intervening construct
     "switch-escape",    // break (or Java yield) out of a switch from under an intervening construct
@@ -254,6 +277,7 @@ inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
     "fallthrough",      // Go fallthrough — an explicit intra-switch goto
     "multi-entry",      // a case label displaced into a loop/branch (Duff's device; §2.6)
 };
+static_assert( std::size( kEvWhyTagTable ) == kEvWhyTagCount, "kEvWhyTagTable: one spelling per ev_why tag — a spelled extent zero-fills a missing one into a null the emitter prints" );
 
 // A definition = one node in the graph. symbols[i].id == i (dense, deterministic order).
 struct Symbol

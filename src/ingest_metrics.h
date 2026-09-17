@@ -399,6 +399,9 @@ inline constexpr std::uint32_t kNoCtrl = 0xFFFFFFFFu;
 // EvWhyTag indices MUST track model.h's kEvWhyTagTable declaration order — the table is the single
 // source of the public spellings; these are the write-side indices.
 enum class EvWhyTag : std::uint8_t { GuardReturn = 0, LoopEscape, SwitchEscape, Goto, LabelledJump, BackEdge, Fallthrough, MultiEntry };
+// kEvWhyTagCount (model.h) is spelled 8 by hand and sizes EvCtx::why below, which is indexed by an EvWhyTag: a tag
+// appended here without raising it would be a write past the array's end. Proven exact at compile time.
+static_assert( enumCountIsExact<EvWhyTag, kEvWhyTagCount>(), "kEvWhyTagCount must equal the EvWhyTag count — raise it with the append" );
 
 // Everything the walk accumulates for one def's ev. Vectors are constructed per complexityOf call and
 // reserve small — the same per-def allocation posture as cc_walk's own frame stack/kids (A4-F25: NOT

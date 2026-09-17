@@ -899,7 +899,7 @@ inline bool sliceAssignIntroduces( SliceFam fam ) noexcept
 // statement CONTAINER for the family — the child at that boundary IS the statement.
 
 // declarative table over a switch (G2): the node kinds whose DIRECT children are statements
-inline constexpr const char* kSliceStmtContainers[ std::size_t( SliceFam::None ) ][ 6 ] =
+inline constexpr const char* kSliceStmtContainers[][ 6 ] =
 {
     /* C    */ { "compound_statement", "translation_unit", "field_declaration_list", "declaration_list", "case_statement", nullptr },
     /* Py   */ { "block", "module", nullptr, nullptr, nullptr, nullptr },
@@ -924,9 +924,13 @@ inline bool sliceKindInTable( TSNode n, const char* const* table, std::size_t ex
 }
 
 // the same lookup on a PER-FAMILY table (kSliceStmtContainers, kSliceScopeKinds): the family picks the row
+// Both tables DEDUCE their row count, so a family added before SliceFam::None without its row is a build error here
+// rather than a zero-filled row of nullptrs that silently holds no kinds (the extent used to be spelled
+// `[ std::size_t( SliceFam::None ) ]`, which made a missing row compile).
 template< std::size_t Rows, std::size_t Cols >
 inline bool sliceKindInFamilyTable( TSNode n, SliceFam fam, const char* const ( &table )[ Rows ][ Cols ] ) noexcept
 {
+    static_assert( Rows == std::size_t( SliceFam::None ), "a per-family slice table needs exactly one row per SliceFam before None" );
     return fam != SliceFam::None && sliceKindInTable( n, table[ std::size_t( fam ) ], Cols );
 }
 
@@ -1011,7 +1015,7 @@ inline std::uint32_t sliceStmtAnchorLine( TSNode node, SliceFam fam )
 // scope (function-scoped by the language; comprehension/lambda scopes are not separated here), so its
 // row is empty and every Python binding spans the definition. JS `var` is function-scoped (hoisting),
 // so a var binding climbs to the nearest function kind instead (kSliceJsFunctionKinds).
-inline constexpr const char* kSliceScopeKinds[ std::size_t( SliceFam::None ) ][ 14 ] =
+inline constexpr const char* kSliceScopeKinds[][ 14 ] =
 {
     /* C    */ { "compound_statement", "for_statement", "for_range_loop", "if_statement", "switch_statement", "while_statement", "do_statement",
                  "catch_clause", "lambda_expression", "function_definition", nullptr, nullptr, nullptr, nullptr },
@@ -1561,9 +1565,14 @@ struct SliceRdWalker
                        || sliceKindIs( n, "try_statement" ) || sliceKindIs( n, "with_statement" ) || sliceKindIs( n, "match_statement" )
                        || sliceKindIs( n, "return_statement" ) || sliceKindIs( n, "raise_statement" ) || sliceKindIs( n, "break_statement" )
                        || sliceKindIs( n, "continue_statement" );
-            default:
+            case SliceFam::Js:     // reach=linear families: no control-flow graph, so no construct is a control kind
+            case SliceFam::Go:
+            case SliceFam::Java:
+            case SliceFam::Rust:
+            case SliceFam::None:
                 return false;
         }
+        return false;
     }
 
     // ── the structure walk (the definition root, and every node of a linear family): recurse while there
