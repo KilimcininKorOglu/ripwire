@@ -232,9 +232,9 @@ inline double bm25ImpactBound( double idf, double T, const Bm25Params& p ) noexc
 // (natural-language prose, a pasted diff, a stack trace) stayed as big as the input.
 //
 // The longest REAL --for/--pack-task query on record in this repo (grep -rhoE -- '--for="[^"]{1,}"'
-// bench/ docs/, ranked by word count) is 13 words: "write through one reference or pointer while reading
-// another of the same type". This cap sits at ~78× that — the owner's "caps are blow-up guards, not
-// budgets to hug; set them at the pathological tail, not the typical case" ruling (memory
+// bench/ docs/, ranked by word count) is 10 words: "per connection state that holds the active
+// transaction and query" (docs/EVALS.md). This cap sits at ~102× that — the owner's "caps are blow-up
+// guards, not budgets to hug; set them at the pathological tail, not the typical case" ruling (memory
 // owner-quality-first-caps-are-blowup-guards.md) — so an ordinary task description, even an unusually long
 // one, never meets it; only a pathological paste does.
 inline constexpr std::size_t kMaxUniqueQueryTerms = 1024;

@@ -22,7 +22,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   body — and the query's DISTINCT term count had no ceiling: `lexicalScoresTiered`'s `tfFlat` allocation
   (symbols × unique query terms × 4 bytes) grew with the paste, not with the corpus. A measured 480 KB
   task string cost 5.2 GB RSS on one request. `dedupeQueryTerms` now caps the kept unique-term count at
-  `kMaxUniqueQueryTerms` (1024 — about 78× the longest real `--for`/`--pack-task` query on record in
+  `kMaxUniqueQueryTerms` (1024 — about 102× the longest real `--for`/`--pack-task` query on record in
   `bench/` and `docs/`), disclosed as `terms_capped="1" terms_total="N"` on the CLI's `--for` root and on
   the MCP `for`/`explore`/`pack_task` responses, never a silent truncation. Gate: `test/forblowupcheck.sh`.
 - **An MCP stdio request line had no size bound, unlike the HTTP transport.** `runMcp()`'s read loop grew

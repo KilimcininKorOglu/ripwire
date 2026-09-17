@@ -9,8 +9,8 @@
 # request. Deduping to unique terms was already correct (a repeated query word does not double-count);
 # the gap was that "unique" itself had no bound.
 #
-# THE FIX. dedupeQueryTerms caps the KEPT unique-term count at kMaxUniqueQueryTerms (1024 — about 78x the
-# longest real --for/--pack-task query on record in bench/ and docs/, a 13-word one; see lexical.h for the
+# THE FIX. dedupeQueryTerms caps the KEPT unique-term count at kMaxUniqueQueryTerms (1024 — about 102x the
+# longest real --for/--pack-task query on record in bench/ and docs/, a 10-word one; see lexical.h for the
 # grep this cap is set from). A term seen after the cap fills scores zero (it owns no tf row) rather than
 # growing the allocation further, and the cut is disclosed via the SAME CapDisclosure channel every other
 # indexing cap on a --for/--pack-task bundle uses: `terms_capped="1" terms_total="N"` on the XML root
