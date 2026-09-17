@@ -504,16 +504,9 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
         return 0;
     }
 
-    // Collect + sort .md paths for determinism. The walk advances with increment(ec): the range-for's operator++
-    // THROWS, and this function is noexcept, so a skills tree it could not descend (a path past the name limit, a
-    // directory removed mid-walk, a descriptor limit) was std::terminate — SIGABRT, exit 134, from `ripwire wrap`
-    // run in a repository carrying such a tree. A walk that stops early is disclosed and scored as a WARN: the
-    // skills past that point were never scanned, so a clean result would claim more than was checked.
-    //
-    // A directory the scan cannot enter is not skipped in silence either. skip_permission_denied used to drop a
-    // mode-000 skills subfolder without a word, so a skill carrying injection text scored CRITICAL while readable and
-    // clean once its folder was sealed. Each unreadable directory is now named on stderr, the walk does not descend
-    // into it but goes on with its siblings, and the scan scores at least WARN.
+    // Collect + sort .md paths for determinism. The walk advances with increment(ec): the throwing range-for
+    // operator++ made an undescendable tree std::terminate (exit 134) before this fix. A stopped walk is
+    // disclosed below (CRITICAL: F-B3); a directory the scan cannot ENTER (mode-000, WARN) is different.
     std::vector<std::string> mdPaths;
     int                      maxSev = 0;
     fs::recursive_directory_iterator it( dir, fs::directory_options::none, ec ), end;
@@ -535,10 +528,12 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
     }
     std::sort( mdPaths.begin(), mdPaths.end() );
 
+    // F-B3: unlike the WARN above, files past a stopped walk are still COPYABLE — this fails CLOSED (ruling 3).
+    if( !ec && rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" ) ) { ec = std::make_error_code( std::errc::too_many_files_open ); }
     if( ec )
     {
-        rw::emitTo( stderr, "ripwire wrap: WARN — the skill scan of {} stopped early ({}); skills past that point were not scanned\n", dir, ec.message() );
-        maxSev = std::max( maxSev, 1 );
+        rw::emitTo( stderr, "ripwire wrap: CRITICAL — the skill scan of {} stopped early ({}); skills past that point were not scanned and may still be installed\n", dir, ec.message() );
+        maxSev = std::max( maxSev, 2 );
     }
     for( const std::string& p : mdPaths )
     {

@@ -521,13 +521,15 @@ PatternFileCensus eligiblePatternFiles( const IngestResult& ing, const pattern::
 inline constexpr std::size_t kUnreachableMaxHits = 5000;
 
 // ---- a user's #match? / #not-match? predicate that could not be DECIDED, by cause ----
-// Three different facts that used to share one counter and one sentence — "the regex engine abandoned the match" —
-// which was false for two of them and sent the reader to the wrong fix:
+// Four different facts that used to share one counter and one sentence — "the regex engine abandoned the match" —
+// which was false for three of them and sent the reader to the wrong fix:
 //   TextScreened     — a capture-typed argument's per-match TEXT was refused by the structural screen (e.g. a captured
 //                      string literal spelling a catastrophic-backtracking construct). Nothing was matched.
 //   TextUncompilable — that per-match text does not parse as a regular expression (e.g. "foo(").
 //   Abandoned        — a pattern compiled and the engine gave up part-way through the match (RegexVerdict::Exhausted).
-enum class AstRegexUndecidedCause : std::uint8_t { TextScreened, TextUncompilable, Abandoned };
+//   Skipped          — the captured text was too long to hand the engine at all on this thread (RegexVerdict::Skipped,
+//                      F-B4 — never tried, never abandoned mid-match; the same bound `--regex` uses on a long line).
+enum class AstRegexUndecidedCause : std::uint8_t { TextScreened, TextUncompilable, Abandoned, Skipped };
 
 // What a finished walk hands the verb: a count per cause and the FIRST undecided evaluation — lowest fileId, then
 // byte, then cause, then pattern — so the refusal names one concrete site, and the same one on every run whatever the
@@ -537,15 +539,16 @@ struct AstRegexUndecidedReport
     std::uint64_t          textScreened     = 0;
     std::uint64_t          textUncompilable = 0;
     std::uint64_t          abandoned        = 0;
+    std::uint64_t          skipped          = 0;
     bool                   hasFirst         = false;
     std::uint32_t          firstFileId      = 0;
     std::uint32_t          firstByte        = 0;
     std::uint32_t          firstLine        = 0;
     AstRegexUndecidedCause firstCause       = AstRegexUndecidedCause::Abandoned;
-    std::string            firstPattern;     // the per-match text (Text*) or the pattern that was running (Abandoned)
-    std::string            firstReason;      // the guard's refusal, or kRegexAbandonedReason
+    std::string            firstPattern;     // the per-match text (Text*) or the pattern that was running (Abandoned/Skipped)
+    std::string            firstReason;      // the guard's refusal, or kRegexAbandonedReason / kRegexOversizeReason
 
-    std::uint64_t total() const noexcept { return textScreened + textUncompilable + abandoned; }
+    std::uint64_t total() const noexcept { return textScreened + textUncompilable + abandoned + skipped; }
 };
 
 // The sink the walk's workers write into. Only the undecided path ever touches it, which is why a mutex is the whole
@@ -556,8 +559,10 @@ public:
     void note( AstRegexUndecidedCause cause, std::uint32_t fileId, std::uint32_t byte, std::uint32_t line, std::string_view pattern, std::string_view reason )
     {
         const std::lock_guard<std::mutex> lock( mutex );
-        std::uint64_t& count = ( cause == AstRegexUndecidedCause::TextScreened ) ? state.textScreened
-                             : ( cause == AstRegexUndecidedCause::TextUncompilable ) ? state.textUncompilable : state.abandoned;
+        std::uint64_t& count = ( cause == AstRegexUndecidedCause::TextScreened )     ? state.textScreened
+                              : ( cause == AstRegexUndecidedCause::TextUncompilable ) ? state.textUncompilable
+                              : ( cause == AstRegexUndecidedCause::Skipped )          ? state.skipped
+                                                                                       : state.abandoned;
         ++count;
         const auto key      = std::make_tuple( fileId, byte, std::uint8_t( cause ), pattern );
         const auto firstKey = std::make_tuple( state.firstFileId, state.firstByte, std::uint8_t( state.firstCause ), std::string_view( state.firstPattern ) );

@@ -71,4 +71,34 @@ else
         || { echo "codexwrapcheck: a mode-000 skills folder was skipped without a word on stderr: $( head -c 300 "$TMP/sealed.err" )"; exit 1; }
     grep -q '^\[mcp_servers\.ripwire\]$' "$TMP/sealed.out" || { echo "codexwrapcheck: no recipe after the sealed-folder WARN"; exit 1; }
 fi
+
+# ══ F-B3 (owner ruling 3) — reclassify the SAME two fixtures above without --force ═════════════════
+# An early-stopped walk (the descriptor-limit tree) is over INSTALLABLE content: the files past the point the
+# walk gave up on are still ordinary readable files install would copy, only the SCAN gave up on them. That must
+# fail CLOSED (CRITICAL, blocking the recipe without --force) — was WARN, advisory only, recipe always emitted.
+# The sealed folder is the owner's own opposite example: unreadable content that could not have been installed
+# EITHER, so it must stay WARN and the recipe must still emit without --force.
+( cd "$DEEPROOT" && ulimit -n 24 && exec "$BIN" wrap codex ) >"$TMP/deepnf.out" 2>"$TMP/deepnf.err"; rc_deepnf=$?
+[ "$rc_deepnf" -eq 1 ] \
+    || { echo "codexwrapcheck: F-B3 — an early-stopped walk over installable content exited $rc_deepnf without --force, expected 1 (CRITICAL refusal)"; exit 1; }
+grep -q 'CRITICAL — the skill scan of ./skills stopped early' "$TMP/deepnf.err" \
+    || { echo "codexwrapcheck: F-B3 — the stopped-early walk is not disclosed as CRITICAL: $( head -c 300 "$TMP/deepnf.err" )"; exit 1; }
+grep -q 'CRITICAL skill findings above' "$TMP/deepnf.err" \
+    || { echo "codexwrapcheck: F-B3 — wrap did not refuse the recipe over the stopped-early walk"; exit 1; }
+[ -s "$TMP/deepnf.out" ] \
+    && { echo "codexwrapcheck: F-B3 — a refused wrap still emitted a recipe: $( head -c 200 "$TMP/deepnf.out" )"; exit 1; }
+echo "codexwrapcheck: F-B3 PASS — an early-stopped walk over installable content now refuses without --force"
+
+if [ "$( id -u )" -ne 0 ]; then
+    chmod 000 "$SEALROOT/skills/sealed"
+    ( cd "$SEALROOT" && exec "$BIN" wrap codex ) >"$TMP/sealnf.out" 2>"$TMP/sealnf.err"; rc_sealnf=$?
+    chmod 755 "$SEALROOT/skills/sealed"
+    [ "$rc_sealnf" -eq 0 ] \
+        || { echo "codexwrapcheck: F-B3 — an unreadable, non-installable folder now blocks wrap without --force (rc=$rc_sealnf) — should stay WARN"; exit 1; }
+    grep -q 'WARN — cannot read skills folder' "$TMP/sealnf.err" \
+        || { echo "codexwrapcheck: F-B3 — the unreadable-folder WARN wording regressed: $( head -c 300 "$TMP/sealnf.err" )"; exit 1; }
+    grep -q '^\[mcp_servers\.ripwire\]$' "$TMP/sealnf.out" \
+        || { echo "codexwrapcheck: F-B3 — no recipe after the non-installable WARN, without --force"; exit 1; }
+    echo "codexwrapcheck: F-B3 PASS — an unreadable non-installable folder stays WARN, recipe still emits without --force"
+fi
 echo "codexwrapcheck: ALL PASS"

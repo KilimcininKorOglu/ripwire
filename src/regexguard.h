@@ -24,11 +24,16 @@
 //       engine's own diagnostic. `isScreened` says which, for a caller whose malformed-pattern wording predates
 //       the screen and is pinned (--arch). The screen runs FIRST, so its verdict is identical on every standard
 //       library: a pattern one engine abandons and the other backtracks on forever gets one answer, not two.
-//   GuardedRegex::search / forEachMatch → RegexVerdict { Miss, Hit, Exhausted }. Exhausted is a regex_error
-//       thrown DURING the match (libc++'s error_complexity / error_stack): the screen is a static
+//   GuardedRegex::search / forEachMatch → RegexVerdict { Miss, Hit, Exhausted, Skipped }. Exhausted is a
+//       regex_error thrown DURING the match (libc++'s error_complexity / error_stack): the screen is a static
 //       approximation, and overlapping alternation — (a|a)+z — passes it. It is never Miss. METHODOLOGY §9: an
 //       abandoned match is "unknown", and a caller that folds it into "no hit" reports a zero it did not
-//       measure. Every entry point refuses on it by name, quoting kRegexAbandonedReason.
+//       measure. Every entry point refuses on it by name, quoting kRegexAbandonedReason. Skipped is a subject
+//       NEVER HANDED to the engine because it exceeds this thread's measured-safe bound (maxEngineSubjectBytes)
+//       — search()/search(subject,captures) take an optional stackBytes (default SIZE_MAX, i.e. unbounded, so
+//       every caller that does not pass one is untouched); a caller off the grep line-loop (forEachLineMatch
+//       already bounds itself) passes one explicitly. Skipped is exactly as "unknown" as Exhausted and every
+//       entry point refuses on it the same way, quoting kRegexOversizeReason.
 //
 // THE ONE EXCEPTION BOUNDARY. std::regex reports through exceptions — regex_error from the parser and from the
 // matcher, bad_alloc from either — and this codebase avoids exception handling (CONTRIBUTING §3: a recoverable
@@ -404,6 +409,7 @@ enum class RegexVerdict : std::uint8_t
     Miss,
     Hit,
     Exhausted,   // the engine gave up DURING the match (regex_error or bad_alloc) — the answer is unknown, never a miss
+    Skipped,     // the subject was never handed to the engine — longer than this thread's measured-safe bound; unknown, never a miss
 };
 
 // The one sentence every entry point quotes when a match is abandoned, so a reader (and a gate) meets the same
@@ -413,6 +419,14 @@ inline constexpr std::string_view kRegexAbandonedReason =
     "the regex engine abandoned the match (std::regex gave up part-way through it: the backtracking the structural "
     "screen cannot see, such as overlapping alternation like (a|a)+z where two branches match the same text, or "
     "its stack or memory limit)";
+
+// The counterpart for RegexVerdict::Skipped — the sentence every entry point quotes when a subject was never
+// handed to the engine at all (too long for this thread's measured-safe bound, src/infra/stackthreads.h and
+// maxEngineSubjectBytes below). Distinct from kRegexAbandonedReason on purpose: "gave up mid-match" points a
+// reader at the pattern's backtracking; "too long to try" points them at the subject's size instead.
+inline constexpr std::string_view kRegexOversizeReason =
+    "the subject was too long for the regex engine to attempt safely on this thread (longer than the measured-safe "
+    "bound for this pattern's recursion cost and stack size)";
 
 // ── THE PATTERN'S SHAPE, read once when it compiles ─────────────────────────────────────────────────────────────
 //
@@ -1199,29 +1213,35 @@ class GuardedRegex
 public:
     GuardedRegex() = default;
 
-    // Whether `subject` holds a match. A literal plan answers without the engine; a subject holding none of the
-    // required literals is a Miss without it.
-    RegexVerdict search( std::string_view subject ) const noexcept
+    // Whether `subject` holds a match. A literal plan, or a Miss from the required-literals prefilter, never
+    // reaches the engine and so is never too long. `stackBytes` (default SIZE_MAX: every pre-existing caller is
+    // untouched) bounds only the branch that does — see maxEngineSubjectBytes and the file header above.
+    RegexVerdict search( std::string_view subject, std::size_t stackBytes = SIZE_MAX ) const noexcept
     {
         try
         {
             throwIfMatchFaultInjected();
-            const bool isHit = paths.hasPlan() ? paths.findsPlanMatch( subject.data(), subject.size() )
-                                               : paths.holdsRequired( subject.data(), subject.size() )
-                                                 && std::regex_search( subject.data(), subject.data() + subject.size(), engine );
-            return isHit ? RegexVerdict::Hit : RegexVerdict::Miss;
+            if( paths.hasPlan() )
+            {
+                return paths.findsPlanMatch( subject.data(), subject.size() ) ? RegexVerdict::Hit : RegexVerdict::Miss;
+            }
+            return !paths.holdsRequired( subject.data(), subject.size() )                ? RegexVerdict::Miss
+                 : subject.size() > maxEngineSubjectBytes( stackBytes )                   ? RegexVerdict::Skipped
+                 : std::regex_search( subject.data(), subject.data() + subject.size(), engine ) ? RegexVerdict::Hit : RegexVerdict::Miss;
         }
         catch( const std::regex_error& ) { return RegexVerdict::Exhausted; }   // error_complexity / error_stack
         catch( const std::bad_alloc& )   { return RegexVerdict::Exhausted; }   // the matcher's state stack outgrew memory
     }
 
-    // `captures` index into `subject`'s bytes, so the subject must outlive every read of them.
-    RegexVerdict search( std::string_view subject, RegexCaptures& captures ) const noexcept
+    // `captures` index into `subject`'s bytes, so the subject must outlive every read of them. No literal-plan
+    // fast path here — every subject reaches the engine, so `stackBytes` is what keeps a long one from it.
+    RegexVerdict search( std::string_view subject, RegexCaptures& captures, std::size_t stackBytes = SIZE_MAX ) const noexcept
     {
         try
         {
             throwIfMatchFaultInjected();
-            return std::regex_search( subject.data(), subject.data() + subject.size(), captures, engine ) ? RegexVerdict::Hit : RegexVerdict::Miss;
+            return subject.size() > maxEngineSubjectBytes( stackBytes ) ? RegexVerdict::Skipped
+                 : std::regex_search( subject.data(), subject.data() + subject.size(), captures, engine ) ? RegexVerdict::Hit : RegexVerdict::Miss;
         }
         catch( const std::regex_error& ) { return RegexVerdict::Exhausted; }
         catch( const std::bad_alloc& )   { return RegexVerdict::Exhausted; }
@@ -1277,6 +1297,15 @@ struct RegexCompile
     GuardedRegex               regex;                // an empty slot whenever `refusal` is set — never matched
     std::optional<std::string> refusal;              // the named reason, in the words --regex has always printed
     bool                       isScreened = false;   // true ⇒ a structural screen refused it; false ⇒ the engine's parser did
+
+    // F-H9 (CodeRabbit on #277): true only when the ENGINE'S OWN parser refused with error_badbrace — a
+    // syntactically well-formed {min,max} whose bound ORDER is wrong for the digits THIS pattern happened to
+    // hold (e.g. "9" substituted for a backreference where the template needed \1 >= 10). That is a fact about
+    // which digits landed there, never about the pattern's structure, so a caller building a template from a
+    // placeholder (arch.h's TO-template parse-time probe) can treat this refusal as "maybe valid for a
+    // DIFFERENT value" rather than "invalid for every value" — every other refusal (a screen refusal, or any
+    // other engine error) still means the same thing for any value that could ever be substituted.
+    bool                       isIntervalRangeOnly = false;
 };
 
 // Screen, then compile. The screen's verdict is platform-independent, so it decides first; only a pattern it
@@ -1294,7 +1323,12 @@ inline RegexCompile compileGuardedRegex( const std::string& pattern, RegexSyntax
         return out;
     }
     try                                { out.regex.engine.assign( pattern, syntax ); }
-    catch( const std::regex_error& e ) { out.refusal = std::string( e.what() ); return out; }
+    catch( const std::regex_error& e )
+    {
+        out.refusal             = std::string( e.what() );
+        out.isIntervalRangeOnly = e.code() == std::regex_constants::error_badbrace;
+        return out;
+    }
     catch( const std::bad_alloc& )     { out.refusal = std::string( "invalid regular expression: the engine ran out of memory compiling it" ); return out; }
     out.regex.paths.plan     = regexLiteralPlanOf( pattern, syntax );
     out.regex.paths.required = regexRequiredLiteralsOf( pattern, syntax );

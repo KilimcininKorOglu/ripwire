@@ -30,6 +30,7 @@
 #include "extentsuspect.h"     // extent honesty: the containment rules + the recovered/suspect bit vocabulary
 #include "macroreparse.h"      // member-macro re-parse: the scanner, the offset-preserving blank, the adoption rule
 #include "regexguard.h"        // #match?/#not-match?: the screen, the compile and the guarded match (ingest_astquery.h)
+#include "infra/stackthreads.h"   // kCallerStackBytesFloor — #match? bounds a captured node's text the same way skillscan.h/--arch do (F-B4)
 
 #include "infra/Diagnostics.h"
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)

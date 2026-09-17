@@ -1097,6 +1097,7 @@ static std::string undecidedPredicateCauses( const rw::AstRegexUndecidedReport& 
     if( u.textScreened != 0 )     { parts.push_back( std::to_string( u.textScreened ) + " captured text(s) the structural screen refused as a pattern" ); }
     if( u.textUncompilable != 0 ) { parts.push_back( std::to_string( u.textUncompilable ) + " captured text(s) that do not compile as a pattern" ); }
     if( u.abandoned != 0 )        { parts.push_back( std::to_string( u.abandoned ) + " match(es) the regex engine abandoned" ); }
+    if( u.skipped != 0 )          { parts.push_back( std::to_string( u.skipped ) + " match(es) whose captured text was too long to reach the regex engine" ); }
     std::string joined;
     for( const std::string& part : parts )
     {
@@ -1118,6 +1119,10 @@ static std::string undecidedPredicateFirstSite( const rw::Config& cfg, const rw:
     if( u.firstCause == rw::AstRegexUndecidedCause::Abandoned )
     {
         return "the first, at " + at + ", ran the pattern '" + u.firstPattern + "': " + u.firstReason;
+    }
+    if( u.firstCause == rw::AstRegexUndecidedCause::Skipped )
+    {
+        return "the first, at " + at + ", never ran the pattern '" + u.firstPattern + "': " + u.firstReason;
     }
     const char* const verdict = ( u.firstCause == rw::AstRegexUndecidedCause::TextScreened ) ? "which the structural screen refused" : "which does not compile";
     return "the first, at " + at + ", used the captured text '" + u.firstPattern + "' as its pattern, " + verdict + ": " + u.firstReason;
