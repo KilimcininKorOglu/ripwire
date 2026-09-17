@@ -642,10 +642,15 @@ enum class LocalBindKind : std::uint8_t
                //     (kind != Type) and the L3 fn tables skip it (typeName empty). APPENDED so no persisted
                //     kind value renumbers (RawBind rides kind through the cache as a u8).
     ParamType, // member-variable round (card A3): a C++/ObjC function DEFINITION parameter's WRITTEN type
-               //     (`void f( Counter& c )` → c:Counter), so `c.count` resolves to Counter.count in the field
-               //     use-site index (graph.h collectFieldUseSites). Consumed THERE ONLY, deliberately: Rule 2's
-               //     call narrowing (kind == Type) does not read it, so no call edge changes; the L3 fn tables
-               //     skip it by kind; shadow suppression already holds the parameter's VarDecl record.
+               //     (`void f( Counter& c )` → c:Counter) — also a lambda parameter's, a typed range-for
+               //     variable's and a reference local's — so `c.count` resolves to Counter.count in the field
+               //     use-site index (graph.h collectFieldUseSites). Rule 2's call narrowing reads it too, but
+               //     LEXICALLY (resolve.h buildScopedRecvDecls, 2026-09-16): every one of these shapes is scoped
+               //     narrower than the whole function or can be redeclared inside it, so the flat per-function
+               //     varType table would leak the type to other declarations of the name. The L3 fn tables skip
+               //     it by kind; shadow suppression already holds the declaration's VarDecl record. importedName
+               //     holds the written type WHOLE when it is qualified (`std::map<K, V>`), else "" — the same on a
+               //     declaration's Type record — so the lexical lookup can refuse a name that is only a final segment.
                //     APPENDED for the same cache reason as VarDecl.
     Import,    // Phase 5 (docs/EVALS.md "Phase 5", kParserVer 77): a FILE-SCOPE import binding — `var` is the
                //     name the import binds in the module namespace, `typeName` the module target as written
@@ -680,6 +685,11 @@ struct Binding
     NodeId        fromSymbol = kNoNode;   // enclosing function/method (the binding's scope); kNoNode if file-scope
     std::uint32_t fileId     = 0;
     LocalBindKind kind       = LocalBindKind::Type;
+    std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
+                                          //   VarDecl and its typed record (Type or ParamType) carry the SAME
+                                          //   value — that shared byte is how Rule 2's lexical receiver lookup
+                                          //   (buildScopedRecvDecls) knows a scope and a written type belong to
+                                          //   one declaration. Rides the padding after `kind`: no size change.
     std::uint32_t spanStart  = 0;         // VarDecl: the byte span the name shadows within — a block
     std::uint32_t spanEnd    = 0;         //   declaration runs from its DECLARATION POINT (end of the complete
                                           //   declarator, [basic.scope.pdecl]) to the block's end; a whole-scope
@@ -689,12 +699,15 @@ struct Binding
                                           //   {0,0} on a scope-less shadow capture (contains nothing).
     std::string   var;                    // the declared variable identifier (`x`)
     std::string   importedName;           // JsImport: the requested export name; never a global-name fallback.
+                                          //   Type/ParamType: the written type WHOLE when it is qualified, else "".
                                           //   JsExport: the LOCAL name the exported spelling binds (empty when
                                           //   the two are identical). Elixir: see LocalBindKind's field contracts.
     std::string   typeName;               // kind==Type: the written type's final segment (`Foo`), resolved to a
                                           //   class in buildGraph. kind==FnDecl/FnAssign: the bound FUNCTION
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
+static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
+               "Binding's scalars are five u32 and a u8 kind in 24 bytes — startByte rides the padding after `kind`" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT
