@@ -1955,6 +1955,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // Rule 3 pins a call to the ONE file the caller includes that defines it — all BEFORE the bare-name spray below. See resolve.h.
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId );
+    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto, "<Owner>#<field>" (C/C++)
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The
@@ -2404,12 +2405,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             narrowed = narrowTo( narrower.rule2RecvVarType( r ), r, cand );
         }
-        // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base
-        // defining `m`) when Cls is an in-repo class no local shadows. After Rule 2 (a typed LOCAL wins), before
-        // 2b (a class name outranks a same-named field). See Narrower::rule2cClassNameRecv.
+        // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base defining `m`) when Cls is an in-repo class that no
+        // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2cClassNameRecv( r, classNames, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }
         // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver
         // names a FIELD of the caller's enclosing class resolves to the method on the field's DECLARED type

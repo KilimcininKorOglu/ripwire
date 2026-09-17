@@ -757,7 +757,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kFieldWalkCap` | `16` | INDEXING | total visited names — bounds depth and width together |
+| `kFieldWalkCap` | `16` | INDEXING | total visited names — bounds depth and width together (methodOnTypeOrBases and memberFieldHides) |
 
 ### `src/search.h`
 

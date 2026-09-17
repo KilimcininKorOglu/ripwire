@@ -2654,7 +2654,6 @@ struct Narrower
             }
         }
 
-        constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together
         fieldWalk.clear();
         fieldWalk.push_back( typeName );
         std::size_t lvlBegin = 0;
@@ -2743,26 +2742,109 @@ struct Narrower
         return methodOnTypeOrBases( callerScope, r, chaUp, /*skipSelf=*/ isSuper, /*unionOnMulti=*/ isSuper );
     }
 
+    static constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together (methodOnTypeOrBases and memberFieldHides)
+
+    // Rule 2c's member-field veto set: "<Owner>#<field>" for every C/C++ member in the field side table (IngestResult::fields). That
+    // table, not Rule 2b's fieldTypeByClass, because it holds EVERY declarator shape: the S5-E compose capture records no type for
+    // `std::unique_ptr<Widget> Reader;`, the llvm shape this veto exists for. Owner is the scope's final segment — the keying of
+    // Symbol::scope and chaUp — so same-named classes pool their members: a collision can only add a refusal, never a narrow. Python
+    // attributes stay out: a Python method reaches one only through `self.`, so a bare `Interval.validate()` always names the class.
+    static HashMap<std::string, char> memberFieldNames( const IngestResult& ing )
+    {
+        HashMap<std::string, char> names;
+        names.reserve( ing.fields.size() );
+        std::string key;
+        for( const Symbol& f : ing.fields )
+        {
+            if( ( f.lang != Lang::Cpp && f.lang != Lang::C ) || f.scope.empty() || f.name.empty() )
+            {
+                continue;
+            }
+            std::string_view owner( f.scope );
+            if( const std::size_t cut = owner.rfind( "::" ); cut != std::string_view::npos )
+            {
+                owner.remove_prefix( cut + 2 );
+            }
+            key.assign( owner ).push_back( '#' );
+            key.append( f.name );
+            names.try_emplace( key, '\0' );
+        }
+        return names;
+    }
+
+    // True ⇒ `name` is a member field of `callerScope`'s class or of a class up its chaUp bases, breadth-first. C++ lookup inside a
+    // member function finds a member of the class or a base before any namespace-scope class, so such a token is the member and
+    // never the class it is spelled like. A walk stopped by the cap with a base unvisited answers true as well: a narrow that cannot
+    // prove the name unshadowed is withheld, never guessed. Reuses fieldWalk / keyScope / keyBind — it returns before the caller's
+    // methodOnTypeOrBases clears them.
+    bool memberFieldHides( std::string_view callerScope, std::string_view name, const HashMap<std::string, char>& memberFields,
+                           const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    {
+        if( const std::size_t cut = callerScope.rfind( "::" ); cut != std::string_view::npos )
+        {
+            callerScope.remove_prefix( cut + 2 );
+        }
+        fieldWalk.clear();
+        fieldWalk.push_back( callerScope );
+        for( std::size_t walkIndex = 0; walkIndex < fieldWalk.size(); ++walkIndex )
+        {
+            keyBind.assign( fieldWalk[ walkIndex ] ).push_back( '#' );
+            keyBind.append( name );
+            if( memberFields.find( keyBind ) != memberFields.end() )
+            {
+                return true;
+            }
+            keyScope.assign( fieldWalk[ walkIndex ] );
+            const auto uit = chaUp.find( keyScope );
+            if( uit == chaUp.end() )
+            {
+                continue;
+            }
+            for( const std::string& base : uit->second )
+            {
+                if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) != fieldWalk.end() )
+                {
+                    continue;
+                }
+                if( fieldWalk.size() >= kFieldWalkCap )
+                {
+                    return true;   // an unvisited base could declare the member — refuse rather than guess
+                }
+                fieldWalk.push_back( base );
+            }
+        }
+        return false;
+    }
+
     // Rule 2c — CLASS-NAME receiver (docs/EVALS.md "Phase 4b"). `Cls.m(…)`, a static / classmethod call THROUGH
     // THE CLASS NAME, reaches the ladder as a named-receiver call with no local binding, so Rule 2 cannot fire
     // and the S6-C prior then hands the win to the CALLER's own class by the scope segment (astropy:
     // `_Interval.validate(v)` pinned to `ModelBoundingBox::validate`). The receiver token IS the type: resolve
     // the callee against it, then its direct bases (`IERS_B.open()` → `IERS::open`). Narrows ONLY when ALL hold:
     // (1) bare named-receiver call from a known def; (2) NO local binding of any kind for (fromSymbol, recvVar)
-    // — a parameter/local named like the class shadows it (Rule 2b's veto set); (3) recvVar names an in-repo
-    // class-like definition (`classNames`: SymKind Class/Struct/Interface); (4) the class — or exactly one base
-    // at the shallowest hit level — DEFINES the callee. Two same-named classes both defining it keep BOTH
-    // candidates (an honest split). Any miss ⇒ nullptr. C++'s `Cls::m()` never arrives here (a qualifier).
-    const rw::SmallVec<NodeId, 2>* rule2cClassNameRecv( const Reference& r,
-                                                        const HashMap<std::string, char>&                     classNames,
-                                                        const HashMap<std::string, char>&                     localNames,
+    // — a parameter/local named like the class shadows it (Rule 2b's veto set); (2m) for a C++/ObjC caller, NO
+    // member field of that name in the caller's class or its bases (memberFieldHides: `Reader->read()` beside
+    // `std::unique_ptr<SampleProfileReader> Reader;` is the member — test/clsrecvcheck.sh arms H-N); (3) recvVar
+    // names an in-repo class-like definition (`classNames`: SymKind Class/Struct/Interface); (4) the class — or
+    // exactly one base at the shallowest hit level — DEFINES the callee. Two same-named classes both defining it
+    // keep BOTH candidates (an honest split). Any miss ⇒ nullptr. C++'s `Cls::m()` never arrives here (a qualifier).
+    // Rule 2c's name evidence, bundled so the rule's signature reads as its conditions: every class-like definition NAME (3), every
+    // local binding "<fromSymbol>#var" (2), every C/C++ member "<Owner>#field" (2m, memberFieldNames). Built per call from graph.h's
+    // tables — three references, no copy.
+    struct ClassNameRecvNames
+    {
+        const HashMap<std::string, char>& classNames;
+        const HashMap<std::string, char>& localNames;
+        const HashMap<std::string, char>& memberFields;
+    };
+    const rw::SmallVec<NodeId, 2>* rule2cClassNameRecv( const Reference& r, const std::string& callerScope, const ClassNameRecvNames& names,
                                                         const HashMap<std::string, std::vector<std::string>>& chaUp ) const
     {
         if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode )
         {
             return nullptr; // (1) not a bare named-receiver call from a known def
         }
-        if( classNames.find( r.recvVar ) == classNames.end() )
+        if( names.classNames.find( r.recvVar ) == names.classNames.end() )
         {
             return nullptr; // (3) the receiver token names no class-like definition anywhere in the corpus
         }
@@ -2770,9 +2852,13 @@ struct Narrower
         appendUint( keyBind, r.fromSymbol );
         keyBind.push_back( '#' );
         keyBind.append( r.recvVar );
-        if( localNames.find( keyBind ) != localNames.end() )
+        if( names.localNames.find( keyBind ) != names.localNames.end() )
         {
             return nullptr; // (2) a local / parameter of that name shadows the class
+        }
+        if( ( r.lang == Lang::Cpp || r.lang == Lang::ObjC ) && !callerScope.empty() && memberFieldHides( callerScope, r.recvVar, names.memberFields, chaUp ) )
+        {
+            return nullptr; // (2m) a member field of the caller's class or a base hides the class
         }
         return methodOnTypeOrBases( r.recvVar, r, chaUp );   // (4)
     }

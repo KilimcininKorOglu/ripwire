@@ -15,6 +15,44 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a C++ member named like a class was read as that class
+
+Rule 2c reads `Cls.m()` through a class name as a call on that class. It checked that no local shadowed the name, but
+never checked members. Inside a C++ member function, name lookup finds a member of the class or of a base before any
+namespace-scope class, so the token is the member. Two graded llvm-project instances resolved to ONE precise, wrong
+edge:
+
+- `LVReader.cpp:175 OutputFile->keep()`, whose member is `std::unique_ptr<ToolOutputFile> OutputFile`, went to
+  `VirtualOutputFile.cpp OutputFile::keep`.
+- `SampleProfile.cpp:1962 Reader->read()`, whose base-class member is `std::unique_ptr<SampleProfileReader> Reader`,
+  went to msgpack `Reader::read`.
+
+Rule 2c now refuses a C++/ObjC receiver that names a member of the caller's class or of a class up its bases. The
+check reads the member side table, which holds every declarator shape, including the `std::unique_ptr<T>` members
+Rule 2b's type table never records. A walk stopped by its 16-name cap also refuses. A raw-pointer member such as
+`Widget* Raw;` is then typed by Rule 2b. Python keeps the route: its attributes are reached only through `self.`.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), against the alias fix above:
+
+| Corpus | Sites retargeted | Changed target | Lost edge |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 0 | 0 | 0 |
+| llvm-project @ 4d5358b1d | 1,398 | 1,346 | 52 |
+
+Most llvm sites move from a namesake class to the member's real type: `IRBuilderBase` → `CGBuilderTy` overrides,
+`Token` → `MIToken`, `Context` → `ASTContext`. The order matters. Without the alias fix, the same refusal lost 1,772
+llvm edges and graded net-worse (60 blinded sites: 23 better / 3 same / 34 worse), because clang's `CGBuilderTy Builder`
+had reached `IRBuilderBase` only through an unrelated class `Builder : IRBuilder` in HexagonVectorCombine.cpp.
+With the alias fix in place, a seeded, blinded sample of 60 of the 1,398 llvm retargets graded 51 better, 7 same and
+2 worse. The worse sites are one Rule 2b floor: `using CGBuilderBaseTy::CreateGEP;` re-exports base overloads the
+class's own overload set shadows.
+
+Neither instance above gets an edge in a scratch composition with the assignment-type lane, where they surfaced.
+
+Gate: `test/clsrecvcheck.sh` arms H–N (a smart-pointer member, a raw-pointer member, a base's member, a class template
+base's member, a member past the walk cap), red on the unfixed binary. Two controls hold: the same call from a class
+without such a member keeps the route, and a Python `self.Interval` attribute does not veto `Interval.validate(v)`.
+
 ### Fixed — a base class or member type reached through a C++ `typedef` or `using` alias ended the base walk
 
 The resolver walks a type's bases by class NAME, and an alias names no class. In llvm-project's clang CodeGen,
