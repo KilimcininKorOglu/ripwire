@@ -787,6 +787,19 @@ cache never saw), so `kParserVer` moves 99 → 100 (mirrored in `kIngestParserVe
 `test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
 single-file root.
 
+### Fixed — `--slice --since` no longer tells the "new code" story about a blob that was never parseable source
+
+A file whose blob at REV held ERROR/MISSING tree-sitter nodes (binary content committed under a source
+extension, a merge gone wrong, anything the grammar's error recovery could not read as this language)
+could leave the REV-side symbol search empty for a reason that has nothing to do with the definition
+being new. `status="sym_absent_at_rev"` claims "the file was there and the definition was not" — every
+row then reads `op="+"`, the reviewer's cue that this is newly-added code — which is a confidently wrong
+story for a blob that was not valid source at all. `slicediff.h`'s `sliceAtRev` now checks the same
+`errNodes > 0` degraded-parse signal `fileParseDegraded` already shares with `--grep`'s `parse_degraded=`
+and the selector refusals, and reports `status="unparsed_at_rev"` (`comparable="0"`, no rows) instead
+when the REV blob's own parse was this degraded. `test/slicediffcheck.sh` gained arm (8c) pinning a
+binary-at-REV case against the (8)/(8b) sym-absent case it must not be confused with.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
