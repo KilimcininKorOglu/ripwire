@@ -96,7 +96,9 @@ disclosure — so the file credit stays.
 The second hole: a written type is recorded as its final segment, matched against class names that carry no
 namespace. The entry above refused every qualified PARAMETER type; typed locals kept narrowing, so
 `std::map<int, int> table; table.find( k )` pinned an in-repo `map::find`. Measurement overturned the blanket rule
-instead of extending it. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
+instead of extending it, and **this entry supersedes the parameter rule stated above**: where that entry says only a
+written, unqualified type narrows and that qualified in-repo types keep their previous answer, a parameter now refuses
+only a type written in namespace `std`, exactly as a local does. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
 (`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on this repository's `src/` — every sampled
 one correct — while the only wrong edges it removed on all three were six `std::map` locals. `std` is reserved to the
 implementation, so no in-repo class is a `std::` type: a type written in namespace `std` now never narrows — for a
@@ -107,17 +109,21 @@ nor the class's own namespace — an external or alias-template type whose final
 still narrows by name. Closing it needs the namespace chain in `Symbol::scope`.
 
 Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
-category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider ones (14 of 14
-sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard refused
-(`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
-`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins were
-wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
+category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider
+ones (14 of 14 sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard
+refused (`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
+`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins
+were wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
 in-repo `map`, and 12 in-repo qualified parameters narrow, one of them an `ankerl::unordered_dense::map<…>&` alias
-template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits
-(`old_ids.add( obj )` had pinned `ManyRelatedManager::add`); rails: 145; this repository's `src/`: 5 splits become
-Rule-2 pins through `notes::`- and `rw::quality::`-qualified parameters; vue-core and Go's `net` package: none. The
-assignment capture moved no site on these corpora; its arm is the only witness. Wall time on rocksdb is within noise
-(three cold runs each at load average 42: 1.69–2.19 s before, 1.73–2.80 s after).
+template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits; rails: 145.
+The removed pins were less often wrong in the dynamic languages, as an independent review's samples show: django 8 of 14
+wrong (`target_ids.add`, `params.get`, `form.save`) and 6 right (`copy.set_source_expressions`, `cls._pre_setup()`);
+rails 8 of 12 wrong (`pair.freeze`, `connection.create_table`) and 4 right (`set.each`, `model.history`). Every right
+target stays inside the split that replaces it. Python's `cls` is a named receiver, so a classmethod's `cls.m()` splits
+too (2 of django's 72). This repository's `src/`: 5 splits become Rule-2 pins through `notes::`- and
+`rw::quality::`-qualified parameters. vue-core and Go's `net` package: none. The assignment capture moved no site on
+these corpora; its arm is the only witness. Wall time on rocksdb is within noise (three cold runs each at load average
+42: 1.69–2.19 s before, 1.73–2.80 s after).
 
 `test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-24 are the gates: localitycheck 5, 6 and 7 red on
 the previous commit and 8 red on the skip-the-tie-break variant; narrowcheck 19, 20, 21, 23 and 24 red on the previous
