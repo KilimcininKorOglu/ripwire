@@ -120,7 +120,15 @@ qsnap_count() { blob_paths "$1" 'ripwire-qsnap-*.bin' | grep -c . ; }
 if stat --version >/dev/null 2>&1; then inode_mtime(){ stat -c '%i %Y' "$1" 2>/dev/null || echo "MISSING"; }   # GNU coreutils
 else                                    inode_mtime(){ stat -f '%i %m' "$1" 2>/dev/null || echo "MISSING"; }   # BSD / macOS
 fi
-assert_no_tsan() { grep -q "ThreadSanitizer" "$1" 2>/dev/null && no "TSan WARNING in server stderr ($2)" || ok "no ThreadSanitizer warning in server stderr ($2)"; }
+skip(){ printf '  SKIP  %s\n' "$*"; }
+# The no-warning row only measures something on a ThreadSanitizer build; on any other binary it is a SKIP by name, never
+# a PASS, because a plain binary prints no warning whether or not the race is there (arm (f) passes on the unfixed
+# plain binary too, and CI has no TSan job — the preview-race fix has no CI guard beyond a local TSan run).
+if LC_ALL=C grep -q -a '__tsan_init' "$BIN" 2>/dev/null; then IS_TSAN=1; else IS_TSAN=0; fi
+assert_no_tsan() {
+    if [ "$IS_TSAN" -ne 1 ]; then skip "no ThreadSanitizer warning in server stderr ($2) — not a TSan build, nothing measured"; return 0; fi
+    if grep -q "ThreadSanitizer" "$1" 2>/dev/null; then no "TSan WARNING in server stderr ($2)"; else ok "no ThreadSanitizer warning in server stderr ($2)"; fi
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 echo
