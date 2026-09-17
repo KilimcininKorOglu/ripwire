@@ -114,8 +114,21 @@ ok("--test-gate=%s: parsed %d <u> rows into %d distinct (name,file) keys (shown_
 # reader (test/testrowpaths.py), which knows both shapes in every dialect.
 testgate_testfiles = set(norm_path(p) for p in testrowpaths.xml_paths(tg))
 
-# ── union every --impact=src/graph.h:SYM call's rows, keyed (name, normalized path) -> tested bool ─────
-impact_rows = {}          # key -> tested (bool)
+# ── union every --impact=src/graph.h:SYM call's rows ─────────────────────────────────────────────────────
+# KEYED PER DEFINITION, (name, file, line), for the consistency check. Keyed (name, file) it read two OVERLOADS as one
+# symbol: on train 1b quality.h's readAckRecords( path ) (untested) and readAckRecords( path, badLines ) (tested)
+# were reported as "tested=True from one seed and tested=False from another" on every leg (#277). A per-definition
+# key makes that check mean what it says: ONE definition read two ways by two seeds. The set comparison with
+# --test-gate below is still over (name, file), because <u> carries no line: the projection is a key being untested
+# when ANY of its overloads is (exactly how <u> collapses them), and tested only when ALL of them are.
+def observe(store, def_key, tested):
+    """record one --impact observation; True when THIS definition was already seen with the other tested= value"""
+    if def_key in store and store[def_key] != tested:
+        return True
+    store[def_key] = tested
+    return False
+
+impact_rows = {}          # (name, file, line) -> tested (bool)
 row_count_ok = True
 radius_sum_ok = True
 for name in seed_names:
@@ -142,19 +155,27 @@ for name in seed_names:
             continue                       # the changed file's own symbols — excluded, as --test-gate excludes them
         if np in testgate_testfiles:
             continue                       # a test-file row — --test-gate folds these into <t>, never <u>
-        key = (rn, np)
+        line = rp.split(":", 1)[1] if ":" in rp else ""
+        def_key = (rn, np, line)
         tested = bool(rtested)
-        if key in impact_rows and impact_rows[key] != tested:
-            no("internal inconsistency: %s is tested=%s from one seed and tested=%s from another" % (str(key), impact_rows[key], tested))
-        impact_rows[key] = tested
+        previous = impact_rows.get(def_key)
+        if observe(impact_rows, def_key, tested):
+            no("internal inconsistency: %s is tested=%s from one seed and tested=%s from another" % (str(def_key), previous, tested))
 
 if row_count_ok:
     ok("row-count invariance: every --impact call's printed row count equals its own reaches=")
 if radius_sum_ok:
     ok("row-count invariance: radius_tested= + radius_untested= == reaches= on every call")
 
-impact_untested = set(k for k, t in impact_rows.items() if not t)
-impact_tested    = set(k for k, t in impact_rows.items() if t)
+# the (name, file) projection --test-gate's <u> can be compared with (see the keying note above the loop)
+impact_by_file = {}
+for (n, f, _line), t in impact_rows.items():
+    impact_by_file.setdefault((n, f), []).append(t)
+impact_untested = set(k for k, ts in impact_by_file.items() if not all(ts))   # any overload untested
+impact_tested    = set(k for k, ts in impact_by_file.items() if all(ts))      # every overload tested
+mixed_overloads = sorted(k for k, ts in impact_by_file.items() if any(ts) and not all(ts))
+if mixed_overloads:
+    print("  INFO  %d (name,file) key(s) hold overloads with DIFFERENT tested= (e.g. %s) — compared per definition above, projected as untested below" % (len(mixed_overloads), str(mixed_overloads[0])))
 
 # ── (1) SET EQUALITY ─────────────────────────────────────────────────────────────────────────────────
 missing = testgate_untested - impact_untested   # test-gate says untested, --impact disagrees (or never saw it)
@@ -185,6 +206,19 @@ if testgate_untested:
         no("MUTATION CONTROL: dropping a row did NOT break equality — the assertion above is vacuous")
 else:
     no("MUTATION CONTROL: testgate_untested is empty, nothing to mutate — the sample is not exercising real cases")
+
+# ── (3b) OVERLOAD CONTROL — the per-definition key tells one definition from two overloads ───────────────
+# The same observe() the loop uses, fed planted rows: one definition seen tested and then untested MUST be an
+# inconsistency (so the consistency check can still fail), and two same-named overloads in one file with different
+# tested= must NOT be (the #277 false alarm), while the projection still reads that (name, file) as untested.
+probe = {}
+observe(probe, ("f", "a.h", "10"), True)
+same_def_conflict = observe(probe, ("f", "a.h", "10"), False)
+overload_conflict = observe(probe, ("f", "a.h", "20"), False)
+if same_def_conflict and not overload_conflict:
+    ok("OVERLOAD CONTROL: one definition read tested and untested is flagged; two overloads with different tested= are not")
+else:
+    no("OVERLOAD CONTROL: same-definition conflict flagged=%s (want True), overload conflict flagged=%s (want False)" % (same_def_conflict, overload_conflict))
 
 # ── (4) F-02 — THE LENS'S BLIND SPOT IS DISCLOSED WHERE THE PARTITION IS READ, AND NOWHERE ELSE ────────
 # testSymbolForwardReach only sees a caller through a CALL EDGE from an indexed test symbol, so a shell or

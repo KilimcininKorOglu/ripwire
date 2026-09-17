@@ -86,6 +86,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>       // std::declval — the rule-mask width static_assert reads firedRuleMask's return type
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -490,6 +492,8 @@ inline std::uint32_t firedRuleMask( const Symbol& s, std::string_view sig )
     }
     return mask;
 }
+static_assert( kRuleCount <= std::numeric_limits<decltype( firedRuleMask( std::declval<const Symbol&>(), std::string_view() ) )>::digits,
+               "firedRuleMask holds one bit per naming rule — widen it before kRuleCount outgrows it" );
 
 // Read one file whole, memoized. A signature is a byte range in a file, and an unreadable file must degrade
 // to "no signature" — both role-vs-return-type rules then stay silent — rather than to a guess. The read

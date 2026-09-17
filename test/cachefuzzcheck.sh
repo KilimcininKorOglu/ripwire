@@ -324,6 +324,25 @@ def mut_record_offset_inside_table(b):
     return with_recomputed_trailer(p)
 mutations["record_range_overlaps_table"] = mut_record_offset_inside_table
 
+def mut_table_offset_near_u64_max(b):
+    # a trailer naming a table offset one short of 2^64. The exact-fit check refused it, but through
+    # `tableOffset + entries + trailer`, a sum that wraps — which the G1 sanitizer build's -fsanitize=integer aborts on.
+    # Found by the reader fuzzer (test/fuzz/readers, reader ingestframe); the check is now written without the wrap.
+    p = bytearray(b)
+    struct.pack_into("<Q", p, len(p) - TRAILER, (1 << 64) - 1)
+    return bytes(p)
+mutations["table_offset_near_u64_max"] = mut_table_offset_near_u64_max
+
+def mut_record_offset_near_u64_max(b):
+    # a table entry whose record offset is 16 short of 2^64 with a 64-byte length: `recOffset + recLength` wrapped to 48,
+    # which is below the table offset, so the per-entry bound ACCEPTED the entry. The frame is rebuilt so every digest
+    # agrees; only a wrap-free bound can refuse it.
+    p = bytearray(b[:payload_len])
+    struct.pack_into("<Q", p, TABLE_OFF + 8, (1 << 64) - 16)
+    struct.pack_into("<I", p, TABLE_OFF + 24, 64)
+    return with_recomputed_trailer(p)
+mutations["record_offset_near_u64_max"] = mut_record_offset_near_u64_max
+
 # -- checksum mismatch only: a single deep bit flip, checksum left STALE (the shallowest guard alone) --
 def mut_deep_bitflip_stale(b):
     # inside record[0], leaving BOTH digests stale: the table is untouched so tableSum still verifies,
@@ -461,6 +480,44 @@ for dname in trailer_bytes_corrupted empty_file; do
         ok "[disclose:$dname] stderr names the cache file and the reject reason"
     else
         no "[disclose:$dname] no disclosure on stderr for a rejected cache: $(head -c 200 "$TMP/disc_$dname.err")"
+    fi
+done
+# A record offset near 2^64 is a CORRUPT FRAME, refused whole — not a table entry whose read fails later. The per-entry
+# bound was `recOffset + recLength > tableOffset`; at recOffset = 2^64-16, recLength = 64 the sum wrapped to 48 and the
+# entry was accepted (blob_entries=6, one "read failed mid-load" reparse). Its control is the non-wrapping twin already in
+# the table, a record range reaching into the table, which both forms refuse. Cut fresh from $GOOD like the two above.
+python3 - "$GOOD" "$DISCDIR" <<'PYWRAP'
+import struct, sys
+good, outdir = sys.argv[1], sys.argv[2]
+b = open(good, "rb").read()
+TABLE_OFF, N = struct.unpack_from("<QI", b, len(b) - 24)[0:2]
+def blob_checksum(data):
+    P, M = 1099511628211, (1 << 64) - 1
+    lane = [1469598103934665603, 1099511628211, 0x100000001b3, 0x9e3779b97f4a7c15,
+            0xc2b2ae3d27d4eb4f, 0x165667b19e3779f9, 0xff51afd7ed558ccd, 0xc4ceb9fe1a85ec53]
+    k8 = len(data) - len(data) % 8
+    for i in range(0, k8, 8):
+        for k in range(8):
+            lane[k] = ((lane[k] ^ data[i + k]) * P) & M
+    for k, i in enumerate(range(k8, len(data))):
+        lane[k] = ((lane[k] ^ data[i]) * P) & M
+    h = 1469598103934665603
+    for k in range(8):
+        h = ((h ^ lane[k]) * P) & M
+    return h
+for name, off in (("record_offset_near_u64_max", (1 << 64) - 16), ("record_range_overlaps_table", TABLE_OFF)):
+    p = bytearray(b[:len(b) - 24])
+    struct.pack_into("<Q", p, TABLE_OFF + 8, off)
+    struct.pack_into("<I", p, TABLE_OFF + 24, 64)
+    tbl = bytes(p[:25]) + bytes(p[TABLE_OFF:TABLE_OFF + N * 32])
+    open("%s/%s.cache" % (outdir, name), "wb").write(bytes(p) + struct.pack("<QIIQ", TABLE_OFF, N, 0, blob_checksum(tbl)))
+PYWRAP
+for dname in record_range_overlaps_table record_offset_near_u64_max; do
+    RIPWIRE_CACHE_STATS=1 "$BIN" "$FIXTURE" --cache="$DISCDIR/$dname.cache" --no-stable >/dev/null 2>"$TMP/disc_$dname.err"
+    if grep -q "ripwire: cache .*$dname.cache: corrupt-frame — not used" "$TMP/disc_$dname.err" && grep -q 'blob_entries=0' "$TMP/disc_$dname.err"; then
+        ok "[disclose:$dname] refused whole as corrupt-frame (blob_entries=0), never read entry by entry"
+    else
+        no "[disclose:$dname] expected a corrupt-frame refusal with blob_entries=0, got: $( grep -E 'ripwire: cache|cache-stats' "$TMP/disc_$dname.err" | tr '\n' ' ' | cut -c1-220 )"
     fi
 done
 "$BIN" "$FIXTURE" --cache="$GOOD" --no-stable >/dev/null 2>"$TMP/disc_good.err"
@@ -793,6 +850,10 @@ fi
 #       never loaded (a key mismatch, an earlier refusal) would otherwise pass while proving nothing.
 # The enumerator counts are DERIVED from src/model.h, not written here, so appending an enumerator without
 # moving its k*Count constant turns (c)'s last-enumerator control red instead of going unnoticed.
+#
+# The same three runs cover the 16-BIT FIELDS the writer stores in a u32 slot (readDef's ppAlt and params,
+# readRef's argCount — hazardpatterncheck.sh rule D). `std::uint16_t( r.u32() )` kept the low bits of 0x10000
+# and believed a 0: (a) values 0x10000 and 0xFFFFFFFF must refuse that record, (c) 0xFFFF must be accepted.
 echo
 echo "=== Part 3: out-of-range enum byte in a checksum-valid ingest-cache record — DEV build ==="
 EFX="$TMP/enumfx"; mkdir -p "$EFX/ffi" "$EFX/routes"
@@ -857,15 +918,18 @@ for i in range(n):
         global p; ln = u32(); p += ln
     def site(cls):
         sites.setdefault(cls, (p, blob[p])); skip(1)
+    def site32(cls, rel):                                                 # a u32 slot `rel` bytes ahead; p does not move
+        sites.setdefault(cls, (p + rel, struct.unpack_from("<I", blob, p + rel)[0]))
     s(); skip(4 * 8 + 5 * 4)                                              # path, hash/size/mtime/ctime, FileHealth
     for _ in range(u32()):                                                # defs (LEAN family: no subtoken rows)
+        site32("def.ppAlt", 9 * 4); site32("def.params", 13 * 4)
         skip(14 * 4 + 5); site("def.kind"); site("def.lang"); s(); s(); skip(8)
     for _ in range(u32()):                                                # refs
-        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); skip(9)
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(9)
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds
-        skip(4); site("bind.lang"); site("bind.kind"); skip(8); s(); s(); s()
+        skip(4); site("bind.lang"); site("bind.kind"); skip(1 + 8); s(); s(); s()   # isFromAssignment, spanStart/End
     for _ in range(u32()):                                                # FFI aliases
         site("ffi.kind"); skip(1); s(); s(); s()
     for _ in range(u32()):                                                # route defs
@@ -892,8 +956,12 @@ def blob_checksum(data):
         h = ((h ^ lane[k]) * P) & M
     return h
 
-def rebuilt_with(off, value):
-    b = bytearray(blob); b[off] = value
+def rebuilt_with(off, value, width=1):
+    b = bytearray(blob)
+    if width == 1:
+        b[off] = value
+    else:
+        struct.pack_into("<I", b, off, value)
     for i in range(n):
         e = table_off + i * ENTRY
         ro = struct.unpack_from("<Q", b, e + 8)[0]; rl = struct.unpack_from("<I", b, e + 24)[0]
@@ -913,6 +981,14 @@ for cls, enum in ENUM_OF.items():
         path = f"{outdir}/{cls}.{tag}.cache"
         open(path, "wb").write(data)
         print(f"{cls}\t{enum}\t{tag}\t{value}\t{orig}\t{c}")
+for cls in ("def.ppAlt", "def.params", "ref.argCount"):
+    if cls not in sites:
+        print(f"{cls}\tu16\tABSENT\t-\t-\t-")
+        continue
+    off, orig = sites[cls]
+    for tag, value in (("wide", 0x10000), ("allones", 0xFFFFFFFF), ("inrange", 0xFFFF)):
+        open(f"{outdir}/{cls}.{tag}.cache", "wb").write(rebuilt_with(off, value, 4))
+        print(f"{cls}\tu16\t{tag}\t{value}\t{orig}\t65536")
 PYEOF
 planRc=$?
 if [ "$planRc" -ne 0 ]; then
@@ -925,6 +1001,7 @@ elif [ -n "$GOOD_RECORDS" ]; then
             continue
         fi
         mutant="$EDIR/$cls.$tag.cache"
+        if [ "$enum" = "u16" ]; then what="16-bit field stored wider than 16 bits"; else what="$enum byte past the last enumerator (count $enumCount)"; fi
         if cmp -s "$mutant" "$EDIR/good.cache"; then
             no "[enum:$cls=$value] the mutation did not take (mutant equals the good cache)"
             continue
@@ -935,23 +1012,23 @@ elif [ -n "$GOOD_RECORDS" ]; then
         records="$( cachedRecords "$EDIR/out.err" )"
         if [ "$tag" = "inrange" ]; then
             if [ "$rc" -eq 0 ] && [ "$records" = "$GOOD_RECORDS" ]; then
-                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the enum read"
+                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the field read"
             else
-                no "[enum:$cls control] in-range $enum value $value (last enumerator of $enumCount, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale k*Count bound, or a digest the mutation did not rebuild"
+                no "[enum:$cls control] in-range $enum value $value (the largest value that fits, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale bound, or a digest the mutation did not rebuild"
             fi
             continue
         fi
         if [ "$rc" -ge 128 ]; then
-            no "[enum:$cls=$value] CRASH — exit $rc on a $enum byte past the last enumerator"
+            no "[enum:$cls=$value] CRASH — exit $rc on a $what"
         elif [ "$rc" -ne 0 ]; then
             no "[enum:$cls=$value] nonzero exit ($rc) — an out-of-range cache byte must degrade, not fail the run"
         elif [ "$records" != "$expectRefused" ]; then
-            no "[enum:$cls=$value] $enum byte past the last enumerator (count $enumCount) was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
+            no "[enum:$cls=$value] $what was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
         elif ! cmp -s "$EDIR/truth.xml" "$EDIR/out.xml"; then
             no "[enum:$cls=$value] record refused but the output still differs from --no-cache"
             diff "$EDIR/truth.xml" "$EDIR/out.xml" | head -4
         else
-            ok "[enum:$cls=$value] $enum past the last enumerator: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
+            ok "[enum:$cls=$value] $what: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
         fi
     done <"$EDIR/plan.tsv"
 

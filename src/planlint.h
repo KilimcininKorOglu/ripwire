@@ -147,8 +147,9 @@ inline const char* glyphName( Glyph g ) noexcept
         case Glyph::Hourglass: return "hourglass";
         case Glyph::Check:     return "check";
         case Glyph::Cross:     return "cross";
-        default:                return "missing";
+        case Glyph::None:      return "missing";
     }
+    return "missing";
 }
 
 struct CardRow
@@ -549,7 +550,12 @@ inline LintResult computePlanLint( const std::string& fileArg )
     {
         char        resolved[ PATH_MAX ];
         const char* rp = ::realpath( fileArg.c_str(), resolved );
-        absFile        = rp ? std::string( resolved ) : std::filesystem::absolute( fileArg ).lexically_normal().string();
+        std::error_code absEc;   // the throwing absolute() raised filesystem_error when the working directory could not be read
+        absFile        = rp ? std::string( resolved ) : std::filesystem::absolute( fileArg, absEc ).lexically_normal().string();
+        if( absEc )
+        {
+            absFile = std::filesystem::path( fileArg ).lexically_normal().string();   // as given: the git lookup below then finds no repo
+        }
     }
     const std::string parentDir = std::filesystem::path( absFile ).parent_path().string();
     const std::string repoRoot  = gitRepoToplevel( parentDir );

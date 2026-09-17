@@ -40,8 +40,11 @@ inline void dedupRawDefs( std::vector<RawDef>& rawDefs )
             case SymKind::Function:  return 2;
             case SymKind::Var:       return 1;
             case SymKind::Field:     return 1;   // never collides with Var in practice: the static/non-static gates are complementary
-            default:                 return 0;   // Other
+            case SymKind::Macro:     return 0;   // Macro and Section were folded into "Other" by a default; named now, same value:
+            case SymKind::Section:   return 0;   // each comes from its own single capture (a #define, a heading or data key), so
+            case SymKind::Other:     return 0;   // neither collides with a code kind on one name byte
         }
+        return 0;
     };
 
     // identity = the declared identifier itself: (fileId, name-token start byte). Two tags
@@ -763,6 +766,7 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
         Binding& b = result.bindings[ outBindIndex++ ];
         b.fileId     = rb.fileId;
         b.kind       = rb.kind;
+        b.isFromAssignment = rb.isFromAssignment;
         b.startByte  = rb.startByte;   // the declaration a VarDecl and its typed record share (Rule 2 lexical lookup)
         b.spanStart  = rb.spanStart;   // shadow fix round: the declaring block's span rides through
         b.spanEnd    = rb.spanEnd;

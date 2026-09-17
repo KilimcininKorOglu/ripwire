@@ -603,6 +603,15 @@ inline constexpr TokenCalib kTokenCalib[] =
                                    // Java/CSharp when tokenbudgetcheck next gets a PHP corpus sample. Same
                                    // headroom clamp as CSharp/C/Toml/Yaml above: `s.lang==Php` (18) never
                                    // reaches contentBytesByLang[13].
+    { Lang::GDScript,   2.36 },   // REASONED, not measured — GDScript is Python's shape (indentation, snake_case
+                                   // members, `func`/`var`), so it borrows Python's MEASURED 2.36 rather than
+                                   // guessing a new rate. It is deliberately the DENSE end of the plausible band:
+                                   // Godot's PascalCase API names (CharacterBody2D, get_tree) push the true rate
+                                   // up toward the 2.55 Java/CSharp band, and under-stating bytes/token OVER-states
+                                   // the token count, which shrinks a budget rather than overrunning it — the safe
+                                   // direction. Recalibrate with Python when tokenbudgetcheck gets a .gd corpus.
+                                   // Same headroom clamp as every append since CSharp: `s.lang==GDScript` (23)
+                                   // never reaches contentBytesByLang[13].
     { Lang::Lua,        2.40 },   // REASONED, not measured — Lua's convention is short lower-case and
                                    // snake_case names over a very small keyword set, the same identifier shape
                                    // that put Ruby at the dense end of the band, so Lua borrows Ruby's exact
@@ -1278,6 +1287,13 @@ inline std::FILE* openChargeBuffer( char** bufOut, std::size_t* sizeOut ) noexce
     return open_memstream( bufOut, sizeOut );
 }
 
+// Open a MemoryStream through openChargeBuffer: the one way an est_tokens-family measurement opens its buffer, so the
+// fault switch above reaches every one of them, and no site calls the opener by hand (test/estchargecheck.sh #14g).
+inline std::FILE* openChargeStream( rw::MemoryStream& stream ) noexcept
+{
+    return stream.openWith( []( char** bufOut, std::size_t* sizeOut ) noexcept { return openChargeBuffer( bufOut, sizeOut ); } );
+}
+
 // ── §B4b: the <ctx> WRAPPER RULE for a verb that appends a section beside serialize()'s root ─────────────
 // serialize() OWNS a root element — it writes `<r …>` and it writes `</r>` — so anything a caller emits after
 // it is a SECOND top-level element and the document is not XML. G4 ("output | xmllint --noout clean") is one
@@ -1322,19 +1338,24 @@ inline CtxWrap ctxWrapFor( const ChargedSection& a, bool aHasEdges, const Charge
 template<typename RenderFn>
 inline ChargedSection chargeSection( RenderFn&& render, double bytesPerToken )
 {
-    ChargedSection  sec;
-    char*           buf = nullptr;
-    std::size_t     sz  = 0;
-    std::FILE*      mem = openChargeBuffer( &buf, &sz );
+    ChargedSection   sec;
+    rw::MemoryStream stream;
+    std::FILE* const mem = openChargeStream( stream );
     if( !mem )
     {
         DEGRADED_PATH_ALERT( "chargeSection: open_memstream failed — this payload section streams uncharged" );
         return sec;
     }
     render( mem );
-    std::fflush( mem );
-    std::fclose( mem );
-    if( buf ) { sec.xml.assign( buf, sz );  std::free( buf ); }
+    const rw::MemoryStreamBytes rendered = stream.finish();
+    if( !rendered.isWhole )
+    {
+        // the same answer as a failed open: isRendered stays false, so emitChargedSection renders the section straight
+        // to the sink, whole and uncharged, instead of writing bytes a lost write left a hole in
+        DEGRADED_PATH_ALERT( "chargeSection: the charge buffer did not finish whole — this payload section streams uncharged" );
+        return sec;
+    }
+    sec.xml.assign( rendered.bytes );
     sec.tokens     = tokensForEmittedBytes( sec.xml.size(), bytesPerToken );
     sec.isRendered = true;
     return sec;
@@ -1431,7 +1452,9 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
                                      const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets )
 {
     std::size_t                      markupBytes = kEnvelopeBytes;
-    double                           contentBytesByLang[ 13 ] = { 0 };   // indexed by Lang enum (13 values)
+    // indexed by Lang, through Unknown: every later language clamps into Unknown's bucket (model.h's Lang note). The extent
+    // is spelled from the enumerator rather than as a literal 13, so the bound and the clamp below name the same value.
+    double                           contentBytesByLang[ std::size_t( Lang::Unknown ) + 1 ] = { 0 };
     static_assert( int( Lang::Unknown ) == 12, "contentBytesByLang sized for the 13-value Lang enum" );
     std::vector<char>                seen( ing.files.size(), 0 );
     for( std::size_t k = 0; k < keep; ++k )
@@ -1439,7 +1462,7 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
         const NodeId        id = order[k];
         const Symbol&       s  = ing.symbols[id];
         const std::uint32_t f  = s.fileId;
-        const int           li = int( s.lang ) < 13 ? int( s.lang ) : int( Lang::Unknown );
+        const int           li = s.lang < Lang::Unknown ? int( s.lang ) : int( Lang::Unknown );
         if( !seen[f] )
         {
             seen[f] = 1;
@@ -1475,7 +1498,7 @@ inline TokenEstimate estimateTokens( const IngestResult& ing, const std::vector<
     // measured B/tok. Rounds to nearest (0.5 up) so the reported number never systematically under-reads.
     double estTokensF   = double( markupBytes ) / kBytesPerTokenDefault;
     double modelBytesF  = double( markupBytes );
-    for( int l = 0; l < 13; ++l )
+    for( int l = 0; l <= int( Lang::Unknown ); ++l )
     {
         if( contentBytesByLang[ l ] > 0.0 )
         {
@@ -2665,331 +2688,348 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // DEGRADE: an open_memstream failure keeps the whole map — the head goes out FIRST carrying the MODELLED
     // estimate (the pre-§H7 number, so this path is no worse than the old behaviour, never a fabricated one)
     // and the children stream straight to `out` behind it.
-    char*       childBuf = nullptr;
-    std::size_t childSz  = 0;
-    std::FILE*  childMem = openChargeBuffer( &childBuf, &childSz );
+    rw::MemoryStream childStream;
+    std::FILE* const childMem = openChargeStream( childStream );
     if( !childMem )
     {
         DEGRADED_PATH_ALERT( "serialize: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
     }
 
     const std::size_t modelledTokens = mapEstTokens + extraPayloadTokens;
-    XmlWriter         w( childMem ? childMem : out );
-    if( !childMem )
+    // The children, as ONE renderer both paths call. This was inline code writing through a writer bound to "the buffer,
+    // or `out` when the buffer could not open". That serves a failed open, and cannot serve a buffer that opened and then
+    // lost a write: by then the children were already spent into it, and the only bytes left to print had a hole in them.
+    const auto writeChildren = [ & ]( XmlWriter& w )
     {
-        w.write( buildHead( modelledTokens ) );
-    }
-    // §P8 collision: this prologue spelled its LABEL `l=`, the two characters 22 other sites use for a LINE
-    // NUMBER — including the <f p= …> rows just below. Renamed: the label had exactly two references in the
-    // tree (both updated here) against 15+ readers of the line-number meaning that must not move.
-    if( ing.rootLabels.size() >= 2 )
-    { // A13 prologue: label → root path, canonical order
-        for( std::size_t r = 0; r < ing.rootLabels.size(); ++r )
-        {
-            w.write( "<root label=\"" );  w.write( escapeXml( ing.rootLabels[r], esc ) );
-            w.write( "\" p=\"" );     w.write( escapeXml( r < ing.rootPaths.size() ? ing.rootPaths[r] : std::string(), esc ) );
-            w.write( "\"/>" );
-        }
-    }
-    writeRecentRows( w, ann, pathRel, esc );   // F3: rank_by=churn-decay's file-level answer, before the symbol map
-    // C1-b: under in=DIR the symbol map is a DISCLOSED stub (docs/METHODOLOGY.md §9.3) — the caller asked for DIR's
-    // recent files, not the map.
-    //
-    // NOT total=/shown=, which is what this first shipped as. Under pageview.h's vocabulary total= is THE TOTAL
-    // (rule 2) and capped= always rides beside a shown= (rule 3), and the stub had neither property: it printed
-    // total="200" — the --top-k PAGE SIZE — on a document whose own header says symbols="18457", with no capped=,
-    // so the one number it carried was the one number it was not allowed to mean. The stub is not a page of the map
-    // and it must not borrow the page vocabulary to say so. It says what it IS instead:
-    //   stubbed="1"     the symbol map was not rendered at all (the <f> loop walks an empty order below)
-    //   would_show="N"  `keep` — the un-stubbed header's own shown=, and shown= counts symbol DEFINITIONS
-    //                   individually, not printed rows: the print loop runs collapseOverloadRows() per file
-    //                   bucket, so a const/non-const pair that both make the top-K cut prints ONE row carrying
-    //                   overloads=2. The row count therefore FOLLOWS from the identity the map legend already
-    //                   publishes for shown= — rows+sum(overloads-1)=shown — rather than being reported here.
-    //                   Measured on this repo 2026-09-14: shown=200, 193 <s> rows, 7 at overloads=2, 193+7=200.
-    //                   IT IS A DEFINITION COUNT AND NOT A CEILING, by owner decision 2026-09-14, and the
-    //                   reason is vocabulary: in this tool a floor/ceiling marker means "we could not see
-    //                   everything" (counts_floor=, _capped, the truncation disclosures). would_show is EXACT;
-    //                   what differs from a reader's guess is the UNIT. Spending an uncertainty marker on a
-    //                   unit difference would make "ceiling" mean "exact, but not in the unit you assumed" and
-    //                   weaken every honest use of the word elsewhere in the output. Naming the quantity is
-    //                   also the stronger claim: a ceiling cannot be inverted, while a definition count plus
-    //                   the published identity yields the rows. Reporting post-collapse rows instead — the
-    //                   review's original ask — is not available at this site for any price worth paying:
-    //                   which definitions survive the cut is a fact about the RANKING, and not ranking is the
-    //                   whole point of the stub (no pr_iters= rides its header). Not the corpus total either
-    //                   (that is symbols=), so the three cannot be read as each other.
-    //                   test/recentscopecheck.sh arms 14a/14b pin the arithmetic.
-    // Rule 3's own sentence sanctions the shape: "If a verb emits no shown=, it emits no capped= either."
-    if( ann.stubSymbols )
-    {
-        std::string stub = "<symbols stubbed=\"1\" would_show=\"";   // std::string, not a char[]: next= is already-markup (fixedbufsweep's rule)
-        stub += std::to_string( keep );   // `keep` is computed above from topK and S alone — the count with no ranking behind it
-        stub += "\"";
-        stub += nextAttrXml( ann.stubNext );
-        stub += "/>";
-        w.write( stub );
-    }
-    static const std::vector<std::uint32_t> kNoFiles;
-    for( std::uint32_t f : ann.stubSymbols ? kNoFiles : fileOrder )
-    {
-        w.write( "<f p=\"" );  w.write( escapeXml( pathRel( f ), esc ) );  w.write( "\"" );
-        if( const char* fl = builtinLayer( rootRelPath( ing, f ) ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }   // P3
-        w.write( ">" );
-
-        // §P6.3: see collapseOverloadRows() above — const/non-const overload pairs are already folded to
-        // one representative row per (kind,id) before this loop runs, so the loop body below is unchanged
-        // shape (no added branch): it just iterates a shorter vector.
-        const OverloadRows rows = collapseOverloadRows( ing, buckets[f] );
-
-        for( std::size_t i = 0; i < rows.id.size(); ++i )
-        {
-            const NodeId         id  = rows.id[i];
-            const Symbol&        s   = ing.symbols[id];
-            const std::uint32_t  out = outOff[id + 1] - outOff[id];
-            w.write( "<s t=\"" );  w.write( symTag( s.kind ) );
-            w.write( "\" n=\"" );  w.write( escapeXml( s.name, esc ) );  w.write( "\"" );   // close n="…" here so sc= can follow
-
-            // S6-C / row 6 (2026-09-12): the SHORT id. The canonical SCIP-style id is `path::scope::name`, and
-            // on a map row the path is the enclosing <f p=> verbatim — 942 of 942 scoped rows on this tree
-            // repeated it, 11.2% of a flagless map. The row now prints ONLY the segment the wrapper does not
-            // carry: sc= the enclosing scope. The legend states the composition (id = p::sc::n), the selectors
-            // keep accepting the composed spelling, and test/scroundtripcheck.sh proves the composed multiset is
-            // byte-identical to the id= multiset this row used to print. Emitted ONLY when a scope exists —
-            // exactly when the canonical id differed from the bare name (canonicalId degrades to the name on an
-            // empty scope), so the row set that carries an identity attribute is unchanged.
-            writeScopeAttr( w, s, esc );
-
-            w.write( overloadsAttr( rows.overloads[i] ) );   // see overloadsAttr() above — empty in the common case
-
-            // A4-R5: bind="pkg.Cls.method" — the decoded JNI binding label (graph.h g.bindLabel), when this
-            // symbol has one. Unconditional (not --metrics-gated): it is an identity fact like id=, not a
-            // descriptive stat. Omitted whenever bind is nullptr or the per-symbol label is empty (the
-            // overwhelming common case) → zero token cost, byte-identical golden map on non-JNI corpora.
-            if( bind && id < bind->size() && !(*bind)[id].empty() )
+        // §P8 collision: this prologue spelled its LABEL `l=`, the two characters 22 other sites use for a LINE
+        // NUMBER — including the <f p= …> rows just below. Renamed: the label had exactly two references in the
+        // tree (both updated here) against 15+ readers of the line-number meaning that must not move.
+        if( ing.rootLabels.size() >= 2 )
+        { // A13 prologue: label → root path, canonical order
+            for( std::size_t r = 0; r < ing.rootLabels.size(); ++r )
             {
-                w.write( " bind=\"" );  w.write( escapeXml( (*bind)[id], esc ) );  w.write( "\"" );
-            }
-
-            char ambs[ 48 ];  ambs[ 0 ] = '\0';   // "fast guessed K of this symbol's call targets — read source"
-            // amb= (≤ 17 B) then lpin= (≤ 18 B) in ONE buffer, each absent when 0. The cursor is the OUT
-            // POINTER, never a would-have-written length: lpin= is written AT the offset the first write
-            // ended, so a count an implementation computed rather than wrote would place it inside the
-            // half-written amb= attribute. Same defect class as the appendf clamps below.
-            char*       ap = ambs;
-            char* const ae = ambs + sizeof( ambs );
-            if( const std::uint32_t ambK = counterAt( ambOut, id ); ambK > 0 )
-            {
-                ap  = std::format_to_n( ap, ( ae - ap ) - 1, " amb=\"{}\"", ambK ).out;
-                *ap = '\0';
-            }
-            if( const std::uint32_t lpinK = counterAt( locPinOut, id ); lpinK > 0 )   // Phase 4: the disclosed locality pin
-            {
-                ap  = std::format_to_n( ap, ( ae - ap ) - 1, " lpin=\"{}\"", lpinK ).out;
-                *ap = '\0';
-            }
-
-            // PageRank k= is GLOBALLY volatile (any edit perturbs every rank) → omit it in --stable mode
-            // so the prefix stays byte-identical for unedited files (provider KV-cache hits). Default keeps k=.
-            char kbuf[ 24 ];  kbuf[ 0 ] = '\0';
-            if( !stable )
-            {
-                rw::formatTo( kbuf, sizeof( kbuf ), " k=\"{:.4f}\"", double( rank[id] ) );
-            }
-
-            // Q-compute descriptive attrs (loc/params/nest/locals/cbo/lcom4/tested), built into a side buffer
-            // that is appended before the closing '>' of the metrics attr. ALL --metrics-only; absent by
-            // default so the golden map is byte-identical. params/nest/locals emitted only for fns/methods
-            // (kind guard) so a class/sec never carries a 0 it can't have; lcom4 only for class-kinds with
-            // methods (kLcom4NA sentinel omits) — mutually exclusive with the fn/method group, which is why
-            // the buffer sizing below only has to cover ONE of the two groups' worst case, not both summed.
-            // 96 -> 160 (Phase 1, local-variable-indexing, docs/LOCALS_INDEXING.md): the fn/method worst
-            // case grew by locals="4294967295" locals_floor="1" (38 B) on top of the pre-existing
-            // loc+params+nest+cbo+amp+tested run (~88 B) — 96 would silently TRUNCATE (appendf's qe-clamp
-            // makes truncation safe from a buffer-overrun standpoint, but a truncated attr run is malformed
-            // XML, not a degrade worth shipping quietly). 160 -> 192 (ppalt disclosure): ppalt="65535"
-            // (+14 B) put the summed fn/method worst case within a rounding error of 160; 192 restores the
-            // same real headroom over the recomputed worst case.
-            char qbuf[ 192 ];  qbuf[ 0 ] = '\0';
-            if( metrics )
-            {
-                char* qp = qbuf; char* const qe = qbuf + sizeof( qbuf );
-                // A4-F8: snprintf returns the WOULD-HAVE-written length; on truncation `qp += ret` pushes qp
-                // PAST qe, then the next size_t(qe-qp) underflows to a huge size → unbounded stack write. Clamp
-                // qp to qe after every append (once full, further appends write nothing and stay clamped).
-                // fmt is always a string literal at every call site below — the non-literal warning is
-                // an artifact of routing it through the lambda parameter
-                // rw::formatTo reproduces snprintf's contract EXACTLY, so the A4-F8 clamp below is kept
-                // verbatim: it is applied to the same would-have-written length, and truncation therefore
-                // happens at the same byte it always did.
-                //
-                // The obvious-looking rewrite — `qp = std::format_to_n( qp, qe - qp, ... ).out` — is WRONG,
-                // and wrong in a way no fixture catches. snprintf( p, S, ... ) writes at most S-1 characters
-                // PLUS a NUL; format_to_n( p, S, ... ) writes up to S and terminates nothing. It buys one
-                // extra byte of room and drops the terminator. Measured 2026-09-09: that version emitted a
-                // row carrying amp="1" where every previous release truncated it away, on test/ as the
-                // corpus. The byte fence was green throughout — the fixture's attribute strings never reach
-                // this 80-byte buffer, so only a differential run against the pre-conversion binary on a
-                // REAL tree exposed it.
-                //
-                // What the conversion does keep: -Wformat-security is gone, because std::format_string
-                // preserves compile-time checking THROUGH the lambda parameter where a const char* fmt
-                // could not.
-                const auto appendf = [ & ]< class... A >( std::format_string<A...> fmt, A&&... args )
-                {
-                    // Bound by the OUT POINTER, never by a would-have-written length. std::format_to_n's
-                    // `out` is clamped to the n it was given on any implementation; its `size` is a
-                    // would-have-written count that an implementation can get wrong, and this clamp used
-                    // to depend on it. n is (qe-qp)-1 so the NUL below always lands in bounds, which is
-                    // snprintf's "at most S-1 characters plus a terminator", byte for byte.
-                    if( qp < qe )
-                    {
-                        const auto r = std::format_to_n( qp, ( qe - qp ) - 1, fmt, std::forward<A>( args )... );
-                        qp  = r.out;
-                        *qp = '\0';
-                    }
-                };
-                // loc: physical line span — always meaningful (SIZE is the master variable — report it first).
-                if( s.loc > 0 )
-                {
-                    appendf( " loc=\"{}\"", s.loc );
-                }
-                const bool isFn = ( s.kind == SymKind::Function || s.kind == SymKind::Method );
-                if( isFn )
-                {
-                    appendf( " params=\"{}\"", unsigned( s.params ) );
-                    appendf( " nest=\"{}\"", unsigned( s.maxNest ) );
-                    // The nesting PROFILE beside the max (model.h Symbol::humps/deepLoc). nest= alone cannot
-                    // distinguish a long run of shallow scoped steps from a body that sustains depth — both
-                    // report their deepest line and nothing about how much of the function is that deep.
-                    // Omitted, never a bare 0, when no region reached quality::kNestBar: that is exactly
-                    // nest < kNestBar, which the row already carries, so absence is lossless rather than a
-                    // truncation (test/nestprofilecheck.sh arm 5 pins the equivalence in both directions).
-                    if( s.humps > 0 )
-                    {
-                        appendf( " humps=\"{}\" deep=\"{}\" deep_floor=\"1\"", unsigned( s.humps ), unsigned( s.deepLoc ) );
-                    }
-                    // Phase 1 (local-variable-indexing, docs/LOCALS_INDEXING.md): locals= is ABSENT — never
-                    // a bare "0" — for every def outside model.h's localsCountedLang (MVP: C/C++ only), so a
-                    // reader never mistakes "not counted for this language" for "counted, and there are none".
-                    // locals_floor="1" always rides alongside a present locals=: `int a,b;` counts as ONE
-                    // declaration-statement, not two names (see cc_isCountableLocalDecl's own comment).
-                    if( localsCountedLang( s.lang ) )
-                    {
-                        appendf( " locals=\"{}\" locals_floor=\"1\"", unsigned( s.locals ) );
-                    }
-                    // ppalt disclosure: the body carries preproc branches that never coexist at compile
-                    // time, so this row's structural metrics are sums over ALL of them (model.h Symbol::
-                    // ppAlt). ABSENT when 0 — presence itself is the signal.
-                    if( s.ppAlt > 0 )
-                    {
-                        appendf( " ppalt=\"{}\"", unsigned( s.ppAlt ) );
-                    }
-                }
-                if( cbo && id < cbo->size() )
-                {
-                    appendf( " cbo=\"{}\"", (*cbo)[id] );
-                }
-                if( lcom4 && id < lcom4->size() && ( *lcom4 )[id] != 0xFFFFFFFFu )
-                { // 0xFFFFFFFF = kLcom4NA (graph.h) ⇒ omit
-                    appendf( " lcom4=\"{}\"", (*lcom4)[id] );
-                }
-                if( amp && id < amp->size() )
-                {
-                    appendf( " amp=\"{}\"", (*amp)[id] );
-                }
-                if( tested && id < tested->size() && ( *tested )[id] )
-                { // omit when 0 (lean output)
-                    appendf( " tested=\"1\"" );
-                }
-            }
-
-            char attr[ 352 ];   // descriptive metric attrs (fan-in/out/cx/role/amb/lpin + Q-compute qbuf) — facts, never
-                                // gates. The name quote + id= are already written above; this opens with a space.
-                                // The closing '>' is written separately below so the ev run — composed on
-                                // std::string, never a fixed char buffer (fixedbufsweep's own rule: ev_why= is
-                                // variable-length text) — can sit inside the element.
-            if( metrics && fanIn )
-            {
-                const std::uint32_t in = ( id < fanIn->size() ) ? (*fanIn)[id] : 0u;
-                rw::formatTo( attr, sizeof( attr ), " in=\"{}\" out=\"{}\" cx=\"{}\" ccx=\"{}\"{}{}{}{}",
-                               in, out, s.cx, s.ccx, ( in >= 8 ? " role=\"hub\"" : "" ), rw::cstr( qbuf ), rw::cstr( ambs ), rw::cstr( kbuf ) );
-            }
-            else
-            {
-                rw::formatTo( attr, sizeof( attr ), "{}{}", rw::cstr( ambs ), rw::cstr( kbuf ) );
-            }
-            w.write( attr );
-            // EXTENT HONESTY (kExtentSuspectRowLegend): the containment checks this row's extent/scope/kind failed.
-            // After k= so every pre-existing adjacency holds; absent when every check held (clean corpora unchanged).
-            if( s.extentSuspect != 0 )
-            {
-                w.write( " extent_suspect=\"" );
-                w.write( extent::extentSuspectReasons( s.extentSuspect ) );
-                w.write( "\"" );
-            }
-            // Essential complexity (model.h Symbol::ev), --metrics only. Emitted iff ev >= 2: ev >= 1 for any
-            // walked fn/method body, so on a row carrying cx= ABSENT means exactly ev == 1 — lossless in the
-            // strictest sense, and never a bare ev="1" (G4 + the honesty contract point the same way). Routed
-            // through evCountedLang so an uncovered language (Bash) reads as "not counted", never "counted, 1".
-            // ev_floor="1" always rides along: noreturn calls, macro-hidden returns and unresolvable gotos are
-            // invisible to the syntactic walk and can only RAISE the true value. ev_why= is the reason
-            // breakdown that keeps §10.1-Option-A honest (a guard-heavy row is visibly not a knot).
-            if( metrics && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && evCountedLang( s.lang ) && s.ev >= 2u )
-            {
-                std::string evRun = " ev=\"" + std::to_string( s.ev ) + "\" ev_floor=\"1\" ev_why=\"" + evWhyString( s ) + "\"";
-                w.write( evRun );
-            }
-            w.write( ">" );
-
-            for( std::uint32_t e = outOff[id]; e < outOff[id + 1]; ++e )
-            {
-                w.write( "<c n=\"" );
-                w.write( escapeXml( ing.symbols[ outTargets[e] ].name, esc ) );
-                // A4-R5: prov="scip" on a SCIP-pinned (precise) edge, prov="binding" on an FFI
-                // binding-table edge (pybind/extern-C/JNI), prov="import" on an ES named-import edge whose
-                // module AND export the source named. C1: prov="split" on one arm of a k-way split the
-                // resolver could not choose between. Absent = name-based AND uniquely resolved (the common case
-                // → zero token cost). outProv parallels outTargets exactly, so index `e` is the same edge.
-                //
-                // C1, and this is the whole point of the marker: `amb="K"` on the enclosing <s> says K of this
-                // symbol's CALLS were guesses and cannot say WHICH edges, so a consumer honouring the honesty
-                // signal had to distrust every <c> child. prov="split" names the arms, and the suspect set
-                // becomes the guessed edges and nothing else.
-                if( outProv && e < outProv->size() && ( *outProv )[e] )
-                {
-                    w.write( "\" prov=\"" );
-                    w.write( provLabel( ( *outProv )[e] ) );
-                }
+                w.write( "<root label=\"" );  w.write( escapeXml( ing.rootLabels[r], esc ) );
+                w.write( "\" p=\"" );     w.write( escapeXml( r < ing.rootPaths.size() ? ing.rootPaths[r] : std::string(), esc ) );
                 w.write( "\"/>" );
             }
-            w.write( "</s>" );
         }
-        w.write( "</f>" );
-    }
-    w.write( "</r>" );
+        writeRecentRows( w, ann, pathRel, esc );   // F3: rank_by=churn-decay's file-level answer, before the symbol map
+        // C1-b: under in=DIR the symbol map is a DISCLOSED stub (docs/METHODOLOGY.md §9.3) — the caller asked for DIR's
+        // recent files, not the map.
+        //
+        // NOT total=/shown=, which is what this first shipped as. Under pageview.h's vocabulary total= is THE TOTAL
+        // (rule 2) and capped= always rides beside a shown= (rule 3), and the stub had neither property: it printed
+        // total="200" — the --top-k PAGE SIZE — on a document whose own header says symbols="18457", with no capped=,
+        // so the one number it carried was the one number it was not allowed to mean. The stub is not a page of the map
+        // and it must not borrow the page vocabulary to say so. It says what it IS instead:
+        //   stubbed="1"     the symbol map was not rendered at all (the <f> loop walks an empty order below)
+        //   would_show="N"  `keep` — the un-stubbed header's own shown=, and shown= counts symbol DEFINITIONS
+        //                   individually, not printed rows: the print loop runs collapseOverloadRows() per file
+        //                   bucket, so a const/non-const pair that both make the top-K cut prints ONE row carrying
+        //                   overloads=2. The row count therefore FOLLOWS from the identity the map legend already
+        //                   publishes for shown= — rows+sum(overloads-1)=shown — rather than being reported here.
+        //                   Measured on this repo 2026-09-14: shown=200, 193 <s> rows, 7 at overloads=2, 193+7=200.
+        //                   IT IS A DEFINITION COUNT AND NOT A CEILING, by owner decision 2026-09-14, and the
+        //                   reason is vocabulary: in this tool a floor/ceiling marker means "we could not see
+        //                   everything" (counts_floor=, _capped, the truncation disclosures). would_show is EXACT;
+        //                   what differs from a reader's guess is the UNIT. Spending an uncertainty marker on a
+        //                   unit difference would make "ceiling" mean "exact, but not in the unit you assumed" and
+        //                   weaken every honest use of the word elsewhere in the output. Naming the quantity is
+        //                   also the stronger claim: a ceiling cannot be inverted, while a definition count plus
+        //                   the published identity yields the rows. Reporting post-collapse rows instead — the
+        //                   review's original ask — is not available at this site for any price worth paying:
+        //                   which definitions survive the cut is a fact about the RANKING, and not ranking is the
+        //                   whole point of the stub (no pr_iters= rides its header). Not the corpus total either
+        //                   (that is symbols=), so the three cannot be read as each other.
+        //                   test/recentscopecheck.sh arms 14a/14b pin the arithmetic.
+        // Rule 3's own sentence sanctions the shape: "If a verb emits no shown=, it emits no capped= either."
+        if( ann.stubSymbols )
+        {
+            std::string stub = "<symbols stubbed=\"1\" would_show=\"";   // std::string, not a char[]: next= is already-markup (fixedbufsweep's rule)
+            stub += std::to_string( keep );   // `keep` is computed above from topK and S alone — the count with no ranking behind it
+            stub += "\"";
+            stub += nextAttrXml( ann.stubNext );
+            stub += "/>";
+            w.write( stub );
+        }
+        static const std::vector<std::uint32_t> kNoFiles;
+        for( std::uint32_t f : ann.stubSymbols ? kNoFiles : fileOrder )
+        {
+            w.write( "<f p=\"" );  w.write( escapeXml( pathRel( f ), esc ) );  w.write( "\"" );
+            if( const char* fl = builtinLayer( rootRelPath( ing, f ) ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }   // P3
+            w.write( ">" );
 
-    // ── PHASE 2: measure, decide, then write ────────────────────────────────────────────────────────────
-    // The children are complete; `w` has nothing more to write on either path. Flush BEFORE closing the
-    // memstream (the writer's destructor also flushes, but by then m_used is 0, so it never touches a closed
-    // stream). On the degrade path there is nothing to measure — the head already went out — so only the
-    // trailing summary is left.
-    w.flush();
-    if( !childMem )
+            // §P6.3: see collapseOverloadRows() above — const/non-const overload pairs are already folded to
+            // one representative row per (kind,id) before this loop runs, so the loop body below is unchanged
+            // shape (no added branch): it just iterates a shorter vector.
+            const OverloadRows rows = collapseOverloadRows( ing, buckets[f] );
+
+            for( std::size_t i = 0; i < rows.id.size(); ++i )
+            {
+                const NodeId         id  = rows.id[i];
+                const Symbol&        s   = ing.symbols[id];
+                const std::uint32_t  out = outOff[id + 1] - outOff[id];
+                w.write( "<s t=\"" );  w.write( symTag( s.kind ) );
+                w.write( "\" n=\"" );  w.write( escapeXml( s.name, esc ) );  w.write( "\"" );   // close n="…" here so sc= can follow
+
+                // S6-C / row 6 (2026-09-12): the SHORT id. The canonical SCIP-style id is `path::scope::name`, and
+                // on a map row the path is the enclosing <f p=> verbatim — 942 of 942 scoped rows on this tree
+                // repeated it, 11.2% of a flagless map. The row now prints ONLY the segment the wrapper does not
+                // carry: sc= the enclosing scope. The legend states the composition (id = p::sc::n), the selectors
+                // keep accepting the composed spelling, and test/scroundtripcheck.sh proves the composed multiset is
+                // byte-identical to the id= multiset this row used to print. Emitted ONLY when a scope exists —
+                // exactly when the canonical id differed from the bare name (canonicalId degrades to the name on an
+                // empty scope), so the row set that carries an identity attribute is unchanged.
+                writeScopeAttr( w, s, esc );
+
+                w.write( overloadsAttr( rows.overloads[i] ) );   // see overloadsAttr() above — empty in the common case
+
+                // A4-R5: bind="pkg.Cls.method" — the decoded JNI binding label (graph.h g.bindLabel), when this
+                // symbol has one. Unconditional (not --metrics-gated): it is an identity fact like id=, not a
+                // descriptive stat. Omitted whenever bind is nullptr or the per-symbol label is empty (the
+                // overwhelming common case) → zero token cost, byte-identical golden map on non-JNI corpora.
+                if( bind && id < bind->size() && !(*bind)[id].empty() )
+                {
+                    w.write( " bind=\"" );  w.write( escapeXml( (*bind)[id], esc ) );  w.write( "\"" );
+                }
+
+                char ambs[ 48 ];  ambs[ 0 ] = '\0';   // "fast guessed K of this symbol's call targets — read source"
+                // amb= (≤ 17 B) then lpin= (≤ 18 B) in ONE buffer, each absent when 0. The cursor is the OUT
+                // POINTER, never a would-have-written length: lpin= is written AT the offset the first write
+                // ended, so a count an implementation computed rather than wrote would place it inside the
+                // half-written amb= attribute. Same defect class as the appendf clamps below.
+                char*       ap = ambs;
+                char* const ae = ambs + sizeof( ambs );
+                if( const std::uint32_t ambK = counterAt( ambOut, id ); ambK > 0 )
+                {
+                    ap  = std::format_to_n( ap, ( ae - ap ) - 1, " amb=\"{}\"", ambK ).out;
+                    *ap = '\0';
+                }
+                if( const std::uint32_t lpinK = counterAt( locPinOut, id ); lpinK > 0 )   // Phase 4: the disclosed locality pin
+                {
+                    ap  = std::format_to_n( ap, ( ae - ap ) - 1, " lpin=\"{}\"", lpinK ).out;
+                    *ap = '\0';
+                }
+
+                // PageRank k= is GLOBALLY volatile (any edit perturbs every rank) → omit it in --stable mode
+                // so the prefix stays byte-identical for unedited files (provider KV-cache hits). Default keeps k=.
+                char kbuf[ 24 ];  kbuf[ 0 ] = '\0';
+                if( !stable )
+                {
+                    rw::formatTo( kbuf, sizeof( kbuf ), " k=\"{:.4f}\"", double( rank[id] ) );
+                }
+
+                // Q-compute descriptive attrs (loc/params/nest/locals/cbo/lcom4/tested), built into a side buffer
+                // that is appended before the closing '>' of the metrics attr. ALL --metrics-only; absent by
+                // default so the golden map is byte-identical. params/nest/locals emitted only for fns/methods
+                // (kind guard) so a class/sec never carries a 0 it can't have; lcom4 only for class-kinds with
+                // methods (kLcom4NA sentinel omits) — mutually exclusive with the fn/method group, which is why
+                // the buffer sizing below only has to cover ONE of the two groups' worst case, not both summed.
+                // 96 -> 160 (Phase 1, local-variable-indexing, docs/LOCALS_INDEXING.md): the fn/method worst
+                // case grew by locals="4294967295" locals_floor="1" (38 B) on top of the pre-existing
+                // loc+params+nest+cbo+amp+tested run (~88 B) — 96 would silently TRUNCATE (appendf's qe-clamp
+                // makes truncation safe from a buffer-overrun standpoint, but a truncated attr run is malformed
+                // XML, not a degrade worth shipping quietly). 160 -> 192 (ppalt disclosure): ppalt="65535"
+                // (+14 B) put the summed fn/method worst case within a rounding error of 160; 192 restores the
+                // same real headroom over the recomputed worst case.
+                char qbuf[ 192 ];  qbuf[ 0 ] = '\0';
+                if( metrics )
+                {
+                    char* qp = qbuf; char* const qe = qbuf + sizeof( qbuf );
+                    // A4-F8: snprintf returns the WOULD-HAVE-written length; on truncation `qp += ret` pushes qp
+                    // PAST qe, then the next size_t(qe-qp) underflows to a huge size → unbounded stack write. Clamp
+                    // qp to qe after every append (once full, further appends write nothing and stay clamped).
+                    // fmt is always a string literal at every call site below — the non-literal warning is
+                    // an artifact of routing it through the lambda parameter
+                    // rw::formatTo reproduces snprintf's contract EXACTLY, so the A4-F8 clamp below is kept
+                    // verbatim: it is applied to the same would-have-written length, and truncation therefore
+                    // happens at the same byte it always did.
+                    //
+                    // The obvious-looking rewrite — `qp = std::format_to_n( qp, qe - qp, ... ).out` — is WRONG,
+                    // and wrong in a way no fixture catches. snprintf( p, S, ... ) writes at most S-1 characters
+                    // PLUS a NUL; format_to_n( p, S, ... ) writes up to S and terminates nothing. It buys one
+                    // extra byte of room and drops the terminator. Measured 2026-09-09: that version emitted a
+                    // row carrying amp="1" where every previous release truncated it away, on test/ as the
+                    // corpus. The byte fence was green throughout — the fixture's attribute strings never reach
+                    // this 80-byte buffer, so only a differential run against the pre-conversion binary on a
+                    // REAL tree exposed it.
+                    //
+                    // What the conversion does keep: -Wformat-security is gone, because std::format_string
+                    // preserves compile-time checking THROUGH the lambda parameter where a const char* fmt
+                    // could not.
+                    const auto appendf = [ & ]< class... A >( std::format_string<A...> fmt, A&&... args )
+                    {
+                        // Bound by the OUT POINTER, never by a would-have-written length. std::format_to_n's
+                        // `out` is clamped to the n it was given on any implementation; its `size` is a
+                        // would-have-written count that an implementation can get wrong, and this clamp used
+                        // to depend on it. n is (qe-qp)-1 so the NUL below always lands in bounds, which is
+                        // snprintf's "at most S-1 characters plus a terminator", byte for byte.
+                        if( qp < qe )
+                        {
+                            const auto r = std::format_to_n( qp, ( qe - qp ) - 1, fmt, std::forward<A>( args )... );
+                            qp  = r.out;
+                            *qp = '\0';
+                        }
+                    };
+                    // loc: physical line span — always meaningful (SIZE is the master variable — report it first).
+                    if( s.loc > 0 )
+                    {
+                        appendf( " loc=\"{}\"", s.loc );
+                    }
+                    const bool isFn = ( s.kind == SymKind::Function || s.kind == SymKind::Method );
+                    if( isFn )
+                    {
+                        appendf( " params=\"{}\"", unsigned( s.params ) );
+                        appendf( " nest=\"{}\"", unsigned( s.maxNest ) );
+                        // The nesting PROFILE beside the max (model.h Symbol::humps/deepLoc). nest= alone cannot
+                        // distinguish a long run of shallow scoped steps from a body that sustains depth — both
+                        // report their deepest line and nothing about how much of the function is that deep.
+                        // Omitted, never a bare 0, when no region reached quality::kNestBar: that is exactly
+                        // nest < kNestBar, which the row already carries, so absence is lossless rather than a
+                        // truncation (test/nestprofilecheck.sh arm 5 pins the equivalence in both directions).
+                        if( s.humps > 0 )
+                        {
+                            appendf( " humps=\"{}\" deep=\"{}\" deep_floor=\"1\"", unsigned( s.humps ), unsigned( s.deepLoc ) );
+                        }
+                        // Phase 1 (local-variable-indexing, docs/LOCALS_INDEXING.md): locals= is ABSENT — never
+                        // a bare "0" — for every def outside model.h's localsCountedLang (MVP: C/C++ only), so a
+                        // reader never mistakes "not counted for this language" for "counted, and there are none".
+                        // locals_floor="1" always rides alongside a present locals=: `int a,b;` counts as ONE
+                        // declaration-statement, not two names (see cc_isCountableLocalDecl's own comment).
+                        if( localsCountedLang( s.lang ) )
+                        {
+                            appendf( " locals=\"{}\" locals_floor=\"1\"", unsigned( s.locals ) );
+                        }
+                        // ppalt disclosure: the body carries preproc branches that never coexist at compile
+                        // time, so this row's structural metrics are sums over ALL of them (model.h Symbol::
+                        // ppAlt). ABSENT when 0 — presence itself is the signal.
+                        if( s.ppAlt > 0 )
+                        {
+                            appendf( " ppalt=\"{}\"", unsigned( s.ppAlt ) );
+                        }
+                    }
+                    if( cbo && id < cbo->size() )
+                    {
+                        appendf( " cbo=\"{}\"", (*cbo)[id] );
+                    }
+                    if( lcom4 && id < lcom4->size() && ( *lcom4 )[id] != 0xFFFFFFFFu )
+                    { // 0xFFFFFFFF = kLcom4NA (graph.h) ⇒ omit
+                        appendf( " lcom4=\"{}\"", (*lcom4)[id] );
+                    }
+                    if( amp && id < amp->size() )
+                    {
+                        appendf( " amp=\"{}\"", (*amp)[id] );
+                    }
+                    if( tested && id < tested->size() && ( *tested )[id] )
+                    { // omit when 0 (lean output)
+                        appendf( " tested=\"1\"" );
+                    }
+                }
+
+                char attr[ 352 ];   // descriptive metric attrs (fan-in/out/cx/role/amb/lpin + Q-compute qbuf) — facts, never
+                                    // gates. The name quote + id= are already written above; this opens with a space.
+                                    // The closing '>' is written separately below so the ev run — composed on
+                                    // std::string, never a fixed char buffer (fixedbufsweep's own rule: ev_why= is
+                                    // variable-length text) — can sit inside the element.
+                if( metrics && fanIn )
+                {
+                    const std::uint32_t in = ( id < fanIn->size() ) ? (*fanIn)[id] : 0u;
+                    rw::formatTo( attr, sizeof( attr ), " in=\"{}\" out=\"{}\" cx=\"{}\" ccx=\"{}\"{}{}{}{}",
+                                   in, out, s.cx, s.ccx, ( in >= 8 ? " role=\"hub\"" : "" ), rw::cstr( qbuf ), rw::cstr( ambs ), rw::cstr( kbuf ) );
+                }
+                else
+                {
+                    rw::formatTo( attr, sizeof( attr ), "{}{}", rw::cstr( ambs ), rw::cstr( kbuf ) );
+                }
+                w.write( attr );
+                // EXTENT HONESTY (kExtentSuspectRowLegend): the containment checks this row's extent/scope/kind failed.
+                // After k= so every pre-existing adjacency holds; absent when every check held (clean corpora unchanged).
+                if( s.extentSuspect != 0 )
+                {
+                    w.write( " extent_suspect=\"" );
+                    w.write( extent::extentSuspectReasons( s.extentSuspect ) );
+                    w.write( "\"" );
+                }
+                // Essential complexity (model.h Symbol::ev), --metrics only. Emitted iff ev >= 2: ev >= 1 for any
+                // walked fn/method body, so on a row carrying cx= ABSENT means exactly ev == 1 — lossless in the
+                // strictest sense, and never a bare ev="1" (G4 + the honesty contract point the same way). Routed
+                // through evCountedLang so an uncovered language (Bash) reads as "not counted", never "counted, 1".
+                // ev_floor="1" always rides along: noreturn calls, macro-hidden returns and unresolvable gotos are
+                // invisible to the syntactic walk and can only RAISE the true value. ev_why= is the reason
+                // breakdown that keeps §10.1-Option-A honest (a guard-heavy row is visibly not a knot).
+                if( metrics && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && evCountedLang( s.lang ) && s.ev >= 2u )
+                {
+                    std::string evRun = " ev=\"" + std::to_string( s.ev ) + "\" ev_floor=\"1\" ev_why=\"" + evWhyString( s ) + "\"";
+                    w.write( evRun );
+                }
+                w.write( ">" );
+
+                for( std::uint32_t e = outOff[id]; e < outOff[id + 1]; ++e )
+                {
+                    w.write( "<c n=\"" );
+                    w.write( escapeXml( ing.symbols[ outTargets[e] ].name, esc ) );
+                    // A4-R5: prov="scip" on a SCIP-pinned (precise) edge, prov="binding" on an FFI
+                    // binding-table edge (pybind/extern-C/JNI), prov="import" on an ES named-import edge whose
+                    // module AND export the source named. C1: prov="split" on one arm of a k-way split the
+                    // resolver could not choose between. Absent = name-based AND uniquely resolved (the common case
+                    // → zero token cost). outProv parallels outTargets exactly, so index `e` is the same edge.
+                    //
+                    // C1, and this is the whole point of the marker: `amb="K"` on the enclosing <s> says K of this
+                    // symbol's CALLS were guesses and cannot say WHICH edges, so a consumer honouring the honesty
+                    // signal had to distrust every <c> child. prov="split" names the arms, and the suspect set
+                    // becomes the guessed edges and nothing else.
+                    if( outProv && e < outProv->size() && ( *outProv )[e] )
+                    {
+                        w.write( "\" prov=\"" );
+                        w.write( provLabel( ( *outProv )[e] ) );
+                    }
+                    w.write( "\"/>" );
+                }
+                w.write( "</s>" );
+            }
+            w.write( "</f>" );
+        }
+        w.write( "</r>" );
+    };
+    // DEGRADE, one path for both failures: the head goes out FIRST carrying the MODELLED estimate (the pre-§H7 number, so
+    // no worse than the old behaviour and never a fabricated one), the children stream straight to `out` behind it, then
+    // the trailing summary. The whole map, uncharged.
+    const auto emitModelled = [ & ]()
     {
-        w.write( buildTail( modelledTokens ) );   // trailing volatile summary — kept out of the byte-stable prefix
-        w.flush();
+        XmlWriter direct( out );
+        direct.write( buildHead( modelledTokens ) );
+        writeChildren( direct );
+        direct.write( buildTail( modelledTokens ) );   // trailing volatile summary — kept out of the byte-stable prefix
+        direct.flush();
         if( outEstTokens )
         {
             *outEstTokens = modelledTokens;
         }
+    };
+    if( !childMem )
+    {
+        emitModelled();
         return;
     }
 
-    std::fflush( childMem );
-    std::fclose( childMem );
-    std::string childrenStr;
-    if( childBuf ) { childrenStr.assign( childBuf, childSz );  std::free( childBuf ); }
+    // ── PHASE 2: measure, decide, then write ────────────────────────────────────────────────────────────
+    // The children go into the buffer, and the writer flushes BEFORE the memstream is finished (its destructor flushes
+    // again at the end of the block, with nothing left to write). A buffer that did not finish whole means a write was
+    // lost INSIDE the children (rw::MemoryStream::finish), so those bytes are never printed: the map is rendered again,
+    // straight to `out`, on the modelled path a failed open takes.
+    {
+        XmlWriter w( childMem );
+        writeChildren( w );
+        w.flush();
+    }
+    const rw::MemoryStreamBytes children = childStream.finish();
+    if( !children.isWhole )
+    {
+        DEGRADED_PATH_ALERT( "serialize: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
+        emitModelled();
+        return;
+    }
+    const std::string_view childrenStr = children.bytes;   // owned by childStream, alive to the end of this function
 
     // The fixpoint: est_tokens covers head + children + tail, and head/tail both PRINT est_tokens, so the
     // digit count feeds back. Converges in ≤2 passes in practice (each extra digit moves the estimate by
@@ -7440,9 +7480,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     // ── PHASE 1: render the "r" array into a buffer (§H7 — see serialize()'s PHASE 1 for the full reasoning:
     // measure, decide, then write). DEGRADE: an open_memstream failure emits the header FIRST with the
     // MODELLED estimate (the pre-§H7 number, never a fabricated one) and streams the array behind it.
-    char*       rowsBuf = nullptr;
-    std::size_t rowsSz  = 0;
-    std::FILE*  rowsMem = openChargeBuffer( &rowsBuf, &rowsSz );
+    rw::MemoryStream rowsStream;
+    std::FILE* const rowsMem = openChargeStream( rowsStream );
     if( !rowsMem )
     {
         DEGRADED_PATH_ALERT( "serializeJson: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
@@ -7460,112 +7499,129 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         hw.write( ",\"r\":[" );
     };
 
-    if( !rowsMem )
+    // The "r" array, as ONE renderer both paths call — serialize()'s writeChildren above, for the same reason: a buffer
+    // that opened and then lost a write has already spent the rows, so the fallback must be able to write them again.
+    const auto writeRows = [ & ]( JsonWriter& w )
     {
-        emitHeader( out, mapEstTokens ); // degrade: nothing to measure, so the model stands
-    }
+        char       num[ 64 ];
 
-    JsonWriter w( rowsMem ? rowsMem : out );
-    char       num[ 64 ];
-
-    bool firstFile = true;
-    for( std::uint32_t f : fileOrder )
-    {
-        if( !firstFile )
+        bool firstFile = true;
+        for( std::uint32_t f : fileOrder )
         {
-            w.write( "," );
-        }
-        firstFile = false;
-        w.write( "{\"p\":" );  writeJsonStr( w, pathRel( f ), esc );
-        if( const char* fl = builtinLayer( rootRelPath( ing, f ) ); *fl ) { w.write( ",\"layer\":" );  writeJsonStr( w, fl, esc ); }
-        w.write( ",\"s\":[" );
-
-        // §P6.3 / §A4d: const/non-const overloads canonicalize to the SAME id, so a bucket straight from
-        // `order` printed two byte-identical JSON objects and a consumer keying on "id" silently dropped
-        // one. Same collapse the XML path runs (collapseOverloadRows above), same "overloads" count.
-        const OverloadRows rows = collapseOverloadRows( ing, buckets[f] );
-
-        bool firstSym = true;
-        for( std::size_t rowIndex = 0; rowIndex < rows.id.size(); ++rowIndex )
-        {
-            const NodeId id = rows.id[ rowIndex ];
-            if( !firstSym )
+            if( !firstFile )
             {
                 w.write( "," );
             }
-            firstSym = false;
-            const Symbol&       s   = ing.symbols[id];
-            const std::uint32_t out2= outOff[id + 1] - outOff[id];
+            firstFile = false;
+            w.write( "{\"p\":" );  writeJsonStr( w, pathRel( f ), esc );
+            if( const char* fl = builtinLayer( rootRelPath( ing, f ) ); *fl ) { w.write( ",\"layer\":" );  writeJsonStr( w, fl, esc ); }
+            w.write( ",\"s\":[" );
 
-            w.write( "{\"t\":" );  writeJsonStr( w, symTag( s.kind ), esc );
-            w.write( ",\"n\":" );  writeJsonStr( w, s.name, esc );
+            // §P6.3 / §A4d: const/non-const overloads canonicalize to the SAME id, so a bucket straight from
+            // `order` printed two byte-identical JSON objects and a consumer keying on "id" silently dropped
+            // one. Same collapse the XML path runs (collapseOverloadRows above), same "overloads" count.
+            const OverloadRows rows = collapseOverloadRows( ing, buckets[f] );
 
-            if( hasScopeAttr( s ) ) { w.write( ",\"sc\":" );  writeJsonStr( w, s.scope, esc ); }   // row 6: the XML sibling's sc=, one presence rule (hasScopeAttr)
-
-            if( rows.overloads[ rowIndex ] > 1 )
-            { rw::formatTo( num, sizeof( num ), ",\"overloads\":{}", rows.overloads[ rowIndex ] );  w.write( num ); }
-
-            if( bind && id < bind->size() && !(*bind)[id].empty() )
-            { w.write( ",\"bind\":" );  writeJsonStr( w, (*bind)[id], esc ); }
-
-            if( const std::uint32_t ambK = counterAt( ambOut, id ); ambK > 0 )
-            { rw::formatTo( num, sizeof( num ), ",\"amb\":{}", ambK );  w.write( num ); }
-
-            if( const std::uint32_t lpinK = counterAt( locPinOut, id ); lpinK > 0 )   // Phase 4: the XML lpin= twin
-            { rw::formatTo( num, sizeof( num ), ",\"lpin\":{}", lpinK );  w.write( num ); }
-
-            if( s.extentSuspect != 0 )   // extent honesty: the XML extent_suspect= twin, same reason spelling
-            { w.write( ",\"extent_suspect\":" );  writeJsonStr( w, extent::extentSuspectReasons( s.extentSuspect ), esc ); }
-
-            if( !stable )
-            { rw::formatTo( num, sizeof( num ), ",\"k\":{:.4f}", double( rank[id] ) );  w.write( num ); }
-
-            if( metrics )
+            bool firstSym = true;
+            for( std::size_t rowIndex = 0; rowIndex < rows.id.size(); ++rowIndex )
             {
-                writeJsonQMetrics( w, JsonQMetrics{ s, id, out2, fanIn, cbo, tested, lcom4, amp } );
-            }
-
-            w.write( ",\"c\":[" );
-            bool firstC = true;
-            for( std::uint32_t e = outOff[id]; e < outOff[id + 1]; ++e )
-            {
-                if( !firstC )
+                const NodeId id = rows.id[ rowIndex ];
+                if( !firstSym )
                 {
                     w.write( "," );
                 }
-                firstC = false;
-                w.write( "{\"n\":" );  writeJsonStr( w, ing.symbols[ outTargets[e] ].name, esc );
-                // §A4d: prov mirrors the XML attribute 1:1 — "scip" for a SCIP-pinned edge, "binding" for a
-                // decoded FFI binding, "import" for an ES named-import edge, "split" (C1) for one arm of a k-way
-                // split the resolver could not choose between. outProv parallels outTargets exactly, so index `e`
-                // is the same edge. The two dialects MUST spell the same vocabulary: test/mcpclidiffcheck.sh is
-                // the gate that says so.
-                if( outProv && e < outProv->size() && (*outProv)[e] )
+                firstSym = false;
+                const Symbol&       s   = ing.symbols[id];
+                const std::uint32_t out2= outOff[id + 1] - outOff[id];
+
+                w.write( "{\"t\":" );  writeJsonStr( w, symTag( s.kind ), esc );
+                w.write( ",\"n\":" );  writeJsonStr( w, s.name, esc );
+
+                if( hasScopeAttr( s ) ) { w.write( ",\"sc\":" );  writeJsonStr( w, s.scope, esc ); }   // row 6: the XML sibling's sc=, one presence rule (hasScopeAttr)
+
+                if( rows.overloads[ rowIndex ] > 1 )
+                { rw::formatTo( num, sizeof( num ), ",\"overloads\":{}", rows.overloads[ rowIndex ] );  w.write( num ); }
+
+                if( bind && id < bind->size() && !(*bind)[id].empty() )
+                { w.write( ",\"bind\":" );  writeJsonStr( w, (*bind)[id], esc ); }
+
+                if( const std::uint32_t ambK = counterAt( ambOut, id ); ambK > 0 )
+                { rw::formatTo( num, sizeof( num ), ",\"amb\":{}", ambK );  w.write( num ); }
+
+                if( const std::uint32_t lpinK = counterAt( locPinOut, id ); lpinK > 0 )   // Phase 4: the XML lpin= twin
+                { rw::formatTo( num, sizeof( num ), ",\"lpin\":{}", lpinK );  w.write( num ); }
+
+                if( s.extentSuspect != 0 )   // extent honesty: the XML extent_suspect= twin, same reason spelling
+                { w.write( ",\"extent_suspect\":" );  writeJsonStr( w, extent::extentSuspectReasons( s.extentSuspect ), esc ); }
+
+                if( !stable )
+                { rw::formatTo( num, sizeof( num ), ",\"k\":{:.4f}", double( rank[id] ) );  w.write( num ); }
+
+                if( metrics )
                 {
-                    w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( (*outProv)[e] ), esc );
+                    writeJsonQMetrics( w, JsonQMetrics{ s, id, out2, fanIn, cbo, tested, lcom4, amp } );
                 }
-                w.write( "}" );
+
+                w.write( ",\"c\":[" );
+                bool firstC = true;
+                for( std::uint32_t e = outOff[id]; e < outOff[id + 1]; ++e )
+                {
+                    if( !firstC )
+                    {
+                        w.write( "," );
+                    }
+                    firstC = false;
+                    w.write( "{\"n\":" );  writeJsonStr( w, ing.symbols[ outTargets[e] ].name, esc );
+                    // §A4d: prov mirrors the XML attribute 1:1 — "scip" for a SCIP-pinned edge, "binding" for a
+                    // decoded FFI binding, "import" for an ES named-import edge, "split" (C1) for one arm of a k-way
+                    // split the resolver could not choose between. outProv parallels outTargets exactly, so index `e`
+                    // is the same edge. The two dialects MUST spell the same vocabulary: test/mcpclidiffcheck.sh is
+                    // the gate that says so.
+                    if( outProv && e < outProv->size() && (*outProv)[e] )
+                    {
+                        w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( (*outProv)[e] ), esc );
+                    }
+                    w.write( "}" );
+                }
+                w.write( "]}" );
             }
             w.write( "]}" );
         }
         w.write( "]}" );
-    }
-    w.write( "]}" );
-    w.flush();
-
-    // ── PHASE 2: measure, decide, then write ────────────────────────────────────────────────────────────
-    if( !rowsMem )
+    };
+    // DEGRADE, one path for both failures: the header FIRST with the MODELLED estimate, the array streamed behind it.
+    const auto emitModelled = [ & ]()
     {
+        emitHeader( out, mapEstTokens );
+        JsonWriter direct( out );
+        writeRows( direct );
+        direct.flush();
         if( outEstTokens )
         {
             *outEstTokens = mapEstTokens;
         }
+    };
+    if( !rowsMem )
+    {
+        emitModelled();
         return;
     }
-    std::fflush( rowsMem );
-    std::fclose( rowsMem );
-    std::string rowsStr;
-    if( rowsBuf ) { rowsStr.assign( rowsBuf, rowsSz );  std::free( rowsBuf ); }
+    {
+        JsonWriter w( rowsMem );
+        writeRows( w );
+        w.flush();
+    }
+
+    // ── PHASE 2: measure, decide, then write ────────────────────────────────────────────────────────────
+    const rw::MemoryStreamBytes rows = rowsStream.finish();
+    if( !rows.isWhole )
+    {
+        // a write was lost inside the rows: never print them — write the whole document again, on the modelled path
+        DEGRADED_PATH_ALERT( "serializeJson: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
+        emitModelled();
+        return;
+    }
+    const std::string_view rowsStr = rows.bytes;   // owned by rowsStream, alive to the end of this function
 
     // The header STATES est_tokens and its own bytes are part of what est_tokens covers, so its size is
     // probed with the modelled number first. Unlike the XML sibling — whose head is a plain std::string and
@@ -7577,14 +7633,18 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     // than dropping the header's bytes from the charge.
     std::size_t headerBytes = kEnvelopeBytes;
     {
-        char*       pbuf = nullptr;
-        std::size_t psz  = 0;
-        if( std::FILE* pm = openChargeBuffer( &pbuf, &psz ) )
+        rw::MemoryStream probe;
+        if( std::FILE* const pm = openChargeStream( probe ) )
         {
             emitHeader( pm, mapEstTokens );
-            std::fflush( pm );  std::fclose( pm );
-            headerBytes = psz;
-            std::free( pbuf );
+            if( const rw::MemoryStreamBytes header = probe.finish(); header.isWhole )
+            {
+                headerBytes = header.bytes.size();
+            }
+            else
+            {
+                DEGRADED_PATH_ALERT( "serializeJson: the header size probe's buffer did not finish whole — est_tokens charges the modelled envelope instead" );
+            }
         }
         else
         {

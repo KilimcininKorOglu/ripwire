@@ -36,6 +36,8 @@
 // is one shape word, one paren pair, one or two arguments. Anything else refuses with the whole
 // vocabulary in the message (the --graph-query refusal posture).
 
+#include "infra/enumcount.h"   // rw::enumCountIsExact — ClaimShape's count, proven at compile time beside kShapeTags
+
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -197,6 +199,8 @@ inline Claim parseClaim( std::string_view src )
 // the count so a new shape cannot silently miss a tag.
 inline constexpr const char* kShapeTags[] = { "calls", "uses", "unused", "contains", "defines", "reaches" };
 static_assert( std::size_t( ClaimShape::Reaches ) + 1 == std::size( kShapeTags ), "ClaimShape grew — extend kShapeTags" );
+// `Reaches + 1` names the last enumerator by hand; enumCountIsExact is what makes an append after it a build error.
+static_assert( enumCountIsExact<ClaimShape, std::size( kShapeTags )>(), "ClaimShape grew past Reaches — extend kShapeTags and the assert above" );
 
 // ── the limit= vocabulary — the not-established verdict's REASON, closed like the shapes ─────────────
 inline constexpr const char* kLimitCallGraphFloor   = "call-graph-floor";     // name-based edges: dynamic dispatch/fn-ptr/macros may be missing

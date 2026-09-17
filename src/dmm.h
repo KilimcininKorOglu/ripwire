@@ -94,7 +94,8 @@ inline constexpr std::uint32_t kUnitInterfacingLowRiskMax = 2;    // parameters
 // The three properties, in the order they are emitted. Index-addressed rather than switched: every loop in
 // this file walks all three, and a fourth would be a row here plus a threshold above.
 inline constexpr std::size_t kPropCount = 3;
-inline constexpr const char* kPropNames[kPropCount] = { "size", "complexity", "interfacing" };
+inline constexpr const char* kPropNames[] = { "size", "complexity", "interfacing" };
+static_assert( std::size( kPropNames ) == kPropCount, "kPropNames: one name per property — a spelled extent zero-fills a missing one" );
 
 // Why the run could not produce a score. Ok and NoParent/NoGit/… are NOT the same thing as BadRev: the first
 // group is the environment (degrade to an UNAVAILABLE report, exit 0), BadRev is the user's typo (a refusal

@@ -10,9 +10,10 @@
 
 #include "infra/profileScope.h"
 #include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
+#include "infra/sortutil.h"  // svLess — JS/TS builtin-member tables below (binary_search, no signed-char wrap)
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 
-#include <algorithm>   // std::sort — symbolsByFile below
+#include <algorithm>   // std::sort — symbolsByFile below; std::binary_search — isJsTsBuiltinMember
 #include <tuple>       // std::tie — lessUnindexedExt's mixed-direction compare
 #include <array>       // Symbol::evWhy — the fixed-size ev_why tag counters
 #include <cstdint>
@@ -79,8 +80,9 @@ inline const char* symTag( SymKind k ) noexcept
         case SymKind::Section:   return "sec";    // markdown heading (doc structure; isolated in the graph)
         case SymKind::Macro:     return "macro";  // #define (disclosed-degraded: replacement text, not a parsed body)
         case SymKind::Field:     return "field";  // member variable (id=path::Owner::field; use-sites via --uses=Owner.field)
-        default:                 return "other";
+        case SymKind::Other:     return "other";
     }
+    return "other";   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent "other"
 }
 
 // NOTE: Json sits AFTER Unknown deliberately. serialize.h pins `static_assert( int(Lang::Unknown)==12 )`
@@ -112,23 +114,24 @@ inline const char* symTag( SymKind k ) noexcept
 // JVM-bridged to Java via graph.h's langCompatible (mirroring the existing Cpp<->ObjC and Cpp<->C
 // bridges) so a mixed Kotlin+Java module (the Android norm) resolves calls across the language
 // boundary instead of dropping every one of them as unresolved.
-enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC, Markdown, JavaScript, Bash, Java, Ruby, Unknown, Json, CSharp, C, Toml, Yaml, Php, Lua, Elixir, Dart, Kotlin };
+enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC, Markdown, JavaScript, Bash, Java, Ruby, Unknown, Json, CSharp, C, Toml, Yaml, Php, Lua, Elixir, Dart, Kotlin, GDScript };
 // The number of Lang enumerators. MUST stay ( last enumerator + 1 ): any per-language array sized by
 // a LITERAL silently drops the tail when a language is appended, and the drop is invisible because
 // the affected code paths just see a zero. That happened: nonlocalstate.h's filesByLang was a
 // hardcoded 16 while Php(18), Lua(19) and Elixir(20) existed, so --nonlocal-state never disclosed
 // those three as unanalyzed even though kUnanalyzedLangs listed Php and Lua. Size per-language
 // arrays with this, never with a number.
-inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::Kotlin ) + 1;
+inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::GDScript ) + 1;
 // ...and the cache readers validate every cached Lang byte against it, so a stale kLangCount would also refuse
 // the new language's records. The compile-time proof (infra/enumcount.h) makes the append a build error instead.
 static_assert( enumCountIsExact<Lang, kLangCount>(), "kLangCount must name the LAST Lang enumerator — move it with the append" );
 
-// short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt").
+// short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt|gd").
 // The canonical home for this switch: previously duplicated privately in htmlexport.h, moved here so a THIRD
 // caller (naming-consistency's per-language vote groups) reuses it instead of growing a second copy.
 /// Return the stable short output label for a language, or "?" for an unknown value.
-inline const char* langTag( Lang l ) noexcept
+/// constexpr so main.cpp's registration asserts can ask it about the value one past kLangCount.
+inline constexpr const char* langTag( Lang l ) noexcept
 {
     switch( l )
     {
@@ -154,8 +157,30 @@ inline const char* langTag( Lang l ) noexcept
         case Lang::Elixir:     return "ex";
         case Lang::Dart:       return "dart";
         case Lang::Kotlin:     return "kt";
-        default:               return "?";
+        case Lang::GDScript:   return "gd";
+        case Lang::Unknown:    return "?";
     }
+    return "?";   // a byte past the enum (a corrupt cache value) still reads "?"; a NEW Lang is a -Werror=switch error above
+}
+
+// Is this a CODE language (functions, calls, state), as opposed to a data or document format or no language at all?
+// It is the ONE declared exemption the per-language registration checks read: main.cpp's asserts and ingest_crawl.h's
+// kLangTable mirror check. Appending a Lang used to mean remembering five tables in four files, and three shipped or
+// nearly shipped one language short (02f798e3 Dart, 9418e35e five unanalyzed languages, PR #233's `.gd` row).
+// There is no `default:` here on purpose: a new enumerator is a -Wswitch error on this switch, so whether it is code is
+// a decision, and every table the checks read then has to agree with that decision at compile time.
+inline constexpr bool isCodeLang( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Cpp: case Lang::Python: case Lang::TypeScript: case Lang::Go: case Lang::Rust: case Lang::Swift:
+        case Lang::ObjC: case Lang::JavaScript: case Lang::Bash: case Lang::Java: case Lang::Ruby: case Lang::CSharp:
+        case Lang::C: case Lang::Php: case Lang::Lua: case Lang::Elixir: case Lang::Dart: case Lang::Kotlin: case Lang::GDScript:
+            return true;
+        case Lang::Markdown: case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Unknown:
+            return false;
+    }
+    return false;   // a byte past the enum (a corrupt cache value) is not a language
 }
 
 // Call-site RECEIVER classification (P2-D one-hop type narrowing). Captured at ingest from the AST shape
@@ -184,10 +209,108 @@ inline const char* langTag( Lang l ) noexcept
 //              `@external` veto, never a spray. APPENDED so no persisted value renumbers (RawRef rides the
 //              cache with recv as a u8). Python only: isMemberAccessNode classifies C++/Python receivers and
 //              C++ has no `super`.
-enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule };
+//   LitString / LitArray / LitRegex / LitNumber / LitBoolean — TS/JS member call whose receiver type the
+//              syntax already proves (a literal, or a chain of built-in methods that stay certain). APPENDED
+//              so the cache u8 does not renumber. isMemberAccessNode stays false for TS/JS; receiverOf
+//              classifies these beside that function, TS/JS only. A matching Foo.prototype.NAME extension
+//              may bind; anything else is vetoExternal. Object literals, identifier receivers, this, casts,
+//              and element-returning links (find/at/pop/shift/reduce/subscript/!) stay None.
+//   JavaTypeCandidate — Java `identifier::method` (issue #74): syntax alone cannot say type or value. Ingest stamps
+//              the candidate; graph resolution admits it only when the identifier names an indexed class and no Java
+//              declaration in the caller shadows that name. APPENDED after the literal kinds: persisted values stay stable.
+enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean,
+    JavaTypeCandidate };
 // The number of RecvKind enumerators — the bound readRef validates a cached receiver byte against (see kSymKindCount).
-inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::ElixirSelfModule ) + 1;
+inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::JavaTypeCandidate ) + 1;
 static_assert( enumCountIsExact<RecvKind, kRecvKindCount>(), "kRecvKindCount must name the LAST RecvKind enumerator — move it with the append" );
+
+inline bool isJsTsLitRecv( RecvKind k ) noexcept
+{
+    return k == RecvKind::LitString || k == RecvKind::LitArray || k == RecvKind::LitRegex
+        || k == RecvKind::LitNumber || k == RecvKind::LitBoolean;
+}
+
+inline std::string_view jsLitCtorName( RecvKind k ) noexcept
+{
+    switch( k )
+    {
+        case RecvKind::LitString:  return "String";
+        case RecvKind::LitArray:   return "Array";
+        case RecvKind::LitRegex:   return "RegExp";
+        case RecvKind::LitNumber:  return "Number";
+        case RecvKind::LitBoolean: return "Boolean";
+        default:                   return {};
+    }
+}
+
+inline bool isJsTsBuiltinCtor( std::string_view ctor ) noexcept
+{
+    return ctor == "String" || ctor == "Array" || ctor == "RegExp" || ctor == "Number" || ctor == "Boolean";
+}
+
+// Names that really are members of the literal's built-in type. A Lit* call whose callee is in the
+// matching table may bind a scope-matched polyfill or go External/Undefined; any other name keeps
+// today's ladder (so String.prototype.shout / named-function / Object.assign / declare global survive).
+inline constexpr std::string_view kJsTsStringMembers[] = {
+    "anchor", "at", "big", "blink", "bold", "charAt", "charCodeAt", "codePointAt", "concat", "endsWith",
+    "fixed", "fontcolor", "fontsize", "includes", "indexOf", "isWellFormed", "italics", "lastIndexOf",
+    "link", "localeCompare", "match", "matchAll", "normalize", "padEnd", "padStart", "repeat", "replace",
+    "replaceAll", "search", "slice", "small", "split", "startsWith", "strike", "sub", "substr", "substring",
+    "sup", "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toString", "toUpperCase", "toWellFormed",
+    "trim", "trimEnd", "trimLeft", "trimRight", "trimStart", "valueOf",
+};
+inline constexpr std::string_view kJsTsArrayMembers[] = {
+    "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast",
+    "findLastIndex", "flat", "flatMap", "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf",
+    "map", "pop", "push", "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort", "splice",
+    "toLocaleString", "toReversed", "toSorted", "toSpliced", "toString", "unshift", "values", "with",
+};
+inline constexpr std::string_view kJsTsRegExpMembers[] = {
+    "compile", "exec", "test", "toString",
+};
+inline constexpr std::string_view kJsTsNumberMembers[] = {
+    "toExponential", "toFixed", "toLocaleString", "toPrecision", "toString", "valueOf",
+};
+inline constexpr std::string_view kJsTsBooleanMembers[] = {
+    "toString", "valueOf",
+};
+
+static_assert( std::is_sorted( std::begin( kJsTsStringMembers ),  std::end( kJsTsStringMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsArrayMembers ),   std::end( kJsTsArrayMembers ),   rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsRegExpMembers ),  std::end( kJsTsRegExpMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsNumberMembers ),  std::end( kJsTsNumberMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsBooleanMembers ), std::end( kJsTsBooleanMembers ), rw::sortutil::svLess ) );
+
+inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) noexcept
+{
+    const std::string_view* b = nullptr;
+    const std::string_view* e = nullptr;
+    if( ctor == "String" )
+    {
+        b = std::begin( kJsTsStringMembers );  e = std::end( kJsTsStringMembers );
+    }
+    else if( ctor == "Array" )
+    {
+        b = std::begin( kJsTsArrayMembers );   e = std::end( kJsTsArrayMembers );
+    }
+    else if( ctor == "RegExp" )
+    {
+        b = std::begin( kJsTsRegExpMembers );  e = std::end( kJsTsRegExpMembers );
+    }
+    else if( ctor == "Number" )
+    {
+        b = std::begin( kJsTsNumberMembers );  e = std::end( kJsTsNumberMembers );
+    }
+    else if( ctor == "Boolean" )
+    {
+        b = std::begin( kJsTsBooleanMembers ); e = std::end( kJsTsBooleanMembers );
+    }
+    else
+    {
+        return false;
+    }
+    return std::binary_search( b, e, name, rw::sortutil::svLess );
+}
 
 // ABS-3 reference / use-site ROLE: WHAT a reference does at the use site, captured at ingest so a
 // use-site index (`--uses=SYM`) can report the resolvable places a name is referenced, not just calls.
@@ -235,8 +358,8 @@ inline const char* refRoleTag( RefRole r ) noexcept
         case RefRole::Extends: return "extends";
         case RefRole::Macro:   return "macro";
         case RefRole::Type:    return "type";
-        default:               return "read";
     }
+    return "read";   // a byte past the enum; every enumerator is named above, so a NEW role is a -Werror=switch error
 }
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
@@ -244,7 +367,7 @@ inline const char* refRoleTag( RefRole r ) noexcept
 // adding a tag later is a compatible extension, renaming one is not. Declaration order MUST track the
 // EvWhyTag indices ingest.cpp writes — the table is the single source both emitters read.
 inline constexpr std::size_t kEvWhyTagCount = 8;
-inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
+inline constexpr const char* kEvWhyTagTable[] = {
     "guard-return",     // return/throw whose escape crosses at least one construct (incl. §1.3's guard clause)
     "loop-escape",      // break/continue out of a loop from under an intervening construct
     "switch-escape",    // break (or Java yield) out of a switch from under an intervening construct
@@ -254,6 +377,7 @@ inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
     "fallthrough",      // Go fallthrough — an explicit intra-switch goto
     "multi-entry",      // a case label displaced into a loop/branch (Duff's device; §2.6)
 };
+static_assert( std::size( kEvWhyTagTable ) == kEvWhyTagCount, "kEvWhyTagTable: one spelling per ev_why tag — a spelled extent zero-fills a missing one into a null the emitter prints" );
 
 // A definition = one node in the graph. symbols[i].id == i (dense, deterministic order).
 struct Symbol
@@ -685,6 +809,9 @@ struct Binding
     NodeId        fromSymbol = kNoNode;   // enclosing function/method (the binding's scope); kNoNode if file-scope
     std::uint32_t fileId     = 0;
     LocalBindKind kind       = LocalBindKind::Type;
+    bool          isFromAssignment = false;   // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
+                                              //   a function's name as often as a class's, so buildGraph drops it unless a class of
+                                              //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
                                           //   VarDecl and its typed record (Type or ParamType) carry the SAME
                                           //   value — that shared byte is how Rule 2's lexical receiver lookup
@@ -707,7 +834,7 @@ struct Binding
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
 static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
-               "Binding's scalars are five u32 and a u8 kind in 24 bytes — startByte rides the padding after `kind`" );
+               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT
@@ -1065,6 +1192,13 @@ struct IngestResult
     //    Recorded once by ingest(); a single-file root records the file's directory. EMPTY on a multi-root
     //    merge, whose `files` are already the labeled root-relative identity (rootRelPath is then the identity).
     std::string                crawlRoot;
+    // …and every PREFIX a selector path typed from the cwd can start with before the root-relative part (graph.h
+    // selectorRootTail): the root as typed, then the root expressed relative to the cwd, then its absolute spellings
+    // (joined onto the shell's logical $PWD and onto getcwd, and its realpath — a user types the logical spelling, and
+    // a symlinked prefix such as /tmp vs /private/tmp makes the two differ). "." means the root IS the cwd, so a `./`
+    // path is root-relative. Lexically normalised, no trailing '/', each once. Recorded once by ingest(); empty on a
+    // multi-root merge, like crawlRoot.
+    std::vector<std::string>   crawlRootPrefixes;
 
     // ── P1-15: how many files this run actually RE-EXTRACTED (cache miss / changed / new) rather than
     //    reusing from the content-hash cache — the number RIPWIRE_CACHE_STATS has always printed as
@@ -1405,6 +1539,20 @@ inline bool shadowSuppressedSite( const Reference& r, const ShadowEvidence& ev, 
     if( r.recv != RecvKind::None || !r.qualifier.empty() )
     {
         return false;   // a receiver- or scope-qualified name can never resolve to a plain local
+    }
+    // JAVA IS REFUSED OUTRIGHT, and this arm is load-bearing rather than defensive. This pass is
+    // C++/ObjC evidence: it deletes a reference because a declared local of that name shadows it at
+    // that byte. Java's VarDecl records (ingest_binds.h captureJavaShadowDecls) exist for one
+    // unrelated consumer — the JavaTypeCandidate receiver proof for issue #74 — and Java call sites
+    // carry no classified receiver, so `b.name(name)` inside `make( Builder b, String name )` reaches
+    // here as a BARE call whose name a parameter declares, and lost its call edge and its `--uses`
+    // row. The refusal is not a heuristic: Java has no free functions and no callable locals, so a
+    // Java call NEVER resolves to a local and there is nothing here to prevent. Python keeps its
+    // veto-only evidence at an empty span for the same reason (ingest_binds.h, the note above
+    // capturePythonParamShadowDecls); Java needs real spans, so the refusal lives at the consumer.
+    if( r.lang == Lang::Java )
+    {
+        return false;
     }
     // ORDER IS A COST DECISION, not a semantic one: all four guards are pure predicates ANDed together, so
     // any order gives the same verdict — but they are not equally selective. `varSpans` is keyed on

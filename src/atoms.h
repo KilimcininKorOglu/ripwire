@@ -34,6 +34,7 @@
 
 #include "infra/Diagnostics.h"
 #include "ingest.h"             // AstQuerySpec / AstMatch / astQuery — the SAME engine --lint and --match run
+#include "clones.h"             // langBit — "is this one of N languages" as one mask test, not a re-derived == chain
 #include "lintrules.h"          // langOfPath — the house file-language predicate; kLintMaxPerRule
 #include "model.h"
 
@@ -146,24 +147,13 @@ struct SpanIndex
     }
 };
 
-// The extensions ingest routes through a C/C++/ObjC/CUDA grammar. langOfPath covers C, C++ and ObjC;
-// the three shader/CUDA extensions ride a C-family grammar in ingest.cpp's kLangTable but predate
-// langOfPath's table, so they are named here rather than widening a predicate that other verbs
-// (packDeps' dep_files= denominator, --health) read for a different question.
+// The extensions ingest routes through a C/C++/ObjC/CUDA grammar. langOfPath covers every one of them now, the
+// shader/CUDA trio (`.metal`, `.cu`, `.cuh`) included: this predicate used to name those three itself because
+// langOfPath's table did not, and the compile-time mirror check in ingest_crawl.h is what closed that gap for every
+// verb at once instead of this one.
 inline bool isCFamilyPath( std::string_view path ) noexcept
 {
-    const Lang lang = langOfPath( path );
-    if( lang == Lang::C || lang == Lang::Cpp || lang == Lang::ObjC )
-    {
-        return true;
-    }
-    const std::size_t dot = path.rfind( '.' );
-    if( dot == std::string_view::npos )
-    {
-        return false;
-    }
-    const std::string_view ext = path.substr( dot );
-    return ext == ".cu" || ext == ".cuh" || ext == ".metal";
+    return ( langBit( langOfPath( path ) ) & ( langBit( Lang::C ) | langBit( Lang::Cpp ) | langBit( Lang::ObjC ) ) ) != 0;
 }
 
 // Which symbol OWNS a byte offset — the INNERMOST definition whose [sigStartByte, endByte) contains

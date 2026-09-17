@@ -20,8 +20,10 @@
 #include <climits>       // PATH_MAX — the crawl-boundary realpath buffer below
 #include <cstdlib>       // realpath  — likewise
 #include <cstring>
+#include <mutex>         // AstRegexUndecided — the rare undecided-predicate path records its first site under a lock
 #include <span>          // spanTiersOfFiles takes a VIEW of paths — the caller owns the storage
 #include <string_view>
+#include <tuple>         // AstRegexUndecided orders its first site by (fileId, byte, cause, pattern)
 
 // GLOBAL-scope forward declaration, deliberately OUTSIDE namespace rw — the hazard the pattern-surface
 // note below records is a `struct TSLanguage;` INSIDE namespace rw (it would declare rw::TSLanguage and
@@ -360,10 +362,26 @@ inline bool crawlPathStaysInRoot( const std::string& path, const std::string& ro
 // ignored subtree all keep TODAY'S FULL WALK and say which (CrawlSkips::ignoreMode). Default true: the
 // HEAD-snapshot and edit-preview callers re-ingest a `git archive` extraction, which holds tracked files
 // only, so the two sides of a --quality-delta compare the same population either way.
+//
+// THE LAYOUT LINK STAMP (the trailing IngestLayout argument, which every caller defaults). CLAUDE.md records builds that
+// linked objects compiled against two different struct layouts and reported success: sizeof( Symbol ) 96 in one object
+// and 104 in another gave a real ASan report of a fake bug, and an "impossible" std::length_error. The empty tag type
+// carries both sizes in its template arguments, so they enter ingest()'s MANGLED NAME: an object compiled against a
+// stale layout references an ingest() that no fresh object defines, and the link fails instead.
+// MEASURED 2026-09-16 on this tree, with the dev build's own flags and link line: main.o compiled with the stamp at
+// sizeof( Symbol ) 112, ingest.o at 120 (one u64 added) -> ld: undefined symbol
+// rw::ingest(…, IngestLayoutStamp<112, 848>) against a defined …<120, 848>. The same mixed pair WITHOUT the stamp linked
+// at exit 0, and the binary died with SIGBUS (exit 138) on test/fixture. The consistent stamped pair links and prints
+// byte-identical output. Symbol is named separately because sizeof( IngestResult ) does not move when an element type
+// held in one of its vectors grows (848 on both sides above). An empty class argument: at most one ignored register,
+// on a function called once per run.
+template<std::size_t kSymbolBytes, std::size_t kIngestResultBytes> struct IngestLayoutStamp {};
+using IngestLayout = IngestLayoutStamp<sizeof( Symbol ), sizeof( IngestResult )>;
+
 IngestResult ingest( const char* rootDir, const std::vector<std::string>& excludeSubstr = {},
                      std::string_view cacheFile = {}, std::size_t maxFileBytes = kDefaultMaxFileBytes,
                      bool captureValueUses = true, std::string_view excludeLabel = {},
-                     bool respectGitignore = true );
+                     bool respectGitignore = true, IngestLayout = {} );
 
 // ---- index-identity disclosure (the two functions behind --doctor's index-cache row) ----
 //
@@ -502,6 +520,71 @@ PatternFileCensus eligiblePatternFiles( const IngestResult& ing, const pattern::
 // The unreachable-code rule's own budget, named so every caller spends the same one.
 inline constexpr std::size_t kUnreachableMaxHits = 5000;
 
+// ---- a user's #match? / #not-match? predicate that could not be DECIDED, by cause ----
+// Three different facts that used to share one counter and one sentence — "the regex engine abandoned the match" —
+// which was false for two of them and sent the reader to the wrong fix:
+//   TextScreened     — a capture-typed argument's per-match TEXT was refused by the structural screen (e.g. a captured
+//                      string literal spelling a catastrophic-backtracking construct). Nothing was matched.
+//   TextUncompilable — that per-match text does not parse as a regular expression (e.g. "foo(").
+//   Abandoned        — a pattern compiled and the engine gave up part-way through the match (RegexVerdict::Exhausted).
+enum class AstRegexUndecidedCause : std::uint8_t { TextScreened, TextUncompilable, Abandoned };
+
+// What a finished walk hands the verb: a count per cause and the FIRST undecided evaluation — lowest fileId, then
+// byte, then cause, then pattern — so the refusal names one concrete site, and the same one on every run whatever the
+// thread interleaving. Plain and copyable, unlike the sink below.
+struct AstRegexUndecidedReport
+{
+    std::uint64_t          textScreened     = 0;
+    std::uint64_t          textUncompilable = 0;
+    std::uint64_t          abandoned        = 0;
+    bool                   hasFirst         = false;
+    std::uint32_t          firstFileId      = 0;
+    std::uint32_t          firstByte        = 0;
+    std::uint32_t          firstLine        = 0;
+    AstRegexUndecidedCause firstCause       = AstRegexUndecidedCause::Abandoned;
+    std::string            firstPattern;     // the per-match text (Text*) or the pattern that was running (Abandoned)
+    std::string            firstReason;      // the guard's refusal, or kRegexAbandonedReason
+
+    std::uint64_t total() const noexcept { return textScreened + textUncompilable + abandoned; }
+};
+
+// The sink the walk's workers write into. Only the undecided path ever touches it, which is why a mutex is the whole
+// synchronisation: a query whose predicates all decide never takes the lock.
+class AstRegexUndecided
+{
+public:
+    void note( AstRegexUndecidedCause cause, std::uint32_t fileId, std::uint32_t byte, std::uint32_t line, std::string_view pattern, std::string_view reason )
+    {
+        const std::lock_guard<std::mutex> lock( mutex );
+        std::uint64_t& count = ( cause == AstRegexUndecidedCause::TextScreened ) ? state.textScreened
+                             : ( cause == AstRegexUndecidedCause::TextUncompilable ) ? state.textUncompilable : state.abandoned;
+        ++count;
+        const auto key      = std::make_tuple( fileId, byte, std::uint8_t( cause ), pattern );
+        const auto firstKey = std::make_tuple( state.firstFileId, state.firstByte, std::uint8_t( state.firstCause ), std::string_view( state.firstPattern ) );
+        if( state.hasFirst && !( key < firstKey ) )
+        {
+            return;
+        }
+        state.hasFirst     = true;
+        state.firstFileId  = fileId;
+        state.firstByte    = byte;
+        state.firstLine    = line;
+        state.firstCause   = cause;
+        state.firstPattern = std::string( pattern );
+        state.firstReason  = std::string( reason );
+    }
+
+    AstRegexUndecidedReport report() const
+    {
+        const std::lock_guard<std::mutex> lock( mutex );
+        return state;
+    }
+
+private:
+    mutable std::mutex      mutex;
+    AstRegexUndecidedReport state;
+};
+
 struct AstQueryGroup
 {
     const std::vector<AstQuerySpec>* specs         = nullptr;   // borrowed — the caller owns the spec table
@@ -551,6 +634,18 @@ struct AstQueryGroup
     std::vector<std::string>*        nearestGrammarOut = nullptr;   // optional: the grammar (kLangTable's
                                                                      // querySub name) that nearestKindOut's
                                                                      // entry belongs to, "" alongside a "" kind
+
+    // USER-AUTHORED #match? / #not-match? patterns (src/regexguard.h). Both opt-in, both null for the built-in
+    // rule packs, whose patterns are constants of this binary: a caller that passes them is saying "these
+    // predicates are the user's, and a predicate that could not be decided must not quietly keep or drop a row".
+    //   regexRefusedOut   — one "'PATTERN' refused: REASON" per distinct constant pattern of this group's specs the
+    //                       guard REFUSED (malformed, non-portable, or catastrophic backtracking), sorted. Decided
+    //                       when the query is compiled, before any file is walked, so the verdict is the pattern's.
+    //   regexUndecidedOut — every predicate evaluation that could not be decided during the walk, BY CAUSE (see
+    //                       AstRegexUndecidedCause), with the first site named deterministically.
+    // Without them the legacy contract holds for that group: a refused or undecided predicate filters NOTHING.
+    std::vector<std::string>*        regexRefusedOut   = nullptr;
+    AstRegexUndecided*               regexUndecidedOut = nullptr;
 };
 
 // keptBytesOut (optional): the walk is where the corpus gets READ, so a pass that runs after it and needs

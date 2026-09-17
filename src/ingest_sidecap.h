@@ -1424,6 +1424,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
 
         // P2-D Rule 2: local var→type bindings (`Foo x;`), for receiver-variable narrowing. C++/ObjC/Python/TS
         // (the languages whose receiver shape `receiverOf` captures as a recvVar) — others have no consumer yet.
+        // Java contributes declaration-name vetoes only, for issue #74's ambiguous Identifier::method receiver.
         // L3 adds Lang::C for the fn-pointer/callback var→function capture only: the Rule-2 branches inside
         // gate themselves on Cpp/ObjC/Python/TS, so type narrowing is byte-identical on C files.
         BindCtx bindCtx;
@@ -1455,6 +1456,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
             arms.rust = &rustCtx;
         }
         if( le.lang == Lang::Cpp || le.lang == Lang::ObjC || le.lang == Lang::Python || le.lang == Lang::TypeScript
+            || le.lang == Lang::Java
             || le.lang == Lang::C )
         {
             arms.bind = &bindCtx;
@@ -1688,6 +1690,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             if( !haveRole )
             {
                 continue;
+            }
+            if( captureSpecializationHeader( isDef, le.lang, defCapSv, roleNode, nameNode, fileId, src, refs ) )
+            {
+                continue;   // a C++ specialization header: its base clause only, never a symbol
             }
 
             // C1 (memgraph F1) — see cppDefNameReseat. A null node is "nothing to re-seat".
@@ -1959,7 +1965,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             d.internalLinkage = internalLinkageBit( le.lang, defNode, src );
             if( le.lang == Lang::Cpp )                              // canonical scope (E#4): out-of-line `A::b` → "A", else enclosing class/namespace
             {
-                d.scope = qualifierOf( nameNode, src );
+                d.scope = qualifierOfDefinition( nameNode, src );   // `Box<T>::grow` (primary) → "Box"; a specialization keeps its id
                 if( d.scope.empty() )
                 {
                     d.scope = enclosingScopeOf( nameNode, src );
@@ -2009,6 +2015,16 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
               // Kotlin<->Java langCompatible bridge (graph.h) — an unqualified name-only match is
               // exactly the false-candidate risk that bridge's own comment names.
                 d.scope = kotlinEnclosingScopeOf( nameNode, src );
+            }
+            else if( ( le.lang == Lang::JavaScript || le.lang == Lang::TypeScript )
+                     && defCapSv == "definition.protomethod" )
+            { // only the five built-in ctors: every Foo.prototype.bar gaining sc= would mint a new
+              // canonical id and move quality baselines (node lib/ has ~163 anonymous protomethods)
+                const std::string_view ctor = prototypeCtorName( nameNode, src );
+                if( isJsTsBuiltinCtor( ctor ) )
+                {
+                    d.scope = std::string( ctor );
+                }
             }
             // extent honesty: did the parse RECOVER this def's container or kind? Only asked in a file whose root
             // holds an error (fileHasError, one O(1) flag test per file) — see parseRecoveredBits.
@@ -2083,49 +2099,18 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( le.lang == Lang::Cpp )
                 {
                     r.qualifier = qualifierOf( nameNode, src ); // `A::b()` → "A" (E#4 canonical resolve)
+                    cppResplitRefName( r, nameTxt );            // H4 RE-SPLIT at 3+ segments, operator tails, `template` disambiguator
                 }
                 else if( le.lang == Lang::Rust )
                 {
                     r.qualifier = rustQualifierOf( nameNode, src ); // H4: `Widget::new()` → "Widget"
                 }
 
-                // H4 RE-SPLIT: the widened qualified-call pattern binds the INNER node, so a 3+-segment call's
-                // captured text still carries scope (`inner::targetFn`). Recover the pair the canonical tier
-                // keys on — name = the final segment, qualifier = the IMMEDIATE scope — from the text itself.
-                // This must run INSTEAD OF the finalSegment() above (it overwrites both fields): finalSegment
-                // truncates at the first '<', which would name `numeric_limits<std::size_t>::max` as
-                // `numeric_limits` and mint an edge to the wrong symbol. Inert for every 2-segment call
-                // (`rw::midFn` binds a bare identifier — no top-level `::` in the text) and for
-                // `ns::tmplFn<int>()` (whose `::` sits inside no group but whose captured text is just
-                // `tmplFn<int>`), so those keep their qualifierOf() result untouched.
-                if( le.lang == Lang::Cpp )
-                {
-                    // An OPERATOR tail is recognised first: its `<`/`>` are part of the NAME, so handing it to
-                    // the angle-depth scan below binds the wrong scope for the whole `>` family. See
-                    // operatorNameStart. When the operator spelling starts at index 0 the capture IS the bare
-                    // operator name, its parent is the qualified_identifier, and qualifierOf() already put the
-                    // immediate scope in r.qualifier — nothing to re-split.
-                    const std::size_t opStart = operatorNameStart( nameTxt );
-                    const bool        opScoped = opStart != std::string_view::npos && opStart >= 2
-                                              && nameTxt[ opStart - 1 ] == ':' && nameTxt[ opStart - 2 ] == ':';
-                    if( opScoped )
-                    {
-                        r.name      = finalSegment( nameTxt.substr( opStart ) );                                  // `operator>` verbatim
-                        r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, opStart - 2 ) ) );
-                    }
-                    else if( opStart == std::string_view::npos )
-                    {
-                        if( const std::size_t sep = lastTopLevelScopeSep( nameTxt ); sep != std::string_view::npos )
-                        {
-                            r.name      = finalSegment( nameTxt.substr( sep + 2 ) );
-                            r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, sep ) ) );
-                        }
-                    }
-                }
-
                 if( !isImportRef && le.lang != Lang::Elixir )                             // an import site has no receiver and no argument list —
                 {                                                                        //   the defaults (RecvKind::None, argCountKnown=false) are the truth
-                    RecvShape rs = receiverOf( nameNode, le.lang, src );                 // P2-D: `this`/`self`/`x`/`base.field` shape
+                    RecvShape rs = le.lang == Lang::Java
+                                 ? javaMethodReferenceReceiver( roleNode, src )
+                                 : receiverOf( nameNode, le.lang, src );                 // P2-D: `this`/`self`/`x`/`base.field` shape
                     r.recv = rs.kind;  r.recvVar = std::move( rs.var );                  //   → one-hop narrowing in resolve.h
                     r.fieldName = std::move( rs.field );                                 //   depth-2 intermediate field; "" otherwise
                     auto [ ac, ak ] = callArity( nameNode, le.lang, src );               // B2.2: call-site positional arg count

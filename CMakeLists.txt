@@ -250,6 +250,7 @@ set(_ripwire_query_names
   java
   javascript
   json
+  gdscript
   kotlin
   lua
   objc
@@ -509,6 +510,18 @@ add_ts_grammar(lua    https://github.com/tree-sitter-grammars/tree-sitter-lua.gi
 # deliberately not a kLangTable row yet — see the note there.
 add_ts_grammar(kotlin https://github.com/fwcd/tree-sitter-kotlin.git 1852ea17b7f60fb3f9d84e0b1555d56b46b39fb1)  # main, post-0.3.8
 
+# GDScript (.gd): PrestonKnopp/tree-sitter-gdscript — the only maintained GDScript grammar; there is no
+# first-party one under tree-sitter/. LANGUAGE_VERSION 14, inside [MIN_COMPATIBLE, LANGUAGE_VERSION]=[13,15]
+# for the vendored core. Ships a scanner.c (significant indentation: INDENT/DEDENT/NEWLINE, like Python's)
+# which the macro picks up. The SHA below is 12 commits ahead of upstream's newest tag — `git describe
+# --tags` reports v6.1.0-12-gc5c8fa4 — so it is a master commit by choice, not for want of a tag.
+# PARSE RATE MEASURED, not assumed, before vendoring (STEP 0 of prompts/add-a-language.md): 98.88% of 2938
+# real .gd files parse with zero ERROR/MISSING nodes — 13 open-source Godot projects (2611 files, 98.81%)
+# plus a private 327-file game (99.39%); 8159 error bytes out of 25.3 MB (0.032%). The three known blind
+# spots are disclosed in queries/gdscript/tags.scm and test/gdscriptcheck.sh; all three are upstream grammar
+# gaps, NOT patched here (guardrail G3 — this repo carries no grammar fork).
+add_ts_grammar(gdscript https://github.com/PrestonKnopp/tree-sitter-gdscript.git c5c8fa4861b5a4f04a7e60d97587fc3b6cc5639e)  # master, ABI 14
+
 # PHP (.php): the official tree-sitter org grammar. Like TypeScript this repo hosts TWO sub-grammars
 # in subdirectories — `php/` (the full one: HTML text interleaved with `<?php … ?>` blocks) and
 # `php_only/` (no surrounding text). ONLY `php/` is vendored and built: a real .php file in a real
@@ -570,6 +583,7 @@ set(RIPWIRE_TS_OBJECTS
   $<TARGET_OBJECTS:ts_lua>
   $<TARGET_OBJECTS:ts_dart>
   $<TARGET_OBJECTS:ts_kotlin>
+  $<TARGET_OBJECTS:ts_gdscript>
   $<TARGET_OBJECTS:ts_elixir>
   $<TARGET_OBJECTS:ts_php>
   $<TARGET_OBJECTS:ts_toml>
@@ -782,7 +796,7 @@ endif()
 set(RIPWIRE_GRAMMAR_TARGETS
   ts_cpp ts_python ts_go ts_rust ts_tsts ts_tstsx ts_swift ts_objc
   ts_javascript ts_bash ts_java ts_ruby ts_json ts_toml ts_yaml ts_csharp ts_c ts_cuda ts_markdown
-  ts_php ts_lua ts_elixir ts_dart ts_kotlin)
+  ts_php ts_lua ts_elixir ts_dart ts_kotlin ts_gdscript)
 set(RIPWIRE_RUNTIME_COMPILE_TARGETS ripwire_probe ripwire tree-sitter ${RIPWIRE_GRAMMAR_TARGETS})
 set(RIPWIRE_RUNTIME_LINK_TARGETS ripwire_probe ripwire)
 # The C++ subset of the compile list — the only targets that include a C++ standard library at all, and so
@@ -936,6 +950,25 @@ if(RIPWIRE_ASAN)
     DEPENDS ripwire
     COMMENT "Run the G1 fixture with the platform leak-detection policy")
 endif()
+
+# ---- compile-time fences: two warnings that are errors on OUR C++ targets, every compiler, every flavour ----
+# The tree passes no warning set (no -Wall), so until this block a check only a warning could make was a check nobody
+# read, and on GCC -Wswitch did not run at all: GCC enables it only under -Wall, Clang by default.
+#   -Werror=switch                  a switch over an enum with no `default:` must name every enumerator, so appending
+#                                   one (a Lang, a SymKind, a RefRole) is a compile error at every per-value switch that
+#                                   has to decide it. The house rule that makes this bite: a switch returning one answer
+#                                   PER ENUMERATOR carries no `default:`, and ends with a plain `return` for a byte past
+#                                   the enum (a corrupt cache value); GCC's -Wreturn-type needs that line and Clang
+#                                   accepts it. A switch over a deliberate SUBSET keeps its `default:`.
+#   -Werror=implicit-fallthrough    a case body that falls into the next label says so with [[fallthrough]].
+# Both were measured at 0 diagnostics on this tree before they became errors (AppleClang and Homebrew clang, debug and
+# -DNDEBUG), so they cost nothing today and fence the next edit. GCC's first run of them is CI's.
+# OUR TARGETS ONLY, the same rule the sanitizer and separate-storage blocks follow: the tree-sitter core and the grammar
+# objects are generated C we do not own, and their scanners fall through by design.
+set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
+  target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})
+endforeach()
 
 # ---- G-race ThreadSanitizer build (the qsnap-prefetch worker vs the request loop) ----
 # A SEPARATE target/dir from ASan (TSan and ASan are mutually exclusive). Vets the one concurrent path in the
@@ -1109,5 +1142,53 @@ if(RIPWIRE_FUZZ)
   add_ripwire_fuzzer(elixir     tree_sitter_elixir     elixir)
   add_ripwire_fuzzer(lua        tree_sitter_lua        lua)
   add_ripwire_fuzzer(kotlin     tree_sitter_kotlin     kotlin)
+  add_ripwire_fuzzer(gdscript   tree_sitter_gdscript   gdscript)
   add_custom_target(ripwire_fuzzers DEPENDS ${RIPWIRE_FUZZ_TARGETS})
+
+  # ---- reader fuzzers: ripwire's OWN parsers of bytes it did not create (test/fuzz/readers/) ----
+  # The grammar targets above fuzz the vendored parsers; these fuzz the code a hostile cache blob, sidecar, SCIP
+  # index, MCP frame or repository document actually reaches. Each reader family compiles ONCE into the static
+  # library (readers_ingest.cpp IS the ingest translation unit, instrumented); each ripwire_fuzz_reader_<name> is one
+  # tiny entry TU that names its reader, so the linker pulls only the family it calls. Crash oracles only — the
+  # correctness oracles are help-wanted issue #149's.
+  set(RIPWIRE_FUZZ_READER_SOURCES
+    test/fuzz/readers/readers_light.cpp
+    test/fuzz/readers/readers_domain.cpp
+    test/fuzz/readers/readers_mcphttp.cpp
+    test/fuzz/readers/readers_ingest.cpp
+    src/pagerank.cpp
+    src/infra/diagnostics.cpp)
+  set(RIPWIRE_FUZZ_READER_INCLUDES
+    ${tree_sitter_SOURCE_DIR}/lib/include ${_ripwire_generated_dir} src/infra third_party src test/fuzz/readers)
+  add_library(ripwire_fuzz_readers STATIC EXCLUDE_FROM_ALL ${RIPWIRE_FUZZ_READER_SOURCES})
+  target_include_directories(ripwire_fuzz_readers PRIVATE ${RIPWIRE_FUZZ_READER_INCLUDES})
+  target_compile_definitions(ripwire_fuzz_readers PRIVATE PROFILE_ENABLED=0)
+  target_compile_options(ripwire_fuzz_readers PRIVATE ${RIPWIRE_FUZZ_COMPILE_OPTIONS})
+  if(RIPWIRE_HAS_CLANG_INTEGER_SANITIZER)
+    target_compile_options(ripwire_fuzz_readers PRIVATE "-fsanitize-ignorelist=${_ripwire_libstdcxx_ignorelist}")
+  endif()
+  add_dependencies(ripwire_fuzz_readers ripwire_version_stamp)
+  add_library(ripwire_fuzz_reader_grammars STATIC EXCLUDE_FROM_ALL ${RIPWIRE_TS_OBJECTS})
+  set_target_properties(ripwire_fuzz_reader_grammars PROPERTIES LINKER_LANGUAGE C)
+
+  set(RIPWIRE_FUZZ_READER_TARGETS)
+  function(add_ripwire_reader_fuzzer NAME)
+    set(_ripwire_reader_target "ripwire_fuzz_reader_${NAME}")
+    add_executable(${_ripwire_reader_target} EXCLUDE_FROM_ALL test/fuzz/readers/fuzz_reader.cpp)
+    target_compile_definitions(${_ripwire_reader_target} PRIVATE RIPWIRE_FUZZ_READER=${NAME})
+    target_compile_options(${_ripwire_reader_target} PRIVATE ${RIPWIRE_FUZZ_COMPILE_OPTIONS})
+    target_link_options(${_ripwire_reader_target} PRIVATE ${RIPWIRE_FUZZ_LINK_OPTIONS})
+    target_link_libraries(${_ripwire_reader_target} PRIVATE
+      ripwire_fuzz_readers ripwire_fuzz_reader_grammars ripwire_tree_sitter_fuzz Threads::Threads)
+    set(RIPWIRE_FUZZ_READER_TARGETS ${RIPWIRE_FUZZ_READER_TARGETS} ${_ripwire_reader_target} PARENT_SCOPE)
+  endfunction()
+
+  # The reader list is declared ONCE, here; test/fuzz/readers/run.sh and test/g1configcheck.sh derive theirs from it.
+  set(RIPWIRE_FUZZ_READERS
+    mcpjson mcphttp docparse tracein skillscan scip resolvecfg lintrules
+    qsnap qchurn oracle sidecars qscope ingestrecord ingestframe stiermemo)
+  foreach(_ripwire_reader IN LISTS RIPWIRE_FUZZ_READERS)
+    add_ripwire_reader_fuzzer(${_ripwire_reader})
+  endforeach()
+  add_custom_target(ripwire_reader_fuzzers DEPENDS ${RIPWIRE_FUZZ_READER_TARGETS})
 endif()

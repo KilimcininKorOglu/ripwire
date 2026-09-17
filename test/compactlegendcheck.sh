@@ -360,6 +360,9 @@ probeFor()
 # ripwire.pr-context/v1 stays at 410/399 for the same reason: the clause is present-only and this fixture's
 # answer is not truncated.
 # ripwire.expand-file/v1 is NEW: --expand has two servings and they share no element (see compactlegend.h).
+# RE-PINNED 2026-09-17 (lane/regex-long-lines): ripwire.grep/v1 360 -> 440 (measured 422, the --regex=dist.* probe). Every
+# --regex answer now carries regex_lines_skipped= — how many lines were too long for the regex engine's stack and never
+# matched, 0 included — so its compact reading rides every regex probe (73 B). The literal --grep probe does not move.
 # schema                      pin  measured
 PIN_TABLE='
 ripwire.map/v1                   910   892
@@ -407,7 +410,7 @@ ripwire.affected/v1              350   339
 ripwire.verify/v1                330   316
 ripwire.help-task/v1             170   153
 ripwire.query/v1                 720   707
-ripwire.grep/v1                  360   345
+ripwire.grep/v1                  440   422
 ripwire.match/v1                 270   260
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1              250   232

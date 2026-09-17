@@ -1073,7 +1073,7 @@ inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, c
 inline bool langUsesHashComment( Lang l ) noexcept
 {
     return l == Lang::Python || l == Lang::Bash || l == Lang::Ruby || l == Lang::Elixir
-        || l == Lang::Toml   || l == Lang::Yaml;
+        || l == Lang::Toml   || l == Lang::Yaml || l == Lang::GDScript;
 }
 
 inline std::uint32_t codeLinesInBody( std::string_view body, Lang lang ) noexcept
@@ -1972,13 +1972,52 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // suite the moment the two disagree, and `test/qschemetripcheck.sh` (which previously hashed only quality.h
 // functions and never looked at ingest.cpp — precisely why this shipped) now hashes the ingest-side constant
 // lines too. Bumping kParserVer without updating these two lines is a hard gate failure, not a silent miss.
-// FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
-// `static_assert` — this lane's file boundary forbade editing those files.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 105;  // MUST equal ingest.cpp's kParserVer   (gated)
-                                                          // 105 = 2026-09-17 (type aliases): a typedef / using alias of a
-                                                          //    named class records its target for the base walk.
+// The FOLLOW-UP this note asked for is done the other way round: ingest_cache.h holds
+// `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
+// not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
+// that broke that fails the build on the undeclared name rather than passing.
+constexpr std::uint32_t kIngestCacheVersionMirror   = 23;   // MUST equal ingest.cpp's kCacheVersion (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 111;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 111 = 2026-09-17 (type aliases, PR #280): a typedef / using alias
+                                                          //    of a named class records its target for the base walk.
                                                           //    See ingest_cache.h's kParserVer note.
+                                                          // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, #235
+                                                          //    follow-up). See ingest_cache.h's kParserVer note.
+                                                          // 109 = 2026-09-17 (Ruby constant receivers, PR #267): a constant or
+                                                          //    scope_resolution receiver is NamedVar with its final segment.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 108 = 2026-09-17 (GDScript, PR #233): a new grammar, tags.scm and
+                                                          //    `.gd` crawl row. See ingest_cache.h's kParserVer note.
+                                                          // 107 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
+                                                          //    steps below (declared 97, 98) land as one on integration/train-3.
+                                                          //    PR step 98, 2026-09-15 (Java Type::method review):
+                                                          //    Java shadow binds carry lexical spans and inferred
+                                                          //    lambda parameters are captured. See ingest_cache.h.
+                                                          //    PR step 97, 2026-09-15 (Java Type::method candidates):
+                                                          //    method_reference member capture plus indexed-class +
+                                                          //    no-shadow resolver gating. #216 spent 96, so this
+                                                          //    RE-BUMPS. See ingest_cache.h's kParserVer note.
+                                                          // 106 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
+                                                          //    record carries isFromAssignment (cache version 23).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 105 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
+                                                          //    gained a kLangTable row (src/ingest_crawl.h), so a
+                                                          //    tree that spells its headers `.hxx` now yields NEW
+                                                          //    files/symbols/edges a pre-bump cache never saw.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 104 = 2026-09-17 (template arguments in a receiver's type): a
+                                                          //    declaration records its type's last name through the
+                                                          //    grammar's fields. See ingest_cache.h's kParserVer note.
+                                                          // 103 = 2026-09-17 (TS/JS signed numeric literal receivers, train 1b
+                                                          //    #277). See ingest_cache.h's kParserVer note.
+                                                          // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                          //    PR #256). See ingest_cache.h's kParserVer note.
+                                                          // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                          //    §12, PR #243): `r.f<T>()` / `x.template f<T>()` mint call
+                                                          //    references; the `template` disambiguator leaves names and
+                                                          //    qualifiers. See ingest_cache.h's kParserVer note.
+                                                          // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                          //    Lit* appended; extraction identity moves, cache format does not.
                                                           // 99 = 2026-09-16 (std-typed member fields): a field's compose
                                                           //    record carries its written namespace as its qualifier.
                                                           //    See ingest_cache.h's kParserVer note.
@@ -1987,6 +2026,8 @@ constexpr std::uint32_t kIngestParserVerMirror    = 105;  // MUST equal ingest.c
                                                           //    See ingest_cache.h's kParserVer note.
                                                           // 97 = 2026-09-16 (parameter receivers): a declaration's qualified
                                                           //    written type rides its Type/ParamType RawBind (importedName).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm B2):
                                                           //    See ingest_cache.h's kParserVer note.
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
                                                           //    RE-BUMPED from the branch's 87 over #139's 93 and #172's 94.
@@ -2937,11 +2978,15 @@ inline std::string qbodyCachePath( const std::string& repoHex, const std::string
     return shaKeyedCachePath( "qbody", repoHex, exclHex, refSha );
 }
 
-// append one trivially-copyable POD to the blob buffer (native layout; see the determinism note above).
+// append one POD to the blob buffer (native layout; see the determinism note above). CONSTRAINED, not merely asserted
+// trivially copyable: a trivially copyable struct can still carry padding bytes, whose values are indeterminate, and a
+// float has more than one byte spelling of one value (-0.0 beside 0.0, many NaNs). Either would write a blob whose
+// bytes differ between two runs over the same facts. Every call site passes a fixed-width integer, and the constraint
+// keeps it that way: has_unique_object_representations is false for any type with padding or a floating-point member.
 template<class T>
+    requires std::has_unique_object_representations_v<T>
 inline void qsnapPut( std::string& buf, const T& v )
 {
-    static_assert( std::is_trivially_copyable_v<T>, "qsnap serializes PODs only" );
     buf.append( reinterpret_cast<const char*>( &v ), sizeof( T ) );
 }
 

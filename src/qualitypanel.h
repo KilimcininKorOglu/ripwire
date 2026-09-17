@@ -128,6 +128,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -153,7 +154,9 @@ enum : std::uint8_t
     kPanelFamilyCount = ensemble::kFamilyCount + 2   // 6
 };
 
-inline constexpr std::array<const char*, 2> kNewFamilyNames = { { "colocation", "state" } };
+inline constexpr const char* kNewFamilyNames[] = { "colocation", "state" };
+static_assert( std::size( kNewFamilyNames ) == std::size_t( kPanelFamilyCount ) - std::size_t( ensemble::kFamilyCount ),
+               "kNewFamilyNames is indexed by (family - ensemble::kFamilyCount) — one name per family the panel adds" );
 
 // ONE name table for six families, and the four calibrated names are READ from ensemble's own table rather
 // than copied into a second one — a copied name list is how a report ends up naming a family the join stopped
@@ -164,6 +167,10 @@ inline const char* familyName( std::uint8_t family ) noexcept
                                            : kNewFamilyNames[ family - ensemble::kFamilyCount ];
 }
 
+// The panel's six families are bits of the same std::uint8_t masks ensemble's four are (PanelRow::firedMask below,
+// kAllFamilies here), set by `1u << family`: pinned so a seventh family cannot shift past the mask.
+static_assert( kPanelFamilyCount <= std::numeric_limits<std::uint8_t>::digits,
+               "quality-panel families are bits of a std::uint8_t mask — widen the masks before adding a family" );
 inline constexpr std::uint8_t kAllFamilies = std::uint8_t( ( 1u << kPanelFamilyCount ) - 1u );
 
 // The families measured stable enough to stand behind a gate — everything but `historical` and `colocation`,
@@ -174,6 +181,8 @@ inline constexpr std::uint8_t kUnstableForGating = std::uint8_t( ( 1u << ensembl
 inline constexpr std::uint8_t kStableFamilies    = std::uint8_t( kAllFamilies & ~kUnstableForGating );
 
 enum class Preset : std::uint8_t { Strict = 0, Default = 1, Lenient = 2 };
+inline constexpr std::size_t kPresetCount = static_cast<std::size_t>( Preset::Lenient ) + 1;
+static_assert( enumCountIsExact<Preset, kPresetCount>(), "kPresetCount must name the LAST Preset — move it with the append" );
 
 // A preset is a SELECTION and a CUT. No third field exists, and none may be added: a weight here would be the
 // composite score this verb's rank is defined against.
@@ -184,11 +193,12 @@ struct PresetRow
     std::uint8_t  cut;
 };
 
-inline constexpr std::array<PresetRow, 3> kPresets = { {
+inline constexpr PresetRow kPresets[] = {
     { "strict",  kStableFamilies, 2 },
     { "default", kAllFamilies,    2 },
     { "lenient", kAllFamilies,    1 },
-} };
+};
+static_assert( std::size( kPresets ) == kPresetCount, "kPresets is indexed by Preset — one row per enumerator" );
 
 inline const PresetRow& presetRow( Preset p ) noexcept
 {
@@ -200,7 +210,7 @@ inline const PresetRow& presetRow( Preset p ) noexcept
 // different report.
 inline bool parsePreset( std::string_view value, Preset& out ) noexcept
 {
-    for( std::size_t index = 0; index < kPresets.size(); ++index )
+    for( std::size_t index = 0; index < std::size( kPresets ); ++index )
     {
         if( value == kPresets[index].name )
         {

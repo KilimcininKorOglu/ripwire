@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <string>
 #include <string_view>
 #include <vector>
@@ -48,7 +49,7 @@ namespace rw::lintcatalog
 // The catalog's language vocabulary is exactly the token set --lint-rules' own `language:` field
 // already accepts (lintrules.h::langFromToken) — one language spelling for the whole lint subsystem,
 // so a catalog row's lang= list is round-trippable straight into a user rule's language: field.
-inline constexpr std::array<Lang, 18> kCatalogLangs = { {
+inline constexpr std::array<Lang, 19> kCatalogLangs = { {
     Lang::Cpp, Lang::C, Lang::ObjC, Lang::Python, Lang::TypeScript, Lang::JavaScript,
     Lang::Go, Lang::Rust, Lang::Swift, Lang::Java, Lang::CSharp, Lang::Ruby, Lang::Bash,
     // Php/Lua/Elixir/Dart/Kotlin join the vocabulary, but ONLY the language-agnostic naming family
@@ -57,7 +58,7 @@ inline constexpr std::array<Lang, 18> kCatalogLangs = { {
     // by this append. What the entries buy is the round-trip — `language: php` in a user AST rule now
     // resolves, and a catalog row that claims to cover php/lua/dart/kotlin is backed by langOfPath
     // knowing .php/.lua/.dart/.kt (lintrules.h).
-    Lang::Php, Lang::Lua, Lang::Elixir, Lang::Dart, Lang::Kotlin,
+    Lang::Php, Lang::Lua, Lang::Elixir, Lang::Dart, Lang::Kotlin, Lang::GDScript,
 } };
 
 // Lang→bitmask itself is rw::langBit (src/clones.h) — reused, not redefined.
@@ -96,6 +97,9 @@ struct LintCatalogRow
     std::uint32_t     langMask;   // bitmask over kCatalogLangs — which grammars can ever satisfy this rule's query/scan
     std::string_view since;       // the ripwire release the rule first shipped in (git archaeology on the literal, not a guess)
 };
+// langMask holds one bit per Lang (clones.h langBit), and corpusLangMask builds a mask of the same type at runtime.
+static_assert( kLangCount <= std::numeric_limits<decltype( LintCatalogRow::langMask )>::digits,
+               "LintCatalogRow::langMask holds one bit per Lang — widen it before the enum outgrows it" );
 
 // Declaration order here IS the order `--lint`'s tally and `--lint-catalog`'s listing both use — the
 // same 24 base names main.cpp's allRuleNames builds, then the atoms pack's 7, then the cache pack's 8.

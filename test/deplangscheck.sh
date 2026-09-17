@@ -185,7 +185,7 @@ root = pathlib.Path(sys.argv[1])
 lint = (root / "src" / "lintrules.h").read_text(encoding="utf-8")
 res  = (root / "src" / "resolve.h").read_text(encoding="utf-8")
 
-m = re.search(r'static const std::array<Row, \d+> kExt = \{ \{(.*?)\} \};', lint, re.S)
+m = re.search(r'inline constexpr LintExtRow kLintExtRows\[\] = \{(.*?)\n\};', lint, re.S)   # hoisted out of langOfPath, deduced extent
 if not m:
     print("  FAIL  (G) could not read lintrules.h::langOfPath's extension table"); sys.exit(1)
 extToLang = dict(re.findall(r'\{\s*"(\.[A-Za-z0-9]+)",\s*Lang::(\w+)\s*\}', m.group(1)))
