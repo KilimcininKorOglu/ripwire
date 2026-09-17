@@ -240,7 +240,9 @@ inline Lang langOfPath( std::string_view path ) noexcept
 // --deps printed the C++ `<inc t="b.h"/>` row and nothing for the Dart file, and dep_langs= did not name dart. So a
 // Dart file cannot carry an edge today, and counting it would dilute ccd/acd/nccd exactly as .md/.sh once did. When
 // Dart import capture lands, this case and dependencyDialect's move in the same commit, and without the default a
-// reviewer sees them.
+// reviewer sees them. GDSCRIPT stays FALSE for the same reason (PR #233, which left this function untouched on purpose):
+// `preload`/`load("res://…")` resolution is a later round, so no `.gd` file carries a dependency edge yet, and claiming
+// capability without edges would make the dep_files= denominator lie.
 /// Return whether this language has syntax-backed dependency extraction for dependency rules.
 inline bool dependencyCapable( Lang lang ) noexcept
 {
@@ -254,6 +256,7 @@ inline bool dependencyCapable( Lang lang ) noexcept
         case Lang::Kotlin:
             return true;
         case Lang::Dart:   // no import capture yet — see the DART paragraph above
+        case Lang::GDScript:   // no preload/load capture yet — the same paragraph
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
             return false;
     }
@@ -301,6 +304,7 @@ inline DepDialect dependencyDialect( Lang lang ) noexcept
         case Lang::Lua:                                 return DepDialect::Lua;
         case Lang::Elixir:                              return DepDialect::Elixir;
         case Lang::Dart:                                // not dependency-capable (dependencyCapable's DART paragraph)
+        case Lang::GDScript:                            // not dependency-capable (the same paragraph)
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
                                                         return DepDialect::None;
     }
