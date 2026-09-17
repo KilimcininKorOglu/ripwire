@@ -1103,6 +1103,91 @@ struct FieldNarrowTables
     HashMap<std::string, char>        javaFieldShadow;              // class-field names copied onto methods
 };
 
+// Issue #74: every Java class field NAME, grouped by its owning class (a Java class, interface or struct symbol a binding
+// attributes to) — owners in first-seen order (ing.bindings is totally ordered), each owner's names in binding order.
+struct JavaFieldOwnerGroups
+{
+    std::vector<NodeId>                        owners;   // distinct owners in first-seen order
+    std::vector<std::vector<std::string_view>> fields;   // parallel: that owner's field names, in binding order
+};
+
+inline JavaFieldOwnerGroups buildJavaFieldOwnerGroups( const IngestResult& ing )
+{
+    JavaFieldOwnerGroups           groups;
+    HashMap<NodeId, std::uint32_t> javaOwnerSlot;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
+        {
+            continue;
+        }
+        const Symbol& owner = ing.symbols[ b.fromSymbol ];
+        if( owner.lang != Lang::Java
+            || ( owner.kind != SymKind::Class && owner.kind != SymKind::Interface
+                 && owner.kind != SymKind::Struct ) )
+        {
+            continue;
+        }
+        const auto [ slot, inserted ] = javaOwnerSlot.try_emplace( owner.id, std::uint32_t( groups.owners.size() ) );
+        if( inserted )
+        {
+            groups.owners.push_back( owner.id );
+            groups.fields.emplace_back();
+        }
+        groups.fields[ slot->second ].push_back( b.var );
+    }
+    return groups;
+}
+
+// Issue #74: copy each Java class's field names onto the class and onto every method or function inside its byte range,
+// in Rule 2b's local-name set and the Java field-shadow set (buildFieldNarrowTables' note says why). `key` is the
+// caller's reused key buffer.
+inline void shadowJavaFieldsOntoMethods( const IngestResult& ing, const JavaFieldOwnerGroups& groups, FieldNarrowTables& t, std::string& key )
+{
+    if( groups.owners.empty() )
+    {
+        return;
+    }
+    // model.h::symbolsByFile — the shared bucket-and-sort, id order (no reordering wanted). Built
+    // only when a Java class field exists, so a Java-free corpus pays nothing at all.
+    const SymbolsByFile byFile = symbolsByFileInIdOrder(
+        ing, []( const Symbol& s ) { return s.kind == SymKind::Method || s.kind == SymKind::Function; } );
+    for( std::size_t oi = 0; oi < groups.owners.size(); ++oi )
+    {
+        const Symbol&                          owner  = ing.symbols[ groups.owners[ oi ] ];
+        const std::vector<std::string_view>&   fields = groups.fields[ oi ];
+        for( std::string_view field : fields )
+        {
+            key.clear();
+            Narrower::appendUint( key, owner.id );
+            key.push_back( '#' );
+            key.append( field );
+            t.javaFieldShadow.try_emplace( key, 1 );
+        }
+        if( owner.fileId >= byFile.size() )
+        {
+            continue;
+        }
+        for( NodeId sid : byFile[ owner.fileId ] )
+        {
+            const Symbol& s = ing.symbols[ sid ];
+            if( s.id == owner.id || s.sigStartByte < owner.sigStartByte || s.endByte > owner.endByte )
+            {
+                continue;
+            }
+            for( std::string_view field : fields )
+            {
+                key.clear();
+                Narrower::appendUint( key, s.id );
+                key.push_back( '#' );
+                key.append( field );
+                t.localNameSet.try_emplace( key, 1 );
+                t.javaFieldShadow.try_emplace( key, 1 );
+            }
+        }
+    }
+}
+
 inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const HashMap<std::string, char>& classNames )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2d: Rule-2b field-narrow tables" );
@@ -1150,71 +1235,7 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
     // scan's own first test was "is this symbol even in the owner's file". The key SET is
     // unchanged: the bucket predicate carries the kind filter, the bucket carries the file filter,
     // and the byte-range containment test is the same one.
-    std::vector<NodeId>                        javaFieldOwners;   // distinct owners in first-seen order (ing.bindings is totally ordered)
-    std::vector<std::vector<std::string_view>> javaFieldsOfOwner; // parallel: that owner's field names, in binding order
-    HashMap<NodeId, std::uint32_t>             javaOwnerSlot;
-    for( const Binding& b : ing.bindings )
-    {
-        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
-        {
-            continue;
-        }
-        const Symbol& owner = ing.symbols[ b.fromSymbol ];
-        if( owner.lang != Lang::Java
-            || ( owner.kind != SymKind::Class && owner.kind != SymKind::Interface
-                 && owner.kind != SymKind::Struct ) )
-        {
-            continue;
-        }
-        const auto [ slot, inserted ] = javaOwnerSlot.try_emplace( owner.id, std::uint32_t( javaFieldOwners.size() ) );
-        if( inserted )
-        {
-            javaFieldOwners.push_back( owner.id );
-            javaFieldsOfOwner.emplace_back();
-        }
-        javaFieldsOfOwner[ slot->second ].push_back( b.var );
-    }
-    if( !javaFieldOwners.empty() )
-    {
-        // model.h::symbolsByFile — the shared bucket-and-sort, id order (no reordering wanted). Built
-        // only when a Java class field exists, so a Java-free corpus pays nothing at all.
-        const SymbolsByFile byFile = symbolsByFileInIdOrder(
-            ing, []( const Symbol& s ) { return s.kind == SymKind::Method || s.kind == SymKind::Function; } );
-        for( std::size_t oi = 0; oi < javaFieldOwners.size(); ++oi )
-        {
-            const Symbol&                          owner  = ing.symbols[ javaFieldOwners[ oi ] ];
-            const std::vector<std::string_view>&   fields = javaFieldsOfOwner[ oi ];
-            for( std::string_view field : fields )
-            {
-                key.clear();
-                Narrower::appendUint( key, owner.id );
-                key.push_back( '#' );
-                key.append( field );
-                t.javaFieldShadow.try_emplace( key, 1 );
-            }
-            if( owner.fileId >= byFile.size() )
-            {
-                continue;
-            }
-            for( NodeId sid : byFile[ owner.fileId ] )
-            {
-                const Symbol& s = ing.symbols[ sid ];
-                if( s.id == owner.id || s.sigStartByte < owner.sigStartByte || s.endByte > owner.endByte )
-                {
-                    continue;
-                }
-                for( std::string_view field : fields )
-                {
-                    key.clear();
-                    Narrower::appendUint( key, s.id );
-                    key.push_back( '#' );
-                    key.append( field );
-                    t.localNameSet.try_emplace( key, 1 );
-                    t.javaFieldShadow.try_emplace( key, 1 );
-                }
-            }
-        }
-    }
+    shadowJavaFieldsOntoMethods( ing, buildJavaFieldOwnerGroups( ing ), t, key );
     return t;
 }
 
