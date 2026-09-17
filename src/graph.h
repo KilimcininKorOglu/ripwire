@@ -1087,11 +1087,9 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 //     scope, so an unindexed type simply never hits and degrades to the unchanged ladder. A type written in `std` records "" (resolve.h
 //     fieldTypeWrittenInStd): it names no in-repo class, and it still tombstones a same-named class's other type, which a skip would not.
 //     A type written in any other namespace keeps its name and marks the entry qualified: prov="final-segment" (fieldFinalSegmentAt).
-//   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
-//     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
-//     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse. Not an
-//     assignment's callee-read type no class is called (resolve.h assignmentNamesNoClass): `m_decl = cast<D>( x )`
-//     declares nothing, and counting it refused the member's declared type.
+//   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind, valued by the evidence it holds (resolve.h localNameEvidence):
+//     any record makes the name a VARIABLE (Rule 2c, the Phase 5 veto); only a DECLARATION makes it a LOCAL, which hides a
+//     same-named field in real C++ lookup, so Rule 2b refuses on that bit alone — `m_p = makePool();` declares nothing.
 // Both tables empty on a field-capture-free corpus → the resolve loop's Rule 2b block never fires →
 // byte-identical output there. Deterministic: ing.references / ing.bindings are totally ordered; first
 // type wins, a later conflict tombstones, and set membership is order-independent.
@@ -1205,14 +1203,17 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        // same class-name#field-name with different declared types → tombstone (resolve.h recordFlatRecvTypeFact)
-        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty() );
+        // same class-name#field-name with different declared types, or one reached through `->` alone (a smart pointer's pointee) → tombstone
+        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
     }
     t.localNameSet.reserve( ing.bindings.size() );
     t.localShadowSpans.reserve( ing.bindings.size() );
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol == kNoNode || b.var.empty() || assignmentNamesNoClass( b, classNames ) )
+        // Every record, an assignment's included: localNameEvidence keeps an assignment out of Rule 2b's declared bit (the
+        // member it assigns stays typed, which is what assignmentNamesNoClass guarded here), while Rule 2c still reads it as
+        // proof the token is a variable (test/fieldnarrowcheck.sh arm v3).
+        if( b.fromSymbol == kNoNode || b.var.empty() )
         {
             continue;
         }
@@ -1220,7 +1221,7 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const 
         Narrower::appendUint( key, b.fromSymbol );
         key.push_back( '#' );
         key.append( b.var );
-        t.localNameSet.try_emplace( key, 1 );
+        t.localNameSet[ key ] |= localNameEvidence( b.kind );
         if( b.kind == LocalBindKind::VarDecl )
         {
             t.localShadowSpans[ key ].push_back( VarSpan{ b.spanStart, b.spanEnd } );
@@ -2225,7 +2226,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
     const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
-    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto, "<Owner>#<field>" (C/C++)
+    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
     // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
     // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
     // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
@@ -2762,19 +2763,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }
-        // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver
-        // names a FIELD of the caller's enclosing class resolves to the method on the field's DECLARED type
-        // (walking direct bases when the type itself doesn't define it), BEFORE the bare-name spray — the
-        // bare-field member call is the idiomatic C++ shape Rule 2's local-binding table can never see. Fires
-        // only when NO local binding shadows the name, the class#field→type fact is unambiguous corpus-wide
-        // (tombstoned otherwise), and the type (or exactly one base) defines the method — every other shape
-        // degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
+        // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver names a FIELD of the caller's
+        // enclosing class — or of the one base declaring it, when the class declares none — resolves to the method on the field's DECLARED
+        // type (walking direct bases when the type itself doesn't define it), BEFORE the bare-name spray: the bare-field member call is the
+        // idiomatic C++ shape Rule 2's local-binding table can never see. Fires only when NO local binding shadows the name, the
+        // class#field→type fact is unambiguous corpus-wide (tombstoned otherwise), and the type (or exactly one base) defines the method —
+        // every other shape degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
         // (Rule 2 first: a typed LOCAL beats a same-named field in real C++ lookup, and the veto inside 2b
         // refuses any locally-declared name outright).
         bool fieldTypeNarrowed = false;   // Rule 2b decided the site: its prov="final-segment" question reads the field entry
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp }, fieldNarrow.localNameSet ), r, cand );
             fieldTypeNarrowed = narrowed;
         }
         const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
@@ -3271,7 +3271,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so every edge it
         // commits is prov="final-segment" (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt); never a class-identity CLAIM, whose one class was verified
         const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && !identityClaim && narrower.finalSegmentTypeAt( r ) )
-                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass ) );
+                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp } ) );
         for( NodeId to : tier )
         {
             if( to == r.fromSymbol )
@@ -3534,9 +3534,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/7: HAS-A compose edges" );
     for( const Reference& r : ing.references )
     {
-        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) )
+        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) || r.viaArrow )
         {
-            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member
+            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member; a smart pointer's pointee is Rule 2b's alone
         }
         const auto it = byName.find( r.calleeName );
         if( it == byName.end() )
@@ -5116,6 +5116,8 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         key.clear();
         key.append( owner ).push_back( '#' );
         key.append( member );
+        // a smart-pointer pointee (arrowOnly) is taken whatever the access: a std smart pointer has no data members, so a member
+        // read through one is `->` by construction
         const auto it = narrow.fieldTypeByClass.find( key );
         return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second.type );
     };

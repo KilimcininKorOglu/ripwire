@@ -651,6 +651,9 @@ struct Reference
     std::uint16_t argCount   = 0;         // B2.2: number of positional args at the call site when countable; 0 otherwise
     bool          argCountKnown = false;  // B2.2: true ⇒ the call-site argument list was reliably counted (no spread /
                                           //   splat / apply) → arity-filter candidates against argCount; false ⇒ never filter
+    bool          viaArrow   = false;     // a C++/ObjC member call written `->` (`p->m()`, not `p.m()`). On a compose ref: calleeName is the
+                                          //   POINTEE of a member written `std::unique_ptr<T>` / `std::shared_ptr<T>`, which `->` reaches and
+                                          //   `.` never does (`p.reset()` is the smart pointer's own member) — Rule 2b requires the call's bit
     std::string   calleeName;             // referenced name (final identifier segment)
     std::string   qualifier;              // explicit scope at the call site (`A` in `A::b()`); "" if bare/method — for canonical resolve
     std::string   recvVar;                // receiver variable identifier when recv==NamedVar/FieldOfVar (`x` in `x->m()`); "" otherwise — for Rule 2

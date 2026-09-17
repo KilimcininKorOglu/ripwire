@@ -60,12 +60,14 @@ inline TSNode memberAccessField( TSNode access, Lang lang ) noexcept
 }
 
 // The classified receiver of one call site. `var` is set for NamedVar / FieldOfVar, `field` for
-// FieldOfThis / FieldOfVar; both "" for None / ThisObj.
+// FieldOfThis / FieldOfVar; both "" for None / ThisObj. `viaArrow`: the call's own member access was written
+// `->` (C++/ObjC) — set by receiverOf only, which is the one caller that holds that access.
 struct RecvShape
 {
     RecvKind    kind = RecvKind::None;
     std::string var;
     std::string field;
+    bool        viaArrow = false;
 };
 
 // One receiver NODE → its RecvShape. `allowChain` is the ONE-hop bound: true at the call's immediate
@@ -425,6 +427,8 @@ inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
         return {};
     }
     RecvShape rs = classifyReceiver( recvNode, lang, src, /*allowChain=*/ true );
+    // `p->m()` against `p.m()`: on a std smart pointer member only `->` reaches the pointee (Rule 2b, fieldnarrowcheck arm p)
+    rs.viaArrow  = ( lang == Lang::Cpp || lang == Lang::ObjC ) && nodeFieldText( parent, NodeField::Operator, src ) == "->";
     if( rs.kind == RecvKind::None )
     {
         // Phase 5 (docs/EVALS.md "Phase 5", kParserVer 77): a member access whose receiver is too rich to
@@ -1237,12 +1241,28 @@ inline std::uint32_t shadowSpanStart( const ShadowScope& scope, TSNode completeD
     return point > scope.start ? point : scope.start;
 }
 
+// the declarator one wrapping declarator holds: its `declarator` field, or, for the three kinds whose grammar rule
+// names no field — reference_declarator (`& d`), parenthesized_declarator (`( d )`) and attributed_declarator
+// (`d [[maybe_unused]]`) — its first named child. Null for a leaf (an identifier, a qualified name).
+inline TSNode innerDeclaratorOf( TSNode decl )
+{
+    const TSNode inner = fieldChild( decl, NodeField::Declarator );
+    if( !ts_node_is_null( inner ) )
+    {
+        return inner;
+    }
+    const char* dt = ts_node_type( decl );
+    const bool  holdsUnnamed = kindIs( dt, "reference_declarator" ) || kindIs( dt, "parenthesized_declarator" ) || kindIs( dt, "attributed_declarator" );
+    return ( holdsUnnamed && ts_node_named_child_count( decl ) > 0 ) ? ts_node_named_child( decl, 0 ) : TSNode{};
+}
+
 // r9 shadow fix round (A5): every VARIABLE name a declarator declares → one VarDecl record each, carrying
 // the declaring block's span. Handles the shapes the verifier refuted the first landing on:
 //   * reference_declarator / parenthesized_declarator hold their inner declarator as an UNNAMED child
 //     (no `declarator` field — same grammar fact fnDeclaratorVarName already works around), so a
 //     field-only unwrap missed `const T& key` entirely — pass-by-const-ref, the most idiomatic C++
-//     parameter shape;
+//     parameter shape; attributed_declarator (`int run [[maybe_unused]] = 0;`) is the same fact and
+//     recorded nothing until 2026-09-17 (test/shadowcheck.sh arm q8) — all three unwrap in innerDeclaratorOf;
 //   * structured_binding_declarator (`auto& [key, w]`) declares SEVERAL names — one record per identifier;
 //   * a plain function declarator still yields NOTHING (`void helper();` in a body and the most-vexing-
 //     parse `Foo x();` declare a FUNCTION, whose calls must never be suppressed), while a
@@ -1273,13 +1293,7 @@ inline void emitShadowVarDecls( std::uint32_t fileId, Lang lang, TSNode decl, st
             }
             return;
         }
-        TSNode inner = fieldChild( decl, NodeField::Declarator );
-        if( ts_node_is_null( inner )
-            && ( kindIs( dt, "reference_declarator" ) || kindIs( dt, "parenthesized_declarator" ) )
-            && ts_node_named_child_count( decl ) > 0 )
-        {
-            inner = ts_node_named_child( decl, 0 );   // the inner declarator is an UNNAMED child here
-        }
+        const TSNode inner = innerDeclaratorOf( decl );
         if( ts_node_is_null( inner ) )
         {
             return;
@@ -1395,13 +1409,16 @@ inline void captureLambdaShadowDecls( TSNode n, std::uint32_t fileId, Lang lang,
 // a function DEFINITION's parameter_list, reached through its own declarator chain (`char* f(...)` /
 // `T& f(...)` unwrap to the function_declarator). Null when the shape isn't a plain definition —
 // walking only THIS chain (never bare parameter_declaration nodes) is what keeps a PROTOTYPE's
-// parameters and a fn-pointer TYPE's parameter list out of shadow evidence.
+// parameters and a fn-pointer TYPE's parameter list out of shadow evidence. The `T&` / `T&&` step goes
+// through innerDeclaratorOf: a reference_declarator holds the function declarator by no field, and a
+// field-only walk stopped there, so every definition returning a reference recorded no parameter at all
+// (2026-09-17, test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arm am).
 inline TSNode fnDefParameterList( TSNode fnDef )
 {
     TSNode decl = fieldChild( fnDef, NodeField::Declarator );
     for( int guard = 0; guard < 8 && !ts_node_is_null( decl ) && !kindIs( ts_node_type( decl ), "function_declarator" ); ++guard )
     {
-        decl = fieldChild( decl, NodeField::Declarator );
+        decl = innerDeclaratorOf( decl );
     }
     if( ts_node_is_null( decl ) || !kindIs( ts_node_type( decl ), "function_declarator" ) )
     {

@@ -696,6 +696,7 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.recvVar     = std::move( r.recvVar );
         ref.argCount    = r.argCount;        // B2.2: call-site positional arg count (when countable)
         ref.argCountKnown = r.argCountKnown; // B2.2: whether argCount is reliable (no spread/splat)
+        ref.viaArrow    = r.viaArrow;    // a call written `->`; a compose ref's smart-pointer pointee (arm p)
         ref.fieldName   = std::move( r.fieldName );   // S5-E: the member variable name (e.g. "m_pool")
         ref.composeRel  = std::move( r.composeRel );  // S5-E: "creates" or "uses"
         ref.startByte   = r.startByte;                // shadow fix round: for the block-span containment test

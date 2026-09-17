@@ -2215,8 +2215,9 @@ inline HashMap<std::string, char> classNameSet( const IngestResult& ing )
 // a function call are one grammar node: `t = llvm::cast<Target>( y )` recorded `cast`, `t = makeTarget( y )` recorded
 // `makeTarget`. An assignment declares nothing, so such a name is no fact about the variable, and every reader of the
 // record drops it — buildGraph's flat varType table and collectFieldUseSites' table, where it tombstoned the declaration's
-// written `Target* t` (a lost narrow, a lost field pin), and the local-name set, where it made a MEMBER assigned from a
-// call read as a local, so Rule 2b refused the member's declared type. A DECLARATION's callee-read name is kept: that
+// written `Target* t` (a lost narrow, a lost field pin). The local-name set keeps it: localNameEvidence marks an assignment
+// bound but not declared, so Rule 2b no longer reads a MEMBER assigned from a call as a local, while Rule 2c still reads the
+// name as a variable (integration/train-5 joined the two). A DECLARATION's callee-read name is kept: that
 // declaration exists with a type nothing recorded, and its conflict with a sibling declaration of the name is the tombstone
 // that keeps one block's type off the other block's calls (arm 48). An assignment from a class keeps its record, conflict
 // included (arm 47). The lexical table (buildScopedRecvDecls) never attaches an assignment's record: no declaration shares
@@ -2226,27 +2227,53 @@ inline bool assignmentNamesNoClass( const Binding& b, const HashMap<std::string,
     return b.isFromAssignment && classNames.find( b.typeName ) == classNames.end();
 }
 
+// The VALUE of buildFieldNarrowTables' localNameSet (graph.h): the evidence one "<fromSymbol>#<var>" key holds, OR-ed over its
+// binding records (test/fieldnarrowcheck.sh arm v). Its readers ask two different questions, and an assignment answers only
+// one. Rule 2c and the Phase 5 external veto ask whether the name is a VARIABLE in that definition, and any record says so:
+// `Widget = makePane();` proves `Widget` is no class. Rule 2b asks whether a LOCAL hides a member of the enclosing class, and
+// only a declaration introduces one: `OutputFile = std::make_unique<ToolOutputFile>( … );` inside a method assigns the member,
+// yet ingest records it — a Type record naming the callee (ingest_binds.h's assignment arm), an L3 FnAssign for `x = other`,
+// a clobber tombstone for `x = nullptr` — and counting those refused the member's declared type. Every local-declaring shape
+// emits VarDecl (a block or condition declaration, a parameter, a range-for variable, a structured binding, a catch parameter,
+// a lambda parameter or capture) or ParamType, and FnDecl is a declaration too: the misparsed `void (*fn)() = &f;` has no VarDecl.
+// One declaration still records none: a direct-initialised local whose arguments are plain names, `Foo x( a, b );`, which the
+// grammar reads as a function declarator — a call inside its scope takes the member's type (fieldnarrowcheck arm v4, a floor).
+inline constexpr char kLocalNameBound    = 1;   // some binding record names the variable
+inline constexpr char kLocalNameDeclared = 2;   // a declaration record does
+
+inline char localNameEvidence( LocalBindKind kind ) noexcept
+{
+    const bool declares = kind == LocalBindKind::VarDecl || kind == LocalBindKind::ParamType || kind == LocalBindKind::FnDecl;
+    return declares ? char( kLocalNameBound | kLocalNameDeclared ) : kLocalNameBound;
+}
+
 // One entry of Rule 2's FLAT per-function type table (buildGraph's varType) and of Rule 2b's "Class#field" table
 // (buildFieldNarrowTables): the declared type name — "" is a TOMBSTONE, an ambiguous or `std::`-typed name that never
-// narrows — and whether a declaration wrote that type QUALIFIED, the fact prov="final-segment" discloses
-// (Narrower::finalSegmentTypeAt for a parameter or local, Narrower::fieldFinalSegmentAt for a field).
+// narrows — whether a declaration wrote that type QUALIFIED, the fact prov="final-segment" discloses
+// (Narrower::finalSegmentTypeAt for a parameter or local, Narrower::fieldFinalSegmentAt for a field), and, for a field only,
+// whether the type is the POINTEE of a std smart pointer member, which a call reaches through `->` alone (test/fieldnarrowcheck.sh
+// arm p): `w_.reset()` on `std::unique_ptr<Widget> w_;` is the smart pointer's own member, never Widget::reset.
 struct FlatRecvType
 {
     std::string type;
     bool        writtenQualified = false;
+    bool        arrowOnly        = false;
 };
 
 // fold one declared type into a flat table: the first type wins, a different later type tombstones, and an agreeing
-// declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too.
-inline void recordFlatRecvTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, std::string_view type, bool writtenQualified )
+// declaration that wrote it qualified marks the entry. `type` is "" for a refused (`std::`) type, which tombstones too. A type
+// reached through `->` alone (`arrowOnly`) and the same type reached as the member itself are different facts, and tombstone too.
+inline void recordFlatRecvTypeFact( HashMap<std::string, FlatRecvType>& table, const std::string& key, std::string_view type, bool writtenQualified,
+                                    bool arrowOnly = false )
 {
     const auto [ it, inserted ] = table.try_emplace( key );
     if( inserted )
     {
         it->second.type.assign( type );
         it->second.writtenQualified = writtenQualified;
+        it->second.arrowOnly        = arrowOnly;
     }
-    else if( !it->second.type.empty() && it->second.type != type )
+    else if( !it->second.type.empty() && ( it->second.type != type || it->second.arrowOnly != arrowOnly ) )
     {
         it->second.type.clear();   // conflicting types for one name in one scope → tombstone (never narrow on it)
     }
@@ -3637,6 +3664,16 @@ struct Narrower
         return identity.forgetClaim();
     }
 
+    // Rule 2b's member evidence, bundled so its signatures read as its conditions: `types` = "<Class>#<field>" → the declared type
+    // (graph.h buildFieldNarrowTables, from the HAS-A compose captures), `declared` = every C/C++ member "<Owner>#<field>"
+    // (memberFieldNames), typed or not, and `chaUp` = class name → its direct base names, the graph both walks read. No copy.
+    struct FieldRecvTables
+    {
+        const HashMap<std::string, FlatRecvType>&             types;
+        const HashMap<std::string, char>&                     declared;
+        const HashMap<std::string, std::vector<std::string>>& chaUp;
+    };
+
     // Rule 2b — receiver-FIELD type narrow (W1-P1-12). For a member call `f.m()` / `f->m()` (recv==NamedVar,
     // recvVar="f") inside a METHOD whose enclosing class declares a FIELD named `f` with a known type
     // (the S5-E HAS-A capture): resolve `m` against that declared type's own method set, walking DIRECT-base
@@ -3647,10 +3684,12 @@ struct Narrower
     //   (1) named-receiver call, no explicit qualifier, from a known def in a known class scope, C-family
     //       (the field table is built from C++ field captures; Python/TS field receivers are chained
     //       accesses ingest classifies RecvKind::None, so they never even reach this rule — disclosed limit);
-    //   (2) NO local binding of ANY kind exists for (fromSymbol, recvVar) — a parameter or declared local
-    //       SHADOWS a same-named field in real C++ lookup, so any local evidence vetoes the narrow
-    //       (`localNames`, built from every binding kind incl. the r9 VarDecl shadow records);
-    //   (3) the enclosing class declares that field with EXACTLY ONE type corpus-wide — same-NAMED classes
+    //   (2) NO local DECLARATION exists for (fromSymbol, recvVar) — a parameter or declared local SHADOWS a
+    //       same-named field in real C++ lookup, so declaration evidence vetoes the narrow; an assignment
+    //       names the field itself and does not (`localNames`' kLocalNameDeclared bit, localNameEvidence);
+    //   (3) the enclosing class declares that field with EXACTLY ONE type corpus-wide — or, when the class declares
+    //       no member of that name, the ONE base declaring it at the shallowest level of a bounded breadth-first
+    //       walk over chaUp does (fieldEntryAt, arm w). Same-NAMED classes
     //       collapse to one scope string here (namespaces are dropped from Symbol::scope), so a same-named
     //       field bound to two DIFFERENT types is TOMBSTONED at build ("" value) and never narrows;
     //   (4) the field's type — or exactly ONE base name at the shallowest hit level of a bounded, breadth-
@@ -3660,10 +3699,8 @@ struct Narrower
     //       type-correct one earlier; any uncertainty degrades to §2a and the honest amb= split.
     // Deterministic: chaUp lists are sorted+deduped, the frontier is expanded in stored order with a fixed
     // visit cap, and canonByName insertion order = symbol-id order.
-    const rw::SmallVec<NodeId, 2>* rule2bFieldRecvType( const Reference& r, const std::string& callerScope,
-                                                        const HashMap<std::string, FlatRecvType>&             fieldTypes,
-                                                        const HashMap<std::string, char>&                     localNames,
-                                                        const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    const rw::SmallVec<NodeId, 2>* rule2bFieldRecvType( const Reference& r, const std::string& callerScope, const FieldRecvTables& fields,
+                                                        const HashMap<std::string, char>& localNames ) const
     {
         if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode )
         {
@@ -3673,30 +3710,34 @@ struct Narrower
         {
             return nullptr; // (1) the field-type table is C++-evidence only — other languages stay on their unchanged ladder
         }
-        if( callerScope.empty() || fieldTypes.empty() )
+        if( callerScope.empty() || fields.types.empty() )
         {
             return nullptr; // free function (no enclosing class), or a field-capture-free corpus
         }
 
-        // (2) local-shadow veto: ANY binding evidence for (fromSymbol, recvVar) means the name is a LOCAL.
+        // (2) local-shadow veto: a DECLARATION of (fromSymbol, recvVar) makes the name a LOCAL; assigning it does not.
         keyBind.clear();
         appendUint( keyBind, r.fromSymbol );
         keyBind.push_back( '#' );
         keyBind.append( r.recvVar );
-        if( localNames.find( keyBind ) != localNames.end() )
+        if( const auto lit = localNames.find( keyBind ); lit != localNames.end() && ( lit->second & kLocalNameDeclared ) != 0 )
         {
             return nullptr;
         }
 
-        // (3) the enclosing class's field entry (fieldEntryAt), "" = tombstone.
-        const FlatRecvType* field = fieldEntryAt( r, callerScope, fieldTypes );
+        // (3) the field entry of the enclosing class or the one base declaring it (fieldEntryAt), "" = tombstone.
+        const FlatRecvType* field = fieldEntryAt( r, callerScope, fields );
         if( field == nullptr || field->type.empty() )
         {
             return nullptr;
         }
+        if( field->arrowOnly && !r.viaArrow )
+        {
+            return nullptr; // a std smart pointer's pointee: `.` names the smart pointer's own member (arm p)
+        }
 
         // (4) the declared type's own method set, then its bases — shared with Rule 2c below.
-        return methodOnTypeOrBases( field->type, r, chaUp );
+        return methodOnTypeOrBases( field->type, r, fields.chaUp );
     }
 
     // The type-side probe Rules 2b and 2c share: `type::callee` in the type's OWN method set first (ownMethodSet: its
@@ -3730,31 +3771,6 @@ struct Narrower
             }
         }
         return { found, multi };
-    }
-
-    // One level of the base walk: append the direct bases (chaUp) of fieldWalk[ lvlBegin, lvlEnd ) as the next level,
-    // deduped against every visited name (cycles too), and never past kFieldWalkCap names in total.
-    void expandWalkLevel( std::size_t lvlBegin, std::size_t lvlEnd, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
-    {
-        for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
-        {
-            const auto uit = chaUp.find( std::string( fieldWalk[ i ] ) );
-            if( uit == chaUp.end() )
-            {
-                continue;
-            }
-            for( const std::string& base : uit->second )
-            {
-                if( fieldWalk.size() >= kFieldWalkCap )
-                {
-                    break;
-                }
-                if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) == fieldWalk.end() )
-                {
-                    fieldWalk.push_back( base );
-                }
-            }
-        }
     }
 
     // TRUE when `base` is in `typeName`'s base closure over chaUp: a direct base, a base's base, and so on. The walk is
@@ -3867,6 +3883,8 @@ struct Narrower
         while( lvlBegin < fieldWalk.size() )
         {
             const std::size_t lvlEnd = fieldWalk.size();
+            // expand this level's bases into the next level (dedup against every visited name — cycles too). A walk the cap
+            // stopped still probes the names it visited: this probe's policy, unlike fieldEntryAt's.
             expandWalkLevel( lvlBegin, lvlEnd, chaUp );
             // probe the NEW level's names; the shallowest level with any hit decides
             const auto [ found, multi ] = probeWalkLevel( lvlEnd, r.calleeName );
@@ -3930,7 +3948,7 @@ struct Narrower
         return methodOnTypeOrBases( callerScope, r, chaUp, /*skipSelf=*/ isSuper, /*unionOnMulti=*/ isSuper );
     }
 
-    static constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together (methodOnTypeOrBases and memberFieldHides)
+    static constexpr std::size_t kFieldWalkCap = 16;   // total visited names — bounds depth and width together (methodOnTypeOrBases, memberFieldHides and fieldEntryAt)
 
     // Rule 2c's member-field veto set: "<Owner>#<field>" for every C/C++ member in the field side table (IngestResult::fields). That
     // table, not Rule 2b's fieldTypeByClass, because it holds EVERY declarator shape: the S5-E compose capture records no type for
@@ -4010,7 +4028,8 @@ struct Narrower
     // `_Interval.validate(v)` pinned to `ModelBoundingBox::validate`). The receiver token IS the type: resolve
     // the callee against it, then its direct bases (`IERS_B.open()` → `IERS::open`). Narrows ONLY when ALL hold:
     // (1) bare named-receiver call from a known def; (2) NO local binding of any kind for (fromSymbol, recvVar)
-    // — a parameter/local named like the class shadows it (Rule 2b's veto set); (2m) for a C++/ObjC caller, NO
+    // — a parameter/local named like the class shadows it, and an assignment to the name proves a variable just as
+    // well (every record in Rule 2b's veto set, not only the declarations Rule 2b reads); (2m) for a C++/ObjC caller, NO
     // member field of that name in the caller's class or its bases (memberFieldHides: `Reader->read()` beside
     // `std::unique_ptr<SampleProfileReader> Reader;` is the member — test/clsrecvcheck.sh arms H-N); (3) recvVar
     // names an in-repo class-like definition (`classNames`: SymKind Class/Struct/Interface); (4) the class — or
@@ -4138,28 +4157,106 @@ struct Narrower
     // prov="final-segment" for a FIELD (test/fieldnarrowcheck.sh arm r): whether the field Rule 2b narrowed on was declared
     // QUALIFIED. `store::Text body_; body_.size()` matched `Text` alone, exactly the guess finalSegmentTypeAt discloses for a
     // parameter or a local, so the edge must not read as uniquely resolved. Asked only for a site Rule 2b decided.
-    bool fieldFinalSegmentAt( const Reference& r, const std::string& callerScope, const HashMap<std::string, FlatRecvType>& fieldTypes ) const
+    bool fieldFinalSegmentAt( const Reference& r, const std::string& callerScope, const FieldRecvTables& fields ) const
     {
-        const FlatRecvType* field = fieldEntryAt( r, callerScope, fieldTypes );
+        const FlatRecvType* field = fieldEntryAt( r, callerScope, fields );
         return field != nullptr && field->writtenQualified && !field->type.empty();
     }
 
     // Rule 2b's "Class#field" entry for a named receiver, or nullptr: keyed by the caller scope's FINAL segment (Symbol::scope
     // is the bare class name for methods; a nested scope's last segment is the innermost class). Shared by the narrow and its
     // prov="final-segment" question, so the two cannot read different entries.
-    const FlatRecvType* fieldEntryAt( const Reference& r, const std::string& callerScope, const HashMap<std::string, FlatRecvType>& fieldTypes ) const
+    // A class that declares no member of that name reads it from its bases (test/fieldnarrowcheck.sh arm w): C++ lookup of a bare
+    // name inside a member function finds the class's own member first, then the bases'. The walk is breadth-first over chaUp
+    // (final-segment names, like methodOnTypeOrBases), and the SHALLOWEST level with a base DECLARING the member decides: exactly
+    // one such base, whose entry is returned. A member counts as declared when it is typed OR only in the field side table, so a
+    // member whose type was not captured — in the class itself or at a level before the hit — hides the bases behind it and
+    // answers nullptr, never a deeper base's type. Two declaring bases at one level (an ambiguous lookup) and a walk the cap
+    // stopped with a base unvisited answer nullptr too: neither proves which member the name reaches.
+    const FlatRecvType* fieldEntryAt( const Reference& r, const std::string& callerScope, const FieldRecvTables& fields ) const
     {
-        std::string_view scopeFinal( callerScope );
-        if( const std::size_t cut = scopeFinal.rfind( "::" ); cut != std::string_view::npos )
+        std::string_view className( callerScope );
+        if( const std::size_t cut = className.rfind( "::" ); cut != std::string_view::npos )
         {
-            scopeFinal.remove_prefix( cut + 2 );
+            className.remove_prefix( cut + 2 );
         }
-        keyBind.clear();
-        keyBind.append( scopeFinal );
-        keyBind.push_back( '#' );
-        keyBind.append( r.recvVar );
-        const auto fit = fieldTypes.find( keyBind );
-        return fit == fieldTypes.end() ? nullptr : &fit->second;
+        if( const auto [ own, ownDeclared ] = declaredFieldAt( className, r.recvVar, fields ); ownDeclared )
+        {
+            return own;   // the class's own member hides every base's — nullptr when its type was not captured
+        }
+        fieldWalk.clear();
+        fieldWalk.push_back( className );
+        for( std::size_t lvlBegin = 0; lvlBegin < fieldWalk.size(); )
+        {
+            const std::size_t lvlEnd = fieldWalk.size();
+            if( !expandWalkLevel( lvlBegin, lvlEnd, fields.chaUp ) )
+            {
+                return nullptr;   // the cap left a base unvisited: this level may be incomplete, and deeper ones are unread
+            }
+            if( const auto [ hit, declaring ] = declaringBasesAt( lvlEnd, r.recvVar, fields ); declaring != 0 )
+            {
+                return declaring == 1 ? hit : nullptr;   // two bases declaring it at one level → an ambiguous lookup
+            }
+            lvlBegin = lvlEnd;
+        }
+        return nullptr;
+    }
+
+    // One level of fieldEntryAt's walk: how many of fieldWalk[ lvlEnd, end ) declare member `name`, and the last one's typed entry.
+    std::pair<const FlatRecvType*, std::size_t> declaringBasesAt( std::size_t lvlEnd, std::string_view name, const FieldRecvTables& fields ) const
+    {
+        const FlatRecvType* hit       = nullptr;
+        std::size_t         declaring = 0;
+        for( std::size_t i = lvlEnd; i < fieldWalk.size(); ++i )
+        {
+            if( const auto [ entry, declared ] = declaredFieldAt( fieldWalk[ i ], name, fields ); declared )
+            {
+                ++declaring;
+                hit = entry;
+            }
+        }
+        return { hit, declaring };
+    }
+
+    // Whether `className` declares a member `name`, and its typed "Class#field" entry when it has one (nullptr when the member's
+    // type was not captured). Reuses keyBind.
+    std::pair<const FlatRecvType*, bool> declaredFieldAt( std::string_view className, std::string_view name, const FieldRecvTables& fields ) const
+    {
+        keyBind.assign( className ).push_back( '#' );
+        keyBind.append( name );
+        if( const auto fit = fields.types.find( keyBind ); fit != fields.types.end() )
+        {
+            return { &fit->second, true };
+        }
+        return { nullptr, fields.declared.find( keyBind ) != fields.declared.end() };
+    }
+
+    // Append the direct bases of fieldWalk[ lvlBegin, lvlEnd ) that the walk has not visited. False when the kFieldWalkCap-name cap
+    // left one out. Reuses keyScope.
+    bool expandWalkLevel( std::size_t lvlBegin, std::size_t lvlEnd, const HashMap<std::string, std::vector<std::string>>& chaUp ) const
+    {
+        for( std::size_t i = lvlBegin; i < lvlEnd; ++i )
+        {
+            keyScope.assign( fieldWalk[ i ] );
+            const auto uit = chaUp.find( keyScope );
+            if( uit == chaUp.end() )
+            {
+                continue;
+            }
+            for( const std::string& base : uit->second )
+            {
+                if( std::find( fieldWalk.begin(), fieldWalk.end(), std::string_view( base ) ) != fieldWalk.end() )
+                {
+                    continue;
+                }
+                if( fieldWalk.size() >= kFieldWalkCap )
+                {
+                    return false;
+                }
+                fieldWalk.push_back( base );
+            }
+        }
+        return true;
     }
 
     // prov="final-segment" (test/narrowcheck.sh arm 25): whether a named receiver's type at this site — the one Rule 2 narrows
