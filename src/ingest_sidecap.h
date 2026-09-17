@@ -1678,6 +1678,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             {
                 continue;
             }
+            if( captureSpecializationHeader( isDef, le.lang, defCapSv, roleNode, nameNode, fileId, src, refs ) )
+            {
+                continue;   // a C++ specialization header: its base clause only, never a symbol
+            }
 
             // C1 (memgraph F1) — see cppDefNameReseat. A null node is "nothing to re-seat".
             const auto [ reNode, reTxt, reByte, reRow ] = cppDefNameReseat( isDef && le.lang == Lang::Cpp, nameNode, src );

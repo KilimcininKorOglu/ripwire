@@ -103,6 +103,18 @@
 
 (struct_specifier name: (qualified_identifier) @name body:(_)) @definition.class
 
+; ---- class SPECIALIZATION headers (ripwire addition — C++ template scopes, test/cpptmplscopecheck.sh) ----
+; `template <> struct Info<char> : CharBase {};` and `template <class T> struct Slot<T*> : Base { … };` name their
+; class with a template_type, which none of the class patterns above bind, so a specialization's BASE CLAUSE was
+; never read: a specialization that only inherits its members was invisible, and the resolver's template-family
+; fallback could pin a call to a sibling that does not apply. Captured as @definition.specialization, which ingest
+; never turns into a symbol (the members already carry the specialization's canonical scope): it emits only the
+; header's inherit refs, with the specialization's canonical template-id as the derived name
+; (ingest_names.h captureSpecializationHeader).
+(class_specifier name: (template_type) @name body:(_)) @definition.specialization
+
+(struct_specifier name: (template_type) @name body:(_)) @definition.specialization
+
 ; ---- module-level settings constants (ripwire addition — r3 q10) ----
 ; Same rationale and --match-verified declarator shapes as queries/c/tags.scm (the C++ grammar
 ; extends tree-sitter-c): file-scope `static const char* DEFAULT_HOSTS[] = { … }` tables and

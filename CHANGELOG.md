@@ -26,58 +26,74 @@ way. An argument list broken over lines put the line break into the `--pin-censu
 `Factory<int>::make()` qualified as `Factory<int>`, which keyed nothing, so the call split onto an unrelated
 `Decoy::make`.
 
-Scopes now follow what the declaration is. A primary template's out-of-line member keys the bare template name: its
-template-id names exactly the parameters its own `template <…>` introduces, as in `template <class T, int N> void
-Box<T, N>::grow()`. An explicit or partial specialization keeps its template-id, spelled canonically: whitespace and
-comments are dropped except between two identifier characters, and a comma is followed by one space, so `Traits< int >`
-and a list broken over lines key the same identity as `Traits<int>`. A call keeps the template-id it writes.
-`Traits<int>::encode( 1 )` resolves precisely to the int specialization, including from a 3-segment spelling. When no
-definition is keyed by the written id, the resolver takes the template's family (the primary and every specialization
-of that name) instead of the bare-name spray, so an unrelated same-named definition never shares the split. The first
-version of this fix joined every specialization to the primary. An independent review measured that on llvm: precise
-edges became splits, and a delegation between two specializations vanished (`DenseMapInfo<APSInt>::getHashValue`
-calling `DenseMapInfo<APInt, void>::getHashValue`, APSInt.h:371), so the two halves were split apart. The locality
-tie-break also now prefers a candidate declared in the caller's own scope over one nested inside it, for a bare or
-`this->` call only. Both ids share the caller's `Outer::` segment, so segment counting tied `Outer::start` with
-`Outer::Inner::start`. On main a non-template nested class already split there, and the template form pinned the nested
-class's member.
+Scopes now follow what the declaration is:
 
-Measured with `--pin-census --no-cache`, the same frozen corpus through main (`31e788ce`) and this change, sites joined
-on (caller file, callee, line). On llvm `ADT` + `Support` + `lib/Support` (590 files, 37,055 calls), edges moved from
-45,768 to 44,935 and ambiguous from 7,247 to 7,230, and `--callers=lib/Support/APInt.cpp:getHashValue` answers 5, as on
-main.
+- A primary template's out-of-line member keys the bare template name, because its template-id names exactly the
+  parameters its own `template <…>` introduces (`template <class T, int N> void Box<T, N>::grow()`).
+- An explicit or partial specialization keeps its template-id, spelled canonically. Whitespace and comments are dropped
+  except between two identifier characters, and a comma is followed by one space, so `Traits< int >` and a list broken
+  over lines key the same identity as `Traits<int>`.
+- A call keeps the template-id it writes. `Traits<int>::encode( 1 )` resolves precisely to the int specialization,
+  including from a 3-segment spelling.
+- When no definition is keyed by the written id, the resolver answers from the template's family (the primary and its
+  specializations), but only when that answer cannot be missing a body the call may reach. The family is the primary's
+  own or inherited member (`CastInfo` inherits `CastIsPossible::isPossible`) plus every specialization's own or
+  inherited member, and a member reached through a base is widened to that base template's specializations. A written
+  id that names an existing specialization which does not define the member answers with what that specialization
+  inherits. With nothing visible from the primary, only a split of two or more specializations answers.
+- Anything else goes to the bare-name ladder, exactly as before, so a same-named definition outside the template never
+  joins a family answer.
+- A specialization header's base clause (`template <> struct Info<char> : CharBase {}`) is now read, as inherit
+  references with no new symbol.
+- The locality tie-break prefers a candidate declared in the caller's own scope over one nested inside it, for an
+  unqualified bare or `this->` call only. Both ids share the caller's `Outer::` segment, so segment counting tied
+  `Outer::start` with `Outer::Inner::start`.
 
-Wins: 44 splits became precise, 54 call sites that had no edge gained a precise one, and 12 external sites resolved
-in-repo. Of the 58 sites main resolved precisely and the first version split, 44 are precise again, each to main's
-target.
+Two earlier revisions of this change were measured and revised before merge. Joining every specialization to the
+primary made precise edges splits and dropped a delegation between specializations (`DenseMapInfo<APSInt>` calling
+`DenseMapInfo<APInt, void>::getHashValue`, APSInt.h:371). A family fallback that ignored inherited members pinned `isa`
+(Casting.h:548) to one rare specialization.
+
+Measured with `--pin-census --no-cache` on the same frozen corpus through main (`31e788ce`) and this change, with sites
+joined on (caller symbol id, callee, line); symbol ids are identical across the two binaries. On llvm `ADT` + `Support`
++ `lib/Support` (590 files, 37,055 calls), edges moved from 45,768 to 45,001 and ambiguous from 7,247 to 7,237, and
+`--callers=lib/Support/APInt.cpp:getHashValue` answers 5, as on main.
+
+Wins: 37 splits became precise, 12 sites that had no edge gained a precise one, 12 external sites resolved in-repo, and
+5 precise edges were retargeted. All 66 were read against the source and are correct: 64 in the independent review of
+the previous revision (unchanged here), and the 2 new ones, `cast`/`dyn_cast` through `CastInfo<To,
+std::unique_ptr<From>>`, which inherits `UniquePtrCast`. The Casting.h `isa` site is now a split that contains the
+inherited `CastIsPossible::isPossible`, and the 8 `list_storage` calls that an earlier revision pinned to
+`list_storage<DataType, bool>` are splits.
 
 Costs and differences, reported apart:
 
-- 14 of those 58 sites still split. In 10 of them main had pinned the wrong class: the caller's own
-  `SmallString::assign` for `SmallVectorImpl<char>::assign`, an iterator's own `end`/`find` for a `DenseMap` field's,
-  the caller's own `isEqual` for `ImutContainerInfo<S>::isEqual`, and 3 of 4 `IntervalMap` iterator calls. One correct
-  pin (`RHS.branched()`) is now a 2-way split that contains it. The last 3 are `DominatorTreeBase::dominates` overloads
-  that are now one identity.
-- One site lost its edge: `simple_ilist::sort`, whose body had been "calling" its own declaration's identity.
-- 47 sites gained a split where main had none, 9 external sites became splits, and 6 sites became external.
+- 14 sites main resolved precisely now split. In 10 of them main had pinned the wrong class, one correct pin
+  (`RHS.branched()`) is a 2-way split that contains it, and 3 are `DominatorTreeBase::dominates` overloads that are now
+  one identity.
+- One edge is gone: `simple_ilist::sort`, which is a genuine recursive call.
+- 4 sites with no edge and 9 external sites became splits.
+- One call through `list_storage<DataType, StorageClass>::clear()` (CommandLine.h:1760) keeps main's locality pin to
+  `list::clear`, because that primary's members are extracted under `cl` and the template supplies nothing visible.
 
 On dgl (`f0b7cc9`, 343 C, C++ and CUDA files; main at `b1489df4`, whose resolver is identical), edges moved from 20,829
-to 20,730 and ambiguous from 1,891 to 1,882, with 11 splits made precise and 3 precise sites split. Those 3 are calls
-through a dependent template-id (`DGLValueCast<T, TSrc>::Apply`, `typed_packed_call_dispatcher<R>::run`), where main
-had pinned the primary. On this repository nothing changes. An ack or saved baseline keyed on a primary template
-member's old `Box<T>` spelling re-keys once.
+to 20,733 and ambiguous from 1,891 to 1,882. 11 splits became precise. 12 precise edges moved from a specialization's
+own `Call` to the `_Sum`/`_Max`/`_Min` base it calls. 3 calls through a dependent template-id that main had pinned to
+the primary now split over the primary and its specialization. On this repository nothing changes. An ack or saved
+baseline keyed on a primary template member's old `Box<T>` spelling re-keys once.
 
-Gated by `test/cpptmplscopecheck.sh`, 55 checks; main fails 38 and the first version fails 17. The gate covers:
+Gated by `test/cpptmplscopecheck.sh`, 64 checks: main fails 42, and the previous revision fails 6. The gate covers:
 
 - a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact`, `--uses`
   and the census;
-- the multi-line, namespaced, nested and member-template primary forms;
+- the primary shapes;
 - all three specialization forms;
-- the review's own `Traits` probe verbatim;
-- an APSInt-shaped cross-file delegation;
-- a partial specialization's own-class call;
+- the review's `Traits` probe;
+- an APSInt-shaped delegation;
+- the inherited-member shapes (a primary that inherits the member, a specialization that only inherits it, a primary
+  with nothing visible, a primary that defines nothing);
 - the two-segment decoy;
-- the nested-class tie, in both twins.
+- the nested-class tie.
 
 ### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
 

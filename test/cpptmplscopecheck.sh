@@ -26,10 +26,16 @@
 #     members of `template<> struct Slot<bool> { … }`) keeps its template-id, spelled canonically (whitespace dropped
 #     except between two identifier characters, `, ` after a comma, so `Traits< int >` and a list broken over lines
 #     key the same identity as `Traits<int>`);
-#   * a reference keeps the template-id it writes; when no definition is keyed by it, the resolver retries the
-#     template's FAMILY — the primary and every specialization of that name — and never the bare-name spray.
+#   * a reference keeps the template-id it writes. When no definition is keyed by it, the resolver answers from the
+#     template's FAMILY, and only when that answer cannot be missing a body the call may reach (re-review of aa69e66f,
+#     llvm Casting.h:548 — the family had omitted what the primary INHERITS and pinned `isa` to one rare
+#     specialization): the family is the primary's own OR INHERITED member plus every specialization's own or
+#     inherited member (a specialization header's base clause is now read), each member reached through a base
+#     widened to that base template's specializations; an existing specialization that does not define the name
+#     answers with what it inherits; with nothing visible from the primary, only a split of two or more
+#     specializations answers. Anything else is left to the bare-name ladder exactly as before.
 #
-# FIVE CORPORA, generated below into a scratch dir (never committed under test/, where the live-tree gates would
+# SIX CORPORA, generated below into a scratch dir (never committed under test/, where the live-tree gates would
 # index them: the repo already has a `grow` with callers, and a fixture def beside it would move the live graph):
 #   plain/  the CONTROL — the non-template twin, the join the codebase already makes (decl + out-of-line def = one
 #           row, overloads="2"; --callers=Box::grow defs="2" count="1" use).
@@ -41,8 +47,10 @@
 #           function template, an out-of-line nested class of a template, and the two-segment decoy call.
 #   spec/   the specializations: the three forms (one with `::` inside its arguments, one broken over lines), the
 #           review's own `Traits` probe verbatim, an APSInt-shaped delegation between two explicit specializations
-#           across a header and its .cpp, and a partial specialization calling its own member (llvm's
-#           `SmallVectorTemplateBase<T, true>` shape).
+#           across a header and its .cpp, a partial specialization calling its own member (llvm's
+#           `SmallVectorTemplateBase<T, true>` shape), and the inherited-member shapes: a primary that inherits the
+#           member (Casting.h's CastInfo), a specialization that only inherits it, a primary with nothing visible
+#           (CommandLine.h's list_storage), and a primary that defines nothing (MappingTraits).
 #   tiepl/ tietm/  the NESTED-CLASS LOCALITY TIE, non-template and template twins (equal-length names): a bare
 #           `start()` in `Outer::operator=` beside `Outer::Inner::start`. Both ids share the `Outer::` segment, so the
 #           segment-counting tie-break could not choose; on main the non-template twin split and the template twin
@@ -50,16 +58,20 @@
 #
 # EVERY expected value below is a LITERAL read by hand off the fixture text, never derived the way the code does.
 #
-# RED-FIRST (2026-09-16, plain builds, every arm below):
-#   main 31e788ce                      38 of 55 FAIL. It passes the §1 control, the presence guards, determinism,
+# RED-FIRST (2026-09-16, plain builds, every arm below; 64 checks):
+#   main 31e788ce                      42 FAIL. It passes the §1 control, the presence guards, determinism,
 #                                      --callers=Leaf::shed (a suffix match), and the arms that keep main's own correct
-#                                      edges: Traits<int|bool|long>::encode, the Dmi delegation (--callers count="1"),
-#                                      the partial specialization's own-class call, and the five distinct encode rows.
-#   d42f3639 (this PR's first version)  17 of 55 FAIL: every specialization arm — the rows joined into one, Traits<…>
-#                                      and Info<char> split over the joined identity, the Dmi delegation gone
-#                                      (--callers count="0"), Svb's own-class calls split — plus both tie twins.
+#                                      edges (Traits<int|bool|long>::encode, the Dmi delegation, Svb's own-class call,
+#                                      the distinct encode rows, Storage<D, bool>::reset, the MapInfo default-argument
+#                                      split, the ladder's refusal to pin Storage<D, S>).
+#   d42f3639 (first version)           every specialization arm plus both tie twins (17 of the 55 it then had).
+#   aa69e66f (second version)          6 FAIL — the inherited-member arms: Caster<int>::isPossible pinned to the one
+#                                      defining specialization, Hasher<char>/<long> pinned to the primary's charHash,
+#                                      Storage<D, S>::reset pinned to the lone specialization, and --uses=CharBase
+#                                      missing the specialization header's extends site.
+#   the build before the lone-specialization rule   1 FAIL — Mapping<T>::mapFields fell to the ladder instead of
+#                                      splitting over the primary-less template's two specializations.
 #   ALL PASS on the fix.
-#
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/cpptmplscopecheck.sh   |   bash test/cpptmplscopecheck.sh asan/ripwire
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
 
@@ -328,6 +340,82 @@ void Svb<T, true>::grow()
 }
 EOF
 
+# the family fallback must see INHERITED members (re-review of aa69e66f, llvm Casting.h:548): the primary `Caster`
+# defines no isPossible but inherits PossibleBase's; one partial specialization defines its own; another only inherits
+# PtrBase's; Unrelated is a same-name decoy outside the template
+cat > spec/caster.hpp <<'EOF'
+struct PossibleBase { static bool isPossible( int v ) { return v > 0; } };
+struct PtrBase { static bool isPossible( int v ) { return v != 0; } };
+template <class T, class Enable = void> struct Caster : PossibleBase { static int tag() { return 0; } };
+template <class T> struct Caster<T, typename T::simplified> { static bool isPossible( int v ) { return v < 0; } };
+template <class T> struct Caster<T*> : PtrBase {};
+struct Unrelated { static bool isPossible( int v ) { return false; } };
+bool useInherited() { return Caster<int>::isPossible( 1 ); }
+template <class K, class E = void> struct MapInfo { static unsigned keyHash( const K& ) { return 0; } };
+struct Key {};
+template <> struct MapInfo<Key, void> { static unsigned keyHash( const Key& ) { return 1; } };
+unsigned useDefaultArg() { return MapInfo<Key>::keyHash( Key{} ); }
+EOF
+
+# a specialization that only INHERITS the member the primary defines itself
+cat > spec/hasher.hpp <<'EOF'
+struct CharBase { static unsigned charHash( char c ) { return 1; } };
+template <class T, class E = void> struct Hasher { static unsigned charHash( T t ) { return 0; } };
+template <> struct Hasher<char> : CharBase {};
+unsigned useSpecInherited() { return Hasher<char>::charHash( 'a' ); }
+unsigned usePrimaryHasher() { return Hasher<long>::charHash( 1L ); }
+EOF
+
+# llvm CommandLine.h list_storage's shape: the primary supplies nothing visible (here: declared only), so a call
+# through `Storage<D, S>` must not become a lone pin to the one specialization; the exact `<D, bool>` call is precise
+cat > spec/store.hpp <<'EOF'
+template <class D, class S> class Storage;
+template <class D> class Storage<D, bool>
+{
+public:
+    void reset();
+};
+template <class D> void Storage<D, bool>::reset()
+{
+}
+struct OtherStore
+{
+    void reset();
+};
+void OtherStore::reset()
+{
+}
+template <class D, class S> struct ListOpt : Storage<D, S>
+{
+    void clearAll()
+    {
+        Storage<D, S>::reset();
+    }
+    void clearDefault()
+    {
+        Storage<D, bool>::reset();
+    }
+};
+EOF
+
+# a traits template whose PRIMARY defines nothing (llvm's MappingTraits / DenseMapInfo shape): only its specializations
+# can be reached, so a call through a dependent template-id is their split — never a stray same-name function
+cat > spec/mapping.hpp <<'EOF'
+template <class T, class E = void> struct Mapping
+{
+};
+struct Alpha
+{
+};
+struct Beta
+{
+};
+template <> struct Mapping<Alpha> { static void mapFields( Alpha& ) {} };
+template <> struct Mapping<Beta> { static void mapFields( Beta& ) {} };
+struct Stray { static void mapFields( int ) {} };
+template <class T> void doMapping( T& v ) { Mapping<T>::mapFields( v ); }
+EOF
+
 # the nested-class locality tie, non-template and template twins
 cat > tiepl/m.hpp <<'EOF'
 struct Outer
@@ -549,6 +637,34 @@ expect_site 'svb.hpp::Svb<T, true>::assignGrow' "$( xsite 'svb.hpp::Svb<T, true>
 [ "$( xtargets 'svb.hpp::Svb::assignGrow' )" = 'svb.hpp::Svb::grow|' ] \
     && ok "census: the primary's own-class call grow() binds the primary's grow, one target" \
     || no "census: Svb::assignGrow expected the primary's grow alone, got '$( xtargets 'svb.hpp::Svb::assignGrow' )'"
+# ── inherited members in the family (the re-review's R1): a family answer that omits what the primary or a
+# specialization INHERITS is a confident wrong edge; one that includes it is an honest split
+[ "$( xtargets 'caster.hpp::useInherited' )" = 'caster.hpp::Caster<T, typename T::simplified>::isPossible|caster.hpp::PossibleBase::isPossible|caster.hpp::PtrBase::isPossible|' ] \
+    && ok "census: Caster<int>::isPossible splits over the primary's INHERITED PossibleBase::isPossible, the defining specialization and the inheriting Caster<T*>'s PtrBase::isPossible — no lone pin, no Unrelated" \
+    || no "census: Caster<int>::isPossible expected the three-member family with inherited members, got '$( xtargets 'caster.hpp::useInherited' )'"
+[ "$( xsite 'caster.hpp::useInherited' | cut -f1 )" = split ] \
+    && ok "census: that family answer is a disclosed split (mech=split), never mech=qualified to one body" \
+    || no "census: Caster<int>::isPossible expected mech=split, got '$( xsite 'caster.hpp::useInherited' | tr '\t\n' ' ;' )'"
+[ "$( xtargets 'caster.hpp::useDefaultArg' )" = 'caster.hpp::MapInfo::keyHash|caster.hpp::MapInfo<Key, void>::keyHash|' ] \
+    && ok "census: MapInfo<Key>::keyHash (a default-argument spelling of MapInfo<Key, void>) is the two-member family split" \
+    || no "census: MapInfo<Key>::keyHash expected the MapInfo family, got '$( xtargets 'caster.hpp::useDefaultArg' )'"
+[ "$( xtargets 'mapping.hpp::doMapping' )" = 'mapping.hpp::Mapping<Alpha>::mapFields|mapping.hpp::Mapping<Beta>::mapFields|' ] \
+    && ok "census: Mapping<T>::mapFields — a primary that defines nothing — is the split of its two specializations, no Stray" \
+    || no "census: Mapping<T>::mapFields expected the two-specialization split, got '$( xtargets 'mapping.hpp::doMapping' )'"
+expect_site 'hasher.hpp::useSpecInherited' $'qualified\thasher.hpp::CharBase::charHash' \
+    "Hasher<char>::charHash reaches what the char specialization INHERITS (CharBase), never the primary's own charHash"
+[ "$( xtargets 'hasher.hpp::usePrimaryHasher' )" = 'hasher.hpp::CharBase::charHash|hasher.hpp::Hasher::charHash|' ] \
+    && ok "census: Hasher<long>::charHash splits over the primary's member and the inheriting specialization's — no lone pin" \
+    || no "census: Hasher<long>::charHash expected the primary + CharBase split, got '$( xtargets 'hasher.hpp::usePrimaryHasher' )'"
+[ "$( xsite 'store.hpp::ListOpt::clearAll' | cut -f2 | tr '|' '\n' | grep -c . )" -ge 2 ] \
+    && ok "census: Storage<D, S>::reset() with a primary that supplies nothing visible is NOT a lone pin to Storage<D, bool>::reset (the ladder decides: $( xsite 'store.hpp::ListOpt::clearAll' | cut -f1 ))" \
+    || no "census: Storage<D, S>::reset() became a lone pin: '$( xsite 'store.hpp::ListOpt::clearAll' | tr '\t\n' ' ;' )'"
+expect_site 'store.hpp::ListOpt::clearDefault' $'qualified\tstore.hpp::Storage<D, bool>::reset' \
+    "Storage<D, bool>::reset() — the exact template-id — is precise"
+XUSES="$( run spec --uses=CharBase --no-cache --legend=compact )"
+printf '%s' "$XUSES" | grep -q '<u role="extends" p="hasher.hpp:3"' \
+    && ok "--uses=CharBase lists the specialization header's base clause (hasher.hpp:3), which was never read before" \
+    || no "--uses=CharBase is missing the specialization's extends site: $( el "$XUSES" )"
 BADX="$( printf '%s' "$XMAP" | grep -oE ' sc="[^"]*"' | grep -E '&#10;|&#13;|sc="string' )"
 [ -z "$BADX" ] \
     && ok "no specialization sc= holds a line break or a list cut at an inner ::" \

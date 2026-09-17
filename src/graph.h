@@ -1783,24 +1783,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ambiguity. Definitions only (body present); the obj.method()/unqualified halves stay bare-name (and
     // keep their honest `amb`). C++ only (scope is populated for Lang::Cpp).
     HashMap<std::string, rw::SmallVec<NodeId, 2>> canonByName;
-    HashMap<std::string, rw::SmallVec<NodeId, 2>> canonFamilyByName;   // a C++ specialization's def under its template's `T::name` (resolve.h)
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> canonFamilyByName;   // C++ specializations under their template's `T::name`, plus existence markers (resolve.h)
     canonByName.reserve( N );
     std::string canonKey;
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1f: canonByName (scope::name -> def ids)" );
         for( const Symbol& s : ing.symbols )
         {
-            if( s.scope.empty() || !isDefinitionNotDeclaration( s ) )
-            {
-                continue;
-            }
-            canonKey.clear();
-            canonKey.append( s.scope ).append( "::" ).append( s.name );
-            canonByName[ canonKey ].push_back( s.id );
-            if( appendTemplateFamilyKey( canonKey, s.scope, s.name ) )
-            {
-                canonFamilyByName[ canonKey ].push_back( s.id );
-            }
+            // a definition under scope::name; a C++ specialization's definition again under its template's family key, and
+            // any symbol a specialization scopes (declarations too) as that specialization's existence marker
+            indexCanonicalScope( canonByName, canonFamilyByName, canonKey, s );
         }
     }
 
@@ -2082,6 +2074,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         for( auto& [ k, v ] : chaUp )   { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
         for( auto& [ k, v ] : chaDown ) { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
     }
+    const std::vector<std::string> specializationsWithBases = sortedSpecializationNames( chaUp );   // resolve.h: what a C++ specialization inherits
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
 
@@ -2267,14 +2260,21 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             canonical = true;
         }
         // E#4 canonical tier (resolve.h appendCanonicalCandidates): the defs keyed "qualifier::name", built in the reused
-        // qkey buffer and admitted by language and root. A C++ template-id qualifier that keys nothing — a call through
-        // `Traits<double>` when only `Traits` and other specializations are defined — takes its template's FAMILY
-        // (the primary's `T::name` defs, then each specialization's) instead of falling to the bare-name spray, where
-        // an unrelated same-named def would share the split. An exact template-id still keys exactly its
-        // specialization (`Traits<int>::encode`), which is what keeps a delegation between specializations an edge.
+        // qkey buffer and admitted by language and root. An exact template-id keys exactly its specialization
+        // (`Traits<int>::encode`), which is what keeps a delegation between specializations an edge. A C++ template-id
+        // qualifier that keys nothing is answered from its template's FAMILY only when that answer cannot be missing
+        // a body the call may reach:
+        //   * the id names a specialization that exists but does not define the name → what IT inherits (chaUp holds
+        //     specialization headers' base clauses), or no answer;
+        //   * otherwise what the PRIMARY supplies, itself or through its bases — `CastInfo` defines no `isPossible` but
+        //     inherits `CastIsPossible::isPossible` — joined by every specialization's own or inherited member; more
+        //     than one candidate is a disclosed split;
+        //   * with nothing visible from the primary, only a split of two or more specializations answers.
+        // No answer leaves `cand` empty, so the bare-name ladder decides exactly as it did before the family fallback,
+        // and no family answer ever reaches a same-named definition outside the template.
         if( !scipPinned && r.lang != Lang::Elixir && !r.qualifier.empty() )
         {
-            appendCanonicalCandidates( cand, qkey, r, CanonicalScopes { canonByName, canonFamilyByName },
+            appendCanonicalCandidates( cand, qkey, r, CanonicalScopes { canonByName, canonFamilyByName, specializationsWithBases, narrower, chaUp, ing.symbols },
                                        [ & ]( NodeId c ) { return langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ); } );
             canonical = !cand.empty();
         }
@@ -2772,7 +2772,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 // another — rubygems' composed_set.rb). Widening tier 1 past the caller would invent a
                 // cross-file edge the SAME-FILE tier already outranked, and `other.each` on a second instance
                 // of the caller's own class is a genuine self-loop, so the honest nothing stands.
-                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKey[c], r.recv == RecvKind::None || r.recv == RecvKind::ThisObj );   // path-scoped even for a free function
+                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKey[c], ( r.recv == RecvKind::None && r.qualifier.empty() ) || r.recv == RecvKind::ThisObj );   // path-scoped even for a free function
                 locShare.push_back( sh );
                 if( sh > bestShare )
                 {

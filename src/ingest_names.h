@@ -527,6 +527,32 @@ inline std::string cppScopeNameText( TSNode name, std::string_view src )
     return scope.append( canonicalTemplateIdText( nodeTextOf( link, src ) ) );
 }
 
+// A C++ class SPECIALIZATION header's base clause (`template <> struct Info<char> : CharBase {}`), captured by the tags
+// query as @definition.specialization and never made a symbol. Each base becomes an inherit ref (captureBases) whose
+// DERIVED name is the specialization's canonical template-id, carried in `qualifier` exactly as the Rust impl pass
+// carries its implementor: byte-span attribution cannot name a derived class that is not a symbol. buildGraph's CHA
+// name graph then knows what the specialization inherits (resolve.h appendCanonicalCandidates reads it); the Lego
+// view resolves `qualifier` by symbol name and finds none, so its rows are unchanged.
+// Returns true when the capture WAS a specialization header (and so must not continue to the definition path). The
+// whole precondition is tested here rather than at the call site, which is captureTagsFacts: every branch spent there is
+// measured (see cppDefNameReseat).
+inline bool captureSpecializationHeader( bool isDef, Lang lang, std::string_view defCapture, TSNode classNode, TSNode nameNode, std::uint32_t fileId,
+                                         std::string_view src, std::vector<RawRef>& refs )
+{
+    if( !isDef || lang != Lang::Cpp || defCapture != "definition.specialization" )
+    {
+        return false;
+    }
+    const std::size_t firstBase = refs.size();
+    captureBases( classNode, fileId, Lang::Cpp, src, refs );
+    const std::string derived = canonicalTemplateIdText( nodeTextOf( nameNode, src ) );
+    for( std::size_t i = firstBase; i < refs.size(); ++i )
+    {
+        refs[i].qualifier = derived;
+    }
+    return true;
+}
+
 // The scope that qualifies `nameNode` — "" when it is unqualified, or qualified only by a separator error recovery
 // invented (hasPhantomScopeSeparator). A plain scope reads its immediate segment (`a::B::c` → "B"). A template-id
 // scope depends on who asks: a REFERENCE keeps the id it wrote, canonically (`Traits<int>::encode()` → "Traits<int>",
