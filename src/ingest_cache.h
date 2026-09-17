@@ -238,7 +238,15 @@ constexpr std::uint32_t kCacheVersion = 23;           // 23: RawBind gains `isFr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 110;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 111;          // bump on any grammar/.scm/extraction change
+                                                      // 111 = 2026-09-17 (block-scope direct-initialized locals,
+                                                      //    test/narrowcheck.sh arms 52-60): a C++ function_declarator
+                                                      //    inside a function/lambda body that an argument list also
+                                                      //    produces (`IRBuilder<> Builder(Rem);`) mints no function
+                                                      //    symbol (ingest_names.h cppBlockScopeDirectInit), so the
+                                                      //    local's type binding is attributed to the enclosing function.
+                                                      //    Symbols and fact attribution change; no record layout changes
+                                                      //    (kCacheVersion unchanged). Claimed 111; integration/train-4 keeps it over main 110.
                                                       // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, PR #235
                                                       //    follow-up from CodeRabbit on #281, test/javamethodrefcheck.sh):
                                                       //    a catch parameter, an enhanced-for variable and a try-with-

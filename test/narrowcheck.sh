@@ -44,6 +44,10 @@
 #     pin (49) and a member's Rule 2b narrow (46) were lost. A class-named assignment still types and still conflicts (47);
 #     a DECLARATION initialised by a call still tombstones a sibling declaration (48); the new record byte round-trips
 #     the cache (51).
+#   * Arms 52-60 — a direct-initialized local whose every argument is a plain name (`IRBuilder<> Builder(Rem);`) parses as a
+#     local FUNCTION declaration. The tags query minted a function symbol for it, the local's type binding was attributed
+#     to that symbol instead of to the enclosing function, and Rule 2 never saw the type. RED on the unfixed binary:
+#     52-58. RED on a naive fix that refuses every body-local declarator: 59. 60 pins the multiplication floor.
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -782,6 +786,144 @@ if [ -s "$TMP/a1" ] && cmp -s "$TMP/a1" "$TMP/a2" && cmp -s "$TMP/a1" "$TMP/awar
     ok "(51) assignfix map byte-identical: cold, cold again, and warm"
 else
     no "(51) assignfix map differs across runs or warm vs cold"; diff "$TMP/a1" "$TMP/awarm" | head -6
+fi
+
+# ── Arms 52-60 (2026-09-17): a DIRECT-INITIALIZED local whose every argument is a plain name — `IRBuilder<> Builder(Rem);`,
+#    `std::lock_guard<std::mutex> Lock(Mtx);`, `Slice end(end_str);` — is the most-vexing-parse shape. The grammar cannot
+#    tell a name from a type, so it reads the statement as a local FUNCTION declaration, and the tags query minted a
+#    function symbol `Builder` whose span is the declaration. The local's type binding was attributed to that symbol (the
+#    innermost span covering the declaration byte), not to the function the local lives in, so Rule 2 looked up
+#    `<enclosing fn>#Builder`, found nothing, and `Builder.CreateSExt()` fell to the name ladder. A body-local declarator
+#    now mints no symbol unless something in it can only be written in a prototype. Candidates live two directories away
+#    from the caller, and nothing is #included, so a site no rule decides DECLINES (no edge) instead of reaching Rule 3.
+#    LINE NUMBERS ARE ASSERTED BELOW: Widget/Box/store::Shelf at lib/widget.h:1/2/3, the vexing locals at vexing.cpp:2-8.
+XFIX="$TMP/vexingfix"
+mkdir -p "$XFIX/lib" "$XFIX/lib2" "$XFIX/app"
+printf 'struct Widget { Widget( int n ) {} Widget( int a, int b ) {} int pick( int k ) { return k; } };\ntemplate <typename T = int> struct Box { Box( int n ) {} int pick( int k ) { return k; } };\nnamespace store { struct Shelf { Shelf( int n ) {} int pick( int k ) { return k; } }; }\n' >"$XFIX/lib/widget.h"
+printf 'struct Other { int pick( int k ) { return k + 1; } };\n' >"$XFIX/lib2/other.h"
+cat >"$XFIX/app/vexing.cpp" <<'EOF'
+int nextSeed() { return 3; }
+int pickOne( int seed ) { Widget w( seed ); return w.pick( 1 ); }
+int pickTwo( int a, int b ) { Widget w( a, b ); return w.pick( 2 ); }
+int pickCall() { Widget w( nextSeed() ); return w.pick( 3 ); }
+int pickIndex( int* seeds ) { Widget w( seeds[ 0 ] ); return w.pick( 4 ); }
+int pickQualified( int seed ) { store::Shelf s( seed ); return s.pick( 5 ); }
+int pickTemplate( int seed ) { Box<> b( seed ); return b.pick( 6 ); }
+int pickProduct( int a, int b ) { Widget w( a * b ); return w.pick( 7 ); }
+int pickLiteral() { Widget w( 8 ); return w.pick( 8 ); }
+int prototypes()
+{
+    void helperVoid( Widget );
+    Widget helperPrim( int );
+    Widget helperNamed( Widget other );
+    Widget helperPtr( Other* );
+    Widget helperNone();
+    extern Widget helperExtern( Other );
+    Widget helperConst( const Other& );
+    return 0;
+}
+EOF
+# a class body the grammar misreads as a FUNCTION body (an export macro before the class name): its member declarations
+# arrive as body-local declarators too, and their trailing `const` / `override` is what keeps them.
+cat >"$XFIX/app/misparse.h" <<'EOF'
+#define API_MACRO
+class API_MACRO Stream : public Other
+{
+public:
+    int count( Widget ) const;
+    Widget copy( Other ) override;
+};
+EOF
+xRows(){   # the pick@<file:line> rows one caller's callees answer; NO-CALLEES-ANSWER when the probe did not run
+    local out
+    out="$( "$BIN" "$XFIX" "--callees=$1" --no-cache 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o '<s [^>]*>' | sed -n 's/.* n="pick".* p="\([^"]*\)".*/pick@\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectX(){   # arm label, caller, the exact expected row set ("" = no edge), what the declaration writes
+    local got
+    got="$( xRows "$2" )"
+    if [ "$got" = "$3" ]; then
+        ok "$1 $2(): $4 -> [${got:-no edge}]"
+    else
+        no "$1 $2(): $4 -> [${got:-no edge}], want [${3:-no edge}]"
+    fi
+}
+"$BIN" "$XFIX" --no-cache --pin-census="$TMP/xcensus.tsv" >/dev/null 2>&1
+xSymLines(){   # the census S-row lines of every symbol named $2 in file $1, sorted; empty when none
+    awk -F '\t' -v id="$1::$2#" '$1 == "S" && index( $2, id ) == 1 { print $4 }' "$TMP/xcensus.tsv" 2>/dev/null | sort -n | tr '\n' ' ' | sed 's/ $//'
+}
+# presence guard: the census ran and indexed every probed caller, or the symbol-absence arms below prove nothing
+xmiss=0
+for want in nextSeed pickOne pickTwo pickCall pickIndex pickQualified pickTemplate pickProduct pickLiteral prototypes; do
+    [ -n "$( xSymLines app/vexing.cpp "$want" )" ] || { no "presence guard: vexingfix caller $want has no census S row"; xmiss=1; }
+done
+[ "$xmiss" = 0 ] && ok "presence: the vexingfix census lists all ten callers"
+
+# ── 52) THE DEFECT: `Widget w( seed ); w.pick( 1 )` pins to Widget::pick. (52c) is the same local with a LITERAL argument,
+#        which never parsed as a function and always narrowed — the only difference between the two is the argument. ──
+expectX "(52)" pickOne "pick@lib/widget.h:1" "Widget w( seed )"
+expectX "(52c)" pickLiteral "pick@lib/widget.h:1" "Widget w( 8 )"
+# ── 53) two plain-name arguments. ───────────────────────────────────────────────────────────────────────────────────────
+expectX "(53)" pickTwo "pick@lib/widget.h:1" "Widget w( a, b )"
+# ── 54) a CALL argument, `nextSeed()` — the grammar reads it as a parameter of type nextSeed returning a function. ────────
+expectX "(54)" pickCall "pick@lib/widget.h:1" "Widget w( nextSeed() )"
+# ── 55) a SUBSCRIPT argument, `seeds[ 0 ]` — read as an array parameter. ──────────────────────────────────────────────────
+expectX "(55)" pickIndex "pick@lib/widget.h:1" "Widget w( seeds[ 0 ] )"
+# ── 56) a namespace-qualified written type keeps its narrow (arm 22's rule) once the declaration is a local again. ────────
+expectX "(56)" pickQualified "pick@lib/widget.h:3" "store::Shelf s( seed )"
+# ── 57) EXTRACTION: none of those declarations mints a function symbol — including the template-id one `Box<> b( seed )`
+#        (`IRBuilder<> Builder(Rem)`'s own shape), whose narrow waits on the template-id receiver type. ────────────────────
+for xs in "w 2 3 4 5" "s 6" "b 7"; do
+    set -- $xs
+    xname="$1"; shift
+    xgot=" $( xSymLines app/vexing.cpp "$xname" ) "
+    for xline in "$@"; do
+        case "$xgot" in
+            *" $xline "*) no "(57) vexing.cpp:$xline declares a local '$xname', yet it is indexed as a function symbol" ;;
+            *)            ok "(57) vexing.cpp:$xline local '$xname' mints no symbol" ;;
+        esac
+    done
+done
+# ── 58) the mechanism: the census names Rule 2 (receiver-rule, flags r) for pickOne's site. ──────────────────────────────
+xmech="$( awk -F '\t' '$1 == "C" && $6 ~ /^app\/vexing\.cpp::pickOne#/ && $7 == "pick" { print $2 "/" $5 }' "$TMP/xcensus.tsv" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//' )"
+[ "$xmech" = "receiver-rule/r" ] \
+    && ok "(58) pickOne's pick site is decided by receiver-rule/r (Rule 2)" \
+    || no "(58) pickOne's pick site mech/flags=[${xmech:-NO-CENSUS-ROW}], want [receiver-rule/r]"
+# ── 59) PROTOTYPE CONTROLS: a body-local declarator carrying anything a variable cannot write stays a function symbol —
+#        a void return, a primitive or const-qualified or pointer or NAMED parameter, empty parentheses (a function by the
+#        language's own rule), `extern`, and the misread class body's trailing `const` / `override`. RED on a naive fix
+#        that refuses every body-local declarator (observed, see the commit). ─────────────────────────────────────────────
+for xp in "helperVoid 12" "helperPrim 13" "helperNamed 14" "helperPtr 15" "helperNone 16" "helperExtern 17" "helperConst 18"; do
+    set -- $xp
+    [ "$( xSymLines app/vexing.cpp "$1" )" = "$2" ] \
+        && ok "(59) vexing.cpp:$2 prototype '$1' stays a function symbol" \
+        || no "(59) vexing.cpp:$2 prototype '$1' -> S lines [$( xSymLines app/vexing.cpp "$1" )], want [$2]"
+done
+for xp in "count 5" "copy 6"; do
+    set -- $xp
+    [ "$( xSymLines app/misparse.h "$1" )" = "$2" ] \
+        && ok "(59) misparse.h:$2 member declaration '$1' stays a function symbol" \
+        || no "(59) misparse.h:$2 member declaration '$1' -> S lines [$( xSymLines app/misparse.h "$1" )], want [$2]"
+done
+# ── 60) STATED FLOOR, pinned so it stays a decision: `Widget w( a * b )` parses as a POINTER parameter `a* b`, which a
+#        prototype writes too, so it is still a function symbol and its call still declines. If this arm goes red, the floor
+#        moved: rewrite it to assert the fixed behaviour, never delete it. ──────────────────────────────────────────────────
+case " $( xSymLines app/vexing.cpp w ) " in
+    *" 8 "*) ok "(60) floor: vexing.cpp:8 'Widget w( a * b )' is still a function symbol" ;;
+    *)       no "(60) floor moved: no symbol named w at vexing.cpp:8 (lines [$( xSymLines app/vexing.cpp w )])" ;;
+esac
+expectX "(60)" pickProduct "" "floor: Widget w( a * b )"
+# ── 60d) determinism + cache transparency on the vexing fixture: the dropped symbol must not come back warm. ────────────────
+"$BIN" "$XFIX" --no-cache >"$TMP/x1" 2>/dev/null
+"$BIN" "$XFIX" --no-cache >"$TMP/x2" 2>/dev/null
+rm -f "$TMP/xc"
+"$BIN" "$XFIX" --cache="$TMP/xc" >/dev/null 2>&1
+"$BIN" "$XFIX" --cache="$TMP/xc" >"$TMP/xwarm" 2>/dev/null
+if [ -s "$TMP/x1" ] && cmp -s "$TMP/x1" "$TMP/x2" && cmp -s "$TMP/x1" "$TMP/xwarm"; then
+    ok "(60d) vexingfix map byte-identical: cold, cold again, and warm"
+else
+    no "(60d) vexingfix map differs across runs or warm vs cold"; diff "$TMP/x1" "$TMP/xwarm" | head -6
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

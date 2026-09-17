@@ -15,6 +15,27 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a C++ local constructed from plain names, `IRBuilder<> Builder(Rem);`, was indexed as a function and hid its type from the receiver rule
+
+The grammar cannot tell a name from a type, so a block-scope direct-initialized local whose every argument is a plain
+name (`std::lock_guard<std::mutex> Lock(Mtx);`, `Slice end(end_str);`) parses as a local function declaration, and the
+tags query minted a function symbol for it. That symbol's span covers the declaration, so the local's type binding was
+filed under the phantom instead of the function the local lives in: Rule 2 found no type for `Builder.CreateSExt()`, and
+the call fell to the name ladder, where it declined or split. The phantoms also answered bare-name lookups: a Python
+`range(...)` read as bound in-repo because a C++ local was named `range`. Such a declarator now mints no symbol unless
+something in it can only be written in a prototype: `extern`/`inline`/`virtual`/`explicit`, a `void` return, anything
+after the parameter list (`const`, `override`, `noexcept`), empty parentheses, or a parameter an argument cannot
+produce (a primitive or cv-qualified type, a named declarator, `*`/`&`, a default, `...`). Measured with
+`--pin-census --no-cache`, main against the change, C rows joined on (caller, callee, line): llvm-project 4d5358b1d
+loses 12,543 function symbols and rocksdb 0e2801ac3 2,443, none added. Excluding rows that only lost a phantom target,
+changed caller when a phantom disappeared, or lost a veto on a phantom name, 2,857 llvm and 1,062 rocksdb call sites
+retarget. A seeded blinded sample of 40 graded 34 better, 0 same, 6 worse, and all 6 came from the 68 llvm sites that
+lost an edge. Those sites are the flat per-function receiver table's existing floor: a sibling block's same-named local
+of another type now tombstones the name. On train 3 (template-id receivers) the change also restores 997 of the 1,937
+llvm sites that refusing Rule 2c for C++ moved, 928 of them `Builder.CreateX()`. `Widget w( a * b )` still reads as a
+pointer parameter and stays a function symbol, a stated floor. Gate: `test/narrowcheck.sh` arms 52-60 (52-58 red on the
+unchanged binary; 59 red on a fix that refuses every body-local declarator).
+
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
 A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles
