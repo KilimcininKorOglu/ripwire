@@ -32,9 +32,11 @@
 #include <fcntl.h>     // ::open( O_NONBLOCK ) — readRegularFile asks a FIFO for an answer instead of waiting on it
 #include <sys/stat.h>  // ::fstat — readRegularFile asks the DESCRIPTOR what it opened
 #include <unistd.h>    // ::close — the one descriptor fdopen may decline to take
+#include <mutex>       // openRegularFileStream discloses a refused path once per process
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>      // openRegularFileStream: the paths already disclosed
 
 namespace rw
 {
@@ -258,8 +260,24 @@ inline rw::pathguard::NoFollowRead openRegularFileStream( std::string_view what,
     struct stat st{};
     if( ::fstat( ::fileno( stream.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
     {
-        rw::emitTo( stderr, "ripwire: ignoring {} at '{}': it is not a regular file (a FIFO, a directory or a device), "
-                            "so it was not read and counts as absent\n", what, path );
+        // Once per path per process: .ripwire_config is read several times in one --quality-delta, and the same sentence
+        // three times says nothing the first did not.
+        static std::mutex               disclosedMutex;
+        static std::vector<std::string> disclosed;
+        bool                            firstTime = false;
+        {
+            const std::lock_guard<std::mutex> lock( disclosedMutex );
+            if( std::find( disclosed.begin(), disclosed.end(), path ) == disclosed.end() )
+            {
+                disclosed.push_back( path );
+                firstTime = true;
+            }
+        }
+        if( firstTime )
+        {
+            rw::emitTo( stderr, "ripwire: ignoring {} at '{}': it is not a regular file (a FIFO, a directory or a device), "
+                                "so it was not read and counts as absent\n", what, path );
+        }
         DEGRADED_PATH_ALERT( "docparse: a fixed-name file in the tree is not a regular file — refused before reading" );
         return rw::pathguard::NoFollowRead{};   // `stream` closes as it leaves scope; the caller gets no stream
     }

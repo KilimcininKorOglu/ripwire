@@ -653,6 +653,8 @@ for name in .ripwire_config .ripwire_quality_acks; do
                 no "B2 [$tag]: the answer changed — a file that is not regular must read as absent"
             elif ! grep -q "at '$B2/$name': it is not a regular file" "$TMP/b2_err.txt"; then
                 no "B2 [$tag]: exit 0, but nothing on stderr says the file was ignored"
+            elif [ "$( grep -c "at '$B2/$name': it is not a regular file" "$TMP/b2_err.txt" )" -ne 1 ]; then
+                no "B2 [$tag]: the refusal was printed $( grep -c "at '$B2/$name': it is not a regular file" "$TMP/b2_err.txt" ) times in one run — once per path is the contract"
             else
                 ok "B2 [$tag]: refused before reading, disclosed, answer unchanged"
             fi
