@@ -29,10 +29,12 @@
 #include "graph.h"          // buildGraph / resolveAllByNameQualified
 #include "quality.h"        // cacheDirLadder / TmpTreeGuard
 #include "sarif.h"          // rootPrefixOf / rootRelativeUri — the root-relative identity of the edited file
+#include "infra/ownedfile.h" // rw::OwnedFile — the spliced temp file is closed on every return
 
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -253,6 +255,16 @@ inline IngestResult previewMerge( const IngestResult& ing, std::uint32_t fileId,
 // A single-file ingest of `bytes` written under `rel` inside a private temp root, so the parse sees the
 // file's real EXTENSION and its real relative directory (both are inputs to language selection). Returns
 // an empty result (files empty) on any I/O failure — a degrade, never a throw.
+//
+// THE INGEST HOLDS THE PROCESS-WIDE INGEST LOCK. ingest() installs compiled tags queries into a process-global
+// cache and deletes the query each install displaces (ingest_prewarm.h), which is single-writer by design; every
+// other ingest a long-lived server runs is serialized on quality::headSnapshotIngestMutex. This one was not: the
+// MCP `edit_check` new_body preview ran its two ingests after the verb's own locked ingest had released, so they
+// raced the detached HEAD-snapshot prefetch worker's ingest — a reader probing the map while it was written, and
+// a query freed under a parse worker still using it (ThreadSanitizer: data race at ingest.cpp's parse-pool call,
+// prefetch worker vs editpreview::ingestOneFile). Taken HERE, around the ingest alone: the caller's
+// editCheckBundleText takes the same (non-recursive) mutex inside computeHeadSnapshot, so a lock held across the
+// whole preview would deadlock. Uncontended on the CLI, where nothing else ingests.
 inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string& rel, const std::string& bytes,
                                    std::size_t maxFileBytes, bool captureValueUses )
 {
@@ -260,22 +272,24 @@ inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string&
     std::error_code   ec;
     const fs::path    target = fs::path( tmpDir ) / fs::path( rel );
     fs::create_directories( target.parent_path(), ec );
-    std::FILE* fp = std::fopen( target.string().c_str(), "wb" );
-    if( fp == nullptr )
     {
-        DEGRADED_PATH_ALERT( "edit-preview: cannot write the spliced file into the temp root" );
-        return {};
-    }
-    const std::size_t written = bytes.empty() ? 0 : std::fwrite( bytes.data(), 1, bytes.size(), fp );
-    const bool        wrote   = ( written == bytes.size() );
-    std::fclose( fp );
-    if( !wrote )
-    {
-        DEGRADED_PATH_ALERT( "edit-preview: short write of the spliced file" );
-        return {};
+        OwnedFile fp = openOwnedFile( target.string().c_str(), "wb" );
+        if( !fp )
+        {
+            DEGRADED_PATH_ALERT( "edit-preview: cannot write the spliced file into the temp root" );
+            return {};
+        }
+        const std::size_t written  = bytes.empty() ? 0 : std::fwrite( bytes.data(), 1, bytes.size(), fp.file );
+        const bool        closedOk = fp.close();
+        if( written != bytes.size() || !closedOk )
+        {
+            DEGRADED_PATH_ALERT( "edit-preview: short write of the spliced file" );
+            return {};
+        }
     }
     // No excludes: the ONE file here is the one the caller already resolved through the main index, so a
     // --exclude that would drop it can only produce a false "the payload defines nothing".
+    std::lock_guard<std::mutex> ingestLk( quality::headSnapshotIngestMutex() );
     return ingest( tmpDir.c_str(), {}, {}, maxFileBytes, captureValueUses );
 }
 

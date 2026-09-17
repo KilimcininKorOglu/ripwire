@@ -876,8 +876,8 @@ inline std::string registerMacroConfigWarningAttr( const rw::quality::RegisterMa
 int ackNothingToAccept( const std::string& acksFile, const gtl::btree_map<std::string, rw::quality::AckRecord>& acks,
                         const rw::quality::Scope& scope, std::size_t outOfScopeCount )
 {
-    const std::string onDisk = rw::docparse::detail::readWholeFile( acksFile ).value_or( std::string() );   // absent file ⇒ "" ⇒ never equal to a rendered ledger
-    if( acks.empty() || rw::quality::renderAckRecords( acks ) == onDisk )
+    // `acks.empty()` first, so a ledger that is not a regular file (already refused on read) is not read and disclosed twice.
+    if( acks.empty() || rw::quality::renderAckRecords( acks ) == rw::docparse::detail::readRegularFile( "the quality-acks ledger", acksFile ).value_or( std::string() ) )
     {
         if( scope.active() && outOfScopeCount > 0 )
         {
