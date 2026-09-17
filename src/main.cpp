@@ -535,6 +535,7 @@ struct MainDispatch
 #include "verbs_change.h"
 #include "verbs_report.h"
 #include "verbs_grep.h"
+#include "lsp.h"                 // the --lsp navigation-server section (Phase 1 PoC — docs/LSP.md); after the verb families so it can reuse the shared use-site scan
 
 // ── LANGUAGE-REGISTRATION COMPLETENESS, at compile time ──────────────────────────────────────────────────────────
 // Appending a Lang is not one table. 02f798e3 left Dart out of kUnanalyzedLangs, kCatalogLangs and langFromToken's map;
@@ -3727,6 +3728,14 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     if( cfg.json && cfg.planLanesFlag )
     {
         rw::emitRaw( stderr, "ripwire: --plan-lanes always emits JSON — --json is redundant here and changes nothing\n" );
+    }
+
+    // The --lsp navigation server: a third front door onto the SAME warm index the MCP twins use
+    // (getIndex()), answering the five navigation methods over stdio. --mcp/--listen beside it are
+    // refused in validateConfig, so this block's position relative to the --mcp branch below is inert.
+    if( cfg.lsp )
+    {
+        return lsp::runLsp( std::string( cfg.rootPath ) );
     }
 
     if( cfg.mcp )

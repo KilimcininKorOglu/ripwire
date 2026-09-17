@@ -233,9 +233,11 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # ackNothingToAccept (the acks ledger). Disjoint from the three githarden.h sites; re-derived on the merged tree
 # (20 grep lines = 19 call sites + the definition, and --uses answers 19).
 # 19 -> 22: Python runner evidence reads source, pyproject.toml and setup.cfg (#229).
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 22 ] \
-    && ok "repo: --uses=readWholeFile count=22 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 22"
+# 22 -> 23 2026-09-17 (#279 --lsp, @mpapis, on integration/train-4): src/lsp.h's hover reads the whole file through the
+# same canonical detail::readWholeFile helper rather than growing another fopen/fread.
+[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 23 ] \
+    && ok "repo: --uses=readWholeFile count=23 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 23"
 [ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
     || no "repo: --callers=writeTally expected 1"

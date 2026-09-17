@@ -1721,6 +1721,17 @@ the template-qualified re-export are red. (u4) is the contrast: the same two bas
 split. (u6) is an unindexed re-export that keeps the walk. (u1) goes red on the union build, and (u5) on a build
 without the template-argument strip.
 
+### Added
+
+- **`--lsp` — a read-only navigation LSP server over stdio (Phase 1).** `definition`, `references`,
+  `documentSymbol` (member variables merged into the outline), workspace symbol, and `hover` — the hover
+  gist carries two clickable link tiers: **Used at** (the same call-role floor `--uses` answers with) and
+  **Referenced at** (Ruby constant-load directives, so a class names the files that load it even where no
+  call edge exists) — served to editors off the same warm index `--mcp` uses — no second parser, no
+  second process. Saved-state answers, UTF-8 positions, every count labelled a floor in place; refuses
+  `--mcp`/`--listen` — one protocol per stdin. The design record is `docs/LSP.md`; the gate is
+  `test/lspcheck.sh` (16 arms, a scripted client speaking real LSP framing).
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
