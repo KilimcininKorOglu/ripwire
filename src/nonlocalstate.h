@@ -68,6 +68,7 @@
 #include "serialize.h"          // escapeXml
 #include "graphlegend.h"        // kGraphCountFloorAttrXml — the shared floor marker
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — a blind spot degrades the report, never aborts it
+#include "infra/sortutil.h"     // svLess — pythonStubsWithSource sorts and searches string_views
 
 #include <algorithm>
 #include <array>
@@ -360,11 +361,11 @@ inline std::vector<char> pythonStubsWithSource( const IngestResult& ing )
             sources.push_back( std::string_view( path ).substr( 0, path.size() - 3 ) );
         }
     }
-    std::sort( sources.begin(), sources.end() );
+    std::sort( sources.begin(), sources.end(), rw::sortutil::svLess );   // svLess, not operator<: infra/sortutil.h
     for( std::size_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
         const std::string_view path = ing.files[fileId];
-        shadowed[fileId] = path.ends_with( ".pyi" ) && std::binary_search( sources.begin(), sources.end(), path.substr( 0, path.size() - 4 ) ) ? 1 : 0;
+        shadowed[fileId] = path.ends_with( ".pyi" ) && std::binary_search( sources.begin(), sources.end(), path.substr( 0, path.size() - 4 ), rw::sortutil::svLess ) ? 1 : 0;
     }
     return shadowed;
 }
