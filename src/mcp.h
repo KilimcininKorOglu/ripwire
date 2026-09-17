@@ -1509,9 +1509,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         {
                             return errResultMsg( -32602, "for: limit/offset select the file page, which has no token budget to shape against — drop budget_tokens, or drop limit/offset for the budgeted bundle" );
                         }
-                        const std::string t = forTaskText( path, task, redactPtr,
-                                                           budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg );
-                        return t.empty() ? errResult( -32602, "no symbols found" ) : textResult( t );
+                        const std::optional<std::string> answer = forTaskText( path, task, redactPtr,
+                                                                                budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg );
+                        if( !answer )
+                        {
+                            return errResult( -32603, "internal error: the for answer buffer lost bytes — no answer served" );
+                        }
+                        return answer->empty() ? errResult( -32602, "no symbols found" ) : textResult( *answer );
                     } );
                 }
                 else if( name == "lego" && !path.empty() && !type.empty() )
@@ -1610,7 +1614,12 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     {
                     resp = pagedResult( [ & ]( McpPageArgs pg )   // M13
                     {
-                        const std::string t = ownersText( path, symbol, pg );
+                        const std::optional<std::string> answer = ownersText( path, symbol, pg );
+                        if( !answer )
+                        {
+                            return errResult( -32603, "internal error: the owners answer buffer lost bytes — no answer served" );
+                        }
+                        const std::string& t = *answer;
                         return t.empty() ? errResultMsg( -32602, symbol.empty()
                                                 ? std::string( "no git history for this tree (owners is mined from git; not a repo, or no commits)" )
                                                 : notFoundSym( symbol ) )
@@ -1623,16 +1632,22 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 {
                     // `kind` (a kind token) OR `task` (a task string) — either resolves to a target kind by ROLE.
                     const std::string arg = !kind.empty() ? kind : task;
-                    const std::string t   = exemplarText( path, arg, redactPtr );
-                    resp = t.empty() ? errResult( -32602, "no matching exemplar (no symbol of that kind, or the task matched nothing)" ) : textResult( t );
+                    const std::optional<std::string> answer = exemplarText( path, arg, redactPtr );
+                    resp = !answer        ? errResult( -32603, "internal error: the exemplar answer buffer lost bytes — no answer served" )
+                         : answer->empty() ? errResult( -32602, "no matching exemplar (no symbol of that kind, or the task matched nothing)" )
+                                           : textResult( *answer );
                 }
                 else if( name == "impact" && !path.empty() && !symbol.empty() )
                 {
                     // §B6 M4: limit/offset are read by the SAME mcpPageArgs the batch arm uses (mcpverbs.h).
                     resp = pagedResult( [ & ]( McpPageArgs pg )
                     {
-                        const std::string t = impactText( path, symbol, pg );
-                        return t.empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( t );
+                        const std::optional<std::string> answer = impactText( path, symbol, pg );
+                        if( !answer )
+                        {
+                            return errResult( -32603, "internal error: the impact answer buffer lost bytes — no answer served" );
+                        }
+                        return answer->empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( *answer );
                     } );
                 }
                 else if( name == "uses" && !path.empty() && !symbol.empty() )
@@ -1652,9 +1667,10 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 }
                 else if( name == "path_between" && !path.empty() && !from.empty() && !to.empty() )
                 {
-                    const std::string t = pathText( path, from, to );
-                    resp = t.empty() ? errResultMsg( -32602, pathEndpointRefusal( getIndex( path ).ing, from, to ) )
-                                     : textResult( t );
+                    const std::optional<std::string> answer = pathText( path, from, to );
+                    resp = !answer        ? errResult( -32603, "internal error: the path_between answer buffer lost bytes — no answer served" )
+                         : answer->empty() ? errResultMsg( -32602, pathEndpointRefusal( getIndex( path ).ing, from, to ) )
+                                           : textResult( *answer );
                 }
                 // `connect` — symbols as a JSON string array (the schema form) or a comma-string (lenient);
                 // optional integer radius (core clamps to 1..12). One global computation, not a batch of paths.

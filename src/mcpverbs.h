@@ -1597,7 +1597,7 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
     rw::spliceRootAttrs( doc, rootAttrs );
 }
 
-inline std::string forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
+inline std::optional<std::string> forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
                                 std::size_t budgetTokens = 0, bool noRoute = false,
                                 McpPageArgs page = {} )   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
 {
@@ -1802,7 +1802,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
 
     // G4: task and rc.reason are agent-controlled and land verbatim in an XML comment below — a "-->" run
@@ -2042,7 +2042,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     std::optional<std::string> answer = mcpAnswerText( stream );
     if( !answer )
     {
-        return {};   // the same answer as the failed open above
+        return std::nullopt;   // the buffer lost bytes: the same internal error as the failed open above
     }
     std::string out = std::move( *answer );
     // F5 (terminality round A 2026-09-05): PRICE the bundle instead of declaring it unpriced. The document is
@@ -2106,7 +2106,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
 // on this path yet (the MCP request shape here carries no such field) — always collapsed, matching the
 // CLI's own default.
 // M13: --owners is in cli.h's honorsPaging set; this twin served every row and named no window.
-inline std::string ownersText( const std::string& root, const std::string& symbolName, McpPageArgs page = {} )
+inline std::optional<std::string> ownersText( const std::string& root, const std::string& symbolName, McpPageArgs page = {} )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2124,14 +2124,14 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
     }
     else if( !symbolName.empty() && symbolName.front() == '@' )
     {
-        return {}; // faulted seed — refused upstream; this arm only defends dispatch drift
+        return std::string{}; // faulted seed — refused upstream; this arm only defends dispatch drift
     }
     else if( !symbolName.empty() )
     {
         const std::vector<NodeId> defs = resolveAllByName( ing, symbolName );
         if( defs.empty() )
         {
-            return {}; // symbol not found → caller sends -32602
+            return std::string{}; // symbol not found → caller sends -32602
         }
         // ONE of N definitions — the lowest node id — and the report then covers that definition's file
         // alone under files="1", while callers/uses/impact/mentions on the same name all disclose defs=.
@@ -2142,14 +2142,14 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
     const std::vector<FileOwnership> ownerships = gitFileAuthors( root, ing, onlyFileId );
     if( ownerships.empty() )
     {
-        return {}; // git unavailable or no history → caller sends error
+        return std::string{}; // git unavailable or no history → caller sends error
     }
 
     rw::MemoryStream stream;
     std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
 
     const int          cap          = int( ownerships.size() );
@@ -2214,7 +2214,7 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
         rw::emitTo( mem, " top=\"{}\" share=\"{:.2f}\"/>", std::string_view( em.data(), em.size() ), top.share );
     }
     rw::emitRaw( mem, "</owners>" );
-    return mcpAnswerText( stream ).value_or( std::string{} );
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // ─── flagship-reflex verbs (exemplar / impact / uses / path — the write-moment + is-it-safe reflexes) ──────
@@ -2240,7 +2240,7 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
 // back to fn. Its `candidates=` also counted ALL of the kind (3408) against the CLI's post-ceiling ELIGIBLE
 // set (3338) — one attribute name, two populations. It now calls selectExemplar (exemplar.h), the same
 // function main.cpp calls, so there is one selector and the divergence class is gone rather than resynced.
-inline std::string exemplarText( const std::string& root, const std::string& kindOrTask, RedactCounts* redact = nullptr )
+inline std::optional<std::string> exemplarText( const std::string& root, const std::string& kindOrTask, RedactCounts* redact = nullptr )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2262,7 +2262,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
     const ExemplarPick pick = selectExemplar( ing, g, fanIn, qm.tested, kindOrTask );
     if( pick.winner == kNoNode )
     {
-        return {}; // no candidate of the kind / task matched nothing → caller reports not-found
+        return std::string{}; // no candidate of the kind / task matched nothing → caller reports not-found
     }
 
     const auto fin = [ & ]( NodeId i ) -> std::uint32_t { return ( i < fanIn.size() )    ? fanIn[i]    : 0u; };
@@ -2286,7 +2286,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
     std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
     rw::emitRaw( mem, "<ctx>" );
     // §B6 M13: the rule is exemplar.h's kExemplarSelectionRule, rendered — not restated here in a fourth wording.
@@ -2310,7 +2310,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
                 /*ranges=*/nullptr, /*noteIndex=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                 /*withFileContext=*/false, exSingleRoot ? std::string_view( root ) : std::string_view() );
     rw::emitRaw( mem, "</exemplar></ctx>" );
-    return mcpAnswerText( stream ).value_or( std::string{} );
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // `impact` verb (is-it-safe-to-change-X reflex): the transitive blast radius of SYM — every symbol that
@@ -2322,7 +2322,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
 // pageWindow/effectiveRowCap/pageDisclosure trio the CLI --impact uses — so the 40-row display default is a
 // default here too rather than a ceiling, and a paged answer carries the total=/has_more=/next_offset=
 // half that lets a caller's loop terminate. Defaulted to {} ⇒ byte-identical to the un-paged answer.
-inline std::string impactText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
+inline std::optional<std::string> impactText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2336,7 +2336,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     const std::vector<NodeId> seeds        = resolveAllByNameQualified( ing, symbol, &unprovenDefs );
     if( seeds.empty() )
     {
-        return {}; // symbol not found → caller reports not-found
+        return std::string{}; // symbol not found → caller reports not-found
     }
 
     const std::vector<NodeId> reach = transitiveCallers( g, seeds );
@@ -2363,7 +2363,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
     // §H4 §3.4: the opener AND the paging clause AND the floor/counting-unit tail now come from the shared
     // constants (src/graphlegend.h + src/pageview.h), so this legend is byte-identical to the CLI --impact
@@ -2411,7 +2411,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
     rw::emitRaw( mem, "</impact>" );
-    return mcpAnswerText( stream ).value_or( std::string{} );
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // `uses` verb (ABS-3): the use-site index for SYM — the resolvable places its name is REFERENCED (call/read/
@@ -2676,7 +2676,7 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
 // or "" (caller → not-found error) when EITHER endpoint fails to resolve.
-inline std::string pathText( const std::string& root, const std::string& from, const std::string& to )
+inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2693,7 +2693,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
     const std::size_t         unprovenDefs    = srcUnprovenDefs + dstUnprovenDefs;
     if( srcDefs.empty() || dstDefs.empty() )
     {
-        return {}; // an endpoint not found → caller reports not-found
+        return std::string{}; // an endpoint not found → caller reports not-found
     }
 
     const std::vector<NodeId> pth     = shortestPathAny( g, srcDefs, dstDefs );
@@ -2715,7 +2715,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
     std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
     const std::string ptRootAttr = ptSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     // R-E fix (2026-08-19): the same shared root-relative clause the CLI --path twin now leads with — this
@@ -2740,7 +2740,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line ); }
     rw::emitRaw( mem, "</path>" );
-    return mcpAnswerText( stream ).value_or( std::string{} );
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // §B6 M8: `path_between`'s not-found refusal, shared by both arms. The old wording — "path endpoint not
@@ -4797,7 +4797,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "for" ) );
         }
-        r.payload = forTaskText( root, task, redactPtr, 0, false, pageParse.page );   // L-W: the batch arm pages the file page too
+        std::optional<std::string> forAnswer = forTaskText( root, task, redactPtr, 0, false, pageParse.page );   // L-W: the batch arm pages the file page too
+        if( !forAnswer )
+        {
+            return bad( "internal error: the for answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *forAnswer );
         if( r.payload.empty() )
         {
             return bad( "no symbols found" );
@@ -4848,7 +4853,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "impact" ) );
         }
-        r.payload = impactText( root, symbol, pageParse.page );   // §B6 M4: the batch arm honors the SAME window
+        std::optional<std::string> impactAnswer = impactText( root, symbol, pageParse.page );   // §B6 M4: the batch arm honors the SAME window
+        if( !impactAnswer )
+        {
+            return bad( "internal error: the impact answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *impactAnswer );
         if( r.payload.empty() )
         {
             return bad( symbolMissing( "impact", symbol ) );
@@ -4917,7 +4927,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( refusal );
         }
-        r.payload = ownersText( root, symbol, pageParse.page );      // symbol optional (empty = all files); M13: paged
+        std::optional<std::string> ownersAnswer = ownersText( root, symbol, pageParse.page );      // symbol optional (empty = all files); M13: paged
+        if( !ownersAnswer )
+        {
+            return bad( "internal error: the owners answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *ownersAnswer );
         if( r.payload.empty() )
         {
             return bad( symbol.empty() ? std::string( "no git history for this tree (owners is mined from git; not a repo, or no commits)" )
@@ -4942,7 +4957,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "path_between" ) );
         }
-        r.payload = pathText( root, from, to );
+        std::optional<std::string> pathAnswer = pathText( root, from, to );
+        if( !pathAnswer )
+        {
+            return bad( "internal error: the path_between answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *pathAnswer );
         if( r.payload.empty() )
         {
             return bad( pathEndpointRefusal( getIndex( root ).ing, from, to ) );
@@ -4955,7 +4975,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "exemplar" ) );
         }
-        r.payload = exemplarText( root, arg, redactPtr );
+        std::optional<std::string> exemplarAnswer = exemplarText( root, arg, redactPtr );
+        if( !exemplarAnswer )
+        {
+            return bad( "internal error: the exemplar answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *exemplarAnswer );
         if( r.payload.empty() )
         {
             return bad( "no matching exemplar (no symbol of that kind, or the task matched nothing)" );
