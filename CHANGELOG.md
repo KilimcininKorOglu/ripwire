@@ -330,6 +330,177 @@ re-encode byte-identically and appear verbatim as an `S` id. The `|` target must
 dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
 12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
 
+### Fixed — a member call through a typed parameter was pinned to the caller's own class
+
+`int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` answered `--callees=plainCaller` with one edge
+to `Decoy::pick` — precise, no `amb=`, nothing disclosed, and wrong. Rule 2 narrowed a receiver only through a typed
+LOCAL; a parameter's written type had been captured since the member-variable round but was read only by the field
+use-site index, so the call fell through to the name ladder, whose locality tie-break hands a same-file tie to the
+caller's own class. The same call through `Target other;` resolved correctly.
+
+Rule 2, and CHA-lite with it, now reads the written type of a parameter, a lambda parameter, a typed range-for
+variable and a reference local LEXICALLY: the innermost declaration of the name whose scope covers the call site
+decides, and only a written, unqualified type narrows. Both limits were measured before they were chosen. Folding
+these types into Rule 2's flat per-function table minted three precise wrong edges on the gate fixture — a range-for
+variable's type reaching a later `auto` loop of the same name, a same-named field read after the loop, and a
+parameter hidden by an untyped loop variable. And a written type is recorded as its final segment against class
+names that carry no namespace, so `const std::map<K, V>& ref; ref.lower_bound( q )` narrowed to an unrelated in-repo
+`map`: three such edges on a private C++/ObjC++ corpus of 129,759 call sites, which refusing qualified types removes
+at the cost of 11 correct narrows through namespace- or class-qualified in-repo types (those sites keep their previous
+answer). An include-visibility guard was measured first and rejected: path-precise includes miss include-root
+spellings such as `"LinearMath/btVector3.h"`, and it refused about 150 correct narrows on that corpus to stop the
+same three. The qualified text rides the declaration's record, so **kParserVer moves 96 → 97** and a warm cache is
+reparsed once.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `f8e6087c` against this change, on that corpus: 587 call
+sites change target — 373 splits narrow (300 to a Rule-2 pin or the type's own overload set, 73 through the CHA cone), 147
+calls the ladder had declined gain an edge (`bound=` 80,432 → 80,583, `declined=` 17,552 → 17,401), 66 pins or splits
+that did not contain the parameter's type move to it (40 of them `unique` pins to the one same-file method of the
+wrong class), and one edge is lost — a friend function ripwire scopes inside its class, which the parameter's type
+then names as the caller itself. 956 more sites keep their target and are now decided by Rule 2. Every category was
+sampled and read against the source. On this repository's `src/`, 53 splits become one Rule-2 pin and nothing else
+moves target. Wall time is unchanged within noise (three cold runs each on the same corpus, 1.66–2.51 s both).
+
+`test/narrowcheck.sh` arms 7-18 are the gate: nine rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
+red on the lexical lookup without the qualifier guard, arm 15 asserting through the census that the site is decided
+by Rule 2 rather than the locality tie-break. Five gates' controls were built on "a parameter has no binding" and now
+use an untyped `auto` receiver — `narrowcheck`, `chacheck`, `chaconecheck`, `localitycheck` (whose call no longer
+reached the tie-break it exists to test) and `resolverhonestycheck` F9 (whose `check_signal` row had gone vacuous on a
+single edge). `fieldnarrowcheck`'s ambiguity gauge moves 7 → 6 because `shadowParam( Decoy& m_x )` now resolves to the
+parameter's type, and its arm (s1) now also asserts that the shadowed field's `Pool::acquire` is not linked. Still
+open, and unchanged by this entry: an untyped receiver (`auto x = make(); x.m()`) still reaches the locality
+tie-break, and a typed LOCAL still reads the flat table, qualified-type collision included.
+
+Two floors this change does NOT remove, stated because the first one moves edges the wrong way.
+**An abstract parameter type narrows onto its namesakes.** Rule 2 resolves `m` against definitions only, so a parameter
+typed as an interface whose methods are pure-virtual declarations cannot narrow to it — and when unrelated classes
+share the interface's final name segment and define `m`, the narrow lands on them instead. On rocksdb at
+`0e2801ac3`, `--pin-census --no-cache` with the `main` binary at `f8e6087c` against this change: 79 call sites
+(88 census rows) through an `Iterator*` parameter, such as `AssertItersEqual( Iterator* iter1, Iterator* iter2 )` in
+`utilities/write_batch_with_index/write_batch_with_index_test.cc`, now split five ways over the nested `Iterator` classes in
+`memtable/` (`skiplist.h`, `inlineskiplist.h`, `skiplistrep.cc`, `vectorrep.cc`, `hash_skiplist_rep.cc`), and none of
+the five is right. Before this change 25 of them were a unique pin to a plausible override (`BlobCountingIterator::key`),
+26 were a different split over overrides, and 28 had no edge. Every one is disclosed (`amb=`, `prov="split"`), but
+each is a wrong answer rather than a missing one, and 28 are new edges. It is the same final-segment collision typed
+locals already have on `main`; this change extends it to parameters. **A call in a constructor's member-initializer
+list is not narrowed:** `Decoy( Target& t ) : v( t.pick( 3 ) )` sits outside the parameter's scope span (the body),
+so it keeps `main`'s answer — on a same-named `Decoy::pick`, the locality tie-break's wrong pin.
+
+### Fixed — an explicit receiver of unknown type was pinned to the caller's own class, and a `std::` type narrowed to an in-repo namesake
+
+Two holes the parameter-receiver entry above left open. The S6-C locality tie-break prefers the candidate that shares
+the longest segment prefix with the caller — same file, then same class — and granted the class credit to every
+named receiver on the premise that a typed one had already been narrowed. A receiver no rule typed never was:
+`auto other = make(); return other->pick( 1 );` inside `Decoy` answered one precise edge to `Decoy::pick`, no `amb=`,
+and delegation through a member whose type Rule 2b cannot read (`rep_->Name()` inside `Wrapper::Name`) did the same.
+Such a receiver — an untyped local, a member of an unreadable type, or a typed variable whose type defines no such
+method — now keeps the file and directory credit and loses the scope segments, so the call is the split it is.
+Skipping the tie-break outright for these receivers was measured too: it moved no target on any corpus below, and
+relabelled every tier whose one competitor is the caller itself from `locality` to `unique`, dropping its `lpin=`
+disclosure — so the file credit stays.
+
+The second hole: a written type is recorded as its final segment, matched against class names that carry no
+namespace. The entry above refused every qualified PARAMETER type; typed locals kept narrowing, so
+`std::map<int, int> table; table.find( k )` pinned an in-repo `map::find`. Measurement overturned the blanket rule
+instead of extending it, and **this entry supersedes the parameter rule stated above**: where that entry says only a
+written, unqualified type narrows and that qualified in-repo types keep their previous answer, a parameter now refuses
+only a type written in namespace `std`, exactly as a local does. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
+(`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on this repository's `src/` — every sampled
+one correct — while the only wrong edges it removed on all three were six `std::map` locals. `std` is reserved to the
+implementation, so no in-repo class is a `std::` type: a type written in namespace `std` now never narrows — for a
+parameter, a typed local, a constructor-inferred local, and a C++ assignment from a constructor, whose record did not
+carry the qualified text until now (**kParserVer 97 → 98**). Every other qualifier narrows on its final segment,
+parameters included again. Stated floor, pinned by `test/narrowcheck.sh` arm 24: a qualifier that is neither `std`
+nor the class's own namespace — an external or alias-template type whose final segment an in-repo class shares —
+still narrows by name. Closing it needs the namespace chain in `Symbol::scope`.
+
+That floor is disclosed on every edge it can produce. A narrow decided by a qualified, non-`std` written type matched
+the type's last name and never checked its qualifier, so its edge carries **`prov="final-segment"`** — a parameter or
+a local, through Rule 2 or CHA-lite's cone — and both map legends define it. The wrong edge arm 24 pins and the correct
+`store::tree&` narrow beside it read the same way, as a guess, not as a uniquely resolved name. Byte cost on rocksdb,
+the previous commit's binary against this change, the only differences being the attribute, the legend term and
+`est_tokens`:
+
+| rocksdb output | before | after |
+| --- | --- | --- |
+| default map | 31,366 B | 31,711 B (+345, +1.10%; 14 marked edges) |
+| `--for="write batch handler mark commit"` | 8,746 B | 8,746 B (the bundle carries no `prov=`) |
+| whole graph, `--top-k=100000` | 5,406,160 B | 5,413,666 B (+7,506, +0.14%; 355 marked edges) |
+
+A private C++ corpus's default map pays only the legend term (+51 B, no marked edge printed). The Iterator-shaped
+collision #248 states above is unchanged: those calls stay `amb=`-disclosed splits. A name-only collision guard was
+measured against them and rejected — it moved 967 rocksdb rows off the wrong `memtable` namesakes, but declined 58
+correct platform-alternate splits (`port::Mutex::Lock` over posix and win) and 8 correct `log::Writer` narrows, minted
+10 new wrong unique pins on rocksdb, and declined 132 correct `Template.render` splits on django. The namespace chain
+is the fix for both.
+
+Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
+category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider
+ones (14 of 14 sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard
+refused (`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
+`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins
+were wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
+in-repo `map`, and 12 in-repo qualified parameters narrow, one of them an `ankerl::unordered_dense::map<…>&` alias
+template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits; rails: 145.
+The removed pins were less often wrong in the dynamic languages, as an independent review's samples show: django 8 of 14
+wrong (`target_ids.add`, `params.get`, `form.save`) and 6 right (`copy.set_source_expressions`, `cls._pre_setup()`);
+rails 8 of 12 wrong (`pair.freeze`, `connection.create_table`) and 4 right (`set.each`, `model.history`). Every right
+target stays inside the split that replaces it. Python's `cls` is a named receiver, so a classmethod's `cls.m()` splits
+too (2 of django's 72). This repository's `src/`: 5 splits become Rule-2 pins through `notes::`- and
+`rw::quality::`-qualified parameters. vue-core and Go's `net` package: none. The assignment capture moved no site on
+these corpora; its arm is the only witness. Wall time on rocksdb is within noise (three cold runs each at load average
+42: 1.69–2.19 s before, 1.73–2.80 s after).
+
+`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-25 are the gates: localitycheck 5, 6 and 7 red on
+the previous commit and 8 red on the skip-the-tie-break variant; narrowcheck 19, 20, 21, 23 and 24 red on the previous
+commit, 21 red without the assignment capture, and 25 (the attribute on arms 22-24's edges and in both legends, absent
+from an unqualified narrow and a uniquely named call) red before `prov="final-segment"` existed. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
+three non-firing controls (B), (C), (E) asserted that the caller's own `Box::validate` pin STANDS for
+`item.validate( v )`; they now assert the honest two-way split, which keeps the contrast with the route that fires, and
+(F) reads `ambiguous=3` with no locality pin. localitycheck's HIGH-1 probe was an untyped local that no longer earns
+the scope credit, so it could no longer tell a byte-prefix tie-break from a segment-aware one; it is `this->go()` in a
+class template with a dependent base now, and a census row asserts the call still reaches the tie-break holding both
+candidates. `chacheck`, `chaconecheck`, `resolverhonestycheck` and `fieldnarrowcheck` pass unchanged: their untyped
+controls sit in scope-less free functions, which never reach the tie-break.
+
+### Fixed — a member field typed `std::string` narrowed to an in-repo class named `string`
+
+The entry above stopped a type written in namespace `std` from narrowing a parameter or a local. A member field is the
+third place a written type is read, and it still did. The field capture records a qualified type's final segment, so
+`struct Record { std::string name_; int nameLength() { return name_.size(); } };` recorded `name_` as a `string`, and
+all three readers of that record took it for any in-repo class of that name: Rule 2b pinned `name_.size()` to the
+in-repo `string::size` (census `receiver-rule` — one precise edge, no `amb=`), the HAS-A block drew `Record → string`,
+and `--uses=string.len` pinned both `name_.len` and `this->name_.len` to that class. A field's compose record now
+carries the namespace its type was written in as its qualifier — the same (name, immediate qualifier) pair a call
+carries, so `std::string` is `string` in `std` (**kParserVer 98 → 99**) — and the readers refuse `std`: the field-type
+table records no type for the field, and no HAS-A edge is drawn. Every other qualifier narrows as before:
+`store::Text body_; body_.size()` still reaches `Text::size`.
+
+The std field records an empty type rather than being skipped, and that choice was measured. Dropping it at capture —
+the obvious fix — un-tombstones a same-named class's differently-typed field. rocksdb has two classes named
+`StringSource`: `test_util/testutil.h`'s holds `std::string contents_` and `db/log_test.cc`'s holds `Slice& contents_`.
+Class names carry no namespace, so both share the entry `StringSource#contents_`, and the disagreement is what keeps
+either from narrowing; with the std record skipped, four `contents_.size()` calls in testutil.h pinned `Slice::size`.
+The empty type tombstones the entry exactly as a second real type does.
+
+Measured with `--pin-census --no-cache` and the default map, the previous commit's binary against this change: rocksdb,
+a private C++ corpus and this repository's `src/` (a frozen copy, so both binaries read one tree) are byte-identical in
+both, and so is rocksdb's `--metrics`. None of them has an in-repo class that shares a `std::` field type's name and
+defines the member called on it: counted with `--match`, rocksdb has 1,258 fields whose type is written `std::X`,
+`src/` 1,987 and the private corpus 143, and only rocksdb's 1,116 `std::string`/`std::wstring` fields share a name — with
+gtest's `typedef ::std::string string`, which has no members and drew no HAS-A edge. So a probe measured the reach: a
+copy of rocksdb plus one `namespace shim { struct string { … } }` defining `size`, `empty`, `data`, `c_str`, `clear`,
+`append` and a field `len`. There the previous binary pins 384 call sites to `shim::string` by receiver-rule and this
+change leaves 7, all gtest parameters written `const ::string&` — the global namespace, not `std`, and not fields. Of
+the 357 sites that move, 279 land on exactly the row the unmodified rocksdb census has; the other 78 are `c_str` calls
+the probe's own second `c_str` definition makes ambiguous. 455 class rows lose a composed type from `cbo=` (446 by
+one, 9 by two).
+
+`test/fieldnarrowcheck.sh` arm q is the gate. q1 (Rule 2b), q3 (HAS-A) and both q5 rows (`--uses`) are red on the
+previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refuse-every-qualifier variant; and the four
+q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
+variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

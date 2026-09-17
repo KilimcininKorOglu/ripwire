@@ -3459,6 +3459,9 @@ Python and TypeScript all refuse. One limit the fixture DISCOVERED and now pins:
 (`void f( DCfg cfg ){ cfg.opts.enable(); }`) cannot narrow, because the binding capture records a
 parameter's name but not its type, and the parameter still shadows a same-named field — so the honest
 split is the only sound answer. That is the same answer Rule 2 already gives a depth-1 parameter receiver.
+*(Superseded 2026-09-16 for depth 1: Rule 2 now reads a parameter's written type lexically — the declaration in
+scope at the call site decides, and a type written in namespace `std` never narrows — so a depth-1 parameter
+receiver narrows; test/narrowcheck.sh arms 7-24. The depth-2 parameter base above is unchanged.)*
 
 **The recon report's `composeEdges` hoist is unnecessary — re-derived, and the design changed by it.**
 `graph.h::buildFieldNarrowTables` (`graph.h:648`) already runs at `graph.h:919`, ahead of the resolve

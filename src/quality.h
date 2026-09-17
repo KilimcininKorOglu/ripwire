@@ -1974,7 +1974,16 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
 // `static_assert` — this lane's file boundary forbade editing those files.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 96;   // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 99;   // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 99 = 2026-09-16 (std-typed member fields): a field's compose
+                                                          //    record carries its written namespace as its qualifier.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 98 = 2026-09-16 (std-qualified receivers): a C++ assignment's
+                                                          //    constructor records its qualified text too.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 97 = 2026-09-16 (parameter receivers): a declaration's qualified
+                                                          //    written type rides its Type/ParamType RawBind (importedName).
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
                                                           //    RE-BUMPED from the branch's 87 over #139's 93 and #172's 94.
                                                           //    See ingest_cache.h's kParserVer note.
