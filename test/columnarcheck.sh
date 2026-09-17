@@ -57,7 +57,7 @@ CB=$( "$BIN" src "$VERB_USES" --format=columnar --limit=100000 --no-cache 2>/dev
 # xml form: <s ... n="NAME" p="path:LINE"/>  →  NAME<TAB>LINE
 xml_set(){ "$BIN" src "$1" --format=xml --no-cache 2>/dev/null \
     | grep -oE '<s [^>]*n="[^"]*" p="[^"]*:[0-9]+"' \
-    | sed -E 's/.*n="([^"]*)" p="[^"]*:([0-9]+)"/\1\t\2/' | sort; }
+    | sed -E 's/.*n="([^"]*)" p="[^"]*:([0-9]+)"/\1\t\2/' | LC_ALL=C sort; }
 # columnar form: zip the <name> and <line> arrays.
 col_set(){ "$BIN" src "$1" --format=columnar --no-cache 2>/dev/null > "$TMP/col.xml"
     python3 - "$TMP/col.xml" <<'PY'

@@ -401,6 +401,61 @@ function storyCards(s, { kick, head, stories, footText }){
   ]);
 }
 
+/* ── S5e2 · 0.6.1 at a glance ───────────────────────────────────────────── */
+{
+  // Same four-quadrant shape as 0.6.0. The theme of this release is not speed: it is that an answer
+  // resolves what it NAMES, and states what it could not prove. Three of the four quadrants are honesty.
+  const s = p.addSlide(); bg(s);
+  kicker(s, "// 0.6.1 — everything since v0.6.0 (tagged 2026-09-07); each figure names its PR", CYAN);
+  title(s, "0.6.1: it resolves what it names, and says what it cannot prove", { size: 30 });
+  const CW = (W - 2*MX - 0.14) / 2, CH = 2.43, X2 = MX + CW + 0.14, Y2 = 1.72 + CH + 0.12;
+
+  listCard(s, MX, 1.72, CW, CH, "languages that resolve, not just parse", CYAN, [
+    ["module · name · arity", "Elixir calls resolve to the module, name and arity they name, not by name alone: lexical aliases, filtered imports, default arguments, pipes, captures, delegates. Macro expansion and unquote stay documented limits (@henry-hz, #207)", CYAN],
+    ["none → 79%",            "of occurrences matched on spring-petclinic: SCIP encodes a range two ways and ripwire read only the deprecated one, so every scip-java index was silently ignored and --scip changed nothing (@dpunosevac, #198)", GREEN],
+  ], { bigW: 1.95 });
+
+  listCard(s, X2, 1.72, CW, CH, "it says what it could not prove", AMBER, [
+    ["89 of 4,322",   "answers shrank over every file:name selector on ripwire's own tree that selects only declarations — and NONE grew. A header selector kept a definition only when its file is the header or includes it, resolved path-precisely (#173)", AMBER],
+    ["nine listing verbs", "now count what the proof dropped as unproven_defs=; all but two had answered from the declaration alone and printed a clean zero (#190, #195)", AMBER],
+    ["not a safe edit", "an incompatible=\"0\" beside unproven_defs= is now STATED to be an incomplete read, on every verb that resolves a focus symbol, --edit-check included (#210)", AMBER],
+  ], { bigW: 1.75 });
+
+  listCard(s, MX, Y2, CW, CH, "every number carries its definition", CYAN, [
+    ["graph_unindexed=", "shipped in 0.6.0 with no definition on three verbs, and under a compact legend on every XML verb but one (#169)", CYAN],
+    ["and eight more",   "declined_calls=, unproven_defs=, pr_iters=, the map header's counts, --impact's blast-radius counts, --safe-delete's verdict fields and the community structure counts: each defined now (#185, #189, #203)", CYAN],
+    ["pins follow prose", "the compact byte pins now follow the definitions, instead of a definition being trimmed to fit one pin; a budgeted --for that drops legend clauses NAMES the attributes it dropped (#174)", GREEN],
+  ], { bigW: 1.95 });
+
+  listCard(s, X2, Y2, CW, CH, "it fits in memory at llvm scale", GREEN, [
+    ["114 MB → 368 KB", "the declined-call index on llvm-project. Candidate lists were stored once per call, so the structure grew with calls x candidates: 27.9 M entries. One copy per DISTINCT list makes it 9,879 lists and 62,359 entries (#208)", GREEN],
+    ["every byte the same", "counts and output are unchanged by that change — the win is the structure, not the answer (#208)", MUTED],
+  ], { bigW: 1.95 });
+
+  foot(s, "the release ran against instruments registered before the work began: a frozen bank of 30 retrieval questions answered in ONE call on a 2,066-file corpus pinned at one commit, a six-step follow-up ladder with no model in the loop, and a separately registered held-out draw so a round cannot be tuned onto the bank it is graded on");
+  notes(s, [
+    "SOURCES (0.6.1 at a glance). Window: after the v0.6.0 tag through the 0.6.1 release commit. Every PR cited here is MERGED as of 2026-09-14; verified with gh pr view --json state.",
+    "TITLE: the release's own theme. 0.6.0's slide was 'faster where it hurt, clearer where it stops'; this round's work was routing and shape rather than ranking, and three of its four quadrants are honesty, so the title says so.",
+    "LANGUAGES",
+    "- Elixir: #207, from issue #81, lane by @henry-hz. Parser version 95. 'Calls resolve to the module, name and arity they name, instead of by name alone: lexical aliases, filtered imports, default arguments, pipes, captures and delegates.' Nested modules and each target of a multi-target defimpl have separate identities. LIMITS, documented as such and NOT claimed fixed: macro expansion, __using__, and calls inside unquote(...) / bind_quoted:.",
+    "- SCIP: #198, by @dpunosevac. 'SCIP writers encode an occurrence's range in one of two ways, and ripwire read only the deprecated one, so every index scip-java writes was silently ignored and --scip changed nothing. It now reads the typed form first, as scip.proto asks. On spring-petclinic the precise overlay went from no matches to 79% of occurrences.' The corpus is named on the slide because the figure is corpus-specific.",
+    "IT SAYS WHAT IT COULD NOT PROVE",
+    "- 89 of 4,322: #173. 'On ripwire's own tree, over every file:name selector whose selection is all declarations, the binary after #173 shrank 89 of 4,322 answers compared with the one before it, and grew none.' The population is the whole selector set, not a sample, which is why the claim can be one-directional.",
+    "- The defect #173 fixed: the widening matched on the name and the enclosing scope, and that scope drops namespaces, so --callers=a/Store.h:putObject counted callB in b/Store.cpp, a caller of a DIFFERENT Store, and a free function matched on its name alone.",
+    "- nine listing verbs: #190, #195 — unproven_defs= on --callers, --callees, --impact, --safe-delete, --path, --uses, --mentions, --verify and --affected. 'all but the first two had answered from the declaration alone and printed a clean zero'.",
+    "- incompatible=\"0\": #210 — 'on every verb that resolves a focus symbol at all, --edit-check included, where an incompatible=\"0\" beside unproven_defs= is now stated to be an incomplete read rather than a safe edit'.",
+    "EVERY NUMBER CARRIES ITS DEFINITION",
+    "- graph_unindexed=: #169 — shipped in 0.6.0 with no definition on --lego, --verify and --nonlocal-state, and under --legend=compact on every XML verb except --connect.",
+    "- the eight more, and the pins: #185, #189, #203. 'each is defined now, and the compact pins follow the definitions rather than the definitions being trimmed to fit one pin'.",
+    "- the budgeted --for: #174 — 'A budgeted --for that drops legend clauses to fit its allowance now names the attributes whose definitions it dropped.'",
+    "LLVM SCALE",
+    "- 114 MB → 368 KB: #208. 'The call graph keeps, for every call the resolver declines to bind, the list of candidates it declined between. Those lists were stored once per call, so the structure grew with calls x candidates: 27.9 M entries, 114 MB, on llvm-project. One stored copy per distinct list makes that 9,879 distinct lists and 62,359 entries - 368 KB - with every count and every byte of output unchanged.'",
+    "- The second row exists so the slide cannot be read as an output change. It is a structure change with byte-identical output, and saying so is the point.",
+    "FOOTER (the instruments). From the release notes' Highlights: 'Three readouts, all registered before the work began, and none of them a model's opinion. A frozen bank of 30 retrieval questions, each answered in ONE call on a 2,066-file C++ corpus pinned at one commit, scored on the gold files the question's answer must name. A follow-up ladder over the same bank: six deterministic steps per tool, no model in the loop... And a held-out draw registered separately, so a round cannot be tuned onto the bank it is graded on.'",
+    "NOT ON THIS SLIDE, DELIBERATELY: no competitor is named and no comparison is drawn (the head-to-head re-measure is held for 0.6.2); no flag is named that the shipped --help does not carry (deckcheck); and the shape/routing figures are on the companion slide because they are re-measured on the instruments rather than argued from per-verb byte tables.",
+  ]);
+}
+
 /* ── S5f · 0.6.0: the scale rung ────────────────────────────────────────── */
 {
   // Three defects that were measured on llvm-project, then a bar per corpus for the one no standard corpus
@@ -1068,7 +1123,7 @@ function storyCards(s, { kick, head, stories, footText }){
   kicker(s, "// how it stays true", AMBER);
   title(s, "Proven, not promised");
   const cards = [
-    ["618 gate scripts", "the suite runs on every push — plus determinism, cache-transparency and golden contracts; the gate count itself is gated against the runner's own loop"], // gatecount
+    ["620 gate scripts", "the suite runs on every push — plus determinism, cache-transparency and golden contracts; the gate count itself is gated against the runner's own loop"], // gatecount
     ["byte-identical, always", "two runs over the same tree produce the same bytes; warm equals cold. Enforced in CI, twice — Release AND a plain flavour, because NDEBUG once blinded a whole class of checks"],
     ["differential refactoring", "a refactor must prove it changed nothing observable: two binaries, hundreds of argv vectors, stdout + stderr + exit codes byte-identical"],
     ["held-out labels, authored blind", "eval labels were written by reading source before the ranker ever ran on them — so the eval is allowed to say the ranker is wrong. It has."],
@@ -1092,7 +1147,7 @@ function storyCards(s, { kick, head, stories, footText }){
   title(s, "Claims you can trust, because we publish what failed", { size: 32 });
 
   card(s, MX, 1.72, 3.86, 1.72);
-  stat(s, "618", "gate scripts named by test/regression.sh — and the COUNT itself is gated against the runner's own loop, so it cannot go stale quietly", // gatecount
+  stat(s, "620", "gate scripts named by test/regression.sh — and the COUNT itself is gated against the runner's own loop, so it cannot go stale quietly", // gatecount
     MX+0.15, 1.86, 3.56, CYAN, { bsize: 42, bh: 0.66, lsize: 9.5 });
   card(s, 4.68, 1.72, 3.86, 1.72, CARD2);
   stat(s, "8", "registered NEGATIVES — changes built, gated green, measured against a band written before the code, and reverted rather than tuned",
@@ -1289,7 +1344,7 @@ function storyCards(s, { kick, head, stories, footText }){
   kicker(s, "// standing on giants", AMBER);
   title(s, "The research inside — classic and current");
   s.addText([
-    { text: "49 repositories + 70 papers folded", options: { color: TEXT, bold: true } },
+    { text: "49 repositories + 71 papers folded", options: { color: TEXT, bold: true } },
     { text: "  ·  and a labelled survey of 237 tools that contributed nothing, which says so — every row with the lesson taken and where it lives: docs/LINEAGE.md", options: { color: MUTED } },
   ], { x: MX, y: 1.58, w: 12.0, h: 0.34, fontFace: SANS, fontSize: 13, margin: 0 });
   const classics = [
@@ -1339,11 +1394,11 @@ function storyCards(s, { kick, head, stories, footText }){
   kicker(s, "// do not take any of it on trust", AMBER);
   title(s, "Every claim, and the command that re-derives it");
   const claims = [
-    ["180 long flags · 33 slides",        "bash test/deckclaimcheck.sh"],
+    ["180 long flags · 34 slides",        "bash test/deckclaimcheck.sh"],
     ["every --flag named here exists",    "bash test/deckcheck.sh"],
     ["74.7% fewer element bytes",         "bash test/showcasecapturecheck.sh"],
-    ["618 gate scripts",                  "bash test/manifestcheck.sh"], // gatecount
-    ["49 repos · 70 papers · 237 surveyed","bash test/readmedriftcheck.sh"],
+    ["620 gate scripts",                  "bash test/manifestcheck.sh"], // gatecount
+    ["49 repos · 71 papers · 237 surveyed","bash test/readmedriftcheck.sh"],
     ["the ten moments, any row",          "ripwire . --callers=SYM | wc -c"],
     ["the head-to-head table",            "bench/headtohead/r4-2026-08-06/"],
     ["the oracle round",                  "bench/headtohead/r9-2026-08-09/RESULTS.md"],

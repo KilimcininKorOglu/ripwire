@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 # The version string lives in exactly ONE place — this project() call. --version (main.cpp)
 # reads it via the generated version.h below; test/versioncheck.sh asserts the two never drift.
-project(ripwire VERSION 0.6.0 LANGUAGES C CXX)
+project(ripwire VERSION 0.6.1 LANGUAGES C CXX)
 
 # ---- language standards (C++23 for our own code / C11 for the vendored C dependencies) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -920,7 +920,7 @@ endif()
 # READS it is a separate switch inside the optimizer, llvm/lib/Analysis/BasicAliasAnalysis.cpp:
 #     static cl::opt<bool> EnableSeparateStorageAnalysis("basic-aa-separate-storage", cl::Hidden, cl::init(false))
 # in LLVM 17, and cl::init(true) from LLVM 18 on. So on an LLVM-17 toolchain — AppleClang 16.0.0.16000026 (Xcode
-# 16.2), the macos-14 CI runners and release.yml's macos-arm64 leg — the header compiles, the IR carries the bundle,
+# 16.2: the macos-14 CI runners and release.yml's macos-arm64 leg through 0.6.1) — the header compiles, the IR carries the bundle,
 # and codegen is byte-identical to no promise at all. Found by CI job "release (macos-14, plain, appleclang, shard
 # 4/4)" on PR #200: test/noaliascheck.sh arms 2, 2/3 and 6 red ("accNew still reloads a after the store", "NO
 # CONTRAST", "not at least 2 below plain"), arm 7 and the IR-bundle row green — the front-end half worked, the

@@ -1,0 +1,28 @@
+# CodeRabbit review settings for ripwire. Schema: https://coderabbit.ai/integrations/schema.v2.json
+#
+# Why this file exists: one review pass when a PR opens, not a loop.
+#   - The review on open stays; it is the one that finds real defects.
+#   - No re-review on every push: each fix commit used to start a new pass over a new diff.
+#   - No automatic reply inside review threads: every in-thread answer used to wake another pass.
+#   - Vendored parsers and generated/pinned files are excluded; a review of them cannot change them.
+# CodeRabbit reads this file from the PR's head branch, so a fork PR picks it up once it merges main.
+reviews:
+  profile: chill                     # the default; "quiet" is the lever if noise persists
+  auto_review:
+    enabled: true                    # the review on open is the valuable one; keep it
+    auto_incremental_review: false   # no re-review per push
+  path_filters:
+    - "!third_party/**"              # 98K-line vendored parsers (#233)
+    - "!docs/captures/**"
+    - "!test/*.hash"
+    - "!test/printf_parity.manifest"
+  path_instructions:
+    - path: "src/**"
+      instructions: >-
+        MSVC is not a target; do not raise MSVC-only portability. Never suggest std::map/unordered_map.
+        A degrade path uses DEGRADED_PATH_ALERT, never VERIFY(false). A count that cannot be a total must be
+        labelled a floor; a zero means none found. Flag silent zeros, undisclosed truncation, and gate arms
+        that cannot fail.
+  sequence_diagrams: false
+chat:
+  auto_reply: false                  # thread replies no longer wake it

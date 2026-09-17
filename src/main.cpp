@@ -1,4 +1,5 @@
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 // main.cpp — ripwire entry point: parse args → ingest → graph → PageRank → minified XML,
@@ -106,7 +107,7 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include "cli.h"
 #include "embedded_queries.h"      // configure-generated tags.scm table shared with ingest and --doctor
 #include "infra/hashutil.h"        // sanitizer-clean modulo-2^64 FNV multiplication
-#include "infra/charconvcompat.h"  // rw::parseFloating — FP from_chars is `= delete` on older libc++ (macos-14 CI)
+#include "infra/charconvcompat.h"  // rw::parseFloating — FP from_chars is `= delete` on older libc++, unavailable below macOS 26
 
 #include <algorithm>
 #include <array>
@@ -407,8 +408,8 @@ std::pair<std::string, bool> resolveRemoteRoot( const std::string& urlOrPath, bo
     // URL string that starts with `-` from ever being parsed as a `git clone` OPTION even if isGitUrl's
     // own leading-dash guard were ever bypassed or loosened — belt-and-suspenders, not the only gate.
     fs::remove_all( fs::path( cacheDir ), ec );
-    const std::string cmd = "git -c protocol.ext.allow=never -c protocol.file.allow=user -c core.quotepath=false "
-                             "clone --depth=1 -q -- " + rw::shSingleQuote( urlOrPath )
+    const std::string cmd = rw::gitCmd( " -c protocol.ext.allow=never -c protocol.file.allow=user -c core.quotepath=false "
+                                         "clone --depth=1 -q -- " ) + rw::shSingleQuote( urlOrPath )
                           + " " + rw::shSingleQuote( cacheDir ) + " 2>&1";
     rw::emitTo( stderr, "ripwire: cloning {} → {}\n", urlOrPath.c_str(), cacheDir.c_str() );
     std::FILE* pipe = popen( cmd.c_str(), "r" );

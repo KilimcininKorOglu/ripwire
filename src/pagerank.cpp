@@ -96,7 +96,7 @@ PageRankRun pageRankDouble( const sparseCsr<float>& inEdges, std::span<const dou
                             std::span<const double> teleport, std::span<double> rank, PageRankConfig config )
 {
     const std::size_t nodeCount = inEdges.rows();
-    VERIFY( verifyCsr( inEdges, nodeCount ) );
+    VERIFY_DEBUG_ONLY( verifyCsr( inEdges, nodeCount ) ); // a corrupt CSR is not impossible; do not let the promise delete the bounds reasoning
     VERIFY( weightedOutDegree.size() == nodeCount );
     VERIFY( teleport.size() == nodeCount );
     VERIFY( rank.size() == nodeCount );
@@ -118,7 +118,10 @@ PageRankRun pageRankDouble( const sparseCsr<float>& inEdges, std::span<const dou
         VERIFY( std::isfinite( weightedOutDegree[nodeIndex] ) && weightedOutDegree[nodeIndex] >= 0.0 );
         VERIFY( std::isfinite( teleport[nodeIndex] ) && teleport[nodeIndex] >= 0.0 );
     }
-    VERIFY( std::fabs( probabilityMass( teleport ) - 1.0 ) <= 1e-9 );
+    // Checked, never assumed: handing the optimizer a floating-point identity in the translation unit whose
+    // whole point is reproducible arithmetic (docs/ARCHITECTURE.md's determinism contract) buys nothing worth
+    // the licence it grants.
+    VERIFY_DEBUG_ONLY( std::fabs( probabilityMass( teleport ) - 1.0 ) <= 1e-9 );
 
     // Allocate all scratch once. The power-iteration loop performs no dynamic allocation.
     std::vector<double> currentRank( teleport.begin(), teleport.end() );

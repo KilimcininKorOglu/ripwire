@@ -24,7 +24,7 @@ format, exit codes and limits. You do not need it to get started.
 <p align="center"><a href="https://trendshift.io/repositories/217924?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-217924"><img src="https://trendshift.io/api/badge/trendshift/repositories/217924/weekly?language=C%2B%2B" alt="Trendshift: C++ Repository of the Week badge for redhat-et/ripwire" width="250" height="55"></a></p>
 
 <details>
-<summary><b>Fifty years of software-engineering results, and research from last month.</b> 49 repositories and 70 papers folded — McCabe (1976) through to <b>seven published in the last two months</b> — each row in <a href="docs/LINEAGE.md"><b>docs/LINEAGE.md</b></a> naming the lesson taken and the file it lives in</summary>
+<summary><b>Fifty years of software-engineering results, and research from last month.</b> 49 repositories and 71 papers folded — McCabe (1976) through to <b>seven published in the last two months</b> — each row in <a href="docs/LINEAGE.md"><b>docs/LINEAGE.md</b></a> naming the lesson taken and the file it lives in</summary>
 
 Beside those sits a labelled survey of **237 tools** that contributed nothing and says so. The two
 sets are disjoint by construction, so they add rather than nest — a tool that gave a lesson is never
@@ -53,9 +53,19 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
+**ripwire 0.6.1 — out now. The answers an agent reads got smaller.** A compact answer is 46–66% smaller per
+call — 2.8–5.8 KB less on `--callers`, `--uses`, `--impact` and `--affected` — the flagless map is 15.3% smaller at
+identical rows, and the new `--in=DIR` scopes "what changed recently" to a directory: 39.8 KB down to 10.2 KB per
+answer on RocksDB. It got smaller in memory too: on llvm-project the declined-call index drops from **114 MB to
+368 KB**, with every count and every byte of output unchanged. Elixir resolves natively by module, name and arity
+(thanks @henry-hz), `--scip` reads scip-java indexes (thanks @dpunosevac), and a `file:name` selector no longer
+answers with a definition that belongs to another file (thanks @andriytyurnikov). Every number in a compact answer
+now arrives with its definition, and the focus verbs say when a definition could not be proven instead of
+reporting a quiet zero.
+
 **ripwire 0.6.0 — out now.** Kotlin and Dart bring it to 24 vendored grammars, and Ruby now reads the dependencies a
 Rails application actually has: superclasses, mixins, `autoload`, and the constant receivers an autoloader loads
-through. On llvm-project — 182,555 files — the cold parse drops from 194 s to 156 s. Declined calls, derailed parses
+through. On llvm-project — 182,555 files — the cold parse drops from 194 s to 156 s of CPU. Declined calls, derailed parses
 and cut answers now say so, instead of returning a quiet zero.
 
 **[The presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md)** — with thanks to the
@@ -798,7 +808,7 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 </p>
 
 <p align="center">
-  <a href="present/ripwire-showcase.pdf"><b>▶ The whole tool in 33 slides</b></a> — every figure names the instrument that pins it<br>
+  <a href="present/ripwire-showcase.pdf"><b>▶ The whole tool in 34 slides</b></a> — every figure names the instrument that pins it<br>
   <sub>renders in your browser · <a href="present/ripwire-showcase.pptx">pptx</a> beside it · <a href="docs/EVALS.md">the numbers behind it</a></sub>
 </p>
 
@@ -827,9 +837,10 @@ the recommendation — and abstains honestly when the evidence is too thin to na
 <summary>Which surface is the authority — <code>--help</code> vs <code>docs/COMMANDS.md</code> — and the four reflex verbs worth memorising</summary>
 
 `./build/ripwire --help` is generated from the binary's own flag table and is always the authority;
-[`docs/COMMANDS.md`](docs/COMMANDS.md) documents every one of the 145 documented flags — 94 of them
-with a real invocation and its recorded output (counts re-derived 2026-08-23; `test/docscommandscheck.sh`
-fails if that documented set and the binary's own flag table ever disagree). Each family below links there.
+[`docs/COMMANDS.md`](docs/COMMANDS.md) documents every one of the 176 documented flags — 162 of them
+with a real invocation and its recorded output (both counts are reported by the generator that writes the
+document, `docs/docs_commands_build.py`, and were re-derived from it on 2026-09-14;
+`test/docscommandscheck.sh` fails if that documented set and the binary's own flag table ever disagree). Each family below links there.
 
 Four reflexes worth wiring into muscle memory: `--from-trace=FILE` for an error you have in hand,
 `--edit-check=SYM` right after an edit (did the contract change, and which callers are now provably
@@ -853,9 +864,10 @@ ranking, bodies, callers and tests in one budgeted bundle.
 ## Quickstart
 
 <details>
-<summary><b>Prebuilt binary</b> — macOS and Linux (arm64 / x86-64, built for <b>RHEL 8+</b>), SHA-256 verified, shipping <b>seventeen agent skills</b> the installer activates for every agent it detects</summary>
+<summary><b>Prebuilt binary</b> — macOS on Apple silicon and Linux (arm64 / x86-64, built for <b>RHEL 8+</b>), SHA-256 verified, shipping <b>seventeen agent skills</b> the installer activates for every agent it detects</summary>
 
-**Prebuilt binary** — macOS (arm64 / x86-64) and Linux (arm64 / x86-64, built for **RHEL 8+**;
+**Prebuilt binary** — macOS (arm64; 0.6.1 is the last release with an Intel macOS binary, and an Intel Mac
+builds later releases from source) and Linux (arm64 / x86-64, built for **RHEL 8+**;
 every release is smoke-tested on a RHEL 9 userland before it publishes). Downloads the latest
 [GitHub Release](https://github.com/redhat-et/ripwire/releases), verifies its SHA-256, and installs
 to `~/.local/bin`. From v0.2.2 the release tarball also ships the seventeen agent skills, and the
@@ -1320,7 +1332,7 @@ cmake --build build 2>&1 | ./build/ripwire . --from-trace=-
 
 **0.6.0 — 2026-09-11.** Kotlin and Dart bring the vendored grammars to 24; Ruby now reads the dependencies a
 Rails application actually has — superclasses, mixins, `autoload`, and the constant receivers an autoloader
-loads through. On llvm-project, 182,555 files, the cold parse drops from 194 s to 156 s. Declined calls,
+loads through. On llvm-project, 182,555 files, the cold parse drops from 194 s to 156 s of CPU. Declined calls,
 derailed parses and cut answers say so now, instead of returning a quiet zero.
 
 Every release, with its measurements and its caveats, is in **[CHANGELOG.md](CHANGELOG.md)** — that file is the
@@ -1648,10 +1660,10 @@ timing-only, and `pmccheck`'s inactive arm now proves that was truly the case.
 ## Standing on the whole field
 
 <details>
-<summary>43 repositories, 69 papers and a 237-tool survey — and the study where search over a pre-built index beats a delegating planner <b>65.2% to 46.2%</b>, at under half the cost</summary>
+<summary>49 repositories, 71 papers and a 237-tool survey — and the study where search over a pre-built index beats a delegating planner <b>65.2% to 46.2%</b>, at under half the cost</summary>
 
 Almost none of the ideas here are new; the combination and the constraints are. Lessons folded from
-**49 repositories and 70 papers** into one deterministic executable, alongside a labelled
+**49 repositories and 71 papers** into one deterministic executable, alongside a labelled
 survey of 237 tools that folded nothing and are catalogued separately — the two sets are disjoint,
 so they add rather than nest. The row-by-row ledger, each with the lesson taken and where it lives, is
 [`docs/LINEAGE.md`](docs/LINEAGE.md). Those three counts are derived from that document's own tables
@@ -1805,9 +1817,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>618 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>620 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **618 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **620 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2042,14 +2054,14 @@ tier: it parses with its own vendored grammar, so its headings are symbols, not 
 > there. Come here when you want to know exactly what a command does, what its output means, or where the tool stops
 > being right.
 
-Publication date: 2026-09-12. Every claim below re-verified against a 0.6.0 build on 2026-09-13.
+Re-verified against a 0.6.1 build on 2026-09-14.
 
-ripwire analyzes a source tree. The tool writes a ranked symbol map to standard output. The map
-shows the symbols that matter for a task, the callers of those symbols, and the tests that reach
-them. The tool is one binary. The map itself has no runtime dependencies: no API key, no embeddings,
-no index server, no daemon. The history-backed commands need `git` on the path and a repository
-to read. It uses a network only when you give it a git URL instead of a directory, which
-it shallow-clones into a cache.
+ripwire reads a source tree and writes a ranked symbol map to standard output: the symbols that matter for a
+task, their callers, and the tests that reach them. One binary, and a map that costs nothing to serve — no API
+key, no embeddings, no index server. The history-backed commands need `git` on the path and a repository to
+read. Two commands reach the network and nothing else does: a git URL in place of a directory, which is
+shallow-cloned into a cache, and `--mcp --listen=HOST:PORT`, which binds a socket and is the one mode that
+serves other processes (see `--mcp-token` and `--allow-remote-edits` before exposing it).
 
 This guide tells you how to install, operate, and evaluate ripwire. Read `docs/COMMANDS.md` for the
 full command reference. Run `ripwire --help` for the current flag list. The binary generates
@@ -2057,9 +2069,9 @@ full command reference. Run `ripwire --help` for the current flag list. The bina
 `--help`, report this guide as a defect.
 
 <details>
-<summary><b>Evidence basis.</b> Fifty years of software-engineering results. 49 repositories and 70 papers are folded. A survey of 237 tools is separate.</summary>
+<summary><b>Evidence basis.</b> Fifty years of software-engineering results. 49 repositories and 71 papers are folded. A survey of 237 tools is separate.</summary>
 
-The counts come from `docs/LINEAGE.md`. Counts are current as of 2026-09-08. Seventeen of the folded papers are from 2026, seven published in the last two months, and three in the last thirty days. This project folds 49 repositories and 70 papers into one executable. The survey describes 237 tools that contributed no lesson. The two sets are disjoint, so the counts add.
+The counts come from `docs/LINEAGE.md`. Counts are current as of 2026-09-14. Seventeen of the folded papers are from 2026, seven published in the last two months, and three in the last thirty days. The survey describes 237 tools that contributed no lesson. The two sets are disjoint, so the counts add.
 
 </details>
 
@@ -2157,7 +2169,7 @@ same renderer. One computation has one output shape.
 | --- | --- |
 | Operating system | macOS (arm64 or x86-64) or Linux (arm64 or x86-64). On Windows, use WSL2. |
 | Prebuilt Linux floor | RHEL 8 or later (glibc 2.28) |
-| Prebuilt macOS floor | macOS 14 or later |
+| Prebuilt macOS floor | macOS 14 or later, Apple silicon. 0.6.1 is the last release with an Intel macOS binary; on an Intel Mac, pin `RIPWIRE_VERSION=v0.6.1` or build from source. |
 | x86-64 floor | x86-64-v3 (Intel Haswell, 2013, or later), for a prebuilt binary and a source build alike |
 | Build tools | CMake 3.24 or later, and a C++23 compiler |
 | Compilers | clang 16+, AppleClang 15+, or gcc 13+ |
@@ -2543,7 +2555,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 212 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 213 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.
@@ -2770,7 +2782,7 @@ terms.
 | The compile-time cap inventory | [`docs/LIMITS.md`](docs/LIMITS.md) |
 | The measured cost of each cap | [`docs/TUNING.md`](docs/TUNING.md) |
 | Skill-file security checks | [`docs/COMMANDS.md`](docs/COMMANDS.md#--scan-skillsdir) |
-| The whole tool in 33 slides — the showcase deck | [`present/ripwire-showcase.pdf`](present/ripwire-showcase.pdf) ([pptx](present/ripwire-showcase.pptx), rebuilt by [`present/deck5_ripwire_build.js`](present/deck5_ripwire_build.js)) |
+| The whole tool in 34 slides — the showcase deck | [`present/ripwire-showcase.pdf`](present/ripwire-showcase.pdf) ([pptx](present/ripwire-showcase.pptx), rebuilt by [`present/deck5_ripwire_build.js`](present/deck5_ripwire_build.js)) |
 
 If a document disagrees with `--help`, the document is the bug.
 

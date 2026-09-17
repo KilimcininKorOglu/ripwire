@@ -289,6 +289,21 @@ already knew about the others, several while fixing one. So the rule is mechanic
   Guard, don't assert.
 - Throw only at the `operator new` seam. A throw escaping a worker thread is `std::terminate`, so
   wrap thread bodies in `try { … } catch( ... ) { … }`.
+- **Avoid exception handling. Where a throw is unavoidable, RAII is what makes the code exception-safe:
+  cleanup belongs in a destructor, never in a `catch`.** A handler that releases a resource has to know
+  which resources are live at the point the throw happened, so such handlers multiply — two throw sites
+  in one function own different things and need different teardown, and the handler is only correct
+  until someone adds an early `return` above it. One owner whose destructor releases what it holds
+  collapses that to a single handler whose only job is the conversion this codebase actually wants: a
+  recoverable error becomes a degrade, returned, never propagated. Measured on `216802ad`, 2026-09-14:
+  of **27 `catch` blocks under `src/`, exactly one releases a resource by hand** — `infra/emit.h`'s
+  `renderToString`, which `fclose`s a memstream and `free`s its buffer. The other 26 convert a throw
+  into a degrade, set a flag, return a message, or `continue`; they own nothing, which is why they are
+  one line each. Re-derive rather than trust: a bare `grep -cE '\bcatch[[:space:]]*\('` over `src/`
+  reports **35**, and 8 of those hits are the word inside a `//` comment or inside a tree-sitter query
+  string — most of them in `lintrules.h`, whose subject is *detecting* empty catch blocks in other
+  people's code. Exclude comment and string context, then read each surviving handler's first body
+  line, because the resource question is answered by reading it and not by counting.
 
 ### Naming encodes what the type cannot
 
@@ -401,7 +416,7 @@ already knew about the others, several while fixing one. So the rule is mechanic
   it (measured 2026-09-08). Testing the macro means every toolchain BUILDS — which is why the choice is
   DISCLOSED: `--version` prints `emit=std::print` or `emit=std::format+fputs` (`test/versioncheck.sh` #6),
   every CI and release leg asserts `std::print` (gcc-14 on the ubuntu legs, gcc-toolset-14 on RHEL and the
-  manylinux containers, Xcode 16.2 on macOS), and the `fallback-emitter` job builds the fallback arm with
+  manylinux containers, Xcode 26.6 on macOS), and the `fallback-emitter` job builds the fallback arm with
   the stock ubuntu g++ 13 on purpose and proves it emits the same bytes. A silent fallback is the failure
   this whole arrangement exists to make impossible.
 - **A conversion is byte-parity-fenced, not reviewed by eye.** `test/printffmtparitycheck.sh` hashes

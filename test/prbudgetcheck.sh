@@ -164,7 +164,7 @@ if [ "$( attr "$TMP/wt_dirty" files )" = "0" ] || [ "$( attr "$TMP/wt_clean" fil
     no "(F4) the fixture did not produce a dirty root (files>0) AND a clean root (files=0): dirty=$( attr "$TMP/wt_dirty" files ) clean=$( attr "$TMP/wt_clean" files )"
 else
     ok "(F4 fixture) same base (working-tree): one root with a change, one on a clean tree"
-    MISSING="$( comm -23 <( rootattrs "$TMP/wt_dirty" ) <( rootattrs "$TMP/wt_clean" ) | grep -Ev "$EXEMPT" | tr '\n' ' ' )"
+    MISSING="$( LC_ALL=C comm -23 <( rootattrs "$TMP/wt_dirty" ) <( rootattrs "$TMP/wt_clean" ) | grep -Ev "$EXEMPT" | tr '\n' ' ' )"
     [ -z "$MISSING" ] \
         && ok "(F4) the empty-diff root carries every attribute the non-empty root carries (bar the declared page-window set)" \
         || no "(F4) the empty-diff root is MISSING attributes the non-empty root carries: $MISSING"

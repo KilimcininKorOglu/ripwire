@@ -21,7 +21,7 @@ licence in [`THIRD_PARTY.md`](../THIRD_PARTY.md). First-party code under `src/` 
 third-party code lives under `third_party/` and keeps its own licence. Citing a paper means the idea
 was read and applied, not that any of its text or code is here.
 
-**The counts, derived from the tables below:** **49 repositories** and **70 papers** are folded, and
+**The counts, derived from the tables below:** **49 repositories** and **71 papers** are folded, and
 a labelled survey of **237 tools** contributed nothing and says so. **The two sets are disjoint by
 construction, so they add rather than nest:** a tool that contributed a lesson gets a row in §3a and
 is never repeated in §3b, which makes the field study 49 folded *plus* 237 surveyed — not 49 picked
@@ -60,8 +60,9 @@ rejected rather than shipped on the paper's authority. Those are the LARGER row 
 overlap row — LARGER was rejected before it ever shipped, and the overlap proxy was built, measured on
 this repository, and withdrawn. They are the two worth reading first.
 
-Two rows rest on three sources that are not peer-reviewed — a vendor specification, a book, and a
-practitioner article. Each is labelled as such in its own row rather than left to look like a paper.
+Three rows rest on four sources that are not peer-reviewed — a vendor specification, a book, a
+practitioner article and an online textbook chapter. Each is labelled as such in its own row rather than
+left to look like a paper.
 
 | Work | Lesson taken | Where it lives |
 | --- | --- | --- |
@@ -125,6 +126,7 @@ practitioner article. Each is labelled as such in its own row rather than left t
 | Paul, Helm, Glavaš & Gurevych, *OctoLong: Mid-Training on Cross-Repository Code Contexts Enhances Long-Context Modeling* — [arXiv:2608.05141](https://arxiv.org/abs/2608.05141) | A cross-repository context-curation pipeline is only as trustworthy as its linking discipline — OctoLong instruments an AST parser, a language server and a package manager to curate genuinely dependency-linked spans across repository boundaries rather than merely co-located ones. External corroboration of the same discipline applied here. | Multi-root workspaces (`ripwire <dir1> <dir2> ...`): cross-root edges admitted only on explicit include/import/FFI evidence, never on same-name coincidence (`src/resolve.h`) |
 | Shao, Zeng, Zhao & Yu, *HyperFL: Query-Adaptive Representation Learning for Software Fault Localization* — [arXiv:2608.02967](https://arxiv.org/abs/2608.02967) | Adapting the retrieval representation to the shape of the query, rather than serving every query from one fixed embedding space, is worth doing — HyperFL does it with a learned hypernetwork generating per-query LoRA parameters. External motivation, after the fact and without the learner, for choosing a representation deterministically instead. | The `--for` query-shape router: name-exact BM25 versus subtoken+body BM25, chosen per query with the evidence printed as `route=` (`src/lexical.h`, `src/filter.h`) |
 | Langdale & Lemire, *Parsing Gigabytes of JSON per Second* — [doi:10.1007/s00778-019-00578-5](https://doi.org/10.1007/s00778-019-00578-5) (VLDB Journal 2019) | Classify every byte of a block with two 16-entry shuffles — the low nibble indexes a column bitmap, the high nibble selects a row bit — and then reason about the text as bitmasks rather than bytes. | `classMasks` in `src/infra/strkern.h`, and the tokenizer that consumes its masks (`src/lexindex.h`: token starts and camel/acronym splits are mask algebra, not a per-byte state machine) |
+| Slotin, *Algorithmica — Algorithms for Modern Hardware*, the S-tree chapter — [en.algorithmica.org/hpc/data-structures/s-tree](https://en.algorithmica.org/hpc/data-structures/s-tree/) *(an online textbook chapter, not peer-reviewed)* | The primitive inside a B-tree node is not "binary search the keys" but **count the keys less than x** — a branchless, fixed-width SIMD reduction. That inverts what node width is *for*: it becomes a property of the cache line and the vector lane count rather than of the comparison count, and the descent loses its branches. The chapter's tree is STATIC; what transfers is the scan kernel, not the structure. | `src/infra/dynamic_map.hpp` — the per-node `rank_lt` / `rank_le` kernel of the B+ tree that stands in for `std::map` and `std::unordered_map` everywhere in this tree (both are forbidden by CONTRIBUTING's container rule). NEON on AArch64, SSE2/SSE4.2 on x86_64, a portable scalar loop elsewhere; node width `B` is a template parameter constrained to a whole multiple of the lane count, default 16. What the static chapter has no use for and is designed here: insert and erase over node pools recycled through intrusive free lists with no per-operation allocation, the struct-of-arrays node layout and 32-bit child handles, the parent-link-free descent, the max-value sentinel scheme that stays correct when that value is a real key, and the less-or-equal rank variant a dynamic descent requires (`test/dynmapsimdcheck.sh`) |
 
 **Two co-change parameters here were derived independently and landed on the published values — and
 saying so is stronger than silence.** The bulk-commit cap (`kCoBoostMaxFilesPerCommit`, `src/gitmine.h`)

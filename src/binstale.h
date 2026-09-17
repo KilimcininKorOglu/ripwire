@@ -36,6 +36,7 @@
 
 #include "quality.h"    // gitRepoHasHistory / gitOneLine / gitIsAncestor / popenTrimmed — the shared git plumbing
 #include "infra/jsonesc.h"    // shSingleQuote
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include "resolve.h"    // includerDir — the SAME "directory of a path" primitive the include resolver already reuses at 4+ sites; not reimplemented here
 #include "mention.h"    // mention_detail::baseNameOf — the SAME "basename of a path" primitive doc-mention matching already reuses
 #include "btree.hpp"    // gtl::btree_map — sorted-by-directory grouping (house rule: never std::map)
@@ -128,7 +129,7 @@ inline BinaryStaleResult computeBinaryStaleness( const std::string& root )
     if( !quality::gitRepoHasHistory( root ) ) { result.nonGitRoot = true; return result; }
 
     const std::string lsOut = quality::popenTrimmed(
-        "git -c core.quotepath=false -C " + shSingleQuote( root ) + " ls-files 2>/dev/null" );
+        gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " ls-files 2>/dev/null" );
     if( lsOut.empty() )
     {
         return result; // nothing tracked — degrade quietly, not a failure

@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -43,7 +44,7 @@
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
 #include <algorithm>
-#include <atomic>       // Phase-M: the tmp-name sequence counter (atomicWriteFile); also the A5 process-once cache-sweep guard
+#include <atomic>       // the A5 process-once cache-sweep guard
 #include <cctype>       // std::isxdigit/std::isdigit — B10.2d churn-blame porcelain parsing
 #include <chrono>       // A5: the 30-day cache-blob age cutoff (evictOldCacheFamily)
 #include <cstdio>
@@ -649,6 +650,7 @@ inline bool languageInvokedSymbol( const Symbol& s ) noexcept
 inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
                              const std::vector<std::uint64_t>& topLevelCallees,
                              const std::vector<NodeId>& registeredMacroIds,
+                             const std::vector<NodeId>& pythonDispatchIds,
                              bool* exemptedByRegisterMacro = nullptr ) noexcept
 {
     if( exemptedByRegisterMacro )
@@ -672,6 +674,10 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     if( std::binary_search( topLevelCallees.begin(), topLevelCallees.end(), fnv1a64( s.name ) ) )
     {
         return false; // W1-S2: invoked from file scope (a top-level script statement) — a use the CSR drops
+    }
+    if( std::binary_search( pythonDispatchIds.begin(), pythonDispatchIds.end(), i ) )
+    {
+        return false; // a Python self/cls call can dispatch to this override through an indexed base
     }
     if( languageInvokedSymbol( s ) )
     {
@@ -879,6 +885,166 @@ inline void forEachSymbolBody( const IngestResult& ing, Fn&& visit )
             visit( i, s, std::string_view( bytes.data() + s.sigStartByte, s.endByte - s.sigStartByte ) );
         }
     }
+}
+
+// Direct Python class members only; module-level and nested functions have no class owner.
+inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
+{
+    const bool hasClasses = std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& s )
+    {
+        return s.lang == Lang::Python && s.kind == SymKind::Class;
+    } );
+    if( !hasClasses )
+    {
+        return {};
+    }
+    std::vector<NodeId> owner( ing.symbols.size(), kNoNode );
+    SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s )
+    {
+        return s.lang == Lang::Python && ( s.kind == SymKind::Class || s.kind == SymKind::Function || s.kind == SymKind::Method );
+    } );
+    std::vector<NodeId> parents;
+    for( auto& ids : byFile )
+    {
+        std::sort( ids.begin(), ids.end(), [ & ]( NodeId a, NodeId b )
+        {
+            const Symbol& x = ing.symbols[a];
+            const Symbol& y = ing.symbols[b];
+            if( x.sigStartByte != y.sigStartByte ) { return x.sigStartByte < y.sigStartByte; }
+            if( x.endByte != y.endByte ) { return x.endByte > y.endByte; }
+            return a < b;
+        } );
+        parents.clear();
+        for( NodeId id : ids )
+        {
+            const Symbol& s = ing.symbols[id];
+            while( !parents.empty() && ( ing.symbols[parents.back()].sigStartByte >= s.sigStartByte
+                                         || ing.symbols[parents.back()].endByte < s.endByte ) )
+            {
+                parents.pop_back();
+            }
+            if( s.kind != SymKind::Class && !parents.empty() && ing.symbols[parents.back()].kind == SymKind::Class )
+            {
+                owner[id] = parents.back();
+            }
+            parents.push_back( id );
+        }
+    }
+    return owner;
+}
+
+// Python VarDecl bindings are parameter names in source order (emitBindings); the first one
+// identifies the conventional receiver. Reuse those AST facts, including commented/typed parameters.
+// A non-receiver first parameter is marked 3 so a later parameter named cls cannot replace it.
+inline std::vector<std::uint8_t> pythonReceiverParameters( const IngestResult& ing )
+{
+    std::vector<std::uint8_t> receiver( ing.symbols.size(), 0 );
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.fromSymbol >= receiver.size() || ing.symbols[b.fromSymbol].lang != Lang::Python
+            || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 || receiver[b.fromSymbol] != 0 )
+        {
+            continue;
+        }
+        receiver[b.fromSymbol] = b.var == "self" ? 1 : b.var == "cls" ? 2 : 3;
+    }
+    return receiver;
+}
+
+// Deduplicate receiver-call evidence before walking inheritance; repeated call sites have the same
+// possible targets. Views borrow the ingested reference names for this one snapshot computation.
+inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( const IngestResult& ing,
+    std::span<const NodeId> owner, std::span<const std::uint8_t> receiver )
+{
+    std::vector<std::pair<NodeId, std::string_view>> requests;
+    for( const Reference& r : ing.references )
+    {
+        if( r.lang != Lang::Python || r.role != RefRole::Call || r.fromSymbol >= owner.size()
+            || owner[r.fromSymbol] == kNoNode || !r.qualifier.empty()
+            || !( ( r.recv == RecvKind::ThisObj && receiver[r.fromSymbol] == 1 )
+                  || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" && receiver[r.fromSymbol] == 2 ) ) )
+        {
+            continue;
+        }
+        requests.emplace_back( owner[r.fromSymbol], r.calleeName );
+    }
+    std::sort( requests.begin(), requests.end(), []( const auto& a, const auto& b )
+    {
+        return a.first != b.first ? a.first < b.first : rw::sortutil::svLess( a.second, b.second );
+    } );
+    requests.erase( std::unique( requests.begin(), requests.end() ), requests.end() );
+    return requests;
+}
+
+// Include the class itself and follow implementors DOWNWARD only. A walk up then down would admit
+// sibling classes the receiver cannot be. The graph already filters inheritance by language/root.
+inline std::vector<NodeId> pythonDispatchClasses( const Graph& g, NodeId base )
+{
+    std::vector<NodeId> classes{ base };
+    HashMap<NodeId, bool> visited;
+    visited.reserve( 32 );
+    visited.emplace( base, true );
+    for( std::size_t n = 0; n < classes.size(); ++n )
+    {
+        const NodeId id = classes[n];
+        if( id >= g.implementors.size() )
+        {
+            continue;
+        }
+        for( NodeId child : g.implementors[id] )
+        {
+            if( visited.emplace( child, true ).second )
+            {
+                classes.push_back( child ); // cycles and diamonds visit a class only once
+            }
+        }
+    }
+    return classes;
+}
+
+// Python self/cls dispatch can reach a subclass override even when the call graph pins the base
+// definition. Keep possible targets out of the deletion-candidate set; do not invent call edges.
+// Evidence is bounded to an enclosing class, a receiver parameter, and the indexed inheritance graph.
+// This is conservative liveness, not a model of Python's MRO, descriptors, or monkey-patching.
+inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, const Graph& g )
+{
+    const std::vector<NodeId> owner = pythonMethodOwners( ing );
+    if( owner.empty() )
+    {
+        return {};
+    }
+    HashMap<NodeId, std::vector<NodeId>> methods;
+    methods.reserve( 32 );
+    for( NodeId i = 0; i < owner.size(); ++i )
+    {
+        if( owner[i] != kNoNode && ing.symbols[i].sigEndByte < ing.symbols[i].endByte )
+        {
+            methods[ owner[i] ].push_back( i );
+        }
+    }
+    const std::vector<std::uint8_t> receiver = pythonReceiverParameters( ing );
+    std::vector<NodeId> result;
+    for( const auto& [ base, name ] : pythonDispatchRequests( ing, owner, receiver ) )
+    {
+        for( NodeId id : pythonDispatchClasses( g, base ) )
+        {
+            const auto it = methods.find( id );
+            if( it == methods.end() )
+            {
+                continue;
+            }
+            for( NodeId method : it->second )
+            {
+                if( ing.symbols[method].name == name )
+                {
+                    result.push_back( method );
+                }
+            }
+        }
+    }
+    std::sort( result.begin(), result.end() );
+    result.erase( std::unique( result.begin(), result.end() ), result.end() );
+    return result;
 }
 
 // Q-DIAL-3 (2026-09-10) — THE VERBOSITY KIND'S METRIC: CODE lines, not physical lines.
@@ -1405,7 +1571,7 @@ using rw::gitResolveCommitSha;
 // `git -C <root>` INCLUDING redirects (so a caller can pipe, e.g. "rev-list HEAD 2>/dev/null | tail -1").
 inline std::string gitOneLine( const std::string& root, const std::string& tail )
 {
-    return popenTrimmed( "git -c core.quotepath=false -C " + shSingleQuote( root ) + " " + tail );
+    return popenTrimmed( gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + tail );
 }
 
 // ─── R1 IDENTITY: the GIT-RECORDED RENAME MAP ──────────────────────────────────────────────────────────
@@ -1533,7 +1699,7 @@ inline RenameMap gitRenameMap( const std::string& root, const std::string& span 
         }
     };
 
-    const std::string pinned = "git -c core.quotepath=false -c diff.renames=true -C " + shSingleQuote( root ) + " ";
+    const std::string pinned = gitCmd( " -c core.quotepath=false -c diff.renames=true -C " ) + shSingleQuote( root ) + " ";
     if( span.empty() )
     {
         // Uncommitted first (a staged `git mv` is the single moment an agent is most likely to run this),
@@ -1612,7 +1778,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
         DEGRADED_PATH_ALERT( "quality: refusing a non-sha revision token on the merge-base path" );
         return false;                                          // degrade: "not reachable" → the caller self-heals the pin
     }
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " merge-base --is-ancestor " + shSingleQuote( ancestor ) + " " + shSingleQuote( descendant )
                           + " >/dev/null 2>&1";
     return std::system( cmd.c_str() ) == 0;
@@ -1654,7 +1820,7 @@ inline std::string gitWindowRefSha( const std::string& root, std::uint32_t days 
 // exists, but a --since window matched zero commits". popen failure degrades to false.
 inline bool gitRepoHasHistory( const std::string& root )
 {
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " rev-parse --verify --quiet HEAD 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -2571,6 +2737,11 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // instructions: did the *semantics* of what a cached Snapshot represents change? → bump kQSnapCacheScheme AND
 // re-pin the hash in the same diff. Refactor-only (no behavior change)? → just re-pin. Keep this manifest
 // SMALL and edit it here (nowhere else) if the semantic surface grows:
+//   pythonMethodOwners        (quality.h) — enclosing-class evidence
+//   pythonReceiverParameters  (quality.h) — conventional first receiver parameter
+//   pythonDispatchRequests    (quality.h) — eligible receiver-call evidence
+//   pythonDispatchClasses     (quality.h) — downward-only inheritance reachability
+//   pythonDispatchedMethodIds  (quality.h) — Python inherited receiver-call evidence for the dead set
 //   isDeadCandidate            (quality.h) — the dead-set predicate itself
 //   isFixturePath              (quality.h) — a fixture-path exemption isDeadCandidate calls into
 //   isTestScriptPath           (quality.h) — the test-script exemption isDeadCandidate calls into (the exact
@@ -2649,7 +2820,8 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // hash a different byte string), confined to one language: a v10 blob's Elixir entries are absent from every
 // lookup this binary makes, so each Elixir symbol would read as new. Extraction is unchanged (parser version
 // 95 stays), so kParserVer and its mirror deliberately did NOT move. Bumped 10 -> 11.
-constexpr std::uint32_t kQSnapCacheScheme = 11;
+// v12 — Python inherited self/cls dispatch excludes possible overrides from the dead set on both sides.
+constexpr std::uint32_t kQSnapCacheScheme = 12;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -2941,22 +3113,18 @@ inline std::mutex& headSnapshotIngestMutex()
 // and degrade rules to drift, which is the clone kind --quality-delta gates on.
 inline bool atomicWriteFile( const std::string& path, const std::string& blob )
 {
-    static std::atomic<std::uint64_t> seq{ 0 };
-    const std::string tmp = path + ".tmp." + std::to_string( ::getpid() )
-                          + "." + std::to_string( seq.fetch_add( 1, std::memory_order_relaxed ) );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the target, refusing an existing entry at that name. The RAII holder removes
+    // the temp on any failure
+    // path below; commit() renames it into place. The name keeps its `.tmp.` infix (a *.tmp.* residue glob
+    // still matches) and 0666 preserves the ofstream default mode; the kernel applies the umask exactly as
+    // the stream did. The fd-based write replaces the ofstream, which cannot express O_EXCL.
+    rw::pathguard::ExclTempFile temp = rw::pathguard::createExclTempFile( path + ".tmp.", "", 0666 );
+    if( !temp.ok() || !temp.write( blob ) )
     {
-        std::ofstream of( tmp, std::ios::binary | std::ios::trunc );
-        if( !of )
-        {
-            return false;
-        }
-        of.write( blob.data(), static_cast<std::streamsize>( blob.size() ) );
-        of.flush();
-        if( !of ) { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
+        return false;   // temp removed by the holder's destructor
     }
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
-    { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
-    return true;
+    return temp.commit( path );
 }
 
 // ─── shared plumbing for the two archived-tree consumers (HEAD snapshot / churn window-ref) ─────────────
@@ -3004,7 +3172,7 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     { DEGRADED_PATH_ALERT( "quality: cannot create commit-tree temp dir" ); return {}; }
 
-    const std::string extract = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string extract = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
     if( std::system( extract.c_str() ) != 0 )
     {
@@ -3569,6 +3737,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
     const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );          // W1-S2: dead-kind evidence, built once
     const std::vector<std::string>   macroNames      = registeredMacroNames( root );             // P2.2: built-ins + .ripwire_config
     const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
+    const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
     for( NodeId i = 0; i < ing.symbols.size(); ++i )
     {
         if( i >= g.canonId.size() || g.canonId[i].empty() )
@@ -3591,7 +3760,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
         // (editcheck.h). A COUNT is overload-collision-proof for the opposite reason a MAX is: it is the one
         // number a collision cannot hide. (maskBySym is the other non-MAX kind; it sums for its own reason.)
         { std::uint32_t& slot = snap.defsBySym[ key ];    slot += 1; }
-        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds ) )
+        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) )
         {
             snap.dead.push_back( key );
         }
@@ -4207,7 +4376,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
     {
         return;
     }
-    const std::string cmd = "git -c core.quotepath=false" + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false" ) + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
                           + " blame --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
                           + " HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
@@ -4281,7 +4450,7 @@ using DiffHunkMemo = HashMap<std::string, std::vector<DiffHunk>>;
 inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const std::string& relPath )
 {
     std::vector<DiffHunk> hunks;
-    const std::string cmd = "git -c core.quotepath=false -c diff.algorithm=myers -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
                           + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe ) { DEGRADED_PATH_ALERT( "quality: churn hunk diff could not be spawned" ); return hunks; }
@@ -6518,6 +6687,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );   // W1-S2: dead-kind evidence, built once
     const std::vector<std::string>   macroNames      = registeredMacroNames( root );      // P2.2: built-ins + .ripwire_config
     const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
+    const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
     for( NodeId i = 0; i < ing.symbols.size(); ++i )
     {
         if( i >= g.canonId.size() || g.canonId[i].empty() )
@@ -6525,7 +6695,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             continue;
         }
         bool macroExempt = false;
-        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, &macroExempt ) )
+        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt ) )
         {
             if( macroExempt && registerMacroExcludedOut )
             {
