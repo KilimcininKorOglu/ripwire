@@ -738,6 +738,15 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kGenericMinRunLength` | `32` | — | — |
 
+### `src/regexguard.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kRegexMaxGroupDepth` | `64` | BOUNDARY | deeper group nesting is REFUSED by name — the same stack bound, for nesting |
+| `kRegexMaxPatternBytes` | `2048` | BOUNDARY | a longer pattern is REFUSED by name, never truncated — the compile-recursion stack bound |
+
 ### `src/renamemine.h`
 
 Discloses: **none**

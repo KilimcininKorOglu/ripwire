@@ -822,6 +822,10 @@ struct LintRulesRun
     // made a broken query byte-identical, on stdout, to a well-formed query that legitimately found
     // nothing. The caller marks these rows compiled="0" instead of a bare count="0" (see printLintRuleTallyRow).
     std::vector<std::string> uncompiledRuleIds;
+    // src/regexguard.h: the rules are the user's, so a #match?/#not-match? pattern the guard refused, or an evaluation
+    // it could not decide, refuses the run by name (see AstQueryGroup::regexRefusedOut / regexUndecidedOut).
+    std::vector<std::string> regexRefused;
+    AstRegexUndecidedReport  regexUndecided;
 };
 
 // The per-rule astQuery budget shared by the built-in checks (--lint) and the user rules (--lint-rules).
@@ -875,7 +879,12 @@ inline LintRulesRun runLintRules( const IngestResult& ing, const std::vector<Lin
     }
 
     std::vector<std::string>    uncompiledQueries;   // §L10: query TEXT of every spec that compiled for no grammar
-    const std::vector<AstMatch> ms = astQuery( ing, specs, kLintMaxPerRule, &uncompiledQueries );
+    std::vector<std::string>    regexRefused;        // src/regexguard.h: the rules' #match? patterns are user-authored
+    AstRegexUndecided           regexUndecided;
+    AstQueryGroup               userRules{ &specs, kLintMaxPerRule, &uncompiledQueries };
+    userRules.regexRefusedOut   = &regexRefused;
+    userRules.regexUndecidedOut = &regexUndecided;
+    const std::vector<AstMatch> ms = std::move( astQueryGrouped( ing, { userRules } )[0] );
 
     for( const LintRule& r : rules )    // saturation is measured on the RAW candidate stream, before the combinators thin it
     {
@@ -1031,7 +1040,8 @@ inline LintRulesRun runLintRules( const IngestResult& ing, const std::vector<Lin
         if( a.startByte != b.startByte ) { return a.startByte < b.startByte;
 }
         return a.id < b.id; } );
-    return { std::move( out ), std::move( saturatedRuleIds ), std::move( uncompiledRuleIds ) };
+    return { std::move( out ), std::move( saturatedRuleIds ), std::move( uncompiledRuleIds ), std::move( regexRefused ),
+             regexUndecided.report() };
 }
 
 // ── built-in ERROR-MASKING rule table (GitClear 2026: +47% error-masking constructs in AI-authored code,

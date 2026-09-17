@@ -17,6 +17,10 @@
 #   * the REFUSAL. A malformed pattern threw out of the constructor, was caught, and left `ok = true` —
 #     i.e. it filtered NOTHING. Precompiling moves that throw from the match to the build, so the arm has
 #     to be preserved deliberately; getting it wrong turns a broken rule into a rule that drops every row.
+#     SINCE src/regexguard.h: that fallback is kept for the BUILT-IN packs (constant patterns of this
+#     binary), while a USER's --match refuses a pattern the guard rejects, by name, at exit 1 — rows a
+#     predicate never judged are not the query's answer. C4 pins the user half; the golden's
+#     match-malformed section is therefore empty (the refusal prints nothing on stdout).
 #   * the CAPTURE-typed argument. `(#match? @a @b)` has no constant to precompile — it must stay dynamic.
 #   * THREAD SAFETY. The compiled regex is now SHARED across the query pool's workers instead of being
 #     built per match. Concurrent const use of a standard library object is data-race-free by
@@ -36,8 +40,8 @@
 #           makes both select two, which is the mutation the round actually ran; see the note below).
 #        C2 search, not match — a bare substring "oo" must select both of them.
 #        C3 complement       — #not-match? on a pattern must select exactly the rows #match? does not.
-#        C4 refusal          — a malformed pattern "(" must filter NOTHING, i.e. return the same rows as
-#           the same query with no predicate at all.
+#        C4 refusal          — a malformed pattern "(" in --match is REFUSED: exit 1, the pattern named on
+#           stderr, no <match> element (it used to filter NOTHING and print every row at exit 0).
 #   D  CAPTURE-TYPED ARGUMENT. `(#match? @a @b)` still evaluates per match (its pattern is not a constant),
 #      and the probe's answer is pinned in the golden with the rest.
 #   E  MUTATION CONTROL for arm C. Each of C1-C4 is re-run with its expectation INVERTED and must fail —
@@ -169,7 +173,13 @@ fi
 expect "C2" "$( hits 'match-substring' )" "2" "regex_SEARCH, not regex_match: the bare substring \"oo\" selects both"
 C3N="$( hits 'match-not-anchor' )"; C3A="$( hits 'match-no-predicate' )"
 expect "C3" "$C3N" "$(( ${C3A:-0} - ${C1L:-0} ))" "#not-match? is the exact complement of #match? over the same rows"
-expect "C4" "$( hits 'match-malformed' )" "$C3A" "a MALFORMED pattern filters NOTHING (the constructor's throw leaves ok = true)"
+"$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"(\"))" >"$TMP/c4.out" 2>"$TMP/c4.err"; C4RC=$?
+expect "C4" "$C4RC" "1" "a MALFORMED pattern in a user's --match is REFUSED (src/regexguard.h), not answered with unfiltered rows"
+if grep -qF "'(' refused" "$TMP/c4.err" && ! grep -q '<match ' "$TMP/c4.out"; then
+    ok "C4: the refusal names the pattern on stderr and prints no <match> element"
+else
+    no "C4: refusal stderr/stdout wrong — stderr: $( head -c 200 "$TMP/c4.err" )"
+fi
 
 # ── D. capture-typed argument: no constant to precompile, so it must still be evaluated ──────────────
 # NON-VACUITY, not just presence (CodeRabbit #127 / 3985249714 asked for it; the review's premise — that
@@ -195,7 +205,7 @@ check_inverts(){ [ "$1" != "$2" ] && inverted=$(( inverted + 1 )); }
 check_inverts "$C1L/$C1R"                 "2/2"                              # what an icase build returns
 check_inverts "$( hits 'match-substring' )" "0"                              # what regex_match would return
 check_inverts "$C3N"                      "$C3A"                             # a #not-match? that filtered nothing
-check_inverts "$( hits 'match-malformed' )" "0"                              # a refusal that dropped every row
+check_inverts "$C4RC"                     "0"                                # a malformed pattern answered at exit 0
 if [ "$inverted" -eq 4 ]; then
     ok "E: all 4 inverted expectations are FALSE — arms C1-C4 are comparing real, distinguishable answers"
 else

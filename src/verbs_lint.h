@@ -1035,6 +1035,8 @@ struct MatchQueryOutcome
     std::size_t                eligibleFiles = 0;
     std::string                nearestKind;     // octocode F3: "" when no candidate was close enough
     std::string                nearestGrammar;  // "" alongside a "" nearestKind
+    std::vector<std::string>   regexRefused;    // src/regexguard.h: "'PATTERN' refused: REASON" per refused #match? pattern
+    rw::AstRegexUndecidedReport regexUndecided;      // #match? evaluations that could not be decided, by cause, first site named
 };
 
 // Runs a --match query and reports the grammar-applicability disclosure (see AstQueryGroup::grammarsOut/
@@ -1055,11 +1057,99 @@ static MatchQueryOutcome runMatchQuery( const rw::IngestResult& ing, const std::
     grp.eligibleFilesOut  = &out.eligibleFiles;
     grp.nearestKindOut    = &nearestKinds;      // octocode F3: parallel to uncompiledOut — a one-spec caller
     grp.nearestGrammarOut = &nearestGrammars;   // ever gets at most one entry in either
+    rw::AstRegexUndecided      regexUndecided;
+    grp.regexRefusedOut   = &out.regexRefused;  // the query is the user's, so its #match? patterns are too
+    grp.regexUndecidedOut = &regexUndecided;
     out.matches = std::move( rw::astQueryGrouped( ing, { grp } )[0] );
+    out.regexUndecided = regexUndecided.report();
     out.grammarsAttr = rw::mcprefuse::joinClauses( std::vector<std::string_view>( grammarsOut.begin(), grammarsOut.end() ), "," );
     if( !nearestKinds.empty() )    { out.nearestKind    = std::move( nearestKinds[0] ); }
     if( !nearestGrammars.empty() ) { out.nearestGrammar = std::move( nearestGrammars[0] ); }
     return out;
+}
+
+// src/regexguard.h, applied to a user's tree-sitter query: a #match?/#not-match? predicate the guard could not
+// DECIDE used to filter nothing — a refused pattern kept every row, an abandoned match kept that one — and the
+// verb printed the rows as the query's answer at exit 0 (on libstdc++ the catastrophic pattern backtracked
+// without end instead). A user wrote the pattern, so the verb refuses by name, the way --regex does: a pattern
+// refusal is decided when the query compiles, whatever the files hold; the undecided count is what the walk met.
+// `verb` is the flag the user typed; `where` is the closing clause that locates the pattern (the query echoed, or
+// the rules directory).
+//
+// An undecided evaluation is reported BY CAUSE, and the first site (lowest file, then byte) is named with the text
+// that caused it: "the regex engine abandoned the match" is the right sentence only for an abandoned match, and a
+// captured string literal that the screen refused, or that does not parse, needs the reader to see THAT text.
+static std::string undecidedPredicateCauses( const rw::AstRegexUndecidedReport& u )
+{
+    std::vector<std::string> parts;
+    if( u.textScreened != 0 )     { parts.push_back( std::to_string( u.textScreened ) + " captured text(s) the structural screen refused as a pattern" ); }
+    if( u.textUncompilable != 0 ) { parts.push_back( std::to_string( u.textUncompilable ) + " captured text(s) that do not compile as a pattern" ); }
+    if( u.abandoned != 0 )        { parts.push_back( std::to_string( u.abandoned ) + " match(es) the regex engine abandoned" ); }
+    std::string joined;
+    for( const std::string& part : parts )
+    {
+        joined += joined.empty() ? part : ", " + part;
+    }
+    return joined;
+}
+
+static std::string undecidedPredicateFirstSite( const rw::Config& cfg, const rw::IngestResult& ing, const rw::AstRegexUndecidedReport& u )
+{
+    if( !u.hasFirst )
+    {
+        return {};
+    }
+    const bool             singleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
+    const std::string      rootPrefix = singleRoot ? rw::sarif::rootPrefixOf( std::string( cfg.roots[0] ) ) : std::string();
+    const std::string_view path       = singleRoot ? rw::sarif::rootRelativeUri( ing.files[ u.firstFileId ], rootPrefix ) : std::string_view( ing.files[ u.firstFileId ] );
+    const std::string      at         = std::string( path ) + ":" + std::to_string( u.firstLine );
+    if( u.firstCause == rw::AstRegexUndecidedCause::Abandoned )
+    {
+        return "the first, at " + at + ", ran the pattern '" + u.firstPattern + "': " + u.firstReason;
+    }
+    const char* const verdict = ( u.firstCause == rw::AstRegexUndecidedCause::TextScreened ) ? "which the structural screen refused" : "which does not compile";
+    return "the first, at " + at + ", used the captured text '" + u.firstPattern + "' as its pattern, " + verdict + ": " + u.firstReason;
+}
+
+// `firstSite` is undecidedPredicateFirstSite's clause for this report (empty when nothing was undecided).
+static bool refuseUndecidedMatchRegex( std::string_view verb, const std::vector<std::string>& refused, const rw::AstRegexUndecidedReport& undecided,
+                                       std::string_view firstSite, std::string_view where )
+{
+    if( !refused.empty() )
+    {
+        lintPrintErr( "ripwire: {}: the #match? pattern {}, nothing was reported ({} refused pattern(s); a predicate that cannot be compiled "
+                      "would filter nothing, so the rows would not be the query's answer — fix the pattern) ({})\n",
+                      verb, refused.front(), refused.size(), where );
+        return true;
+    }
+    if( undecided.total() != 0 && undecided.hasFirst )
+    {
+        lintPrintErr( "ripwire: {}: {} #match?/#not-match? evaluation(s) could not be decided ({}); {} — refusing rather than reporting rows no "
+                      "predicate judged ({})\n",
+                      verb, undecided.total(), undecidedPredicateCauses( undecided ), firstSite, where );
+        return true;
+    }
+    return false;
+}
+
+// The ids of the user rules any of whose queries (main or combinator) carries a #match?/#not-match? predicate, in
+// load order — the rules an undecided-predicate refusal can be about, so the refusal names them rather than only the
+// directory (the per-evaluation counter is kept per group, not per rule).
+static std::string rulesWithMatchPredicate( const std::vector<rw::LintRule>& rules )
+{
+    const auto hasPredicate = []( const std::string& query ) { return query.find( "match?" ) != std::string::npos; };
+    std::string ids;
+    for( const rw::LintRule& r : rules )
+    {
+        const bool any = hasPredicate( r.query ) || std::any_of( r.inside.begin(), r.inside.end(), hasPredicate )
+                      || std::any_of( r.notInside.begin(), r.notInside.end(), hasPredicate )
+                      || std::any_of( r.notMatches.begin(), r.notMatches.end(), hasPredicate );
+        if( any )
+        {
+            ids += ids.empty() ? r.id : "," + r.id;
+        }
+    }
+    return ids;
 }
 
 // Join owned strings through the ONE joiner the refusal surfaces already use, so a list this file prints
@@ -1305,6 +1395,11 @@ std::optional<int> runLint( const MainDispatch& d )
                 lintPrintErr( "ripwire: --match: the query compiled for no grammar — refusing rather than reporting a zero it did not measure "
                                     "(query as received: {}){}\n",
                             cfg.match, matchNearestKindClause( mq.nearestKind, mq.nearestGrammar ) );
+                return 1;
+            }
+            if( refuseUndecidedMatchRegex( "--match", mq.regexRefused, mq.regexUndecided, undecidedPredicateFirstSite( cfg, ing, mq.regexUndecided ),
+                                           "query as received: " + std::string( cfg.match ) ) )
+            {
                 return 1;
             }
             // §P8 G3: --match was missed when its sibling --grep got paging — `--limit=5` still emitted the
@@ -1695,7 +1790,13 @@ std::optional<int> runLint( const MainDispatch& d )
                 lintPrintErr( "ripwire: --lint-rules={}: no rules loaded\n", cfg.lintRulesDir );
                 return 1;
             }
-            const auto [ userFindings, saturatedUserRuleIds, uncompiledIds ] = runLintRules( ing, userRules );
+            const auto [ userFindings, saturatedUserRuleIds, uncompiledIds, regexRefused, regexUndecided ] = runLintRules( ing, userRules );
+            if( refuseUndecidedMatchRegex( "--lint-rules", regexRefused, regexUndecided, undecidedPredicateFirstSite( cfg, ing, regexUndecided ),
+                                           "rules loaded from " + std::string( cfg.lintRulesDir ) + " whose queries carry a #match?/#not-match? predicate: "
+                                               + rulesWithMatchPredicate( userRules ) ) )
+            {
+                return 1;
+            }
             for( const LintFinding& f : userFindings )
             {
                 outs.push_back( { f.fileId, f.startByte, f.line, f.id, f.severity, f.message } );
