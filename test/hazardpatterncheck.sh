@@ -456,7 +456,6 @@ cat > "$TMP/reg_a.tsv" <<'REGA'
 gitoracle.h	loadOracleCache	Fate	1	range-checked against kFateTable in the same record's guard, before the record enters the index; Fate's underlying type is uint8_t, so the construction itself is defined
 REGA
 cat > "$TMP/reg_b1.tsv" <<'REGB1'
-arch.h	pathRuleForbids	silent	2	a path rule whose regex is malformed only after backreference substitution is inert for that edge; the rule was already accepted at parse time — the regexguard lane re-homes this match
 crossref.h	parallelIndexed	alert-only	1	FINDING (disclosure lane): a git worker that throws leaves its shard of the --stray-content sweep unread, and Release says nothing — needs the DISCLOSE sink form
 infra/emit.h	emitTo	silent	1	not an answer path: std::print's failed write is made silent to keep fputs's contract, which the header documents
 ingest_astquery.h	astQueryGrouped	silent	1	FINDING: a file whose query walk throws drops out of --match/--lint hits with no disclosure in any build; file held by the regexguard and crash-fixes lanes
@@ -465,19 +464,15 @@ ingest_docpass.h	runDocPostPass	alert-only	1	FINDING (disclosure lane): a doc po
 ingest_parsepool.h	runParseWorker	alert-only	1	FINDING (disclosure lane): a parse-worker throw skips that file from the index, silent in Release
 ingest_prewarm.h	prewarmTagsQueries	alert-only	1	not an answer path: a prewarm hash that throws is treated as a cache miss, and the parse pool re-reads the file
 mcpindex.h	maybePrefetchHeadSnapshot	silent	1	not an answer path: optional background prefetch of the HEAD snapshot; a request recomputes whatever it did not fill (§2b rule 3)
-search.h	grepScanText	alert-only	1	FINDING (disclosure lane): a regex match that throws skips the rest of that file's hits, silent in Release; regexguard lane holds search.h
 REGB1
 cat > "$TMP/reg_b2.tsv" <<'REGB2'
 alloccount.cpp	operator new	2	the one throw seam CONTRIBUTING §3 permits: operator new under RIPWIRE_ALLOC_COUNT, an A/B instrument no shipped build links
 infra/dynamic_map.hpp	at	1	vendored container API; no ripwire call site reaches it (rule C lists its one caller, the container's own non-const at)
+regexguard.h	throwIfMatchFaultInjected	1	the RIPWIRE_FAULT_REGEX_MATCH fault switch, off unless the variable is set; its three call sites are the first statement inside GuardedRegex's search, search and forEachMatch try blocks, which catch std::regex_error by type and return Exhausted
 REGB2
 cat > "$TMP/reg_c.tsv" <<'REGC'
 infra/dynamic_map.hpp	at	.at	1	the non-const at forwards to the const at of the same container; no ripwire caller
 ingest_astquery.h	nearestNodeKindHint	.at	1	the key was just read out of this same map by nearestNameByEditDistance, so it is present
-skilleval.h	discoverSkills	.is_directory() without error_code	1	PENDING lane/crash-fixes-parsers f636b19b: --eval-skills aborted (exit 134) on a skill directory it could not stat; that branch reads with error_code
-skilleval.h	discoverSkills	fs::exists without error_code	1	PENDING lane/crash-fixes-parsers f636b19b: the same walk's SKILL.md probe
-skilleval.h	discoverSkills	range-for over a directory_iterator (operator++ throws)	1	PENDING lane/crash-fixes-parsers f636b19b: the same walk's advance
-wrap.h	wrapScanSkillDir	range-for over a directory_iterator (operator++ throws)	1	PENDING lane/crash-fixes-parsers af40182b: a throw inside this noexcept function was std::terminate
 REGC
 cat > "$TMP/reg_d.tsv" <<'REGD'
 REGD
@@ -507,6 +502,9 @@ mcpserver.h	runMcpHttp	accept	1	each accepted connection is closed after its one
 mcpserver.h	runMcpHttp	socket	1	the listening socket is closed before every return
 pattern.h	compileFor	ts_parser_new	1	deleted right after the parse, and on the null-language return
 pattern.h	compileFor	ts_parser_parse_string	1	deleted before each return
+pythonrunner.h	topLevelEvidence	ts_parser_new	1	deleted on the grammar-refused return and right after the parse
+pythonrunner.h	topLevelEvidence	ts_parser_parse_string	1	the tree is deleted by hand after the top-level walk, before the return
+slice.h	sliceBuildParentIndex	ts_tree_cursor_new	1	deleted before the only return, where the cursor walk ends
 slice.h	sliceScanDefinition	ts_parser_new	1	deleted before each return
 slice.h	sliceScanDefinition	ts_parser_parse_string	1	deleted before the final return
 verbs_change.h	runCommandCapture	pipe	1	both ends closed in the child, the write end in the parent at once and the read end after the drain
