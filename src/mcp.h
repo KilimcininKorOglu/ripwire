@@ -1643,7 +1643,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // LB-G: limit/offset are read by the SAME mcpPageArgs impact uses, because this verb now
                     // honors them — it grew a default site cap in that round and needs the hatch to match.
                     resp = refusal.empty() ? pagedResult( [ & ]( McpPageArgs pg )
-                                             { return textResult( usesText( path, symbol, pg ) ); } )   // count="0" stays a valid answer
+                                             {
+                                                 const std::optional<std::string> answer = usesText( path, symbol, pg );
+                                                 return answer ? textResult( *answer )   // count="0" stays a valid answer
+                                                               : errResult( -32603, "internal error: the uses answer buffer lost bytes — no answer served" );
+                                             } )
                                            : errResultMsg( -32602, refusal );
                 }
                 else if( name == "path_between" && !path.empty() && !from.empty() && !to.empty() )

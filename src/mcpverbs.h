@@ -2542,7 +2542,9 @@ inline std::string_view atSeedNameOr( const IngestResult& ing, std::string_view 
     return seedDef != kNoNode ? std::string_view( ing.symbols[ seedDef ].name ) : sym;
 }
 
-inline std::string usesText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
+// nullopt when the answer buffer failed (at the open, or a write lost inside it): the callers answer an internal error,
+// because an empty text result would read as a successful, empty answer.
+inline std::optional<std::string> usesText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
 {
     const McpIndex&        ix   = getIndex( root );
     const IngestResult&    ing  = ix.ing;
@@ -2620,7 +2622,7 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
     std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;
     }
     // §H4 §3.4 item 2: the opener is the SHARED one (src/graphlegend.h) — this copy and the CLI's were the
     // same false "every use-site of SYM" promise emitted twice, and a fix applied to one of two echo sites
@@ -2656,7 +2658,7 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
         rw::emitRaw( mem, "/>" );
     }
     rw::emitRaw( mem, "</uses>" );
-    return mcpAnswerText( stream ).value_or( std::string{} );
+    return mcpAnswerText( stream );
 }
 
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
@@ -4822,7 +4824,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( refusal );
         }
-        r.payload = usesText( root, symbol, pageParse.page );   // LB-G: the batch arm honors the SAME window (the impact precedent)
+        std::optional<std::string> usesAnswer = usesText( root, symbol, pageParse.page );   // LB-G: the batch arm honors the SAME window (the impact precedent)
+        if( !usesAnswer )
+        {
+            return bad( "internal error: the uses answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *usesAnswer );
     }
     else if( r.verb == "mentions" )
     {
