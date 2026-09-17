@@ -174,6 +174,14 @@ Each of these was reproduced before it was fixed, and the gate that already owns
   for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
   short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
   `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
+- **`--layout` dropped a data member whose declaration carries a `(` that belongs to an `alignas`,
+  `__attribute__` or `decltype` specifier, or sits inside a template argument list, and still said the size was
+  right.** `alignas(8) int x`, `int x __attribute__((aligned(8)))`, `decltype(1) x` and `std::function<void(int)>
+  cb` were all taken for member functions too, for the same reason as the row above: the scan still looked at the
+  first `(` in the statement, whichever `(` that was. The field vanished while the struct reported `modeled="1"`
+  and a size short by its bytes. That first `(` is now skipped when it opens one of those specifiers or sits
+  inside `<…>`; each shape now comes back refused (`modeled="0"`, a named caveat) instead of silently missing.
+  Gate: `test/layoutcheck.sh` §14.
 - **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
   directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
   `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
