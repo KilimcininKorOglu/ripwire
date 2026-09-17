@@ -29,7 +29,8 @@
 # Two llvm-project instances were graded: LVReader.cpp `OutputFile->keep()` (member `std::unique_ptr<ToolOutputFile>
 # OutputFile`) landed on VirtualOutputFile.cpp OutputFile::keep, and SampleProfile.cpp `Reader->read()` (a BASE-class
 # member `std::unique_ptr<SampleProfileReader> Reader`) on msgpack Reader::read. The fixture is GENERATED below: a
-# smart-pointer member (H), a raw-pointer member that Rule 2b can then type (I), a base's member (J), a class template
+# smart-pointer member (H), a raw-pointer member (I) and a base's member (J), each of which Rule 2b types once the
+# class-name route refuses (H needs #282's pointee capture, J the base walk — both integration/train-5), a class template
 # base's member (K), a member 16 levels up, past the base walk's 16-name cap (L); two controls keep the contrast: the
 # same call from a class with no such member still takes the route (M), and a Python attribute named like the class does
 # not veto a Python class-name call — Python reaches an attribute only through `self.` (N).
@@ -180,8 +181,18 @@ for sel in Holder.Reader Holder.Raw Base.Inherited TBase.Templated Chain16.Deep;
         || no "(H) presence: --uses=$sel finds no member definition — the fixture no longer exercises a member"
 done
 
-# a member-hidden site: the route must not pin the class the token names. No row (the ladder drops a many-way name)
-# is honest; a row must not be receiver-rule, and must reach Widget::read when it names targets.
+# a member-hidden site whose member Rule 2b CAN type: the row is the member type's method alone, never the class the
+# token names. H (a smart-pointer member, #282) and J (a base class's member, lane/field-base-member) join I on
+# integration/train-5 — each member now has a declared type Rule 2b reads.
+memberTypePin(){ # $1 arm, $2 caller, $3 the class the token names, $4 what the member is
+    _R="$( mcrow "$2" read )"
+    printf '%s' "$_R" | grep -q "^receiver-rule	${WREAD}[0-9]*$" \
+        && ok "($1) $2 -> read is Rule 2b's Widget::read ALONE, the member's type ($4): $_R" \
+        || no "($1) $2 -> read is not receiver-rule to Widget::read alone: '${_R:-no row}' (want the member's type, not class $3)"
+}
+
+# a member-hidden site whose member Rule 2b CANNOT type (a class template's base, a member past the walk cap): the
+# route must not pin the class the token names. No row (the ladder drops a many-way name) is honest; a row must not
 notClassPin(){ # $1 arm, $2 caller, $3 the class the token names
     _R="$( mcrow "$2" read )"
     if [ -z "$_R" ]; then ok "($1) $2 -> read: no edge, not the class-name pin"; return; fi
@@ -192,16 +203,13 @@ notClassPin(){ # $1 arm, $2 caller, $3 the class the token names
         && ok "($1) $2 -> read reaches Widget::read, the member's type" \
         || no "($1) $2 -> read names targets without Widget::read: '$_R' (the class-name pin to $3::read, or a lost edge)"
 }
-# ── (H) std::unique_ptr<Widget> Reader — the S5-E compose capture never records this declarator, so only the field
-#        side table can see the member ──────────────────────────────────────────────────────────────────────
-notClassPin H 'app/holder.cpp::Holder::viaSmart' Reader
+# ── (H) std::unique_ptr<Widget> Reader — the field side table sees the member, and since #282 the compose capture
+#        records the pointee, so Rule 2b types it ─────────────────────────────────────────────────────────
+memberTypePin H 'app/holder.cpp::Holder::viaSmart' Reader 'std::unique_ptr<Widget> Reader'
 # ── (I) Widget* Raw — once the class-name route refuses, Rule 2b reads the member's declared type ───────────
-R="$( mcrow 'app/holder.cpp::Holder::viaRaw' read )"
-printf '%s' "$R" | grep -q "^receiver-rule	${WREAD}[0-9]*\$" \
-    && ok "(I) Holder::viaRaw -> Raw->read is Rule 2b's Widget::read ALONE: $R" \
-    || no "(I) Holder::viaRaw -> read is not receiver-rule to Widget::read alone: '${R:-no row}' (want the member's type, not class Raw)"
-# ── (J) a BASE class's member ─────────────────────────────────────────────────────────────────────────────
-notClassPin J 'app/holder.cpp::Holder::viaBase' Inherited
+memberTypePin I 'app/holder.cpp::Holder::viaRaw' Raw 'Widget* Raw'
+# ── (J) a BASE class's member — Rule 2b walks the bases for a member the class itself does not declare ─────
+memberTypePin J 'app/holder.cpp::Holder::viaBase' Inherited "the base's Widget* Inherited"
 # ── (K) a class TEMPLATE base's member (`: TBase<Widget>` — chaUp keys the template's name) ───────────────
 notClassPin K 'app/holder.cpp::Deriv::viaTemplateBase' Templated
 # ── (L) a member 16 levels up: past the walk's 16-name cap a narrow that cannot prove the name unshadowed is
