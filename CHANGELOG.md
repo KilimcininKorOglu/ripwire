@@ -15,6 +15,54 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a class's `using Base::m;` was ignored, so a call its two bases tie on stayed split
+
+llvm-project's `clang/lib/CodeGen/CGNonTrivialStruct.cpp` declares `struct CopyStructVisitor : StructVisitor<Derived>,
+CopiedTypeVisitor<Derived, IsMove> { using StructVisitor<Derived>::asDerived; … }`. Both bases define `asDerived`, and
+the using-declaration is how C++ picks one. The type-side probe that Rules 2b and 2c and Rule 1's base walk share
+(`resolve.h` `methodOnTypeOrBases`) never read it. A class with no `asDerived` of its own went straight to its bases,
+the two-base tie refused, and each of the file's five `asDerived()` calls split three ways: `StructVisitor::asDerived`
+plus same-file namesakes in `GenFuncNameBase` and `GenFuncBase`, classes the caller does not derive from. The tags pass
+has recorded every class-scope using-declaration as an import site all along; the resolver never consulted them.
+
+A class that defines no `m` now answers with what its `using Base::m;` names: the base's own definitions, else the
+result of walking that base. The walk goes one level: that base's own using-declarations are not followed. The
+qualifier loses its template arguments (`using Base<T>::m;` names `Base`). A re-export naming nothing the index reaches
+adds nothing, and the unchanged walk runs. The change is resolve-stage only: kParserVer and the cache format do not
+move.
+
+It deliberately does NOT add the base's overloads to a class that also defines `m`, though C++ does. That was measured
+first. Clang's `CGBuilderTy`, for example, writes `using CGBuilderBaseTy::CreateGEP;` next to its own `CreateGEP`
+overloads, yet the resolver answers the class's own overloads alone. The union was built and graded: over the 17 call
+sites it moved (rocksdb 13, llvm-project 4), blinded against source, 5 were better, 4 the same and 8 worse. Three
+causes, none fixable without parameter types:
+- The ladder cannot drop a re-exported overload the class overrides: rocksdb's `WriteBatch::Put` and `Delete` gained
+  `WriteBatchBase`'s.
+- It cannot drop one the argument count rules out, because the arity filter removes only too-many-arguments
+  candidates.
+- One split was cut to its base half by the same-file tier.
+
+That shape stays a stated floor, pinned by `test/fieldnarrowcheck.sh` arm (u1). It would not have reached `CGBuilderTy`'s
+calls in any case. On main, `CGBuilderBaseTy` is a typedef the base walk cannot follow. With a typedef/using alias fact
+applied, the S6-C locality tie-break keeps the `clang/lib/CodeGen` half of the split.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `fe28fd49` against this change, joining call-site rows
+on (caller, callee, line):
+- rocksdb @ `0e2801ac3`: 0 call sites change.
+- llvm-project @ `4d5358b1d`: 5 change, 0 gained, 0 lost. All five `asDerived()` splits become one receiver-rule pin
+  (`receiver-rule=` 520,496 → 520,501, `split=` 256,918 → 256,913). Graded blinded against source: 5 better, 0 same,
+  0 worse.
+- Composed with the typedef/using alias fact then in review (head `36aa4f56`), llvm-project moves one more site:
+  `UsingShadowDecl::getMostRecentDeclImpl` reaches `Redeclarable::getMostRecentDecl` through `using
+  redeclarable_base::getMostRecentDecl;`, graded WRONG → PARTIAL. rocksdb stays at 0.
+
+The ASan build's llvm-project census is byte-identical to the plain build's and reports no sanitizer finding.
+
+The gate is `test/fieldnarrowcheck.sh` arms (u0)–(u7). On `main`, (u2) the field call, (u3) Rule 1's bare call and (u5)
+the template-qualified re-export are red. (u4) is the contrast: the same two bases with no using-declaration keep their
+split. (u6) is an unindexed re-export that keeps the walk. (u1) goes red on the union build, and (u5) on a build
+without the template-argument strip.
+
 ### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
 
 CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
