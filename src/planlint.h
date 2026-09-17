@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -388,7 +389,7 @@ inline std::string gitBlameLineSha( const std::string& repoRoot, const std::stri
     {
         return {};
     }
-    const std::string cmd = "git -c core.quotepath=false" + quality::gitBlameConfigPins( repoRoot )
+    const std::string cmd = gitCmd( " -c core.quotepath=false" ) + quality::gitBlameConfigPins( repoRoot )
                            + " -C " + shSingleQuote( repoRoot ) + " blame --porcelain -L "
                            + std::to_string( lineNo1 ) + ",+1 HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );

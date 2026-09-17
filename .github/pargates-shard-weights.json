@@ -516,6 +516,7 @@
 "swiftshapecheck.sh": 0.9,
 "taskechocheck.sh": 1.1,
 "taskroutecheck.sh": 72.7,
+"tempfilesymlinkcheck.sh": 15.0,
 "termmargincheck.sh": 0.6,
 "testedreachcheck.sh": 0.6,
 "testgatecheck.sh": 8.1,
