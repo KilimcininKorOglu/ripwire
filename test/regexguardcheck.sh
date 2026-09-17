@@ -57,6 +57,23 @@
 #   (i) --arch DECIDES DENY FIRST — an allow whose pattern the engine cannot finish must not turn a determinable "no
 #       deny can forbid this edge" into a refusal; an undecided allow matters only when a deny fires and no allow
 #       matches, and a later allow that matches still permits the edge.
+#   (j) THE LITERAL PATHS ARE THE ENGINE — src/regexguard.h answers a literal (or `|`-joined literals, one optionally
+#       `^`/`$`-anchored) with byte kernels, and never hands the engine a line holding none of a pattern's required
+#       literals. test/regexlines_harness.cpp diffs both, and the long-line skip policy, against std::regex itself over
+#       adversarial, generated and corpus patterns (every --regex the docs/skills/gates spell, every #match? a query or
+#       lint pack carries) × CRLF/LF/empty-line texts, under both syntax sets; 0 mismatches and its coverage floors, and
+#       a mutated copy of the header (an alternation that resumes one byte past a match) must go red.
+#   (k) A LONG LINE ANSWERS OR SAYS IT WAS SKIPPED — libstdc++'s matcher recurses once per state it visits, and
+#       `--regex='a*b'` died with SIGSEGV on a ~26–45 KB matching line on Linux. A 300 KB matching line now exits 0: matched
+#       in full where the engine does not recurse (libc++), or skipped and disclosed (regex_lines_skipped=, regex_line_max=,
+#       counts_floor, the LONG LINES legend clause) where it does. A 2 MB line with no 'b' is ruled out by the required
+#       literal on every engine (it crashed libstdc++ and ran quadratic on libc++), a literal alternation over a 3 MB line
+#       never reaches the engine, and a literal --grep answer is unchanged.
+#   (l) THE BOUND HOLDS WHERE IT EXISTS — on a recursing engine, for three shapes (a plain repeat, an alternation loop, a
+#       loop before a lookahead), a line of exactly regex_line_max bytes is matched at exit 0 and one byte more is skipped.
+#   (m) THE SKIP PATH ON EVERY ENGINE — the non-NDEBUG fault switch RIPWIRE_FAULT_REGEX_LINE_BOUND=1 caps the bound at 64
+#       bytes: a 104-byte line is skipped, counted and floored, and the compact legend reads both attributes; a literal
+#       pattern and a line lacking the required literal are never skipped; the exact-"1" control changes nothing.
 #   (d) file() IS ROOT-RELATIVE — two clones of one tree at different directory names, each run with an
 #       absolute and a relative root spelling, must give the SAME count for a pattern naming one clone's
 #       directory, and an anchored `^src/` must select the src/ symbols (it selected nothing under an
@@ -95,16 +112,19 @@ capRun(){                        # capRun <seconds> <outfile> <errfile> <args…
 # ── the fixture: a directory whose NAME is a long run of 'a' (the backtracking bait lives in the PATH, which is
 #    what file() and --arch match), an include edge from zz/ into it, a C++ file whose identifiers a #match?
 #    predicate can select and whose string literal (88 'a') a real-engine #match? arm can exhaust on, and a
-#    markdown line of 4000 'a' for --regex. Written here so it cannot drift; the rules files sit OUTSIDE it. ────
+#    markdown line of 4000 'a' for --regex. Each bait run is followed by a non-'a' byte and then a 'z': a subject
+#    holding no 'z' is ruled out by (a|a)+z's required literal before the engine is asked (src/regexguard.h), so
+#    the real-engine arms need the 'z' present for the engine to have anything to abandon. Written here so it cannot
+#    drift; the rules files sit OUTSIDE it. ────
 RUNA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 FIX="$TMP/rxfix"
 mkdir -p "$FIX/$RUNA" "$FIX/zz" "$TMP/rules_bomb" "$TMP/rules_ok"
-printf 'int aaaa_one() { return 1; }\nint aaaa_two() { return aaaa_one(); }\n' >"$FIX/$RUNA/$RUNA.h"
-printf '#include "%s.h"\nint aaaa_three() { return aaaa_two(); }\n' "$RUNA" >"$FIX/$RUNA/$RUNA.c"
-printf '#include "../%s/%s.h"\nint zz_caller() { return aaaa_one(); }\n' "$RUNA" "$RUNA" >"$FIX/zz/b.c"
-printf '#include "../%s/%s.h"\nint zz_digit() { return aaaa_two(); }\n' "$RUNA" "$RUNA" >"$FIX/zz/d1.c"
-printf 'int foo_alpha() { return 0; }\nint foo_beta() { return foo_alpha(); }\nconst char* bait = "%s";\n' "$RUNA$RUNA" >"$FIX/zz/q.cpp"
-{ printf '# bait\n'; head -c 4000 /dev/zero | tr '\0' 'a'; printf '\nzz marker line\n'; } >"$FIX/zz/bait.md"
+printf 'int aaaa_one() { return 1; }\nint aaaa_two() { return aaaa_one(); }\n' >"$FIX/$RUNA/${RUNA}_z.h"
+printf '#include "%s_z.h"\nint aaaa_three() { return aaaa_two(); }\n' "$RUNA" >"$FIX/$RUNA/$RUNA.c"
+printf '#include "../%s/%s_z.h"\nint zz_caller() { return aaaa_one(); }\n' "$RUNA" "$RUNA" >"$FIX/zz/b.c"
+printf '#include "../%s/%s_z.h"\nint zz_digit() { return aaaa_two(); }\n' "$RUNA" "$RUNA" >"$FIX/zz/d1.c"
+printf 'int foo_alpha() { return 0; }\nint foo_beta() { return foo_alpha(); }\nconst char* bait = "%s_z";\n' "$RUNA$RUNA" >"$FIX/zz/q.cpp"
+{ printf '# bait\n'; head -c 4000 /dev/zero | tr '\0' 'a'; printf '_z\nzz marker line\n'; } >"$FIX/zz/bait.md"
 cat >"$TMP/rules_bomb/bomb.yml" <<'YML'
 - id: rx-bomb
   language: cpp
@@ -527,6 +547,157 @@ else no "(g) 65 nested groups: exit $rc — $( head -c 160 "$TMP/g4.err" )"; fi
 rc="$( capRun 20 "$TMP/g5.out" "$TMP/g5.err" "$FIX" --no-cache --graph-query="file(all,\"$NEST64\")" )"
 if [ "$rc" = 0 ] && grep -q '<query ' "$TMP/g5.out"; then ok "(g) groups nested exactly 64 deep still compile and answer"
 else no "(g) 64 nested groups: exit $rc — $( head -c 160 "$TMP/g5.err" )"; fi
+
+# ── (j) the literal paths ARE the engine: a differential harness, then a mutation it must see ──────────────────────
+# The corpus is every --regex pattern the docs, skills and gates spell, and every #match? predicate a lint pack or query
+# file carries, on top of the harness's own adversarial and generated patterns.
+CXX="${CXX:-c++}"
+. "$ROOT/scripts/cxxstd.sh"
+CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"
+{
+    grep -rhoE -- "--regex='[^']+'" "$ROOT/docs" "$ROOT/skills" "$ROOT/test" "$ROOT/README.md" 2>/dev/null | sed -e "s/^--regex='//" -e "s/'\$//"
+    grep -rhoE '#(not-)?match\? @[A-Za-z_.]+ "([^"\\]|\\.)+"' "$ROOT/src" "$ROOT/queries" "$ROOT/test" 2>/dev/null \
+        | sed -e 's/^#[a-z-]*? @[A-Za-z_.]* "//' -e 's/"$//' -e 's/\\\\/\\/g'
+} | LC_ALL=C sort -u >"$TMP/rx_corpus.txt"
+corpusLines="$( wc -l <"$TMP/rx_corpus.txt" | tr -d ' ' )"
+if "$CXX" "$CXXSTD" -O2 -Wall -Wextra -I"$ROOT/src" "$ROOT/test/regexlines_harness.cpp" -o "$TMP/rxlines" 2>"$TMP/rxlines.cc"; then
+    "$TMP/rxlines" "$TMP/rx_corpus.txt" >"$TMP/rxlines.out" 2>&1; rxRc=$?
+    summary="$( grep -m1 '^regexlines:' "$TMP/rxlines.out" )"
+    if [ "$rxRc" -eq 0 ] && printf '%s' "$summary" | grep -q ' mismatches=0 coverage=met'; then
+        ok "(j) literal plan, required-literal prefilter and skip policy agree with std::regex ($CXX, corpus $corpusLines): $summary"
+    else
+        no "(j) the literal paths disagree with std::regex (rc $rxRc): $summary $( grep -m2 '^MISMATCH' "$TMP/rxlines.out" | head -c 400 )"
+    fi
+    # can the harness go red? A plan that resumes one byte after a match instead of after its end reports overlaps.
+    mkdir -p "$TMP/rxmut"
+    python3 - "$ROOT/src/regexguard.h" "$TMP/rxmut/regexguard.h" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = "k = at + chosen->size();"
+assert s.count(old) == 1, "mutation site moved"
+open(sys.argv[2], "w").write(s.replace(old, "k = at + 1;"))
+PY
+    if "$CXX" "$CXXSTD" -O2 -w -I"$TMP/rxmut" -I"$ROOT/src" "$ROOT/test/regexlines_harness.cpp" -o "$TMP/rxlinesmut" 2>"$TMP/rxmut.cc"; then
+        "$TMP/rxlinesmut" "$TMP/rx_corpus.txt" >"$TMP/rxmut.out" 2>&1; mutRc=$?
+        if [ "$mutRc" -ne 0 ] && grep -q '^MISMATCH' "$TMP/rxmut.out"; then ok "(j) mutation control: an overlapping literal alternation is caught ($( grep -m1 -o 'mismatches=[0-9]*' "$TMP/rxmut.out" ))"
+        else no "(j) mutation control: the harness passed a literal plan that reports overlapping matches (rc $mutRc)"; fi
+    else
+        no "(j) mutation control did not compile: $( head -c 300 "$TMP/rxmut.cc" )"
+    fi
+else
+    no "(j) test/regexlines_harness.cpp did not compile with $CXX: $( head -c 400 "$TMP/rxlines.cc" )"
+fi
+
+# ── (k) a long line answers or says it was skipped — never a signal death, never a silent zero ─────────────────────
+attrOf(){ grep -o "<grep [^>]*>" "$2" | head -1 | grep -o " $1=\"[^\"]*\"" | head -1 | sed -e 's/.*="//' -e 's/"$//'; }
+FIXL="$TMP/longfix"; FIXN="$TMP/nobfix"; FIXP="$TMP/litfix"
+mkdir -p "$FIXL" "$FIXN" "$FIXP"
+python3 - "$FIXL" "$FIXN" "$FIXP" <<'PY'
+import sys
+l, n, p = sys.argv[1:4]
+open(f"{l}/long.md", "w").write("a" * 300000 + "b\nok ab\n")          # 300 KB: past libstdc++'s 8 MiB crash (26-45 KB) and its 256 MiB bound
+open(f"{l}/small.md", "w").write("# small\nab\n")
+open(f"{n}/nob.txt", "w").write("a" * 2000000 + "\n")                  # no 'b' anywhere: the required literal rules the line out
+open(f"{n}/small.md", "w").write("# small\nab\n")
+open(f"{p}/lit.txt", "w").write("x" * 3000000 + "needle\n")            # a literal alternation over a 3 MB line
+open(f"{p}/small.md", "w").write("# small\npin\n")
+PY
+rc="$( capRun 60 "$TMP/k1.out" "$TMP/k1.err" "$FIXL" --no-cache --regex='a*b' )"
+skipped="$( attrOf regex_lines_skipped "$TMP/k1.out" )"
+if [ "$rc" != 0 ]; then
+    no "(k) --regex='a*b' over a 300 KB matching line: exit $rc (a signal death is 128+N) — $( head -c 160 "$TMP/k1.err" )"
+elif [ -z "$skipped" ]; then
+    no "(k) --regex='a*b' answered without regex_lines_skipped= on its root"
+elif [ "$skipped" = 0 ]; then
+    if grep -q '<f p="long.md"><hit l="1"' "$TMP/k1.out"; then ok "(k) a 300 KB matching line is matched in full (this engine does not recurse per byte): regex_lines_skipped=\"0\""
+    else no "(k) regex_lines_skipped=\"0\" but the 300 KB line's hit is missing — a silent zero"; fi
+else
+    lineMax="$( attrOf regex_line_max "$TMP/k1.out" )"
+    if [ "$skipped" = 1 ] && [ -n "$lineMax" ] && grep -q 'counts_floor="1"' "$TMP/k1.out" && grep -q '<f p="long.md"><hit l="2"' "$TMP/k1.out" \
+       && grep -q 'LONG LINES:' "$TMP/k1.out"; then
+        ok "(k) the 300 KB line is skipped and disclosed (regex_lines_skipped=\"1\" regex_line_max=\"$lineMax\" counts_floor=\"1\", legend defines both), line 2 still answered"
+    else
+        no "(k) a skipped line is not fully disclosed: skipped=$skipped line_max=[$lineMax] floor=$( grep -c 'counts_floor="1"' "$TMP/k1.out" )"
+    fi
+fi
+rc="$( capRun 30 "$TMP/k2.out" "$TMP/k2.err" "$FIXN" --no-cache --regex='a*b' )"
+if [ "$rc" = 0 ] && [ "$( attrOf regex_lines_skipped "$TMP/k2.out" )" = 0 ] && ! grep -q 'p="nob.txt"' "$TMP/k2.out"; then
+    ok "(k) a 2 MB line holding no 'b' is ruled out without the engine: exit 0 inside 30 s, regex_lines_skipped=\"0\", no hit"
+else
+    no "(k) --regex='a*b' over a 2 MB line with no 'b': exit $rc, regex_lines_skipped=[$( attrOf regex_lines_skipped "$TMP/k2.out" )]"
+fi
+rc="$( capRun 30 "$TMP/k3.out" "$TMP/k3.err" "$FIXP" --no-cache --regex='needle|pin' )"
+if [ "$rc" = 0 ] && [ "$( attrOf regex_lines_skipped "$TMP/k3.out" )" = 0 ] && grep -q '<hit l="1"' "$TMP/k3.out" && grep -q '<hit l="2"' "$TMP/k3.out"; then
+    ok "(k) a literal alternation over a 3 MB line never reaches the engine: both hits, regex_lines_skipped=\"0\""
+else
+    no "(k) --regex='needle|pin' over a 3 MB line: exit $rc, regex_lines_skipped=[$( attrOf regex_lines_skipped "$TMP/k3.out" )]"
+fi
+"$BIN" "$FIXP" --no-cache --grep=needle >"$TMP/k4.out" 2>/dev/null
+if grep -q '<grep ' "$TMP/k4.out" && ! grep -q 'regex_lines_skipped\|LONG LINES:' "$TMP/k4.out"; then ok "(k) a literal --grep answer carries no long-line attribute or clause"
+else no "(k) a literal --grep answer changed: $( grep -o '<grep [^>]*>' "$TMP/k4.out" | head -c 300 )"; fi
+
+# ── (l) the bound holds on the engine it protects: exactly at regex_line_max the engine runs, one byte past it skips ───
+# Only a recursing engine has a finite bound; (k) above read it from the binary. Each shape builds its own bound first.
+boundShape(){                    # boundShape <label> <pattern> <unit> <suffix>
+    local label="$1" pat="$2" unit="$3" suffix="$4" dir="$TMP/bound_$5"
+    mkdir -p "$dir"
+    python3 -c "import sys; open(sys.argv[1],'w').write(sys.argv[2]*(1000000//len(sys.argv[2])) + sys.argv[3] + '\n')" "$dir/huge.txt" "$unit" "$suffix"
+    capRun 60 "$TMP/l0.out" /dev/null "$dir" --no-cache --regex="$pat" >/dev/null
+    local max; max="$( attrOf regex_line_max "$TMP/l0.out" )"
+    if [ -z "$max" ]; then
+        no "(l) $label: a 1 MB line was not skipped on an engine whose 300 KB line was — no regex_line_max= to test"
+        return
+    fi
+    rm -f "$dir/huge.txt"
+    local body=$(( max - ${#suffix} )) at past
+    python3 -c "import sys; u=sys.argv[2]; n=int(sys.argv[3]); s=(u*(n//len(u)+1))[:n]; open(sys.argv[1],'w').write(s + sys.argv[4] + '\n')" "$dir/at.txt" "$unit" "$body" "$suffix"
+    at="$( capRun 60 "$TMP/l1.out" "$TMP/l1.err" "$dir" --no-cache --regex="$pat" )"
+    rm -f "$dir/at.txt"
+    python3 -c "import sys; u=sys.argv[2]; n=int(sys.argv[3]); s=(u*(n//len(u)+1))[:n]; open(sys.argv[1],'w').write(s + sys.argv[4] + '\n')" "$dir/past.txt" "$unit" "$(( body + 1 ))" "$suffix"
+    past="$( capRun 60 "$TMP/l2.out" /dev/null "$dir" --no-cache --regex="$pat" )"
+    if [ "$at" = 0 ] && [ "$( attrOf regex_lines_skipped "$TMP/l1.out" )" = 0 ] && grep -q '<hit l="1"' "$TMP/l1.out"; then
+        ok "(l) $label: a line of exactly regex_line_max=$max bytes is handed to the engine and matched, exit 0"
+    else
+        no "(l) $label: at the bound ($max bytes) exit $at, regex_lines_skipped=[$( attrOf regex_lines_skipped "$TMP/l1.out" )] — $( head -c 160 "$TMP/l1.err" )"
+    fi
+    if [ "$past" = 0 ] && [ "$( attrOf regex_lines_skipped "$TMP/l2.out" )" = 1 ]; then ok "(l) $label: one byte past the bound the line is skipped and counted"
+    else no "(l) $label: one byte past the bound: exit $past, regex_lines_skipped=[$( attrOf regex_lines_skipped "$TMP/l2.out" )]"; fi
+}
+if [ -n "$( attrOf regex_line_max "$TMP/k1.out" )" ]; then
+    boundShape "a*b"                "a*b"             a   b 1
+    boundShape "(a|b)*c"            "(a|b)*c"         ab  c 2
+    boundShape "(?:x|y|a)*(?=b)b"   "(?:x|y|a)*(?=b)b" a  b 3
+else
+    printf '  INFO  (l) (k) disclosed no regex_line_max= on this binary (an engine with no per-byte recursion has no finite line bound), so there is no bound to test\n'
+fi
+
+# ── (m) the skip path and its disclosure on EVERY engine: RIPWIRE_FAULT_REGEX_LINE_BOUND=1 caps the bound at 64 bytes ──
+if [ "$FAULTS" -eq 1 ]; then
+    FIXF="$TMP/faultfix"; mkdir -p "$FIXF"
+    { head -c 100 /dev/zero | tr '\0' 'x'; printf ' aab\naab\n'; } >"$FIXF/f.md"
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='a+b' >"$TMP/m1.out" 2>/dev/null
+    if [ "$( attrOf regex_lines_skipped "$TMP/m1.out" )" = 1 ] && [ "$( attrOf regex_line_max "$TMP/m1.out" )" = 64 ] \
+       && grep -q 'counts_floor="1"' "$TMP/m1.out" && grep -q '<hit l="2"' "$TMP/m1.out" && ! grep -q '<hit l="1"' "$TMP/m1.out"; then
+        ok "(m) a 104-byte line past the 64-byte fault bound is skipped, counted and floored; the short line still answers"
+    else
+        no "(m) fault bound: $( grep -o '<grep [^>]*>' "$TMP/m1.out" | head -c 300 )"
+    fi
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='a+b' --legend=compact >"$TMP/m2.out" 2>/dev/null
+    if grep -q 'regex_lines_skipped=N: ' "$TMP/m2.out" && grep -q 'regex_line_max=: ' "$TMP/m2.out"; then ok "(m) the compact legend reads both long-line attributes"
+    else no "(m) the compact legend does not read regex_lines_skipped=/regex_line_max=: $( head -c 300 "$TMP/m2.out" )"; fi
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='aab' >"$TMP/m3.out" 2>/dev/null
+    if [ "$( attrOf regex_lines_skipped "$TMP/m3.out" )" = 0 ] && grep -q '<hit l="1"' "$TMP/m3.out" && grep -q 'hits="2"' "$TMP/m3.out"; then
+        ok "(m) a literal pattern is never skipped, even past the fault bound: both lines answer"
+    else no "(m) --regex='aab' under the fault bound: $( grep -o '<grep [^>]*>' "$TMP/m3.out" | head -c 300 )"; fi
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIXF" --no-cache --regex='a+q' >"$TMP/m4.out" 2>/dev/null
+    if [ "$( attrOf regex_lines_skipped "$TMP/m4.out" )" = 0 ]; then ok "(m) a long line holding none of the pattern's required literal is ruled out, not skipped"
+    else no "(m) --regex='a+q' skipped a line that cannot match: $( grep -o '<grep [^>]*>' "$TMP/m4.out" | head -c 300 )"; fi
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=10 "$BIN" "$FIXF" --no-cache --regex='a+b' >"$TMP/m5.out" 2>/dev/null
+    if [ "$( attrOf regex_lines_skipped "$TMP/m5.out" )" = 0 ] && grep -q 'hits="2"' "$TMP/m5.out"; then ok "(m) control: RIPWIRE_FAULT_REGEX_LINE_BOUND=10 is not ON, and both lines answer"
+    else no "(m) control: RIPWIRE_FAULT_REGEX_LINE_BOUND=10 changed the answer: $( grep -o '<grep [^>]*>' "$TMP/m5.out" | head -c 300 )"; fi
+else
+    printf '  INFO  (m) this binary compiles fault switches out (NDEBUG); the skip path is observable through (k)/(l) on a recursing engine\n'
+fi
 
 # ── (d) file() matches the ROOT-RELATIVE path, so the checkout's directory name cannot select anything ─────────
 mkTree(){

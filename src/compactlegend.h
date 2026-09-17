@@ -349,6 +349,10 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "run_unknown",       "run_unknown=1: no runner derivable (a guess would be worse)", true },
     { "run_unknown",       "<g n= p=a,b,c>: n runner-less rows with equal attrs as ONE row, paths verbatim; a path holding ',' is never grouped, so p= splits into exactly n=; shown=/total= over these rows counts test FILES", true, "g" },
     { "hits_capped",       "hits_capped=1: hits= is a floor" },
+    // --regex's long-line disclosure (search.h grepScanText / regexguard.h maxEngineSubjectBytes): the count rides every
+    // regex answer, the bound only beside a nonzero count.
+    { "regex_lines_skipped", "regex_lines_skipped=N: N lines too long for the regex engine, never matched" },
+    { "regex_line_max",    "regex_line_max=: the longest line it could take; hits= is a floor" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
     // under max-tokens. Same number, same reading, so one row reads both places.
     { "est_tokens",        "est_tokens=: price as emitted (an upper bound under compact)", false, {}, MapHeaderRead::Also },

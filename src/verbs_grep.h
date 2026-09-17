@@ -345,6 +345,28 @@ std::string grepTierAttrs( const rw::GrepTierReport& tier, bool floorAlreadyEmit
     return attrs;
 }
 
+// A --regex answer's long-line disclosure: regex_lines_skipped= ALWAYS (0 is the proof that no line was kept from the
+// engine), and, when it is not 0, regex_line_max= (the longest line the engine was handed) and the floor marker, which
+// rides with its cause unless the page disclosure or tier_budget= already spelled it. Literal --grep answers never
+// reach the engine and carry none of it — byte-identical to before.
+std::string grepRegexSkipAttrs( const rw::Config& cfg, const rw::GrepCollection& found, const rw::GrepAuxCollection& aux, bool floorAlreadyEmitted )
+{
+    if( !cfg.grepRegex )
+    {
+        return {};
+    }
+    const std::uint64_t skipped = found.regexLinesSkipped + aux.regexLinesSkipped;
+    std::string         attrs   = " regex_lines_skipped=\"" + std::to_string( skipped ) + "\"";
+    if( skipped != 0 )
+    {
+        const std::size_t lineMax = found.regexLinesSkipped == 0 ? aux.regexLineBytesMax
+                                  : aux.regexLinesSkipped == 0   ? found.regexLineBytesMax
+                                                                 : std::min( found.regexLineBytesMax, aux.regexLineBytesMax );
+        attrs += " regex_line_max=\"" + std::to_string( lineMax ) + "\"" + ( floorAlreadyEmitted ? "" : rw::kGraphCountFloorAttrXml );
+    }
+    return attrs;
+}
+
 std::vector<rw::GrepTerm> makeGrepTerms( const rw::Config& cfg )
 {
     std::vector<rw::GrepTerm> terms;
@@ -733,6 +755,16 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     // held nothing back emits no tier attribute and pays no tier prose — byte-identical to the pre-tier
     // verb, which is the "purely additive" contract. Helper above; empty string when there is nothing to say.
     rw::emitTo( stdout, "{}", grepTierLegend( tierReport ) );
+    // The long-line clause rides only on a regex answer — the only one that can carry the attributes it defines.
+    if( cfg.grepRegex )
+    {
+        rw::emitRaw( stdout, "LONG LINES: regex_lines_skipped= (regex only, always present) counts lines the regex engine was never handed "
+                             "because they were longer than its thread's stack can take (libstdc++ recurses once per character matched): a match "
+                             "on one of them is neither found nor ruled out, and a value of 0 means no line was skipped. When it is not 0, "
+                             "regex_line_max= is the longest line the engine could take on that stack and the root also carries counts_floor: hits= is a "
+                             "floor. A pattern that is a literal (or literals joined by |) never reaches the engine, so no line is too long "
+                             "for it; neither is a line holding none of the pattern's required literal text. " );
+    }
     rw::emitTo( stdout,
                  // G1 (2026-08-15 harvest): byte-identical match text within one file's hits on the UNPAGINATED default view folds into
                  // ONE <hit> row plus <at l=… in=…/> children for the extra sites — n= on the <hit> (present only when >1) is 1+the <at>
@@ -817,6 +849,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     const std::string tierAttr = grepTierAttrs( tierReport, /*floorAlreadyEmitted=*/hitsCapped != 0 );   // N2: tier_budget= floors the root too
     // §R-J: unindexed_files_scanned=/unindexed_files_skipped=/unindexed_candidates_capped= (helper above).
     const std::string auxAttr = grepUnindexedAttrs( aux );
+    const std::string regexSkipAttr = grepRegexSkipAttrs( cfg, found, aux, /*floorAlreadyEmitted=*/hitsCapped != 0 || tierReport.budgetHit != nullptr );
     const char* schemaAttr = cfg.legend == "compact" ? " schema=\"ripwire.grep/v1\"" : "";
     // P3 (L7, nextverb.h): the one follow-up. A CUT answer → the next page, under the compact legend (the page
     // is what the agent wants, not the prose it has already read); a hit → the enclosing-definition chain at the
@@ -834,12 +867,12 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     {
         grepNext = rw::nextFlag( "--for=", pat );
     }
-    rw::emitTo( stdout, "<grep pattern=\"{}\"{}{}{} files=\"{}\" hits=\"{}\"{} hits_capped=\"{}\"{}{}{}{}{}>",
+    rw::emitTo( stdout, "<grep pattern=\"{}\"{}{}{} files=\"{}\" hits=\"{}\"{} hits_capped=\"{}\"{}{}{}{}{}{}>",
                  ex( pat ).c_str(), schemaAttr, rootAttr.c_str(), termsAttr.c_str(), filesMatched, hitCount,
                  pageDisclosure( grab, sizeof( grab ), grepPage.end - grepPage.begin, hitCount, grepPage.end,
                                  cfg.pageLimit, cfg.pageOffset, true, kXmlPageSyntax,
                                  /*collectionCapped=*/ hitsCapped != 0 ),   // H8: the cap hits_capped= names floors the root
-                 hitsCapped, completeAttr, tierAttr.c_str(), corpusAttr.c_str(), auxAttr.c_str(),
+                 hitsCapped, completeAttr, tierAttr.c_str(), corpusAttr.c_str(), auxAttr.c_str(), regexSkipAttr.c_str(),
                  rw::nextAttrXml( grepNext ).c_str() );
     // G1 (2026-08-15 harvest): hits GROUP by file under <f p="…">, root-relative when this is a single-root
     // run (report-memgraph §F6: the absolute root prefix alone was 42.5% of a real --grep payload; the
