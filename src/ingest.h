@@ -580,9 +580,15 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
 //
 // What it is FOR: classifying a byte offset that some other pass already found. A --grep hit inside a
 // comment or a string literal is a mention, not a use, and 22-42% of a --grep answer's rows were such
-// mentions (2026-08-15 harvest, report-ugrep §F3). Nothing here is cached or serialized — these spans are
-// a property of the file's bytes at query time, so no cache version moves when this changes.
+// mentions (2026-08-15 harvest, report-ugrep §F3). The spans are a property of the file's bytes at query
+// time, so the ingest cache never carries them and no kCacheVersion moves when this changes — but they ARE
+// persisted since: the span-tier memo (ingest_astquery.h spanTierMemoLoad, its own kSpanTierMemoVersion)
+// writes one tier byte per span to disk, and reads each one back as external input.
 enum class SpanTier : std::uint8_t { Code = 0, Comment = 1, String = 2 };
+// The number of SpanTier values — the bound spanTierMemoLoad validates every memo tier byte against. A byte at
+// or past it used to reach search.h's grepApplySpanTiers, which counts hits into a per-tier array indexed by it.
+inline constexpr std::size_t kSpanTierCount = static_cast<std::size_t>( SpanTier::String ) + 1;
+static_assert( enumCountIsExact<SpanTier, kSpanTierCount>(), "kSpanTierCount must name the LAST SpanTier value — move it with the append" );
 
 // One file's comment/string spans. SoA, not an array of {start,end,tier} structs: the classify path binary-
 // searches `startByte` alone and touches the other two arrays at most once per lookup, so the search walks
@@ -661,7 +667,14 @@ struct AstQueryShape
     bool hasCapture       = false;   // an @capture appears outside any string literal
     bool isSingleTopLevel = false;   // exactly one top-level (…) or […] group, with nothing beside it
     bool hasComment = false;         // a `;` line comment — an appended capture could land inside it
+    std::size_t maxDepth = 0;        // the deepest ( / [ nesting outside strings and comments
 };
+
+// The deepest ( / [ nesting a tree-sitter query may carry before ripwire hands it to ts_query_new. The query
+// compiler recurses once per level, and it runs on worker threads with a small stack: a --match query nested
+// 4,000 levels deep died with SIGBUS (exit 138), and 2,000 levels ran for over a minute. A structural query a
+// person or an agent writes nests a few dozen levels; deeper is refused by name before any compile.
+inline constexpr std::size_t kMaxAstQueryNesting = 256;
 
 inline AstQueryShape astQueryShape( std::string_view query )
 {
@@ -704,6 +717,7 @@ inline AstQueryShape astQueryShape( std::string_view query )
                 ++topLevelGroupCount;
             }
             ++depth;
+            shape.maxDepth = std::max( shape.maxDepth, static_cast<std::size_t>( depth ) );
             continue;
         }
         if( c == ')' || c == ']' )
@@ -726,6 +740,11 @@ inline AstQueryShape astQueryShape( std::string_view query )
 
     shape.isSingleTopLevel = ( topLevelGroupCount == 1 ) && ( depth == 0 ) && !inString && !sawContentAfterTopLevelGroup;
     return shape;
+}
+
+inline bool astQueryNestsTooDeep( std::string_view query )
+{
+    return astQueryShape( query ).maxDepth > kMaxAstQueryNesting;
 }
 
 // ---- local-variable-indexing plan, Phase 2 (docs/LOCALS_INDEXING.md) ----

@@ -97,6 +97,8 @@ def parse_census( path ):
         for line in fh:
             if line.startswith( "#" ):
                 continue
+            # Census v3 escapes ids and callee names (src/pincensus.h). Both runs escape one symbol identically,
+            # so the join below compares them as opaque keys and needs no decode; split on TAB and `|` is exact.
             parts = line.rstrip( "\n" ).split( "\t" )
             if parts[ 0 ] == "C" and len( parts ) >= 8:
                 decisions.append( {

@@ -69,7 +69,7 @@ anchor="$( sed -n 's/.*anchors: Frobnicator(\([^)]*\)).*/\1/p' "$TMP/lens" | hea
     && ok "the anchor resolves to a_gold.hpp (anchors: Frobnicator($anchor))" \
     || no "anchors: Frobnicator($anchor) — expected candheadfix/a_gold.hpp+8"
 
-bodykinds="$( tr '>' '\n' <"$TMP/lens" | sed -n 's/.*<b t="\([^"]*\)" l="\([0-9]*\)" p="\([^"]*\)".*/\1:\2:\3/p' | sed 's#candheadfix/##' | sort )"
+bodykinds="$( tr '>' '\n' <"$TMP/lens" | sed -n 's/.*<b t="\([^"]*\)" l="\([0-9]*\)" p="\([^"]*\)".*/\1:\2:\3/p' | sed 's#candheadfix/##' | LC_ALL=C sort )"
 want='cls:28:a_gold.hpp
 fn:31:a_gold.hpp'
 if [ "$bodykinds" = "$want" ]; then
@@ -108,7 +108,7 @@ fi
 # can reach it regardless of order; anchor and body must be byte-stable before and after.
 "$BIN" candheadfix --for=Gadget >"$TMP/gad" 2>/dev/null
 gadan="$( sed -n 's/.*anchors: Gadget(\([^)]*\)).*/\1/p' "$TMP/gad" | head -1 )"
-gadbody="$( tr '>' '\n' <"$TMP/gad" | sed -n 's/.*<b t="\([^"]*\)" l="\([0-9]*\)" p="\([^"]*\)".*/\1:\2/p' | sed 's#candheadfix/##' | sort )"
+gadbody="$( tr '>' '\n' <"$TMP/gad" | sed -n 's/.*<b t="\([^"]*\)" l="\([0-9]*\)" p="\([^"]*\)".*/\1:\2/p' | sed 's#candheadfix/##' | LC_ALL=C sort )"
 gadwant='cls:37
 fn:40'
 if [ "$gadan" = "candheadfix/a_gold.hpp+1" ] && [ "$gadbody" = "$gadwant" ]; then

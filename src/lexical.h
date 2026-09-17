@@ -932,7 +932,7 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
             }
         };
         std::atomic<std::size_t> nextFileIndex { 0 };
-        const auto               fileWorker = [ & ]
+        const auto               fileWorker = [ & ]() noexcept
         {
             try
             {

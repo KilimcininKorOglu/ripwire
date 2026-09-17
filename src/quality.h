@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -43,7 +44,7 @@
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
 #include <algorithm>
-#include <atomic>       // Phase-M: the tmp-name sequence counter (atomicWriteFile); also the A5 process-once cache-sweep guard
+#include <atomic>       // the A5 process-once cache-sweep guard
 #include <cctype>       // std::isxdigit/std::isdigit — B10.2d churn-blame porcelain parsing
 #include <chrono>       // A5: the 30-day cache-blob age cutoff (evictOldCacheFamily)
 #include <cstdio>
@@ -393,7 +394,8 @@ inline void appendConfigValueTokens( std::string_view rest, bool isVendor, Regis
 inline RegisterMacrosConfig readRegisterMacrosConfig( std::string_view root )
 {
     RegisterMacrosConfig out;
-    const std::string    text = docparse::detail::readWholeFile( configPath( root ) ).value_or( std::string() );
+    // readRegularFile: a FIFO at the name hung every --quality-delta, and a directory there aborted on Linux (docparse.h).
+    const std::string    text = docparse::detail::readRegularFile( ".ripwire_config", configPath( root ) ).value_or( std::string() );
     if( text.empty() )
     {
         return out;   // absent/unreadable/empty — inert, never a refusal
@@ -1570,7 +1572,7 @@ using rw::gitResolveCommitSha;
 // `git -C <root>` INCLUDING redirects (so a caller can pipe, e.g. "rev-list HEAD 2>/dev/null | tail -1").
 inline std::string gitOneLine( const std::string& root, const std::string& tail )
 {
-    return popenTrimmed( "git -c core.quotepath=false -C " + shSingleQuote( root ) + " " + tail );
+    return popenTrimmed( gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + tail );
 }
 
 // ─── R1 IDENTITY: the GIT-RECORDED RENAME MAP ──────────────────────────────────────────────────────────
@@ -1698,7 +1700,7 @@ inline RenameMap gitRenameMap( const std::string& root, const std::string& span 
         }
     };
 
-    const std::string pinned = "git -c core.quotepath=false -c diff.renames=true -C " + shSingleQuote( root ) + " ";
+    const std::string pinned = gitCmd( " -c core.quotepath=false -c diff.renames=true -C " ) + shSingleQuote( root ) + " ";
     if( span.empty() )
     {
         // Uncommitted first (a staged `git mv` is the single moment an agent is most likely to run this),
@@ -1777,7 +1779,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
         DEGRADED_PATH_ALERT( "quality: refusing a non-sha revision token on the merge-base path" );
         return false;                                          // degrade: "not reachable" → the caller self-heals the pin
     }
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " merge-base --is-ancestor " + shSingleQuote( ancestor ) + " " + shSingleQuote( descendant )
                           + " >/dev/null 2>&1";
     return std::system( cmd.c_str() ) == 0;
@@ -1819,7 +1821,7 @@ inline std::string gitWindowRefSha( const std::string& root, std::uint32_t days 
 // exists, but a --since window matched zero commits". popen failure degrades to false.
 inline bool gitRepoHasHistory( const std::string& root )
 {
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " rev-parse --verify --quiet HEAD 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -2897,6 +2899,22 @@ inline bool qsnapGet( const char*& p, const char* end, T& out )
     return true;
 }
 
+// A record COUNT read out of a blob is the blob's claim, not a fact: bound it by the bytes that remain BEFORE
+// anything is sized from it. `minRecordBytes` is the smallest encoding one record can have, so a count that
+// passes cannot reserve more records than the blob could possibly hold. Without it a checksum-valid blob
+// whose count reads 0xFFFFFFFF reached `reserve` — 32 GiB for a u64 vector — and on a host that will not
+// overcommit that is std::bad_alloc, which nothing on the CLI path catches: SIGABRT on every run until the
+// blob was evicted. The twin of loadCache's countFits (ingest_cache.h), for the qsnap-format readers.
+inline bool qsnapCountFits( const char* p, const char* end, std::uint32_t count, std::size_t minRecordBytes ) noexcept
+{
+    if( count <= static_cast<std::size_t>( end - p ) / minRecordBytes )
+    {
+        return true;
+    }
+    DEGRADED_PATH_ALERT( "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
+    return false;
+}
+
 // Serialize a Snapshot to a self-validating blob: [magic][scheme][cacheVer][parserVer][fnv(headSha)] then each
 // of the 9 fields as a uint32 count followed by its flat records (btree maps in sorted key order, vectors
 // as-is), then an fnv1a64 checksum over all preceding bytes. Byte-stable for a fixed Snapshot.
@@ -3026,9 +3044,9 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
     const auto getVec = [ & ]( std::vector<std::uint64_t>& v ) -> bool
     {
         std::uint32_t n = 0;
-        if( !qsnapGet( p, end, n ) )
+        if( !qsnapGet( p, end, n ) || !qsnapCountFits( p, end, n, sizeof( std::uint64_t ) ) )
         {
-            return false;
+            return false;   // a corrupt blob: the caller's "cache corrupt — recomputing" path
         }
         v.reserve( n );
         for( std::uint32_t i = 0; i < n; ++i )
@@ -3121,22 +3139,18 @@ inline std::mutex& headSnapshotIngestMutex()
 // and degrade rules to drift, which is the clone kind --quality-delta gates on.
 inline bool atomicWriteFile( const std::string& path, const std::string& blob )
 {
-    static std::atomic<std::uint64_t> seq{ 0 };
-    const std::string tmp = path + ".tmp." + std::to_string( ::getpid() )
-                          + "." + std::to_string( seq.fetch_add( 1, std::memory_order_relaxed ) );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the target, refusing an existing entry at that name. The RAII holder removes
+    // the temp on any failure
+    // path below; commit() renames it into place. The name keeps its `.tmp.` infix (a *.tmp.* residue glob
+    // still matches) and 0666 preserves the ofstream default mode; the kernel applies the umask exactly as
+    // the stream did. The fd-based write replaces the ofstream, which cannot express O_EXCL.
+    rw::pathguard::ExclTempFile temp = rw::pathguard::createExclTempFile( path + ".tmp.", "", 0666 );
+    if( !temp.ok() || !temp.write( blob ) )
     {
-        std::ofstream of( tmp, std::ios::binary | std::ios::trunc );
-        if( !of )
-        {
-            return false;
-        }
-        of.write( blob.data(), static_cast<std::streamsize>( blob.size() ) );
-        of.flush();
-        if( !of ) { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
+        return false;   // temp removed by the holder's destructor
     }
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
-    { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
-    return true;
+    return temp.commit( path );
 }
 
 // ─── shared plumbing for the two archived-tree consumers (HEAD snapshot / churn window-ref) ─────────────
@@ -3184,7 +3198,7 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     { DEGRADED_PATH_ALERT( "quality: cannot create commit-tree temp dir" ); return {}; }
 
-    const std::string extract = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string extract = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
     if( std::system( extract.c_str() ) != 0 )
     {
@@ -3653,8 +3667,12 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
         return false;
     }
 
+    // Every commit record is at least its epoch plus its path count, and every path at least its length prefix;
+    // both counts are measured against the bytes left before either sizes a reserve (qsnapCountFits).
+    constexpr std::size_t kMinCommitRecordBytes = sizeof( RawCommitStream::Commit::epoch ) + sizeof( std::uint32_t );
+    constexpr std::size_t kMinPathRecordBytes   = sizeof( std::uint32_t );
     std::uint32_t nCommits = 0;
-    if( !qsnapGet( p, end, nCommits ) )
+    if( !qsnapGet( p, end, nCommits ) || !qsnapCountFits( p, end, nCommits, kMinCommitRecordBytes ) )
     {
         return false;
     }
@@ -3668,7 +3686,7 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
             return false;
         }
         std::uint32_t nPaths = 0;
-        if( !qsnapGet( p, end, nPaths ) )
+        if( !qsnapGet( p, end, nPaths ) || !qsnapCountFits( p, end, nPaths, kMinPathRecordBytes ) )
         {
             return false;
         }
@@ -4388,7 +4406,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
     {
         return;
     }
-    const std::string cmd = "git -c core.quotepath=false" + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false" ) + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
                           + " blame --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
                           + " HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
@@ -4462,7 +4480,7 @@ using DiffHunkMemo = HashMap<std::string, std::vector<DiffHunk>>;
 inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const std::string& relPath )
 {
     std::vector<DiffHunk> hunks;
-    const std::string cmd = "git -c core.quotepath=false -c diff.algorithm=myers -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
                           + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe ) { DEGRADED_PATH_ALERT( "quality: churn hunk diff could not be spawned" ); return hunks; }
@@ -5102,13 +5120,13 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 {
     badLines = 0;
     gtl::btree_map<std::string, AckRecord> out;
-    std::ifstream f( path );
-    if( !f )
-    {
-        return out;
-    }
-    std::string line;
-    while( std::getline( f, line ) )
+    // openRegularFileStream, not a stream opened on the name: a FIFO planted at the ledger's name blocked that open until
+    // a writer appeared, so --quality-delta hung before any output, and a link to /dev/zero never reached end of file.
+    // Anything that is not a regular file now reads as no ledger, and stderr says so (docparse.h). Still one line at a
+    // time, as the std::ifstream it replaces read it: a large ledger is never held whole.
+    rw::pathguard::NoFollowRead ledger = docparse::detail::openRegularFileStream( "the quality-acks ledger", path );
+    std::string                 line;
+    while( ledger.readLine( line ) )
     {
         while( !line.empty() && ( line.back() == '\r' || line.back() == '\n' ) )
         {

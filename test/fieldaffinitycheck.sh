@@ -130,7 +130,7 @@ else no 'legend does not cite the prior art / does not state the advice-only pos
 fi
 
 # ── 10) exactly two finding kinds exist — no packing or reordering advice is emitted, ever ────────────
-kinds="$( printf '%s' "$OUT" | tr '<' '\n' | grep '^finding ' | sed -E 's/.*k="([^"]*)".*/\1/' | sort -u | tr '\n' ' ' )"
+kinds="$( printf '%s' "$OUT" | tr '<' '\n' | grep '^finding ' | sed -E 's/.*k="([^"]*)".*/\1/' | LC_ALL=C sort -u | tr '\n' ' ' )"
 case "$kinds" in
     "split-line straddle "|"split-line "|"straddle "|"")
         ok "only the two defensible finding kinds are emitted (saw: ${kinds:-none})" ;;

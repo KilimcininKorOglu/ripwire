@@ -30,6 +30,9 @@
 #     to the implementation — a program declares no class in it — so a `std::`-led written type never narrows, for
 #     a parameter (17), a typed local (19), a constructor-inferred local (20) and a C++ assignment (21). Every other
 #     qualifier keeps its narrow: an in-repo namespace is the common case (22, 23). (24) pins the stated floor.
+#   * Arm 25 — DISCLOSURE: a narrow decided by a qualified written type matched only its final segment, so it never reads
+#     as precise. Its edge carries prov="final-segment" (the floor's wrong edge, a correct parameter narrow and the local
+#     twin alike); an unqualified narrow and a uniquely named call carry no prov=, and both legends define the value.
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -233,6 +236,7 @@ printf 'int lookupCtor() { auto table = std::map<int, int>(); return table.find(
 printf 'std::map<int, int> cache;\nint lookupAssign() { cache = std::map<int, int>(); return cache.find( 1 ); }\n' >"$VFIX/app/assign.cpp"
 printf 'int lookupInRepoLocal() { store::tree table; return table.find( 1 ); }\nint lookupInRepoParam( const store::tree& table ) { return table.find( 1 ); }\n' >"$VFIX/app/inrepo.cpp"
 printf 'int lookupExternal( ext::map<int, int>& table ) { return table.find( 1 ); }\n' >"$VFIX/app/external.cpp"
+printf 'int helperOnly() { return 1; }\nint callsHelper() { return helperOnly(); }\n' >"$VFIX/app/plain.cpp"
 visRows(){   # the find@<file> rows one caller's callees answer; NO-CALLEES-ANSWER when the probe did not run
     local out
     out="$( "$BIN" "$VFIX" "--callees=$1" --no-cache 2>/dev/null )"
@@ -278,6 +282,50 @@ expectNarrow "(23)" lookupInRepoParam "find@lib3/tree.h:1"
 #        namespace chain in Symbol::scope, planned on its own. If this arm goes red, the floor moved: rewrite it to
 #        assert the fixed behaviour, never delete it. ────────────────────────────────────────────────────────────────
 expectNarrow "(24)" lookupExternal "find@lib/map.h:1"
+
+# ── 25) DISCLOSURE (2026-09-16): the narrows arms 22-24 keep matched a QUALIFIED written type by its final segment alone —
+#        the qualifier is never checked against the class's namespace (arm 24's is wrong) — so their edges must not read
+#        as uniquely resolved. Each carries prov="final-segment"; arm 18's unqualified narrow and a uniquely named call
+#        carry no prov=; the map legend and the compact legend define the value on the document that carries it. RED
+#        before the attribute existed: (25) rows a, b, c and both legend rows. ─────────────────────────────────────────
+"$BIN" "$VFIX" --no-cache >"$TMP/vis.map" 2>/dev/null
+"$BIN" "$VFIX" --no-cache --legend=compact >"$TMP/vis.compact" 2>/dev/null
+provOf(){   # the prov= of caller $1's <c n="$2"> edge in the map: a word, "none" when absent, NO-EDGE when the row or edge is missing
+    local row
+    row="$( tr '<' '\n' <"$TMP/vis.map" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
+    row="$( printf '%s\n' "$row" | grep "^c n=\"$2\"" | head -1 )"
+    if [ -z "$row" ]; then
+        printf 'NO-EDGE'
+    elif printf '%s' "$row" | grep -q ' prov="'; then
+        printf '%s' "$row" | sed -n 's/.* prov="\([^"]*\)".*/\1/p'
+    else
+        printf 'none'
+    fi
+}
+expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent)
+    local got
+    got="$( provOf "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2() -> $3: prov=[$got]"
+    else
+        no "$1 $2() -> $3: prov=[$got], want [$4]"
+    fi
+}
+expectProv "(25a)" lookupExternal find final-segment      # the floor's WRONG edge is disclosed, never precise
+expectProv "(25b)" lookupInRepoParam find final-segment   # a CORRECT qualified parameter narrow: still a final-segment match
+expectProv "(25c)" lookupInRepoLocal find final-segment   # the typed LOCAL twin says the same
+expectProv "(25d)" lookupSeen find none                   # an unqualified narrow: no qualifier was ever skipped
+expectProv "(25e)" callsHelper helperOnly none            # a uniquely named call
+if grep -q 'final-segment(' "$TMP/vis.map"; then
+    ok "(25f) the map legend defines prov=final-segment on the map that carries it"
+else
+    no "(25f) the map legend does not define prov=final-segment"
+fi
+if grep -q 'final-segment' "$TMP/vis.compact"; then
+    ok "(25g) the compact legend defines prov=final-segment"
+else
+    no "(25g) the compact legend does not define prov=final-segment"
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

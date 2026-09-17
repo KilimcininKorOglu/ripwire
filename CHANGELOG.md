@@ -15,6 +15,123 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
+
+Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
+
+- **A checksum-valid qsnap or qchurn cache blob with a huge record count aborted.** `deserializeSnapshot` and
+  `deserializeRawCommitStream` passed a count read from the blob straight to `reserve`: 2^32−1 records is 32 GiB for
+  the qsnap vectors and 96–128 GiB for the qchurn commit and path lists. On Linux that is `std::bad_alloc`, which
+  nothing on the CLI path catches, so `--quality-delta`, `--edit-check`, `--for`, `--metrics` and `--exemplar` died
+  with SIGABRT on every run until the blob was evicted (reproduced on Ubuntu, exit 134). Every count is now measured
+  against the bytes left in the blob first, and a count that cannot fit makes the blob corrupt: recompute, as for any
+  other damage. Gate: `test/cachefuzzcheck.sh`, Part 2's three vector-count rows and the new Part 5. The rows run
+  under an allocation bound (`ulimit -v` on Linux, ASan's `max_allocation_size_mb` anywhere), because macOS
+  overcommits the reservation and exits 0 against the defect. The old map-count and wrong-sha rows wrote at stale
+  offsets, so an earlier guard rejected the blob before the count was ever read; they now write where
+  `deserializeSnapshot` reads, and both tables check the good blob's layout first and fail loudly if a header change
+  would re-aim a row.
+- **A short read leaked a file descriptor.** The parse pool's `readFile` closed its stream inside
+  `( got == want ) && ( std::fclose( fp ) == 0 )`, so a file that came up short (truncated between the size probe
+  and the read) was never closed. A long-lived `--mcp` server re-ingesting such a tree ran out of descriptors, and
+  every file it could then not open dropped out of the answer at exit 0. With an interposed short-read shim, 300 of
+  600 short-read streams stayed open, and under `ulimit -n 200` all 20 ordinary files vanished from a `--grep`
+  answer. The stream now has an owner, `rw::OwnedFile` (`src/infra/ownedfile.h`), whose destructor closes it on
+  every path, and the whole-file readers in `ingest_crawl.h`, `docparse.h` and `editpreview.h` use it. Gate:
+  `test/crashsweepcheck.sh` B1.
+- **A FIFO, a directory or a device link at `.ripwire_config` or `.ripwire_quality_acks` hung or aborted.** Both
+  were read through a blocking open on the name. A FIFO hung `--quality-delta` before any output, and a committed
+  symlink from the acks ledger to `/dev/zero` or `/dev/urandom` never reached end of file. A directory at
+  `.ripwire_config` opens on Linux; where a directory's seek reports `LLONG_MAX` (overlayfs), the string that length
+  asks for aborts, the failure `ingest_crawl.h`'s `PathShape` note measured for `--cache=<dir>`. Both files now go
+  through `docparse::detail::openRegularFileStream`: it opens with `O_NONBLOCK`, asks the descriptor what it opened,
+  and reads anything but a regular file as absent, with a stderr line saying so. The ledger is still read one line at a
+  time. Gate: `test/crashsweepcheck.sh` B2
+  (eight shapes).
+- **`edit_check` with `new_body` raced the HEAD-snapshot prefetch worker.** The preview's two ingests ran after the
+  verb's own ingest had released the process-wide ingest lock, so they could run alongside the detached prefetch
+  worker's ingest. `ingest()` installs compiled tags queries into a process-global cache and deletes the entry each
+  install displaces, and that is single-writer by design. On the ThreadSanitizer build the server reported a data
+  race at the parse-pool call and aborted (exit 134) mid-session. The preview's ingest now takes
+  the same lock as every other ingest a server runs. Gate: `test/qsnapprefetchcheck.sh` (f), whose red needs the
+  TSan build (`RIPWIRE_BIN=tsan/ripwire`).
+- **A file dated after 2262 overflowed a signed multiply.** `tv_sec * 1000000000 + tv_nsec` does not fit in
+  `long long` past 2262-04-11, a date ext4, XFS, tmpfs or a tar restore can store. That is undefined behaviour in
+  release and an abort in the sanitizer build (reproduced on Linux tmpfs: `signed integer overflow: 10000000000 *
+  1000000000`). Both stat readers now saturate through `rw::saturatingNanoseconds` (`src/infra/statclock.h`); size
+  and ctime still tell apart two saturated timestamps. Gate: `test/crashsweepcheck.sh` B3. APFS clamps timestamps
+  at 2262, so on macOS the arm says it cannot build its input.
+
+Three of these shapes can be seen in the source, so `test/crashsweepcheck.sh` now also runs ripwire's own `--match`
+over `src/` and fails on them. Each rule is proven live against a probe tree that holds one violation and one
+compliant twin.
+
+- **S1:** an allocation sized by a count a byte reader decoded must be bounded earlier in the same function.
+- **S2:** every raw `fopen`/`open`/`fdopen`/`opendir`/`open_memstream`/`popen` site must be registered with the fact
+  that makes it safe, and a new one points at `rw::OwnedFile`. A close as the right operand of `&&`/`||` or an arm
+  of `?:` is refused outright.
+- **S3:** every body handed to a `std::thread` must be `noexcept` or a single try block. The eight bodies that were
+  neither are now declared `noexcept`, as are three that were already one try block. None of them had a throw that
+  could escape except allocation failure, which already ended in `std::terminate`.
+
+Red on the base, in order: S1 finds the three unbounded counts, S2 the short-circuited `fclose`, S3 eight bare
+bodies. The gate's header states what each rule catches and what it misses.
+
+### Added — a nightly ThreadSanitizer run against main, which opens one tracking issue when it fails
+
+ThreadSanitizer had a build mode (`-DRIPWIRE_TSAN=ON`) and one gate written for it, `test/qsnapprefetchcheck.sh` arm
+(e), but nothing ran it against `main`: a data race could reach a tag if nobody happened to build TSan locally in
+between. It is not added as a per-PR leg, because TSan builds already run often on contributors' machines and every PR
+already waits on the macOS runners. `.github/workflows/nightly.yml` runs it once a day at 07:17 UTC instead, and skips
+the heavy job when `main` has not moved since the last green scheduled run and no tracking issue is open.
+
+The job builds TSan with clang in its own tree and runs ten gates against it, chosen for the threads they drive: the MCP
+prefetch worker (`qsnapprefetchcheck`), the edit lock (`mcpeditracecheck`), a server's re-ingest at a 128-fd limit
+(`mcpwatchercheck`), a long-lived server's re-ingest after an edit (`mcpstalecheck`), concurrent `--quality-ack` writers
+(`qackconcurrencycheck`), the private cache directory (`cacheisolationcheck`), the parallel ingest and `--match` fan-out
+over the repository (`det-gate.sh`), `--grep`'s prefetch thread (`grepfastcheck`), the `--doc-drift` workers
+(`docdriftcheck`) and the git-spawn pool (`mergescoutcheck`). A gate's own verdict is not trusted to notice a race:
+reports go to per-gate files, and a wrapper fails the step on a non-zero exit or on any report file. Before any gate
+runs, the job checks that every object of the `ripwire` target references the TSan runtime, and that the wrapper goes
+red on a planted race and stays green on its race-free twin. Locally on Apple clang 21, the same wrapper failed on the
+planted race and on a race whose exit code the command swallowed, and all ten gates passed through it against a TSan
+build of 105666c1 with no report file (4 s to 404 s each, `mergescoutcheck` the slowest, on a machine at load 40-60).
+
+A failing run on `main` opens one issue, "Nightly checks failing on main" (label `nightly-failure`), or comments on the
+open one. The comment names the failing jobs and steps, the commit and the run, and quotes the head of the first report.
+The next green scheduled run comments "green again at <sha>" and closes it. The top-level token is `contents: read`,
+and only the two reporting jobs hold `issues: write`. A pull request that edits the workflow runs it without the
+reporting. A placeholder marks where the Windows full-suite job goes (D3 of the #44 plan). `test/g1configcheck.sh`
+gains six rows that pin the schedule, the skip probe, the TSan wiring, the permission scoping, the report conditions
+and "no secret but `GITHUB_TOKEN`". Each row has a mutated copy that turns exactly that row red.
+
+### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
+
+The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
+`std::cerr` insertions. With stdio sync on, each insertion is its own write to stderr, so a line another thread
+wrote at the same moment could land inside a notice. kotlincheck §12 refuses two Kotlin files at once; when the
+second parse worker's refusal line landed straight after `[math degraded] `, the arm's one-line grep failed with
+"raised no DEGRADED_PATH_ALERT" although the alert was on stderr, whole, one line further down. That is the
+failure eight CI jobs hit since Kotlin landed, three of them on `main`. Measured on f8e6087c by running §12's map
+over its own fixture: 18 gate failures in 5,700 runs, and the notice torn in 32–73% of runs depending on load.
+Every reporter now formats its whole notice into a fixed 4,096-byte stack buffer and hands it to stderr in ONE
+stdio call, which no other stdio writer in the process can interleave, and which needs no heap in a reporter that
+may be running because memory ran out. The text is byte-identical for every notice under the cap; a longer one is
+cut and says so at its end (`... [notice truncated: kept K of N bytes]`). The reporters still flush stdout
+before the notice, as `std::cerr`'s tie to `std::cout` always did, so a trap or an abort right after it loses no
+buffered output and `>file 2>&1` keeps its order. Measured after the fix on §12's fixture, alternating
+run by run with the f8e6087c binary under four busy loops: 0 gate failures and 0 torn notices in 2,100 runs,
+against 6 failures and 726 torn notices from the old binary in the same 2,100 interleaved runs. The new gate
+`test/diagnoticecheck.sh` counts the write(2) calls each reporter makes by giving it a datagram socket as fd 2,
+which keeps write boundaries: red on the old reporters (9 writes for the degraded notice, 15 to 21 for the banners,
+every one still byte-exact), green at one write each. Three `2>&1` cases leave text in stdout's buffer before a
+degraded notice, an assert and a panic, and require it first and whole: byte-identical to the old reporters. It also carries a static arm with a mutation control, a
+12,000-notice race against raw and stdio writers (red in 200 of 200 runs on the old reporters), a zero-allocation
+arm (global `operator new`) measured with `src/alloccount.cpp` as a delta between otherwise identical runs, and an
+ASan/UBSan pass. kotlincheck §12 now prints the first five lines of stderr when that arm fails, because
+none of the eight CI logs could show what the notice had looked like. Not fixed here: the default map over the same
+fixture says `files=4` with no sign of the two refused files, a disclosure gap tracked by #157.
+
 ### Changed — Intel macOS binaries end with 0.6.1
 
 0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
@@ -38,6 +155,180 @@ Gate: `test/releaseinstallcheck.sh` section H, nine rows. Five were red on main:
 macOS arm64 on a later release) each went red against a mutant installer that refused one release too many, or keyed on
 the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
 deployment target, retires with it.
+
+### Fixed — a deep or odd-shaped argument, source file or skills tree could crash or stall a verb
+
+Each of these was reproduced before it was fixed, and the gate that already owns each verb now fails on the old code.
+
+- **`--graph-query` nested deep enough overflowed the stack.** The evaluator recurses once per `(`, and a 50,000-level
+  `kind(kind(…all…))` chain died with SIGSEGV (exit 139). Nesting past 256 levels is now refused before evaluation,
+  exit 1 with the reason. Gate: `test/graphqueryrefusecheck.sh` arm 6.
+- **A `--layout` array extent could crash its evaluator.** A `#define` extent nested 200,000 parentheses deep overflowed
+  the stack (exit 139). `((0-1099511627776)*8388608/(0-1))` divides INT64_MIN by −1, which is SIGFPE (exit 136) on
+  Linux x86-64, and `1099511627776*1099511627776` is signed overflow, which aborts the sanitizer build. Arithmetic is
+  now checked, that quotient is refused, and parenthesis nesting depth is bounded at 64 (a macro of many sibling
+  parenthesised terms nests one level and still sizes). Any of these reads as an unknown extent, with its caveat.
+  Gate: `test/layoutcheck.sh` §12.
+- **`--layout` dropped a data member whose extent or initializer holds a parenthesis, and still said the size was
+  right.** `char a[(4)];`, `int x = (3);` and `int x{ (3) };` were taken for member functions, because the test looked
+  for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
+  short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
+  `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
+- **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
+  directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
+  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
+  directory link loop included, and names it on stderr; a skills root that cannot be listed at all says "cannot list".
+  Gate: `test/skillevalcheck.sh`.
+- **`ripwire wrap` aborted on a `./skills` tree it could not descend.** The pre-recipe scan advanced a
+  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree it could not
+  open mid-walk (measured with more nested folders than free descriptors) was `std::terminate` (exit 134). The walk
+  now stops early instead, says so, scores the scan WARN and still prints the recipe. The same scan used to skip a
+  mode-000 skills folder in silence — a skill carrying injection text scored CRITICAL while readable and nothing once
+  sealed — and now names the folder it cannot enter and scores WARN. Gate: `test/codexwrapcheck.sh`.
+- **A deeply nested `--match` query overflowed the query compiler.** `ts_query_new` recurses per level on a worker
+  thread with a 512 KB stack: 4,000 levels died with SIGBUS (exit 138), and 2,000 ran past a minute. A query or
+  `--lint-rules` spec nested past 256 levels is refused before any compile. Gate: `test/matchgrammarcheck.sh` arm 6.
+- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** Every occurrence climbed to its
+  statement anchor through `ts_node_parent`, which descends from the tree root each time, so the walk's cost grew with
+  the cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
+  one call wedged the server, and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s. The
+  scan now builds a parent table in one cursor pass and memoizes the anchor, so the walk is linear: 2,000 / 4,000 /
+  8,000 nested ifs in 0.05 / 0.06 / 0.08 s, the 808-level chain in 0.06 s, and the output is byte-identical. Past
+  2,048 syntax levels the slice is refused by name: the walks still recurse once per level on the main thread, and
+  nested loops, the widest frame per level, need ~1.8 MB at that depth on a plain build and 2-3× under a sanitizer, so
+  this is a stack guard, not a time guard. That is still 2.5× the deepest function in 47,795 parsed files (808).
+  Gate: `test/slicecheck.sh` (15), including 2,040 nested `for` loops that must be answered just under the guard.
+
+The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
+
+### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
+
+Through 0.6.1 the `macos-arm64` release asset and every macOS CI leg were built with Xcode 16.2 on `macos-14`. Its
+AppleClang 16 is LLVM 17, and LLVM 17's loop vectorizer never reads `__builtin_assume_separate_storage`
+(llvm/llvm-project#64666, fixed in LLVM 18). There, a `VERIFY_NO_ALIAS_BUF` promise removed scalar reloads but left each
+vectorized loop's runtime overlap check and its scalar fallback in place. The release leg, the eight macOS gate shards
+and the macOS sanitizer leg now build with Xcode 26.6 (17F113, Apple clang 21.0.0), the default Xcode on `macos-26`.
+GitHub retires the `macos-14` images on 2026-11-02. On Xcode 26.6, with no flag beyond the release's own
+`-O2 -mcpu=apple-m1`, a two-buffer loop carrying the promise vectorizes with no overlap check. objdump counts 57
+instructions against 64 for the same loop without the promise, and 64 again with `-mllvm -basic-aa-separate-storage=false`.
+`test/noaliascheck.sh` classifies this compiler `CONSUMED_DEFAULT` and `LOOP_CONSUMED`. No speed is claimed: the promises
+that would use this land later, with the macro rename.
+
+The minimum macOS is now pinned instead of inherited from the runner. With no deployment target, clang takes the lower of
+the runner's macOS and the SDK default. The published `ripwire-0.6.1-macos-arm64` binary reads `minos 14.0` (otool), and
+the same build on `macos-26` would have read 26.x and dropped every macOS 14 and 15 user. The release leg exports
+`MACOSX_DEPLOYMENT_TARGET=14.0` before its PGO build and reads `minos` back off the binary it packages. The CI legs build
+at the same 14.0, where Xcode 26.6's libc++ still defines `__cpp_lib_print`. The leg also records its Xcode, compiler and
+`llvm-profdata`, and fails if `DEVELOPER_DIR` is empty or either tool is not the pinned Xcode's, so PGO trains, merges and
+optimizes with one toolchain. None of these checks skips a leg that lost its pin. A macOS release leg without a
+deployment target fails, and so does a CI leg whose CMake cache did not receive the pinned target.
+
+Gate: `test/portablebuildcheck.sh` #2i, sixteen rows. It holds the release leg's runner, Xcode and quoted minimum macOS;
+the export before the first configure; a single deployment-target source across the leg and the build job's env and
+steps (no `-DCMAKE_OSX_DEPLOYMENT_TARGET`, `-mmacosx-version-min` or second `MACOSX_DEPLOYMENT_TARGET`); the exact
+`otool` compare between PGO staging and packaging; and each fail-loudly guard: the empty-target refusal, the toolchain
+record step ahead of the first build, and ci.yml's two CMake-cache checks. It also holds ci.yml's nine macOS runner
+labels, five `matrix.os` conditions, two Xcode paths and two deployment targets to the release's values, so a half-done
+runner move (an `ASAN_OPTIONS` condition still naming `macos-14`) is refused. Three mutated copies must each be refused
+by exactly their own row: no minos step, `ASAN_OPTIONS` back on `macos-14`, and `-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0`
+added to the pgobuild step. Red before this change: 14 FAIL, 2 PASS. All sixteen pass after.
+
+A local emulation of the release leg on the same Xcode build (`scripts/pgobuild.sh`, Release,
+`MACOSX_DEPLOYMENT_TARGET=14.0`) passed every post-step: the PGO determinism diff, `emit=std::print`, `minos 14.0`, and
+xmllint. Its output was byte-identical to the plain build on `test/fixture`, the repo map and a `--for` query.
+
+The move also exposed a test-harness defect. Under a UTF-8 locale, macOS 26's `/usr/bin/sort` sorts case-insensitively,
+where macOS 14 and Linux sorted these lists in byte order. `test/scroundtripcheck.sh` compared a `sort`ed expected list
+with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of every `sort`, `comm`, `join`, `uniq` and
+`ls` call in the gate and bench scripts found 27 sites in 20 files that compare an order with something else: Python's
+`sorted()`, a literal, a pinned hash, ripwire's own byte-sorted output, or `git status`. Only that one fails today; the
+other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
+`LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
+
+### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
+
+Two on-disk readers built enums straight from bytes with no range check. **The ingest cache** read ten of them —
+`SymKind` and `Lang` on a definition, `Lang`/`RecvKind`/`RefRole` on a reference, `Lang`/`LocalBindKind` on a
+binding, `BindKind` on an FFI alias, `HttpMethod` on both route records. **The span-tier memo** (`ripwire-stier-*`,
+the `--grep` classifier's per-file blob) read one `SpanTier` byte per span.
+
+What an out-of-range value did, measured on the unfixed binary at `3bf884e2` over a 15-file fixture
+(`test/fixture` + `test/ffifix` + `test/routeedgefix`), one field class set to 255 at every site with every digest
+rebuilt, 24 verbs each diffed against `--no-cache`: every record was accepted (`cached_records=15` of 15), and the
+answer changed on 18 verbs for `SymKind` (served as `t="other"`; a field became a map symbol), 18 and 17 for a
+definition's and a reference's `Lang`, 17 for `RefRole` (a call demoted to `role="read"` and out of the call graph),
+13 for `RecvKind`, 12 for `BindKind` and 11 for `LocalBindKind`. A `Lang` of 32 or more is also undefined behaviour:
+`src/clones.h:135` shifts a 32-bit language mask by it, and UBSan stops `--for`, `--clones`, `--readability` and
+`--pack-task` there. The memo was worse: a tier byte of 3 or more indexes the three-element per-tier hit counter in
+`grepApplySpanTiers` (`src/search.h:2174`), an out-of-bounds **write** on the stack that AddressSanitizer reports as
+`stack-buffer-overflow`, and the plain binary served a different `--grep` answer.
+
+How reachable, stated plainly. An ingest-cache record is covered by its own 32-bit digest and the offset table by
+another, so a random bit flip is refused before any enum is read; an out-of-range byte gets there only from a blob
+written wrong or edited with its digests rebuilt — a committed team artifact handed to `--cache=`, a copied cache
+directory. For that cache this is defence in depth, and hardening rather than an integrity boundary: a blob whose
+digests were rebuilt can still carry wrong in-range facts. The span-tier memo is read ONLY from the per-user cache
+directory ladder (`$TMPDIR/ripwire`, `$XDG_CACHE_HOME/ripwire`, `/tmp/ripwire-<uid>`; mode 0700 and owner-checked,
+failing closed otherwise), never from a repository or a `--cache=` path, so a cloned repository cannot supply one;
+reaching the out-of-bounds write took storage corruption or a write by the same user. And the memo still has **no
+checksum**: an in-range flip (a tier re-labelled, a span offset moved) is still believed and still changes a
+`--grep` answer. This change bounds out-of-range bytes only.
+
+Every enum byte is now validated at the read. The ingest readers go through one helper, `ByteR::enumU8`, which folds
+a failure into the reader's existing `ok` flag, so the record takes the refusal path a short read already takes:
+that file reparses and the rest of the blob stands. The memo refuses the whole blob and re-parses the file. Each
+bound is a count constant beside its enum (`kSymKindCount`, `kRecvKindCount`, `kRefRoleCount`,
+`kLocalBindKindCount`, `kBindKindCount`, `kHttpMethodCount`, `kSpanTierCount`; `kLangCount` already existed), and
+each is proven exact at compile time by `src/infra/enumcount.h`, which asks the compiler whether `count - 1` names
+an enumerator and `count` does not. So appending an enumerator without moving its count is a build error, not a
+validator that quietly refuses the new value's every record. The proof is evaluated under clang only; GCC's
+spelling was not verified, and the macOS and Linux clang legs carry it. On `-DNDEBUG` Apple clang the warm load
+function `loadCache` grows from 3,936 to 3,962 instructions: the checks become compares folded into the `ok` flag
+with `csel`, plus 4 conditional branches. No cache format, `kCacheVersion` or parser version moved.
+
+`test/cachefuzzcheck.sh` gains Part 3 and Part 4. Part 3 changes ONE enum byte per field class in an otherwise
+valid blob, rebuilds every digest, and asserts that the one record is refused (`cached_records` 14 of 15), that
+the output is byte-identical to `--no-cache`, and that the ASan binary with `--clones` stays silent. An in-range
+edit of the same byte must be accepted (15 of 15), which proves the refusal comes from the range check and not
+from a digest. The enumerator counts are read from `src/model.h`, not written into the gate. Part 4 does the same
+for a memo tier byte, and its control re-labels a comment span as code, which changes the answer. Against the
+unfixed binaries the new arms gave 27 FAIL rows: 20 accepted mutants, the `clones.h:135` UBSan report, the
+`search.h:2174` stack-buffer-overflow, and the memo serving a different answer. Against the fixed build the whole
+gate is 161 PASS, 0 FAIL.
+
+### Fixed — git runs with the file-system monitor off, temp files are created exclusively, and edit-plan reads the path it confined
+
+- ripwire runs its git commands with `--no-optional-locks -c core.fsmonitor=false`; the one read of that setting
+  runs without them, since the flag would mask the value it reads.
+- the atomic-publish writers create their temp file exclusively and without following a symlink.
+- `--edit-plan` reads a payload through the same confined path its containment check judged.
+
+### Fixed — a `--pin-census` row no longer splits on a line break, TAB or `|` inside an id
+
+A C++ out-of-line member of a class template whose template-argument list spans source lines has a scope that holds
+the line break verbatim, and the census wrote it raw. One `C` row became a six-field line plus a continuation line
+starting with neither `C`, `S`, `O` nor `#`, and the symbol's `S` row broke the same way; a reader splitting lines
+dropped or mis-keyed the site. It was seen once, on a large private C++ corpus. The map was never affected: it writes
+the same scope as `&#10;`. Five more spellings of the defect reproduce on the pre-fix binary: a TAB or a form feed
+inside the argument list, a backslash line splice, CRLF source, and a `|` inside an id. `|` separates targets, and on
+this repository that case is real: Markdown heading symbols such as ``--token-budget=N[K|M|G]`` made a `|`-split read
+18 single-target rows as two to six targets.
+
+Every id and callee field is now escaped. A backslash is written `\\`, TAB, LF and CR are `\t`, `\n` and `\r`, and every
+other control byte and `|` is `\xHH`. Nothing else changes, so the columns are the same and an id without those bytes
+is spelled exactly as before. The first line now reads `pin-census v3` and the header documents the escape.
+`bench/scip_match_diag.py` decodes the fields, because it opens files by an id's path; `bench/scip_pin_precision.py`
+joins ids as opaque keys and needs no decode.
+
+Measured by running the pre-fix and fixed binaries with `--pin-census --no-cache` over a clean export of this
+repository at `a55b118e`: 99 of 51,821 rows change, 18 `C` and 81 `S`. 98 of them hold a `|` and one holds a backslash,
+each decodes back to its pre-fix bytes exactly, and every other row is byte-identical. Before the fix all 18 of those
+`C` rows had target lists a `|`-split misread; after it, none do. Gate: `test/pincensuscheck.sh`
+arm (L), over a generated fixture. Every non-comment line must be a `C`, `S` or `O` row with its full field count, and
+the check also runs over arm (B)'s and arm (G)'s censuses. Each awkward caller id must decode to its source bytes,
+re-encode byte-identically and appear verbatim as an `S` id. The `|` target must split into one id, and the
+dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
+12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
 
 ### Fixed — a member call through a typed parameter was pinned to the caller's own class
 
@@ -70,7 +361,7 @@ then names as the caller itself. 956 more sites keep their target and are now de
 sampled and read against the source. On this repository's `src/`, 53 splits become one Rule-2 pin and nothing else
 moves target. Wall time is unchanged within noise (three cold runs each on the same corpus, 1.66–2.51 s both).
 
-`test/narrowcheck.sh` arms 7-18 are the gate: ten rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
+`test/narrowcheck.sh` arms 7-18 are the gate: nine rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
 red on the lexical lookup without the qualifier guard, arm 15 asserting through the census that the site is decided
 by Rule 2 rather than the locality tie-break. Five gates' controls were built on "a parameter has no binding" and now
 use an untyped `auto` receiver — `narrowcheck`, `chacheck`, `chaconecheck`, `localitycheck` (whose call no longer
@@ -79,6 +370,21 @@ single edge). `fieldnarrowcheck`'s ambiguity gauge moves 7 → 6 because `shadow
 parameter's type, and its arm (s1) now also asserts that the shadowed field's `Pool::acquire` is not linked. Still
 open, and unchanged by this entry: an untyped receiver (`auto x = make(); x.m()`) still reaches the locality
 tie-break, and a typed LOCAL still reads the flat table, qualified-type collision included.
+
+Two floors this change does NOT remove, stated because the first one moves edges the wrong way.
+**An abstract parameter type narrows onto its namesakes.** Rule 2 resolves `m` against definitions only, so a parameter
+typed as an interface whose methods are pure-virtual declarations cannot narrow to it — and when unrelated classes
+share the interface's final name segment and define `m`, the narrow lands on them instead. On rocksdb at
+`0e2801ac3`, `--pin-census --no-cache` with the `main` binary at `f8e6087c` against this change: 79 call sites
+(88 census rows) through an `Iterator*` parameter, such as `AssertItersEqual( Iterator* iter1, Iterator* iter2 )` in
+`utilities/write_batch_with_index/write_batch_with_index_test.cc`, now split five ways over the nested `Iterator` classes in
+`memtable/` (`skiplist.h`, `inlineskiplist.h`, `skiplistrep.cc`, `vectorrep.cc`, `hash_skiplist_rep.cc`), and none of
+the five is right. Before this change 25 of them were a unique pin to a plausible override (`BlobCountingIterator::key`),
+26 were a different split over overrides, and 28 had no edge. Every one is disclosed (`amb=`, `prov="split"`), but
+each is a wrong answer rather than a missing one, and 28 are new edges. It is the same final-segment collision typed
+locals already have on `main`; this change extends it to parameters. **A call in a constructor's member-initializer
+list is not narrowed:** `Decoy( Target& t ) : v( t.pick( 3 ) )` sits outside the parameter's scope span (the body),
+so it keeps `main`'s answer — on a same-named `Decoy::pick`, the locality tie-break's wrong pin.
 
 ### Fixed — an explicit receiver of unknown type was pinned to the caller's own class, and a `std::` type narrowed to an in-repo namesake
 
@@ -96,7 +402,9 @@ disclosure — so the file credit stays.
 The second hole: a written type is recorded as its final segment, matched against class names that carry no
 namespace. The entry above refused every qualified PARAMETER type; typed locals kept narrowing, so
 `std::map<int, int> table; table.find( k )` pinned an in-repo `map::find`. Measurement overturned the blanket rule
-instead of extending it. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
+instead of extending it, and **this entry supersedes the parameter rule stated above**: where that entry says only a
+written, unqualified type narrows and that qualified in-repo types keep their previous answer, a parameter now refuses
+only a type written in namespace `std`, exactly as a local does. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
 (`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on this repository's `src/` — every sampled
 one correct — while the only wrong edges it removed on all three were six `std::map` locals. `std` is reserved to the
 implementation, so no in-repo class is a `std::` type: a type written in namespace `std` now never narrows — for a
@@ -106,22 +414,47 @@ parameters included again. Stated floor, pinned by `test/narrowcheck.sh` arm 24:
 nor the class's own namespace — an external or alias-template type whose final segment an in-repo class shares —
 still narrows by name. Closing it needs the namespace chain in `Symbol::scope`.
 
-Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
-category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider ones (14 of 14
-sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard refused
-(`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
-`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins were
-wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
-in-repo `map`, and 12 in-repo qualified parameters narrow, one of them an `ankerl::unordered_dense::map<…>&` alias
-template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits
-(`old_ids.add( obj )` had pinned `ManyRelatedManager::add`); rails: 145; this repository's `src/`: 5 splits become
-Rule-2 pins through `notes::`- and `rw::quality::`-qualified parameters; vue-core and Go's `net` package: none. The
-assignment capture moved no site on these corpora; its arm is the only witness. Wall time on rocksdb is within noise
-(three cold runs each at load average 42: 1.69–2.19 s before, 1.73–2.80 s after).
+That floor is disclosed on every edge it can produce. A narrow decided by a qualified, non-`std` written type matched
+the type's last name and never checked its qualifier, so its edge carries **`prov="final-segment"`** — a parameter or
+a local, through Rule 2 or CHA-lite's cone — and both map legends define it. The wrong edge arm 24 pins and the correct
+`store::tree&` narrow beside it read the same way, as a guess, not as a uniquely resolved name. Byte cost on rocksdb,
+the previous commit's binary against this change, the only differences being the attribute, the legend term and
+`est_tokens`:
 
-`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-24 are the gates: localitycheck 5, 6 and 7 red on
+| rocksdb output | before | after |
+| --- | --- | --- |
+| default map | 31,366 B | 31,711 B (+345, +1.10%; 14 marked edges) |
+| `--for="write batch handler mark commit"` | 8,746 B | 8,746 B (the bundle carries no `prov=`) |
+| whole graph, `--top-k=100000` | 5,406,160 B | 5,413,666 B (+7,506, +0.14%; 355 marked edges) |
+
+A private C++ corpus's default map pays only the legend term (+51 B, no marked edge printed). The Iterator-shaped
+collision #248 states above is unchanged: those calls stay `amb=`-disclosed splits. A name-only collision guard was
+measured against them and rejected — it moved 967 rocksdb rows off the wrong `memtable` namesakes, but declined 58
+correct platform-alternate splits (`port::Mutex::Lock` over posix and win) and 8 correct `log::Writer` narrows, minted
+10 new wrong unique pins on rocksdb, and declined 132 correct `Template.render` splits on django. The namespace chain
+is the fix for both.
+
+Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
+category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider
+ones (14 of 14 sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard
+refused (`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
+`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins
+were wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
+in-repo `map`, and 12 in-repo qualified parameters narrow, one of them an `ankerl::unordered_dense::map<…>&` alias
+template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits; rails: 145.
+The removed pins were less often wrong in the dynamic languages, as an independent review's samples show: django 8 of 14
+wrong (`target_ids.add`, `params.get`, `form.save`) and 6 right (`copy.set_source_expressions`, `cls._pre_setup()`);
+rails 8 of 12 wrong (`pair.freeze`, `connection.create_table`) and 4 right (`set.each`, `model.history`). Every right
+target stays inside the split that replaces it. Python's `cls` is a named receiver, so a classmethod's `cls.m()` splits
+too (2 of django's 72). This repository's `src/`: 5 splits become Rule-2 pins through `notes::`- and
+`rw::quality::`-qualified parameters. vue-core and Go's `net` package: none. The assignment capture moved no site on
+these corpora; its arm is the only witness. Wall time on rocksdb is within noise (three cold runs each at load average
+42: 1.69–2.19 s before, 1.73–2.80 s after).
+
+`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-25 are the gates: localitycheck 5, 6 and 7 red on
 the previous commit and 8 red on the skip-the-tie-break variant; narrowcheck 19, 20, 21, 23 and 24 red on the previous
-commit and 21 red without the assignment capture. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
+commit, 21 red without the assignment capture, and 25 (the attribute on arms 22-24's edges and in both legends, absent
+from an unqualified narrow and a uniquely named call) red before `prov="final-segment"` existed. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
 three non-firing controls (B), (C), (E) asserted that the caller's own `Box::validate` pin STANDS for
 `item.validate( v )`; they now assert the honest two-way split, which keeps the contrast with the route that fires, and
 (F) reads `ambiguous=3` with no locality pin. localitycheck's HIGH-1 probe was an untyped local that no longer earns

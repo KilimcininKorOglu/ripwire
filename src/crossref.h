@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 
 
 // crossref.h — the CROSS-BRANCH CONTENT INDEX: --whereis=SYM and --stray-content.
@@ -492,7 +493,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         std::fclose( lf );
     }
 
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " cat-file --batch < " + shSingleQuote( listPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -660,11 +661,12 @@ private:
 
 // ── git plumbing (read-only) ─────────────────────────────────────────────────────────────────────────────
 
-// Capture a git command's FULL multi-line stdout ("" on failure). quality::popenTrimmed already owns the
-// popen-and-trim shape; this is the same call with the trim kept to trailing newlines only.
+// Capture a git command's FULL multi-line stdout ("" on failure). This is exactly quality::gitOneLine's
+// read-only `git -C <root> <tail>` shape (popenTrimmed keeps internal newlines, trimming only trailing
+// whitespace), so it delegates rather than re-spelling the same hardened prefix and popen-and-trim call.
 inline std::string gitCapture( const std::string& root, const std::string& tail )
 {
-    return quality::popenTrimmed( "git -c core.quotepath=false -C " + shSingleQuote( root ) + " " + tail );
+    return quality::gitOneLine( root, tail );
 }
 
 inline std::vector<std::string_view> splitLines( std::string_view s )
@@ -830,7 +832,7 @@ inline void parallelIndexed( std::size_t count, Body body )
     }
 
     std::atomic<std::size_t> nextIndex{ 0 };
-    const auto               worker = [ & ]()
+    const auto               worker = [ & ]() noexcept
     {
         // A throw escaping a std::thread entry is std::terminate — degrade to partial coverage instead. Only
         // the allocation seam can throw here (popen/parse), and a short answer beats killing the process.
