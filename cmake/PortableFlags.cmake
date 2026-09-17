@@ -41,7 +41,7 @@ option(RIPWIRE_PRETEND_LINUX
 # (CMakeDetermineSystem honours only CMAKE_APPLE_SILICON_PROCESSOR) and never from CMAKE_OSX_ARCHITECTURES.
 # release.yml built the macOS x86_64 binary on an arm64 runner with -DCMAKE_OSX_ARCHITECTURES=x86_64 through 0.6.1, and
 # keyed on CMAKE_SYSTEM_PROCESSOR that compile got -mcpu=apple-m1 and no -march: a hard driver error on
-# clang >= 17 (AppleClang 16, the Xcode 16.2 the release pins), and on clang 16 a baseline x86-64 binary
+# clang >= 17 (AppleClang 16, the Xcode 16.2 the release pinned through 0.6.1), and on clang 16 a baseline x86-64 binary
 # running strkern.h's scalar twins. test/portablebuildcheck.sh #2d-#2g hold both directions.
 set(RIPWIRE_TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 if(APPLE AND CMAKE_OSX_ARCHITECTURES)

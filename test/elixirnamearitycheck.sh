@@ -270,7 +270,7 @@ done
 # --uses in_id rows of one symbol, sorted, one per line
 use_ids(){ grep -oE 'in_id="[^"]*"' "$1" | sort; }
 # the p= of every callee row of $2, sorted onto one line
-callee_ps(){ "$BIN" "$R" "--callees=$1" --no-cache 2>/dev/null | grep -oE '<s [^>]*/>' | grep -oE 'p="[^"]*"' | sort | tr '\n' ' ' | sed 's/ $//'; }
+callee_ps(){ "$BIN" "$R" "--callees=$1" --no-cache 2>/dev/null | grep -oE '<s [^>]*/>' | grep -oE 'p="[^"]*"' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
 
 # ── (G) import M, except: [...] after import M, only: [...] subtracts; it does not replace ──────────────
 [ "$( callees "$TMP/resolve.xml" '::Narrowed::c_never/1' )" = "" ] \

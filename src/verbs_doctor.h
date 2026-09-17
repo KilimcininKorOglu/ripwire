@@ -9,6 +9,7 @@
 // linkage it had inside main.cpp, so the split adds zero API surface) and leans on main.cpp's own
 // top-of-file #includes and preamble helpers. The RIPWIRE_MAIN_TU guard turns a second includer into
 #include "gitstamp.h"          // isShallow — the git row's shallow="1" (2026-09-06 stranger audit)
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 // a compile error instead of a silent per-TU-copy ODR trap.
 
 namespace
@@ -281,7 +282,9 @@ inline const char* doctorLegendComment()
                        "git-config-trust reads the checkout's OWN core.fsmonitor as this process saw it at startup: hook is a "
                        "COMMAND git would run on every read-only call, and neutralised=\"1\" says core.fsmonitor=false was "
                        "appended to git's environment override for this run (stderr said so as git_harden=fsmonitor-hook); "
-                       "builtin, off and unset are left untouched and neutralised=\"0\". "
+                       "builtin, off and unset need no override and read neutralised=\"0\". Independently of this row, every git command "
+                       "ripwire runs carries no-optional-locks and core.fsmonitor=false, so no monitor of either form runs for its "
+                       "read-only calls. "
                        "NB no flag below is spelled with its leading dashes: an XML comment may not contain a "
                        "double hyphen, and this legend is one comment. -->";
 }
@@ -774,13 +777,13 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // ---- check 4: git reachability — `git` on PATH + the target dir's repo status; degrades
     // gracefully on non-repos (ok=1, repo="0" — doctor diagnoses, non-repo isn't sickness) ----
     {
-        const std::string gitVer       = doctorPopenTrim( "git --version 2>/dev/null" );
+        const std::string gitVer       = doctorPopenTrim( gitCmd( " --version 2>/dev/null" ) );
         const bool        gitAvailable = !gitVer.empty();
         std::string        attrs        = "git=\"" + std::string( gitAvailable ? "1" : "0" ) + "\"";
         if( gitAvailable )
         {
             const std::string root   = std::string( cfg.rootPath );
-            const std::string isRepo = doctorPopenTrim( "git -c core.quotepath=false -C " + shSingleQuote( root )
+            const std::string isRepo = doctorPopenTrim( gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                                                           + " rev-parse --is-inside-work-tree 2>/dev/null" );
             const bool repo = ( isRepo == "true" );
             attrs += " repo=\"" + std::string( repo ? "1" : "0" ) + "\"";

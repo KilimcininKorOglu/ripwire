@@ -196,7 +196,7 @@ inline void prewarmTagsQueries( const std::vector<std::string>& files, const Has
 
         for( unsigned t = 0; t < nHashThreads; ++t )
         {
-            hashPool.emplace_back( [ & ]()
+            hashPool.emplace_back( [ & ]() noexcept
             {
                 std::string bytes;
                 std::string headerPrefix;
@@ -430,7 +430,7 @@ inline void prewarmTagsQueries( const std::vector<std::string>& files, const Has
 
         for( std::size_t i = 0; i < prewarm.toCompile.size(); ++i )
         {
-            prewarm.compilePool.emplace_back( [ &prewarm, i ]() { prewarm.compiledQueries[ i ] = compileQueryStandalone( *prewarm.toCompile[ i ] ); } );
+            prewarm.compilePool.emplace_back( [ &prewarm, i ]() noexcept { prewarm.compiledQueries[ i ] = compileQueryStandalone( *prewarm.toCompile[ i ] ); } );
         }
     }
 }

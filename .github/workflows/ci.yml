@@ -153,7 +153,7 @@ jobs:
     # Clang-only by construction (-Rpass=/-fsave-optimization-record, .profdata/llvm-profdata) and
     # CMakeLists FATAL_ERRORs on anything else, so on a gcc-only Linux leg optremarkscheck's configure arms
     # cannot be expressed and can only skip. macOS covers Clang but not Linux's libc, headers or linker.
-    # Six legs = {macos-14 AppleClang, ubuntu gcc, ubuntu clang} x {Release, plain}: every guardrail is
+    # Six legs = {macos-26 AppleClang, ubuntu gcc, ubuntu clang} x {Release, plain}: every guardrail is
     # observed by at least one leg on the OS it matters for, and no leg has to assert the impossible.
     name: release (${{ matrix.os }}, ${{ matrix.flavor }}, ${{ matrix.cc }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     strategy:
@@ -172,14 +172,14 @@ jobs:
       # (plus asan's) exceed the account's concurrent macOS cap, the excess waits for a free runner.
       matrix:
         include:
-          - { os: macos-14,     flavor: Release, cc: appleclang, shard: 1, shards: 4 }
-          - { os: macos-14,     flavor: Release, cc: appleclang, shard: 2, shards: 4 }
-          - { os: macos-14,     flavor: Release, cc: appleclang, shard: 3, shards: 4 }
-          - { os: macos-14,     flavor: Release, cc: appleclang, shard: 4, shards: 4 }
-          - { os: macos-14,     flavor: plain,   cc: appleclang, shard: 1, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
-          - { os: macos-14,     flavor: plain,   cc: appleclang, shard: 2, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
-          - { os: macos-14,     flavor: plain,   cc: appleclang, shard: 3, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
-          - { os: macos-14,     flavor: plain,   cc: appleclang, shard: 4, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
+          - { os: macos-26,     flavor: Release, cc: appleclang, shard: 1, shards: 4 }
+          - { os: macos-26,     flavor: Release, cc: appleclang, shard: 2, shards: 4 }
+          - { os: macos-26,     flavor: Release, cc: appleclang, shard: 3, shards: 4 }
+          - { os: macos-26,     flavor: Release, cc: appleclang, shard: 4, shards: 4 }
+          - { os: macos-26,     flavor: plain,   cc: appleclang, shard: 1, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
+          - { os: macos-26,     flavor: plain,   cc: appleclang, shard: 2, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
+          - { os: macos-26,     flavor: plain,   cc: appleclang, shard: 3, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
+          - { os: macos-26,     flavor: plain,   cc: appleclang, shard: 4, shards: 4, skiplist: .github/pargates-macos-plain-skip.txt }
           - { os: ubuntu-24.04, flavor: Release, cc: gcc,   shard: 1, shards: 4 }
           - { os: ubuntu-24.04, flavor: Release, cc: gcc,   shard: 2, shards: 4 }
           - { os: ubuntu-24.04, flavor: Release, cc: gcc,   shard: 3, shards: 4 }
@@ -197,10 +197,15 @@ jobs:
           - { os: ubuntu-24.04, flavor: plain,   cc: clang, shard: 3, shards: 4 }
           - { os: ubuntu-24.04, flavor: plain,   cc: clang, shard: 4, shards: 4 }
     runs-on: ${{ matrix.os }}
-    # Xcode 16.2 on the macOS legs (the image default is 15.4): its libc++ carries <print> at a macOS 14
-    # deployment target, the default's does not. An empty DEVELOPER_DIR on the Linux legs is inert.
+    # The macOS legs test the toolchain release.yml's macos-arm64 leg ships: the same runner, Xcode 26.6 and the pinned
+    # minimum macOS 14.0 (test/portablebuildcheck.sh #2i holds all three against release.yml). Xcode 26.6's Apple clang
+    # 21 is LLVM 18+, so its loop vectorizer reads VERIFY_NO_ALIAS's separate-storage promise (test/noaliascheck.sh arm
+    # 6); its libc++ still defines __cpp_lib_print at a 14.0 deployment target, and it decides what else it declares
+    # available by that target, so the legs build at the one the release ships. Through 0.6.1 these legs ran Xcode
+    # 16.2 (LLVM 17) on macos-14, which retires 2026-11-02. Both variables are empty, and inert, on the Linux legs.
     env:
-      DEVELOPER_DIR: ${{ matrix.os == 'macos-14' && '/Applications/Xcode_16.2.app/Contents/Developer' || '' }}
+      DEVELOPER_DIR: ${{ matrix.os == 'macos-26' && '/Applications/Xcode_26.6.app/Contents/Developer' || '' }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-26' && '14.0' || '' }}
     steps:
       # L4 (Linux probe): checkout@v4 defaults to a --depth 1 clone, which leaves ONE commit of history
       # in the tree. The churn / co-change / ownership gates (churnjoincheck, hotspots, --owners, the
@@ -254,9 +259,20 @@ jobs:
 
       # The front end is recorded per leg so a log reader never has to infer it from the job name alone —
       # a `cc: clang` leg whose CMake cache says GNU is a broken matrix, not a passing run.
+      # A macOS leg also proves the release toolchain pin reached it. The job env's matrix.os condition falls back to an
+      # empty string on any other runner label, so a runner bump without the condition would otherwise build silently
+      # with the image's default Xcode at the runner's own minimum macOS.
       - name: Confirm the front end this leg actually configured with
         run: |
           grep -h 'CMAKE_CXX_COMPILER_ID\|CMAKE_CXX_COMPILER_VERSION' build/CMakeFiles/*/CMakeCXXCompiler.cmake
+          if [ "$RUNNER_OS" = macOS ]; then
+            if [ -z "$DEVELOPER_DIR" ] || [ -z "$MACOSX_DEPLOYMENT_TARGET" ] \
+               || ! grep -qx "CMAKE_OSX_DEPLOYMENT_TARGET:STRING=$MACOSX_DEPLOYMENT_TARGET" build/CMakeCache.txt; then
+              echo "ci: macOS leg without the release toolchain pin: DEVELOPER_DIR='$DEVELOPER_DIR' MACOSX_DEPLOYMENT_TARGET='$MACOSX_DEPLOYMENT_TARGET' cache='$( grep '^CMAKE_OSX_DEPLOYMENT_TARGET:' build/CMakeCache.txt )'" >&2
+              exit 1
+            fi
+            echo "DEVELOPER_DIR=$DEVELOPER_DIR MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET (in CMakeCache.txt)"
+          fi
 
       - name: Build
         run: cmake --build build -j
@@ -465,7 +481,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-24.04]
+        os: [macos-26, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     env:
       # Darwin's arm64 runtime rejects the standalone leak sanitizer at startup (CMakeLists.txt's own
@@ -476,12 +492,13 @@ jobs:
       # log_path: a sanitizer abort inside a gate that pipes 2>/dev/null leaves NO report in the log
       # (CI round 3: an asan/x86-64 abort read as "pin no longer resolves"). With log_path the report
       # lands in a file the failure artifact below preserves.
-      ASAN_OPTIONS: ${{ matrix.os == 'macos-14' && 'detect_leaks=0:halt_on_error=1:abort_on_error=1:log_path=/tmp/asanlog' || 'detect_leaks=1:halt_on_error=1:abort_on_error=1:log_path=/tmp/asanlog' }}
+      ASAN_OPTIONS: ${{ matrix.os == 'macos-26' && 'detect_leaks=0:halt_on_error=1:abort_on_error=1:log_path=/tmp/asanlog' || 'detect_leaks=1:halt_on_error=1:abort_on_error=1:log_path=/tmp/asanlog' }}
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1:log_path=/tmp/asanlog
       LSAN_OPTIONS: suppressions=${{ github.workspace }}/lsan_suppressions.txt
-      # Xcode 16.2 on the macOS leg (image default 15.4): its libc++ carries <print> at a macOS 14 deployment
-      # target, the default's does not — the std::print floor the build matrix holds. Inert (empty) on Linux.
-      DEVELOPER_DIR: ${{ matrix.os == 'macos-14' && '/Applications/Xcode_16.2.app/Contents/Developer' || '' }}
+      # The release toolchain on the macOS leg, as in the build matrix: Xcode 26.6 at the pinned minimum macOS 14.0
+      # (test/portablebuildcheck.sh #2i). Inert (empty) on Linux.
+      DEVELOPER_DIR: ${{ matrix.os == 'macos-26' && '/Applications/Xcode_26.6.app/Contents/Developer' || '' }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-26' && '14.0' || '' }}
     steps:
       # L4 (Linux probe): checkout@v4 defaults to a --depth 1 clone, which leaves ONE commit of history
       # in the tree. The churn / co-change / ownership gates (churnjoincheck, hotspots, --owners, the
@@ -529,9 +546,16 @@ jobs:
           CXX: clang++
         run: cmake -S . -B asan -DRIPWIRE_ASAN=ON
 
+      # Fails, as the build matrix's front-end step does, when the release toolchain pin did not reach this leg.
       - name: Configure (G1 sanitizer stack)
         if: runner.os == 'macOS'
-        run: cmake -S . -B asan -DRIPWIRE_ASAN=ON
+        run: |
+          cmake -S . -B asan -DRIPWIRE_ASAN=ON
+          if [ -z "$DEVELOPER_DIR" ] || [ -z "$MACOSX_DEPLOYMENT_TARGET" ] \
+             || ! grep -qx "CMAKE_OSX_DEPLOYMENT_TARGET:STRING=$MACOSX_DEPLOYMENT_TARGET" asan/CMakeCache.txt; then
+            echo "ci: macOS asan leg without the release toolchain pin: DEVELOPER_DIR='$DEVELOPER_DIR' MACOSX_DEPLOYMENT_TARGET='$MACOSX_DEPLOYMENT_TARGET' cache='$( grep '^CMAKE_OSX_DEPLOYMENT_TARGET:' asan/CMakeCache.txt )'" >&2
+            exit 1
+          fi
 
       - name: Build
         run: cmake --build asan -j
@@ -578,6 +602,13 @@ jobs:
       # green-by-construction in CI until it appeared here (V3-H-2).
       - name: Sanitizer-only class — cppqualcheck §9 operator-frame scan (test/cppqualcheck.sh)
         run: RIPWIRE_BIN=asan/ripwire bash test/cppqualcheck.sh
+
+      # crashsweepcheck B3 is the other sanitizer-only class: a file dated past 2262 overflowed the stat readers'
+      # nanosecond product, silent UB in the plain build and an abort here. The job's Linux leg is the one whose
+      # filesystem stores such a date (APFS clamps at 2262, and the arm says so on macOS). B2's hostile
+      # fixed-name files ride along on the instrumented binary; B1's preload shim skips a sanitizer build by name.
+      - name: Sanitizer-only class — crashsweepcheck far-future timestamp and fixed-name shapes (test/crashsweepcheck.sh)
+        run: RIPWIRE_BIN=asan/ripwire RIPWIRE_ASAN_BIN=asan/ripwire bash test/crashsweepcheck.sh
 
       - name: det-gate — 2-run byte-identical diff (ASan binary)
         run: |

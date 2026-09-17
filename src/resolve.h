@@ -2112,6 +2112,79 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
     return r.isCompose && r.qualifier == "std";
 }
 
+// One entry of Rule 2's FLAT per-function type table (buildGraph's varType): the variable's type name — "" is a TOMBSTONE,
+// an ambiguous or `std::`-typed variable that never narrows — and whether a declaration wrote that type QUALIFIED, the
+// fact prov="final-segment" discloses (Narrower::finalSegmentTypeAt).
+struct FlatRecvType
+{
+    std::string type;
+    bool        writtenQualified = false;
+};
+
+// fold one Type binding into the flat table: the first type wins, a different later type or a `std::` one tombstones
+inline void recordFlatRecvType( HashMap<std::string, FlatRecvType>& table, const std::string& key, const Binding& b )
+{
+    const std::string_view type = namesStdType( b.importedName ) ? std::string_view{} : std::string_view( b.typeName );
+    const auto [ it, inserted ] = table.try_emplace( key );
+    if( inserted )
+    {
+        it->second.type.assign( type );
+        it->second.writtenQualified = !b.importedName.empty();
+    }
+    else if( !it->second.type.empty() && it->second.type != type )
+    {
+        it->second.type.clear();   // conflicting types for one var in one scope → tombstone (never narrow this var)
+    }
+    else
+    {
+        it->second.writtenQualified = it->second.writtenQualified || !b.importedName.empty();
+    }
+}
+
+// what Rule 2 and CHA-lite read for one named receiver at one site: its type name ("" = none), whether the declaration
+// that decided it wrote the type QUALIFIED — a match on the final segment alone, whose qualifier nothing checked — and, for
+// Rule 2's class identity, that declaration's typed record when the lexical table decided it (nullptr on the flat table)
+struct RecvVarType
+{
+    std::string_view name;
+    bool             writtenQualified = false;
+    const Binding*   declared         = nullptr;
+};
+
+// The provenance value of one resolved edge (Graph::outProv; graph.h provLabel spells it) from the edge sets the resolve loop
+// filled. The precedence is deliberate: scip PINS an edge (precise); binding and import NAME the mechanism that resolved it;
+// split says the resolver could not choose; final-segment says it chose by a qualified written type's last name alone
+// (test/narrowcheck.sh arm 25). prov= is single-valued and a symbol's amb= counts a split arm either way, so nothing is
+// lost by the ordering. 0 = a uniquely resolved name-based edge, which no emitter writes.
+struct EdgeProvenanceSets
+{
+    const HashMap<std::uint64_t, char>& binding;
+    const HashMap<std::uint64_t, char>& import;
+    const HashMap<std::uint64_t, char>& split;
+    const HashMap<std::uint64_t, char>& finalSegment;
+};
+inline std::uint8_t edgeProvenance( bool scipPrecise, const EdgeProvenanceSets& sets, std::uint64_t edgeKey ) noexcept
+{
+    const auto holds = [ edgeKey ]( const HashMap<std::uint64_t, char>& set ) { return set.find( edgeKey ) != set.end(); };
+    if( scipPrecise )
+    {
+        return 1u;
+    }
+    if( holds( sets.binding ) )
+    {
+        return 2u;
+    }
+    if( holds( sets.import ) )
+    {
+        return 4u;
+    }
+    if( holds( sets.split ) )
+    {
+        return 3u;
+    }
+    return holds( sets.finalSegment ) ? 5u : 0u;
+}
+
 // P2-D Rule 2, PARAMETER receivers (2026-09-16, test/narrowcheck.sh arms 7-18): one DECLARATION of a receiver
 // name inside one definition — the scope its VarDecl record covers and the written type its Type/ParamType
 // record carries, joined on the record position the two share (Binding::startByte).
@@ -3164,7 +3237,7 @@ struct Narrower
     // canonByName), or the empty string as a TOMBSTONE marking an AMBIGUOUS var (bound to ≥2 distinct types in
     // one scope) — looked up but never narrowed. buildGraph builds it from IngestResult::bindings. Empty when
     // there are no bindings, so Rule 2 simply never fires (degrades to the unchanged ladder).
-    const HashMap<std::string, std::string>&             varType;
+    const HashMap<std::string, FlatRecvType>&            varType;
     // Rule 2's LEXICAL table for names with a ParamType declaration (see ScopedRecvDecl above). A name found here is
     // answered here ONLY — varType is not consulted.
     const ScopedRecvDecls&                               scopedDecls;
@@ -3189,7 +3262,7 @@ struct Narrower
     IdentityNarrower identity;   // Rule 2 through class identity: its scratch, memo and claim flag live there
 
     explicit Narrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon,
-                       const HashMap<std::string, std::string>&             vt,
+                       const HashMap<std::string, FlatRecvType>&            vt,
                        const ScopedRecvDecls&                               scoped,
                        const std::vector<std::vector<NodeId>>&              incl,
                        const std::vector<std::uint32_t>&                    symFile ) noexcept
@@ -3641,15 +3714,25 @@ struct Narrower
     // same way ("" = tombstone).
     // KNOWN FLOOR, the span model's own: a range-for variable's span is the whole loop statement, so a same-named
     // outer variable used inside the loop's own range expression reads as the loop variable.
-    struct RecvVarType
-    {
-        std::string_view name;                // the final class-name segment Rule 2 matches, "" when none is usable
-        const Binding*   declared = nullptr;  // the lexical declaration's typed record; nullptr on the flat table
-    };
     std::string_view recvVarTypeName( const Reference& r ) const
     {
         return recvVarType( r ).name;
     }
+
+    // prov="final-segment" (test/narrowcheck.sh arm 25): whether a named receiver's type at this site — the one Rule 2 narrows
+    // on and CHA-lite prunes by — was written QUALIFIED. Such a narrow matched the type's final segment alone and never
+    // checked its qualifier against the class's namespace (arm 24's wrong edge is exactly that), so the edge must not read
+    // as uniquely resolved. `this`, a field, a bare call or an explicit `A::m()` answer false.
+    bool finalSegmentTypeAt( const Reference& r ) const
+    {
+        if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode )
+        {
+            return false;
+        }
+        const RecvVarType t = recvVarType( r );
+        return t.writtenQualified && !t.name.empty();
+    }
+
     RecvVarType recvVarType( const Reference& r ) const
     {
         // key built in the reused buffer (identical bytes to `std::to_string( r.fromSymbol ) + "#" + r.recvVar`)
@@ -3662,13 +3745,13 @@ struct Narrower
             const ScopedRecvDecl* const innermost = innermostCoveringDecl( sit->second, r.startByte );
             if( innermost == nullptr || innermost->typeBinding >= kRecvDeclConflicted )
             {
-                return {};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
+                return RecvVarType{};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
-            return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, &declared };
+            return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, !declared.importedName.empty(), &declared };
         }
         const auto vit = varType.find( keyBind );
-        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second, nullptr };
+        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
     }
 
     // the qualifier the receiver's declaration wrote — the lexical record's own, else the flat table's kept one (read while

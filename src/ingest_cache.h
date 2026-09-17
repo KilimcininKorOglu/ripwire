@@ -4,6 +4,7 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "pathguard.h"  // CWE-59/367 round 5: rw::pathguard::createExclTempFile — saveCache's temp is created exclusively, never through a link
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 // ingest_cache.h — the raw-facts model + incremental cache, moved VERBATIM from ingest.cpp in the
@@ -1543,6 +1544,25 @@ struct ByteR
     std::string      str () { const std::string_view s = view(); return ok ? std::string( s ) : std::string{}; }
     bool rawInto( void* dst, std::size_t n )   // B0.2: bulk array read — overflow-safe bound, memcpy into caller storage
     { if( !ok || std::size_t( end - p ) < n ) { ok = false; return false; } if( n ) { std::memcpy( dst, p, n ); p += n; } return true; }
+    // An ENUM byte. The blob is external input — a committed team artifact, a copied cache directory, a file
+    // whose digests were rebuilt around an edit — so a value at or past the enum's count is corruption, never an
+    // enumerator this binary forgot (model.h proves each k*Count exact at compile time). It folds into `ok`
+    // exactly like a short read, so the record takes readFileRecord's one refusal path: that file reparses and
+    // the rest of the blob stands. Accepting it was never harmless downstream: symTag/refRoleTag serve such a
+    // value as "other"/"read", and clones.h shifts a 32-bit language mask by the Lang (UB at 32 and up).
+    // One compare per byte on the warm path; never an assumption, because nothing upstream makes it true.
+    template<class E>
+    E enumU8( std::size_t enumCount )
+    {
+        const std::uint8_t v = u8();
+        if( v >= enumCount )   // VALIDATE-SITE: becomes `if( !VALIDATE( v < enumCount ) )` when the macro vocabulary lands
+        {
+            DEGRADED_PATH_ALERT( "ingest: cache record carries an enum byte past its enum's last enumerator — cache treated as corrupt" );
+            ok = false;
+            return E{};
+        }
+        return E( v );
+    }
 };
 
 // withLex (B0.2 / v10 H3): the RICH family (captureValueUses=true) persists each def's doc/body subtoken
@@ -1691,7 +1711,7 @@ inline void verifyCacheRecordMinimaTripwire() noexcept
 
 inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>& fileDict )
 {
-    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = std::uint16_t( r.u32() ); d.humps = std::uint16_t( r.u32() ); d.deepLoc = std::uint16_t( r.u32() ); d.ev = std::uint16_t( r.u32() ); d.params = std::uint16_t( r.u32() ); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.kind = SymKind( r.u8() ); d.lang = Lang( r.u8() ); d.name = r.str(); d.scope = r.str();
+    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = std::uint16_t( r.u32() ); d.humps = std::uint16_t( r.u32() ); d.deepLoc = std::uint16_t( r.u32() ); d.ev = std::uint16_t( r.u32() ); d.params = std::uint16_t( r.u32() ); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
     for( std::uint8_t& tagCount : d.evWhy ) { tagCount = r.u8(); }   // mirrors writeDef's fixed 8×u8 order
     if( withLex && r.ok )
     {
@@ -1771,17 +1791,17 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = Lang( r.u8() ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = RecvKind( r.u8() ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = RefRole( r.u8() ); x.line = r.u32(); x.argCount = std::uint16_t( r.u32() ); x.argCountKnown = r.u8() != 0; return x; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = std::uint16_t( r.u32() ); x.argCountKnown = r.u8() != 0; return x; }
 inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
-inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = Lang( r.u8() ); b.kind = LocalBindKind( r.u8() ); b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
+inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }
-inline BindingAlias readFfi( ByteR& r ) { BindingAlias a; a.kind = BindKind( r.u8() ); a.lowConf = r.u8() != 0; a.aliasName = r.str(); a.targetName = r.str(); a.targetScope = r.str(); return a; }
+inline BindingAlias readFfi( ByteR& r ) { BindingAlias a; a.kind = r.enumU8<BindKind>( kBindKindCount ); a.lowConf = r.u8() != 0; a.aliasName = r.str(); a.targetName = r.str(); a.targetScope = r.str(); return a; }
 // B6.3: RouteDef needs no startByte (its handler is resolved by NAME in buildGraph); RawRouteUse mirrors
 // RawBind (startByte for the enclosing-def byte-span attribution done in the ingest() model-build below).
 inline void   writeRouteDef( ByteW& w, const RouteDef& d ) { w.u32( d.line ); w.u8( std::uint8_t( d.method ) ); w.str( d.path ); w.str( d.handlerName ); }
-inline RouteDef readRouteDef( ByteR& r ) { RouteDef d; d.line = r.u32(); d.method = HttpMethod( r.u8() ); d.path = r.str(); d.handlerName = r.str(); return d; }
+inline RouteDef readRouteDef( ByteR& r ) { RouteDef d; d.line = r.u32(); d.method = r.enumU8<HttpMethod>( kHttpMethodCount ); d.path = r.str(); d.handlerName = r.str(); return d; }
 inline void   writeRouteUse( ByteW& w, const RawRouteUse& u ) { w.u32( u.startByte ); w.u32( u.line ); w.u8( std::uint8_t( u.method ) ); w.str( u.path ); }
-inline RawRouteUse readRouteUse( ByteR& r ) { RawRouteUse u; u.startByte = r.u32(); u.line = r.u32(); u.method = HttpMethod( r.u8() ); u.path = r.str(); return u; }
+inline RawRouteUse readRouteUse( ByteR& r ) { RawRouteUse u; u.startByte = r.u32(); u.line = r.u32(); u.method = r.enumU8<HttpMethod>( kHttpMethodCount ); u.path = r.str(); return u; }
 
 // T5: re-absolutize a cache-stored ROOT-RELATIVE key against the CURRENT invocation's rootDir, producing
 // the exact spelling collectSources() would crawl it as (`<rootDir>/<rel>`, trailing slash on rootDir
@@ -2557,27 +2577,41 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // cache should never be clobbered without a peep). Mirrors mcpedit::atomicWrite's discipline
     // (src/mcp.h): check the write byte-count AND fclose's return, and on any failure unlink the temp
     // and leave the prior on-disk cache (if any) untouched.
-    const std::string tmp = path + "." + std::to_string( getpid() ) + ".tmp";
-    std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the cache blob, refusing an existing entry at that name. The name keeps its
+    // `.tmp` tail (a *.tmp residue glob still
+    // matches) and 0666 preserves the fopen("wb") default mode. The RAII holder owns the temp NAME and removes
+    // it on every early return below; fdopen adopts the descriptor so fwrite/fclose keep their bookkeeping.
+    rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0666 );
+    const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+    std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
     if( !fp )
     {
+        const int openErr = errno;
+        if( rawFd >= 0 )
+        {
+            ::close( rawFd );   // fdopen did not adopt the descriptor; the holder still removes the temp name
+        }
         DEGRADED_PATH_ALERT( "ingest: saveCache could not open temp file for write — cache left unchanged" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot write ({}) — every run parses from source until this is fixed\n",
-                      path.c_str(), std::strerror( errno )  );   // 2026-09-06: Release kept no signal for this
+                      path.c_str(), std::strerror( openErr )  );   // 2026-09-06: Release kept no signal for this
         return;
     }
-    const std::size_t wrote = std::fwrite( w.b.data(), 1, w.b.size(), fp );
-    const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;
+    // The stream owns the descriptor since releaseFd(), so it closes on every path: the write and the close
+    // are evaluated separately, never short-circuited into one expression.
+    const std::size_t wrote  = std::fwrite( w.b.data(), 1, w.b.size(), fp );
+    const bool        closed = std::fclose( fp ) == 0;
+    const bool        wErr   = wrote != w.b.size() || !closed;
     if( wErr )
     {
-        std::remove( tmp.c_str() );   // never rename a short/torn write over a good cache
+        // never rename a short/torn write over a good cache — the holder removes the temp on return
         DEGRADED_PATH_ALERT( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
+    if( !temp.commit( path ) )
     {
-        std::remove( tmp.c_str() );   // clean up on failure
+        // the holder removes the temp on return
         DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot replace ({}) — old cache kept, this run was parsed from source\n",
                       path.c_str(), std::strerror( errno ) );

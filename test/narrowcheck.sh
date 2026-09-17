@@ -30,6 +30,9 @@
 #     to the implementation — a program declares no class in it — so a `std::`-led written type never narrows, for
 #     a parameter (17), a typed local (19), a constructor-inferred local (20) and a C++ assignment (21). Every other
 #     qualifier keeps its narrow: an in-repo namespace is the common case (22, 23). (24) pins the stated floor.
+#   * Arm 25 — DISCLOSURE: a narrow decided by a qualified written type matched only its final segment, so it never reads
+#     as precise. Its edge carries prov="final-segment" (the floor's wrong edge, a correct parameter narrow and the local
+#     twin alike); an unqualified narrow and a uniquely named call carry no prov=, and both legends define the value.
 #
 # Usage:
 #   RIPWIRE_BIN=build/ripwire bash test/narrowcheck.sh
@@ -233,6 +236,7 @@ printf 'int lookupCtor() { auto table = std::map<int, int>(); return table.find(
 printf 'std::map<int, int> cache;\nint lookupAssign() { cache = std::map<int, int>(); return cache.find( 1 ); }\n' >"$VFIX/app/assign.cpp"
 printf 'int lookupInRepoLocal() { store::tree table; return table.find( 1 ); }\nint lookupInRepoParam( const store::tree& table ) { return table.find( 1 ); }\n' >"$VFIX/app/inrepo.cpp"
 printf 'int lookupExternal( ext::map<int, int>& table ) { return table.find( 1 ); }\n' >"$VFIX/app/external.cpp"
+printf 'int helperOnly() { return 1; }\nint callsHelper() { return helperOnly(); }\n' >"$VFIX/app/plain.cpp"
 visRows(){   # the find@<file> rows one caller's callees answer; NO-CALLEES-ANSWER when the probe did not run
     local out
     out="$( "$BIN" "$VFIX" "--callees=$1" --no-cache 2>/dev/null )"
@@ -279,7 +283,50 @@ expectNarrow "(23)" lookupInRepoParam "find@lib3/tree.h:1"
 #        assert the fixed behaviour, never delete it. ────────────────────────────────────────────────────────────────
 expectNarrow "(24)" lookupExternal "find@lib/map.h:1"
 
-# ── Arms 25-30: CLASS IDENTITY — an interface-typed receiver and its NESTED NAMESAKES (2026-09-16). Rule 2 matched
+# ── 25) DISCLOSURE (2026-09-16): the narrows arms 22-24 keep matched a QUALIFIED written type by its final segment alone —
+#        the qualifier is never checked against the class's namespace (arm 24's is wrong) — so their edges must not read
+#        as uniquely resolved. Each carries prov="final-segment"; arm 18's unqualified narrow and a uniquely named call
+#        carry no prov=; the map legend and the compact legend define the value on the document that carries it. RED
+#        before the attribute existed: (25) rows a, b, c and both legend rows. ─────────────────────────────────────────
+"$BIN" "$VFIX" --no-cache >"$TMP/vis.map" 2>/dev/null
+"$BIN" "$VFIX" --no-cache --legend=compact >"$TMP/vis.compact" 2>/dev/null
+provOf(){   # the prov= of caller $1's <c n="$2"> edge in map $3 (default: the VFIX map): a word, "none" when absent, NO-EDGE when missing
+    local row
+    row="$( tr '<' '\n' <"${3:-$TMP/vis.map}" | awk -v c="$1" '$1 == "s" && index( $0, " n=\"" c "\"" ) { on = 1; next } $1 == "s" || $1 == "/s>" { on = 0 } on' )"
+    row="$( printf '%s\n' "$row" | grep "^c n=\"$2\"" | head -1 )"
+    if [ -z "$row" ]; then
+        printf 'NO-EDGE'
+    elif printf '%s' "$row" | grep -q ' prov="'; then
+        printf '%s' "$row" | sed -n 's/.* prov="\([^"]*\)".*/\1/p'
+    else
+        printf 'none'
+    fi
+}
+expectProv(){   # arm label, caller, callee, expected prov word ("none" = absent), optional map file (provOf's $3)
+    local got
+    got="$( provOf "$2" "$3" "${5:-}" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2() -> $3: prov=[$got]"
+    else
+        no "$1 $2() -> $3: prov=[$got], want [$4]"
+    fi
+}
+expectProv "(25a)" lookupExternal find final-segment      # the floor's WRONG edge is disclosed, never precise
+expectProv "(25b)" lookupInRepoParam find final-segment   # a CORRECT qualified parameter narrow: still a final-segment match
+expectProv "(25c)" lookupInRepoLocal find final-segment   # the typed LOCAL twin says the same
+expectProv "(25d)" lookupSeen find none                   # an unqualified narrow: no qualifier was ever skipped
+expectProv "(25e)" callsHelper helperOnly none            # a uniquely named call
+if grep -q 'final-segment(' "$TMP/vis.map"; then
+    ok "(25f) the map legend defines prov=final-segment on the map that carries it"
+else
+    no "(25f) the map legend does not define prov=final-segment"
+fi
+if grep -q 'final-segment' "$TMP/vis.compact"; then
+    ok "(25g) the compact legend defines prov=final-segment"
+else
+    no "(25g) the compact legend does not define prov=final-segment"
+fi
+# ── Arms 26-31: CLASS IDENTITY — an interface-typed receiver and its NESTED NAMESAKES (2026-09-16). Rule 2 matched
 #    `T::m` by the final class-name segment, and a nested class loses its enclosing class in that key: a call through
 #    `Iterator* it` whose Iterator is an abstract interface (its methods are pure-virtual DECLARATIONS, never in the
 #    definitions-only map) narrowed onto the unrelated nested `Iterator` classes that do define the method, and every
@@ -391,32 +438,32 @@ for want in 'n="useParam"' 'n="useLocal"' 'n="useInherited"' 'n="peek"' 'n="useQ
     printf '%s\n' "$DMAP" | grep -qF "$want" || { no "presence guard: dispatchfix symbol $want not indexed"; dmiss=1; }
 done
 [ "$dmiss" = 0 ] && ok "presence: all dispatchfix symbols indexed"
-# ── 25) THE DEFECT: `it->key()` through a PARAMETER typed with the interface reaches its three real overriders — the
+# ── 26) THE DEFECT: `it->key()` through a PARAMETER typed with the interface reaches its three real overriders — the
 #        top-level DBIter, the NESTED Outer::NestedIt (a nested subclass is still a subclass) and the same-file KVIter —
 #        and neither nested namesake (ListRep::Iterator, Skip::Iterator), and is not trimmed to the same-file KVIter. ─
-expectDispatch "(25)" useParam key "$DISPATCH_KEYS"
-# ── 26) the same through a typed LOCAL (Rule 2's flat table), `Iterator* it = makeIter();`. ────────────────────────────
-expectDispatch "(26)" useLocal key "$DISPATCH_KEYS"
-# ── 27) INSIDE ListRep a bare `Iterator` IS ListRep::Iterator (a nested class is nameable in its enclosing class): the
+expectDispatch "(26)" useParam key "$DISPATCH_KEYS"
+# ── 27) the same through a typed LOCAL (Rule 2's flat table), `Iterator* it = makeIter();`. ────────────────────────────
+expectDispatch "(27)" useLocal key "$DISPATCH_KEYS"
+# ── 28) INSIDE ListRep a bare `Iterator` IS ListRep::Iterator (a nested class is nameable in its enclosing class): the
 #        visible nested owner stays, Skip's namesake goes. ──────────────────────────────────────────────────────────────
-expectDispatch "(27)" peek key "key@memtable/rep.h:12"
-# ── 28) a QUALIFIED nested type, `Skip::Iterator& it`, names exactly Skip's nested class — its out-of-line def. ─────────
-expectDispatch "(28)" useQualified key "key@memtable/rep.h:25"
-# ── 29) control — a method the interface's base DEFINES (`IteratorBase::size`) keeps the static inherited definition;
+expectDispatch "(28)" peek key "key@memtable/rep.h:12"
+# ── 29) a QUALIFIED nested type, `Skip::Iterator& it`, names exactly Skip's nested class — its out-of-line def. ─────────
+expectDispatch "(29)" useQualified key "key@memtable/rep.h:25"
+# ── 30) control — a method the interface's base DEFINES (`IteratorBase::size`) keeps the static inherited definition;
 #        overriders join only when the ancestry has no body at all. ────────────────────────────────────────────────────
-expectDispatch "(29)" useInherited size "size@include/iterator.h:6"
-# ── 30) the dispatch split is disclosed as ambiguity: useParam carries amb=, never a quiet single pin. ────────────────
+expectDispatch "(30)" useInherited size "size@include/iterator.h:6"
+# ── 31) the dispatch split is disclosed as ambiguity: useParam carries amb=, never a quiet single pin. ────────────────
 if printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | grep -q 'amb="'; then
-    ok "(30) useParam carries amb= — the dispatch split is disclosed"
+    ok "(31) useParam carries amb= — the dispatch split is disclosed"
 else
-    no "(30) useParam carries no amb= — a multi-target dispatch reads as a confident edge: $( printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | head -1 )"
+    no "(31) useParam carries no amb= — a multi-target dispatch reads as a confident edge: $( printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | head -1 )"
 fi
-# ── Arms 31-34: the four shapes the corpora taught class identity (rocksdb, llvm-project, a private C++ corpus). ────────
-# 31: a namespace-level FORWARD DECLARATION `class Iterator;` is not a class — counted as one it made every bare `Iterator`
-#     read as several namesakes and refused arm 25's dispatch (rocksdb has five). db/fwd.h adds one; arms 25-26 re-run.
+# ── Arms 32-35: the four shapes the corpora taught class identity (rocksdb, llvm-project, a private C++ corpus). ────────
+# 32: a namespace-level FORWARD DECLARATION `class Iterator;` is not a class — counted as one it made every bare `Iterator`
+#     read as several namesakes and refused arm 26's dispatch (rocksdb has five). db/fwd.h adds one; arms 26-27 re-run.
 printf 'class Iterator;\nclass IteratorBase;\n' >"$DFIX/db/fwd.h"
-expectDispatch "(31)" useParam key "$DISPATCH_KEYS"
-# 32: a type ALIAS reaching a nested class (`using NodeSet = Graph::NodeSet;`, llvm's X86 LVI pass) is invisible to the
+expectDispatch "(32)" useParam key "$DISPATCH_KEYS"
+# 33: a type ALIAS reaching a nested class (`using NodeSet = Graph::NodeSet;`, llvm's X86 LVI pass) is invisible to the
 #     index; the nested class's header is visible from the caller, so its hit is never dropped for the unrelated
 #     namespace-level `NodeSet` the caller never includes. pipe/pipeliner.h:1 must not be the whole answer.
 mkdir -p "$DFIX/graph" "$DFIX/pipe"
@@ -425,10 +472,10 @@ printf 'struct NodeSet { void clear() {} };\n' >"$DFIX/pipe/pipeliner.h"
 printf '#include "../graph/graph.h"\nstruct Pass\n{\n    using NodeSet = Graph::NodeSet;\n    void run() { NodeSet s; s.clear(); }\n};\n' >"$DFIX/graph/pass.cc"
 got="$( dispatchRows run clear )"
 case " $got " in
-    *" clear@graph/graph.h:5 "*) ok "(32) run(): an aliased nested NodeSet keeps its clear -> [$got]" ;;
-    *)                           no "(32) run(): clear -> [$got] lost graph/graph.h:5 — an alias's nested class was dropped for an unincluded namesake" ;;
+    *" clear@graph/graph.h:5 "*) ok "(33) run(): an aliased nested NodeSet keeps its clear -> [$got]" ;;
+    *)                           no "(33) run(): clear -> [$got] lost graph/graph.h:5 — an alias's nested class was dropped for an unincluded namesake" ;;
 esac
-# 33: two NAMESPACE-level classes named Value (llvm::Value, sandboxir::Value): the base the derived class's file INCLUDES is
+# 34: two NAMESPACE-level classes named Value (llvm::Value, sandboxir::Value): the base the derived class's file INCLUDES is
 #     the one it means — here through an include-root spelling (`"ir/Value.h"`) the path-precise include set cannot resolve,
 #     read as a path suffix, so the out-of-line sb::Value::getType in sandbox/Value.cc is not a candidate.
 mkdir -p "$DFIX/ir" "$DFIX/sandbox" "$DFIX/opt"
@@ -437,8 +484,8 @@ printf 'namespace sb { struct Value { int getType() const; }; }\n' >"$DFIX/sandb
 printf '#include "sandbox/Value.h"\nint sb::Value::getType() const { return 2; }\n' >"$DFIX/sandbox/Value.cc"
 printf '#include "ir/Value.h"\nstruct Inst : Value {};\n' >"$DFIX/ir/Inst.h"
 printf '#include "ir/Inst.h"\nint typeOf( Inst* i ) { return i->getType(); }\n' >"$DFIX/opt/use.cc"
-expectDispatch "(33)" typeOf getType "getType@ir/Value.h:3"
-# 34: an INHERITED BODY — `IOStatus` defines no `ok`, its base Status does — is the static answer through the typed receiver,
+expectDispatch "(34)" typeOf getType "getType@ir/Value.h:3"
+# 35: an INHERITED BODY — `IOStatus` defines no `ok`, its base Status does — is the static answer through the typed receiver,
 #     over a same-named `ok` elsewhere the name ladder could only split or decline over.
 #     Caller, Status and the decoy sit in three directories and the caller includes both headers — the shape the ladder
 #     DECLINES (two cross-directory candidates, no include narrow), measured as 397 formerly unlinked calls on rocksdb.
@@ -446,7 +493,20 @@ mkdir -p "$DFIX/status" "$DFIX/probe" "$DFIX/app"
 printf 'struct Status\n{\n    bool ok() const { return true; }\n};\nstruct IOStatus : Status {};\n' >"$DFIX/status/status.h"
 printf 'struct Probe { bool ok() const { return false; } };\n' >"$DFIX/probe/probe.h"
 printf '#include "../status/status.h"\n#include "../probe/probe.h"\nbool healthy( IOStatus& s ) { return s.ok(); }\n' >"$DFIX/app/health.cc"
-expectDispatch "(34)" healthy ok "ok@status/status.h:3"
+expectDispatch "(35)" healthy ok "ok@status/status.h:3"
+# ── 36) an identity CLAIM is not a final-segment guess: `hs::DiskHealth& d; d.fine()` resolves through class identity to the
+#        inherited HealthBase::fine — one plausible class, its namespace evidenced in its file (a non-member of `hs` defined
+#        there: a file holding only classes gives no namespace evidence, and the claim then stays out) — so the edge carries no
+#        prov="final-segment", which says a qualified type was matched by its last name and nothing checked. Control: the
+#        class-qualified `Skip::Iterator& it; it.key()` (arm 29) is a step-1 narrow, no claim, and keeps the disclosure. RED
+#        on a merge that stamps every qualified receiver's edge: (36b). ──────────────────────────────────────────────────
+printf 'namespace hs\n{\nstruct HealthBase\n{\n    bool fine() const { return true; }\n};\nstruct DiskHealth : HealthBase {};\ninline int version() { return 1; }\n}\n' >"$DFIX/status/ns.h"
+printf 'struct Gauge { bool fine() const { return false; } };\n' >"$DFIX/probe/gauge.h"
+printf '#include "../status/ns.h"\n#include "../probe/gauge.h"\nbool nsHealthy( hs::DiskHealth& d ) { return d.fine(); }\n' >"$DFIX/app/nshealth.cc"
+expectDispatch "(36a)" nsHealthy fine "fine@status/ns.h:5"
+"$BIN" "$DFIX" --no-cache >"$TMP/dispatch.map" 2>/dev/null
+expectProv "(36b)" nsHealthy fine none "$TMP/dispatch.map"
+expectProv "(36c)" useQualified key final-segment "$TMP/dispatch.map"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
