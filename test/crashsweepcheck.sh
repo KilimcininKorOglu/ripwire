@@ -40,7 +40,9 @@
 #        .size() term whose parentheses nest (its identifiers are then judged like any other).
 #   (S2) EVERY RAW STREAM OR DESCRIPTOR ACQUISITION IS ACCOUNTED FOR. Each fopen/open/fdopen/openat/opendir/
 #        open_memstream/popen call site must appear in the registry below with the fact that makes it safe
-#        (owned by a destructor, closed on every return, or handed to a closer). A NEW site fails: wrap it in
+#        (owned by a destructor, closed on every return, or handed to a closer). A call passed straight to an owner
+#        type's constructor — `OwnedFd fd( ::open( … ) )`, `OwnedFile fp( ::fdopen( … ) )` — is owned and needs no
+#        row. A NEW raw site fails: wrap it in
 #        rw::OwnedFile — `rw::openOwnedFile( path, mode )`, or `rw::OwnedFile f( ::fdopen( fd, mode ) )` — or
 #        register it with its reason. And one shape is refused outright, registry or not: a close call as the
 #        right operand of && or ||, or an arm of ?: — the exact expression that leaked (B1). Red on the base:
@@ -192,6 +194,20 @@ OPENERS = "^(std::|::)?(fopen|open|fdopen|openat|opendir|open_memstream|popen)$"
 sites = Counter()
 for f, ln, fn, kind, _call in pairs(match('(call_expression function: [(identifier) @f (qualified_identifier) @f] (#match? @f "%s")) @call' % OPENERS)):
     sites[(f, fn, kind.split("::")[-1])] += 1
+# An acquisition handed straight to an owner type needs no registry row: `OwnedFd fd( ::open( … ) )`,
+# `OwnedFile fp( ::fdopen( … ) )`, `return OwnedFile( std::fopen( … ) )`. The owner's destructor closes on every path.
+OWNERS = "(^|::)(OwnedFd|OwnedFile)$"
+owned = Counter()
+for shape in ('(declaration type: [(type_identifier) (qualified_identifier)] @_t declarator: (init_declarator value: (argument_list . '
+              '(call_expression function: [(identifier) (qualified_identifier)] @f))) (#match? @_t "%s") (#match? @f "%s"))',
+              '(call_expression function: [(identifier) (qualified_identifier)] @_t arguments: (argument_list . '
+              '(call_expression function: [(identifier) (qualified_identifier)] @f)) (#match? @_t "%s") (#match? @f "%s"))'):
+    for f, ln, fn, _owner, kind in pairs(match(shape % (OWNERS, OPENERS))):
+        owned[(f, fn, kind.split("::")[-1])] += 1
+for key, n in owned.items():
+    sites[key] -= n
+    if sites[key] <= 0:
+        del sites[key]
 with open(os.path.join(OUT, "s2_sites.tsv"), "w") as out:
     for (f, fn, kind), n in sorted(sites.items()):
         out.write("%s\t%s\t%s\t%d\n" % (f, fn, kind, n))
@@ -266,14 +282,13 @@ gitmine.h	gitLogFileSets	popen	1	closes	continue-only loop; pclose after the flu
 gitmine.h	gitLogNameOnlyRaw	popen	1	closes	continue-only loop; pclose after it
 gitmine.h	popenTrimmed	popen	1	closes	no exit between popen and pclose
 gitoracle.h	loadOracleCache	fopen	1	closes	returns only on a failed open; fclose after the read loop
-gitoracle.h	saveOracleCache	fopen	1	closes	the fwrite result is kept, then an unconditional fclose
+gitoracle.h	saveOracleCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 gitoracle.h	walkGitPatch	popen	1	closes	break-only loops, a drain, then pclose; no return between
 infra/emit.h	renderToString	open_memstream	1	closes	the catch at the seam fcloses; the success path always fcloses
-infra/ownedfile.h	openOwnedFile	fopen	1	owned	the owner itself: the stream is returned inside rw::OwnedFile
 ingest_cache.h	openOnce	open	1	owned	ReadFd's destructor closes it
-ingest_cache.h	saveCache	fopen	1	writer	temp-file publish writer; its write and close path is not audited by this gate
+ingest_cache.h	saveCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 ingest_crawl.h	collectGitIgnored	popen	1	closes	the overflow break still reaches pclose
-ingest_docpass.h	docTextViaBridgeCache	fopen	1	closes	the fwrite result is kept, then an unconditional fclose
+ingest_docpass.h	publishDocBridgeBlob	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 lintrules.h	loadLintRules	fopen	1	closes	skips only a failed open; fclose after the sized read
 main.cpp	dispatchMain	fopen	1	closes	returns only on a failed open; fclose after the read loop
 main.cpp	openTokenBudgetBuffer	open_memstream	1	transferred	finishTokenBudgetGate fcloses it; the caller has no return between
@@ -281,7 +296,6 @@ main.cpp	resolveRemoteRoot	popen	1	closes	no exit between popen and pclose
 main.cpp	runDefaultMap	fopen	1	closes	returns only on a failed open; fclose after the render
 main.cpp	scipIndexUnreadableReason	open	1	closes	close right after fstat, before every return
 mcpedit.h	EditLock	open	1	owned	EditLock's destructor unlocks and closes
-mcpedit.h	atomicWrite	open	1	writer	temp-file publish writer; its write and close path is not audited by this gate
 mcpindex.h	arm	open	1	owned	held in FsWatcher::dirFds, closed by reset and the destructor
 mcpindex.h	readFileBytes	fopen	1	closes	fclose before both returns
 mcpverbs.h	connectText	open_memstream	1	closes	returns only on a failed open; fclose before the copy-out
@@ -295,9 +309,12 @@ mcpverbs.h	sliceText	fopen	1	closes	if-scoped; fclose after the read loop
 mcpverbs.h	usesText	open_memstream	1	closes	no return between open and fclose
 naminglens.h	namingLensChecks	fopen	1	closes	if-scoped; fclose after the sized read
 packtask.h	d1ReadSrcCached	fopen	1	closes	if-scoped; fclose after the read loop
+pathguard.h	openExclNoFollow	open	1	transferred	returned to createExclTempFile, which adopts it into ExclTempFile (closes and unlinks)
 pathguard.h	openNoFollowRead	fdopen	1	owned	adopted by NoFollowRead, whose destructor fcloses
 pathguard.h	openNoFollowRead	open	1	owned	closed on every refusal; otherwise fdopen'd into NoFollowRead
 pathguard.h	openNoFollowTruncate	open	1	transferred	every caller hands the descriptor to writeAllAndClose, which always closes
+pathguard.h	randomTempSuffix	open	1	closes	::close after the read loop, before the only exit; only ::read runs between
+pathguard.h	readWholeBeneathNoFollow	openat	1	transferred	the next statement's cur.reset( next ) adopts it into OwnedFd; the only return between is the failed open
 pincensus.h	writePinCensus	fopen	1	closes	returns only on a failed open; one fclose before the return
 planlint.h	gitBlameLineSha	popen	1	closes	no exit between popen and pclose
 prcontext.h	numstatChangedPaths	popen	1	closes	rc = pclose after the loop; no exit between
@@ -341,9 +358,9 @@ cat > "$TMP/s1_allow.tsv" <<'S1ALLOW'
 ingest_cache.h	finishCacheBlob	entryCount	writer: entryCount counts the in-memory records being written, not a decoded field
 ingest_cache.h	saveCache	slotCount	writer: slotCount sizes the table from the in-memory plan, not a decoded field
 S1ALLOW
-# The short-circuited closes S2 refuses, registered only where this gate does not audit the writer.
+# The short-circuited closes S2 refuses, registered with why. Empty: the one row this held (saveCache) excused a live
+# instance of B1's exact shape until #250 made its fclose unconditional, and a stale row now fails the gate.
 cat > "$TMP/s2_shortcircuit_allow.tsv" <<'S2ALLOW'
-ingest_cache.h	saveCache	temp-file publish writer; its write and close path is not audited by this gate
 S2ALLOW
 # Thread bodies S3 reports as bare, with why each is accepted.
 cat > "$TMP/s3_allow.tsv" <<'S3ALLOW'
@@ -361,12 +378,17 @@ def rows(path):
 allow1  = {(r[0], r[1], r[2]) for r in rows(tmp + "/s1_allow.tsv")}
 allowSc = {(r[0], r[1]) for r in rows(tmp + "/s2_shortcircuit_allow.tsv")}
 allow3  = {(r[0], r[1]) for r in rows(tmp + "/s3_allow.tsv")}
+used1, usedSc, used3 = set(), set(), set()
 registry = {(r[0], r[1], r[2]): int(r[3]) for r in rows(tmp + "/registry.tsv")}
 for f, fn, ident, ln in rows(out + "/s1.tsv"):
-    if label != "src" or (f, fn, ident) not in allow1:
+    if label == "src" and (f, fn, ident) in allow1:
+        used1.add((f, fn, ident))
+    else:
         print("S1\t%s:%s (%s) sizes an allocation by `%s` with no bound on it earlier in the function" % (f, ln, fn, ident))
 for f, fn, ln in rows(out + "/s2_shortcircuit.tsv"):
-    if label != "src" or (f, fn) not in allowSc:
+    if label == "src" and (f, fn) in allowSc:
+        usedSc.add((f, fn))
+    else:
         print("S2\t%s:%s (%s) closes a handle inside && / || / ?: — a short-circuit skips the close; own it (rw::OwnedFile)" % (f, ln, fn))
 seen = {}
 for f, fn, kind, n in rows(out + "/s2_sites.tsv"):
@@ -382,8 +404,18 @@ else:
     for key, n in sorted(seen.items()):
         print("S2\t%s %s: %d raw %s call(s) outside the registry" % (key[0], key[1], n, key[2]))
 for f, fn, ln, verdict in rows(out + "/s3.tsv"):
-    if verdict == "bare" and (label != "src" or (f, fn) not in allow3):
+    if verdict != "bare":
+        continue
+    if label == "src" and (f, fn) in allow3:
+        used3.add((f, fn))
+    else:
         print("S3\t%s:%s (%s) hands a thread a body that is neither noexcept nor one try block" % (f, ln, fn))
+# An allow row that excuses nothing any more is a stale permission: it would silently excuse the next site of that
+# name. Each one fails until it is deleted.
+if label == "src":
+    for rule, allowed, used in (("S1", allow1, used1), ("S2", allowSc, usedSc), ("S3", allow3, used3)):
+        for row in sorted(allowed - used):
+            print("%s\tallow row %s excuses nothing any more — delete the row" % (rule, " ".join(row)))
 JUDGEPY
 }
 
@@ -415,6 +447,11 @@ inline bool probeShortCircuit( const char* path )
     const bool ok = ( fp != nullptr ) && ( std::fclose( fp ) == 0 );
     return ok;
 }
+struct OwnedFd { explicit OwnedFd( int ) noexcept {} };
+inline void probeOwnedDescriptor( const char* path )
+{
+    const OwnedFd fd( ::open( path, 0 ) );   // handed straight to an owner: S2 must not count it
+}
 inline void probeThreads()
 {
     std::vector<std::thread> pool;
@@ -434,6 +471,9 @@ else
         && ok "S2 probe: the short-circuited fclose fires" || { no "S2 probe: the short-circuited fclose did not fire"; cat "$TMP/probe_verdict.txt"; }
     grep -q 'S2	probe_reader.h probeShortCircuit: 1 raw fopen' "$TMP/probe_verdict.txt" \
         && ok "S2 probe: an unregistered raw fopen fires" || { no "S2 probe: the unregistered raw fopen did not fire"; cat "$TMP/probe_verdict.txt"; }
+    grep -q 'probeOwnedDescriptor' "$TMP/probe_verdict.txt" \
+        && { no "S2 probe: an open handed straight to OwnedFd was counted as raw"; cat "$TMP/probe_verdict.txt"; } \
+        || ok "S2 probe: an open handed straight to an owner type (OwnedFd) is not counted"
     [ "$( grep -c '^S3' "$TMP/probe_verdict.txt" )" -eq 1 ] \
         && ok "S3 probe: the bare thread body fires and its noexcept twin does not" \
         || { no "S3 probe: expected exactly one bare thread body"; cat "$TMP/probe_verdict.txt"; }
