@@ -10,7 +10,8 @@
 # (arm q, 2026-09-16, is the exception: the field capture records the namespace a type was written in, kParserVer 99).
 #
 # Zero false edges is the bar — narrowing that guesses wrong is worse than ambiguity disclosed:
-#   * a LOCAL (param / declared var) that shadows the field name vetoes the narrow (real C++ lookup);
+#   * a LOCAL (param / declared var) that shadows the field name vetoes the narrow (real C++ lookup) — and only a
+#     DECLARATION says so: `m_p = makePool();` inside the method assigns the field and declares nothing (arm v);
 #   * two same-NAMED classes (scope strings drop namespaces, so `n1::Dup` and `n2::Dup` collide) with a
 #     same-named field of DIFFERENT types TOMBSTONE the field entry — neither narrows;
 #   * an unknown/unindexed field type, a chained `this->f.m()` receiver, a receiver in a scope-less free
@@ -539,6 +540,135 @@ if [ -s "$TMP/p5.tsv" ] && cmp -s "$TMP/p5.tsv" "$TMP/p5b.tsv" && cmp -s "$TMP/p
     ok "(p9) ptrfix census byte-identical cold, cold again and warm, and the warm run still narrows w_->read()"
 else
     no "(p9) ptrfix census differs across runs or warm vs cold, or the warm run lost w_->read()'s narrow"; diff "$TMP/p5.tsv" "$TMP/p5w.tsv" | head -6
+fi
+
+# ── (v) an ASSIGNMENT declares nothing (2026-09-17). The local-shadow veto read every binding record for (method, name), and
+#        ingest records assignments too: `x = Foo()` and `x = std::make_unique<T>( … )` mint a Type record (the callee's
+#        name), `x = other` an L3 FnAssign, and `x = nullptr` a clobber tombstone once the file binds x to a function. So a
+#        member the method ASSIGNS before calling it read as a local, and Rule 2b refused its declared type — measured on
+#        llvm-project's LVSplitContext::open, `OutputFile = std::make_unique<ToolOutputFile>( … ); OutputFile->keep();`.
+#        Only a declaration shadows a member, so Rule 2b's veto now reads declaration records alone (VarDecl, ParamType,
+#        FnDecl), and every local-declaring shape must still veto: (v2) is each one, assigned or not. Three of them recorded
+#        no declaration and were refused only by the assignment's record — a parameter of a definition returning `T&` or
+#        `T&&`, and an attributed declarator — so ingest records those first (narrowcheck arms 61-63, shadowcheck am/q8); the
+#        fourth, a vexing-parse local, is the floor (v4) pins. Rule 2c keeps every record (v3): its question is whether the
+#        token is a VARIABLE rather than the class it spells, and assigning to a name proves that as well as declaring it does.
+#        One file per shape — the L3 clobber sweep reads a whole file. ──
+FIX7="$TMP/assignfix"
+mkdir -p "$FIX7/lib" "$FIX7/app"
+cat >"$FIX7/lib/types.h" <<'EOF'
+struct Tool { void keep() { } };
+struct Decoy { void keep() { } };
+struct Base { void flush() { } };
+struct DecoyBase { void flush() { } };
+struct Sub : Base { };
+struct Widget { void draw() { } };
+struct Pane { void draw() { } };
+Tool* makeTool();
+Pane* makePane();
+Decoy* pickDecoy();
+Unk* pickUnk();
+EOF
+vFile(){ printf '%s\n' "$2" >"$FIX7/app/$1.cpp"; }
+vFile unique     'struct AUnique { std::unique_ptr<Tool> out_; void openUnique() { out_ = std::make_unique<Tool>(); out_->keep(); } };'
+vFile ctor       'struct ACtor { Sub sub_; void openCtor() { sub_ = Sub(); sub_.flush(); } };'
+vFile call       'struct ACall { Tool* raw_; void openCall() { raw_ = makeTool(); raw_->keep(); } };'
+vFile copy       'struct ACopy { Tool* raw_; Tool* spare_; void openCopy() { raw_ = spare_; raw_->keep(); } };'
+vFile clobber    'struct AClobber { Tool* raw_; Tool* spare_; void swap() { raw_ = spare_; } void openReset() { raw_ = nullptr; raw_->keep(); } };'
+vFile named      'struct ANamed { Pane* Widget; void openNamed() { Widget = makePane(); Widget->draw(); } };'
+vFile localauto  'struct BLocal { Tool* raw_; void localAssigned() { auto* raw_ = pickDecoy(); raw_ = pickDecoy(); raw_->keep(); } };'
+vFile localtyped 'struct BTyped { Tool* raw_; void typedAssigned() { Unk* raw_; raw_ = pickUnk(); raw_->keep(); } };'
+vFile param      'struct BParam { Tool* raw_; void param( Unk* raw_ ) { raw_ = pickUnk(); raw_->keep(); } };'
+vFile range      'struct BRange { Tool* raw_; void range( V& v ) { for( auto* raw_ : v ) { raw_->keep(); } } };'
+vFile bind       'struct BBind { Tool* raw_; void bind( M& m ) { auto [ raw_, n ] = m.get(); raw_->keep(); } };'
+vFile catch      'struct BCatch { Tool* raw_; void handle() { try { go(); } catch( Unk* raw_ ) { raw_->keep(); } } };'
+vFile lambda     'struct BLambda { Tool* raw_; void each() { auto f = []( Unk* raw_ ) { raw_->keep(); }; f( nullptr ); } };'
+vFile capture    'struct BCapture { Tool* raw_; void later() { auto f = [ raw_ = pickDecoy() ]() { raw_->keep(); }; f(); } };'
+vFile cond       'struct BCond { Tool* raw_; void maybe() { if( auto* raw_ = pickDecoy() ) { raw_->keep(); } } };'
+vFile global     'struct BGlobal { Tool* raw_; void paintGlobal() { Widget = makePane(); Widget->draw(); } };'
+vFile refret     'struct BRef { Tool* raw_; Tool& get( Unk* raw_ ) { raw_ = pickUnk(); raw_->keep(); return *this->raw_; } };'
+vFile rvret      'struct BRv { Tool* raw_; Tool&& take( Unk* raw_ ); }; Tool&& BRv::take( Unk* raw_ ) { raw_ = pickUnk(); raw_->keep(); return static_cast<Tool&&>( *this->raw_ ); }'
+vFile attr       'struct BAttr { Tool* raw_; void tagged() { Unk* raw_ [[maybe_unused]] = pickUnk(); raw_ = pickUnk(); raw_->keep(); } };'
+vFile vexing     'struct BVex { Tool* raw_; void direct( int a, int b ) { Unk raw_( a, b ); raw_ = pickUnk(); raw_->keep(); } };'
+"$BIN" "$FIX7" --no-cache --pin-census="$TMP/v7.tsv" >/dev/null 2>&1
+vMissing=""
+for want in 'app/unique.cpp::AUnique::openUnique#' 'app/clobber.cpp::AClobber::openReset#' 'app/named.cpp::ANamed::openNamed#' \
+            'app/lambda.cpp::BLambda::each#' 'app/global.cpp::BGlobal::paintGlobal#' 'app/rvret.cpp::BRv::take#' 'app/attr.cpp::BAttr::tagged#' \
+            'app/vexing.cpp::BVex::direct#' 'lib/types.h::Tool::keep#' 'lib/types.h::Widget::draw#' 'dispositions calls=40 '; do
+    qHas "$TMP/v7.tsv" "$want" || vMissing="$vMissing [$want]"
+done
+[ -z "$vMissing" ] && ok "(v0) presence: the census names every assignfix caller and target and counts all 40 calls" \
+    || no "(v0) presence guard:$vMissing — every (v) arm below would be vacuous"
+
+# (v1) the defect: a member assigned in the method, then called, narrows to the member's declared type
+vPinned(){  # vPinned ARM CALLER CALLEE TARGET-ERE WHAT
+    local got; got="$( pRows "$TMP/v7.tsv" "$2" "$3" )"
+    if printf '%s\n' "$got" | grep -qE "^receiver-rule\\|$4#[0-9]+\$"; then
+        ok "($1) $5 narrows to the member's declared type (receiver-rule)"
+    else
+        no "($1) $5 did not narrow to the member's declared type — the assignment still vetoes it: [${got:-no row}]"
+    fi
+}
+vPinned v1 '::AUnique::openUnique#' keep  'lib/types\.h::Tool::keep'  'std::unique_ptr<Tool> out_; out_ = std::make_unique<Tool>(); out_->keep() (a Type record)'
+vPinned v1 '::ACtor::openCtor#'     flush 'lib/types\.h::Base::flush' 'Sub sub_; sub_ = Sub(); sub_.flush() (a Type record naming a class, the base walk decides)'
+vPinned v1 '::ACall::openCall#'     keep  'lib/types\.h::Tool::keep'  'Tool* raw_; raw_ = makeTool(); raw_->keep() (a Type record naming a function)'
+vPinned v1 '::ACopy::openCopy#'     keep  'lib/types\.h::Tool::keep'  'Tool* raw_; raw_ = spare_; raw_->keep() (an L3 FnAssign record)'
+vPinned v1 '::AClobber::openReset#' keep  'lib/types\.h::Tool::keep'  'Tool* raw_; raw_ = nullptr; raw_->keep() (an L3 clobber tombstone)'
+
+# (v2) every shape that DECLARES the name inside the method still vetoes the member — assigned afterwards or not
+vKept(){  # vKept ARM CALLER WHAT — the site must not take the member Tool* raw_'s type
+    pNotPinned "$1" "$TMP/v7.tsv" "$2" keep 'lib/types\.h::Tool::keep' "$3"
+}
+vKept v2 '::BLocal::localAssigned#' 'auto* raw_ = pickDecoy(); raw_ = pickDecoy(); raw_->keep() — a local declared, then assigned'
+vKept v2 '::BTyped::typedAssigned#' 'Unk* raw_; raw_ = pickUnk(); raw_->keep() — a typed local no class names, then assigned'
+vKept v2 '::BParam::param#'         'param( Unk* raw_ ) { raw_ = pickUnk(); raw_->keep(); } — a parameter, assigned'
+vKept v2 '::BRange::range#'         'for( auto* raw_ : v ) raw_->keep() — a range-for variable'
+vKept v2 '::BBind::bind#'           'auto [ raw_, n ] = m.get(); raw_->keep() — a structured binding'
+vKept v2 '::BCatch::handle#'        'catch( Unk* raw_ ) { raw_->keep(); } — a catch parameter'
+vKept v2 '::BLambda::each#'         '[]( Unk* raw_ ) { raw_->keep(); } — a lambda parameter'
+vKept v2 '::BCapture::later#'       '[ raw_ = pickDecoy() ]() { raw_->keep(); } — a lambda init-capture'
+vKept v2 '::BCond::maybe#'          'if( auto* raw_ = pickDecoy() ) raw_->keep() — a condition declaration'
+vKept v2 '::BRef::get#'             'Tool& get( Unk* raw_ ) { raw_ = pickUnk(); raw_->keep(); … } — the assigned parameter of a method returning a reference'
+vKept v2 '::BRv::take#'             'Tool&& BRv::take( Unk* raw_ ) { raw_ = pickUnk(); raw_->keep(); … } — the same, `T&&` and out of line'
+vKept v2 '::BAttr::tagged#'         'Unk* raw_ [[maybe_unused]] = pickUnk(); raw_ = pickUnk(); raw_->keep() — an attributed declarator'
+
+# (v3) Rule 2c: a name ASSIGNED is a variable, never the class it spells — with or without a member of that name
+vNotClass(){  # vNotClass CALLER WHAT — the site must not be pinned to the class the receiver token spells
+    local got; got="$( pRows "$TMP/v7.tsv" "$1" draw )"
+    if printf '%s\n' "$got" | grep -qE '^receiver-rule\|lib/types\.h::Widget::draw#[0-9]+$'; then
+        no "(v3) $2 was read as the class Widget: [$got]"
+    else
+        ok "(v3) $2 is not read as the class Widget: [${got:-no row}]"
+    fi
+}
+vNotClass '::BGlobal::paintGlobal#' 'Widget = makePane(); Widget->draw() in a class with no member Widget'
+vNotClass '::ANamed::openNamed#'    'Pane* Widget; Widget = makePane(); Widget->draw()'
+vPinned v3 '::ANamed::openNamed#' draw 'lib/types\.h::Pane::draw' 'Pane* Widget; Widget = makePane(); Widget->draw() — Rule 2c refuses the token, Rule 2b reads the member'
+
+# (v4) KNOWN FLOOR: a direct-initialised local whose arguments are plain names, `Unk raw_( a, b );`, is read by the grammar as
+#      a FUNCTION declarator. The shadow capture refuses it (a block-scope `void helper( int );` must not suppress calls), so it
+#      records no VarDecl, and its Type record belongs to the phantom function the declarator mints — the method sees only the
+#      assignment, which no longer vetoes: the call inside the local's scope takes the member's type. Measured before accepting
+#      it, llvm-project and rocksdb: no retargeted site has such a receiver, and composed with the branch that removes the
+#      phantom (whose Type record then vetoed the member across the whole method) the 24 extra llvm sites all name the MEMBER,
+#      outside the local's block — `MIB.buildInstr( … )` in AArch64InstructionSelector::select. A lexically scoped record for
+#      these declarators is the fix; this arm flips when it lands.
+V4="$( pRows "$TMP/v7.tsv" '::BVex::direct#' keep )"
+if printf '%s\n' "$V4" | grep -qE '^receiver-rule\|lib/types\.h::Tool::keep#[0-9]+$'; then
+    ok "(v4) KNOWN FLOOR: Unk raw_( a, b ); raw_ = pickUnk(); raw_->keep() takes the member Tool* raw_'s type — the vexing-parse local records no declaration: [$V4]"
+else
+    no "(v4) KNOWN FLOOR MOVED: Unk raw_( a, b ); raw_->keep() is no longer pinned to the member's Tool::keep: [${V4:-no row}] — if no row, a declaration record now vetoes it: rewrite this arm with vKept"
+fi
+
+# (v5) determinism + cache transparency: the veto is resolve-stage, so the warm census must equal the cold one
+"$BIN" "$FIX7" --no-cache --pin-census="$TMP/v7b.tsv" >/dev/null 2>&1
+rm -f "$TMP/vc"
+"$BIN" "$FIX7" --cache="$TMP/vc" >/dev/null 2>&1
+"$BIN" "$FIX7" --cache="$TMP/vc" --pin-census="$TMP/v7w.tsv" >/dev/null 2>&1
+if [ -s "$TMP/v7.tsv" ] && cmp -s "$TMP/v7.tsv" "$TMP/v7b.tsv" && cmp -s "$TMP/v7.tsv" "$TMP/v7w.tsv"; then
+    ok "(v5) assignfix census byte-identical cold, cold again and warm"
+else
+    no "(v5) assignfix census differs across runs or warm vs cold"; diff "$TMP/v7.tsv" "$TMP/v7w.tsv" | head -6
 fi
 
 # ── TS/JS literal receivers (issue #163, first step on #59) ──

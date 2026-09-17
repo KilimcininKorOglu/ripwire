@@ -2120,6 +2120,26 @@ inline bool fieldTypeWrittenInStd( const Reference& r ) noexcept
     return r.isCompose && r.qualifier == "std";
 }
 
+// The VALUE of buildFieldNarrowTables' localNameSet (graph.h): the evidence one "<fromSymbol>#<var>" key holds, OR-ed over its
+// binding records (test/fieldnarrowcheck.sh arm v). Its readers ask two different questions, and an assignment answers only
+// one. Rule 2c and the Phase 5 external veto ask whether the name is a VARIABLE in that definition, and any record says so:
+// `Widget = makePane();` proves `Widget` is no class. Rule 2b asks whether a LOCAL hides a member of the enclosing class, and
+// only a declaration introduces one: `OutputFile = std::make_unique<ToolOutputFile>( … );` inside a method assigns the member,
+// yet ingest records it — a Type record naming the callee (ingest_binds.h's assignment arm), an L3 FnAssign for `x = other`,
+// a clobber tombstone for `x = nullptr` — and counting those refused the member's declared type. Every local-declaring shape
+// emits VarDecl (a block or condition declaration, a parameter, a range-for variable, a structured binding, a catch parameter,
+// a lambda parameter or capture) or ParamType, and FnDecl is a declaration too: the misparsed `void (*fn)() = &f;` has no VarDecl.
+// One declaration still records none: a direct-initialised local whose arguments are plain names, `Foo x( a, b );`, which the
+// grammar reads as a function declarator — a call inside its scope takes the member's type (fieldnarrowcheck arm v4, a floor).
+inline constexpr char kLocalNameBound    = 1;   // some binding record names the variable
+inline constexpr char kLocalNameDeclared = 2;   // a declaration record does
+
+inline char localNameEvidence( LocalBindKind kind ) noexcept
+{
+    const bool declares = kind == LocalBindKind::VarDecl || kind == LocalBindKind::ParamType || kind == LocalBindKind::FnDecl;
+    return declares ? char( kLocalNameBound | kLocalNameDeclared ) : kLocalNameBound;
+}
+
 // One entry of Rule 2's FLAT per-function type table (buildGraph's varType) and of Rule 2b's "Class#field" table
 // (buildFieldNarrowTables): the declared type name — "" is a TOMBSTONE, an ambiguous or `std::`-typed name that never
 // narrows — whether a declaration wrote that type QUALIFIED, the fact prov="final-segment" discloses
@@ -2533,9 +2553,9 @@ struct Narrower
     //   (1) named-receiver call, no explicit qualifier, from a known def in a known class scope, C-family
     //       (the field table is built from C++ field captures; Python/TS field receivers are chained
     //       accesses ingest classifies RecvKind::None, so they never even reach this rule — disclosed limit);
-    //   (2) NO local binding of ANY kind exists for (fromSymbol, recvVar) — a parameter or declared local
-    //       SHADOWS a same-named field in real C++ lookup, so any local evidence vetoes the narrow
-    //       (`localNames`, built from every binding kind incl. the r9 VarDecl shadow records);
+    //   (2) NO local DECLARATION exists for (fromSymbol, recvVar) — a parameter or declared local SHADOWS a
+    //       same-named field in real C++ lookup, so declaration evidence vetoes the narrow; an assignment
+    //       names the field itself and does not (`localNames`' kLocalNameDeclared bit, localNameEvidence);
     //   (3) the enclosing class declares that field with EXACTLY ONE type corpus-wide — same-NAMED classes
     //       collapse to one scope string here (namespaces are dropped from Symbol::scope), so a same-named
     //       field bound to two DIFFERENT types is TOMBSTONED at build ("" value) and never narrows;
@@ -2564,12 +2584,12 @@ struct Narrower
             return nullptr; // free function (no enclosing class), or a field-capture-free corpus
         }
 
-        // (2) local-shadow veto: ANY binding evidence for (fromSymbol, recvVar) means the name is a LOCAL.
+        // (2) local-shadow veto: a DECLARATION of (fromSymbol, recvVar) makes the name a LOCAL; assigning it does not.
         keyBind.clear();
         appendUint( keyBind, r.fromSymbol );
         keyBind.push_back( '#' );
         keyBind.append( r.recvVar );
-        if( localNames.find( keyBind ) != localNames.end() )
+        if( const auto lit = localNames.find( keyBind ); lit != localNames.end() && ( lit->second & kLocalNameDeclared ) != 0 )
         {
             return nullptr;
         }
@@ -2737,7 +2757,8 @@ struct Narrower
     // `_Interval.validate(v)` pinned to `ModelBoundingBox::validate`). The receiver token IS the type: resolve
     // the callee against it, then its direct bases (`IERS_B.open()` → `IERS::open`). Narrows ONLY when ALL hold:
     // (1) bare named-receiver call from a known def; (2) NO local binding of any kind for (fromSymbol, recvVar)
-    // — a parameter/local named like the class shadows it (Rule 2b's veto set); (3) recvVar names an in-repo
+    // — a parameter/local named like the class shadows it, and an assignment to the name proves a variable just as
+    // well (every record in Rule 2b's veto set, not only the declarations Rule 2b reads); (3) recvVar names an in-repo
     // class-like definition (`classNames`: SymKind Class/Struct/Interface); (4) the class — or exactly one base
     // at the shallowest hit level — DEFINES the callee. Two same-named classes both defining it keep BOTH
     // candidates (an honest split). Any miss ⇒ nullptr. C++'s `Cls::m()` never arrives here (a qualifier).
