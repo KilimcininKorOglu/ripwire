@@ -187,6 +187,79 @@ macOS arm64 on a later release) each went red against a mutant installer that re
 the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
 deployment target, retires with it.
 
+### Fixed — `--quality-delta` answered from a dead-code baseline another build computed
+
+`--quality-delta` caches the snapshot it computes for `HEAD`, keyed on the repository, the commit, the excludes, the
+file-size ceiling and the parser version. Its dead-code half also depends on call resolution — a function is dead when
+nothing calls it — and a change to how calls resolve moves none of those, because resolution runs over facts already
+extracted. So two builds that resolve calls differently, sharing a cache directory on one commit, answered from each
+other's snapshot: after an upgrade on a repository whose `HEAD` has not moved, or with an installed `ripwire` and a local
+build on one checkout. Measured on main `a55b118e` against the same tree with the `std::`-qualified call guard switched
+off, over a two-file fixture where `std::launder( &v )` may or may not bind an in-repo `Pool::launder`: on a cold cache
+the guarded build reports `regressions="0"`, and after the unguarded build warmed the cache it reports a gating
+`dead-code` row on the untouched `Pool::launder` and exits 2. The other order hides a real one: deleting the only call is
+a gating regression on a cold cache (exit 2) and nothing on the warm one (exit 0). Both runs used one cache file.
+
+Each build now has a source identity: a SHA-256 over every file under `src/` and `queries/`, computed by
+`cmake/source_identity.cmake` on each build (49 ms on this tree) and compiled in as one generated definition. The
+snapshot and window-ref body caches fold its full 64-hex spelling into the material their filename key hashes, and the
+blob header stores its `fnv1a64`, which a reader must match. It is derived rather than a version to bump because bumps
+are what this cache has missed: an `isDeadCandidate` exemption and a parser-version change each shipped without one, and
+no resolution change ever had one. The price is that any source edit renames the snapshot, including one that changes
+nothing it means. On ripwire's own tree, five runs each with a private cache, a warm `--quality-delta` took a median
+3.04 s (2.78–3.21) and one whose snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the
+parse cache underneath keeps its key, so that recompute reads a warm parse. On the fixed tree the two-build experiment
+writes one snapshot per build and matches a cold cache in both orders. The snapshot and window-ref body caches move to
+schemes 14 and 4.
+
+Gate: `test/qsnapproducercheck.sh`, 16 rows. Its core is a matched pair over a real cached snapshot: dead entries
+dropped (or added) with the producer bytes kept, a control that must change the answer and does, and the same forgery
+with those bytes flipped, which must be refused with output byte-identical to a cold cache. Against main 8 of its 13
+rows failed: the forgery had no producer bytes to flip and was served in both directions, and the key, header,
+derivation and blob arms found nothing. Under ASan the gate passes with no sanitizer report on any child's stderr, and
+`test/cachefuzzcheck.sh`'s snapshot sweep stays clean. Pin moved: `test/qschemetrip.hash`.
+
+### Fixed — a pinned `--quality-baseline` was honored by a build that resolves calls differently
+
+The same defect, in the file you write on purpose. `--quality-baseline` pins a floor to `.ripwire_quality_baseline`,
+dead-code records included, and stamped it with nothing but the `HEAD` commit, so `--quality-delta` honored the pin
+whenever the commit matched, whichever build had written it. Pin with the installed `ripwire`, then check with a local
+build (or upgrade) before the next commit, and the floor's dead set came from one resolver while the working tree's came
+from another. Measured with two builds of the previous commit, `d8c225a2` as built and with the `std::`-qualified call
+guard switched off, over the fixture above: pinned by the unguarded build and checked by the guarded one, an untouched
+tree reported a gating `dead-code` row on `Pool::launder` and exited 2 (the guarded build pinning its own floor: exit 0).
+In the other order a real regression disappeared: deleting the only `std::launder` call exited 0 where the unguarded
+build, against its own pin, exits 2.
+
+The sidecar is now format v6 and carries a `producer` record, the same source identity the snapshot cache uses. A pin at
+the current `HEAD` whose producer is missing or names another build is not the floor: `--quality-delta` falls back to
+the `HEAD` tree this build computes and says so as `baseline="git-HEAD (foreign sidecar ignored)"`, with one stderr line
+and a legend sentence naming the two ways back (run the delta with the build that pinned it, or re-pin on a clean tree
+(commit or stash first)). Unlike a stale pin the file is never deleted, by the CLI or by the MCP `quality_delta` verb,
+because the build that wrote it can still use it. A root with no git has nothing to fall back to and exits 1 naming the
+foreign pin. Demoting the dead-code rows instead was ruled out: it cannot surface a regression whose row never appears,
+and another build can compute any kind differently. A pin at another commit is still stale first and still self-heals.
+On the same two fixed builds all four cross-build runs give the same-build answer: exit 0 and exit 2, both marked
+foreign, the sidecar still on disk.
+
+Every existing sidecar is v5, which only a build without the stamp can have written, so the version rule refuses it.
+That refusal used to be reported as `baseline="git-HEAD"`, which means no sidecar existed, under a stderr line saying
+there was no `.ripwire_quality_baseline`, one line below the line naming the refused file. It now reads
+`baseline="git-HEAD (sidecar unreadable)"` with the matching stderr line, and a root with no git no longer says "no
+<file>" about an unreadable sidecar on either arm. Upgrading costs one re-pin on a clean tree (commit or stash first).
+An older binary also refuses a v6 pin rather than honoring it without its stamp, but reports the refusal the old way, as
+`baseline="git-HEAD"` with a line saying there is no `.ripwire_quality_baseline`; the file is intact. A v5 pin left at
+an older commit is no longer removed by the stale-pin self-heal: it is refused as unreadable, with two stderr lines on
+every run, until it is re-pinned or deleted.
+
+Gate: `test/qbaselineproducercheck.sh`, 26 rows. Matched pairs over a real pin: dead records dropped (or one added)
+with the producer kept, a control that must change the answer and does, and the same forgery with one hex digit of the
+producer flipped, which must give the no-sidecar answer and leave the file byte-identical. Beside them: an unstamped v6
+pin, a v5 pin, a stale foreign pin, a root with no git, the MCP verb, the legend and `--help`. Against the previous
+commit 12 rows failed, both forged directions among them. `test/qrevtokencheck.sh`'s hand-written sidecars move to the
+v6 header so its hostile head stamps still reach the head-stamp path. Pin moved: `test/printf_parity.manifest`
+(`help_all` only, `UPDATE_GOLDEN_EXPECT` matched).
+
 ### Fixed — a deep or odd-shaped argument, source file or skills tree could crash or stall a verb
 
 Each of these was reproduced before it was fixed, and the gate that already owns each verb now fails on the old code.
@@ -205,6 +278,14 @@ Each of these was reproduced before it was fixed, and the gate that already owns
   for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
   short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
   `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
+- **`--layout` dropped a data member whose declaration carries a `(` that belongs to an `alignas`,
+  `__attribute__` or `decltype` specifier, or sits inside a template argument list, and still said the size was
+  right.** `alignas(8) int x`, `int x __attribute__((aligned(8)))`, `decltype(1) x` and `std::function<void(int)>
+  cb` were all taken for member functions too, for the same reason as the row above: the scan still looked at the
+  first `(` in the statement, whichever `(` that was. The field vanished while the struct reported `modeled="1"`
+  and a size short by its bytes. That first `(` is now skipped when it opens one of those specifiers or sits
+  inside `<…>`; each shape now comes back refused (`modeled="0"`, a named caveat) instead of silently missing.
+  Gate: `test/layoutcheck.sh` §14.
 - **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
   directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
   `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
@@ -275,6 +356,38 @@ with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of eve
 `sorted()`, a literal, a pinned hash, ripwire's own byte-sorted output, or `git status`. Only that one fails today; the
 other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
 `LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
+
+### Fixed — an answer depended on how the root was typed (`ripwire .` and `ripwire "$PWD"` disagreed)
+
+Reported by **@hnipps** in #228: `--quality-delta` on an unchanged tree gated. Part of that report is how the root is
+spelled, and it was a graph defect, not a delta one. The crawl stores every path with the root exactly as typed, and the
+include/import index and the path predicates read that spelling raw. Three things followed. Python's root-relative
+import probe joined onto an empty base, which is the crawl root only under `ripwire .`. Under `"$PWD"`, which is every
+MCP session and the `--quality-delta` HEAD side (always an absolute temp root), `from pkg.store import load` stopped
+resolving and the name ladder bound a same-directory `load` instead. A root typed `../repo` lost every include and
+import edge in every language, because `lexicalNormalize` refuses a path that starts above its base. And a checkout that
+merely lives under a `tests/` or `fixtures/` directory had every file tagged `layer="test"`, exempted from dead-code and
+seeded as a test under an absolute root, and none of that under `.`. The fix is one seam: `ingest()` records the root
+once, and `rootRelPath` (`src/model.h`) gives the root-relative view (a prefix strip, no syscall, no allocation). The
+include/import index, the Python/JS/C declaration indexes, the module vocabularies, the test, fixture, layer and tier
+predicates, the path-mention and stack-trace suffix matches, the `--lint` byte cap and the map's byte model now read
+that view. Stored and printed paths are unchanged. `rootRelativeUri` also trims a trailing `/`, so `--pack-task` rows
+stop printing the whole absolute path under `"$PWD/"`. On a shallow Django clone (2b30f62, 3,449 indexed files,
+`--no-cache`, map header), `"$PWD"` went from 62,591 edges, `ambiguous=3135` and `declined=49153` to what `.` always
+gave: 74,972, 5,958 and 40,681: 12,381 more (caller, callee) edges, and more calls reaching a definition set at all,
+which is why the ambiguous gauge rises with them. On the same clone, `--quality-delta` with a fresh cache gated 14 rows
+under `.` and `./`, 8 under `../dj` and 0 under `"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped
+to `order=important-last(auto:fill)` under `"$PWD"` alone and now agrees. Rooting at a test directory now answers the
+way `cd tests && ripwire .` does: `ripwire tests/` no longer counts its own files as tests (no `layer="test"`, no test
+seeds for `--affected`/`--test-gate`, no dead-code exemption). The `.` answer itself moves slightly on byte-capped
+output, because the byte models now charge a path as printed: the default `--lint` page on this repo went from 680 to
+689 rows. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is never served.
+`test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and `../name`) to
+byte-identical output, once the printed `root=` and `est_tokens=` are normalised, across the committed four-file repro,
+eight language import fixtures and a C++ header selector whose answer rests on an include proof. It also checks a
+tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme upgrade. On origin/main it
+fails 57 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules, sparse checkouts, skip-worktree,
+`--no-ignore`) stays open.
 
 ### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
 
