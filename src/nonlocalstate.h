@@ -68,6 +68,7 @@
 #include "serialize.h"          // escapeXml
 #include "graphlegend.h"        // kGraphCountFloorAttrXml — the shared floor marker
 #include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — a blind spot degrades the report, never aborts it
+#include "infra/sortutil.h"     // svLess — pythonStubsWithSource sorts and searches string_views
 
 #include <algorithm>
 #include <array>
@@ -343,9 +344,36 @@ inline const AstMatch* enclosingDecl( std::span<const AstMatch* const> bucket, c
     return ( d->endByte >= name.endByte ) ? d : nullptr;
 }
 
+// A Python typing stub (`m.pyi`) RESTATES its module's globals (`COUNT: int` beside `m.py`'s `COUNT = 0`). Once
+// langOfPath learned `.pyi`, both files' declarations became cells, and one global counted twice under
+// counts_floor="1" — measured on a two-file probe: cells 1 -> 2, with every <fn>/<cell> row still bound to m.py. So a
+// stub's declarations are dropped when its same-stem `.py` is indexed; a stub with NO source beside it (the shape a
+// C extension ships) keeps its cells, because it is the only declaration of that module the index holds.
+// Marks, per fileId, a `.pyi` whose `.py` sibling is in ing.files.
+inline std::vector<char> pythonStubsWithSource( const IngestResult& ing )
+{
+    std::vector<char> shadowed( ing.files.size(), 0 );
+    std::vector<std::string_view> sources;
+    for( const std::string& path : ing.files )
+    {
+        if( path.ends_with( ".py" ) )
+        {
+            sources.push_back( std::string_view( path ).substr( 0, path.size() - 3 ) );
+        }
+    }
+    std::sort( sources.begin(), sources.end(), rw::sortutil::svLess );   // svLess, not operator<: infra/sortutil.h
+    for( std::size_t fileId = 0; fileId < ing.files.size(); ++fileId )
+    {
+        const std::string_view path = ing.files[fileId];
+        shadowed[fileId] = path.ends_with( ".pyi" ) && std::binary_search( sources.begin(), sources.end(), path.substr( 0, path.size() - 4 ), rw::sortutil::svLess ) ? 1 : 0;
+    }
+    return shadowed;
+}
+
 // Find the cell universe: run every rule's two queries through the shared astQuery pass, join each name
 // back to its declaration, apply the form's mutability test to the text that PRECEDES the name, and keep
-// what survives. Deduplicated by (scope key, name) so a header included many times contributes one cell.
+// what survives. Deduplicated by (scope key, name) so a header included many times contributes one cell,
+// and a typing stub's restatement of its own module's globals contributes none (pythonStubsWithSource).
 inline void discoverCells( const IngestResult& ing, Scan& scan )
 {
     std::vector<AstQuerySpec> specs;
@@ -397,6 +425,7 @@ inline void discoverCells( const IngestResult& ing, Scan& scan )
     }
 
     const flipimpact::SymbolLineIndex lineIndex = flipimpact::buildSymbolLineIndex( ing );
+    const std::vector<char>           stubWithSource = pythonStubsWithSource( ing );
     HashMap<std::string, std::uint32_t> seen;   // dedup key -> cell index (lookup only; never iterated)
 
     for( const AstMatch& m : matches )
@@ -408,7 +437,7 @@ inline void discoverCells( const IngestResult& ing, Scan& scan )
         // The coverage ceiling, enforced at the one place it can be: a C-family query compiles against the
         // C grammar too, so a .c file WOULD yield cells here that no access could ever reach (see the note
         // on kAnalyzedLangs). Drop them at discovery so cells= counts only what the lens can actually answer.
-        if( m.fileId >= ing.files.size() || !isAnalyzedLang( langOfPath( ing.files[m.fileId] ) ) )
+        if( m.fileId >= ing.files.size() || !isAnalyzedLang( langOfPath( ing.files[m.fileId] ) ) || stubWithSource[m.fileId] != 0 )
         {
             continue;
         }

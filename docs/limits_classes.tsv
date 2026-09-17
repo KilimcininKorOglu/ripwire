@@ -97,6 +97,7 @@ kMaxSkipRowsPerClass	OUTPUT
 kMaxSliceDepth	BOUNDARY
 kMaxStructsPerRef	OUTPUT
 kMaxStructsShown	OUTPUT
+kMaxUniqueQueryTerms	INDEXING
 kMeasuredDigitsPricedWidth	OUTPUT
 kMemberSpellingsShown	OUTPUT
 kMentionMaxDirectSymbols	INDEXING
@@ -111,6 +112,8 @@ kNameCandidateCap	OUTPUT
 kNoticeByteCap	OUTPUT
 kOtherDefCap	OUTPUT
 kRadixThreshold	BOUNDARY
+kRegexMaxGroupDepth	BOUNDARY
+kRegexMaxPatternBytes	BOUNDARY
 kRenameMaxChain	INDEXING
 kRenameMaxPairs	INDEXING
 kSelectorFilesShown	OUTPUT

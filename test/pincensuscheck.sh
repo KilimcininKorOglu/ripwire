@@ -245,9 +245,11 @@ grep -q "symbols=$N_SYM" <( tail -1 "$TMP/c1.tsv" ) && ok "(K) the summary line 
     || no "(K) summary line lacks symbols=$N_SYM: $( tail -1 "$TMP/c1.tsv" )"
 
 # ── (L) a field never holds a row separator: every id and callee is ESCAPED (format v3) ───────────
-# WHY. A C++ out-of-line member of a class template whose template-argument list spans source lines gets
-# a scope that holds the line break verbatim — `SmallVec<T, Alloc, SizeType,\n    GrowingPolicy, N>`. The
-# map has always escaped it (`sc="…&#10;…"`); the census wrote it RAW, so one C row became a 6-field line
+# WHY. An id can hold a line break verbatim. It first did through a C++ out-of-line member of a class
+# template whose template-argument list spans source lines (`SmallVec<T, Alloc,\n GrowingPolicy, N>::grow`);
+# that scope is now the bare template name (test/cpptmplscopecheck.sh), so the fixture reaches the same bytes
+# through a C++ CONVERSION OPERATOR, whose name is its written type verbatim (`operator Pair<int,\n long>`).
+# The map has always escaped it (`n="…&#10;…"`); the census wrote it RAW, so one C row became a 6-field line
 # plus a continuation line starting with neither C, S, O nor #, and the S row for the same symbol broke
 # the same way. A reader splitting lines drops or mis-keys the site (observed 2026-09-16: exactly one such
 # row on a large private C++ corpus). The same exposure had five more spellings, each reproduced below on
@@ -264,12 +266,12 @@ grep -q "symbols=$N_SYM" <( tail -1 "$TMP/c1.tsv" ) && ok "(K) the summary line 
 ESC="$TMP/esc"
 mkdir -p "$ESC/pipe|dir"
 printf '#include <cstddef>\nnamespace inplace {\ninline void grow_storage() {}\n}\n' >"$ESC/smallvec.hpp"
-printf 'template <class T, class Alloc, class SizeType,\n          class GrowingPolicy, std::size_t N>\nclass SmallVec\n{\npublic:\n    void grow();\n    void shrink();\n    void tabbed();\n    void paged();\n};\n' >>"$ESC/smallvec.hpp"
-printf 'template <class T, class Alloc, class SizeType,\n          class GrowingPolicy, std::size_t N>\nvoid SmallVec<T, Alloc, SizeType,\n              GrowingPolicy, N>::grow()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
-printf 'template <class T, class Alloc, class SizeType, class GrowingPolicy, std::size_t N>\nvoid SmallVec<T, Alloc, \\\nSizeType, GrowingPolicy, N>::shrink()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
-printf 'template <class T, class Alloc, class SizeType, class GrowingPolicy, std::size_t N>\nvoid SmallVec<T,\tAlloc, SizeType, GrowingPolicy, N>::tabbed()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
-printf 'template <class T, class Alloc, class SizeType, class GrowingPolicy, std::size_t N>\nvoid SmallVec<T,\fAlloc, SizeType, GrowingPolicy, N>::paged()\n{\n    inplace::grow_storage();\n}\n' >>"$ESC/smallvec.hpp"
-printf 'inline void crlf_sink() {}\r\ntemplate <class K,\r\n          class V>\r\nclass Table\r\n{\r\npublic:\r\n    void put();\r\n};\r\ntemplate <class K, class V>\r\nvoid Table<K,\r\n           V>::put()\r\n{\r\n    crlf_sink();\r\n}\r\n' >"$ESC/crlf.hpp"
+printf 'template <class A, class B> struct Pair {};\nclass SmallVec\n{\npublic:\n' >>"$ESC/smallvec.hpp"
+printf '    operator Pair<int,\n              long>() const\n    {\n        inplace::grow_storage();\n        return {};\n    }\n' >>"$ESC/smallvec.hpp"
+printf '    operator Pair<char, \\\nshort>() const\n    {\n        inplace::grow_storage();\n        return {};\n    }\n' >>"$ESC/smallvec.hpp"
+printf '    operator Pair<bool,\tfloat>() const\n    {\n        inplace::grow_storage();\n        return {};\n    }\n' >>"$ESC/smallvec.hpp"
+printf '    operator Pair<double,\fint>() const\n    {\n        inplace::grow_storage();\n        return {};\n    }\n};\n' >>"$ESC/smallvec.hpp"
+printf 'inline void crlf_sink() {}\r\ntemplate <class A, class B> struct Pair {};\r\nclass Table\r\n{\r\npublic:\r\n    operator Pair<long,\r\n           int>() const\r\n    {\r\n        crlf_sink();\r\n        return {};\r\n    }\r\n};\r\n' >"$ESC/crlf.hpp"
 printf 'inline void far_helper() {}\n' >"$ESC/pipe|dir/far.hpp"
 printf '#include "pipe|dir/far.hpp"\nvoid near_caller()\n{\n    far_helper();\n}\n' >"$ESC/near.cpp"
 cat >"$TMP/censusfields.py" <<'PY'
@@ -336,26 +338,26 @@ sids = { p[ 1 ] for p in good if p[ 0 ] == b"S" }
 
 def xmlspell( raw ):
     # escapeXml's rule: TAB/LF/CR become character references, every OTHER C0 byte is scrubbed to a space
-    # (xmlSafeByte). So for the form feed the map proves only that the scope spans that position; the
+    # (xmlSafeByte). So for the form feed the map proves only that the name spans that position; the
     # round-trip verdict, which must decode \x0c out of the census, is what proves the byte itself.
     raw = bytes( b if b >= 0x20 or b in ( 0x09, 0x0A, 0x0D ) else 0x20 for b in raw )
     return raw.replace( b"&", b"&amp;" ).replace( b"<", b"&lt;" ).replace( b">", b"&gt;" ).replace( b"\t", b"&#9;" ).replace( b"\n", b"&#10;" ).replace( b"\r", b"&#13;" )
 
-# (label, the raw caller id before #NODEID, the scope the map must spell, the callee)
+# (label, the raw caller id before #NODEID, the conversion-operator NAME the map must spell, the callee)
 CALLERS = [
-    ( "a template-argument list spanning two lines (LF)", b"smallvec.hpp::SmallVec<T, Alloc, SizeType,\n              GrowingPolicy, N>::grow",
-      b"SmallVec<T, Alloc, SizeType,\n              GrowingPolicy, N>", b"grow_storage" ),
-    ( "a backslash line splice", b"smallvec.hpp::SmallVec<T, Alloc, \\\nSizeType, GrowingPolicy, N>::shrink",
-      b"SmallVec<T, Alloc, \\\nSizeType, GrowingPolicy, N>", b"grow_storage" ),
-    ( "a TAB inside the argument list", b"smallvec.hpp::SmallVec<T,\tAlloc, SizeType, GrowingPolicy, N>::tabbed",
-      b"SmallVec<T,\tAlloc, SizeType, GrowingPolicy, N>", b"grow_storage" ),
+    ( "a template-argument list spanning two lines (LF)", b"smallvec.hpp::SmallVec::operator Pair<int,\n              long>",
+      b"operator Pair<int,\n              long>", b"grow_storage" ),
+    ( "a backslash line splice", b"smallvec.hpp::SmallVec::operator Pair<char, \\\nshort>",
+      b"operator Pair<char, \\\nshort>", b"grow_storage" ),
+    ( "a TAB inside the argument list", b"smallvec.hpp::SmallVec::operator Pair<bool,\tfloat>",
+      b"operator Pair<bool,\tfloat>", b"grow_storage" ),
     ( "a FORM FEED inside the argument list (the \\xHH path, a zero-padded low byte)",
-      b"smallvec.hpp::SmallVec<T,\x0cAlloc, SizeType, GrowingPolicy, N>::paged",
-      b"SmallVec<T,\x0cAlloc, SizeType, GrowingPolicy, N>", b"grow_storage" ),
-    ( "CRLF source", b"crlf.hpp::Table<K,\r\n           V>::put", b"Table<K,\r\n           V>", b"crlf_sink" ),
+      b"smallvec.hpp::SmallVec::operator Pair<double,\x0cint>",
+      b"operator Pair<double,\x0cint>", b"grow_storage" ),
+    ( "CRLF source", b"crlf.hpp::Table::operator Pair<long,\r\n           int>", b"operator Pair<long,\r\n           int>", b"crlf_sink" ),
 ]
-for label, raw, scope, callee in CALLERS:
-    say( b' sc="' + xmlspell( scope ) + b'"' in xml, "(L) presence: the map's sc= holds %s — the fixture reaches the byte" % label )
+for label, raw, name, callee in CALLERS:
+    say( b' n="' + xmlspell( name ) + b'"' in xml, "(L) presence: the map's n= holds %s — the fixture reaches the byte" % label )
     hit = [ p for p in crows if p[ 6 ] == callee and re.fullmatch( re.escape( raw ) + rb"#[0-9]+", decode( p[ 5 ] ) ) ]
     if len( hit ) != 1:
         say( False, "(L) %s: want ONE C row whose caller_id decodes to %r, found %d" % ( label, raw, len( hit ) ) )

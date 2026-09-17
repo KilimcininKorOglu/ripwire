@@ -232,7 +232,33 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 99;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 103;          // bump on any grammar/.scm/extraction change
+                                                      // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                      //    PR #256): a primary template's out-of-line member keys the bare
+                                                      //    template name (`void Box<T>::grow()` joins `Box::grow`); a
+                                                      //    specialization keeps its canonical template-id; a reference
+                                                      //    keeps the template-id it writes (3+ segments too); and a class
+                                                      //    specialization HEADER's base clause is captured as inherit
+                                                      //    refs (tags.scm @definition.specialization). Symbol scopes,
+                                                      //    RawRef::qualifier and the extracted refs change; no record
+                                                      //    layout changes (kCacheVersion stays 22). The PR declared 100;
+                                                      //    assigned 102 on integration/train-2b after #243's 101.
+                                                      // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                      //    §12, PR #243): a C++ member call with explicit template arguments
+                                                      //    (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) mints a
+                                                      //    call reference with its receiver, where it minted none;
+                                                      //    a `template` disambiguator no longer leaks into a qualified
+                                                      //    call's name (`template f`) or qualifier (`template Rebind`).
+                                                      //    The extracted SET and names change; no record changes shape
+                                                      //    (kCacheVersion stays 22). The PR declared 99; assigned 101 on
+                                                      //    integration/train-2b in merge order after #244's 100.
+                                                      //    quality.h's kIngestParserVerMirror moves in the SAME commit.
+                                                      // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                      //    gains LitString/LitArray/LitRegex/LitNumber/LitBoolean
+                                                      //    (appended u8, no RawRef field, kCacheVersion stays 22).
+                                                      //    A `"x".replace()` call no longer takes the bare-name ladder.
+                                                      //    The PR declared 97; assigned 100 on integration/train-2b in
+                                                      //    merge order over train 2's 99.
                                                       // 99 = 2026-09-16 (std-typed member fields, test/fieldnarrowcheck.sh
                                                       //    arm q): a C++ field's compose RawRef records the namespace its
                                                       //    type was written in as `qualifier` (`std` for `std::string
@@ -1069,6 +1095,15 @@ constexpr std::uint32_t kParserVer    = 99;           // bump on any grammar/.sc
                                                       //    kMaxJsonConfigBytes crawl skip + kMaxJsonNestDepth hostile-data guard;
                                                       //    the crawl/parse SET changed; 27: +C (.c); 26: +JSON config keys)
 
+// THE QUALITY-CACHE MIRROR, as a compile error. quality.h keys every qsnap/qbody blob on kIngestCacheVersionMirror and
+// kIngestParserVerMirror, because quality.h cannot see these two constants from every translation unit that includes it.
+// Until now only test/qextractionkeycheck.sh kept the pair equal, by parsing both files. A kParserVer bump that missed
+// the mirror would re-serve quality snapshots computed under the old extraction, which is the poisoned-cache defect the
+// mirror exists for (quality.h's r27 note). This translation unit includes both files, so the equality is a static_assert
+// here. The gate still runs its source-text arm; this makes the same fact fail the build first.
+static_assert( quality::kIngestParserVerMirror == kParserVer && quality::kIngestCacheVersionMirror == kCacheVersion,
+               "quality.h's kIngestParserVerMirror / kIngestCacheVersionMirror must equal kParserVer / kCacheVersion — bump both in one commit" );
+
 // A1 (team-index artifact): architecture/ABI tag for the cache-blob header. The blob is NATIVE-ENDIAN —
 // ByteW/ByteR memcpy raw ints (see ByteW below), no portable varint/LE re-encoding — so it is only safely
 // consumable on a machine with the same integer byte order AND pointer width that WROTE it. This one byte
@@ -1218,6 +1253,12 @@ struct CacheEntry
 };
 static_assert( sizeof( CacheEntry ) == kCacheEntryBytes, "CacheEntry must be the exact 32-byte on-disk row (no padding)" );
 static_assert( alignof( CacheEntry ) == 8, "CacheEntry must stay 8-byte aligned so the table is a raw array copy" );
+// The size pin above does NOT prove "no padding", although its message says so. Narrow recSum from u32 to u16 and the
+// struct still rounds up to 32 bytes, with two indeterminate bytes in every row of a committed, checksummed blob: the
+// determinism contract broken, and a portable cache that differs by build. has_unique_object_representations is the
+// compiler's own answer to "is every byte of this type part of its value", so it refuses padding (and any float).
+static_assert( std::is_trivially_copyable_v<CacheEntry> && std::has_unique_object_representations_v<CacheEntry>,
+               "CacheEntry is copied to disk as raw bytes — it must carry no padding bytes and no float" );
 
 // The per-record digest stored in the table: the low half of the same 8-lane FNV the trailer uses.
 // 32 bits is a detection budget, not a security one — the whole-blob guards above sit in front of it.
@@ -1417,9 +1458,14 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     std::memcpy( &entryCount,  trailer +  8, 4 );
     std::memcpy( &tableSum,    trailer + 16, 8 );
 
+    // Every term below is written so it cannot wrap: the file is at least a header plus a trailer (checked above) and the
+    // entry clause bounds the table by the bytes between them, so the right-hand side of the exact-fit compare is never
+    // negative. The earlier `tableOffset + entries + trailer != fileBytes` wrapped for a trailer naming an offset near
+    // 2^64 — still refused, but through a sum the G1 sanitizer build (-fsanitize=integer) aborts on
+    // (test/cachefuzzcheck.sh mutation table_offset_near_u64_max; found by test/fuzz/readers, reader ingestframe).
     if( entryCount != headerEntryCount || tableOffset < kCacheHeaderBytes
         || entryCount > ( fileBytes - kCacheHeaderBytes - kCacheTrailerBytes ) / kCacheEntryBytes
-        || tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes != fileBytes )
+        || tableOffset != fileBytes - kCacheTrailerBytes - std::uint64_t( entryCount ) * kCacheEntryBytes )
     {
         DEGRADED_PATH_ALERT( "ingest: cache blob trailer does not describe the file (torn write) — cache treated as corrupt" );
         frame.reason = CacheReject::CorruptFrame;
@@ -1456,7 +1502,7 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     {
         const CacheEntry& e = frame.entries[i];
         if( e.recOffset < kCacheHeaderBytes || e.recLength == 0
-            || e.recOffset + e.recLength > tableOffset
+            || e.recLength > tableOffset || e.recOffset > tableOffset - e.recLength   // recOffset + recLength > tableOffset, without the wrap
             || ( i != 0 && frame.entries[ i - 1 ].pathHash > e.pathHash ) )
         {
             DEGRADED_PATH_ALERT( "ingest: cache offset-table entry out of bounds or out of order — cache treated as corrupt" );
@@ -1544,24 +1590,41 @@ struct ByteR
     std::string      str () { const std::string_view s = view(); return ok ? std::string( s ) : std::string{}; }
     bool rawInto( void* dst, std::size_t n )   // B0.2: bulk array read — overflow-safe bound, memcpy into caller storage
     { if( !ok || std::size_t( end - p ) < n ) { ok = false; return false; } if( n ) { std::memcpy( dst, p, n ); p += n; } return true; }
-    // An ENUM byte. The blob is external input — a committed team artifact, a copied cache directory, a file
-    // whose digests were rebuilt around an edit — so a value at or past the enum's count is corruption, never an
-    // enumerator this binary forgot (model.h proves each k*Count exact at compile time). It folds into `ok`
-    // exactly like a short read, so the record takes readFileRecord's one refusal path: that file reparses and
-    // the rest of the blob stands. Accepting it was never harmless downstream: symTag/refRoleTag serve such a
-    // value as "other"/"read", and clones.h shifts a 32-bit language mask by the Lang (UB at 32 and up).
-    // One compare per byte on the warm path; never an assumption, because nothing upstream makes it true.
+    // A decoded value that must lie below `count`. The blob is external input — a committed team artifact, a copied
+    // cache directory, a file whose digests were rebuilt around an edit — so a value at or past its bound is
+    // corruption, never a value this binary forgot. It folds into `ok` exactly like a short read, so the record
+    // takes readFileRecord's one refusal path: that file reparses and the rest of the blob stands. One compare on the
+    // warm path; never an assumption, because nothing upstream makes it true.
+    bool fitsBelow( std::uint64_t v, std::uint64_t count )
+    {
+        if( v >= count )   // VALIDATE-SITE: becomes `if( !VALIDATE( v < count ) )` when the macro vocabulary lands
+        {
+            DEGRADED_PATH_ALERT( "ingest: cache record carries a field past its range (an enum byte past its last enumerator, or a 16-bit field wider than 16 bits) — cache treated as corrupt" );
+            ok = false;
+            return false;
+        }
+        return true;
+    }
+    // An ENUM byte. Accepting one past the count was never harmless downstream: symTag/refRoleTag serve such a value
+    // as "other"/"read", and clones.h shifts a 32-bit language mask by the Lang (UB at 32 and up). model.h proves
+    // each k*Count exact at compile time.
     template<class E>
     E enumU8( std::size_t enumCount )
     {
         const std::uint8_t v = u8();
-        if( v >= enumCount )   // VALIDATE-SITE: becomes `if( !VALIDATE( v < enumCount ) )` when the macro vocabulary lands
+        return fitsBelow( v, enumCount ) ? E( v ) : E{};
+    }
+    // A 16-bit field the writer stores in a u32 slot (writeDef's ppAlt/humps/deepLoc/ev/params, writeRef's argCount).
+    // The writer only ever holds a uint16_t there; a plain `std::uint16_t( u32() )` kept the low bits of a wider value
+    // and believed them (test/hazardpatterncheck.sh rule D, test/cachefuzzcheck.sh Part 3).
+    std::uint16_t u16Of32()
+    {
+        std::uint32_t v = u32();
+        if( !fitsBelow( v, 0x10000u ) )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache record carries an enum byte past its enum's last enumerator — cache treated as corrupt" );
-            ok = false;
-            return E{};
+            v = 0;
         }
-        return E( v );
+        return std::uint16_t( v );
     }
 };
 
@@ -1711,7 +1774,7 @@ inline void verifyCacheRecordMinimaTripwire() noexcept
 
 inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>& fileDict )
 {
-    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = std::uint16_t( r.u32() ); d.humps = std::uint16_t( r.u32() ); d.deepLoc = std::uint16_t( r.u32() ); d.ev = std::uint16_t( r.u32() ); d.params = std::uint16_t( r.u32() ); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
+    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = r.u16Of32(); d.humps = r.u16Of32(); d.deepLoc = r.u16Of32(); d.ev = r.u16Of32(); d.params = r.u16Of32(); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
     for( std::uint8_t& tagCount : d.evWhy ) { tagCount = r.u8(); }   // mirrors writeDef's fixed 8×u8 order
     if( withLex && r.ok )
     {
@@ -1791,7 +1854,7 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = std::uint16_t( r.u32() ); x.argCountKnown = r.u8() != 0; return x; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; return x; }
 inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
 inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }

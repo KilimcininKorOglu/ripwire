@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -1137,6 +1138,10 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
         return {};
     }
     const std::size_t        n = bodyIds.size();   // kPackTaskBodyCandidates today — small by construction
+    // the subset enumeration below shifts 1u by n: n must stay under the mask's width, which the constant guarantees
+    static_assert( kPackTaskBodyCandidates < std::numeric_limits<std::uint32_t>::digits,
+                   "selectMonotoneBodySubset enumerates subsets in a std::uint32_t — 1u << kPackTaskBodyCandidates must fit" );
+    VERIFY( n <= kPackTaskBodyCandidates );
     std::vector<std::size_t> cost( n, 0 );
     std::size_t               wrapperLen = 0;
     {

@@ -25,10 +25,53 @@ namespace
 // scope component ("A", or "B" from `A::B::b`). enclosingScopeOf walks ancestors to the nearest
 // class/struct/namespace and returns its name (for in-class method DEFS). Both "" when absent → caller
 // falls back to bare-name resolution (so non-C++ langs and unqualified calls are unaffected).
+//
+// The C++ `template` DISAMBIGUATOR is a KEYWORD, never part of a name. `X::template make<int>()` and
+// `X::template Rebind<int>::f()` spell it in front of a dependent template name, and tree-sitter-cpp keeps it
+// inside the dependent_name node whose TEXT the reference path reads. Returns `text` past one leading
+// `template` token and the whitespace/comments after it, or `text` unchanged when it does not start with
+// that token — the keyword must be followed by a separator, so `templateFn` stays a plain identifier.
+// Measured before this existed (test/cppqualcheck.sh §12 (c)/(d)): `X::template tqDepQualTmpl<int>()` minted
+// a reference NAMED `template tqDepQualTmpl`, which resolves to nothing, and
+// `X::template TqRebind<int>::tqScopedFn()` keyed its qualifier as `template TqRebind`, so the canonical tier
+// missed and the call split over a same-named decoy in another scope.
+inline std::string_view skipTemplateDisambiguator( std::string_view text ) noexcept
+{
+    constexpr std::string_view kKeyword = "template";
+    if( !text.starts_with( kKeyword ) )
+    {
+        return text;
+    }
+    std::string_view rest = text.substr( kKeyword.size() );
+    while( !rest.empty() )
+    {
+        if( std::isspace( static_cast<unsigned char>( rest.front() ) ) )
+        {
+            rest.remove_prefix( 1 );
+        }
+        else if( rest.starts_with( "/*" ) )
+        {
+            const std::size_t close = rest.find( "*/", 2 );
+            rest.remove_prefix( close == std::string_view::npos ? rest.size() : close + 2 );
+        }
+        else if( rest.starts_with( "//" ) )
+        {
+            const std::size_t eol = rest.find( '\n' );
+            rest.remove_prefix( eol == std::string_view::npos ? rest.size() : eol + 1 );
+        }
+        else
+        {
+            break;
+        }
+    }
+    const bool separated = rest.size() < text.size() - kKeyword.size();
+    return separated && !rest.empty() ? rest : text;
+}
+
 inline std::string immediateScope( std::string_view full )
 {
     const std::size_t cc = full.rfind( "::" );
-    return std::string( cc == std::string_view::npos ? full : full.substr( cc + 2 ) );
+    return std::string( skipTemplateDisambiguator( cc == std::string_view::npos ? full : full.substr( cc + 2 ) ) );
 }
 
 // ── H4 qualified-call re-split helpers ───────────────────────────────────────────────────────────────────
@@ -163,6 +206,7 @@ inline std::size_t lastTopLevelScopeSep( std::string_view text ) noexcept
     }
     return std::string_view::npos;
 }
+
 // True when a qualified_identifier's `::` separator is a MISSING node — a zero-width token tree-sitter
 // INSERTED during error recovery, not one that is written in the source. Recovery reaches for this shape
 // whenever two identifiers sit adjacent where the grammar expected one, so `<ReturnType> name(...)` after
@@ -196,10 +240,10 @@ inline bool hasPhantomScopeSeparator( TSNode qualified ) noexcept
 // The hop cap is defensive only: each step moves strictly down a finite tree, so it cannot spin. A chain
 // deeper than the cap would return a still-qualified node, which finalSegment() still names correctly (it
 // splits on the last `::`); only the immediate-scope precision would degrade, so there is nothing here a
-// DEGRADED_PATH_ALERT could truthfully claim.
+// DEGRADED_PATH_ALERT could truthfully claim. cppScopeNameText below walks the same chain under the same cap.
+constexpr int kMaxQualifierHops = 32;   // `a::b::c::…` past 32 segments is not written C++
 inline TSNode innermostQualifiedName( TSNode n ) noexcept
 {
-    constexpr int kMaxQualifierHops = 32;   // `a::b::c::…` past 32 segments is not written C++
     for( int hop = 0; hop < kMaxQualifierHops; ++hop )
     {
         if( ts_node_is_null( n ) || !kindIs( ts_node_type( n ), "qualified_identifier" ) )
@@ -268,24 +312,380 @@ inline DefNameFacts cppDefNameReseat( bool applies, TSNode nameNode, std::string
     }
     return { inner, src.substr( a, b - a ), a, ts_node_start_point( inner ).row };
 }
-inline std::string qualifierOf( TSNode nameNode, std::string_view src )
+
+// ── C++ template scopes: the primary's member keys the template name, a specialization keeps its id ──────────
+// A scope is half of an IDENTITY — the map's sc=, the canonical `path::scope::name` id the S6-C locality tie-break
+// and the census key on, the `A::b` a selector names. tree-sitter-cpp hands a template scope over as a
+// `template_type` (`name:` + `arguments:`) in three places: the `scope:` of a qualified declarator (`void
+// Box<T>::grow()`), the `name:` of a class specialization (`struct Slot<bool> { … }`), and a link of a qualified
+// class name (`struct Tree<T>::Leaf { … }`). Reading those nodes' raw TEXT made one member two identities — the
+// in-class declaration `Box::grow` and the out-of-line body `Box<T>::grow` — so --callers=Box::grow resolved to the
+// declaration and answered 0; a list broken over lines put the line break into the id; and `Slot<std::string>`,
+// whose `::` sits INSIDE the list, was cut by immediateScope to `string>`.
+//
+// Two identities are genuinely different, and the reading keeps them apart (test/cpptmplscopecheck.sh):
+//   * the PRIMARY template's own member — its declarator's template-id names exactly the parameters its own
+//     `template <…>` introduces, `template <class T, int N> void Box<T, N>::grow()` — keys the bare name `Box`;
+//   * a SPECIALIZATION (explicit or partial, a whole class or one member) keeps its template-id, spelled canonically
+//     (canonicalTemplateIdText), because a call spelled `Traits<int>::encode( 1 )` names exactly that body and a
+//     delegation from one specialization into another (`DenseMapInfo<APInt>::getHashValue` inside
+//     `DenseMapInfo<APSInt>`) is a call to a different body. Joining them to the primary was measured on llvm ADT +
+//     Support: 58 precise edges became splits and that delegation vanished.
+// A REFERENCE keeps the template-id it writes; the resolver retries the template's family when no definition is keyed
+// by it (resolve.h appendCanonicalCandidates).
+
+inline bool isCppTemplateType( TSNode n ) noexcept
+{
+    return !ts_node_is_null( n ) && kindIs( ts_node_type( n ), "template_type" );
+}
+
+// Index just past a `//` or `/* */` comment starting at `i`, or `i` itself when none starts there. An unclosed comment
+// runs to the end of `text`.
+inline std::size_t cppCommentEnd( std::string_view text, std::size_t i ) noexcept
+{
+    if( text[i] != '/' || i + 1 >= text.size() || ( text[i + 1] != '/' && text[i + 1] != '*' ) )
+    {
+        return i;
+    }
+    const bool        lineComment = text[i + 1] == '/';
+    const std::size_t close       = text.find( lineComment ? std::string_view( "\n" ) : std::string_view( "*/" ), i + 2 );
+    return close == std::string_view::npos ? text.size() : close + ( lineComment ? 1 : 2 );
+}
+
+// One spelling for a template-id, so a definition and a call written differently still key one identity: whitespace
+// and comments are dropped except for a single space between two identifier characters (`unsigned int`), and a comma
+// is followed by one space. `Traits< int >` → "Traits<int>"; `Map<std::string,\n V>` → "Map<std::string, V>".
+inline std::string canonicalTemplateIdText( std::string_view text )
+{
+    std::string canonical;
+    canonical.reserve( text.size() );
+    bool        separated = false;   // whitespace or a comment since the last kept character
+    std::size_t i         = 0;
+    while( i < text.size() )
+    {
+        const char        c         = text[i];
+        const std::size_t afterSkip = std::isspace( static_cast<unsigned char>( c ) ) ? i + 1 : cppCommentEnd( text, i );
+        if( afterSkip != i )
+        {
+            separated = true;
+            i         = afterSkip;
+            continue;
+        }
+        if( separated && !canonical.empty() && namesplit::isIdentChar( canonical.back() ) && namesplit::isIdentChar( c ) )
+        {
+            canonical.push_back( ' ' );
+        }
+        separated = false;
+        canonical.push_back( c );
+        if( c == ',' )
+        {
+            canonical.push_back( ' ' );
+        }
+        ++i;
+    }
+    return canonical;
+}
+
+// Where a template parameter's top-level default begins (its `=`), or `text.size()` when it has none. Angle,
+// parenthesis, bracket and brace depth is tracked so `template <class U = int> class C` keeps its inner `=`.
+inline std::size_t templateParameterDefaultStart( std::string_view text ) noexcept
+{
+    std::size_t depth = 0;
+    for( std::size_t i = 0; i < text.size(); ++i )
+    {
+        const char c = text[i];
+        if( c == '=' && depth == 0 )
+        {
+            return i;
+        }
+        const bool opens  = c == '<' || c == '(' || c == '[' || c == '{';
+        const bool closes = c == '>' || c == ')' || c == ']' || c == '}';
+        depth = opens ? depth + 1 : ( closes && depth > 0 ? depth - 1 : depth );
+    }
+    return text.size();
+}
+
+// The last identifier in `text`, or an empty view when it holds none.
+inline std::string_view lastIdentifierIn( std::string_view text ) noexcept
+{
+    std::string_view last;
+    std::size_t      i = 0;
+    while( i < text.size() )
+    {
+        std::size_t runEnd = i;
+        while( runEnd < text.size() && namesplit::isIdentChar( text[runEnd] ) )
+        {
+            ++runEnd;
+        }
+        if( runEnd > i && namesplit::isIdentStart( text[i] ) )
+        {
+            last = text.substr( i, runEnd - i );
+        }
+        i = runEnd > i ? runEnd : i + 1;
+    }
+    return last;
+}
+
+// The name one template parameter declares, read off its text: the last identifier before its top-level default `=`,
+// with `...` appended for a pack — `class T` → "T", `int N = 4` → "N", `class... Ts` → "Ts...", `template <class U =
+// int> class C` → "C". An unnamed parameter yields its keyword (`class`), which no template argument can equal.
+inline std::string cppTemplateParameterName( std::string_view text )
+{
+    const std::string_view declared = text.substr( 0, templateParameterDefaultStart( text ) );
+    std::string            name { lastIdentifierIn( declared ) };
+    if( declared.find( "..." ) != std::string_view::npos )
+    {
+        name.append( "..." );
+    }
+    return name;
+}
+
+// True when `templateType`'s argument list names exactly the parameters `parameterList` declares, in order: the
+// template-id a primary template's out-of-line member writes (`Box<T, N>` under `template <class T, int N>`).
+inline bool templateIdNamesItsParameters( TSNode templateType, TSNode parameterList, std::string_view src )
+{
+    const TSNode arguments = fieldChild( templateType, NodeField::Arguments );
+    if( ts_node_is_null( arguments ) || ts_node_is_null( parameterList ) )
+    {
+        return false;
+    }
+    const auto nextNamed = []( TSNode list, std::uint32_t index ) noexcept
+    {
+        const std::uint32_t count = ts_node_named_child_count( list );
+        while( index < count && kindIs( ts_node_type( ts_node_named_child( list, index ) ), "comment" ) )
+        {
+            ++index;
+        }
+        return index;
+    };
+    const std::uint32_t argumentCount  = ts_node_named_child_count( arguments );
+    const std::uint32_t parameterCount = ts_node_named_child_count( parameterList );
+    std::uint32_t       a              = nextNamed( arguments, 0 );
+    std::uint32_t       p              = nextNamed( parameterList, 0 );
+    for( ; a < argumentCount && p < parameterCount; a = nextNamed( arguments, a + 1 ), p = nextNamed( parameterList, p + 1 ) )
+    {
+        const std::string argument = canonicalTemplateIdText( nodeTextOf( ts_node_named_child( arguments, a ), src ) );
+        if( argument != cppTemplateParameterName( nodeTextOf( ts_node_named_child( parameterList, p ), src ) ) )
+        {
+            return false;
+        }
+    }
+    return a >= argumentCount && p >= parameterCount && parameterCount > 0;
+}
+
+// The `template <…>` parameter lists that introduce the declaration `node` belongs to, INNERMOST first: the run of
+// template_declaration ancestors directly above it. The walk passes through declarator and declaration wrappers and
+// stops at the first body or namespace boundary, so nothing inside a function or class body reaches an enclosing
+// template's list. On the way up it also counts the template-id `scope:` links of the qualified_identifier chain
+// ABOVE `node` — the pairing index of `node`'s own scope. Stores at most kMaxQualifierHops lists — the chain cap, and
+// past it only precision degrades.
+struct TemplateParameterLists
+{
+    std::array<TSNode, static_cast<std::size_t>( kMaxQualifierHops )> innerFirst {};
+    std::size_t                                                         count              = 0;
+    std::size_t                                                         templateLinksAbove = 0;
+};
+inline TemplateParameterLists templateParameterListsAbove( TSNode node ) noexcept
+{
+    TemplateParameterLists lists;
+    for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        const char* t = ts_node_type( p );
+        if( kindIs( t, "qualified_identifier" ) )
+        {
+            lists.templateLinksAbove += isCppTemplateType( fieldChild( p, NodeField::Scope ) ) ? 1u : 0u;
+            continue;
+        }
+        if( kindIs( t, "template_declaration" ) )
+        {
+            if( lists.count < lists.innerFirst.size() )
+            {
+                lists.innerFirst[ lists.count++ ] = fieldChild( p, NodeField::Parameters );
+            }
+            continue;
+        }
+        const bool boundary = kindIs( t, "compound_statement" ) || kindIs( t, "field_declaration_list" ) || kindIs( t, "declaration_list" )
+                           || kindIs( t, "translation_unit" );
+        if( lists.count > 0 || boundary )
+        {
+            break;
+        }
+    }
+    return lists;
+}
+
+// How many `scope:` links of the qualified class name `name` are template-ids.
+inline std::size_t templateScopeLinksIn( TSNode name ) noexcept
+{
+    std::size_t count = 0;
+    for( int hop = 0; hop < kMaxQualifierHops && !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "qualified_identifier" ); ++hop )
+    {
+        count += isCppTemplateType( fieldChild( name, NodeField::Scope ) ) ? 1u : 0u;
+        name   = fieldChild( name, NodeField::Name );
+    }
+    return count;
+}
+
+// The scope text a DECLARATION's template-id link contributes: the bare template name when it is the primary's own
+// id, its canonical template-id otherwise. The link is paired with the `template <…>` list that introduces it:
+// outermost first when there are at least as many lists as template-id links (a member function template's own list
+// is the extra, innermost one: `template <class T> template <class U> void Box<T>::convert( U )`), innermost first
+// when there are fewer (the outer links then belong to an explicit specialization, which has no list of its own).
+inline std::string cppDeclaratorLinkText( TSNode link, std::size_t linkIndex, std::size_t linkCount, const TemplateParameterLists& lists,
+                                          std::string_view src )
+{
+    const std::size_t fromInner = lists.count >= linkCount ? lists.count - 1 - linkIndex : linkCount - 1 - linkIndex;
+    if( fromInner < lists.count && templateIdNamesItsParameters( link, lists.innerFirst[ fromInner ], src ) )
+    {
+        return std::string( nodeFieldText( link, NodeField::Name, src ) );
+    }
+    return canonicalTemplateIdText( nodeTextOf( link, src ) );
+}
+
+// A class's written `name:` read as a scope. `struct Slot<bool>` is a specialization → "Slot<bool>";
+// `template <class T> struct Tree<T>::Leaf` → "Tree::Leaf". A name with no template-id keeps its written text byte for
+// byte — `Outer::Inner`, a Python class, a namespace — and a NULL `name` (an anonymous class) reads "".
+inline std::string cppScopeNameText( TSNode name, std::string_view src )
+{
+    const std::string_view written = nodeTextOf( name, src );
+    if( isCppTemplateType( name ) )
+    {
+        return canonicalTemplateIdText( written );
+    }
+    if( written.find( '<' ) == std::string_view::npos || !kindIs( ts_node_type( name ), "qualified_identifier" ) )
+    {
+        return std::string( written );
+    }
+    const std::size_t            linkCount = templateScopeLinksIn( name );
+    const TemplateParameterLists lists     = templateParameterListsAbove( name );
+    std::string                  scope;
+    std::size_t                  linkIndex = 0;
+    TSNode                       link      = name;
+    for( int hop = 0; hop < kMaxQualifierHops && !ts_node_is_null( link ) && kindIs( ts_node_type( link ), "qualified_identifier" ); ++hop )
+    {
+        const TSNode segment = fieldChild( link, NodeField::Scope );             // null for a leading `::`
+        scope.append( isCppTemplateType( segment ) ? cppDeclaratorLinkText( segment, linkIndex++, linkCount, lists, src )
+                                                   : std::string( nodeTextOf( segment, src ) ) ).append( "::" );
+        link = fieldChild( link, NodeField::Name );
+    }
+    return scope.append( canonicalTemplateIdText( nodeTextOf( link, src ) ) );
+}
+
+// A C++ class SPECIALIZATION header's base clause (`template <> struct Info<char> : CharBase {}`), captured by the tags
+// query as @definition.specialization and never made a symbol. Each base becomes an inherit ref (captureBases) whose
+// DERIVED name is the specialization's canonical template-id, carried in `qualifier` exactly as the Rust impl pass
+// carries its implementor: byte-span attribution cannot name a derived class that is not a symbol. buildGraph's CHA
+// name graph then knows what the specialization inherits (resolve.h appendCanonicalCandidates reads it); the Lego
+// view resolves `qualifier` by symbol name and finds none, so its rows are unchanged.
+// Returns true when the capture WAS a specialization header (and so must not continue to the definition path). The
+// whole precondition is tested here rather than at the call site, which is captureTagsFacts: every branch spent there is
+// measured (see cppDefNameReseat).
+inline bool captureSpecializationHeader( bool isDef, Lang lang, std::string_view defCapture, TSNode classNode, TSNode nameNode, std::uint32_t fileId,
+                                         std::string_view src, std::vector<RawRef>& refs )
+{
+    if( !isDef || lang != Lang::Cpp || defCapture != "definition.specialization" )
+    {
+        return false;
+    }
+    const std::size_t firstBase = refs.size();
+    captureBases( classNode, fileId, Lang::Cpp, src, refs );
+    const std::string derived = canonicalTemplateIdText( nodeTextOf( nameNode, src ) );
+    for( std::size_t i = firstBase; i < refs.size(); ++i )
+    {
+        refs[i].qualifier = derived;
+    }
+    return true;
+}
+
+// The scope that qualifies `nameNode` — "" when it is unqualified, or qualified only by a separator error recovery
+// invented (hasPhantomScopeSeparator). A plain scope reads its immediate segment (`a::B::c` → "B"). A template-id
+// scope depends on who asks: a REFERENCE keeps the id it wrote, canonically (`Traits<int>::encode()` → "Traits<int>",
+// never cut inside the list); a DEFINITION keys the bare name when the id is its primary template's own (`template
+// <class T> void Box<T>::grow()` → "Box") and the canonical id otherwise (`template <> … Traits<long>::encode` →
+// "Traits<long>"). An out-of-range span reads "", as before.
+inline std::string cppQualifierText( TSNode nameNode, std::string_view src, bool isDefinition )
 {
     const TSNode parent = ts_node_parent( nameNode );
-    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "qualified_identifier" ) )
+    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "qualified_identifier" ) || hasPhantomScopeSeparator( parent ) )
     {
         return {};
     }
-    if( hasPhantomScopeSeparator( parent ) )
+    const TSNode scope = fieldChild( parent, NodeField::Scope );   // null for a leading `::`
+    if( !isCppTemplateType( scope ) )
     {
-        return {}; // error-recovery artefact, not a written qualification
+        return immediateScope( nodeTextOf( scope, src ) );
     }
-    const TSNode scope = fieldChild( parent, NodeField::Scope );
-    if( ts_node_is_null( scope ) )
+    if( !isDefinition )
     {
-        return {};
+        return canonicalTemplateIdText( nodeTextOf( scope, src ) );
     }
-    const std::uint32_t a = ts_node_start_byte( scope ), b = ts_node_end_byte( scope );
-    return ( a <= b && b <= src.size() ) ? immediateScope( src.substr( a, b - a ) ) : std::string{};
+    const TemplateParameterLists lists = templateParameterListsAbove( parent );   // `nameNode` is the chain's last link
+    return cppDeclaratorLinkText( scope, lists.templateLinksAbove, lists.templateLinksAbove + 1, lists, src );
+}
+inline std::string qualifierOf( TSNode nameNode, std::string_view src )
+{
+    return cppQualifierText( nameNode, src, /*isDefinition=*/false );
+}
+inline std::string qualifierOfDefinition( TSNode nameNode, std::string_view src )
+{
+    return cppQualifierText( nameNode, src, /*isDefinition=*/true );
+}
+
+// The qualifier the 3+-segment re-split keys a REFERENCE on, from the scope half of its captured text: the last
+// top-level segment, a template-id kept whole and canonical (`numeric_limits<std::size_t>` stays itself; the resolver
+// falls back to the family when nothing is keyed by it). PRECONDITION: `scopeText` holds no operator tail — it is the
+// part BEFORE the name's separator, and an operator never names a scope.
+inline std::string cppRefQualifierText( std::string_view scopeText )
+{
+    const std::size_t      sep  = lastTopLevelScopeSep( scopeText );
+    const std::string_view last = skipTemplateDisambiguator( sep == std::string_view::npos ? scopeText : scopeText.substr( sep + 2 ) );
+    return last.ends_with( '>' ) ? canonicalTemplateIdText( last ) : immediateScope( last );
+}
+
+// H4 RE-SPLIT of a C++ call reference's (name, qualifier), moved out of captureTagsFacts (whose complexity is
+// measured). The widened qualified-call pattern binds the INNER node, so a 3+-segment call's captured text
+// still carries scope (`inner::targetFn`). Recover the pair the canonical tier keys on — name = the final
+// segment, qualifier = the IMMEDIATE scope — from the text itself. This must run AFTER the reference's
+// finalSegment() name and qualifierOf() qualifier are set, and overwrites both when it splits: finalSegment
+// truncates at the first '<', which would name `numeric_limits<std::size_t>::max` as `numeric_limits` and mint
+// an edge to the wrong symbol. Inert for every 2-segment call (`rw::midFn` binds a bare identifier — no
+// top-level `::` in the text) and for `ns::tmplFn<int>()` (whose captured text is just `tmplFn<int>`), so
+// those keep their qualifierOf() result untouched.
+//
+// An OPERATOR tail is recognised first: its `<`/`>` are part of the NAME, so handing it to the angle-depth
+// scan binds the wrong scope for the whole `>` family. See operatorNameStart. When the operator spelling
+// starts at index 0 the capture IS the bare operator name, its parent is the qualified_identifier, and
+// qualifierOf() already put the immediate scope in r.qualifier — nothing to re-split.
+//
+// The `template` disambiguator (see skipTemplateDisambiguator) is stepped over on the NAME half here — at
+// 2 segments too, where the capture is the dependent_name itself (`template make<int>`) and nothing splits —
+// and on the QUALIFIER half inside immediateScope.
+inline void cppResplitRefName( RawRef& r, std::string_view nameTxt )
+{
+    const std::size_t opStart  = operatorNameStart( nameTxt );
+    const bool        opScoped = opStart != std::string_view::npos && opStart >= 2 && nameTxt[ opStart - 1 ] == ':' && nameTxt[ opStart - 2 ] == ':';
+    if( opScoped )
+    {
+        r.name      = finalSegment( nameTxt.substr( opStart ) );                                  // `operator>` verbatim
+        r.qualifier = cppRefQualifierText( nameTxt.substr( 0, opStart - 2 ) );
+        return;
+    }
+    if( opStart != std::string_view::npos )
+    {
+        return;
+    }
+    const std::size_t      sep    = lastTopLevelScopeSep( nameTxt );
+    const bool             hasSep = sep != std::string_view::npos;
+    const std::string_view tail   = hasSep ? nameTxt.substr( sep + 2 ) : nameTxt;
+    const std::string_view bare   = skipTemplateDisambiguator( tail );
+    if( hasSep || bare.size() != tail.size() )   // neither a split nor a keyword: finalSegment( nameTxt ) already named it
+    {
+        r.name = finalSegment( bare );
+    }
+    if( hasSep )
+    {
+        r.qualifier = cppRefQualifierText( nameTxt.substr( 0, sep ) );
+    }
 }
 // ── H4 RUST qualified-call helpers (W1-MEASURE verdict) ─────────────────────────────────────────────────
 // W1 measured that the Rust PATTERN ALONE under-delivers: Rust defs carried scope="" (canonByName was fed
@@ -415,13 +815,8 @@ inline std::string enclosingScopeOf( TSNode node, std::string_view src )
                                 || kindIs( t, "namespace_definition" ) || kindIs( t, "class_definition" );
         if( scopeOwner )
         {
-            const TSNode nm = fieldChild( p, NodeField::Name );
-            if( ts_node_is_null( nm ) )
-            {
-                return {}; // anonymous → no usable scope
-            }
-            const std::uint32_t a = ts_node_start_byte( nm ), b = ts_node_end_byte( nm );
-            return ( a <= b && b <= src.size() ) ? std::string( src.substr( a, b - a ) ) : std::string{};
+            // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text; anonymous (no `name:`) → ""
+            return cppScopeNameText( fieldChild( p, NodeField::Name ), src );
         }
     }
     return {};
@@ -1410,6 +1805,35 @@ inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noe
         return false;
     }
     return nodeTextOf( fieldChild( obj, NodeField::Property ), src ) == "prototype";
+}
+
+// Constructor identifier of `Foo.prototype.NAME` (the object of the inner `.prototype` member).
+// `String.prototype.shout` → "String"; `net.Socket.prototype.x` → "Socket". Empty if the shape
+// is not a prototype member. Used as RawDef::scope so a Lit* call can bind only an extension of
+// that built-in (issue #163).
+inline std::string_view prototypeCtorName( TSNode nameNode, std::string_view src ) noexcept
+{
+    if( !isPrototypeMemberTarget( nameNode, src ) )
+    {
+        return {};
+    }
+    const TSNode member     = ts_node_parent( nameNode );
+    const TSNode protoMember = fieldChild( member, NodeField::Object );
+    const TSNode ctor       = fieldChild( protoMember, NodeField::Object );
+    if( ts_node_is_null( ctor ) )
+    {
+        return {};
+    }
+    const char* ct = ts_node_type( ctor );
+    if( kindIs( ct, "identifier" ) )
+    {
+        return nodeTextOf( ctor, src );
+    }
+    if( kindIs( ct, "member_expression" ) )
+    {
+        return nodeTextOf( fieldChild( ctor, NodeField::Property ), src );
+    }
+    return {};
 }
 
 // Python shape round (test/pyshapecheck.sh): `NAME = value` in a class body is a definition only when

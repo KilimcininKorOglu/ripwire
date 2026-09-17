@@ -691,6 +691,11 @@ std::optional<int> runFromTrace( const MainDispatch& d )
                                                                     : std::string_view();   // R-R
 
     const FromTraceResult res = fromTraceBundleText( ing, g, *text, src == "-" ? "<stdin>" : src, in );
+    if( res.isBufferLost )
+    {
+        rw::emitRaw( stderr, "ripwire: write error — a --from-trace buffer lost bytes; the bundle is withheld, not printed without its blocks\n" );
+        return 1;   // the exit code main's A4-F18 check gives a short write to stdout
+    }
     if( !res.ok )
     {
         rw::emitTo( stderr, "ripwire: --from-trace: no stack-trace / sanitizer / compiler frames found in '{}' — nothing to map\n",
@@ -1156,6 +1161,11 @@ std::optional<int> runRunTrace( const MainDispatch& d )
     in.preludeMeasuredDigits = std::to_string( cap.durationMs ).size();   // R1: priced at a fixed width, never charged live
 
     const FromTraceResult res = fromTraceBundleText( d.ing, d.g, text, label, in );
+    if( res.isBufferLost )
+    {
+        rw::emitRaw( stderr, "ripwire: write error — a --run-trace buffer lost bytes; the bundle is withheld, not printed without its blocks\n" );
+        return 1;
+    }
     if( res.ok )
     {
         std::fwrite( res.xml.data(), 1, res.xml.size(), stdout );
