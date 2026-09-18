@@ -409,7 +409,7 @@ inline std::string randomTempSuffix()
 // Create EXACTLY `path` for writing, failing (never following a link, never truncating) if anything already
 // sits at the name. O_EXCL makes the create atomic — a symlink at the name yields EEXIST, not a followed
 // open — and O_NOFOLLOW is the redundant guard for the same intent. Returns the descriptor, or -1 with errno.
-inline int openExclNoFollow( const char* path, mode_t mode ) noexcept
+inline int openExclNoFollow( const char* path, os::mode_t mode ) noexcept
 {
     return os::open( path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode );
 }
@@ -504,7 +504,7 @@ private:
 // residue glob still matches). Retries a few times on EEXIST — an existing entry at a candidate name that a
 // fresh CSPRNG draw steps past — and stops at once on any other errno. `!ok()` means the caller refuses and discloses
 // through its own path.
-inline ExclTempFile createExclTempFile( const std::string& prefix, std::string_view suffix, mode_t mode )
+inline ExclTempFile createExclTempFile( const std::string& prefix, std::string_view suffix, os::mode_t mode )
 {
     for( int attempt = 0; attempt < 8; ++attempt )
     {

@@ -140,6 +140,8 @@ using mode_t    = ::mode_t;
 using uid_t     = ::uid_t;
 using nfds_t    = ::nfds_t;
 using socklen_t = ::socklen_t;
+using pthread_t      = ::pthread_t;
+using pthread_attr_t = ::pthread_attr_t;
 
 // the stat fields call sites read; every platform's stat_t carries them
 static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtime; st.st_ctime; st.st_dev; st.st_ino; st.st_uid; } );
@@ -304,6 +306,17 @@ inline int pthread_main_np()
 #else
 [[gnu::always_inline]] inline int pthread_getname_np( ::pthread_t, char*, std::size_t ) { return ENOSYS; }
 #endif
+
+// A stack whose SIZE is chosen rather than inherited (infra/stackthreads.h): attr init/setstacksize/destroy,
+// create and join, nothing wrapped beyond the always_inline passthrough every other os:: call gets.
+[[gnu::always_inline]] inline int pthread_attr_init( pthread_attr_t* attr )                                { return ::pthread_attr_init( attr ); }
+[[gnu::always_inline]] inline int pthread_attr_setstacksize( pthread_attr_t* attr, std::size_t stackBytes ) { return ::pthread_attr_setstacksize( attr, stackBytes ); }
+[[gnu::always_inline]] inline int pthread_attr_destroy( pthread_attr_t* attr )                              { return ::pthread_attr_destroy( attr ); }
+[[gnu::always_inline]] inline int pthread_create( pthread_t* thread, const pthread_attr_t* attr, void* (*start)( void* ), void* arg )
+{
+    return ::pthread_create( thread, attr, start, arg );
+}
+[[gnu::always_inline]] inline int pthread_join( pthread_t thread, void** valueOut ) { return ::pthread_join( thread, valueOut ); }
 
 // ── sockets ────────────────────────────────────────────────────────────────────────────────────────────────
 [[gnu::always_inline]] inline int     socket( int domain, int type, int protocol )                     { return ::socket( domain, type, protocol ); }

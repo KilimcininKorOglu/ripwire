@@ -238,13 +238,13 @@ static std::vector<std::string> selectorRootPrefixes( const std::string& root )
     const std::filesystem::path rootPath( root.empty() ? std::string( "." ) : root );
     add( normal( rootPath ) );   // as typed: "test/fixture", "../repo", "/abs/repo", "."
     char cwdBuf[ PATH_MAX ];
-    const char* const cwd = ::getcwd( cwdBuf, sizeof( cwdBuf ) );
+    const char* const cwd = os::getcwd( cwdBuf, sizeof( cwdBuf ) );
     std::vector<std::string> cwds;   // the cwd's absolute spellings: logical first
     if( cwd != nullptr )
     {
         const char* const pwd = std::getenv( "PWD" );
         char pwdBuf[ PATH_MAX ];
-        if( pwd != nullptr && pwd[0] == '/' && ::realpath( pwd, pwdBuf ) != nullptr && std::strcmp( pwdBuf, cwd ) == 0 )
+        if( pwd != nullptr && pwd[0] == '/' && os::realpath( pwd, pwdBuf ) != nullptr && std::strcmp( pwdBuf, cwd ) == 0 )
         {
             cwds.push_back( normal( pwd ) );
         }
@@ -260,7 +260,7 @@ static std::vector<std::string> selectorRootPrefixes( const std::string& root )
         if( !rootPath.is_absolute() ) { absolutes.push_back( normal( std::filesystem::path( c ) / rootPath ) ); }
     }
     char realBuf[ PATH_MAX ];
-    if( ::realpath( rootPath.c_str(), realBuf ) != nullptr )
+    if( os::realpath( rootPath.c_str(), realBuf ) != nullptr )
     {
         absolutes.push_back( normal( realBuf ) );
     }

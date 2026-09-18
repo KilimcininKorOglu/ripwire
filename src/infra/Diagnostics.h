@@ -75,14 +75,6 @@
   #define DIAGNOSTICS_ANALYZER_NORETURN
 #endif
 
-// An empty member that takes no storage. The MSVC ABI (clang-cl, the Windows port) ignores the standard spelling
-// with a warning and honours only its own; everything else takes the standard one.
-#if defined( _MSC_VER )
-  #define RW_NO_UNIQUE_ADDRESS [[msvc::no_unique_address]]
-#else
-  #define RW_NO_UNIQUE_ADDRESS [[no_unique_address]]
-#endif
-
 // --------------------------------------------------------------------------------------------------------------------
 // 2. Handler declarations — implemented in diagnostics.cpp
 // --------------------------------------------------------------------------------------------------------------------
@@ -150,10 +142,10 @@ std::uint64_t currentThreadId() noexcept;
 // The per-object owner behind ASSUME_SAME_THREAD_AS. A member of a struct that is NOT internally synchronised and is
 // handed between threads at known points (a prefetch worker fills it, the joiner reads it after the join):
 //
-//     struct GrepScanPhases { …; RW_NO_UNIQUE_ADDRESS Diagnostics::ThreadOwner threadOwner; };
+//     struct GrepScanPhases { …; [[no_unique_address]] Diagnostics::ThreadOwner threadOwner; };
 //
 // Debug: an atomic id, claimed by the first thread that asserts on the object. release() hands the object on; the
-// next assert claims it again. Release: an EMPTY class under RW_NO_UNIQUE_ADDRESS, so the struct's size and layout
+// next assert claims it again. Release: an EMPTY class under [[no_unique_address]], so the struct's size and layout
 // are byte-identical to the struct without the member — a hot SoA/POD struct's `static_assert( sizeof( X ) == N )`
 // holds in release unchanged. In debug the member is 8 bytes, which is why it belongs on coordinating objects (an
 // index, a worker's result slot, a server's session state), never on a per-node or per-edge record.

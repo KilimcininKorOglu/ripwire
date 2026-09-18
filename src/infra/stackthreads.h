@@ -8,7 +8,8 @@
 //  macOS secondary thread, 8 MiB under glibc), so work whose depth is data-dependent — libstdc++'s regex matcher
 //  recurses once per state it visits — gets a stack it can state and bound instead of whatever the platform gave.
 //
-//  POSIX, inline: pthread_attr_setstacksize + pthread_create + pthread_join, nothing wrapped. A stack of S bytes
+//  POSIX, inline (behind rw::os): pthread_attr_setstacksize + pthread_create + pthread_join, nothing wrapped
+//  beyond os::'s own always_inline passthrough. A stack of S bytes
 //  is an address-space reservation; pages are committed only as deep as the work actually recurses, and returned
 //  when the thread exits.
 //
@@ -25,8 +26,7 @@
 #pragma once
 
 #include "Diagnostics.h"   // DISCLOSE
-
-#include <pthread.h>
+#include "os.h"            // rw::os::pthread_* — attr init/setstacksize/destroy, create, join
 
 #include <algorithm>
 #include <cstddef>
@@ -58,17 +58,17 @@ class StackThreadAttr
 {
 public:
     explicit StackThreadAttr( std::size_t stackBytes ) noexcept
-        : isInitialized( pthread_attr_init( &attr ) == 0 )
-        , isSized( isInitialized && pthread_attr_setstacksize( &attr, stackBytes ) == 0 )
+        : isInitialized( os::pthread_attr_init( &attr ) == 0 )
+        , isSized( isInitialized && os::pthread_attr_setstacksize( &attr, stackBytes ) == 0 )
     {
     }
-    ~StackThreadAttr() { if( isInitialized ) { pthread_attr_destroy( &attr ); } }
+    ~StackThreadAttr() { if( isInitialized ) { os::pthread_attr_destroy( &attr ); } }
     StackThreadAttr( const StackThreadAttr& )            = delete;
     StackThreadAttr& operator=( const StackThreadAttr& ) = delete;
 
-    pthread_attr_t attr {};
-    const bool     isInitialized;
-    const bool     isSized;
+    os::pthread_attr_t attr {};
+    const bool          isInitialized;
+    const bool          isSized;
 };
 
 inline constexpr std::size_t kStackThreadBytesFloor = 8 * 1024 * 1024;   // the smallest stack a refused thread is retried with
@@ -110,8 +110,8 @@ std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, 
     };
     struct Launch
     {
-        Shared*   shared;
-        pthread_t thread;
+        Shared*        shared;
+        os::pthread_t  thread;
     };
     const auto entry = []( void* arg ) -> void*
     {
@@ -125,7 +125,7 @@ std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, 
         return nullptr;
     };
     Shared              shared( &work );
-    std::vector<Launch> launches( threadCount, Launch{ &shared, pthread_t{} } );
+    std::vector<Launch> launches( threadCount, Launch{ &shared, os::pthread_t{} } );
     std::size_t         startedCount = 0;
     {
         const std::lock_guard<std::mutex> hold( shared.gate );
@@ -137,7 +137,7 @@ std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, 
             for( std::size_t tryBytes = stackBytes; !isStarted && tryBytes > 0; tryBytes = nextStackTryBytes( tryBytes, stackBytes ) )
             {
                 const StackThreadAttr attr( tryBytes );
-                isStarted     = attr.isSized && !isRefused( t, tryBytes, stackBytes ) && pthread_create( &launch.thread, &attr.attr, entry, &launch ) == 0;
+                isStarted     = attr.isSized && !isRefused( t, tryBytes, stackBytes ) && os::pthread_create( &launch.thread, &attr.attr, entry, &launch ) == 0;
                 smallestBytes = isStarted ? std::min( smallestBytes, tryBytes ) : smallestBytes;
             }
             startedCount += isStarted ? 1 : 0;
@@ -146,7 +146,7 @@ std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, 
     }
     for( std::size_t t = 0; t < startedCount; ++t )
     {
-        pthread_join( launches[ t ].thread, nullptr );
+        os::pthread_join( launches[ t ].thread, nullptr );
     }
     if( startedCount == 0 )
     {
