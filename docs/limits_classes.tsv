@@ -109,6 +109,7 @@ kMinMentionLen	BOUNDARY
 kMinNameLen	BOUNDARY
 kMinValueNameLen	BOUNDARY
 kNameCandidateCap	OUTPUT
+kNoticeByteCap	OUTPUT
 kOtherDefCap	OUTPUT
 kRadixThreshold	BOUNDARY
 kRegexMaxGroupDepth	BOUNDARY

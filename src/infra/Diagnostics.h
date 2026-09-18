@@ -425,9 +425,9 @@ template<class Site>
 //   DISCLOSE( sink, why, "msg" )   sink.disclose( why ) in EVERY build, then a debug trace with the literal message
 //   DISCLOSE( msg )                a debug trace ONLY — see "THE ONE-ARGUMENT FORM" below before using it
 //
-// THE SINK is the object whose field the emitter ALREADY reads for this answer — RefPlumbing → ok="0" v="unknown", the
-// grep collector → hits_capped= / counts_floor=, IngestResult's health rows → why= / unindexed=, a root's est_tokens
-// measurement → an omitted est_tokens=, a sidecar read → its symlinkRefused. It models Diagnostics::DisclosureSink,
+// THE SINK is the object whose field the emitter ALREADY reads for this answer — a reference lookup → ok="0"
+// v="unknown", a grep collector → hits_capped= / counts_floor=, a parse result's health rows → why= / unindexed=, a
+// root's est_tokens measurement → an omitted est_tokens=, a sidecar read → its symlinkRefused. It models Diagnostics::DisclosureSink,
 // which is checked at COMPILE TIME at every site:
 //     struct GrepCollection {
 //         enum class DisclosureWhy : std::uint8_t { RegexError, UnreadableFile };   // owned by the sink, scoped

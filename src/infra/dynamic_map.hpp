@@ -82,7 +82,7 @@
     #define DYNMAP_HAS_SSE2 0
 #endif
 
-// Precondition guard. Inside ripwire the project's ASSUME (src/infra/Diagnostics.h)
+// Precondition guard. In the game build the project's ASSUME (math/Diagnostics.h)
 // is already defined and is used (logs + traps in debug, optimiser-assume in
 // release). Standalone builds (the unit tests) have no ASSUME, so we fall back to
 // assert -- which keeps every guard LIVE in the standalone test binaries.

@@ -298,7 +298,11 @@ for f, ln, fn, t, a in ncasts:
 tsv("d.tsv", [(f, fn, k, n) for (f, fn, k), n in sorted(armD.items())])
 
 # ── (B1) catch handlers that record nothing ──────────────────────────────────────────────────────────────────────
-RECORDS = re.compile(r"(?<![=!<>])=(?!=)|\.store\s*\(|\breturn\s+[^;\s]|\+\+|--|\b(emitTo|emitRaw|fprintf|fputs|fail|DISCLOSE|PANIC|push_back|emplace_back|append)\s*\(|\bthrow\b")
+# DISCLOSE is arity-sensitive, so it is NOT in this alternation: the sink form DISCLOSE( sink, why[, "msg"] ) calls
+# sink.disclose( why ) in every build and genuinely records something (the trailing comma-before-`,` clause below
+# catches it), but the one-argument DISCLOSE( "msg" ) is a debug-only trace — nothing in Release — so it must fall
+# through to the alert-only classification a few lines down, the same as the old one-argument degrade-alert macro did.
+RECORDS = re.compile(r"(?<![=!<>])=(?!=)|\.store\s*\(|\breturn\s+[^;\s]|\+\+|--|\b(emitTo|emitRaw|fprintf|fputs|fail|PANIC|push_back|emplace_back|append)\s*\(|\bthrow\b|\bDISCLOSE\s*\([^)]*,")
 catchRows = match('(catch_clause) @c')
 perLine = defaultdict(int)
 armB1, recorded = Counter(), 0
@@ -318,7 +322,7 @@ for f, ln, fn, _t in catchRows:
     if RECORDS.search(body):
         recorded += 1
         continue
-    cls = "alert-only" if re.search(r"\bDEGRADED_PATH_ALERT\s*\(", body) else "silent"
+    cls = "alert-only" if re.search(r"\bDISCLOSE\s*\(", body) else "silent"
     armB1[(f, fn, cls)] += 1
 tsv("b1.tsv", [(f, fn, c, n) for (f, fn, c), n in sorted(armB1.items())])
 
