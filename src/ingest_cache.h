@@ -4,6 +4,7 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "pathguard.h"  // CWE-59/367 round 5: rw::pathguard::createExclTempFile — saveCache's temp is created exclusively, never through a link
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 // ingest_cache.h — the raw-facts model + incremental cache, moved VERBATIM from ingest.cpp in the
@@ -69,6 +70,8 @@ struct RawRef
     RecvKind      recv      = RecvKind::None;   // call-site receiver shape (P2-D narrowing)
     std::uint16_t argCount     = 0;             // B2.2: call-site positional arg count when countable; 0 otherwise
     bool          argCountKnown = false;        // B2.2: true ⇒ argCount is reliable (no spread/splat/apply)
+    bool          viaArrow  = false;   // a C++/ObjC call: the member access was written `->`. A compose ref: `name` is the POINTEE
+                                       //   of a std smart pointer member, which only `->` reaches (see Reference::viaArrow)
     std::string   name;
     std::string   qualifier;           // explicit scope at a call site (`A` in `A::b()`); C++; "" if bare/method
     std::string   recvVar;             // receiver variable when recv==NamedVar/FieldOfVar (`x` in `x->m()`); Rule 2 fuel
@@ -86,6 +89,7 @@ struct RawBind
     std::uint32_t startByte = 0;   // position inside the enclosing function (for enclosing-def attribution)
     Lang          lang      = Lang::Unknown;
     LocalBindKind kind      = LocalBindKind::Type;   // Type = Rule 2 var→type; FnDecl/FnAssign = L3 var→function
+    bool          isFromAssignment = false;          // kind==Type: an ASSIGNMENT's callee name, not a declaration's (model.h Binding)
     std::uint32_t spanStart = 0;   // lexical visibility or declaration span; see model.h Binding/LocalBindKind
     std::uint32_t spanEnd   = 0;
     std::string   var;             // the declared variable identifier (`x`)
@@ -123,7 +127,21 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `internalLinkage` (parser version 96, a u8 after
+constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaArrow` (parser version 113, a u8 after
+                                                      //    `argCountKnown` in the ref record, kMinRefRecordBytes 39 -> 40)
+                                                      //    — a call's member access was written `->`, and a compose
+                                                      //    ref's type is the pointee of a std smart pointer member
+                                                      //    (test/fieldnarrowcheck.sh arm p). A FORMAT change: v23 blobs
+                                                      //    end the ref record one byte early and would read the next
+                                                      //    record's start byte as the bit → reject them. PR #282
+                                                      //    declared 22 -> 23; integration/train-5 assigns 24 over
+                                                      //    #278's 23.
+                                                      // 23: RawBind gains `isFromAssignment` (parser version 106, a u8 after
+                                                      //    `kind` in the bind record, 26 -> 27 bytes lean) — a C++
+                                                      //    assignment's callee-read type is kept only when it names a
+                                                      //    class (test/narrowcheck.sh arms 44-51). A FORMAT change: v22
+                                                      //    blobs read the new byte as spanStart's low byte → reject them.
+                                                      // 22: RawDef gains `internalLinkage` (parser version 96, a u8 after
                                                       //    `recovered` in the def record, 78 -> 79 bytes lean) — an
                                                       //    anonymous-namespace or namespace-scope `static` C/C++ def
                                                       //    is visible to its own TU alone, and graph.h's decl-to-def
@@ -207,7 +225,7 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    dict INDICES + narrowest-exact-width tfs instead of raw
                                                       //    u64 hash + u32 tf pairs (the v9 shape grew the rich
                                                       //    blob +38-56% and dragged index/warm p95). Lossless by
-                                                      //    construction (widths from maxima, VERIFY'd) — a FORMAT
+                                                      //    construction (widths from maxima, ASSUME'd) — a FORMAT
                                                       //    change → reject v9 blobs (v9 never shipped; local v9
                                                       //    blobs self-heal via the same full-reparse path).
                                                       // 9 (B0.2 postings): each RICH-family def record gains the
@@ -231,7 +249,164 @@ constexpr std::uint32_t kCacheVersion = 22;           // 22: RawDef gains `inter
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 96;           // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 114;          // bump on any grammar/.scm/extraction change
+                                                      // 114 = 2026-09-17 (reference-returning definitions,
+                                                      //    test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am
+                                                      //    and q8): a C++/ObjC function definition returning `T&` or
+                                                      //    `T&&` records its parameters (VarDecl + ParamType; it recorded
+                                                      //    none — the declarator walk stopped at reference_declarator),
+                                                      //    and an attributed declarator records its VarDecl. No record
+                                                      //    layout changes (kCacheVersion stays 24). The lane declared 112
+                                                      //    over #282's 104; integration/train-5 assigns 114 after #282's 113.
+                                                      // 113 = 2026-09-17 (smart-pointer members, PR #282,
+                                                      //    test/fieldnarrowcheck.sh arm p): a C++ member written
+                                                      //    `std::unique_ptr<T>` / `std::shared_ptr<T>` records T with
+                                                      //    viaArrow set (it recorded nothing), and a call ref records
+                                                      //    whether its member access was `->`. The ref record grows by
+                                                      //    one u8 (kCacheVersion 23 -> 24 in the same commit). The PR
+                                                      //    declared 104 over main's 103; integration/train-5 assigns
+                                                      //    113 over main's 112.
+                                                      // 112 = 2026-09-17 (type aliases, PR #280, test/fieldnarrowcheck.sh
+                                                      //    arm t): a C/C++/ObjC `typedef` / `using` alias of a named class
+                                                      //    emits a compose-shaped RawRef (composeRel "alias", empty
+                                                      //    fieldName) that the base walk follows to its target. Format
+                                                      //    unchanged (kCacheVersion stays 23); an older blob holds no such
+                                                      //    records and would dead-end the walk at the alias on a warm run:
+                                                      //    content change, bump required. The PR declared 105 over main's
+                                                      //    99; re-declared 111 over main's 110 when train 3 merged;
+                                                      //    integration/train-4 assigns 112 after irbuilder-local's 111.
+                                                      // 111 = 2026-09-17 (block-scope direct-initialized locals,
+                                                      //    test/narrowcheck.sh arms 52-60): a C++ function_declarator
+                                                      //    inside a function/lambda body that an argument list also
+                                                      //    produces (`IRBuilder<> Builder(Rem);`) mints no function
+                                                      //    symbol (ingest_names.h cppBlockScopeDirectInit), so the
+                                                      //    local's type binding is attributed to the enclosing function.
+                                                      //    Symbols and fact attribution change; no record layout changes
+                                                      //    (kCacheVersion unchanged). Claimed 111; integration/train-4 keeps it over main 110.
+                                                      // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, PR #235
+                                                      //    follow-up from CodeRabbit on #281, test/javamethodrefcheck.sh):
+                                                      //    a catch parameter, an enhanced-for variable and a try-with-
+                                                      //    resources resource now emit Java VarDecl shadow binds, so a
+                                                      //    `Widget` declared there vetoes `Widget::m` inside that scope.
+                                                      //    The extracted bind SET changes; no record changes shape.
+                                                      // 109 = 2026-09-17 (Ruby constant receivers narrow calls, PR #267,
+                                                      //    test/rubyrecvnarrowcheck.sh): classifyReceiver classifies a
+                                                      //    Ruby (constant)/(scope_resolution) receiver as NamedVar with
+                                                      //    the FINAL constant segment, so `Calc.add(…)` /
+                                                      //    `Outer::Engine.run(…)` reach resolve.h's Rule 2c instead of
+                                                      //    the §2a name spray. RECORD LAYOUT unchanged — recv/recvVar
+                                                      //    are fields RawRef already had (kCacheVersion stays 23) — but
+                                                      //    their VALUES change, so old Ruby extraction facts must be
+                                                      //    re-parsed. quality.h's kIngestParserVerMirror bumped in the
+                                                      //    SAME commit. The PR declared 96 -> 97 over main; assigned
+                                                      //    109 on integration/train-3 after #233's 108.
+                                                      // 108 = 2026-09-17 (GDScript, PR #233, test/gdscriptcheck.sh): a
+                                                      //    new grammar (third_party/deps/gdscript) and queries/gdscript/
+                                                      //    tags.scm, `.gd` a kLangTable row, and NodeField::Op appended:
+                                                      //    a tree with `.gd` files yields new files, symbols and edges.
+                                                      //    The PR declared 96 -> 98 over main; assigned 108 on
+                                                      //    integration/train-3 after #235's 107. kCacheVersion stays 23.
+                                                      // 107 = 2026-09-17 (Java Type::method, issue #74, PR #235): the PR's
+                                                      //    two steps below, declared 97 and 98 over main's 96, land as one;
+                                                      //    assigned 107 on integration/train-3 after #278's 106.
+                                                      //    RecvKind::JavaTypeCandidate is appended after train 2b's Lit*
+                                                      //    kinds (kRecvKindCount follows it); kCacheVersion stays 23.
+                                                      //    PR step 98, 2026-09-15 (Java Type::method review,
+                                                      //    test/javamethodrefcheck.sh): Java shadow binds carry
+                                                      //    lexical spans (block / lambda / method body) and inferred
+                                                      //    lambda parameters (`Widget ->`, `(Widget) ->`) are captured.
+                                                      //    Extracted bind SET and span values change, so a v97 blob
+                                                      //    must be rejected. kCacheVersion stays 22 — Binding already
+                                                      //    has spans; RecvKind and record shapes are unchanged.
+                                                      //    PR step 97, 2026-09-15 (Java Type::method candidates,
+                                                      //    test/javamethodrefcheck.sh): method_reference member names
+                                                      //    after `::` plus declaration-aware resolver gating. The query
+                                                      //    cannot distinguish a type identifier from a value identifier.
+                                                      //    #216 already spent 96 on internalLinkage, so this RE-BUMPS
+                                                      //    (never-reuse / collision). kCacheVersion stays 22 — RecvKind
+                                                      //    is appended, record shapes are unchanged.
+                                                      // 106 = 2026-09-17 (assignment types, PR #278, test/narrowcheck.sh arms
+                                                      //    44-51): a C++ ASSIGNMENT's Type RawBind is marked
+                                                      //    isFromAssignment, and buildGraph keeps its callee-read name
+                                                      //    only when a class of that name exists (`t = llvm::cast<T>( y )`
+                                                      //    recorded `cast` and tombstoned `T* t`). The bind record grows
+                                                      //    one u8 (kCacheVersion 22 -> 23 in the same commit). The PR
+                                                      //    declared 104 over main's 99; assigned 106 on integration/
+                                                      //    train-3 after small-fixes' 105.
+                                                      // 105 = 2026-09-17 (A4, found-items 2026-09-17,
+                                                      //    test/filerootcheck.sh arm 4): `.hxx` gained a kLangTable row
+                                                      //    (Lang::Cpp, same as `.hpp`/`.hh`) — the crawl previously
+                                                      //    skipped every `.hxx` file outright (unindexed), so a repo
+                                                      //    that spells its headers `.hxx` now yields NEW files,
+                                                      //    symbols and edges a pre-bump cache never saw: content
+                                                      //    change, bump required. The lane declared 100 over main's
+                                                      //    99; assigned 105 on integration/train-3 after #276's 104.
+                                                      // 104 = 2026-09-17 (template arguments in a receiver's written type,
+                                                      //    test/narrowcheck.sh arms 39-43): a C++ declaration's Type/ParamType
+                                                      //    record takes its type's LAST NAME through the grammar's fields.
+                                                      //    An unqualified template-id (`Vec<Decl *>& v`, `Vec<T> v;`)
+                                                      //    recorded nothing and now records `Vec`; `Outer<int>::Inner`
+                                                      //    recorded `Outer` (finalSegment cut at the first `<`) and now
+                                                      //    records `Inner`, written or constructed (`Outer<int>::Inner()`,
+                                                      //    and `Foo<T>::create()` records `create`, not `Foo`); an
+                                                      //    unqualified `Vec<T>()` stays unread (ingest_binds.h
+                                                      //    ctorNameNode's floor); `Vec<std::string>` no longer records a
+                                                      //    qualified text for its argument's `::`. No record changes shape
+                                                      //    (kCacheVersion stays 22). The PR declared 103 over main's 99;
+                                                      //    assigned 104 on integration/train-3 over train 1b's 103.
+                                                      //    quality.h's kIngestParserVerMirror moves in the SAME commit.
+                                                      // 103 = 2026-09-17 (TS/JS signed numeric literal receivers, train 1b
+                                                      //    #277): `(-1).toFixed()` is a Number receiver, not an unrelated
+                                                      //    `toFixed`. An extraction change on #244's literal receivers;
+                                                      //    no record changes shape.
+                                                      // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                      //    PR #256): a primary template's out-of-line member keys the bare
+                                                      //    template name (`void Box<T>::grow()` joins `Box::grow`); a
+                                                      //    specialization keeps its canonical template-id; a reference
+                                                      //    keeps the template-id it writes (3+ segments too); and a class
+                                                      //    specialization HEADER's base clause is captured as inherit
+                                                      //    refs (tags.scm @definition.specialization). Symbol scopes,
+                                                      //    RawRef::qualifier and the extracted refs change; no record
+                                                      //    layout changes (kCacheVersion stays 22). The PR declared 100;
+                                                      //    assigned 102 on integration/train-2b after #243's 101.
+                                                      // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                      //    §12, PR #243): a C++ member call with explicit template arguments
+                                                      //    (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) mints a
+                                                      //    call reference with its receiver, where it minted none;
+                                                      //    a `template` disambiguator no longer leaks into a qualified
+                                                      //    call's name (`template f`) or qualifier (`template Rebind`).
+                                                      //    The extracted SET and names change; no record changes shape
+                                                      //    (kCacheVersion stays 22). The PR declared 99; assigned 101 on
+                                                      //    integration/train-2b in merge order after #244's 100.
+                                                      //    quality.h's kIngestParserVerMirror moves in the SAME commit.
+                                                      // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                      //    gains LitString/LitArray/LitRegex/LitNumber/LitBoolean
+                                                      //    (appended u8, no RawRef field, kCacheVersion stays 22).
+                                                      //    A `"x".replace()` call no longer takes the bare-name ladder.
+                                                      //    The PR declared 97; assigned 100 on integration/train-2b in
+                                                      //    merge order over train 2's 99.
+                                                      // 99 = 2026-09-16 (std-typed member fields, test/fieldnarrowcheck.sh
+                                                      //    arm q): a C++ field's compose RawRef records the namespace its
+                                                      //    type was written in as `qualifier` (`std` for `std::string
+                                                      //    name_;`). Format unchanged; a 98 blob holds "" there and would
+                                                      //    let Rule 2b and the HAS-A edges read `string` as an in-repo
+                                                      //    class on a warm run: content change, bump required.
+                                                      // 98 = 2026-09-16 (std-qualified receivers, test/narrowcheck.sh
+                                                      //    arm 21): a C++ ASSIGNMENT from a constructor (`x = std::
+                                                      //    map<K, V>()`) records the constructor's qualified text in
+                                                      //    importedName, like a declaration's record. Format unchanged;
+                                                      //    a 97 blob holds "" there and would let Rule 2 narrow `x` to
+                                                      //    an in-repo `map` on a warm run: content change, bump required.
+                                                      // 97 = 2026-09-16 (parameter receivers, test/narrowcheck.sh arm
+                                                      //    17): a declaration's Type/ParamType RawBind records its
+                                                      //    written type WHOLE in importedName when the type is
+                                                      //    QUALIFIED (`std::map<K, V>`). Record FORMAT unchanged (the
+                                                      //    field was already serialised, empty on these kinds), but a
+                                                      //    96 blob holds "" there and would let Rule 2's lexical lookup
+                                                      //    narrow a qualified parameter type to an unrelated same-named
+                                                      //    in-repo class on a warm run: content change, bump required.
+                                                      //    (Binding::startByte, same lane, is re-derived from the cached
+                                                      //    RawBind::startByte and needed none.)
                                                       // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm
                                                       //    B2): every C/C++ def carries a new syntactic
                                                       //    `internalLinkage` bit — inside an anonymous namespace at any
@@ -1046,6 +1221,15 @@ constexpr std::uint32_t kParserVer    = 96;           // bump on any grammar/.sc
                                                       //    kMaxJsonConfigBytes crawl skip + kMaxJsonNestDepth hostile-data guard;
                                                       //    the crawl/parse SET changed; 27: +C (.c); 26: +JSON config keys)
 
+// THE QUALITY-CACHE MIRROR, as a compile error. quality.h keys every qsnap/qbody blob on kIngestCacheVersionMirror and
+// kIngestParserVerMirror, because quality.h cannot see these two constants from every translation unit that includes it.
+// Until now only test/qextractionkeycheck.sh kept the pair equal, by parsing both files. A kParserVer bump that missed
+// the mirror would re-serve quality snapshots computed under the old extraction, which is the poisoned-cache defect the
+// mirror exists for (quality.h's r27 note). This translation unit includes both files, so the equality is a static_assert
+// here. The gate still runs its source-text arm; this makes the same fact fail the build first.
+static_assert( quality::kIngestParserVerMirror == kParserVer && quality::kIngestCacheVersionMirror == kCacheVersion,
+               "quality.h's kIngestParserVerMirror / kIngestCacheVersionMirror must equal kParserVer / kCacheVersion — bump both in one commit" );
+
 // A1 (team-index artifact): architecture/ABI tag for the cache-blob header. The blob is NATIVE-ENDIAN —
 // ByteW/ByteR memcpy raw ints (see ByteW below), no portable varint/LE re-encoding — so it is only safely
 // consumable on a machine with the same integer byte order AND pointer width that WROTE it. This one byte
@@ -1170,7 +1354,7 @@ inline std::uint64_t blobChecksum( std::string_view s ) noexcept
 //   A torn write is caught three ways, in this order: (a) the file is shorter than header+trailer;
 // (b) the EXACT-FIT invariant `fileSize == tableOffset + entryCount*32 + 24` fails, which is what
 // catches a truncation that removes whole records or lands mid-table; (c) `tableSum` mismatches. Any
-// of the three rejects the WHOLE blob with a DEGRADED_PATH_ALERT and self-heals to a full reparse —
+// of the three rejects the WHOLE blob with a DISCLOSE and self-heals to a full reparse —
 // never a partial load. A record that is individually torn while the table survives is caught by its
 // own `recSum`: that one file is dropped (disclosed) and reparsed, and the rest of the blob stands.
 // saveCache still publishes by tmp-then-rename with the write byte-count and fclose both checked, so
@@ -1195,6 +1379,12 @@ struct CacheEntry
 };
 static_assert( sizeof( CacheEntry ) == kCacheEntryBytes, "CacheEntry must be the exact 32-byte on-disk row (no padding)" );
 static_assert( alignof( CacheEntry ) == 8, "CacheEntry must stay 8-byte aligned so the table is a raw array copy" );
+// The size pin above does NOT prove "no padding", although its message says so. Narrow recSum from u32 to u16 and the
+// struct still rounds up to 32 bytes, with two indeterminate bytes in every row of a committed, checksummed blob: the
+// determinism contract broken, and a portable cache that differs by build. has_unique_object_representations is the
+// compiler's own answer to "is every byte of this type part of its value", so it refuses padding (and any float).
+static_assert( std::is_trivially_copyable_v<CacheEntry> && std::has_unique_object_representations_v<CacheEntry>,
+               "CacheEntry is copied to disk as raw bytes — it must carry no padding bytes and no float" );
 
 // The per-record digest stored in the table: the low half of the same 8-lane FNV the trailer uses.
 // 32 bits is a detection budget, not a security one — the whole-blob guards above sit in front of it.
@@ -1221,7 +1411,7 @@ struct ReadFd
     // (--quality-delta's duplication kind says so). One owner, one transfer direction, no reopen.
     bool openOnce( const std::string& path ) noexcept
     {
-        VERIFY( fd < 0 );
+        ASSUME( fd < 0 );
         fd = os::open( path.c_str(), O_RDONLY | O_CLOEXEC );
         return fd >= 0;
     }
@@ -1360,19 +1550,19 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
             // shipped binary reads this. Same for the two guards below, split from one fused test because
             // "your binary's extraction changed" and "this artifact came from another architecture" are
             // different things to be told about a committed artifact.
-            DEGRADED_PATH_ALERT( "ingest: cache blob is a different format version — rejected and rebuilt (full reparse)" );
+            DISCLOSE( "ingest: cache blob is a different format version — rejected and rebuilt (full reparse)" );
             frame.reason = CacheReject::FormatVersion;
             return frame;
         }
         if( parserVer != parserVerFor( captureValueUses ) )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache blob parserVer mismatch (older binary, or the other lean/rich family) — rejected and rebuilt (full reparse)" );
+            DISCLOSE( "ingest: cache blob parserVer mismatch (older binary, or the other lean/rich family) — rejected and rebuilt (full reparse)" );
             frame.reason = CacheReject::ParserVersion;
             return frame;
         }
         if( arch != kArtifactArch )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache blob arch mismatch (foreign endianness/pointer width) — rejected and rebuilt (full reparse)" );
+            DISCLOSE( "ingest: cache blob arch mismatch (foreign endianness/pointer width) — rejected and rebuilt (full reparse)" );
             frame.reason = CacheReject::ArtifactArch;
             return frame;
         }
@@ -1394,11 +1584,16 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     std::memcpy( &entryCount,  trailer +  8, 4 );
     std::memcpy( &tableSum,    trailer + 16, 8 );
 
+    // Every term below is written so it cannot wrap: the file is at least a header plus a trailer (checked above) and the
+    // entry clause bounds the table by the bytes between them, so the right-hand side of the exact-fit compare is never
+    // negative. The earlier `tableOffset + entries + trailer != fileBytes` wrapped for a trailer naming an offset near
+    // 2^64 — still refused, but through a sum the G1 sanitizer build (-fsanitize=integer) aborts on
+    // (test/cachefuzzcheck.sh mutation table_offset_near_u64_max; found by test/fuzz/readers, reader ingestframe).
     if( entryCount != headerEntryCount || tableOffset < kCacheHeaderBytes
         || entryCount > ( fileBytes - kCacheHeaderBytes - kCacheTrailerBytes ) / kCacheEntryBytes
-        || tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes != fileBytes )
+        || tableOffset != fileBytes - kCacheTrailerBytes - std::uint64_t( entryCount ) * kCacheEntryBytes )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache blob trailer does not describe the file (torn write) — cache treated as corrupt" );
+        DISCLOSE( "ingest: cache blob trailer does not describe the file (torn write) — cache treated as corrupt" );
         frame.reason = CacheReject::CorruptFrame;
         return frame;
     }
@@ -1415,7 +1610,7 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     }
     if( blobChecksum( std::string_view( hdrTable.data(), hdrTable.size() ) ) != tableSum )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache offset-table checksum mismatch — cache treated as corrupt (full reparse)" );
+        DISCLOSE( "ingest: cache offset-table checksum mismatch — cache treated as corrupt (full reparse)" );
         frame.reason = CacheReject::Checksum;
         return frame;
     }
@@ -1433,10 +1628,10 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     {
         const CacheEntry& e = frame.entries[i];
         if( e.recOffset < kCacheHeaderBytes || e.recLength == 0
-            || e.recOffset + e.recLength > tableOffset
+            || e.recLength > tableOffset || e.recOffset > tableOffset - e.recLength   // recOffset + recLength > tableOffset, without the wrap
             || ( i != 0 && frame.entries[ i - 1 ].pathHash > e.pathHash ) )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache offset-table entry out of bounds or out of order — cache treated as corrupt" );
+            DISCLOSE( "ingest: cache offset-table entry out of bounds or out of order — cache treated as corrupt" );
             frame.entries.clear();
             frame.reason = CacheReject::CorruptFrame;
             return frame;
@@ -1521,6 +1716,42 @@ struct ByteR
     std::string      str () { const std::string_view s = view(); return ok ? std::string( s ) : std::string{}; }
     bool rawInto( void* dst, std::size_t n )   // B0.2: bulk array read — overflow-safe bound, memcpy into caller storage
     { if( !ok || std::size_t( end - p ) < n ) { ok = false; return false; } if( n ) { std::memcpy( dst, p, n ); p += n; } return true; }
+    // A decoded value that must lie below `count`. The blob is external input — a committed team artifact, a copied
+    // cache directory, a file whose digests were rebuilt around an edit — so a value at or past its bound is
+    // corruption, never a value this binary forgot. It folds into `ok` exactly like a short read, so the record
+    // takes readFileRecord's one refusal path: that file reparses and the rest of the blob stands. One compare on the
+    // warm path; never an assumption, because nothing upstream makes it true.
+    bool fitsBelow( std::uint64_t v, std::uint64_t count )
+    {
+        if( !VALIDATE( v < count ) )
+        {
+            DISCLOSE( "ingest: cache record carries a field past its range (an enum byte past its last enumerator, or a 16-bit field wider than 16 bits) — cache treated as corrupt" );
+            ok = false;
+            return false;
+        }
+        return true;
+    }
+    // An ENUM byte. Accepting one past the count was never harmless downstream: symTag/refRoleTag serve such a value
+    // as "other"/"read", and clones.h shifts a 32-bit language mask by the Lang (UB at 32 and up). model.h proves
+    // each k*Count exact at compile time.
+    template<class E>
+    E enumU8( std::size_t enumCount )
+    {
+        const std::uint8_t v = u8();
+        return fitsBelow( v, enumCount ) ? E( v ) : E{};
+    }
+    // A 16-bit field the writer stores in a u32 slot (writeDef's ppAlt/humps/deepLoc/ev/params, writeRef's argCount).
+    // The writer only ever holds a uint16_t there; a plain `std::uint16_t( u32() )` kept the low bits of a wider value
+    // and believed them (test/hazardpatterncheck.sh rule D, test/cachefuzzcheck.sh Part 3).
+    std::uint16_t u16Of32()
+    {
+        std::uint32_t v = u32();
+        if( !fitsBelow( v, 0x10000u ) )
+        {
+            v = 0;
+        }
+        return std::uint16_t( v );
+    }
 };
 
 // withLex (B0.2 / v10 H3): the RICH family (captureValueUses=true) persists each def's doc/body subtoken
@@ -1540,7 +1771,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
     for( const std::uint8_t tagCount : d.evWhy ) { w.u8( tagCount ); }   // 8×u8, fixed order (model.h kEvWhyTagTable)
     if( withLex )
     {
-        VERIFY( d.lex.tokenHashes.size() == d.lex.tokenTfs.size() );
+        ASSUME( d.lex.tokenHashes.size() == d.lex.tokenTfs.size() );
         w.u32( d.lex.dlWeighted );
         w.u32( std::uint32_t( d.lex.tokenHashes.size() ) );
         std::uint32_t maxTf = 0;
@@ -1559,7 +1790,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         // specialized fill loops per width — no per-byte push_back on this multi-million-pair seam.
         const std::size_t count = d.lex.tokenTfs.size();
         char*             p     = w.extend( count * ( idxWidth + tfWidth ) );
-        VERIFY( count == 0 || rowDictIndex != nullptr );   // null only with an empty row: verifyCacheRecordMinimaTripwire's probe
+        ASSUME( count == 0 || rowDictIndex != nullptr );   // null only with an empty row: verifyCacheRecordMinimaTripwire's probe
         if( idxWidth == 1 )
         {
             for( std::size_t k = 0; k < count; ++k )
@@ -1621,7 +1852,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         }
     }
 }
-inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); }
+inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); }
 
 // loadCache's countFits() bounds a corrupt on-disk record COUNT against remaining bytes /
 // minRecordBytes BEFORE reserve() — the guard that keeps a hostile blob's 0xFFFFFFFF count from reaching
@@ -1635,13 +1866,14 @@ inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8
 // added one u8 in the run — 12 -> 13 u8, so 56 + 13 + 8 = 77; the extent-honesty `recovered` bit then added
 // one more u8 in the run — 13 -> 14 u8, so 56 + 14 + 8 = 78; the internal-linkage bit then added one more u8 in
 // the run — 14 -> 15 u8, so 56 + 15 + 8 = 79); the RICH (withLex) extra is
-// dlWeighted u32 + tokenCount u32 + tfWidth u8 = 9 bytes. A ref record is 3 u32 + 7 u8 + 5 empty
-// str(len u32) fields = 3*4 + 7*1 + 5*4 = 39 bytes. verifyCacheRecordMinimaTripwire() below derives these
+// dlWeighted u32 + tokenCount u32 + tfWidth u8 = 9 bytes. A ref record is 3 u32 + 8 u8 + 5 empty
+// str(len u32) fields = 3*4 + 8*1 + 5*4 = 40 bytes (39 until the `viaArrow` u8, kCacheVersion 23).
+// verifyCacheRecordMinimaTripwire() below derives these
 // same numbers from the REAL writer functions at runtime so the next field added to writeDef/writeRef
 // can't silently stale them.
 inline constexpr std::size_t kMinDefRecordBytesLean      = 79;   // 14×u32 + 15×u8 + 2×str(len u32, empty)
 inline constexpr std::size_t kMinDefRecordBytesRichExtra =  9;   // v10 rich withLex extra: dlWeighted u32 + tokenCount u32 + tfWidth u8
-inline constexpr std::size_t kMinRefRecordBytes          = 39;   // 3×u32 + 7×u8 + 5×str(len u32, empty)
+inline constexpr std::size_t kMinRefRecordBytes          = 40;   // 3×u32 + 8×u8 + 5×str(len u32, empty)
 
 inline std::size_t minDefRecordBytes( bool captureValueUses ) noexcept
 {
@@ -1649,27 +1881,27 @@ inline std::size_t minDefRecordBytes( bool captureValueUses ) noexcept
 }
 
 // runtime tripwire: serialize a DEFAULT-CONSTRUCTED (all-empty) RawDef/RawRef through the real
-// writer functions and VERIFY the byte count matches the hand-pinned constants above. This is the runtime
+// writer functions and ASSUME the byte count matches the hand-pinned constants above. This is the runtime
 // equivalent of the house `static_assert( sizeof(X) == N )` layout tripwire — ByteW's size is only known at
-// runtime (strings, not a POD struct), so it can't be a compile-time static_assert. VERIFY is a no-op
+// runtime (strings, not a POD struct), so it can't be a compile-time static_assert. ASSUME is a no-op
 // optimizer hint in release (never costs a shipped run anything); in any debug/ASan build or CI it fires the
 // moment a field is added to writeDef/writeRef without updating the matching constant above.
 inline void verifyCacheRecordMinimaTripwire() noexcept
 {
     ByteW probe;
     writeDef( probe, RawDef{}, false, 0, nullptr );
-    VERIFY( probe.b.size() == kMinDefRecordBytesLean );
+    ASSUME( probe.b.size() == kMinDefRecordBytesLean );
     probe.b.clear();
     writeDef( probe, RawDef{}, true, 0, nullptr );
-    VERIFY( probe.b.size() == kMinDefRecordBytesLean + kMinDefRecordBytesRichExtra );
+    ASSUME( probe.b.size() == kMinDefRecordBytesLean + kMinDefRecordBytesRichExtra );
     probe.b.clear();
     writeRef( probe, RawRef{} );
-    VERIFY( probe.b.size() == kMinRefRecordBytes );
+    ASSUME( probe.b.size() == kMinRefRecordBytes );
 }
 
 inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>& fileDict )
 {
-    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = std::uint16_t( r.u32() ); d.humps = std::uint16_t( r.u32() ); d.deepLoc = std::uint16_t( r.u32() ); d.ev = std::uint16_t( r.u32() ); d.params = std::uint16_t( r.u32() ); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.kind = SymKind( r.u8() ); d.lang = Lang( r.u8() ); d.name = r.str(); d.scope = r.str();
+    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = r.u16Of32(); d.humps = r.u16Of32(); d.deepLoc = r.u16Of32(); d.ev = r.u16Of32(); d.params = r.u16Of32(); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
     for( std::uint8_t& tagCount : d.evWhy ) { tagCount = r.u8(); }   // mirrors writeDef's fixed 8×u8 order
     if( withLex && r.ok )
     {
@@ -1749,17 +1981,17 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = Lang( r.u8() ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = RecvKind( r.u8() ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = RefRole( r.u8() ); x.line = r.u32(); x.argCount = std::uint16_t( r.u32() ); x.argCountKnown = r.u8() != 0; return x; }
-inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
-inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = Lang( r.u8() ); b.kind = LocalBindKind( r.u8() ); b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; return x; }
+inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u8( b.isFromAssignment ? 1 : 0 ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
+inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.isFromAssignment = r.u8() != 0; b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }
-inline BindingAlias readFfi( ByteR& r ) { BindingAlias a; a.kind = BindKind( r.u8() ); a.lowConf = r.u8() != 0; a.aliasName = r.str(); a.targetName = r.str(); a.targetScope = r.str(); return a; }
+inline BindingAlias readFfi( ByteR& r ) { BindingAlias a; a.kind = r.enumU8<BindKind>( kBindKindCount ); a.lowConf = r.u8() != 0; a.aliasName = r.str(); a.targetName = r.str(); a.targetScope = r.str(); return a; }
 // B6.3: RouteDef needs no startByte (its handler is resolved by NAME in buildGraph); RawRouteUse mirrors
 // RawBind (startByte for the enclosing-def byte-span attribution done in the ingest() model-build below).
 inline void   writeRouteDef( ByteW& w, const RouteDef& d ) { w.u32( d.line ); w.u8( std::uint8_t( d.method ) ); w.str( d.path ); w.str( d.handlerName ); }
-inline RouteDef readRouteDef( ByteR& r ) { RouteDef d; d.line = r.u32(); d.method = HttpMethod( r.u8() ); d.path = r.str(); d.handlerName = r.str(); return d; }
+inline RouteDef readRouteDef( ByteR& r ) { RouteDef d; d.line = r.u32(); d.method = r.enumU8<HttpMethod>( kHttpMethodCount ); d.path = r.str(); d.handlerName = r.str(); return d; }
 inline void   writeRouteUse( ByteW& w, const RawRouteUse& u ) { w.u32( u.startByte ); w.u32( u.line ); w.u8( std::uint8_t( u.method ) ); w.str( u.path ); }
-inline RawRouteUse readRouteUse( ByteR& r ) { RawRouteUse u; u.startByte = r.u32(); u.line = r.u32(); u.method = HttpMethod( r.u8() ); u.path = r.str(); return u; }
+inline RawRouteUse readRouteUse( ByteR& r ) { RawRouteUse u; u.startByte = r.u32(); u.line = r.u32(); u.method = r.enumU8<HttpMethod>( kHttpMethodCount ); u.path = r.str(); return u; }
 
 // T5: re-absolutize a cache-stored ROOT-RELATIVE key against the CURRENT invocation's rootDir, producing
 // the exact spelling collectSources() would crawl it as (`<rootDir>/<rel>`, trailing slash on rootDir
@@ -1801,7 +2033,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
     // arrays themselves are bounded per record inside readDef.
     const std::size_t     kMinDefRecordBytes      = minDefRecordBytes( captureValueUses );   // F8: named + tripwire-pinned above
     constexpr std::size_t kMinIncRecordBytes      = 12;   // 4×u8 (isAngle,isLazy,isSymbolic,isValueUse) + 1×u32 (byte) + 1×str(len u32, empty)
-    constexpr std::size_t kMinBindRecordBytes     = 26;   // 3×u32 + 2×u8 + 3×str(len u32, empty)
+    constexpr std::size_t kMinBindRecordBytes     = 27;   // 3×u32 + 3×u8 (lang,kind,isFromAssignment) + 3×str(len u32, empty)
     constexpr std::size_t kMinFfiRecordBytes      = 14;   // 2×u8 (kind,lowConf) + 3×str(len u32, empty)
     constexpr std::size_t kMinRouteDefRecordBytes = 13;   // B6.3: 1×u32 (line) + 1×u8 (method) + 2×str(len u32, empty)
     constexpr std::size_t kMinRouteUseRecordBytes = 13;   // B6.3: 2×u32 (startByte,line) + 1×u8 (method) + 1×str(len u32, empty)
@@ -1812,7 +2044,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
         {
             return true;
         }
-        DEGRADED_PATH_ALERT( "ingest: cache record count exceeds remaining bytes — cache treated as corrupt" );
+        DISCLOSE( "ingest: cache record count exceeds remaining bytes — cache treated as corrupt" );
         r.ok = false;
         return false;
     };
@@ -1849,7 +2081,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
         {
             if( fileDict[k] <= fileDict[ k - 1 ] )
             {
-                DEGRADED_PATH_ALERT( "ingest: cache file dictionary not strictly ascending — cache treated as corrupt" );
+                DISCLOSE( "ingest: cache file dictionary not strictly ascending — cache treated as corrupt" );
                 r.ok = false;
                 return false;
             }
@@ -2059,7 +2291,7 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
             fileBuf.resize( std::size_t( spanEnd - spanStart ) );
             if( !preadExact( frame.blob.fd, fileBuf.data(), fileBuf.size(), spanStart ) )
             {
-                DEGRADED_PATH_ALERT( "ingest: cache blob read failed mid-load — the unread records are reparsed" );
+                DISCLOSE( "ingest: cache blob read failed mid-load — the unread records are reparsed" );
                 break;
             }
 
@@ -2071,7 +2303,7 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
                 {
                     // A record torn on its own while the table survived: drop THIS file (it reparses) and
                     // keep the rest of the blob. The table is what must be trusted whole, not each record.
-                    DEGRADED_PATH_ALERT( "ingest: cache record checksum mismatch — that file is reparsed, the rest of the blob stands" );
+                    DISCLOSE( "ingest: cache record checksum mismatch — that file is reparsed, the rest of the blob stands" );
                     continue;
                 }
                 ByteR       r{ rec, rec + e.recLength };
@@ -2085,7 +2317,7 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
                 {
                     // The pathHash matched but the record is for a DIFFERENT file — a 64-bit collision.
                     // Serving it would be a wrong answer, so the file reparses instead.
-                    DEGRADED_PATH_ALERT( "ingest: cache path-hash collision — the colliding file is reparsed" );
+                    DISCLOSE( "ingest: cache path-hash collision — the colliding file is reparsed" );
                     continue;
                 }
                 // T5: the on-disk key is ROOT-RELATIVE; re-absolutize against the CURRENT rootDir so the
@@ -2203,7 +2435,7 @@ inline std::vector<CacheWriteRow> buildCacheWritePlan( const std::vector<std::ui
                                                        const std::vector<CacheEntry>&    prevEntries,
                                                        std::vector<CacheEntry>&          carryOut )
 {
-    VERIFY_NO_ALIAS( prevEntries, carryOut );
+    ASSUME_NO_ALIAS( prevEntries, carryOut );
     carryOut.clear();
     carryOut.reserve( prevEntries.size() );
     {
@@ -2253,7 +2485,7 @@ inline bool appendCarryRecord( ByteW& w, int fd, const CacheEntry& src, std::str
     if( !preadExact( fd, scratch.data(), scratch.size(), src.recOffset )
         || recordSum32( std::string_view( scratch.data(), scratch.size() ) ) != src.recSum )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache carry-over record failed its checksum — dropped (that file reparses)" );
+        DISCLOSE( "ingest: cache carry-over record failed its checksum — dropped (that file reparses)" );
         return false;
     }
     w.raw( scratch.data(), scratch.size() );
@@ -2289,7 +2521,7 @@ inline void finishCacheBlob( ByteW& w, const std::vector<CacheEntry>& table )
     w.u32( entryCount );
     w.u32( 0 );   // reserved
     w.u64( blobChecksum( std::string_view( hdrTable.data(), hdrTable.size() ) ) );
-    VERIFY( w.b.size() == tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes );
+    ASSUME( w.b.size() == tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes );
 }
 
 // write the cache atomically (path.tmp → rename); groups the merged raw facts back by file.
@@ -2312,7 +2544,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // directory at `path` costs no wasted pass and temp write before rename(tmp,dir) fails EISDIR.
     if( shapeOfPath( path ) == PathShape::Other )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache path is not a regular file (directory/device/fifo) — cache not written" );
+        DISCLOSE( "ingest: cache path is not a regular file (directory/device/fifo) — cache not written" );
         return;
     }
 
@@ -2355,7 +2587,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     w.u8( kArtifactArch );
     w.u64( (std::uint64_t)blobWriteNs );
     w.u32( 0 );   // entryCount — patched in place below, once the carry-over verification has settled it
-    VERIFY( w.b.size() == kCacheHeaderBytes );
+    ASSUME( w.b.size() == kCacheHeaderBytes );
     {
         PROFILE_SCOPE_DESCRIBE( "ingest/saveCache: serialize records" );
         std::vector<std::uint64_t> fileDict;                                   // per-file subtoken dictionary, reused across files
@@ -2535,28 +2767,42 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // cache should never be clobbered without a peep). Mirrors mcpedit::atomicWrite's discipline
     // (src/mcp.h): check the write byte-count AND fclose's return, and on any failure unlink the temp
     // and leave the prior on-disk cache (if any) untouched.
-    const std::string tmp = path + "." + std::to_string( os::getpid() ) + ".tmp";
-    std::FILE* fp = std::fopen( tmp.c_str(), "wb" );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the cache blob, refusing an existing entry at that name. The name keeps its
+    // `.tmp` tail (a *.tmp residue glob still
+    // matches) and 0666 preserves the fopen("wb") default mode. The RAII holder owns the temp NAME and removes
+    // it on every early return below; fdopen adopts the descriptor so fwrite/fclose keep their bookkeeping.
+    rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0666 );
+    const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+    std::FILE*                  fp    = rawFd >= 0 ? os::fdopen( rawFd, "wb" ) : nullptr;
     if( !fp )
     {
-        DEGRADED_PATH_ALERT( "ingest: saveCache could not open temp file for write — cache left unchanged" );
+        const int openErr = errno;
+        if( rawFd >= 0 )
+        {
+            os::close( rawFd );   // fdopen did not adopt the descriptor; the holder still removes the temp name
+        }
+        DISCLOSE( "ingest: saveCache could not open temp file for write — cache left unchanged" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot write ({}) — every run parses from source until this is fixed\n",
-                      path.c_str(), std::strerror( errno )  );   // 2026-09-06: Release kept no signal for this
+                      path.c_str(), std::strerror( openErr )  );   // 2026-09-06: Release kept no signal for this
         return;
     }
-    const std::size_t wrote = std::fwrite( w.b.data(), 1, w.b.size(), fp );
-    const bool wErr = wrote != w.b.size() || std::fclose( fp ) != 0;
+    // The stream owns the descriptor since releaseFd(), so it closes on every path: the write and the close
+    // are evaluated separately, never short-circuited into one expression.
+    const std::size_t wrote  = std::fwrite( w.b.data(), 1, w.b.size(), fp );
+    const bool        closed = std::fclose( fp ) == 0;
+    const bool        wErr   = wrote != w.b.size() || !closed;
     if( wErr )
     {
-        os::remove( tmp.c_str() );   // never rename a short/torn write over a good cache
-        DEGRADED_PATH_ALERT( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
+        // never rename a short/torn write over a good cache — the holder removes the temp on return
+        DISCLOSE( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
-    if( os::rename( tmp.c_str(), path.c_str() ) != 0 )
+    if( !temp.commit( path ) )
     {
-        os::remove( tmp.c_str() );   // clean up on failure
-        DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
+        // the holder removes the temp on return
+        DISCLOSE( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot replace ({}) — old cache kept, this run was parsed from source\n",
                       path.c_str(), std::strerror( errno ) );
         return;

@@ -127,7 +127,7 @@ The non-negotiables from `CLAUDE.md`:
 - **Determinism.** Output may not depend on thread timing, hash order or pointer values.
 - **Honesty.** A refused site goes through the existing `vetoExternal` path: `external=` in the header,
   one `C external` census row, no edge. A zero means none found, not none exists.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any degrade path.
+- **`DISCLOSE`, never `ASSUME( false )`**, on any degrade path.
 - **No `std::map` / `std::unordered_map`.** Use sorted arrays and `std::binary_search` with
   `rw::sortutil::svLess`, as `kStdInlineNamespaceNames` does.
 - **Style:** Allman braces, braces on every body, spaces inside parens (`CONTRIBUTING.md` §3).
@@ -189,7 +189,8 @@ it splits; the `>`-family operator names have their own path (`operatorNameStart
 call `fs::exists( p )` reaches resolution with qualifier `fs`. Resolving aliases is not this task. State
 it as a floor in the gate and the PR rather than half-solving it.
 
-**Version bumps collide.** Open PR #135 also bumps `kParserVer` and `kCacheVersion`. Two lanes can land
+**Version bumps collide.** Other open work bumps `kParserVer` too: #235 (Java `Type::method`), #233
+(GDScript), the #163 literal-receiver fix, and the COBOL language work tracked on #70. Two lanes can land
 on the same number without a textual conflict. Take the next free value when you land, re-pin
 `test/qschemetrip.hash`, and re-run `test/qextractionkeycheck.sh` on the merged tree.
 

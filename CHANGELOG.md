@@ -70,6 +70,1985 @@ A 17, A′ 8, B 41, F 275 — and on #44's head C and D red with 18 and 21 viola
 itself a failure. Every arm fires on a planted fixture and stays silent on a clean one on every run. (E), POSIX/Windows
 declaration parity, is present and turns itself on when the Windows branch declares its first function.
 `test/namedfileinputcheck.sh`'s mechanism arm reads the `os::open` spelling. CONTRIBUTING §3 states the rule.
+### Changed — the self-check macro vocabulary is renamed to the conventional spellings, and degrade paths gain a sink form
+
+`VERIFY` / `VERIFY_TEXT` → `ASSUME`; `VERIFY_DEBUG_ONLY(_TEXT)` → `DASSERT`; `VERIFY_NOT_REACHED(_TEXT)` →
+`UNREACHABLE`; `VERIFY_SAME_THREAD(_TEXT)` → `ASSUME_SAME_THREAD` (kept — multithreaded checking stays important);
+`VERIFY_NO_ALIAS` / `3` / `_BUF` → `ASSUME_NO_ALIAS` / `3` / `_BUF`; `DYNMAP_VERIFY` → `DYNMAP_ASSUME`;
+`TODO_IMPLEMENT` is dropped (no use sites remained). `VERIFY` read as "evaluated in release" in SerenityOS, Unreal
+and MFC — ours is the opposite, and the wrong reading once let external input reach an assumption
+(`gitmine.h`'s baseline-sha check, now `VALIDATE`d instead). Two words are new: `EXPECTS`/`ENSURES` (an `ASSUME` at
+function entry/return that blames the caller/callee by name) and `VALIDATE` (external input — always evaluated,
+never assumed, used only as a condition). No compatibility aliases: a gate refuses every old name outside dated
+history.
+
+`DEGRADED_PATH_ALERT` → `DISCLOSE`, in the same pass, with the same one-argument, debug-only-trace behaviour for
+every existing site (839 renames, 179 files; `test/*check.sh` byte-identical PASS/FAIL sets, and `ripwire . --no-cache`
+byte-identical between an origin/main binary and this one, on three trees). `DISCLOSE` also gains two new forms:
+`DISCLOSE( sink, why[, "msg"] )` calls `sink.disclose( why )` in *every* build — the sink's contract is a C++20
+concept (`Diagnostics::DisclosureSink`) checked at compile time, and `why` is a scoped enum the sink owns (one byte,
+no runtime string) — and `DISCLOSE( Diagnostics::answerUnchanged, "reason" )` for a degrade that changes cost, never
+content. No existing site is converted to a sink in this pass; that is the next lane's job, tracked by a ratchet
+that counts only sink-less `DISCLOSE( msg )` sites in `src/` (217 at landing) and may only go down.
+
+Release-build differences: on GCC ≥ 13, `ASSUME` compiles to `[[assume]]` instead of the old
+`if( !e ) __builtin_unreachable()`, so a non-pure predicate (e.g. `std::is_sorted(...)`) no longer evaluates in a
+GCC release build — Clang was already this way via `__builtin_assume`. `DASSERT` now type-checks its expression
+without evaluating it, in both debug and release. Assert banners name the failed word and who is to blame
+(caller/callee/invariant) instead of one generic message. `UNREACHABLE()`'s release form is `__builtin_unreachable()`
+directly (not `std::unreachable()`, which would pull `<utility>` into a header that must stay library-free for
+`noaliascheck`).
+
+New gate: `test/selfcheckcheck.sh` (registered in `test/regression.sh`, `.github/pargates-shard-weights.json`; not
+exempt in `test/binoverridecheck.sh`). It is zero-ceremony for a new `ASSUME` on a genuine invariant — it bites only
+on a side effect inside a check, an unseen non-accessor callee in a promise, `ASSUME( false )`, external input
+handed to anything but `VALIDATE`, a new sink-less `DISCLOSE`, or an `answerUnchanged` without a literal reason.
+
+### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
+
+A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles
+the alert out. `test/churnjoincheck.sh` (G2), `test/preproccondcheck.sh` (the 600-deep guard stack) and
+`test/w3fixlegendcheck.sh` (arm 6) found out by running `--rank-by=churn --since=notadate` and looking for an alert.
+Since `--since` became a refusal (exit 1, before any degrade path runs), that run prints no alert on any build, so
+all three skipped their alert arm on the plain build too: one SKIP each, zero failures, on the leg CI keeps
+precisely to prove degrade paths. The build type `--version` names decides now, as in `kotlincheck` and
+`estchargecheck`: Release, RelWithDebInfo and MinSizeRel skip, every other flavour asserts. G2 also asserts the join
+alert itself, on the line after the NFD disclosure, where any `[math degraded]` line used to do. Arm 6's subject,
+the wording of the `--since` alert, no longer exists, so it pins the refusal that replaced it: exit 1, no document,
+one stderr line, and no alert, next to a positive control proving the binary prints alerts at all.
+
+The suite could not see this, because an arm-level skip inside a passing gate counts as a pass. `test/pargates.py`
+now reads the binary's build type once and fails any gate whose skip row blames NDEBUG or compiled-out alerts on a
+build type that does not define NDEBUG. A skip for any other reason is untouched, and a binary that names no build
+type disarms the check with a line in the summary. Gate: `test/skipclassifycheck.sh` arm (I), red on the old harness,
+and the new harness fails all three unfixed gates ([#261](https://github.com/redhat-et/ripwire/pull/261)).
+
+### Fixed — the churn join gate read "2 weeks ago" twice, and checked the default window against the wall clock
+
+`test/churnjoincheck.sh` compared ripwire's churn with git's own count, but the two did not always ask about the same
+window. The live audit passed `--since="2 weeks ago"` to ripwire and `"2 weeks ago"` to git, and each evaluated it when
+it ran, so a commit on the edge fell inside one window and outside the other: #265 went red on `src/slice.h` churn 15 vs
+14. Every default-window oracle asked git for wall-clock `"12 months ago"`, while ripwire anchors that window on HEAD,
+so the fixtures' 2026-06 commits would have failed the gate from 2027-06-01. The offset arm beside them still selected a
+retired `p="./…"` spelling and passed on zero rows. The gate now reads the clock once and hands one ISO-8601 instant to
+both sides, computes the HEAD-anchored start for the default window, and re-derives all 163 offset rows. A new arm pins
+both window edges to the second, with controls that stage the double reading through git's `GIT_TEST_DATE_NOW`. Measured
+on the old gate with that staging: 4 FAIL rows for #265's straddle (`src/slice.h` 12 vs 11) and 12 FAIL rows with git's
+clock at 2027-07-01; the new gate is 78 PASS under both stagings and without them
+([#271](https://github.com/redhat-et/ripwire/pull/271)).
+
+### Changed — the compiler checks the tables, switches, masks and layouts this tree's defects came from
+
+Each check below is written against a defect this repository shipped or nearly shipped, and each was shown failing on a
+deliberate break before it landed. None of them changes output. They are `static_assert`s, one template constraint, one
+link-time stamp and two warning flags. Output was compared with the base binary on every fixture corpus, stdout and exit
+code, and the only differences are the extension fix below.
+
+- **Language registration.** Appending a `Lang` meant updating five tables in four files. 02f798e3 (Dart), 9418e35e (five
+  unanalysed languages) and PR #233's `.gd` row each stayed one language short. `src/main.cpp` now asserts that every
+  code language is analysed or disclosed as unanalysed by `--nonlocal-state`, and that it is named by the lint vocabulary,
+  the lint catalog and `langOfPath`. `src/ingest_crawl.h` asserts that `langOfPath`'s extensions and the crawl's are the
+  same. Each check returns the first INDEX that is wrong, so a zero-filled row cannot pass. `isCodeLang` (`src/model.h`)
+  is the one declared exemption, and it has no `default:`.
+- **`-Werror=switch -Werror=implicit-fallthrough`** on ripwire's own C++ targets, for every compiler. GCC ran no
+  `-Wswitch` at all before this, because it enables it only under `-Wall`. The warning count was measured at 0 on
+  AppleClang 21 and Homebrew clang 22, debug and `-DNDEBUG`, for both binaries and the four test harnesses. A switch that
+  returns one answer per enumerator carries no `default:` any more. Eleven did, including `dependencyCapable` and
+  `dependencyDialect`, where Dart was the one language never decided.
+- **Cache and layout facts.** `quality.h`'s mirror of `kParserVer` and `kCacheVersion` is asserted equal to the real
+  constants; only `test/qextractionkeycheck.sh` held that before. `CacheEntry` must have unique object representations,
+  because `sizeof == 32` did not prove "no padding". `qsnapPut` is constrained the same way, so a padded struct or a float
+  cannot reach a byte-stable blob. `ingest()` carries `sizeof( Symbol )` and `sizeof( IngestResult )` in its mangled name.
+  CLAUDE.md records three mixed-layout builds that linked "successfully". Measured on this tree, an object pair compiled
+  against two `Symbol` layouts now fails to link, where the same pair without the stamp linked and died with SIGBUS.
+- **The redaction first-byte mask** is compared bit for bit with the rule table it hand-numbers, so an inserted rule
+  cannot leave a later rule tried only at bytes its pattern cannot start with.
+- **Shift width against count.** Every mask a runtime value is shifted into has its count pinned to its width: the
+  language masks, the ensemble and quality-panel family masks, the naming-rule mask, the redaction rule mask, the
+  pack-task subset enumeration and `strkern`'s block masks.
+- **Tables indexed by an enum.** A table's extent is deduced and asserted against the enum's count, and the count is
+  proven exact beside the enum with `infra/enumcount.h` (#241). A spelled extent had let several of these asserts restate
+  their own declaration, and let a missing row compile as a null pointer. `kNodeFieldNames` rows now name their
+  enumerator, because the enum and the table are paired by index. `skilleval`'s provenance counters were `[3]` for a
+  four-value `Prov`. A new gate, `test/enumtablecheck.sh`, refuses a literal-extent table indexed by an enum. It reports 14
+  subscripts over five tables on `f8e6087c`. Each of its three positive controls puts one real literal back and must
+  report exactly that table among the violations the literal adds, so a violation already in the tree fails the rule
+  arm alone instead of every control.
+
+### Fixed — a memory buffer that lost a write was read back as a whole document
+
+Twenty-three places render into an `open_memstream` buffer and then read it back: the map's own children (XML and JSON),
+the `est_tokens` payload charges, the `--max-tokens` fit probes, the `--token-budget` buffer, the `--for` lens's pre-rendered
+blocks, the `--from-trace` blocks and seven MCP answers. Twenty-two of them flushed and closed the buffer without looking
+at either result. The one that did look, `renderToString`, could not see the failure it looked for.
+
+Measured, not assumed: a `DYLD_INSERT_LIBRARIES` interposer failed one chosen `realloc` inside an `open_memstream` on macOS
+26.5.1 (Apple libc), over 5 KB, 50 KB and 200 KB streams written in 1 KB chunks. In all 19 runs where the failure landed
+inside the stream, one `fwrite` came back short and the stream's error flag was set. Each run lost 152 to 976 bytes, as
+late as chunk 177 of 200, so the hole sat in the middle of the document. `fflush` and `fclose` both returned 0 every time.
+Read after that, the buffer is a shorter document with no sign that it is one. What that meant per site: a map or `--json`
+map with a hole in it; a payload section, trace block or MCP answer cut mid-element; a `--max-tokens` probe that read a
+too-small size as fitting; and a `--token-budget` map printed short at exit 0.
+
+Every buffer is now owned by one type, `rw::MemoryStream` (`src/infra/emit.h`). Its `finish()` flushes, reads the error
+flag, closes, and reports by value, and it is `[[nodiscard]]`. The destructor closes a stream nobody finished and frees the
+buffer on every path, so no site frees or closes anything by hand. A buffer that did not finish whole takes the path a
+failed open already took. The map and the JSON map are rendered again, straight to the output, with the modelled
+`est_tokens`: the children became one renderer both paths call. A charged section streams uncharged, and a probe answers
+"unmeasured". The `--for` blocks are emitted directly, and a secret redacted in the failed buffer is not counted again when the block
+re-renders. The MCP answers answer as they do when the open fails, except `uses`, which answers `-32603` instead of an
+empty success. Two surfaces have
+no second path, because the buffer holds the answer itself, and both refuse in every build instead of printing short.
+The `--token-budget` map prints nothing, says `write error — the --token-budget buffer lost bytes` on stderr, and exits
+1. `--from-trace` and `--run-trace` do the same when the `<trace>` map, the test hop or the signature/body section loses
+its buffer, at the open or at the finish, and the MCP `from_trace` verb answers `-32603`. Those blocks used to be left
+out of a bundle printed at exit 0, which no Release build disclosed.
+
+`test/estchargecheck.sh` gains two arms. **#14f** uses a new debug-only fault switch, `INFRA_FAULT_MEMSTREAM_FINISH=1`,
+which makes every finish really close its stream and then report failure. It asserts four surfaces, not every site. The
+`--pack-signatures` map and the `--json` map come out byte-identical to the undegraded run outside `est_tokens`,
+well-formed, at exit 0. The `--token-budget` run and a `--from-trace` run each print 0 bytes and exit 1 where their
+controls print the answer. Under the same switch, MCP `uses` answers `-32603`, and the `--for` redaction summary
+matches its control in XML and `--json`. **#14g** reads `src/` and refuses an `open_memstream`, a direct call of the charge opener, or
+an `fflush`/`fclose` of a memory stream anywhere outside the type. On `f8e6087c` it reports 46 such lines. Its positive
+control puts the two lines of one site back by hand, once per spelling of the opener (bare, `::`, `os::`, `rw::os::`),
+and must report exactly those two each time.
+
+### Fixed — five code extensions the index parses were no language at all to the dependency, state and lint verbs
+
+The crawl indexes `.metal`, `.cu` and `.cuh` as C++, `.pyi` as Python and `.phtml` as PHP. `langOfPath`
+(`src/lintrules.h`) is the verb-time classifier that `--deps`, `--arch`, co-change's `dep_capable=`, `--nonlocal-state`,
+`--quality-panel`, the lint catalog and user `--lint-rules` use to bucket a file. It kept its own extension table "in sync
+by hand", that table had drifted, and it called those five extensions Unknown. Every one of those verbs quietly left the
+files out. `includeLangOf` (`src/resolve.h`) had the same four C++ and Python gaps, so even a counted file could not
+resolve its includes.
+
+Both tables now know all five, and the crawl's table and `langOfPath`'s are asserted equal at compile time (above).
+`test/deplangscheck.sh` arm (G) requires every dependency-counted extension to resolve too. It went red with only the
+classifier rows added, naming `.cu`, `.cuh`, `.metal` and `.pyi` as counted but unresolvable (and `.hxx` the other way
+round), which is why the resolver rows land in the same change. `.hxx` left both tables: the crawl admits no `.hxx` file, so neither row could ever be reached.
+
+Measured by comparing stdout and exit code, `--no-cache`, between the base binary (`f8e6087c`) and this change, over all
+162 fixture corpora under `test/` and eight verbs: 1,296 runs. 14 differ. All 14 are on the six corpora that hold one of
+the extensions, and only on `--deps`, `--nonlocal-state` and `--quality-panel`. The map, `--json`, `--lint`,
+`--lint-catalog` and `--pack-signatures` are byte-identical everywhere.
+- `test/cudafix` `--nonlocal-state`: `cells="0" functions="0"` became `cells="5" functions="4"`. The CUDA kernel's
+  `rk_scaleTable`, read through `rk_clampScale`, was invisible.
+- `test/cudafix` `--deps`: `dep_files="1"` became `3`, and the kernel's include of `reduceShared.cuh` now counts
+  (`afferent` 1 → 2, `transitive` 1 → 2). `test/metalfix` already printed the `.metal` shader's row. The shader now
+  counts in `dep_files` (2 → 3), and its quote include of `AAPLSharedTypes.h` resolves (the header's `afferent` 1 → 2).
+  `test/phpfix`, `pyshapefix`, `stdqualfix` and `macroreparsefix` each gain the one file their denominator was missing.
+- `test/phpfix` `--nonlocal-state`: `unanalyzed_files="4"` became `5`. The `.phtml` view is disclosed as unanalysed PHP.
+- A user rule with `language: cpp` run over a `.metal` shader and a `.cu` kernel reported `findings="0"`. It now reports 16.
+- `.pyi` typing stubs. A stub restates its module's globals (`COUNT: int` beside `m.py`'s `COUNT = 0`), so reading
+  both files counted one global twice: a two-file probe went from `cells="1"` to `cells="2"` with every row still bound to
+  `m.py`. `--nonlocal-state` and `--quality-panel` now skip a stub whose `.py` is indexed beside it. A stub with no
+  source, the shape a C extension ships, is the only declaration of its module and keeps its cells: `test/pyshapefix`'s
+  `stubs.pyi` adds one (`cells` 5 → 6). Gate: `test/nonlocalstatecheck.sh` arm (J), red at `cells="2"` before the skip.
+
+Dart stays outside the dependency denominator, now by a named case instead of a `default:`. Dart has no import capture,
+and a two-file probe showed `--deps` printing no row for `import 'util.dart';`.
+
+### Changed — CI runs a light set on push to main and on `train-member` pull requests; the full matrix moves to a nightly schedule and `workflow_dispatch`
+
+CI was the bottleneck: a merge to main re-ran the full 31-job matrix on a tree its pull request had already
+tested, and a full run per landing-queue lane found almost nothing (measured 2026-09-14). `.github/workflows/ci.yml`
+now computes one `full` output (from the event name, the pull request's labels and the ref) in a new `plan` job,
+and every other job reads it instead of repeating the same condition:
+
+- **Light** (the `style` job plus the single `ubuntu-24.04`/`Release`/`clang` release leg, all 4 shards — it
+  already runs the determinism and G4 XML checks): a push to `main`, or a pull request carrying the
+  `train-member` label. Labelling is maintainer-only by construction — a fork pull request cannot label its own.
+  `pull_request` now also triggers on `labeled`/`unlabeled` (on top of the GitHub default types) so toggling the
+  label re-evaluates the same pull request without a new push.
+- **Full** (all 31 jobs): every other pull request, `workflow_dispatch` — run this against the exact commit
+  before any release tag, not an earlier green nightly — and a new nightly `schedule` at 05:41 UTC (off `:00`,
+  distinct from `nightly.yml`'s own 07:17 TSan run). `release`'s matrix is `plan`'s own computed output rather
+  than a second hand-typed list, because a job-level `if:` cannot see the matrix context to prune legs directly.
+
+A failure on the scheduled full-matrix run opens or updates `ci.yml`'s own tracking issue, titled "Nightly
+checks failing on main (full matrix)" — deliberately separate from `nightly.yml`'s TSan one. Every tracking
+issue carries the shared `nightly-failure` label (so "every nightly-scale failure" is one query) plus a
+workflow-specific second label — `nightly-full-matrix` here, `nightly-tsan` in `nightly.yml` — and every
+open/comment/close filters on both together, so a green run in one workflow can only ever touch the issue
+carrying its own second label. (An earlier draft of this change shared one issue between the two workflows
+with an uncoordinated close each; that let a green TSan night close an issue the full matrix had opened
+while the matrix was still red, and the reverse — caught before merge, not shipped.) Top-level permissions
+are `contents: read`; only the two report jobs widen, and only to `issues: write` on themselves.
+`test/g1configcheck.sh` gates the split with ten new `ciRows` for `ci.yml` and one new `labelscope` row in
+`nightlyRows` for `nightly.yml`, each proven red on its own mutated copy. Five of the ten `ciRows` extract the
+`plan` job's decide script and execute it under synthetic event/label/ref combinations rather than guessing
+at the bash from a regex.
+
+### Fixed — a cached 16-bit field wider than 16 bits was believed, and a `--with-profile` line past INT_MAX joined the wrong site
+
+Two defects found by a new static gate that asks, of the crashes fixed this cycle, whether their shapes were visible
+in source before they shipped. **The ingest cache stores five def fields (`ppAlt`, `humps`, `deepLoc`, `ev`,
+`params`) and a reference's `argCount` as 16-bit values in u32 slots, and read them back with
+`std::uint16_t( r.u32() )`**, which keeps the low bits of a value the writer can never have produced: a
+checksum-valid record carrying 0x10000 was served as 0. `ByteR::u16Of32` refuses such a record the way `enumU8`
+refuses an enum byte past its count (that file reparses, the rest of the blob stands). Measured on the
+`cachefuzzcheck` Part 3 fixture (15 files): 0x10000 and 0xFFFFFFFF in `ppAlt`, `params` and `argCount` were accepted
+before (`cached_records=15 of 15`, 6 FAIL rows) and are refused after (`14 of 15`, output byte-identical to
+`--no-cache`, clean under ASan/UBSan), while 0xFFFF is still accepted. Cost, Apple clang 21 `-O2 -DNDEBUG` on the
+ingest TU: `loadCache` 3,962 → 3,992 instructions (+0.8%, six branchless compare-and-selects); no other function changed.
+**`--with-profile` read its `#PROF_TSV` line column with `std::atoi`**, which is undefined past INT_MAX; libc kept
+the low 32 bits, so a line of 4294967329 read as 33 and annotated the finding at line 38 with a site that is not
+there (`heat_joined="1"`). The column now goes through `std::from_chars`, and a value that is not wholly a positive
+int is a row that carries nothing joinable, like a short row (`test/withprofilecheck.sh` arm 8: red on the base,
+`heat_joined="0"` after, with the same row at line 33 still joining as its control). `--plan-lint`'s
+`std::filesystem::absolute` fallback takes an `std::error_code` too.
+
+The new gate `test/hazardpatterncheck.sh` runs ripwire's own `--match` over `src/` (19 queries, about 5 s) for the
+hazard classes no other gate holds, and registers every site it finds with the fact that makes it safe: (A) an enum
+built from a byte reader outside `ByteR::enumU8` (1 site, validated in place); (B) every `catch` handler that
+records nothing (11 of 27 — 6 of them rows naming a drop that is silent in Release, for the disclosure lane) and
+every `throw` with no `try` in its own function (3, all permitted seams); (C) a throwing or overflow-undefined
+standard call where nothing may throw — `std::sto*`, `.at( )`, `.value( )`, the `atoi` family, `std::filesystem`
+without its error_code (72 calls read), a range-for over a directory iterator; (D) a decoded value narrowed without a
+check (1,269 casts read, 0 left); (E) a raw acquisition `crashsweepcheck` does not name — descriptors, the malloc
+family, `new`, tree-sitter parsers, queries, cursors and trees — without an owning destructor (36 sites registered,
+2 owned). Every registry is exact both ways: a new site fails, a moved count fails, and a row that matches no site
+fails, except a row marked PENDING, whose fix is already written on another branch and which asks to be deleted once
+it lands. Red on the base: 6 rule-C sites (four of them the `--eval-skills` and `ripwire wrap` filesystem throws that
+the parser-crash lane fixes) and 6 rule-D sites; green after. A probe tree with one violation and one compliant twin
+per rule proves each rule fires (13 planted violations, nothing else).
+
+### Added — reader fuzzers for ripwire's own parsers of bytes it did not create, and the two crashes they found
+
+The fuzz suite fuzzed only the vendored tree-sitter grammars. `test/fuzz/readers/` adds 16 libFuzzer targets
+(`ripwire_fuzz_reader_<name>`, `RIPWIRE_FUZZ_READERS` in CMakeLists.txt) over the code hostile input reaches: the MCP
+JSON-RPC scanner and HTTP request reader, the ipynb/HTML/CSV extractors, `--from-trace`, the skill scanner, the SCIP
+decoder, tsconfig/go.mod aliases, lint-rule files, the qsnap/qchurn/history-oracle caches (header and digest rebuilt so
+the fuzzer reaches the parse), the committed sidecars, `--scope`, ingest-cache records and frames, and the span-tier memo.
+Seeds are 54 blobs the real writers produced (`make_seeds.sh`); `run.sh replay` fails a reader that ran 0 inputs or
+refused a valid seed. Five minutes per reader under ASan, UBSan (with `integer`) and libc++ extensive hardening, Homebrew
+clang 22, found: a SCIP varint whose 10th byte carried payload past bit 63 was accepted as a truncated number (and
+aborted the G1 build); and `openCacheFrame`'s exact-fit check summed a table offset near 2^64 through a wrap, while its
+per-entry bound `recOffset + recLength` wrapped far enough to ACCEPT a record at 2^64-16 (`blob_entries=6` where the
+frame is corrupt). Both are fixed without the wrap, with red-first arms: `scipcheck` 5c and `cachefuzzcheck`'s two
+`*_near_u64_max` mutations plus a disclosure arm (`corrupt-frame`, `blob_entries=0`), and the minimized inputs are
+`regress-*` replay seeds. The qsnap and qchurn readers hit the unbounded-count `reserve` #249 fixes (18 GB and 40 GB
+allocations) within seconds.
+
+### Fixed — a term-rich `--for`/`--pack-task` query, an unbounded MCP stdio request line, or a pathological ASan trace could exhaust memory or stall the process
+
+- **A `--for`/`--pack-task` task string with many distinct terms could cost gigabytes of RAM.** The task
+  string is agent-supplied text, not a hand-typed query — an agent can paste a whole file, log or issue
+  body — and the query's DISTINCT term count had no ceiling: `lexicalScoresTiered`'s `tfFlat` allocation
+  (symbols × unique query terms × 4 bytes) grew with the paste, not with the corpus. A measured 480 KB
+  task string cost 5.2 GB RSS on one request. `dedupeQueryTerms` now caps the kept unique-term count at
+  `kMaxUniqueQueryTerms` (1024 — about 102× the longest real `--for`/`--pack-task` query on record in
+  `bench/` and `docs/`), disclosed as `terms_capped="1" terms_total="N"` on the CLI's `--for` root and on
+  the MCP `for`/`explore`/`pack_task` responses, never a silent truncation. Gate: `test/forblowupcheck.sh`.
+- **An MCP stdio request line had no size bound, unlike the HTTP transport.** `runMcp()`'s read loop grew
+  its line buffer without limit, so one long-lived `--mcp` server could be pushed toward OOM one
+  oversized line at a time by a runaway or hostile peer — HTTP already bounded a request body at 8 MiB
+  before it reached the JSON-RPC layer, stdio had no equivalent. `readByteSafeLineBounded`
+  (`src/infra/stdinline.h`) now bounds a stdio request line at `kMcpStdioLineMaxBytes` (32 MiB) and drains
+  the remainder of an over-limit line without buffering it; `runMcp()` refuses it with a named JSON-RPC
+  error (`code=-32600`, `id:null`) and keeps serving the next request on the same connection. Gate:
+  `test/mcpstdiolinecapcheck.sh`.
+- **A pathological `--from-trace` line could turn 160 KB of text into ~4 s of CPU.** `parseAsan`'s search
+  for an ASan/UBSan frame's source location re-derived the whole candidate on every widening try
+  (a demangled C++ function name can itself contain spaces, so the split cannot just be the first one) —
+  O(k²) in the space-separated word count k. A line built from thousands of short, non-path-shaped
+  "words" with no valid trailing location (a fuzzer or minified-diagnostic shape) showed the worst case.
+  Every quantity the rescan recomputed is actually invariant once the growing window first reaches it, so
+  `parseAsan` now computes each once and walks word boundaries in a single backward pass — O(size), not
+  O(words²) — landing on the exact same candidate the original rescan would have found first. Gate:
+  `test/traceasanlinearcheck.sh` (40 KB/160 KB/640 KB/2.5 MB timing; the baseline binary times out past
+  640 KB on the same fixture).
+### Fixed — a cache blob, a file in the tree, or an MCP preview could crash, hang or starve the process
+
+Each of these was reproduced before it was fixed, and each now has a gate that fails on the old code.
+
+- **A checksum-valid qsnap or qchurn cache blob with a huge record count aborted.** `deserializeSnapshot` and
+  `deserializeRawCommitStream` passed a count read from the blob straight to `reserve`: 2^32−1 records is 32 GiB for
+  the qsnap vectors and 96–128 GiB for the qchurn commit and path lists. On Linux that is `std::bad_alloc`, which
+  nothing on the CLI path catches, so `--quality-delta`, `--edit-check`, `--for`, `--metrics` and `--exemplar` died
+  with SIGABRT on every run until the blob was evicted (reproduced on Ubuntu, exit 134). Every count is now measured
+  against the bytes left in the blob first, and a count that cannot fit makes the blob corrupt: recompute, as for any
+  other damage. Gate: `test/cachefuzzcheck.sh`, Part 2's three vector-count rows and the new Part 5. The rows run
+  under an allocation bound (`ulimit -v` on Linux, ASan's `max_allocation_size_mb` anywhere), because macOS
+  overcommits the reservation and exits 0 against the defect. The old map-count and wrong-sha rows wrote at stale
+  offsets, so an earlier guard rejected the blob before the count was ever read; they now write where
+  `deserializeSnapshot` reads, and both tables check the good blob's layout first and fail loudly if a header change
+  would re-aim a row.
+- **A short read leaked a file descriptor.** The parse pool's `readFile` closed its stream inside
+  `( got == want ) && ( std::fclose( fp ) == 0 )`, so a file that came up short (truncated between the size probe
+  and the read) was never closed. A long-lived `--mcp` server re-ingesting such a tree ran out of descriptors, and
+  every file it could then not open dropped out of the answer at exit 0. With an interposed short-read shim, 300 of
+  600 short-read streams stayed open, and under `ulimit -n 200` all 20 ordinary files vanished from a `--grep`
+  answer. The stream now has an owner, `rw::OwnedFile` (`src/infra/ownedfile.h`), whose destructor closes it on
+  every path, and the whole-file readers in `ingest_crawl.h`, `docparse.h` and `editpreview.h` use it. Gate:
+  `test/crashsweepcheck.sh` B1.
+- **A FIFO, a directory or a device link at `.ripwire_config` or `.ripwire_quality_acks` hung or aborted.** Both
+  were read through a blocking open on the name. A FIFO hung `--quality-delta` before any output, and a committed
+  symlink from the acks ledger to `/dev/zero` or `/dev/urandom` never reached end of file. A directory at
+  `.ripwire_config` opens on Linux; where a directory's seek reports `LLONG_MAX` (overlayfs), the string that length
+  asks for aborts, the failure `ingest_crawl.h`'s `PathShape` note measured for `--cache=<dir>`. Both files now go
+  through `docparse::detail::openRegularFileStream`: it opens with `O_NONBLOCK`, asks the descriptor what it opened,
+  and reads anything but a regular file as absent, with a stderr line saying so. The ledger is still read one line at a
+  time. Gate: `test/crashsweepcheck.sh` B2
+  (eight shapes).
+- **`edit_check` with `new_body` raced the HEAD-snapshot prefetch worker.** The preview's two ingests ran after the
+  verb's own ingest had released the process-wide ingest lock, so they could run alongside the detached prefetch
+  worker's ingest. `ingest()` installs compiled tags queries into a process-global cache and deletes the entry each
+  install displaces, and that is single-writer by design. On the ThreadSanitizer build the server reported a data
+  race at the parse-pool call and aborted (exit 134) mid-session. The preview's ingest now takes
+  the same lock as every other ingest a server runs. Gate: `test/qsnapprefetchcheck.sh` (f), whose red needs the
+  TSan build (`RIPWIRE_BIN=tsan/ripwire`).
+- **A file dated after 2262 overflowed a signed multiply.** `tv_sec * 1000000000 + tv_nsec` does not fit in
+  `long long` past 2262-04-11, a date ext4, XFS, tmpfs or a tar restore can store. That is undefined behaviour in
+  release and an abort in the sanitizer build (reproduced on Linux tmpfs: `signed integer overflow: 10000000000 *
+  1000000000`). Both stat readers now saturate through `rw::saturatingNanoseconds` (`src/infra/statclock.h`); size
+  and ctime still tell apart two saturated timestamps. Gate: `test/crashsweepcheck.sh` B3. APFS clamps timestamps
+  at 2262, so on macOS the arm says it cannot build its input.
+
+Three of these shapes can be seen in the source, so `test/crashsweepcheck.sh` now also runs ripwire's own `--match`
+over `src/` and fails on them. Each rule is proven live against a probe tree that holds one violation and one
+compliant twin.
+
+- **S1:** an allocation sized by a count a byte reader decoded must be bounded earlier in the same function.
+- **S2:** every raw `fopen`/`open`/`fdopen`/`opendir`/`open_memstream`/`popen` site must be registered with the fact
+  that makes it safe, and a new one points at `rw::OwnedFile`. A close as the right operand of `&&`/`||` or an arm
+  of `?:` is refused outright.
+- **S3:** every body handed to a `std::thread` must be `noexcept` or a single try block. The eight bodies that were
+  neither are now declared `noexcept`, as are three that were already one try block. None of them had a throw that
+  could escape except allocation failure, which already ended in `std::terminate`.
+
+Red on the base, in order: S1 finds the three unbounded counts, S2 the short-circuited `fclose`, S3 eight bare
+bodies. The gate's header states what each rule catches and what it misses.
+
+### Added — a nightly ThreadSanitizer run against main, which opens one tracking issue when it fails
+
+ThreadSanitizer had a build mode (`-DRIPWIRE_TSAN=ON`) and one gate written for it, `test/qsnapprefetchcheck.sh` arm
+(e), but nothing ran it against `main`: a data race could reach a tag if nobody happened to build TSan locally in
+between. It is not added as a per-PR leg, because TSan builds already run often on contributors' machines and every PR
+already waits on the macOS runners. `.github/workflows/nightly.yml` runs it once a day at 07:17 UTC instead, and skips
+the heavy job when `main` has not moved since the last green scheduled run and no tracking issue is open.
+
+The job builds TSan with clang in its own tree and runs ten gates against it, chosen for the threads they drive: the MCP
+prefetch worker (`qsnapprefetchcheck`), the edit lock (`mcpeditracecheck`), a server's re-ingest at a 128-fd limit
+(`mcpwatchercheck`), a long-lived server's re-ingest after an edit (`mcpstalecheck`), concurrent `--quality-ack` writers
+(`qackconcurrencycheck`), the private cache directory (`cacheisolationcheck`), the parallel ingest and `--match` fan-out
+over the repository (`det-gate.sh`), `--grep`'s prefetch thread (`grepfastcheck`), the `--doc-drift` workers
+(`docdriftcheck`) and the git-spawn pool (`mergescoutcheck`). A gate's own verdict is not trusted to notice a race:
+reports go to per-gate files, and a wrapper fails the step on a non-zero exit or on any report file. Before any gate
+runs, the job checks that every object of the `ripwire` target references the TSan runtime, and that the wrapper goes
+red on a planted race and stays green on its race-free twin. Locally on Apple clang 21, the same wrapper failed on the
+planted race and on a race whose exit code the command swallowed, and all ten gates passed through it against a TSan
+build of 105666c1 with no report file (4 s to 404 s each, `mergescoutcheck` the slowest, on a machine at load 40-60).
+
+A failing run on `main` opens one issue, "Nightly checks failing on main" (label `nightly-failure`), or comments on the
+open one. The comment names the failing jobs and steps, the commit and the run, and quotes the head of the first report.
+The next green scheduled run comments "green again at <sha>" and closes it. The top-level token is `contents: read`,
+and only the two reporting jobs hold `issues: write`. A pull request that edits the workflow runs it without the
+reporting. A placeholder marks where the Windows full-suite job goes (D3 of the #44 plan). `test/g1configcheck.sh`
+gains six rows that pin the schedule, the skip probe, the TSan wiring, the permission scoping, the report conditions
+and "no secret but `GITHUB_TOKEN`". Each row has a mutated copy that turns exactly that row red.
+
+### Fixed — a diagnostic notice could be split across lines by another thread's output, which is what kotlincheck §12 kept tripping on
+
+The `DEGRADED_PATH_ALERT` notice, and the assert, panic and thread-violation banners, were built from a chain of
+`std::cerr` insertions. With stdio sync on, each insertion is its own write to stderr, so a line another thread
+wrote at the same moment could land inside a notice. kotlincheck §12 refuses two Kotlin files at once; when the
+second parse worker's refusal line landed straight after `[math degraded] `, the arm's one-line grep failed with
+"raised no DEGRADED_PATH_ALERT" although the alert was on stderr, whole, one line further down. That is the
+failure eight CI jobs hit since Kotlin landed, three of them on `main`. Measured on f8e6087c by running §12's map
+over its own fixture: 18 gate failures in 5,700 runs, and the notice torn in 32–73% of runs depending on load.
+Every reporter now formats its whole notice into a fixed 4,096-byte stack buffer and hands it to stderr in ONE
+stdio call, which no other stdio writer in the process can interleave, and which needs no heap in a reporter that
+may be running because memory ran out. The text is byte-identical for every notice under the cap; a longer one is
+cut and says so at its end (`... [notice truncated: kept K of N bytes]`). The reporters still flush stdout
+before the notice, as `std::cerr`'s tie to `std::cout` always did, so a trap or an abort right after it loses no
+buffered output and `>file 2>&1` keeps its order. Measured after the fix on §12's fixture, alternating
+run by run with the f8e6087c binary under four busy loops: 0 gate failures and 0 torn notices in 2,100 runs,
+against 6 failures and 726 torn notices from the old binary in the same 2,100 interleaved runs. The new gate
+`test/diagnoticecheck.sh` counts the write(2) calls each reporter makes by giving it a datagram socket as fd 2,
+which keeps write boundaries: red on the old reporters (9 writes for the degraded notice, 15 to 21 for the banners,
+every one still byte-exact), green at one write each. Three `2>&1` cases leave text in stdout's buffer before a
+degraded notice, an assert and a panic, and require it first and whole: byte-identical to the old reporters. It also carries a static arm with a mutation control, a
+12,000-notice race against raw and stdio writers (red in 200 of 200 runs on the old reporters), a zero-allocation
+arm (global `operator new`) measured with `src/alloccount.cpp` as a delta between otherwise identical runs, and an
+ASan/UBSan pass. kotlincheck §12 now prints the first five lines of stderr when that arm fails, because
+none of the eight CI logs could show what the notice had looked like. Not fixed here: the default map over the same
+fixture says `files=4` with no sign of the two refused files, a disclosure gap tracked by #157.
+
+### Fixed — a user's regular expression could abort the process, hang the skill scanner, or answer a question it never finished; one header owns them now
+
+Only `--regex` screened a user's pattern before handing it to `std::regex`. Three other entry points took the same
+engine unscreened and caught nothing at match time, so on Apple libc++ — whose engine throws `error_complexity` when
+it gives up — `ripwire <dir> --graph-query='file(all,"(a+)+z")'` and an `--arch` rules file holding `deny path zz/.*
+-> (a+)+z` both died with an uncaught `std::regex_error` (rc 134), over a fixture whose directory name is a run of 44
+`a`. `--match` swallowed the same throw and KEPT every row the `#match?` predicate never decided, at rc 0; a malformed
+`#match?` pattern kept every row too. On libstdc++, which has no budget, each of these backtracks without end. A
+`--regex` of 20,000 bytes died with SIGBUS (rc 138): `std::regex` compiles by recursion, and a grep worker runs on a
+512 KiB stack. The skill scanner's `EXFILTRATE:net-exfil` regex was quadratic in the line — a 20,000-byte fenced `curl
+curl …` line took 5.9 s and a 200,000-byte one was still running at 60 s — and an engine throw inside it would have
+ended `wrap`'s `noexcept` scan. And `file()` matched the path with the checkout's own directories in front of it:
+`file(all,"alpha")` selected every symbol in a clone named `repo_alpha` and none in `repo_beta`, and
+`file(all,"^src/")` selected nothing under an absolute root.
+
+`src/regexguard.h` now owns the screen (moved verbatim from `src/search.h`), the compile and the match, and is the one
+place that catches `std::regex_error` and `std::bad_alloc` — by type, converted to a value behind a `noexcept` API
+that `static_assert`s pin. A pattern the screen or the parser rejects is refused by name at exit 1 on every entry
+point (`--graph-query file()`, an `--arch` FROM or TO path-rule, a `#match?` in `--match` or `--lint-rules`), in the
+words `--regex` already printed. The screen also bounds a pattern at 2,048 bytes and 64 nested groups, under the
+smallest stack overflow measured with a standalone probe (a 3,392-deep nesting and a 16,896-byte literal on a 512 KiB
+libc++ thread; 960 and 3,648 on a 512 KiB libstdc++ one). A match the engine abandons part-way — overlapping
+alternation such as `(a|a)+z` passes the structural screen — is refused by name at exit 1, never read as "no match":
+the regex scan used to skip the rest of that file behind a `DEGRADED_PATH_ALERT`, which a Release build compiles out,
+and still print `hits=` as a complete count. An `--arch` TO template that compiles for no capture rejects the rules
+file at parse, and one that only breaks once an edge's captures are substituted (`a{2,\1}` becoming `a{2,1}`) is
+refused naming the substituted text, where both used to leave the rule silently inert. `file()` matches the
+root-relative path its own `p=` prints, the rule `--arch` adopted for its rules. The skill scanner's patterns go
+through the same boundary and fail CLOSED — an undecided line is a CRITICAL `SCAN-INCOMPLETE:regex-abandoned` finding
+— and `net-exfil` is decided by a linear scan derived from its regex. The built-in lint packs keep the old
+keep-the-row fallback for their constant patterns.
+
+Not fixed here, measured and disclosed: libstdc++'s matcher recurses once per consumed character, so on Linux a
+`--regex` such as `a*b` crashes on a long enough matching line with an 8 MiB stack — from about 26 KB, build-dependent
+(a standalone probe: 26,624 bytes, 13,312 for `(a|b)*c`; this tool's own earlier Linux builds: between 27 KB and 35 KB
+for a gcc dev build, 35 KB and 45 KB for a clang Release one); a pattern bound cannot reach that.
+
+Byte-identical: 45 of 45 comparisons of the origin/main binary against this one (dev build, one checkout, stdout,
+stderr and exit code) across `--grep`/`--regex` (prefiltered and full-scan, context, compact, unindexed, the three
+existing refusals, JSON), `--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` (incl. SARIF), `--scan-skill`
+and `--scan-skills` over every scanner fixture and this repository's own skills, and the map, plus a three-request
+`--mcp` grep session; the only differences are the fixes above. Instructions retired (Release, `/usr/bin/time -l`,
+median of 5, interleaved, the final commit against origin/main): `--regex` over an llvm-project checkout of 8,837
+C/C++ files −2.4% to −3.3%, over this repository within ±0.5%, the literal `--grep` and map controls +0.3% to +1.6%;
+release `__TEXT,__text` 8,684,280 → 8,704,196 bytes (+0.23%, the refusal texts and the scanner), `grepScanText` 443 →
+437 instructions. No compile was added: once per query, per rule and per grep worker as before, and `file()` now
+decides each FILE once instead of each symbol.
+
+Gate: `test/regexguardcheck.sh` — (a) a catastrophic pattern refused by name on all five entry points, each with a
+positive control; (b1) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_MATCH=1` makes every guarded match throw and
+each entry point must refuse naming the pattern (or, for `--lint-rules`, the rule); (b2) `(a|a)+z` against libc++'s
+real engine; (c) no `std::regex` spelled in `src/` outside the owner and a one-row allowlist (the constant redaction
+table), with planted-file controls; (e) the `--arch` TO template refused at parse and after substitution; (f) the
+linear `net-exfil` agrees with its regex over 1,200 generated lines, a 200,000-byte line scans in bounded time, and an
+abandoned match fails closed; (g) the size and depth bounds, each with its limit still compiling; (h) an undecided
+capture-typed `#match?` is reported by cause — a captured text the screen refused, one that does not compile, or an
+abandoned match — naming the first site and its text; (i) `--arch` decides deny rules first, so an allow the engine
+cannot finish refuses only when a deny fires and no allow matches; (d) two clones at different directory names,
+absolute and relative roots, agree. Red on origin/main: 72 failures, ten of them a signal death (rc 134 or 138).
+`test/astqueryregexcheck.sh` C4 now asserts the malformed-pattern refusal, and its golden's `match-malformed` section
+is empty.
+
+### Fixed — `--regex` crashed on a long matching line on Linux; a literal pattern skips the engine, and a line too long for the engine's stack is skipped and counted
+
+libstdc++'s regex matcher recurses once for every state it visits, so on Linux `--regex='a*b'` died with SIGSEGV
+(exit 139) in a grep worker on a matching line of about 26–45 KB — the residual the entry above disclosed. Measured on
+this lane's own gcc 13 Linux build before the fix: exit 139 on a 300 KB matching line, and again on a 2 MB line that
+could not match at all. Three changes, in this order:
+
+- **The engine is not asked when the answer is a byte search.** `src/regexguard.h` reads each compiled pattern once. A
+  literal, or literals joined by `|` (one of them optionally `^`/`$`-anchored), is matched with `strkern.h`'s byte
+  kernels in the engine's own order — leftmost start first, then the first alternative written — so no line is too long
+  for it. Any other pattern's required literals (the unquantified literal runs outside groups, one set per top-level
+  alternative) rule out every line that holds none of them before the engine sees it: `a*b` never reads a line with no
+  `b`. The full-scan switch the gates use turns both paths off, so `test/regexcheck.sh`'s prefiltered-versus-full-scan
+  diff checks them too.
+- **The scan threads get a stack they can state.** grep's workers and its unindexed scan run on 256 MiB POSIX threads
+  (`src/infra/stackthreads.h`), halving on refusal down to 8 MiB; pages are committed only as deep as a match recurses.
+  Starting 16 of them costs the same at 8 MiB and 256 MiB, within run-to-run noise, on macOS and on Linux. ONE size is
+  settled — the smallest any thread got — before a single file is read, and every thread is held to it, so no file's
+  answer depends on which thread picked it up; a size below 256 MiB is disclosed on the answer as `regex_stack_bytes=`,
+  with `regex_line_max=` beside it even when nothing was skipped.
+- **A line past the measured bound is skipped and said so.** A per-pattern model bounds the matcher's recursion; the
+  bytes one modelled visit may take (128) is the largest need measured over 35 pattern shapes and six builds — gcc
+  -O0/-O2, clang -O2 and -O3 -flto, gcc and clang under AddressSanitizer — rounded up, with half of every stack held
+  back, so the engine's measured crash is at least 2.5× the bound. On gcc 13 at 256 MiB the bound is 149,502 bytes
+  for `a*b` and 33,757 for `(a|b)*c`. A longer line is never handed to the engine: every `--regex` root now carries
+  `regex_lines_skipped=` (0 means none was), and when it is not 0, `regex_line_max=` and `counts_floor="1"` ride with
+  it — hits= is a floor — defined in the full legend and the compact one. libc++ does not recurse per character, so
+  macOS has no bound and skips nothing.
+- **Secret redaction no longer runs the engine.** `src/redact.h` redacts every emitted body by default, up to 4 MB, and
+  its rules went straight to `std::regex`: on the gcc 13 Linux build, `--expand` over a file holding `sk-` and a 200 KB
+  token run died with exit 139. Every rule is a literal prefix and character-class runs, so each is now matched by
+  reading its runs once (the PEM banner's word loop takes the regex's greedy choice); the regexes stay in the table as
+  the specification. Nothing is skipped, so there is no unscanned line to withhold. `src/regexguard.h`'s allowlist of
+  files that may spell the engine is now empty.
+
+Byte-identical: 61 of 61 comparisons against this lane's parent (dev builds, one checkout, stdout, stderr and exit
+code) — 42 unchanged to the byte (`--graph-query`, `--arch`, `--match`, `--lint`, `--lint-rules` with SARIF, the map,
+`--scan-skill(s)`, the literal `--grep`, and every redaction seam: `--pack-top-n`, `--expand` and `--recall` over the
+secrets fixture and this tree), and 19 `--regex` answers (literal, alternation, anchored, required-literal,
+prefiltered and full-scan, context, compact, unindexed) identical once the new `regex_lines_skipped="0"` and its legend
+sentence are removed. Instructions retired (Release, `/usr/bin/time -l`, median of 5, interleaved, against the parent):
+`--regex` over an llvm-project checkout of 8,837 C/C++ files −83% to −90% (`getOperand\w*\(` 224.5G → 28.3G), over
+this repository −80% to −93%; the full-scan switch, where every line still reaches the engine, −8% and −14%; the literal
+`--grep` and map controls within ±0.7%. Release `__TEXT,__text` 8,715,336 → 8,732,840 bytes (+0.20%); `grepScanText`
+437 → 1,609 instructions, because the line loop, the literal searches and their kernels now inline into it.
+
+Gate: `test/regexguardcheck.sh` — (j) `test/regexlines_harness.cpp` diffs the literal plan, the required-literal filter
+and the skip policy against `std::regex` itself: adversarial, generated and corpus patterns (every `--regex` the docs,
+skills and gates spell, every `#match?` a query or lint pack carries) over CRLF, LF and empty-line texts, under both
+syntax sets; 0 mismatches over about 80,000 cases on libc++ and on libstdc++, and a copy of the header whose
+alternation resumes one byte past a match must go red; (k) a 300 KB matching line is matched or skipped-and-disclosed,
+a 2 MB line with no `b` is ruled out in bounded time, a literal alternation over a 3 MB line answers, and a literal
+`--grep` is unchanged; (n) with a test switch that gives half the scan threads half the stack, 48 files are answered
+identically over five runs at one bound and the smaller stack is disclosed (the per-thread bound it replaced skipped 24
+to 27 of the 48, varying run to run); (o) `test/redactshape_harness.cpp` gives each redaction rule's regex match length
+at every position over 30,000 generated texts (682,859 checks, 0 mismatches on libc++ and libstdc++; a threshold moved
+by one goes red), and the 200 KB `sk-` file exits 0 with the key redacted; (l) on a recursing engine, for three shapes, a line of exactly `regex_line_max` bytes is matched
+at exit 0 and one byte more is skipped; (m) the non-NDEBUG fault switch `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` reaches the
+skip path and its disclosure on every engine. Red on this lane's parent: 8 failures on macOS (a TIMEOUT on the 2 MB
+line), and 8 on the gcc 13 Linux build, two of them a signal death (exit 139). `test/emittertruthcheck.sh` (Z2h) holds the
+new "always present" claim at zero; `test/compactlegendcheck.sh` re-pins `ripwire.grep/v1` 360 → 440 (measured 422 on
+`--regex`).
+
+### Changed — Intel macOS binaries end with 0.6.1
+
+0.6.1 is the last release with a prebuilt Intel macOS binary. The `macos-x64` release leg has had no Intel machine since
+GitHub retired its `macos-13` runner pool, which left v0.1.0's leg and the first v0.2.0 run queued for 24 hours until
+the auto-cancel. From then on it cross-compiled on an arm64 runner with `-DCMAKE_OSX_ARCHITECTURES=x86_64` and ran its
+PGO training, its determinism diff and its smoke test under Rosetta 2, pinned to the one runner image whose Rosetta was
+verified to execute the binary's x86-64-v3 instructions. Every step that proved the binary ran did so under a
+translator. The leg is gone from `release.yml`, along with the deployment-target step and the `minos` check that only it
+used. The Linux x86-64 binary and its x86-64-v3 floor are unchanged, and an Intel Mac can still build from source.
+
+The installer was not told. Its arch map sends `x86_64` to `x64` on every OS, so an Intel Mac asking for a later release
+would have heard `release vX has no asset named ripwire-X-macos-x64.tar.gz`: true, and silent on both the decision and
+the two routes that still work. `scripts/install.sh` now stops an Intel Mac before any download for every release after
+0.6.1, says Intel macOS binaries end with 0.6.1, and prints the exact command that pins `RIPWIRE_VERSION=v0.6.1` and the
+exact source build. Pinning 0.6.1 still installs its Intel binary. A Rosetta shell on Apple silicon, which also reports
+`x86_64`, is sent to a native arm64 shell rather than told it owns an Intel Mac.
+
+Gate: `test/releaseinstallcheck.sh` section H, nine rows. Five were red on main: the unpinned one-liner on an Intel Mac
+(two rows), a v0.10.0 pin whose release still listed a `macos-x64` asset and installed it, the Rosetta shell, and
+`release.yml` still building the asset. The three installer controls (a v0.6.1 pin on an Intel Mac, Linux x86-64,
+macOS arm64 on a later release) each went red against a mutant installer that refused one release too many, or keyed on
+the arch or the OS alone. `test/portablebuildcheck.sh` #2h, which held the leg to its verified runner, Xcode and
+deployment target, retires with it.
+
+### Fixed — `--quality-delta` answered from a dead-code baseline another build computed
+
+`--quality-delta` caches the snapshot it computes for `HEAD`, keyed on the repository, the commit, the excludes, the
+file-size ceiling and the parser version. Its dead-code half also depends on call resolution — a function is dead when
+nothing calls it — and a change to how calls resolve moves none of those, because resolution runs over facts already
+extracted. So two builds that resolve calls differently, sharing a cache directory on one commit, answered from each
+other's snapshot: after an upgrade on a repository whose `HEAD` has not moved, or with an installed `ripwire` and a local
+build on one checkout. Measured on main `a55b118e` against the same tree with the `std::`-qualified call guard switched
+off, over a two-file fixture where `std::launder( &v )` may or may not bind an in-repo `Pool::launder`: on a cold cache
+the guarded build reports `regressions="0"`, and after the unguarded build warmed the cache it reports a gating
+`dead-code` row on the untouched `Pool::launder` and exits 2. The other order hides a real one: deleting the only call is
+a gating regression on a cold cache (exit 2) and nothing on the warm one (exit 0). Both runs used one cache file.
+
+Each build now has a source identity: a SHA-256 over every file under `src/` and `queries/`, computed by
+`cmake/source_identity.cmake` on each build (49 ms on this tree) and compiled in as one generated definition. The
+snapshot and window-ref body caches fold its full 64-hex spelling into the material their filename key hashes, and the
+blob header stores its `fnv1a64`, which a reader must match. It is derived rather than a version to bump because bumps
+are what this cache has missed: an `isDeadCandidate` exemption and a parser-version change each shipped without one, and
+no resolution change ever had one. The price is that any source edit renames the snapshot, including one that changes
+nothing it means. On ripwire's own tree, five runs each with a private cache, a warm `--quality-delta` took a median
+3.04 s (2.78–3.21) and one whose snapshot had to be recomputed 5.12 s (4.85–5.34), identical output throughout; the
+parse cache underneath keeps its key, so that recompute reads a warm parse. On the fixed tree the two-build experiment
+writes one snapshot per build and matches a cold cache in both orders. The snapshot and window-ref body caches move to
+schemes 14 and 4.
+
+Gate: `test/qsnapproducercheck.sh`, 16 rows. Its core is a matched pair over a real cached snapshot: dead entries
+dropped (or added) with the producer bytes kept, a control that must change the answer and does, and the same forgery
+with those bytes flipped, which must be refused with output byte-identical to a cold cache. Against main 8 of its 13
+rows failed: the forgery had no producer bytes to flip and was served in both directions, and the key, header,
+derivation and blob arms found nothing. Under ASan the gate passes with no sanitizer report on any child's stderr, and
+`test/cachefuzzcheck.sh`'s snapshot sweep stays clean. Pin moved: `test/qschemetrip.hash`.
+
+### Fixed — a pinned `--quality-baseline` was honored by a build that resolves calls differently
+
+The same defect, in the file you write on purpose. `--quality-baseline` pins a floor to `.ripwire_quality_baseline`,
+dead-code records included, and stamped it with nothing but the `HEAD` commit, so `--quality-delta` honored the pin
+whenever the commit matched, whichever build had written it. Pin with the installed `ripwire`, then check with a local
+build (or upgrade) before the next commit, and the floor's dead set came from one resolver while the working tree's came
+from another. Measured with two builds of the previous commit, `d8c225a2` as built and with the `std::`-qualified call
+guard switched off, over the fixture above: pinned by the unguarded build and checked by the guarded one, an untouched
+tree reported a gating `dead-code` row on `Pool::launder` and exited 2 (the guarded build pinning its own floor: exit 0).
+In the other order a real regression disappeared: deleting the only `std::launder` call exited 0 where the unguarded
+build, against its own pin, exits 2.
+
+The sidecar is now format v6 and carries a `producer` record, the same source identity the snapshot cache uses. A pin at
+the current `HEAD` whose producer is missing or names another build is not the floor: `--quality-delta` falls back to
+the `HEAD` tree this build computes and says so as `baseline="git-HEAD (foreign sidecar ignored)"`, with one stderr line
+and a legend sentence naming the two ways back (run the delta with the build that pinned it, or re-pin on a clean tree
+(commit or stash first)). Unlike a stale pin the file is never deleted, by the CLI or by the MCP `quality_delta` verb,
+because the build that wrote it can still use it. A root with no git has nothing to fall back to and exits 1 naming the
+foreign pin. Demoting the dead-code rows instead was ruled out: it cannot surface a regression whose row never appears,
+and another build can compute any kind differently. A pin at another commit is still stale first and still self-heals.
+On the same two fixed builds all four cross-build runs give the same-build answer: exit 0 and exit 2, both marked
+foreign, the sidecar still on disk.
+
+Every existing sidecar is v5, which only a build without the stamp can have written, so the version rule refuses it.
+That refusal used to be reported as `baseline="git-HEAD"`, which means no sidecar existed, under a stderr line saying
+there was no `.ripwire_quality_baseline`, one line below the line naming the refused file. It now reads
+`baseline="git-HEAD (sidecar unreadable)"` with the matching stderr line, and a root with no git no longer says "no
+<file>" about an unreadable sidecar on either arm. Upgrading costs one re-pin on a clean tree (commit or stash first).
+An older binary also refuses a v6 pin rather than honoring it without its stamp, but reports the refusal the old way, as
+`baseline="git-HEAD"` with a line saying there is no `.ripwire_quality_baseline`; the file is intact. A v5 pin left at
+an older commit is no longer removed by the stale-pin self-heal: it is refused as unreadable, with two stderr lines on
+every run, until it is re-pinned or deleted.
+
+Gate: `test/qbaselineproducercheck.sh`, 26 rows. Matched pairs over a real pin: dead records dropped (or one added)
+with the producer kept, a control that must change the answer and does, and the same forgery with one hex digit of the
+producer flipped, which must give the no-sidecar answer and leave the file byte-identical. Beside them: an unstamped v6
+pin, a v5 pin, a stale foreign pin, a root with no git, the MCP verb, the legend and `--help`. Against the previous
+commit 12 rows failed, both forged directions among them. `test/qrevtokencheck.sh`'s hand-written sidecars move to the
+v6 header so its hostile head stamps still reach the head-stamp path. Pin moved: `test/printf_parity.manifest`
+(`help_all` only, `UPDATE_GOLDEN_EXPECT` matched).
+
+### Fixed — a deep or odd-shaped argument, source file or skills tree could crash or stall a verb
+
+Each of these was reproduced before it was fixed, and the gate that already owns each verb now fails on the old code.
+
+- **`--graph-query` nested deep enough overflowed the stack.** The evaluator recurses once per `(`, and a 50,000-level
+  `kind(kind(…all…))` chain died with SIGSEGV (exit 139). Nesting past 256 levels is now refused before evaluation,
+  exit 1 with the reason. Gate: `test/graphqueryrefusecheck.sh` arm 6.
+- **A `--layout` array extent could crash its evaluator.** A `#define` extent nested 200,000 parentheses deep overflowed
+  the stack (exit 139). `((0-1099511627776)*8388608/(0-1))` divides INT64_MIN by −1, which is SIGFPE (exit 136) on
+  Linux x86-64, and `1099511627776*1099511627776` is signed overflow, which aborts the sanitizer build. Arithmetic is
+  now checked, that quotient is refused, and parenthesis nesting depth is bounded at 64 (a macro of many sibling
+  parenthesised terms nests one level and still sizes). Any of these reads as an unknown extent, with its caveat.
+  Gate: `test/layoutcheck.sh` §12.
+- **`--layout` dropped a data member whose extent or initializer holds a parenthesis, and still said the size was
+  right.** `char a[(4)];`, `int x = (3);` and `int x{ (3) };` were taken for member functions, because the test looked
+  for the first `(` anywhere in the statement. The field vanished while the struct reported `modeled="1"` and a size
+  short by its bytes. Only a `(` before the first `[`, `=`, `{` or bitfield `:` now opens a parameter list, and an
+  `operator` member is still a function. Gate: `test/layoutcheck.sh` §13.
+- **`--layout` dropped a data member whose declaration carries a `(` that belongs to an `alignas`,
+  `__attribute__` or `decltype` specifier, or sits inside a template argument list, and still said the size was
+  right.** `alignas(8) int x`, `int x __attribute__((aligned(8)))`, `decltype(1) x` and `std::function<void(int)>
+  cb` were all taken for member functions too, for the same reason as the row above: the scan still looked at the
+  first `(` in the statement, whichever `(` that was. The field vanished while the struct reported `modeled="1"`
+  and a size short by its bytes. That first `(` is now skipped when it opens one of those specifiers or sits
+  inside `<…>`; each shape now comes back refused (`modeled="0"`, a named caveat) instead of silently missing.
+  Gate: `test/layoutcheck.sh` §14.
+- **`--eval-skills` aborted on a skills directory it could not fully read.** A `SKILL.md` symlinked to itself, a
+  directory link loop or a mode-000 skill raised an uncaught `filesystem_error` from the throwing
+  `std::filesystem` overloads (exit 134). The walk now uses the `error_code` forms, skips an unreadable entry, the
+  directory link loop included, and names it on stderr; a skills root that cannot be listed at all says "cannot list".
+  Gate: `test/skillevalcheck.sh`.
+- **`ripwire wrap` aborted on a `./skills` tree it could not descend.** The pre-recipe scan advanced a
+  `recursive_directory_iterator` with its throwing `operator++` inside a `noexcept` function, so a tree it could not
+  open mid-walk (measured with more nested folders than free descriptors) was `std::terminate` (exit 134). The walk
+  now stops early instead, says so, scores the scan WARN and still prints the recipe. The same scan used to skip a
+  mode-000 skills folder in silence — a skill carrying injection text scored CRITICAL while readable and nothing once
+  sealed — and now names the folder it cannot enter and scores WARN. Gate: `test/codexwrapcheck.sh`.
+- **A deeply nested `--match` query overflowed the query compiler.** `ts_query_new` recurses per level on a worker
+  thread with a 512 KB stack: 4,000 levels died with SIGBUS (exit 138), and 2,000 ran past a minute. A query or
+  `--lint-rules` spec nested past 256 levels is refused before any compile. Gate: `test/matchgrammarcheck.sh` arm 6.
+- **`--slice` and the MCP `slice` verb stalled on a deeply nested function.** Every occurrence climbed to its
+  statement anchor through `ts_node_parent`, which descends from the tree root each time, so the walk's cost grew with
+  the cube of the nesting: 1,000 chained `if (x)` took 5.7 s, 2,000 took 48 s, and 4,000 did not finish. Over MCP that
+  one call wedged the server, and a real CPython test method (a chained assignment 808 levels deep) took 21.8 s. The
+  scan now builds a parent table in one cursor pass and memoizes the anchor, so the walk is linear: 2,000 / 4,000 /
+  8,000 nested ifs in 0.05 / 0.06 / 0.08 s, the 808-level chain in 0.06 s, and the output is byte-identical. Past
+  2,048 syntax levels the slice is refused by name: the walks still recurse once per level on the main thread, and
+  nested loops, the widest frame per level, need ~1.8 MB at that depth on a plain build and 2-3× under a sanitizer, so
+  this is a stack guard, not a time guard. That is still 2.5× the deepest function in 47,795 parsed files (808).
+  Gate: `test/slicecheck.sh` (15), including 2,040 nested `for` loops that must be answered just under the guard.
+- **That stack guard is now a heap one — `--slice`'s walk no longer recurses at all.** The scan above made the walk
+  linear but it still cost one C++ stack frame per loop/if/switch/try/block nesting level, so under ASan (frames
+  2-3× wider) 2,040 nested `for` loops needed 18.8 MB against an 8 MB thread and SIGSEGV'd (reproduced with the
+  caller's stack held to 1 MB, `ulimit -s 1024`: rc 139). `SliceRdWalker` (the reaching-definitions pass) and the
+  occurrence scan's own `sliceWalk` now run on an explicit heap work stack: every descent into a child node pushes a
+  continuation instead of recursing, so nesting depth grows a `std::vector`, never the calling thread's. Two defects
+  surfaced and were fixed before this shipped: passing the pending continuation by value at the one dispatch point
+  reached on every level copied it — and copying a continuation copies everything it closed over, so a 2,040-level
+  chain went quadratic in CLOSURE COPIES (1,000 nested `for` loops: 0.02 s → 12 s); and the loop fixpoint's own
+  per-round locals, arena-allocated like everything else, were never freed when an outer level's fixpoint redid an
+  inner loop's body, so superseded rounds piled up (2,040 nested `for` loops: 2.6 GB against the recursive form's
+  13 MB). Both are fixed — the continuation is passed by reference, and a loop's own per-round state is
+  `shared_ptr`-owned so a superseded round frees the moment its closures finish, the same lifetime the recursive
+  form's stack gave for free. Verified byte-identical to the recursive form on 198 real definitions (790 slice
+  calls: ripwire's own `src/`, two other local C++/Python trees, and the `#252` parity fixture set) and timing-
+  neutral on the same set (interleaved, real total time within 1%). The 2,048-level guard is unchanged: it is a
+  safety margin now rather than a strict necessity, but the walk's fixpoint cost is still super-linear in nesting
+  (measured: 8,192 nested `for` loops, 48 s), so raising it further is a time risk, not a safety win. Gate:
+  `test/slicecheck.sh` (15a)/(15b) run under `ulimit -s 1024` (red on the pre-fix binary at (15b), SIGSEGV).
+
+The four new bounds are listed in `docs/LIMITS.md` as BOUNDARY.
+
+### Changed — the macOS arm64 release and the macOS CI legs build with Xcode 26.6, whose loop vectorizer reads the no-alias promises
+
+Through 0.6.1 the `macos-arm64` release asset and every macOS CI leg were built with Xcode 16.2 on `macos-14`. Its
+AppleClang 16 is LLVM 17, and LLVM 17's loop vectorizer never reads `__builtin_assume_separate_storage`
+(llvm/llvm-project#64666, fixed in LLVM 18). There, a `VERIFY_NO_ALIAS_BUF` promise removed scalar reloads but left each
+vectorized loop's runtime overlap check and its scalar fallback in place. The release leg, the eight macOS gate shards
+and the macOS sanitizer leg now build with Xcode 26.6 (17F113, Apple clang 21.0.0), the default Xcode on `macos-26`.
+GitHub retires the `macos-14` images on 2026-11-02. On Xcode 26.6, with no flag beyond the release's own
+`-O2 -mcpu=apple-m1`, a two-buffer loop carrying the promise vectorizes with no overlap check. objdump counts 57
+instructions against 64 for the same loop without the promise, and 64 again with `-mllvm -basic-aa-separate-storage=false`.
+`test/noaliascheck.sh` classifies this compiler `CONSUMED_DEFAULT` and `LOOP_CONSUMED`. No speed is claimed: the promises
+that would use this land later, with the macro rename.
+
+The minimum macOS is now pinned instead of inherited from the runner. With no deployment target, clang takes the lower of
+the runner's macOS and the SDK default. The published `ripwire-0.6.1-macos-arm64` binary reads `minos 14.0` (otool), and
+the same build on `macos-26` would have read 26.x and dropped every macOS 14 and 15 user. The release leg exports
+`MACOSX_DEPLOYMENT_TARGET=14.0` before its PGO build and reads `minos` back off the binary it packages. The CI legs build
+at the same 14.0, where Xcode 26.6's libc++ still defines `__cpp_lib_print`. The leg also records its Xcode, compiler and
+`llvm-profdata`, and fails if `DEVELOPER_DIR` is empty or either tool is not the pinned Xcode's, so PGO trains, merges and
+optimizes with one toolchain. None of these checks skips a leg that lost its pin. A macOS release leg without a
+deployment target fails, and so does a CI leg whose CMake cache did not receive the pinned target.
+
+Gate: `test/portablebuildcheck.sh` #2i, sixteen rows. It holds the release leg's runner, Xcode and quoted minimum macOS;
+the export before the first configure; a single deployment-target source across the leg and the build job's env and
+steps (no `-DCMAKE_OSX_DEPLOYMENT_TARGET`, `-mmacosx-version-min` or second `MACOSX_DEPLOYMENT_TARGET`); the exact
+`otool` compare between PGO staging and packaging; and each fail-loudly guard: the empty-target refusal, the toolchain
+record step ahead of the first build, and ci.yml's two CMake-cache checks. It also holds ci.yml's nine macOS runner
+labels, five `matrix.os` conditions, two Xcode paths and two deployment targets to the release's values, so a half-done
+runner move (an `ASAN_OPTIONS` condition still naming `macos-14`) is refused. Three mutated copies must each be refused
+by exactly their own row: no minos step, `ASAN_OPTIONS` back on `macos-14`, and `-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0`
+added to the pgobuild step. Red before this change: 14 FAIL, 2 PASS. All sixteen pass after.
+
+A local emulation of the release leg on the same Xcode build (`scripts/pgobuild.sh`, Release,
+`MACOSX_DEPLOYMENT_TARGET=14.0`) passed every post-step: the PGO determinism diff, `emit=std::print`, `minos 14.0`, and
+xmllint. Its output was byte-identical to the plain build on `test/fixture`, the repo map and a `--for` query.
+
+The move also exposed a test-harness defect. Under a UTF-8 locale, macOS 26's `/usr/bin/sort` sorts case-insensitively,
+where macOS 14 and Linux sorted these lists in byte order. `test/scroundtripcheck.sh` compared a `sort`ed expected list
+with Python's `sorted()` and went red on both macos-26 CI shards. A sweep of every `sort`, `comm`, `join`, `uniq` and
+`ls` call in the gate and bench scripts found 27 sites in 20 files that compare an order with something else: Python's
+`sorted()`, a literal, a pinned hash, ripwire's own byte-sorted output, or `git status`. Only that one fails today; the
+other 26 pass by luck of their current names. All 27 now run under `LC_ALL=C`, and each fixed gate passes under both
+`LC_ALL=C` and `LC_ALL=en_US.UTF-8`.
+
+### Fixed — an answer depended on how the root was typed (`ripwire .` and `ripwire "$PWD"` disagreed)
+
+Reported by **@hnipps** in #228: `--quality-delta` on an unchanged tree gated. Part of that report is how the root is
+spelled, and it was a graph defect, not a delta one. The crawl stores every path with the root exactly as typed, and the
+include/import index and the path predicates read that spelling raw. Three things followed. Python's root-relative
+import probe joined onto an empty base, which is the crawl root only under `ripwire .`. Under `"$PWD"`, which is every
+MCP session and the `--quality-delta` HEAD side (always an absolute temp root), `from pkg.store import load` stopped
+resolving and the name ladder bound a same-directory `load` instead. A root typed `../repo` lost every include and
+import edge in every language, because `lexicalNormalize` refuses a path that starts above its base. And a checkout that
+merely lives under a `tests/` or `fixtures/` directory had every file tagged `layer="test"`, exempted from dead-code and
+seeded as a test under an absolute root, and none of that under `.`. The fix is one seam: `ingest()` records the root
+once, and `rootRelPath` (`src/model.h`) gives the root-relative view (a prefix strip, no syscall, no allocation). The
+include/import index, the Python/JS/C declaration indexes, the module vocabularies, the test, fixture, layer and tier
+predicates, the path-mention and stack-trace suffix matches, the `--lint` byte cap and the map's byte model now read
+that view. Stored and printed paths are unchanged. `rootRelativeUri` also trims a trailing `/`, so `--pack-task` rows
+stop printing the whole absolute path under `"$PWD/"`. On a shallow Django clone (2b30f62, 3,449 indexed files,
+`--no-cache`, map header), `"$PWD"` went from 62,591 edges, `ambiguous=3135` and `declined=49153` to what `.` always
+gave: 74,972, 5,958 and 40,681: 12,381 more (caller, callee) edges, and more calls reaching a definition set at all,
+which is why the ambiguous gauge rises with them. On the same clone, `--quality-delta` with a fresh cache gated 14 rows
+under `.` and `./`, 8 under `../dj` and 0 under `"$PWD"`; it now reports 0 under all four. A `--top-k=300` map flipped
+to `order=important-last(auto:fill)` under `"$PWD"` alone and now agrees. Rooting at a test directory now answers the
+way `cd tests && ripwire .` does: `ripwire tests/` no longer counts its own files as tests (no `layer="test"`, no test
+seeds for `--affected`/`--test-gate`, no dead-code exemption). The `.` answer itself moves slightly on byte-capped
+output, because the byte models now charge a path as printed: the default `--lint` page on this repo went from 680 to
+689 rows. `kQSnapCacheScheme` moves 12 → 13 so a HEAD Snapshot computed before this fix is never served.
+`test/rootspellingcheck.sh` holds six spellings (`.`, `./`, `"$PWD"`, `"$PWD/"`, a symlink and `../name`) to
+byte-identical output, once the printed `root=` and `est_tokens=` are normalised, across the committed four-file repro,
+eight language import fixtures and a C++ header selector whose answer rests on an include proof. It also checks a
+tests/fixtures placement, a real-edit sensitivity arm and, given a pre-fix binary, the scheme upgrade. On origin/main it
+fails 57 of its 86 rows. The checkout-shape half of #228 (export-ignore, submodules, sparse checkouts, skip-worktree,
+`--no-ignore`) stays open.
+
+### Fixed — a cached enum byte past its enum's last value was believed, and a span-tier memo byte wrote past a stack array
+
+Two on-disk readers built enums straight from bytes with no range check. **The ingest cache** read ten of them —
+`SymKind` and `Lang` on a definition, `Lang`/`RecvKind`/`RefRole` on a reference, `Lang`/`LocalBindKind` on a
+binding, `BindKind` on an FFI alias, `HttpMethod` on both route records. **The span-tier memo** (`ripwire-stier-*`,
+the `--grep` classifier's per-file blob) read one `SpanTier` byte per span.
+
+What an out-of-range value did, measured on the unfixed binary at `3bf884e2` over a 15-file fixture
+(`test/fixture` + `test/ffifix` + `test/routeedgefix`), one field class set to 255 at every site with every digest
+rebuilt, 24 verbs each diffed against `--no-cache`: every record was accepted (`cached_records=15` of 15), and the
+answer changed on 18 verbs for `SymKind` (served as `t="other"`; a field became a map symbol), 18 and 17 for a
+definition's and a reference's `Lang`, 17 for `RefRole` (a call demoted to `role="read"` and out of the call graph),
+13 for `RecvKind`, 12 for `BindKind` and 11 for `LocalBindKind`. A `Lang` of 32 or more is also undefined behaviour:
+`src/clones.h:135` shifts a 32-bit language mask by it, and UBSan stops `--for`, `--clones`, `--readability` and
+`--pack-task` there. The memo was worse: a tier byte of 3 or more indexes the three-element per-tier hit counter in
+`grepApplySpanTiers` (`src/search.h:2174`), an out-of-bounds **write** on the stack that AddressSanitizer reports as
+`stack-buffer-overflow`, and the plain binary served a different `--grep` answer.
+
+How reachable, stated plainly. An ingest-cache record is covered by its own 32-bit digest and the offset table by
+another, so a random bit flip is refused before any enum is read; an out-of-range byte gets there only from a blob
+written wrong or edited with its digests rebuilt — a committed team artifact handed to `--cache=`, a copied cache
+directory. For that cache this is defence in depth, and hardening rather than an integrity boundary: a blob whose
+digests were rebuilt can still carry wrong in-range facts. The span-tier memo is read ONLY from the per-user cache
+directory ladder (`$TMPDIR/ripwire`, `$XDG_CACHE_HOME/ripwire`, `/tmp/ripwire-<uid>`; mode 0700 and owner-checked,
+failing closed otherwise), never from a repository or a `--cache=` path, so a cloned repository cannot supply one;
+reaching the out-of-bounds write took storage corruption or a write by the same user. And the memo still has **no
+checksum**: an in-range flip (a tier re-labelled, a span offset moved) is still believed and still changes a
+`--grep` answer. This change bounds out-of-range bytes only.
+
+Every enum byte is now validated at the read. The ingest readers go through one helper, `ByteR::enumU8`, which folds
+a failure into the reader's existing `ok` flag, so the record takes the refusal path a short read already takes:
+that file reparses and the rest of the blob stands. The memo refuses the whole blob and re-parses the file. Each
+bound is a count constant beside its enum (`kSymKindCount`, `kRecvKindCount`, `kRefRoleCount`,
+`kLocalBindKindCount`, `kBindKindCount`, `kHttpMethodCount`, `kSpanTierCount`; `kLangCount` already existed), and
+each is proven exact at compile time by `src/infra/enumcount.h`, which asks the compiler whether `count - 1` names
+an enumerator and `count` does not. So appending an enumerator without moving its count is a build error, not a
+validator that quietly refuses the new value's every record. The proof is evaluated under clang only; GCC's
+spelling was not verified, and the macOS and Linux clang legs carry it. On `-DNDEBUG` Apple clang the warm load
+function `loadCache` grows from 3,936 to 3,962 instructions: the checks become compares folded into the `ok` flag
+with `csel`, plus 4 conditional branches. No cache format, `kCacheVersion` or parser version moved.
+
+`test/cachefuzzcheck.sh` gains Part 3 and Part 4. Part 3 changes ONE enum byte per field class in an otherwise
+valid blob, rebuilds every digest, and asserts that the one record is refused (`cached_records` 14 of 15), that
+the output is byte-identical to `--no-cache`, and that the ASan binary with `--clones` stays silent. An in-range
+edit of the same byte must be accepted (15 of 15), which proves the refusal comes from the range check and not
+from a digest. The enumerator counts are read from `src/model.h`, not written into the gate. Part 4 does the same
+for a memo tier byte, and its control re-labels a comment span as code, which changes the answer. Against the
+unfixed binaries the new arms gave 27 FAIL rows: 20 accepted mutants, the `clones.h:135` UBSan report, the
+`search.h:2174` stack-buffer-overflow, and the memo serving a different answer. Against the fixed build the whole
+gate is 161 PASS, 0 FAIL.
+
+### Fixed — git runs with the file-system monitor off, temp files are created exclusively, and edit-plan reads the path it confined
+
+- ripwire runs its git commands with `--no-optional-locks -c core.fsmonitor=false`; the one read of that setting
+  runs without them, since the flag would mask the value it reads.
+- the atomic-publish writers create their temp file exclusively and without following a symlink.
+- `--edit-plan` reads a payload through the same confined path its containment check judged.
+
+### Fixed — a `--pin-census` row no longer splits on a line break, TAB or `|` inside an id
+
+A C++ out-of-line member of a class template whose template-argument list spans source lines has a scope that holds
+the line break verbatim, and the census wrote it raw. One `C` row became a six-field line plus a continuation line
+starting with neither `C`, `S`, `O` nor `#`, and the symbol's `S` row broke the same way; a reader splitting lines
+dropped or mis-keyed the site. It was seen once, on a large private C++ corpus. The map was never affected: it writes
+the same scope as `&#10;`. Five more spellings of the defect reproduce on the pre-fix binary: a TAB or a form feed
+inside the argument list, a backslash line splice, CRLF source, and a `|` inside an id. `|` separates targets, and on
+this repository that case is real: Markdown heading symbols such as ``--token-budget=N[K|M|G]`` made a `|`-split read
+18 single-target rows as two to six targets.
+
+Every id and callee field is now escaped. A backslash is written `\\`, TAB, LF and CR are `\t`, `\n` and `\r`, and every
+other control byte and `|` is `\xHH`. Nothing else changes, so the columns are the same and an id without those bytes
+is spelled exactly as before. The first line now reads `pin-census v3` and the header documents the escape.
+`bench/scip_match_diag.py` decodes the fields, because it opens files by an id's path; `bench/scip_pin_precision.py`
+joins ids as opaque keys and needs no decode.
+
+Measured by running the pre-fix and fixed binaries with `--pin-census --no-cache` over a clean export of this
+repository at `a55b118e`: 99 of 51,821 rows change, 18 `C` and 81 `S`. 98 of them hold a `|` and one holds a backslash,
+each decodes back to its pre-fix bytes exactly, and every other row is byte-identical. Before the fix all 18 of those
+`C` rows had target lists a `|`-split misread; after it, none do. Gate: `test/pincensuscheck.sh`
+arm (L), over a generated fixture. Every non-comment line must be a `C`, `S` or `O` row with its full field count, and
+the check also runs over arm (B)'s and arm (G)'s censuses. Each awkward caller id must decode to its source bytes,
+re-encode byte-identically and appear verbatim as an `S` id. The `|` target must split into one id, and the
+dispositions and summary counts must agree with what a line reader parses. Against the pre-fix binary the gate printed
+12 FAIL rows: a line reader parsed 2 of 6 decision rows and 12 of 16 symbols.
+
+### Fixed — a member call through a typed parameter was pinned to the caller's own class
+
+`int Decoy::plainCaller( Target& other ) { return other.pick( 1 ); }` answered `--callees=plainCaller` with one edge
+to `Decoy::pick` — precise, no `amb=`, nothing disclosed, and wrong. Rule 2 narrowed a receiver only through a typed
+LOCAL; a parameter's written type had been captured since the member-variable round but was read only by the field
+use-site index, so the call fell through to the name ladder, whose locality tie-break hands a same-file tie to the
+caller's own class. The same call through `Target other;` resolved correctly.
+
+Rule 2, and CHA-lite with it, now reads the written type of a parameter, a lambda parameter, a typed range-for
+variable and a reference local LEXICALLY: the innermost declaration of the name whose scope covers the call site
+decides, and only a written, unqualified type narrows. Both limits were measured before they were chosen. Folding
+these types into Rule 2's flat per-function table minted three precise wrong edges on the gate fixture — a range-for
+variable's type reaching a later `auto` loop of the same name, a same-named field read after the loop, and a
+parameter hidden by an untyped loop variable. And a written type is recorded as its final segment against class
+names that carry no namespace, so `const std::map<K, V>& ref; ref.lower_bound( q )` narrowed to an unrelated in-repo
+`map`: three such edges on a private C++/ObjC++ corpus of 129,759 call sites, which refusing qualified types removes
+at the cost of 11 correct narrows through namespace- or class-qualified in-repo types (those sites keep their previous
+answer). An include-visibility guard was measured first and rejected: path-precise includes miss include-root
+spellings such as `"LinearMath/btVector3.h"`, and it refused about 150 correct narrows on that corpus to stop the
+same three. The qualified text rides the declaration's record, so **kParserVer moves 96 → 97** and a warm cache is
+reparsed once.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `f8e6087c` against this change, on that corpus: 587 call
+sites change target — 373 splits narrow (300 to a Rule-2 pin or the type's own overload set, 73 through the CHA cone), 147
+calls the ladder had declined gain an edge (`bound=` 80,432 → 80,583, `declined=` 17,552 → 17,401), 66 pins or splits
+that did not contain the parameter's type move to it (40 of them `unique` pins to the one same-file method of the
+wrong class), and one edge is lost — a friend function ripwire scopes inside its class, which the parameter's type
+then names as the caller itself. 956 more sites keep their target and are now decided by Rule 2. Every category was
+sampled and read against the source. On this repository's `src/`, 53 splits become one Rule-2 pin and nothing else
+moves target. Wall time is unchanged within noise (three cold runs each on the same corpus, 1.66–2.51 s both).
+
+`test/narrowcheck.sh` arms 7-18 are the gate: nine rows red on `main`, arms 12-14 red on the flat-table fold, arm 17
+red on the lexical lookup without the qualifier guard, arm 15 asserting through the census that the site is decided
+by Rule 2 rather than the locality tie-break. Five gates' controls were built on "a parameter has no binding" and now
+use an untyped `auto` receiver — `narrowcheck`, `chacheck`, `chaconecheck`, `localitycheck` (whose call no longer
+reached the tie-break it exists to test) and `resolverhonestycheck` F9 (whose `check_signal` row had gone vacuous on a
+single edge). `fieldnarrowcheck`'s ambiguity gauge moves 7 → 6 because `shadowParam( Decoy& m_x )` now resolves to the
+parameter's type, and its arm (s1) now also asserts that the shadowed field's `Pool::acquire` is not linked. Still
+open, and unchanged by this entry: an untyped receiver (`auto x = make(); x.m()`) still reaches the locality
+tie-break, and a typed LOCAL still reads the flat table, qualified-type collision included.
+
+Two floors this change does NOT remove, stated because the first one moves edges the wrong way.
+**An abstract parameter type narrows onto its namesakes.** Rule 2 resolves `m` against definitions only, so a parameter
+typed as an interface whose methods are pure-virtual declarations cannot narrow to it — and when unrelated classes
+share the interface's final name segment and define `m`, the narrow lands on them instead. On rocksdb at
+`0e2801ac3`, `--pin-census --no-cache` with the `main` binary at `f8e6087c` against this change: 79 call sites
+(88 census rows) through an `Iterator*` parameter, such as `AssertItersEqual( Iterator* iter1, Iterator* iter2 )` in
+`utilities/write_batch_with_index/write_batch_with_index_test.cc`, now split five ways over the nested `Iterator` classes in
+`memtable/` (`skiplist.h`, `inlineskiplist.h`, `skiplistrep.cc`, `vectorrep.cc`, `hash_skiplist_rep.cc`), and none of
+the five is right. Before this change 25 of them were a unique pin to a plausible override (`BlobCountingIterator::key`),
+26 were a different split over overrides, and 28 had no edge. Every one is disclosed (`amb=`, `prov="split"`), but
+each is a wrong answer rather than a missing one, and 28 are new edges. It is the same final-segment collision typed
+locals already have on `main`; this change extends it to parameters. **A call in a constructor's member-initializer
+list is not narrowed:** `Decoy( Target& t ) : v( t.pick( 3 ) )` sits outside the parameter's scope span (the body),
+so it keeps `main`'s answer — on a same-named `Decoy::pick`, the locality tie-break's wrong pin.
+
+### Fixed — an explicit receiver of unknown type was pinned to the caller's own class, and a `std::` type narrowed to an in-repo namesake
+
+Two holes the parameter-receiver entry above left open. The S6-C locality tie-break prefers the candidate that shares
+the longest segment prefix with the caller — same file, then same class — and granted the class credit to every
+named receiver on the premise that a typed one had already been narrowed. A receiver no rule typed never was:
+`auto other = make(); return other->pick( 1 );` inside `Decoy` answered one precise edge to `Decoy::pick`, no `amb=`,
+and delegation through a member whose type Rule 2b cannot read (`rep_->Name()` inside `Wrapper::Name`) did the same.
+Such a receiver — an untyped local, a member of an unreadable type, or a typed variable whose type defines no such
+method — now keeps the file and directory credit and loses the scope segments, so the call is the split it is.
+Skipping the tie-break outright for these receivers was measured too: it moved no target on any corpus below, and
+relabelled every tier whose one competitor is the caller itself from `locality` to `unique`, dropping its `lpin=`
+disclosure — so the file credit stays.
+
+The second hole: a written type is recorded as its final segment, matched against class names that carry no
+namespace. The entry above refused every qualified PARAMETER type; typed locals kept narrowing, so
+`std::map<int, int> table; table.find( k )` pinned an in-repo `map::find`. Measurement overturned the blanket rule
+instead of extending it, and **this entry supersedes the parameter rule stated above**: where that entry says only a
+written, unqualified type narrows and that qualified in-repo types keep their previous answer, a parameter now refuses
+only a type written in namespace `std`, exactly as a local does. Refusing any qualifier on locals would have refused 424 narrows on rocksdb
+(`ROCKSDB_NAMESPACE::Status s; s.ok()`), 11 on a private C++ corpus and 9 on this repository's `src/` — every sampled
+one correct — while the only wrong edges it removed on all three were six `std::map` locals. `std` is reserved to the
+implementation, so no in-repo class is a `std::` type: a type written in namespace `std` now never narrows — for a
+parameter, a typed local, a constructor-inferred local, and a C++ assignment from a constructor, whose record did not
+carry the qualified text until now (**kParserVer 97 → 98**). Every other qualifier narrows on its final segment,
+parameters included again. Stated floor, pinned by `test/narrowcheck.sh` arm 24: a qualifier that is neither `std`
+nor the class's own namespace — an external or alias-template type whose final segment an in-repo class shares —
+still narrows by name. Closing it needs the namespace chain in `Symbol::scope`.
+
+That floor is disclosed on every edge it can produce. A narrow decided by a qualified, non-`std` written type matched
+the type's last name and never checked its qualifier, so its edge carries **`prov="final-segment"`** — a parameter or
+a local, through Rule 2 or CHA-lite's cone — and both map legends define it. The wrong edge arm 24 pins and the correct
+`store::tree&` narrow beside it read the same way, as a guess, not as a uniquely resolved name. Byte cost on rocksdb,
+the previous commit's binary against this change, the only differences being the attribute, the legend term and
+`est_tokens`:
+
+| rocksdb output | before | after |
+| --- | --- | --- |
+| default map | 31,366 B | 31,711 B (+345, +1.10%; 14 marked edges) |
+| `--for="write batch handler mark commit"` | 8,746 B | 8,746 B (the bundle carries no `prov=`) |
+| whole graph, `--top-k=100000` | 5,406,160 B | 5,413,666 B (+7,506, +0.14%; 355 marked edges) |
+
+A private C++ corpus's default map pays only the legend term (+51 B, no marked edge printed). The Iterator-shaped
+collision #248 states above is unchanged: those calls stay `amb=`-disclosed splits. A name-only collision guard was
+measured against them and rejected — it moved 967 rocksdb rows off the wrong `memtable` namesakes, but declined 58
+correct platform-alternate splits (`port::Mutex::Lock` over posix and win) and 8 correct `log::Writer` narrows, minted
+10 new wrong unique pins on rocksdb, and declined 132 correct `Template.render` splits on django. The namespace chain
+is the fix for both.
+
+Measured with `--pin-census --no-cache`, the previous commit's binary against this change, with sampled rows of every
+category read against the source. rocksdb: 211 call sites change target — 117 locality decisions become splits or wider
+ones (14 of 14 sampled pins were wrong), and 94 sites narrow through in-repo qualified parameter types the blanket guard
+refused (`WriteBatch::Handler* handler; handler->MarkCommit( xid )` had been pinned to `WriteBatchInternal::MarkCommit`);
+`bound=` 200,009 → 200,036. The private C++ corpus: 88 — 70 locality decisions widen to splits (14 of 16 sampled pins
+were wrong; one of the two right ones is now a three-way split that keeps it), 6 `std::map` locals stop narrowing to an
+in-repo `map`, and 12 in-repo qualified parameters narrow, one of them an `ankerl::unordered_dense::map<…>&` alias
+template that lands on that in-repo `map` again: the floor above. django: 72 locality pins become splits; rails: 145.
+The removed pins were less often wrong in the dynamic languages, as an independent review's samples show: django 8 of 14
+wrong (`target_ids.add`, `params.get`, `form.save`) and 6 right (`copy.set_source_expressions`, `cls._pre_setup()`);
+rails 8 of 12 wrong (`pair.freeze`, `connection.create_table`) and 4 right (`set.each`, `model.history`). Every right
+target stays inside the split that replaces it. Python's `cls` is a named receiver, so a classmethod's `cls.m()` splits
+too (2 of django's 72). This repository's `src/`: 5 splits become Rule-2 pins through `notes::`- and
+`rw::quality::`-qualified parameters. vue-core and Go's `net` package: none. The assignment capture moved no site on
+these corpora; its arm is the only witness. Wall time on rocksdb is within noise (three cold runs each at load average
+42: 1.69–2.19 s before, 1.73–2.80 s after).
+
+`test/localitycheck.sh` arms 5-9 and `test/narrowcheck.sh` arms 17-25 are the gates: localitycheck 5, 6 and 7 red on
+the previous commit and 8 red on the skip-the-tie-break variant; narrowcheck 19, 20, 21, 23 and 24 red on the previous
+commit, 21 red without the assignment capture, and 25 (the attribute on arms 22-24's edges and in both legends, absent
+from an unqualified narrow and a uniquely named call) red before `prov="final-segment"` existed. Two gates moved for the reason the fix exists. `clsrecvcheck`'s
+three non-firing controls (B), (C), (E) asserted that the caller's own `Box::validate` pin STANDS for
+`item.validate( v )`; they now assert the honest two-way split, which keeps the contrast with the route that fires, and
+(F) reads `ambiguous=3` with no locality pin. localitycheck's HIGH-1 probe was an untyped local that no longer earns
+the scope credit, so it could no longer tell a byte-prefix tie-break from a segment-aware one; it is `this->go()` in a
+class template with a dependent base now, and a census row asserts the call still reaches the tie-break holding both
+candidates. `chacheck`, `chaconecheck`, `resolverhonestycheck` and `fieldnarrowcheck` pass unchanged: their untyped
+controls sit in scope-less free functions, which never reach the tie-break.
+
+### Fixed — a member field typed `std::string` narrowed to an in-repo class named `string`
+
+The entry above stopped a type written in namespace `std` from narrowing a parameter or a local. A member field is the
+third place a written type is read, and it still did. The field capture records a qualified type's final segment, so
+`struct Record { std::string name_; int nameLength() { return name_.size(); } };` recorded `name_` as a `string`, and
+all three readers of that record took it for any in-repo class of that name: Rule 2b pinned `name_.size()` to the
+in-repo `string::size` (census `receiver-rule` — one precise edge, no `amb=`), the HAS-A block drew `Record → string`,
+and `--uses=string.len` pinned both `name_.len` and `this->name_.len` to that class. A field's compose record now
+carries the namespace its type was written in as its qualifier — the same (name, immediate qualifier) pair a call
+carries, so `std::string` is `string` in `std` (**kParserVer 98 → 99**) — and the readers refuse `std`: the field-type
+table records no type for the field, and no HAS-A edge is drawn. Every other qualifier narrows as before:
+`store::Text body_; body_.size()` still reaches `Text::size`.
+
+The std field records an empty type rather than being skipped, and that choice was measured. Dropping it at capture —
+the obvious fix — un-tombstones a same-named class's differently-typed field. rocksdb has two classes named
+`StringSource`: `test_util/testutil.h`'s holds `std::string contents_` and `db/log_test.cc`'s holds `Slice& contents_`.
+Class names carry no namespace, so both share the entry `StringSource#contents_`, and the disagreement is what keeps
+either from narrowing; with the std record skipped, four `contents_.size()` calls in testutil.h pinned `Slice::size`.
+The empty type tombstones the entry exactly as a second real type does.
+
+Measured with `--pin-census --no-cache` and the default map, the previous commit's binary against this change: rocksdb,
+a private C++ corpus and this repository's `src/` (a frozen copy, so both binaries read one tree) are byte-identical in
+both, and so is rocksdb's `--metrics`. None of them has an in-repo class that shares a `std::` field type's name and
+defines the member called on it: counted with `--match`, rocksdb has 1,258 fields whose type is written `std::X`,
+`src/` 1,987 and the private corpus 143, and only rocksdb's 1,116 `std::string`/`std::wstring` fields share a name — with
+gtest's `typedef ::std::string string`, which has no members and drew no HAS-A edge. So a probe measured the reach: a
+copy of rocksdb plus one `namespace shim { struct string { … } }` defining `size`, `empty`, `data`, `c_str`, `clear`,
+`append` and a field `len`. There the previous binary pins 384 call sites to `shim::string` by receiver-rule and this
+change leaves 7, all gtest parameters written `const ::string&` — the global namespace, not `std`, and not fields. Of
+the 357 sites that move, 279 land on exactly the row the unmodified rocksdb census has; the other 78 are `c_str` calls
+the probe's own second `c_str` definition makes ambiguous. 455 class rows lose a composed type from `cbo=` (446 by
+one, 9 by two).
+
+`test/fieldnarrowcheck.sh` arm q is the gate. q1 (Rule 2b), q3 (HAS-A) and both q5 rows (`--uses`) are red on the
+previous commit; the in-repo qualified controls q2, q4 and q6 are red on a refuse-every-qualifier variant; and the four
+q7 rows — the StringSource collision in both record orders — are red on the skip-at-capture variant, the only arms that
+variant turns red. `qschemetripcheck` is re-pinned for the parser version, as its own message directs.
+
+### Fixed — `--uses=Owner.field` pinned a read through a `std::` local or parameter to an in-repo namesake
+
+The entries above stopped a type written in namespace `std` from narrowing a call through a local, a parameter or a
+member field. The member use-site index keeps its own table of local and parameter types, and that table still read the
+final segment alone. Given an in-repo `struct pair { int first; int second; };` and a second owner of `first`,
+`std::pair<int, int> p; return p.first;` and `const std::pair<int, int>& q` → `q.first` both answered
+`--uses=pair.first` as pinned: one owner, no `owner_candidates=`, and wrong. The table now records a `std::` type as a
+tombstone, as Rule 2's own table does, so such a read is the split it is (`owner_candidates=2`, one per owner of
+`first`). A second declaration of the same name in that function is tombstoned with it rather than handed every site.
+A tombstoned local also no longer falls back to the enclosing class's same-named member. `std::pair<int, int> p`
+inside a method of a class whose member `p` is a `pair` used to answer through the member's type. But the local hides
+that member, and the table cannot tell which of a function's declarations a site sees, so a local declared twice with
+different types now answers the same split. Every other qualifier still narrows: `store::Text t; t.len` pins
+`Text.len` against a second owner of `len`. Ingest already recorded the qualified text on both kinds of record, so the
+parser version does not move.
+
+Measured with a scratch dump of the index for every field whose name is read through a receiver whose type record this
+change can alter (one written in `std`, or two that disagree), the previous commit's binary against this change. Three
+corpora are byte-identical: this repository's `src/` (a frozen copy; 1,169 fields, 57,511 sites), rocksdb (824 fields,
+84,617 sites) and a private C++ corpus (1,811 fields, 393,336 sites). So are `--pin-census` and the default map on
+`src/` and rocksdb; the call graph never reads this table. None of those corpora has an in-repo class named after a
+`std::` type that declares the member read through one. So a probe measured the reach: a copy of rocksdb plus
+`namespace shim { struct pair { int first; int second; }; }` and a second owner of both names. The previous binary
+pinned 110 rocksdb reads to `shim::pair` (53 `.first`, 57 `.second`, such as `std::pair<IOStatus, std::string> res;
+res.first` in `env/env_chroot.cc`), and every one was wrong, because no rocksdb code declares a `shim::pair`. This change
+turns all 110 into two-way splits and pins no site that was not pinned before. Six of them, sampled across files, were
+read against the source, and all six are `std::pair` locals or parameters.
+
+`test/fieldusescheck.sh` arm J is the gate, on its own fixture. It covers a `std::pair` local, a `std::pair` parameter
+and a `::std::pair` local, a `std::string` receiver two hops deep, one function declaring both `std::pair v` and
+`pair v`, `std::` locals and parameters that hide a member, and a non-std double declaration. The previous commit's
+binary fails three of its rows. Three variants of the fix were built to prove each row can fail. Skipping the std
+record turns the double-declaration and member-hiding rows red. Letting a tombstone fall back to the member turns
+exactly the three `std::` member-hiding rows red (measured before the non-std row was added). Refusing every qualifier
+turns only the `store::Text` controls red.
+
+### Fixed — a C++ member call with explicit template arguments is a call (parser version 101)
+
+`r.get<K>( 1 )`, `p->get<K>( 1 )` and `x.template get<K>()` minted no reference at all. Their callee parses as a
+`template_method` under the member access — inside a `dependent_name` when the `template` keyword is spelled — and no
+C++ reference pattern bound either shape, so the call was dropped at extraction, before `ambiguous=`/`unresolved=`
+could count it: a four-line repro answered `--callers=get` count="0" beside count="1" for `r.plain( 1 )`,
+`--callers`/`--uses`/`--impact`/`--safe-delete` under-counted every such call, and `--quality-delta` could report a
+method reached only this way as `kind="dead-code"`. A new `queries/cpp/tags.scm` pattern binds both shapes, and the
+receiver reader now steps over the wrapper — without that step `other.pick<int>()` reads as a bare call and the
+enclosing-class rule binds it to the caller's own same-named method. The qualified dependent spelling had the same
+defect family in another place: `X::template make<int>()` was extracted under the NAME `template make`, which
+resolves to nothing, and `X::template Rebind<int>::f()` keyed its qualifier as `template Rebind`, so a same-named
+definition in another scope split the call. The keyword is now stepped over in both halves. Free `f<T>( x )` and
+qualified `ns::f<T>( x )` (the `std::get<0>( t )` shape) were already bound and are unchanged.
+
+Measured with the pre-fix (`f8e6087c`) and fixed (`1171f775`) binaries, `--no-cache`, map header plus
+`ripwire_probe`'s reference total. On this repository's `src/` (169 files) the change is small: references 168,457 →
+168,463 and edges 18,308 → 18,309 — the six `r.pod<T>()` reads in `src/gitoracle.h`'s cache loader, so `--uses=pod`
+goes 1 → 7. On a template-heavy tree it is not small. `clang/include` plus `clang/lib` from llvm-project `4d5358b1d`
+(2,515 files) gains 10,175 references (1,855,925 → 1,866,100), 3,907 edges (409,860 → 413,767, +0.95%) and 972
+`ambiguous=` (81,601 → 82,573), with `unresolved=` unchanged at 3,893; `--callers=getAs` goes 48 → 492 and
+`--callers=hasAttr` 45 → 377. On `clang/lib/AST` (155 files) the reference delta, 2,027, equals the `--match` hit count
+of the new call shape exactly (`hits_capped="0"`), so extraction moved only the intended class.
+
+The new sites resolve exactly as a plain member call to the same name does, so a name like `getAs` or `hasAttr` gains
+its real callers and also that resolver's wrong ones. On the same clang tree `FD->hasAttr<PackedAttr>()` in
+`ASTContext::getDeclAlign` binds `Type::hasAttr(attr::Kind)` at `lib/AST/Type.cpp:2026`, not `Decl::hasAttr<T>()`,
+with no `amb=` on the row. The plain spelling does the same on main: in a reduced five-file repro, `FD->plainAttr()`
+binds `Type::plainAttr(int)` rather than `Decl::plainAttr()`. That is a resolver defect this change widens the reach
+of, not one it introduces, and it is not fixed here.
+
+`test/cppqualcheck.sh` §12 adds a corpus, `test/cppqualtmplfix/`, with one literal per spelling plus receiver, arity
+and qualifier decoys: 19 of its checks fail on the pre-fix binary, and a mutation build that reverts each of the three
+mechanisms (the receiver step, the keyword skip, `callArity`'s hop bound) turns that mechanism's own arms red. The
+spellings still not bound are pinned at zero behind a check that each is still written in the fixture: `r.f<0>( x )`
+without `template` (tree-sitter reads it as two comparisons, a read of the member), a base-qualified member
+`r.Base::f<T>()` / `p->Base::f<T>()` (the plain `r.Base::f()` is absent too, so the gap is not template-shaped), and
+`r.operator()<T>()`. `test/callformcheck.sh` row 11, `b.template memberTmpl<int>()`, was pinned as documented-absent
+at literal 0 and now pins 1.
+
+`kParserVer` → 101 with `quality.h`'s `kIngestParserVerMirror` in the same commit, assigned in merge order on
+integration train 2b (after #244's 100); `kCacheVersion` stays 22, and `test/qschemetrip.hash` is re-derived once on the
+train's merged tree with a RE-PIN LOG line.
+
+### Fixed — a class template's out-of-line member is the same symbol as its declaration, and a specialization stays its own (parser version 102)
+
+A C++ member defined out of line on a class template kept the template-argument list in its scope, so `template <class
+T> void Box<T>::grow() {}` produced a `sc="Box&lt;T&gt;"` row next to the in-class declaration's `sc="Box"`. One member
+was two identities. `--callers=Box::grow` resolved to the declaration and answered `count="0"` while `use( Box<int>& b
+) { b.grow(); }` sat three lines below, and `--impact`, `--uses` and the S6-C locality tie-break missed it the same
+way. An argument list broken over lines put the line break into the `--pin-census` id, and a list that itself holds
+`::` was cut inside it: `template<> void Slot<std::string>::clear()` was scoped `string>`. On the reference side,
+`Factory<int>::make()` qualified as `Factory<int>`, which keyed nothing, so the call split onto an unrelated
+`Decoy::make`.
+
+Scopes now follow what the declaration is:
+
+- A primary template's out-of-line member keys the bare template name, because its template-id names exactly the
+  parameters its own `template <…>` introduces (`template <class T, int N> void Box<T, N>::grow()`).
+- An explicit or partial specialization keeps its template-id, spelled canonically. Whitespace and comments are dropped
+  except between two identifier characters, and a comma is followed by one space, so `Traits< int >` and a list broken
+  over lines key the same identity as `Traits<int>`.
+- A call keeps the template-id it writes. `Traits<int>::encode( 1 )` resolves precisely to the int specialization,
+  including from a 3-segment spelling.
+- When no definition is keyed by the written id, the resolver answers from the template's family (the primary and its
+  specializations), but only when that answer cannot be missing a body the call may reach. The family is the primary's
+  own or inherited member (`CastInfo` inherits `CastIsPossible::isPossible`) plus every specialization's own or
+  inherited member, and a member reached through a base is widened to that base template's specializations. A written
+  id that names an existing specialization which does not define the member answers with what that specialization
+  inherits. With nothing visible from the primary, only a split of two or more specializations answers.
+- Anything else goes to the bare-name ladder, exactly as before, so a same-named definition outside the template never
+  joins a family answer.
+- A specialization header's base clause (`template <> struct Info<char> : CharBase {}`) is now read, as inherit
+  references with no new symbol.
+- The locality tie-break prefers a candidate declared in the caller's own scope over one nested inside it, for an
+  unqualified bare or `this->` call only. Both ids share the caller's `Outer::` segment, so segment counting tied
+  `Outer::start` with `Outer::Inner::start`.
+
+Two earlier revisions of this change were measured and revised before merge. Joining every specialization to the
+primary made precise edges splits and dropped a delegation between specializations (`DenseMapInfo<APSInt>` calling
+`DenseMapInfo<APInt, void>::getHashValue`, APSInt.h:371). A family fallback that ignored inherited members pinned `isa`
+(Casting.h:548) to one rare specialization.
+
+Measured with `--pin-census --no-cache` on the same frozen corpus through main (`31e788ce`) and this change, with sites
+joined on (caller symbol id, callee, line); symbol ids are identical across the two binaries. On llvm `ADT` + `Support`
++ `lib/Support` (590 files, 37,055 calls), edges moved from 45,768 to 45,001 and ambiguous from 7,247 to 7,237, and
+`--callers=lib/Support/APInt.cpp:getHashValue` answers 5, as on main.
+
+Wins: 37 splits became precise, 12 sites that had no edge gained a precise one, 12 external sites resolved in-repo, and
+5 precise edges were retargeted. All 66 were read against the source and are correct: 64 in the independent review of
+the previous revision (unchanged here), and the 2 new ones, `cast`/`dyn_cast` through `CastInfo<To,
+std::unique_ptr<From>>`, which inherits `UniquePtrCast`. The Casting.h `isa` site is now a split that contains the
+inherited `CastIsPossible::isPossible`, and the 8 `list_storage` calls that an earlier revision pinned to
+`list_storage<DataType, bool>` are splits.
+
+Costs and differences, reported apart:
+
+- 14 sites main resolved precisely now split. In 10 of them main had pinned the wrong class, one correct pin
+  (`RHS.branched()`) is a 2-way split that contains it, and 3 are `DominatorTreeBase::dominates` overloads that are now
+  one identity.
+- One edge is gone: `simple_ilist::sort`, which is a genuine recursive call.
+- 4 sites with no edge and 9 external sites became splits.
+- One call through `list_storage<DataType, StorageClass>::clear()` (CommandLine.h:1760) keeps main's locality pin to
+  `list::clear`, because that primary's members are extracted under `cl` and the template supplies nothing visible.
+
+On dgl (`f0b7cc9`, 343 C, C++ and CUDA files; main at `b1489df4`, whose resolver is identical), edges moved from 20,829
+to 20,733 and ambiguous from 1,891 to 1,882. 11 splits became precise. 12 precise edges moved from a specialization's
+own `Call` to the `_Sum`/`_Max`/`_Min` base it calls. 3 calls through a dependent template-id that main had pinned to
+the primary now split over the primary and its specialization. On this repository nothing changes. An ack or saved
+baseline keyed on a primary template member's old `Box<T>` spelling re-keys once.
+
+Gated by `test/cpptmplscopecheck.sh`, 64 checks: main fails 42, and the previous revision fails 6. The gate covers:
+
+- a line-aligned template/non-template twin compared byte for byte across the map, `--callers`, `--impact` and
+  `--uses`, and on identities in the census;
+- the primary shapes;
+- all three specialization forms;
+- the review's `Traits` probe;
+- an APSInt-shaped delegation;
+- the inherited-member shapes (a primary that inherits the member, a specialization that only inherits it, a primary
+  with nothing visible, a primary that defines nothing);
+- the two-segment decoy;
+- the nested-class tie.
+
+### Fixed — a narrow through a qualified field type read as a uniquely resolved edge
+
+The receiver-qualifier entry above marks an edge **`prov="final-segment"`** when the qualified written type of a parameter or a local chose it by its last name alone. A member field is the third place that guess is made, and its edge still read as uniquely resolved. `struct Record { store::Text body_; int bodyLength() { return body_.size(); } };` is an example: Rule 2b narrowed on `Text` and never checked `store`. The disclosure now covers fields as well. Since the std-typed-field entry above, a field's compose record carries the namespace its type was written in. Rule 2b's `Class#field` table now keeps whether any agreeing declaration wrote the type qualified, and every edge a Rule 2b narrow commits on such a field carries `prov="final-segment"`. The narrow itself is unchanged: the mark discloses, it never demotes. An unqualified field narrow skipped no qualifier and stays unmarked, and a `std::` field never narrows. Extraction is unchanged, so kParserVer stays.
+
+Measured with `--no-cache`, the `integration/train-2` binary (92b4c91d) against this change:
+- **Decisions:** `--pin-census` is byte-identical on rocksdb, a private C++ corpus and this repository's `src/` (a frozen copy), so no decision moved.
+- **Default map:** byte-identical on all three (rocksdb 31,711 bytes), because no newly marked edge sits on a row the default map shows.
+- **Full map (`--top-k=1000000`):** marked edges grow 355 → 382 on rocksdb (+27, 567 bytes), 98 → 143 on the private corpus and 80 → 81 on `src/`.
+
+Every sampled new mark is a qualified field type:
+- `InternalStats::CompactionStatsFull compaction_stats_` → `SetMicros`
+- `toku::locktree_manager ltm_` → `set_max_lock_memory`
+- `strkern::Byteset256 heads` → `contains`
+
+`test/fieldnarrowcheck.sh` arm r is the gate:
+- (r1) the qualified field's mark and (r5) the compact legend term are red on the train binary.
+- (r3), an unqualified field narrow staying unmarked, is red on a variant that marks every Rule 2b narrow and on nothing else.
+- (r2) the refused std field and (r4) the unchanged census decision are the controls.
+
+### Fixed — `--version` names the configuration a multi-config generator built, not `dev`
+
+`--version` took its build-type token from `CMAKE_BUILD_TYPE`, which a multi-config generator (Ninja Multi-Config,
+Xcode) leaves empty. So a `cmake --build b --config Release` binary said `dev`, although it defines `NDEBUG` and
+compiles `DEGRADED_PATH_ALERT` out. Gates that read the token to decide whether the binary can print alerts
+(`test/pargates.py`, `kotlincheck` §12 and others) failed loudly on such a binary, so none passed for the wrong
+reason, but the token was wrong. Reported by CodeRabbit on #261. On a multi-config generator the token is now the
+configuration built (`Debug`, `Release`, …). A single-config configure is unchanged: `cmake -S . -B build` still says
+`dev`, and `-DCMAKE_BUILD_TYPE=Release` still says `Release`. The stamp command and both targets' compile flags are
+byte-identical to before.
+
+Passing the configuration into the stamp command was not enough, because `version.h` was one file shared by every
+configuration. In a cross-config Ninja Multi-Config build (`CMAKE_CROSS_CONFIGS=all`), CMake runs a shared byproduct's
+command once. On a two-file probe, the Debug, Release and RelWithDebInfo binaries all printed `Debug`, and against the
+real tree the gate read `Release="Debug" RelWithDebInfo="Debug"`. Each configuration now writes its own
+`generated/<Config>/version.h`, found before `generated/`. Stamping one configuration no longer rewrites another's
+header, so switching `--config` does not recompile `main.cpp` either.
+
+Gate: `test/buildtypestampcheck.sh`. It configures the real `CMakeLists.txt` in scratch trees and builds only the stamp
+target. It then asks CMake's File API which `version.h` each configuration's `ripwire` compile would include, and reads
+the token from that file. It checks both single-config spellings, and under Ninja Multi-Config (or Xcode when ninja is
+absent) that Debug and Release each see their own token in different files. It also checks that stamping Release
+leaves the Debug header's bytes and mtime alone, that re-stamping Debug keeps its mtime, and that one cross-config
+build gives every configuration its own token. Two controls prove the token extraction and include resolution can
+fail. On the old `CMakeLists.txt`, 6 of its rows failed under Ninja Multi-Config and 5 under Xcode. Against the
+command-only fix, 4 rows still failed.
+
+The source identity from #255 (`generated/source_identity.cpp`) is one shared file for every configuration. It now has
+its own always-run target, `ripwire_source_identity`, instead of being a second command of `ripwire_version_stamp`.
+Both commands in one target made a cross-config Ninja Multi-Config build fail with
+`'generated/RelWithDebInfo/version.h' … missing and no known rule`, and the gate's cross-config row caught it on the
+merged tree. Both stamp scripts also give their temp file a random name. Two builds of one tree used to share
+`<output>.tmp`: in 40 concurrent runs of the old identity script, 10 to 19 failed with "could not write" in each of
+three rounds, and none of the new script's runs did.
+### Fixed — a TS/JS call on a literal no longer pins an unrelated same-named function (parser versions 100 and 103)
+
+`"=".repeat( 50 )` bound webpack's in-repo CssSyntax `repeat`, and `/^@/.exec( … )` its DefinePlugin `exec` (issue
+#163): a member call whose receiver is a literal took the bare-name ladder like any receiver of unknown type. A string,
+template, array, regex, number or boolean literal's type is certain from the syntax, and so is a chain that keeps it
+certain; certainty ends at `find`, `at`, `pop`, `shift`, `reduce`, a subscript, `!`, `as`, `satisfies` or `<T>x`.
+`RecvKind` gains LitString, LitArray, LitRegex, LitNumber and LitBoolean, and only a name that really is a member of that
+built-in (sorted per-type tables in `src/model.h`) leaves the ladder: a JS `Foo.prototype.NAME` polyfill binds first,
+otherwise the call is External when the name exists in the repository and Undefined when it does not. A name that is not
+a member of the built-in (`shout`, `Object.assign`, a TS `declare global { interface String { loud() } }`) keeps its old
+path. Object literals, `this.replace()`, `helpers.transform()`, `JSON.stringify` and a typed `text: string` are out of
+scope.
+
+Measured with `--pin-census`: on webpack `a943d69c4`, 139 previously bound sites become External (sort 46, repeat 32,
+join 25, exec 17, test 13, split 3, slice 3), edges go 23,970 → 23,823 and `--callers=stringify` stays 361; node's `lib/`
+loses 10 wrong pins (`regex.test` had bound the test runner's `test`); zod's `external=` rises 112 → 192. A signed number,
+`(-1).toFixed()`, was no literal in the first version and could still bind an unrelated `toFixed`: the grammar spells the
+sign as a unary expression over the number, and a unary `+` or `-` over a number now classifies as LitNumber while every
+other unary expression (`!1`, `typeof 1`, `-x`) stays unclassified. `test/fieldnarrowcheck.sh`'s literal-receiver arm is
+the gate, with `viaNegative` and `viaPositive` in its TS, JS and TSX fixtures. `kParserVer` moved to 100 on
+integration/train-2b (the PR declared 97) and 102 → 103 on integration/train-1b for the signed-number fix. Thanks to
+@csy20.
+
+### Fixed — a call through an interface pointer landed on unrelated nested classes of the same name
+
+`void AssertItersEqual( Iterator* iter1, Iterator* iter2 ) { … iter1->key() … }` in rocksdb answered with five edges to
+the nested `Iterator` classes inside memtable/'s skip lists, and none was right. Rule 2 keys a receiver's type by its final
+class-name segment, a nested class keeps only that segment (`SkipList<Key, Comparator>::Iterator::key` has scope
+`Iterator`), and `rocksdb::Iterator`'s methods are pure-virtual declarations the definitions-only map never holds — so the
+only `Iterator::key` it could find were the namesakes. The entry above disclosed 79 such parameter sites; typed LOCALS
+(`Iterator* iter = db->NewIterator( … )`) have the same shape, and there are more than a thousand.
+
+Rule 2 now reads the call through class identity rebuilt from facts ingest already has (resolve.h `ClassIdentity`): byte
+spans give each class its enclosing class and each member its owner, the inherit references give the class graph, and
+an `Iterator` nested in `SkipList` can then be told apart from a namespace-level one. A hit owned by a nested class the
+written type cannot name — C++ lookup outward from the caller, a qualifier naming the enclosing class — is dropped; with
+nothing left, the call resolves to the shallowest ancestor that defines the method; and when the ancestry only DECLARES
+it, to its definitions in the class's real subclasses — the dispatch split a virtual call through an interface is, kept
+whole rather than trimmed to the same-file override by the locality ladder. Four guards came from reading the corpora,
+each one a wrong edge an intermediate build made and a gate arm now pins: a forward declaration (`class Iterator;`, five
+at rocksdb's namespace scope) is not a class; two namespace-level classes of one name (`llvm::Value`,
+`llvm::sandboxir::Value`) are told apart by what the file includes, an include-root spelling read as a path suffix; a
+type ALIAS the index cannot see (`using NodeSet = MachineGadgetGraph::NodeSet;`) keeps the nested class its caller
+includes; and identity replaces an answer only with one it can explain — otherwise the previous answer stands. No
+extraction change: kParserVer does not move.
+
+Measured with `--pin-census --no-cache`, the stack tip `50129f8c` against this change:
+- rocksdb @ `0e2801ac3`: 2,659 call sites change target and `bound=` goes 200,036 → 201,085. 995 namesake splits become
+  the real `Iterator` implementations (DBIter, ArenaWrappedDBIter, ModelIter, … — 11 for `key`); 638 declined calls gain
+  a dispatch split (`Statistics::getTickerCount`, `DB::DefaultColumnFamily`); 397 declined calls gain their inherited body
+  (`IOStatus io_s; io_s.ok()` → `Status::ok`); 276 partial splits complete (`Comparator::Compare`, 6 → 26); 88 wrong unique
+  pins become the interface's implementations (`env->DeleteFile` had pinned an unrelated file system).
+- llvm-project @ `4d5358b1d`: 37,949 of 1,790,841 call sites change target and `bound=` goes 1,126,051 → 1,153,808 —
+  21,408 declined calls gain their inherited body (`LD->getAlign()` → `MemSDNode::getAlign`, `e->getRHS()` →
+  `BinaryOperator::getRHS`), and wrong locality pins move to the right base (`FD->getType()` → `ValueDecl::getType`).
+- a private C++/ObjC++ corpus: 177 sites change target, `bound=` 80,582 → 80,646 (a map subclass's `begin` → its base's,
+  a behaviour interface's `get` → all 64 implementations).
+- this repository's `src/`: no site changes.
+
+Every change bucket on all three corpora was sampled and read against the source on the final build; the wrong shapes
+the intermediate builds produced are the four guards above. Cost, two cold runs each on llvm-project: user time 52.4 /
+52.9 s before, 50.9 / 55.9 s after; peak RSS 2.37–2.47 GB both; output byte-identical run to run on every corpus.
+`test/narrowcheck.sh` arms 26-38 are the gate: seven rows red on the stack tip — (26) (27) (28) (29) (32) (34) (35) — and
+arms 30, 31 and 33 are controls (33 was red on the intermediate build that dropped an aliased nested class). An identity
+claim is a verified answer, not a last-name match, so its edges carry no `prov="final-segment"`; a class-qualified step-1
+narrow keeps that disclosure (arm 36).
+A seeded sample of the retargets graded against source — 30 rocksdb and 30 llvm-project sites — read 56 better, 2 the same
+and 2 worse. One worse shape is fixed here. A class template's specialization has no class symbol, so its members (scope
+`SmallVectorTemplateBase<T, true>`) were never reached: `SmallVectorImpl<FunctionDecl *>& v; v.push_back( FD )` answered
+the primary template alone, while pointer T instantiates the specialization. A defining level now adds its template's
+specialization-scoped definitions — among them a primary template's own `DominatorTreeBase<NodeT, IsPostDom>::verify`
+out-of-line bodies — and the CHA-lite cone prune skips an identity claim, as the ladder and locality already do. This moves
+366 llvm-project sites (a sample of 20 graded: 12 now right, 8 hold the right target in a split; 0 worse) and none on
+rocksdb, the private corpus or `src/` (arm 38).
+FLOORS, stated: namespaces are evidence, not a model — a same-named class in another namespace that the caller's file
+also includes stays a candidate; a type alias is kept rather than read through; an inherited body is the static answer,
+as a class's own body always was (overriders join only a method no ancestor defines), and it answers for every overload
+of its name. rocksdb's `BackupEngine* e; e->RestoreDBFromLatestBackup( options, db, wal )` therefore takes the inline compat
+overload while the pure-virtual overload it calls goes unjoined. Joining its overriders was built and measured: 2 sites
+better, 5 worse (arm 37). A dispatch split is as wide as the interface's implementations — up to 50 targets on rocksdb
+and 71 on the private corpus, every one disclosed by `amb=`.
+
+### Fixed — a receiver typed with template arguments got no type, or the wrong class's
+
+`void f( SmallVectorImpl<FunctionDecl *> &Decls ) { Decls.push_back( FD ); }` bound nothing on llvm-project unless the
+parameter was spelled `llvm::SmallVectorImpl<…>`. Rule 2 reads a receiver's type off its declaration, and that capture
+recorded a type only for a plain or a qualified name: an unqualified template-id (`SmallVectorImpl<FunctionDecl *>`,
+`Expected<unsigned>`, rocksdb's `autovector<VersionEdit*>`) recorded none, and that is how code inside its own namespace
+writes nearly all of them. A qualified name was read by cutting its text at the first `<`, so a type whose template
+arguments come before its last name — `SkipList<Key, TestComparator>::Iterator iter` — recorded `SkipList`. `SkipList`
+defines no `key`, so `iter.key()` fell to the name ladder, which picked the test's own `ConcurrentTest::key` (86 such
+receivers changed target: 76 on rocksdb, 10 on llvm-project). Where the outer class does define the method, the edge was
+precise and wrong: `Outer<int>::Inner& in; in.size()` went to `Outer::size`. Neither corpus has an instance of that; arm
+41 pins it. The last name is now read through the grammar's own fields (`Vec<T>`
+and `ll::Vec<T>` are `Vec`, `Outer<int>::Inner` is `Inner`), and a `::` inside a template argument (`Vec<std::string>`)
+no longer marks the type qualified, so its edge carries no `prov="final-segment"`.
+
+Measured with `--pin-census --no-cache`, call sites joined on (caller id, callee, line), `main` 13a19162 against this
+change. rocksdb `0e2801ac3`: 640 sites change target and bound calls rise by 347. llvm-project `4d5358b1d`: 5,231 sites
+and +3,589. Composed with the class-identity resolver (#268), whose inherited-member walk these bindings feed, it is 657
+and 18,050 sites, +12,702 bound on llvm-project. A seeded sample of 100 of those sites (seed 20260917: 20 + 30
+standalone, 12 + 38 composed) was graded blind against source, each grader seeing the two answers as A and B in random
+order: 99 better, 1 the same, none worse (62 NONE → RIGHT, 24 WRONG → RIGHT, 5 PARTIAL → RIGHT, 1 WRONG → PARTIAL, 7
+NONE → PARTIAL where #268's template-family split lists the specialization a trivially copyable element does not select,
+and 1 PARTIAL either way). Nine edges are lost, all on llvm-project, and all nine were read. Seven are a name declared
+twice in one function with different types (`APInt Mask` beside `SmallVector<int> Mask`): Rule 2's per-function table
+cannot tell which declaration covers a call, so it drops both, as it always has for two plain types. Two are
+`auto Table = EytzingerTable<…>::create( … )`, which recorded `EytzingerTable` only because the cut stopped at `<`; it
+now reads `create`, as `Foo::create()` always did.
+
+STATED FLOOR: an unqualified template-id constructor, `auto v = Vec<T>()`, still infers nothing. It is the spelling of
+every cast helper. Reading it records `dyn_cast` as the type of `auto *CI = dyn_cast<CallInst>( I )`, a name that
+conflicts with the declaration's written type (`const ConstantInt *CI = dyn_cast<ConstantInt>( V )`) or with a second
+declaration of the variable, and the conflict tombstones it. Measured on integration/train-3 (llvm-project `4d5358b1d`,
+`--pin-census --no-cache`), reading it moves 463 sites: 324 edges lost, 137 retargeted and 2 gained, and rocksdb moves
+none. On `main` 13a19162, before #278 dropped an assignment's callee name (`Spec = cast<FunctionDecl>( F )`), it moved 994
+and lost 779. The qualified `llvm::cast<T>( x )` still records `cast`, as before. `kParserVer` moves 103 → 104 (the PR
+declared 99 → 103 over `main`; integration/train-3 assigns 104 after train 1b's 103) and `test/qschemetrip.hash` is re-pinned.
+Gate: `test/narrowcheck.sh` arms 39–43. They are red on `main` (no edge, or the precise edge to `Outer::size`) and on
+#268's head, where arm 42 also fails: the qualified twin splits and the unqualified twins decline. Arm 40b is red on a fix
+that reads qualification off the whole spelling.
+
+### Fixed — `--affected=`/`--exercises=` and `--exclude=` matched a directory ABOVE the crawl root, not just the tree
+
+Root-spelling-invariance seams #228 missed. `--affected=`/`--exercises=` (`testmap.h`'s
+`resolveAffectedSeeds`/`resolveExerciseSeeds`), `--exclude=` (`ingest_crawl.h`), `--verify`'s FILE argument
+(`verbs_navigate.h`), `--at=FILE:LINE` (`graph.h::resolveAtSeed`), the `file:name` qualifier every
+`--callers`/`--impact`/`--uses`/`--edit-check`/`--around`/`--lego` selector shares
+(`graph.h::resolveAllByNameQualified`), its own refusal diagnosis (`selectorrefuse.h::indexHasFileMatching`
+and `definingFilesOf`), and the MCP write verbs' `file` disambiguation hint
+(`mcpedit.h::editHintMatches`) all `filePathContains`'d the RAW stored path instead of the root-relative one
+— the same seam every other index-builder and path predicate already reads per #228. So a pattern that
+happened to match the CHECKOUT location — never anything inside the tree itself — decided the answer only
+under an absolute or trailing-slash root: `--affected=<marker-above-root>` matched every file instead of
+refusing, `--exclude=<marker-above-root>` silently dropped every file from the map, `--verify`/`--at`/the
+file:name qualifier confirmed or ambiguated claims about files the index never matched, and an MCP edit's
+bogus `file` hint could pass a false disambiguation. Every path-pattern consumer now routes through one
+shared helper, `graph.h::filePathContainsRootRel`, so the next consumer cannot independently reintroduce the
+raw form; `selectorrefuse.h::definingFilesOf`'s own "here's a runnable retry" suggestion is root-relative too,
+for the same reason — the retry text has to re-match under the fixed rule to still be runnable.
+`test/rootspellingcheck.sh` gained arms for `--affected`/`--exclude`/`--verify`/`--at`/`--callers=file:name`
+across all six root spellings; `test/mcpeditcheck.sh` gained arm (10) for the MCP `file` hint.
+Matching root-relative ONLY dropped the other way a user names a file: from the cwd. `ripwire test/fixture
+--edit-check=test/fixture/geometry.cpp:distance`, `./a.cpp` under `ripwire .`, `../repo/a.cpp` under
+`ripwire ../repo` and an absolute `/…/repo/a.cpp` all resolved in 0.6.1 and refused with this change's first version.
+`filePathContainsRootRel` still tries the root-relative path first; on a miss it strips a root prefix the crawl
+recorded once (the root as typed, the root relative to the cwd, or one of its absolute spellings, `$PWD`'s and
+realpath's alike) and matches the rest root-relative. A path that names no indexed file still refuses.
+`test/rootspellingcheck.sh` arm (6) pins `<root as typed>/`, absolute and cwd-relative selectors on `--edit-check`,
+`--callers`, `--at` and `--affected` under all six spellings, with a refusal control for each form.
+
+### Fixed — MCP `quality_delta`'s "sidecar present but unreadable" baseline marker now spells the CLI's own wording
+
+The CLI and MCP arms named the same disk state — a `.ripwire_quality_baseline` sidecar that exists but was
+rejected by `readBaseline` (unrecognizable, an older format, or pre-Q1) — with two different strings:
+`baseline="git-HEAD (sidecar unreadable)"` on the CLI (the spelling `quality::selectBaseline` sets and
+`--help`'s own legend documents) versus `"git-HEAD (unreadable sidecar ignored)"` from MCP's
+`mcpBaselineMarker`, which carries its own local `std::filesystem::exists` fallback for a residual case
+`selectBaseline` cannot flag on its own. MCP now returns the documented CLI string.
+`test/mcpattrparitycheck.sh` gained a value-level check (its existing arms compare attribute NAMES only,
+deliberately) that pins both surfaces to the identical marker on a pre-stamp v5 sidecar fixture.
+
+### Fixed — `--layout` no longer drops a field decorated with a postfix `__attribute__((...))`
+
+`int x __attribute__((aligned(8)));` reached `layout.h`'s plain-field parser with the attribute still
+attached: the last-identifier scan that splits a declarator into its type and name took the digit inside
+the attribute's own argument list (`8`) as the field NAME and left its closing parens as unparsed trailing
+text, so the whole declaration was refused as `caveat k="unparsed-member"` with no `<f n="x">` row at
+all — unlike every other unmodelable-field shape the fixture covers (`alignas(N)`, `decltype(...)`,
+`std::function<...>`), all of which still count the field. `layout.h` now peels a trailing
+`__attribute__((...))` (balanced parens, same technique as the existing array-extent peel) before the
+name/type split. An attribute that changes the field's own placement (`aligned`/`packed`) still refuses —
+`x` is counted (`<f n="x">`) but `unknown-type`, the same degrade `alignas(N)` already gets, rather than a
+confidently wrong offset; any other attribute (`deprecated`, `unused`, …) is a pure hint and is now modelled
+normally, with no caveat at all. `test/layoutcheck.sh`'s `AttributeFieldCase` gained the same
+field-survives assertion `AlignasFieldCase` already had, and a new `AttributeHarmlessFieldCase` fixture
+pins the fully-modelled path.
+
+The aligned/packed check also missed GNU's reserved-namespace double-underscore spelling
+(`__aligned__`/`__packed__` — what system headers reach for so the keyword cannot collide with a macro of
+the same bare name): `containsWord`'s word-boundary rule treats `_` as an identifier byte, so it does not
+match `aligned` inside `__aligned__` at all, and the field came back `modeled="1"` with a confidently
+wrong `sz`/`al`/`off`. `attrHasKeyword` now checks both spellings. The C++11 standard attribute syntax
+(`[[gnu::aligned(8)]]`/`[[gnu::packed]]`) was checked too: both already refuse, as a side effect of how the
+surrounding text fails to parse as a plain field rather than by design — pinned in the fixture so a later
+change to `[[...]]` handling cannot silently start modelling these as natural. `test/layoutcheck.sh` gained
+`AttributeGnuAlignedFieldCase`/`AttributeGnuPackedFieldCase` (must degrade), `AttributeGnuHarmlessFieldCase`
+(`__unused__`, must stay modelled), and `AttributeStdAlignedFieldCase`/`AttributeStdPackedFieldCase`
+(the `[[gnu::...]]` regression pins).
+
+### Fixed — the crawl now admits `.hxx`, a C++ header spelling every OTHER per-extension table already listed
+
+`src/ingest_crawl.h`'s `kLangTable` — the ONE table that decides whether the crawl looks at a file at
+all — had rows for `.h`/`.hpp`/`.hh` but none for `.hxx`, so a repository that spells its headers `.hxx`
+was invisible to the crawl (`files=0`, `unindexed="hxx:N"`) even though six other per-extension tables in
+the tree (`flipimpact.h`'s dead-code header set, `layout.h`'s `--layout` scan, `lintrules.h`,
+`quality.h`'s header/public-API predicates, `resolve.h`'s include resolver, `verbs_lint.h`) already listed
+`.hxx` alongside `.hpp`/`.hh`. `.hxx` now rides the same `Lang::Cpp` / tree-sitter-cpp grammar as `.h`.
+This changes extraction output for any tree with `.hxx` files (new files, symbols and edges a pre-bump
+cache never saw), so `kParserVer` moves 104 → 105 (the lane declared 99 → 100 over `main`;
+integration/train-3 assigns 105 after #276's 104; mirrored in `kIngestParserVerMirror`, same diff;
+`test/qschemetrip.hash` re-pinned). `test/filerootcheck.sh` gained an arm indexing a `.hxx` file as a
+single-file root. `taskroute.h::kCodeExtensions` (the FILE:LINE token recognizer behind `--help-task`'s
+at-line routing) was a seventh table listing `.hpp`/`.hh` without `.hxx` — added, with a `test/taskroutecheck.sh`
+arm routing a `.hxx:LINE` token to `--slice=@FILE:LINE`. Two of the six had just dropped their `.hxx` rows as unreachable
+(`langOfPath`'s and `includeLangOf`'s, in the five-extensions entry above), and the compile-time check between the crawl's
+table and `langOfPath`'s refuses a crawl row without its classifier row, so both rows are restored with it.
+
+### Fixed — `--slice --since` no longer tells the "new code" story about a blob that was never parseable source
+
+A file whose blob at REV held ERROR/MISSING tree-sitter nodes (binary content committed under a source
+extension, a merge gone wrong, anything the grammar's error recovery could not read as this language)
+could leave the REV-side symbol search empty for a reason that has nothing to do with the definition
+being new. `status="sym_absent_at_rev"` claims "the file was there and the definition was not" — every
+row then reads `op="+"`, the reviewer's cue that this is newly-added code — which is a confidently wrong
+story for a blob that was not valid source at all. `slicediff.h`'s `sliceAtRev` now checks the same
+`errNodes > 0` degraded-parse signal `fileParseDegraded` already shares with `--grep`'s `parse_degraded=`
+and the selector refusals, and reports `status="unparsed_at_rev"` (`comparable="0"`, no rows) instead
+when the REV blob's own parse was this degraded. `test/slicediffcheck.sh` gained arm (8c) pinning a
+binary-at-REV case against the (8)/(8b) sym-absent case it must not be confused with.
+
+### Fixed — assigning a variable from a function call erased the type it was declared with
+
+`Status s; … s = GetDBOptionsFromMap( … ); if( !s.ok() )` bound no `ok` edge on rocksdb, and `PHINode *PHI = nullptr; …
+PHI = PHINode::Create( … ); PHI->addIncoming( V, BB )` bound no `addIncoming` edge on llvm-project. Rule 2 reads a
+receiver's type off its declaration, and it also records a C++ ASSIGNMENT from a call as a type, so that `x = Foo()`
+types `x`. A constructor call and a function call are the same grammar node, so the assignment recorded the callee's
+last name, `GetDBOptionsFromMap` or `Create` (and `cast` for `x = llvm::cast<T>( y )`). Rule 2's per-function table
+drops a variable whose records disagree, so that non-type erased the declared `Status` or `PHINode *`. The field use-site index (`--uses=Owner.field`) lost
+the same pin. A MEMBER assigned from a call (`cur = ns::cast<Target>( y )`) also read as a local, so Rule 2b refused the
+member's declared type. An assignment declares nothing, so its callee name now counts as a type only when a class of
+that name exists. A declaration initialised by a call (`auto t = makeFoo()`) still counts, as a declaration whose type
+is unknown: when a sibling block declares the same name with another type, both calls are dropped rather than one
+block's type reaching the other's call.
+
+Measured with `--pin-census --no-cache`, call sites joined on (caller id, callee, line), `main` fe28fd49 against this
+change. rocksdb `0e2801ac3`: 1,871 sites change target, bound calls +1,562 (1,544 newly bound, 327 retargeted, none lost;
+1,494 are `Status::ok`). llvm-project `4d5358b1d`: 4,046 sites, +2,984 (2,859 newly bound, 1,187 retargeted, none lost).
+A seeded sample of 60 (seed 20260917: 25 rocksdb, 35 llvm-project) was graded blind against source by independent
+readers, with the two answers shown as A and B in random order. 51 were better, 6 the same and 3 worse. The better ones
+were 39 NONE → RIGHT, 5 WRONG → RIGHT, 4 PARTIAL → RIGHT, 2 NONE → PARTIAL and 1 WRONG → PARTIAL. The same ones were
+4 WRONG → WRONG and 2 RIGHT → RIGHT. All three worse sites are resolver floors the erased type had been hiding, not
+errors in the recovered type. One is a rocksdb `Iterator*` that narrows onto the memtable's same-named `Iterator` classes.
+Two are llvm-project calls where arity picked the wrong overload of the right class (`getFirstInsertionPt`, `find`).
+Dropping the member's record from the local-name set is 23 of the rocksdb sites and 132 of the llvm-project ones; 15 of
+those graded 10 better, 2 the same and 3 worse. Two of the worse ones show a floor this change exposes but does not
+cause: Rule 2c reads a member named like a class (`std::unique_ptr<ToolOutputFile> OutputFile;`) as that class.
+
+Built and rejected: also dropping a DECLARATION's callee name. It moves 89 more llvm-project sites (none on rocksdb), and
+15 graded 11 better, 2 the same and 2 worse. Arm 48 is why it is not shipped: the flat table would hand one block's
+declared type to a sibling block's `auto t = ns::cast<Decoy>( y )`, a precise edge to the wrong class. The unqualified
+`Vec<T>()` constructor spelling left unread by the template-id receiver lane (#276) stays unread. Composed with that lane
+and this change on #276's head, reading it moves 245 llvm-project sites, and all of them get worse: 170 edges lost and none
+gained, where it lost 779 before this change (on integration/train-3, with the class-identity resolver, 463 and 324). The losses left are declaration conflicts, `auto *LI = cast<LoadInst>( … )` beside
+another `LI`.
+
+The bind record gains one byte (`kCacheVersion` 22 → 23). `kParserVer` moves 105 → 106 (the PR declared 99 → 104
+over `main`; integration/train-3 assigns 106 after small-fixes' 105). `test/qschemetrip.hash` is re-pinned, and `test/cachefuzzcheck.sh`'s
+blob walker reads the new byte. Gate: `test/narrowcheck.sh` arms 44–51. On `main`, arms 44, 45, 46, 49 and 50 are red.
+Arm 48 is red on the declaration variant, 46 without the local-name-set change, and 51 on a build that does not persist
+the new byte.
+
+### Added — a Java `Type::method` reference is a call site for `--uses` and `--callers` (parser version 107)
+
+`Widget.makeFn()` minted a call edge and `Widget::makeFn` did not, so a lambda and the method reference beside it
+disagreed about who calls `makeFn` (issue #74). The receiver is a type and the member a literal identifier, so the
+target is fixed at compile time. `queries/java/tags.scm` now captures the member name after `::` on a
+`method_reference`, and ingest stamps the site `RecvKind::JavaTypeCandidate`: the pinned grammar spells `Widget` and
+`widget` with the same `identifier` node, so the query alone proves nothing about the receiver. `src/graph.h` admits
+an ordinary call edge only when the receiver denotes an indexed Java type; a Java parameter, local or field binding of
+that name in scope vetoes it, and nested and package-qualified type receivers are handled explicitly. Java shadow
+binds now carry lexical spans and capture inferred lambda parameters, and the C-family shadow pass refuses Java
+outright (a Java call never resolves to a local). `widget::instanceFn`, `this::thisFn`, `super::superFn` and
+`Widget::new` stay unresolved, and the receiver identifier is never the callee.
+
+`test/javamethodrefcheck.sh` is the gate: the callers of `makeFn` are exactly `genericTypeMethod`, `lambdaForm`,
+`nestedTypeMethod` and `typeMethod`, nothing calls `instanceFn`, `thisFn`, `superFn`, `Widget` or `widget`, and
+rewriting `Widget::makeFn` removes only `typeMethod`. `test/callformcheck.sh`'s Java `--uses=makeFn` is 2.
+A catch parameter, an enhanced-for variable and a try-with-resources resource declare names as well, and none of the
+three was read, so `catch (RuntimeException Widget) { return Widget::m; }` still resolved `Widget` as the class
+(CodeRabbit on #281). All three now shadow, each inside its own clause, loop or statement only; the gate pins both
+the shadowed reference and the one after the scope closes, and `kParserVer` moves 109 → 110.
+`kParserVer` 106 → 107 (the PR declared 96 → 97 → 98 over `main`; integration/train-3 assigns 107). Thanks to
+@rainhuang0220.
+
+### Added — GDScript (`.gd`), the 25th vendored grammar (parser version 108)
+
+A Godot repository was invisible: `.gd` fell out at crawl time as an unsupported extension, so every ranked lens
+answered `reason="no_candidates"`, while `--grep`'s unindexed-text fallback still scanned the files and made the gap
+read as a ranking problem. ripwire now vendors `PrestonKnopp/tree-sitter-gdscript` and extracts `class_name`, inner
+classes, functions and methods, constants, enums and their members, variables and signals, plus call edges. A `.gd`
+file is a class body: `class_name` names it and its file-scope `func`/`var` are its members. Measured on 13
+open-source Godot projects outside this tree: 3,525 files, 58,128 symbols and 27,768 edges, indexed cold in 0.82 s,
+and 98.81% of their 2,611 `.gd` files parse clean.
+
+STATED FLOORS: three upstream grammar bugs are not patched here (G3) — a `%` scene-unique name inside a node path, a
+column-0 comment inside an indented block, and Godot 3 keywords that are still reserved (`remote = {}`). tree-sitter's
+recovery is local, and `test/gdscriptcheck.sh` asserts that every definition and call edge in a fixture holding them
+survives. `preload`/`load("res://…")` dependency edges are a later round, so GDScript is not dependency-capable, and
+`.tscn`, `.tres` and `.gdshader` are not indexed. `test/gdscriptcheck.sh` is the gate, and it is red on a
+pre-GDScript binary. On integration/train-3 the language registers through train 1's compile-time-checked tables
+(`isCodeLang`, `kLintExtRows`, `kLangTokenRows`, `kNodeFieldNames`, `kLangTable`'s exact extent), and `kParserVer`
+107 → 108 (the PR declared 96 → 98 over `main`). Thanks to @sclyde.
+
+### Added — a Ruby constant receiver now pins the call, instead of splitting it across every same-named method
+
+`Calc.add( 1, 2 )`, `Outer::Engine.run( 3 )`, `::Top.ping` and `Util.format( 5 )` resolved to EVERY
+method of that name in the corpus, each edge marked `prov="split"`. The resolver's Rule 2c already
+says "the receiver token IS the type" (`docs/EVALS.md` "Phase 4b"), but it could not fire for Ruby:
+`classifyReceiver` accepted a receiver node of kind `(identifier)` only, and Ruby's class/module
+receiver is its own node kind — `(constant)` for `Calc`, `(scope_resolution)` for `Outer::Engine`
+and `::Top`. Every such call classified `RecvKind::None`, and the resolver fell through to the
+name spray. Ruby's one call form that carries a type was the one the type rule never saw.
+
+The receiver's FINAL constant segment is the type name (`Outer::Engine` → `Engine`), the same
+final-segment convention the existing type bindings use (`ns::Foo` → `Foo`), because `Symbol::scope`
+is the IMMEDIATE enclosing name by design. A Ruby MODULE is a receiver of class methods as much as
+a class is (`Util.format`), so Ruby's `SymKind::Other` symbols — which `queries/ruby/tags.scm` can
+only reach through `module` — join Rule 2c's class-name set.
+
+Measured with `--no-cache` on five Ruby corpora, before → after (map header gauges):
+
+| corpus | files | edges | ambiguous | declined |
+| --- | --- | --- | --- | --- |
+| activesupport 8.1.3 `lib` | 290 | 3,868 → 3,912 | 468 → 434 | 1,022 → 985 |
+| activerecord 8.1.3 `lib` | 398 | 9,116 → 9,152 | 1,496 → 1,479 | 4,576 → 4,497 |
+| actionpack 8.1.3 `lib` | 157 | 3,151 → 3,140 | 390 → 364 | 943 → 923 |
+| Rails app A | 4,683 | 23,784 → 24,376 | 1,328 → 1,263 | 12,485 → 11,624 |
+| Rails app B | 2,174 | 14,859 → 15,257 | 275 → 431 | 3,264 → 3,050 |
+
+`declined` falls on all five: those are call sites the resolver refused to guess at and now has
+evidence for. Edges fall on actionpack because a pinned call is ONE edge where a two-way split was
+two. App B's `ambiguous` rises while its `declined` falls by 214: a receiver that names two
+same-final-segment classes both defining the callee produces an honest split where there was
+previously no edge at all — the disclosed floor below, not a regression.
+
+Stated floors, each pinned by an arm of `test/rubyrecvnarrowcheck.sh`: Ruby feeds no
+class-hierarchy edges (`captureBases` has no Ruby arm), so a method inherited from a superclass does
+not narrow — this is what holds the gem numbers down, where deep `ActiveRecord::Base` hierarchies are
+the idiom; matching is by final segment, so two same-named classes in different namespaces both
+defining the callee keep both candidates; a variable receiver (`c.scale`) or a chained one
+(`Calc.new.scale`) is untouched; and a constant receiver whose class defines both `def self.x` and `def x` gets an
+honest two-way split that includes the instance method (rails `Journey::Parser.parse`) — a split, not a pin, because
+telling `method` from `singleton_method` apart is a later round. A narrow that misses degrades to the unchanged ladder — it never
+deletes an edge and never invents one (`Time.now` still mints nothing).
+
+The default map is byte-identical to the previous build on five Ruby-free corpora (this repo's
+`src/`, npm, a Clojure project, CPython 3.14's stdlib, and this whole repository), and this
+repository's `--report` totals are unchanged at 2,052 files · 18,979 symbols · 22,529 edges.
+`kParserVer` 108 → 109 (the PR declared 96 → 97 over `main`; integration/train-3 assigns 109; record layout
+unchanged by it, `kCacheVersion` stays 23; the VALUES of `recv`/`recvVar` move, so Ruby extraction facts are re-parsed),
+with `quality.h`'s mirror and `test/qschemetrip.hash` re-pinned in the same commit. Thanks to @andriytyurnikov.
+
+### Fixed — a C++ local constructed from plain names, `IRBuilder<> Builder(Rem);`, was indexed as a function and hid its type from the receiver rule
+
+The grammar cannot tell a name from a type, so a block-scope direct-initialized local whose every argument is a plain
+name (`std::lock_guard<std::mutex> Lock(Mtx);`, `Slice end(end_str);`) parses as a local function declaration, and the
+tags query minted a function symbol for it. That symbol's span covers the declaration, so the local's type binding was
+filed under the phantom instead of the function the local lives in: Rule 2 found no type for `Builder.CreateSExt()`, and
+the call fell to the name ladder, where it declined or split. The phantoms also answered bare-name lookups: a Python
+`range(...)` read as bound in-repo because a C++ local was named `range`. Such a declarator now mints no symbol unless
+something in it can only be written in a prototype: `extern`/`inline`/`virtual`/`explicit`, a `void` return, anything
+after the parameter list (`const`, `override`, `noexcept`), empty parentheses, or a parameter an argument cannot
+produce (a primitive or cv-qualified type, a named declarator, `*`/`&`, a default, `...`). Measured with
+`--pin-census --no-cache`, main against the change, C rows joined on (caller, callee, line): llvm-project 4d5358b1d
+loses 12,543 function symbols and rocksdb 0e2801ac3 2,443, none added. Excluding rows that only lost a phantom target,
+changed caller when a phantom disappeared, or lost a veto on a phantom name, 2,857 llvm and 1,062 rocksdb call sites
+retarget. A seeded blinded sample of 40 graded 34 better, 0 same, 6 worse, and all 6 came from the 68 llvm sites that
+lost an edge. Those sites are the flat per-function receiver table's existing floor: a sibling block's same-named local
+of another type now tombstones the name. On train 3 (template-id receivers) the change also restores 997 of the 1,937
+llvm sites that refusing Rule 2c for C++ moved, 928 of them `Builder.CreateX()`. `Widget w( a * b )` still reads as a
+pointer parameter and stays a function symbol, a stated floor. Gate: `test/narrowcheck.sh` arms 52-60 (52-58 red on the
+unchanged binary; 59 red on a fix that refuses every body-local declarator).
+
+### Fixed — a class's `using Base::m;` was ignored, so a call its two bases tie on stayed split
+
+llvm-project's `clang/lib/CodeGen/CGNonTrivialStruct.cpp` declares `struct CopyStructVisitor : StructVisitor<Derived>,
+CopiedTypeVisitor<Derived, IsMove> { using StructVisitor<Derived>::asDerived; … }`. Both bases define `asDerived`, and
+the using-declaration is how C++ picks one. The type-side probe that Rules 2b and 2c and Rule 1's base walk share
+(`resolve.h` `methodOnTypeOrBases`) never read it. A class with no `asDerived` of its own went straight to its bases,
+the two-base tie refused, and each of the file's five `asDerived()` calls split three ways: `StructVisitor::asDerived`
+plus same-file namesakes in `GenFuncNameBase` and `GenFuncBase`, classes the caller does not derive from. The tags pass
+has recorded every class-scope using-declaration as an import site all along; the resolver never consulted them.
+
+A class that defines no `m` now answers with what its `using Base::m;` names: the base's own definitions, else the
+result of walking that base. The walk goes one level: that base's own using-declarations are not followed. The
+qualifier loses its template arguments (`using Base<T>::m;` names `Base`). A re-export naming nothing the index reaches
+adds nothing, and the unchanged walk runs. So does one naming a class outside the class's base closure, which C++ forbids: trusting
+`using NotABase::m;` would pin `NotABase::m` over the real bases' tie. The change is resolve-stage only: kParserVer and the cache format do not
+move.
+
+It deliberately does NOT add the base's overloads to a class that also defines `m`, though C++ does. That was measured
+first. Clang's `CGBuilderTy`, for example, writes `using CGBuilderBaseTy::CreateGEP;` next to its own `CreateGEP`
+overloads, yet the resolver answers the class's own overloads alone. The union was built and graded: over the 17 call
+sites it moved (rocksdb 13, llvm-project 4), blinded against source, 5 were better, 4 the same and 8 worse. Three
+causes, none fixable without parameter types:
+- The ladder cannot drop a re-exported overload the class overrides: rocksdb's `WriteBatch::Put` and `Delete` gained
+  `WriteBatchBase`'s.
+- It cannot drop one the argument count rules out, because the arity filter removes only too-many-arguments
+  candidates.
+- One split was cut to its base half by the same-file tier.
+
+That shape stays a stated floor, pinned by `test/fieldnarrowcheck.sh` arm (u1). It would not have reached `CGBuilderTy`'s
+calls in any case. On main, `CGBuilderBaseTy` is a typedef the base walk cannot follow. With a typedef/using alias fact
+applied, the S6-C locality tie-break keeps the `clang/lib/CodeGen` half of the split.
+
+Measured with `--pin-census --no-cache`, the `main` binary at `fe28fd49` against this change, joining call-site rows
+on (caller, callee, line):
+- rocksdb @ `0e2801ac3`: 0 call sites change.
+- llvm-project @ `4d5358b1d`: 5 change, 0 gained, 0 lost. All five `asDerived()` splits become one receiver-rule pin
+  (`receiver-rule=` 520,496 → 520,501, `split=` 256,918 → 256,913). Graded blinded against source: 5 better, 0 same,
+  0 worse.
+- Composed with the typedef/using alias fact then in review (head `36aa4f56`), llvm-project moves one more site:
+  `UsingShadowDecl::getMostRecentDeclImpl` reaches `Redeclarable::getMostRecentDecl` through `using
+  redeclarable_base::getMostRecentDecl;`, graded WRONG → PARTIAL. rocksdb stays at 0.
+
+The ASan build's llvm-project census is byte-identical to the plain build's and reports no sanitizer finding. Re-measured after merging `main` at `a5ce95e2`: the same five llvm-project sites move, and rocksdb still moves none.
+
+The gate is `test/fieldnarrowcheck.sh` arms (u0)–(u7). On `main`, (u2) the field call, (u3) Rule 1's bare call and (u5)
+the template-qualified re-export are red. (u4) is the contrast: the same two bases with no using-declaration keep their
+split. (u6) is an unindexed re-export that keeps the walk. (u1) goes red on the union build, and (u5) on a build
+without the template-argument strip.
+
+### Fixed — an `--arch` TO-template interval was rejected at parse time even when a real capture made it valid
+
+`deny path FROM -> TO` validates a TO template like `a{10,\1}` at parse time by compiling it once with a
+placeholder in `\1`'s place — and used to try two placeholders, `"x"` then `"9"`, rejecting the whole rules
+file (D9) only when BOTH failed. But `"x"` is not a digit, so it fails ANY numeric-interval position on that
+alone (`{10,x}`), whatever the template; `a{10,\1}` failed both placeholders (`{10,x}` non-numeric, `{10,9}`
+since 9<10) and was refused outright — even though `\1="20"` makes `{10,20}` a perfectly valid interval
+(CodeRabbit review on #277). The probe is now a single `"9"` (valid everywhere a placeholder is: ordinary
+literal text, or a genuine interval digit), and a refusal is accepted at parse time only when it is NOT
+`std::regex_constants::error_badbrace` — an out-of-order `{min,max}` is a fact about which digits a specific
+capture supplies, not about the template's structure, so it defers to the edge: `pathRuleMatches` already
+compiles the REAL substitution per edge and refuses by name (`isRefused`) only the edges whose own capture is
+actually invalid. `RegexCompile` (`src/regexguard.h`) gained `isIntervalRangeOnly`, set once at the single
+`std::regex_error` catch site `compileGuardedRegex` already had — no new file spells `std::regex`
+(`test/regexguardcheck.sh` arm (c), which caught the first version of this fix routing the check through a
+second parse in arch.h itself).
+
+Gates: `test/archcheck.sh` (new F-H9 section) — a valid capture applies (a real verdict, not a parse-time
+refusal), an invalid capture refuses that edge by name, and a template broken independent of any capture
+(an unmatched `(`) still refuses at parse time, unchanged.
+
+### Fixed — a `#match?` predicate or an `--arch` path-rule that never reached the engine still filtered nothing
+
+`#match?`/`#not-match?` (a `--match`/`--lint-rules` predicate) and `--arch` path-rules matched a captured node's
+text, or a FROM/TO path, straight through the engine with no length bound — the same crash shape #251/the
+regex-long-lines lane fixed for `--regex`, just not wired to these three entry points yet. A subject too long
+for the engine on its thread now answers `RegexVerdict::Skipped` (never a silent Miss) at both: `#match?`
+refuses like an abandoned match, naming the site (`--match`/`--lint-rules` exit 1); an `--arch` path-rule's
+verdict refuses only when the skip could actually change the edge's answer — a LATER deny rule that decisively
+matches the same edge settles it regardless, and the earlier skip is disclosed on stderr, not refused. That
+"keep scanning past an undecided rule" shape used to stop at the FIRST undecided deny even when a later one
+would have settled things either way; it now mirrors the allow-loop's own shape, which already scanned past an
+undecided allow the same way.
+
+Gates: `test/astqueryregexcheck.sh` (new arm G, red via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1`), `test/archcheck.sh`
+(a new section: arm 1 red via the same fault, arm 2 deterministic via a per-edge TO-template refusal — the
+fault forces every `kCallerStackBytesFloor`-bound match to skip unconditionally, so a differential needs a
+cause that isn't stack-size-uniform). quality-delta gating=0 (short-horizon-churn acked through the binary).
+
+### Fixed — a skill scan that could not finish reading a line, or a directory, still said "clean"
+
+`--scan-skill(s)` skipped a line the regex engine was never handed (too long for this thread's measured-safe
+bound, the same bound `--regex` uses on a long matching line) and read it as an ordinary Miss, and a
+`--scan-skills` walk that stopped early — a descriptor limit, not a permission error — was silently invisible:
+the loop's own error was cleared in the same expression that set it, so the `if( ec )` guarding it could never
+fire. Both are content that WOULD BE INSTALLED and was never actually scanned, so both now fail CLOSED
+(CRITICAL, named `SCAN-INCOMPLETE:line-oversize` / `SCAN-INCOMPLETE:walk-stopped-early`), reconciling the
+walk-only WARN an earlier round gave `ripwire wrap` with the CRITICAL `--scan-skill` already gives an engine
+that gives up mid-match. An unreadable folder — content that install could not have picked up either — is
+unchanged and stays WARN, the owner's own example of what does not need to fail closed.
+`GuardedRegex::search`/`search(subject,captures)` (`src/regexguard.h`) take an optional per-thread stack bound
+(default unbounded, so every existing caller is untouched) and answer `RegexVerdict::Skipped` rather than a
+silent Miss when a subject exceeds it. Gates: `test/skillscanreadcheck.sh` (a new section), `test/codexwrapcheck.sh`
+(a new section), both red on the unfixed binary via `RIPWIRE_FAULT_REGEX_LINE_BOUND=1` / the new
+`RIPWIRE_FAULT_SKILL_WALK_STOP=1`.
+
+### Fixed — a skill file the scan could not read, or held a NUL byte, is now reported instead of passing
+
+`--scan-skills` counted an unreadable file (mode 000 in a readable folder, an I/O error) as `skipped=` and still
+answered `verdict="clean"` at exit 0, and `ripwire wrap` read the same file as "no findings", with one pathless
+degrade line on stderr however many files it hit. Both now score such a file CRITICAL and name it — a
+`SCAN-INCOMPLETE:file-unreadable` row on the artifact, a `cannot read skill file <path>` line on stderr — so
+`wrap` no longer emits the recipe over it without `--force`. The single-file `--scan-skill` already refused
+that path. A folder the scan cannot enter stays WARN: its contents cannot be copied either.
+`--scan-skills` also stops skipping a file because its first 8 KB hold a NUL byte: it scans it like any other
+file, as `--scan-skill` and `wrap` already did — a PNG icon a skill bundles is now read (and comes back clean)
+rather than skipped. `skipped=` counts unreadable files only.
+
+Gates: `test/skillscanreadcheck.sh` arms (4) and (5), with the NUL-file arm re-pinned (`files="3"`, no
+`skipped=`); `test/codexwrapcheck.sh` unreadable-file arm (red on the unfixed binary, with a readable control)
+and a NUL-byte arm that pins `wrap`'s existing behaviour.
+
+### Added
+
+- **`--lsp` — a read-only navigation LSP server over stdio (Phase 1).** `definition`, `references`,
+  `documentSymbol` (member variables merged into the outline), workspace symbol, and `hover` — the hover
+  gist carries two clickable link tiers: **Used at** (the same call-role floor `--uses` answers with) and
+  **Referenced at** (Ruby constant-load directives, so a class names the files that load it even where no
+  call edge exists) — served to editors off the same warm index `--mcp` uses — no second parser, no
+  second process. Saved-state answers, UTF-8 positions, every count labelled a floor in place; refuses
+  `--mcp`/`--listen` — one protocol per stdin. A `workspace/symbol` query matching more than 20 symbols answers
+  the first 20 and says how many it left out in a `window/logMessage`. A file URI outside the root (absolute,
+  `..`-escaped, through a symlink, or percent-encoded) answers nothing, and malformed `Content-Length` framing ends
+  the session at exit 1. The design record is `docs/LSP.md`; the gate is `test/lspcheck.sh` (17 arms, 19 checks, a
+  scripted client speaking real LSP framing). Thanks to @mpapis.
+
+### Fixed — a C++ member named like a class was read as that class
+
+Rule 2c reads `Cls.m()` through a class name as a call on that class. It checked that no local shadowed the name, but
+never checked members. Inside a C++ member function, name lookup finds a member of the class or of a base before any
+namespace-scope class, so the token is the member. Two graded llvm-project instances resolved to ONE precise, wrong
+edge:
+
+- `LVReader.cpp:175 OutputFile->keep()`, whose member is `std::unique_ptr<ToolOutputFile> OutputFile`, went to
+  `VirtualOutputFile.cpp OutputFile::keep`.
+- `SampleProfile.cpp:1962 Reader->read()`, whose base-class member is `std::unique_ptr<SampleProfileReader> Reader`,
+  went to msgpack `Reader::read`.
+
+Rule 2c now refuses a C++/ObjC receiver that names a member of the caller's class or of a class up its bases. The
+check reads the member side table, which holds every declarator shape, including the `std::unique_ptr<T>` members
+Rule 2b's type table never records. A walk stopped by its 16-name cap also refuses. A raw-pointer member such as
+`Widget* Raw;` is then typed by Rule 2b. Python keeps the route: its attributes are reached only through `self.`.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), against the alias fix above:
+
+| Corpus | Sites retargeted | Changed target | Lost edge |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 0 | 0 | 0 |
+| llvm-project @ 4d5358b1d | 1,398 | 1,346 | 52 |
+
+Most llvm sites move from a namesake class to the member's real type: `IRBuilderBase` → `CGBuilderTy` overrides,
+`Token` → `MIToken`, `Context` → `ASTContext`. The order matters. Without the alias fix, the same refusal lost 1,772
+llvm edges and graded net-worse (60 blinded sites: 23 better / 3 same / 34 worse), because clang's `CGBuilderTy Builder`
+had reached `IRBuilderBase` only through an unrelated class `Builder : IRBuilder` in HexagonVectorCombine.cpp.
+With the alias fix in place, a seeded, blinded sample of 60 of the 1,398 llvm retargets graded 51 better, 7 same and
+2 worse. The worse sites are one Rule 2b floor: `using CGBuilderBaseTy::CreateGEP;` re-exports base overloads the
+class's own overload set shadows.
+
+Neither instance above gets an edge in a scratch composition with the assignment-type lane, where they surfaced.
+
+Gate: `test/clsrecvcheck.sh` arms H–N (a smart-pointer member, a raw-pointer member, a base's member, a class template
+base's member, a member past the walk cap), red on the unfixed binary. Two controls hold: the same call from a class
+without such a member keeps the route, and a Python `self.Interval` attribute does not veto `Interval.validate(v)`.
+
+### Fixed — a base class or member type reached through a C++ `typedef` or `using` alias ended the base walk
+
+The resolver walks a type's bases by class NAME, and an alias names no class. In llvm-project's clang CodeGen,
+`class CGBuilderTy : public CGBuilderBaseTy` with `typedef llvm::IRBuilder<llvm::TargetFolder, CGBuilderInserterTy>
+CGBuilderBaseTy;` stopped at `CGBuilderBaseTy`, so a member `CGBuilderTy Builder;` never reached
+`IRBuilderBase::CreateCall`. The same happened for `BuilderType Builder;` (a class-scope typedef), `BuilderTy Builder;`
+(a class-scope `using`) and every member or base typed through an alias of a class. Those calls got no edge, or a
+split over every same-named method in the corpus.
+
+The C/C++/ObjC capture now records a plain alias's target class, and the base walk continues at the target. Several
+things are deliberately excluded:
+
+- **Not every alias records.** A pointer, reference, array or function alias records nothing, and neither does a
+  primitive, dependent or `decltype` target, or an alias local to a function body.
+- **A target written in `std` is refused**, as a `std::` member type already is.
+- **An alias named like a real class elsewhere is not followed.** Classes are keyed by bare name, so `using Base = Foo;`
+  would otherwise hand `Foo`'s methods to an unrelated class `Base`.
+- **The alias is not an inheritance fact.** It gains no `--lego` implementor, no `role="extends"` use-site and no
+  HAS-A row.
+
+**Alias templates are covered too.** `template <typename T> using SetTy = SmallPtrSet<T, 8>;` is an `alias_declaration`
+inside a template declaration, so a member typed `SetTy<Foo>` walks on to `SmallPtrSet` and its bases.
+
+The record rides the existing compose record shape, so the cache format is unchanged; `kParserVer` moves to 112 (claimed 111; integration/train-4 assigns 112 after the vexing-parse locals lane's 111).
+
+**Known floor.** An alias records its target's class name without template arguments. So when an argument is the enclosing
+template's own parameter, the walk lands on the primary template alone. For example, with `typedef SubT<marks> subtree;` it
+drops an explicit specialization such as `SubT<true>` that the argument can also select. That is a lost candidate, never a
+wrong-class pin. rocksdb's `omt_impl.h` hits it through `subtree_templated<true>`; before this change those calls split
+over both. It is pinned as `test/fieldnarrowcheck.sh` arm t11, whose control `typedef SubT<false>` narrows correctly.
+
+Measured with `--pin-census --no-cache`, joined on (caller, callee, line), main → this change:
+
+| Corpus | Sites retargeted | Newly bound | Lost |
+| --- | --- | --- | --- |
+| rocksdb @ 0e2801ac3 | 366 | +111 | 0 |
+| llvm-project @ 4d5358b1d | 2,649 | +1,146 | 0 |
+
+A seeded, blinded sample of 60 retargets (25 rocksdb, 35 llvm) was graded against source: 57 better, 2 same, 1 worse.
+The worse site is a class template specialization that shares the primary template's name.
+
+Gate: `test/fieldnarrowcheck.sh` arm t. Arms t1–t4 are red on the unfixed binary. Arms t5, t9, t10 and t6's HAS-A row
+each went red when the one guard they protect was disabled in a scratch build.
+
+### Fixed — `--uses` on a `::` selector resolved `defs=` and then answered a silent `count="0"`
+
+Every symbol-taking verb resolves the two `::` spellings the tool prints about itself — the canonical id
+`path::scope::name` and `Scope::name` — but `--uses` then matched reference sites against the whole spelling, which
+no call site carries, so a resolving selector answered `count="0"` (issue #164). `resolveUsesSelector` now takes the
+resolved defs and, when they share one name, matches sites by that name and narrows the call role to those defs,
+exactly as a `file:name` selector does; `--safe-delete` and `--verify` get the narrowed scan too. A wrong scope
+(`Nope::ctwin`) still refuses, a member spelling with no symbol behind it still takes the field path, and an
+all-Elixir resolution keeps the Elixir resolver's arity-exact sites. The MCP `uses` verb refuses a resolving `::`
+spelling as CLI-only with the bare-name retry, the way `file:name` already refuses, instead of the silent zero; the
+legend and `--help` name both spellings that narrow. `test/usesselectorcheck.sh` flips every KNOWN GAP arm to its
+fixed answer and asserts the `::` and `file:name` twins give the same rows and that every call row sits inside
+`--callers`. Thanks to @aniruddhaadak80.
+
+### Added — `--doctor` detects a struct layout that differs between translation units
+
+Each translation unit that includes `src/model.h` records `sizeof` and `alignof` for the shared model types
+(`Symbol`, `Reference`, `Include`, `Binding`, `IngestResult` and the rest) in an internal-linkage registry that
+survives Release and LTO, and `--doctor`'s `layout` row compares them: `state="agree"`, `state="disagree"` with
+the first differing type and both units' sizes and alignments plus the rebuild action, or `not-checked` /
+`no-records` when there is too little to compare. A mixed build — the stale-object failure CLAUDE.md warns about —
+is now named rather than debugged. Stated floors: a field reorder that keeps both size and alignment, and a unit
+that never includes the header, are invisible. `test/structlayoutcheck.sh` proves the disagreement on a
+deterministic two-unit fixture (sizes 4 and 8) and the `not-checked` state on one unit. Thanks to @lennix1337.
+
+### Fixed — a member held by `std::unique_ptr` or `std::shared_ptr` had no type, so every call through it guessed
+
+The member-field capture that feeds Rule 2b read a qualified type only when a plain name sat directly under the `::`.
+In `std::unique_ptr<ToolOutputFile> OutputFile;` that name is a template, so the member recorded no type at all, and
+`OutputFile->keep()` took the bare-name ladder: a split over every `keep`, a locality pick, or no edge. A member written
+`std::unique_ptr<T>` or `std::shared_ptr<T>` now records T, marked as reachable through `->` only, and every C++ call
+reference records whether its member access was written `->`. Rule 2b narrows `p->m()` to T's `m` and leaves `p.m()`
+alone, because `.` names the smart pointer's own `reset` or `get`. The `->` requirement matters: without it, 9
+llvm-project sites (`MC.reset(…)`, `MII.get()`) bind the pointee's same-named method. A list of smart-pointer member
+names cannot stand in for the bit either, since it would also refuse 38 `->get()`/`->reset()` narrows the change makes.
+No other template is read through. `std::vector` has no `->`, and an in-repo `Holder<T>` may overload it onto anything.
+Two same-named classes whose same-named member is reached through `->` in one and as the member itself in the other now
+tombstone each other, as two different types already did. Recording every other `std::Tmpl<…>` member as a std type
+was measured and rejected: on both corpora it changed 6 sites, and all 6 got worse. `--uses=Owner.field` reads the
+same record, so `w_->level` pins to the pointee's `level` instead of every owner's.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 809 sites (448 gain an edge, 355 change target, 6 lose one; bound +442), and
+llvm-project @ 4d5358b1d retargets 793 (498 gained, 295 changed, 0 lost; bound +501). A seeded, blinded, stratified
+sample of 60 retargets graded against source came out 53 better, 4 same and 3 worse. The 3 worse sites are limits Rule 2b
+already had, now reached through a smart pointer: a pointee class name shared by nested classes (`Iterator`), and two
+overload picks that miss a default argument. The ref record grows by one byte, so kCacheVersion moves 23 → 24 and
+kParserVer 112 → 113 (integration/train-5 assigns both; the PR declared 22 → 23 and 103 → 104).
+
+`test/fieldnarrowcheck.sh` arm p is the gate. p1–p4 (the narrow), p7 (`--uses`), all four p8 tombstones and p9 (the warm
+cache) are red on the previous commit. p5 (`w_.reset()`) is red on a build that ignores the `->` bit, the p6 in-repo
+template controls on a build that reads through any template, and a p8 row on a build without the new tombstone.
+`qschemetripcheck` is re-pinned for both versions, and `cachefuzzcheck`'s record walker learns the new byte.
+`localitycheck` arm 6 had used a `std::unique_ptr` member as its example of a type Rule 2b cannot read; it now holds a
+qualified non-std template, and new arm 6b asserts the smart-pointer member narrows (red on the previous commit).
+
+### Fixed — a function definition returning a reference recorded none of its parameters
+
+A C++ function definition finds its parameter list by walking its declarator chain down to the function declarator, and
+the walk read only each declarator's `declarator` field. A definition returning `T&` or `T&&` reaches its function
+declarator through a `reference_declarator`, which holds it as an unnamed child, so the walk stopped there and the
+parameters recorded nothing: no declaration for shadow suppression, no written type for Rule 2's parameter receivers or
+the field use-site index. `Target& Decoy::refCaller( Target& other ) { other.pick( 1 ); … }` fell to the locality
+tie-break and linked `Decoy::pick`, and `int& refRet( int run ) { run += 1; … }` listed its own parameter's write under
+`--uses=run`. The walk now unwraps reference, parenthesized and attributed declarators, as the shadow capture already did
+for the first two, and the shadow capture unwraps `attributed_declarator` too, so `int run [[maybe_unused]] = 0;`
+declares `run`. kParserVer 113 → 114 (integration/train-5 assigns it after #282's 113; the lane declared 104 → 112); no record layout changes.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 28 sites (1 gained, 27 changed, 0 lost), and llvm-project @ 4d5358b1d retargets 1,318
+(977 gained, 331 changed, 10 lost; `calls=` falls by 11). Of the 10 lost, 5 were Rule 2c reading a parameter named like
+a class as that class (`QualType Type`, `MaybeAlign Align`), and the rest were calls through a callable parameter
+(`Compute()`, `Pred( Str )`) linked to a same-named function. A seeded, blinded sample of 26 graded against source came
+out 24 better, 1 same and 1 worse; the worse site is `Type->isRecordType()` on a `QualType Type` parameter, which Rule 2c
+had reached only because the parameter's name spells the class.
+
+`test/narrowcheck.sh` arms 61-63, `test/shadowcheck.sh` arm am plus a body write in arm q8's attributed declarator, and
+`test/fieldnarrowcheck.sh` arm s3 are the gates, all red on the previous commit. `qschemetripcheck` is re-pinned for the
+parser version.
+
+### Fixed — a member the method assigned before calling it read as a local, so Rule 2b refused its declared type
+
+Rule 2b narrows `m_p->m()` to the member's declared type unless a local of that name hides the member, and it decided
+"local" from ANY binding record for the name in the method. Ingest records assignments too: `x = Foo()` and
+`x = std::make_unique<T>( … )` record the callee's name as a Type binding, `x = other` an L3 function-pointer binding,
+and `x = nullptr` a clobber once the file binds `x` to a function. An assignment declares nothing, so every member a
+method assigned before calling it lost its narrow — llvm-project's `LVSplitContext::open`, `OutputFile =
+std::make_unique<ToolOutputFile>( … ); OutputFile->keep();`, had no edge. The veto now reads declaration records alone
+(VarDecl, ParamType, FnDecl); every local-declaring shape emits one once the entry above lets a reference-returning
+definition's parameters and an attributed declarator record theirs. Rule 2c and the Phase 5 external-name veto still read
+every record: they ask whether the name is a variable at all, and an assignment says so. Letting Rule 2c ignore
+assignments too was measured and rejected — it moved 7 llvm-project sites and no rocksdb site, 6 worse and 1 same, each
+reading a member such as `OutputFile`, `Context` or `Section` as the class it spells.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 118 sites (67 gained, 51 changed, 0 lost), and llvm-project @ 4d5358b1d retargets 683
+(521 gained, 162 changed, 0 lost); every one is decided by Rule 2b. What used to veto them: an L3 FnAssign or clobber
+record for 88 rocksdb and 479 llvm-project sites, a Type record naming a class for 13 llvm-project sites, and only a
+Type record naming no class for 30 and 191 — the sites #278's assignment-type guard also releases. A seeded, blinded
+sample of 40 graded against source came out 35 better, 4 same and 1 worse; the worse site is a member `Instruction *`
+whose name-based base walk reaches a namesake `Value` class in another namespace, a Rule 2b limit this change only
+exposes.
+
+One declaration still records none, and is pinned as a floor: a direct-initialised local whose arguments are plain
+names, `Foo x( a, b );`, parses as a function declarator, so a call inside its scope takes the member's type. No
+retargeted site on either corpus has such a receiver. Composed with the branch that stops minting a phantom function for
+that declarator, the change retargets 24 more llvm-project sites, and all 24 name the member outside the local's block
+(`MIB.buildInstr( … )` in `AArch64InstructionSelector::select`), which the previous veto refused across the whole method.
+
+`test/fieldnarrowcheck.sh` arm v is the gate. v1 (five assignment shapes) and v3's member pickup are red on the previous
+commit; the v2 declaration controls are red on a build without the veto, three of them (the reference-returning
+parameters and the attributed declarator) on this veto without the entry above; v3's class-name rows are red on a build
+whose Rule 2c ignores assignments. v4 pins the floor.
+
+### Fixed — a member declared in a base class had no type in the derived class, so every call through it guessed
+
+Rule 2b types a bare member receiver from the `Class#field` table, and it looked the field up on the caller's own class
+only. A member the class inherits was never found: in `class SampleProfileLoader final : public
+SampleProfileLoaderBaseImpl<Function>`, `Reader->getSummary()` names the base's `std::unique_ptr<SampleProfileReader>
+Reader;` and took the bare-name ladder, which gave a split over every `getSummary`, a locality pick, or no edge. When the
+class declares no member of that name, Rule 2b now walks its bases breadth-first, the way it already walks a type's bases
+for a method. The shallowest level with a base declaring the member decides, and it has to be exactly one base whose
+member type was captured. A member counts as declared when it is in the field side table, typed or not. So an own
+`std::optional<Widget> Reader;` whose type the capture skips still hides the base's `Reader`, and so does one at any
+base level before the hit. Two bases declaring the member at one level refuse, and so does a walk the 16-name cap cut
+short. A local of that name still vetoes the narrow. A class template's dependent base is walked like any other base,
+though C++ lookup never searches one for a bare name. This is a disclosed floor. It was measured first: 5 of the
+2,203 sites this change moves sit in such a template, and all 5 are right. Three reach the template's non-dependent
+base, and two reach a `using Base::G;`.
+
+Measured with `--pin-census --no-cache`, C rows joined on (caller id, callee, line) against the previous commit:
+rocksdb @ 0e2801ac3 retargets 374 sites (236 gain an edge, 138 change target, 0 lose one; bound +236), and
+llvm-project @ 4d5358b1d retargets 1,829 (731 gained, 1,098 changed, 0 lost; bound +735). A seeded, blinded, stratified
+sample of 60 retargets graded against source came out 52 better, 3 same and 5 worse, and in all 60 the grader traced the
+receiver to a member of a base class. The 5 worse sites are limits Rule 2b already had, now reached through a base
+member: a type name shared by classes in two namespaces (`llvm::Module` and `sandboxir::Module` twice, `Sema` and
+`comments::Sema` once), and two overload picks that ignore the argument count. `SampleProfile.cpp:1962`, the
+`Reader->read()` that motivated the change, still gets no edge. The assignment `Reader = std::move(...)` five lines up
+records a local binding, and the local-shadow veto refuses the member; a fixture with the assignment deleted narrows.
+
+`test/fieldnarrowcheck.sh` arm w is the gate. w1, w2, w4 (the narrow and its `prov="final-segment"`), w10 and the w12
+floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
+members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
 ## [0.6.1] — 2026-09-14
 
@@ -2706,7 +4685,6 @@ order, and `<recent>`.
 
 Each release leg's gates split across runner jobs, so the workflow's wall clock is one shard rather
 than one suite. Main runs are no longer cancelled by the next push.
-
 
 ### Changed — every skill description rewritten under the client budget, and one skill folded away
 

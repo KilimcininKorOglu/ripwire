@@ -23,6 +23,8 @@
 // the same seven faults a second time.
 
 #include "model.h"
+#include "graph.h"   // filePathContainsRootRel / resolveAllByName — A1 (found-items 2026-09-17): this file's
+                      // own diagnosis must match the file half the SAME way resolveAllByNameQualified does
 #include "graph.h"          // splitQualifiedSpec / resolveAllByName — the SAME grammar the callers resolve with
 #include "didyoumean.h"     // §P12.1: the near-miss suggester, for the "the name is wrong too" fallback
 #include "degradedscan.h"   // degradedTextHit — the ONE degraded-parse text scan (mcprefusal.h words the same facts for MCP)
@@ -41,13 +43,19 @@ namespace rw
 // many were left unsaid, and the first one is all a retry needs.
 inline constexpr std::size_t kSelectorFilesShown = 6;
 
-// The distinct files defining `name`, in index order (first occurrence wins), so the message is deterministic.
+// The distinct files defining `name`, in index order (first occurrence wins), so the message is
+// deterministic. A1 (review round, found-items 2026-09-17): root-relative (rootRelPath), never
+// ing.files[fileId] raw — this list feeds selectorFaultClause's "e.g. --verb=FILE:name" retry text below,
+// and a retry must actually RUN: under an absolute root spelling the raw stored path is LONGER than the
+// root-relative haystack every matcher now compares against (filePathContainsRootRel), so a raw absolute
+// echo can no longer even substring-match its own file — the retry regressed to unrunnable, not merely
+// differently spelled. selectorrefusecheck.sh's §B4.2/§B11.1 arms execute the offered retry, not just print it.
 inline std::vector<std::string> definingFilesOf( const IngestResult& ing, std::string_view name )
 {
     std::vector<std::string> files;
     for( NodeId n : resolveAllByName( ing, name ) )
     {
-        const std::string& path = ing.files[ ing.symbols[n].fileId ];
+        const std::string path( rootRelPath( ing, ing.symbols[n].fileId ) );
         if( std::find( files.begin(), files.end(), path ) == files.end() )
         {
             files.push_back( path );
@@ -56,15 +64,21 @@ inline std::vector<std::string> definingFilesOf( const IngestResult& ing, std::s
     return files;
 }
 
-// Does the FILE half of a `file:name` selector name anything in the index at all? Asked with filePathContains
-// — the identical predicate resolveFocus/resolveAllByNameQualified match the file half with — so this answers
-// exactly the question the resolver asked, never an approximation of it. Written as any_of rather than a
-// hand-rolled loop: the loop form is a 31-token for/if/return-true/return-false stream that --clones pairs
-// with every other tiny predicate in the tree (docdrift's declKeywordOnLine, for one), which is noise.
+// Does the FILE half of a `file:name` selector name anything in the index at all? Asked with
+// filePathContainsRootRel — the identical predicate resolveFocus/resolveAllByNameQualified match the file
+// half with (graph.h) — so this answers exactly the question the resolver asked, never an approximation of
+// it. A fileId loop rather than any_of-over-paths (the shape this used before A1, found-items 2026-09-17):
+// the root-relative view is keyed by fileId, so any_of's by-path lambda can no longer express it.
 inline bool indexHasFileMatching( const IngestResult& ing, std::string_view file )
 {
-    return std::any_of( ing.files.begin(), ing.files.end(),
-                        [ file ]( const std::string& path ) { return filePathContains( path, file ); } );
+    for( std::uint32_t fileId = 0; fileId < std::uint32_t( ing.files.size() ); ++fileId )
+    {
+        if( filePathContainsRootRel( ing, fileId, file ) )
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // DEGRADED-PARSE routing (degradedhintcheck, 2026-08-30). A symbol sitting in a shredded file (the

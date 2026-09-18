@@ -23,8 +23,9 @@
 #include "recall.h"
 #include "situ.h"
 #include "workspace.h"          // multi-root `paths` array (A11): root hygiene + labels + merge
+#include "infra/statclock.h"    // rw::saturatingNanoseconds — the staleness stat reads without signed overflow past 2262
 #include "quality.h"            // computeSnapshot/computeDelta + writeBaseline + gitHeadSha/computeHeadSnapshot — the quality_delta/quality_baseline verbs reuse the exact CLI logic
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — no-op in release; the visible line on a watcher-degrade path
+#include "infra/Diagnostics.h"  // DISCLOSE — no-op in release; the visible line on a watcher-degrade path
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
 
 #include "infra/os.h"    // rw::os — stat + the nanosecond stat fields, open/close, flock, and the directory watcher
@@ -43,7 +44,7 @@
 // here instead of being first discovered by a CI leg nobody can reproduce locally.
 //
 // L2 (Linux runtime probe) — why FsWatcher::arm's no-watcher branch (os::dirwatch_available() is false) is SILENT
-// while its watcher-failed branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something
+// while its watcher-failed branch still emits DISCLOSE. An alert marks an UNEXPECTED fallback: something
 // that normally works did not, this run. On a build with no watcher at all (every Linux build, and any
 // -DRW_OS_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has, taken on
 // every arm() call for the life of the process, forever. Alerting on it made every Linux MCP run emit a degrade
@@ -74,12 +75,14 @@ namespace rw
 
 namespace mcpdetail
 {
-    // nanosecond mtime out of a filled stat_t (os::st_mtim reads the sub-second field under whichever name the
-    // platform gives it). Same arithmetic as ingest.cpp's statSizeTimes; kept local rather than shared because
-    // that one lives in a .cpp and hoisting it would move ingest internals into a header for two call sites.
+    // nanosecond mtime out of a filled stat_t, saturating past 2262 (infra/statclock.h) where the plain product
+    // overflowed. os::st_mtim reads the sub-second field under whichever name the platform gives it (st_mtimespec
+    // on Darwin/BSD, st_mtim on Linux, a whole-second fallback elsewhere), so no platform switch is needed here.
+    // Same arithmetic as ingest.cpp's statSizeTimes; kept local rather than shared because that one lives in a
+    // .cpp and hoisting it would move ingest internals into a header for two call sites.
     inline long long mtimeNsOf( const os::stat_t& st ) noexcept
     {
-        return (long long)os::st_mtim( st ).tv_sec * 1000000000LL + os::st_mtim( st ).tv_nsec;
+        return saturatingNanoseconds( os::st_mtim( st ) );
     }
 
     // nanosecond mtime of a path, or -1 if it can't be stat'd. The staleness signal for the in-memory index.
@@ -99,7 +102,7 @@ namespace mcpdetail
     // unprivileged writer cannot restore it.
     inline long long ctimeNsOf( const os::stat_t& st ) noexcept
     {
-        return (long long)os::st_ctim( st ).tv_sec * 1000000000LL + os::st_ctim( st ).tv_nsec;
+        return saturatingNanoseconds( os::st_ctim( st ) );
     }
 
     // (mtime-ns, size, ctime-ns) of a path in ONE stat(), or (-1,-1,-1) if it can't be stat'd. mcpStale()
@@ -254,7 +257,7 @@ namespace mcpdetail
                 return;
             }
             kq = os::dirwatch_open();
-            if( kq < 0 ) { DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
+            if( kq < 0 ) { DISCLOSE( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
 
             dirFds.reserve( dirs.size() );
             for( const std::string& d : dirs )
@@ -268,7 +271,7 @@ namespace mcpdetail
                 }
                 if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
                 {
-                    DEGRADED_PATH_ALERT( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
+                    DISCLOSE( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
                     reset();
                     return;
                 }
@@ -1059,7 +1062,7 @@ inline void maybePrefetchHeadSnapshot( const std::string& root, std::size_t file
     // quality_delta uses with the SAME default args (so it warms the IDENTICAL qsnap key), then clears the
     // in-flight flag via an RAII guard on EVERY exit path. (3) discard-on-error: a throw (OOM at operator new)
     // is swallowed; the flag is always cleared so the mechanism never wedges.
-    std::thread( [ root, timingsOn ]()
+    std::thread( [ root, timingsOn ]() noexcept
     {
         struct FlagGuard { ~FlagGuard(){ mcpPrefetchInFlight().store( false, std::memory_order_release ); } } guard;
         try   { (void)rw::quality::computeHeadSnapshot( root ); }      // side effect: warm the sha-keyed qsnap (atomic publish)
@@ -1238,7 +1241,7 @@ inline const McpIndex& getIndex( const std::string& root )
 // identity and there is nothing to strip.
 inline void handleIdentity( const McpIndex& ix, NodeId id, std::string& canonOut, std::string& pathOut )
 {
-    VERIFY_NO_ALIAS( canonOut, pathOut );
+    ASSUME_NO_ALIAS( canonOut, pathOut );
     const Symbol&          s       = ix.ing.symbols[ id ];
     const std::string_view rootArg = ix.ing.realPaths.empty() ? std::string_view( ix.root ) : std::string_view();
     canonOut = ( id < ix.g.canonId.size() ) ? canonicalIdForEmit( ix.ing, s, rootArg ) : s.name;

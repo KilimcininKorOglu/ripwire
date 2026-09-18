@@ -1,6 +1,7 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include "infra/os.h"   // rw::os::popen / pclose / realpath — git blame and the file argument
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -147,8 +148,9 @@ inline const char* glyphName( Glyph g ) noexcept
         case Glyph::Hourglass: return "hourglass";
         case Glyph::Check:     return "check";
         case Glyph::Cross:     return "cross";
-        default:                return "missing";
+        case Glyph::None:      return "missing";
     }
+    return "missing";
 }
 
 struct CardRow
@@ -389,7 +391,7 @@ inline std::string gitBlameLineSha( const std::string& repoRoot, const std::stri
     {
         return {};
     }
-    const std::string cmd = "git -c core.quotepath=false" + quality::gitBlameConfigPins( repoRoot )
+    const std::string cmd = gitCmd( " -c core.quotepath=false" ) + quality::gitBlameConfigPins( repoRoot )
                            + " -C " + shSingleQuote( repoRoot ) + " blame --porcelain -L "
                            + std::to_string( lineNo1 ) + ",+1 HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
@@ -549,7 +551,12 @@ inline LintResult computePlanLint( const std::string& fileArg )
     {
         char        resolved[ PATH_MAX ];
         const char* rp = os::realpath( fileArg.c_str(), resolved );
-        absFile        = rp ? std::string( resolved ) : std::filesystem::absolute( fileArg ).lexically_normal().string();
+        std::error_code absEc;   // the throwing absolute() raised filesystem_error when the working directory could not be read
+        absFile        = rp ? std::string( resolved ) : std::filesystem::absolute( fileArg, absEc ).lexically_normal().string();
+        if( absEc )
+        {
+            absFile = std::filesystem::path( fileArg ).lexically_normal().string();   // as given: the git lookup below then finds no repo
+        }
     }
     const std::string parentDir = std::filesystem::path( absFile ).parent_path().string();
     const std::string repoRoot  = gitRepoToplevel( parentDir );

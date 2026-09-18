@@ -5,12 +5,11 @@ declarations. Today a call from shared code to a multiplatform type can resolve 
 output reads exactly as if nobody made the call. The change is small in lines and large in reach:
 every Kotlin Multiplatform codebase gets its shared-code call graph back.
 
-> **Prerequisite — PR #126 (Kotlin support, by @xCatG).** Everything below describes code that #126
-> adds, and #126 is still open as of 2026-09-11. Until it merges, work on top of it: `gh pr checkout
-> 126` inside a fresh worktree. Before you plan, confirm you have the integrated head:
-> `src/graph.h` must define `keepOwnJvmLanguageCandidates`, and `isDefinitionNotDeclaration` in
-> `src/model.h` must carry a Kotlin clause. If either is missing you are on an older head — ask on
-> #126 rather than rebuilding those pieces. Line numbers drift; the function names are the pointers.
+> **Builds on PR #126 (Kotlin support, by @xCatG), merged 2026-09-11.** Everything below describes
+> code that #126 added, so work from `main`. Before you plan, confirm it is there: `src/graph.h`
+> defines `keepOwnJvmLanguageCandidates`, and `isDefinitionNotDeclaration` in `src/model.h` carries a
+> Kotlin clause. The outputs below were recorded on #126's integrated head before it merged; re-record
+> them on your base. Line numbers drift; the function names are the pointers.
 
 Work in a git worktree, not your main checkout. Run every gate in the foreground.
 
@@ -31,7 +30,7 @@ visible; it still leaves the agent's question — who constructs `Platform`? —
 
 The cost on a real library, measured by the maintainers when #126's bodyless-type rule landed: of
 the 138 Kotlin call pairs on ktor that the rule moved, **48 sit on `expect`/`actual` type names**
-(the Kotlin paragraph of `docs/ARCHITECTURE.md`, as #126 lands it). The pattern is everywhere in
+(the Kotlin paragraph of `docs/ARCHITECTURE.md`, as #126 landed it). The pattern is everywhere in
 that tree. At ktor `166c52b3`, a line-anchored grep — a floor, since it misses annotated lines —
 finds at least 59 `expect` type declarations (24 `expect class`, 8 `expect open class`,
 8 `expect interface`, 8 `expect abstract class`, 7 `expect object`, 2 `expect sealed class`,
@@ -109,7 +108,7 @@ collision you re-bump rather than keep either side (the history in `src/ingest_c
 
 ## Reproduce the gap
 
-Build #126 with the plain dev build — no build type:
+Build `main` with the plain dev build — no build type:
 
 ```bash
 cmake -S . -B build && cmake --build build -j
@@ -160,11 +159,11 @@ rm "$FX/src/commonMain/kotlin/demo/Platform.kt"
 
 All four outputs were recorded on #126's integrated head. The last run is the diagnosis: deleting
 the bodyless `expect` declaration, and nothing else, brings the edge back. That head predates #136;
-on a #126 build that includes it, the first run should also carry `declined_calls="1"` — disclosed,
+on `main`, which includes both, the first run should also carry `declined_calls="1"` — disclosed,
 still unbound.
 
 Then take your baseline on ktor (Apache-2.0; clone it and write down the commit). Run the full map
-with `--no-cache` and `--top-k` above the symbol count, once with #126's binary and once with yours,
+with `--no-cache` and `--top-k` above the symbol count, once with a `main` binary and once with yours,
 and diff the Kotlin (caller, callee) pairs. **Re-derive the 48-of-138 share on your ktor commit
 before you rely on it** — it is the number your PR has to move, and the PR must restate it.
 
@@ -203,14 +202,14 @@ declaration and must not move; members declared inside an `expect class` body st
 
 ## Constraints — the non-negotiables
 
-- **Write the gate before the code.** Every arm is observed RED on #126's binary before your change
+- **Write the gate before the code.** Every arm is observed RED on a `main` binary before your change
   turns it green. An arm that has never failed is not evidence it can.
 - **Determinism is a contract.** Two runs are byte-identical, and a warm run from the cache equals
   `--no-cache`. The new bit must ride the cache record, or a warm run silently serves the old answer.
 - **Honesty in output.** Counts that cannot be totals stay floors (`counts_floor="1"`); a zero means
   "none found". Never bind a declined call to a guessed `actual`. Write every floor you leave into the
   gate header and into the Kotlin paragraph of `docs/ARCHITECTURE.md`.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any recoverable path — Release compiles the
+- **`DISCLOSE`, never `ASSUME( false )`**, on any recoverable path — Release compiles the
   assert away and deletes the fallback behind it.
 - **No `std::map` or `std::unordered_map`.** Use `HashMap<>` (ankerl) or `gtl::btree_map`, and never
   let hash iteration order reach output.
@@ -227,7 +226,7 @@ declaration and must not move; members declared inside an `expect class` body st
 ## Acceptance criteria
 
 Add a section to `test/kotlincheck.sh` (the next free § number) that builds its trees in `$TMP` with
-heredocs, the way the file's §13 does. Each arm is red on #126 first:
+heredocs, the way the file's §13 does. Each arm is red on `main` first:
 
 1. **Split tree** — caller, `expect` and `actual` in three different directories: `--callees=greet`
    binds `Platform`, and the arm asserts which file it bound.
@@ -237,18 +236,18 @@ heredocs, the way the file's §13 does. Each arm is red on #126 first:
    2, the zero is a measured decline; on a base that includes #136, assert `declined_calls="1"`.
 4. **No `actual` in the tree:** the call binds the `expect` row.
 5. **`expect fun` unchanged:** a bodyless `expect fun` beside a bodied `actual fun` collapses and
-   binds exactly as it did on #126.
+   binds exactly as it does on `main`.
 6. **Mutation keyed on the keyword:** delete the word `expect` (a plain bodyless `class Platform`) and
    arm 1's edge must be declined again — proving the arm reads the modifier, not the layout. Assert
    the mutation took before reading the result.
 7. **Java invariant:** a Java `Platform` class and a Java caller elsewhere in the tree keep exactly
-   the `--callers` rows they have without the Kotlin files (the §13c pattern).
-8. **Cache:** a warm run equals `--no-cache`, and a cache written by #126's binary is not served to
+   the `--callers` rows they have without the Kotlin files (the §14c pattern).
+8. **Cache:** a warm run equals `--no-cache`, and a cache written by a `main` binary is not served to
    yours.
 9. **Determinism and well-formedness:** two runs are `diff -q` clean, and the output passes
    `xmllint --noout`.
 
-**Measurements to report.** ktor at a named commit: Kotlin pairs gained and lost against #126, how
+**Measurements to report.** ktor at a named commit: Kotlin pairs gained and lost against `main`, how
 many sit on `expect`/`actual` names, and the `declined=` delta (#136). retrofit and
 nowinandroid: zero Java pairs moved, and every moved Kotlin pair listed. The byte-identity check on a
 tree without `.kt` files.
@@ -290,7 +289,7 @@ sanitizer lines.
 
 - The gap in one paragraph, with the fixture and its before/after `--callees` output.
 - The design you chose, the alternatives you rejected, and why.
-- Red → green for every arm, naming the #126 head you were red on.
+- Red → green for every arm, naming the `main` commit you were red on.
 - The ktor, retrofit and nowinandroid measurements with their corpus commits, and the byte-identity
   result on a tree without `.kt` files.
 - The version bumps (old → new) and the RE-PIN LOG entry.

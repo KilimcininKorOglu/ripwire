@@ -12,7 +12,7 @@
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 
 
-#include "infra/Diagnostics.h"   // VERIFY — the enum-index bounds check
+#include "infra/Diagnostics.h"   // ASSUME — the enum-index bounds check
 
 #include <array>
 #include <cstddef>
@@ -34,28 +34,29 @@ namespace
 // serialize.h's calibration array can size on it (model.h documents why), and ingest never assigns it.
 inline constexpr const char* kLangName[] = {
     "cpp", "py", "ts", "go", "rust", "swift", "objc", "md", "js", "sh", "java", "rb", "?", "json", "cs", "c", "toml", "yaml",
-    "php", "lua", "ex", "dart", "kt",
+    "php", "lua", "ex", "dart", "kt", "gd",
 };
 
 static_assert( std::size( kLangName ) == rw::kLangCount,
                "kLangName drifted from the Lang enum — update both together" );
 
-// SymKind has no table here: rw::symTag() already IS the declarative one. Only its count is needed,
-// and it is derived the same way — `Other` is the last kind, so an appended kind resizes the counter.
-inline constexpr std::size_t kSymKindCount = std::size_t( rw::SymKind::Other ) + 1;
+// SymKind has no table here: rw::symTag() already IS the declarative one. Only its count is needed, and
+// model.h owns it — rw::kSymKindCount, proven at compile time to end at the LAST kind, so an appended kind
+// resizes the counter below instead of indexing it off its end.
+using rw::kSymKindCount;
 
 // A Lang / SymKind reaching these out of range means a symbol carries a value its own enum does not
-// name — a corrupt invariant, not a recoverable input, so VERIFY (free in release) and no fallback:
+// name — a corrupt invariant, not a recoverable input, so ASSUME (free in release) and no fallback:
 // the static_assert above already proves every in-range value has a row.
 std::size_t langIndex( rw::Lang l ) noexcept
 {
-    VERIFY( std::size_t( l ) < std::size( kLangName ) );
+    ASSUME( std::size_t( l ) < std::size( kLangName ) );
     return std::size_t( l );
 }
 
 std::size_t kindIndex( rw::SymKind k ) noexcept
 {
-    VERIFY( std::size_t( k ) < kSymKindCount );
+    ASSUME( std::size_t( k ) < kSymKindCount );
     return std::size_t( k );
 }
 

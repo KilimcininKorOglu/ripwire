@@ -5,7 +5,7 @@
 //   collect raw defs/refs -> assign Symbol ids in (file,line,name) order ->
 //   attribute each Reference to its enclosing definition by byte-span containment.
 //
-// Single-threaded (v1). Never throws: every recoverable problem degrades + DEGRADED_PATH_ALERT.
+// Single-threaded (v1). Never throws: every recoverable problem degrades + DISCLOSE.
 
 #include "ingest.h"
 #include "docparse.h"          // P1-B: non-code document ingest (notebooks/html/csv + markitdown bridge)
@@ -18,6 +18,8 @@
 #include "infra/namesplit.h"   // H4: stripTemplateArgs for the C++ qualified-call re-split (shared with tracelocus.h)
 #include "infra/jsonesc.h"     // rw::shSingleQuote - the git ignore probe quotes its root the same way every other git popen does
 #include "infra/fixedStr.h"    // rw::findByte — the NEON/SSE2 byte scan buildNewlineOffsets rides
+#include "infra/ownedfile.h"   // rw::OwnedFile — readFile/readFilePrefix own their stream, so no return path skips the close
+#include "infra/statclock.h"   // rw::saturatingNanoseconds — statSizeTimes' stat timestamps without signed overflow past 2262
 #include "lexindex.h"          // B0.1/B0.2: shared subtoken state machine + per-def lexical statistics builder
 #include "didyoumean.h"        // octocode F3: boundedEditDistance/nearestNameByEditDistance — the ONE near-miss
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
@@ -27,6 +29,8 @@
 #include "preprocdead.h"       // #62: the ONE literal `#if 0` rule (shared with slice.h) — dead call sites never become edges
 #include "extentsuspect.h"     // extent honesty: the containment rules + the recovered/suspect bit vocabulary
 #include "macroreparse.h"      // member-macro re-parse: the scanner, the offset-preserving blank, the adoption rule
+#include "regexguard.h"        // #match?/#not-match?: the screen, the compile and the guarded match (ingest_astquery.h)
+#include "infra/stackthreads.h"   // kCallerStackBytesFloor — #match? bounds a captured node's text the same way skillscan.h/--arch do (F-B4)
 
 #include "infra/Diagnostics.h"
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -52,7 +56,6 @@
 #include <span>
 #include <string_view>
 #include <atomic>
-#include <regex>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -76,7 +79,8 @@ namespace fs = std::filesystem;
 namespace fuseprobe
 {
 enum PassId : int { kInc = 0, kFfi = 1, kRoutes = 2, kRustImpls = 3, kBinds = 4, kUses = 5, kPassCount = 6 };
-inline const char* const kPassName[ kPassCount ] = { "captureIncludes", "captureFfi", "captureRoutes", "captureRustImpls", "captureBindings", "captureUses" };
+inline const char* const kPassName[] = { "captureIncludes", "captureFfi", "captureRoutes", "captureRustImpls", "captureBindings", "captureUses" };
+static_assert( std::size( kPassName ) == kPassCount, "kPassName is indexed by PassId — one name per pass" );
 
 inline thread_local std::uint64_t tlNodes[ kPassCount ] = {};   // visitor calls, this thread, cumulative
 inline std::atomic<std::uint64_t> gNodes[ kPassCount ];         // visitor calls per pass, corpus-wide
@@ -162,6 +166,7 @@ extern "C"
     const TSLanguage* tree_sitter_elixir( void );
     const TSLanguage* tree_sitter_dart( void );
     const TSLanguage* tree_sitter_kotlin( void );
+    const TSLanguage* tree_sitter_gdscript( void );
 }
 
 // ── the ingest-family sections (2026-08-29 split; ingest() phases followed 2026-08-30) ──────────────
@@ -215,8 +220,74 @@ const char* cacheArtifactVerdict( const std::string& path, bool captureValueUses
     return cacheRejectName( inspectCacheArtifact( path, captureValueUses ) );
 }
 
+// Every prefix a cwd-spelled selector path can carry before its root-relative part (IngestResult::crawlRootPrefixes), in
+// the order selectorRootTail tries them: the root as typed, the root relative to the cwd, the root's absolute spellings.
+// $PWD is trusted only when its realpath IS getcwd, so a stale inherited PWD is ignored; a spelling that cannot be
+// computed is left out, never guessed. Lexical throughout, apart from the one realpath of the root and of $PWD.
+static std::vector<std::string> selectorRootPrefixes( const std::string& root )
+{
+    const auto normal = []( const std::filesystem::path& p ) {
+        std::string s = p.lexically_normal().string();
+        while( s.size() > 1 && s.back() == '/' ) { s.pop_back(); }
+        return s;
+    };
+    std::vector<std::string> out;
+    const auto add = [ & ]( std::string s ) {
+        if( !s.empty() && std::find( out.begin(), out.end(), s ) == out.end() ) { out.push_back( std::move( s ) ); }
+    };
+    const std::filesystem::path rootPath( root.empty() ? std::string( "." ) : root );
+    add( normal( rootPath ) );   // as typed: "test/fixture", "../repo", "/abs/repo", "."
+    char cwdBuf[ PATH_MAX ];
+    const char* const cwd = ::getcwd( cwdBuf, sizeof( cwdBuf ) );
+    std::vector<std::string> cwds;   // the cwd's absolute spellings: logical first
+    if( cwd != nullptr )
+    {
+        const char* const pwd = std::getenv( "PWD" );
+        char pwdBuf[ PATH_MAX ];
+        if( pwd != nullptr && pwd[0] == '/' && ::realpath( pwd, pwdBuf ) != nullptr && std::strcmp( pwdBuf, cwd ) == 0 )
+        {
+            cwds.push_back( normal( pwd ) );
+        }
+        cwds.push_back( normal( cwd ) );
+    }
+    std::vector<std::string> absolutes;
+    if( rootPath.is_absolute() )
+    {
+        absolutes.push_back( normal( rootPath ) );
+    }
+    for( const std::string& c : cwds )
+    {
+        if( !rootPath.is_absolute() ) { absolutes.push_back( normal( std::filesystem::path( c ) / rootPath ) ); }
+    }
+    char realBuf[ PATH_MAX ];
+    if( ::realpath( rootPath.c_str(), realBuf ) != nullptr )
+    {
+        absolutes.push_back( normal( realBuf ) );
+    }
+    for( const std::string& a : absolutes )
+    {
+        for( const std::string& c : cwds )
+        {
+            if( a == c )
+            {
+                add( "." );
+            }
+            else if( a.size() > c.size() + 1 && a.compare( 0, c.size(), c ) == 0 && ( c == "/" || a[ c.size() ] == '/' ) )
+            {
+                add( a.substr( c == "/" ? 1 : c.size() + 1 ) );   // the root relative to the cwd
+            }
+        }
+    }
+    for( std::string& a : absolutes )
+    {
+        add( std::move( a ) );
+    }
+    return out;
+}
+
 IngestResult ingest( const char* rootDir, const std::vector<std::string>& excludeSubstr, std::string_view cacheFile,
-                     std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore )
+                     std::size_t maxFileBytes, bool captureValueUses, std::string_view excludeLabel, bool respectGitignore,
+                     IngestLayout )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest: total (crawl + parse + model)" );
     // Cheap (a handful of bytes serialized twice) and runs once per invocation — catches a
@@ -225,11 +296,11 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     verifyCacheRecordMinimaTripwire();
 
     IngestResult result;
-    // A4-F17: rootDir is a runtime-falsifiable input (caller/CLI-supplied), so degrade — never VERIFY here.
-    // In release VERIFY becomes __builtin_assume, which would delete the very guard below (the CLAUDE.md trap).
+    // A4-F17: rootDir is a runtime-falsifiable input (caller/CLI-supplied), so degrade — never ASSUME here.
+    // In release ASSUME becomes __builtin_assume, which would delete the very guard below (the CLAUDE.md trap).
     if( rootDir == nullptr )
     {
-        DEGRADED_PATH_ALERT( "ingest: null root directory — empty result" );
+        DISCLOSE( "ingest: null root directory — empty result" );
         return result;
     }
 
@@ -244,6 +315,16 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
         PROFILE_SCOPE_DESCRIBE( "ingest: crawl (collectSources)" );
         auto [ crawledPaths, oversizeSkipped, taxonomySkips ] = collectSources( rootDir, excludeSubstr, maxFileBytes, excludeLabel, respectGitignore );
         result.files           = std::move( crawledPaths );
+        // #228: record the root once, for rootRelPath (model.h). A directory crawl joins it onto every path; a
+        // single-file root IS its one path, so the root-relative view anchors at that file's directory instead.
+        const std::string_view rootArg( rootDir );
+        result.crawlRoot = rootArg;
+        if( result.files.size() == 1 && result.files.front() == rootArg )
+        {
+            const std::size_t lastSlash = rootArg.rfind( '/' );
+            result.crawlRoot = ( lastSlash == std::string_view::npos ) ? std::string_view{} : rootArg.substr( 0, std::max<std::size_t>( lastSlash, 1 ) );
+        }
+        result.crawlRootPrefixes = selectorRootPrefixes( result.crawlRoot );   // #281: a selector typed from the cwd (graph.h selectorRootTail)
         result.skippedOversize = std::move( oversizeSkipped );
         result.crawlSkips      = std::move( taxonomySkips );   // §L1: excluded / unsupported-ext / unindexed exts
     }

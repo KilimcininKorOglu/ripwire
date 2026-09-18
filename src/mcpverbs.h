@@ -37,6 +37,7 @@
 #include "fielduses.h"     // the member-variable round: the ONE --uses=Owner.field renderer (renderFieldUses — CLI ≡ MCP)
 
 #include <filesystem>      // §B6 M3: the shared root-path existence/directory check (mcpRootRefusal below)
+#include <optional>        // mcpAnswerText / usesText: nullopt is an answer buffer that failed, never an empty answer
 #include <span>            // std::span — connectemit::rebuildFromLegs reads the caller's retained-leg mask
 
 namespace rw
@@ -376,6 +377,21 @@ inline std::string mcpUnknownFieldRefusal( const std::string& scope, std::string
 inline std::string captureXml( const std::function<void( std::FILE* )>& render )
 {
     return rw::renderToString( render, "mcp: open_memstream failed — this verb answers empty" ).text;
+}
+
+// The seven verbs below that render into their own memstream (for, owners, exemplar, impact, uses, path_between,
+// connect) all finish it the same way, so they finish it HERE: the answer's bytes only when rw::MemoryStream::finish
+// says the buffer is whole, and nullopt when it is not. A lost write left a hole in the answer, so each caller answers
+// exactly what it answers when the open fails, never the short bytes. The stream itself closes and frees on every path.
+inline std::optional<std::string> mcpAnswerText( rw::MemoryStream& stream )
+{
+    const rw::MemoryStreamBytes answer = stream.finish();
+    if( !answer.isWhole )
+    {
+        DISCLOSE( "mcp: an answer buffer did not finish whole — this verb answers as if the buffer never opened" );
+        return std::nullopt;
+    }
+    return std::string( answer.bytes );
 }
 
 // full pipeline on a dir → XML captured into a string (captureXml, above).
@@ -1582,7 +1598,7 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
     rw::spliceRootAttrs( doc, rootAttrs );
 }
 
-inline std::string forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
+inline std::optional<std::string> forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
                                 std::size_t budgetTokens = 0, bool noRoute = false,
                                 McpPageArgs page = {} )   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
 {
@@ -1645,6 +1661,17 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // The CLI twin's lr.capAttrs: the INDEXING caps that cut this ranking, same names, same order, so the
     // two surfaces cannot disagree about what was dropped (mention.h CapDisclosure). "" unless one bit.
     std::string   capAttrs;
+
+    // input blow-up guard disclosure (lexical.h kMaxUniqueQueryTerms/dedupeQueryTerms) — same channel and
+    // same attribute names as the CLI twin (verbs_for.h computeLensRanking), so a capped task reads
+    // identically on both surfaces.
+    std::string termsCapNote;
+    {
+        CapDisclosure termsCap;
+        termsCap.note( "terms_capped", "terms_total", mcpEvidence.termsCapped, mcpEvidence.termsSeenTotal );
+        absorbCapDisclosure( termsCap, termsCapNote, capAttrs );
+    }
+
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {
         MentionBoostInfo mentionInfo;
@@ -1772,12 +1799,11 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         }
     }
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
 
     // G4: task and rc.reason are agent-controlled and land verbatim in an XML comment below — a "-->" run
@@ -1872,7 +1898,7 @@ inline std::string forTaskText( const std::string& root, const std::string& task
     // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
     const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
     std::string headerStr = rootOpenStr
-                          + "<!-- ripwire lens for \"" + safeTask + "\"" + mentionNote + boostNote + docMentionNote + floorNote
+                          + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
                           + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
@@ -2014,10 +2040,12 @@ inline std::string forTaskText( const std::string& root, const std::string& task
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
     rw::emitRaw( mem, "</ctx>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
+    std::optional<std::string> answer = mcpAnswerText( stream );
+    if( !answer )
+    {
+        return std::nullopt;   // the buffer lost bytes: the same internal error as the failed open above
+    }
+    std::string out = std::move( *answer );
     // F5 (terminality round A 2026-09-05): PRICE the bundle instead of declaring it unpriced. The document is
     // complete here, so this is the same measurement the CLI twin makes over its own (deliberately different)
     // bytes: pricedRootAttr's ≤4-pass fixpoint at kBytesPerTokenDefault, spliced onto the <ctx> root by the
@@ -2079,7 +2107,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
 // on this path yet (the MCP request shape here carries no such field) — always collapsed, matching the
 // CLI's own default.
 // M13: --owners is in cli.h's honorsPaging set; this twin served every row and named no window.
-inline std::string ownersText( const std::string& root, const std::string& symbolName, McpPageArgs page = {} )
+inline std::optional<std::string> ownersText( const std::string& root, const std::string& symbolName, McpPageArgs page = {} )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2097,14 +2125,14 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
     }
     else if( !symbolName.empty() && symbolName.front() == '@' )
     {
-        return {}; // faulted seed — refused upstream; this arm only defends dispatch drift
+        return std::string{}; // faulted seed — refused upstream; this arm only defends dispatch drift
     }
     else if( !symbolName.empty() )
     {
         const std::vector<NodeId> defs = resolveAllByName( ing, symbolName );
         if( defs.empty() )
         {
-            return {}; // symbol not found → caller sends -32602
+            return std::string{}; // symbol not found → caller sends -32602
         }
         // ONE of N definitions — the lowest node id — and the report then covers that definition's file
         // alone under files="1", while callers/uses/impact/mentions on the same name all disclose defs=.
@@ -2115,15 +2143,14 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
     const std::vector<FileOwnership> ownerships = gitFileAuthors( root, ing, onlyFileId );
     if( ownerships.empty() )
     {
-        return {}; // git unavailable or no history → caller sends error
+        return std::string{}; // git unavailable or no history → caller sends error
     }
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
 
     const int          cap          = int( ownerships.size() );
@@ -2188,11 +2215,7 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
         rw::emitTo( mem, " top=\"{}\" share=\"{:.2f}\"/>", std::string_view( em.data(), em.size() ), top.share );
     }
     rw::emitRaw( mem, "</owners>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // ─── flagship-reflex verbs (exemplar / impact / uses / path — the write-moment + is-it-safe reflexes) ──────
@@ -2218,7 +2241,7 @@ inline std::string ownersText( const std::string& root, const std::string& symbo
 // back to fn. Its `candidates=` also counted ALL of the kind (3408) against the CLI's post-ceiling ELIGIBLE
 // set (3338) — one attribute name, two populations. It now calls selectExemplar (exemplar.h), the same
 // function main.cpp calls, so there is one selector and the divergence class is gone rather than resynced.
-inline std::string exemplarText( const std::string& root, const std::string& kindOrTask, RedactCounts* redact = nullptr )
+inline std::optional<std::string> exemplarText( const std::string& root, const std::string& kindOrTask, RedactCounts* redact = nullptr )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2240,7 +2263,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
     const ExemplarPick pick = selectExemplar( ing, g, fanIn, qm.tested, kindOrTask );
     if( pick.winner == kNoNode )
     {
-        return {}; // no candidate of the kind / task matched nothing → caller reports not-found
+        return std::string{}; // no candidate of the kind / task matched nothing → caller reports not-found
     }
 
     const auto fin = [ & ]( NodeId i ) -> std::uint32_t { return ( i < fanIn.size() )    ? fanIn[i]    : 0u; };
@@ -2260,12 +2283,11 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
                                                    + ( pick.lowConfidence ? ", low-confidence: weak match, fell back to fn" : "" ) + ")" )
                                                : std::string();
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
     rw::emitRaw( mem, "<ctx>" );
     // §B6 M13: the rule is exemplar.h's kExemplarSelectionRule, rendered — not restated here in a fourth wording.
@@ -2289,11 +2311,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
                 /*ranges=*/nullptr, /*noteIndex=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                 /*withFileContext=*/false, exSingleRoot ? std::string_view( root ) : std::string_view() );
     rw::emitRaw( mem, "</exemplar></ctx>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // `impact` verb (is-it-safe-to-change-X reflex): the transitive blast radius of SYM — every symbol that
@@ -2305,7 +2323,7 @@ inline std::string exemplarText( const std::string& root, const std::string& kin
 // pageWindow/effectiveRowCap/pageDisclosure trio the CLI --impact uses — so the 40-row display default is a
 // default here too rather than a ceiling, and a paged answer carries the total=/has_more=/next_offset=
 // half that lets a caller's loop terminate. Defaulted to {} ⇒ byte-identical to the un-paged answer.
-inline std::string impactText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
+inline std::optional<std::string> impactText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2319,7 +2337,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     const std::vector<NodeId> seeds        = resolveAllByNameQualified( ing, symbol, &unprovenDefs );
     if( seeds.empty() )
     {
-        return {}; // symbol not found → caller reports not-found
+        return std::string{}; // symbol not found → caller reports not-found
     }
 
     const std::vector<NodeId> reach = transitiveCallers( g, seeds );
@@ -2342,12 +2360,11 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
     // §H4 §3.4: the opener AND the paging clause AND the floor/counting-unit tail now come from the shared
     // constants (src/graphlegend.h + src/pageview.h), so this legend is byte-identical to the CLI --impact
@@ -2395,11 +2412,7 @@ inline std::string impactText( const std::string& root, const std::string& symbo
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
     rw::emitRaw( mem, "</impact>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // `uses` verb (ABS-3): the use-site index for SYM — the resolvable places its name is REFERENCED (call/read/
@@ -2471,6 +2484,45 @@ inline std::string qualifiedSelectorRefusal( const IngestResult& ing, const std:
          + "` for the narrowed answer";
 }
 
+// Issue #164 option (b), folded out of usesSelectorRefusal so that function stays under the quality-delta
+// bars (F8/nice-to-have): the "::" refusal fires only when the whole spelling RESOLVES to at least one
+// def and at least one of those defs is not Elixir. An all-Elixir resolution is answerable on both
+// surfaces without narrowing — usesText/collectUseSites already match it through the Elixir resolver
+// (elixirDefs, mirrored in resolveUsesSelector) — so refusing it would reintroduce the exact silent
+// count="0" this verb exists to fix, for a population that never had it (elixirsemanticcheck). Unlike the
+// prior shape, this no longer consults resolveFieldSelector first: the CLI's own precedence
+// (memberUsesArm) only looks at fields once defs is empty, so a "::" spelling that resolves to a SYMBOL
+// refuses here regardless of also matching a field name.
+inline std::string qualifiedColonSelectorRefusal( const IngestResult& ing, const std::string& symbol )
+{
+    if( symbol.find( "::" ) == std::string::npos )
+    {
+        return {};
+    }
+    const std::vector<NodeId> defs = resolveAllByName( ing, symbol );
+    if( defs.empty() )
+    {
+        return {}; // does not resolve as a whole spelling — falls through to the generic refusal below
+    }
+    bool allElixir = true;
+    for( NodeId n : defs )
+    {
+        if( n >= ing.symbols.size() || ing.symbols[ n ].lang != Lang::Elixir )
+        {
+            allElixir = false;
+            break;
+        }
+    }
+    if( allElixir )
+    {
+        return {}; // main's byte-identical answer for this population
+    }
+    const std::string bareName = symbol.substr( symbol.rfind( ':' ) + 1 );
+    return "qualified '::' selectors are CLI-only on this verb — pass the bare name '" + bareName
+         + "' (the union across its defs), or use the CLI form `ripwire <dir> --uses=" + symbol
+         + "` for the narrowed answer";
+}
+
 inline std::string usesSelectorRefusal( const IngestResult& ing, const std::string& symbol )
 {
     if( !symbol.empty() && symbol.front() == '@' )
@@ -2489,6 +2541,15 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
     const std::size_t lastColon = symbol.rfind( ':' );
     if( lastColon != std::string::npos && lastColon + 1 < symbol.size() )
     {
+        // Issue #164, option (b): a RESOLVING "::" spelling (canonical id or Scope::name) is the one
+        // qualified shape the CLI answers and this verb cannot narrow — its scan is name-wide with no
+        // narrowing machinery, so serving it is the silent count="0" the CLI just fixed. Refuse with the
+        // retry instead, the way a file:name spelling already refuses below. A non-resolving "::" spelling,
+        // and an all-Elixir resolution, both fall through to the shared refusal / no-op below (byte-identical).
+        if( const std::string colonRefusal = qualifiedColonSelectorRefusal( ing, symbol ); !colonRefusal.empty() )
+        {
+            return colonRefusal;
+        }
         return qualifiedSelectorRefusal( ing, symbol, "--uses=" );   // "" when the qualified spelling resolves
     }
 
@@ -2541,7 +2602,9 @@ inline std::string_view atSeedNameOr( const IngestResult& ing, std::string_view 
     return seedDef != kNoNode ? std::string_view( ing.symbols[ seedDef ].name ) : sym;
 }
 
-inline std::string usesText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
+// nullopt when the answer buffer failed (at the open, or a write lost inside it): the callers answer an internal error,
+// because an empty text result would read as a successful, empty answer.
+inline std::optional<std::string> usesText( const std::string& root, const std::string& symbol, McpPageArgs page = {} )
 {
     const McpIndex&        ix   = getIndex( root );
     const IngestResult&    ing  = ix.ing;
@@ -2615,21 +2678,20 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;
     }
     // §H4 §3.4 item 2: the opener is the SHARED one (src/graphlegend.h) — this copy and the CLI's were the
     // same false "every use-site of SYM" promise emitted twice, and a fix applied to one of two echo sites
     // is the §B4 failure family. The BODY deliberately stays surface-specific: the CLI legend documents the
-    // file:name selector attributes, which this verb has no selector for and does not emit.
+    // qualified-selector attributes, which this verb has no selector for and does not emit.
     rw::emitTo( mem, "{}"
                        "Reference-name-based (same heuristic level as call edges) — verify in source if a name is overloaded. "
                        "external=\"1\" means SYM has no definition in the indexed tree under ANY spelling (stdlib/third-party); "
-                       "a qualified file:name spelling whose bare name IS defined refuses instead (the CLI uses verb narrows it). "
+                       "qualified file:name and \"::\" spellings whose bare name IS defined refuse instead (the CLI uses verb narrows them). "
                        "{}{}-->{}", kUsesLegendOpen,
                   capLegendClause( computePageDisclosure( upageRows, sites.size(), upw.end,
                                                           page.limit, page.offset, usDiscloseCap ).active ),
@@ -2656,18 +2718,14 @@ inline std::string usesText( const std::string& root, const std::string& symbol,
         rw::emitRaw( mem, "/>" );
     }
     rw::emitRaw( mem, "</uses>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream );
 }
 
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
 // or "" (caller → not-found error) when EITHER endpoint fails to resolve.
-inline std::string pathText( const std::string& root, const std::string& from, const std::string& to )
+inline std::optional<std::string> pathText( const std::string& root, const std::string& from, const std::string& to )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -2684,7 +2742,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
     const std::size_t         unprovenDefs    = srcUnprovenDefs + dstUnprovenDefs;
     if( srcDefs.empty() || dstDefs.empty() )
     {
-        return {}; // an endpoint not found → caller reports not-found
+        return std::string{}; // an endpoint not found → caller reports not-found
     }
 
     const std::vector<NodeId> pth     = shortestPathAny( g, srcDefs, dstDefs );
@@ -2702,12 +2760,11 @@ inline std::string pathText( const std::string& root, const std::string& from, c
       const std::string_view rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       return ex( rp ) + ":" + std::to_string( s.line ); };
 
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem )
     {
-        return {};
+        return std::nullopt;   // the answer buffer could not be opened: an internal error, never "not found"
     }
     const std::string ptRootAttr = ptSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     // R-E fix (2026-08-19): the same shared root-relative clause the CLI --path twin now leads with — this
@@ -2732,11 +2789,7 @@ inline std::string pathText( const std::string& root, const std::string& from, c
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line ); }
     rw::emitRaw( mem, "</path>" );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
 // §B6 M8: `path_between`'s not-found refusal, shared by both arms. The old wording — "path endpoint not
@@ -3239,18 +3292,19 @@ inline std::string connectText( const std::string& root, const std::vector<std::
     }
 
     const ConnectResult res = connectSubgraph( g, terminals, radius );
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  mem = os::open_memstream( &buf, &sz );
+    rw::MemoryStream stream;
+    std::FILE* const mem = stream.open();
     if( !mem ) { err = "internal error"; return {}; }
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     packConnect( mem, ing, g, res, redact, /*maxTokens=*/0, ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),
                  unprovenDefs );
-    std::fflush( mem );
-    std::fclose( mem );
-    std::string out = buf ? std::string( buf, sz ) : std::string{};
-    std::free( buf );
-    return out;
+    std::optional<std::string> answer = mcpAnswerText( stream );
+    if( !answer )
+    {
+        err = "internal error";   // the same refusal as the failed open above
+        return {};
+    }
+    return std::move( *answer );
 }
 
 // ─── quality_baseline / quality_delta verbs (the convergence-loop oracle over the warm index) ──────────────
@@ -3312,7 +3366,7 @@ struct QualityDeltaOutcome
 // §B6 M10 — a CORRUPT sidecar used to read as "no sidecar". readBaseline reports a file that yields no header,
 // no `head` stamp and no record line as ABSENT (correct — a broken pin is not a floor), and selectBaseline then
 // hands back the bare "git-HEAD" marker, which is the SAME answer a tree with NO sidecar at all gets. The only
-// disclosure was a server-side DEGRADED_PATH_ALERT on stderr, which no MCP client surfaces: the agent saw a
+// disclosure was a server-side DISCLOSE on stderr, which no MCP client surfaces: the agent saw a
 // clean baseline:"git-HEAD" and could not know its pinned floor had silently stopped being read.
 //
 // Absent-vs-present is a fact this arm can establish on the path it already knows: a bare "git-HEAD" means the
@@ -3342,9 +3396,44 @@ inline const char* mcpBaselineMarker( const rw::quality::BaselineSelection& sele
     std::error_code sidecarEc;
     if( std::filesystem::exists( std::filesystem::path( sidecarPath ), sidecarEc ) && !sidecarEc )
     {
-        return "git-HEAD (unreadable sidecar ignored)";   // present on disk, rejected by readBaseline
+        return "git-HEAD (sidecar unreadable)";   // present on disk, rejected by readBaseline — the SAME
+                                                   // spelling selectBaseline's own "present but unrecognizable"
+                                                   // state uses (quality.h), and the one verbs_quality.h's
+                                                   // legend documents; A2 (found-items 2026-09-17) found this
+                                                   // arm spelling the identical state differently.
     }
     return selection.marker;                              // genuinely absent — "git-HEAD"
+}
+
+// The error quality_delta returns when the git-HEAD fallback was attempted and ALSO came back empty — the CLI
+// twin is verbs_quality.h's noBaselineFatalMessage, and each state below mirrors its wording, per-arm verb aside.
+// A named step rather than a conditional chain inside computeQualityDelta, for the reason mcpBaselineMarker above
+// gives: each state is one arm with one reason, and "no <file>" is reached only when there is no file.
+//   * w1 sibling sweep: this arm passes removeStaleFile=false, so a stale sidecar ALWAYS survives here
+//     (baseSel.isStaleFileOnDisk() is true whenever isSidecarStale() is) — "delete it" is therefore always the true
+//     instruction and the wording needs no removed-vs-ignored split. The CLI twin, which unlinks, does branch on it.
+//   * Round 3 (pathguard.h): "no <file>" is false while a refused link is sitting at the name.
+//   * The producer rule (quality.h BaselineSource): a foreign pin is a real floor for another build, left on disk.
+inline std::string mcpNoBaselineMessage( const rw::quality::BaselineSelection& baseSel )
+{
+    const std::string sidecarName = rw::quality::kBaselineFile;
+    if( baseSel.sidecarSymlinkRefused )
+    {
+        return sidecarName + " is a symlink, which is refused on read exactly as on write (it was not opened), and there is no git HEAD to auto-compare against — replace the link with a regular copy of its target, or remove it and run the quality_baseline verb";
+    }
+    if( baseSel.sidecarUnreadable )
+    {
+        return sidecarName + " exists but is not a readable baseline (unrecognizable, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc records) and there is no git HEAD to auto-compare against — re-pin it with the quality_baseline verb BEFORE the change you want to measure";
+    }
+    if( baseSel.isSidecarForeign() )
+    {
+        return sidecarName + " was pinned by another ripwire build (its producer stamp does not name this server's sources, and a dead set depends on how calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run quality_delta with the build that pinned it, or re-pin on a clean tree (commit or stash first) with the quality_baseline verb BEFORE the change you want to measure";
+    }
+    if( baseSel.isSidecarStale() )
+    {
+        return sidecarName + " is STALE (pinned at a different HEAD) and there is no current HEAD tree to fall back to — delete it or re-run the quality_baseline verb";
+    }
+    return "no " + sidecarName + " and no git HEAD to auto-compare against — run the quality_baseline verb BEFORE the change you want to measure";
 }
 
 inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
@@ -3377,18 +3466,8 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
         auto [ headSnap, headOk ] = rw::quality::computeHeadSnapshot( root );
         if( !headOk )
         {
-            oc.ok = false;
-            // w1 sibling sweep: this arm passes removeStaleFile=false, so a stale sidecar ALWAYS survives here
-            // (baseSel.isStaleFileOnDisk() is true whenever isSidecarStale() is) — "delete it" is therefore
-            // always the true instruction and the wording needs no removed-vs-ignored split. The CLI twin,
-            // which unlinks, does branch on isStaleFileOnDisk().
-            // Round 3 (pathguard.h): a refused link gets the CLI twin's refused-link wording, per-arm verb aside —
-            // "no <file>" is false while the link is sitting at the name.
-            oc.errMsg = baseSel.sidecarSymlinkRefused
-                ? std::string( rw::quality::kBaselineFile ) + " is a symlink, which is refused on read exactly as on write (it was not opened), and there is no git HEAD to auto-compare against — replace the link with a regular copy of its target, or remove it and run the quality_baseline verb"
-                : baseSel.isSidecarStale()
-                ? std::string( rw::quality::kBaselineFile ) + " is STALE (pinned at a different HEAD) and there is no current HEAD tree to fall back to — delete it or re-run the quality_baseline verb"
-                : std::string( "no " ) + rw::quality::kBaselineFile + " and no git HEAD to auto-compare against — run the quality_baseline verb BEFORE the change you want to measure";
+            oc.ok     = false;
+            oc.errMsg = mcpNoBaselineMessage( baseSel );
             return oc;
         }
         baseSel.snapshot = std::move( headSnap );
@@ -3615,9 +3694,18 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     const queryshape::Verdict shape   = queryshape::classify( task );
     const std::vector<float>  tierMul = rankTierSymbolMultipliersShaped( ing, !noRoute && shape.fires() );
     lr.rank      = ( rc.which == LexMode::NameExact ) ? lexicalScoresNameExactRanked( ing, task, &tierMul )
-                                                       : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul );
+                                                       : lexicalScoresTiered( ing, g.outOff, g.outTargets, task, 0, &ifaceExact, &tierMul,
+                                                                              0, 0, {}, &lr.evidence );
     // §L10b + verify-wave2 F6: same trim as the other route= construction sites — neither bracket.
     lr.routeNote = routeNoteOf( rc, shape, noRoute );   // row 6: the route CODE, ONE producer (filter.h)
+
+    // input blow-up guard disclosure (lexical.h kMaxUniqueQueryTerms/dedupeQueryTerms) — same channel/
+    // attribute names as the other two --for/--pack-task surfaces.
+    {
+        CapDisclosure termsCap;
+        termsCap.note( "terms_capped", "terms_total", lr.evidence.termsCapped, lr.evidence.termsSeenTotal );
+        absorbCapDisclosure( termsCap, lr.capNote, lr.capAttrs, lr.capJson );
+    }
 
     if( !noRoute && !std::getenv( "RIPWIRE_NO_MENTION" ) )
     {
@@ -3696,9 +3784,9 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
 // `from_trace` verb: the MCP twin of --from-trace — maps a pasted stack trace / sanitizer report / compiler
 // error onto indexed symbols, ranked INNERMOST-first, via fromTraceBundleText() (tracelocus.h) — the SAME
 // assembler the CLI --from-trace handler calls. `trace` is the raw trace TEXT (no stdin/file reading over
-// MCP — the caller pastes it as a request argument, unlike the CLI's FILE/'-' arg). "" ⇒ zero parseable
-// frames (caller → error, mirroring the CLI's loud refusal).
-inline std::string fromTraceText( const std::string& root, const std::string& trace, std::size_t budgetTokens, RedactCounts* redact = nullptr )
+// MCP — the caller pastes it as a request argument, unlike the CLI's FILE/'-' arg). Returns the assembler's own
+// result: !ok ⇒ zero parseable frames or a withheld bundle (isBufferLost), and the dispatcher words each refusal.
+inline FromTraceResult fromTraceText( const std::string& root, const std::string& trace, std::size_t budgetTokens, RedactCounts* redact = nullptr )
 {
     const McpIndex&     ix  = getIndex( root );
     const IngestResult& ing = ix.ing;
@@ -3726,7 +3814,7 @@ inline std::string fromTraceText( const std::string& root, const std::string& tr
     in.rootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();   // R-R
 
     const FromTraceResult res = fromTraceBundleText( ing, g, trace, "mcp trace input", in );
-    return res.ok ? res.xml : std::string();
+    return res;
 }
 
 // `edit_check` verb: the MCP twin of --edit-check=SYM — "did MY edit change a contract someone depends on",
@@ -3912,15 +4000,20 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     }
     else
     {
-        DEGRADED_PATH_ALERT( "mcp slice: definition file unreadable" );
+        DISCLOSE( "mcp slice: definition file unreadable" );
         return SliceReply{ {}, "cannot read " + path + " — the slice re-parses the definition's file and has nothing to walk" };
     }
 
     const ::TSLanguage* grammar = sliceGrammarForFile( path );
     slicev::SliceScan   scan    = slicev::sliceScanDefinition( src, sym, fam, grammar, varName );
+    if( scan.tooDeep )
+    {
+        return SliceReply{ {}, "'" + sym.name + "' in " + path + " nests deeper than " + std::to_string( slicev::kMaxSliceDepth )
+                               + " syntax levels — refused: the slice walks recurse once per level, and a definition this deep would exhaust the stack" };
+    }
     if( !scan.parseOk )
     {
-        DEGRADED_PATH_ALERT( "mcp slice: definition re-parse failed" );
+        DISCLOSE( "mcp slice: definition re-parse failed" );
         return SliceReply{ {}, "could not re-parse " + path + " (grammar missing, or the indexed span no longer fits "
                                "the file — a stale index; call any read verb to refresh, or check the CLI --doctor)" };
     }
@@ -4757,7 +4850,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "for" ) );
         }
-        r.payload = forTaskText( root, task, redactPtr, 0, false, pageParse.page );   // L-W: the batch arm pages the file page too
+        std::optional<std::string> forAnswer = forTaskText( root, task, redactPtr, 0, false, pageParse.page );   // L-W: the batch arm pages the file page too
+        if( !forAnswer )
+        {
+            return bad( "internal error: the for answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *forAnswer );
         if( r.payload.empty() )
         {
             return bad( "no symbols found" );
@@ -4808,7 +4906,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "impact" ) );
         }
-        r.payload = impactText( root, symbol, pageParse.page );   // §B6 M4: the batch arm honors the SAME window
+        std::optional<std::string> impactAnswer = impactText( root, symbol, pageParse.page );   // §B6 M4: the batch arm honors the SAME window
+        if( !impactAnswer )
+        {
+            return bad( "internal error: the impact answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *impactAnswer );
         if( r.payload.empty() )
         {
             return bad( symbolMissing( "impact", symbol ) );
@@ -4825,7 +4928,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( refusal );
         }
-        r.payload = usesText( root, symbol, pageParse.page );   // LB-G: the batch arm honors the SAME window (the impact precedent)
+        std::optional<std::string> usesAnswer = usesText( root, symbol, pageParse.page );   // LB-G: the batch arm honors the SAME window (the impact precedent)
+        if( !usesAnswer )
+        {
+            return bad( "internal error: the uses answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *usesAnswer );
     }
     else if( r.verb == "mentions" )
     {
@@ -4872,7 +4980,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( refusal );
         }
-        r.payload = ownersText( root, symbol, pageParse.page );      // symbol optional (empty = all files); M13: paged
+        std::optional<std::string> ownersAnswer = ownersText( root, symbol, pageParse.page );      // symbol optional (empty = all files); M13: paged
+        if( !ownersAnswer )
+        {
+            return bad( "internal error: the owners answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *ownersAnswer );
         if( r.payload.empty() )
         {
             return bad( symbol.empty() ? std::string( "no git history for this tree (owners is mined from git; not a repo, or no commits)" )
@@ -4897,7 +5010,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "path_between" ) );
         }
-        r.payload = pathText( root, from, to );
+        std::optional<std::string> pathAnswer = pathText( root, from, to );
+        if( !pathAnswer )
+        {
+            return bad( "internal error: the path_between answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *pathAnswer );
         if( r.payload.empty() )
         {
             return bad( pathEndpointRefusal( getIndex( root ).ing, from, to ) );
@@ -4910,7 +5028,12 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         {
             return bad( missingField( "exemplar" ) );
         }
-        r.payload = exemplarText( root, arg, redactPtr );
+        std::optional<std::string> exemplarAnswer = exemplarText( root, arg, redactPtr );
+        if( !exemplarAnswer )
+        {
+            return bad( "internal error: the exemplar answer buffer lost bytes — no answer served" );
+        }
+        r.payload = std::move( *exemplarAnswer );
         if( r.payload.empty() )
         {
             return bad( "no matching exemplar (no symbol of that kind, or the task matched nothing)" );
@@ -4975,7 +5098,7 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         // Unreachable by construction: unknownSubVerbRefusal above already refused anything outside
         // kBatchServedVerbs + kBatchVerbAliases, and every member of those has an arm. If a verb joins the
         // registry without one, THIS is the honest failure — never a silent ok="1" with an empty payload.
-        DEGRADED_PATH_ALERT( "batch: a verb in the served registry has no dispatch arm" );
+        DISCLOSE( "batch: a verb in the served registry has no dispatch arm" );
         return bad( "batch cannot answer '" + r.verb + "' — it is in the served registry but has no dispatch "
                     "arm (a ripwire bug: kBatchServedVerbs and runBatchSub have drifted)" );
     }

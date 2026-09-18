@@ -171,7 +171,7 @@ edge at all, external or otherwise, and the PR's deferred-work list says so.
 Each one shows up in the output as a floor, never as a silent zero.
 
 **FFI (optional, later).** `extern fn` and `export fn` meet C. ripwire already resolves across
-languages in `src/graph.h` (`langCompatible`), and open PR #126 bridges Kotlin and Java there. A
+languages in `src/graph.h` (`langCompatible`), and #126 (merged) bridges Kotlin and Java there. A
 Zig↔C bridge is a second-round idea. Put it on the plan's "not now" list, unless the STEP 0 corpora
 show heavy C interop.
 
@@ -184,7 +184,7 @@ These do not change for this kit:
 - The gate comes before the code.
 - Determinism is a contract: two runs are byte-identical, and a warm run equals a cold one.
 - A zero means "none found".
-- Never `VERIFY( false )` on a degrade path.
+- Never `ASSUME( false )` on a degrade path.
 - Never use `std::map` or `std::unordered_map`.
 - Style follows `CONTRIBUTING.md` §3.
 

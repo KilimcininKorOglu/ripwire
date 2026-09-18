@@ -4,8 +4,8 @@
 # WHY THIS GATE EXISTS. PageRank here stops on one of two conditions: the L1 residual falls below tolerance
 # (the fixed point), or the iteration ceiling is reached with the residual still above it (a TRUNCATION of
 # the computation). Before this item the two produced byte-identical documents. `pageRankDouble` fired
-# DEGRADED_PATH_ALERT on the truncating exit and returned its iteration count; `rankGraphTeleport` discarded
-# that return, and DEGRADED_PATH_ALERT is `#ifndef NDEBUG`, so on every shipped Release binary it is not code
+# DISCLOSE on the truncating exit and returned its iteration count; `rankGraphTeleport` discarded
+# that return, and DISCLOSE is `#ifndef NDEBUG`, so on every shipped Release binary it is not code
 # at all. A release build emitted a ranking from an unfinished iteration with no alert, no attribute, exit 0.
 # `pr_iters=` / `pr_converged=` put the fact in the document, where a release build cannot delete it.
 #
@@ -40,7 +40,7 @@
 # arm (C) proves it, so the arming mechanism cannot become a way to change shipped behaviour — it is not a
 # flag and appears in no --help (arm (G) asserts that), and unlike serialize.h's RIPWIRE_FAULT_CHARGE_BUFFER
 # it is honoured in EVERY build flavour, which is the whole point: the question this gate asks is whether an
-# NDEBUG build still discloses after DEGRADED_PATH_ALERT has been compiled out of it.
+# NDEBUG build still discloses after DISCLOSE has been compiled out of it.
 #
 # Arms:
 #   (A) presence   — the default map root carries pr_iters="N" with 1 <= N <= 100, and NO pr_converged=
@@ -117,7 +117,7 @@ else
 fi
 
 # ── (B2) the truncating exit under NDEBUG — the reason this whole item exists ──────────────────────
-# A Release build has no DEGRADED_PATH_ALERT. If the disclosure were still carried by the alert, this arm
+# A Release build has no DISCLOSE. If the disclosure were still carried by the alert, this arm
 # is where that would show. Build the reference with:
 #     cmake -S . -B build_rel -DCMAKE_BUILD_TYPE=Release && cmake --build build_rel -j
 #     RIPWIRE_RELEASE_BIN=build_rel/ripwire bash test/prconvergecheck.sh

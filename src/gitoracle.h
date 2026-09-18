@@ -1,6 +1,7 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
-#include "infra/os.h"   // rw::os::popen / pclose / rename / remove — the history walk and its cache publish
+#include "infra/os.h"   // rw::os::popen / pclose — the history walk
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -74,7 +75,7 @@
 #include "docparse.h"           // lowerExtOf — the SHARED extension step (no third copy of the lowercase loop)
 #include "arch.h"               // fnv1a64 — the cache trailer checksum and the repo key
 #include "infra/jsonesc.h"      // shSingleQuote
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include <algorithm>
 #include <cctype>
@@ -127,14 +128,18 @@ inline constexpr FateSpec kFateTable[] = {
 
 static_assert( std::size( kFateTable ) == std::size_t( Fate::Removed ) + 1,
                "kFateTable drifted from the Fate enum — update both together" );
+// loadOracleCache validates a cached fate byte against this table's size, so the table must also END at the last
+// enumerator. The assert above restates `Removed + 1`; this one asks the compiler (infra/enumcount.h), so a Fate
+// appended after Removed is a build error rather than a fate every cached record is refused for.
+static_assert( enumCountIsExact<Fate, std::size( kFateTable )>(), "kFateTable must end at the LAST Fate enumerator" );
 
 inline const char* fateTag( Fate f ) noexcept
 {
     // A Fate reaching here out of range means a corrupt cache blob got past loadOracleCache's validation and
-    // is about to index this table out of bounds — an invariant, not a recoverable input, so VERIFY (free in
+    // is about to index this table out of bounds — an invariant, not a recoverable input, so ASSUME (free in
     // release, and the ASan build turns the corrupt-blob fuzz in test/historyoraclecheck.sh into a real test
     // of that claim).
-    VERIFY( std::size_t( f ) < std::size( kFateTable ) );
+    ASSUME( std::size_t( f ) < std::size( kFateTable ) );
     return kFateTable[ std::size_t( f ) ].tag;
 }
 
@@ -256,7 +261,7 @@ inline void putStr( std::string& b, const std::string& s )
 {
     // Every field written here is a git-controlled identifier / sha / date / path, all far inside 64 KiB; a
     // pathological one is CLAMPED rather than allowed to wrap the length field (G1 runs -fsanitize=integer).
-    VERIFY_NO_ALIAS( b, s );
+    ASSUME_NO_ALIAS( b, s );
     const std::uint16_t n = std::uint16_t( std::min<std::size_t>( s.size(), 0xffffu ) );
     qsnapPut( b, n );
     b.append( s.data(), n );
@@ -299,8 +304,8 @@ inline bool saveOracleCache( const std::string& path, const HistoryIndex& idx )
 
     // The key list must be a permutation of the map, or the count written into the header below disagrees
     // with the records that follow it and every later read of this blob mis-frames — the silent-corruption
-    // shape, which is exactly what a VERIFY is for.
-    VERIFY( names.size() == idx.removed.size() );
+    // shape, which is exactly what an ASSUME is for.
+    ASSUME( names.size() == idx.removed.size() );
 
     std::string body;
     body.reserve( names.size() * 72 + 32 );
@@ -321,20 +326,23 @@ inline bool saveOracleCache( const std::string& path, const HistoryIndex& idx )
     qsnapPut<std::uint64_t>( body, fnv1a64( body ) );
 
     // Write-then-rename: a reader in another process must never see a half-written blob (the torn-read rule
-    // the rest of the cache families follow).
-    const std::string tmp = path + ".tmp";
-    std::FILE*        fp  = std::fopen( tmp.c_str(), "wb" );
+    // the rest of the cache families follow). The temp is created through the shared exclusive no-follow
+    // helper (rw::pathguard::createExclTempFile), whose RAII holder removes it on any failure; `.tmp` stays
+    // in the name so a residue glob still matches. fdopen keeps the fwrite/fclose bookkeeping.
+    rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0666 );
+    const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
+    std::FILE*                  fp    = rawFd >= 0 ? os::fdopen( rawFd, "wb" ) : nullptr;
     if( !fp )
     {
-        DEGRADED_PATH_ALERT( "gitoracle: cannot write the history cache — the probe stays correct but re-runs cold" );
+        if( rawFd >= 0 ) { os::close( rawFd ); }
+        DISCLOSE( "gitoracle: cannot write the history cache — the probe stays correct but re-runs cold" );
         return false;
     }
-    const bool wrote = std::fwrite( body.data(), 1, body.size(), fp ) == body.size();
-    std::fclose( fp );
-    if( !wrote || os::rename( tmp.c_str(), path.c_str() ) != 0 )
+    const bool wrote  = std::fwrite( body.data(), 1, body.size(), fp ) == body.size();
+    const bool closed = std::fclose( fp ) == 0;
+    if( !wrote || !closed || !temp.commit( path ) )
     {
-        os::remove( tmp.c_str() );
-        DEGRADED_PATH_ALERT( "gitoracle: history cache write/rename failed — the probe stays correct but re-runs cold" );
+        DISCLOSE( "gitoracle: history cache write/rename failed — the probe stays correct but re-runs cold" );
         return false;
     }
     return true;
@@ -400,7 +408,7 @@ inline bool loadOracleCache( const std::string& path, HistoryIndex& idx )
         f.path   = r.str();
         // Validate every record before it enters the map: a bad read, a nameless entry, a fate outside the
         // table, or a Removed with no commit to name are all "this is not our blob" — a clean MISS that
-        // recomputes, never a partially-trusted index. (This is also what keeps writeNameFate's VERIFY an
+        // recomputes, never a partially-trusted index. (This is also what keeps writeNameFate's ASSUME an
         // invariant rather than something a crafted cache file could trip; fuzzed in the gate.)
         if( r.bad || name.empty() || std::size_t( f.fate ) >= std::size( kFateTable ) )
         {
@@ -445,10 +453,10 @@ inline void recordRemoval( HistoryIndex& idx, std::string_view name, const Remov
 {
     // A removal with no commit to name is not evidence — it means a diff line arrived before any commit
     // header, i.e. a malformed stream. DEGRADE (drop the token), never record a Removed that cannot say
-    // WHERE it was removed; downstream treats "Removed" as a claim backed by a sha, and VERIFYs as much.
+    // WHERE it was removed; downstream treats "Removed" as a claim backed by a sha, and ASSUMEs as much.
     if( site.commit.empty() )
     {
-        DEGRADED_PATH_ALERT( "gitoracle: a removed line arrived before any commit header — dropping it rather than recording an unattributed removal" );
+        DISCLOSE( "gitoracle: a removed line arrived before any commit header — dropping it rather than recording an unattributed removal" );
         return;
     }
 
@@ -601,7 +609,7 @@ inline HistoryIndex runProbe( const std::string& root )
 {
     HistoryIndex idx;
 
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " log --no-merges --no-color --no-ext-diff --no-textconv --no-renames"
                             " --format='%x01%H %cs' -p -U0 2>/dev/null";
 
@@ -611,13 +619,13 @@ inline HistoryIndex runProbe( const std::string& root )
                                          [ & ] { return idx.commitsWalked <= kMaxProbeCommits; } );
     if( !walk.started )
     {
-        DEGRADED_PATH_ALERT( "gitoracle: git log failed to start — the history probe answers unknown for every name" );
+        DISCLOSE( "gitoracle: git log failed to start — the history probe answers unknown for every name" );
         return idx;
     }
     if( walk.truncated )
     {
         idx.truncated = true;
-        DEGRADED_PATH_ALERT( "gitoracle: history walk hit its bound — names it did not see report unknown, never never" );
+        DISCLOSE( "gitoracle: history walk hit its bound — names it did not see report unknown, never never" );
     }
     const int status = walk.status;
 
@@ -629,7 +637,7 @@ inline HistoryIndex runProbe( const std::string& root )
     // Report NO ANSWER instead, so every name reads unknown.
     if( idx.commitsWalked == 0 )
     {
-        DEGRADED_PATH_ALERT( "gitoracle: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'never' for every name" );
+        DISCLOSE( "gitoracle: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'never' for every name" );
         return HistoryIndex{};
     }
 
@@ -640,7 +648,7 @@ inline HistoryIndex runProbe( const std::string& root )
     if( status != 0 )
     {
         idx.truncated = true;
-        DEGRADED_PATH_ALERT( "gitoracle: git log exited non-zero mid-walk — the answer is kept but marked truncated, so unseen names report unknown" );
+        DISCLOSE( "gitoracle: git log exited non-zero mid-walk — the answer is kept but marked truncated, so unseen names report unknown" );
     }
 
     idx.ok = true;
@@ -715,7 +723,7 @@ inline void writeNameFate( std::FILE* out, const std::string& name, const NameFa
 {
     // Fate::Removed is a claim about a specific commit, so the commit must be there to name. A Removed with
     // no sha would print `commit=""` and read as evidence while carrying none.
-    VERIFY( f.fate != Fate::Removed || !f.commit.empty() );
+    ASSUME( f.fate != Fate::Removed || !f.commit.empty() );
 
     rw::emitTo( out, "<fate sym=\"{}\" v=\"{}\"", escape( name ).c_str(), fateTag( f.fate ) );
     if( f.fate == Fate::Removed )

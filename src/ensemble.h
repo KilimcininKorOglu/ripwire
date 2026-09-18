@@ -90,6 +90,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>          // std::popcount — familyCountOf
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -128,7 +129,8 @@ enum : std::uint8_t
     kFamilyCount   = 4
 };
 
-inline constexpr std::array<const char*, kFamilyCount> kFamilyNames = { { "structural", "lexical", "confusion", "historical" } };
+inline constexpr const char* kFamilyNames[] = { "structural", "lexical", "confusion", "historical" };
+static_assert( std::size( kFamilyNames ) == kFamilyCount, "kFamilyNames is indexed by family — one name per kFam* value (a spelled extent zero-fills a missing one)" );
 
 // ── THE FAMILY-VOCABULARY HELPERS, written ONCE over a (count, name lookup) pair ──────────────────────────
 // Three operations are pure functions of "a bitmask over a family table": name the set bits, mark one family
@@ -230,6 +232,12 @@ struct EnsembleFileRow
     std::uint8_t  topCount  = 0;
     std::uint8_t  unionMask = 0;
 };
+
+// Every family mask above and below is one bit per family, set by `1u << family` at runtime (markUnavailableIn, the
+// join's per-symbol mask): a family index at or past the mask's width would be a shift into undefined behaviour.
+static_assert( kFamilyCount <= std::numeric_limits<decltype( EnsembleRow::firedMask )>::digits
+                   && kFamilyCount <= std::numeric_limits<decltype( EnsembleFileRow::unionMask )>::digits,
+               "ensemble families are bits of a std::uint8_t mask — widen firedMask/unionMask/unavailMask first" );
 
 struct EnsembleScan
 {

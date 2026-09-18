@@ -59,7 +59,7 @@
 #include "infra/hashutil.h"     // fnv1aMultiply — the sanitizer-safe wrapping multiply (G1 runs -fsanitize=integer)
 #include "serialize.h"          // escapeXml
 #include "darkflags.h"          // readWhole — the same 4 MB-capped whole-file read the sibling field-notes verb owns
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -67,6 +67,7 @@
 #include <cctype>
 #include <cstdio>
 #include <functional>
+#include <limits>       // std::numeric_limits — IntEval::apply refuses the one quotient int64 cannot hold
 #include <string>
 #include <string_view>
 #include <utility>
@@ -81,6 +82,7 @@ namespace layout
 
 constexpr std::size_t   kMaxNestDepth   = 8;          // nested-aggregate resolution depth (a cycle stops here)
 constexpr std::size_t   kMaxMacroDepth  = 4;          // object-like macro expansion depth for a type name
+constexpr std::size_t   kMaxExtentParens = 64;        // `(` nesting DEPTH an extent expression may reach (IntEval recurses per level)
 constexpr std::size_t   kMaxDefScan     = 1u << 20;   // bytes scanned forward from a def start looking for its body
 constexpr std::size_t   kMaxAssertChars = 220;        // the displayed prefix of a static_assert's text
 constexpr std::uint32_t kMaxArrayElems  = 1u << 24;   // refusal bound: past this the extent is a parse artefact
@@ -265,7 +267,7 @@ inline std::string withoutComments( std::string_view s )
 // when the bracket never closes inside the buffer — a truncated/garbled file degrades, never hangs.
 inline std::size_t matchBracket( std::string_view src, std::size_t from, char open, char close )
 {
-    VERIFY( from < src.size() && src[ from ] == open );
+    ASSUME( from < src.size() && src[ from ] == open );
     int depth = 0;
     for( std::size_t i = from; i < src.size(); )
     {
@@ -631,6 +633,7 @@ struct IntEval
     const ConstTable& table;
     std::size_t       depth = 0;
     bool              ok    = true;
+    std::size_t       parenDepth = 0;   // `(` levels OPEN at this point of the parse — kMaxExtentParens bounds the recursion
 
     std::int64_t parse( std::string_view s )
     {
@@ -658,16 +661,30 @@ private:
         }
     }
 
+    // Every operator is checked: an extent is source text, so `(0-1099511627776)*8388608` reaches INT64_MIN and a
+    // following `/(0-1)` is the one quotient int64 cannot hold (SIGFPE on x86-64), and a plain `1<<40 * 1<<40`
+    // product is signed overflow (an abort in the sanitizer build). An expression that leaves the range is not a
+    // knowable extent, so it un-sizes the field exactly like any other expression this evaluator cannot read.
     std::int64_t apply( char op, std::int64_t a, std::int64_t b )
     {
-        if( ( op == '/' ) && b == 0 ) { ok = false; return 0; }        // never divide by zero under G1
+        std::int64_t r = 0;
+        bool         outOfRange = false;
         switch( op )
         {
-            case '+': return a + b;
-            case '-': return a - b;
-            case '*': return a * b;
-            default:  return a / b;
+            case '+': outOfRange = __builtin_add_overflow( a, b, &r ); break;
+            case '-': outOfRange = __builtin_sub_overflow( a, b, &r ); break;
+            case '*': outOfRange = __builtin_mul_overflow( a, b, &r ); break;
+            default:
+                outOfRange = b == 0 || ( b == -1 && a == std::numeric_limits<std::int64_t>::min() );   // never divide by zero under G1
+                r          = outOfRange ? 0 : a / b;
+                break;
         }
+        if( outOfRange )
+        {
+            ok = false;
+            return 0;
+        }
+        return r;
     }
 
     std::int64_t level( std::string_view s, std::size_t& i, std::size_t rank )
@@ -692,8 +709,14 @@ private:
         if( i >= s.size() || !ok ) { ok = false; return 0; }
         if( s[i] == '(' )
         {
+            // A bounded recursion: `#define N ((((…1))))` 200,000 levels deep overflowed the stack (SIGSEGV, exit 139).
+            // The bound is the DEPTH of open parentheses, restored when this level closes: `(A)+(B)+…` with sixty-six
+            // sibling terms nests one level, and must size exactly as it did before the bound existed.
+            if( parenDepth >= kMaxExtentParens ) { ok = false; return 0; }
+            ++parenDepth;
             ++i;
             const std::int64_t v = level( s, i, 0 );
+            --parenDepth;
             skipWs( s, i );
             if( i < s.size() && s[i] == ')' ) { ++i; }
             else
@@ -1167,6 +1190,7 @@ struct Declarator
     std::string_view              typeSpec;        // empty on a follow-on declarator (inherits the first's)
     std::string_view              name;
     std::vector<std::string_view> extents;         // one entry per `[…]`, left to right
+    std::vector<std::string_view> attrGroups;      // A3: peeled `__attribute__((…))` inner text, source order
     bool                          isPointer  = false;
     bool                          isRef      = false;
     bool                          isBitfield = false;
@@ -1191,6 +1215,115 @@ inline bool cutAtTopLevel( std::string_view& s, std::string_view stops )
         return true;
     }
     return false;
+}
+
+// `s` with the CONTENTS of every string literal, character literal and comment blanked to spaces — same length, the
+// delimiters kept. The attribute scans below read this mask and slice the ORIGINAL at the same offsets, so an argument
+// such as `deprecated( ")" )` cannot unbalance a group and `deprecated( "packed" )` cannot spell a layout keyword
+// (CodeRabbit on #281, test/layoutcheck.sh AttributeString*Case). An unterminated literal blanks to the end.
+inline std::string lexicalMask( std::string_view s )
+{
+    std::string mask( s );
+    for( std::size_t i = 0; i < mask.size(); ++i )
+    {
+        const char c = mask[i];
+        if( c == '"' || c == '\'' )
+        {
+            for( ++i; i < mask.size() && mask[i] != c; ++i )
+            {
+                if( mask[i] == '\\' && i + 1 < mask.size() )
+                {
+                    mask[i++] = ' ';   // the escape and the byte it escapes are both content
+                }
+                mask[i] = ' ';
+            }
+        }
+        else if( c == '/' && i + 1 < mask.size() && ( mask[ i + 1 ] == '/' || mask[ i + 1 ] == '*' ) )
+        {
+            const bool line = mask[ i + 1 ] == '/';
+            for( i += 2; i < mask.size() && !( line ? mask[i] == '\n' : ( mask[i] == '*' && i + 1 < mask.size() && mask[ i + 1 ] == '/' ) ); ++i )
+            {
+                mask[i] = ' ';
+            }
+            i += line ? 0 : 1;   // leave a block comment's `*/` in place
+        }
+    }
+    return mask;
+}
+
+// A3 (found-items 2026-09-17): peel trailing `__attribute__((…))` groups off the RIGHT of `s` — GNU/GCC
+// postfix attribute syntax, placed after the declarator name or (per the standard grammar) after its array
+// extents. `int x __attribute__((aligned(8)))` used to reach parseDeclarator's last-identifier scan with the
+// attribute still attached: the scan took "8" (the last identifier-looking token before the attribute's own
+// closing parens) as the field NAME and left `)))` as unparsed trailing junk, so `d.ok` came back false and
+// the whole declaration was refused as "unparsed-member" with no `<f n="x">` row at all — candidateParen
+// already keeps `__attribute__(( … ))` from being misread as a member-function's parameter list (see its own
+// comment above), but nothing removed the group before the name/type split ran. Mirrors peelExtents: balanced
+// parens, returns the peeled groups' INNER text (the attribute-list bytes between the doubled parens, e.g.
+// "aligned(8)") in source order, so the caller can tell an attribute that changes layout (aligned/packed)
+// from one that is purely a hint (deprecated/unused/…) and does not need to touch modeled= at all.
+inline std::vector<std::string_view> peelAttributeGroups( std::string_view& s )
+{
+    static constexpr std::string_view kAttr = "__attribute__";
+    std::vector<std::string_view>     reversed;
+    for( ;; )
+    {
+        s = trimView( s );
+        const std::string mask = lexicalMask( s );   // parens and the keyword are read here; slices come from `s`
+        if( mask.empty() || mask.back() != ')' )
+        {
+            break;
+        }
+        int         depth = 0;
+        std::size_t open  = std::string_view::npos;
+        for( std::size_t i = mask.size(); i-- > 0; )
+        {
+            if( mask[i] == ')' )      { ++depth; }
+            else if( mask[i] == '(' ) { --depth; if( depth == 0 ) { open = i; break; } }
+        }
+        if( open == std::string_view::npos )
+        {
+            break; // unbalanced — degrade rather than misclassify (same rule matchBracket's callers use)
+        }
+        const std::string_view before = trimView( s.substr( 0, open ) );
+        if( !trimView( std::string_view( mask ).substr( 0, open ) ).ends_with( kAttr ) )
+        {
+            break; // the trailing (...) group is not an attribute specifier — leave it for the caller
+        }
+        std::string_view inner = trimView( s.substr( open + 1, s.size() - open - 2 ) );
+        if( inner.size() >= 2 && inner.front() == '(' && inner.back() == ')' )
+        {
+            inner = trimView( inner.substr( 1, inner.size() - 2 ) ); // the doubled-paren wrapper `((…))`
+        }
+        reversed.push_back( inner );
+        s = trimView( before.substr( 0, before.size() - kAttr.size() ) );
+    }
+    return { reversed.rbegin(), reversed.rend() };
+}
+
+// A3 (review round, found-items 2026-09-17): a GNU attribute keyword may be spelled bare (`aligned`) OR
+// wrapped in the reserved-namespace double underscore (`__aligned__` — what system headers reach for so
+// the name cannot collide with a macro of the same bare word); the two spell the SAME attribute, but
+// `containsWord` alone cannot see it: `_` counts as an identifier byte, so the underscores that correctly
+// wall "aligned" off from a longer word are exactly what makes `__aligned__` fail to match at all. Checked
+// as two containsWord calls (the bare spelling, then the wrapped one) rather than a hand-rolled tokenizer:
+// a fresh identifier-scanning loop here duplicated gitoracle.h::forEachIdentifier closely enough that
+// quality-delta gated on it (found-items 2026-09-17 review round) — two bounded word checks reuse the
+// primitive layout.h already leans on everywhere else (static/virtual/operator, above) instead of
+// re-deriving a general tokenizer for a two-keyword, fixed-alphabet job.
+inline bool attrHasKeyword( std::string_view attr, std::string_view bare ) noexcept
+{
+    const std::string code = lexicalMask( attr );   // a keyword spelled inside a string argument is not the keyword
+    if( containsWord( code, bare ) )
+    {
+        return true;
+    }
+    std::string wrapped;
+    wrapped.reserve( bare.size() + 4 );
+    wrapped += "__";
+    wrapped += bare;
+    wrapped += "__";
+    return containsWord( code, wrapped );
 }
 
 // Peel trailing array extents off the RIGHT of `s`: `slots[ 4 ][ 2 ]` → {"4","2"}, leaving `Slot slots`.
@@ -1243,6 +1376,15 @@ inline Declarator parseDeclarator( std::string_view text )
 
     d.isBitfield = cutAtTopLevel( s, ":" );        // a bitfield WIDTH — refused later, but recognised here
     cutAtTopLevel( s, "={" );                      // a default member initializer (`= 0`, `= {}`, `{0}`)
+    if( s.empty() )
+    {
+        return d;
+    }
+
+    // A3: peel a trailing `__attribute__((…))` BEFORE the array extents — the standard grammar (and this
+    // fixture's own `int x[4] __attribute__((packed));` shape) places the attribute AFTER any array bounds,
+    // so it must come off first for peelExtents below to still find `]` at the end of `s`.
+    d.attrGroups = peelAttributeGroups( s );
     if( s.empty() )
     {
         return d;
@@ -1684,6 +1826,23 @@ inline void appendField( BodyWalk& w, const Declarator& d, std::string_view type
         addCaveat( w.def, "reference-member", f.name + ": a reference member's storage is unspecified" );
     }
 
+    // A3: a PER-FIELD `__attribute__((aligned(N)))` / `((packed))` (bare OR the GNU reserved-namespace
+    // `__aligned__` / `__packed__` spelling — attrHasKeyword normalises both to one classification, review
+    // round 2026-09-17) changes this field's own placement, and the model has no argument evaluator for
+    // it — degrade to unknown-type exactly like resolveFieldType's own refusal for `alignas(N) int x`
+    // (AlignasFieldCase), an unknown size/align rather than a confidently wrong one. Every OTHER attribute
+    // (deprecated/unused/…) is a pure hint that changes no byte of the layout, so peelAttributeGroups
+    // already dropped it from typeSpec above with no caveat at all — this is the one place that distinction
+    // is made, deliberately narrow to keep a silent attribute silent.
+    for( std::string_view attr : d.attrGroups )
+    {
+        if( attrHasKeyword( attr, "aligned" ) || attrHasKeyword( attr, "packed" ) )
+        {
+            t.known = false;
+            break;
+        }
+    }
+
     for( std::string_view e : d.extents )
     {
         std::uint32_t n = 0;
@@ -1729,8 +1888,83 @@ inline void appendField( BodyWalk& w, const Declarator& d, std::string_view type
     w.def.fields.push_back( std::move( f ) );
 }
 
+// True when the word immediately before `s[at]` — the `(` at `at` — spells `alignas` / `__attribute__` /
+// `decltype`: that `(` opens the specifier's own argument list, not a member's parameter list.
+inline bool opensAttrSpecifier( std::string_view s, std::size_t at )
+{
+    static constexpr std::string_view kAttrKeywords[] = { "alignas", "__attribute__", "decltype" };
+    std::size_t wordEnd = at;
+    while( wordEnd > 0 && std::isspace( (unsigned char)s[wordEnd - 1] ) != 0 ) { --wordEnd; }
+    std::size_t wordStart = wordEnd;
+    while( wordStart > 0 && identByte( (unsigned char)s[wordStart - 1] ) ) { --wordStart; }
+    const std::string_view word = s.substr( wordStart, wordEnd - wordStart );
+    for( std::string_view kw : kAttrKeywords )
+    {
+        if( word == kw ) { return true; }
+    }
+    return false;
+}
+
 // The statement forms that contribute NO storage and are simply skipped, plus the ones that withdraw the
 // numbers. Returns true when the statement was consumed here and holds no field declarators.
+// The first `(` that is a CANDIDATE for a member declaration's parameter list: skip one that instead
+// belongs to an `alignas( … )` / `__attribute__( ( … ) )` / `decltype( … )` specifier, or that sits inside a
+// template argument list's `<…>` (`std::function< void(int) >`). None of those opens a parameter list, and
+// counting one anyway silently dropped the field it decorates while the aggregate still reported
+// modeled="1": `alignas(8) int x`, `int x __attribute__((aligned(8)))`, `decltype(1) x` and
+// `std::function<void(int)> cb` each lost their field this way. Returns npos when no candidate remains.
+inline std::size_t candidateParen( std::string_view s )
+{
+    int angle = 0;
+    for( std::size_t i = 0; i < s.size(); )
+    {
+        const char c = s[i];
+        if( c == '<' ) { ++angle; ++i; continue; }
+        if( c == '>' && angle > 0 ) { --angle; ++i; continue; }
+        if( c != '(' ) { ++i; continue; }
+        if( angle > 0 ) { ++i; continue; }   // a template argument's own parens — not a parameter list
+        if( !opensAttrSpecifier( s, i ) )
+        {
+            return i;
+        }
+        const std::size_t close = matchBracket( s, i, '(', ')' );
+        if( close == std::string_view::npos )
+        {
+            return std::string_view::npos;   // unbalanced — degrade rather than misclassify
+        }
+        i = close;
+    }
+    return std::string_view::npos;
+}
+
+// Where a member declaration's parameter list opens, or npos when it has none. Only a `(` that comes BEFORE the first
+// `[`, `=`, `{` or bitfield `:` can open one: `char a[(4)];`, `int x = (3);` and `int x{ (3) };` are data members whose
+// parenthesis sits in an extent or an initializer. Reading those as member functions dropped the field from the layout
+// while the struct still reported modeled="1" and a size four bytes short. `operator=`, `operator[]` and `operator()`
+// are functions whose own name holds one of those characters, so an `operator` word decides first.
+inline std::size_t parameterListParen( std::string_view s )
+{
+    if( containsWord( s, "operator" ) )
+    {
+        return s.find( '(' );
+    }
+    const std::size_t paren = candidateParen( s );
+    if( paren == std::string_view::npos )
+    {
+        return paren;
+    }
+    for( std::size_t i = 0; i < paren; ++i )
+    {
+        const char c = s[i];
+        const bool scopeColon = c == ':' && ( ( i + 1 < s.size() && s[i + 1] == ':' ) || ( i > 0 && s[i - 1] == ':' ) );
+        if( c == '[' || c == '=' || c == '{' || ( c == ':' && !scopeColon ) )
+        {
+            return std::string_view::npos;
+        }
+    }
+    return paren;
+}
+
 inline bool modelNonFieldStatement( BodyWalk& w, std::string_view s )
 {
     // Access specifiers change nothing this model computes, but MIXED access makes the class non-standard-
@@ -1773,7 +2007,7 @@ inline bool modelNonFieldStatement( BodyWalk& w, std::string_view s )
     // storage, so it is simply skipped. A function POINTER member does contribute — but a pointer to a
     // MEMBER function is 16 bytes, not 8, and the two are not reliably distinguishable here, so the
     // aggregate withdraws its numbers rather than pick.
-    const std::size_t paren = s.find( '(' );
+    const std::size_t paren = parameterListParen( s );
     if( paren == std::string_view::npos )
     {
         return false;
@@ -2010,7 +2244,7 @@ inline LayoutDef modelDefFromSource( ModelCtx& ctx, std::string_view src, std::s
     def.path = ( fileId < ctx.ing.files.size() ) ? ctx.ing.files[ fileId ] : std::string();
     def.line = lineOf( src, site.headStart );
 
-    VERIFY( site.braceStart < site.braceEnd && site.braceEnd <= src.size() );
+    ASSUME( site.braceStart < site.braceEnd && site.braceEnd <= src.size() );
     const std::string_view whole    = src;
     const std::string      headText = withoutComments( whole.substr( site.headStart, site.braceStart - site.headStart ) );
     readHeadAttributes( def, headText, name );
@@ -2393,7 +2627,7 @@ inline LayoutResult computeLayout( const IngestResult& ing, std::string_view spe
             const std::string& src = fileBytes( ctx, s.fileId );
             if( src.empty() )
             {
-                DEGRADED_PATH_ALERT( "layout: cannot read a definition's file — that definition is omitted" );
+                DISCLOSE( "layout: cannot read a definition's file — that definition is omitted" );
                 continue;
             }
             if( !findDefBody( src, name, s.sigStartByte, site ) )

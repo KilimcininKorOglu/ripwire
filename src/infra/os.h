@@ -148,6 +148,7 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 // open and fcntl are variadic in C: the two-argument forms pass no third argument, exactly as a direct call does.
 [[gnu::always_inline]] inline int     open( const char* path, int flags )                          { return ::open( path, flags ); }
 [[gnu::always_inline]] inline int     open( const char* path, int flags, mode_t mode )             { return ::open( path, flags, mode ); }
+[[gnu::always_inline]] inline int     openat( int dirFd, const char* path, int flags )              { return ::openat( dirFd, path, flags ); }
 [[gnu::always_inline]] inline int     close( int fd )                                              { return ::close( fd ); }
 [[gnu::always_inline]] inline ssize_t read( int fd, void* buf, std::size_t count )                 { return ::read( fd, buf, count ); }
 [[gnu::always_inline]] inline ssize_t write( int fd, const void* buf, std::size_t count )          { return ::write( fd, buf, count ); }

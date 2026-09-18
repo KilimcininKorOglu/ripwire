@@ -12,6 +12,11 @@ be their target. Every other member call keeps today's behaviour, byte for byte.
 
 Work in a git worktree, not the main checkout, and run gates in the foreground.
 
+> **Status (2026-09-16).** Issue #163 is claimed by @csy20, and their plan is agreed on the issue. Read
+> that thread before you start anything, and offer help there rather than opening a parallel branch.
+> The plan's updates since it was written: take the next free `kParserVer` at rebase, and rebase after
+> PR #235 lands (see "Known traps").
+
 ---
 
 ## Why this matters
@@ -246,7 +251,7 @@ a candidate that extends that built-in (a prototype extension). Otherwise it bin
   - If you add any attribute, it is absent at zero and defined in the leading legend exactly when present
     (`test/legendcoveragecheck.sh`).
   - It is carried on every dialect and the MCP twin (`test/mcpattrparitycheck.sh`).
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any degrade path you add.
+- **`DISCLOSE`, never `ASSUME( false )`**, on any degrade path you add.
 - **No `std::map` or `std::unordered_map`**; see "Containers" in CONTRIBUTING.md.
 - **Style** (CONTRIBUTING.md §3): Allman braces on every control body, spaces inside parens, output
   through `rw::emitTo`, declarative tables.
@@ -335,6 +340,11 @@ typescript and tsx apart for this reason.
 **`kParserVer` collides with concurrent lanes.** PR #126 had to re-bump twice while it was in review. Take
 the next free value when you rebase to land, and move the mirror in the same commit.
 
+**Rebase over PR #235 first.** #235 (Java `Type::method` call sites, by @rainhuang0220) works in the same
+subsystem: it edits `src/ingest_binds.h` and `src/graph.h` near `receiverOf` and the resolver, and it
+bumps `kParserVer` as well. Let it land, rebase onto it, and take the next free value then. #233
+(GDScript) also bumps `kParserVer`.
+
 **`RecvKind` rides the cache as a u8.** Append new values; never renumber or reorder.
 
 **`test/tsimportprecisecheck.sh` builds a comparison binary.** Its monotonicity arm builds one from HEAD
@@ -363,7 +373,8 @@ graph. Generate fixtures under the gate's temp dir, as the KNOWN GAP block does.
   cache written by the pre-change binary is rejected.
 - **Scope, honestly:** what stays out (typed identifiers like #59's `text: string`, `JSON.stringify`,
   `this.field.m()`, the TS prototype spelling) and the next step this makes possible.
-- **Links:** `Fixes` nothing yet. Say "first step on #59" and link #71's correction comment.
+- **Links:** `Fixes #163` and `Refs #59`, which stays open for typed identifiers. Link #71's correction
+  comment.
 
 ---
 

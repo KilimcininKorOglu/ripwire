@@ -399,7 +399,7 @@ inline bool isInitialThread() noexcept
 // "unnamed" for that case.
 inline void copyThreadName( char* buffer, std::size_t bufferCount ) noexcept
 {
-    VERIFY( buffer != nullptr && bufferCount > 0 );
+    ASSUME( buffer != nullptr && bufferCount > 0 );
     buffer[ 0 ] = '\0';
     rw::os::pthread_getname_np( rw::os::pthread_self(), buffer, bufferCount );
 }
