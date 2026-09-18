@@ -15,6 +15,27 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
+
+`src/infra/os.h`'s POSIX seam (below) was built on v0.6.1; this refresh carries it forward onto everything main
+grew since. The self-check rename (`VERIFY`/`VERIFY_TEXT` → `ASSUME`, `DEGRADED_PATH_ALERT` → `DISCLOSE`, and the
+rest of the vocabulary in the entry below this one) landed on main while the branch slept, so every macro this
+branch's own commits still spelled the old way is converted; `test/selfcheckcheck.sh` is the gate. Main also grew
+POSIX call sites the branch predates — a tmp+rename publish RAII (`rw::pathguard::ExclTempFile`) and a
+`MemoryStream` `open_memstream` holder replacing several hand-rolled buf/sz pairs, `gitCmd()`'s hardened
+`--no-optional-locks -c core.fsmonitor=false` prefix in front of every git child, a `saturatingNanoseconds` fix
+for stat timestamps past 2262, `docparse.h`'s FIFO-safe regular-file reader, `infra/stackthreads.h`'s
+sized-stack thread pool (pthread attr/create/join — `os::pthread_attr_init/setstacksize/destroy`,
+`os::pthread_create`, `os::pthread_join`, and `os::pthread_t`/`os::pthread_attr_t` added to the header), and the
+LSP server's (`src/lsp.h`) root-directory resolution — each now routed through `os::` so `osswitchcheck` passes
+because the call sites went through the seam, not because the allowlist widened. Dropped one unused macro
+(`Diagnostics.h`'s `RW_NO_UNIQUE_ADDRESS`, an `_MSC_VER` branch with zero real call sites) rather than pull the
+now-heavyweight `os.h` into a header that has to stay library-free for `noaliascheck`. `osswitchcheck`,
+`selfcheckcheck`, `manifestcheck`, `gateexitcheck` and `gatecountcheck` are ALL PASS on the merged tree; three
+duplication findings the merge's own restructuring surfaced (a network `send`-retry-loop and a file
+`write`-retry-loop token-matching at 18/20/99 tokens — the same idiom, different syscalls, no shared helper to
+call) are acked, `--quality-delta` gates 0. Plain build, `--clean-first`: 0 warnings.
+
 ### Changed — every operating-system difference lives in `src/infra/os.h`, and a gate refuses one anywhere else
 
 Main answered "which operating system is this?" wherever a call happened to need the answer: 19 OS-conditional
