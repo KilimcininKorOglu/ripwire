@@ -101,6 +101,7 @@ HISTORY_EXACT = { "CHANGELOG.md", "docs/EVALS.md", "bench/PROFILE.md", "docs/LIN
                   "docs/COMMANDS.md" }   # GENERATED from the release capture; the next capture renames it (docscommandscheck owns it)
 HISTORY_LINES = [ ( "test/connectjoincheck.sh", "`VERIFY` 27" ),                 # a recorded measurement of join-node names
                   ( "test/showcase_capture.py", "VERIFY a closed claim" ),        # English: the --verify feature's caption
+                  ( "test/showcase_capture.py", "VERIFY/VERIFY_TEXT/VERIFY_DEBUG_ONLY/VERIFY_NOT_REACHED/VERIFY_SAME_THREAD/VERIFY_NO_ALIAS*/DYNMAP_VERIFY/DEGRADED_PATH_ALERT renamed to" ),  # the --pack-signatures caption's own before/after name list (provenance of the 2026-09-17 re-derivation), keyed by TEXT not line: see CONTRIBUTING/LIMITS.md's never-pin-a-line rule
                   ( "src/infra/Diagnostics.h", "define ASSERT, VERIFY and ENSURE" ) ]  # the collision note names MFC macros
 # The word glued to a suffix is still the old name in prose ("never VERIFYs on hostile input", "VERIFYed here").
 INFLECTED_RE = re.compile( r"(?<![A-Za-z0-9_])VERIFY(s|ed)\b" )
