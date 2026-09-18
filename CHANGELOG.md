@@ -15,6 +15,35 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — Ruby's class-level attribute DSL (`attr_*`) defines Var symbols
+
+`attr_reader`/`attr_writer`/`attr_accessor` are Ruby's canonical class DSL, and `attribute`/`attributes` are
+their ActiveModel counterparts: each macro generates the accessor methods named by its arguments when the
+class is defined — `attr_reader` spells only the reader, `attr_writer` only the writer, and `attr_accessor`/
+`attribute`/`attributes` spell both.
+Those generated names were indexed by none of them — a write against one resolved to nothing. The class DSL
+now mints real symbols: one `Var` def per `simple_symbol` argument (named as the argument, minus the leading
+`:`), plus the `<x>=` setter for the writer-side macros — the exact spelling the setter-call rename already
+produces, so `record.x = v` BINDS to a def instead of dropping. The singular `attribute` takes one name; a
+trailing type or `default:` argument is metadata, not a def. An `attributes` do-block body is walked but
+defines nothing. This REVERSES a stated floor: queries/ruby/tags.scm used to say "attr_accessor/attr_writer/
+attr_reader define nothing in the source TEXT … a write against one is an honest nothing". That posture
+predated measurement; tested to be working in a real, running Rails application (test/rubyattrsfix/
+USECASES.md), these macros define methods that every `record.price` reads — the silence was a coverage hole,
+not honesty. The reversal is GLOBAL: every indexed Ruby corpus gains Var defs, attribute names leave the
+external surface, setter writes bind, and — because Call refs are language-gated, not kind-gated — attr names
+receive real call edges and PageRank weight (accepted churn, disclosed here). The DSL CALL itself stays a
+reference capture: `attr_accessor` and friends remain external-surface names, the same posture as the schema
+DSL rows. Plural `attributes` is captured for third-party DSLs — base ActiveModel/Rails has no class-level
+plural (NoMethodError at runtime) — and its def-carrying form is pinned static-only. kParserVer 119 → 120
+(extraction facts changed, the bump past everything main carries; no record layout change — kCacheVersion
+stays 24, kQSnapCacheScheme stays 14).
+Gate: `test/rubyattrscheck.sh` on `test/rubyattrsfix/` (fixture proven against a running Rails application;
+red on the pre-change binary — the before-state `defs=0 external=1` attribution rows are the before-evidence).
+Disclosed capture floors, pinned by the gate's `floor_attr.rb` arms: a `begin`- or modifier-`if`-guarded macro
+call is not unwrapped to class-DSL position, and only `simple_symbol` arguments define — a quoted (`:"x"`/`:'x'`),
+string, or splat/`%i[]` argument stays an honest nothing (Ruby defines those methods; ripwire does not capture them).
+
 ### Added — Microsoft's `cl.exe` builds the tree, so both Windows front ends compile and both gate
 
 The native Windows port (#44) built with clang-cl only; `cl.exe` stopped at the GCC/Clang language extensions

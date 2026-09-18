@@ -963,6 +963,100 @@ inline bool rubyCallIsAssignmentTarget( TSNode nameNode ) noexcept
     return !ts_node_is_null( left ) && ts_node_eq( left, call );
 }
 
+// Parser version 115 (test/rubyattrscheck.sh): Ruby's class-level attribute DSL DEFINES symbols. The getter's
+// nameByte rides the symbol's first TEXT byte (after the ':'), the setter's the token's first byte (the ':'):
+// both stay inside [startByte, endByte) — the extentsuspect R1 head rule — and the two defs of one token can
+// never collide with each other or with another token's pair (tokens never overlap and every simple_symbol is
+// ≥ 2 bytes), so both survive dedupRawDefs' (fileId, nameByte) identity. Placed here rather than in
+// captureIncludes because it mints DEFS: called from captureTagsFacts it lands inside the same per-file defs
+// window the tags pass writes, so warm lex and the cache round-trip treat it exactly like any other captured
+// def. The walk is the same iterative pre-order captureIncludes uses — explicit stack, no recursion, source
+// order preserved (byte-identity determinism).
+//
+// Per-call emitter: one Var def per simple_symbol argument (the name minus the leading ':'), plus the `<x>=`
+// setter where the family spells writers — attr_writer/accessor/attribute/attributes; attr_reader spells only
+// the getter. Keyword args (`default:`, a type) and non-symbol args are data, not defs: the singular
+// `attribute` stops at its first named child. defs come ONLY from the call's own argument_list — a do-block
+// body is not one of the call's fields, so a block body can never leak defs.
+inline void captureRubyAttrDefsCall( TSNode n, std::uint32_t fileId, std::string_view src,
+                                     std::string_view fam, std::vector<RawDef>& defs )
+{
+    const TSNode args = fieldChild( n, NodeField::Arguments );
+    if( ts_node_is_null( args ) )
+    {
+        return;
+    }
+    const bool reader        = fam != "attr_writer";
+    const bool writer        = fam != "attr_reader";
+    const bool firstNameOnly = fam == "attribute";   // trailing type/metadata args are data, not defs
+    ChildCursor ac( args );
+    forEachNamedChild( args, ac.cur, [ & ]( TSNode a )
+    {
+        if( !kindIs( ts_node_type( a ), "simple_symbol" ) )
+        {
+            return !firstNameOnly;   // a non-symbol argument: the singular stops at its first arg whatever it is
+        }
+        std::string_view txt = nodeTextOf( a, src );
+        if( !txt.empty() && txt.front() == ':' )
+        {
+            txt.remove_prefix( 1 );
+        }
+        if( txt.empty() )
+        {
+            return !firstNameOnly;   // defensive: an empty symbol text is no name; same first-arg stop as any non-symbol
+        }
+        const std::uint32_t s = ts_node_start_byte( a );
+        RawDef d;
+        d.fileId = fileId; d.line = ts_node_start_point( a ).row + 1; d.startByte = s; d.endByte = ts_node_end_byte( a );
+        d.loc = 1; d.kind = SymKind::Var; d.lang = Lang::Ruby; d.scope = rubyEnclosingScopeOf( a, src );
+        if( reader )
+        {
+            d.nameByte = s + 1; d.name = txt; defs.push_back( d );
+        }
+        if( writer )
+        {
+            d.nameByte = s; d.name = std::string( txt ) + '='; defs.push_back( std::move( d ) );
+        }
+        return !firstNameOnly;   // `attribute :x, :decimal, …`: stop at the first named child (unknown spellings there define nothing)
+    } );
+}
+
+inline void captureRubyAttrDefs( TSNode root, std::uint32_t fileId, std::string_view src, std::vector<RawDef>& defs )
+{
+    if( src.find( "attr" ) == std::string_view::npos )   // file signal: every family name contains "attr"
+    {
+        return;
+    }
+    ChildCursor         cursor( root );
+    std::vector<TSNode> kids;
+    kids.reserve( 64 );
+    std::vector<TSNode> stack;
+    stack.reserve( 64 );
+    collectChildren( root, cursor.cur, kids );   // root's width is file-controlled — never index it (O(C²))
+    for( std::size_t i = kids.size(); i > 0; --i )
+    {
+        stack.push_back( kids[i - 1] );
+    }
+    while( !stack.empty() )
+    {
+        const TSNode n = stack.back();
+        stack.pop_back();
+        if( kindIs( ts_node_type( n ), "call" ) )
+        {
+            const std::string_view fam = rubyNamedDirective( n, src, kRubyAttrFamilyNames );
+            if( !fam.empty() && rubyAttrAtClassBodyLevel( n ) )
+            {
+                captureRubyAttrDefsCall( n, fileId, src, fam, defs );
+            }
+        }
+        collectChildren( n, cursor.cur, kids );
+        for( std::size_t i = kids.size(); i > 0; --i )
+        {
+            stack.push_back( kids[i - 1] );
+        }
+    }
+}
+
 // F5: a Swift LOCAL binding — `let a = f()` / `var b = ...` inside a function/closure body — parses to the
 // same `property_declaration` node as a real stored/computed MEMBER property, so the @definition.var pattern
 // captures it as a spurious top-level `var` symbol AND (being the nearest enclosing symbol above the body's

@@ -250,7 +250,7 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 119;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 120;          // bump on any grammar/.scm/extraction change
                                                       // 119 = 2026-09-20 (T13/fix3): queries/java/tags.scm
                                                       //   and queries/kotlin/tags.scm's import captures were
                                                       //   @reference.call — an import is a dependency edge,
@@ -265,6 +265,16 @@ constexpr std::uint32_t kParserVer    = 119;          // bump on any grammar/.sc
                                                       //   graph edge (graph.h isResolvableCallReference is
                                                       //   Call+Macro only). A cache written before this
                                                       //   double-counts every JVM import as a caller.
+                                                      // 120 = 2026-09-21 (Ruby class-level attribute DSL,
+                                                      //   test/rubyattrscheck.sh — the attr_* floor reversal): a
+                                                      //   class-body-level receiver-less attr_reader/attr_writer/
+                                                      //   attr_accessor/attribute/attributes call defines one Var
+                                                      //   per simple_symbol argument (plus the `<x>=` setter for
+                                                      //   writer-side macros), so setter CALLS (`record.x = v`)
+                                                      //   now bind; the extracted def SET grows on every Ruby
+                                                      //   corpus. Landed at 115 on the pre-train-6 base; rebased
+                                                      //   in Sept 2026 it bumps past main's 119. No record layout
+                                                      //   change (kCacheVersion stays 24); kQSnapCacheScheme 14.
                                                       // 118 = 2026-09-19 (CodeRabbit follow-up, thread
                                                       //   4053600599: isJsxIntrinsicTagIdentifier
                                                       //   (src/ingest_names.h) tested `!isUppercase`, which kept
