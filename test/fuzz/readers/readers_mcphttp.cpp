@@ -1,6 +1,6 @@
 // readers_mcphttp.cpp — crash-fuzz entry point for `ripwire --mcp --listen`'s HTTP request reader. The input is
 // written into one end of a connected socket pair and the write side shut down, so readRequest sees exactly the
-// bytes a client sent and then EOF — never a stall. Oracle: no sanitizer report, no trap, no VERIFY, no throw.
+// bytes a client sent and then EOF — never a stall. Oracle: no sanitizer report, no trap, no ASSUME, no throw.
 
 #include "fuzzsupport.h"
 

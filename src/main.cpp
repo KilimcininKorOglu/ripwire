@@ -270,7 +270,7 @@ using rw::effectiveRowCap;
 //
 // A range attempt that does not parse (non-numeric, empty half, START==0) still DEGRADES to whole-body —
 // never a hard error, never a crash — with a one-line stderr note naming `verb` (house style: recoverable
-// input ⇒ degrade + note, not VERIFY/throw). `verb` exists because --outline routes through here too and
+// input ⇒ degrade + note, not ASSUME/throw). `verb` exists because --outline routes through here too and
 // used to emit a note blaming --expand (§P10 X7). A reversed range (START>END) is NOT rejected here —
 // sliceBodyLines() swaps it defensively — so only truly unparseable text degrades.
 struct ExpandToken { std::string selector; rw::LineRange range; };
@@ -775,7 +775,7 @@ NoteTargetResolution resolveNoteAddTarget( const MainDispatch& d, const std::str
 //   --note-add="TARGET: text" — append a note to the committed, sorted root/.ripwire_notes and print the exact
 //        written line. The date is git's committer clock (HEAD, %cs), NOT wall time, so the line is a pure
 //        function of (commit state, target, text) — deterministic and stable across machines; a non-git root
-//        degrades to the fixed epoch 1970-01-01 + a DEGRADED_PATH_ALERT (nothing to date against). MUTATES one
+//        degrades to the fixed epoch 1970-01-01 + a DISCLOSE (nothing to date against). MUTATES one
 //        file and touches nothing else; the multi-root refusal lives with its siblings earlier in main().
 //   --notes — list every note grouped by target; a target matching no indexed symbol canonical-id / file path
 //        is flagged dangling="1" (legal — surfaced nowhere, listed here so the human can prune it). Read-only.
@@ -865,13 +865,13 @@ std::optional<int> runNotes( const MainDispatch& d )
         {
             // 2026-09-06 stranger audit: this used to store 1970-01-01 — an epoch nobody explained, read as a
             // real date by every consumer. "undated" is the honest value: there is no committer date to anchor to.
-            DEGRADED_PATH_ALERT( "notes: non-git root — the note is stored undated" );
+            DISCLOSE( "notes: non-git root — the note is stored undated" );
             date = "undated";
             rw::emitTo( stderr, "ripwire: --note-add: {} is not a git checkout — the note is stored undated (d=\"undated\"; a git checkout stamps the committer date)\n", d.root.c_str() );
         }
         // provenance stamp (the day's costliest lesson): anchor the note to the commit it was written under.
         // gitHeadSha resolves empty exactly when date's own gitCommitterDateIso lookup would have (same
-        // non-git-root / no-HEAD condition, already alerted above) — no second DEGRADED_PATH_ALERT needed.
+        // non-git-root / no-HEAD condition, already alerted above) — no second DISCLOSE needed.
         // "no sha shown rather than a wrong one": an empty sha here means addNote writes the plain LEGACY
         // 3-field line, never a hollow or guessed stamp.
         const std::string sha    = rw::quality::gitHeadSha( d.root );
@@ -982,7 +982,7 @@ std::optional<int> runNotes( const MainDispatch& d )
 //
 // Open the buffer into `stream` (a MemoryStream the caller owns for the whole map, so an early return still closes
 // and frees it) and return what the caller should write the map body to: the buffer when budgeting, else `real`. A
-// memstream-open failure degrades to `real` directly (DEGRADED_PATH_ALERT) rather than losing the map — the budget is
+// memstream-open failure degrades to `real` directly (DISCLOSE) rather than losing the map — the budget is
 // still ASSERTED afterward by finishTokenBudgetGate, it just can no longer WITHHOLD an over-budget map on that one run
 // (the stream never opened, so finishTokenBudgetGate's write-or-withhold branch is a no-op and the content — already
 // streamed straight to `real` — is left exactly where it is).
@@ -996,7 +996,7 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, std::size_t t
     {
         return buffer;
     }
-    DEGRADED_PATH_ALERT( "openTokenBudgetBuffer: open_memstream failed — falling back to direct stdout" );
+    DISCLOSE( "openTokenBudgetBuffer: open_memstream failed — falling back to direct stdout" );
     return real;
 }
 
@@ -1017,7 +1017,7 @@ inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, std::
     const rw::MemoryStreamBytes body       = isBuffered ? stream.finish() : rw::MemoryStreamBytes{};
     if( isBuffered && !body.isWhole )
     {
-        DEGRADED_PATH_ALERT( "finishTokenBudgetGate: the --token-budget buffer did not finish whole — map withheld, exit 1" );
+        DISCLOSE( "finishTokenBudgetGate: the --token-budget buffer did not finish whole — map withheld, exit 1" );
         rw::emitRaw( stderr, "ripwire: write error — the --token-budget buffer lost bytes; the map is withheld, not printed short\n" );
         return 1;
     }
@@ -1485,7 +1485,7 @@ inline ExpandServeChoice chooseExpandServe( const ExpandServeDocument& bundleDoc
                        bundleBytes, fileBytes );
         // the subtraction's precondition: both spellings begin with the literal "<ctx" and end with '>', so
         // neither can be shorter than the envelope it is measured against (formatTo always NUL-terminates).
-        VERIFY( std::strlen( fileOpen ) >= ( sizeof( "<ctx>" ) - 1 ) && std::strlen( bundleOpen ) >= ( sizeof( "<ctx>" ) - 1 ) );
+        ASSUME( std::strlen( fileOpen ) >= ( sizeof( "<ctx>" ) - 1 ) && std::strlen( bundleOpen ) >= ( sizeof( "<ctx>" ) - 1 ) );
         const std::size_t nextFile   = std::strlen( fileOpen ) - ( sizeof( "<ctx>" ) - 1 );
         const std::size_t nextBundle = std::strlen( bundleOpen ) - ( sizeof( "<ctx>" ) - 1 );
         if( nextFile == fileDisclosure && nextBundle == bundleDisclosure )
@@ -1779,7 +1779,7 @@ int runDefaultMap( const MainDispatch& d )
         std::FILE* const m = rw::openChargeStream( probe );
         if( !m )
         {
-            DEGRADED_PATH_ALERT( "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
+            DISCLOSE( "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
         serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
@@ -1787,7 +1787,7 @@ int runDefaultMap( const MainDispatch& d )
         if( !measured.isWhole )
         {
             // a short size would read as a SMALLER map and pass a ceiling the real one breaks; 0 is the documented unmeasured answer
-            DEGRADED_PATH_ALERT( "runDefaultMap: the --max-tokens fit probe's buffer did not finish whole — the map is emitted unshaped and its ceiling unverified" );
+            DISCLOSE( "runDefaultMap: the --max-tokens fit probe's buffer did not finish whole — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
         return measured.bytes.size();
@@ -1816,12 +1816,12 @@ int runDefaultMap( const MainDispatch& d )
             return measureMapBytes( k, extraPayloadTokens );
         }
 
-        VERIFY( extraPayloadTokens == 0 );          // the payload verbs are all refused under --json
+        ASSUME( extraPayloadTokens == 0 );          // the payload verbs are all refused under --json
         rw::MemoryStream probe;
         std::FILE* const m = rw::openChargeStream( probe );
         if( !m )
         {
-            DEGRADED_PATH_ALERT( "runDefaultMap: open_memstream failed for the --max-tokens JSON ceiling probe — the ceiling verdict is unverified" );
+            DISCLOSE( "runDefaultMap: open_memstream failed for the --max-tokens JSON ceiling probe — the ceiling verdict is unverified" );
             return 0;                                // reads as "fits" — the same safe direction measureMapBytes takes
         }
         serializeJson( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics,
@@ -1830,7 +1830,7 @@ int runDefaultMap( const MainDispatch& d )
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
-            DEGRADED_PATH_ALERT( "runDefaultMap: the --max-tokens JSON ceiling probe's buffer did not finish whole — the ceiling verdict is unverified" );
+            DISCLOSE( "runDefaultMap: the --max-tokens JSON ceiling probe's buffer did not finish whole — the ceiling verdict is unverified" );
             return 0;                                // the same "unmeasured" answer the open failure above gives
         }
         return measured.bytes.size();
@@ -1948,7 +1948,7 @@ int runDefaultMap( const MainDispatch& d )
             htmlOut = std::fopen( htmlPath.c_str(), "wb" );
             if( !htmlOut )
             {
-                DEGRADED_PATH_ALERT( "writeHtml: could not open output file" );
+                DISCLOSE( "writeHtml: could not open output file" );
                 rw::emitTo( stderr, "ripwire: --html={}: cannot open file for writing\n", htmlPath.c_str() );
                 return 1;
             }
@@ -2242,7 +2242,7 @@ int runDefaultMap( const MainDispatch& d )
             // chooseExpandServe's four formatted opens all start "<ctx mode=\"...\" reason=\"...\">" — insert
             // right after "<ctx" so the self-describing default rides alongside whichever mode/reason M6
             // independently picked (bundle-without-a-map still beats a huge whole-file, so this composes).
-            VERIFY( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+            ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
             ctxOpenStr.insert( 4, " topk_default=\"0\"" );
         }
     }
@@ -2251,7 +2251,7 @@ int runDefaultMap( const MainDispatch& d )
     // ctxRootAttr comment above the bundle price.
     if( !ctxRootAttr.empty() && ( serveWholeFile || mapTopK == 0 ) )
     {
-        VERIFY( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+        ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
         ctxOpenStr.insert( 4, ctxRootAttr );
     }
     // H1: the residue rides the root in EVERY serving mode (whole-file, bundle with its map, bodies alone), and its clause
@@ -2259,7 +2259,7 @@ int runDefaultMap( const MainDispatch& d )
     // qualifies. The later est_tokens splices find the start tag's own '>' first, so they still land on the root.
     if( ctxUnprovenDefs > 0 )
     {
-        VERIFY( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+        ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
         ctxOpenStr.insert( 4, ctxUnprovenAttr );
         ctxOpenStr += ctxUnprovenLegend;
     }
@@ -3043,7 +3043,7 @@ inline constexpr std::string_view kJsonShapeModifiers[] = { "--format=columnar",
 
 inline bool isJsonShapeModifier( std::string_view flag ) noexcept
 {
-    VERIFY( !flag.empty() );
+    ASSUME( !flag.empty() );
     return std::ranges::find( kJsonShapeModifiers, flag ) != std::end( kJsonShapeModifiers );
 }
 
@@ -3337,7 +3337,7 @@ static std::string_view scipIndexUnreadableReason( const std::string& scipPath )
     ::close( probeFd );
     if( !isStatted )
     {
-        DEGRADED_PATH_ALERT( "--scip: fstat on the opened index failed — file kind and size undecided, loadScipOverlay's read decides" );
+        DISCLOSE( "--scip: fstat on the opened index failed — file kind and size undecided, loadScipOverlay's read decides" );
         return {};
     }
     if( S_ISDIR( probeStat.st_mode ) )
@@ -3492,14 +3492,14 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
     std::FILE* capture = std::tmpfile();
     if( capture == nullptr )
     {
-        DEGRADED_PATH_ALERT( "runWithCompactLegend: tmpfile() failed — the FULL legend is emitted where compact was asked for" );
+        DISCLOSE( "runWithCompactLegend: tmpfile() failed — the FULL legend is emitted where compact was asked for" );
         std::fputs( "ripwire: --legend=compact: could not open a capture buffer — emitting the full legend instead\n", stderr );
         return dispatchMain( cfg, argv );
     }
     const int savedStdout = dup( STDOUT_FILENO );
     if( savedStdout < 0 || dup2( fileno( capture ), STDOUT_FILENO ) < 0 )
     {
-        DEGRADED_PATH_ALERT( "runWithCompactLegend: dup/dup2 failed — the FULL legend is emitted where compact was asked for" );
+        DISCLOSE( "runWithCompactLegend: dup/dup2 failed — the FULL legend is emitted where compact was asked for" );
         std::fputs( "ripwire: --legend=compact: could not redirect stdout — emitting the full legend instead\n", stderr );
         if( savedStdout >= 0 ) { close( savedStdout ); }
         std::fclose( capture );
@@ -4482,7 +4482,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             total, bytes, ing.files.size(), pathB, ing.symbols.size(), nameB, ing.references.size(), calleeB, ing.includes.size(), incB );
     }
     // SCIP precision overlay: parse the index (if --scip given) → map to ripwire ids → hand to buildGraph as an optional
-    // parameter. An unreadable/corrupt/mismatched index yields an EMPTY overlay (one DEGRADED_PATH_ALERT + stderr note) and
+    // parameter. An unreadable/corrupt/mismatched index yields an EMPTY overlay (one DISCLOSE + stderr note) and
     // the build proceeds name-based, byte-identical to no --scip. A path that cannot be opened, is not a regular file or is
     // empty never gets here: it was refused above, exit 1. The probe closed its descriptor, though, so scipReadFile opens the
     // path again itself — O_NONBLOCK, reading a regular file only — and a path replaced since by a FIFO degrades, never hangs.

@@ -352,8 +352,8 @@ inline TracePartition partitionTraceFrames( const IngestResult& ing, const std::
         part.suspects.push_back( sus );
     }
 
-    VERIFY( part.inCorpusCount == part.suspects.size() + part.mergedCount + part.unresolved.size() );
-    VERIFY( part.unresolved.size() == part.unresolvedLadderTotal.size() );
+    ASSUME( part.inCorpusCount == part.suspects.size() + part.mergedCount + part.unresolved.size() );
+    ASSUME( part.unresolved.size() == part.unresolvedLadderTotal.size() );
     return part;
 }
 
@@ -645,7 +645,7 @@ inline TestHop buildTestHop( const IngestResult& ing, const Graph& g, const Trac
     const NodeId from = part.suspects[0].symbolId;
     if( std::size_t( from ) + 1 >= g.outOff.size() )
     {
-        DEGRADED_PATH_ALERT( "test-hop: the innermost frame's symbol has no out-edge CSR row — hop skipped" );
+        DISCLOSE( "test-hop: the innermost frame's symbol has no out-edge CSR row — hop skipped" );
         return hop;
     }
 
@@ -684,7 +684,7 @@ inline TestHop buildTestHop( const IngestResult& ing, const Graph& g, const Trac
         }
     }
 
-    VERIFY( hop.rows.size() <= hop.calleeCandidateCount + hop.basenameCandidateCount );
+    ASSUME( hop.rows.size() <= hop.calleeCandidateCount + hop.basenameCandidateCount );
     hop.cappedCount = hop.calleeCandidateCount + hop.basenameCandidateCount - hop.rows.size();
     hop.isFired     = !hop.rows.empty();
     return hop;
@@ -783,7 +783,7 @@ inline std::optional<std::string> renderTestHopBlock( const IngestResult& ing, c
     std::FILE* const m = stream.open();
     if( !m )
     {
-        DEGRADED_PATH_ALERT( "renderTestHopBlock: open_memstream failed — the bundle is withheld" );
+        DISCLOSE( "renderTestHopBlock: open_memstream failed — the bundle is withheld" );
         return std::nullopt;
     }
 
@@ -804,7 +804,7 @@ inline std::optional<std::string> renderTestHopBlock( const IngestResult& ing, c
     if( !block.isWhole )
     {
         // a lost write left a hole in the block: never serve it, and never serve the bundle without it
-        DEGRADED_PATH_ALERT( "renderTestHopBlock: the buffer did not finish whole — the bundle is withheld" );
+        DISCLOSE( "renderTestHopBlock: the buffer did not finish whole — the bundle is withheld" );
         return std::nullopt;
     }
     return std::string( block.bytes );
@@ -824,7 +824,7 @@ inline std::optional<std::string> renderTraceBlock( const IngestResult& ing, tra
     std::FILE* const m = stream.open();
     if( !m )
     {
-        DEGRADED_PATH_ALERT( "renderTraceBlock: open_memstream failed — the bundle is withheld" );
+        DISCLOSE( "renderTraceBlock: open_memstream failed — the bundle is withheld" );
         return std::nullopt;
     }
     rw::emitTo( m, "<trace src=\"{}\" format=\"{}\" frame_lines=\"{}\" parsed=\"{}\" in_corpus=\"{}\" skipped=\"{}\" merged=\"{}\" unresolved=\"{}\" suspects=\"{}\">",
@@ -866,7 +866,7 @@ inline std::optional<std::string> renderTraceBlock( const IngestResult& ing, tra
     const rw::MemoryStreamBytes block = stream.finish();
     if( !block.isWhole )
     {
-        DEGRADED_PATH_ALERT( "renderTraceBlock: the buffer did not finish whole — the bundle is withheld" );
+        DISCLOSE( "renderTraceBlock: the buffer did not finish whole — the bundle is withheld" );
         return std::nullopt;
     }
     return std::string( block.bytes );
@@ -1127,14 +1127,14 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
             }
             else
             {
-                DEGRADED_PATH_ALERT( "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
+                DISCLOSE( "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
                 res.isBufferLost = true;
                 return res;
             }
         }
         else
         {
-            DEGRADED_PATH_ALERT( "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
+            DISCLOSE( "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
             res.isBufferLost = true;
             return res;
         }

@@ -30,7 +30,7 @@
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
 #include "docparse.h"           // docparse::detail::readWholeFile — THE canonical whole-file byte read (commentcoherence.h names it that); reused rather than re-rolled, see forEachSymbolBody
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
+#include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
 
@@ -157,7 +157,7 @@ inline bool insertScratchSeen( ScratchMap<std::uint8_t>& seen, std::uint64_t key
     const auto [ it, inserted ] = seen.insert( { key, 1 } );
     if( it == seen.end() )
     {
-        DEGRADED_PATH_ALERT( capacityMsg );
+        DISCLOSE( capacityMsg );
         return false;
     }
     return inserted;
@@ -1777,7 +1777,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
     // than the P0.1 data-loss bug — the shape is identical. Refuse anything that is not a bare object name.
     if( !isBareCommitSha( ancestor ) || !isBareCommitSha( descendant ) )
     {
-        DEGRADED_PATH_ALERT( "quality: refusing a non-sha revision token on the merge-base path" );
+        DISCLOSE( "quality: refusing a non-sha revision token on the merge-base path" );
         return false;                                          // degrade: "not reachable" → the caller self-heals the pin
     }
     const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
@@ -2482,7 +2482,7 @@ struct CacheBlobStat
 // DISCLOSURE, and the reason P1-1 stayed invisible: all four measured 250 s runs wrote 0 bytes to stderr.
 // Conditional by construction — a sweep that frees nothing and is not over budget on its pinned set alone
 // says nothing at all, so no ordinary run, and no gate that compares stderr, grows a line. Plain emits,
-// NEVER DEGRADED_PATH_ALERT: NDEBUG compiles that out, and a Release binary is exactly where a 10x
+// NEVER DISCLOSE: NDEBUG compiles that out, and a Release binary is exactly where a 10x
 // slowdown needs to be visible.
 inline std::vector<CacheBlobStat> evictBySizeBudget( std::vector<CacheBlobStat>& mine, const std::string& dir,
                                                      const std::string& keepPath, std::uintmax_t maxTotalBytes )
@@ -3025,7 +3025,7 @@ inline bool qsnapCountFits( const char* p, const char* end, std::uint32_t count,
     {
         return true;
     }
-    DEGRADED_PATH_ALERT( "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
+    DISCLOSE( "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
     return false;
 }
 
@@ -3315,19 +3315,19 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // the separator goes AFTER the revision.
     const std::string rev = gitResolveCommitSha( root, committish );
     if( rev.empty() )
-    { DEGRADED_PATH_ALERT( "quality: commit-tree revision does not resolve to a commit — refusing to archive" ); return {}; }
+    { DISCLOSE( "quality: commit-tree revision does not resolve to a commit — refusing to archive" ); return {}; }
 
     std::error_code ec;
     std::string tmpRoot = cacheDirLadder() + "/ripwire-" + tag + "-" + std::to_string( ::getpid() );   // not const: moved out on return
     fs::remove_all( fs::path( tmpRoot ), ec );                 // stale leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
-    { DEGRADED_PATH_ALERT( "quality: cannot create commit-tree temp dir" ); return {}; }
+    { DISCLOSE( "quality: cannot create commit-tree temp dir" ); return {}; }
 
     const std::string extract = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
     if( std::system( extract.c_str() ) != 0 )
     {
-        DEGRADED_PATH_ALERT( "quality: git archive failed — committed tree unavailable" );
+        DISCLOSE( "quality: git archive failed — committed tree unavailable" );
         std::error_code e;
         fs::remove_all( fs::path( tmpRoot ), e );
         return {};
@@ -3488,9 +3488,9 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
         if( hit == -1 )
         {
             // the fprintf is the visible line in ALL build types (test/qsnapcachecheck.sh (e) gates on it);
-            // DEGRADED_PATH_ALERT compiles out under NDEBUG.
+            // DISCLOSE compiles out under NDEBUG.
             rw::emitRaw( stderr, "ripwire: quality: HEAD Snapshot cache corrupt — recomputing\n" );
-            DEGRADED_PATH_ALERT( "quality: HEAD Snapshot cache corrupt — recomputing" );
+            DISCLOSE( "quality: HEAD Snapshot cache corrupt — recomputing" );
         }
     }
 
@@ -3537,7 +3537,7 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
         evictOldHeadSnapCaches( cacheDirLadder(), repoHex, exclHex, cachePath, 2 );
     }
     if( headIng.symbols.empty() && headIng.files.empty() )
-    { DEGRADED_PATH_ALERT( "quality: HEAD tree ingested empty — falling back to run --quality-baseline first" ); return { Snapshot{}, false }; }
+    { DISCLOSE( "quality: HEAD tree ingested empty — falling back to run --quality-baseline first" ); return { Snapshot{}, false }; }
     const Graph headG = buildGraph( headIng, nullptr );
 
     // root = tmpRoot so keys are root-relative and match the working-tree side key-for-key (S2).
@@ -3593,7 +3593,7 @@ struct RefTree
 inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, const std::vector<std::string>& excludes,
                          std::size_t maxFileBytes, const char* tag, TmpTreeGuard& guard, RefTree& out )
 {
-    VERIFY( tag != nullptr && *tag != '\0' );
+    ASSUME( tag != nullptr && *tag != '\0' );
     const std::string tmpRoot = materializeCommitTree( repoRoot, sha, tag );
     if( tmpRoot.empty() )
     {
@@ -3616,7 +3616,7 @@ inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, co
     }
     if( out.ing.symbols.empty() && out.ing.files.empty() )
     {
-        DEGRADED_PATH_ALERT( "quality: a materialized commit tree ingested empty" );
+        DISCLOSE( "quality: a materialized commit tree ingested empty" );
         return false;
     }
     out.g    = buildGraph( out.ing, nullptr );
@@ -3663,7 +3663,7 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
         if( hit == -1 )
         {
             rw::emitRaw( stderr, "ripwire: quality: window-ref body cache corrupt — recomputing\n" );
-            DEGRADED_PATH_ALERT( "quality: window-ref body cache corrupt — recomputing" );
+            DISCLOSE( "quality: window-ref body cache corrupt — recomputing" );
         }
     }
 
@@ -3692,7 +3692,7 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
     IngestResult refIng = ingest( tmpRoot.c_str(), excludes, std::string_view( ingestCachePath ), maxFileBytes );
     evictOldHeadSnapCaches( cacheDirLadder(), repoHex, exclHex, ingestCachePath, 2 );
     if( refIng.symbols.empty() && refIng.files.empty() )
-    { DEGRADED_PATH_ALERT( "quality: churn-window ref tree ingested empty — churn evidence unavailable" ); return { {}, false }; }
+    { DISCLOSE( "quality: churn-window ref tree ingested empty — churn evidence unavailable" ); return { {}, false }; }
 
     Snapshot bodyOnly;
     bodyOnly.bodyHashBySym = bodyHashesBySym( refIng, tmpRoot );   // pathQualifiedKey on EVERY side of the churn join (baseline, this ref, working tree, per-node lookup) — a one-sided keying change makes every symbol read as rewritten   // root = tmpRoot → root-relative keys (S2)
@@ -3966,8 +3966,8 @@ inline int openBaselineSidecar( const std::string& path )
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the quality baseline sidecar", path );
     if( fd < 0 )
     {
-        if( openErr == ELOOP ) { DEGRADED_PATH_ALERT( "quality: refusing to write the baseline sidecar through a symlink" ); }
-        else                   { DEGRADED_PATH_ALERT( "quality: cannot write baseline file" ); }
+        if( openErr == ELOOP ) { DISCLOSE( "quality: refusing to write the baseline sidecar through a symlink" ); }
+        else                   { DISCLOSE( "quality: cannot write baseline file" ); }
     }
     return fd;
 }
@@ -4126,7 +4126,7 @@ inline void readProducerRecord( std::istream& is, BaselineReadStats& stats )
     const auto isLowerHexDigit = []( char c ) { return ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' ); };
     if( value.size() != 64 || !std::all_of( value.begin(), value.end(), isLowerHexDigit ) )
     {
-        DEGRADED_PATH_ALERT( "quality: malformed baseline producer line skipped" );
+        DISCLOSE( "quality: malformed baseline producer line skipped" );
         ++stats.badLines;
         return;
     }
@@ -4143,7 +4143,7 @@ inline void readProducerRecord( std::istream& is, BaselineReadStats& stats )
 inline rw::pathguard::NoFollowRead readBaselineSidecar( const std::string& path )
 {
     rw::pathguard::NoFollowRead sidecar = rw::pathguard::openNoFollowRead( "the quality baseline sidecar", path );
-    if( sidecar.refused ) { DEGRADED_PATH_ALERT( "quality: refusing to read the baseline sidecar through a symlink" ); }
+    if( sidecar.refused ) { DISCLOSE( "quality: refusing to read the baseline sidecar through a symlink" ); }
     return sidecar;
 }
 
@@ -4168,7 +4168,7 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         if( baselineHeaderIsForeign( line ) )   // pre-pathQualifiedKey sidecar — refused, see above
         {
             // The refusal is a USER-FACING disclosure, so it must survive NDEBUG: behind only a
-            // DEGRADED_PATH_ALERT a Release binary refuses SILENTLY and the caller reads "no baseline
+            // DISCLOSE a Release binary refuses SILENTLY and the caller reads "no baseline
             // found" — a refusal that hides its reason misleads exactly like the misread it prevents.
             rw::emitRaw( stderr, "ripwire: quality: baseline sidecar predates this binary's baseline format — refused, re-pin with --quality-baseline\n" );
             // ...and the caller's marker has to say a sidecar is THERE. Without this flag the refusal read as
@@ -4187,14 +4187,14 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         // gracefully so forward/backward baseline versions never crash.
         const auto readValMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint32_t>& m, const char* what )
         { std::uint64_t h = 0; std::uint32_t v = 0; is >> std::hex >> h >> std::dec >> v;
-          if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } m[h] = v; };
+          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } m[h] = v; };
         const auto readSet = [ & ]( std::vector<std::uint64_t>& v, const char* what )
         { std::uint64_t h = 0; is >> std::hex >> h;
-          if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } v.push_back( h ); };
+          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } v.push_back( h ); };
         // "<kind> <hexkey> <hexval>" — both 64-bit hex (the raw-body-hash map). Malformed → degrade + skip.
         const auto readHashMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint64_t>& m, const char* what )
         { std::uint64_t h = 0, v = 0; is >> std::hex >> h >> v;
-          if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } m[h] = v; };
+          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } m[h] = v; };
 
         if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
          || kind == "producer" )
@@ -4250,7 +4250,7 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
     }
     if( recognizedLineCount == 0 )
     {
-        DEGRADED_PATH_ALERT( "quality: baseline file is empty/unrecognizable — treating it as absent" );
+        DISCLOSE( "quality: baseline file is empty/unrecognizable — treating it as absent" );
         stats.unrecognizable = true;
         out = Snapshot{};
         return false;
@@ -4306,7 +4306,7 @@ inline std::string readBaselineHeadSha( const std::string& path )
             {
                 return sha;
             }
-            DEGRADED_PATH_ALERT( "quality: baseline head stamp is not a bare commit sha — ignoring the pin" );
+            DISCLOSE( "quality: baseline head stamp is not a bare commit sha — ignoring the pin" );
             return {};
         }
     }
@@ -4442,14 +4442,14 @@ inline BaselineSelection selectPinnedAtHead( BaselineSelection sel, std::string_
 // = the CLI's self-heal policy: a best-effort unlink of a stale sidecar. The unlink can FAIL (read-only parent
 // dir, permissions, a racing sibling run) and the marker then tells the truth about the DISK rather than the
 // intent — "git-HEAD (stale sidecar ignored)", the same honest string the read-only arm uses, because
-// ignored-not-removed is exactly what happened — plus one DEGRADED_PATH_ALERT so the plain build can observe
+// ignored-not-removed is exactly what happened — plus one DISCLOSE so the plain build can observe
 // the degrade. `staleFileRemoved` carries the same fact to the caller, which needs it to word its own fatal
 // message (a "no <file>" message is false while the file is still on disk). `sidecarPath` must already be
 // ROOT-QUALIFIED by the caller (baselinePath) — this function can DELETE it, and a bare relative name would
 // resolve against the process CWD (D1).
 inline BaselineSelection selectBaseline( const std::string& root, const std::string& sidecarPath, bool removeStaleFile )
 {
-    VERIFY( !sidecarPath.empty() );
+    ASSUME( !sidecarPath.empty() );
 
     BaselineSelection sel;
     BaselineReadStats readStats;
@@ -4513,11 +4513,11 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
         // today — but the alert itself should not assert a fallback that does not exist.
         else if( headSha.empty() )
         {
-            DEGRADED_PATH_ALERT( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; this tree has no git HEAD to fall back to either, so this run has no baseline floor at all" );
+            DISCLOSE( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; this tree has no git HEAD to fall back to either, so this run has no baseline floor at all" );
         }
         else
         {
-            DEGRADED_PATH_ALERT( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; the baseline still falls back to git HEAD" );
+            DISCLOSE( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; the baseline still falls back to git HEAD" );
         }
     }
     return sel;
@@ -4681,7 +4681,7 @@ inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const 
     const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
                           + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
-    if( !pipe ) { DEGRADED_PATH_ALERT( "quality: churn hunk diff could not be spawned" ); return hunks; }
+    if( !pipe ) { DISCLOSE( "quality: churn hunk diff could not be spawned" ); return hunks; }
 
     char buf[ 4096 ];
     while( std::fgets( buf, sizeof( buf ), pipe ) )
@@ -5224,7 +5224,7 @@ inline std::string normalizeLegacyAckKind( const std::string& kind, std::uint32_
 // different language, and a caller that rejects the value restores `reason` itself.
 inline bool takeAckNamedToken( std::string& reason, std::string_view name, std::string& valueOut )
 {
-    VERIFY_NO_ALIAS( reason, valueOut );
+    ASSUME_NO_ALIAS( reason, valueOut );
     if( reason.size() < name.size() || reason.compare( 0, name.size(), name ) != 0 )
     {
         return false;
@@ -5251,7 +5251,7 @@ inline std::uint64_t takeAckCidPrefix( std::string& reason )
     const auto v    = std::strtoull( hex.c_str(), &stop, 16 );
     if( hex.empty() || stop == nullptr || *stop != '\0' )
     {
-        DEGRADED_PATH_ALERT( "quality: unparseable cid= on an ack line — kept as reason text, content identity unavailable for that row" );
+        DISCLOSE( "quality: unparseable cid= on an ack line — kept as reason text, content identity unavailable for that row" );
         reason = untouched;
         return 0;
     }
@@ -5273,7 +5273,7 @@ inline std::string takeAckByPrefix( std::string& reason )
     }
     if( val.empty() || !scopeSpecIsSpellable( val ) )
     {
-        DEGRADED_PATH_ALERT( "quality: unspellable by= on an ack line — kept as reason text, provenance unavailable for that row" );
+        DISCLOSE( "quality: unspellable by= on an ack line — kept as reason text, provenance unavailable for that row" );
         reason = untouched;
         return {};
     }
@@ -5339,7 +5339,7 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
         std::uint64_t key = 0;
         std::uint32_t ackNow = 0;
         is >> tag >> kind >> std::hex >> key >> std::dec >> ackNow;
-        if( tag != "ack" || is.fail() ) { DEGRADED_PATH_ALERT( "quality: malformed ack line skipped" ); ++badLines; continue; }
+        if( tag != "ack" || is.fail() ) { DISCLOSE( "quality: malformed ack line skipped" ); ++badLines; continue; }
         kind = normalizeLegacyAckKind( kind, ackNow );               // P0.3 migration — see the note at ackKindToken
         std::string reason;
         std::getline( is, reason );
@@ -5403,7 +5403,7 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 //
 // WHY THE WAIT IS LONG. The critical section spans a whole delta computation (seconds, cold), not a splice,
 // so mcpedit's ~200 ms budget would time out on essentially every real contention and degrade straight back
-// into the bug. 60 s of 10 ms polls, then DEGRADED_PATH_ALERT and proceed lock-free: the pre-fix behavior is
+// into the bug. 60 s of 10 ms polls, then DISCLOSE and proceed lock-free: the pre-fix behavior is
 // the floor, never a hang. flock is released by the kernel when the fd closes, so a crashed peer cannot
 // wedge the ledger.
 //
@@ -5433,7 +5433,7 @@ struct SidecarWriteLock
         fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
         if( fd < 0 )
         {
-            DEGRADED_PATH_ALERT( "quality: ack-ledger lockfile open failed; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
+            DISCLOSE( "quality: ack-ledger lockfile open failed; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
             return;
         }
         for( int waitedMs = 0; ; waitedMs += 10 )
@@ -5448,7 +5448,7 @@ struct SidecarWriteLock
         }
         if( !locked )
         {
-            DEGRADED_PATH_ALERT( "quality: ack-ledger lock contended past the wait budget; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
+            DISCLOSE( "quality: ack-ledger lock contended past the wait budget; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
         }
     }
 
@@ -5511,7 +5511,7 @@ inline bool writeAckRecords( const std::string& path, const gtl::btree_map<std::
     // concurrent run in eight left a single stray character on its own line in the committed ledger.
     if( !atomicWriteFile( path, renderAckRecords( acks ) ) )
     {
-        DEGRADED_PATH_ALERT( "quality: cannot write acks file" );
+        DISCLOSE( "quality: cannot write acks file" );
         return false;
     }
     return true;
@@ -6519,7 +6519,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              std::size_t* registerMacroExcludedOut = nullptr,   // P2.2: honest disclosure count, additive+optional — see isDeadCandidate
                                              std::size_t* apiNewSurfaceOut = nullptr )          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
 {
-    VERIFY_TEXT( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
+    ASSUME( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
                  "computeDelta: registerMacroExcludedOut and apiNewSurfaceOut must be distinct" );   // both default to nullptr, so the object form would dereference null
     std::vector<Regression> regs;
     if( registerMacroExcludedOut )
@@ -6607,7 +6607,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     const bool originOracleOk = !base.locBySym.empty() || baselineIsWhollyEmpty;
     if( !originOracleOk )
     {
-        DEGRADED_PATH_ALERT( "quality: baseline has no per-symbol loc map (pre-Q1 format) — origin unclassifiable, gating every finding" );
+        DISCLOSE( "quality: baseline has no per-symbol loc map (pre-Q1 format) — origin unclassifiable, gating every finding" );
     }
 
     const auto existedAtBaseline = [ & ]( std::uint64_t symKey )
@@ -6646,7 +6646,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // relForHash spelling every sidecar key already uses) + the symbol's own 1-based start line.
     const auto stampLoc = [ & ]( NodeId i )
     {
-        VERIFY( !regs.empty() );
+        ASSUME( !regs.empty() );
         if( i >= ing.symbols.size() )
         {
             return; // degrade: no locator rather than a wrong one

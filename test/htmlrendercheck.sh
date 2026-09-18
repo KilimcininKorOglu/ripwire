@@ -1053,7 +1053,7 @@ absent 'LCONF|LOW_CONF' "(V12) the superseded LCONF/LOW_CONF derivation is gone 
 #     strictly-increasing arrangement, therefore the same edges always emit in the same order and always
 #     settle to the same layout. Relax it to allow duplicates and the ties come back, and every failure
 #     above returns with the check still green. src/htmlexport.h::writeEdgePayload carries the same fence
-#     as a VERIFY; these arms hold it on the emitted BYTES, at a scale where the sensitivity is real and
+#     as an ASSUME; these arms hold it on the emitted BYTES, at a scale where the sensitivity is real and
 #     in a build where NDEBUG has compiled the assert away.
 #
 #     It cannot catch a change to which edges are SELECTED, and must not: that is meant to move the

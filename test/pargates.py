@@ -476,7 +476,7 @@ def classify_skipped(rc, out):
 
 
 # --- an NDEBUG skip from a build that does not define NDEBUG is a FAILURE (2026-09-16) --------------------------
-# DEGRADED_PATH_ALERT is compiled out only where NDEBUG is defined, and CMake defines NDEBUG for exactly the build
+# DISCLOSE is compiled out only where NDEBUG is defined, and CMake defines NDEBUG for exactly the build
 # types `--version` names Release / RelWithDebInfo / MinSizeRel. On any other flavour (the plain `dev` configure, an
 # ASan tree) a gate that skips an alert arm "because alerts are compiled out" asserted nothing AND gave a false
 # reason, and the classification above cannot see it: an arm-level skip inside a gate that passed is a pass.
@@ -518,7 +518,7 @@ def fail_ndebug_skips(rc, out):
     rows = ndebug_skip_rows(out) if polices_ndebug_skips else []
     for row in rows:
         out += (f"\n  FAIL  pargates: skipped as if NDEBUG, on build type '{bin_build_type}', which does not define it "
-                f"(DEGRADED_PATH_ALERT is compiled IN, so this arm asserted nothing): {row}")
+                f"(DISCLOSE is compiled IN, so this arm asserted nothing): {row}")
     return (rc or 1) if rows else rc, out
 
 

@@ -9,7 +9,7 @@
 // format change moves the harness with it) and appends the real checksum. What the reader sees is exactly what a
 // crafted blob with rebuilt digests would carry — the case the digests do not protect against.
 //
-// Oracle: no sanitizer report, no hardening trap, no VERIFY, no uncaught exception.
+// Oracle: no sanitizer report, no hardening trap, no ASSUME, no uncaught exception.
 
 #include "fuzzsupport.h"
 

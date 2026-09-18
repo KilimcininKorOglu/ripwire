@@ -258,7 +258,7 @@ if "$BIN" "$DEEP" --deps --no-cache >"$TMP/deep.out" 2>"$TMP/deep.err"; then
 else
     no "600-deep guard stack: non-zero exit"; head -3 "$TMP/deep.err"
 fi
-# …and the degrade is ANNOUNCED, not silent. DEGRADED_PATH_ALERT is compiled out under NDEBUG, and CMakeLists
+# …and the degrade is ANNOUNCED, not silent. DISCLOSE is compiled out under NDEBUG, and CMakeLists
 # defines NDEBUG for exactly the build types --version names Release / RelWithDebInfo / MinSizeRel, so that
 # token decides whether an alert is owed here (the reading kotlincheck §12 and estchargecheck share). A Release
 # leg SKIPs with its flavour named; every other flavour ASSERTS, and the plain leg — which CI runs as a second
@@ -272,12 +272,12 @@ fi
 DEEP_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
 case "$DEEP_FLAVOUR" in
     Release|RelWithDebInfo|MinSizeRel)
-        skip "600-deep guard stack: this $DEEP_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out; the plain-flavour leg proves it" ;;
+        skip "600-deep guard stack: this $DEEP_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out; the plain-flavour leg proves it" ;;
     *)
         if grep -qF '[math degraded] ingest: import-container nesting past the depth bound' "$TMP/deep.err"; then
-            ok "600-deep guard stack: the depth bound announces itself via DEGRADED_PATH_ALERT on this '${DEEP_FLAVOUR:-unknown}' (non-NDEBUG) build"
+            ok "600-deep guard stack: the depth bound announces itself via DISCLOSE on this '${DEEP_FLAVOUR:-unknown}' (non-NDEBUG) build"
         else
-            no "600-deep guard stack: '${DEEP_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the depth bound was hit SILENTLY — no DEGRADED_PATH_ALERT on stderr: $( head -c 200 "$TMP/deep.err" )"
+            no "600-deep guard stack: '${DEEP_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the depth bound was hit SILENTLY — no DISCLOSE on stderr: $( head -c 200 "$TMP/deep.err" )"
         fi ;;
 esac
 if command -v xmllint >/dev/null 2>&1; then

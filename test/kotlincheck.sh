@@ -450,7 +450,7 @@ echo "=== 12. HOSTILE NESTING: 600 nested string templates are refused before th
 # would overrun the 1024-byte serialization buffer: on the first Kotlin binary ONE such file ended the run for its whole
 # tree at rc=134 with no output — the map, --skipped, --grep, --match, every verb. Two independent layers now, and this
 # section is the runtime arm for the FIRST: ingest's kotlinStringsNestTooDeep prescan (ingest.h
-# kMaxKotlinStringNestDepth = 128) refuses the FILE before any parse, names it on stderr (plus DEGRADED_PATH_ALERT on a
+# kMaxKotlinStringNestDepth = 128) refuses the FILE before any parse, names it on stderr (plus DISCLOSE on a
 # non-NDEBUG build) and rows it in --skipped as why="nest-refused". The SECOND layer, the vendored scanner refusing the
 # push instead of aborting, is vendorpatchcheck arm J. The ceiling is pinned from BOTH sides (128 indexed, 129 refused)
 # and the siblings must stay indexed, so a guard that refuses the whole tree and a guard that refuses nothing are both red.
@@ -493,22 +493,22 @@ if [ "$NEST_RC" -eq 0 ]; then
     grep -q 'Deep.kt: kotlin string-template nesting > 128 levels' "$TMP/nest.err" && grep -q 'OverCeiling.kt: kotlin string-template nesting > 128 levels' "$TMP/nest.err" \
         && ok "hostile nesting: both refusals are named on stderr (the json/yaml house skip style)" \
         || no "hostile nesting: stderr does not name both refusals: $( head -5 "$TMP/nest.err" )"
-    # DEGRADED_PATH_ALERT prints only where NDEBUG is undefined (the plain dev build, the asan build); Release compiles it
+    # DISCLOSE prints only where NDEBUG is undefined (the plain dev build, the asan build); Release compiles it
     # out. The flavour is read from --version's build-type token, the reading estchargecheck and versioncheck share, so
     # this arm neither goes red on a Release leg nor passes blind on the plain build.
     NEST_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
     case "$NEST_FLAVOUR" in
         Release|RelWithDebInfo|MinSizeRel)
-            ok "hostile nesting: $NEST_FLAVOUR build defines NDEBUG — DEGRADED_PATH_ALERT is compiled out, nothing to assert" ;;
+            ok "hostile nesting: $NEST_FLAVOUR build defines NDEBUG — DISCLOSE is compiled out, nothing to assert" ;;
         *)
             # ONE line on purpose, never with newlines stripped first: the notice must arrive whole. This arm went red on
             # CI when the reporter wrote the notice in nine writes and the second refusal's line landed between two of
             # them (test/diagnoticecheck.sh is the gate for that). On a FAIL the stderr is printed, because no CI log of
             # those eight failures could show what the notice had actually looked like.
             if grep -q 'math degraded.*kMaxKotlinStringNestDepth' "$TMP/nest.err"; then
-                ok "hostile nesting: DEGRADED_PATH_ALERT names the refusal on this '${NEST_FLAVOUR:-unknown}' (non-NDEBUG) build"
+                ok "hostile nesting: DISCLOSE names the refusal on this '${NEST_FLAVOUR:-unknown}' (non-NDEBUG) build"
             else
-                no "hostile nesting: '${NEST_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the Kotlin refusal raised no DEGRADED_PATH_ALERT on one line; stderr:"
+                no "hostile nesting: '${NEST_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the Kotlin refusal raised no DISCLOSE on one line; stderr:"
                 head -5 "$TMP/nest.err" | sed 's/^/        /'
             fi ;;
     esac

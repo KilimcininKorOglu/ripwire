@@ -94,7 +94,7 @@
 #include "quality.h"            // pathQualifiedKey — the one body-hash/claim key space (§KEY)
 #include "arch.h"               // relForHash / fnv1a64
 #include "serialize.h"          // jsonStr
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -1119,7 +1119,7 @@ inline void measureLaneOverlap( const IngestResult& ing, const std::vector<Lane>
 // caller's own root already implies) — no ref resolution, no archive, no second ingest.
 inline PlanLanesResult computePlanLanes( const LanesInputs& in )
 {
-    VERIFY( in.ing != nullptr && in.g != nullptr && in.root != nullptr );
+    ASSUME( in.ing != nullptr && in.g != nullptr && in.root != nullptr );
     const IngestResult& ing = *in.ing;
     const Graph&        g   = *in.g;
 
@@ -1179,7 +1179,7 @@ inline PlanLanesResult computePlanLanes( const LanesInputs& in )
     buildWarnings( in, result );
     if( result.lanes.empty() )
     {
-        DEGRADED_PATH_ALERT( "plan-lanes: the task's ranked surface produced no assignable lane — emitting a plan with zero lanes" );
+        DISCLOSE( "plan-lanes: the task's ranked surface produced no assignable lane — emitting a plan with zero lanes" );
     }
     return result;
 }

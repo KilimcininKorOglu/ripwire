@@ -67,7 +67,7 @@
 #include "pageview.h"           // pageWindow + pageDisclosure — THE TRUNCATION VOCABULARY
 #include "serialize.h"          // escapeXml
 #include "graphlegend.h"        // kGraphCountFloorAttrXml — the shared floor marker
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — a blind spot degrades the report, never aborts it
+#include "infra/Diagnostics.h"  // DISCLOSE — a blind spot degrades the report, never aborts it
 #include "infra/sortutil.h"     // svLess — pythonStubsWithSource sorts and searches string_views
 
 #include <algorithm>
@@ -920,7 +920,7 @@ inline Scan computeNonLocalState( const IngestResult& ing, const Graph& g )
                     // The bit exists but no reachable toucher explains it — a graph/closure disagreement.
                     // Drop the child rather than emit an unexplained one; the counts stay, and the row's
                     // cells_total vs its children is what makes the gap visible.
-                    DEGRADED_PATH_ALERT( "nonlocal-state: a reachable cell has no reachable direct access site" );
+                    DISCLOSE( "nonlocal-state: a reachable cell has no reachable direct access site" );
                     continue;
                 }
             }

@@ -43,9 +43,9 @@ TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
 # ── BUILD-FLAVOUR / DEGRADE-OBSERVABILITY PROBE (read by #14 below) ───────────────────────────────────
 # CI runs the whole suite TWICE: once against a Release binary (catches optimizer-only bugs, e.g. the
-# VERIFY-then-defend trap) and once against the plain build — Release defines NDEBUG, which compiles
-# DEGRADED_PATH_ALERT out, so "if you add a degrade path, it is the PLAIN run that proves it" (CLAUDE.md).
-# #14 asserts a DEGRADED_PATH_ALERT, so under the Release binary it is unobservable BY DESIGN and must
+# ASSUME-then-defend trap) and once against the plain build — Release defines NDEBUG, which compiles
+# DISCLOSE out, so "if you add a degrade path, it is the PLAIN run that proves it" (CLAUDE.md).
+# #14 asserts a DISCLOSE, so under the Release binary it is unobservable BY DESIGN and must
 # SKIP with the reason named; under the plain binary it must assert. What it must never do is pass
 # silently for lack of an alert it could not have seen — the 2026-07-27 CI trap this gate was written
 # against. (Before 2026-08-01 it took the other branch and FAILED under NDEBUG, which is the same trap
@@ -726,7 +726,7 @@ fi
 # ── #14 (the CA4 coverage debt, trap #3): THE open_memstream DEGRADE PATH. The wave-1 verifier declared these
 #    paths never exercised: `open_memstream` fails on ALLOCATION, so no `ulimit -n` harness reaches them. The
 #    fault switch RIPWIRE_FAULT_CHARGE_BUFFER=1 exists ONLY on the non-NDEBUG flavour — the same flavour
-#    DEGRADED_PATH_ALERT exists on — so this arm establishes that flavour with its OWN observability probe
+#    DISCLOSE exists on — so this arm establishes that flavour with its OWN observability probe
 #    rather than assuming it, and it must never pass for lack of an alert it could not have seen.
 #
 #    (a) OBSERVABILITY PROBE. If the switch has no effect, exactly one of two things is true, and the
@@ -736,7 +736,7 @@ fi
 RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/dg.out" 2>"$TMP/dg.err"
 rc_dg=$?
 if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
-    ok "#14a observability probe: this flavour CAN observe DEGRADED_PATH_ALERT (the fault switch is live)"
+    ok "#14a observability probe: this flavour CAN observe DISCLOSE (the fault switch is live)"
 
     #    (b) the alert names the CONSEQUENCE, on both the section and the document
     grep -aq 'streams uncharged' "$TMP/dg.err" \
@@ -822,9 +822,9 @@ PY
     done
     [ "$g4fail" = 0 ] && ok "#14e the fault switch is exact-match: 8 non-\"1\" values (incl. 10 / 1x / 1000000) are byte-identical to unset"
 elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
-    skip "#14 open_memstream degrade arms — DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). The RIPWIRE_FAULT_CHARGE_BUFFER switch does not exist on this flavour either. These arms are proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
+    skip "#14 open_memstream degrade arms — DISCLOSE is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). The RIPWIRE_FAULT_CHARGE_BUFFER switch does not exist on this flavour either. These arms are proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
 else
-    no "#14a observability probe FAILED: RIPWIRE_FAULT_CHARGE_BUFFER=1 produced no DEGRADED_PATH_ALERT on a build that CAN observe alerts (--version build type \"$BUILD_FLAVOUR\", unrelated-degrade-path observable=$alerts_observable) — the openChargeBuffer seam regressed. This is a FAILURE, not a skip."
+    no "#14a observability probe FAILED: RIPWIRE_FAULT_CHARGE_BUFFER=1 produced no DISCLOSE on a build that CAN observe alerts (--version build type \"$BUILD_FLAVOUR\", unrelated-degrade-path observable=$alerts_observable) — the openChargeBuffer seam regressed. This is a FAILURE, not a skip."
 fi
 
 # ── #14f THE MEMSTREAM FINISH DEGRADE: a buffer that opened and then lost a write takes the SAME path a failed open
@@ -949,7 +949,7 @@ PY
         fi
     done
 elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
-    skip "#14f memstream finish degrade arms — this NDEBUG binary has neither DEGRADED_PATH_ALERT nor the INFRA_FAULT_MEMSTREAM_FINISH switch (build type \"$BUILD_FLAVOUR\"); the PLAIN-flavour CI leg proves them"
+    skip "#14f memstream finish degrade arms — this NDEBUG binary has neither DISCLOSE nor the INFRA_FAULT_MEMSTREAM_FINISH switch (build type \"$BUILD_FLAVOUR\"); the PLAIN-flavour CI leg proves them"
 else
     no "#14f observability probe FAILED: INFRA_FAULT_MEMSTREAM_FINISH=1 produced no finish alert on a build that CAN observe alerts (build type \"$BUILD_FLAVOUR\", observable=$alerts_observable) — the MemoryStream seam or its switch regressed"
 fi

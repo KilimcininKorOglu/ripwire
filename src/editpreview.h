@@ -68,7 +68,7 @@ inline Outcome refuse( std::string message )
 // kBinaryPayloadRefusal makes is exactly the condition that would drop the file from the index.
 inline bool readPayload( std::string_view spec, std::size_t maxFileBytes, std::string& out, std::string& err )
 {
-    VERIFY_NO_ALIAS( out, err );
+    ASSUME_NO_ALIAS( out, err );
     out.clear();
     if( spec == "-" )
     {
@@ -277,14 +277,14 @@ inline IngestResult ingestOneFile( const std::string& tmpDir, const std::string&
         OwnedFile fp = openOwnedFile( target.string().c_str(), "wb" );
         if( !fp )
         {
-            DEGRADED_PATH_ALERT( "edit-preview: cannot write the spliced file into the temp root" );
+            DISCLOSE( "edit-preview: cannot write the spliced file into the temp root" );
             return {};
         }
         const std::size_t written  = bytes.empty() ? 0 : std::fwrite( bytes.data(), 1, bytes.size(), fp.file );
         const bool        closedOk = fp.close();
         if( written != bytes.size() || !closedOk )
         {
-            DEGRADED_PATH_ALERT( "edit-preview: short write of the spliced file" );
+            DISCLOSE( "edit-preview: short write of the spliced file" );
             return {};
         }
     }
@@ -395,7 +395,7 @@ inline Outcome run( const IngestResult& ing, const Graph& g, const std::string& 
     fs::remove_all( fs::path( tmpRoot ), ec );                    // a leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     {
-        DEGRADED_PATH_ALERT( "edit-preview: cannot create the temp parse root" );
+        DISCLOSE( "edit-preview: cannot create the temp parse root" );
         return refuse( "cannot create a private temp directory to parse the payload in" );
     }
     quality::TmpTreeGuard guard{ tmpRoot };

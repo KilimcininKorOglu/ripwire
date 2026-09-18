@@ -59,7 +59,7 @@
 #include "infra/hashutil.h"     // fnv1aMultiply — the sanitizer-safe wrapping multiply (G1 runs -fsanitize=integer)
 #include "serialize.h"          // escapeXml
 #include "darkflags.h"          // readWhole — the same 4 MB-capped whole-file read the sibling field-notes verb owns
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -267,7 +267,7 @@ inline std::string withoutComments( std::string_view s )
 // when the bracket never closes inside the buffer — a truncated/garbled file degrades, never hangs.
 inline std::size_t matchBracket( std::string_view src, std::size_t from, char open, char close )
 {
-    VERIFY( from < src.size() && src[ from ] == open );
+    ASSUME( from < src.size() && src[ from ] == open );
     int depth = 0;
     for( std::size_t i = from; i < src.size(); )
     {
@@ -2244,7 +2244,7 @@ inline LayoutDef modelDefFromSource( ModelCtx& ctx, std::string_view src, std::s
     def.path = ( fileId < ctx.ing.files.size() ) ? ctx.ing.files[ fileId ] : std::string();
     def.line = lineOf( src, site.headStart );
 
-    VERIFY( site.braceStart < site.braceEnd && site.braceEnd <= src.size() );
+    ASSUME( site.braceStart < site.braceEnd && site.braceEnd <= src.size() );
     const std::string_view whole    = src;
     const std::string      headText = withoutComments( whole.substr( site.headStart, site.braceStart - site.headStart ) );
     readHeadAttributes( def, headText, name );
@@ -2627,7 +2627,7 @@ inline LayoutResult computeLayout( const IngestResult& ing, std::string_view spe
             const std::string& src = fileBytes( ctx, s.fileId );
             if( src.empty() )
             {
-                DEGRADED_PATH_ALERT( "layout: cannot read a definition's file — that definition is omitted" );
+                DISCLOSE( "layout: cannot read a definition's file — that definition is omitted" );
                 continue;
             }
             if( !findDefBody( src, name, s.sigStartByte, site ) )

@@ -227,7 +227,7 @@ token, behind one function that answers "does this file's content refuse to pars
 
 Hand-copied `if` blocks are how the other sites were forgotten in the first place.
 
-**Mind the alert when you merge the sites.** `DEGRADED_PATH_ALERT` holds a static latch per **call site**,
+**Mind the alert when you merge the sites.** `DISCLOSE` holds a static latch per **call site**,
 so it prints at most once per site per process. Today that is one alert for Kotlin's site, however many
 files it refuses. Move it into one shared predicate and a process prints ONE alert across every language
 and every parse site, whose text cannot name a language. That is fine for a debug trace, and it is exactly
@@ -289,7 +289,7 @@ keeps hiding them until the file changes.
   `--match` arms, and show them RED on the pre-change binary before writing the fix.
 - **Gates assert output rows, never the stderr alert.** The disclosure a gate reads is the document:
   `--skipped`'s `why="nest-refused"` rows, the header count, the legend clause, and the `--match`
-  refusal attribute. Never assert `DEGRADED_PATH_ALERT`'s text:
+  refusal attribute. Never assert `DISCLOSE`'s text:
   - it fires once per call site per process, not once per refused file, so a second refusal raises
     nothing;
   - it is compiled out in Release, so an arm that reads it must branch on the build flavour and asserts
@@ -307,7 +307,7 @@ keeps hiding them until the file changes.
   - Legend clauses only where their attribute is present (`test/legendcoveragecheck.sh`).
   - Caps disclosed.
   - `--json` twins for every new count.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`.** A refusal is a recoverable degrade by CONTRIBUTING.md's
+- **`DISCLOSE`, never `ASSUME( false )`.** A refusal is a recoverable degrade by CONTRIBUTING.md's
   definition. If you keep an alert, remember it prints on plain builds only, and several gates assert a
   clean stderr on their committed fixtures.
 - **No `std::map` or `std::unordered_map`**; see "Containers" in CONTRIBUTING.md.
@@ -404,7 +404,7 @@ same commit.
 **Other work lands on the same code first.**
 - PR #245 makes the alert's notice a single write. It lands before this work; rebase onto it, and do
   not fix the reporter here.
-- The self-check macros are being renamed (`DEGRADED_PATH_ALERT` → `DISCLOSE`, `VERIFY` → `ASSUME`). A
+- The self-check macros are being renamed (`DISCLOSE` → `DISCLOSE`, `ASSUME` → `ASSUME`). A
   rename script covers open branches, so do not hand-edit around it.
 
 **Fixed buffers and LIMITS pins.** #126 added two fixed buffers and re-pinned `test/fixedbufsweep.sh`'s

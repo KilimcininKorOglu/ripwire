@@ -154,7 +154,7 @@ jobs:
   #
   # clang-tidy is ADVISORY and must stay that way: continue-on-error, and .clang-tidy's WarningsAsErrors is
   # empty. Its default catalogue argues for a different C++ than the data-oriented one G2 mandates (POD/SoA,
-  # C arrays, 32-bit handles, VERIFY instead of exceptions), so the config is curated down to bugprone-* /
+  # C arrays, 32-bit handles, ASSUME instead of exceptions), so the config is curated down to bugprone-* /
   # clang-analyzer-* / performance-* / misc-dangling-* and even those only report. Baseline at the commit
   # that added it: 312 unique sites, of which 126 are bugprone-easily-swappable-parameters and 85 are
   # bugprone-exception-escape. Re-measured 2026-09-10 at d90acb2c, unique file:line:check: 358 while main.cpp's
@@ -233,8 +233,8 @@ jobs:
     # be conditional, not a condition alongside it).
     # Two independent flavours per OS, each on its OWN runner — they used to run stacked in one job,
     # doubling wall time for no coverage gain:
-    #   Release — defines NDEBUG, which compiles DEGRADED_PATH_ALERT out; the optimizer-visible build.
-    #   plain   — NDEBUG off, so DEGRADED_PATH_ALERT compiles in and the degrade-path gates can observe
+    #   Release — defines NDEBUG, which compiles the DISCLOSE( msg ) trace out; the optimizer-visible build.
+    #   plain   — NDEBUG off, so the DISCLOSE( msg ) trace compiles in and the degrade-path gates can observe
     #             the alert they assert. The e7405e7 qsnap fix was invisible to CI before this flavour
     #             existed. estchargecheck #14 / qualitystalecheck arms 7/8c probe the flavour (an
     #             already-gated degrade path + --version's build-type token) and SKIP honestly on the
@@ -273,7 +273,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The macOS legs test the toolchain release.yml's macos-arm64 leg ships: the same runner, Xcode 26.6 and the pinned
     # minimum macOS 14.0 (test/portablebuildcheck.sh #2i holds all three against release.yml). Xcode 26.6's Apple clang
-    # 21 is LLVM 18+, so its loop vectorizer reads VERIFY_NO_ALIAS's separate-storage promise (test/noaliascheck.sh arm
+    # 21 is LLVM 18+, so its loop vectorizer reads ASSUME_NO_ALIAS's separate-storage promise (test/noaliascheck.sh arm
     # 6); its libc++ still defines __cpp_lib_print at a 14.0 deployment target, and it decides what else it declares
     # available by that target, so the legs build at the one the release ships. Through 0.6.1 these legs ran Xcode
     # 16.2 (LLVM 17) on macos-14, which retires 2026-11-02. Both variables are empty, and inert, on the Linux legs.

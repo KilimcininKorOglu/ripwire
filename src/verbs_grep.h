@@ -551,7 +551,7 @@ std::thread startGrepScanPrefetch( const rw::Config& cfg, const rw::IngestResult
                             catch( ... )   // a throw crossing this thread boundary would be std::terminate
                             {
                                 out.valid = false;
-                                DEGRADED_PATH_ALERT( "grep: scan prefetch degraded (exception swallowed) — the verb recomputes inline" );
+                                DISCLOSE( "grep: scan prefetch degraded (exception swallowed) — the verb recomputes inline" );
                             }
                         } );
 }

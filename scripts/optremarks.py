@@ -122,7 +122,7 @@ COLD_FILES = (
       "the RIPWIRE_ALLOC_COUNT operator new/delete replacement: absent from every shipped build and from every gate by construction — see the honesty note at the "
       "top of the file." ),
     ( "src/infra/diagnostics.cpp",
-      "the VERIFY / DEGRADED_PATH_ALERT handlers. They run on a degrade path: once, after something has already gone wrong." ),
+      "the ASSUME / DISCLOSE handlers. They run on a degrade path: once, after something has already gone wrong." ),
 
     # ── name-family siblings of a hot file ────────────────────────────────────────────────────────
     ( "src/pagerank.h",

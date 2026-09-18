@@ -85,8 +85,8 @@ inline std::string immediateScope( std::string_view full )
 // `call_expression function: (template_function name: (identifier))` — structurally identical to a real
 // explicit-template-argument call — so the template_function reference pattern matches every cast in the
 // tree (171 sites in this repo's src/ alone). A cast is not a call and must not mint a reference: it is
-// VALID INPUT, not a corrupt invariant, so the capture loop simply skips it (never VERIFY, never
-// DEGRADED_PATH_ALERT — nothing degraded). Query predicates cannot do this: passesPredicates is wired into
+// VALID INPUT, not a corrupt invariant, so the capture loop simply skips it (never ASSUME, never
+// DISCLOSE — nothing degraded). Query predicates cannot do this: passesPredicates is wired into
 // --match/--lint only, not the tags pass (measured — a `#not-eq?` left --uses=static_cast at 165).
 inline bool isCppCastKeyword( std::string_view name ) noexcept
 {
@@ -240,7 +240,7 @@ inline bool hasPhantomScopeSeparator( TSNode qualified ) noexcept
 // The hop cap is defensive only: each step moves strictly down a finite tree, so it cannot spin. A chain
 // deeper than the cap would return a still-qualified node, which finalSegment() still names correctly (it
 // splits on the last `::`); only the immediate-scope precision would degrade, so there is nothing here a
-// DEGRADED_PATH_ALERT could truthfully claim. cppScopeNameText below walks the same chain under the same cap.
+// DISCLOSE could truthfully claim. cppScopeNameText below walks the same chain under the same cap.
 constexpr int kMaxQualifierHops = 32;   // `a::b::c::…` past 32 segments is not written C++
 inline TSNode innermostQualifiedName( TSNode n ) noexcept
 {

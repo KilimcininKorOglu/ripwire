@@ -3,7 +3,7 @@
 # exactly the bytes it always had, so a concurrent writer can never tear it across lines.
 #
 # WHY THIS GATE EXISTS. kotlincheck §12 "hostile nesting" went red on CI eight times (three on main) with "yet the
-# Kotlin refusal raised no DEGRADED_PATH_ALERT". The alert was on stderr every time, whole, just not on one line.
+# Kotlin refusal raised no DISCLOSE". The alert was on stderr every time, whole, just not on one line.
 # ConsoleLog::handleDegraded built its notice from nine `std::cerr <<` insertions; with stdio sync on, each
 # insertion is its own fwrite on an unbuffered stderr, so its own write(2). §12's fixture refuses two files at
 # once, the second parse worker's one-write refusal line landed between two of those insertions, and the notice

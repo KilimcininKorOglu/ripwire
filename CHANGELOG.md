@@ -15,6 +15,40 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — the self-check macro vocabulary is renamed to the conventional spellings, and degrade paths gain a sink form
+
+`VERIFY` / `VERIFY_TEXT` → `ASSUME`; `VERIFY_DEBUG_ONLY(_TEXT)` → `DASSERT`; `VERIFY_NOT_REACHED(_TEXT)` →
+`UNREACHABLE`; `VERIFY_SAME_THREAD(_TEXT)` → `ASSUME_SAME_THREAD` (kept — multithreaded checking stays important);
+`VERIFY_NO_ALIAS` / `3` / `_BUF` → `ASSUME_NO_ALIAS` / `3` / `_BUF`; `DYNMAP_VERIFY` → `DYNMAP_ASSUME`;
+`TODO_IMPLEMENT` is dropped (no use sites remained). `VERIFY` read as "evaluated in release" in SerenityOS, Unreal
+and MFC — ours is the opposite, and the wrong reading once let external input reach an assumption
+(`gitmine.h`'s baseline-sha check, now `VALIDATE`d instead). Two words are new: `EXPECTS`/`ENSURES` (an `ASSUME` at
+function entry/return that blames the caller/callee by name) and `VALIDATE` (external input — always evaluated,
+never assumed, used only as a condition). No compatibility aliases: a gate refuses every old name outside dated
+history.
+
+`DEGRADED_PATH_ALERT` → `DISCLOSE`, in the same pass, with the same one-argument, debug-only-trace behaviour for
+every existing site (839 renames, 179 files; `test/*check.sh` byte-identical PASS/FAIL sets, and `ripwire . --no-cache`
+byte-identical between an origin/main binary and this one, on three trees). `DISCLOSE` also gains two new forms:
+`DISCLOSE( sink, why[, "msg"] )` calls `sink.disclose( why )` in *every* build — the sink's contract is a C++20
+concept (`Diagnostics::DisclosureSink`) checked at compile time, and `why` is a scoped enum the sink owns (one byte,
+no runtime string) — and `DISCLOSE( Diagnostics::answerUnchanged, "reason" )` for a degrade that changes cost, never
+content. No existing site is converted to a sink in this pass; that is the next lane's job, tracked by a ratchet
+that counts only sink-less `DISCLOSE( msg )` sites in `src/` (217 at landing) and may only go down.
+
+Release-build differences: on GCC ≥ 13, `ASSUME` compiles to `[[assume]]` instead of the old
+`if( !e ) __builtin_unreachable()`, so a non-pure predicate (e.g. `std::is_sorted(...)`) no longer evaluates in a
+GCC release build — Clang was already this way via `__builtin_assume`. `DASSERT` now type-checks its expression
+without evaluating it, in both debug and release. Assert banners name the failed word and who is to blame
+(caller/callee/invariant) instead of one generic message. `UNREACHABLE()`'s release form is `__builtin_unreachable()`
+directly (not `std::unreachable()`, which would pull `<utility>` into a header that must stay library-free for
+`noaliascheck`).
+
+New gate: `test/selfcheckcheck.sh` (registered in `test/regression.sh`, `.github/pargates-shard-weights.json`; not
+exempt in `test/binoverridecheck.sh`). It is zero-ceremony for a new `ASSUME` on a genuine invariant — it bites only
+on a side effect inside a check, an unseen non-accessor callee in a promise, `ASSUME( false )`, external input
+handed to anything but `VALIDATE`, a new sink-less `DISCLOSE`, or an `answerUnchanged` without a literal reason.
+
 ### Fixed — three degrade-alert arms asserted nothing on the plain build, and the gate harness now refuses that skip
 
 A gate that asserts a `DEGRADED_PATH_ALERT` has to know whether the binary can print one, because Release compiles

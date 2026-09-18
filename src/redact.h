@@ -25,7 +25,7 @@
 // so the map stays readable ("there was an AWS key here") without leaking the secret, and the output size
 // does not depend on the secret's length (deterministic byte count per redaction kind).
 //
-// Style: Allman braces; spaces inside parens; VERIFY/degrade; declarative pattern TABLE, not a switch.
+// Style: Allman braces; spaces inside parens; ASSUME/degrade; declarative pattern TABLE, not a switch.
 
 #include "infra/Diagnostics.h"
 

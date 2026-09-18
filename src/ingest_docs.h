@@ -226,11 +226,11 @@ void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_vi
     mdtier::MdWalkOut walk;
     mdtier::mdWalk( root, src, false, 0, walk );
 
-    // The walk is preorder ⇒ headings and opaque ranges arrive in byte order; VERIFY rather than re-sort
+    // The walk is preorder ⇒ headings and opaque ranges arrive in byte order; ASSUME rather than re-sort
     // (a re-sort would hide a walk-order bug behind deterministic-looking output).
     for( std::size_t i = 1; i < walk.headings.size(); ++i )
     {
-        VERIFY( walk.headings[ i - 1 ].startByte <= walk.headings[ i ].startByte );
+        ASSUME( walk.headings[ i - 1 ].startByte <= walk.headings[ i ].startByte );
     }
 
     // (2) section spans + hierarchy over the MERGED heading list: endByte = next same-or-higher heading's

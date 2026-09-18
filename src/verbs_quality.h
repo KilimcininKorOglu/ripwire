@@ -241,7 +241,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     // and the ONLY record is the `baseline=` XML attribute ("git-HEAD (stale sidecar removed)") — no stderr
     // spam, which is the B10.1b noise fix that survives the ruling intact. The read-only MCP arm passes false
     // and reports "…ignored" instead. When the unlink FAILS (read-only parent dir) this arm degrades to the
-    // read-only story — marker "…ignored", one DEGRADED_PATH_ALERT from the seam — because the pin is still
+    // read-only story — marker "…ignored", one DISCLOSE from the seam — because the pin is still
     // on disk; `isStaleFileOnDisk()` is the fact, and the fatal message words itself from it, not the intent.
     out.deltaRoot = std::string( cfg.rootPath );
     out.baseSel   = quality::selectBaseline( root, baselineFile, /*removeStaleFile=*/true );
@@ -401,7 +401,7 @@ std::size_t partitionByScope( const rw::quality::Scope& scope, std::vector<rw::q
                               std::vector<rw::quality::Regression>& outOfScope,
                               const gtl::btree_map<std::string, rw::quality::AckRecord>& acks )
 {
-    VERIFY_NO_ALIAS( regs, outOfScope );   // push_back into outOfScope while iterating regs: the same vector twice is UB
+    ASSUME_NO_ALIAS( regs, outOfScope );   // push_back into outOfScope while iterating regs: the same vector twice is UB
     if( !scope.active() )
     {
         return 0;
@@ -1055,7 +1055,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // same dead pin, and the ONLY record is the `baseline=` XML attribute ("git-HEAD (stale sidecar
         // removed)") — no stderr spam, which is the B10.1b noise fix that survives the ruling intact. The
         // read-only MCP arm passes false and reports "…ignored" instead. When the unlink FAILS (read-only
-        // parent dir) this arm degrades to the read-only story — marker "…ignored", one DEGRADED_PATH_ALERT
+        // parent dir) this arm degrades to the read-only story — marker "…ignored", one DISCLOSE
         // from the seam — because the pin is still on disk; `baseSel.isStaleFileOnDisk()` is the fact, and the
         // fatal message below words itself from it rather than from the intent.
         // `refs` is declared HERE because it owns both materialized trees' teardown and they must outlive
@@ -2011,7 +2011,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
 //   unchanged         — SYM existed at baseline and none of the three moved (a body-only edit is unchanged by
 //                       design: this checks the CONTRACT, not the body — that is --quality-delta's
 //                       short-horizon-churn kind's job).
-// A non-git root / no HEAD degrades to new-symbol (nothing to compare against) with a DEGRADED_PATH_ALERT —
+// A non-git root / no HEAD degrades to new-symbol (nothing to compare against) with a DISCLOSE —
 // never a crash; only an unresolvable SYM refuses loudly (below).
 //
 // 1-hop callers (reuse the --callers 1-hop in-edge walk, unioned over the whole overload set) are listed with

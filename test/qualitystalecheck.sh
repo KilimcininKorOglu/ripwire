@@ -171,7 +171,7 @@ r1="$("$BIN" "$REPO" --quality-delta --no-cache 2>/dev/null)"; r2="$("$BIN" "$RE
 if [ "$r1" = "$r2" ]; then ok "--quality-delta deterministic run-to-run"; else no "--quality-delta non-deterministic"; fi
 
 # ── DEGRADE-OBSERVABILITY / BUILD-FLAVOUR PROBE (for arms 7 and 8c) ───────────────────────────────────────
-# Arms 7 and 8c assert a DEGRADED_PATH_ALERT, which a Release/NDEBUG build compiles OUT ("if you add a
+# Arms 7 and 8c assert a DISCLOSE, which a Release/NDEBUG build compiles OUT ("if you add a
 # degrade path, it is the PLAIN run that proves it" — CLAUDE.md). Probe the flavour with an UNRELATED,
 # degrading invocation (a --scip index that opens and fails to decode — see RE-POINTED below) so that a missing alert INSIDE arm 7 is a genuine
 # FAILURE rather than a silent skip — the whole point of the finding is that no alert fired where one was owed.
@@ -205,11 +205,11 @@ case "$BUILD_FLAVOUR" in
     *)                                 ndebug_flavour=0 ;;
 esac
 skip(){ printf '  SKIP  %s\n' "$*"; }
-DEGRADE_SKIP_WHY="DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). Proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
+DEGRADE_SKIP_WHY="DISCLOSE is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). Proven by the PLAIN-flavour run of the same suite, which CI executes as a second leg for exactly this reason."
 
 # 7) w1 MED #1 — the self-heal unlink FAILS (read-only parent dir). The marker used to say "stale sidecar
 #    removed" on the strength of the CLI's INTENT while the file was demonstrably still on disk (the unlink's
-#    std::error_code was captured and never read), and no DEGRADED_PATH_ALERT fired, so the plain build could
+#    std::error_code was captured and never read), and no DISCLOSE fired, so the plain build could
 #    not observe the degrade either. Post-fix the seam reports what the DISK says: "stale sidecar ignored" (the
 #    same honest string the read-only MCP arm uses, because ignored-not-removed is now the truth), exactly one
 #    alert, and an otherwise UNCHANGED answer — the git-HEAD fallback still runs, so a clean tree still scores 0.
@@ -245,7 +245,7 @@ if [ "$alerts_observable" -eq 1 ]; then
 elif [ "$ndebug_flavour" -eq 1 ]; then
     skip "arm 7's degrade assertions (one [math degraded] alert naming the surviving sidecar and the git-HEAD fallback) — $DEGRADE_SKIP_WHY"
 else
-    no "arm 7: no DEGRADED_PATH_ALERT is observable, yet --version reports build type \"$BUILD_FLAVOUR\", which does NOT define NDEBUG — the alert seam regressed on a flavour that should be able to see it"
+    no "arm 7: no DISCLOSE is observable, yet --version reports build type \"$BUILD_FLAVOUR\", which does NOT define NDEBUG — the alert seam regressed on a flavour that should be able to see it"
 fi
 chmod u+w "$RREPO"; rm -rf "$RREPO"; ROSANDBOXES=""
 
@@ -319,7 +319,7 @@ if [ "$alerts_observable" -eq 1 ]; then
 elif [ "$ndebug_flavour" -eq 1 ]; then
     skip "8c's §B12.11 alert-wording assertion (the no-HEAD case must name \"no baseline floor at all\", never an unconditional git-HEAD fallback) — $DEGRADE_SKIP_WHY"
 else
-    no "8c: no DEGRADED_PATH_ALERT is observable, yet --version reports build type \"$BUILD_FLAVOUR\", which does NOT define NDEBUG — the alert seam regressed on a flavour that should be able to see it"
+    no "8c: no DISCLOSE is observable, yet --version reports build type \"$BUILD_FLAVOUR\", which does NOT define NDEBUG — the alert seam regressed on a flavour that should be able to see it"
 fi
 chmod u+w "$NOHEADRO"; rm -rf "$NOHEADRO"; ROSANDBOXES=""
 

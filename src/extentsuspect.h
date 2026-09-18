@@ -220,7 +220,7 @@ inline void linkToParent( std::span<const ExtentDef> defs, std::uint32_t defInde
 // bits[i] receives defs[i]'s reason set. Deterministic in the input order alone.
 inline void classifyFileExtents( std::span<const ExtentDef> defs, std::span<std::uint8_t> bits, ExtentScratch& scratch )
 {
-    VERIFY( bits.size() == defs.size() );
+    ASSUME( bits.size() == defs.size() );
     std::fill( bits.begin(), bits.end(), std::uint8_t( 0 ) );
     resetExtentScratch( defs, scratch );
 

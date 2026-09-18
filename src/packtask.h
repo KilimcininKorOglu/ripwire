@@ -813,7 +813,7 @@ inline void partitionByEligibility( const std::vector<NodeId>& topRanked, const 
                                     const std::vector<char>& d1Mark,
                                     std::vector<NodeId>& eligibleIds, std::vector<NodeId>& d2plusIds )
 {
-    VERIFY_NO_ALIAS3( topRanked, eligibleIds, d2plusIds );
+    ASSUME_NO_ALIAS3( topRanked, eligibleIds, d2plusIds );
     for( NodeId id : topRanked )
     {
         ( ( id < d0Mark.size() && d0Mark[id] ) || ( id < d1Mark.size() && d1Mark[id] ) ? eligibleIds : d2plusIds ).push_back( id );
@@ -910,7 +910,7 @@ inline RankingSection renderRankingWithFar( const IngestResult& ing, const Ranki
     }
     else if( !far.xml.empty() )
     {
-        DEGRADED_PATH_ALERT( "pack-task: <sigs> did not end with the expected closing tag — <far> omitted" );
+        DISCLOSE( "pack-task: <sigs> did not end with the expected closing tag — <far> omitted" );
     }
     return out;
 }
@@ -1083,7 +1083,7 @@ inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const 
     const bool         closesRight = bodiesXml.size() >= 9 && bodiesXml.compare( bodiesXml.size() - 9, 9, "</bodies>" ) == 0;
     if( openEnd == std::string::npos || !closesRight )
     {
-        DEGRADED_PATH_ALERT( "pack-task: <bodies> did not have the expected open/close shape — restated omissions dropped" );
+        DISCLOSE( "pack-task: <bodies> did not have the expected open/close shape — restated omissions dropped" );
         return bodiesXml;
     }
     // compress="1" restated with shown=/total=: this wrapper REPLACES packBodies' own open tag, so the
@@ -1141,7 +1141,7 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
     // the subset enumeration below shifts 1u by n: n must stay under the mask's width, which the constant guarantees
     static_assert( kPackTaskBodyCandidates < std::numeric_limits<std::uint32_t>::digits,
                    "selectMonotoneBodySubset enumerates subsets in a std::uint32_t — 1u << kPackTaskBodyCandidates must fit" );
-    VERIFY( n <= kPackTaskBodyCandidates );
+    ASSUME( n <= kPackTaskBodyCandidates );
     std::vector<std::size_t> cost( n, 0 );
     std::size_t               wrapperLen = 0;
     {

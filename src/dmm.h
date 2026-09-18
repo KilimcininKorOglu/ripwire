@@ -62,7 +62,7 @@
 #include "gitstamp.h"           // stampAt — the at="<sha>[+dirty]" anchor (M10: --dmm read git and carried no anchor)
 #include "ingest.h"             // ingest — the second side is a real parse of a materialized tree
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — every failure here degrades to UNAVAILABLE, never aborts
+#include "infra/Diagnostics.h"  // DISCLOSE — every failure here degrades to UNAVAILABLE, never aborts
 
 #include <cstdint>
 #include <cstdio>
@@ -283,7 +283,7 @@ inline bool ingestCommitTree( const std::string& root, const std::string& sha, c
     out = ingest( tmpRoot.c_str(), excludes, cachePath.empty() ? std::string_view {} : std::string_view( cachePath ), maxFileBytes );
     if( out.symbols.empty() && out.files.empty() )
     {
-        DEGRADED_PATH_ALERT( "dmm: a materialized commit tree ingested empty" );
+        DISCLOSE( "dmm: a materialized commit tree ingested empty" );
         return false;
     }
     return true;

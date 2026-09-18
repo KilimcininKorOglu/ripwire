@@ -62,7 +62,7 @@
 # that reached the engine's hit cap, or ran against a binary that answered nothing, FAILS as partial.
 #
 # RUNTIME CHECKS. None of B1-B3 trips an assertion a debug build already has: an input-sized count is not an
-# invariant (VERIFY on external data is forbidden), a short read is legal, and the timestamp overflow is seen
+# invariant (ASSUME on external data is forbidden), a short read is legal, and the timestamp overflow is seen
 # only by the sanitizer build — which is why B3's red needs RIPWIRE_ASAN_BIN.
 #
 # Usage:  bash test/crashsweepcheck.sh [BIN]      RIPWIRE_ASAN_BIN=asan/ripwire bash test/crashsweepcheck.sh

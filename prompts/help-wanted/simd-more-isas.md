@@ -247,7 +247,7 @@ result, and the PR must not report one.
   - No new dependency.
   - Everything stays in one header, and the scalar twin stays compiled and callable.
 - **The x86-64 floor stays `-march=x86-64-v3`.** That is an owner decision. AVX-512 is opt-in.
-- **Never `VERIFY( false )` on a degrade path.** Use `DEGRADED_PATH_ALERT`.
+- **Never `ASSUME( false )` on a degrade path.** Use `DISCLOSE`.
 - **Style** follows `CONTRIBUTING.md` §3.
 - **No perf-budget gate.** No gate may fail on a timing threshold. The gates are the parity,
   mutation, non-vacuity and opcode-presence arms. Speed is a reported measurement.

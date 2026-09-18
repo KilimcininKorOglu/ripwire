@@ -34,7 +34,7 @@
 #      least-unexplained-prefix runner-up — and that is the ordinary, SILENT case (§2, §5, §7, §8).
 #   3. What IS disclosed once per process: a root whose offset cannot be derived, an indexed file that does not
 #      wear its root's spelling, and two roots deriving one repo-relative path. Each on stderr (which survives
-#      -DNDEBUG) plus a DEGRADED_PATH_ALERT.
+#      -DNDEBUG) plus a DISCLOSE.
 #   4. The same join, and the same byte-safe reader, apply to EVERY consumer — churn, co-change, ownership,
 #      the changed mask, short-horizon churn (§9 walks the readers one by one).
 #   5. A churn prior with zero in-window evidence discloses that in the window stamp AND on stderr, so
@@ -721,7 +721,7 @@ if [ -n "$GITSPELL" ] && [ "$GITSPELL" != "$NFDSPELL" ]; then
         && ok "G2: the disclosure names BOTH spellings (the two look identical; only the bytes differ)" \
         || no "G2: the disclosure does not name git's own spelling, so the reader cannot act on it"
     # trap #3: an alert arm must know whether this build CAN print alerts before it believes its own silence —
-    # a Release/NDEBUG build compiles DEGRADED_PATH_ALERT out and this arm would then pass for the wrong reason
+    # a Release/NDEBUG build compiles DISCLOSE out and this arm would then pass for the wrong reason
     # (the 2026-07-27 CI trap). --version's build-type token decides, the reading kotlincheck §12 and
     # estchargecheck share: CMakeLists defines NDEBUG for Release / RelWithDebInfo / MinSizeRel and nothing else.
     #
@@ -734,12 +734,12 @@ if [ -n "$GITSPELL" ] && [ "$GITSPELL" != "$NFDSPELL" ]; then
     G2_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
     case "$G2_FLAVOUR" in
         Release|RelWithDebInfo|MinSizeRel)
-            printf '  SKIP  %s\n' "G2: this $G2_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out — the plain-flavour leg proves the alert arm" ;;
+            printf '  SKIP  %s\n' "G2: this $G2_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out — the plain-flavour leg proves the alert arm" ;;
         *)
             if grep -A1 'DECOMPOSED (NFD) filename' "$TMP/h8b.err" | grep -qF '[math degraded] gitmine: a git-history path join was left unmade'; then
-                ok "G2: the NFD join loss raises its DEGRADED_PATH_ALERT on this '${G2_FLAVOUR:-unknown}' (non-NDEBUG) build"
+                ok "G2: the NFD join loss raises its DISCLOSE on this '${G2_FLAVOUR:-unknown}' (non-NDEBUG) build"
             else
-                no "G2: '${G2_FLAVOUR:-unknown}' is a non-NDEBUG build, yet no join DEGRADED_PATH_ALERT follows the NFD disclosure: $( grep -F '[math degraded]' "$TMP/h8b.err" | head -1 )"
+                no "G2: '${G2_FLAVOUR:-unknown}' is a non-NDEBUG build, yet no join DISCLOSE follows the NFD disclosure: $( grep -F '[math degraded]' "$TMP/h8b.err" | head -1 )"
             fi ;;
     esac
 else

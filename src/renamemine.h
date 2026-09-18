@@ -82,7 +82,7 @@
 #include "quality.h"            // gitRepoHasHistory
 #include "gitstamp.h"           // atAttr — at="<sha>[+dirty]" root anchor (M10: --naming-calibration read git and carried no anchor)
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include <algorithm>
 #include <cstdint>
@@ -352,33 +352,33 @@ inline RenameHarvest mineRenamePairs( const std::string& root )
 
     if( !walk.started )
     {
-        DEGRADED_PATH_ALERT( "renamemine: git log failed to start — the calibration corpus is empty, which the report states rather than scoring zero" );
+        DISCLOSE( "renamemine: git log failed to start — the calibration corpus is empty, which the report states rather than scoring zero" );
         return harvest;
     }
     if( walk.truncated )
     {
         harvest.truncated = true;
-        DEGRADED_PATH_ALERT( "renamemine: the history walk hit its bound — candidates= is a floor, not a total" );
+        DISCLOSE( "renamemine: the history walk hit its bound — candidates= is a floor, not a total" );
     }
     // The dangerous failure, guarded the way gitoracle guards it: the caller has established that HEAD
     // resolves, so ZERO commit headers means git failed (stderr is swallowed, popen still succeeds). An empty
     // candidate set with ok=true reads as "this repo has no renames", which is a claim, not an observation.
     if( harvest.commitsWalked == 0 )
     {
-        DEGRADED_PATH_ALERT( "renamemine: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'no renames'" );
+        DISCLOSE( "renamemine: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'no renames'" );
         return harvest;
     }
     if( walk.status != 0 )
     {
         harvest.truncated = true;
-        DEGRADED_PATH_ALERT( "renamemine: git log exited non-zero mid-walk — the partial answer is kept and marked truncated" );
+        DISCLOSE( "renamemine: git log exited non-zero mid-walk — the partial answer is kept and marked truncated" );
     }
 
     harvest.candidates.reserve( votes.size() );
     for( const auto& vote : votes )
     {
         const std::size_t sep = vote.first.find( '\x01' );
-        VERIFY( sep != std::string::npos );
+        ASSUME( sep != std::string::npos );
         harvest.candidates.push_back( { vote.first.substr( 0, sep ), vote.first.substr( sep + 1 ), vote.second } );
     }
     // The hash map's iteration order is not a contract; the emitted order is. Sort before anyone can see it.
@@ -619,7 +619,7 @@ inline CalibrationReport scoreRenamePairs( const IngestResult& ing, RenameHarves
         }
         const RenameCandidate& candidate = harvest.candidates[pairIndex];
         const Symbol*          newSymbol = eligibleNamed( candidate.newName );
-        VERIFY( newSymbol != nullptr );
+        ASSUME( newSymbol != nullptr );
 
         Symbol oldSymbol = *newSymbol;
         oldSymbol.name   = candidate.oldName;

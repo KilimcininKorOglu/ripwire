@@ -192,7 +192,7 @@ _batchWord2 = "cache"
 _batchWord3 = "invalidation"
 BATCH = f"""for:{_batchWord1} {_batchWord2} {_batchWord3}
 callers:rankGraphTeleport
-grep:DEGRADED_PATH_ALERT
+grep:DISCLOSE
 lego:Vehicle
 """
 batch_path = os.path.join(AUX, "batch2.txt")
@@ -394,9 +394,9 @@ add(S2, f"{BIN} . --situ", f"Mid-task situational report for the current git dif
 add(S2, f"{BIN} . --test-gate", onTree(
     "Pre-PR gate on a CLEAN tree: no obligations, exit 0.",
     "Pre-PR gate recorded against a DIRTY tree, so the obligations below are the working copy's real ones — the recorded exit code says which way it went."))
-add(S2, f"{BIN} . --grep=DEGRADED_PATH_ALERT", "Literal trigram-indexed search. Each hit carries its MATCHED line as the <hit> element's own CDATA (the <m> wrapper is gone), plus shown/capped/hits_capped and a pasteable next= on the root.")
-add(S2, f"{BIN} . --grep=DEGRADED_PATH_ALERT --grep-context=1", "Same search with one line of source context either side.")
-add(S2, f"{BIN} . --grep=DEGRADED_PATH_ALERT --grep-before=1 --grep-after=2 --limit=3", "The asymmetric spelling of the same context: one line before and two after each hit (ripgrep's -B/-A), on a three-hit window.")
+add(S2, f"{BIN} . --grep=DISCLOSE", "Literal trigram-indexed search. Each hit carries its MATCHED line as the <hit> element's own CDATA (the <m> wrapper is gone), plus shown/capped/hits_capped and a pasteable next= on the root.")
+add(S2, f"{BIN} . --grep=DISCLOSE --grep-context=1", "Same search with one line of source context either side.")
+add(S2, f"{BIN} . --grep=DISCLOSE --grep-before=1 --grep-after=2 --limit=3", "The asymmetric spelling of the same context: one line before and two after each hit (ripgrep's -B/-A), on a three-hit window.")
 add(S2, f"{BIN} . --regex='fnv1a\\w+'", "Regex search + enclosing symbol.")
 add(S2, f"{BIN} . --match='(if_statement)'", "Tree-sitter structural query WITHOUT a capture — a bare node query gets a capture AUTO-ADDED (auto_captured=\"1\") and matches the same nodes the explicit form does.")
 add(S2, f"{BIN} . --match='(if_statement) @i'", "The same shape query WITH an explicit capture — identical hits, no auto_captured= attribute.")
@@ -636,15 +636,15 @@ add(S2B, f"{BIN} . --slice=rankGraphTeleport:nosuchvar", "A variable the definit
 add(S2B, f"{BIN} . --slice-depth=3", "--slice-depth without --slice-flow is refused loudly rather than silently ignored.")
 add(S2B, f"{BIN} . --slice=rankGraphTeleport:teleport --legend=compact", "The compact legend posture: rows byte-identical, a versioned schema id replaces the repeated explanatory prose — for a many-small-calls loop.")
 add(S2B, f"{BIN} . --pattern='rankGraphTeleport($A, $B, $C)'", "Structural search written in CODE: $NAME binds one node; grammars=/shapes= disclose what the pattern became per grammar (a 3-argument call shape — the 2-argument spelling has no call site in this repo and correctly reports hits=0).")
-add(S2B, f"{BIN} . --pattern='DEGRADED_PATH_ALERT(...)'", "The ellipsis form over a macro-shaped call site; unsupported= names the families this verb does not serve.")
+add(S2B, f"{BIN} . --pattern='DISCLOSE(...)'", "The ellipsis form over a macro-shaped call site; unsupported= names the families this verb does not serve.")
 add(S2B, f"{BIN} . --pattern='x'", "A pattern that collapses to a bare token is REFUSED — never reported as hits=0.")
-add(S2B, f"{BIN} . --grep=DEGRADED_PATH_ALERT --and=cache", "Boolean grep: hits where BOTH literals share the matched line (--grep-scope=line is the default).")
-add(S2B, f"{BIN} . --grep=DEGRADED_PATH_ALERT --not=test --grep-scope=file", "Drop every hit in a file that ALSO contains the --not literal anywhere (file scope).")
-add(S2B, f"{BIN} . --grep=DEGRADED_PATH_ALERT --grep=cache", "A second --grep= REFUSES and names --and= as the AND spelling — no silent overwrite.")
-add(S2B, f"{BIN} . --grep=DEGRADED_PATH_ALERT --grep-in=any", "Span tiers off: the exhaustive view — the comment and string hits the default tier held back (suppressed_comment=96 / suppressed_string=29 in the plain --grep block above) now print alongside the code hits; hits= grows accordingly.")
+add(S2B, f"{BIN} . --grep=DISCLOSE --and=cache", "Boolean grep: hits where BOTH literals share the matched line (--grep-scope=line is the default).")
+add(S2B, f"{BIN} . --grep=DISCLOSE --not=test --grep-scope=file", "Drop every hit in a file that ALSO contains the --not literal anywhere (file scope).")
+add(S2B, f"{BIN} . --grep=DISCLOSE --grep=cache", "A second --grep= REFUSES and names --and= as the AND spelling — no silent overwrite.")
+add(S2B, f"{BIN} . --grep=DISCLOSE --grep-in=any", "Span tiers off: the exhaustive view — the comment and string hits the default tier held back (suppressed_comment=96 / suppressed_string=29 in the plain --grep block above) now print alongside the code hits; hits= grows accordingly.")
 add(S2B, f"{BIN} . --grep=deterministic", "A literal whose classified hits are all prose: the answer serves tier=\"comment+string\" rather than an empty code tier, and tier_unclassified= says how many hits the fixed parse budget never classified.")
-add(S2B, f"{BIN} . --grep=DEGRADED_PATH_ALERT --handles", "h= on each editable enclosing-symbol row: a freshness-pinned identity an edit verb can target and must refuse on after any file change.")
-add(S2B, f"{BIN} . --grep=DEGRADED_PATH_ALERT --legend=compact", "The grep compact legend (ripwire.grep/v1).")
+add(S2B, f"{BIN} . --grep=DISCLOSE --handles", "h= on each editable enclosing-symbol row: a freshness-pinned identity an edit verb can target and must refuse on after any file change.")
+add(S2B, f"{BIN} . --grep=DISCLOSE --legend=compact", "The grep compact legend (ripwire.grep/v1).")
 add(S2B, f'{BIN} . --for="tree-sitter parse of a source file" --legend=compact', "The --for compact legend (ripwire.for/v1) — every data/completeness attribute kept.")
 add(S2B, f'{BIN} . --for="tree-sitter parse of a source file" --auto-bodies', "Opt OUT of compact conceptual serving: restore the rank-first auto <bodies> walk (bundle=\"auto\").")
 add(S2B, f'{BIN} . --for="quality delta acks ledger rubber stamp"', "Doc-mention surfacing (default ON): a markdown doc naming a top-resolved symbol in a backtick rides in below that symbol — the legend's [doc mentions: …] clause says it fired.")
@@ -749,10 +749,10 @@ add(S9, mcp(MCP_INIT, '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'), "initia
 add(S9, mcp(MCP_INIT, mcp_call("for", task="pagerank power iteration")), "MCP `for`: always bundle=sigs (never the CLI's compact route), the same ranked signatures as --for.")
 add(S9, mcp(MCP_INIT, mcp_call("explore", task="add a new output format flag to the CLI", budget_tokens=2000)), "MCP `explore` = --pack-task under a token budget, one call.")
 add(S9, mcp(MCP_INIT, mcp_call("fetch_body", handle="rankGraphTeleport")), "MCP `fetch_body`: the lazy-body handle posture — bodies only after ranked retrieval, by bare name here.")
-add(S9, mcp(MCP_INIT, mcp_call("grep", pattern="DEGRADED_PATH_ALERT", limit=3)), "MCP `grep` with paging args.")
+add(S9, mcp(MCP_INIT, mcp_call("grep", pattern="DISCLOSE", limit=3)), "MCP `grep` with paging args.")
 add(S9, mcp(MCP_INIT, mcp_call("slice", symbol="rankGraphTeleport", var="teleport", flow="back", depth=3)), "MCP `slice` — the CLI's --slice/--slice-flow/--slice-depth as one verb.")
 add(S9, mcp(MCP_INIT, mcp_call("find_symbol", symbol="DoesNotExist")), "MCP error shape: an unknown symbol comes back as a JSON-RPC error/refusal, not an empty success.")
-add(S9, mcp(MCP_INIT, mcp_call("batch", queries=[{"verb": "for", "task": "incremental cache invalidation"}, {"verb": "find_referencing_symbols", "symbol": "rankGraphTeleport"}, {"verb": "grep", "pattern": "DEGRADED_PATH_ALERT", "limit": 2}])), "MCP `batch`: three independent read queries answered in ONE round-trip — NOTE the sub-query grammar is {verb, ...args} objects with MCP verb names, not the CLI --batch file's verb:arg lines.")
+add(S9, mcp(MCP_INIT, mcp_call("batch", queries=[{"verb": "for", "task": "incremental cache invalidation"}, {"verb": "find_referencing_symbols", "symbol": "rankGraphTeleport"}, {"verb": "grep", "pattern": "DISCLOSE", "limit": 2}])), "MCP `batch`: three independent read queries answered in ONE round-trip — NOTE the sub-query grammar is {verb, ...args} objects with MCP verb names, not the CLI --batch file's verb:arg lines.")
 add(S9, mcp(MCP_INIT, mcp_call("batch", queries=["for:incremental cache invalidation", "callers:rankGraphTeleport"])), "The CLI --batch spelling handed to MCP `batch`: refused, with the accepted shape named.")
 add(S9, mcp(MCP_INIT, mcp_call("edit_check", symbol="rankGraphTeleport")), "MCP `edit_check` on " + TREE + ".")
 add(S9, mcp(MCP_INIT, mcp_call("edit_check", symbol="rankGraphTeleport", legend="compact")), "The same MCP `edit_check` with legend:\"compact\" — the CLI --legend=compact dialect on the MCP side (declared on the 16 XML verbs): ~5.5 KB of legend down to ~600 B, rows identical; an unknown or empty legend value is refused, never read as the default.")

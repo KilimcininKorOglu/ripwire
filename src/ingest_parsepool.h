@@ -71,8 +71,8 @@ inline ColdParseReserve coldParseReserve( std::span<const LangEntry* const> file
                                           std::span<const std::uintmax_t> fileByteSize,
                                           unsigned nthreads ) noexcept
 {
-    VERIFY( nthreads >= 1 );   // caller derives it from min( hardware_concurrency, nfiles ) with nfiles >= 1
-    VERIFY( fileLang.size() == fileByteSize.size() );
+    ASSUME( nthreads >= 1 );   // caller derives it from min( hardware_concurrency, nfiles ) with nfiles >= 1
+    ASSUME( fileLang.size() == fileByteSize.size() );
 
     std::size_t parseableBytes = 0;
     for( std::size_t fileId = 0; fileId < fileLang.size(); ++fileId )
@@ -104,10 +104,10 @@ inline ColdParseReserve coldParseReserve( std::span<const LangEntry* const> file
 
     // The two properties the whole argument above rests on: every value is a power of two (so the doubling
     // ladder is unchanged) and none exceeds the cap (so the waste stays bounded).
-    VERIFY( r.defs  <= kCapPerThread && ( r.defs  == 0 || std::has_single_bit( r.defs  ) ) );
-    VERIFY( r.refs  <= kCapPerThread && ( r.refs  == 0 || std::has_single_bit( r.refs  ) ) );
-    VERIFY( r.incs  <= kCapPerThread && ( r.incs  == 0 || std::has_single_bit( r.incs  ) ) );
-    VERIFY( r.binds <= kCapPerThread && ( r.binds == 0 || std::has_single_bit( r.binds ) ) );
+    ASSUME( r.defs  <= kCapPerThread && ( r.defs  == 0 || std::has_single_bit( r.defs  ) ) );
+    ASSUME( r.refs  <= kCapPerThread && ( r.refs  == 0 || std::has_single_bit( r.refs  ) ) );
+    ASSUME( r.incs  <= kCapPerThread && ( r.incs  == 0 || std::has_single_bit( r.incs  ) ) );
+    ASSUME( r.binds <= kCapPerThread && ( r.binds == 0 || std::has_single_bit( r.binds ) ) );
     return r;
 }
 
@@ -271,7 +271,7 @@ inline WarmHitTotals markCacheHits( const std::vector<std::string>& files, const
                                     HashMap<std::string, FileFacts>& cache,
                                     std::vector<FileFacts*>& candidates, std::vector<FileFacts*>& hits )
 {
-    VERIFY_NO_ALIAS( candidates, hits );
+    ASSUME_NO_ALIAS( candidates, hits );
     WarmHitTotals tot;
     for( std::size_t fileId = 0; fileId < files.size(); ++fileId )
     {
@@ -356,13 +356,13 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
     ParserGuard pg;
     if( pg.p == nullptr )
     {
-        DEGRADED_PATH_ALERT( "ingest: ts_parser_new failed on a worker — its files skipped" );
+        DISCLOSE( "ingest: ts_parser_new failed on a worker — its files skipped" );
         return;
     }
     TSQueryCursor* cursor = ts_query_cursor_new();
     if( cursor == nullptr )
     {
-        DEGRADED_PATH_ALERT( "ingest: ts_query_cursor_new failed on a worker — its files skipped" );
+        DISCLOSE( "ingest: ts_query_cursor_new failed on a worker — its files skipped" );
         return;
     }
 
@@ -627,7 +627,7 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
         }
         catch( ... )
         {
-            DEGRADED_PATH_ALERT( "ingest: worker exception on a file — skipped" );
+            DISCLOSE( "ingest: worker exception on a file — skipped" );
         }
     }
     flushPendingParsed();
@@ -737,7 +737,7 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
         // scan.hash is already pre-sized to nfiles (done by makeFileScan, before the prewarm).
         // Entries pre-filled by the prewarm miss-detection pass (cache-present files that were read+hashed
         // there) stay as-is. Workers fill the remaining 0-valued entries for files they process.
-        VERIFY( scan.hash.size() == nfiles );
+        ASSUME( scan.hash.size() == nfiles );
         unsigned hw = std::thread::hardware_concurrency();
         if( hw == 0 )
         {

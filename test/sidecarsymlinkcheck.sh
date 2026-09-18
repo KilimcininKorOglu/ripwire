@@ -64,7 +64,7 @@
 #                       symlink" from passing (a)/(b)
 #     per writer:   (e) MECHANISM: each sidecar has ONE named acquire seam (openBaselineSidecar /
 #                       openNotesSidecar / openArchBaselineSidecar); it opens through pathguard's atomic
-#                       no-follow create and carries the site's unchanged DEGRADED_PATH_ALERT for the ELOOP
+#                       no-follow create and carries the site's unchanged DISCLOSE for the ELOOP
 #                       case, the writer takes its descriptor from it and opens nothing itself, and neither
 #                       body holds an ofstream/fopen following primitive or a pre-open symlink predicate
 #                   (e5/e6) WRITE INTEGRITY: the writer RETURNS pathguard::writeAllAndClose's verdict over the
@@ -136,7 +136,7 @@
 #                       HEAD to fall back to fails without calling the linked sidecar missing
 #     per reader:   (m) MECHANISM (source arms, like (e)): each reader takes its bytes from its sidecar's read
 #                       seam, the seam reads through pathguard's O_NOFOLLOW read and carries the site's own
-#                       DEGRADED_PATH_ALERT, and no following open survives in a reader or in the arch verb;
+#                       DISCLOSE, and no following open survives in a reader or in the arch verb;
 #                       (f3) pins the read open's flags
 #
 # ROUND 4 — A NON-REGULAR FILE AT THE NAME, AND A READ THAT HOLDS ONE LINE. A FIFO planted AT a sidecar name
@@ -365,9 +365,9 @@ mechArm()
 
     # "Same exit path, same alert" is a promise about THIS site, so it is asserted at this site.
     if grep -qF "$alert" "$acq"; then
-        ok "$label: (e3) the site's own DEGRADED_PATH_ALERT for the symlink case is unchanged"
+        ok "$label: (e3) the site's own DISCLOSE for the symlink case is unchanged"
     else
-        no "$label: (e3) the site's DEGRADED_PATH_ALERT text changed — expected: $alert"
+        no "$label: (e3) the site's DISCLOSE text changed — expected: $alert"
     fi
 
     # The seam is only worth anything if the WRITER actually writes through the descriptor it hands back.
@@ -1182,7 +1182,7 @@ readMechArm()
         no "$label: (m2) $seamFn does not open through rw::pathguard::openNoFollowRead"
     fi
     if grep -qF "$alert" "$sm"; then
-        ok "$label: (m3) $seamFn carries the site's own DEGRADED_PATH_ALERT for the refused link"
+        ok "$label: (m3) $seamFn carries the site's own DISCLOSE for the refused link"
     else
         no "$label: (m3) $seamFn does not carry the expected alert: $alert"
     fi

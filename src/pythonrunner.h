@@ -33,20 +33,20 @@ inline bool topLevelEvidence( std::string_view source, const TSLanguage* languag
     TSParser* parser = ts_parser_new();
     if( parser == nullptr )
     {
-        DEGRADED_PATH_ALERT( "Python runner: parser allocation failed" );
+        DISCLOSE( "Python runner: parser allocation failed" );
         return false;
     }
     if( !ts_parser_set_language( parser, language ) )
     {
         ts_parser_delete( parser );
-        DEGRADED_PATH_ALERT( "Python runner: grammar unavailable" );
+        DISCLOSE( "Python runner: grammar unavailable" );
         return false;
     }
     TSTree* tree = ts_parser_parse_string( parser, nullptr, source.data(), std::uint32_t( source.size() ) );
     ts_parser_delete( parser );
     if( tree == nullptr )
     {
-        DEGRADED_PATH_ALERT( "Python runner: parse failed" );
+        DISCLOSE( "Python runner: parse failed" );
         return false;
     }
     const TSNode root = ts_tree_root_node( tree );

@@ -1147,10 +1147,10 @@ inline constexpr double bytesPerTokenFor( Lang l ) noexcept
 // any more: each one MEASURES the bytes it actually wrote and converts them HERE, at the calibrated rate
 // for what those bytes ARE (a kTokenCalib / model-weighted rate for markup+signatures,
 // kBytesPerTokenBody for def bodies and raw source). Rounds to nearest so the number never systematically
-// under-reads. VERIFY, not a clamp: a non-positive rate is a corrupt caller, never a runtime condition.
+// under-reads. ASSUME, not a clamp: a non-positive rate is a corrupt caller, never a runtime condition.
 inline std::size_t tokensForEmittedBytes( std::size_t emittedBytes, double bytesPerToken ) noexcept
 {
-    VERIFY( bytesPerToken > 0.0 );
+    ASSUME( bytesPerToken > 0.0 );
     return std::size_t( double( emittedBytes ) / bytesPerToken + 0.5 );
 }
 
@@ -1211,7 +1211,7 @@ inline void spliceRootAttrs( std::string& doc, std::string_view attrs, std::size
 {
     const std::size_t lt = doc.find( '<', rootTagAt );
     const std::size_t gt = lt == std::string::npos ? std::string::npos : doc.find( '>', lt );
-    if( gt == std::string::npos ) { DEGRADED_PATH_ALERT( "pricedRoot: document has no root start-tag — est_tokens= not spliced" );  return; }
+    if( gt == std::string::npos ) { DISCLOSE( "pricedRoot: document has no root start-tag — est_tokens= not spliced" );  return; }
     const bool selfClosing = gt > 0 && doc[ gt - 1 ] == '/';
     doc.insert( selfClosing ? gt - 1 : gt, attrs );
 }
@@ -1249,12 +1249,12 @@ struct ChargedSection
 // `ulimit -n` harness comes near it — the failure has to be injected.
 //
 // One seam for two reasons. (1) The family's degrade CONTRACT is one contract — the section/document still
-// emits complete, correct bytes; est_tokens falls back to the MODELLED number; a DEGRADED_PATH_ALERT says
+// emits complete, correct bytes; est_tokens falls back to the MODELLED number; a DISCLOSE says
 // which — and a contract restated at five call sites is a contract that diverges at one of them.
 // (2) A single switch then exercises the whole family, which is what test/estchargecheck.sh's degrade arm
 // asserts against.
 //
-// THE SWITCH EXISTS ONLY ON THE NON-NDEBUG FLAVOUR — the same flavour `DEGRADED_PATH_ALERT` itself exists
+// THE SWITCH EXISTS ONLY ON THE NON-NDEBUG FLAVOUR — the same flavour `DISCLOSE` itself exists
 // on. The hook and the observation it enables therefore appear and disappear TOGETHER: a release build has
 // neither, and `isChargeBufferFaultInjected()` is `constexpr false` there, so the branch and the getenv are
 // both deleted (G2/G3: zero release cost, no behaviour to diverge). Read ONCE per process, so the answer
@@ -1343,7 +1343,7 @@ inline ChargedSection chargeSection( RenderFn&& render, double bytesPerToken )
     std::FILE* const mem = openChargeStream( stream );
     if( !mem )
     {
-        DEGRADED_PATH_ALERT( "chargeSection: open_memstream failed — this payload section streams uncharged" );
+        DISCLOSE( "chargeSection: open_memstream failed — this payload section streams uncharged" );
         return sec;
     }
     render( mem );
@@ -1352,7 +1352,7 @@ inline ChargedSection chargeSection( RenderFn&& render, double bytesPerToken )
     {
         // the same answer as a failed open: isRendered stays false, so emitChargedSection renders the section straight
         // to the sink, whole and uncharged, instead of writing bytes a lost write left a hole in
-        DEGRADED_PATH_ALERT( "chargeSection: the charge buffer did not finish whole — this payload section streams uncharged" );
+        DISCLOSE( "chargeSection: the charge buffer did not finish whole — this payload section streams uncharged" );
         return sec;
     }
     sec.xml.assign( rendered.bytes );
@@ -2692,7 +2692,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     std::FILE* const childMem = openChargeStream( childStream );
     if( !childMem )
     {
-        DEGRADED_PATH_ALERT( "serialize: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
+        DISCLOSE( "serialize: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
     }
 
     const std::size_t modelledTokens = mapEstTokens + extraPayloadTokens;
@@ -3025,7 +3025,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const rw::MemoryStreamBytes children = childStream.finish();
     if( !children.isWhole )
     {
-        DEGRADED_PATH_ALERT( "serialize: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
+        DISCLOSE( "serialize: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
         emitModelled();
         return;
     }
@@ -3677,9 +3677,9 @@ inline std::string lensRowPath( const IngestResult& ing, std::uint32_t fileId, s
 inline std::string sigRowHead( const IngestResult& ing, NodeId id, const SigRowFacts& facts, std::vector<char>& esc,
                                std::string_view rootArg )   // R-R: the root this row's id= is relative to
 {
-    VERIFY( id < ing.symbols.size() );
+    ASSUME( id < ing.symbols.size() );
     const Symbol& s = ing.symbols[ id ];
-    VERIFY( s.fileId < ing.files.size() );
+    ASSUME( s.fileId < ing.files.size() );
 
     // declaration line, then identity (the chain key)
     char lineAttr[ 32 ];
@@ -3838,7 +3838,7 @@ inline RelevanceFloorCut relevanceFloorCut( const std::vector<float>& rank, int 
 // be short; this one has no such hedge, so getting it wrong is worse than not shipping it at all.
 inline std::size_t droppedPositiveCount( std::size_t candidatePositives, std::size_t positivesContentSkipped, std::size_t positivesSurvived ) noexcept
 {
-    VERIFY( candidatePositives >= positivesContentSkipped + positivesSurvived );   // see the three-bucket partition above
+    ASSUME( candidatePositives >= positivesContentSkipped + positivesSurvived );   // see the three-bucket partition above
     return candidatePositives - positivesContentSkipped - positivesSurvived;
 }
 
@@ -7484,7 +7484,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     std::FILE* const rowsMem = openChargeStream( rowsStream );
     if( !rowsMem )
     {
-        DEGRADED_PATH_ALERT( "serializeJson: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
+        DISCLOSE( "serializeJson: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
     }
 
     // ONE header emitter, used by the degrade write, the size probe and the real write, so the three can
@@ -7617,7 +7617,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     if( !rows.isWhole )
     {
         // a write was lost inside the rows: never print them — write the whole document again, on the modelled path
-        DEGRADED_PATH_ALERT( "serializeJson: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
+        DISCLOSE( "serializeJson: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
         emitModelled();
         return;
     }
@@ -7643,12 +7643,12 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
             }
             else
             {
-                DEGRADED_PATH_ALERT( "serializeJson: the header size probe's buffer did not finish whole — est_tokens charges the modelled envelope instead" );
+                DISCLOSE( "serializeJson: the header size probe's buffer did not finish whole — est_tokens charges the modelled envelope instead" );
             }
         }
         else
         {
-            DEGRADED_PATH_ALERT( "serializeJson: open_memstream failed for the header size probe — est_tokens charges the modelled envelope instead" );
+            DISCLOSE( "serializeJson: open_memstream failed for the header size probe — est_tokens charges the modelled envelope instead" );
         }
     }
 

@@ -25,7 +25,7 @@
 #include "workspace.h"          // multi-root `paths` array (A11): root hygiene + labels + merge
 #include "infra/statclock.h"    // rw::saturatingNanoseconds — the staleness stat reads without signed overflow past 2262
 #include "quality.h"            // computeSnapshot/computeDelta + writeBaseline + gitHeadSha/computeHeadSnapshot — the quality_delta/quality_baseline verbs reuse the exact CLI logic
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — no-op in release; the visible line on a watcher-degrade path
+#include "infra/Diagnostics.h"  // DISCLOSE — no-op in release; the visible line on a watcher-degrade path
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
 
 #include <sys/stat.h>
@@ -49,7 +49,7 @@
 // nobody can reproduce locally.
 //
 // L2 (Linux runtime probe) — why FsWatcher::arm's no-kqueue branch is SILENT while its kqueue()-failed
-// branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something that normally
+// branch still emits DISCLOSE. An alert marks an UNEXPECTED fallback: something that normally
 // works did not, this run. On a build with no kqueue at all (every Linux build, and any
 // -DRIPWIRE_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has,
 // taken on every arm() call for the life of the process, forever. Alerting on it made every Linux MCP run
@@ -284,7 +284,7 @@ namespace mcpdetail
             (void) dirs; return;
 #else
             kq = ::kqueue();
-            if( kq < 0 ) { DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
+            if( kq < 0 ) { DISCLOSE( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
 
             dirFds.reserve( dirs.size() );
             for( const std::string& d : dirs )
@@ -301,7 +301,7 @@ namespace mcpdetail
                 }
                 if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
                 {
-                    DEGRADED_PATH_ALERT( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
+                    DISCLOSE( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
                     reset();
                     return;
                 }
@@ -1276,7 +1276,7 @@ inline const McpIndex& getIndex( const std::string& root )
 // identity and there is nothing to strip.
 inline void handleIdentity( const McpIndex& ix, NodeId id, std::string& canonOut, std::string& pathOut )
 {
-    VERIFY_NO_ALIAS( canonOut, pathOut );
+    ASSUME_NO_ALIAS( canonOut, pathOut );
     const Symbol&          s       = ix.ing.symbols[ id ];
     const std::string_view rootArg = ix.ing.realPaths.empty() ? std::string_view( ix.root ) : std::string_view();
     canonOut = ( id < ix.g.canonId.size() ) ? canonicalIdForEmit( ix.ing, s, rootArg ) : s.name;

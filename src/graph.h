@@ -12,7 +12,7 @@
                                  // restrictDependencyHealth() needs (owns the extension table, kept in sync
                                  // by hand with ingest.cpp's kLangTable per its own header comment)
 #include "infra/sparseCsr.h"     // first-party infra math (src/infra/)
-#include "infra/csrverify.h"     // structural gate, VERIFY'd after every production CSR build
+#include "infra/csrverify.h"     // structural gate, ASSUME'd after every production CSR build
 #include "infra/hashutil.h"      // fnv1aAbsorb — internDeclinedList buckets a declined call's candidate list by its bytes
 #include "pagerank.h"            // double-precision PageRank kernel over float CSR storage
 #include "prconverge.h"          // W2-F: RankDisclosure — the power iteration's own account, carried with its result
@@ -3305,7 +3305,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // edges are right and the census's conservation line is not. Every plain build says so, census or not.
     if( g.callDispositions[ std::size_t( CallDisposition::Unaccounted ) ] > 0 )
     {
-        DEGRADED_PATH_ALERT( "buildGraph: a call reference left the resolve loop without a disposition (pincensus.h CallDisposition)" );
+        DISCLOSE( "buildGraph: a call reference left the resolve loop without a disposition (pincensus.h CallDisposition)" );
     }
     if( census )
     {
@@ -3393,8 +3393,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         std::vector<std::uint32_t> cur( ro, ro + N );
         for( const E& e : edges ) { const std::uint32_t pos = cur[ e.to ]++; ci[ pos ] = e.from; val[ pos ] = e.w; }
     }
-    VERIFY_DEBUG_ONLY( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
-    VERIFY_DEBUG_ONLY( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
+    DASSERT( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
+    DASSERT( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
     }
 
     // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
@@ -4465,7 +4465,7 @@ inline std::vector<std::uint32_t> fanInFromInEdges( const IngestResult& ing, con
     const std::size_t          symbolCount = ing.symbols.size();
     std::vector<std::uint32_t> fanIn( symbolCount, 0u );
     const auto*                ro = g.inEdges.rowOffsets();
-    if( !ro ) { DEGRADED_PATH_ALERT( "bundle: in-edge CSR unavailable — in= omitted from the bundle rows" );  return {}; }
+    if( !ro ) { DISCLOSE( "bundle: in-edge CSR unavailable — in= omitted from the bundle rows" );  return {}; }
     for( std::size_t i = 0; i < symbolCount; ++i )
     {
         fanIn[i] = ro[i + 1] - ro[i];
@@ -4602,7 +4602,7 @@ inline std::size_t definitionCountOfName( const IngestResult& ing, NodeId focus 
 inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std::vector<char>& isDecl,
                                              const std::vector<char>& isCand, std::vector<char>& proven )
 {
-    VERIFY_NO_ALIAS3( isDecl, isCand, proven );   // three same-role dense arrays: proven[] is written while isDecl[]/isCand[] are read
+    ASSUME_NO_ALIAS3( isDecl, isCand, proven );   // three same-role dense arrays: proven[] is written while isDecl[]/isCand[] are read
     // The index: ONE entry per DECLARATION file, keyed the way buildPreciseIncludeAdj keys its own
     // (lexicalNormalize on BOTH sides, so a `.`-rooted crawl's `./a/x.h` and a resolved `a/x.h` agree).
     HashMap<std::string, std::uint32_t> declIndex;
@@ -5057,7 +5057,7 @@ struct FieldUseAnswer
 inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fieldId )
 {
     FieldUseAnswer out;
-    VERIFY( fieldId < ing.fields.size() );
+    ASSUME( fieldId < ing.fields.size() );
     const Symbol& field = ing.fields[ fieldId ];
 
     // every field sharing the name, by owner scope (field-index order inside each bucket)
@@ -6358,7 +6358,7 @@ inline std::vector<char> testSymbolForwardReach( const IngestResult& ing, const 
 // dist(uint16) + prev(NodeId) + a via-out bit, reused nothing inside the BFS loop after the assigns.
 namespace connectcfg
 {
-    inline constexpr std::size_t   kMaxTerminals  = 16;        // >16 is the CALLER's usage error; the core CLAMPS (never VERIFYs on hostile input)
+    inline constexpr std::size_t   kMaxTerminals  = 16;        // >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input)
     inline constexpr std::uint32_t kMaxNodes      = 96;        // total emitted node cap (§3 size caps)
     inline constexpr std::uint32_t kMaxEdges      = 256;       // total emitted edge cap
     inline constexpr std::uint32_t kMinRadius     = 1;         // --connect-radius clamp band (design §2.2)
@@ -6457,7 +6457,7 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
     res.radius = std::clamp( radius, connectcfg::kMinRadius, connectcfg::kMaxRadius );
 
     // sanitize terminals: drop out-of-range ids, dedup, ascending; CLAMP to the cap (lowest ids win — a
-    // deterministic degrade, since hostile input must never trip a VERIFY; the CLI enforces the usage error).
+    // deterministic degrade, since hostile input must never trip an ASSUME; the CLI enforces the usage error).
     for( NodeId t : terminalSpecs )
     {
         if( t < N )
@@ -7102,7 +7102,7 @@ inline std::string graphCountFloorAttrJson( const Graph& g )
 // candidates, so the list count stays under half the entry count and the uint32 list numbers cannot wrap first.
 inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
-    VERIFY( cand.size() >= 2 );   // tier 3 declines only a set it could not narrow to one
+    ASSUME( cand.size() >= 2 );   // tier 3 declines only a set it could not narrow to one
     std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
     const char* const bytes = reinterpret_cast<const char*>( cand.data() );
     for( std::size_t byteIndex = 0; byteIndex < cand.size_bytes(); ++byteIndex )
@@ -7123,7 +7123,7 @@ inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<st
     constexpr std::size_t kOffsetCeiling = UINT32_MAX;
     if( cand.size() > kOffsetCeiling - g.declinedListCand.size() )
     {
-        DEGRADED_PATH_ALERT( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
+        DISCLOSE( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
         return;
     }
     bucket.push_back( std::uint32_t( g.declinedListCallCount.size() ) );

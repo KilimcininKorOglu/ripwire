@@ -61,7 +61,7 @@
 #include "quality.h"            // gitOneLine — the SAME one-line git primitive crossref/abicheck/mergescout resolve their merge-base with;
                                 // gitResolveCommitSha — the shared resolver BASEREF goes through (P0.1)
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — the unrelated-history (no merge-base) degrade
+#include "infra/Diagnostics.h"  // DISCLOSE — the unrelated-history (no merge-base) degrade
 #include "gitstamp.h"           // gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "graphlegend.h"        // §H4 §3.4 / V4 MED-3: the shared counts_floor= marker + graph-count legend clauses
 #include "testmap.h"            // §A9.5 / §P11.4: TestRunnerIndex / runAttr — the run= hint on a named test row
@@ -302,7 +302,7 @@ inline DiffAnchor resolveDiffAnchor( const std::string& root, std::string_view b
     out.refSha = quality::gitResolveCommitSha( root, std::string( baseRef ) );
     if( out.refSha.empty() )
     {
-        // No DEGRADED_PATH_ALERT (F20): the caller REFUSES on badRef, so this stamped a "[math degraded] …"
+        // No DISCLOSE (F20): the caller REFUSES on badRef, so this stamped a "[math degraded] …"
         // line — the marker of a run that CONTINUED in a reduced mode — immediately ahead of a refusal that
         // continued nothing. The sentence it carried is already the caller's user-facing refusal.
         out.badRef = true;
@@ -313,7 +313,7 @@ inline DiffAnchor resolveDiffAnchor( const std::string& root, std::string_view b
                                                         + " " + shSingleQuote( headSha ) + " 2>/dev/null" );
     if( base.empty() )
     {
-        DEGRADED_PATH_ALERT( "pr-context: no merge-base with the base ref (unrelated history?) — falling back to a two-dot diff against its tip" );
+        DISCLOSE( "pr-context: no merge-base with the base ref (unrelated history?) — falling back to a two-dot diff against its tip" );
         out.revArgs = shSingleQuote( out.refSha );   // the RESOLVED sha, never the raw ref
         return out;
     }
@@ -577,7 +577,7 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
             // root that prints est_tokens = the price of nothing while writePrContext streams the COMPLETE
             // floor level. The bytes are the right answer — cutting rows because a measurement buffer failed
             // would make a cap decide the content, which is the one thing a cap may never do — but the
-            // NUMBER is modelled, and until now its only signal was DEGRADED_PATH_ALERT, which Diagnostics.h
+            // NUMBER is modelled, and until now its only signal was DISCLOSE, which Diagnostics.h
             // compiles to `do {} while (0)` under NDEBUG. So the shipped binary printed a wrong est_tokens
             // with no disclosure at all (review of #214). truncated= is the attribute that already carries
             // exactly this class of fact, so the fact goes there and survives the flavour.

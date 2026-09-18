@@ -30,7 +30,7 @@
 // stdio-vs-iostream mixing is safe here: nothing in this tree calls
 // `std::ios::sync_with_stdio( false )`, so `std::cin` and `stdin` share one buffer and one position.
 
-#include "Diagnostics.h" // VERIFY — the null-stream precondition
+#include "Diagnostics.h" // ASSUME — the null-stream precondition
 
 #include <cstdio>
 #include <string>
@@ -54,7 +54,7 @@ namespace detail
 template<bool Bounded>
 inline bool readByteSafeLineCore( std::FILE* in, std::string& line, std::size_t maxBytes, bool& overflowed )
 {
-    VERIFY( in != nullptr );
+    ASSUME( in != nullptr );
 
     line.clear();
     if constexpr( Bounded )

@@ -35,7 +35,7 @@
 #include "lexical.h"            // subtokens() / chooseForRanker / lexicalScores* — the shipping --for ranker
 #include "eval.h"               // maxPoolToFiles — the file-pooling convention shared with --eval-mined
 #include "search.h"             // normSet — sorted-unique for the query token set
-#include "infra/Diagnostics.h"  // VERIFY
+#include "infra/Diagnostics.h"  // ASSUME
 
 #include <algorithm>
 #include <cmath>
@@ -486,7 +486,7 @@ struct RowOutcome
 inline RowOutcome outcomeOf( const std::vector<double>& score, const PromptRow& row )
 {
     const std::vector<std::uint32_t> order = rankCandidates( score );
-    VERIFY( !order.empty() );
+    ASSUME( !order.empty() );
     RowOutcome out;
     out.top1Index = order[0];
     out.top1Score = score[ order[0] ];
@@ -628,7 +628,7 @@ struct OraclePoint { double acc = 0.0; double th = 0.0; };
 
 inline OraclePoint oracleFireAbstain( const std::vector<RowOutcome>& outcomes, const std::vector<PromptRow>& rows )
 {
-    VERIFY( outcomes.size() == rows.size() );
+    ASSUME( outcomes.size() == rows.size() );
     std::vector<double> thresholds;
     thresholds.push_back( -1.0 );                                  // "always fire" (every score is >= 0)
     for( const RowOutcome& o : outcomes )
@@ -886,7 +886,7 @@ inline int runEvalSkills( const std::string& root, const IngestResult& ing, cons
                 continue;
             }
             const std::size_t p = std::size_t( rows[i].prov );
-            VERIFY( p < kProvCount );
+            ASSUME( p < kProvCount );
             ++provN[p];
             provHit[p] += outcomes[kDiagArm][i].hit1 ? 1 : 0;
         }

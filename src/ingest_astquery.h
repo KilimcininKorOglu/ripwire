@@ -452,7 +452,7 @@ GrammarQueries compileGrammarQueries( const TSLanguage* g, const std::vector<Ast
             {
                 ts_query_delete( comb );
             }
-            DEGRADED_PATH_ALERT( "astQuery: combined per-grammar query did not compile - falling back to one tree walk per spec" );
+            DISCLOSE( "astQuery: combined per-grammar query did not compile - falling back to one tree walk per spec" );
         }
     }
     return gqs;
@@ -1273,7 +1273,7 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
         for( AstMatch& m : merged )
         {
             const auto slotIt = tagSlot.find( m.tag );
-            VERIFY( slotIt != tagSlot.end() );                              // every emitted tag came from a spec
+            ASSUME( slotIt != tagSlot.end() );                              // every emitted tag came from a spec
             std::size_t& keptCount = keptPerTag[ slotIt->second ];
             if( keptCount >= groups[groupIndex].maxMatches )
             {
@@ -1647,9 +1647,9 @@ inline bool spanTierMemoLoad( const std::string& diskPath, const StatInfo& now, 
     // here intact. A value at or past kSpanTierCount is not a tier, and search.h's grepApplySpanTiers counts hits
     // into a per-tier array indexed by it — before this check, an out-of-bounds write on the stack.
     const bool tiersInRange = std::all_of( loaded.tier.begin(), loaded.tier.end(), []( const std::uint8_t tier ) noexcept { return tier < kSpanTierCount; } );
-    if( !tiersInRange )   // VALIDATE-SITE: becomes `if( !VALIDATE( tiersInRange ) )` when the macro vocabulary lands
+    if( !VALIDATE( tiersInRange ) )
     {
-        DEGRADED_PATH_ALERT( "grep: span-tier memo carries a tier byte past SpanTier — memo refused, the file is re-parsed" );
+        DISCLOSE( "grep: span-tier memo carries a tier byte past SpanTier — memo refused, the file is re-parsed" );
         return false;
     }
     loaded.isParsed = true;
@@ -1796,7 +1796,7 @@ SpanTierBatch spanTiersOfFiles( std::span<const std::string> diskPaths, bool use
         ParserGuard pg;
         if( pg.p == nullptr )
         {
-            DEGRADED_PATH_ALERT( "span tiers: no tree-sitter parser — hits stay unclassified (never suppressed)" );
+            DISCLOSE( "span tiers: no tree-sitter parser — hits stay unclassified (never suppressed)" );
             return;
         }
         std::string bytes;
@@ -1857,7 +1857,7 @@ SpanTierBatch spanTiersOfFiles( std::span<const std::string> diskPaths, bool use
         }
         catch( ... )   // a throw escaping a worker thread is std::terminate — degrade to unclassified instead
         {
-            DEGRADED_PATH_ALERT( "span tiers: parse worker degraded (exception swallowed) — files left unclassified" );
+            DISCLOSE( "span tiers: parse worker degraded (exception swallowed) — files left unclassified" );
         }
     };
     if( threadCount <= 1 )

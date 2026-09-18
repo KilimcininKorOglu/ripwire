@@ -2,7 +2,7 @@
 # buildtypestampcheck.sh — gate for the build-type token `--version` prints, under EVERY CMake generator.
 #
 # `ripwire --version` says `(dev, …)` / `(Release, …)`, and several gates decide "can this binary print a
-# DEGRADED_PATH_ALERT?" from that token (test/pargates.py build_type_of/NDEBUG_BUILD_TYPES, kotlincheck §12,
+# DISCLOSE?" from that token (test/pargates.py build_type_of/NDEBUG_BUILD_TYPES, kotlincheck §12,
 # estchargecheck, localscountcheck, qualitystalecheck, churnjoincheck, preproccondcheck, w3fixlegendcheck).
 # The token came from CMAKE_BUILD_TYPE alone. A MULTI-CONFIG generator (Ninja Multi-Config, Xcode) leaves that
 # empty, so `cmake --build b --config Release` — NDEBUG defined, every alert compiled out — printed `dev`

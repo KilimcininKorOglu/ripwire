@@ -24,7 +24,7 @@
 // Findings sorted by (line, rule) for determinism, then deduped on (line, rule) — the per-line and
 // joined-body passes can both find the same phrase (byte-identical output across runs).
 //
-// Style: Allman braces; spaces inside parens; VERIFY/DEGRADED_PATH_ALERT; ~160–200 col wrap.
+// Style: Allman braces; spaces inside parens; ASSUME/DISCLOSE; ~160–200 col wrap.
 
 #include <algorithm>
 #include <cctype>
@@ -957,7 +957,7 @@ inline std::vector<SkillFinding> scanSkillText( std::string_view text )
         catch( ... )
         {
             findings = std::vector<SkillFinding>( 1, SkillFinding{ SkillSeverity::Critical, 0, detail::kScanIncompleteRuleAborted, "the scan stopped before it finished" } );
-            DEGRADED_PATH_ALERT( "skillscan: the scan threw before it finished — reported as a CRITICAL scan-aborted finding" );
+            DISCLOSE( "skillscan: the scan threw before it finished — reported as a CRITICAL scan-aborted finding" );
         }
     };
     runOnStackThreads( 1, kSkillScanStackBytes, scan );
@@ -980,7 +980,7 @@ struct SkillFileReadResult
     std::vector<SkillFinding>   findings;            // valid only when readable == true
 };
 
-// NO DEGRADED_PATH_ALERT on the unreadable paths here, deliberately, and it is not an omission (M7/F20,
+// NO DISCLOSE on the unreadable paths here, deliberately, and it is not an omission (M7/F20,
 // capture-audit 2026-09-04). That log line means "this run CONTINUED in a reduced mode"; every caller of
 // THIS function refuses or scores the file CRITICAL by name instead, so the alert would stamp a
 // deduplicated, pathless degrade notice beside a disclosure that already says which file and why.

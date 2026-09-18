@@ -31,19 +31,19 @@ inline void publishDocBridgeBlob( const std::string& bridgeBlobPath, std::uint32
         {
             ::close( rawFd );
         }
-        DEGRADED_PATH_ALERT( "ingest: doc bridge cache could not create its temp file — the text is kept, the cache is not written" );
+        DISCLOSE( "ingest: doc bridge cache could not create its temp file — the text is kept, the cache is not written" );
         return;
     }
     const bool wroteAll = std::fwrite( text.data(), 1, text.size(), fp ) == text.size();
     const bool closed   = std::fclose( fp ) == 0;
     if( !wroteAll || !closed )
     {
-        DEGRADED_PATH_ALERT( "ingest: doc bridge cache write failed — the text is kept, the cache is not written" );
+        DISCLOSE( "ingest: doc bridge cache write failed — the text is kept, the cache is not written" );
         return;
     }
     if( !temp.commit( bridgeBlobPath ) )
     {
-        DEGRADED_PATH_ALERT( "ingest: doc bridge cache rename failed — the text is kept, the cache is not written" );
+        DISCLOSE( "ingest: doc bridge cache rename failed — the text is kept, the cache is not written" );
     }
 }
 
@@ -168,7 +168,7 @@ inline void runDocPostPass( IngestResult& result, std::vector<RawDef>& rawDefs, 
                     }
                     catch( ... )
                     {
-                        DEGRADED_PATH_ALERT( "ingest: doc post-pass worker exception on a file — skipped" );
+                        DISCLOSE( "ingest: doc post-pass worker exception on a file — skipped" );
                     }
                 }
             } );

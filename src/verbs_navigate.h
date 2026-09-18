@@ -599,7 +599,7 @@ std::optional<int> runUses( const MainDispatch& d )
         // un-narrowed defs_of_name= is the one that can license the claim; pre-fix a non-defining qualifier
         // printed external="1" beside defs_of_name="3", which says the opposite in the same element.
         const bool external = defs.empty() && sel.defsOfName == 0;
-        VERIFY( !( external && sel.defsOfName > 0 ) );
+        ASSUME( !( external && sel.defsOfName > 0 ) );
 
         // §A6b(i): the call sites that resolve to the CHOSEN defs (empty ⇒ nothing narrows, every role stays
         // name-matched, and the un-qualified output is byte-identical).
@@ -1132,7 +1132,7 @@ inline std::optional<int> sliceSincePrepare( const MainDispatch& d, std::string_
                                              const ::TSLanguage* grammar, const rw::slicev::SliceScan& scan, const std::string& src,
                                              std::string& legendOut, std::string& bodyOut, rw::slicev::SliceEmitOpts& emit )
 {
-    VERIFY_NO_ALIAS( legendOut, bodyOut );
+    ASSUME_NO_ALIAS( legendOut, bodyOut );
     const rw::Config& cfg = d.cfg;
     if( cfg.since.empty() )
     {
@@ -1285,7 +1285,7 @@ std::optional<int> runSlice( const MainDispatch& d )
     }
     else
     {
-        DEGRADED_PATH_ALERT( "slice: definition file unreadable" );
+        DISCLOSE( "slice: definition file unreadable" );
         rw::emitTo( stderr, "ripwire: --slice: cannot read {} — the slice re-parses the definition's file and has nothing to walk\n", path.c_str() );
         return 1;
     }
@@ -1300,7 +1300,7 @@ std::optional<int> runSlice( const MainDispatch& d )
     }
     if( !scan.parseOk )
     {
-        DEGRADED_PATH_ALERT( "slice: definition re-parse failed" );
+        DISCLOSE( "slice: definition re-parse failed" );
         rw::emitTo( stderr, "ripwire: --slice: could not re-parse {} (grammar missing, or the indexed span no longer fits the "
                               "file — a stale index; re-run without --no-reindex or check --doctor)\n", path.c_str() );
         return 1;
@@ -1495,7 +1495,7 @@ std::optional<int> runVerify( const MainDispatch& d )
     // then the disclosure pair. `honesty` is exactly one of kGraphCountFloorAttrXml / " complete=\"1\"" / "".
     const auto openRoot = [ & ]( const char* verdict, const std::string& facts, const char* limit, const char* honesty, const char* pageTail )
     {
-        VERIFY( std::size_t( claim.shape ) < std::size( verify::kShapeTags ) );   // the parser is the only producer, every value in range
+        ASSUME( std::size_t( claim.shape ) < std::size( verify::kShapeTags ) );   // the parser is the only producer, every value in range
         // #66: vfFloor above can carry graph_unindexed=, and kVerifyLegend is one closed literal that cannot
         // splice a conditional clause — so the clause rides as its own adjacent comment, emitted exactly when
         // the attribute is (graphlegend.h graphUnindexedLegendComment), ahead of the root= block.
@@ -1718,7 +1718,7 @@ std::optional<int> runVerify( const MainDispatch& d )
     }
 
     // ── reaches( SYM , "FILE" | LAYER ) — does code there transitively CALL the target (impact-based) ─
-    VERIFY( claim.shape == verify::ClaimShape::Reaches );
+    ASSUME( claim.shape == verify::ClaimShape::Reaches );
     const std::vector<NodeId> targetDefs = resolveAllByNameQualified( ing, claim.arg1, &vfUnprovenDefs );   // H1: the residue, as --impact's
     if( targetDefs.empty() )
     {
@@ -2097,7 +2097,7 @@ std::optional<int> runConnect( const MainDispatch& d )
         // §B8.1: the parser now REFUSES a radius outside the band instead of letting the core clamp it
         // silently, so cli.h's domain ceiling and connectcfg's clamp band must be the same number. This is
         // the one seam where both headers are visible — the core keeps clamping (the MCP `connect` verb and
-        // any other caller still hand it an unvalidated radius; a core that VERIFYs on hostile input is a
+        // any other caller still hand it an unvalidated radius; a core that ASSUMEs on hostile input is a
         // crash, not a guard).
         static_assert( rw::kConnectRadiusMax == int( rw::connectcfg::kMaxRadius ),
                        "--connect-radius' refusal band drifted from the core's clamp band — the refusal would name a range the core does not honor" );

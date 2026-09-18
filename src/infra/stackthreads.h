@@ -24,7 +24,7 @@
 //
 #pragma once
 
-#include "Diagnostics.h"   // DEGRADED_PATH_ALERT
+#include "Diagnostics.h"   // DISCLOSE
 
 #include <pthread.h>
 
@@ -150,7 +150,7 @@ std::size_t runOnStackThreads( std::size_t threadCount, std::size_t stackBytes, 
     }
     if( startedCount == 0 )
     {
-        DEGRADED_PATH_ALERT( "stackthreads: no thread could be created with any stack of at least 8 MiB — the work runs on the caller's thread" );
+        DISCLOSE( "stackthreads: no thread could be created with any stack of at least 8 MiB — the work runs on the caller's thread" );
         work( kCallerStackBytesFloor );
     }
     return shared.settledBytes;

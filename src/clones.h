@@ -7,7 +7,7 @@
 // it, don't reimplement" (and "if you fix this, fix its twins"). Type-3 (gapped) clones are a later upgrade.
 
 #include "model.h"
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — graceful-degrade on the Type-3 pair-cap guard (never throw)
+#include "infra/Diagnostics.h"  // DISCLOSE — graceful-degrade on the Type-3 pair-cap guard (never throw)
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
 
 #include <algorithm>
@@ -823,7 +823,7 @@ inline std::vector<CloneGroup> findClonesType3( const IngestResult& ing, int min
                     continue;
                 }
                 pairSeen.emplace( pk, 1 );
-                if( comparedPairs >= kType3MaxPairs ) { DEGRADED_PATH_ALERT( "clones: Type-3 pair cap hit — first N compared (both-gate-surviving) near-misses kept, rest skipped" ); goto done; }
+                if( comparedPairs >= kType3MaxPairs ) { DISCLOSE( "clones: Type-3 pair cap hit — first N compared (both-gate-surviving) near-misses kept, rest skipped" ); goto done; }
                 ++st.distinctPairs;
 
 #ifndef CTX_TYPE3_SKETCH_OFF

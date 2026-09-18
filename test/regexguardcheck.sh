@@ -241,11 +241,11 @@ exhaustedByName(){               # exhaustedByName <label> <needle> <args…>   
 }
 if [ "$FAULTS" -eq 1 ]; then
     exhaustedByName "--graph-query file()" 'q\.cpp'    --graph-query='file(all,"q\.cpp")'
-    # The abandonment branch raises the same DEGRADED_PATH_ALERT its compile-refusal sibling does (CodeRabbit on #277):
+    # The abandonment branch raises the same DISCLOSE its compile-refusal sibling does (CodeRabbit on #277):
     # read from the run just above, on this fault-switch (non-NDEBUG) flavour, where the alert is compiled in.
     grep -qF 'query: file() regex match abandoned by the engine' "$TMP/b.err" \
-        && ok "(b1) --graph-query file(): the abandonment branch raises its DEGRADED_PATH_ALERT, like the refusal branch" \
-        || no "(b1) --graph-query file(): no DEGRADED_PATH_ALERT on the abandonment branch: $( head -c 200 "$TMP/b.err" )"
+        && ok "(b1) --graph-query file(): the abandonment branch raises its DISCLOSE, like the refusal branch" \
+        || no "(b1) --graph-query file(): no DISCLOSE on the abandonment branch: $( head -c 200 "$TMP/b.err" )"
     exhaustedByName "--arch path-rule"     'a+/'       --arch="$TMP/arch_ok.txt"
     exhaustedByName "--match #match?"      '^foo_'     "--match=$MATCH_OK"
     exhaustedByName "--lint-rules #match?" 'rx-ok'     --lint-rules="$TMP/rules_ok"

@@ -254,7 +254,7 @@ fi
 # Three facts, held in step, text-level on any host:
 #   * The leg's runner and Xcode are the exact pair its release was verified on, and ci.yml's macOS legs (the eight gate
 #     shards and the sanitizer leg) run that same pair — TESTED == SHIPPED. Xcode 26.6 (17F113, Apple clang 21.0.0) is
-#     there because VERIFY_NO_ALIAS's `__builtin_assume_separate_storage` reaches the loop vectorizer only from LLVM 18
+#     there because ASSUME_NO_ALIAS's `__builtin_assume_separate_storage` reaches the loop vectorizer only from LLVM 18
 #     (llvm/llvm-project#64666, fixed by #76770): Xcode 16.2's AppleClang 16, which built this leg through 0.6.1, is
 #     LLVM 17 and keeps every runtime overlap check (test/noaliascheck.sh arm 6, LOOP_NOT_CONSUMED). A text check cannot
 #     read a compiler version, so the pair is held exactly and moved deliberately, with noaliascheck's classification on

@@ -26,7 +26,7 @@
 #   RIPWIRE_BIN=build/ripwire      bash test/w3fixlegendcheck.sh
 #   RIPWIRE_BIN=build_base/ripwire bash test/w3fixlegendcheck.sh   # must FAIL (pre-fix binary)
 #
-# NOTE arm 6's alert half asserts that NO DEGRADED_PATH_ALERT fires, which -DNDEBUG makes true of every run. It
+# NOTE arm 6's alert half asserts that NO DISCLOSE fires, which -DNDEBUG makes true of every run. It
 # asserts only where --version names a non-NDEBUG build type, beside a positive control proving this binary prints
 # alerts at all, and says so loudly when it skips, so a Release build cannot make it pass for the wrong reason.
 
@@ -470,12 +470,12 @@ fi
 SINCE_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
 case "$SINCE_FLAVOUR" in
     Release|RelWithDebInfo|MinSizeRel)
-        skip "this $SINCE_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out and 'the --since refusal raises no alert' is true of every run; the plain-flavour leg proves it" ;;
+        skip "this $SINCE_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out and 'the --since refusal raises no alert' is true of every run; the plain-flavour leg proves it" ;;
     *)
         printf 'not a scip index at all\n' > "$TMP/probe.scip"
         "$BIN" "$ROOT/test/fixture" --scip="$TMP/probe.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/probe.err"
         if ! grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/probe.err"; then
-            no "positive control: '${SINCE_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DEGRADED_PATH_ALERT — this binary prints no alerts, so an absent one proves nothing: $( head -c 200 "$TMP/probe.err" )"
+            no "positive control: '${SINCE_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DISCLOSE — this binary prints no alerts, so an absent one proves nothing: $( head -c 200 "$TMP/probe.err" )"
         elif grep -qF '[math degraded]' "$TMP/since.err"; then
             no "the --since refusal still raises a degrade alert on its way to refusing: $( grep -F '[math degraded]' "$TMP/since.err" | head -1 )"
         else
@@ -586,7 +586,7 @@ esac
 
 # ══ 10. limit="0" — defined in band, and refused as INPUT ══════════════════════════════════════════════════
 echo "── 10. limit=\"0\" sentinel"
-for V in "--grep=DEGRADED_PATH_ALERT" "--impact=rankGraphTeleport" "--tree"; do
+for V in "--grep=DISCLOSE" "--impact=rankGraphTeleport" "--tree"; do
     OUT="$( "$BIN" "$ROOT" $V --offset=5 2>/dev/null )"
     ROOTEL="$( printf '%s' "$OUT" | grep -oE '<(grep|impact|tree) [^>]*>' | head -1 )"
     case "$ROOTEL" in
@@ -600,7 +600,7 @@ case "$( refuse "--grep=x" "--limit=0" )" in
     *) no "--limit=0 was accepted — the output sentinel is then ambiguous";;
 esac
 # in-band definition on the two adopting verbs.
-for V in "--grep=DEGRADED_PATH_ALERT" "--impact=rankGraphTeleport"; do
+for V in "--grep=DISCLOSE" "--impact=rankGraphTeleport"; do
     "$BIN" "$ROOT" $V >"$TMP/inband" 2>/dev/null;  L="$( firstComment "$TMP/inband" )"
     case "$L" in
         *'limit="0" means no explicit limit'*) ok "${V%%=*}: the legend DEFINES limit=\"0\" on the first screen";;
@@ -637,7 +637,7 @@ esac
 echo "── G4"
 if command -v xmllint >/dev/null 2>&1; then
     g4=0
-    for V in "--doc-drift" "--tree" "--tree --limit=2" "--grep=DEGRADED_PATH_ALERT" "--impact=rankGraphTeleport" \
+    for V in "--doc-drift" "--tree" "--tree --limit=2" "--grep=DISCLOSE" "--impact=rankGraphTeleport" \
              "--dead-code=./src" "--edit-check=rankGraphTeleport" "--external-surface"; do
         "$BIN" "$ROOT" $V 2>/dev/null | xmllint --noout - 2>/dev/null || { no "G4: $V is not well-formed XML"; g4=1; }
     done

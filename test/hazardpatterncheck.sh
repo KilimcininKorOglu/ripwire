@@ -15,7 +15,7 @@
 #       search.h's tier array, a shift by 255 in clones.h). The spelling that validates is ByteR::enumU8<E>( count ).
 #       Enum names are DERIVED from every enum_specifier under src/, not listed here.
 #   (B) EXCEPTIONS. (B1) every catch handler is read; one that records nothing — no assignment, no stored flag,
-#       no returned value, no emitted line — is a swallow, and one whose only statement is DEGRADED_PATH_ALERT is
+#       no returned value, no emitted line — is a swallow, and one whose only statement is DISCLOSE is
 #       a swallow in every Release binary (NDEBUG empties the macro). crashsweepcheck's S3 already requires every
 #       thread body to be noexcept or one try block; B reads the handlers themselves, wherever they are. Each must be registered with why the dropped
 #       work does not change an answer, or with the finding it is. (B2) every `throw` in src/: one with no `try`
@@ -594,7 +594,7 @@ inline std::uint16_t probeNarrowHelper( ProbeReader& r )
 inline void probeThrowBare( int x ) { if( x ) { throw x; } }
 inline int  probeThrowInTry( int x ) { try { if( x ) { throw x; } } catch( ... ) { return 1; } return 0; }
 inline void probeCatchSilent() { try { probeThrowBare( 1 ); } catch( ... ) { } }
-inline void probeCatchAlertOnly() { try { probeThrowBare( 1 ); } catch( ... ) { DEGRADED_PATH_ALERT( "probe" ); } }
+inline void probeCatchAlertOnly() { try { probeThrowBare( 1 ); } catch( ... ) { DISCLOSE( "probe" ); } }
 inline bool probeCatchRecords() { try { probeThrowBare( 1 ); } catch( ... ) { return false; } return true; }
 inline int  probeAtoi( const char* s ) { return std::atoi( s ); }
 inline int  probeAt( const std::vector<int>& v ) { return v.at( 3 ); }
@@ -638,7 +638,7 @@ else
     expect_probe D 'probeNarrowChecked'            0 "a checked reader (u16Of32) does not fire"
     expect_probe D 'probeNarrowHelper'             0 "a local passed through a bound helper (fitsBelow) on the cast's own line does not fire"
     expect_probe B1 'probeCatchSilent silent: 1'    1 "an empty catch fires as silent"
-    expect_probe B1 'probeCatchAlertOnly alert-only: 1' 1 "a catch whose only statement is DEGRADED_PATH_ALERT fires as alert-only"
+    expect_probe B1 'probeCatchAlertOnly alert-only: 1' 1 "a catch whose only statement is DISCLOSE fires as alert-only"
     expect_probe B1 'probeCatchRecords'             0 "a catch that returns a value does not fire"
     expect_probe B2 'probeThrowBare: 1'             1 "a throw with no try in its function fires"
     expect_probe B2 'probeThrowInTry'               0 "a throw inside a local try does not fire"

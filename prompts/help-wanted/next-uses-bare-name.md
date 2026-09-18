@@ -320,7 +320,7 @@ The design is yours to write in the plan. These are the edges it has to stay ins
 - **House rules** (`CLAUDE.md`, `CONTRIBUTING.md` §3): write the gate before the code; determinism is
   a contract; Allman braces and braces on every body; spaces inside parentheses; output through
   `rw::emitTo`; never `std::map` or `std::unordered_map`; a degrade path uses
-  `DEGRADED_PATH_ALERT`, never `VERIFY( false )`.
+  `DISCLOSE`, never `ASSUME( false )`.
 
 ---
 

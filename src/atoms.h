@@ -352,7 +352,7 @@ inline Exclusions collectExclusions( const IngestResult& ing, const std::vector<
     ex.innerCommaPartial  = innerCommaRaw  >= budget;
     if( ex.forHeaderPartial || ex.stmtCrementPartial || ex.stmtAssignPartial || ex.innerCommaPartial )
     {
-        DEGRADED_PATH_ALERT( "atoms: an exclusion capture stream spent its whole budget; the rules reading it are suppressed this run" );
+        DISCLOSE( "atoms: an exclusion capture stream spent its whole budget; the rules reading it are suppressed this run" );
     }
     return ex;
 }

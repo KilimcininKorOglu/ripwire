@@ -184,7 +184,7 @@ These do not change for this kit:
 - The gate comes before the code.
 - Determinism is a contract: two runs are byte-identical, and a warm run equals a cold one.
 - A zero means "none found".
-- Never `VERIFY( false )` on a degrade path.
+- Never `ASSUME( false )` on a degrade path.
 - Never use `std::map` or `std::unordered_map`.
 - Style follows `CONTRIBUTING.md` §3.
 

@@ -146,7 +146,7 @@ TABLE = {
     ( "src/infra/profileScope.h", "nameBuf" ):  ( 2, "not-markup", "nameBuf[160] x2 at :721/:723: '%s [%s]' over trim_pretty's fn[96] plus Site::description, a compile-time string literal from the PROFILE_SCOPE_DESCRIBE call site. Printed as a timing-table row, never emitted as a document." ),
     ( "src/infra/profileScope.h", "locBuf" ):   ( 1, "not-markup", "locBuf[64] at :724: '%s:%d' over Site::file (__FILE__, a compile-time literal) and Site::line. Same timing table; a truncated path costs a developer legibility, nothing else." ),
     ( "src/infra/profileScope.h", "indented" ): ( 1, "not-markup", "indented[208] at :759: '%*s%s%s' — a width-form pad (depth*2, and depth is capped at 64 by print_tree_node's own guard) over nameBuf[160] plus the literal ' *'. Same timing table." ),
-    # ── src/infra/diagnostics.cpp — the Diagnostics reporters (VERIFY / PANIC / VERIFY_SAME_THREAD / DEGRADED_PATH_ALERT) ──
+    # ── src/infra/diagnostics.cpp — the Diagnostics reporters (ASSUME / PANIC / ASSUME_SAME_THREAD / DISCLOSE) ──
     # Not markup: both buffers go to STDERR as a diagnostic notice and never into a document. They are TABLE rows, not
     # NUMERIC_ONLY, for the arch.h `hex` reason: they have no pre-conversion printf format to derive a class from (the
     # reporters wrote through std::cerr until 2026-09-16, when they began formatting first so a notice is ONE write).

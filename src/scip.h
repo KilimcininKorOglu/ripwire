@@ -24,14 +24,14 @@
 // 1-based, so we map scipStartLine + 1 ↔ symbol.line.
 //
 // Degrade, never throw (house style): a missing / unreadable / corrupt / truncated / mismatched-tree
-// index emits ONE DEGRADED_PATH_ALERT and returns an EMPTY overlay — the pipeline proceeds name-based,
+// index emits ONE DISCLOSE and returns an EMPTY overlay — the pipeline proceeds name-based,
 // byte-identical to a run with no --scip. The wire reader is bounds-checked on every read so a hostile
 // or truncated blob can never over-read (the fuzz gate flips/truncates bytes and asserts no crash).
 
 #include "model.h"
 #include "scipoverlay.h"        // ScipEdge / ScipCover / ScipOverlay — the data struct (also used by graph.h)
 #include "gitmine.h"            // resolveFileSuffix — map a SCIP relative_path to a ripwire fileId
-#include "infra/Diagnostics.h"   // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"   // DISCLOSE
 
 #include <algorithm>
 #include <cstdint>
@@ -741,7 +741,7 @@ inline ScipOverlay buildScipOverlay( const IngestResult& ing, const std::vector<
 // The ONE seam main.cpp calls, and only after main.cpp has REFUSED (exit 1) every path that cannot be read as an index at
 // all: one that cannot be opened, an empty regular file, and anything that is not a regular file (a directory, a FIFO, a
 // device) (scipIndexUnreadableReason, owner decision 2026-09-12). Only a path that was a regular, non-empty file at that
-// probe reaches this seam. It degrades with exactly one DEGRADED_PATH_ALERT and an empty overlay, and the pipeline proceeds
+// probe reaches this seam. It degrades with exactly one DISCLOSE and an empty overlay, and the pipeline proceeds
 // name-based, byte-identical to a no---scip run, when the read yields no bytes (an index over the 256 MiB bound, a short
 // read, a file emptied after main.cpp's probe, or a path replaced after it by something that is not a regular file, which
 // scipReadFile's own non-blocking open never reads) or the index is corrupt, truncated or built from a mismatched tree.
@@ -752,7 +752,7 @@ inline ScipOverlay loadScipOverlay( std::string_view path, const IngestResult& i
     const std::vector<std::uint8_t> bytes = scipReadFile( p.c_str() );
     if( bytes.empty() )
     {
-        DEGRADED_PATH_ALERT( "--scip: index missing or unreadable — proceeding name-based" );
+        DISCLOSE( "--scip: index missing or unreadable — proceeding name-based" );
         rw::emitTo( stderr, "ripwire --scip: cannot read index '{}' — proceeding name-based\n", p.c_str() );
         return {};
     }
@@ -760,7 +760,7 @@ inline ScipOverlay loadScipOverlay( std::string_view path, const IngestResult& i
     std::vector<ScipDocument> docs;
     if( !scipDecodeIndex( bytes.data(), bytes.size(), docs ) )
     {
-        DEGRADED_PATH_ALERT( "--scip: corrupt/truncated index — proceeding name-based" );
+        DISCLOSE( "--scip: corrupt/truncated index — proceeding name-based" );
         rw::emitTo( stderr, "ripwire --scip: corrupt or truncated index '{}' — proceeding name-based\n", p.c_str() );
         return {};
     }
@@ -778,7 +778,7 @@ inline ScipOverlay loadScipOverlay( std::string_view path, const IngestResult& i
     {
         // decoded fine, but nothing mapped AND no occurrence was even examined: the index describes a
         // DIFFERENT tree than the one ripwire parsed (wrong index / wrong root). Say so, proceed name-based.
-        DEGRADED_PATH_ALERT( "--scip: index covers no parsed file/line — proceeding name-based" );
+        DISCLOSE( "--scip: index covers no parsed file/line — proceeding name-based" );
         rw::emitTo( stderr, "ripwire --scip: index '{}' matched no parsed (file,line) — proceeding name-based\n", p.c_str() );
     }
     else if( sawOccurrences )

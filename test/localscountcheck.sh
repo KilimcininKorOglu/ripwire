@@ -33,7 +33,7 @@
 #                        simulate a pre-bump blob, and a second run on the SAME cache path is proven to
 #                        (a) name the rejected blob on stderr ("ripwire: cache <path>: parser-version —
 #                        not used", every flavour, never a silent misread), (a') raise the parserVer
-#                        DEGRADED_PATH_ALERT, and (b) produce byte-identical stdout to the from-scratch run
+#                        DISCLOSE, and (b) produce byte-identical stdout to the from-scratch run
 #                        — the version guard rejects the stale blob and self-heals to a correct cold reparse.
 #                        (a') is observable only on a non-NDEBUG build; on a Release binary it SKIPS with
 #                        the flavour named, and CI's plain leg proves it.
@@ -215,7 +215,7 @@ PYEOF
     grep -qF "ripwire: cache $CORRUPT: parser-version — not used" "$TMP/warmB.err" \
         && ok "stale-cache: stderr names the rejected blob and says it was not used (reason parser-version; every flavour)" \
         || no "stale-cache: no 'ripwire: cache <blob>: parser-version — not used' line for the corrupted blob, got stderr: $( cat "$TMP/warmB.err" )"
-    # (a') the DEGRADED_PATH_ALERT (ingest_cache.h, "ingest: cache blob parserVer mismatch"), which NDEBUG compiles
+    # (a') the DISCLOSE (ingest_cache.h, "ingest: cache blob parserVer mismatch"), which NDEBUG compiles
     # out — so on a Release binary this row asserts something the build cannot express, and CI's two Release legs
     # were once unconditionally red on it. Decide what a missing alert MEANS with two independent readings:
     #   unrelated alert fires, this one does not  → the seam really regressed          → FAIL
@@ -237,11 +237,11 @@ PYEOF
         *)                                 ndebug_flavour=0 ;;
     esac
     if grep -qF '[math degraded] ingest: cache blob parserVer mismatch' "$TMP/warmB.err"; then
-        ok "stale-cache: the parserVer DEGRADED_PATH_ALERT fired for the corrupted blob"
+        ok "stale-cache: the parserVer DISCLOSE fired for the corrupted blob"
     elif [ "$alerts_observable" = "0" ] && [ "$ndebug_flavour" = "1" ]; then
-        printf '  SKIP  %s\n' "stale-cache: DEGRADED_PATH_ALERT is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). The PLAIN-flavour leg of the same CI suite is where this arm is proven."
+        printf '  SKIP  %s\n' "stale-cache: DISCLOSE is compiled out of this binary (--version says build type \"$BUILD_FLAVOUR\", which defines NDEBUG; the unrelated --scip decode degrade path is silent here too, so alerts are unobservable globally rather than this seam having broken). The PLAIN-flavour leg of the same CI suite is where this arm is proven."
     else
-        no "stale-cache: no parserVer DEGRADED_PATH_ALERT for the corrupted blob — build type \"$BUILD_FLAVOUR\" (unrelated --scip decode alert observable=$alerts_observable), got stderr: $( cat "$TMP/warmB.err" )"
+        no "stale-cache: no parserVer DISCLOSE for the corrupted blob — build type \"$BUILD_FLAVOUR\" (unrelated --scip decode alert observable=$alerts_observable), got stderr: $( cat "$TMP/warmB.err" )"
     fi
 fi
 

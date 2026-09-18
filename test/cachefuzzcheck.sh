@@ -455,7 +455,7 @@ SYMDANGLE="$TMP/symlink_dangling.cache"
 ln -sf "$TMP/does_not_exist_$$" "$SYMDANGLE"
 run_one_dev "symlink_dangling" "$SYMDANGLE"
 
-# ── disclosure (2026-09-06 stranger audit): a Release binary keeps NO DEGRADED_PATH_ALERT, so every reject
+# ── disclosure (2026-09-06 stranger audit): a Release binary keeps NO DISCLOSE, so every reject
 #    above used to be byte-identical to a healthy run — a torn blob, an older binary's blob, a full disk: all
 #    silent, every run. The map stays byte-identical (arms above); stderr now says what happened, once. The
 #    ordinary cold-start miss stays silent, and a good cache says nothing (the controls). ──

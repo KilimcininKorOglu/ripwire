@@ -14,7 +14,7 @@
 // override instead of the raw bytes, so a notebook is indexed + recalled by its prose, not its JSON.
 // Determinism: every parser is a pure function of the file bytes; the post-pass runs each cold OR warm.
 //
-// Style: Allman braces; spaces inside parens; VERIFY/DEGRADED_PATH_ALERT; ~160–200 col wrap.
+// Style: Allman braces; spaces inside parens; ASSUME/DISCLOSE; ~160–200 col wrap.
 
 #include "infra/Diagnostics.h"
 #include "infra/jsonesc.h"   // A4-F27 residual: rw::shSingleQuote — canonical shell single-quote, forwarded
@@ -278,7 +278,7 @@ inline rw::pathguard::NoFollowRead openRegularFileStream( std::string_view what,
             rw::emitTo( stderr, "ripwire: ignoring {} at '{}': it is not a regular file (a FIFO, a directory or a device), "
                                 "so it was not read and counts as absent\n", what, path );
         }
-        DEGRADED_PATH_ALERT( "docparse: a fixed-name file in the tree is not a regular file — refused before reading" );
+        DISCLOSE( "docparse: a fixed-name file in the tree is not a regular file — refused before reading" );
         return rw::pathguard::NoFollowRead{};   // `stream` closes as it leaves scope; the caller gets no stream
     }
     return stream;
@@ -626,7 +626,7 @@ inline std::string runMarkitdown( const std::string& path )
     std::FILE* pipe = ::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
-        DEGRADED_PATH_ALERT( "docparse: popen failed for markitdown bridge" );
+        DISCLOSE( "docparse: popen failed for markitdown bridge" );
         return {};
     }
     std::string         out;
@@ -660,7 +660,7 @@ inline std::string parseDocFile( const std::string& path, std::string_view extLo
             const std::optional<std::string> bytes = detail::readWholeFile( path );
             if( !bytes )
             {
-                DEGRADED_PATH_ALERT( "docparse: cannot read document file" );
+                DISCLOSE( "docparse: cannot read document file" );
                 rw::emitTo( stderr, "ripwire: doc {}: cannot read — omitted from the index (the skipped verb counts it as unmeasured)\n", path.c_str() );   // 2026-09-06
                 return {};
             }
