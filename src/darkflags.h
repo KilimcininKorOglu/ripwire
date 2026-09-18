@@ -37,7 +37,7 @@
 #include "docparse.h"           // lowerExtOf / isDocExtension — which files are PROSE, not code
 #include "pageview.h"           // §P8: pageWindow / effectiveRowCap / secondaryCutAttrs — the ONE paging contract
 #include "nextverb.h"           // P3: nextAttrXml — the ONE pasteable follow-up a cut root carries
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -784,7 +784,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
     CMakeScan       out;
     std::error_code ec;
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( ec ) { DEGRADED_PATH_ALERT( "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
+    if( ec ) { DISCLOSE( "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );
 
     const fs::recursive_directory_iterator end;
@@ -825,7 +825,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
             if( isLink && !rw::crawlPathStaysInRoot( p, rootReal ) )
             {
                 ++out.escaped;
-                DEGRADED_PATH_ALERT( "flags: a CMake file's symlink target leaves the root — file refused" );
+                DISCLOSE( "flags: a CMake file's symlink target leaves the root — file refused" );
                 continue;
             }
             out.files.push_back( p );

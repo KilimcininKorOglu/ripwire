@@ -104,7 +104,12 @@ std::string expectedDegraded( const char* description )
 
 std::string expectedAssert( const char* description )
 {
-    return banner( "!!! DEBUG ASSERT FAILED !!!", std::format( "  Expr:     {}\n", kExpr ) + locationRows() + notesRow( description ) );
+    // Assume is the kind every "assert"-named case below actually raises; the banner and blame text are the row
+    // Diagnostics::CheckKind::Assume owns in diagnostics.cpp's kKindBanner/kKindBlame tables.
+    return banner( "!!! ASSUME FAILED !!!",
+                   std::format( "  Expr:     {}\n"
+                                "  Blame:    an invariant this function relies on is false here\n", kExpr ) +
+                       locationRows() + notesRow( description ) );
 }
 
 std::string expectedPanic()
@@ -114,9 +119,9 @@ std::string expectedPanic()
 
 std::string expectedThread( const char* description )
 {
-    const std::string owner = std::format( "  This call site is single-thread only but was reached from a 2nd thread.\n"
+    const std::string owner = std::format( "  This site or object is single-thread owned but was reached from another thread.\n"
                                            "  Owner thread: {}   Offending thread: {}\n", kOwnerThread, kOffendingThread );
-    return banner( "!!! THREAD-AFFINITY VIOLATION !!!", owner + locationRows() + notesRow( description ) );
+    return banner( "!!! THREAD-OWNERSHIP VIOLATION !!!", owner + locationRows() + notesRow( description ) );
 }
 
 // ── printable form of captured bytes, for a mismatch report ─────────────────────────────────────────────
@@ -385,16 +390,16 @@ int runWrites( const char* dumpDir )
     }
     const ExactCase cases[] = {
         { "degraded", expectedDegraded( kNotes ), [] { CL::handleDegraded( kFile, kLine, kFunction, kNotes ); } },
-        { "assert", expectedAssert( kNotes ), [] { CL::handleAssert( kExpr, kFile, kLine, kFunction, kNotes ); } },
-        { "assert-nonotes", expectedAssert( "" ), [] { CL::handleAssert( kExpr, kFile, kLine, kFunction, "" ); } },
-        { "assert-nullnotes", expectedAssert( nullptr ), [] { CL::handleAssert( kExpr, kFile, kLine, kFunction, nullptr ); } },
+        { "assert", expectedAssert( kNotes ), [] { CL::handleAssert( Diagnostics::CheckKind::Assume, kExpr, kFile, kLine, kFunction, kNotes ); } },
+        { "assert-nonotes", expectedAssert( "" ), [] { CL::handleAssert( Diagnostics::CheckKind::Assume, kExpr, kFile, kLine, kFunction, "" ); } },
+        { "assert-nullnotes", expectedAssert( nullptr ), [] { CL::handleAssert( Diagnostics::CheckKind::Assume, kExpr, kFile, kLine, kFunction, nullptr ); } },
         { "panic", expectedPanic(), [] { CL::handlePanic( kFile, kLine, kFunction, kNotes ); } },
         { "thread", expectedThread( kNotes ), [] { CL::handleThreadViolation( kOwnerThread, kOffendingThread, kFile, kLine, kFunction, kNotes ); } },
         { "thread-nonotes", expectedThread( "" ), [] { CL::handleThreadViolation( kOwnerThread, kOffendingThread, kFile, kLine, kFunction, "" ); } },
         { "stdout-degraded", std::string( kStdoutText ) + expectedDegraded( kNotes ),
           [] { bufferStdoutIntoCapture(); CL::handleDegraded( kFile, kLine, kFunction, kNotes ); } },
         { "stdout-assert", std::string( kStdoutText ) + expectedAssert( kNotes ),
-          [] { bufferStdoutIntoCapture(); CL::handleAssert( kExpr, kFile, kLine, kFunction, kNotes ); } },
+          [] { bufferStdoutIntoCapture(); CL::handleAssert( Diagnostics::CheckKind::Assume, kExpr, kFile, kLine, kFunction, kNotes ); } },
         { "stdout-panic", std::string( kStdoutText ) + expectedPanic(), [] { bufferStdoutIntoCapture(); CL::handlePanic( kFile, kLine, kFunction, kNotes ); } },
     };
     bool isMeasured = true;

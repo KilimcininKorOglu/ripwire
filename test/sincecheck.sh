@@ -94,7 +94,7 @@ rm -f "$baderr"
 
 # ── M8: all FOUR --since hosts refuse an unresolvable value, with ONE message ────────────────────────────
 # The ONE-message rows assert that NO "[math degraded]" line rides along with the refusal. Until 2026-09-16 that was
-# a bare absence, and an absence is true of every run on a Release binary (NDEBUG compiles DEGRADED_PATH_ALERT out)
+# a bare absence, and an absence is true of every run on a Release binary (NDEBUG compiles DISCLOSE out)
 # and of every run on a build whose alerts broke — measured: a dev-labelled binary with every alert line stripped
 # from stderr passed all four rows. So the alert half decides from --version's build type (kotlincheck §12) and, on
 # a flavour that compiles alerts IN, first proves this binary really prints one: a --scip index that OPENS and fails
@@ -103,7 +103,7 @@ M8_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p
 m8_alerts_live=0
 case "$M8_FLAVOUR" in
   Release|RelWithDebInfo|MinSizeRel)
-    echo "  SKIP  M8 alert half (no [math degraded] line beside the refusal): this $M8_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out and the absence is true of every run; the 'ignoring it' half still asserts below, and the plain-flavour leg proves the alert half" ;;
+    echo "  SKIP  M8 alert half (no [math degraded] line beside the refusal): this $M8_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out and the absence is true of every run; the 'ignoring it' half still asserts below, and the plain-flavour leg proves the alert half" ;;
   *)
     printf 'not a scip index at all\n' > "$PROBEDIR/probe.scip"
     "$BIN" "$REPO" --scip="$PROBEDIR/probe.scip" --top-k=1 --no-cache >/dev/null 2>"$PROBEDIR/probe.err"
@@ -111,7 +111,7 @@ case "$M8_FLAVOUR" in
       m8_alerts_live=1
       ok "M8 positive control: this '${M8_FLAVOUR:-unknown}' (non-NDEBUG) build prints alerts — an undecodable --scip index raised one, so an absent alert below is evidence"
     else
-      no "M8 positive control: '${M8_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DEGRADED_PATH_ALERT — this binary prints no alerts, so the four no-alert rows were NOT evaluated: $(head -c 200 "$PROBEDIR/probe.err")"
+      no "M8 positive control: '${M8_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DISCLOSE — this binary prints no alerts, so the four no-alert rows were NOT evaluated: $(head -c 200 "$PROBEDIR/probe.err")"
     fi ;;
 esac
 for host in "--hotspots" "--rank-by=churn" "--cochange" "--slice=a"; do

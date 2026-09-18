@@ -225,7 +225,7 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    dict INDICES + narrowest-exact-width tfs instead of raw
                                                       //    u64 hash + u32 tf pairs (the v9 shape grew the rich
                                                       //    blob +38-56% and dragged index/warm p95). Lossless by
-                                                      //    construction (widths from maxima, VERIFY'd) — a FORMAT
+                                                      //    construction (widths from maxima, ASSUME'd) — a FORMAT
                                                       //    change → reject v9 blobs (v9 never shipped; local v9
                                                       //    blobs self-heal via the same full-reparse path).
                                                       // 9 (B0.2 postings): each RICH-family def record gains the
@@ -1354,7 +1354,7 @@ inline std::uint64_t blobChecksum( std::string_view s ) noexcept
 //   A torn write is caught three ways, in this order: (a) the file is shorter than header+trailer;
 // (b) the EXACT-FIT invariant `fileSize == tableOffset + entryCount*32 + 24` fails, which is what
 // catches a truncation that removes whole records or lands mid-table; (c) `tableSum` mismatches. Any
-// of the three rejects the WHOLE blob with a DEGRADED_PATH_ALERT and self-heals to a full reparse —
+// of the three rejects the WHOLE blob with a DISCLOSE and self-heals to a full reparse —
 // never a partial load. A record that is individually torn while the table survives is caught by its
 // own `recSum`: that one file is dropped (disclosed) and reparsed, and the rest of the blob stands.
 // saveCache still publishes by tmp-then-rename with the write byte-count and fclose both checked, so
@@ -1411,7 +1411,7 @@ struct ReadFd
     // (--quality-delta's duplication kind says so). One owner, one transfer direction, no reopen.
     bool openOnce( const std::string& path ) noexcept
     {
-        VERIFY( fd < 0 );
+        ASSUME( fd < 0 );
         fd = ::open( path.c_str(), O_RDONLY | O_CLOEXEC );
         return fd >= 0;
     }
@@ -1550,19 +1550,19 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
             // shipped binary reads this. Same for the two guards below, split from one fused test because
             // "your binary's extraction changed" and "this artifact came from another architecture" are
             // different things to be told about a committed artifact.
-            DEGRADED_PATH_ALERT( "ingest: cache blob is a different format version — rejected and rebuilt (full reparse)" );
+            DISCLOSE( "ingest: cache blob is a different format version — rejected and rebuilt (full reparse)" );
             frame.reason = CacheReject::FormatVersion;
             return frame;
         }
         if( parserVer != parserVerFor( captureValueUses ) )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache blob parserVer mismatch (older binary, or the other lean/rich family) — rejected and rebuilt (full reparse)" );
+            DISCLOSE( "ingest: cache blob parserVer mismatch (older binary, or the other lean/rich family) — rejected and rebuilt (full reparse)" );
             frame.reason = CacheReject::ParserVersion;
             return frame;
         }
         if( arch != kArtifactArch )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache blob arch mismatch (foreign endianness/pointer width) — rejected and rebuilt (full reparse)" );
+            DISCLOSE( "ingest: cache blob arch mismatch (foreign endianness/pointer width) — rejected and rebuilt (full reparse)" );
             frame.reason = CacheReject::ArtifactArch;
             return frame;
         }
@@ -1593,7 +1593,7 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
         || entryCount > ( fileBytes - kCacheHeaderBytes - kCacheTrailerBytes ) / kCacheEntryBytes
         || tableOffset != fileBytes - kCacheTrailerBytes - std::uint64_t( entryCount ) * kCacheEntryBytes )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache blob trailer does not describe the file (torn write) — cache treated as corrupt" );
+        DISCLOSE( "ingest: cache blob trailer does not describe the file (torn write) — cache treated as corrupt" );
         frame.reason = CacheReject::CorruptFrame;
         return frame;
     }
@@ -1610,7 +1610,7 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
     }
     if( blobChecksum( std::string_view( hdrTable.data(), hdrTable.size() ) ) != tableSum )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache offset-table checksum mismatch — cache treated as corrupt (full reparse)" );
+        DISCLOSE( "ingest: cache offset-table checksum mismatch — cache treated as corrupt (full reparse)" );
         frame.reason = CacheReject::Checksum;
         return frame;
     }
@@ -1631,7 +1631,7 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
             || e.recLength > tableOffset || e.recOffset > tableOffset - e.recLength   // recOffset + recLength > tableOffset, without the wrap
             || ( i != 0 && frame.entries[ i - 1 ].pathHash > e.pathHash ) )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache offset-table entry out of bounds or out of order — cache treated as corrupt" );
+            DISCLOSE( "ingest: cache offset-table entry out of bounds or out of order — cache treated as corrupt" );
             frame.entries.clear();
             frame.reason = CacheReject::CorruptFrame;
             return frame;
@@ -1723,9 +1723,9 @@ struct ByteR
     // warm path; never an assumption, because nothing upstream makes it true.
     bool fitsBelow( std::uint64_t v, std::uint64_t count )
     {
-        if( v >= count )   // VALIDATE-SITE: becomes `if( !VALIDATE( v < count ) )` when the macro vocabulary lands
+        if( !VALIDATE( v < count ) )
         {
-            DEGRADED_PATH_ALERT( "ingest: cache record carries a field past its range (an enum byte past its last enumerator, or a 16-bit field wider than 16 bits) — cache treated as corrupt" );
+            DISCLOSE( "ingest: cache record carries a field past its range (an enum byte past its last enumerator, or a 16-bit field wider than 16 bits) — cache treated as corrupt" );
             ok = false;
             return false;
         }
@@ -1771,7 +1771,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
     for( const std::uint8_t tagCount : d.evWhy ) { w.u8( tagCount ); }   // 8×u8, fixed order (model.h kEvWhyTagTable)
     if( withLex )
     {
-        VERIFY( d.lex.tokenHashes.size() == d.lex.tokenTfs.size() );
+        ASSUME( d.lex.tokenHashes.size() == d.lex.tokenTfs.size() );
         w.u32( d.lex.dlWeighted );
         w.u32( std::uint32_t( d.lex.tokenHashes.size() ) );
         std::uint32_t maxTf = 0;
@@ -1790,7 +1790,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         // specialized fill loops per width — no per-byte push_back on this multi-million-pair seam.
         const std::size_t count = d.lex.tokenTfs.size();
         char*             p     = w.extend( count * ( idxWidth + tfWidth ) );
-        VERIFY( count == 0 || rowDictIndex != nullptr );   // null only with an empty row: verifyCacheRecordMinimaTripwire's probe
+        ASSUME( count == 0 || rowDictIndex != nullptr );   // null only with an empty row: verifyCacheRecordMinimaTripwire's probe
         if( idxWidth == 1 )
         {
             for( std::size_t k = 0; k < count; ++k )
@@ -1881,22 +1881,22 @@ inline std::size_t minDefRecordBytes( bool captureValueUses ) noexcept
 }
 
 // runtime tripwire: serialize a DEFAULT-CONSTRUCTED (all-empty) RawDef/RawRef through the real
-// writer functions and VERIFY the byte count matches the hand-pinned constants above. This is the runtime
+// writer functions and ASSUME the byte count matches the hand-pinned constants above. This is the runtime
 // equivalent of the house `static_assert( sizeof(X) == N )` layout tripwire — ByteW's size is only known at
-// runtime (strings, not a POD struct), so it can't be a compile-time static_assert. VERIFY is a no-op
+// runtime (strings, not a POD struct), so it can't be a compile-time static_assert. ASSUME is a no-op
 // optimizer hint in release (never costs a shipped run anything); in any debug/ASan build or CI it fires the
 // moment a field is added to writeDef/writeRef without updating the matching constant above.
 inline void verifyCacheRecordMinimaTripwire() noexcept
 {
     ByteW probe;
     writeDef( probe, RawDef{}, false, 0, nullptr );
-    VERIFY( probe.b.size() == kMinDefRecordBytesLean );
+    ASSUME( probe.b.size() == kMinDefRecordBytesLean );
     probe.b.clear();
     writeDef( probe, RawDef{}, true, 0, nullptr );
-    VERIFY( probe.b.size() == kMinDefRecordBytesLean + kMinDefRecordBytesRichExtra );
+    ASSUME( probe.b.size() == kMinDefRecordBytesLean + kMinDefRecordBytesRichExtra );
     probe.b.clear();
     writeRef( probe, RawRef{} );
-    VERIFY( probe.b.size() == kMinRefRecordBytes );
+    ASSUME( probe.b.size() == kMinRefRecordBytes );
 }
 
 inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>& fileDict )
@@ -2044,7 +2044,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
         {
             return true;
         }
-        DEGRADED_PATH_ALERT( "ingest: cache record count exceeds remaining bytes — cache treated as corrupt" );
+        DISCLOSE( "ingest: cache record count exceeds remaining bytes — cache treated as corrupt" );
         r.ok = false;
         return false;
     };
@@ -2081,7 +2081,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
         {
             if( fileDict[k] <= fileDict[ k - 1 ] )
             {
-                DEGRADED_PATH_ALERT( "ingest: cache file dictionary not strictly ascending — cache treated as corrupt" );
+                DISCLOSE( "ingest: cache file dictionary not strictly ascending — cache treated as corrupt" );
                 r.ok = false;
                 return false;
             }
@@ -2291,7 +2291,7 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
             fileBuf.resize( std::size_t( spanEnd - spanStart ) );
             if( !preadExact( frame.blob.fd, fileBuf.data(), fileBuf.size(), spanStart ) )
             {
-                DEGRADED_PATH_ALERT( "ingest: cache blob read failed mid-load — the unread records are reparsed" );
+                DISCLOSE( "ingest: cache blob read failed mid-load — the unread records are reparsed" );
                 break;
             }
 
@@ -2303,7 +2303,7 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
                 {
                     // A record torn on its own while the table survived: drop THIS file (it reparses) and
                     // keep the rest of the blob. The table is what must be trusted whole, not each record.
-                    DEGRADED_PATH_ALERT( "ingest: cache record checksum mismatch — that file is reparsed, the rest of the blob stands" );
+                    DISCLOSE( "ingest: cache record checksum mismatch — that file is reparsed, the rest of the blob stands" );
                     continue;
                 }
                 ByteR       r{ rec, rec + e.recLength };
@@ -2317,7 +2317,7 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
                 {
                     // The pathHash matched but the record is for a DIFFERENT file — a 64-bit collision.
                     // Serving it would be a wrong answer, so the file reparses instead.
-                    DEGRADED_PATH_ALERT( "ingest: cache path-hash collision — the colliding file is reparsed" );
+                    DISCLOSE( "ingest: cache path-hash collision — the colliding file is reparsed" );
                     continue;
                 }
                 // T5: the on-disk key is ROOT-RELATIVE; re-absolutize against the CURRENT rootDir so the
@@ -2435,7 +2435,7 @@ inline std::vector<CacheWriteRow> buildCacheWritePlan( const std::vector<std::ui
                                                        const std::vector<CacheEntry>&    prevEntries,
                                                        std::vector<CacheEntry>&          carryOut )
 {
-    VERIFY_NO_ALIAS( prevEntries, carryOut );
+    ASSUME_NO_ALIAS( prevEntries, carryOut );
     carryOut.clear();
     carryOut.reserve( prevEntries.size() );
     {
@@ -2485,7 +2485,7 @@ inline bool appendCarryRecord( ByteW& w, int fd, const CacheEntry& src, std::str
     if( !preadExact( fd, scratch.data(), scratch.size(), src.recOffset )
         || recordSum32( std::string_view( scratch.data(), scratch.size() ) ) != src.recSum )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache carry-over record failed its checksum — dropped (that file reparses)" );
+        DISCLOSE( "ingest: cache carry-over record failed its checksum — dropped (that file reparses)" );
         return false;
     }
     w.raw( scratch.data(), scratch.size() );
@@ -2521,7 +2521,7 @@ inline void finishCacheBlob( ByteW& w, const std::vector<CacheEntry>& table )
     w.u32( entryCount );
     w.u32( 0 );   // reserved
     w.u64( blobChecksum( std::string_view( hdrTable.data(), hdrTable.size() ) ) );
-    VERIFY( w.b.size() == tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes );
+    ASSUME( w.b.size() == tableOffset + std::uint64_t( entryCount ) * kCacheEntryBytes + kCacheTrailerBytes );
 }
 
 // write the cache atomically (path.tmp → rename); groups the merged raw facts back by file.
@@ -2544,7 +2544,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // directory at `path` costs no wasted pass and temp write before rename(tmp,dir) fails EISDIR.
     if( shapeOfPath( path ) == PathShape::Other )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache path is not a regular file (directory/device/fifo) — cache not written" );
+        DISCLOSE( "ingest: cache path is not a regular file (directory/device/fifo) — cache not written" );
         return;
     }
 
@@ -2587,7 +2587,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     w.u8( kArtifactArch );
     w.u64( (std::uint64_t)blobWriteNs );
     w.u32( 0 );   // entryCount — patched in place below, once the carry-over verification has settled it
-    VERIFY( w.b.size() == kCacheHeaderBytes );
+    ASSUME( w.b.size() == kCacheHeaderBytes );
     {
         PROFILE_SCOPE_DESCRIBE( "ingest/saveCache: serialize records" );
         std::vector<std::uint64_t> fileDict;                                   // per-file subtoken dictionary, reused across files
@@ -2782,7 +2782,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
         {
             ::close( rawFd );   // fdopen did not adopt the descriptor; the holder still removes the temp name
         }
-        DEGRADED_PATH_ALERT( "ingest: saveCache could not open temp file for write — cache left unchanged" );
+        DISCLOSE( "ingest: saveCache could not open temp file for write — cache left unchanged" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot write ({}) — every run parses from source until this is fixed\n",
                       path.c_str(), std::strerror( openErr )  );   // 2026-09-06: Release kept no signal for this
         return;
@@ -2795,14 +2795,14 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     if( wErr )
     {
         // never rename a short/torn write over a good cache — the holder removes the temp on return
-        DEGRADED_PATH_ALERT( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
+        DISCLOSE( "ingest: saveCache write failed (short write or fclose error) — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: write failed (short write; disk full?) — old cache kept, this run was parsed from source\n", path.c_str() );
         return;
     }
     if( !temp.commit( path ) )
     {
         // the holder removes the temp on return
-        DEGRADED_PATH_ALERT( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
+        DISCLOSE( "ingest: saveCache rename(tmp -> cache) failed — old cache preserved" );
         rw::emitTo( stderr, "ripwire: cache {}: cannot replace ({}) — old cache kept, this run was parsed from source\n",
                       path.c_str(), std::strerror( errno ) );
         return;

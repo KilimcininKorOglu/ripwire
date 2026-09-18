@@ -12,7 +12,7 @@
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 
 
-#include "infra/Diagnostics.h"   // VERIFY — the enum-index bounds check
+#include "infra/Diagnostics.h"   // ASSUME — the enum-index bounds check
 
 #include <array>
 #include <cstddef>
@@ -46,17 +46,17 @@ static_assert( std::size( kLangName ) == rw::kLangCount,
 using rw::kSymKindCount;
 
 // A Lang / SymKind reaching these out of range means a symbol carries a value its own enum does not
-// name — a corrupt invariant, not a recoverable input, so VERIFY (free in release) and no fallback:
+// name — a corrupt invariant, not a recoverable input, so ASSUME (free in release) and no fallback:
 // the static_assert above already proves every in-range value has a row.
 std::size_t langIndex( rw::Lang l ) noexcept
 {
-    VERIFY( std::size_t( l ) < std::size( kLangName ) );
+    ASSUME( std::size_t( l ) < std::size( kLangName ) );
     return std::size_t( l );
 }
 
 std::size_t kindIndex( rw::SymKind k ) noexcept
 {
-    VERIFY( std::size_t( k ) < kSymKindCount );
+    ASSUME( std::size_t( k ) < kSymKindCount );
     return std::size_t( k );
 }
 

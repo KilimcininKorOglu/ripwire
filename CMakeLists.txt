@@ -92,11 +92,11 @@ add_compile_options(${RIPWIRE_ARCH_FLAGS})
 # trade. The person building to USE ripwire wants the fast binary and is already on Release, so they
 # get it without asking. Both are overridable: -DRIPWIRE_LTO=ON on a dev tree, OFF on Release.
 #
-# DELIBERATELY NOT COUPLED TO NDEBUG/VERIFY. It would be tidier to say "checked build = slow, real
+# DELIBERATELY NOT COUPLED TO NDEBUG/ASSUME. It would be tidier to say "checked build = slow, real
 # build = fast" and fold LTO into the Release flavour, but that puts LTO and the assertions in
 # mutually exclusive builds — and LTO is precisely an OPTIMIZER change, the class of bug CLAUDE.md
 # says the Release leg exists to catch. Keeping the axes independent means a CI leg can run LTO WITH
-# VERIFY and DEGRADED_PATH_ALERT live, which is the only configuration that can catch an
+# ASSUME and the DISCLOSE( msg ) trace live, which is the only configuration that can catch an
 # LTO-induced miscompile the assertions would have flagged. Coupling them would create the blind
 # spot exactly where this optimization can hurt.
 # Determinism is unaffected: pagerank.cpp's -fno-fast-math is a per-function IR attribute that
@@ -288,7 +288,7 @@ file(APPEND "${_ripwire_embedded_queries}" "}};\n\ninline constexpr std::string_
 # the two can never silently drift. Short build info (compiler id/version, build type) rides along so a
 # bug report's "ripwire --version" line is enough to reproduce the toolchain, no separate --doctor call.
 # CMAKE_BUILD_TYPE is empty for the plain dev configure the house style mandates (CLAUDE.md: "never
-# -DCMAKE_BUILD_TYPE=Release" locally — Release defines NDEBUG, which compiles DEGRADED_PATH_ALERT out).
+# -DCMAKE_BUILD_TYPE=Release" locally — Release defines NDEBUG, which compiles the DISCLOSE( msg ) trace out).
 # "unspecified" told a bug reporter nothing about what they actually ran; "dev" is the honest, specific
 # label for that configure (§P6.10, 2026-07-28 output audit) — it is the first thing a bug report pastes.
 # A MULTI-CONFIG generator (Ninja Multi-Config, Xcode) has no CMAKE_BUILD_TYPE: the configuration is picked at
@@ -554,7 +554,7 @@ add_ts_object(tstsx ${ts_typescript_SOURCE_DIR}/tsx/src)
 
 # ---- explicit, easy-to-extend executable source list ----
 # Later stages (graph/rank/serialize/main) get appended here. ingest.cpp + infra's
-# diagnostics.cpp (VERIFY/DEGRADED handlers link partner) are the foundation.
+# diagnostics.cpp (ASSUME/DEGRADED handlers link partner) are the foundation.
 set(RIPWIRE_SRCS
   src/ingest.cpp
   src/pagerank.cpp
@@ -737,7 +737,7 @@ endforeach()
 #
 # Three properties this option deliberately keeps:
 #   * SEPARATE BUILD TREE, no build type. Remarks only describe an OPTIMIZED build, but the repo forbids
-#     -DCMAKE_BUILD_TYPE=Release in a dev tree (NDEBUG compiles DEGRADED_PATH_ALERT out and blinds the
+#     -DCMAKE_BUILD_TYPE=Release in a dev tree (NDEBUG compiles the DISCLOSE( msg ) trace out and blinds the
 #     degrade-path gates — CONTRIBUTING.md §5). No build type is needed here: RIPWIRE_ARCH_FLAGS already
 #     puts the plain configuration at -O2, so build_remarks/ describes the SAME codegen build/ ships,
 #     with the degrade paths still compiled in. The option is nonetheless refused inside build/ below.
@@ -985,7 +985,7 @@ if(RIPWIRE_TSAN)
 endif()
 
 # ---- separate-storage alias analysis: -mllvm -basic-aa-separate-storage (LLVM 17 keeps it OFF) ----
-# src/infra/Diagnostics.h §6's VERIFY_NO_ALIAS lowers, in release, to `llvm.assume [ "separate_storage"(a, b) ]`
+# src/infra/Diagnostics.h §6's ASSUME_NO_ALIAS lowers, in release, to `llvm.assume [ "separate_storage"(a, b) ]`
 # through __builtin_assume_separate_storage. The FRONT END has emitted that bundle since clang 17; whether BasicAA
 # READS it is a separate switch inside the optimizer, llvm/lib/Analysis/BasicAliasAnalysis.cpp:
 #     static cl::opt<bool> EnableSeparateStorageAnalysis("basic-aa-separate-storage", cl::Hidden, cl::init(false))
@@ -1066,7 +1066,7 @@ if(RIPWIRE_CXX_HAS_BASIC_AA_SEPARATE_STORAGE)
   endif()
   message(STATUS "separate-storage alias analysis: forced on (-mllvm -basic-aa-separate-storage — turns BasicAA's separate_storage reader on for LLVM 17 / AppleClang 16, a no-op on LLVM 18+); ${_ripwire_separate_storage_link}")
 else()
-  message(STATUS "separate-storage alias analysis: compiler default (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not accept -mllvm -basic-aa-separate-storage; VERIFY_NO_ALIAS keeps its debug check, the release promise is whatever this optimizer does by default)")
+  message(STATUS "separate-storage alias analysis: compiler default (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not accept -mllvm -basic-aa-separate-storage; ASSUME_NO_ALIAS keeps its debug check, the release promise is whatever this optimizer does by default)")
 endif()
 
 # ---- opt-in ingestion fuzzing: isolated coverage-instrumented parser objects ----

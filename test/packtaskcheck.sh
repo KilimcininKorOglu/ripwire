@@ -246,7 +246,7 @@ if xmllint --noout "$DEF" 2>/dev/null; then ok "default bundle is xmllint-clean"
 # grep with `2>/dev/null`, so it kept ONE bit — the extracted path — and threw away the exit code, stderr,
 # and the emitted bytes. CI reported exactly `for= pack=…/src/serialize.h` and nothing else, which is the
 # SAME observation for at least four different causes:
-#   (a) --for aborted (a sanitizer report / a VERIFY panic) and wrote nothing — rc and stderr both discarded;
+#   (a) --for aborted (a sanitizer report / an ASSUME panic) and wrote nothing — rc and stderr both discarded;
 #   (b) --for emitted an EMPTY payload, `<sigs capped="1"></sigs>` (serialize.h's ladder drops every <f>
 #       once sigsBudget clamps toward 1), which is a real product defect and a real thing to see;
 #   (c) the <sigs>/<f> shape changed and only the EXTRACTOR broke — a gate bug, not a product bug;

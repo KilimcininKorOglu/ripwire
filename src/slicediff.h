@@ -378,7 +378,7 @@ inline RevSide sliceAtRev( const std::string& root, const std::string& sha, cons
     fs::remove_all( fs::path( tmpRoot ), ec );                   // a leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
     {
-        DEGRADED_PATH_ALERT( "slicediff: cannot create the temp parse root" );
+        DISCLOSE( "slicediff: cannot create the temp parse root" );
         r.status = Status::UnparsedAtRev;
         return r;
     }

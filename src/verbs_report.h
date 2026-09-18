@@ -1158,7 +1158,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
 
         // §P0.5c: an unresolvable --since used to degrade to ALL history while stdout still printed
         // window="12mo" — a false NON-zero. The churn numbers are real; the window they are labelled with is
-        // not, and the only honest signal was a DEGRADED_PATH_ALERT on stderr, invisible to every MCP client.
+        // not, and the only honest signal was a DISCLOSE on stderr, invisible to every MCP client.
         // --hotspots is a measurement verb and its window is part of the measurement, so refuse instead.
         if( !cfg.since.empty() && !sinceScope.active )
         {
@@ -1245,7 +1245,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
             if( !ccxSum[f] )     { if( suspectSyms[f] > 0 ) { ++unrankedExtentSuspect; } else { ++unrankedNoComplexity; } continue; }
             order.push_back( f );
         }
-        VERIFY( order.size() + unrankedNoChurn + unrankedNoComplexity + unrankedExtentSuspect == ing.files.size() );
+        ASSUME( order.size() + unrankedNoChurn + unrankedNoComplexity + unrankedExtentSuspect == ing.files.size() );
         const auto score = [ & ]( std::uint32_t f ) { return std::uint64_t( churn[f] ) * ccxSum[f]; };
         std::sort( order.begin(), order.end(), [ & ]( std::uint32_t a, std::uint32_t b )
                    { return score( a ) != score( b ) ? score( a ) > score( b ) : ing.files[a] < ing.files[b]; } );

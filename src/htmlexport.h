@@ -33,7 +33,7 @@
 #include "serialize.h"   // for escapeXml (not reused here; we write jsonEscape instead)
 #include "infra/jsonesc.h"     // A4-F27: canonical escape core; jsonEscape below is a thin wrapper
 #include "cli.h"         // for ColorBy — the --color-by=MODE enum baked into COLOR_MODE (no cycle: cli.h pulls ingest.h/version.h only)
-#include "infra/Diagnostics.h"  // VERIFY — writeEdgePayload asserts the emitted LINKS order, which the layout depends on
+#include "infra/Diagnostics.h"  // ASSUME — writeEdgePayload asserts the emitted LINKS order, which the layout depends on
 
 #include <algorithm>
 #include <cmath>
@@ -2340,7 +2340,7 @@ inline void writeEdgePayload( std::FILE* out, const std::vector<HtmlEdge>& edges
     rw::emitRaw( out, "const LINKS = [\n" );
     for( std::size_t k = 0; k < edges.size(); ++k )
     {
-        VERIFY( k == 0 || edges[k - 1].s < edges[k].s || ( edges[k - 1].s == edges[k].s && edges[k - 1].t < edges[k].t ) );
+        ASSUME( k == 0 || edges[k - 1].s < edges[k].s || ( edges[k - 1].s == edges[k].s && edges[k - 1].t < edges[k].t ) );
         rw::emitTo( out, "  {{\"s\":{},\"t\":{}{}{}\n", unsigned( edges[k].s ), unsigned( edges[k].t ),
                       edges[k].amb ? ",\"a\":1}" : "}", ( k + 1 < edges.size() ) ? "," : "" );
     }
@@ -2538,7 +2538,7 @@ inline void writeHtml( std::FILE* out, const IngestResult& ing, const std::vecto
     // So above roughly 500 nodes any change to edge EMIT ORDER silently changes every picture this tool
     // has published — and every change that would do it reads as cosmetic: adding a field to the record
     // and sorting on it, grouping edges by module, emitting the low-confidence ones in a separate pass,
-    // dedup'ing in a different order. writeEdgePayload's VERIFY is the fence; its note says why STRICT
+    // dedup'ing in a different order. writeEdgePayload's ASSUME is the fence; its note says why STRICT
     // increase is the property that makes the emitted order a function of the edge SET alone.
     std::sort( edges.begin(), edges.end(), [ ]( const HtmlEdge& a, const HtmlEdge& b )
     { return a.s != b.s ? a.s < b.s : a.t < b.t; } );

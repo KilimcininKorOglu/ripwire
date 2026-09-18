@@ -5,7 +5,7 @@
 //   collect raw defs/refs -> assign Symbol ids in (file,line,name) order ->
 //   attribute each Reference to its enclosing definition by byte-span containment.
 //
-// Single-threaded (v1). Never throws: every recoverable problem degrades + DEGRADED_PATH_ALERT.
+// Single-threaded (v1). Never throws: every recoverable problem degrades + DISCLOSE.
 
 #include "ingest.h"
 #include "docparse.h"          // P1-B: non-code document ingest (notebooks/html/csv + markitdown bridge)
@@ -298,11 +298,11 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     verifyCacheRecordMinimaTripwire();
 
     IngestResult result;
-    // A4-F17: rootDir is a runtime-falsifiable input (caller/CLI-supplied), so degrade — never VERIFY here.
-    // In release VERIFY becomes __builtin_assume, which would delete the very guard below (the CLAUDE.md trap).
+    // A4-F17: rootDir is a runtime-falsifiable input (caller/CLI-supplied), so degrade — never ASSUME here.
+    // In release ASSUME becomes __builtin_assume, which would delete the very guard below (the CLAUDE.md trap).
     if( rootDir == nullptr )
     {
-        DEGRADED_PATH_ALERT( "ingest: null root directory — empty result" );
+        DISCLOSE( "ingest: null root directory — empty result" );
         return result;
     }
 

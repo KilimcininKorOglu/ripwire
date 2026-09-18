@@ -351,7 +351,7 @@ Discloses: `importers_capped`
 | `kMaxEdges` | `256` | — | total emitted edge cap |
 | `kMaxNodes` | `96` | — | total emitted node cap (§3 size caps) |
 | `kMaxRadius` | `12` | — | — |
-| `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never VERIFYs on hostile input) |
+| `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input) |
 | `kMemberSpellingsShown` | `6` | OUTPUT | — |
 
 ### `src/handoff.h`

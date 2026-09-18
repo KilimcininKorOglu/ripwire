@@ -388,7 +388,7 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
 // WHY THIS IS PUBLIC API AND NOT A SECOND COPY OF THE GUARD. `kCacheVersion`, `kParserVer` and
 // `kArtifactArch` decide whether ANY committed `--index-out` artifact is reusable, and until this pair
 // existed they had no user-visible surface at all: `--doctor`, `--help` and the map header named none of
-// them, and every refusal reached the user only through DEGRADED_PATH_ALERT, which NDEBUG (i.e. every
+// them, and every refusal reached the user only through DISCLOSE, which NDEBUG (i.e. every
 // installed binary — install.sh configures Release) compiles out. So `ripwire DIR --cache=/gone.bin`
 // exited 0, printed nothing on either stream, and emitted bytes identical to a valid-artifact run.
 // Gate: test/cacheidentitycheck.sh. The definitions live in ingest.cpp because the guard they wrap

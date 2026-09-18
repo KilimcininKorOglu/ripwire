@@ -114,7 +114,7 @@ cp -R "$REALCORPUS" "$CORPUS"
 # resize is deliberately kept (the brief names it the HONEST COUNTER-CASE: hits genuinely are code in
 # distinct symbols, few duplicates to fold) — a real median, not a cherry-picked one. langOfPathh (zero-hit)
 # belongs to G4's own gate, not here — a zero-hit answer has no "payload" to compare bytes on.
-QUERIES_CAPPED=(stale cache buffer resize DEGRADED_PATH_ALERT)
+QUERIES_CAPPED=(stale cache buffer resize DISCLOSE)
 
 # ── frozen fixture queries, UNCAPPED set (instrument fix 3) — every one of these resolves to fewer than the
 # 100-row default, so shown == hits and the answer is COMPLETE. Chosen as durable internal identifiers

@@ -602,7 +602,7 @@ std::optional<int> runChangeViews( const MainDispatch& d )
             ccOut = std::fopen( ccPath.c_str(), "wb" );
             if( !ccOut )
             {
-                DEGRADED_PATH_ALERT( "writeCcJson: could not open output file" );
+                DISCLOSE( "writeCcJson: could not open output file" );
                 rw::emitTo( stderr, "ripwire: --export=cc.json:{}: cannot open file for writing\n", ccPath.c_str() );
                 return 1;
             }
@@ -1364,7 +1364,7 @@ std::optional<int> runPlanLanes( const MainDispatch& d )
     std::vector<std::uint32_t> churn( ing.files.size(), 0u );
     if( !gitChurnCounts( root, ing, churn, "12 months ago" ) )
     {
-        DEGRADED_PATH_ALERT( "plan-lanes: no git churn history for this root — claims.files churn/hotspot_rank report 0/null" );
+        DISCLOSE( "plan-lanes: no git churn history for this root — claims.files churn/hotspot_rank report 0/null" );
     }
     in.churn  = &churn;
     in.tested = d.testedPtr;

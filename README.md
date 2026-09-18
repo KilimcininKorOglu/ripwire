@@ -1817,9 +1817,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>636 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>637 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **636 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **637 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2258,7 +2258,7 @@ your shell profile. It does not register hooks. To register hooks, run
    ```
 
 **Note:** do not add `-DCMAKE_BUILD_TYPE=Release` to the *development* tree. Release defines
-`NDEBUG`. `NDEBUG` removes the `DEGRADED_PATH_ALERT` diagnostics at compile time. A gate that
+`NDEBUG`. `NDEBUG` removes the `DISCLOSE( msg )` traces at compile time. A gate that
 asserts a degrade path then passes without evidence. That is why the two builds above write to two
 trees, and why `scripts/pgobuild.sh` writes to a third: CMakeLists refuses a profile-guided build in
 `build/` or `asan/` by name, because every gate and bench number in this repository is measured

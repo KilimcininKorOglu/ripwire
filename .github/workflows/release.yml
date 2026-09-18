@@ -41,7 +41,7 @@ jobs:
             asset_os: macos
             pgo: true
             # Xcode 26.6 (17F113, Apple clang 21.0.0), the macos-26 image default. Through 0.6.1 this leg pinned Xcode
-            # 16.2, whose AppleClang 16 is LLVM 17: its loop vectorizer ignores VERIFY_NO_ALIAS's separate-storage
+            # 16.2, whose AppleClang 16 is LLVM 17: its loop vectorizer ignores ASSUME_NO_ALIAS's separate-storage
             # promise (llvm/llvm-project#64666, fixed in LLVM 18) and keeps every runtime overlap check. Pinned so an
             # image bump cannot change the compiler under a release, and ci.yml's macOS legs test this same Xcode.
             developer_dir: /Applications/Xcode_26.6.app/Contents/Developer

@@ -95,7 +95,7 @@ inline bool isTestSymbol( const IngestResult& ing, std::size_t symbolIndex ) noe
 // ── §P11 first-screen ORDERING tiers ─────────────────────────────────────────────────────────────────────
 // Several LISTING verbs serialized their rows in plain path-alphabetical order, which on a doc-heavy repo is
 // a systematic bias against code: `AGENTS.md` and other long-named docs sort above `src/`, and a fixed row cap then cuts
-// the deepest paths — usually the code — first (`--grep=DEGRADED_PATH_ALERT` showed 34 src + 66 doc rows and
+// the deepest paths — usually the code — first (`--grep=DISCLOSE` showed 34 src + 66 doc rows and
 // not one `test/` or `third_party/` row, the macro's own definition site included).
 //
 // This is a pure ORDERING key and nothing else: no row is dropped, no attribute is added or changed, and
@@ -512,7 +512,7 @@ inline std::vector<float> rankTierSymbolMultipliers( const IngestResult& ing )
 // inside the calibrated margin documented at kWeakLexicalScoreThreshold.)
 inline float maxScoreUndoingTier( const std::vector<float>& rank, const std::vector<float>& tierMul )
 {
-    VERIFY( rank.size() == tierMul.size() );
+    ASSUME( rank.size() == tierMul.size() );
     float rawMax = 0.f;
     for( std::size_t i = 0; i < rank.size() && i < tierMul.size(); ++i )
     {

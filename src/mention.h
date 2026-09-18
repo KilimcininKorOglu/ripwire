@@ -112,7 +112,7 @@ inline std::string capDisclosureNote( const CapDisclosure& disc )
 // Every one of the three is "" unless a cap actually bit, so a bundle that lost nothing still pays nothing.
 inline void absorbCapDisclosure( const CapDisclosure& disc, std::string& note, std::string& xmlAttrs, std::string& jsonKeys )
 {
-    VERIFY_NO_ALIAS3( note, xmlAttrs, jsonKeys );
+    ASSUME_NO_ALIAS3( note, xmlAttrs, jsonKeys );
     note     += capDisclosureNote( disc );
     xmlAttrs += disc.xml;
     jsonKeys += disc.json;
@@ -409,7 +409,7 @@ inline bool definesScopeName( const IngestResult& ing, const std::string& scope,
 inline void mentionUnkeptFiles( const IngestResult& ing, const RawMention& m, const std::vector<std::uint32_t>& kept,
                                 std::vector<std::uint32_t>& out )
 {
-    VERIFY_NO_ALIAS( kept, out );
+    ASSUME_NO_ALIAS( kept, out );
     const std::size_t fileCount = ing.files.size();
     for( std::size_t suffixLen = m.segments.size(); suffixLen >= 1; --suffixLen )
     {
@@ -586,7 +586,7 @@ inline std::vector<RawMention> extractMentions( std::string_view task, std::uint
 inline bool applyMentionBoost( const IngestResult& ing, std::string_view task, std::vector<float>& lensRank, MentionBoostInfo* outInfo = nullptr )
 {
     using namespace mention_detail;
-    VERIFY( lensRank.size() == ing.symbols.size() );
+    ASSUME( lensRank.size() == ing.symbols.size() );
     if( task.empty() || lensRank.empty() || lensRank.size() != ing.symbols.size() )
     {
         return false;
@@ -808,7 +808,7 @@ struct DocMentionBoostInfo
 inline void collectRefusedDocLifts( const Graph& g, const std::vector<float>& lensRank, const std::vector<NodeId>& order,
                                     std::size_t from, std::size_t to, std::vector<NodeId>& out )
 {
-    VERIFY_NO_ALIAS( order, out );
+    ASSUME_NO_ALIAS( order, out );
     for( std::size_t k = from; k < to; ++k )
     {
         const NodeId anchor = order[k];
@@ -830,7 +830,7 @@ inline void collectRefusedDocLifts( const Graph& g, const std::vector<float>& le
 inline bool applyDocMentionBoost( const Graph& g, std::vector<float>& lensRank, DocMentionBoostInfo* outInfo = nullptr )
 {
     const std::size_t N = lensRank.size();
-    VERIFY( g.mentions.empty() || g.mentions.size() == N );
+    ASSUME( g.mentions.empty() || g.mentions.size() == N );
     if( N == 0 || g.mentions.empty() )
     {
         return false;

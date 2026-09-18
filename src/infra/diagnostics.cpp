@@ -4,11 +4,11 @@
 //
 //  diagnostics.cpp
 //
-//  The one out-of-line translation unit behind Diagnostics.h: the four ConsoleLog
-//  report handlers (assert / panic / thread-affinity violation / degraded path) and
-//  the thread-id counter. Everything else in the diagnostics system is macros, so
-//  every target and every standalone test harness in test/ links exactly this file
-//  to satisfy VERIFY, PANIC and DEGRADED_PATH_ALERT.
+//  The one out-of-line translation unit behind Diagnostics.h: the ConsoleLog report handlers (assert-family / panic /
+//  thread-ownership violation / VALIDATE trace / degraded path) and the thread-id counter. Everything else in the
+//  diagnostics system is macros, so every target and every standalone test harness in test/ links exactly this file
+//  to satisfy ASSUME, EXPECTS, ENSURES, DASSERT, UNREACHABLE, VALIDATE, ASSUME_SAME_THREAD*, PANIC and
+//  DISCLOSE.
 //
 #include "Diagnostics.h"
 #include "emit.h"
@@ -21,16 +21,41 @@
 #include <format>
 #include <utility>
 
-namespace Diagnostics {
+namespace Diagnostics
+{
 
-namespace {
+// The build-flavour link check behind ThreadOwner (Diagnostics.h §2): only a debug diagnostics.cpp defines it, so a
+// debug TU that constructs a ThreadOwner cannot link against a release one.
+#if !defined( NDEBUG )
+void debugFlavourLinkCheck() noexcept {}
+#endif
+
+namespace
+{
+
+// Two columns, one row per CheckKind in enum order: the banner, then who to suspect. The blame line is the reason
+// EXPECTS and ENSURES exist as words — it is the first thing a reader of the report needs.
+constexpr const char* kKindBanner[] = {
+    "ASSUME FAILED",
+    "EXPECTS FAILED (precondition)",
+    "ENSURES FAILED (postcondition)",
+    "DASSERT FAILED",
+    "UNREACHABLE REACHED",
+};
+constexpr const char* kKindBlame[] = {
+    "an invariant this function relies on is false here",
+    "the CALLER broke this function's contract — look up the stack",
+    "THIS function broke its own contract — look inside it",
+    "a debug-only check is false (no release promise was made)",
+    "control arrived where this function says it cannot",
+};
 
 // ── ONE NOTICE, ONE WRITE ────────────────────────────────────────────────────────────────────────────────────────
-// Every reporter below formats its whole notice first and hands it to stderr in ONE stdio call. They used to build it
-// from a chain of `std::cerr <<` insertions, and with stdio sync on (the default) each insertion is its own fwrite on
-// an unbuffered stderr, so its own write(2). Any other thread's single-write line could then land between two
-// insertions and split the notice across lines. Measured on a gate whose fixture refuses two files at once: the
-// degraded notice torn in 32-73% of runs depending on load, and 0 tears in 3,800 runs once it was written whole.
+// Every reporter below formats its whole notice first and hands it to stderr in ONE stdio call. Built instead from a
+// chain of `std::cerr <<` insertions, with stdio sync on (the default) each insertion is its own fwrite on an
+// unbuffered stderr, so its own write(2): any other thread's single-write line can then land between two insertions
+// and split the notice across lines. Measured on a gate whose fixture refuses two files at once: the degraded notice
+// torn in 32-73% of runs depending on load, and 0 tears in 3,800 runs once it was written whole (test/diagnoticecheck.sh).
 //
 // WHY emitRaw OVER A RAW write( 2, … ). One stdio call holds the stream's lock for the whole call, so no other stdio
 // writer in the process — which is every other stderr writer here — can interleave, at any length. Underneath, the
@@ -44,9 +69,9 @@ namespace {
 // buffer through rw::formatTo, never into a std::string (which std::print and rw::emitTo both build). The buffer is
 // a cap: a notice longer than it is cut, and the cut is DISCLOSED in the notice itself (markTruncated, below).
 //
-// STDOUT FIRST. std::cerr is tied to std::cout, so every insertion the old reporters made flushed stdout before it
-// wrote. writeNotice keeps that: without it a trap or an abort right after the notice loses whatever stdout still
-// held, and under `>file 2>&1` a notice lands ahead of output the program wrote before it. fflush allocates nothing.
+// STDOUT FIRST. std::cerr is tied to std::cout, so a chain of insertions flushes stdout before it writes. writeNotice
+// keeps that: without it a trap or an abort right after the notice loses whatever stdout still held, and under
+// `>file 2>&1` a notice lands ahead of output the program wrote before it. fflush allocates nothing.
 inline constexpr std::size_t kNoticeByteCap = 4096;   // a longer notice is cut and says so: " ... [notice truncated: kept K of N bytes]"
 
 // std::format on a null const char* is undefined, and a reporter must survive the malformed call it is reporting.
@@ -109,25 +134,27 @@ template<class... A>
 } // namespace
 
 [[gnu::cold, gnu::noinline]]
-void ConsoleLog::handleAssert( const char* expr, const char* file, int line,
-                                const char* function, const char* description ) noexcept
+void ConsoleLog::handleAssert( CheckKind kind, const char* expr, const char* file, int line, const char* function,
+                               const char* description ) noexcept
 {
-    const NotesRow notes = notesRowOf( description );
+    const std::size_t row   = static_cast<std::size_t>( kind );
+    const NotesRow     notes = notesRowOf( description );
     writeNotice( "\n======================================\n"
-                 "!!! DEBUG ASSERT FAILED !!!\n"
+                 "!!! {} !!!\n"
                  "======================================\n"
                  "  Expr:     {}\n"
+                 "  Blame:    {}\n"
                  "  Location: {}:{}\n"
                  "  Function: {}\n"
                  "{}{}{}"
                  "======================================\n",
-                 orEmpty( expr ), orEmpty( file ), line, orEmpty( function ), notes.label, notes.text, notes.eol );
+                 kKindBanner[ row ], orEmpty( expr ), kKindBlame[ row ], orEmpty( file ), line, orEmpty( function ),
+                 notes.label, notes.text, notes.eol );
     __builtin_trap();
 }
 
 [[gnu::cold, gnu::noinline, noreturn]]
-void ConsoleLog::handlePanic( const char* file, int line,
-                               const char* function, const char* description ) noexcept
+void ConsoleLog::handlePanic( const char* file, int line, const char* function, const char* description ) noexcept
 {
     writeNotice( "\n======================================\n"
                  "!!! CRITICAL SYSTEM PANIC !!!\n"
@@ -141,15 +168,14 @@ void ConsoleLog::handlePanic( const char* file, int line,
 }
 
 [[gnu::cold, gnu::noinline]]
-void ConsoleLog::handleThreadViolation( uint64_t expected, uint64_t got,
-                                         const char* file, int line,
-                                         const char* function, const char* description ) noexcept
+void ConsoleLog::handleThreadViolation( std::uint64_t expected, std::uint64_t got, const char* file, int line, const char* function,
+                                        const char* description ) noexcept
 {
     const NotesRow notes = notesRowOf( description );
     writeNotice( "\n======================================\n"
-                 "!!! THREAD-AFFINITY VIOLATION !!!\n"
+                 "!!! THREAD-OWNERSHIP VIOLATION !!!\n"
                  "======================================\n"
-                 "  This call site is single-thread only but was reached from a 2nd thread.\n"
+                 "  This site or object is single-thread owned but was reached from another thread.\n"
                  "  Owner thread: {}   Offending thread: {}\n"
                  "  Location: {}:{}\n"
                  "  Function: {}\n"
@@ -160,20 +186,32 @@ void ConsoleLog::handleThreadViolation( uint64_t expected, uint64_t got,
 }
 
 [[gnu::cold, gnu::noinline]]
-void ConsoleLog::handleDegraded( const char* file, int line,
-                                  const char* function, const char* description ) noexcept
+void ConsoleLog::handleValidateFailed( const char* expr, const char* file, int line, const char* function, const char* description ) noexcept
 {
-    // One-line notice, no trap — the caller clamps/falls back and continues.
+    // One line, no trap: a false VALIDATE is input being refused, which is the program working.
+    const bool  hasDescription = description != nullptr && description[ 0 ] != '\0';
+    const char* separator      = hasDescription ? " — " : "";
+    const char* text           = hasDescription ? description : "";
+    writeNotice( "[validate] {} is false{}{}  ({}:{}, {} — logged once per site)\n",
+                 orEmpty( expr ), separator, text, orEmpty( file ), line, orEmpty( function ) );
+}
+
+[[gnu::cold, gnu::noinline]]
+void ConsoleLog::handleDegraded( const char* file, int line, const char* function, const char* description ) noexcept
+{
+    // DISCLOSE's debug trace. One-line notice, no trap — the caller clamps/falls back and continues. The
+    // "[math degraded]" prefix and every message are kept byte-identical: 11 gates grep for the prefix
+    // (test/*.sh on 3bf884e2) and test/sidecarsymlinkcheck.sh pins message text. Retiring the prefix is its own change.
     writeNotice( "[math degraded] {}  ({}:{}, {} — logged once per site)\n", orEmpty( description ), orEmpty( file ), line, orEmpty( function ) );
 }
 
-// Unique, stable, non-zero per-thread id. thread_local counter avoids pulling
-// <thread> into the widely-included Diagnostics.h; first thread to ask gets 1,
-// next 2, etc. Non-zero so 0 stays a valid "unclaimed" sentinel for the latch.
-uint64_t currentThreadId() noexcept
+// Unique, stable, non-zero per-thread id. thread_local counter avoids pulling <thread> into the widely-included
+// Diagnostics.h; first thread to ask gets 1, next 2, etc. Non-zero so 0 stays a valid "unclaimed" sentinel for the
+// per-site latch and ThreadOwner.
+std::uint64_t currentThreadId() noexcept
 {
-    static std::atomic<uint64_t> counter{ 0 };
-    thread_local const uint64_t id = ++counter;
+    static std::atomic<std::uint64_t> counter{ 0 };
+    thread_local const std::uint64_t  id = ++counter;
     return id;
 }
 

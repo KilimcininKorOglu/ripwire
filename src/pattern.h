@@ -573,7 +573,7 @@ inline PatternProgram compileFor( const TSLanguage* grammar, std::string_view gr
         for( const std::string_view tmpl : ts->templates )
         {
             const std::size_t slot = tmpl.find( "@@" );
-            VERIFY( slot != std::string_view::npos );   // every row in templateTable() carries the slot
+            ASSUME( slot != std::string_view::npos );   // every row in templateTable() carries the slot
             std::string src( tmpl.substr( 0, slot ) );
             const std::uint32_t begin = std::uint32_t( src.size() );
             src += norm.src;
@@ -583,7 +583,7 @@ inline PatternProgram compileFor( const TSLanguage* grammar, std::string_view gr
             TSParser* parser = ts_parser_new();
             if( parser == nullptr )
             {
-                DEGRADED_PATH_ALERT( "pattern: ts_parser_new returned null" );
+                DISCLOSE( "pattern: ts_parser_new returned null" );
                 continue;
             }
             if( !ts_parser_set_language( parser, grammar ) )

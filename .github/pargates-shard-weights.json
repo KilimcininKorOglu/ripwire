@@ -488,6 +488,7 @@
 "selectorhonestycheck.sh": 23.4,
 "selectorrefusecheck.sh": 12.9,
 "selectorscopecheck.sh": 3.0,
+"selfcheckcheck.sh": 32.7,
 "selfcontainedcheck.sh": 2.2,
 "shadowcheck.sh": 11.2,
 "shapingflagcheck.sh": 193.7,

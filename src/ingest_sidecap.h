@@ -1331,7 +1331,7 @@ inline bool sideArmsAreOrderSafe( const SideArms& arms ) noexcept
 
 void streamSideCaptures( TSNode root, const SideArms& arms )
 {
-    VERIFY_DEBUG_ONLY( sideArmsAreOrderSafe( arms ) );   // an internal ordering invariant: checked, not promised
+    DASSERT( sideArmsAreOrderSafe( arms ) );   // an internal ordering invariant: checked, not promised
 
     std::uint32_t deepest = 0;
     if( arms.ffi   != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }

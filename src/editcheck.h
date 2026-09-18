@@ -170,8 +170,8 @@ constexpr std::size_t kEditCheckSpellingsShown = 6;
 inline std::string editCheckAmbiguousMessage( std::string_view spec, std::span<const EditCheckGroup> groups,
                                               std::string_view exampleForm, std::size_t definitionCount )
 {
-    VERIFY( groups.size() > 1 );
-    VERIFY( definitionCount >= groups.size() );
+    ASSUME( groups.size() > 1 );
+    ASSUME( definitionCount >= groups.size() );
 
     std::string msg = "'" + std::string( spec ) + "' is ambiguous — it matches " + std::to_string( definitionCount )
                     + " definitions in " + std::to_string( groups.size() ) + " distinct contracts, and a contract is per "
@@ -263,7 +263,7 @@ inline EditCheckContract editCheckContractVsHead( const IngestResult& ing, const
         // symbol that plainly exists — a false contract claim whose only tell was a missing at=. No HEAD means
         // no comparison: say so, claim nothing.
         res.status = "no-baseline";
-        DEGRADED_PATH_ALERT( "edit-check: no git HEAD baseline — status no-baseline" );
+        DISCLOSE( "edit-check: no git HEAD baseline — status no-baseline" );
         return res;
     }
     if( base.locBySym.find( key ) == base.locBySym.end() )
@@ -284,7 +284,7 @@ inline EditCheckContract editCheckContractVsHead( const IngestResult& ing, const
     if( dit == base.defsBySym.end() )
     {
         res.wasDefs = res.nowDefs;
-        DEGRADED_PATH_ALERT( "edit-check: baseline snapshot has no definition count for SYM — defs_was suppressed" );
+        DISCLOSE( "edit-check: baseline snapshot has no definition count for SYM — defs_was suppressed" );
     }
     else
     {
@@ -373,7 +373,7 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
     // the two derivations tied together so they cannot drift: editCheckContractVsHead's own status IS the
     // was/now half of exactly this expression, so the change list is empty exactly where that half said
     // unchanged.
-    VERIFY( change.empty() == ( std::string_view( contract.status ) == "unchanged" ) );
+    ASSUME( change.empty() == ( std::string_view( contract.status ) == "unchanged" ) );
     return EditCheckVerdict{ change.empty() ? "unchanged" : "contract-change", std::move( change ) };
 }
 

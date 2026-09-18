@@ -1,6 +1,6 @@
 // readers_light.cpp — crash-fuzz entry points for the readers that live in small self-contained headers:
 // the MCP JSON-RPC field scanner, the document extractors, the --from-trace frame parsers and the skill scanner.
-// Oracle: no sanitizer report, no hardening trap, no VERIFY, no uncaught exception. Correctness oracles belong to
+// Oracle: no sanitizer report, no hardening trap, no ASSUME, no uncaught exception. Correctness oracles belong to
 // the correctness fuzzers (help-wanted issue #149), not here.
 
 #include "fuzzsupport.h"

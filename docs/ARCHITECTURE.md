@@ -96,7 +96,7 @@ can only over-count), and the vendored scanner additionally carries the one-line
   `*_pb2.py`, `*.pb.go`.
 
 Ingest never throws — a bad file, a missing grammar or a corrupt cache degrades and prints a one-line
-`DEGRADED_PATH_ALERT` to stderr. **The ordinary denylist prunes above are silent**, deliberately: they
+`DISCLOSE( msg )` trace to stderr in debug builds. **The ordinary denylist prunes above are silent**, deliberately: they
 are the normal state of every crawl and a note per skipped directory would be noise, not evidence. The
 size-ceiling drops sit between the two — silent on stderr, but *counted* into the header's
 `skipped_oversize=N`, so a corpus that shrank says so in the output rather than vanishing quietly.
@@ -432,7 +432,7 @@ the teleport prior — so `residual_k ≤ 2·α^k`, and `2·0.85^k < 1e-6` at `k
 raise `α` toward 1, or hand the ranker a shape the contraction argument stops covering, and the
 attribute is what tells a reader before the ranking does.
 
-The mechanism matters as much as the attribute. `DEGRADED_PATH_ALERT` still fires on the truncating
+The mechanism matters as much as the attribute. `DISCLOSE( msg )` still fires on the truncating
 exit and is still the only thing that names *which site* degraded — but it is `#ifndef NDEBUG`, so
 on every shipped Release binary it is not code at all. Before this contract, `rankGraphTeleport`
 discarded the kernel's return value, which meant a Release build emitted a ranking from an
@@ -624,14 +624,14 @@ why, in the output, where the caller reads it.
 
 CI builds and runs the full suite twice — once `Release`, once with no build type.
 
-`Release` defines `NDEBUG`. Under `NDEBUG`, `VERIFY` lowers to `__builtin_assume` and
-`DEGRADED_PATH_ALERT` compiles away entirely. Both facts have teeth:
+`Release` defines `NDEBUG`. Under `NDEBUG`, `ASSUME` lowers to `__builtin_assume` and
+the `DISCLOSE( msg )` trace compiles away entirely. Both facts have teeth:
 
-- **Release catches optimizer-only bugs.** With `__builtin_assume` in play, a `VERIFY( p != nullptr )`
+- **Release catches optimizer-only bugs.** With `__builtin_assume` in play, an `ASSUME( p != nullptr )`
   followed by a defensive `if( p == nullptr ) return;` licenses the optimizer to delete the defensive
   branch. Code that is correct at `-O0` can be wrong at `-O2`, and only the Release build sees it.
 - **The plain build catches degrade paths.** A gate that asserts a degrade path asserts on
-  `DEGRADED_PATH_ALERT` output. Compiled out, that gate cannot observe what it asserts — it passes
+  `DISCLOSE( msg )` output. Compiled out, that gate cannot observe what it asserts — it passes
   while being blind. This happened here: for three development cycles, every degrade-path gate in CI
   was green for exactly that reason, and a real fix to one of them was invisible to CI until after it
   landed.

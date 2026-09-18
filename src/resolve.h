@@ -51,7 +51,7 @@
 #include "infra/namesplit.h"   // stripTemplateArgs — a C++ template-id scope's family (appendTemplateFamilyKey), a `using Base<T>::m;` qualifier (buildUsingReexports)
 #include "infra/sortutil.h"      // radixSortIdsAscending — the id-set sort buildGraph/2b below runs F times
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
-#include "infra/Diagnostics.h"   // VERIFY — buildScopedRecvDecls' index-range precondition
+#include "infra/Diagnostics.h"   // ASSUME — buildScopedRecvDecls' index-range precondition
 #include "extentsuspect.h"       // extent::inSet with kHeadRuleLangs / kExtentClassKinds — class identity's C-family and class-kind tables
 
 #include <algorithm>
@@ -2459,7 +2459,7 @@ inline void attachRecvDeclTypes( const IngestResult& ing, ScopedRecvDecls& table
 inline ScopedRecvDecls buildScopedRecvDecls( const IngestResult& ing )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2j: Rule-2 lexical receiver declarations" );
-    VERIFY( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
+    ASSUME( ing.bindings.size() < kRecvDeclConflicted );   // typeBinding indices stay clear of the two sentinels
     ScopedRecvDecls table;
     table.bindings = &ing.bindings;
     std::string key;

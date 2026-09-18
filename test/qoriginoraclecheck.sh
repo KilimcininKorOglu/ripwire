@@ -150,12 +150,12 @@ grep -q 'pre-Q1' "$WORK/pq_err" && grep -q 'quality-baseline' "$WORK/pq_err" \
 PQ_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
 case "$PQ_FLAVOUR" in
     Release|RelWithDebInfo|MinSizeRel)
-        echo "  SKIP  pre-Q1 sidecar: 'computeDelta's fail-closed pre-Q1 alert does not fire' — this $PQ_FLAVOUR build defines NDEBUG, so DEGRADED_PATH_ALERT is compiled out and the absence is true of every run; the plain-flavour leg proves it" ;;
+        echo "  SKIP  pre-Q1 sidecar: 'computeDelta's fail-closed pre-Q1 alert does not fire' — this $PQ_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out and the absence is true of every run; the plain-flavour leg proves it" ;;
     *)
         printf 'not a scip index at all\n' > "$WORK/probe.scip"
         "$BIN" "$ROOT/test/fixture" --scip="$WORK/probe.scip" --top-k=1 --no-cache >/dev/null 2>"$WORK/probe.err"
         if ! grep -qF '[math degraded] --scip: corrupt/truncated index' "$WORK/probe.err"; then
-            no "pre-Q1 sidecar: positive control — '${PQ_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DEGRADED_PATH_ALERT, so an absent pre-Q1 alert proves nothing: $( head -c 200 "$WORK/probe.err" )"
+            no "pre-Q1 sidecar: positive control — '${PQ_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DISCLOSE, so an absent pre-Q1 alert proves nothing: $( head -c 200 "$WORK/probe.err" )"
         elif grep -qF '[math degraded] quality: baseline has no per-symbol loc map (pre-Q1 format)' "$WORK/pq_err"; then
             no "pre-Q1 sidecar: computeDelta's fail-closed pre-Q1 alert FIRED — the sidecar reached the delta instead of being refused: $( grep -F '[math degraded]' "$WORK/pq_err" | head -1 | head -c 200 )"
         else

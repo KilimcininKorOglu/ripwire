@@ -25,7 +25,7 @@ cmake -S . -B build && cmake --build build -j
 ```
 
 **Never configure a local dev tree with `-DCMAKE_BUILD_TYPE=Release`.** Release defines `NDEBUG`,
-which compiles `DEGRADED_PATH_ALERT` out. A gate that asserts a degrade path then goes blind and
+which compiles the `DISCLOSE( msg )` trace out. A gate that asserts a degrade path then goes blind and
 passes for the wrong reason. See §5 for why CI builds both flavours.
 
 ### Sanitizer build (the G1 stack — required before you open a PR)
@@ -185,7 +185,7 @@ binary that is not on `PATH` (Homebrew's LLVM is not, on macOS, by default).
 `WarningsAsErrors`, CI runs it with `continue-on-error`, and the config is curated down to
 `bugprone-*` / `clang-analyzer-*` / `performance-*` / `misc-dangling-*`. Its default catalogue argues
 for a different C++ than the data-oriented one §3 and G2 mandate — POD and SoA, C arrays, 32-bit
-handles, `VERIFY` instead of exceptions — so read its output as a to-triage list, never as a queue of
+handles, `ASSUME` instead of exceptions — so read its output as a to-triage list, never as a queue of
 defects.
 
 ---
@@ -278,15 +278,51 @@ already knew about the others, several while fixing one. So the rule is mechanic
 
 ### Self-check, don't throw
 
-- `VERIFY( cond )` at every precondition and invariant. It is free in release (`-DNDEBUG` lowers it
-  to `__builtin_assume`: zero cost, plus an optimizer hint).
-- A **recoverable** runtime error — an unreadable file, a full pool, a missing grammar — is a
-  **degrade**, not a failure: return `nullptr` / `false` / empty / a clamped value, emit
-  `DEGRADED_PATH_ALERT( "msg" )`, and keep going. The whole pipeline must survive a malformed repo.
+Self-checking is this codebase's primary correctness mechanism, ahead of tests: a check at an invariant runs on
+every input the tool ever sees, costs nothing in release, and tells the optimizer a fact. **Add them freely.**
+`test/selfcheckcheck.sh` objects only to:
+- a side effect inside a check;
+- a call it has never seen inside a promise (one line in its ALLOW table, once);
+- `ASSUME( false )`;
+- external input handed to anything but `VALIDATE`;
+- a new one-argument `DISCLOSE`;
+- an `answerUnchanged` without a reason.
+
+| word | promises | release | use for | never for |
+| --- | --- | --- | --- | --- |
+| `ASSUME( e[, "why"] )` | e holds because THIS code makes it hold | not evaluated; the optimizer may rely on it | invariants, indices you bounded, sizes you set | argv, files, git, sockets, the environment |
+| `EXPECTS( e[, "why"] )` | the caller met this function's contract | as ASSUME | preconditions; the report blames the caller | a boundary whose callers you do not control (VALIDATE) |
+| `ENSURES( e[, "why"] )` | this function met its own contract | as ASSUME | postconditions before a return | anything the caller can still change |
+| `DASSERT( e[, "why"] )` | nothing: debug-only check | nothing, not evaluated | expensive or floating-point checks; corruptible structure (`verifyCsr`) | facts the optimizer should have |
+| `ASSUME_NO_ALIAS( a, b )` / `3` / `_BUF` | separate allocations | separate_storage fact | out-params and read/write pairs of one type | views; members of one struct; elements of one array |
+| `ASSUME_SAME_THREAD()` | this SITE runs on one thread | nothing | process singletons (the MCP index) | a body pool workers reach on different objects |
+| `ASSUME_SAME_THREAD_AS( obj )` | obj is touched only by its owner (`release()` hands it on) | nothing, no storage | worker result slots, prefetch results | lock-protected state; per-node records |
+| `UNREACHABLE( ["why"] )` | control never arrives here | `__builtin_unreachable()` | exhaustive `switch` defaults | a path bad input can reach |
+| `VALIDATE( e[, "why"] )` | nothing: e is external input | evaluated, one compare | the condition of the refusing or degrading `if` | invariants |
+| `DISCLOSE( sink, why[, "msg"] )` | the answer carries its incompleteness | `sink.disclose( why )` runs | every degrade: the sink is the struct whose field the emitter reads; `why` is its own scoped enum | — |
+| `DISCLOSE( Diagnostics::answerUnchanged, "reason" )` | this degrade changes cost, never content | nothing, but the reason is listed by the gate | a rejected or unwritable cache, a same-bytes fallback, a lock skipped under a re-check | dropped/truncated/guessed rows, stored partial facts, refusals, unreachable guards |
+| `DISCLOSE( "msg" )` | **nothing to the user**: a debug trace | nothing | existing sites only, until converted (ratchet) | any new degrade |
+| `PANIC( "why" )` | we cannot continue | report and abort | a corrupt state | anything recoverable |
+
+**The error ladder:**
+- A **recoverable** runtime error (an unreadable file, a full pool, a missing grammar) is a **degrade**, not a
+  failure. Return `nullptr` / `false` / empty / a clamped value, **tell the reader in the document**, and keep
+  going. The whole pipeline must survive a malformed repo.
+  - Write `DISCLOSE( sink, Sink::DisclosureWhy::Reason[, "subsystem: condition — consequence"] )`. The sink is the
+    object whose field the emitter already reads (`complete=`, `ok="0"`, `why=`, `*_capped="1"`, `counts_floor="1"`,
+    an omitted `est_tokens=`); give it a scoped `DisclosureWhy` and a `noexcept` `disclose()` that sets that field.
+    The compiler checks the contract.
+  - `docs/ARCHITECTURE.md`: "A disclosure that lives only in an assertion is a disclosure that does not ship."
+  - If the degrade genuinely cannot change this answer (a cache rejected and rebuilt, a cache write that only
+    makes the next run cold), write `DISCLOSE( Diagnostics::answerUnchanged, "why this answer is unchanged" )`.
+    The gate prints that reason on every run.
+  - The one-argument `DISCLOSE( msg )` is a debug trace that ships nothing. It remains only on sites not yet
+    converted, and `test/selfcheckcheck.sh` refuses a new one.
+- **External input** is checked with `VALIDATE` in the condition of the refusal, never `ASSUME`d.
 - A **corrupt invariant** is a `PANIC`.
-- **Never write `VERIFY( false )` on a degrade path.** In release the assert compiles away and the
-  optimizer deletes the fallback behind it — that is a real shipped-bug shape, not a hypothetical.
-  Guard, don't assert.
+- **Never `ASSUME( false )` (or an `EXPECTS`/`ENSURES` of false) on a degrade path.** In release the assert
+  compiles away and the optimizer deletes the fallback behind it — that is a real shipped-bug shape, not a
+  hypothetical. Guard, don't assert.
 - Throw only at the `operator new` seam. A throw escaping a worker thread is `std::terminate`, so
   wrap thread bodies in `try { … } catch( ... ) { … }`.
 - **Avoid exception handling. Where a throw is unavoidable, RAII is what makes the code exception-safe:
@@ -355,7 +391,7 @@ already knew about the others, several while fixing one. So the rule is mechanic
   `#if __STDC_VERSION__ < 199901` / `#define __restrict` (empty), and `__STDC_VERSION__` is
   undefined in C++, so every `__restrict` that follows any libc/libc++ include is silently deleted.
   `__restrict__` is a keyword, not a macro, and survives.
-- **Prefer `VERIFY_NO_ALIAS( a, b )` (objects) or `VERIFY_NO_ALIAS_BUF( a, b )` (OWNING containers only: `std::vector`, `std::string`, `std::array`) in
+- **Prefer `ASSUME_NO_ALIAS( a, b )` (objects) or `ASSUME_NO_ALIAS_BUF( a, b )` (OWNING containers only: `std::vector`, `std::string`, `std::array`) in
   the body over a qualifier on the signature.** For a container, the promise has to land on
   `.data()` — on the objects themselves it is inert for the loop, because the optimizer reaches the
   heap buffer through a pointer loaded from the header, not through the header's own address. Never a
@@ -509,8 +545,8 @@ Both are load-bearing, and the reason is a real regression this project shipped:
 
 - **Release catches optimizer-only bugs** — code that is correct at `-O0` and wrong once
   `__builtin_assume` and inlining are in play, including the "assert it, then defend against it"
-  trap where a `VERIFY` lets the optimizer delete the defensive branch that follows.
-- **The plain build catches degrade paths** — `DEGRADED_PATH_ALERT` is compiled out under `NDEBUG`,
+  trap where an `ASSUME` lets the optimizer delete the defensive branch that follows.
+- **The plain build catches degrade paths** — the `DISCLOSE( msg )` trace is compiled out under `NDEBUG`,
   so a Release-only suite cannot observe the alert that a degrade-path gate asserts. For three
   development cycles, every degrade-path gate in CI passed for exactly that reason.
 

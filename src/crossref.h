@@ -96,7 +96,7 @@
 #include "pageview.h"           // §P8: pageWindow / pageDisclosure — the shared --limit/--offset contract
 #include "workspace.h"          // wsdetail::segmentsOf
 #include "filter.h"             // §P11.5: rw::pathTierOf — the shared source/test/doc ORDERING tier
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -287,8 +287,8 @@ inline std::size_t sortedIntersectSize( const std::vector<std::uint64_t>& a, con
 {
     // SORTEDNESS is this whole family's precondition — an unsorted input does not fail loudly, it silently
     // under-counts the intersection and quietly shifts a verdict. Free in release (__builtin_assume).
-    VERIFY( std::is_sorted( a.begin(), a.end() ) );
-    VERIFY( std::is_sorted( b.begin(), b.end() ) );
+    ASSUME( std::is_sorted( a.begin(), a.end() ) );
+    ASSUME( std::is_sorted( b.begin(), b.end() ) );
     std::size_t hit = 0, i = 0, j = 0;
     while( i < a.size() && j < b.size() )
     {
@@ -360,8 +360,8 @@ inline std::vector<std::uint64_t> lineMultiset( std::string_view src )
 // survives once). The linear merge that makes "what did this side ADD / REMOVE" exact under duplicates.
 inline std::vector<std::uint64_t> msetDiff( const std::vector<std::uint64_t>& a, const std::vector<std::uint64_t>& b )
 {
-    VERIFY( std::is_sorted( a.begin(), a.end() ) );
-    VERIFY( std::is_sorted( b.begin(), b.end() ) );
+    ASSUME( std::is_sorted( a.begin(), a.end() ) );
+    ASSUME( std::is_sorted( b.begin(), b.end() ) );
     std::vector<std::uint64_t> out;
     std::size_t                i = 0, j = 0;
     while( i < a.size() )
@@ -483,7 +483,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         if( !lf )
         {
             st.startFailed = true;
-            DEGRADED_PATH_ALERT( "crossref: cannot write the blob-batch list — cross-branch content unavailable" );
+            DISCLOSE( "crossref: cannot write the blob-batch list — cross-branch content unavailable" );
             return;
         }
         for( const std::string& s : shas )
@@ -500,7 +500,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
     {
         ::unlink( listPath.c_str() );
         st.startFailed = true;
-        DEGRADED_PATH_ALERT( "crossref: git cat-file --batch failed to start — cross-branch content unavailable" );
+        DISCLOSE( "crossref: git cat-file --batch failed to start — cross-branch content unavailable" );
         return;
     }
 
@@ -563,7 +563,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         {
             st.endedEarly = true;
             onBlob( shas[ served ], std::string_view{}, false );
-            DEGRADED_PATH_ALERT( "crossref: git cat-file stream ended mid-blob — stopping the batch rather than risk misattributing content" );
+            DISCLOSE( "crossref: git cat-file stream ended mid-blob — stopping the batch rather than risk misattributing content" );
             break;
         }
 
@@ -731,7 +731,7 @@ inline std::vector<RefInfo> enumerateRefs( const std::string& root, std::string_
             // %(objectname) is always a full object name, so this cannot fire on well-formed output — which
             // is exactly why it is checked HERE, at the one place ref tips enter the module. Every git
             // command downstream takes this value as a revision argument.
-            DEGRADED_PATH_ALERT( "crossref: for-each-ref yielded a ref whose tip is not an object name — skipping it" );
+            DISCLOSE( "crossref: for-each-ref yielded a ref whose tip is not an object name — skipping it" );
             continue;
         }
         if( !filter.empty() && name.find( filter ) == std::string_view::npos )
@@ -763,7 +763,7 @@ inline std::vector<RawRow> diffRaw( const std::string& root, const std::string& 
     // Degrade to an empty diff rather than spawn a command whose arguments were never checked.
     if( !isRevisionToken( a ) || !isRevisionToken( b ) )
     {
-        DEGRADED_PATH_ALERT( "crossref: refusing a diff whose revision arguments are not resolved object names" );
+        DISCLOSE( "crossref: refusing a diff whose revision arguments are not resolved object names" );
         return {};
     }
     const std::string raw = gitCapture( root, "diff --raw --no-abbrev --no-renames " + shSingleQuote( a ) + " " + shSingleQuote( b ) + " -- 2>/dev/null" );
@@ -843,7 +843,7 @@ inline void parallelIndexed( std::size_t count, Body body )
                 body( i );
             }
         }
-        catch( ... ) { DEGRADED_PATH_ALERT( "crossref: a git worker threw — this shard of the sweep is incomplete" ); }
+        catch( ... ) { DISCLOSE( "crossref: a git worker threw — this shard of the sweep is incomplete" ); }
     };
 
     {   // symmetric bare scope: the workers live exactly as long as the pass they serve
@@ -932,7 +932,7 @@ inline const char* verdictTag( Verdict v ) noexcept
     // a missing tag would have zero-filled into a null pointer instead of failing.
     static constexpr const char* kTag[] = { "merged", "superseded", "unmerged", "unknown" };
     static_assert( std::size( kTag ) == kVerdictCount, "verdictTag table must cover every Verdict" );
-    VERIFY( std::size_t( v ) < kVerdictCount );
+    ASSUME( std::size_t( v ) < kVerdictCount );
     return kTag[ std::size_t( v ) ];
 }
 
@@ -992,7 +992,7 @@ inline Verdict classifyFile( const FileRow& r )
     // `redone` counts a SUBSET of `deleted` (base lines this ref removed that HEAD removed too), so a
     // redone > deleted would mean the intersection out-counted one of its own operands — a corrupt
     // multiset walk, and it would push redoDel above 1.0 and silently mark the file superseded.
-    VERIFY( r.redone <= r.deleted );
+    ASSUME( r.redone <= r.deleted );
 
     if( r.strayLines == 0 )
     {
@@ -1037,7 +1037,7 @@ inline RefPlumbing probeRefBase( const std::string& root, const RefInfo& ref, co
     if( !isRevisionToken( ref.tip ) || !isRevisionToken( headSha ) )
     {
         plumb.ok = false;
-        DEGRADED_PATH_ALERT( "crossref: ref tip or HEAD is not a resolved object name — refusing to probe, verdict is unknown" );
+        DISCLOSE( "crossref: ref tip or HEAD is not a resolved object name — refusing to probe, verdict is unknown" );
         return plumb;
     }
 
@@ -1048,7 +1048,7 @@ inline RefPlumbing probeRefBase( const std::string& root, const RefInfo& ref, co
     // to two more git commands. Anything that is not an object name is treated exactly like no merge-base.
     if( !plumb.base.empty() && !isRevisionToken( plumb.base ) )
     {
-        DEGRADED_PATH_ALERT( "crossref: merge-base returned something that is not an object name — discarding it" );
+        DISCLOSE( "crossref: merge-base returned something that is not an object name — discarding it" );
         plumb.base.clear();
     }
     if( plumb.base.empty() )
@@ -1057,7 +1057,7 @@ inline RefPlumbing probeRefBase( const std::string& root, const RefInfo& ref, co
         // not an exotic case) or genuinely unrelated histories. Degrade, never crash — and the verdict this
         // produces is Unknown, never Merged: see writeStrayRef and Verdict's own comment.
         plumb.ok = false;
-        DEGRADED_PATH_ALERT( "crossref: no merge-base for ref (shallow clone or unrelated history?) — verdict is unknown, not merged" );
+        DISCLOSE( "crossref: no merge-base for ref (shallow clone or unrelated history?) — verdict is unknown, not merged" );
         return plumb;
     }
     // ref.tip == base ⇒ the ref is an ANCESTOR of HEAD, so diff(base, ref.tip) is a diff of a tree against
@@ -1165,7 +1165,7 @@ inline RefRow analyzeRef( const RefInfo& ref, const RefPlumbing& plumb, const st
 inline DiffPairTable gatherRefDiffs( const std::string& root, const std::vector<RefInfo>& refs,
                                      const std::string& headSha, std::vector<RefPlumbing>& plumbing )
 {
-    VERIFY( plumbing.size() == refs.size() );
+    ASSUME( plumbing.size() == refs.size() );
 
     DiffPairTable diffs;
     for( std::size_t i = 0; i < refs.size(); ++i )
@@ -1533,7 +1533,7 @@ inline std::vector<RawRow> lsTree( const std::string& root, const std::string& r
 {
     if( !isRevisionToken( rev ) )
     {
-        DEGRADED_PATH_ALERT( "crossref: refusing to list a tree whose revision argument is not a resolved object name" );
+        DISCLOSE( "crossref: refusing to list a tree whose revision argument is not a resolved object name" );
         return {};
     }
     const std::string raw = gitCapture( root, "ls-tree -r " + shSingleQuote( rev ) + " -- 2>/dev/null" );
@@ -1617,7 +1617,7 @@ inline bool relabelHeadHitsFromIndex( std::vector<WhereHit>& hits, std::span<con
     const bool anyPromoted = std::find( promoted.begin(), promoted.end(), 1 ) != promoted.end();
     if( !anyPromoted )
     {
-        DEGRADED_PATH_ALERT( "whereis: the index's def sites match no HEAD row (working tree drifted from HEAD?) — keeping the lexical labels" );
+        DISCLOSE( "whereis: the index's def sites match no HEAD row (working tree drifted from HEAD?) — keeping the lexical labels" );
         return false;
     }
     for( std::size_t hitIndex = 0; hitIndex < hits.size(); ++hitIndex )
@@ -1905,7 +1905,7 @@ inline void writeStrayRef( std::FILE* out, const RefRow& r, const XmlEscaper& ex
     // this is a belt-and-braces coercion at the one place the claim is actually made to the reader: no future
     // degrade path can reintroduce "the analysis failed, so let us print the reassuring answer".
     const Verdict shownVerdict = r.ok ? r.verdict : Verdict::Unknown;
-    VERIFY( r.ok || shownVerdict == Verdict::Unknown );
+    ASSUME( r.ok || shownVerdict == Verdict::Unknown );
 
     rw::emitTo( out, "<ref name=\"{}\" tip=\"{:.9}\" date=\"{}\" base=\"{:.9}\" ok=\"{}\" v=\"{}\" stray=\"{}\" files=\"{}\" superseded=\"{}\">",
                   ex( r.ref.name ).c_str(), r.ref.tip.c_str(), ex( r.ref.date ).c_str(), r.base.c_str(),
@@ -1924,7 +1924,7 @@ inline void writeStrayRef( std::FILE* out, const RefRow& r, const XmlEscaper& ex
         ++shownCount;
         writeStrayFile( out, f, ex );
     }
-    VERIFY( shownCount == std::min( r.files.size(), maxFiles ) );
+    ASSUME( shownCount == std::min( r.files.size(), maxFiles ) );
     if( r.files.size() > maxFiles )
     {
         rw::emitTo( out, "<more files=\"{}\"/>", r.files.size() - maxFiles );
@@ -1961,7 +1961,7 @@ inline void writeStrayContentPage( std::FILE* out, const StrayResult& res, std::
             ++superseded;
         }
     }
-    VERIFY( std::size_t( unmerged ) + superseded + unknown + res.mergedRefs == res.refsScanned );
+    ASSUME( std::size_t( unmerged ) + superseded + unknown + res.mergedRefs == res.refsScanned );
 
     // G4: an XML comment may not contain a double hyphen, so this text (and writeWhereis's) names flags and
     // git subcommands WITHOUT their leading dashes. Keep it that way when editing.
@@ -2078,7 +2078,7 @@ inline bool whereisSpecIsFileQualified( std::string_view spec )
 inline std::string_view whereisBareNameOf( std::string_view spec )
 {
     const std::size_t lastColon = spec.rfind( ':' );
-    VERIFY( lastColon != std::string_view::npos && lastColon + 1 < spec.size() );
+    ASSUME( lastColon != std::string_view::npos && lastColon + 1 < spec.size() );
     return spec.substr( lastColon + 1 );
 }
 
@@ -2239,7 +2239,7 @@ inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_
                       ex( h.ref ).c_str(), h.tip.c_str(), ex( h.date ).c_str(), ex( h.path ).c_str(),
                       h.line, h.isDef ? "def" : "ref", ex( h.text ).c_str() );
     }
-    VERIFY( shownCount == hitPage.end - hitPage.begin );
+    ASSUME( shownCount == hitPage.end - hitPage.begin );
     // <more hits="N"/> = the rows AFTER this page, so shown + more == the rows from this page's offset on.
     // Un-paginated that is the historic "hits= minus the 60 printed"; paged it is what the NEXT page holds
     // (and next_offset= on the root says where to ask for it).

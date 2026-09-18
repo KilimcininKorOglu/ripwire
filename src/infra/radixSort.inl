@@ -60,7 +60,7 @@ ALWAYS_INLINE SortWordFor<Key> sortWordOf( Key key ) noexcept
 {
     if constexpr ( IsFloatRadixKey<Key> )
     {
-        VERIFY_TEXT( keyIsSortable(key), "radix float keys must be finite" );
+        ASSUME( keyIsSortable(key), "radix float keys must be finite" );
 
         uint32_t raw = __builtin_bit_cast( uint32_t, key );
         if( ( raw & 0x7FFFFFFFu ) == 0u ) {
@@ -87,8 +87,8 @@ ALWAYS_INLINE constexpr uint16_t quantizeFloatToU16Impl( float value, float minV
 {
     if( !std::is_constant_evaluated() )
     {
-        VERIFY_TEXT( fastmath::isFiniteFast(value), "radix quantized float keys must be finite" );
-        VERIFY_TEXT( fastmath::isFiniteFast(minValue) &&
+        ASSUME( fastmath::isFiniteFast(value), "radix quantized float keys must be finite" );
+        ASSUME( fastmath::isFiniteFast(minValue) &&
                      fastmath::isFiniteFast(maxValue) &&
                      minValue < maxValue,
                      "radix quantized float key range must be finite and ordered" );
@@ -102,7 +102,7 @@ ALWAYS_INLINE constexpr uint16_t quantizeFloatToU16Impl( float value, float minV
 ALWAYS_INLINE constexpr uint16_t quantizeFloatToU16Signed1024Impl( float value ) noexcept
 {
     if( !std::is_constant_evaluated() ) {
-        VERIFY_TEXT( fastmath::isFiniteFast(value), "radix quantized float keys must be finite" );
+        ASSUME( fastmath::isFiniteFast(value), "radix quantized float keys must be finite" );
 }
 
     constexpr float kMin = -1024.f;
@@ -365,7 +365,7 @@ void buildHistogramsContiguousKeys( const Key* keys, std::size_t count,
         std::size_t i = 0;
         for( ; i + 4 <= count; i += 4 )
         {
-            VERIFY_TEXT( fastmath::isFiniteFast(keys[i + 0]) &&
+            ASSUME( fastmath::isFiniteFast(keys[i + 0]) &&
                          fastmath::isFiniteFast(keys[i + 1]) &&
                          fastmath::isFiniteFast(keys[i + 2]) &&
                          fastmath::isFiniteFast(keys[i + 3]),
@@ -470,10 +470,10 @@ void sortKeySmall( Item* items, Item* scratch, std::size_t count, KeyOf&& keyOf 
         return;
 }
 
-    VERIFY_TEXT( items != nullptr,   "sortKeySmall: items must be non-null" );
-    VERIFY_TEXT( scratch != nullptr, "sortKeySmall: scratch must be non-null" );
-    VERIFY_TEXT( items != scratch,   "sortKeySmall: scratch must not alias items" );
-    VERIFY_TEXT( count <= std::size_t(UINT32_MAX), "sortKeySmall: count exceeds uint32 histogram range" );
+    ASSUME( items != nullptr,   "sortKeySmall: items must be non-null" );
+    ASSUME( scratch != nullptr, "sortKeySmall: scratch must be non-null" );
+    ASSUME( items != scratch,   "sortKeySmall: scratch must not alias items" );
+    ASSUME( count <= std::size_t(UINT32_MAX), "sortKeySmall: count exceeds uint32 histogram range" );
 
     constexpr int kPasses = detail::Passes<Key>;
     alignas( infra::platform::hardware_destructive_interference_size ) detail::Count hist[kPasses][256];
@@ -544,11 +544,11 @@ void sortKeyLarge( const Key* keys, uint32_t* indices, uint32_t* scratch, std::s
         return;
     }
 
-    VERIFY_TEXT( keys != nullptr,    "sortKeyLarge: keys must be non-null" );
-    VERIFY_TEXT( indices != nullptr, "sortKeyLarge: indices must be non-null" );
-    VERIFY_TEXT( scratch != nullptr, "sortKeyLarge: scratch must be non-null" );
-    VERIFY_TEXT( indices != scratch, "sortKeyLarge: scratch must not alias indices" );
-    VERIFY_TEXT( count <= std::size_t(UINT32_MAX), "sortKeyLarge: count exceeds uint32 index range" );
+    ASSUME( keys != nullptr,    "sortKeyLarge: keys must be non-null" );
+    ASSUME( indices != nullptr, "sortKeyLarge: indices must be non-null" );
+    ASSUME( scratch != nullptr, "sortKeyLarge: scratch must be non-null" );
+    ASSUME( indices != scratch, "sortKeyLarge: scratch must not alias indices" );
+    ASSUME( count <= std::size_t(UINT32_MAX), "sortKeyLarge: count exceeds uint32 index range" );
 
     for( std::size_t i = 0; i < count; ++i ) {
         indices[i] = uint32_t( i );
@@ -570,11 +570,11 @@ void sortKeyLargeIndexed( const Key* keys, uint32_t* indices, uint32_t* scratch,
         return;
 }
 
-    VERIFY_TEXT( keys != nullptr,    "sortKeyLargeIndexed: keys must be non-null" );
-    VERIFY_TEXT( indices != nullptr, "sortKeyLargeIndexed: indices must be non-null" );
-    VERIFY_TEXT( scratch != nullptr, "sortKeyLargeIndexed: scratch must be non-null" );
-    VERIFY_TEXT( indices != scratch, "sortKeyLargeIndexed: scratch must not alias indices" );
-    VERIFY_TEXT( count <= std::size_t(UINT32_MAX), "sortKeyLargeIndexed: count exceeds uint32 histogram range" );
+    ASSUME( keys != nullptr,    "sortKeyLargeIndexed: keys must be non-null" );
+    ASSUME( indices != nullptr, "sortKeyLargeIndexed: indices must be non-null" );
+    ASSUME( scratch != nullptr, "sortKeyLargeIndexed: scratch must be non-null" );
+    ASSUME( indices != scratch, "sortKeyLargeIndexed: scratch must not alias indices" );
+    ASSUME( count <= std::size_t(UINT32_MAX), "sortKeyLargeIndexed: count exceeds uint32 histogram range" );
 
     constexpr int kPasses = detail::Passes<Key>;
     alignas( infra::platform::hardware_destructive_interference_size ) detail::Count hist[kPasses][256];
@@ -597,11 +597,11 @@ void sortKeyLargePairs( const Key* keys, uint32_t* indices, WordIndex* scratch, 
         return;
     }
 
-    VERIFY_TEXT( keys != nullptr,    "sortKeyLargePairs: keys must be non-null" );
-    VERIFY_TEXT( indices != nullptr, "sortKeyLargePairs: indices must be non-null" );
-    VERIFY_TEXT( scratch != nullptr, "sortKeyLargePairs: scratch must be non-null" );
-    VERIFY_TEXT( count <= std::size_t(UINT32_MAX), "sortKeyLargePairs: count exceeds uint32 index range" );
-    VERIFY_TEXT( static_cast<const void*>(indices) != static_cast<const void*>(scratch),
+    ASSUME( keys != nullptr,    "sortKeyLargePairs: keys must be non-null" );
+    ASSUME( indices != nullptr, "sortKeyLargePairs: indices must be non-null" );
+    ASSUME( scratch != nullptr, "sortKeyLargePairs: scratch must be non-null" );
+    ASSUME( count <= std::size_t(UINT32_MAX), "sortKeyLargePairs: count exceeds uint32 index range" );
+    ASSUME( static_cast<const void*>(indices) != static_cast<const void*>(scratch),
                  "sortKeyLargePairs: scratch must not alias indices (final writeback reads scratch)" );
 
     // Two ping-pong halves of the scratch hold <word,index> pairs. The scatter

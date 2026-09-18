@@ -57,7 +57,7 @@
 #include "gitstamp.h"      // atAttr — the at="<sha>[+dirty]" root anchor, same placement as --edit-check
 #include "sarif.h"         // rootPrefixOf / rootRelativeUri — root-relative p=, same as every verb
 
-#include "infra/Diagnostics.h"   // DEGRADED_PATH_ALERT — the three parse-refusal arms are degrades, not asserts
+#include "infra/Diagnostics.h"   // DISCLOSE — the three parse-refusal arms are degrades, not asserts
 #include "infra/fieldid.h"       // rw::fieldChild / NodeField — the field id resolved once per grammar, not per node
 
 #include <tree_sitter/api.h>
@@ -1776,7 +1776,7 @@ struct SliceRdWalker
             }
             if( !converged )
             {
-                DEGRADED_PATH_ALERT( "slice: reaching-definition loop did not converge — using the last state" );
+                DISCLOSE( "slice: reaching-definition loop did not converge — using the last state" );
             }
             breakAcc.pop_back();
             continueAcc.pop_back();
@@ -2554,19 +2554,19 @@ inline SliceScan sliceScanDefinition( const std::string& src, const Symbol& sym,
     TSParser* parser = ts_parser_new();
     if( parser == nullptr )
     {
-        DEGRADED_PATH_ALERT( "slice: ts_parser_new returned null" );
+        DISCLOSE( "slice: ts_parser_new returned null" );
         return scan;
     }
     if( !ts_parser_set_language( parser, grammar ) )
     {
-        DEGRADED_PATH_ALERT( "slice: grammar ABI mismatch" );
+        DISCLOSE( "slice: grammar ABI mismatch" );
         ts_parser_delete( parser );
         return scan;
     }
     TSTree* tree = ts_parser_parse_string( parser, nullptr, src.data(), std::uint32_t( src.size() ) );
     if( tree == nullptr )
     {
-        DEGRADED_PATH_ALERT( "slice: parse returned null" );
+        DISCLOSE( "slice: parse returned null" );
         ts_parser_delete( parser );
         return scan;
     }

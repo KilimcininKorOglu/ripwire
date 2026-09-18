@@ -131,7 +131,7 @@
 //   - Directory components. O_NOFOLLOW constrains the final component only, exactly as for the writes.
 //
 // Each sidecar keeps ONE read seam (readNotesSidecar / readBaselineSidecar / readArchBaselineSidecar) that
-// calls openNoFollowRead below and carries its own DEGRADED_PATH_ALERT, for the same once-per-site reason the
+// calls openNoFollowRead below and carries its own DISCLOSE, for the same once-per-site reason the
 // write seams keep theirs.
 //
 // ── ROUND 4: A NON-REGULAR FILE AT THE NAME, AND A READ THAT HOLDS ONE LINE ─────────────────────────────
@@ -206,7 +206,7 @@ inline bool isSymlink( const std::string& path ) noexcept
 // emitter is entitled to clobber errno on its way to stderr.
 //
 // `err == ELOOP` is the link case, and it is the one the caller re-words into its own site-specific
-// DEGRADED_PATH_ALERT — see the three sidecar writers, which each keep the alert text they have always had.
+// DISCLOSE — see the three sidecar writers, which each keep the alert text they have always had.
 struct OpenedFile
 {
     int fd  = -1;

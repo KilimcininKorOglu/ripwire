@@ -13,7 +13,7 @@
 
 #include "model.h"
 #include "mention.h"   // kMentionTopGapStep / kMentionMaxSymbolsPerFile — the ONE slot-ladder vocabulary
-#include "infra/emit.h"          // rw::emitTo — a malformed/out-of-range RIPWIRE_SIBLIFT is REPORTED on stderr in every build flavour: a rejected user value is config feedback, not a degrade path (DEGRADED_PATH_ALERT compiles out under NDEBUG, so a Release binary would have gone silent again)
+#include "infra/emit.h"          // rw::emitTo — a malformed/out-of-range RIPWIRE_SIBLIFT is REPORTED on stderr in every build flavour: a rejected user value is config feedback, not a degrade path (DISCLOSE compiles out under NDEBUG, so a Release binary would have gone silent again)
 #include <algorithm>
 #include <cstdlib>
 #include <string_view>

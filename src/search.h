@@ -20,7 +20,7 @@
 // carries its enclosing symbol chain, its matched line, and optional context lines.
 
 #include "infra/stackthreads.h" // rw::runOnStackThreads — the scan threads, with a stack the regex line bound is computed for
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — graceful-degrade when regex matching throws mid-scan (never terminate)
+#include "infra/Diagnostics.h"  // DISCLOSE — graceful-degrade when regex matching throws mid-scan (never terminate)
 #include "didyoumean.h"         // R1a: the ONE near-miss suggester — the zero-hit follow-up reuses it, never a second one
 #include "docparse.h"           // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
 #include "filter.h"             // §P11.1: rw::pathTierOf — the shared source/test/doc ORDERING tier
@@ -284,8 +284,8 @@ inline bool matchesOnlyEmpty( const RegexInfo& r )
 // (e.g. `(ab|cd)(ef|gh)` → abef, abgh, cdef, cdgh, whose trigrams the AND can then require).
 inline bool crossProduct( const std::vector<std::string>& a, const std::vector<std::string>& b, std::vector<std::string>& out )
 {
-    VERIFY_NO_ALIAS( a, out );   // inputs are only read: a self-product crossProduct( v, v, out ) is valid,
-    VERIFY_NO_ALIAS( b, out );   // so the contract is each input against the output, never a against b
+    ASSUME_NO_ALIAS( a, out );   // inputs are only read: a self-product crossProduct( v, v, out ) is valid,
+    ASSUME_NO_ALIAS( b, out );   // so the contract is each input against the output, never a against b
     if( a.size() * b.size() > kMaxExactSet )
     {
         return false;
@@ -1104,7 +1104,7 @@ struct GrepScanVerdict
         } );
         if( scan.verdict == RegexVerdict::Exhausted )
         {
-            DEGRADED_PATH_ALERT( "grep: the regex engine abandoned a match (catastrophic backtracking?) — the verb refuses the answer" );
+            DISCLOSE( "grep: the regex engine abandoned a match (catastrophic backtracking?) — the verb refuses the answer" );
         }
         scanned = text.size();   // the literal branch's cursor is not shared with this one; keep it honest
         return { scan.verdict == RegexVerdict::Exhausted, scan.skippedLineCount };
@@ -1177,7 +1177,7 @@ inline std::optional<std::string> regexCompileError( const std::string& pat )
 //
 // §P11.1 — the returned ORDER is TIER-then-path, not path alone. Plain path-alphabetical order plus the
 // caller's fixed row cap is a systematic bias against code on any doc-bearing repo: on ripwire's own tree
-// `--grep=DEGRADED_PATH_ALERT` filled 66 of its 100 shown rows with markdown and left no `test/` row at all,
+// `--grep=DISCLOSE` filled 66 of its 100 shown rows with markdown and left no `test/` row at all,
 // because `AGENTS.md` and other long-named docs sort above `src/` and the cap always cuts the tail. Ordering HERE
 // rather than in the emitter keeps the CLI verb and the MCP `grep` verb on ONE order — they already share
 // this collection precisely so they cannot diverge. Path-alphabetical survives untouched INSIDE a tier, so
@@ -1345,7 +1345,7 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
         catch( ... )   // a throw escaping a worker thread is std::terminate — degrade to partial hits instead
         {
             workerDegraded.store( true, std::memory_order_relaxed );     // T1: the hit set is partial now
-            DEGRADED_PATH_ALERT( "grep: scan worker degraded (exception swallowed) — partial hit set" );
+            DISCLOSE( "grep: scan worker degraded (exception swallowed) — partial hit set" );
         }
     };
     // symmetric bare scope: the workers live exactly as long as the scan. A regex scan runs on the scan threads
@@ -1594,7 +1594,7 @@ inline GrepAuxCollection grepCollectAux( const CrawlSkips& skips, const std::str
         catch( ... )
         {
             out.degraded = true;
-            DEGRADED_PATH_ALERT( "grep: the unindexed scan degraded (exception swallowed) — partial hit set" );
+            DISCLOSE( "grep: the unindexed scan degraded (exception swallowed) — partial hit set" );
         }
     };
     if( regex )

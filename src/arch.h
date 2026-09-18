@@ -32,7 +32,7 @@
 
 #include "model.h"
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — THE one atomic no-follow open the sidecar writers share
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — graceful-degrade on a malformed path-regex (never throw at match time)
+#include "infra/Diagnostics.h"  // DISCLOSE — graceful-degrade on a malformed path-regex (never throw at match time)
 #include "regexguard.h"          // path-rules: the screen, the compile and the guarded match every user-authored pattern takes
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
 #include "infra/stackthreads.h" // kCallerStackBytesFloor — path-rule matching runs on whatever thread --arch is on, never one it sized itself
@@ -502,7 +502,7 @@ inline ArchRules parseArchRules( const std::string& path )
     const auto badLine = [ & ]( std::size_t lineNo, std::string_view why ) -> bool
     {
         rw::emitTo( stderr, "ripwire: --arch: {}:{}: {} — rules file rejected\n", path.c_str(), lineNo, why );
-        DEGRADED_PATH_ALERT( "arch: malformed rules line — rules file rejected" );
+        DISCLOSE( "arch: malformed rules line — rules file rejected" );
         return false;
     };
 
@@ -758,7 +758,7 @@ inline std::string archBaselinePath( const std::string& /*rulesPath*/ ) noexcept
 inline rw::pathguard::NoFollowRead readArchBaselineSidecar( const std::string& sidecarPath ) noexcept
 {
     rw::pathguard::NoFollowRead sidecar = rw::pathguard::openNoFollowRead( "the arch baseline sidecar", sidecarPath );
-    if( sidecar.refused ) { DEGRADED_PATH_ALERT( "arch: refusing to read the arch baseline sidecar through a symlink" ); }
+    if( sidecar.refused ) { DISCLOSE( "arch: refusing to read the arch baseline sidecar through a symlink" ); }
     return sidecar;
 }
 
@@ -820,7 +820,7 @@ inline int openArchBaselineSidecar( const std::string& sidecarPath ) noexcept
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the arch baseline sidecar", sidecarPath );
     if( fd < 0 && openErr == ELOOP )
     {
-        DEGRADED_PATH_ALERT( "arch: refusing to write the arch baseline sidecar through a symlink" );
+        DISCLOSE( "arch: refusing to write the arch baseline sidecar through a symlink" );
     }
     return fd;
 }

@@ -195,7 +195,7 @@ inline Claim parseClaim( std::string_view src )
 // the tag the emitter prints for a shape (shape= is what a consumer switches on, so the spelling is
 // pinned here where the parser lives). A declarative table, no lookup helper: the parser is the only
 // producer of ClaimShape values and every one it produces is in range, so the emitter indexes the table
-// directly (with a VERIFY at the use-site) — the enum order IS the tag order, and the static_assert pins
+// directly (with an ASSUME at the use-site) — the enum order IS the tag order, and the static_assert pins
 // the count so a new shape cannot silently miss a tag.
 inline constexpr const char* kShapeTags[] = { "calls", "uses", "unused", "contains", "defines", "reaches" };
 static_assert( std::size_t( ClaimShape::Reaches ) + 1 == std::size( kShapeTags ), "ClaimShape grew — extend kShapeTags" );

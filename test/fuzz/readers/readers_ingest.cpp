@@ -11,7 +11,7 @@
 //   stiermemo    — spanTierMemoLoad over a memo blob (header identity stamped to match), then spanTierAt at every
 //                  recorded boundary: the loader is where the bytes are read, the lookup is where they are used.
 //
-// Oracle: no sanitizer report, no hardening trap, no VERIFY, no uncaught exception.
+// Oracle: no sanitizer report, no hardening trap, no ASSUME, no uncaught exception.
 
 #include "ingest.cpp"
 

@@ -23,7 +23,7 @@
 //   * NEVER FABRICATES — a line that does not match any shape yields no frame (empty input → zero frames →
 //     the handler refuses loudly rather than emitting an empty map).
 
-#include "infra/Diagnostics.h"   // VERIFY — the frames-seen tally's own invariant (§B10)
+#include "infra/Diagnostics.h"   // ASSUME — the frames-seen tally's own invariant (§B10)
 
 #include <cstdint>
 #include <optional>
@@ -434,7 +434,7 @@ inline std::optional<ParsedFrame> parseGeneric( std::string_view line )
 } // namespace detail
 
 // §B10 — the OUTER denominator. Everything downstream partitions the frames this file EXTRACTED
-// (`in_corpus = suspects + merged + unresolved`, airtight and VERIFY-backed), but a line the input clearly
+// (`in_corpus = suspects + merged + unresolved`, airtight and ASSUME-backed), but a line the input clearly
 // presented as a stack frame and no format shape could read lands in NO bucket and simply vanishes: the
 // capture's own ASan trace has five `#N` frames and reports parsed="4", because the dyld frame carries no
 // source location at all. Nothing in the report said a frame had been dropped, so 4 read as "this trace has
@@ -508,7 +508,7 @@ inline FrameScan extractFrames( std::string_view text )
             ++scan.frameShapedLines;
         }
     }
-    VERIFY( scan.frames.size() <= scan.frameShapedLines );
+    ASSUME( scan.frames.size() <= scan.frameShapedLines );
     return scan;
 }
 

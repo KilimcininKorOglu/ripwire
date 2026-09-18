@@ -87,7 +87,7 @@
 #       above on this fixture and red here. The call site is checked because scoping the rule to the
 #       function's own body leaves `classify_skipped(rc, out[:800])` passing a gate that claims no ruler
 #       survives anywhere.
-#   (I) AN NDEBUG SKIP FROM A BUILD WITHOUT NDEBUG IS A FAILURE (2026-09-16) — DEGRADED_PATH_ALERT is compiled out
+#   (I) AN NDEBUG SKIP FROM A BUILD WITHOUT NDEBUG IS A FAILURE (2026-09-16) — DISCLOSE is compiled out
 #       only where NDEBUG is defined, and CMake defines it for the Release / RelWithDebInfo / MinSizeRel build
 #       types that --version names. A gate that skips an alert arm "because alerts are compiled out" on any other
 #       flavour asserted nothing and said something false about why. Three gates did exactly that on every plain
@@ -400,7 +400,7 @@ RELBIN="$TMP/relbin";  mkversionbin "$RELBIN" Release
 
 cat > "$TMP/body_ndebugarm" <<'BODY'
 printf '  PASS  600-deep guard stack: exits 0 (degrades, does not fail)\n'
-printf '  SKIP  600-deep guard stack: DEGRADED_PATH_ALERT compiled out of this binary (NDEBUG); the plain-flavour leg proves it\n'
+printf '  SKIP  600-deep guard stack: DISCLOSE compiled out of this binary (NDEBUG); the plain-flavour leg proves it\n'
 printf 'probe: ALL PASS\n'
 BODY
 cat > "$TMP/body_ndebugwhole" <<'BODY'
@@ -435,7 +435,7 @@ vOtherDev="$( classify "$ORDERROOT" probeotherskipgate "$DEVBIN" )"
 
 ndOut="$( python3 "$PARGATES" "$ORDERROOT" "$DEVBIN" --only probendebugarmgate 2>&1 )"
 printf '%s\n' "$ndOut" | grep -A12 '^FAILURES' | grep -q "build type 'dev'" \
-    && printf '%s\n' "$ndOut" | grep -A12 '^FAILURES' | grep -qF 'DEGRADED_PATH_ALERT compiled out of this binary (NDEBUG)' \
+    && printf '%s\n' "$ndOut" | grep -A12 '^FAILURES' | grep -qF 'DISCLOSE compiled out of this binary (NDEBUG)' \
     && ok "(I) the FAILURES report names the build type and quotes the offending skip row" \
     || { no "(I) the FAILURES report for an NDEBUG skip on a dev build does not name the build type and quote the row:"; printf '%s\n' "$ndOut" | grep -A8 '^FAILURES' | sed 's/^/        /'; }
 

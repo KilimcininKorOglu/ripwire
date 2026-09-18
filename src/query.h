@@ -313,7 +313,7 @@ struct Eval
         const RegexCompile compiled = compileGuardedRegex( re, kRegexEcmaScript );
         if( compiled.refusal )
         {
-            DEGRADED_PATH_ALERT( "query: file() regex refused — empty result" );
+            DISCLOSE( "query: file() regex refused — empty result" );
             fail( "file(\"" + re + "\") refused: " + *compiled.refusal );
             return {};
         }
@@ -329,7 +329,7 @@ struct Eval
                 const RegexVerdict     verdict = compiled.regex.search( path );
                 if( verdict == RegexVerdict::Exhausted )
                 {
-                    DEGRADED_PATH_ALERT( "query: file() regex match abandoned by the engine — empty result" );
+                    DISCLOSE( "query: file() regex match abandoned by the engine — empty result" );
                     fail( "file(\"" + re + "\") could not be evaluated on " + std::string( path ) + ": " + std::string( kRegexAbandonedReason )
                           + " — refusing rather than reporting a count the engine did not finish" );
                     return {};
@@ -374,7 +374,7 @@ struct Eval
         }
         if( !treeHasLayers )
         {
-            DEGRADED_PATH_ALERT( "query: layer() on a tree with no layer taxonomy — refused, not answered 0" );
+            DISCLOSE( "query: layer() on a tree with no layer taxonomy — refused, not answered 0" );
             fail( "no layer taxonomy in this tree: no indexed path has a directory component naming a layer, so layer('" + name
                   + "') cannot be answered. Refusing rather than reporting count=0, which would read as 'no such code'. "
                     "Layers come from directory names (" + std::string( kLayerVocabulary ) + "); the map's layer= attribute shows which files have one" );

@@ -109,7 +109,7 @@ inline bool refuseKotlinNesting( const LangEntry& le, std::string_view bytes, co
     {
         return false;
     }
-    DEGRADED_PATH_ALERT( "ingest: a .kt file nests string templates past kMaxKotlinStringNestDepth — refused before the parse (--skipped why=nest-refused)" );
+    DISCLOSE( "ingest: a .kt file nests string templates past kMaxKotlinStringNestDepth — refused before the parse (--skipped why=nest-refused)" );
     rw::emitTo( stderr, "[ripwire] {}: kotlin string-template nesting > {} levels — refused before the parse (skipped)\n", path, kMaxKotlinStringNestDepth );
     scan.nestRefusedBytes[ fileId ] = static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) );
     return true;
@@ -337,7 +337,7 @@ inline void prewarmTagsQueries( const std::vector<std::string>& files, const Has
                     }
                     catch( ... )
                     {
-                        DEGRADED_PATH_ALERT( "ingest: prewarm hash worker exception on a file — treated as no-miss" );
+                        DISCLOSE( "ingest: prewarm hash worker exception on a file — treated as no-miss" );
                     }
                 }
             } );

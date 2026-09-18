@@ -4,7 +4,7 @@
 # `continue-on-error: true`. The reason is not timidity, it is scope. clang-tidy's default catalogue
 # argues for a different C++ than the one CONTRIBUTING.md §3 asks for — bounds-checked containers,
 # no C arrays, no `(int)x` casts, RAII everywhere — and this codebase is deliberately data-oriented:
-# POD structs, SoA arrays, 32-bit handles, arena allocation, `VERIFY` instead of exceptions. A gate
+# POD structs, SoA arrays, 32-bit handles, arena allocation, `ASSUME` instead of exceptions. A gate
 # built from those checks would spend its life being suppressed. So the selection below is curated
 # down to the classes that find real defects in code shaped like this one, and even those only report.
 #

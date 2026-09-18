@@ -21,7 +21,7 @@
 // both arms and reaches neither.) fmt is NOT vendored: the standard library has the feature, so a vendored
 // copy would be a G3 regression.
 
-#include "Diagnostics.h"   // DEGRADED_PATH_ALERT — renderToString's open_memstream degrade, below
+#include "Diagnostics.h"   // DISCLOSE — renderToString's open_memstream degrade, below
 
 #include <cstddef>
 #include <cstdlib>
@@ -334,7 +334,7 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
     std::FILE* const m = stream.open();
     if( m == nullptr )
     {
-        DEGRADED_PATH_ALERT( degradeMsg );
+        DISCLOSE( degradeMsg );
         return out;
     }
     try
@@ -351,7 +351,7 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
         // NOT degradeMsg: that one says the BUFFER failed, and here it did not — the emitter did. The macro
         // takes a const char*, so this is its own literal rather than a composed string; the caller is named
         // anyway, because __PRETTY_FUNCTION__ carries the Emit lambda's own file and line.
-        DEGRADED_PATH_ALERT( "renderToString: the emitter THREW — nothing was measured, "
+        DISCLOSE( "renderToString: the emitter THREW — nothing was measured, "
                              "the caller takes its documented fallback" );
         return out;
     }
@@ -379,13 +379,13 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
             // NOT degradeMsg, and not the emitter's literal either: the buffer did not fail and the emitter
             // did not throw — the copy out of a complete buffer did. Same reasoning as the catch above, so
             // the caller reads which of the three failures it actually hit.
-            DEGRADED_PATH_ALERT( "renderToString: the final COPY out of the buffer THREW — nothing was "
+            DISCLOSE( "renderToString: the final COPY out of the buffer THREW — nothing was "
                                  "measured, the caller takes its documented fallback" );
         }
     }
     else
     {
-        DEGRADED_PATH_ALERT( degradeMsg );
+        DISCLOSE( degradeMsg );
     }
     return out;
 }

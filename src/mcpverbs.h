@@ -387,7 +387,7 @@ inline std::optional<std::string> mcpAnswerText( rw::MemoryStream& stream )
     const rw::MemoryStreamBytes answer = stream.finish();
     if( !answer.isWhole )
     {
-        DEGRADED_PATH_ALERT( "mcp: an answer buffer did not finish whole — this verb answers as if the buffer never opened" );
+        DISCLOSE( "mcp: an answer buffer did not finish whole — this verb answers as if the buffer never opened" );
         return std::nullopt;
     }
     return std::string( answer.bytes );
@@ -3365,7 +3365,7 @@ struct QualityDeltaOutcome
 // §B6 M10 — a CORRUPT sidecar used to read as "no sidecar". readBaseline reports a file that yields no header,
 // no `head` stamp and no record line as ABSENT (correct — a broken pin is not a floor), and selectBaseline then
 // hands back the bare "git-HEAD" marker, which is the SAME answer a tree with NO sidecar at all gets. The only
-// disclosure was a server-side DEGRADED_PATH_ALERT on stderr, which no MCP client surfaces: the agent saw a
+// disclosure was a server-side DISCLOSE on stderr, which no MCP client surfaces: the agent saw a
 // clean baseline:"git-HEAD" and could not know its pinned floor had silently stopped being read.
 //
 // Absent-vs-present is a fact this arm can establish on the path it already knows: a bare "git-HEAD" means the
@@ -3999,7 +3999,7 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     }
     else
     {
-        DEGRADED_PATH_ALERT( "mcp slice: definition file unreadable" );
+        DISCLOSE( "mcp slice: definition file unreadable" );
         return SliceReply{ {}, "cannot read " + path + " — the slice re-parses the definition's file and has nothing to walk" };
     }
 
@@ -4012,7 +4012,7 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     }
     if( !scan.parseOk )
     {
-        DEGRADED_PATH_ALERT( "mcp slice: definition re-parse failed" );
+        DISCLOSE( "mcp slice: definition re-parse failed" );
         return SliceReply{ {}, "could not re-parse " + path + " (grammar missing, or the indexed span no longer fits "
                                "the file — a stale index; call any read verb to refresh, or check the CLI --doctor)" };
     }
@@ -5097,7 +5097,7 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         // Unreachable by construction: unknownSubVerbRefusal above already refused anything outside
         // kBatchServedVerbs + kBatchVerbAliases, and every member of those has an arm. If a verb joins the
         // registry without one, THIS is the honest failure — never a silent ok="1" with an empty payload.
-        DEGRADED_PATH_ALERT( "batch: a verb in the served registry has no dispatch arm" );
+        DISCLOSE( "batch: a verb in the served registry has no dispatch arm" );
         return bad( "batch cannot answer '" + r.verb + "' — it is in the served registry but has no dispatch "
                     "arm (a ripwire bug: kBatchServedVerbs and runBatchSub have drifted)" );
     }

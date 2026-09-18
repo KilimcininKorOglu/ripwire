@@ -658,7 +658,7 @@ namespace mcpedit
         {
             const std::string lockPath = editLockPath( targetPath );
             fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
-            if( fd < 0 ) { DEGRADED_PATH_ALERT( "edit lockfile open failed; proceeding lock-free (re-check still guards)" ); return; }
+            if( fd < 0 ) { DISCLOSE( "edit lockfile open failed; proceeding lock-free (re-check still guards)" ); return; }
 
             // ~200 ms bounded acquire: 20 tries × 10 ms. If a peer holds it longer, degrade rather than hang —
             // the freshness re-check before rename is the correctness floor, the lock is only the fast path.
@@ -674,7 +674,7 @@ namespace mcpedit
             }
             if( !locked )
             {
-                DEGRADED_PATH_ALERT( "edit lock contended past timeout; proceeding lock-free (re-check still guards)" );
+                DISCLOSE( "edit lock contended past timeout; proceeding lock-free (re-check still guards)" );
             }
         }
 
@@ -737,14 +737,14 @@ namespace mcpedit
         {
             if( ::fchmod( fd, orig.st_mode & 07777 ) != 0 )
             {
-                DEGRADED_PATH_ALERT( "atomicWrite: could not restore original file mode; wrote with default mode" );
+                DISCLOSE( "atomicWrite: could not restore original file mode; wrote with default mode" );
             }
         }
 
         // A3-F7: fsync the data to disk BEFORE the atomic rename so a crash can't leave a renamed-but-empty file.
         if( ::fsync( fd ) != 0 )
         {
-            DEGRADED_PATH_ALERT( "atomicWrite: fsync failed; proceeding (bytes may not be durable across a crash)" );
+            DISCLOSE( "atomicWrite: fsync failed; proceeding (bytes may not be durable across a crash)" );
         }
 
         return temp.commit( path );   // closes the fd and renames; the destructor removes the temp on failure

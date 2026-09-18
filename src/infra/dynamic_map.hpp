@@ -31,7 +31,7 @@
 //      cache-line-aligned nodes; measurement showed the padding LOWERED cache
 //      density and slowed lookups, so it was removed (see the node-layout note).
 //
-//  CONTRACTS (each VERIFY'd at the public seams; free in release):
+//  CONTRACTS (each ASSUME'd at the public seams; free in release):
 //    * Keys: arithmetic types only (SIMD set int32/uint32/float/int64/uint64/
 //      double; other arithmetic via the scalar path). The key's numeric max is
 //      reserved as padding; the descent stays correct even if that value occurs
@@ -82,15 +82,15 @@
     #define DYNMAP_HAS_SSE2 0
 #endif
 
-// Precondition guard. In the game build the project's VERIFY (math/Diagnostics.h)
+// Precondition guard. In the game build the project's ASSUME (math/Diagnostics.h)
 // is already defined and is used (logs + traps in debug, optimiser-assume in
-// release). Standalone builds (the unit tests) have no VERIFY, so we fall back to
+// release). Standalone builds (the unit tests) have no ASSUME, so we fall back to
 // assert -- which keeps every guard LIVE in the standalone test binaries.
-#if defined(VERIFY)
-    #define DYNMAP_VERIFY(expr) VERIFY(expr)
+#if defined(ASSUME)
+    #define DYNMAP_ASSUME(expr) ASSUME(expr)
 #else
     #include <cassert>
-    #define DYNMAP_VERIFY(expr) assert(expr)
+    #define DYNMAP_ASSUME(expr) assert(expr)
 #endif
 
 // Unrecoverable-state trap (node-pool exhaustion past the declared capacity, or
@@ -547,18 +547,18 @@ private:
     size_type capacity_ = 0;  // the declared element bound (enforced at insert)
 
     // ------------------------------------------------------------------ pools
-    // The chokepoint every leaf access funnels through. The VERIFY catches NIL
+    // The chokepoint every leaf access funnels through. The ASSUME catches NIL
     // handles, foreign handles, and use-after-move in one place -- and in release
     // it is an assume the optimiser can use.
     Leaf& leaf_at(handle_t h)
     {
-        DYNMAP_VERIFY(h < leaf_capacity_);
+        DYNMAP_ASSUME(h < leaf_capacity_);
         return leaf_pool_[h];
     }
 
     const Leaf& leaf_at(handle_t h) const
     {
-        DYNMAP_VERIFY(h < leaf_capacity_);
+        DYNMAP_ASSUME(h < leaf_capacity_);
         return leaf_pool_[h];
     }
 
@@ -640,7 +640,7 @@ private:
 
     // Equality under the (static_assert'd) std::less numeric ordering. Direct ==
     // rather than the two-comparison form: identical for every legal (finite)
-    // key, and the finite-key contract is VERIFY'd at the public seams.
+    // key, and the finite-key contract is ASSUME'd at the public seams.
     static bool keys_equal(const Key& a, const Key& b)
     {
         return a == b;
@@ -722,7 +722,7 @@ public:
 
         // Handles are 32-bit; a capacity large enough to wrap the node counts
         // would silently size an undersized pool.
-        DYNMAP_VERIFY(leaves <= 0xFFFFFFFFu && internal <= 0xFFFFFFFFu);
+        DYNMAP_ASSUME(leaves <= 0xFFFFFFFFu && internal <= 0xFFFFFFFFu);
 
         leaf_capacity_     = static_cast<std::uint32_t>(leaves);
         internal_capacity_ = static_cast<std::uint32_t>(internal);
@@ -788,7 +788,7 @@ private:
 
         // Leave the source in a CONSISTENT empty-husk state: every field that
         // referenced the stolen pools is cleared, so a stray operation on the
-        // moved-from map hits the leaf_at()/descent VERIFYs instead of walking
+        // moved-from map hits the leaf_at()/descent ASSUMEs instead of walking
         // stale handles into freed (or stolen) memory. Contract: a moved-from
         // map supports only destruction, move-assignment-into, and the trivial
         // size queries.
@@ -942,7 +942,7 @@ public:
         {
             if (leaf_h_ == NIL)
             {
-                DYNMAP_VERIFY(owner_ && owner_->size_ > 0); // --end() on an empty map
+                DYNMAP_ASSUME(owner_ && owner_->size_ > 0); // --end() on an empty map
                 leaf_h_ = owner_->rightmost_leaf();
                 index_ = owner_->leaf_at(leaf_h_).count - 1;
             }
@@ -1106,7 +1106,7 @@ public:
     // enclosing class is a friend, so it can read the const iterator's slot).
     iterator unconst(const_iterator c)
     {
-        DYNMAP_VERIFY(c.owner_ == this); // an iterator from ANOTHER map is a stale-handle bug
+        DYNMAP_ASSUME(c.owner_ == this); // an iterator from ANOTHER map is a stale-handle bug
         return iterator(this, c.leaf_h_, c.index_);
     }
 
@@ -1186,8 +1186,8 @@ public:
     // ---------------------------------------------------------------- lookup
     const_iterator lower_bound(const Key& x) const
     {
-        DYNMAP_VERIFY(leaf_pool_ != nullptr);  // moved-from map (see steal())
-        DYNMAP_VERIFY(key_is_finite(x));       // inf/NaN break the sentinel ordering
+        DYNMAP_ASSUME(leaf_pool_ != nullptr);  // moved-from map (see steal())
+        DYNMAP_ASSUME(key_is_finite(x));       // inf/NaN break the sentinel ordering
 
         handle_t h = root_;
 
@@ -1374,8 +1374,8 @@ public:
 
     size_type erase(const Key& key)
     {
-        DYNMAP_VERIFY(leaf_pool_ != nullptr);  // moved-from map (see steal())
-        DYNMAP_VERIFY(key_is_finite(key));
+        DYNMAP_ASSUME(leaf_pool_ != nullptr);  // moved-from map (see steal())
+        DYNMAP_ASSUME(key_is_finite(key));
 
         bool erased = false;
         erase_rec(root_, height_ - 1, key, erased);
@@ -1401,8 +1401,8 @@ public:
     // rebalance leaves and invalidate any held iterator, then re-seek it.
     iterator erase(const_iterator pos)
     {
-        DYNMAP_VERIFY(pos.owner_ == this);  // foreign iterator == stale-handle bug
-        DYNMAP_VERIFY(pos != cend());       // ++ below would walk leaf_pool_[NIL]
+        DYNMAP_ASSUME(pos.owner_ == this);  // foreign iterator == stale-handle bug
+        DYNMAP_ASSUME(pos != cend());       // ++ below would walk leaf_pool_[NIL]
 
         const_iterator nxt = pos;
         ++nxt;
@@ -1419,7 +1419,7 @@ public:
     // invalidates iterators), then walks by successive erase(pos) re-seeks.
     iterator erase(const_iterator first, const_iterator last)
     {
-        DYNMAP_VERIFY(first.owner_ == this && (last == cend() || last.owner_ == this));
+        DYNMAP_ASSUME(first.owner_ == this && (last == cend() || last.owner_ == this));
 
         const bool to_end   = (last == cend());
         const Key  stop_key = to_end ? Key{} : last.key();
@@ -1538,7 +1538,7 @@ public:
                 sh = leaf_pool_[sh].next;
                 si = 0;
             }
-            DYNMAP_VERIFY(sh != NIL); // size_ / leaf-chain mismatch would walk off the end
+            DYNMAP_ASSUME(sh != NIL); // size_ / leaf-chain mismatch would walk off the end
             Leaf& s = leaf_pool_[sh];
             k = s.keys[si];
             v = std::move(s.values[si]);
@@ -1688,8 +1688,8 @@ private:
     std::pair<iterator, bool> emplace_impl(const Key& key, Value value,
                                            bool overwrite)
     {
-        DYNMAP_VERIFY(leaf_pool_ != nullptr);  // moved-from map (see steal())
-        DYNMAP_VERIFY(key_is_finite(key));     // inf/NaN break the sentinel ordering
+        DYNMAP_ASSUME(leaf_pool_ != nullptr);  // moved-from map (see steal())
+        DYNMAP_ASSUME(key_is_finite(key));     // inf/NaN break the sentinel ordering
 
         insert_outcome out;
         split_result   split;
@@ -1766,8 +1766,8 @@ private:
         // New key: enforce the declared capacity bound BEFORE any mutation.
         if (size_ >= capacity_)
         {
-#if defined(DEGRADED_PATH_ALERT)
-            DEGRADED_PATH_ALERT("dynamic_map: insert of a new key rejected -- map at declared capacity");
+#if defined(DISCLOSE)
+            DISCLOSE("dynamic_map: insert of a new key rejected -- map at declared capacity");
 #endif
             out.rejected = true;
             return;

@@ -1395,7 +1395,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
         {
             // ENOMEM-class, at the open or inside the buffer: emit unbudgeted rather than nothing, and report no
             // est_tokens/capped at all — a number this path cannot compute must never be fabricated.
-            DEGRADED_PATH_ALERT( "main: open_memstream failed (or its buffer lost a write) for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
+            DISCLOSE( "main: open_memstream failed (or its buffer lost a write) for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
             if( redactBeforeSigs )
             {
                 *in.redact = *redactBeforeSigs;   // the rows below are the ones the summary counts
@@ -1482,7 +1482,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
         }
         estTokens = nextTokens;
     }
-    VERIFY( bundleBytes >= bundleBytesBase );
+    ASSUME( bundleBytes >= bundleBytesBase );
     // W3FIX H2 — the JSON sibling of the XML header's over_ceiling note. The two dialects charge the SAME
     // header bytes to the SAME budget, so they must also agree about the case where that charge cannot make the
     // document fit: the envelope's own verbatim task echo is user-length, and past some task length no sigs
@@ -1496,7 +1496,7 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
     {
         overCeiling = ",\"over_ceiling\":true";
     }
-    VERIFY( overCeiling.size() == 0 || overCeiling.size() == 20 );   // the 20 the charge above reserved for it
+    ASSUME( overCeiling.size() == 0 || overCeiling.size() == 20 );   // the 20 the charge above reserved for it
     std::fputs( header.c_str(), out );
     std::fwrite( kJsonBundleSigsKey.data(), 1, kJsonBundleSigsKey.size(), out );
     std::fwrite( surfaceCountsStanza.data(), 1, surfaceCountsStanza.size(), out );
@@ -2483,7 +2483,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             std::FILE* const buffer = rw::openChargeStream( stream );
             if( buffer == nullptr )
             {
-                DEGRADED_PATH_ALERT( degradeMsg );
+                DISCLOSE( degradeMsg );
                 restoreRedact();
                 return false;
             }
@@ -2491,7 +2491,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             const rw::MemoryStreamBytes block = stream.finish();
             if( !block.isWhole )
             {
-                DEGRADED_PATH_ALERT( degradeMsg );
+                DISCLOSE( degradeMsg );
                 restoreRedact();
                 return false;
             }
@@ -2586,7 +2586,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
-            DEGRADED_PATH_ALERT( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
+            DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
         }
         const std::size_t fixedBytes = ( exemptBytes > headerStr.size() ? headerStr.size() : headerStr.size() - exemptBytes )
                                      + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
@@ -2636,7 +2636,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // A2 (survey card, 2026-09-03): how many rank>0 candidates the H1 ladder just below cut — set ONLY on
         // this (memstream-buffered) render, never on the direct-emission degrade path further down, because
         // headerStr is already flushed to stdout by the time that path runs and cannot be edited retroactively
-        // (the same reason est_tokens is "omitted", not "wrong", on that path — see its DEGRADED_PATH_ALERT).
+        // (the same reason est_tokens is "omitted", not "wrong", on that path — see its DISCLOSE).
         std::size_t forDroppedPositive = 0;
         bool        forSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= legend clause below
         sigsPreRendered = preRender( [ & ]( std::FILE* sm )

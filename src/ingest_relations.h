@@ -2218,7 +2218,7 @@ void captureIncludes( TSNode root, Lang lang, std::uint32_t fileId, std::string_
             // descent reaches every arm of a chain — no separate alternative-following pass.
             if( frame.depth >= kMaxImportContainerDepth )
             {
-                DEGRADED_PATH_ALERT( "ingest: import-container nesting past the depth bound — deeper imports not captured" );
+                DISCLOSE( "ingest: import-container nesting past the depth bound — deeper imports not captured" );
             }
             else
             {

@@ -1198,7 +1198,7 @@ void recordRootEscape( CrawlSkips& skips, const std::string& path, std::string_v
     {
         skips.escaped.push_back( { path, 0ull, std::string( ext ) } );
     }
-    DEGRADED_PATH_ALERT( "ingest: a symlink's target leaves the crawl root — file refused (see --skipped why=escaped-root)" );
+    DISCLOSE( "ingest: a symlink's target leaves the crawl root — file refused (see --skipped why=escaped-root)" );
 }
 
 // §L1: the crawl's two NON-SIZE drop tests, together, because they are one decision with one ordering
@@ -1332,7 +1332,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     std::FILE* pipe = ::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
-        DEGRADED_PATH_ALERT( "ingest: cannot run git for the ignore probe — full walk" );
+        DISCLOSE( "ingest: cannot run git for the ignore probe — full walk" );
         return out;
     }
     std::string buf;
@@ -1354,7 +1354,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     }
     if( overflowed )
     {
-        DEGRADED_PATH_ALERT( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
+        DISCLOSE( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
         return out;
     }
 
@@ -1533,7 +1533,7 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
     fs::recursive_directory_iterator it( root, opts, ec );
     if( ec )
     {
-        DEGRADED_PATH_ALERT( "ingest: cannot open root directory — empty result" );
+        DISCLOSE( "ingest: cannot open root directory — empty result" );
         return { std::move( out ), std::move( skipped ), std::move( skips ) };
     }
 
@@ -1886,7 +1886,7 @@ inline bool isReadableCacheBlob( const std::string& path ) noexcept
     const PathShape shape = shapeOfPath( path );
     if( shape == PathShape::Other )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache path is not a regular file (directory/device/fifo) — cache treated as corrupt (full reparse)" );
+        DISCLOSE( "ingest: cache path is not a regular file (directory/device/fifo) — cache treated as corrupt (full reparse)" );
     }
     return shape == PathShape::RegularFile;
 }
@@ -2052,7 +2052,7 @@ TSQuery* compiledQueryFor( const LangEntry& le )
     // pool later needs. Compiling here would WRITE the shared cache from a worker thread (data race on the
     // non-thread-safe map). Degrade instead: skip the file (caller treats nullptr as "skip"); the normal
     // prewarm path repopulates on the next run.
-    DEGRADED_PATH_ALERT( "ingest: tags query not prewarmed for a grammar — file skipped" );
+    DISCLOSE( "ingest: tags query not prewarmed for a grammar — file skipped" );
     return nullptr;
 }
 }   // namespace — ingest_crawl.h section of ingest.cpp

@@ -62,7 +62,7 @@
 #include "graph.h"              // communities() — the SAME deterministic Louvain --communities uses
 #include "clones.h"             // findClones — hoisted here so N+1 bundles share ONE clone pass
 #include "serialize.h"          // kMinBytesPerToken / jsonStr
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include <algorithm>
 #include <cstdint>
@@ -75,7 +75,7 @@ namespace rw
 namespace packpartition
 {
 
-// N bounds. 2 because a 1-way "split" is just --pack-task (refused at the CLI seam, VERIFYed here); 16 to
+// N bounds. 2 because a 1-way "split" is just --pack-task (refused at the CLI seam, ASSUMEd here); 16 to
 // match the multi-root cap — the same "an orchestrator fanning out past this is doing something else" line.
 //
 // NEITHER of this file's two docs/LIMITS.md-listed constants is an OUTPUT-class silent cap, so neither
@@ -225,7 +225,7 @@ inline std::uint32_t splitGroupsUpTo( CommunityGroups& grp, std::uint32_t target
 // Returns bins[b] = the group indices assigned to bin b.
 inline std::vector<std::vector<std::uint32_t>> packGroupsIntoBins( const CommunityGroups& grp, std::uint32_t binCount )
 {
-    VERIFY( binCount > 0 );
+    ASSUME( binCount > 0 );
     std::vector<std::uint32_t> byWeight( grp.members.size() );
     for( std::uint32_t i = 0; i < byWeight.size(); ++i )
     {
@@ -255,7 +255,7 @@ inline std::vector<std::vector<std::uint32_t>> packGroupsIntoBins( const Communi
 // THE plan: (repo, task-ranking, N) → core + N disjoint id groups. Pure; no I/O, no wall clock.
 inline PartitionPlan planPartition( const IngestResult& ing, const Graph& g, const std::vector<float>& rank, std::uint32_t partitionCount )
 {
-    VERIFY( partitionCount >= kMinPartitions && partitionCount <= kMaxPartitions );
+    ASSUME( partitionCount >= kMinPartitions && partitionCount <= kMaxPartitions );
     PartitionPlan plan;
 
     // ── decision 1 — the task-relevant surface (top ranked, positive score only) ──────────────────────────
@@ -285,7 +285,7 @@ inline PartitionPlan planPartition( const IngestResult& ing, const Graph& g, con
     const std::vector<NodeId> assignable( surface.begin() + std::ptrdiff_t( coreCount ), surface.end() );
     if( assignable.empty() )                       // nothing beyond the core to carve — 0 partitions, honestly reported
     {
-        DEGRADED_PATH_ALERT( "pack-task partition: the task's ranked surface fits entirely in the shared core — no partitions to carve" );
+        DISCLOSE( "pack-task partition: the task's ranked surface fits entirely in the shared core — no partitions to carve" );
         return plan;
     }
 
@@ -298,7 +298,7 @@ inline PartitionPlan planPartition( const IngestResult& ing, const Graph& g, con
     const std::uint32_t binCount = std::min<std::uint32_t>( partitionCount, std::uint32_t( grp.members.size() ) );
     if( binCount < partitionCount )
     {
-        DEGRADED_PATH_ALERT( "pack-task partition: fewer separable modules than partitions requested — emitting the modules that exist" );
+        DISCLOSE( "pack-task partition: fewer separable modules than partitions requested — emitting the modules that exist" );
     }
 
     const std::vector<std::vector<std::uint32_t>> bins = packGroupsIntoBins( grp, binCount );
@@ -503,7 +503,7 @@ inline std::string packTaskPartitionText( const IngestResult& ing, const Graph& 
                                           const LensRanking& lr, const PackTaskInputs& inBase,
                                           std::uint32_t partitionCount, std::string* jsonOut = nullptr )
 {
-    VERIFY( partitionCount >= kMinPartitions && partitionCount <= kMaxPartitions );
+    ASSUME( partitionCount >= kMinPartitions && partitionCount <= kMaxPartitions );
     const PartitionPlan plan = planPartition( ing, g, lr.rank, partitionCount );
 
     // ── decision 4 — the per-AGENT budget split ───────────────────────────────────────────────────────────
