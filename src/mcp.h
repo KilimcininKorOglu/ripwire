@@ -875,6 +875,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             const std::string task    = strArg( "task" );
             const std::string type    = strArg( "type" );     // lego verb: the interface/base name
             const std::string sections = strArg( "sections" ); // L2: `for`'s <lego>/<compose> stub opt-back-in (CLI --sections= twin)
+            // F9/F11 (V2, mirrored from `legend` below): ABSENT and PRESENT-BUT-EMPTY are two different
+            // requests — `sections.empty()` alone collapses them, so `sections:""` was silently read as the
+            // default (no restore) instead of refusing the way the CLI's own `--sections=` (empty value)
+            // refuses. Caught by independent review before this ever shipped.
+            const bool sectionsIsPresent = mcpdetail::findRawValue( args, "sections" ).isPresent;
             const std::string files   = strArg( "files" );    // N11: schema-typed STRING (comma-separated paths), never an array
             const std::string diff    = strArg( "diff" );     // H5: same class as `files` — an array here answered about the wrong tree
             const std::string newBody = strArg( "new_body" ); // replace_symbol_body
@@ -1240,11 +1245,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             }
             // L2 (round-1 lever B1): `sections` is a CLOSED, comma-separated, order-insensitive set (lego
             // and/or compose, each named at most once) — the same rule `legend` states just above, and for
-            // the same reason: a typo must not silently be read as "restore nothing" (F9/F11's ABSENT-vs-
-            // PRESENT-BUT-EMPTY rule applies here too — `sections:""` refuses rather than defaulting).
-            if( !pathsUsageError && !sections.empty() )
+            // the same reason: a typo must not silently be read as "restore nothing". `sections:""` refuses
+            // here (the F9/F11 ABSENT-vs-PRESENT-BUT-EMPTY split), never silently defaulting.
+            if( !pathsUsageError && sectionsIsPresent )
             {
-                bool sawLego = false, sawCompose = false, sectionsBad = false;
+                bool sawLego = false, sawCompose = false, sectionsBad = sections.empty();
                 std::string_view rest = sections;
                 while( !rest.empty() )
                 {

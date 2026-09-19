@@ -227,6 +227,24 @@ zoom | zoom@levels
 # own next= is still, separately, un-charged-header undefined (P3/P7's original reason stands); the closure
 # rides a DIFFERENT clause that happens to share the word.
 for | d@pure
+# for-sections (L2 round-1 lever B1, 2026-09-19): --sections=lego,compose is the one roster row that renders
+# the FULL <lego><iface…><m pure=…><impl…></lego> / <compose><field…></compose> shape instead of the default
+# counted stub, so it is also the one row where the attributes below — every one of them PRE-EXISTING debt
+# this file already records for the plain "for"/"for-budgeted"/"for-budgeted-compact" rows (ctx@task, d@next,
+# field@name/owner/rel/type were on this same file until this lane's own earlier commit deleted them as
+# "no longer emitted" — they were right to note that FOR THE DEFAULT STUB SHAPE, and wrong only in not
+# anticipating a row that opts back into the full render) — become visible again. Per the P3/P7/L1 precedent
+# already established at length above (every header byte on --for is un-charged by the token ladder;
+# fornotesbudgetcheck's rungs leave ~0 headroom for a new clause), these are NOT defined inline: doing so
+# would cost every --for call the byte budget, to define attributes that exist on ONE opt-in roster row.
+# `m@pure` is the exact same gap as the already-baselined `for | d@pure` two lines above, on the sibling
+# element the restored render newly exercises — not new debt, the same one read a second time.
+for-sections | ctx@task
+for-sections | d@next
+for-sections | field@owner
+for-sections | field@rel
+for-sections | field@type
+for-sections | m@pure
 # L1 (0.6.1): the for-budgeted row is NEW WINDOW, not new debt — the roster had no budgeted --for at all, so no
 # run in it ever climbed a rung of the ceiling ladder, which is where --for legend clauses get dropped. The ten
 # lines below are the same gaps the two unbudgeted --for rows already record (route=/task=/field@*/d@next/d@pure
