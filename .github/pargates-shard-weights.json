@@ -357,6 +357,7 @@
 "optremarkscheck.sh": 25.7,
 "ordercheck.sh": 5.8,
 "osswitchcheck.sh": 3.1,
+"oswin32logiccheck.sh": 30.0,
 "outlinecheck.sh": 1.5,
 "overbudgetcommentcheck.sh": 0.5,
 "ownerscheck.sh": 5.2,

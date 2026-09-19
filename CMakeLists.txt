@@ -739,7 +739,17 @@ if(RIPWIRE_TESTS)
   target_link_libraries(ripwire_test_strkern PRIVATE doctest::doctest)
   add_test(NAME ripwire.strkern COMMAND ripwire_test_strkern)
 
-  foreach(_ripwire_test_target ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
+  # src/infra/os_win32_logic.h — the Windows port's pure logic (Win32→errno table, UTF-8/UTF-16 and WidePath,
+  # path spelling, CreateProcessW quoting, reparse/st_mode classification, wait-status and timeout conversions,
+  # trusted-shell predicates). It has no <windows.h> and no platform test, so every leg compiles and runs it;
+  # driven by test/oswin32logiccheck.sh (which adds the sanitizer and can-go-red arms).
+  add_executable(ripwire_test_oswin32logic
+    test/verify_os_win32_logic.cpp)
+  target_include_directories(ripwire_test_oswin32logic PRIVATE src/infra third_party src)
+  target_link_libraries(ripwire_test_oswin32logic PRIVATE doctest::doctest)
+  add_test(NAME ripwire.oswin32logic COMMAND ripwire_test_oswin32logic)
+
+  foreach(_ripwire_test_target ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern ripwire_test_oswin32logic)
     ripwire_windows_target(${_ripwire_test_target})   # the manifest too: a test binary runs under the same code page as the product
   endforeach()
 endif()
@@ -828,9 +838,9 @@ set(RIPWIRE_RUNTIME_LINK_TARGETS ripwire_probe ripwire)
 # the only ones the libstdc++ header exemption below has anything to say about (the grammars are C).
 set(RIPWIRE_OWNED_CXX_TARGETS ripwire_probe ripwire)
 if(RIPWIRE_TESTS)
-  list(APPEND RIPWIRE_RUNTIME_COMPILE_TARGETS ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
-  list(APPEND RIPWIRE_RUNTIME_LINK_TARGETS ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
-  list(APPEND RIPWIRE_OWNED_CXX_TARGETS ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
+  list(APPEND RIPWIRE_RUNTIME_COMPILE_TARGETS ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern ripwire_test_oswin32logic)
+  list(APPEND RIPWIRE_RUNTIME_LINK_TARGETS ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern ripwire_test_oswin32logic)
+  list(APPEND RIPWIRE_OWNED_CXX_TARGETS ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern ripwire_test_oswin32logic)
 endif()
 # G1's `integer` is a CLANG-ONLY UBSan group (unsigned-integer-overflow, implicit-*-truncation,
 # implicit-integer-sign-change — the defined-but-suspicious conversions, not UB). GCC has no such group

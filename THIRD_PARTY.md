@@ -5,7 +5,8 @@ license block intact. Nothing here is relicensed; each file is governed by the l
 below, not by the repository's `LICENSE`.
 
 Code under `src/` — including `src/infra/` — is first-party and covered by the repository
-`LICENSE` (Apache-2.0).
+`LICENSE` (Apache-2.0), except the adapted passages listed under
+[Adapted code under `src/`](#adapted-code-under-src), which keep their upstream licence.
 
 There are **no downloaded dependencies**. Everything the build compiles is in this repository:
 `third_party/*.h*` are the header-only libraries, and `third_party/deps/` holds the full build
@@ -98,3 +99,41 @@ Notes:
   built only when the repository is configured with `-DRIPWIRE_TESTS=ON`.
 - Nothing in `third_party/deps/` is modified. Re-deriving any row is `git clone` + `git checkout
   <pinned commit>` + the prune described above; a diff against the upstream commit is the audit.
+
+## Adapted code under `src/`
+
+These passages are not vendored files: they are functions rewritten into ripwire's own sources from an
+upstream implementation, and the upstream notice travels with them in a comment at the adapted code.
+
+| Where | Adapted from | Upstream | License |
+| --- | --- | --- | --- |
+| `src/infra/os_win32_logic.h` — `appendQuotedArg` (CreateProcessW argument quoting) | libuv `quote_cmd_arg`, `src/win/process.c` | https://github.com/libuv/libuv at `e15526ade343bdfc7cdaaeb0a51b9bba656533ce` | MIT |
+| `src/infra/os_win32_logic.h` — `kWin32ErrnoTable` (Win32/Winsock error → errno rows) | libuv `uv_translate_sys_error`, `src/win/error.c` | same commit | MIT |
+| `src/infra/os_win32.cpp` — `stat` by `GetFileInformationByName` with the handle fallback, and the `open` flag → `CreateFileW` mapping | libuv `fs__stat_path` and `fs__open`, `src/win/fs.c` | same commit | MIT |
+
+libuv's MIT notice. Its `LICENSE` names two copyright holders (the libuv project, and Joyent for the parts that
+originate in joyent/libuv, which include `src/win/`) under the same permission text:
+
+```
+Copyright (c) 2015-present libuv project contributors.
+Copyright Joyent, Inc. and other Node contributors. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+Each adapted passage says what it changed (the quoting works on UTF-8 bytes and always quotes; several errno
+rows answer what a POSIX caller expects rather than what libuv's event loop does). Re-deriving any row is a
+read of the named upstream function at the pinned commit beside the comment.
