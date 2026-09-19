@@ -65,6 +65,7 @@
 #include "infra/Diagnostics.h"  // DISCLOSE — the unrelated-history (no merge-base) degrade
 #include "gitstamp.h"           // gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "graphlegend.h"        // §H4 §3.4 / V4 MED-3: the shared counts_floor= marker + graph-count legend clauses
+#include "compactlegend.h"      // L1 fix round: compactDeliveredEstTokens — trim at the price a compact-posture run delivers
 #include "testmap.h"            // §A9.5 / §P11.4: TestRunnerIndex / runAttr — the run= hint on a named test row
 
 #include <algorithm>
@@ -438,6 +439,8 @@ struct PrBudget
     bool        isDefault  = false;   // kPrDefaultBudgetTokens applied because the caller named none
     int         pageLimit  = 0;       // --limit=N over the changed files (0 = none)
     int         pageOffset = 0;       // --offset=M over the changed files
+    bool        compactLegend = false; // L1 fix round: the run's legend posture is compact — the trim ladder decides on the
+                                       // price the compact layer will DELIVER, not the full dialect's (rv-r1-L1 MED-4)
 };
 
 inline constexpr PrTrim kPrTrims[] = {
@@ -556,9 +559,12 @@ inline PrTrimRender prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
     return out;
 }
 
-template< typename EmitFn, typename PriceFn >
+// `delivered( candidate, windowAttrs )` is the price the ladder DECIDES on: the candidate's own est_tokens in the full posture,
+// the compact layer's price of the same document in the compact one (writePrContext). The root still prints estTokens — the
+// emitter's price of what it writes, which the layer then reprices by its own rule — so the two can never be double-moved.
+template< typename EmitFn, typename PriceFn, typename DeliveredFn >
 inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budgetTokens, const PriceFn& price,
-                                     const std::string& windowAttrs )
+                                     const std::string& windowAttrs, const DeliveredFn& delivered )
 {
     constexpr std::size_t nLevels = sizeof( kPrTrims ) / sizeof( kPrTrims[0] );
     PrTrimRender out;
@@ -588,7 +594,7 @@ inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budget
             out.truncated += ";est-unmeasured";
             out.estTokens = price( out.body, out.testFiles, li, out.truncated, windowAttrs );
         }
-        if( out.estTokens <= budgetTokens )
+        if( delivered( out, windowAttrs ) <= budgetTokens )
         {
             break;
         }
@@ -1333,8 +1339,47 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // keep the least-trimmed fit. P4: when even the FLOOR of the whole window is over, shrink the window to the
     // largest file prefix whose floor fits (binary search on the floor render; at least one file), then pick the
     // level for that prefix — the cut is disclosed below and next= pastes the page that starts where this one stopped.
+    // L1 fix round (rv-r1-L1 MED-4): the candidate as the run will print it — the same head, root and body the writes below
+    // produce — so the compact posture can price what it delivers. The full posture never builds it.
+    const auto candidateDoc = [ & ]( const PrTrimRender& cand, const std::string& windowAttrs ) -> std::string
+    {
+        const std::string legend = ( cand.testFiles > 0 || !cand.rendered )
+                                       ? prLegendText( escBase, g.unindexedFiles > 0,
+                                                       PrLegendClauses{ .runHint = cand.testFiles > 0, .estUnmeasured = !cand.rendered, .rootRelativeRuns = prRootRelRuns } )
+                                       : legendText;
+        return legend + anchorNoteText
+             + prRootOpenText( g, sharedAttrs,
+                               prBudgetTail( changed.size(), skippedModeOnly, budgetTokens, cand, ex( cand.truncated ) )
+                                   + ( budget.isDefault ? " budget_default=\"1\"" : "" ) + windowAttrs + atAttrStr,
+                               anchor, escBase )
+             + cand.body + std::string( kPrCloseTag );
+    };
+    const auto deliveredOf = [ & ]( const PrTrimRender& cand, const std::string& windowAttrs ) -> std::size_t
+    {
+        if( !budget.compactLegend )
+        {
+            return cand.estTokens;
+        }
+        const std::size_t compactEst = rw::compactDeliveredEstTokens( candidateDoc( cand, windowAttrs ), "pr-context" );
+        return compactEst > 0 ? compactEst : cand.estTokens;
+    };
+    // the changed files are this root's PRIMARY listing, so a cut speaks the plain quintet (shown=/capped=/total=/
+    // has_more=/next_offset=/offset=/limit=, pageview.h) — never a noun-prefixed twin beside it (one fact, one name)
+    const auto windowAttrsFor = [ & ]( std::size_t end ) -> std::string
+    {
+        std::string attrs;
+        const std::size_t shown = end - filePw.begin;
+        if( shown < changed.size() )
+        {
+            char pab[ kPageDisclosureCap ];
+            attrs += pageDisclosure( pab, sizeof( pab ), shown, changed.size(), end, budget.pageLimit, budget.pageOffset, true );
+            attrs += nextAttrXml( std::string( "--pr-context" ) + ( baseLabel == "working-tree" ? std::string() : "=" + std::string( baseLabel ) )
+                                  + " --offset=" + std::to_string( end ) );
+        }
+        return attrs;
+    };
     const std::string noWindow;
-    PrTrimRender      chosen = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, noWindow );
+    PrTrimRender      chosen = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, noWindow, deliveredOf );
     if( chosen.truncated.find( "budget-floor-exceeded" ) != std::string::npos && fileEnd - filePw.begin > 1 )
     {
         std::size_t lo = 1, hi = fileEnd - filePw.begin;   // prefix lengths: lo fits (assumed for 1), hi does not
@@ -1342,26 +1387,20 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
         {
             const std::size_t mid = lo + ( hi - lo ) / 2;
             fileEnd = filePw.begin + mid;
-            const PrTrimRender probe = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, noWindow );
+            // L1 fix round: the compact posture prices each probe prefix WITH the window disclosure it will carry (~100 B
+            // of shown=/has_more=/next=), so the prefix it keeps is one the final pick below can still fit. The full posture
+            // keeps its pre-existing probe unchanged (compactlegendcheck A-PIN).
+            const std::string probeWindow = budget.compactLegend ? windowAttrsFor( fileEnd ) : noWindow;
+            const PrTrimRender probe = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, probeWindow, deliveredOf );
             if( probe.truncated.find( "budget-floor-exceeded" ) == std::string::npos ) { lo = mid; } else { hi = mid; }
         }
         fileEnd = filePw.begin + lo;
     }
-    // the changed files are this root's PRIMARY listing, so a cut speaks the plain quintet (shown=/capped=/total=/
-    // has_more=/next_offset=/offset=/limit=, pageview.h) — never a noun-prefixed twin beside it (one fact, one name)
-    const std::size_t filesShown = fileEnd - filePw.begin;
-    std::string       windowAttrs;
-    if( filesShown < changed.size() )
-    {
-        char pab[ kPageDisclosureCap ];
-        windowAttrs += pageDisclosure( pab, sizeof( pab ), filesShown, changed.size(), fileEnd, budget.pageLimit, budget.pageOffset, true );
-        windowAttrs += nextAttrXml( std::string( "--pr-context" ) + ( baseLabel == "working-tree" ? std::string() : "=" + std::string( baseLabel ) )
-                                    + " --offset=" + std::to_string( fileEnd ) );
-    }
+    const std::string windowAttrs = windowAttrsFor( fileEnd );
     // R2/N4: the window disclosure is itself ~100 bytes of the document est_tokens prices, so once it is
     // known the level is chosen AGAIN with it in the price — otherwise the printed number would under-read
     // its own root tag by exactly the disclosure that says the files were cut.
-    chosen = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, windowAttrs );
+    chosen = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, windowAttrs, deliveredOf );
     const std::string rootOpen = prRootOpenText( g, sharedAttrs,
                                                  prBudgetTail( changed.size(), skippedModeOnly, budgetTokens, chosen, ex( chosen.truncated ) )
                                                      + ( budget.isDefault ? " budget_default=\"1\"" : "" ) + windowAttrs + atAttrStr,

@@ -4072,7 +4072,11 @@ static_assert( std::ranges::contains( kLegendPostures, kDefaultLegendPosture ), 
 // The runs with no XML legend to shape: text/markdown/JSON-native answers, the runs that WRITE, and the servers.
 // An ASKED --legend refuses on these (a posture flag must never be the reason an edit, a note, a baseline or a
 // server starts); the DEFAULT posture simply does not apply to them. nullptr = the run answers XML.
-[[nodiscard]] inline const char* legendNonXmlSurface( const Config& c ) noexcept
+// The READ surfaces among them — answers already written in the full dialect's own terms (prose, markdown, JSON, text
+// tables). An asked --legend=full is a no-op there, not a refusal (L1 fix round, rv-r1-L1 MED-6): the release notes tell a
+// script that parses the full prose to pass --legend=full, and one that appends it to every read call got exit 1 on
+// exactly the answers that print nothing BUT the full form. nullptr = none of them.
+[[nodiscard]] inline const char* legendNonXmlReadSurface( const Config& c ) noexcept
 {
     const char* nonXml = nullptr;
     if( c.situ || !c.situFiles.empty() )      { nonXml = "--situ (prose)"; }
@@ -4083,7 +4087,15 @@ static_assert( std::ranges::contains( kLegendPostures, kDefaultLegendPosture ), 
     else if( c.planLanesFlag )                { nonXml = "--plan-lanes (JSON-native)"; }
     else if( c.sarif )                        { nonXml = "--sarif (JSON)"; }
     else if( c.eval || c.evalRetrieval || !c.evalMined.empty() || !c.evalSkills.empty() || !c.evalStray.empty() ) { nonXml = "--eval* (text tables)"; }
-    else if( c.exportCcJson || !c.exportFile.empty() ) { nonXml = "--export (writes a file)"; }
+    return nonXml;
+}
+
+// …and the runs that WRITE or SERVE: any asked posture refuses there — a posture flag must never be the reason an edit, a
+// note, a baseline or a server starts. nullptr = none of them.
+[[nodiscard]] inline const char* legendWriteOrServeSurface( const Config& c ) noexcept
+{
+    const char* nonXml = nullptr;
+    if( c.exportCcJson || !c.exportFile.empty() ) { nonXml = "--export (writes a file)"; }
     else if( !c.noteAdd.empty() )             { nonXml = "--note-add (writes .ripwire_notes)"; }
     else if( c.qualityBaseline )              { nonXml = "--quality-baseline (writes the sidecar)"; }
     else if( c.qualityAck || !c.qualityAckReason.empty() || !c.qualityAckOnly.empty() ) { nonXml = "--quality-ack (writes the ledger)"; }
@@ -4095,6 +4107,12 @@ static_assert( std::ranges::contains( kLegendPostures, kDefaultLegendPosture ), 
     else if( c.mcp || !c.listen.empty() )     { nonXml = "--mcp/--listen (pass legend:\"compact\" per call instead)"; }
     else if( c.lsp )                          { nonXml = "--lsp (an LSP server over stdio)"; }
     return nonXml;
+}
+
+[[nodiscard]] inline const char* legendNonXmlSurface( const Config& c ) noexcept
+{
+    const char* read = legendNonXmlReadSurface( c );
+    return read != nullptr ? read : legendWriteOrServeSurface( c );
 }
 
 // THE DEFAULT, RESOLVED ONCE (L1). A run that names no posture gets kDefaultLegendPosture here, so every downstream
@@ -4128,6 +4146,10 @@ static inline void validateLegendModifier( Config& c ) noexcept
     // + compactlegend.h; --for/--grep/--slice compact natively). The refusal belongs to the runs with nothing to
     // compact — legendNonXmlSurface above. test/compactlegendcheck.sh (U) sweeps the whole flag universe: XML at
     // defaults ⇒ compact honored, anything else ⇒ this refusal.
+    if( c.legend == "full" && legendNonXmlReadSurface( c ) != nullptr && legendWriteOrServeSurface( c ) == nullptr )
+    {
+        return;   // the full form is the only form these answers have: accepted, and a no-op (runWithCompactLegend never captures it)
+    }
     if( nonXml != nullptr )
     {
         rw::emitTo( stderr, "ripwire: --legend={} applies to the XML verbs only — {} has no XML legend to compact; drop --legend (e.g. ripwire <dir> --callers=SYM --legend=compact)\n", std::string_view( c.legend.data(), c.legend.size() ), nonXml );

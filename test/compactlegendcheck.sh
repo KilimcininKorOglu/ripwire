@@ -24,7 +24,7 @@
 # jsoncheck #8b and shapingflagcheck (F) use — so a verb added tomorrow is probed tomorrow. Each flag runs at
 # defaults on a tmp git fixture; whatever answers with an XML root is an XML verb and must honor compact,
 # everything else must refuse it, and each verb's prose legend fits its per-verb pin (pinFor). LOOP arm (L): the ten-verb
-# loop's compact legend bill ≤ 4,700 B (was 29,824 on the ripwire tree). MCP arm (M): edit_check with legend:"compact" answers
+# loop's compact legend bill ≤ 7,200 B (was 29,824 on the ripwire tree). MCP arm (M): edit_check with legend:"compact" answers
 # in ≤ 900 B on a clean tree, and five more MCP verbs' legends fit their per-verb pins.
 # CONDITIONAL arm (D): an absent-at-zero or form-conditional attribute (declined_calls=, unproven_defs=, bodyless_defs=,
 # the member form, the multi-root <root label=> rows, --lego's caveat=; on the map family and --impact: pr_iters=,
@@ -298,16 +298,23 @@ echo "=== (R) refusal — re-pinned to P1's contract: a NON-XML verb refuses com
 # P1 made --callers a member; the refusal contract now belongs to the verbs with nothing to compact.
 # L1: BOTH postures, because both are now something a caller ASKS for (the default is neither spelled nor refused):
 # an asked posture on a run with no XML legend refuses whichever it names, and the same run WITHOUT the flag answers.
+# L1 fix round (rv-r1-L1 MED-6): an asked --legend=full on these READ answers is a no-op, not a refusal — they print only the
+# full form, and the release notes tell a script that parses the full prose to pass it. Asked compact still refuses; the
+# writers and servers still refuse either (compactlegendcheck (FX6)).
 for v in --situ --recall=geometry --report --mermaid "--plan-lanes=2 --task=geometry"; do
-    for posture in compact full; do
-        rrun $v --legend=$posture >"$TMP/bad.out"; rc_bad=$?
-        if [ "$rc_bad" -ne 0 ] && [ ! -s "$TMP/bad.out" ] && grep -q -- '--legend' "$TMP/rerr"; then
-            ok "(R) $v --legend=$posture refuses (exit $rc_bad, empty stdout, stderr names --legend)"
-        else
-            no "(R) $v --legend=$posture: exit=$rc_bad stdout=$( wc -c <"$TMP/bad.out" | tr -d ' ' )B stderr=[$( head -c 120 "$TMP/rerr" | tr '\n' ' ' )]"
-        fi
-    done
+    rrun $v --legend=compact >"$TMP/bad.out"; rc_bad=$?
+    if [ "$rc_bad" -ne 0 ] && [ ! -s "$TMP/bad.out" ] && grep -q -- '--legend' "$TMP/rerr"; then
+        ok "(R) $v --legend=compact refuses (exit $rc_bad, empty stdout, stderr names --legend)"
+    else
+        no "(R) $v --legend=compact: exit=$rc_bad stdout=$( wc -c <"$TMP/bad.out" | tr -d ' ' )B stderr=[$( head -c 120 "$TMP/rerr" | tr '\n' ' ' )]"
+    fi
+    rrun $v --legend=full >"$TMP/bad.full"; rc_full=$?
     rrun $v >"$TMP/bad.def"; rc_def=$?
+    if [ "$rc_full" -eq "$rc_def" ] && cmp -s "$TMP/bad.full" "$TMP/bad.def"; then
+        ok "(R) $v --legend=full is accepted and a no-op (exit $rc_full, the same bytes as the bare run)"
+    else
+        no "(R) $v --legend=full: exit=$rc_full (bare $rc_def), $( wc -c <"$TMP/bad.full" | tr -d ' ' ) B vs $( wc -c <"$TMP/bad.def" | tr -d ' ' ) B"
+    fi
     if [ "$rc_def" -eq 0 ] && [ -s "$TMP/bad.def" ] && ! grep -q -- '--legend' "$TMP/rerr"; then
         ok "(R) $v with no --legend answers (exit 0, $( wc -c <"$TMP/bad.def" | tr -d ' ' ) B) — the compact DEFAULT never refuses a run it cannot shape"
     else
@@ -442,70 +449,70 @@ PIN_TABLE='
 ripwire.map/v1                   910   892
 ripwire.map-diff/v1              900   885
 ripwire.pack-signatures/v1       770   759
-ripwire.metrics/v1               850   834
-ripwire.deps/v1                  260   245
+ripwire.metrics/v1               1040  1021
+ripwire.deps/v1                   380   364
 ripwire.hotspots/v1              280   264
-ripwire.clones/v1                290   280
-ripwire.readability/v1           240   224
-ripwire.nonlocal-state/v1        360   344
-ripwire.ensemble/v1              280   261
-ripwire.context-ratio/v1         250   240
+ripwire.clones/v1                 810   799
+ripwire.readability/v1            320   308
+ripwire.nonlocal-state/v1         570   556
+ripwire.ensemble/v1              1930  1920
+ripwire.context-ratio/v1         1780  1762
 ripwire.quality-panel/v1         290   271
 ripwire.naming-calibration/v1    220   206
-ripwire.naming-consistency/v1    280   261
+ripwire.naming-consistency/v1     550   531
 ripwire.comment-coherence/v1     260   241
-ripwire.cochange/v1              290   271
+ripwire.cochange/v1               540   521
 ripwire.communities/v1           820   807
 ripwire.zoom/v1                  410   394
 ripwire.tree/v1                  250   238
-ripwire.seams/v1                 380   365
-ripwire.handoff/v1               340   325
-ripwire.test-gate/v1             410   400
-ripwire.field-affinity/v1        320   304
-ripwire.skipped/v1               210   195
-ripwire.lint/v1                  250   240
-ripwire.lint-catalog/v1          140   124
-ripwire.external-surface/v1      190   171
-ripwire.scan-skills/v1           160   147
-ripwire.owners/v1                220   207
-ripwire.dead-code/v1             310   297
-ripwire.quality-delta/v1         230   212
+ripwire.seams/v1                  720   703
+ripwire.handoff/v1                600   589
+ripwire.test-gate/v1             1160  1144
+ripwire.field-affinity/v1        3090  3071
+ripwire.skipped/v1               1510  1498
+ripwire.lint/v1                   340   324
+ripwire.lint-catalog/v1           220   204
+ripwire.external-surface/v1       250   234
+ripwire.scan-skills/v1            380   369
+ripwire.owners/v1                 330   315
+ripwire.dead-code/v1              620   604
+ripwire.quality-delta/v1          690   674
 ripwire.dmm/v1                   200   189
-ripwire.pr-context/v1            510   499
-ripwire.stray-content/v1         190   179
-ripwire.flags/v1                 170   159
-ripwire.doc-drift/v1             220   205
-ripwire.notes/v1                 150   135
-ripwire.path/v1                  280   263
-ripwire.connect/v1               410   392
+ripwire.pr-context/v1            2180  2168
+ripwire.stray-content/v1          710   697
+ripwire.flags/v1                  470   459
+ripwire.doc-drift/v1              780   762
+ripwire.notes/v1                  310   292
+ripwire.path/v1                   430   419
+ripwire.connect/v1                660   643
 ripwire.impact/v1                780   770
-ripwire.mentions/v1              180   168
-ripwire.affected/v1              350   339
-ripwire.verify/v1                330   316
+ripwire.mentions/v1               260   243
+ripwire.affected/v1               840   826
+ripwire.verify/v1                 440   421
 ripwire.help-task/v1             170   153
 ripwire.query/v1                 720   707
-ripwire.grep/v1                  440   422
-ripwire.match/v1                 270   260
+ripwire.grep/v1                  1200  1181
+ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
-ripwire.exemplar/v1              250   232
+ripwire.exemplar/v1               440   422
 ripwire.around/v1                770   760
 ripwire.callers/v1               330   317
-ripwire.callees/v1               380   369
-ripwire.uses/v1                  290   271
-ripwire.batch/v1                 160   142
+ripwire.callees/v1                500   484
+ripwire.uses/v1                   510   500
+ripwire.batch/v1                  250   238
 ripwire.safe-delete/v1           720   708
 ripwire.at/v1                    180   161
-ripwire.from-trace/v1            460   445
+ripwire.from-trace/v1            1300  1281
 ripwire.plan-lint/v1             170   156
-ripwire.merge-scout/v1           220   208
-ripwire.whereis/v1               240   223
+ripwire.merge-scout/v1            470   459
+ripwire.whereis/v1                520   508
 ripwire.community/v1             730   719
-ripwire.layout/v1                160   149
+ripwire.layout/v1                1110  1091
 ripwire.pack-task/v1             990   974
 ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
-ripwire.expand-file/v1           240   230
-ripwire.for/v1                   670   654
+ripwire.expand-file/v1            360   342
+ripwire.for/v1                    750   738
 '
 pinFor()
 {
@@ -557,7 +564,10 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
         no "(U) $probe compact PROSE legend is $lb B (> its $pin B pin for $schema; all comments $lball B, full $lbfull B): $( leg legend "$TMP/u.c" | head -c 200 )"
     fi
     [ "$flag" != "--for=" ] || [ "$lb" -lt "$lbfull" ] || no "(U) --for compact legend ($lb B) did not shrink vs full ($lbfull B)"
-    [ "$lball" -lt "$lbfull" ] || [ "$lbfull" -eq 0 ] || no "(U) $probe compact comments ($lball B) are not smaller than the full dialect's ($lbfull B)"
+    # L1 fix round: the whole-file --expand serving is the one answer whose FULL legend (236 B here) defines only <src>/<s> —
+    # not est_tokens=, root=, mode= or reason=, all on its root. The compact legend defines every one (legendcoveragecheck (G)),
+    # so it is longer by those definitions; exempt by schema, never by flag, so the bundle serving keeps the arm.
+    [ "$lball" -lt "$lbfull" ] || [ "$lbfull" -eq 0 ] || [ "$schema" = "ripwire.expand-file/v1" ] || no "(U) $probe compact comments ($lball B) are not smaller than the full dialect's ($lbfull B)"
     fa="$( leg rootattrs "$TMP/u.full" )"; ca="$( leg rootattrs "$TMP/u.c" )"
     [ "$fa" = "$ca" ] || no "(U) $probe root attribute set moved under compact: full=[$fa] compact=[$ca]"
     leg payload "$TMP/u.full" >"$TMP/u.fullpay"; leg payload "$TMP/u.c" >"$TMP/u.cpay"
@@ -571,6 +581,11 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
     # compacting only the envelope reached 8,645 B). So the bytes that moved inside the CDATA are LEGEND at
     # one level down, and no splitter that treats CDATA atomically can say so. The property is not dropped:
     # the (B) arm below re-asserts it on the batch, comparing the sub-answers' own payloads after unwrapping.
+    # L1 fix round (rv-r1-L1 MED-7): --expand's root reason= names the DELIVERED sizes of the two candidates, which differ by
+    # posture by construction; its digits are masked, every other byte still compared.
+    if [ "$flag" = "--expand=" ]; then
+        for pf in "$TMP/u.fullpay" "$TMP/u.cpay"; do sed -E 's/reason="(file|bundle) [0-9]+B &lt;(=)? (bundle|file) [0-9]+B"/reason="\1 NB \3 NB"/' "$pf" > "$pf.m" && mv "$pf.m" "$pf"; done
+    fi
     if [ "$flag" != "--for=" ] && [ "$flag" != "--batch=" ]; then
         cmp -s "$TMP/u.fullpay" "$TMP/u.cpay" || no "(U) $probe rows are NOT byte-identical under compact: $( cmp "$TMP/u.fullpay" "$TMP/u.cpay" 2>&1 | head -c 120 )"
     fi
@@ -666,11 +681,16 @@ for task in "rank symbols by pagerank" "token budget ceiling ladder" "parse comm
             p1bad=$(( p1bad + 1 )); no "(P1) --for='$task' --token-budget=$tb: the default LOST $3 answer row(s) that --legend=full carries (default $1, full $2 symbol rows): ${4:-} ${5:-} ${6:-}"
         fi
         [ "${1:-0}" -gt "${2:-0}" ] && p1more=$(( p1more + 1 ))
+        grep -q '<sigs [^>]*capped="1"' "$TMP/p1.full" && head -c 300 "$TMP/p1.def" | grep -qF 'schema="ripwire.for/v1"' && p1bind=$(( ${p1bind:-0} + 1 ))
     done
 done
 [ "$p1bad" -eq 0 ] && [ "$p1n" -eq 20 ] && ok "(P1) rows(default) ⊇ rows(--legend=full) on all $p1n budgeted --for runs (5 tasks x 4 budgets)"
-[ "$p1more" -gt 0 ] && ok "(P1) the arm binds: on $p1more of $p1n runs the default carries MORE symbol rows than --legend=full" \
-                    || no "(P1) on none of $p1n runs does the default carry more rows than --legend=full — the default is not the compact posture, or the budget no longer binds; the superset arm proved nothing"
+# THE BINDING GUARD (L1 fix round): it asked for a run where the default carries MORE rows. Since the fix round the compact
+# header defines task=/next=/pure=/<field> and its sig charge is capped at the full dialect's (verbs_for.h runForLens), so
+# the default buys no row it cannot pay for and "more" is no longer the claim. What the superset arm needs is that the
+# budget BINDS (the full answer's <sigs> was cut) on a default that IS the compact posture — else it compares nothing.
+[ "${p1bind:-0}" -gt 0 ] && ok "(P1) the arm binds: on ${p1bind} of $p1n runs the budget cut the full answer's <sigs> and the default is the compact posture (default carries more rows on $p1more)" \
+                        || no "(P1) on none of $p1n runs did the budget cut the full answer's <sigs> under a compact default — the superset arm proved nothing"
 
 # (P2) the default map's --token-budget gate decides on the price the default PRINTS. It used to decide on the full
 # dialect's price before the compact layer ran, so a map that fits once compacted was withheld (exit 3). Budget = the
@@ -748,6 +768,10 @@ m = re.search( r" (budget=\d+ bytes \(\d+-token target, ceiling \d+\)(?: \| [^|]
 if not m:
     print( "NOLEDGER" ); sys.exit()
 facts = [ f.strip() for f in m.group( 1 ).split( " | " ) ]
+# L1 fix round (rv-r1-L1 MED-4): the HEADER rungs (task_echo:/route_attr:/over_ceiling:) are not content facts. The default
+# climbs its ceiling ladder at the price it DELIVERS, and the task echo lives in prose it never delivers, so a rung the full
+# answer needed is one the default does not take; (FX4) holds the rung clause of the default ledger to its root instead.
+facts = [ f for f in facts if not f.startswith( ( "task_echo", "over_ceiling:" ) ) ]
 kept  = re.search( r"<!-- ledger: (.*?) -->", dflt )
 missing = [ f for f in facts if not kept or f not in kept.group( 1 ).split( " | " ) ]
 cut = sum( 1 for f in facts if "omitted" in f or "capped" in f or "dropped" in f )
@@ -793,7 +817,11 @@ echo
 # A1' rebuilt --for's compact legend present-only, and it is a THIN answer here, so it also carries for-widen's
 # coverage= reading, +162 B); the other nine verbs are 317/770/271/425/212/400/339/708/287 B and did not move. Same
 # rule as every anchor above: the next multiple of 100 B over the measured total.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,700 B (29,824 B in full on the ripwire tree) ==="
+# RE-ANCHORED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1): 4,700 → 7,200 B, measured 7,131. The default now defines
+# every attribute its answer emits (legendcoveragecheck (G)): --quality-delta's rename/ack counters, --test-gate's four
+# script-gate counts, --affected's seeds/reached, the schema= opener on every verb. Still under a quarter of the full bill
+# (33,407 B on this fixture), and the same rule: the next multiple of 100 B over the measured total.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,200 B (33,407 B in full on the fixture) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -802,8 +830,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 4700 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 4,700 B; full: $fullBytes B)"
+[ "$loopBytes" -le 7200 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,200 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -843,11 +871,13 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 #   path_between  280  measured 263 B; owner decision 2026-09-12: per-verb pins that fit honest definitions (METHODOLOGY §9)
 #   lego          260  measured 249 B; owner decision 2026-09-12: per-verb pins that fit honest definitions (METHODOLOGY §9)
 #   exemplar      260  measured 243 B; owner decision 2026-09-12: per-verb pins that fit honest definitions (METHODOLOGY §9)
+# RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
+# (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 for pair in "impact:780:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
-            "uses:290:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
-            "path_between:280:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
+            "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
+            "path_between:430:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \
-            "exemplar:260:{\"path\":\".\",\"kind\":\"fn\",\"task\":\"distance\",\"legend\":\"compact\"}"; do
+            "exemplar:350:{\"path\":\".\",\"kind\":\"fn\",\"task\":\"distance\",\"legend\":\"compact\"}"; do
     verb="${pair%%:*}"; rest="${pair#*:}"; mpin="${rest%%:*}"; args="${rest#*:}"
     mcp_text "$verb" "$args" >"$TMP/m.v"
     if grep -q '^__ERROR__' "$TMP/m.v"; then
@@ -2023,6 +2053,104 @@ else
         && ok "(R) the compact <g> term states every fact the full run-hint clause states, in the same words, and neither promises the deleted &#44; escape" \
         || no "(R) the compact and full readings of <g> have drifted:$rgbad"
 fi
+
+echo
+echo "=== (FX) the L1 fix round (rv-r1-L1): the default posture drops no disclosure and trims at the price it delivers ==="
+FXT="$TMP/fx"; mkdir -p "$FXT"
+# (FX1) --from-trace keeps the ceiling it APPLIED (MED-1): the allowance sentence survives as a data comment, same number as full.
+printf '#0 0x1 in escapeXml serialize.h:147\n#1 0x2 in main main.cpp:10\n' > "$FXT/trace.txt"
+fx1d="$( "$BIN" "$ROOT/src" --no-cache --from-trace="$FXT/trace.txt" --token-budget=600 2>/dev/null | grep -oE '<!-- ledger: budget=[0-9]+ bytes \(allowance [0-9]+ bytes' | grep -oE 'allowance [0-9]+' )"
+fx1f="$( "$BIN" "$ROOT/src" --no-cache --from-trace="$FXT/trace.txt" --token-budget=600 --legend=full 2>/dev/null | grep -oE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' | grep -oE 'allowance [0-9]+' | head -1 )"
+[ -n "$fx1f" ] && [ "$fx1d" = "$fx1f" ] \
+    && ok "(FX1) --from-trace's default answer keeps the applied ceiling as data ($fx1d, == full)" \
+    || no "(FX1) --from-trace default ledger '$fx1d' vs full '$fx1f' — the default dropped the ceiling it applied"
+# (FX2) --notes keeps its counts (MED-2), and the legend defines them.
+mkdir -p "$FXT/notes" && printf 'int alpha( void ) { return 1; }\n' > "$FXT/notes/a.c"
+( cd "$FXT/notes" && "$BIN" . --no-cache --note-add="alpha: first" >/dev/null 2>&1 && "$BIN" . --no-cache --note-add="gone.c: dangling one" >/dev/null 2>&1 )
+fx2d="$( "$BIN" "$FXT/notes" --no-cache --notes 2>/dev/null )"
+fx2f="$( "$BIN" "$FXT/notes" --no-cache --notes --legend=full 2>/dev/null | grep -oE 'notes=[0-9]+ targets=[0-9]+ dangling=[0-9]+' )"
+printf '%s' "$fx2d" | grep -qF "<!-- $fx2f -->" && [ -n "$fx2f" ] \
+    && printf '%s' "$fx2d" | grep -qE 'notes= rows, targets= <target> rows, dangling= ' \
+    && ok "(FX2) --notes' default answer keeps its counts ($fx2f) and defines notes=/targets=/dangling=" \
+    || no "(FX2) --notes' default answer lost its counts '$fx2f' or their readings: $( printf '%s' "$fx2d" | head -c 300 )"
+# (FX3) the withheld-map record reads as what it is (MED-3): its own legend, in front of the record, not the handoff reading.
+fx3="$( "$BIN" "$ROOT/src" --no-cache --token-budget=50 2>/dev/null )"
+case "$fx3" in
+    '<!-- ripwire map schema=ripwire.map/v1: the ranked map WITHHELD whole'*'<r schema='*'withheld="1"/>')
+        printf '%s' "$fx3" | grep -qF 'rows the budget cut' \
+            && no "(FX3) the withheld record still carries the handoff reading of withheld= (rows cut)" \
+            || ok "(FX3) the withheld-map record leads with its own reading (withheld whole, withheld_est_tokens=, budget=)" ;;
+    *) no "(FX3) withheld-map record: $( printf '%s' "$fx3" | head -c 300 )" ;;
+esac
+# (FX4) --pack-task's kept ledger never contradicts its settled root (MED-4): the ledger says over_ceiling exactly when the
+#       root does, and a default answer never claims a task_echo drop (the echo is prose the compact layer never delivers).
+fx4bad=""
+for tb in 900 1200 1500 2000; do
+    d="$( "$BIN" "$ROOT/src" --no-cache --pack-task="rank symbols by pagerank" --token-budget=$tb 2>/dev/null )"
+    root="$( printf '%s' "$d" | grep -oE '<ctx [^>]*>' | head -1 )"; led="$( printf '%s' "$d" | grep -oE '<!-- ledger: [^>]*-->' | head -1 )"
+    [ -n "$led" ] || { fx4bad="$fx4bad [tb=$tb: no kept ledger]"; continue; }
+    ro=0; lo=0
+    case "$root" in *'over_ceiling="1"'*) ro=1 ;; esac
+    case "$led" in *'over_ceiling:'*) lo=1 ;; esac
+    [ "$ro" = "$lo" ] || fx4bad="$fx4bad [tb=$tb: root over_ceiling=$ro, ledger over_ceiling clause=$lo]"
+    case "$led" in *'task_echo: dropped'*) fx4bad="$fx4bad [tb=$tb: ledger claims a task_echo drop the compact answer never delivered]" ;; esac
+done
+[ -z "$fx4bad" ] && ok "(FX4) --pack-task's kept ledger agrees with its root at 900/1200/1500/2000 tokens" || no "(FX4)$fx4bad"
+# (FX5) --pr-context trims at the price it DELIVERS (MED-4): a fixture whose diff the budget must trim; at every budget the
+#       default keeps at least the full dialect's files, stays inside a budget the full answer met, and keeps MORE files
+#       than full somewhere (else the arm proves nothing).
+PRX="$FXT/pr"; mkdir -p "$PRX/src"
+for i in $( seq 1 40 ); do printf 'int f%d_a( int x ) { return x + %d; }\nint f%d_b( int x ) { return f%d_a( x ) * 2; }\n' "$i" "$i" "$i" "$i" > "$PRX/src/m$i.c"; done
+( cd "$PRX" && git init -q . && git add -A && git -c user.email=g@example.invalid -c user.name=g commit -qm one \
+  && for i in $( seq 1 40 ); do printf 'int f%d_c( int x ) { return f%d_b( x ) - 1; }\n' "$i" "$i" >> "src/m$i.c"; done \
+  && git add -A && git -c user.email=g@example.invalid -c user.name=g commit -qm two ) >/dev/null 2>&1
+fx5bad=""; fx5more=0; fx5runs=0
+for tb in 1000 1500 2000 3000; do
+    d="$( "$BIN" "$PRX" --no-cache --pr-context=HEAD~1 --token-budget=$tb 2>/dev/null | grep -oE '<pr-context [^>]*>' )"
+    f="$( "$BIN" "$PRX" --no-cache --pr-context=HEAD~1 --token-budget=$tb --legend=full 2>/dev/null | grep -oE '<pr-context [^>]*>' )"
+    [ -n "$d" ] && [ -n "$f" ] || { fx5bad="$fx5bad [tb=$tb: no root]"; continue; }
+    fx5runs=$(( fx5runs + 1 ))
+    at(){ printf '%s' "$1" | grep -oE " $2=\"[0-9]+\"" | grep -oE '[0-9]+' | head -1; }
+    ds="$( at "$d" shown )"; fs="$( at "$f" shown )"; ds=${ds:-$( at "$d" files )}; fs=${fs:-$( at "$f" files )}
+    de="$( at "$d" est_tokens )"; fe="$( at "$f" est_tokens )"; dl="$( at "$d" trim_level )"; fl="$( at "$f" trim_level )"
+    [ "$ds" -ge "$fs" ] || fx5bad="$fx5bad [tb=$tb: default shows $ds files < full $fs]"
+    [ "$fe" -gt "$tb" ] || [ "$de" -le "$tb" ] || fx5bad="$fx5bad [tb=$tb: full fits ($fe) but default is over ($de)]"
+    { [ "$ds" -gt "$fs" ] || [ "$dl" -lt "$fl" ]; } && fx5more=$(( fx5more + 1 ))
+done
+[ "$fx5runs" -eq 4 ] && [ -z "$fx5bad" ] && [ "$fx5more" -gt 0 ] \
+    && ok "(FX5) --pr-context: default files >= full at 4 budgets, inside every budget full met, and less trimmed on $fx5more" \
+    || no "(FX5) --pr-context delivered-price trim: runs=$fx5runs better=$fx5more$fx5bad"
+# (FX6) --legend=full is accepted on the read answers that print only the full form (MED-6) and is a no-op there; an asked
+#       compact still refuses, and a writer still refuses any asked posture.
+fx6bad=""
+for a in "--situ" "--recall=legend" "--report" "--mermaid" "--lint --sarif"; do
+    # shellcheck disable=SC2086
+    "$BIN" "$ROOT/src" --no-cache $a >"$FXT/d6" 2>/dev/null; rd=$?
+    # shellcheck disable=SC2086
+    "$BIN" "$ROOT/src" --no-cache $a --legend=full >"$FXT/f6" 2>/dev/null; rf=$?
+    [ "$rf" -eq "$rd" ] && cmp -s "$FXT/d6" "$FXT/f6" || fx6bad="$fx6bad [$a: full exit $rf vs default $rd, or bytes differ]"
+    # shellcheck disable=SC2086
+    "$BIN" "$ROOT/src" --no-cache $a --legend=compact >/dev/null 2>&1 && fx6bad="$fx6bad [$a --legend=compact was accepted]"
+done
+( cd "$FXT/notes" && "$BIN" . --no-cache --note-add="alpha: x" --legend=full >/dev/null 2>&1 ) && fx6bad="$fx6bad [--note-add accepted an asked --legend=full]"
+[ -z "$fx6bad" ] && ok "(FX6) --legend=full is a no-op on --situ/--recall/--report/--mermaid/--sarif; compact and writers still refuse" || no "(FX6)$fx6bad"
+# (FX7) --expand's reason= quotes the size of the document DELIVERED (MED-7), in both servings, in both postures.
+fx7bad=""
+for sym in pageWindow emitTo; do
+    for lg in "" "--legend=full"; do
+        # shellcheck disable=SC2086
+        "$BIN" "$ROOT/src" --no-cache --expand=$sym $lg >"$FXT/x7" 2>/dev/null
+        n="$( wc -c < "$FXT/x7" | tr -d ' ' )"
+        said="$( grep -oE 'reason="(file|bundle) [0-9]+B' "$FXT/x7" | head -1 | grep -oE '[0-9]+' )"
+        [ "$said" = "$n" ] || fx7bad="$fx7bad [$sym ${lg:-default}: reason says ${said:-none}B, delivered ${n}B]"
+    done
+done
+[ -z "$fx7bad" ] && ok "(FX7) --expand reason= names the delivered size (bundle and whole-file, default and full)" || no "(FX7)$fx7bad"
+# (FX8) --for=X --batch=F answers the batch envelope, in the default posture like every other verb (LOW-1).
+printf 'callers escapeXml\n' > "$FXT/batch.txt"
+"$BIN" "$ROOT/src" --no-cache --for=x --batch="$FXT/batch.txt" 2>/dev/null | head -c 200 | grep -qF '<batch schema="ripwire.batch/v1"' \
+    && ok "(FX8) --for=X --batch=F: the batch envelope carries the default posture's schema=" \
+    || no "(FX8) --for=X --batch=F answered the batch envelope outside the default posture"
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
 exit "$fail"

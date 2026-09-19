@@ -1454,6 +1454,11 @@ struct ExpandServeDocument
     std::size_t rootAttrBytes = 0;     // <ctx> attributes only this mode carries (root=, topk_default=, a payload-priced est_tokens=)
     std::size_t legendBytes   = 0;     // legend comments only this mode emits
     double      selfPriceRate = 0.0;   // >0: this mode prices ITSELF on its <ctx> root (est_tokens=), at this B/token rate
+    std::ptrdiff_t compactDeltaBytes = 0; // L1 fix round (rv-r1-L1 MED-7): under the compact posture, how many bytes the compact
+                                        // layer ADDS to this candidate (negative: takes out) — its prose legend out, the compact
+                                        // legend and schema= in (the whole-file legend GROWS: a longer compact legend),
+                                        // measured on the candidate itself — so the choice and the reason= figures are the
+                                        // DELIVERED sizes. 0 in the full posture: nothing moves.
 };
 
 // The whole served document, envelope included. `disclosureBytes` is the mode=/reason= attribute pair the
@@ -1470,7 +1475,8 @@ inline std::size_t priceExpandServeDocument( const ExpandServeDocument& doc, std
         std::size_t estTokens = 0;
         total += rw::pricedRootAttr( total, doc.selfPriceRate, 0, &estTokens ).size();
     }
-    return total;
+    const std::ptrdiff_t delivered = static_cast<std::ptrdiff_t>( total ) + doc.compactDeltaBytes;
+    return delivered > 0 ? static_cast<std::size_t>( delivered ) : total;
 }
 
 inline ExpandServeChoice chooseExpandServe( const ExpandServeDocument& bundleDoc, const ExpandServeDocument& fileDoc,
@@ -1800,6 +1806,20 @@ int runDefaultMap( const MainDispatch& d )
     //
     // DEGRADE: open_memstream failure returns 0, which reads as "fits" — the pre-§F5 behaviour, and the safe
     // direction here: a size this path could not measure must not mint an over_ceiling label it cannot support.
+    // L1 fix round: the map's TEXT, for the one caller that must compact a candidate to price what it delivers (--expand's
+    // serving choice under the compact posture). The same render measureMapBytes measures; empty when the buffer failed.
+    const auto renderMapText = [ & ]( int k, std::size_t extraPayloadTokens ) -> std::string
+    {
+        rw::MemoryStream probe;
+        std::FILE* const m = rw::openChargeStream( probe );
+        if( !m )
+        {
+            return {};
+        }
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
+        const rw::MemoryStreamBytes measured = probe.finish();
+        return measured.isWhole ? std::string( measured.bytes ) : std::string();
+    };
     const auto measureMapBytes = [ & ]( int k, std::size_t extraPayloadTokens ) -> std::size_t
     {
         rw::MemoryStream probe;
@@ -2309,6 +2329,27 @@ int runDefaultMap( const MainDispatch& d )
         fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes;        // whole-file mode always carries root= (no <r root=> rides with it)
         fileDoc.legendBytes   = kExpandWholeFileLegend.size();
         fileDoc.selfPriceRate = rw::kBytesPerTokenBody;
+        // L1 fix round (rv-r1-L1 MED-7): under the compact posture each candidate is priced as the compact layer will deliver
+        // it — the two documents, assembled with the same parts the fields above describe, compacted, and the difference
+        // taken off each price. reason= then names the sizes of documents that exist, and the choice is made on them.
+        if( cfg.legend == "compact" && !cfg.json )
+        {
+            const auto deltaOf = []( const std::string& candidate ) -> std::ptrdiff_t
+            {
+                const std::size_t delivered = rw::compactDeliveredBytes( candidate, "expand" );
+                return delivered > 0 ? static_cast<std::ptrdiff_t>( delivered ) - static_cast<std::ptrdiff_t>( candidate.size() ) : 0;
+            };
+            const std::string mapText = mapTopK > 0 ? renderMapText( mapTopK, payloadTokens ) : std::string();
+            // the ROOT ATTRIBUTES ride too: the compact legend reads root=/est_tokens=/topk_default= etc. present-only, so a
+            // candidate without them would price a legend shorter than the one delivered. The est_tokens= values are the
+            // candidates' own prices (the layer reprices them, and a placeholder of another digit count would move the delta).
+            const std::string topk       = exactNameExpandDefault ? " topk_default=\"0\"" : "";
+            const std::string fileEst    = std::to_string( static_cast<std::size_t>( double( wholeFile.xml.size() + kExpandWholeFileLegend.size() + ctxRootAttr.size() ) / rw::kBytesPerTokenBody ) + 1 );
+            const std::string bundleRoot = "<ctx" + ctxUnprovenAttr + ( mapTopK == 0 ? ctxRootAttr + " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" : std::string() ) + topk + noteBuf + " mode=\"bundle\">";
+            const std::string fileRoot   = "<ctx" + ctxUnprovenAttr + ctxRootAttr + topk + " mode=\"whole-file\" est_tokens=\"" + fileEst + "\">";
+            bundleDoc.compactDeltaBytes = deltaOf( bundleRoot + ctxUnprovenLegend + mapText + bodiesSection.xml + "</ctx>" );
+            fileDoc.compactDeltaBytes   = deltaOf( fileRoot + ctxUnprovenLegend + std::string( kExpandWholeFileLegend ) + wholeFile.xml + "</ctx>" );
+        }
         ExpandServeChoice choice = chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes );
         serveWholeFile = choice.serveWholeFile;
         ctxOpenStr     = std::move( choice.ctxOpen );
@@ -3602,7 +3643,38 @@ static std::string_view compactLegendHint( const rw::Config& c, std::string_view
 // legends are pure prose — the layer restates them as its own compact legend and keeps their schema id.
 static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 {
-    return !c.forTask.empty();
+    // L1 fix round (rv-r1-L1 LOW-1): --batch outranks --for in dispatch, so `--for=X --batch=F` answers the batch envelope —
+    // an answer this layer shapes. Only a run --for actually answers is skipped.
+    return !c.forTask.empty() && c.batchFile.empty();
+}
+
+// L1 fix round (rv-r1-L1 LOW-3): a DEFAULTED posture captured every run through a tmpfile, a 1.28 MB `--lint --sarif`
+// included, so stdout stopped streaming for answers the layer then passed through untouched. Dispatch precedence decides
+// the answering verb (`--callers=X --lint --sarif` answers --callers, in XML), so the capture is skipped only where the
+// answer is CERTAINLY not XML: SARIF, with nothing on the command line but the flags that shape a lint run. Anything
+// else is captured, which is the safe direction — a capture of a non-XML answer passes it through unchanged.
+static bool certainlyNonXmlAnswer( const rw::Config& cfg, char** argv ) noexcept
+{
+    if( !cfg.legendDefaulted || !cfg.sarif || argv == nullptr || argv[ 0 ] == nullptr )
+    {
+        return false;
+    }
+    static constexpr std::string_view kLintShaping[] = { "--lint", "--sarif", "--lint-rules=", "--no-cache", "--exclude=", "--include=", "--no-redact" };
+    for( char** a = argv + 1; *a != nullptr; ++a )
+    {
+        const std::string_view arg( *a );
+        if( !arg.starts_with( "-" ) )
+        {
+            continue;   // a root operand
+        }
+        const bool shapesLint = std::ranges::any_of( kLintShaping, [ & ]( std::string_view f )
+                                                     { return f.ends_with( '=' ) ? arg.starts_with( f ) : arg == f; } );
+        if( !shapesLint )
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 // L1 (2026-09-19): compact is the CLI DEFAULT (cli.h kDefaultLegendPosture, resolved in validateLegendModifier), so this
@@ -3659,7 +3731,7 @@ static int finishCompactCapture( const rw::Config& cfg, std::string& doc, int rc
 static int runWithCompactLegend( const rw::Config& cfg, char** argv )
 {
     EXPECTS( !cfg.legendDefaulted || cfg.legend == rw::kDefaultLegendPosture, "a defaulted posture is the registered default" );
-    if( cfg.legend != "compact" || nativeCompactLegendVerb( cfg ) )
+    if( cfg.legend != "compact" || nativeCompactLegendVerb( cfg ) || certainlyNonXmlAnswer( cfg, argv ) )
     {
         return dispatchMain( cfg, argv );
     }

@@ -27,6 +27,7 @@
 #include "nextverb.h"     // P3 (L7): next= on the trace bundle root
 #include "graph.h"
 #include "filter.h"        // LB-A: isTestPath / isTestSymbol — the SHARED test partition the hop below asks
+#include "compactlegend.h" // L1 fix round: compactDeliveredBytes — the section floor and ladder at the delivered price
 #include "serialize.h"     // packSignatures / packBodies / escapeXml / kForPayloadBudgetBytes
 #include "redact.h"
 #include "tracein.h"        // table-driven stack-trace/sanitizer/compiler frame extraction (pure string work)
@@ -887,6 +888,9 @@ struct FromTraceInputs
     std::size_t                        sigLadderBudgetBytes = 0;                        // packSignatures per-doc ladder (0 = unlimited)
     std::size_t                        bodyBudgetBytes      = 0;                        // packBodies budget for the rank-1 full body (0 = unlimited)
     std::size_t                        maxTokens            = 0;                        // H9: the --max-tokens ceiling as PASSED (0 = none) — max_tokens= on the root.
+    bool                               compactLegend        = false;                    // L1 fix round (rv-r1-L1 MED-4): the run's legend posture is
+                                                                                        // compact — the section floor and the ceiling ladder are
+                                                                                        // priced at the bytes the compact layer DELIVERS
                                                                                          // bodyBudgetBytes is derived from it and also carries the packBudget default,
                                                                                          // so it cannot answer "what ceiling did the caller ask for"
     bool                                compress             = false;
@@ -1095,15 +1099,14 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
     // the trace block — charged against the same ledger, so the sigs/bodies section shrinks to make room
     // rather than the document silently outgrowing its budget.
     const std::size_t fixedBytes   = headerStr.size() + in.preludeXml.size() + traceStr.size() + hopStr.size() + 6;   // + "</ctx>"
-    const std::size_t sigsBudget   = bundleBudget > fixedBytes ? bundleBudget - fixedBytes : 1;
 
-    std::string whole;
-    whole += headerStr;
-    whole += in.preludeXml;
-    whole += traceStr;
-    whole += hopStr;
-    if( !part.suspects.empty() )
+    // The signature/body section at a given sig budget, or nullopt when its buffer failed (the bundle is then withheld).
+    const auto renderSection = [ & ]( std::size_t sigsBudget ) -> std::optional<std::string>
     {
+        if( part.suspects.empty() )
+        {
+            return std::string();
+        }
         rw::MemoryStream stream;
         if( std::FILE* const m = stream.open() )
         {
@@ -1124,23 +1127,36 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
                                                                        // scores positive, so the edge the trace walked survives the cut.
             if( const rw::MemoryStreamBytes section = stream.finish(); section.isWhole )
             {
-                whole.append( section.bytes );
+                return std::string( section.bytes );
             }
-            else
-            {
-                DISCLOSE( "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
-                res.isBufferLost = true;
-                return res;
-            }
+            DISCLOSE( "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
+            return std::nullopt;
         }
-        else
+        DISCLOSE( "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
+        return std::nullopt;
+    };
+    const std::string fixedHead = headerStr + std::string( in.preludeXml ) + traceStr + hopStr;
+    std::optional<std::string> section = renderSection( bundleBudget > fixedBytes ? bundleBudget - fixedBytes : 1 );
+    // L1 fix round (rv-r1-L1 MED-4): under the compact posture the header's prose is never delivered, so the section was
+    // cut to make room for bytes nobody receives. The first render prices the DELIVERED fixed part — the compacted
+    // document minus the section, whose rows the layer does not touch, so the row-term readings that section brought are
+    // in it — and, when that is smaller, the section is rendered again with the room it frees. A larger sig budget only
+    // ever adds rows, so rows(default) ⊇ rows(full) (compactlegendcheck (P1)).
+    if( in.compactLegend && section && !section->empty() )
+    {
+        const std::size_t delivered = rw::compactDeliveredBytes( fixedHead + *section + "</ctx>", "from-trace" );
+        const std::size_t fixedDelivered = delivered > section->size() ? delivered - section->size() : fixedBytes;
+        if( delivered > 0 && fixedDelivered < fixedBytes )
         {
-            DISCLOSE( "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
-            res.isBufferLost = true;
-            return res;
+            section = renderSection( bundleBudget > fixedDelivered ? bundleBudget - fixedDelivered : 1 );
         }
     }
-    whole += "</ctx>";
+    if( !section )
+    {
+        res.isBufferLost = true;
+        return res;
+    }
+    std::string whole = fixedHead + *section + "</ctx>";
 
     // §B3 — climb the ladder over the ASSEMBLED document. Priced after assembly (like both siblings) because
     // the bar is the delivered bytes, not an estimate; the payload was rendered against the pre-ladder
@@ -1201,8 +1217,19 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
             return attrs;
         };
         const std::size_t rootAttrsBound = rootAttrsFor( whole, /*widestSpelling=*/true ).size();
-        const CeilingLadderChoice chosen = climbCeilingLadder( [ & ]( bool, bool withSrcEcho, std::string_view extra )
-                                                               { return buildTraceHeader( withSrcEcho, extra ); },
+        const auto buildRung = [ & ]( bool, bool withSrcEcho, std::string_view extra ) { return buildTraceHeader( withSrcEcho, extra ); };
+        // L1 fix round: under the compact posture the rungs are judged on the DELIVERED document (see packtask.h's twin).
+        const std::string restOfWhole = in.compactLegend ? whole.substr( headerStr.size() ) : std::string();
+        const auto deliveredFits = [ & ]( std::string_view header )
+        {
+            std::string candidate = std::string( header ) + restOfWhole;
+            spliceRootAttrs( candidate, rootAttrsFor( candidate, /*widestSpelling=*/true ) );
+            const std::size_t delivered = rw::compactDeliveredBytes( candidate, "from-trace" );
+            return pricedBytesOf( delivered > 0 ? delivered : candidate.size() ) <= ceilingAllowanceFromBudgetBytes( bundleBudget );
+        };
+        const CeilingLadderChoice chosen = in.compactLegend
+            ? climbCeilingLadderBy( buildRung, headerStr, deliveredFits, deliveredFits, /*hasRouteAttr=*/false, kNotes )
+            : climbCeilingLadder( buildRung,
                                                                headerStr, pricedBytesOf( whole.size() ) - headerStr.size() + rootAttrsBound,
                                                                // ONE ceiling twice: this lens states its ceiling in BYTES and labels
                                                                // over_ceiling= against `namedCeiling`, so it has no token-rate
