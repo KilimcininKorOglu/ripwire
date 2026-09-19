@@ -258,5 +258,25 @@ grep -q 'capped what= at=: ' "$BC/out.xml" \
 command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$BC/out.xml" 2>/dev/null \
     && ok "binding cap: the report is well-formed" || no "binding cap: the report fails xmllint"; }
 
+# ── the alias-chain DEPTH cap is disclosed too, and only when the chain really runs past it ─────────────────────────
+# aliasDescendants descends kMaxChainDepth (8) alias links. Only the fan-out cap (kMaxFamily) set familyCapped, so a
+# chain of ten gates flipped at its root lit nine and dropped the tenth with no <capped> row (CodeRabbit on #295).
+# Control: a chain of exactly nine gates — the walk reaches its end in eight links, so nothing may be claimed capped.
+chain(){ # chain DIR N -> N gates DEEPFIX_L0..L(N-1), each aliasing the previous, the last one guarding a function
+    mkdir -p "$1"; { printf '#ifndef DEEPFIX_L0\n#define DEEPFIX_L0 0\n#endif\n'
+      i=1; while [ $i -lt "$2" ]; do printf '#ifndef DEEPFIX_L%d\n#define DEEPFIX_L%d DEEPFIX_L%d\n#endif\n' $i $i $(( i - 1 )); i=$(( i + 1 )); done
+      printf '#if DEEPFIX_L%d\nint deepFeature() { return 1; }\n#endif\n' $(( $2 - 1 )); } >"$1/chain.h"; }
+chain "$TMP/chain9" 9; chain "$TMP/chain10" 10
+D9="$( flip "$TMP/chain9" DEEPFIX_L0 )"; D10="$( flip "$TMP/chain10" DEEPFIX_L0 )"
+want "depth control: a nine-gate chain is walked to its end (family)" "$( attr "$D9" flip family )" "9"
+printf '%s' "$D9" | grep -q '<capped what="depth"' \
+    && no "depth control: a chain the walk finished claims a depth cut" || ok "depth control: no <capped what=\"depth\"> on a chain the walk finished"
+want "depth: a ten-gate chain stops at the cap (family)" "$( attr "$D10" flip family )" "9"
+printf '%s' "$D10" | grep -q '<capped what="depth" at="8"/>' \
+    && ok "depth: the cut is disclosed (<capped what=\"depth\" at=\"8\"/>)" \
+    || no "depth: a ten-gate chain lost its tenth gate with no <capped what=\"depth\"> row: $( printf '%s' "$D10" | tr '<' '\n' | grep -m1 '^flip ' )"
+printf '%s' "$D10" | grep -q 'what=depth' \
+    && ok "depth: the capped clause defining what=depth rides with the row" || no "depth: <capped what=\"depth\"> emitted with no clause defining it"
+
 [ $fail -eq 0 ] && echo "flipcheck: ALL PASS" || echo "flipcheck: FAILURES"
 exit $fail

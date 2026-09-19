@@ -163,16 +163,20 @@ struct FlipResult
     std::string               parent;                // set when the FLIPPED gate is itself an alias child
     std::uint32_t             siblingCount = 0;      // other children of that parent (what the parent's flip adds)
     bool                      familyCapped = false;
+    bool                      depthCapped = false;      // the alias chain ran deeper than kMaxChainDepth: family= is a floor
     bool                      bindingsCapped = false;   // more value bindings than kMaxBindings: bindings= and its branches are a floor
 
-    // The DISCLOSE sink for the alias walk's cut: familyCapped is the <capped what="family"> row.
+    // The DISCLOSE sink for the alias walk's two cuts: familyCapped is the <capped what="family"> row (fan-out),
+    // depthCapped the <capped what="depth"> row (a chain longer than the walk descends).
     enum class DisclosureWhy : std::uint8_t
     {
         FamilyOverCap,
+        ChainOverDepth,
     };
-    void disclose( DisclosureWhy ) noexcept
+    void disclose( DisclosureWhy why ) noexcept
     {
-        familyCapped = true;
+        familyCapped = familyCapped || why == DisclosureWhy::FamilyOverCap;
+        depthCapped  = depthCapped || why == DisclosureWhy::ChainOverDepth;
     }
 
     std::vector<FamilyMember> family;
@@ -444,6 +448,21 @@ inline NodeId innermostAtLine( const IngestResult& ing, const SymbolLineIndex& i
     return best;
 }
 
+// Is there a gate whose immediate alias parent is in `family` but which is not itself in it — i.e. one more level the
+// walk did not descend? Only asked when the depth bound (not the chain's end) stopped the walk.
+inline bool hasUnwalkedChild( const gtl::btree_map<std::string, darkflags::Gate>& byName, const std::vector<std::string>& family )
+{
+    for( const auto& [ name, g ] : byName )
+    {
+        if( !g.aliasParent.empty() && std::find( family.begin(), family.end(), g.aliasParent ) != family.end()
+            && std::find( family.begin(), family.end(), name ) == family.end() )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── the family a single flip lights ──────────────────────────────────────────────────────────────────────
 // Descendants of `root` over the IMMEDIATE alias link, breadth-first and bounded: flipping a master lights
 // every gate that aliases (transitively) to it. Flipping a leaf lights only the leaf — which falls out of
@@ -452,7 +471,8 @@ inline std::vector<std::string> aliasDescendants( const gtl::btree_map<std::stri
                                                   const std::string& root, FlipResult& res )
 {
     std::vector<std::string> family{ root };
-    bool                     capped = false;
+    bool                     capped     = false;
+    bool                     isExhausted = false;   // a level found no new child: the walk reached the chain's end
     for( std::uint32_t depth = 0; depth < kMaxChainDepth; ++depth )
     {
         std::vector<std::string> next;
@@ -474,6 +494,7 @@ inline std::vector<std::string> aliasDescendants( const gtl::btree_map<std::stri
         }
         if( next.empty() )
         {
+            isExhausted = true;
             break;
         }
         for( std::string& n : next )
@@ -493,6 +514,11 @@ inline std::vector<std::string> aliasDescendants( const gtl::btree_map<std::stri
     if( capped )
     {
         DISCLOSE( res, FlipResult::DisclosureWhy::FamilyOverCap, "flip: alias family hit the fan-out cap — the radius below is a lower bound" );
+    }
+    else if( !isExhausted && hasUnwalkedChild( byName, family ) )
+    {
+        // The depth bound stopped the walk, not the chain: a gate one level further still aliases into the family.
+        DISCLOSE( res, FlipResult::DisclosureWhy::ChainOverDepth, "flip: alias chain deeper than the walk's depth cap — the radius below is a lower bound" );
     }
     return family;
 }
@@ -1171,11 +1197,12 @@ inline constexpr const char* kFlipRowLegend =
 // floors. The clause is defined only where a capped row rides, and the rows follow the root.
 inline void writeFlipCapLegend( std::FILE* out, const FlipResult& res )
 {
-    if( res.familyCapped || res.bindingsCapped )
+    if( res.familyCapped || res.depthCapped || res.bindingsCapped )
     {
         rw::emitRaw( out, "<!-- capped what= at=: a cut made before counting, so what it feeds is a LOWER BOUND — what=family: the alias "
-                          "family stopped at at= members (family= and every count rolled up from it); what=bindings: more value bindings "
-                          "than at= were found (bindings= and the branch sites reached through them). -->" );
+                          "family stopped at at= members (family= and every count rolled up from it); what=depth: the alias chain runs "
+                          "deeper than at= links and the walk stopped there (family= and every count rolled up from it); what=bindings: "
+                          "more value bindings than at= were found (bindings= and the branch sites reached through them). -->" );
     }
 }
 
@@ -1184,6 +1211,10 @@ inline void writeFlipCapRows( std::FILE* out, const FlipResult& res )
     if( res.familyCapped )
     {
         rw::emitTo( out, "<capped what=\"family\" at=\"{}\"/>", kMaxFamily );
+    }
+    if( res.depthCapped )
+    {
+        rw::emitTo( out, "<capped what=\"depth\" at=\"{}\"/>", kMaxChainDepth );
     }
     if( res.bindingsCapped )
     {
