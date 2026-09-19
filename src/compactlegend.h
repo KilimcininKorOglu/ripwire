@@ -1140,14 +1140,20 @@ inline bool settleOverCeilingLabel( std::string& original, std::string_view comp
     const std::string_view inOpen = std::string_view( original ).substr( inRoot.openBegin, inRoot.openEnd - inRoot.openBegin );
     // --pr-context states the same fact in its own vocabulary: truncated="…;budget-floor-exceeded" (prcontext.h) says
     // even the smallest renderable document is over max_tokens=. Once the compacted answer fits, that claim is false.
+    // Two spellings: appended to a trim level (";budget-floor-exceeded"), or the whole value on a clean tree whose
+    // floor alone was over (truncated="budget-floor-exceeded") — there the attribute goes, and its reading with it.
     constexpr std::string_view kFloorToken = ";budget-floor-exceeded";
-    if( !shouldBeOver && outOpen.find( kFloorToken ) != std::string_view::npos )
+    constexpr std::string_view kFloorAttr  = " truncated=\"budget-floor-exceeded\"";
+    if( !shouldBeOver && outOpen.find( "budget-floor-exceeded" ) != std::string_view::npos )
     {
-        const std::size_t at = inOpen.find( kFloorToken );
-        if( at != std::string_view::npos )
+        for( const std::string_view spelling : { kFloorAttr, kFloorToken } )
         {
-            original.erase( inRoot.openBegin + at, kFloorToken.size() );
-            return true;
+            const std::size_t at = inOpen.find( spelling );
+            if( at != std::string_view::npos )
+            {
+                original.erase( inRoot.openBegin + at, spelling.size() );
+                return true;
+            }
         }
     }
     const bool isOver = outOpen.find( kLabel ) != std::string_view::npos;
