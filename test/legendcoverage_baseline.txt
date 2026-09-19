@@ -178,7 +178,6 @@ layout | layout@scanned
 layout | layout@sym
 lint | rule@name
 mentions | mentions@defs
-merge-scout | arm@ok
 merge-scout | landing@order
 merge-scout | no-work@note
 merge-scout | pair@b
