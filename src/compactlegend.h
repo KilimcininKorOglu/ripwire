@@ -531,6 +531,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "redacted",          "redacted=1: a credential shape rewritten to [REDACTED:kind]; the no-redact flag serves the bytes", true },
     // extent honesty (serialize.h kExtentSuspectRowLegend): a ROW-level term on the map, <d> and <b> rows alike.
     { "extent_suspect",    "extent_suspect=: span/scope/kind failed containment (name|head|scope|error)", true },
+    // L1 (2026-09-19): two honesty attributes the compact dialect carried with NO reading, found when compact became the CLI
+    // default and legendcoveragecheck's default-posture rows read every first screen in it (METHODOLOGY §9.4: a floor or a
+    // cut is defined where it rides). locals_floor="1" rides a --metrics <s> row whose locals= count is a lower bound
+    // (C/C++ only); pr-context's root truncated= names what its trim ladder dropped to fit budget_tokens=, and
+    // budget-floor-exceeded means the smallest renderable document is still over it. ELEMENT-qualified, present-only.
+    { "locals_floor",      "locals_floor=1: locals= is a floor", true, "s" },
+    { "truncated",         "truncated=: what the trim ladder dropped to fit budget_tokens= (budget-floor-exceeded: still over)", false, "pr-context" },
 };
 
 // the paging window: these five mean the same on every element (L4's one-attribute-one-reading law), so they are
@@ -976,7 +983,7 @@ inline bool repriceEstTokensIn( std::string& doc, std::size_t begin, std::size_t
     return true;
 }
 
-inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint )
+inline CompactOutcome applyCompactDialectOnce( std::string& doc, std::string_view hint )
 {
     const CompactRootInfo root = findCompactRoot( doc );
     if( root.tag.empty() ) { return CompactOutcome::NotXml; }
@@ -998,6 +1005,7 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
     }
     const CompactLegendSpec* spec = findCompactSpec( root.tag, effectiveHint );
     if( spec == nullptr ) { return root.hasSchema ? CompactOutcome::AlreadyCompact : CompactOutcome::UnknownRoot; }
+    const bool rootCarriesRoute = rootOpen.find( " route=\"" ) != std::string_view::npos;
 
     // pass 1: the legend text is computed from the ORIGINAL document (payload attributes are unchanged by the
     // rewrite, so scanning before or after is the same; before keeps the two passes independent)
@@ -1024,7 +1032,10 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
             const std::size_t j = doc.find( "-->", i );
             const std::size_t e = j == std::string::npos ? n : j + 3;
             const std::string_view comment( doc.data() + i, e - i );
-            if( isCompactProseComment( comment ) )
+            // L1: the router note is prose only where the root restates it as route= (--for); on a root with no
+            // route= (--query's map) it is the ONE carrier of the route decision and its anchors, so it stays.
+            const bool soleRouteCarrier = comment.starts_with( "<!-- routed: " ) && !rootCarriesRoute;
+            if( isCompactProseComment( comment ) && !soleRouteCarrier )
             {
                 if( firstProseAt == std::string::npos ) { firstProseAt = out.size(); }
             }
@@ -1079,6 +1090,157 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
     }
     doc.swap( out );
     return CompactOutcome::Rewritten;
+}
+
+// ── over_ceiling= FOLLOWS THE PRICE (L1, 2026-09-19) ──────────────────────────────────────────────────────
+// over_ceiling="1" says est_tokens exceeds a ceiling THE ROOT NAMES (budget_tokens= / max_tokens=; verbs_for.h F2,
+// the same predicate on --pack-task). The emitter decided it on the FULL document's price; once the layer reprices
+// the compacted answer (compactRepricedTokens) the label can be stale — --pack-task at --token-budget=1200 printed
+// est_tokens="1111" over_ceiling="1" (w3fixbudgetcheck's biconditional, red). So the compacted root is read back:
+// if the label disagrees with the repriced number against the ceilings the root names, the ORIGINAL document's label
+// is corrected and it is compacted again — the legend is built from the document, so its over_ceiling= reading
+// appears exactly when the attribute does. Removing the label only shrinks the answer and adding it only grows it,
+// so one correction settles it. A root that names no ceiling is never touched.
+[[nodiscard]] inline std::size_t rootUnsignedAttr( std::string_view rootOpen, std::string_view name ) noexcept
+{
+    const std::string key = " " + std::string( name ) + "=\"";
+    const std::size_t at  = rootOpen.find( key );
+    if( at == std::string_view::npos )
+    {
+        return 0;
+    }
+    std::size_t value = 0;
+    const char* first = rootOpen.data() + at + key.size();
+    const char* last  = rootOpen.data() + rootOpen.size();
+    return std::from_chars( first, last, value ).ec == std::errc() ? value : 0;
+}
+
+// Returns true when `original`'s root label was corrected (the caller compacts it again).
+inline bool settleOverCeilingLabel( std::string& original, std::string_view compacted )
+{
+    constexpr std::string_view kLabel = " over_ceiling=\"1\"";
+    const CompactRootInfo outRoot = findCompactRoot( compacted );
+    const CompactRootInfo inRoot  = findCompactRoot( original );
+    if( outRoot.tag.empty() || inRoot.tag.empty() )
+    {
+        return false;
+    }
+    const std::string_view outOpen = compacted.substr( outRoot.openBegin, outRoot.openEnd - outRoot.openBegin );
+    const std::size_t budget = rootUnsignedAttr( outOpen, "budget_tokens" );
+    const std::size_t maxTok = rootUnsignedAttr( outOpen, "max_tokens" );
+    const std::size_t est    = rootUnsignedAttr( outOpen, "est_tokens" );
+    if( ( budget == 0 && maxTok == 0 ) || est == 0 )
+    {
+        return false;   // no named ceiling, or no price: nothing this rule can judge
+    }
+    const bool shouldBeOver = ( budget > 0 && est > budget ) || ( maxTok > 0 && est > maxTok );
+    const std::string_view inOpen = std::string_view( original ).substr( inRoot.openBegin, inRoot.openEnd - inRoot.openBegin );
+    // --pr-context states the same fact in its own vocabulary: truncated="…;budget-floor-exceeded" (prcontext.h) says
+    // even the smallest renderable document is over max_tokens=. Once the compacted answer fits, that claim is false.
+    constexpr std::string_view kFloorToken = ";budget-floor-exceeded";
+    if( !shouldBeOver && outOpen.find( kFloorToken ) != std::string_view::npos )
+    {
+        const std::size_t at = inOpen.find( kFloorToken );
+        if( at != std::string_view::npos )
+        {
+            original.erase( inRoot.openBegin + at, kFloorToken.size() );
+            return true;
+        }
+    }
+    const bool isOver = outOpen.find( kLabel ) != std::string_view::npos;
+    if( shouldBeOver == isOver )
+    {
+        return false;
+    }
+    if( isOver )
+    {
+        const std::size_t at = inOpen.find( kLabel );
+        if( at == std::string_view::npos )
+        {
+            return false;   // the label was not the emitter's (never happens: the layer adds no attribute but schema=)
+        }
+        original.erase( inRoot.openBegin + at, kLabel.size() );
+        return true;
+    }
+    const std::size_t estAt = inOpen.find( " est_tokens=\"" );
+    if( estAt == std::string_view::npos )
+    {
+        return false;
+    }
+    const std::size_t estEnd = inOpen.find( '"', estAt + 13 );
+    if( estEnd == std::string_view::npos )
+    {
+        return false;
+    }
+    original.insert( inRoot.openBegin + estEnd + 1, kLabel );
+    return true;
+}
+
+// ── --expand's reason= PRICES THE DOCUMENT IT SERVES (L1, 2026-09-19) ─────────────────────────────────────────
+// --expand chooses whole-file vs bundle serving and states the winner's price on the root: reason="bundle 2555B <= file
+// 11844B" / reason="file 459B …", where the served mode's number IS the delivered document's byte count (main.cpp M6;
+// expandmodecheck (4a)/(4b) hold that identity). Compaction changes the delivered bytes, so the served number is moved
+// to the compacted size — only when it equalled the full document exactly (the identity held), and to a fixed point,
+// since the number's own digits are part of the document it counts. The REJECTED candidate's number is untouched: it
+// was never rendered in this dialect, so the full dialect's measurement is the only one there is.
+inline void settleServedPriceInReason( std::string& doc, std::size_t fullBytes )
+{
+    const CompactRootInfo root = findCompactRoot( doc );
+    if( root.tag != "ctx" )
+    {
+        return;
+    }
+    const std::string_view open = std::string_view( doc ).substr( root.openBegin, root.openEnd - root.openBegin );
+    const bool wholeFile = open.find( " mode=\"whole-file\"" ) != std::string_view::npos;
+    const bool bundle    = open.find( " mode=\"bundle\"" ) != std::string_view::npos;
+    const std::size_t reasonAt = open.find( " reason=\"" );
+    if( ( !wholeFile && !bundle ) || reasonAt == std::string_view::npos )
+    {
+        return;
+    }
+    const std::string key = std::string( wholeFile ? "file " : "bundle " );
+    const std::size_t numAt = open.find( key, reasonAt );
+    const std::size_t valueEnd = open.find( '"', reasonAt + 9 );
+    if( numAt == std::string_view::npos || numAt > valueEnd )
+    {
+        return;
+    }
+    const std::size_t d = root.openBegin + numAt + key.size();
+    std::size_t e = d;
+    while( e < doc.size() && std::isdigit( static_cast<unsigned char>( doc[ e ] ) ) ) { ++e; }
+    std::size_t stated = 0;
+    if( e == d || e >= doc.size() || doc[ e ] != 'B' || std::from_chars( doc.data() + d, doc.data() + e, stated ).ec != std::errc() || stated != fullBytes )
+    {
+        return;   // not the M6 identity (a hand-built or already-moved number): nothing this rule may claim
+    }
+    for( int pass = 0; pass < 4; ++pass )
+    {
+        const std::string now = std::to_string( doc.size() );
+        if( now == std::string_view( doc ).substr( d, e - d ) )
+        {
+            break;
+        }
+        doc.replace( d, e - d, now );
+        e = d + now.size();
+    }
+    ENSURES( std::to_string( doc.size() ) == std::string_view( doc ).substr( d, e - d ), "the served mode's price is the delivered size" );
+}
+
+inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint )
+{
+    std::string original = doc;
+    CompactOutcome outcome = applyCompactDialectOnce( doc, hint );
+    if( outcome == CompactOutcome::Rewritten && settleOverCeilingLabel( original, doc ) )
+    {
+        doc = original;
+        outcome = applyCompactDialectOnce( doc, hint );
+        ENSURES( outcome == CompactOutcome::Rewritten, "a label correction never changes whether the root has a compact dialect" );
+    }
+    if( outcome == CompactOutcome::Rewritten )
+    {
+        settleServedPriceInReason( doc, original.size() );
+    }
+    return outcome;
 }
 
 } // namespace rw
