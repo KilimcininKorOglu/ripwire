@@ -4558,11 +4558,13 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
         // today — but the alert itself should not assert a fallback that does not exist.
         else if( headSha.empty() )
         {
-            DISCLOSE( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; this tree has no git HEAD to fall back to either, so this run has no baseline floor at all" );
+            DISCLOSE( Diagnostics::answerRefused, "with no git HEAD either, the run refuses and names the sidecar that stayed on disk",
+                      "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; this tree has no git HEAD to fall back to either, so this run has no baseline floor at all" );
         }
         else
         {
-            DISCLOSE( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; the baseline still falls back to git HEAD" );
+            DISCLOSE( Diagnostics::answerUnchanged, "the stale sidecar is ignored either way and the baseline is git HEAD; the marker says ignored, not removed",
+                      "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; the baseline still falls back to git HEAD" );
         }
     }
     return sel;
