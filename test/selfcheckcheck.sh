@@ -257,6 +257,31 @@ def top_args( arg ):
 
 EFFECT = re.compile( r"\+\+|--|<<=|>>=|[+\-*/%&|^]=|(?<![=!<>])=(?!=)" )
 
+# CodeRabbit PR #292 finding 4052087952: the (T) arm's `c in win` was raw substring containment, no token
+# boundary. `win` is `!=`/`==`-normalized code with ALL whitespace stripped (scan_code's own `re.sub(
+# r"\s+", "", ... )`), so a candidate like "a!=b" is not anchored to an operand boundary and can match
+# INSIDE an unrelated longer identifier pair: `EXPECTS(a == b)` followed by `if (data != baseline)` builds
+# the candidate "a!=b", which IS a substring of the stripped "data!=baseline" (…"dat[a!=b]aseline"…) even
+# though no operand there is named `a` or `b`. Internal to a candidate this cannot happen — every character
+# inside "a!=b" or "!(a==b)" is contiguous by construction — so only the candidate's OWN two ends need a
+# boundary check: the char immediately before its first character, and the char immediately after its
+# last, must not ALSO be an identifier character (else the match is a fragment of a longer name). A
+# "!(" / ")" -wrapped candidate is already boundary-safe on both ends (its outermost characters are
+# punctuation), so this only ever narrows the two bare "lhs OP rhs" forms.
+_IDENT_CHAR = re.compile( r"[A-Za-z0-9_]" )
+def tokenBoundaryContains( win, candidate ):
+    start = 0
+    while True:
+        idx = win.find( candidate, start )
+        if idx < 0:
+            return False
+        beforeOk = idx == 0 or not _IDENT_CHAR.match( win[ idx - 1 ] )
+        afterPos = idx + len( candidate )
+        afterOk  = afterPos >= len( win ) or not _IDENT_CHAR.match( win[ afterPos ] )
+        if beforeOk and afterOk:
+            return True
+        start = idx + 1
+
 def scan_code( rel, text, findings, counts, ratchet = True, contract_tu = False ):
     for name, ln, arg, before, after, raw in invocations( text, NOEFFECT | { "VALIDATE", "DISCLOSE" } ):
         where = "%s:%d" % ( rel, ln )
@@ -361,7 +386,7 @@ def scan_code( rel, text, findings, counts, ratchet = True, contract_tu = False 
                     else:
                         candidates = ( lhs + "==" + rhs, rhs + "==" + lhs,
                                        "!(" + lhs + "!=" + rhs + ")", "!(" + rhs + "!=" + lhs + ")" )
-                    if any( c in win for c in candidates ) and where not in ASSUMED_THEN_TESTED_ALLOW:
+                    if any( tokenBoundaryContains( win, c ) for c in candidates ) and where not in ASSUMED_THEN_TESTED_ALLOW:
                         findings.append( ( "T", where,
                             "%s( %s %s %s ) then a re-test of it within %d lines of the SAME function — release folds the check away"
                             % ( name, lhs[ :50 ], opstr, rhs[ :50 ], TWINDOW ) ) )
@@ -464,6 +489,13 @@ void gt2( const S& a, const S& b, int i )
 // would have blocked a legitimate new ASSUME — the one thing the owner wants zero-ceremony.
 void gt3( const S& a, const S& b ) { ASSUME( a.size() == b.size() ); }
 void gt4( const S& a, const S& b, int i ) { if( a.size() != b.size() ) { (void)i; } }
+// CodeRabbit PR #292 finding 4052087952: the OVERLAPPING-IDENTIFIER look-alike. `tokenBoundaryContains`'s
+// raw-substring predecessor built the candidate "a!=b" from EXPECTS( a == b )'s own operands and matched
+// it INSIDE the unrelated "data!=baseline" text below — "dat[a!=b]aseline" — although no operand in that
+// second check is named `a` or `b`. Same shape mirrored for the "!=" -> "==" direction: the candidate
+// "x==y" is a substring of "matrix==yellow" — "matri[x==y]ellow" — with no operand named `x` or `y` there.
+void gt5( int a, int b, int data, int baseline ) { EXPECTS( a == b ); if( data != baseline ) { (void)a; (void)b; } }
+void gt6( int x, int y, int matrix, int yellow ) { EXPECTS( x != y ); if( matrix == yellow ) { (void)x; (void)y; } }
 EOF
 cat > "$FX/src/red_r.h" <<'EOF'
 struct Sink { void disclose( int ) noexcept {} };
