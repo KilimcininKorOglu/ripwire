@@ -43,30 +43,11 @@ ROSTER_BIN="${LEGENDREF_ROSTER_BIN:-$BIN}"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first (cmake --build build -j)"; exit 2; }
 echo "legendrefcheck: BIN=$BIN"
+fail=0
+no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
-# ── the fixture: a git tree with a call chain, an interface, and three runner-less C tests (so pack-task groups them) ──
-FX="$TMP/fx"
-mkdir -p "$FX/src" "$FX/tests" "$FX/docs"
-cat >"$FX/src/core.c" <<'EOF'
-/* helper adds one */
-int helper(int x) { return x + 1; }
-/* work doubles the helper */
-int work(int y) { return helper(y) * 2; }
-int caller(void) { int acc = 0; acc = work(3); acc += helper(acc); return acc; }
-EOF
-cat >"$FX/src/shape.h" <<'EOF'
-struct Shape { virtual int area() const = 0; virtual ~Shape() {} };
-struct Square : Shape { int s; int area() const override { return s * s; } };
-struct Circle : Shape { int r; int area() const override { return 3 * r * r; } };
-EOF
-for n in one two three; do
-    printf 'int work(int);\nint test_%s(void) { return work(1) == 4; }\n' "$n" >"$FX/tests/test_$n.c"
-done
-printf '# Notes\nThe `work` function doubles `helper`.\n' >"$FX/docs/README.md"
-( cd "$FX" && git init -q . && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm init ) \
-    || { echo "  FAIL  could not build the git fixture"; exit 1; }
-
-python3 - "$BIN" "$ROSTER_BIN" "$FX" "$TMP" <<'PY'
+# The arms, one python process (the MCP sessions are its subprocesses); written first, run after the fixture exists.
+cat >"$TMP/arms.py" <<'PY'
 import json, re, subprocess, sys
 BIN, ROSTER_BIN, FX, TMP = sys.argv[1:5]
 fails = []
@@ -292,3 +273,32 @@ if g:
 print(f"legendrefcheck: {'FAIL' if fails else 'PASS'} ({len(fails)} failing)")
 sys.exit(1 if fails else 0)
 PY
+
+# ── the fixture: a git tree with a call chain, an interface, and three runner-less C tests (so pack-task groups them) ──
+FX="$TMP/fx"
+mkdir -p "$FX/src" "$FX/tests" "$FX/docs"
+cat >"$FX/src/core.c" <<'EOF'
+/* helper adds one */
+int helper(int x) { return x + 1; }
+/* work doubles the helper */
+int work(int y) { return helper(y) * 2; }
+int caller(void) { int acc = 0; acc = work(3); acc += helper(acc); return acc; }
+EOF
+cat >"$FX/src/shape.h" <<'EOF'
+struct Shape { virtual int area() const = 0; virtual ~Shape() {} };
+struct Square : Shape { int s; int area() const override { return s * s; } };
+struct Circle : Shape { int r; int area() const override { return 3 * r * r; } };
+EOF
+for n in one two three; do
+    printf 'int work(int);\nint test_%s(void) { return work(1) == 4; }\n' "$n" >"$FX/tests/test_$n.c"
+done
+printf '# Notes\nThe `work` function doubles `helper`.\n' >"$FX/docs/README.md"
+( cd "$FX" && git init -q . && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm init ) \
+    || no "could not build the git fixture"
+
+if [ "$fail" -eq 0 ]; then
+    python3 "$TMP/arms.py" "$BIN" "$ROSTER_BIN" "$FX" "$TMP" || fail=1
+fi
+
+[ "$fail" -eq 0 ] && echo "ALL PASS" || echo "legendrefcheck: FAILURES ABOVE"
+exit "$fail"
