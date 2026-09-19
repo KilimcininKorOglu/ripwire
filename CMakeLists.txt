@@ -62,6 +62,15 @@ option(RIPWIRE_NATIVE "build with -march=native (DEV MACHINES ONLY — bakes in 
 include(cmake/PortableFlags.cmake)
 add_compile_options(${RIPWIRE_ARCH_FLAGS})
 
+# Windows adds one source (src/infra/os_win32.cpp), a manifest and three system libraries to each target — all in
+# cmake/Windows.cmake. Elsewhere the hook is empty, so the target blocks below call it unconditionally.
+if(WIN32)
+  include(cmake/Windows.cmake)
+else()
+  function(ripwire_windows_target tgt)
+  endfunction()
+endif()
+
 # ---- link-time optimization: -DRIPWIRE_LTO=ON ----
 # The one change the optimization-remarks pass actually justified (docs/OPTREMARKS.md, finding F1).
 #
@@ -119,6 +128,12 @@ else()
 endif()
 if(RIPWIRE_LTO)
   include(CheckIPOSupported)
+  if(WIN32 AND CMAKE_EXE_LINKER_FLAGS)
+    # ClangCL + lld-link does not inherit the SDK /libpath entries from the parent configure during
+    # check_ipo_supported()'s try_compile. Propagate the explicitly selected linker flags so the LTO
+    # capability check exercises the same Windows CRT/toolchain that the real targets will link against.
+    list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES CMAKE_EXE_LINKER_FLAGS)
+  endif()
   check_ipo_supported(RESULT _ripwire_ipo_ok OUTPUT _ripwire_ipo_why LANGUAGES C CXX)
   if(NOT _ripwire_ipo_ok)
     # Fail loudly. A silently-ignored LTO request produces a normal binary that someone then benchmarks
@@ -563,7 +578,11 @@ set(RIPWIRE_SRCS
 
 # The global profile uses -ffast-math, but PageRank reductions must not reassociate (the determinism
 # contract's no-reassociation rule — docs/ARCHITECTURE.md §3).
-set_source_files_properties(src/pagerank.cpp PROPERTIES COMPILE_OPTIONS "-fno-fast-math")
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  set_source_files_properties(src/pagerank.cpp PROPERTIES COMPILE_OPTIONS "/fp:precise")
+else()
+  set_source_files_properties(src/pagerank.cpp PROPERTIES COMPILE_OPTIONS "-fno-fast-math")
+endif()
 
 # All grammar OBJECT files, gathered once so every target links the same set.
 set(RIPWIRE_TS_OBJECTS
@@ -610,6 +629,7 @@ add_executable(ripwire_probe
   ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire_probe PRIVATE tree-sitter Threads::Threads)
+ripwire_windows_target(ripwire_probe)
 target_include_directories(ripwire_probe PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
   ${_ripwire_generated_include_dirs}
@@ -626,6 +646,7 @@ add_executable(ripwire
   ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire PRIVATE tree-sitter Threads::Threads)
+ripwire_windows_target(ripwire)
 target_include_directories(ripwire PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
   ${_ripwire_generated_include_dirs}
@@ -717,6 +738,10 @@ if(RIPWIRE_TESTS)
   target_compile_definitions(ripwire_test_strkern PRIVATE RIPWIRE_TEST_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(ripwire_test_strkern PRIVATE doctest::doctest)
   add_test(NAME ripwire.strkern COMMAND ripwire_test_strkern)
+
+  foreach(_ripwire_test_target ripwire_test_csr ripwire_test_pagerank ripwire_test_radix ripwire_test_strkern)
+    ripwire_windows_target(${_ripwire_test_target})   # the manifest too: a test binary runs under the same code page as the product
+  endforeach()
 endif()
 
 # ---- self-profiling build (src/infra/profileScope.h): -DRIPWIRE_PROFILE=ON ----
@@ -908,14 +933,45 @@ file(WRITE "${_ripwire_libstdcxx_ignorelist}"
   "src:*/include/c\\+\\+/*/print\n"
   "[implicit-unsigned-integer-truncation]\nsrc:*/include/c\\+\\+/*/format\n"
   "src:*/include/c\\+\\+/*/print\n")
+if(WIN32)
+  # MSVC's filesystem prefix helper intentionally subtracts the lower bound from an unsigned packed value;
+  # Clang's integer sanitizer diagnoses that defined range test before any project code runs. Keep the
+  # exemption limited to the vendor header; project arithmetic remains covered by the complete G1 stack.
+  file(APPEND "${_ripwire_libstdcxx_ignorelist}"
+    "[unsigned-integer-overflow]\nsrc:*/include/filesystem\n"
+    "src:*filesystem\n"
+    "fun:*_Is_drive_prefix*\n")
+endif()
 
 if(RIPWIRE_ASAN)
+  set(_ripwire_windows_clangcl_asan OFF)
+  set(_ripwire_no_omit_frame_pointer -fno-omit-frame-pointer)
+  # CMake's MSVC linker rule invokes CMAKE_LINKER directly. With ClangCL, passing the LLVM
+  # -fsanitize flags to link.exe instruments the objects but never loads the Clang sanitizer
+  # runtime, leaving __asan_* unresolved. Use clang-cl as the link driver for this one flavour;
+  # its driver preserves the MSVC ABI/import libraries and adds the matching runtime.
+  if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(_ripwire_windows_clangcl_asan ON)
+    set(_ripwire_no_omit_frame_pointer /Oy-)
+    string(REPLACE "<CMAKE_LINKER>" "<CMAKE_CXX_COMPILER>" CMAKE_CXX_LINK_EXECUTABLE
+      "${CMAKE_CXX_LINK_EXECUTABLE}")
+    # The replacement template does not carry the generator's per-target FLAGS. Keep the
+    # sanitizer thunk and the instrumented objects on the same dynamic CRT as the compile rule.
+    string(REPLACE "<CMAKE_CXX_COMPILER> ${CMAKE_CL_NOLOGO} <OBJECTS>"
+      "<CMAKE_CXX_COMPILER> ${CMAKE_CL_NOLOGO} /MD <OBJECTS> ${RIPWIRE_G1_SANITIZERS}"
+      CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE}")
+    string(REPLACE " /out:<TARGET>" " /link /out:<TARGET>"
+      CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE}")
+    message(STATUS "RIPWIRE_ASAN: using the ClangCL driver for Windows sanitizer links")
+  endif()
   foreach(_t IN LISTS RIPWIRE_RUNTIME_COMPILE_TARGETS)
     target_compile_options(${_t} PRIVATE ${RIPWIRE_G1_SANITIZERS}
-      -fno-sanitize-recover=all -fno-omit-frame-pointer -O2 -g)
+      -fno-sanitize-recover=all ${_ripwire_no_omit_frame_pointer} -O2 -g)
   endforeach()
   foreach(_t IN LISTS RIPWIRE_RUNTIME_LINK_TARGETS)
-    target_link_options(${_t} PRIVATE ${RIPWIRE_G1_SANITIZERS})
+    if(NOT _ripwire_windows_clangcl_asan)
+      target_link_options(${_t} PRIVATE ${RIPWIRE_G1_SANITIZERS})
+    endif()
   endforeach()
   # Every exemption below names a check inside the Clang-only `integer` group, or uses
   # -fsanitize-ignorelist=, which GCC does not implement. With `integer` absent there is nothing to
@@ -933,15 +989,47 @@ if(RIPWIRE_ASAN)
     endforeach()
   endif()
 
-  # Xcode's arm64 Darwin runtime rejects both the standalone leak sanitizer and detect_leaks=1 at startup.
-  # Keep the local ASan/UBSan gate executable and explicit; LeakSanitizer remains a Linux/upstream-runtime
-  # CI gate using the committed tree-sitter suppressions rather than being falsely claimed on Apple Clang.
-  if(APPLE)
+  # Darwin and Windows runtimes reject detect_leaks=1 at startup. Keep the local ASan/UBSan gate
+  # executable and explicit; LeakSanitizer remains a Linux/upstream-runtime CI gate using the
+  # committed tree-sitter suppressions rather than being falsely claimed on either platform.
+  if(APPLE OR WIN32)
     set(_ripwire_asan_options "detect_leaks=0:halt_on_error=1:abort_on_error=1")
   else()
     set(_ripwire_asan_options "detect_leaks=1:halt_on_error=1:abort_on_error=1")
   endif()
+  set(_ripwire_asan_runtime_copy_command)
+  if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # clang-cl links the ASAN dynamic runtime, but Windows does not search Clang's resource
+    # directory for DLLs. Discover the matching directory from the active compiler so the fixture
+    # exercises this build without requiring a system-wide DLL installation. Copying beside the
+    # executable is deliberate: putting a semicolon-separated Windows PATH in a CMake command is
+    # parsed as a list of unrelated arguments by the Ninja generator.
+    execute_process(
+      COMMAND "${CMAKE_CXX_COMPILER}" -print-resource-dir
+      OUTPUT_VARIABLE _ripwire_clang_resource_dir
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(_ripwire_clang_resource_dir)
+      file(TO_CMAKE_PATH "${_ripwire_clang_resource_dir}/lib/windows" _ripwire_asan_runtime_dir)
+      list(APPEND _ripwire_asan_runtime_copy_command
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_ripwire_asan_runtime_dir}/clang_rt.asan_dynamic-x86_64.dll"
+          "$<TARGET_FILE_DIR:ripwire>")
+      message(STATUS "RIPWIRE_ASAN: fixture copies the runtime DLL from ${_ripwire_asan_runtime_dir}")
+    else()
+      message(WARNING "RIPWIRE_ASAN: clang resource directory was not discoverable; runtime fixture may miss the ASAN DLL")
+    endif()
+  endif()
+  if(WIN32 AND _ripwire_asan_runtime_dir)
+    foreach(_t IN LISTS RIPWIRE_RUNTIME_LINK_TARGETS)
+      add_custom_command(TARGET ${_t} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_ripwire_asan_runtime_dir}/clang_rt.asan_dynamic-x86_64.dll"
+          "$<TARGET_FILE_DIR:${_t}>")
+    endforeach()
+  endif()
   add_custom_target(ripwire_asan_fixture
+    ${_ripwire_asan_runtime_copy_command}
     COMMAND ${CMAKE_COMMAND} -E env
       "ASAN_OPTIONS=${_ripwire_asan_options}"
       "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1"
