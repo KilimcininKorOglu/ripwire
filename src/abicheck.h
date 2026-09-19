@@ -561,12 +561,14 @@ inline void modelRefBlobs( const std::string& root, layout::ModelCtx& ctx, const
             {
                 continue;
             }
-            // DASSERT, not ASSUME: the loop bound right below double-guards both sizes, which only makes
-            // sense if the equality can genuinely fail at runtime — an ASSUME would tell the optimizer the
-            // shorter bound never binds and license deleting the very guard the loop is written to need.
-            DASSERT( mit->second.size() == pit->second.size() );
+            // ASSUME, not DASSERT (rv-s2 review, 2026-09-19): the only writer of sw.models is
+            // SweepState::wantBlob (:425), whose two callers (:505/:506) pass pit->second.size() of this same
+            // byPath — a const& for the whole sweep — so mit->second and pit->second are always sized
+            // together; the loop's second bound below could never bind on the shorter side. Not a defensive
+            // fallback for a reachable mismatch, so the double guard is dead code and is deleted with it.
+            ASSUME( mit->second.size() == pit->second.size() );
 
-            for( std::size_t ci = 0; ci < pit->second.size() && ci < mit->second.size(); ++ci )
+            for( std::size_t ci = 0; ci < pit->second.size(); ++ci )
             {
                 const Candidate& c = pit->second[ ci ];
                 layout::DefSite  refSite;

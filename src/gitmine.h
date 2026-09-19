@@ -2994,17 +2994,19 @@ struct CoBoostInfo
 inline bool applyCoChangeBoost( const IngestResult& ing, const std::vector<std::vector<std::uint32_t>>& sets, std::vector<float>& lensRank, CoBoostInfo* outInfo = nullptr,
                                 const CommitWindowCensus* census = nullptr )
 {
-    // DASSERT, not ASSUME: the very next block is a runtime fallback for exactly this equality being false
-    // (a caller-owned lensRank that no longer matches ing.symbols after the symbol set changed underneath
-    // it). ASSUME here would entitle the optimizer to fold the != re-test below to always-false in release
-    // and delete the early return that makes a mismatch survivable — the shipped-bug trap Diagnostics.h
-    // warns about. Debug still catches a genuine internal bug; release keeps the guard live.
-    DASSERT( lensRank.size() == ing.symbols.size() );
+    // EXPECTS, not DASSERT (rv-s2 review, 2026-09-19): every caller's lensRank is sized from ing.symbols by
+    // construction — lexicalScoresNameExactRanked/lexicalScoresTiered return an S = ing.symbols.size() vector
+    // on every path (including their own early return), optionally through anchoredLexicalRank/blendMaxNorm,
+    // which preserve that size — and all 3 callers (verbs_for.h::computeLensRanking, mcpverbs.h forTaskText /
+    // packTaskText) pass the SAME `ing` the vector was built from. No caller can present a mismatched size, so
+    // this is the function's real precondition, not a defensive fallback for a reachable mismatch; the old
+    // `!= ing.symbols.size()` re-test below was dead code and is deleted with it.
+    EXPECTS( lensRank.size() == ing.symbols.size() );
     if( outInfo && census )
     {
         outInfo->caps.note( "coboost_commits_capped", "coboost_commits_total", census->bulkDropped > 0, census->commits );
     }
-    if( sets.empty() || lensRank.empty() || lensRank.size() != ing.symbols.size() )
+    if( sets.empty() || lensRank.empty() )
     {
         return false;
     }
