@@ -215,6 +215,32 @@ ROSTER = [
     ("help-task",          [SMALL, "--help-task=find the code responsible for this retry timeout bug"]),
 ]
 
+# L1 (round 1 of the answer-size loop, 2026-09-19): THE CLI DEFAULT BECAME COMPACT, so a roster row that names no
+# posture would silently have become a compact row and the FULL dialect — every row this ratchet has ever recorded,
+# test/legendcoverage_baseline.txt line for line — would have lost its ratchet. So every row above is re-spelled as a
+# FULL row (the name unchanged, `--legend=full` appended: the baseline's lines keep meaning exactly what they meant,
+# and that file did not gain a line), and gets a DEFAULT TWIN, `<name>-default`, run with no posture flag at all —
+# whatever the default is today (compact) and whatever round 2 makes it.
+# THE DEFAULT TWINS HAVE THEIR OWN FLOOR, test/legendcoverage_default_baseline.txt, seeded ONCE at L1 and ratcheted
+# from then on exactly like the full floor (a new undefined attribute on a default first screen fails (A); a closed
+# line is a shrink candidate). Its lines are not new debt the full dialect took on: they are the attributes whose
+# reading the compact dialect deliberately leaves to --legend=full and --help — it defines the completeness vocabulary
+# and each verb's purpose on the first screen (METHODOLOGY §9.4; compactlegendcheck (U)/(D)/(S) hold THAT contract),
+# not every descriptive attribute. Recorded here so the number is visible and cannot grow unseen. Two kinds of row keep
+# their spelling: a row that already names a posture (the *-compact rows, whose own lines stay theirs), and a run with
+# no XML legend (--report), which refuses an ASKED posture and has no default twin to take.
+NON_XML_ROWS = { "report" }
+def withPostureTwins( roster ):
+    out = []
+    for name, args in roster:
+        if name in NON_XML_ROWS or any( a.startswith( "--legend=" ) for a in args ):
+            out.append( ( name, args ) )
+            continue
+        out.append( ( name, args + [ "--legend=full" ] ) )
+        out.append( ( name + "-default", args ) )
+    return out
+ROSTER = withPostureTwins( ROSTER )
+
 # the v1 core row keys, defined verbatim in every map legend and re-stated in the row dictionaries — excluded
 # so the report is about the attributes that genuinely have no home, not about the seven everyone knows.
 CORE = { "p", "n", "t", "id", "l", "k", "c" }
@@ -262,6 +288,17 @@ for name, args in ROSTER:
 
 base = { l.strip() for l in open( BASELINE, encoding = 'utf-8' )
          if l.strip() and not l.startswith( '#' ) }
+# L1: the DEFAULT posture's own floor (see withPostureTwins and the file's header). Kept in its own file so the full
+# dialect's floor above is visibly untouched; ratcheted the same way — a line may only leave.
+DEFAULT_BASELINE = os.path.join( ROOT, "test", "legendcoverage_default_baseline.txt" )
+if os.path.exists( DEFAULT_BASELINE ):
+    defaultBase = { l.strip() for l in open( DEFAULT_BASELINE, encoding = 'utf-8' ) if l.strip() and not l.startswith( '#' ) }
+    stray = { l for l in defaultBase if not l.split( ' | ', 1 )[ 0 ].endswith( '-default' ) }
+    if stray:
+        print( "the default-posture floor may hold only <row>-default lines; it holds: " + " · ".join( sorted( stray ) ), file = sys.stderr )
+    base |= defaultBase
+else:
+    print( f"missing {DEFAULT_BASELINE} — the default-posture rows have no floor", file = sys.stderr )
 
 # every list is written LINE-TERMINATED: a final line with no "\n" makes `wc -l` under-count by one, and
 # the first draft of this gate reported "0 NEW" while printing one (its own §B12.10, one file over).
@@ -396,8 +433,12 @@ CORE = { "p", "n", "t", "id", "l", "k", "c" }
 # floor that outlives its findings is a floor nobody reads. They are gone because this dialect's rung zero no
 # longer fires on these documents: it is taken only when the drop PAYS (verbs_for.h), and in the compact dialect
 # the note was longer than the clauses it replaced, so the readings ride and close their own attributes.
-FLOOR = { "default": { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
-          "compact": set() }
+# L1: "default" named the FULL dialect until the CLI default became compact; the dialect is now asked for by name, and
+# its floor moved with it unchanged. The default posture is checked as its own row with the floor of the dialect it
+# resolves to (compact today), so a default that changes cannot inherit a floor written for another dialect.
+FLOOR = { "full":    { "sigs@capped", "sigs@shown", "sigs@total", "tail@capped", "tail@shown", "tail@total" },
+          "compact": set(),
+          "default": set() }
 
 LEAD = re.compile( rb'\A(?:\s*<!--.*?-->)+', re.S )
 ATTR = re.compile( rb'<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+="[^"]*")*)\s*/?>' )
@@ -425,7 +466,7 @@ def attrsOf( d ):
     return order, seen
 
 bad, checked, entered, left, census = [], 0, [], [], []
-for dialect, extra in ( ( "default", [] ), ( "compact", [ "--legend=compact" ] ) ):
+for dialect, extra in ( ( "full", [ "--legend=full" ] ), ( "compact", [ "--legend=compact" ] ), ( "default", [] ) ):
     dt          = doc( [ SMALL, QUERY, TIGHT ] + extra )
     tight, wide = legendOf( dt ), legendOf( doc( [ SMALL, QUERY, WIDE ] + extra ) )
     mt, mw      = NOTE.search( tight ), NOTE.search( wide )
