@@ -34,7 +34,7 @@ pre-existing order and carries no `note=`, exactly as `--help=--expand` already 
 named-import binder both read) covered `.js`→`.ts`/`.tsx`, `.mjs`→`.mts` and `.cjs`→`.cts`, but not `.jsx` or the
 declaration-only case: a specifier naming a file that exists only as a hand-written `.d.ts` (no `.ts`/`.tsx`
 alongside it) stayed unresolved, and neither the CLI's `--deps` edge nor the named-import call binder saw it. Two
-additions, both matched against tsc 7.0.2's own resolver (`--traceResolution`, node16/nodenext/bundler identical):
+additions, both matched against tsc 7.0.2's own resolver (verified against tsc's `traceResolution` diagnostic output, node16/nodenext/bundler identical):
 a `.jsx` row (`./x.jsx` tries `.tsx` then `.ts`), and a second, DECLARATION tier per runtime extension
 (`.js`→`.d.ts`, `.mjs`→`.d.mts`, `.cjs`→`.d.cts`) tried only when the source tier finds nothing — `./both.js` with
 both `both.ts` and `both.d.ts` on disk still resolves to the source, the declaration untouched, matching tsc
@@ -77,13 +77,13 @@ Windows port); the fix is lennix1337's.
 default map"` wrote to `out_onefn:defaultmap` while the three assertions below it read `out_onefndefaultmap`
 — a colon apart. Each sat behind `[ -s "$OUT_FILE" ]` with no `else`, so the file was always missing, the
 block silently never ran, and the gate exited 0 having never checked that a one-function corpus's map
-actually contains `symbols="1"` and the function's name, or that `--graph-query=all` counts it. The naming
+actually contains `symbols="1"` and the function's name, or that `--graph-query` with the `all` source term counts it. The naming
 rule now keeps `[:alnum:]_` on write and read (and drops `:`, which Windows refuses in a filename anyway),
 the assertion matches the header's `files=1 symbols=1` instead of a bare `symbols="1"`, and a missing or
 empty output file now FAILs the block instead of skipping it.
 
 Split out of #44 (native Windows port); the naming-rule and assertion fix is @lennix1337's. Evidence: on
-origin/main, the gate exits 0 with zero `onefn: map contains …` / `onefn: --graph-query=all has count`
+origin/main, the gate exits 0 with zero `onefn: map contains …` / `onefn: --graph-query 'all' has count`
 rows in its output — the content assertions for corpus (c) never print at all. Restoring the old `tr -d ' '`
 rule under the new fail-closed guards FAILs both blocks (`onefn: … is missing or empty`), which is what
 proves the old rule was truly vacuous rather than just differently spelled. `test/emptycorpuscheck.sh` is
