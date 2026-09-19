@@ -173,8 +173,14 @@ fi
 ODD_DIR="$TMP/quo\"te back\\slash"
 mkdir -p "$ODD_DIR"
 cp "$BIN" "$ODD_DIR/ripwire"
+# CodeRabbit PR #292 finding 4052087951: /usr/bin:/bin is not guaranteed empty of `ripwire` — a
+# system-installed copy there would let the wrapper resolve the bare name off PATH instead of emitting
+# this test's own odd absolute path, so a real bug (the wrapper failing to prefer/quote an odd path) could
+# pass silently. An EMPTY directory is the only PATH guaranteed to hold no `ripwire` anywhere.
+EMPTY_PATH="$TMP/empty-path"
+mkdir -p "$EMPTY_PATH"
 for agent in opencode cursor; do
-    PATH="/usr/bin:/bin" "$ODD_DIR/ripwire" wrap "$agent" --force >"$TMP/odd_$agent.txt" 2>/dev/null
+    PATH="$EMPTY_PATH" "$ODD_DIR/ripwire" wrap "$agent" --force >"$TMP/odd_$agent.txt" 2>/dev/null
     awk '/^\{$/{f=1} f{print} /^\}$/{if(f)exit}' "$TMP/odd_$agent.txt" >"$TMP/odd_$agent.json"
     verdict="$( python3 - "$TMP/odd_$agent.json" "$ODD_DIR/ripwire" "$agent" <<'PY'
 import json, os, sys
