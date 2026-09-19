@@ -402,8 +402,9 @@ inline std::string sinceLogArgs( const SinceScope& scope, const char* fallbackSi
         // resolveSinceScope's revision step stores only gitResolveCommitSha's answer, which returns a bare sha or
         // nothing (VALIDATEd there), and its date step VALIDATEs its own rev-list answer and discloses a refusal into
         // the scope. So an active REV scope reaching here with anything else is a caller that built a SinceScope by
-        // hand: EXPECTS blames it, and there is no silent fallback window left for window= to misreport.
-        EXPECTS( isBareCommitSha( scope.baselineSha ), "an active REV scope carries the bare sha resolveSinceScope validated" );
+        // hand: a DASSERT catches that in debug (a checked call, not an optimizer promise — selfcheckcheck arm C), and there
+        // is no silent fallback window left for window= to misreport.
+        DASSERT( isBareCommitSha( scope.baselineSha ), "an active REV scope carries the bare sha resolveSinceScope validated" );
         return shSingleQuote( scope.baselineSha + ".." ) + " ";   // positional rev-range, not a --since flag
     }
     return "--since=" + shSingleQuote( scope.sinceDate ) + " ";
