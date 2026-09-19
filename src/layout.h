@@ -2818,7 +2818,7 @@ inline void writeLayout( std::FILE* out, const LayoutResult& res, std::string_vi
                        "neither a break. agree=\"0\" on an assert row means a sizeof tripwire contradicts the computed size. "
                        "Definitions and asserts come from the INDEXED files.{} -->{}",
                  res.unreadableDefs != 0 ? " unreadable=\"N\": N same-name definitions whose file could not be read when this ran —"
-                                           " absent from defs= and from the mirror comparison, so mirror= compares only what was read." : "",
+                                           " absent from defs= and from the mirror comparison, so mirror= compares only what was read (exit 3: not verified)." : "",
                  rw::rootRelPathsLegend( !rootArg.empty() )  );   // R-E fix (2026-08-19): defines root= (graphlegend.h)
     const std::string layoutRootAttr = rootArg.empty() ? std::string() : ( " root=\"" + ex( rootArg ) + "\"" );
     const std::string unreadableAttr = res.unreadableDefs != 0 ? ( " unreadable=\"" + std::to_string( res.unreadableDefs ) + "\"" ) : std::string();
