@@ -580,6 +580,40 @@ else
         || no "(12) the single-root heading lost its 'relative to root:' clause — the fix over-reached"
 fi
 
+# ── (13) R2-AF (round 2, answer-first ordering, owner-approved) — decl/def-partner and lexical-sibling
+#    BLOCKS print BEFORE the [1] blast radius header line; the header line itself moves AS A WHOLE, so
+#    every cap/count token it carries is still there, just later. $OUT (the core/widget.cc fixture, arm
+#    (7)'s corpus) carries BOTH blocks, so this one report proves the order for both.
+PARTNER_LINE="$( grep -n 'decl/def partners' "$OUT" | head -1 | cut -d: -f1 )"
+SIBLING_LINE="$( grep -n 'lexical siblings'   "$OUT" | head -1 | cut -d: -f1 )"
+BLAST_LINE="$(   grep -n '^  \[1\] blast radius' "$OUT" | head -1 | cut -d: -f1 )"
+if [ -z "$PARTNER_LINE" ] || [ -z "$SIBLING_LINE" ] || [ -z "$BLAST_LINE" ]; then
+    no "(13) the fixture is missing one of decl/def partners / lexical siblings / [1] blast radius — the order arm would be vacuous (partner=$PARTNER_LINE sibling=$SIBLING_LINE blast=$BLAST_LINE)"
+else
+    ok "(13) fixture carries all three sections (partner line $PARTNER_LINE, sibling line $SIBLING_LINE, blast line $BLAST_LINE)"
+    [ "$PARTNER_LINE" -lt "$BLAST_LINE" ] && ok "(13) decl/def partners print BEFORE [1] blast radius" \
+                                          || no "(13) decl/def partners print AFTER [1] blast radius (line $PARTNER_LINE vs $BLAST_LINE) — AF ordering regressed"
+    [ "$SIBLING_LINE" -lt "$BLAST_LINE" ] && ok "(13) lexical siblings print BEFORE [1] blast radius" \
+                                          || no "(13) lexical siblings print AFTER [1] blast radius (line $SIBLING_LINE vs $BLAST_LINE) — AF ordering regressed"
+    [ "$PARTNER_LINE" -lt "$SIBLING_LINE" ] && ok "(13) decl/def partners still print before lexical siblings (F3's own order, unchanged by AF)" \
+                                            || no "(13) decl/def partners no longer precede lexical siblings (line $PARTNER_LINE vs $SIBLING_LINE)"
+fi
+# the blast line MOVED, not REWRITTEN: every cap/count token from arm (3)'s contract is still on it.
+BLASTTXT="$( grep -m1 '^  \[1\] blast radius' "$REPO_OUT" )"
+for tok in 'capped=1' 'prcontext_cap=20' 'shown=' 'total='; do
+  case "$BLASTTXT" in *"$tok"*) ok "(13) the moved [1] blast radius line still carries $tok" ;;
+                       *) no "(13) the moved [1] blast radius line lost $tok: $BLASTTXT" ;; esac
+done
+# and the graph-count floor line (arm (1)'s subject) is still right after [1], not stranded before it —
+# it reads as [1]'s own continuation, and AF only moved what sits AHEAD of [1], never what follows it.
+FLOOR_LINE="$( grep -n 'counts_floor=1' "$REPO_OUT" | head -1 | cut -d: -f1 )"
+BLAST_REPO_LINE="$( grep -n '^  \[1\] blast radius' "$REPO_OUT" | head -1 | cut -d: -f1 )"
+if [ -n "$FLOOR_LINE" ] && [ -n "$BLAST_REPO_LINE" ] && [ "$FLOOR_LINE" -eq $(( BLAST_REPO_LINE + 1 )) ]; then
+    ok "(13) the graph-count floor line still sits directly after [1] blast radius"
+else
+    no "(13) the graph-count floor line no longer sits directly after [1] blast radius (floor=$FLOOR_LINE blast=$BLAST_REPO_LINE)"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "situshapecheck: ALL PASS"; else echo "situshapecheck: SOME FAILED"; fi
 exit "$fail"

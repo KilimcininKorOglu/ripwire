@@ -953,4 +953,194 @@ inline std::vector<MentionFileRow> collapseMentionsToFileRows( const IngestResul
     return fileRows;
 }
 
+// ── R2-AF (round 2, answer-first ordering) — the S4 "named file's decl/impl partner" lookup ────────────
+//
+// --for's ranked rows answer "what is relevant"; they can never answer "what else has to change with the
+// file the task already names", because a header does not transitively depend on its own implementation
+// and a ranker has no evidence to promote it on. This is the --for-side analogue of --situ's decl/def
+// partner block (situ.h declDefPartners) for a CHANGED file's symbol overlap — here there is no diff to
+// read symbols from, so the test is purely LEXICAL: same directory, same stem, a fixed decl/impl
+// extension. Two files that happen to share a directory and a stem almost always ARE the pair; nothing
+// downstream reads this as a graph or ranking fact (§R7: "a lookup, not a ranked or graph-derived row").
+//
+// RESOLUTION (round-2 amendment §R7, verbatim). A row is emitted only when the named path resolves to
+// EXACTLY ONE indexed file, through the SAME normalisation mention_anchored= uses (mention_detail::
+// pathSuffixMatches — the longest matching suffix wins and ends resolution; a `./` prefix or a repo-name
+// prefix falls out of extractMentions' own trimming and the suffix match, not a second rule here). The
+// partner must resolve to exactly one indexed same-directory, same-stem file with a DIFFERENT extension,
+// tried in a fixed order (a source's header: .h, .hpp, .hh; a header's source: .cc, .cpp, .c) — anything
+// else names no partner: precision over recall, the same rule every other mention lookup in this file
+// follows. A partner that is ITSELF named elsewhere in the task is dropped (the reader already asked for
+// it by name); multiple named files are handled in the task's own text order.
+//
+// Shared by the CLI --for (verbs_for.h) and the MCP `for` twin (mcpverbs.h forTaskText) — ONE resolver, so
+// the two surfaces cannot answer this lookup differently. Rendering (root-relative paths, XML escaping)
+// stays at each call site: this file does not depend on sarif.h/serialize.h, and siblift.h already
+// depends on THIS header for its slot-ladder constants, so a dependency the other way would be circular.
+struct ForNamedHeaderRow
+{
+    std::uint32_t namedFile   = 0;   // the file the task names
+    std::uint32_t partnerFile = 0;   // its one same-directory, same-stem decl/impl partner
+};
+
+namespace mention_detail
+{
+
+// the file extension (no dot), or "" when the basename carries none — DERIVED from stripExt() rather than
+// a second rfind('.'): quality-delta flagged the first cut as a new clone of that reused helper (both were
+// "find the last dot, slice around it"), so this composes stripExt's own answer instead of re-deriving it,
+// the same way pathStem above is stripExt(baseNameOf(path)) rather than its own scan.
+inline std::string_view fileExtOf( std::string_view path ) noexcept
+{
+    const std::string_view base = baseNameOf( path );
+    const std::string_view stem = stripExt( base );
+    return stem.size() == base.size() ? std::string_view() : base.substr( stem.size() + 1 );
+}
+
+// path minus its basename (no trailing '/'), or "" at the root — composed from baseNameOf rather than a
+// second rfind('/'), and DELIBERATELY not siblift_detail::dirOf: siblift.h includes this header for its
+// slot-ladder constants, so this header including siblift.h back would be circular.
+inline std::string_view forHdrDirOf( std::string_view path ) noexcept
+{
+    const std::string_view base = baseNameOf( path );
+    return base.size() == path.size() ? std::string_view() : path.substr( 0, path.size() - base.size() - 1 );
+}
+
+// -1 = no decl/impl convention this lookup knows; 0 = a SOURCE (look for a header partner); 1 = a HEADER
+// (look for a source partner). Deliberately the §R7 fixed list, not a language table: guessing a
+// convention this lookup cannot verify is worse than naming no partner at all.
+inline int forHeaderPartnerKind( std::string_view ext ) noexcept
+{
+    if( ext == "cc" || ext == "cpp" || ext == "c" )  { return 0; }
+    if( ext == "h" || ext == "hpp" || ext == "hh" )  { return 1; }
+    return -1;
+}
+
+// Resolve ONE mention to a unique indexed file: try the longest suffix of its segments first (the same
+// order applyMentionBoost's file pass uses), stopping at the first suffix length with any match at all —
+// a shorter suffix is consulted only when a longer one matched NOTHING. Unlike applyMentionBoost, this
+// requires the match to be UNIQUE at that length: 0 or >1 files name nothing this lookup can act on, and
+// a shorter suffix is never tried once a longer one has matched anything (ambiguous or not) — the same
+// "longest suffix ends resolution" rule mentionUnkeptFiles states above.
+inline bool resolveUniqueMentionFile( const IngestResult& ing, const RawMention& m, std::uint32_t& outFile ) noexcept
+{
+    if( !m.isPath || m.segments.empty() )
+    {
+        return false;
+    }
+    const std::uint32_t fileCount = std::uint32_t( ing.files.size() );
+    for( std::size_t suffixLen = m.segments.size(); suffixLen >= 1; --suffixLen )
+    {
+        const std::vector<std::string> suffix( m.segments.end() - suffixLen, m.segments.end() );
+        std::uint32_t                  count = 0, match = 0;
+        for( std::uint32_t f = 0; f < fileCount; ++f )
+        {
+            if( pathSuffixMatches( rootRelPath( ing, f ), suffix ) )
+            {
+                ++count;
+                match = f;
+            }
+        }
+        if( count == 1 )
+        {
+            outFile = match;
+            return true;
+        }
+        if( count > 1 )
+        {
+            return false;   // ambiguous at the longest matching length — not a unique answer
+        }
+    }
+    return false;
+}
+
+// The partner: same directory, same stem, a DIFFERENT extension tried in the §R7 fixed order. Exactly one
+// candidate at an extension wins; zero moves to the next extension in the list; more than one (a same-stem
+// collision across indexed roots) is not a unique answer either, and the lookup moves on rather than guess.
+inline bool resolveUniquePartnerFile( const IngestResult& ing, std::uint32_t namedFile, std::uint32_t& outPartner ) noexcept
+{
+    ASSUME( namedFile < ing.files.size() );
+    const std::string_view path = ing.files[ namedFile ];
+    const int              kind = forHeaderPartnerKind( fileExtOf( path ) );
+    if( kind < 0 )
+    {
+        return false;
+    }
+    static constexpr std::array<std::string_view, 3> kHeaderExts = { "h", "hpp", "hh" };
+    static constexpr std::array<std::string_view, 3> kSourceExts = { "cc", "cpp", "c" };
+    const auto&            tryExts   = kind == 0 ? kHeaderExts : kSourceExts;
+    const std::string_view dir       = forHdrDirOf( path );
+    const std::string_view stem      = stripExt( baseNameOf( path ) );
+    const std::uint32_t    fileCount = std::uint32_t( ing.files.size() );
+    for( const std::string_view partnerExt : tryExts )
+    {
+        std::uint32_t count = 0, match = 0;
+        for( std::uint32_t f = 0; f < fileCount; ++f )
+        {
+            if( f == namedFile || forHdrDirOf( ing.files[f] ) != dir )
+            {
+                continue;
+            }
+            const std::string_view fbase = baseNameOf( ing.files[f] );
+            if( stripExt( fbase ) != stem || fileExtOf( ing.files[f] ) != partnerExt )
+            {
+                continue;
+            }
+            ++count;
+            match = f;
+        }
+        if( count == 1 )
+        {
+            outPartner = match;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace mention_detail
+
+// The task's S4 header rows, in text order, deduplicated by named file, each with exactly one partner
+// that is not itself named anywhere in the task. Empty when the task names no file with a unique partner
+// — the common case, and the feature is byte-identical to before it on every such task (AF's self-reject
+// band: 0 gold lost, 0 rows on a task that names nothing the index agrees is unique).
+inline std::vector<ForNamedHeaderRow> forNamedHeaderRows( const IngestResult& ing, std::string_view task )
+{
+    using namespace mention_detail;
+    std::vector<ForNamedHeaderRow> out;
+    if( task.empty() )
+    {
+        return out;
+    }
+    const std::vector<RawMention> raw = extractMentions( task );
+
+    // pass 1: every path mention this task names, resolved to a unique file, text order, deduplicated —
+    // needed whole before pass 2, because a LATER mention can name THIS mention's partner (§R7's rule).
+    std::vector<std::uint32_t> allNamed;
+    for( const RawMention& m : raw )
+    {
+        std::uint32_t f;
+        if( resolveUniqueMentionFile( ing, m, f ) && std::find( allNamed.begin(), allNamed.end(), f ) == allNamed.end() )
+        {
+            allNamed.push_back( f );
+        }
+    }
+
+    for( const std::uint32_t namedFile : allNamed )
+    {
+        std::uint32_t partner;
+        if( !resolveUniquePartnerFile( ing, namedFile, partner ) )
+        {
+            continue;
+        }
+        if( std::find( allNamed.begin(), allNamed.end(), partner ) != allNamed.end() )
+        {
+            continue;   // the partner is itself named in the task — no lookup row for it
+        }
+        out.push_back( { namedFile, partner } );
+    }
+    ENSURES( out.size() <= allNamed.size() );
+    return out;
+}
+
 } // namespace rw

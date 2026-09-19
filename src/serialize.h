@@ -1064,6 +1064,14 @@ inline constexpr std::string_view kForFileTailLegend =
     "shown=printed, capped=1 when they differ. r= on a ranked row is its 1-based rank in this lens ranking, "
     "rows in r= order, p= the file (a gap = a budget-trimmed row)";
 
+// R2-AF (round 2, S4): the legend clause defining `<hdr p= of=/>` — verbatim, round-2 amendment §R7. A
+// named constant, shared by the CLI --for header and the MCP `for` twin (rw::forNamedHeaderRows,
+// mention.h, is the ONE resolver both surfaces call), present-only: appended only on an answer that
+// actually carries a row. 198 B, priced and pinned (test/forhdrshapecheck.sh).
+inline constexpr std::string_view kForHdrLegend =
+    "; hdr p= of=: the file the task names (of=) has exactly one same-directory, same-stem declaration/"
+    "implementation partner (p=), listed first by name alone: a lookup, not a ranked or graph-derived row";
+
 // Explicit-budget row fit: the largest shown count whose rendered XML fits `budgetBytes` (0 rows always
 // "fits" — the shell is reserved by the caller). Walks down from the collected count; deterministic.
 inline std::size_t fileTailShownForBudget( const FileTail& t, std::size_t budgetBytes, std::vector<char>& esc )
