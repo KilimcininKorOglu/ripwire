@@ -199,12 +199,27 @@ with open(os.path.join(OUT, "s1.tsv"), "w") as out:
 # os::X or rw::os::X, so the regex accepts that prefix too — a call keeps the same registry row (file, fn, opener
 # name) whichever spelling it uses, via the kind.split("::")[-1] normalisation below. os.h's OWN wrapper
 # DEFINITIONS are the one place the bare libc call still appears; that is the seam working as designed, not an
-# unregistered site, so this one file is exempt by name (not by widening the pattern that finds sites elsewhere).
+# unregistered site — but ONLY for the PURE PASSTHROUGH shape: a whole function body that is one
+# `return (::)?NAME( args );`, forwarding its own parameters and nothing else. A helper that does real work inside
+# os.h (spawn_sh's forked child, which opens /dev/null among other steps) is scanned like any other file — the
+# exemption is by shape, not by file name.
 OS_SEAM_HEADER = "infra/os.h"
 OPENERS = "^(std::|::|os::|rw::os::)?(fopen|open|fdopen|openat|opendir|open_memstream|popen)$"
+def _param_name(p):
+    m = re.search(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?$", p.strip())
+    return m.group(1) if m else p.strip()
+def os_seam_passthrough(f, ln):
+    if f != OS_SEAM_HEADER:
+        return False
+    m = re.search(r"\(([^()]*)\)\s*\{\s*return\s+(?:::)?[A-Za-z_]\w*\s*\(([^()]*)\)\s*;\s*\}\s*$", lines_of(f)[ln - 1].strip())
+    if not m:
+        return False
+    params = [_param_name(p) for p in m.group(1).split(",") if p.strip()]
+    args = [a.strip() for a in m.group(2).split(",") if a.strip()]
+    return params == args
 sites = Counter()
 for f, ln, fn, kind, _call in pairs(match('(call_expression function: [(identifier) @f (qualified_identifier) @f] (#match? @f "%s")) @call' % OPENERS)):
-    if f == OS_SEAM_HEADER:
+    if os_seam_passthrough(f, ln):
         continue
     sites[(f, fn, kind.split("::")[-1])] += 1
 # An acquisition handed straight to an owner type needs no registry row: `OwnedFd fd( ::open( … ) )`,
@@ -216,7 +231,7 @@ for shape in ('(declaration type: [(type_identifier) (qualified_identifier)] @_t
               '(call_expression function: [(identifier) (qualified_identifier)] @_t arguments: (argument_list . '
               '(call_expression function: [(identifier) (qualified_identifier)] @f)) (#match? @_t "%s") (#match? @f "%s"))'):
     for f, ln, fn, _owner, kind in pairs(match(shape % (OWNERS, OPENERS))):
-        if f == OS_SEAM_HEADER:
+        if os_seam_passthrough(f, ln):
             continue
         owned[(f, fn, kind.split("::")[-1])] += 1
 for key, n in owned.items():
@@ -300,6 +315,7 @@ gitoracle.h	loadOracleCache	fopen	1	closes	returns only on a failed open; fclose
 gitoracle.h	saveOracleCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 gitoracle.h	walkGitPatch	popen	1	closes	break-only loops, a drain, then pclose; no return between
 infra/emit.h	open	open_memstream	1	owned	rw::MemoryStream: the destructor fcloses a stream nobody finished and frees the buffer on every path; finish() closes exactly once
+infra/os.h	spawn_sh	open	1	closes	in the forked child: dup2 onto stdin, close, then exec or _exit
 ingest_cache.h	openOnce	open	1	owned	ReadFd's destructor closes it
 ingest_cache.h	saveCache	fdopen	1	closes	adopts ExclTempFile's released fd; fclose on its own line; a failed fdopen ::closes the fd
 ingest_crawl.h	collectGitIgnored	popen	1	closes	the overflow break still reaches pclose
