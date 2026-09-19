@@ -271,8 +271,14 @@ inline std::vector<NameHitsRanked> rankNameHits( const IngestResult& ing, const 
 }
 
 // the element itself: up to kNameHitsMaxRows of `ranked` whose display path (lensRowPath) is not already
-// in `namedPaths` (the answer's own p= rows — sigs + the deep tail actually shown). Always emitted, even
-// at n="0" (the <tail>/B1.4 convention: a count states reality, absence would read as "not computed").
+// in `namedPaths` (the answer's own p= rows — sigs + the deep tail actually shown).
+// N3 (round 3, PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_REPORTS/13_round3_PREREG.md §2.1, Amendment 1 Q6): a
+// picked list of ZERO now emits NOTHING — no element at all, not even a self-closed "n=0" one. The old
+// B1.4-style "a count states reality" reasoning is superseded by the owner's Q6 answer: absence already
+// reads as "not computed" on the explicit-budget regime (forNameHitsOn=false), so an empty default-regime
+// answer is now spelled the same way. Callers must treat "" as "omit this element and its definition".
+// Returns the ELEMENT ONLY — no over_ceiling attribute, no trailing comment, no suffix (this is exactly
+// the "E" the round-3 over_ceiling predicate prices; see finishNameHitsXml below).
 inline std::string renderNameHitsXml( const IngestResult& ing, const std::vector<NameHitsRanked>& ranked,
                                        const HashMap<std::string, std::uint8_t>& namedPaths,
                                        std::string_view rootArg, std::vector<char>& esc )
@@ -296,13 +302,11 @@ inline std::string renderNameHitsXml( const IngestResult& ing, const std::vector
     // the only place that can grow `picked`, and its own break already bounds it; ENSURES makes the cap
     // a checked fact instead of a property that happens to hold today.
     ENSURES( picked.size() <= kNameHitsMaxRows, "namehits: renderNameHitsXml must never pad past the registered cap" );
-    std::string x = "<namehits n=\"" + std::to_string( picked.size() ) + "\"";
     if( picked.empty() )
     {
-        x += "/>";
-        return x;
+        return {};   // Q6: empty answer, nothing rides — no element, no definition (finishNameHitsXml mirrors this)
     }
-    x += ">";
+    std::string x = "<namehits n=\"" + std::to_string( picked.size() ) + "\">";
     for( const std::string& p : picked )
     {
         x += "<nh p=\"";
@@ -313,13 +317,54 @@ inline std::string renderNameHitsXml( const IngestResult& ing, const std::vector
     return x;
 }
 
-// Definitions, verbatim (PREREG Amendment 1 §R2) — a single leading space, appended directly after the
-// tail clause with no separator of its own (matches the registered pricing: element+FULL delta 372-167=205
-// = 204 (the clause) + 1 (this space); element+COMPACT delta 261-167=94 = 93+1).
-inline constexpr std::string_view kForFullLegendNameHits =
-    " <namehits n=> = up to 3 files this answer did not already name, ranked ONLY by how many query words "
-    "their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= rows shown";
-inline constexpr std::string_view kForCompactLegendNameHits =
-    " namehits/nh p=: <=3 unnamed files by file-name/path word match (not graph evidence); n= shown";
+// Definitions, verbatim (PREREG round 3 §2.1 + Amendment 1c). N3 moves the definition OFF the top legend
+// and onto a trailing XML comment immediately after the element's own end — these are the comment's INNER
+// text only (no "<!--"/"-->" wrapper, added by finishNameHitsXml so the over_ceiling suffix can be spliced
+// in before the close). Wrapped: FULL 200 B, COMPACT 92 B (§2.1's registered byte counts).
+inline constexpr std::string_view kForNameHitsDefFull =
+    "namehits: up to 3 files this answer did not already name, ranked ONLY by how many query words their "
+    "file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= shown";
+inline constexpr std::string_view kForNameHitsDefCompact =
+    "namehits/nh: <=3 unnamed files by name/path word match (not graph evidence); n= shown";
+// A1.1 / Amendment 1c #2: present-only suffix, inside the same trailing comment, exactly when the element
+// carries over_ceiling="1". Wrapped totals: FULL 235 B, COMPACT 127 B.
+inline constexpr std::string_view kForNameHitsOverCeilingSuffix = "; over_ceiling=1: past budget_bytes";
+
+// Amendment 1c #2 — the over_ceiling predicate, pinned to one code sum shared by both --for dialects (CLI
+// and MCP): does the ranked payload, PLUS this element alone (E — no attribute, no comment, no suffix),
+// exceed the ceiling the composer already computed for the ranked payload? `fixedBytesForHeader` and
+// `sigSideCeiling` are the composer's own values (verbs_for.h ~2651-2657 / mcpverbs.h ~1963-1965, N3
+// header — no namehits clause in either); `sigsStr`/`tailStr` are the rendered strings already charged.
+inline bool nameHitsOverCeiling( std::size_t fixedBytesForHeader, std::size_t sigsBytes, std::size_t tailBytes,
+                                  std::size_t elementOnlyBytes, std::size_t sigSideCeiling ) noexcept
+{
+    return fixedBytesForHeader + sigsBytes + tailBytes + elementOnlyBytes > sigSideCeiling;
+}
+
+// Splices the over_ceiling attribute (when set) onto `elem` and appends the trailing definition comment —
+// the ONE place both --for dialects finish the element, so they cannot drift (task item 5). `elem` must be
+// exactly renderNameHitsXml's return: "" (Q6 — returned unchanged, nothing to finish) or a well-formed
+// "<namehits n=\"K\">...</namehits>" with K>=1 (never self-closing — Q6 removed the only self-closing case).
+inline std::string finishNameHitsXml( std::string elem, bool compactDialect, bool overCeiling )
+{
+    if( elem.empty() )
+    {
+        return elem;   // Q6: no element ⇒ no attribute, no comment — nothing rides
+    }
+    if( overCeiling )
+    {
+        const std::size_t openEnd = elem.find( '>' );
+        ENSURES( openEnd != std::string::npos, "namehits: finishNameHitsXml expects a well-formed opening tag" );
+        elem.insert( openEnd, " over_ceiling=\"1\"" );
+    }
+    elem += "<!--";
+    elem += ( compactDialect ? kForNameHitsDefCompact : kForNameHitsDefFull );
+    if( overCeiling )
+    {
+        elem += kForNameHitsOverCeilingSuffix;
+    }
+    elem += "-->";
+    return elem;
+}
 
 }   // namespace rw

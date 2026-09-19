@@ -495,10 +495,9 @@ struct ForLensHeaderParts
     bool             idRouteLegend = true;    // row 6 (2026-09-12): the sc=/route= readings (graphlegend.h
                                               //   kForIdRouteLegend) — ceiling-droppable exactly like the two
                                               //   above; rung zero clears all three and the note names them
-    bool             nameHitsLegend = false;  // LB3x: set true only when the <namehits> element will actually
-                                              //   ride (default regime, cfg.tokenBudget==0) — NOT part of the
-                                              //   droppable trio: the ladder never runs in that regime, so there
-                                              //   is nothing to drop it FROM (see namehits.h's scope note).
+    // N3 (round 3 §2.1): <namehits>'s definition left this struct entirely — it no longer rides in the top
+    // legend at all (in any regime), so there is no header-legend field to gate it with. It is now emitted as
+    // a trailing comment by finishNameHitsXml (namehits.h), immediately after the element's own end.
     bool             legendDropped = false;   // …and rung zero SAYS SO: set with the two clears above, it splices
                                               //   kForLegendDroppedNote. A field rather than a note the rung
                                               //   appends once, because the ladder rebuilds this header up to
@@ -811,10 +810,6 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     {
         h += kForCompactLegendTail;
     }
-    if( p.nameHitsLegend )
-    {
-        h += rw::kForCompactLegendNameHits;
-    }
     if( p.legendDropped )
     {
         // L1: the droppable clauses went to the ceiling — the attributes stay, and the note names exactly the
@@ -947,10 +942,6 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
-    }
-    if( p.nameHitsLegend )
-    {
-        h.append( rw::kForFullLegendNameHits );   // LB3x: defines the <namehits> element (namehits.h)
     }
     if( p.legendDropped )
     {
@@ -2371,15 +2362,16 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             forScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
         }
-        // LB3x: the <namehits> element rides only in the default regime — no explicit --token-budget (the
-        // ceiling ladder does not yet price it; see namehits.h's scope note) — and its legend clause is
-        // present exactly when the element itself will be (present-only, like every other reading here).
+        // LB3x/N3: the <namehits> element rides only in the default regime — no explicit --token-budget (the
+        // ceiling ladder does not yet price it; see namehits.h's scope note). N3 moved its definition off the
+        // top legend entirely (a trailing comment after the element instead — finishNameHitsXml), so this no
+        // longer feeds ForLensHeaderParts at all.
         const bool forNameHitsOn = cfg.tokenBudget == 0;
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
-                                        /*tailLegend=*/true, /*idRouteLegend=*/true, /*nameHitsLegend=*/forNameHitsOn,
+                                        /*tailLegend=*/true, /*idRouteLegend=*/true,
                                         /*legendDropped=*/false, flRootArg,
                                         forScPresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
@@ -2934,11 +2926,18 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                                + routeStr.size() + graphSection.xml.size() + detailSection.xml.size()
                                                                + autoSection.xml.size() + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve );
 
-        // LB3x — the <namehits> append, RENDERED HERE (not at the emission site) so its bytes are part of
+        // LB3x/N3 — the <namehits> append, RENDERED HERE (not at the emission site) so its bytes are part of
         // est_tokens' fixpoint below: a document that claims a token price and then appends an unpriced
         // element is exactly the "quietly omits" surface the honesty rule forbids (estchargecheck.sh #11).
         // Default regime only (forNameHitsOn); "" on the explicit-budget regime, where the ladder does not
         // yet price this element (namehits.h's scope note) — an empty string costs nothing below.
+        // N3 / Amendment 1c #1-#2: the element and its trailing comment stay OUT of fixedBytes/sigsBudget by
+        // construction (they are rendered and emitted after the sig/tail sections the ladder already sized) —
+        // no change to that arithmetic. over_ceiling is decided here, on the pinned code sum
+        // (fixedBytes + sigsStr + tailStr + the element ALONE, vs sigSideCeiling — the same values the sig
+        // ladder above already computed), and finishNameHitsXml folds the attribute plus the trailing
+        // definition comment (+ its present-only over_ceiling suffix) into nameHitsStr BEFORE the est_tokens
+        // fixpoint below reads nameHitsStr.size() — so est_tokens keeps pricing all of it, unchanged code.
         std::string nameHitsStr;
         if( forNameHitsOn )
         {
@@ -2956,7 +2955,11 @@ std::optional<int> runForLens( const MainDispatch& d )
             }
             const std::vector<NameHitsRanked> nhRanked = rankNameHits( ing, nameHitsToks( cfg.forTask ) );
             std::vector<char>                 nhEsc;
-            nameHitsStr = renderNameHitsXml( ing, nhRanked, nhNamed, flRootArg, nhEsc );
+            std::string                       nameHitsElem = renderNameHitsXml( ing, nhRanked, nhNamed, flRootArg, nhEsc );
+            const bool nameHitsOverCeiling = !nameHitsElem.empty() &&
+                                              rw::nameHitsOverCeiling( fixedBytes, sigsStr.size(), tailStr.size(),
+                                                                        nameHitsElem.size(), sigSideCeiling );
+            nameHitsStr = rw::finishNameHitsXml( std::move( nameHitsElem ), compactLegendOn, nameHitsOverCeiling );
         }
 
         // N1: the last rung's note DEFINES the root attribute it accompanies (over_ceiling= …), so the attribute is
@@ -3184,13 +3187,15 @@ std::optional<int> runForLens( const MainDispatch& d )
             std::fwrite( autoSection.xml.data(), 1, autoSection.xml.size(), stdout );
         }
 
-        // LB3x — the <namehits> append: rendered earlier (nameHitsStr) so its bytes are part of est_tokens'
-        // fixpoint above; this site only streams the bytes already priced. Empty ("") on the explicit-budget
-        // regime — a no-op write. ORDERING (withgraphcheck.sh): --with-graph's own contract is that <graph>
-        // sits immediately before </ctx>, predating this element (R8) — so namehits rides BEFORE <graph>
-        // when the flag is on, and is otherwise the true last child. "LAST child" in namehits.h's own header
-        // comment means "last of THIS element's own family (sigs/lego/compose/tail)", not "after every
-        // opt-in section a later flag might append" — R8's contract was never renegotiated by this lever.
+        // LB3x/N3 — the <namehits> append: rendered earlier (nameHitsStr — element, over_ceiling attribute
+        // and its trailing definition comment already folded together by finishNameHitsXml) so its bytes are
+        // part of est_tokens' fixpoint above; this site only streams the bytes already priced. Empty ("") on
+        // the explicit-budget regime, or when the element itself was empty (Q6) — a no-op write either way.
+        // ORDERING (withgraphcheck.sh): --with-graph's own contract is that <graph> sits immediately before
+        // </ctx>, predating this element (R8) — so namehits (element + its trailing comment together) rides
+        // BEFORE <graph> when the flag is on, and is otherwise the true last child. "LAST child" in
+        // namehits.h's own header comment means "last of THIS element's own family (sigs/lego/compose/tail)",
+        // not "after every opt-in section a later flag might append" — R8's contract was never renegotiated.
         if( !nameHitsStr.empty() )
         {
             std::fwrite( nameHitsStr.data(), 1, nameHitsStr.size(), stdout );

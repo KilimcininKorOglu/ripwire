@@ -1919,7 +1919,8 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                             " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
                             " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens"
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
-                          + ( forNameHitsOn ? std::string( rw::kForFullLegendNameHits ) : std::string() )   // LB3x: defines <namehits> — present-only, same rule as the CLI twin (verbs_for.h)
+                          // N3: <namehits>'s definition left the top legend entirely (round 3 §2.1) — it now
+                          // rides as a trailing comment after the element itself, same as the CLI twin.
                           + " -->"
                           + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
     // W3-S item 5 (2026-08-19): both --for dialects now carry rw::kForRootRelPathsLegendShort (graphlegend.h)
@@ -2044,17 +2045,24 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // LB3x: the FileTail is kept (not just its rendered XML) — the namehits dedup set below needs its
     // .paths the same way the CLI twin's forFileTailShown.paths does (verbs_for.h).
     const FileTail mcpFileTail = computeFileTail( ing, lensRank, mcpShownIds, flRootArg );
+    std::size_t    mcpTailBytes = 0;   // N3: kept past the block below — the over_ceiling predicate needs it
     {
         std::vector<char> tailEsc;
         const std::string tailStr = renderFileTailXml( mcpFileTail, kForFileTailShownCap, tailEsc );
+        mcpTailBytes = tailStr.size();
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
-    // LB3x — the <namehits> append, MCP twin of the CLI --for lever (verbs_for.h, namehits.h): OWN element,
-    // LAST child of the root, APPEND-ONLY, default regime only (forNameHitsOn — see its declaration above).
-    // Written into `mem` BEFORE </ctx>, so priceForTaskRoot's doc.size()-based fixpoint below (run on the
-    // fully captured document) prices these bytes the same way it prices every other byte on this surface —
-    // no separate header-splice reserve is needed here, unlike the CLI's own fixpoint, because this dialect
-    // re-measures the WHOLE captured document after it is built rather than pricing the header in flight.
+    // LB3x/N3 — the <namehits> append, MCP twin of the CLI --for lever (verbs_for.h, namehits.h): OWN
+    // element, LAST child of the root, APPEND-ONLY, default regime only (forNameHitsOn — see its declaration
+    // above). Written into `mem` BEFORE </ctx>, so priceForTaskRoot's doc.size()-based fixpoint below (run on
+    // the fully captured document) prices these bytes the same way it prices every other byte on this
+    // surface — no separate header-splice reserve is needed here, unlike the CLI's own fixpoint, because this
+    // dialect re-measures the WHOLE captured document after it is built rather than pricing the header in
+    // flight. N3: the definition no longer rides in the header comment at all (task item 5 — this twin must
+    // match the CLI); finishNameHitsXml appends it as a trailing comment right here, same as the CLI, and
+    // decides over_ceiling on the SAME pinned sum (fixedBytes/sigsStr/tailStr/E vs the ceiling this dialect
+    // already computed for the ranked payload — forBudgetBytes plays the CLI's sigSideCeiling role here,
+    // since this dialect has no separate auto-bundle section split).
     std::string nameHitsStr;   // LB3x: stays "" under an explicit budget_tokens — ENSURES below checks it
     if( forNameHitsOn )
     {
@@ -2074,7 +2082,11 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         }
         const std::vector<NameHitsRanked> nhRanked = rankNameHits( ing, nameHitsToks( task ) );
         std::vector<char>                 nhEsc;
-        nameHitsStr = renderNameHitsXml( ing, nhRanked, nhNamed, flRootArg, nhEsc );
+        std::string                       nameHitsElem = renderNameHitsXml( ing, nhRanked, nhNamed, flRootArg, nhEsc );
+        const bool nameHitsOverCeiling = !nameHitsElem.empty() &&
+                                          rw::nameHitsOverCeiling( fixedBytes, sigsStr.size(), mcpTailBytes,
+                                                                    nameHitsElem.size(), forBudgetBytes );
+        nameHitsStr = rw::finishNameHitsXml( std::move( nameHitsElem ), /*compactDialect=*/false, nameHitsOverCeiling );
     }
     // ENSURES, not ASSUME: this function's own postcondition on the branch just above, not an invariant
     // some OTHER code establishes — the honesty contract (namehits.h) is that an explicit ceiling never

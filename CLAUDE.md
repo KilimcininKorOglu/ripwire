@@ -117,7 +117,13 @@ the same commit — `test/manifestcheck.sh` fails otherwise.
   Platforms: Unix/Linux/macOS first, native Windows second (clang-cl primary; MSVC `cl.exe` must also build).
   A `cl.exe` portability finding is worth fixing but does not block a POSIX-only code path.
 - **G4 — maximum token density.** Minified XML, no inter-tag whitespace, terse attributes, one
-  legend at the top. Gate: pipes clean through `xmllint --noout`, no newline outside CDATA.
+  legend at the top — with one registered exception: an element on the trailing-definition roster
+  (today only `--for`'s `<namehits>`) carries its definition as ONE XML comment immediately after
+  the element's end (`</namehits>`; an empty element is omitted entirely, comment and all — nothing
+  rides), in every legend posture, and never in the top legend, so that no definition sits in front
+  of gold it does not describe. An element joins the roster only through a pre-registered lever whose
+  band prices the definition's position. Every element and attribute an answer emits is still defined
+  inside that answer. Gate: pipes clean through `xmllint --noout`, no newline outside CDATA.
 - **G5 — modular zero-dependency CLI.** Hand-rolled argument parser; a flagless run is the core map;
   every flag is purely additive.
 

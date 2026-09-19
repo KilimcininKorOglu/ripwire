@@ -275,3 +275,14 @@ for-budgeted-compact | field@name
 for-budgeted-compact | field@owner
 for-budgeted-compact | field@rel
 for-budgeted-compact | field@type
+# N3 (round 3, PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_REPORTS/13_round3_PREREG.md §2.1, Amendment 1c #2-#3,
+# rv-r3-prereg.md §4): <namehits>'s WHOLE definition — n= included — moved OFF the top legend and onto a
+# trailing XML comment immediately after the element itself (the G4 roster; CLAUDE.md/CONTRIBUTING.md G4
+# amendment). over_ceiling= is disclosed the same way, present-only, in that SAME trailing comment's suffix
+# (`; over_ceiling=1: past budget_bytes`) — a real reader does meet the name when the attribute fires, one
+# element past it, but this gate's bare-name search scans the TOP legend only (by design — see arm (A)'s own
+# ELEMENT-BLINDNESS note above), so it cannot see a definition that deliberately lives outside that legend.
+# `namehits@n` is not a separate line here: n is one of the seven v1 core row keys this file excludes
+# globally (see the file header). Not a gap in disguise — namehitscheck.sh's clause 4/9' pins the trailing
+# comment's presence, wording and honesty (attribute and suffix never ride one without the other) directly.
+for | namehits@over_ceiling

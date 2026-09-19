@@ -564,8 +564,14 @@ review discipline.
   OpenMP. The goal is "self-contained", **not** "static": a fully static binary is impossible on
   macOS (`libSystem.dylib` is the syscall interface), so never pass `-static` to the linker.
 - **G4 — maximum token density.** Minified XML, no inter-tag whitespace, terse attributes
-  (`t="fn"`), one schema legend at the top. The gate: output pipes clean through `xmllint --noout`
-  and contains no newline outside CDATA.
+  (`t="fn"`), one schema legend at the top — with one registered exception: an element on the
+  trailing-definition roster (today only `--for`'s `<namehits>`) carries its definition as ONE XML
+  comment immediately after the element's end (`</namehits>`; an empty element is omitted entirely,
+  comment and all), in every legend posture, and never in the top legend, so no definition sits in
+  front of gold it does not describe. An element joins the roster only through a pre-registered lever
+  whose band prices the definition's position; every element and attribute an answer emits is still
+  defined inside that answer. The gate: output pipes clean through `xmllint --noout` and contains no
+  newline outside CDATA.
 - **G5 — modular zero-dependency CLI.** Hand-rolled argument parser. A default run with no flags is
   the core map; every flag is purely additive and gated by a `Config` field.
 

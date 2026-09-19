@@ -1,32 +1,40 @@
 #!/usr/bin/env bash
-# namehitscheck.sh — LB3x (routing-loop round 2, PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_REPORTS/12_round2_PREREG.md,
-# Amendment 1 §R2, approved rv-prereg2.md 2026-09-19): the `--for` ranking-to-gold append.
+# namehitscheck.sh — LB3x/N3 (routing-loop round 3, PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_REPORTS/13_round3_PREREG.md
+# §2.1, Amendments 1/1b/1c, approved rv-r3-prereg.md 2026-09-19): the `--for` ranking-to-gold append, with its
+# FULL definition moved OFF the top legend and onto a trailing comment after the element.
 #
-# THE CONTRACT THIS PINS (src/namehits.h, src/verbs_for.h):
+# THE CONTRACT THIS PINS (src/namehits.h, src/verbs_for.h, src/mcpverbs.h):
 #   (1) <namehits n="K"><nh p=…/>…</namehits> appears on a default-regime --for answer, and is NEVER inside
 #       <tail> (whose shown=/total= count a different population — trimmed rows, not unnamed files). It is
 #       the last child of the root EXCEPT when --with-graph is also on — R8's own standing contract
 #       (withgraphcheck.sh) is that <graph> sits immediately before </ctx>, predating this lever, so
-#       namehits rides immediately BEFORE <graph> in that combination and is otherwise the true last child
-#       (fixed 2026-09-19, r2-LB3x closing batch: the CLI first shipped this element AFTER <graph>, which
-#       broke withgraphcheck's "last child" arm — see (1b) below and src/verbs_for.h's ordering comment).
+#       namehits (element + its trailing comment together) rides immediately BEFORE <graph> in that
+#       combination and is otherwise the true last child.
 #   (2) APPEND-ONLY + DEDUPED: every <nh p=> names a file this SAME answer did not already emit a p= row
 #       for (sigs + the deep tail); no existing row is re-ranked or reordered.
-#   (3) HONESTY: n= is the count actually served (0..3), never padded — fewer than 3 qualifying files says
-#       so; zero qualifying files still emits the element (<namehits n="0"/>), never silently drops it.
-#   (4) Legend: both dialects define namehits/nh/n=, present exactly when the element rides (never one
-#       without the other).
+#   (3) HONESTY (Q6, round 3): n= is the count actually served (0..3), never padded — fewer than 3
+#       qualifying files says so. ZERO qualifying files now emits NOTHING AT ALL: no element, no trailing
+#       comment (round 2's self-closed <namehits n="0"/> is gone — superseded by the owner's Q6 answer).
+#   (4) DEFINITION (N3): the definition is OUT of the top legend on every posture (CLI full/compact, MCP
+#       `for`) and rides instead as ONE XML comment immediately after the element's own end — present iff
+#       the element is present, never one without the other, and never inside the top legend.
 #   (5) SCOPE: absent under an explicit --token-budget (the ceiling ladder does not price it yet — see
 #       namehits.h) and on --json/--format=candidates/--format=columnar (namehits is an XML-bundle-only
 #       enrichment, the T3/auto-bodies precedent).
-#   (6) RED-FIRST: everything BEFORE <namehits> is byte-identical to the pre-lever binary's answer for the
-#       SAME query (append-only at the DOCUMENT level, not just the element's own row order); every other
-#       verb's output is untouched.
+#   (6) RED-FIRST / NO DISPLACEMENT (N3's whole point): everything BEFORE <namehits> is byte-identical to
+#       the pre-lever binary's answer for the SAME query, INCLUDING on a query where round 2's binary
+#       displaced a ranked row or a legend clause by charging the 205 B header definition into the sig
+#       ladder's budget (Amendment 1c #1) — not just the tiny polyglot fixture, where nothing ever got
+#       close enough to the ceiling to displace.
 #   (7) DETERMINISM: two runs byte-identical (integer scoring, path tie-break — no floating point ever
 #       reaches output).
 #   (8) PARITY: the formula (name×3 + path×2 BM25, k1=1.2, b=0.75, lb3_sim.py's toks()) matches a python
 #       mirror of $ORCH/sim/lb3_sim.py's toks()/bm25_rank(), copied verbatim, on >=10 real queries over
 #       this repo's own src/ tree — exact file lists, not just counts.
+#   (9) OVER_CEILING (Amendment 1c #2): the element carries ` over_ceiling="1"` iff the pinned code sum —
+#       fixedBytes + sigsStr.size() + tailStr.size() + E (the element alone) — exceeds sigSideCeiling
+#       (CLI) / forBudgetBytes (MCP); the trailing comment's present-only suffix rides iff the attribute
+#       does, on both surfaces, on both dialects (never one without the other — clause 6/honesty).
 #
 # Usage:  bash test/namehitscheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/namehitscheck.sh
 # Exits non-zero on any failure.
@@ -50,23 +58,23 @@ echo "namehitscheck: BIN=$BIN"
 # ── (1)/(2)/(3)/(4) shape, dedup and honesty over the small polyglot fixture ────────────────────────────
 out1="$( "$BIN" test/fixture --for='geometry area of a shape' --legend=compact 2>/dev/null )"
 case "$out1" in
-    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits></ctx>'*)
-        ok "(1)/(3) fixture 'geometry area of a shape': n=\"2\" (honest — only 2 files qualify), last child, right before </ctx>" ;;
-    *) no "(1)/(3) fixture 'geometry area of a shape': unexpected shape: $( printf '%s' "$out1" | grep -o '<namehits.*' | head -c 200 )" ;;
+    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits><!--namehits/nh: <=3 unnamed files by name/path word match (not graph evidence); n= shown--></ctx>'*)
+        ok "(4) N3: trailing comment (compact wording) rides immediately after the element, right before </ctx>" ;;
+    *) no "(4) N3: compact trailing comment missing/misplaced: $( printf '%s' "$out1" | grep -o '<namehits.*' | head -c 220 )" ;;
 esac
-case "$out1" in
-    *'namehits/nh p=: <=3 unnamed files by file-name/path word match (not graph evidence); n= shown'*)
-        ok "(4) compact legend defines namehits/nh/n=" ;;
-    *) no "(4) compact legend missing the namehits clause" ;;
+# (4) the definition must be GONE from the top legend (header comment), every posture — that is N3's whole point.
+hdr1="${out1%%<namehits*}"
+case "$hdr1" in
+    *namehits*) no "(4) N3: the compact TOP LEGEND still mentions namehits — the definition did not move" ;;
+    *) ok "(4) N3: compact top legend carries no namehits clause at all" ;;
 esac
 # (1b) --with-graph: <graph> is R8's own last-child contract (withgraphcheck.sh) and predates this lever —
-# namehits must ride immediately BEFORE <graph>, never after it (fixed 2026-09-19: the CLI originally
-# streamed <graph> then <namehits>, which put <namehits> last and broke withgraphcheck's own arm).
+# namehits (element + its trailing comment, N3) must ride immediately BEFORE <graph>, never after it.
 outg="$( "$BIN" test/fixture --for='geometry area of a shape' --with-graph 2>/dev/null )"
 case "$outg" in
-    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits><graph '*'</graph></ctx>'*)
-        ok "(1b) --with-graph: <namehits> rides immediately before <graph>, which stays the true last child" ;;
-    *) no "(1b) --with-graph: namehits/graph ordering wrong: $( printf '%s' "$outg" | grep -o '<namehits.*graph[^>]*>' | head -c 200 )" ;;
+    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits><!--namehits: up to 3 files this answer did not already name, ranked ONLY by how many query words their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= shown--><graph '*'</graph></ctx>'*)
+        ok "(1b) --with-graph: <namehits> + its trailing comment ride immediately before <graph>, which stays the true last child" ;;
+    *) no "(1b) --with-graph: namehits/graph ordering wrong: $( printf '%s' "$outg" | grep -o '<namehits.*graph[^>]*>' | head -c 260 )" ;;
 esac
 if printf '%s' "$out1" | xmllint --noout - 2>"$TMP/xml1.err"; then
     ok "(1) fixture answer is well-formed XML"
@@ -76,9 +84,14 @@ fi
 
 out1f="$( "$BIN" test/fixture --for='geometry area of a shape' 2>/dev/null )"
 case "$out1f" in
-    *'<namehits n=> = up to 3 files this answer did not already name, ranked ONLY by how many query words their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= rows shown'*)
-        ok "(4) full legend defines <namehits n=> verbatim" ;;
-    *) no "(4) full legend missing the namehits clause" ;;
+    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits><!--namehits: up to 3 files this answer did not already name, ranked ONLY by how many query words their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= shown--></ctx>'*)
+        ok "(4) N3: trailing comment (full wording) rides immediately after the element, right before </ctx>" ;;
+    *) no "(4) N3: full trailing comment missing/misplaced: $( printf '%s' "$out1f" | grep -o '<namehits.*' | head -c 260 )" ;;
+esac
+hdr1f="${out1f%%<namehits*}"
+case "$hdr1f" in
+    *namehits*) no "(4) N3: the full TOP LEGEND still mentions namehits — the definition did not move" ;;
+    *) ok "(4) N3: full top legend carries no namehits clause at all" ;;
 esac
 
 # dedup: geometry.h/geometry.cpp are NOT named by 'geometry area of a shape' (app.py/notes.md rank the
@@ -93,13 +106,25 @@ else
     ok "(2) geometry.h/geometry.cpp are named ONLY inside <namehits> — dedup holds"
 fi
 
-# honesty at n="0": an all-stopword query tokenizes to nothing (lb3_sim.py STOP), so rankNameHits returns
-# empty and the element must still ride, self-closed, never omitted (the <tail> B1.4 convention).
+# honesty at n=0 (Q6, round 3): an all-stopword query tokenizes to nothing (lb3_sim.py STOP), so
+# rankNameHits returns empty and NOTHING rides — no element, no trailing comment (round 2's self-closed
+# <namehits n="0"/> is gone; superseded by the owner's Q6 answer — see namehits.h renderNameHitsXml/
+# finishNameHitsXml). Checked on both dialects since the trailing comment is dialect-specific text that
+# must also be absent.
 out0="$( "$BIN" test/fixture --for='how does the' 2>/dev/null )"
-case "$out0" in
-    *'<namehits n="0"/></ctx>'*) ok "(3) all-stopword query: <namehits n=\"0\"/> — present, honest, last child" ;;
-    *) no "(3) all-stopword query: expected a self-closed n=\"0\" last child, got: $( printf '%s' "$out0" | grep -o '<namehits.*' | head -c 200 )" ;;
-esac
+if printf '%s' "$out0" | grep -q namehits; then
+    no "(3) Q6: all-stopword query still carries namehits somewhere: $( printf '%s' "$out0" | grep -o '.\{0,40\}namehits.\{0,80\}' )"
+else
+    ok "(3) Q6: all-stopword query emits NO namehits at all — no element, no trailing comment"
+fi
+out0c="$( "$BIN" test/fixture --for='how does the' --legend=compact 2>/dev/null )"
+if printf '%s' "$out0c" | grep -q namehits; then
+    no "(3) Q6 compact: all-stopword query still carries namehits somewhere"
+else
+    ok "(3) Q6 compact: all-stopword query emits NO namehits at all"
+fi
+printf '%s' "$out0" | xmllint --noout - >/dev/null 2>&1 && ok "(3) Q6: n=0 answer is still well-formed XML with the element gone" \
+                                                          || no "(3) Q6: n=0 answer is not well-formed XML"
 
 # the 3-row cap: a query naming few files leaves >=3 unnamed candidates.
 out3="$( "$BIN" test/fixture --for='geometry consumer app' 2>/dev/null )"
@@ -144,17 +169,29 @@ for pair in "geometry area of a shape|for_geometry.xml" "call a native function 
         *namehits*) no "(6) RED-FIRST '$q': the committed base fixture ALREADY has namehits in it — re-capture it" ;;
         *) ok "(6) RED-FIRST '$q': the pre-lever fixture carries no namehits (genuinely red)" ;;
     esac
-    # append-only at the CONTENT level: the header legend comment is EXPECTED to grow (it now defines
-    # namehits/nh/n= — that growth is what the byte clause and the compactlegendcheck/forrankordercheck
-    # re-pins price), so the honest claim is that the PAYLOAD — <sigs>/<lego>/<compose>/<tail>/bodies,
-    # everything from the first <sigs> up to (not including) <namehits> — is untouched: no row moved,
-    # reordered or changed to make room for the append.
-    newpayload="$( printf '%s' "$newout"  | sed 's/.*\(<sigs\)/\1/' )"; newpayload="${newpayload%%<namehits*}"
-    basepayload="$( printf '%s' "$baseout" | sed 's/.*\(<sigs\)/\1/' )"; basepayload="${basepayload%</ctx>}"
-    if [ "$newpayload" = "$basepayload" ]; then
-        ok "(6) '$q': the payload (sigs/tail rows) is byte-identical to the pre-lever answer — append-only"
+    if ! printf '%s' "$newout" | grep -q namehits; then
+        # Q6 (round 3): this query's picked list is empty, so N3 appends NOTHING — no element, no header
+        # clause, no trailing comment. The strongest honest claim IS available here: the whole document,
+        # not just the payload prefix, must be byte-identical to the pre-lever answer.
+        if [ "$newout" = "$baseout" ]; then
+            ok "(6) '$q': n=0 (Q6) — the WHOLE document is byte-identical to the pre-lever answer"
+        else
+            no "(6) '$q': n=0 but the document still DIFFERS from the pre-lever answer — something rode anyway"
+        fi
     else
-        no "(6) '$q': the payload DIFFERS from the pre-lever answer — this is not append-only"
+        # append-only at the CONTENT level: N3 (round 3) moved the definition OFF the top legend entirely, so
+        # on this small fixture the header is now byte-identical too (it never carried a namehits clause to
+        # begin with here — see the separate no-displacement arm below for a corpus where round 2's HEADER
+        # clause used to shrink the sig budget). The honest claim pinned here is that the PAYLOAD —
+        # <sigs>/<lego>/<compose>/<tail>/bodies, everything from the first <sigs> up to (not including)
+        # <namehits> — is untouched: no row moved, reordered or changed to make room for the append.
+        newpayload="$( printf '%s' "$newout"  | sed 's/.*\(<sigs\)/\1/' )"; newpayload="${newpayload%%<namehits*}"
+        basepayload="$( printf '%s' "$baseout" | sed 's/.*\(<sigs\)/\1/' )"; basepayload="${basepayload%</ctx>}"
+        if [ "$newpayload" = "$basepayload" ]; then
+            ok "(6) '$q': the payload (sigs/tail rows) is byte-identical to the pre-lever answer — append-only"
+        else
+            no "(6) '$q': the payload DIFFERS from the pre-lever answer — this is not append-only"
+        fi
     fi
 done
 # (6b) other verbs byte-identical (namehits.h touches nothing outside --for's XML bundle path) — a FULL
@@ -169,6 +206,112 @@ for pair in "--clones|clones.xml" "--callers=area_of_triangle|callers.xml"; do
         no "(6b) $v: DIFFERS from the pre-lever answer"
     fi
 done
+
+# ── (6c) NO DISPLACEMENT on a query that DID displace under round 2 — the ceiling correction itself ────────
+# The tiny polyglot fixture above never gets close enough to budget_bytes to displace a row, so it cannot
+# red/green N3's actual fix (Amendment 1c #1: round 2's 205 B header DEFINITION shrank sigsBudget and
+# trimmed a ranked row — clause 3c). This repo's OWN src/ tree, frozen at the round-2 landing commit via
+# `git archive` (no extra fixture to commit, no `at=` stamp — archived trees carry no .git), reproduces it:
+# round 2's binary (src/verbs_for.h @3cb6aa1b) genuinely displaces content on "hash map open addressing
+# probe sequence" (verified live against wt/r2-LB3x's own build while this lever was written — RED evidence
+# recorded in $ORCH/reports/r3-n3.md, not re-run here to avoid a second full build on every gate run, the
+# same trade-off (6) above documents). test/namehitsfix_base/for_hashmap_prelever.xml is the PRE-LEVER
+# binary's (3bd3e8ae) own answer for that query over that SAME frozen tree — the true no-namehits baseline
+# clause 3c/(6) demands. est_tokens= is normalized on both sides before comparing: N3 honestly prices the
+# appended element (Amendment 1c #1 — no change at the est_tokens fixpoint), so it is EXPECTED to differ,
+# and separately asserted to have grown, never shrunk or stayed put with a namehits element attached.
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" cat-file -e 3cb6aa1b -- 2>/dev/null; then
+    SNAP="$TMP/snap3cb"; rm -rf "$SNAP"; mkdir -p "$SNAP"
+    if git -C "$ROOT" archive 3cb6aa1b -- src 2>/dev/null | tar -x -C "$SNAP" 2>/dev/null; then
+        ndq="hash map open addressing probe sequence"
+        live="$( cd "$SNAP" && "$BIN" src --for="$ndq" 2>/dev/null )"
+        base="$( cat "$ROOT/test/namehitsfix_base/for_hashmap_prelever.xml" )"
+        python3 - "$live" "$base" <<'PY'
+import re, sys
+live, base = sys.argv[1], sys.argv[2]
+livepay = live.split("<namehits")[0]
+base_nostamp = base[:-len("</ctx>")] if base.endswith("</ctx>") else base
+live_n = re.sub(r'est_tokens="\d+"', 'est_tokens="X"', livepay)
+base_n = re.sub(r'est_tokens="\d+"', 'est_tokens="X"', base_nostamp)
+ok = live_n == base_n
+live_est = re.search(r'est_tokens="(\d+)"', live)
+base_est = re.search(r'est_tokens="(\d+)"', base)
+grew = bool(live_est and base_est and int(live_est.group(1)) > int(base_est.group(1)))
+has_nh = '<namehits n="0"' not in live and '<namehits n="' in live
+print("PAYLOAD_MATCH" if ok else "PAYLOAD_DIFFERS")
+print("EST_GREW" if grew else "EST_DID_NOT_GROW")
+print("HAS_ELEMENT" if has_nh else "NO_ELEMENT")
+PY
+    else
+        echo "SKIP_ARCHIVE"
+    fi
+else
+    echo "SKIP_NOCOMMIT"
+fi > "$TMP/nodisp.out"
+if grep -q SKIP_ "$TMP/nodisp.out"; then
+    no "(6c) NO-DISPLACEMENT: could not archive 3cb6aa1b -- src (shallow clone / commit missing?) — $( cat "$TMP/nodisp.out" )"
+else
+    if grep -q PAYLOAD_MATCH "$TMP/nodisp.out"; then
+        ok "(6c) NO-DISPLACEMENT: 'hash map open addressing probe sequence' over the frozen src/ tree — payload byte-identical to the pre-lever baseline (round 2's binary displaces content here; N3 does not)"
+    else
+        no "(6c) NO-DISPLACEMENT: payload DIFFERS from the pre-lever baseline on the exact query that displaced under round 2"
+    fi
+    if grep -q HAS_ELEMENT "$TMP/nodisp.out"; then
+        ok "(6c) the element actually rode on this query (n>0) — this is not a vacuously-empty pass"
+    else
+        no "(6c) the element did not ride (n=0) on this query any more — re-pick a displacing query"
+    fi
+    if grep -q EST_GREW "$TMP/nodisp.out"; then
+        ok "(6c) est_tokens= grew vs the pre-lever baseline — the appended element+comment are still honestly priced"
+    else
+        no "(6c) est_tokens= did not grow although namehits rode — estchargecheck's contract (element still priced) broke"
+    fi
+fi
+
+# ── (9') OVER_CEILING: the pinned code sum (Amendment 1c #2), one case strictly each side of the line ──────
+# fixedBytes + sigsStr.size() + tailStr.size() + E > sigSideCeiling — a unit-level check of rw::nameHitsOverCeiling
+# itself (src/namehits.h) is the only reliable way to pin "one case each side of that line": end-to-end queries
+# over real corpora land wherever the ranking happens to put them, and a corpus tuned to sit exactly on a byte
+# boundary is not stable against unrelated ranking changes. Compiling this against a namehits.h that predates
+# N3 fails outright (no such function) — that IS this arm's red-first proof; no second binary needed.
+NHOC_SRC="$TMP/nh_overceiling_test.cpp"
+cat > "$NHOC_SRC" <<'CPPEOF'
+#include "serialize.h"
+#include "namehits.h"
+#include <cstdio>
+int main()
+{
+    // fixedBytes=1000, sigs=2000, tail=500, E=100 -> sum=3600; ceiling=3600 is NOT over ('>' is strict).
+    bool atLine   = rw::nameHitsOverCeiling( 1000, 2000, 500, 100, 3600 );
+    // same sum, ceiling=3599: exactly one byte past it.
+    bool overLine = rw::nameHitsOverCeiling( 1000, 2000, 500, 100, 3599 );
+    if( atLine ) { std::fprintf( stderr, "at-the-line case is true, expected false\n" ); return 1; }
+    if( !overLine ) { std::fprintf( stderr, "one-byte-over case is false, expected true\n" ); return 1; }
+    std::printf( "PASS\n" );
+    return 0;
+}
+CPPEOF
+CXX="${CXX:-c++}"
+if "$CXX" -std=c++23 -I "$ROOT/src" -I "$ROOT/src/infra" -I "$ROOT/third_party" -O0 "$NHOC_SRC" -o "$TMP/nh_overceiling_test" 2>"$TMP/nhoc.err"; then
+    if "$TMP/nh_overceiling_test" 2>>"$TMP/nhoc.err" | grep -q PASS; then
+        ok "(9') over_ceiling: rw::nameHitsOverCeiling is false at sum==ceiling and true at sum==ceiling+1 (Amendment 1c #2's exact predicate)"
+    else
+        no "(9') over_ceiling: the boundary check ran but did not PASS: $( cat "$TMP/nhoc.err" )"
+    fi
+else
+    no "(9') over_ceiling: could not compile the boundary check against src/namehits.h — rw::nameHitsOverCeiling missing or its signature changed: $( cat "$TMP/nhoc.err" | head -c 400 )"
+fi
+# honesty (clause 6, extended by rv-r3-prereg.md §4): the element's over_ceiling attribute and the trailing
+# comment's suffix must ride TOGETHER, never one without the other, on every answer that carries either.
+for probe in "$out1" "$out1f" "$out0" "$out0c"; do
+    hasAttr=0; hasSuffix=0
+    printf '%s' "$probe" | grep -q 'over_ceiling="1"' && hasAttr=1
+    printf '%s' "$probe" | grep -q 'over_ceiling=1: past budget_bytes' && hasSuffix=1
+    if [ "$hasAttr" -ne "$hasSuffix" ]; then
+        no "(9') over_ceiling honesty: attribute present=$hasAttr but suffix present=$hasSuffix on one of the fixture probes — they must ride together"
+    fi
+done
+ok "(9') over_ceiling honesty: attribute and suffix never rode alone across the fixture probes above"
 
 # ── (8) PARITY vs a verbatim copy of lb3_sim.py's toks()/bm25_rank(), >=10 real queries over src/ ─────────
 # root-relative to src/, matching what `"$BIN" src --for=…`'s p= attributes name (R-R: single-root runs
@@ -235,12 +378,20 @@ bad = 0
 for q in QUERIES:
     out = subprocess.run([BIN, "src", "--for=" + q], capture_output=True, text=True, cwd=ROOT).stdout
     if "<namehits" not in out:
-        print(f"  FAIL  (8) PARITY '{q}': no <namehits> element in the answer at all")
-        bad += 1
+        # Q6 (round 3): a genuinely empty picked list now emits NOTHING at all — no longer a self-closed
+        # n="0" — so absence is only a FAIL if the python mirror expected real candidates. named= is read
+        # off the WHOLE answer here (no <namehits> to rpartition away), same PATH_RE the present case uses.
+        named_empty = set(PATH_RE.findall(out))
+        expected_empty = [f for f in bm25_rank(tracked, toks(q)) if f not in named_empty][:3]
+        if expected_empty:
+            print(f"  FAIL  (8) PARITY '{q}': no <namehits> element at all, but python(lb3_sim formula)={expected_empty}")
+            bad += 1
+        else:
+            print(f"  PASS  (8) PARITY '{q}': (0 qualify) — Q6: nothing emitted, matches the formula")
         continue
-    # rpartition, not partition: the FULL dialect's legend comment spells the literal text "<namehits n=>"
-    # (the verbatim definition clause) near the TOP of the document — the real element is the LAST child,
-    # right before </ctx>, so it is the LAST "<namehits" in the string, never the first.
+    # rpartition, not partition: N3 removed the definition from the top legend, so "<namehits" can only ever
+    # appear once now (the real element, the last child right before </ctx>) — rpartition is future-proof
+    # against that no longer being true (kept as the same defensive pattern the CLI/MCP parity check uses).
     pre, _, rest = out.rpartition("<namehits")
     named = set(PATH_RE.findall(pre))
     m = re.search(r'n="(\d+)"', "<namehits" + rest[:rest.find(">") + 1])
@@ -286,14 +437,15 @@ mcp_for(){
 
 mcp1="$( mcp_for test/fixture 'geometry area of a shape' )"
 case "$mcp1" in
-    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits></ctx>'*)
-        ok "(9) MCP for: namehits n=\"2\" (geometry.h/.cpp), last child, right before </ctx> — same as the CLI" ;;
-    *) no "(9) MCP for: unexpected namehits shape: $( printf '%s' "$mcp1" | grep -o '<namehits.*' | tail -c 200 )" ;;
+    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits><!--namehits: up to 3 files this answer did not already name, ranked ONLY by how many query words their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= shown--></ctx>'*)
+        ok "(9) MCP for: namehits n=\"2\" (geometry.h/.cpp) + trailing comment, last child, right before </ctx> — same as the CLI full dialect" ;;
+    *) no "(9) MCP for: unexpected namehits shape: $( printf '%s' "$mcp1" | grep -o '<namehits.*' | tail -c 260 )" ;;
 esac
-case "$mcp1" in
-    *'<namehits n=> = up to 3 files this answer did not already name, ranked ONLY by how many query words their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= rows shown'*)
-        ok "(9) MCP for: legend defines <namehits n=> verbatim — byte-identical clause to the CLI's" ;;
-    *) no "(9) MCP for: legend missing the namehits clause" ;;
+# N3: the definition must be gone from the MCP header comment too — it rides only in the trailing comment now.
+mcphdr1="${mcp1%%<namehits*}"
+case "$mcphdr1" in
+    *namehits*) no "(9) N3: the MCP header comment still mentions namehits — the definition did not move" ;;
+    *) ok "(9) N3: MCP header comment carries no namehits clause at all" ;;
 esac
 
 # absence under an explicit budget_tokens — the MCP twin of the CLI's --token-budget scope rule (5)
@@ -304,11 +456,12 @@ else
     no "(9) MCP for budget_tokens=900: namehits leaked in under an explicit budget"
 fi
 
-# ── CLI/MCP byte-parity of the <namehits> element itself, on 3 representative --for tasks (review item) ──
-# Extracts ONLY the <namehits …>…</namehits> (or self-closed <namehits …/>) substring from each side's
-# document and asserts the two are byte-identical — paths, ranking and n= must all agree, not just "both
-# have one". rpartition mirrors (8) PARITY's own reasoning: the FULL dialect's legend spells the literal
-# text "<namehits n=>" near the top, so the real element is the LAST "<namehits" in the string.
+# ── CLI/MCP byte-parity of the <namehits> element AND its trailing comment, on 3 representative tasks ──────
+# N3 (task item 5): the MCP `for` twin must match the CLI exactly, element AND definition — both surfaces
+# use the FULL wording (the MCP dialect has no compact/full split), so a true byte match now covers the
+# comment too, not just the element. rpartition mirrors (8) PARITY's own reasoning: since N3 removed the
+# definition from the top legend, "<namehits" cannot appear there any more either, so the LAST (only)
+# "<namehits" in the string is always the real element.
 cat > "$TMP/nhparity.py" <<'PY'
 import sys
 def nh_block( doc ):
@@ -319,13 +472,23 @@ def nh_block( doc ):
     if tag_end == -1:
         return None
     if rest[ :tag_end ].endswith( "/" ):
-        return "<namehits" + rest[ :tag_end + 1 ]          # self-closed: <namehits n="0"/>
-    close = rest.find( "</namehits>" )
-    if close == -1:
-        return None
-    return "<namehits" + rest[ :close + len( "</namehits>" ) ]
+        elem_end = tag_end + 1          # self-closed: <namehits n="0"/> — Q6 no longer produces this, kept defensively
+    else:
+        close = rest.find( "</namehits>" )
+        if close == -1:
+            return None
+        elem_end = close + len( "</namehits>" )
+    # N3: the trailing definition comment, if any, immediately follows the element — fold it in too.
+    tail = rest[ elem_end: ]
+    if tail.startswith( "<!--" ):
+        comment_end = tail.find( "-->" )
+        if comment_end != -1:
+            elem_end += comment_end + len( "-->" )
+    return "<namehits" + rest[ :elem_end ]
 cli_doc, mcp_doc = open( sys.argv[1] ).read(), open( sys.argv[2] ).read()
 cli_nh, mcp_nh   = nh_block( cli_doc ), nh_block( mcp_doc )
+if cli_nh is None and mcp_nh is None:
+    print( "(0 qualify on both sides — Q6: nothing emitted, correctly absent on both)" ); sys.exit( 0 )
 if cli_nh is None or mcp_nh is None:
     print( f"MISSING cli={cli_nh!r} mcp={mcp_nh!r}" ); sys.exit( 1 )
 if cli_nh != mcp_nh:
