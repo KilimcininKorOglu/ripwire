@@ -15,6 +15,39 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--for` lists a named file's one declaration/implementation partner first, and `--situ` puts partners before the blast radius
+
+When a `--for` task names a path that resolves to exactly one indexed file, and that file has exactly one
+same-directory, same-stem declaration/implementation partner (a source tries `.h`/`.hpp`/`.hh`; a header tries
+`.cc`/`.cpp`/`.c`), the answer now opens with `<hdr p="partner" of="named"/>`, right after the legend. It is a
+lookup by name, not a ranked or graph-derived row: an ambiguous, absent or convention-less named file gets no row
+and no reordering, and a partner the task already names is not repeated. The row's legend clause is present only
+when a row is, and is never dropped by the ceiling ladder. The MCP `for` verb serves the same row from the same
+resolver. `--situ` now prints its decl/def-partner and lexical-sibling blocks before the `[1] blast radius` line
+instead of after it; the lines themselves are unchanged, only their order. Gates: `test/forhdrshapecheck.sh`
+(new), `test/situshapecheck.sh` arm (13).
+
+### Changed — `--for` collapses a `<lego>`/`<compose>` section to a counted stub when the stub is smaller
+
+A `<lego>` or `<compose>` section in a `--for` answer is now replaced by a counted stub,
+`<lego total="N" shown="0" next="…"/>`, but only when the stub plus its legend clause is smaller than the section
+it replaces; a small section stays whole. `total=` is the section's own pre-cap row count, and `next=` names the
+new `--sections=lego,compose` flag, which restores both sections byte-identically in one call. The legend clause
+is present only when a section was actually stubbed, in both legend dialects and on the MCP `for` verb
+(`sections` argument; an empty string is refused rather than read as absent). When the in-memory render that
+prices the section is unavailable, the section is stubbed without a price comparison, which is the one
+unpriced case. Gate: `test/forsectioncollapsecheck.sh` (new).
+
+### Fixed — a `.ripwire_notes` file that could not be fully read looked the same as no notes file
+
+A sidecar with unparseable lines, or one refused because it is a symlink, was disclosed only by `--notes`
+itself (`lines_skipped=`/`refused=`). Every other reader answered as if the tree had no notes file at all. The
+map, `--expand` (including whole-file and `--top-k=0`), `--for` and `--pack-task` (XML and `--json`),
+`--edit-check`, `--handoff`, `--plan-lanes`, and the MCP `for`/`pack_task`/`from_trace`/`fetch_body` verbs now
+carry `notes_degraded="1"` (`"notes_degraded":true` in JSON) with a legend clause. The marker is absent on a
+clean read, so output for a tree with no sidecar, or one that fully parses, is unchanged. Gate:
+`test/notesdegradecheck.sh` (new). (CodeRabbit review on #295)
+
 ### Fixed — a JSX tag starting with `_`/`$` lost its call edge, treated as an intrinsic HTML/SVG tag
 
 `isJsxIntrinsicTagIdentifier` (the filter that keeps `<div>`/`<h1>` from minting a phantom call edge to a
