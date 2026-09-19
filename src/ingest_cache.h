@@ -249,7 +249,14 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 114;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 115;          // bump on any grammar/.scm/extraction change
+                                                      // 115 = 2026-09-19 (degrade disclosure, test/skipreasoncheck.sh
+                                                      //    arm 10): a PARTIALLY extracted file (an ExtractShortfall — a
+                                                      //    nesting bound, an unavailable tags query, a throw part-way) is
+                                                      //    itemized why="extract-partial" and written to the cache as
+                                                      //    UNKNOWN. A cache written before this stored such a file's
+                                                      //    partial facts under its real hash, which a warm run would
+                                                      //    serve as whole: every such cache must be re-extracted.
                                                       // 114 = 2026-09-17 (reference-returning definitions,
                                                       //    test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am
                                                       //    and q8): a C++/ObjC function definition returning `T&` or

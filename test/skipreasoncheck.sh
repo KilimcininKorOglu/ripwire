@@ -267,8 +267,9 @@ open(sys.argv[1], "w").write( "#if 1\n" * 260 + '#include "deep.h"\n' + "#endif\
 PYEOF
 printf 'int ok( void ) { return 0; }\n' >"$XP/tree/clean.c"
 XPBYTES="$( wc -c <"$XP/tree/deep.c" | tr -d ' ' )"
+# The cache ladder is $TMPDIR/ripwire FIRST, then $XDG_CACHE_HOME (quality.h cacheDirLadder): isolate both.
 for run in cold warm; do
-    XDG_CACHE_HOME="$XP/xdg" "$BIN" "$XP/tree" --skipped >"$XP/$run.xml" 2>/dev/null
+    TMPDIR="$XP/xdg" XDG_CACHE_HOME="$XP/xdg" "$BIN" "$XP/tree" --skipped >"$XP/$run.xml" 2>/dev/null
     XPROOT="$( grep -o '<skipped [^>]*>' "$XP/$run.xml" )"
     printf '%s' "$XPROOT" | grep -q ' extract_partial="1"' \
         && ok "(10/$run) --skipped counts the partially-extracted file: extract_partial=\"1\" (every build flavour)" \
@@ -283,6 +284,32 @@ grep -q 'p="clean.c" why="extract-partial"' "$XP/cold.xml" \
     && no "(10) control: the clean file was itemized extract-partial" || ok "(10) control: the clean file carries no extract-partial row"
 command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$XP/cold.xml" 2>/dev/null \
     && ok "(10) the disclosing document is well-formed" || no "(10) the disclosing document fails xmllint"; }
+
+# ── (10b) THE UPGRADE LADDER: a cache written by a PRE-extract-partial binary is not trusted as whole ──────────
+# Before this class existed, the partial facts of such a file were cached under its real content hash, and a warm
+# run served them as the whole answer. kParserVer's bump (ingest_cache.h) is what rejects every such cache: the
+# branch binary, run warm on a cache the base binary wrote, must re-extract and list the file. Needs a pre-bump
+# binary as RIPWIRE_BASE (the argvdiffcheck convention); SKIPs, and says so, without one — CI has no "previous" binary.
+BASE="${RIPWIRE_BASE:-}"
+if [ -z "$BASE" ]; then
+    printf '  SKIP  (10b) no RIPWIRE_BASE — the upgrade ladder needs a pre-bump binary to write the cache\n'
+elif [ ! -x "$BASE" ]; then
+    no "(10b) RIPWIRE_BASE=$BASE is not an executable"
+else
+    UL="$TMP/upgrade"; mkdir -p "$UL/cache"; cp -R "$XP/tree" "$UL/tree"
+    TMPDIR="$UL/cache" XDG_CACHE_HOME="$UL/cache" "$BASE" "$UL/tree" --skipped >"$UL/base.xml" 2>/dev/null; brc=$?
+    ls "$UL/cache/ripwire" 2>/dev/null | grep -q . \
+        && ok "(10b) guard: the base binary ran (rc=$brc) and wrote a cache under the isolated ladder" \
+        || no "(10b) guard: the base binary wrote no cache under $UL/cache — the ladder is void"
+    TMPDIR="$UL/cache" XDG_CACHE_HOME="$UL/cache" "$BIN" "$UL/tree" --skipped >"$UL/warm.xml" 2>/dev/null
+    grep -q "<f p=\"deep.c\" why=\"extract-partial\"" "$UL/warm.xml" \
+        && ok "(10b) the branch binary, warm on the base binary's cache, re-extracts and lists deep.c as extract-partial" \
+        || no "(10b) a cache written before the class existed was served as whole: no extract-partial row ($( grep -o '<skipped [^>]*>' "$UL/warm.xml" | grep -o 'extract_partial="[0-9]*"' ))"
+    TMPDIR="$UL/cache" XDG_CACHE_HOME="$UL/cache" "$BIN" "$UL/tree" --skipped >"$UL/warm2.xml" 2>/dev/null
+    grep -q "<f p=\"deep.c\" why=\"extract-partial\"" "$UL/warm2.xml" \
+        && ok "(10b) and again on the cache the branch binary rewrote" \
+        || no "(10b) the second warm run lost the extract-partial row"
+fi
 
 echo
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }
