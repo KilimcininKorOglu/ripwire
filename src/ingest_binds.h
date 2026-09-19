@@ -1624,14 +1624,80 @@ inline void collectPythonNameTargets( TSNode target, std::vector<TSNode>& out )
 // own span starts, so the fact lands on the enclosing scope rather than inside the newly-declared one
 // (verified empirically with `--match`, not merely reasoned about: a byte at the def/class node's own
 // start resolves INSIDE that new symbol's own span, one byte earlier does not).
+// Is `name` declared `global`/`nonlocal` anywhere in the function that encloses `n` — searched over that
+// function's OWN body only, never crossing into a nested def/class/lambda's body (a nested scope's
+// global/nonlocal statements bind there, not here)? Python's `global`/`nonlocal` statement scopes the
+// WHOLE enclosing function regardless of where in the function body it textually sits, so a reassignment
+// anywhere in that function to a name the function has declared global/nonlocal never creates a local
+// shadow — it rewrites the OUTER binding, same as the declaration statement itself (see the SCOPE doc
+// above capturePythonRebindShadowDecls). `n` with no enclosing function_definition is module scope, where
+// `global`/`nonlocal` cannot appear — always false there.
+inline bool pythonNameIsGlobalOrNonlocalHere( TSNode n, std::string_view name, std::string_view src )
+{
+    const bool nGiven = !ts_node_is_null( n );
+    EXPECTS( nGiven, "n is the rebind/for/named_expression/as_pattern node the caller is currently visiting — "
+                      "the tree walker never dispatches on a null node" );
+    TSNode fn = ts_node_parent( n );
+    while( !ts_node_is_null( fn ) && !kindIs( ts_node_type( fn ), "function_definition" ) )
+    {
+        fn = ts_node_parent( fn );
+    }
+    const bool fnIsNullOrFnDef = ts_node_is_null( fn ) || kindIs( ts_node_type( fn ), "function_definition" );
+    ASSUME( fnIsNullOrFnDef, "the loop above exits only when fn is null (walked off the tree) or a function_definition" );
+    if( ts_node_is_null( fn ) )
+    {
+        return false;   // module scope — global/nonlocal cannot appear there
+    }
+    const TSNode body = fieldChild( fn, NodeField::Body );
+    if( ts_node_is_null( body ) )
+    {
+        return false;
+    }
+    std::vector<TSNode> stack{ body };
+    while( !stack.empty() )
+    {
+        const TSNode cur = stack.back();
+        stack.pop_back();
+        const char* ct = ts_node_type( cur );
+        if( kindIs( ct, "global_statement" ) || kindIs( ct, "nonlocal_statement" ) )
+        {
+            const std::uint32_t cc = ts_node_named_child_count( cur );
+            for( std::uint32_t i = 0; i < cc; ++i )
+            {
+                const TSNode id = ts_node_named_child( cur, i );
+                if( kindIs( ts_node_type( id ), "identifier" ) && nodeTextOf( id, src ) == name )
+                {
+                    return true;
+                }
+            }
+            continue;
+        }
+        if( kindIs( ct, "function_definition" ) || kindIs( ct, "class_definition" ) || kindIs( ct, "lambda" ) )
+        {
+            continue;   // nested scope — never crossed
+        }
+        const std::uint32_t cc = ts_node_named_child_count( cur );
+        for( std::uint32_t i = 0; i < cc; ++i )
+        {
+            stack.push_back( ts_node_named_child( cur, i ) );
+        }
+    }
+    return false;
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
-    const auto emitAll = [ & ]( std::uint32_t startByte )
+    // `ownStart` is the fallback attribution (this statement's own position, function-local veto evidence);
+    // a name this function has declared global/nonlocal gets the SAME file-wide startByte=0 treatment the
+    // declaration statement itself uses below, because the reassignment rewrites the outer binding, not a
+    // local one — see pythonNameIsGlobalOrNonlocalHere.
+    const auto emitAll = [ & ]( TSNode site, std::uint32_t ownStart )
     {
         for( const TSNode& id : targets )
         {
-            pushRawBind( fileId, lang, nodeTextOf( id, src ), std::string{}, BindSite{ startByte, 0u, 0u }, LocalBindKind::VarDecl, binds );
+            const std::uint32_t at = pythonNameIsGlobalOrNonlocalHere( site, nodeTextOf( id, src ), src ) ? 0u : ownStart;
+            pushRawBind( fileId, lang, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
         }
     };
 
@@ -1639,14 +1705,14 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
     {
         targets.clear();
         collectPythonNameTargets( fieldChild( n, NodeField::Left ), targets );
-        emitAll( ts_node_start_byte( n ) );
+        emitAll( n, ts_node_start_byte( n ) );
         return;
     }
     if( kindIs( t, "for_statement" ) )
     {
         targets.clear();
         collectPythonNameTargets( fieldChild( n, NodeField::Left ), targets );
-        emitAll( ts_node_start_byte( n ) );
+        emitAll( n, ts_node_start_byte( n ) );
         return;
     }
     if( kindIs( t, "named_expression" ) )   // walrus `(tm := …)` — the grammar allows only a bare name here
@@ -1654,7 +1720,9 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
         const TSNode nm = fieldChild( n, NodeField::Name );
         if( !ts_node_is_null( nm ) && kindIs( ts_node_type( nm ), "identifier" ) )
         {
-            pushRawBind( fileId, lang, nodeTextOf( nm, src ), std::string{}, BindSite{ ts_node_start_byte( n ), 0u, 0u }, LocalBindKind::VarDecl, binds );
+            const std::uint32_t ownStart = ts_node_start_byte( n );
+            const std::uint32_t at       = pythonNameIsGlobalOrNonlocalHere( n, nodeTextOf( nm, src ), src ) ? 0u : ownStart;
+            pushRawBind( fileId, lang, nodeTextOf( nm, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
         }
         return;
     }
@@ -1665,7 +1733,9 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
         const TSNode target = hasTgt ? ts_node_named_child( alias, 0 ) : alias;   // grammar wraps the alias in `as_pattern_target`
         if( !ts_node_is_null( target ) && kindIs( ts_node_type( target ), "identifier" ) )
         {
-            pushRawBind( fileId, lang, nodeTextOf( target, src ), std::string{}, BindSite{ ts_node_start_byte( n ), 0u, 0u }, LocalBindKind::VarDecl, binds );
+            const std::uint32_t ownStart = ts_node_start_byte( n );
+            const std::uint32_t at       = pythonNameIsGlobalOrNonlocalHere( n, nodeTextOf( target, src ), src ) ? 0u : ownStart;
+            pushRawBind( fileId, lang, nodeTextOf( target, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
         }
         return;
     }
@@ -1677,7 +1747,7 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
         {
             collectPythonNameTargets( ts_node_named_child( n, i ), targets );
         }
-        emitAll( ts_node_start_byte( n ) );
+        emitAll( n, ts_node_start_byte( n ) );
         return;
     }
     if( kindIs( t, "global_statement" ) || kindIs( t, "nonlocal_statement" ) )
