@@ -122,5 +122,72 @@ mkdir -p "$TMP/bare"; printf 'int main(){return 0;}\n' > "$TMP/bare/m.cpp"
 "$BIN" "$TMP/bare" --flags --no-cache 2>/dev/null | grep -q 'gates="0"' \
     && ok "a gate-free corpus reports gates=0 and exits clean" || no "gate-free corpus did not report gates=0"
 
+# ── 11) MED-1 (rv-s2 review, 2026-09-19): a CMake root-walk that fails MID-SESSION discloses it ────────
+# collectCMakeFiles' own error_code probe (darkflags.h §SEC1) never used to set: libc++ AND libstdc++ swallow
+# EACCES on the ROOT itself under skip_permission_denied (the flag is meant for entries hit mid-walk, not the
+# walk's own starting point), so an unreadable root read as an EMPTY SUCCESSFUL walk — a false `cmake="0"`
+# indistinguishable from a repo with no CMake at all. `--flags` over the plain CLI never reaches this shape:
+# main.cpp's rootIsReadable refuses an unreadable root before any verb runs. The one door in: a WARM
+# in-process index — MCP `flags`, called twice in the SAME `--mcp` session — skips re-validating the root on
+# the second call (ingest already has the file list resident), but collectCMakeFiles' own walk is independent
+# of that cache and runs fresh every time, so it is the one that meets the now-broken root.
+note(){ printf '  NOTE  %s\n' "$*"; }
+if [ "$( id -u )" = "0" ]; then
+    note "11: MED-1 warm-index CMake root-walk — running as root, chmod 0311 does not block anything, skipping"
+elif ! command -v python3 >/dev/null 2>&1; then
+    note "11: MED-1 warm-index CMake root-walk — no python3 for the MCP stdio driver, skipping"
+else
+    MEDFIX="$TMP/medfix"; mkdir -p "$MEDFIX"
+    trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
+    printf 'option(FX_DARK "test dark cmake gate" OFF)\n' > "$MEDFIX/CMakeLists.txt"
+    printf '#ifdef FX_DARK\nint darkFn() { return 1; }\n#endif\nint liveFn() { return 2; }\n' > "$MEDFIX/a.cpp"
+    MED_OUT="$( python3 - "$BIN" "$MEDFIX" <<'PY'
+import sys, subprocess, json, os
+
+bin_path, fixture = sys.argv[1], sys.argv[2]
+p = subprocess.Popen( [ bin_path, "--mcp" ], stdin = subprocess.PIPE, stdout = subprocess.PIPE,
+                       stderr = subprocess.DEVNULL, text = True, bufsize = 1 )
+
+def call( req ):
+    p.stdin.write( json.dumps( req ) + "\n" ); p.stdin.flush()
+    return p.stdout.readline()
+
+call( { "jsonrpc": "2.0", "id": 1, "method": "initialize" } )
+r1 = call( { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": { "name": "flags", "arguments": { "path": fixture, "legend": "compact" } } } )
+os.chmod( fixture, 0o311 )   # x-only: open-by-name still works, readdir (the walk) does not
+r2 = call( { "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+             "params": { "name": "flags", "arguments": { "path": fixture, "legend": "compact" } } } )
+os.chmod( fixture, 0o755 )
+p.stdin.close(); p.terminate()
+
+def text( raw ):
+    d = json.loads( raw )
+    if "error" in d: return "__ERROR__:%s" % d[ "error" ]
+    return d[ "result" ][ "content" ][ 0 ][ "text" ]
+
+print( "CALL1\t" + text( r1 ) )
+print( "CALL2\t" + text( r2 ) )
+PY
+)"
+    chmod u+rwx "$MEDFIX" 2>/dev/null   # belt-and-suspenders: the python restore already ran, unless it crashed
+    CALL1="$( printf '%s\n' "$MED_OUT" | grep '^CALL1' )"
+    CALL2="$( printf '%s\n' "$MED_OUT" | grep '^CALL2' )"
+    if [ -z "$CALL1" ] || [ -z "$CALL2" ]; then
+        no "11: MED-1 — the MCP driver produced no CALL1/CALL2 line: $( printf '%s' "$MED_OUT" | head -c 200 )"
+    else
+        echo "$CALL1" | grep -q 'cmake="1"' && ! echo "$CALL1" | grep -q 'cmake_scan_failed' \
+            && ok "11a: MED-1 baseline (root readable) — cmake=\"1\", no cmake_scan_failed" \
+            || no "11a: MED-1 baseline did not read cmake=\"1\" clean: $CALL1"
+        if echo "$CALL2" | grep -q 'cmake="0"'; then
+            echo "$CALL2" | grep -q 'cmake_scan_failed="1"' \
+                && ok "11b: MED-1 warm second call over a root chmod'd 0311 mid-session — cmake=\"0\" cmake_scan_failed=\"1\" (the walk failure is disclosed, not a silent false zero)" \
+                || no "11b: MED-1 — cmake=\"0\" with NO cmake_scan_failed: the false zero from rv-s2's MED-1 finding is back: $CALL2"
+        else
+            no "11b: MED-1 control failed — the second call did not even reproduce cmake=\"0\" (fixture or chmod timing changed): $CALL2"
+        fi
+    fi
+fi
+
 [ $fail -eq 0 ] && echo "flagscheck: ALL PASS" || echo "flagscheck: FAILURES"
 exit $fail

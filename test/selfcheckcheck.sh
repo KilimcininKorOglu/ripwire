@@ -27,6 +27,13 @@
 #   (D) FALSE       no ASSUME / EXPECTS / ENSURES whose predicate is literally false (false, 0, !true, nullptr):
 #                   in release that deletes the code after it (CLAUDE.md non-negotiable #4).
 #   (E) VALIDATE    only as a condition: directly under if( / while( / return, or an operand of && / || / ?:.
+#   (T) ASSUMED-THEN-TESTED (added 2026-09-18, S2 assume-sweep): no ASSUME/EXPECTS/ENSURES of a bare top-level
+#                   equality `LHS == RHS` whose literal negation `LHS != RHS` (either order) is a clause of a
+#                   runtime `if( … )` within the next 10 lines of code — that `if` is dead in release the moment
+#                   the promise compiles to an optimizer fact, which is exactly the shape found in gitmine.h's
+#                   applyCoChangeBoost and mention.h's applyMentionBoost (both since converted to DASSERT). A
+#                   compound predicate (top-level && / ||) is not this shape and is not scanned. Off
+#                   ASSUMED_THEN_TESTED_ALLOW, keyed by site with a one-line reason — empty today.
 #   (R) RATCHET     a one-argument DISCLOSE( msg ) is a debug trace that tells the release user NOTHING (Diagnostics.h
 #                   §4b says so). Their count in src/ is pinned below and may only go DOWN: above the pin is a FAIL (a
 #                   new sink-less degrade — use DISCLOSE( sink, why[, "msg"] ), which exists), below it is a FAIL too
@@ -68,7 +75,11 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # regexguard.h/lsp.h/resolve.h show none currently — and lost 3 to unrelated fixes in skillscan.h/verbs_for.h; see
 # the landing report for the per-site classification of the 25). LOWER THIS NUMBER, never raise it. At landing, set
 # it to what (R) prints.
-DISCLOSE_SINKLESS_PIN=217
+# rv-s2 review LOW-4 (2026-09-19): darkflags.h's collectCMakeFiles root-walk-failure site converted to the sink
+# form — CMakeScan now models Diagnostics::DisclosureSink directly (disclose() sets rootWalkFailed itself) —
+# retiring its one sink-less DISCLOSE( msg ) site. 217 -> 216.
+# Train 6 (2026-09-18): re-measured on the merged 14-member tree — (R) prints 216; no other member adds or retires one.
+DISCLOSE_SINKLESS_PIN=216
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'
@@ -125,6 +136,11 @@ ALLOW = {
     "std::max":               "comparison of two values",
     "std::string_view":       "a non-owning view over storage the caller already holds",
     "rfind":                  "read-only search of a string the caller owns",
+}
+# (T) ASSUMED-THEN-TESTED allowlist: "site -> reason", one line each. A site lands here only when the equality
+# really is a true invariant (the re-test below is dead defensive code that should eventually be deleted, not
+# a live degrade path) — never as a way to silence a genuine assumed-then-tested bug. See scan_code's (T) arm.
+ASSUMED_THEN_TESTED_ALLOW = {
 }
 
 def lex( text ):
@@ -241,6 +257,31 @@ def top_args( arg ):
 
 EFFECT = re.compile( r"\+\+|--|<<=|>>=|[+\-*/%&|^]=|(?<![=!<>])=(?!=)" )
 
+# CodeRabbit PR #292 finding 4052087952: the (T) arm's `c in win` was raw substring containment, no token
+# boundary. `win` is `!=`/`==`-normalized code with ALL whitespace stripped (scan_code's own `re.sub(
+# r"\s+", "", ... )`), so a candidate like "a!=b" is not anchored to an operand boundary and can match
+# INSIDE an unrelated longer identifier pair: `EXPECTS(a == b)` followed by `if (data != baseline)` builds
+# the candidate "a!=b", which IS a substring of the stripped "data!=baseline" (…"dat[a!=b]aseline"…) even
+# though no operand there is named `a` or `b`. Internal to a candidate this cannot happen — every character
+# inside "a!=b" or "!(a==b)" is contiguous by construction — so only the candidate's OWN two ends need a
+# boundary check: the char immediately before its first character, and the char immediately after its
+# last, must not ALSO be an identifier character (else the match is a fragment of a longer name). A
+# "!(" / ")" -wrapped candidate is already boundary-safe on both ends (its outermost characters are
+# punctuation), so this only ever narrows the two bare "lhs OP rhs" forms.
+_IDENT_CHAR = re.compile( r"[A-Za-z0-9_]" )
+def tokenBoundaryContains( win, candidate ):
+    start = 0
+    while True:
+        idx = win.find( candidate, start )
+        if idx < 0:
+            return False
+        beforeOk = idx == 0 or not _IDENT_CHAR.match( win[ idx - 1 ] )
+        afterPos = idx + len( candidate )
+        afterOk  = afterPos >= len( win ) or not _IDENT_CHAR.match( win[ afterPos ] )
+        if beforeOk and afterOk:
+            return True
+        start = idx + 1
+
 def scan_code( rel, text, findings, counts, ratchet = True, contract_tu = False ):
     for name, ln, arg, before, after, raw in invocations( text, NOEFFECT | { "VALIDATE", "DISCLOSE" } ):
         where = "%s:%d" % ( rel, ln )
@@ -290,6 +331,65 @@ def scan_code( rel, text, findings, counts, ratchet = True, contract_tu = False 
                 key = callee if not member else callee.split( "::" )[ -1 ]
                 if key in ACCESSORS or key in ALLOW: continue
                 findings.append( ( "C", where, "%s calls %s — not an accessor and not on ALLOW" % ( name, key ) ) )
+        # (T) ASSUMED-THEN-TESTED: the promise is a bare top-level `LHS == RHS` or `LHS != RHS` (no other
+        # top-level && / || outside parens — a compound predicate is not this shape), and within the next
+        # TWINDOW lines of CODE (comments/strings already blanked), BOUNDED TO THE ENCLOSING FUNCTION (rv-s2
+        # review LOW-1: the window used to run past the promise's own closing brace into the NEXT function,
+        # so a correct ASSUME could be flagged by an unrelated `if` two functions later), a runtime `if( … )`
+        # tests the literal negation as one of its clauses: `LHS != RHS` / `RHS != LHS` for an `==` promise
+        # (rv-s2 LOW-2 V1/V14), `!( LHS == RHS )` / `!( RHS == LHS )` for the same (V2), or the mirror for a
+        # `!=` promise — `LHS == RHS` / `RHS == LHS` / `!( LHS != RHS )` / `!( RHS != LHS )` (V3). Release
+        # compiles the promise to an optimizer fact, so that `if` can never be reached on the promise's own
+        # predicate being false — the exact shipped-bug shape CONTRIBUTING.md non-negotiable #4 and
+        # Diagnostics.h warn about (gitmine.h/mention.h's applyCoChangeBoost/applyMentionBoost, found
+        # 2026-09-16 on #286). A whitespace-stripped substring match, not a parser: deliberately loose on
+        # WHERE inside the if the clause sits (one clause of an `||` chain still counts, as in the motivating
+        # case), deliberately tight on WHAT it must say (the exact operands, both orders) so a coincidental
+        # shared identifier is not enough. KNOWN GAPS, listed not chased (rv-s2 LOW-2; the same substring
+        # machinery would extend to each, with a different negation table): an ordering promise
+        # (`ASSUME( a <= b )` then `if( a > b )`), a bare bool (`ASSUME( ok )` then `if( !ok )`), a
+        # null-pointer promise (`ASSUME( p != nullptr )` then `if( !p )`), a loop-bound double guard
+        # (`i < a.size() && i < b.size()`, this lane's own abicheck.h shape — not gated, fixed by hand), and a
+        # re-test past the TWINDOW/function-bound cutoff.
+        if name in FALSEABLE:
+            whole = re.sub( r"\s+", "", body )
+            d2 = 0; toplevel_bool = False; oppos = -1; opstr = None; k2 = 0
+            while k2 < len( whole ):
+                c2 = whole[ k2 ]
+                if c2 == "(": d2 += 1
+                elif c2 == ")": d2 -= 1
+                elif d2 == 0 and whole[ k2:k2 + 2 ] in ( "&&", "||" ): toplevel_bool = True; break
+                elif d2 == 0 and whole[ k2:k2 + 2 ] == "==" and whole[ k2 - 1:k2 ] not in ( "!", "<", ">", "=" ) and oppos < 0:
+                    oppos = k2; opstr = "=="
+                elif d2 == 0 and whole[ k2:k2 + 2 ] == "!=" and oppos < 0:
+                    oppos = k2; opstr = "!="
+                k2 += 1
+            if not toplevel_bool and oppos > 0:
+                lhs = whole[ :oppos ]; rhs = whole[ oppos + 2: ]
+                if lhs and rhs and re.search( r"[A-Za-z_]", lhs ) and re.search( r"[A-Za-z_]", rhs ):
+                    TWINDOW = 10
+                    win_text = "\n".join( after.split( "\n" )[ :TWINDOW ] )
+                    # ASSUMED_THEN_TESTED_FUNCTION_BOUND: stop the window at the first `}` that closes BELOW
+                    # the promise's own scope (a balanced nested block — an `if`/`for` that opens and closes
+                    # within the window — does not trip this; only a brace that closes an ENCLOSING scope,
+                    # i.e. the promise's own function, does). Matches rv-s2's fix shape exactly (LOW-1).
+                    fd = 0; cut = len( win_text )
+                    for fi, fc in enumerate( win_text ):
+                        if fc == "{": fd += 1
+                        elif fc == "}":
+                            if fd == 0: cut = fi; break
+                            fd -= 1
+                    win = re.sub( r"\s+", "", win_text[ :cut ] )
+                    if opstr == "==":
+                        candidates = ( lhs + "!=" + rhs, rhs + "!=" + lhs,
+                                       "!(" + lhs + "==" + rhs + ")", "!(" + rhs + "==" + lhs + ")" )
+                    else:
+                        candidates = ( lhs + "==" + rhs, rhs + "==" + lhs,
+                                       "!(" + lhs + "!=" + rhs + ")", "!(" + rhs + "!=" + lhs + ")" )
+                    if any( tokenBoundaryContains( win, c ) for c in candidates ) and where not in ASSUMED_THEN_TESTED_ALLOW:
+                        findings.append( ( "T", where,
+                            "%s( %s %s %s ) then a re-test of it within %d lines of the SAME function — release folds the check away"
+                            % ( name, lhs[ :50 ], opstr, rhs[ :50 ], TWINDOW ) ) )
 
 def main():
     root = sys.argv[ 1 ]; mode = sys.argv[ 2 ]
@@ -365,6 +465,37 @@ int gr( const S& s, int i, int& out, int other ) {
     return VALIDATE( i >= 0 ) ? i : 0;
 }
 #define LOCAL_CHECK( x ) ASSUME( x = 1 )                   // a definition, not a use
+// (T) look-alikes: a bare equality re-CONFIRMED (not negated) nearby, and one negated far outside the window.
+void gt1( const S& a, const S& b, int i ) { ASSUME( a.size() == b.size() ); if( a.size() == b.size() ) { (void)i; } }
+void gt2( const S& a, const S& b, int i )
+{
+    ASSUME( a.size() == b.size() );
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    (void)i;
+    if( a.size() != b.size() ) { (void)i; }   // twelve lines below the promise: outside the T window
+}
+// rv-s2 LOW-1 (2026-09-19): the FUNCTION-BOUND look-alike. gt3 is a correct, tiny ASSUME with nothing wrong
+// with it; gt4 is a DIFFERENT function whose first line just happens to negate gt3's predicate. Before the
+// function bound, gt3's own ASSUME fell inside gt4's line window and this pair was a false positive that
+// would have blocked a legitimate new ASSUME — the one thing the owner wants zero-ceremony.
+void gt3( const S& a, const S& b ) { ASSUME( a.size() == b.size() ); }
+void gt4( const S& a, const S& b, int i ) { if( a.size() != b.size() ) { (void)i; } }
+// CodeRabbit PR #292 finding 4052087952: the OVERLAPPING-IDENTIFIER look-alike. `tokenBoundaryContains`'s
+// raw-substring predecessor built the candidate "a!=b" from EXPECTS( a == b )'s own operands and matched
+// it INSIDE the unrelated "data!=baseline" text below — "dat[a!=b]aseline" — although no operand in that
+// second check is named `a` or `b`. Same shape mirrored for the "!=" -> "==" direction: the candidate
+// "x==y" is a substring of "matrix==yellow" — "matri[x==y]ellow" — with no operand named `x` or `y` there.
+void gt5( int a, int b, int data, int baseline ) { EXPECTS( a == b ); if( data != baseline ) { (void)a; (void)b; } }
+void gt6( int x, int y, int matrix, int yellow ) { EXPECTS( x != y ); if( matrix == yellow ) { (void)x; (void)y; } }
 EOF
 cat > "$FX/src/red_r.h" <<'EOF'
 struct Sink { void disclose( int ) noexcept {} };
@@ -394,7 +525,43 @@ void ru( Sink& s, const char* runtime )
     DISCLOSE( s, Sink::DisclosureWhy::A, "a real sink: never listed, never counted by R" );
 }
 EOF
-for f in red_b.h red_c.h red_d.h red_e.h red_a.md red_r.h red_u.h; do [ -s "$FX/src/$f" ] || no "F: fixture $f did not take"; done
+cat > "$FX/src/red_t.h" <<'EOF'
+struct V { int size() const; };
+bool rt( const V& lensRank, const V& symbols, int census )
+{
+    ASSUME( lensRank.size() == symbols.size() );
+    if( census == 0 )
+    {
+        return false;
+    }
+    if( symbols.size() != 0 || lensRank.size() != symbols.size() )
+    {
+        return false;
+    }
+    return true;
+}
+// rv-s2 LOW-2 (2026-09-19): V2, `!( a == b )` as the re-test of an `==` promise.
+bool rt2( const V& a, const V& b )
+{
+    ASSUME( a.size() == b.size() );
+    if( !( a.size() == b.size() ) )
+    {
+        return false;
+    }
+    return true;
+}
+// rv-s2 LOW-2 (2026-09-19): V3, the mirror — a `!=` promise re-tested by `==`.
+bool rt3( const V& a, const V& b )
+{
+    ASSUME( a.size() != b.size() );
+    if( a.size() == b.size() )
+    {
+        return false;
+    }
+    return true;
+}
+EOF
+for f in red_b.h red_c.h red_d.h red_e.h red_a.md red_r.h red_u.h red_t.h; do [ -s "$FX/src/$f" ] || no "F: fixture $f did not take"; done
 grep -q 'ASSUME( n = i )' "$FX/src/red_b.h" || no "F: the planted (B) defect is not on disk"
 
 python3 "$WORK/scan.py" "$FX" fixture > "$WORK/fx.json" 2> "$WORK/fx.err" || { no "F: the scanner crashed on the fixture"; sed 's/^/    /' "$WORK/fx.err"; }
@@ -413,6 +580,7 @@ want B red_b.h 3
 want C red_c.h 1
 want D red_d.h 2
 want E red_e.h 2
+want T red_t.h 3
 want U red_u.h 2
 if grep -q "${T}src/green.h:" "$WORK/fx.tsv"; then no "F: look-alikes produced findings:"; grep "${T}src/green.h:" "$WORK/fx.tsv" | sed 's/^/    /'
 else ok "F: every look-alike (feature name, literals, comments, a #define body, DASSERT call, multi-line compare, VALIDATE in if/while/?:) stays clean"; fi
@@ -568,8 +736,8 @@ else
     skip "P: no ripwire binary at $BIN — the tree-sitter cross-check did not run (the lexer arms still did)"
 fi
 
-# (A)-(E) on the tree
-for arm in A B C D E U; do
+# (A)-(E),(T) on the tree
+for arm in A B C D E T U; do
     n="$( grep -c "^HIT${T}$arm${T}" "$WORK/tree.tsv" )"
     case "$arm" in
         A ) label="old self-check names outside the history list" ;;
@@ -577,6 +745,7 @@ for arm in A B C D E U; do
         C ) label="non-accessor calls in a promise, off ALLOW" ;;
         D ) label="ASSUME/EXPECTS/ENSURES of a literal false" ;;
         E ) label="VALIDATE outside a condition" ;;
+        T ) label="assumed-then-tested: an equality ASSUME/EXPECTS/ENSURES whose negation is re-tested nearby, off ASSUMED_THEN_TESTED_ALLOW" ;;
         U ) label="answerUnchanged sites without a non-empty literal reason" ;;
     esac
     if [ "$n" = 0 ]; then ok "$arm: zero $label"

@@ -105,12 +105,17 @@ git status --porcelain 2>/dev/null | grep -vE '^\?\? (build|asan|tsan)' | LC_ALL
 # DOCUMENT stayed inside the ceiling it named. The new site hands cfg.maxTokens to verbs_for.h's
 # forLensOverCeiling so the root can carry over_ceiling="1" when est_tokens exceeds it. Nothing about which
 # verbs read the flag changed, so kShapingVerbs' honorsMaxTokens column is untouched and this is a re-pin.
+# CodeRabbit PR #292 finding 4052087920 (2026-09-19, 13->14): ONE new read, the same kind as V1's above.
+# `noteWouldApplyGivenTopK` (src/main.cpp, ahead of the §F5 --max-tokens search) reads cfg.topKExplicit to
+# decide whether the ride-along note='s bytes should be charged to the search/verdict, the SAME predicate
+# `noteAppliesToBundle` already evaluates further down for the SAME two verbs (--expand/--outline). It does
+# not change which verbs honour --top-k, only fixes an existing verb's ceiling math, so this is a re-pin.
 MAXSITES="$( grep -c 'cfg\.maxTokens\|c\.maxTokens' src/main.cpp src/verbs_*.h src/mcpserver.h 2>/dev/null | awk -F: '{s+=$2} END{print s+0}' )"
 TOPSITES="$( grep -c 'cfg\.topK\|c\.topK'           src/main.cpp src/verbs_*.h src/mcpserver.h 2>/dev/null | awk -F: '{s+=$2} END{print s+0}' )"
 [ "$MAXSITES" = 21 ] && ok "(A) --max-tokens has 21 read sites outside cli.h (grep 'cfg\\.maxTokens' src/main.cpp src/verbs_*.h src/mcpserver.h)" \
                      || no "(A) --max-tokens read sites moved 21 -> $MAXSITES: a verb gained or lost the budget, so kShapingVerbs' honorsMaxTokens column must be re-decided (and this number re-pinned)"
-[ "$TOPSITES" = 13 ] && ok "(A) --top-k has 13 read sites outside cli.h" \
-                     || no "(A) --top-k read sites moved 13 -> $TOPSITES: re-decide kShapingVerbs' honorsTopK column and re-pin this number"
+[ "$TOPSITES" = 14 ] && ok "(A) --top-k has 14 read sites outside cli.h" \
+                     || no "(A) --top-k read sites moved 14 -> $TOPSITES: re-decide kShapingVerbs' honorsTopK column and re-pin this number"
 # no OTHER file may read them: a third file would be a verb family this table has never heard of.
 # 2026-08-29 main.cpp split: src/verbs_*.h are SECTIONS of main.cpp's own TU (RIPWIRE_MAIN_TU-guarded),
 # so they count as main.cpp in this derivation — the counts above sweep them, the exclusion below too.

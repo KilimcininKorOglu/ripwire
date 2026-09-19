@@ -2198,6 +2198,9 @@ inline std::vector<float> churnDecayTeleportWorkspace( const std::vector<std::st
         {
             anyHistory = true;
         }
+        // weights is allocated once outside the root loop; w is a fresh return-by-value local each
+        // iteration — never the same storage.
+        ASSUME_NO_ALIAS_BUF( weights, w );
         for( std::size_t f = 0; f < weights.size(); ++f )
         {
             weights[f] += w[f];
@@ -2991,12 +2994,19 @@ struct CoBoostInfo
 inline bool applyCoChangeBoost( const IngestResult& ing, const std::vector<std::vector<std::uint32_t>>& sets, std::vector<float>& lensRank, CoBoostInfo* outInfo = nullptr,
                                 const CommitWindowCensus* census = nullptr )
 {
-    ASSUME( lensRank.size() == ing.symbols.size() );
+    // EXPECTS, not DASSERT (rv-s2 review, 2026-09-19): every caller's lensRank is sized from ing.symbols by
+    // construction — lexicalScoresNameExactRanked/lexicalScoresTiered return an S = ing.symbols.size() vector
+    // on every path (including their own early return), optionally through anchoredLexicalRank/blendMaxNorm,
+    // which preserve that size — and all 3 callers (verbs_for.h::computeLensRanking, mcpverbs.h forTaskText /
+    // packTaskText) pass the SAME `ing` the vector was built from. No caller can present a mismatched size, so
+    // this is the function's real precondition, not a defensive fallback for a reachable mismatch; the old
+    // `!= ing.symbols.size()` re-test below was dead code and is deleted with it.
+    EXPECTS( lensRank.size() == ing.symbols.size() );
     if( outInfo && census )
     {
         outInfo->caps.note( "coboost_commits_capped", "coboost_commits_total", census->bulkDropped > 0, census->commits );
     }
-    if( sets.empty() || lensRank.empty() || lensRank.size() != ing.symbols.size() )
+    if( sets.empty() || lensRank.empty() )
     {
         return false;
     }
@@ -3280,6 +3290,10 @@ inline bool mineChurnPerFile( const rw::IngestResult& ing, const std::string& ro
             continue;
         }
         churnOk = true;
+        // churn is the caller's out-param; rootChurn is a fresh per-iteration local (line above) — never
+        // the same storage. The "nothing to do" case (this root's gitChurnCounts failing) already
+        // `continue`d above.
+        ASSUME_NO_ALIAS_BUF( churn, rootChurn );
         for( std::size_t f = 0; f < churn.size(); ++f )
         {
             churn[f] += rootChurn[f];

@@ -237,6 +237,7 @@ GATE_BUDGET_SEC = {
     "nestedimportcheck.sh":       900,
     "preproccondcheck.sh":        900,
     "pyimportprecisecheck.sh":    900,
+    "pymodulealiascheck.sh":      900,   # same shape as pyimportprecisecheck.sh: headbinlib builds a HEAD binary
     "rustimportprecisecheck.sh":  900,
     "tsimportprecisecheck.sh":    900,
     "bodydialectcheck.sh":        900,   # T3 gave --for/--pack-task real body assembly (v0.3.5/6);

@@ -31,6 +31,17 @@ int computeBudget( int rawBytes )
     int reserve = rawBytes - budget;
     return budget + reserve;
 }
+// Single-word CAPITALIZED classes, no camel seam, no underscore, no scope — the exact collision class the
+// routing-noise round found in ripwire's own fixture corpora (real symbols happen to be named A, E, Fix,
+// Report, Summary, Lane, WORK, Split), and the reason a leading capital alone used to be "strong" evidence.
+class A {};
+class E {};
+class Fix {};
+class Report {};
+class Summary {};
+class Lane {};
+class WORK {};
+class Split {};
 SRC
 # A config file is part of the fixture on purpose: its keys index as t="sec" symbols with names that are
 # ordinary English words, which is the collision class the weak symbol tier draws its false positives from
@@ -60,7 +71,18 @@ cat >"$REPO/widget.hxx" <<'SRC'
 int widgetInit() { return 1; }
 int widgetTick() { return widgetInit(); }
 SRC
-git -C "$REPO" add router.cpp package.json storage/queue.cpp widget.hxx
+# CodeRabbit round (PR #292, 2026-09-19): a TOML nested table indexes as a t="sec" symbol whose NAME is
+# the dotted path itself — literally "tool.poetry" — all-lowercase, no underscore/colon/dollar/uppercase.
+# `hasMark` (symbolMention's gate for even TRYING the strong shape test) used to test for ':' but not
+# '.', although identifierMentionShape treats "::" and "." as the SAME scoped-seam evidence. A dotted
+# Section-kind symbol therefore could never resolve at all: Section is excluded from the weak tier
+# (weakEvidenceKind), and the strong path — including its backtick override — was unreachable without
+# hasMark seeing the mark first. See the LTA/LTB arms below.
+cat >"$REPO/pyproject.toml" <<'TOML'
+[tool.poetry]
+name = "router-fixture"
+TOML
+git -C "$REPO" add router.cpp package.json storage/queue.cpp widget.hxx pyproject.toml
 git -C "$REPO" commit -qm base
 routeRaw(){ "$BIN" "$REPO" --no-cache --help-task="$1" 2>"$TMP/err"; }
 # The document opens with its LEGEND, and the legend names the attributes it defines (next=, <run>, …).
@@ -111,6 +133,68 @@ LS="$( route 'How does classify work? I just edited classify and report and summ
 case "$LS" in *'--connect='*) no "several lowercase words minted a --connect route: $LS";; *) ok "several lowercase words never mint --connect";; esac
 LC="$( route 'how do classify, report and summary connect?' )"
 case "$LC" in *'--connect='*) no "three lowercase words minted a --connect route: $LC";; *) ok "three lowercase words never satisfy the three-symbol --connect";; esac
+
+# ── an all-lowercase dotted name still carries scoped SHAPE (CodeRabbit round, PR #292, 2026-09-19) ─────
+# `hasMark` used to test for ':' (the "::" scope spelling) but not '.' (the OTHER spelling
+# identifierMentionShape treats identically as `scoped`), so a real indexed dotted name — a TOML nested
+# table, t="sec" symbol named literally "tool.poetry" — could never even reach the strong shape test.
+# Section-kind symbols are excluded from the weak tier (weakEvidenceKind), so the name could not resolve
+# AT ALL, not even backtick-marked (the override identifierMentionShape's step 1 grants is itself gated
+# behind hasMark). Both arms are RED against a pre-fix binary (abstain, resolved_symbols="0").
+LTA="$( route 'Explain the implementation of tool.poetry' )"
+case "$LTA" in *'status="recommend"'*'intent="understand-symbol"'*'--expand='*'tool.poetry'*) ok "bare dotted name resolves as a strong mention -> --expand";; *) no "bare dotted-name route wrong: $LTA";; esac
+LTB="$( route 'Explain the implementation of `tool.poetry`' )"
+case "$LTB" in *'status="recommend"'*'intent="understand-symbol"'*'--expand='*'tool.poetry'*) ok "backtick-marked dotted name resolves -> --expand";; *) no "backtick dotted-name route wrong: $LTB";; esac
+
+# ── a leading capital is not a camel seam (the routing-noise round, 2026-09-19) ─────────────────────────
+# `symbolMention`'s old "strong" test was ANY uppercase/underscore/colon/dollar byte anywhere in the name,
+# so a single-word capitalized class name (`Fix`, `Report`, `Summary`, `Lane`, `Split`, `WORK`, a bare `A`
+# or `E`) passed on a leading capital alone — no interior camel SEAM, no underscore, no scope. Ripwire's
+# own fixture corpora define real symbols with exactly these names (test fixtures written for unrelated
+# rounds), so a background-task report quoting ordinary prose like "Summary: A, Fix, Report" minted a
+# spurious >=3-resolved-symbol --connect route out of text that never named a task at all. These arms are
+# RED against a pre-change binary (both NOISE1/NOISE2 recommended connect-symbols).
+NOISE1='Split-out lane: edit-hint finished. Real-fix NO. Summary: A, Fix, Report'
+N1="$( route "$NOISE1" )"
+case "$N1" in *'--connect='*) no "capitalized-but-shapeless prose minted a --connect route: $N1";; *) ok "capitalized-but-shapeless prose never satisfies the three-symbol --connect";; esac
+NOISE2='run the next round of ripwire improvements as an orchestrator. continuation_notes.md Lane E WORK'
+N2="$( route "$NOISE2" )"
+case "$N2" in *'--connect='*) no "a SCREAMING word and single letters minted a --connect route: $N2";; *) ok "a SCREAMING word and single letters never satisfy the three-symbol --connect";; esac
+# The positive control: real identifier SHAPE (a camel seam) still routes on exactly the same three-symbol
+# gate — the fix narrows what counts as evidence, it does not disable the route.
+N3="$( route 'how do alphaNode, betaNode and gammaNode all come together' )"
+case "$N3" in *'status="recommend"'*'intent="connect-symbols"'*'--connect='*'alphaNode,betaNode,gammaNode'*) ok "genuine camelCase shape still routes --connect";; *) no "camelCase connect-symbols regressed: $N3";; esac
+# Explicit code-marking (backticks) is evidence even when the name itself has no seam: a user who writes
+# `` `Report` `` has said, unambiguously, "this is code" — the override the shape test carves out for it.
+N4="$( route 'how do `Fix`, `Report` and `Summary` relate to each other' )"
+case "$N4" in *'status="recommend"'*'intent="connect-symbols"'*'--connect='*) ok "backtick-marked shapeless names still route --connect";; *) no "backtick override did not route: $N4";; esac
+
+# ── harness/system events never route (the routing-noise round, 2026-09-19) ─────────────────────────────
+# Claude Code delivers a background-task completion and an injected reminder to UserPromptSubmit through
+# the SAME channel a real prompt arrives on. hooks/ripwire-claude-route.sh and hooks/ripwire-codex-route.sh
+# skip calling this classifier at all on such input (test/routehookcheck.sh's (N) section), but --help-task
+# is directly callable too, so the same guard lives in the classifier itself (looksLikeSystemEvent). These
+# arms are RED against a pre-change binary.
+SYS1="$( routeRaw '<task-notification>
+<task-id>bn211i65j</task-id>
+<status>completed</status>
+<summary>Split-out lane: edit-hint finished. Real-fix NO. Summary: A, Fix, Report</summary>
+</task-notification>' )"
+case "$SYS1" in *'status="abstain"'*'resolved_symbols="0"'*) ok "a <task-notification>-shaped task abstains, and nothing below it is even evaluated";; *) no "task-notification-shaped task did not abstain cleanly: $SYS1";; esac
+SYS2="$( routeRaw '<system-reminder>
+run the next round of ripwire improvements as an orchestrator. continuation_notes.md Lane E WORK
+</system-reminder>' )"
+case "$SYS2" in *'status="abstain"'*'resolved_symbols="0"'*) ok "a <system-reminder>-shaped task abstains, and nothing below it is even evaluated";; *) no "system-reminder-shaped task did not abstain cleanly: $SYS2";; esac
+# Leading whitespace before the marker still counts (the harness may deliver it after a blank line).
+SYS3="$( routeRaw '
+	<task-notification>
+foo
+</task-notification>' )"
+case "$SYS3" in *'status="abstain"'*) ok "leading whitespace before the marker still abstains";; *) no "leading-whitespace variant did not abstain: $SYS3";; esac
+# The negative control: a real prompt that merely MENTIONS the marker mid-sentence must still route
+# normally — this is a shape test on the harness's own wake-up marker, not a ban on the words.
+SYS4="$( route 'what does <task-notification> mean in the hook? also, help me understand the implementation of targetSymbol' )"
+case "$SYS4" in *'status="recommend"'*'intent="understand-symbol"'*'--expand='*'targetSymbol'*) ok "a real prompt merely mentioning the marker mid-sentence still routes normally";; *) no "mid-sentence mention wrongly suppressed a real route: $SYS4";; esac
 
 # ── the weak tier may not confirm itself, and may not read a config key as code (2026-09-10) ───────────
 # Two independent defects, two independent arms each; all four recommend-side arms are RED against a

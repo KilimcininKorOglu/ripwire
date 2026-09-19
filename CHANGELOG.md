@@ -15,6 +15,80 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
+
+Reported by @mariadb-KyleHutchinson in #289: `--expand=SYM` on a name matching more than one definition, in a
+file over `--pack-budget-bytes`, served `mode="bundle"` — the ~200-symbol default ranked map, then the
+requested `<bodies>`. On a real ambiguous name (`--expand=write` on this repo's own source) the body landed
+86% into the document, and the existing `--top-k=0` escape hatch ("the ranked map rides along... add
+--top-k=0 for the bodies alone") was stderr-only, invisible to a caller reading only stdout. When the map
+rides along WITHOUT an explicit `--top-k` (the caller never asked for it, `chooseExpandServe` picked bundle
+mode on its own), the requested bodies are now served before the map, and the escape hatch also rides the
+document itself, as a `note=` attribute on the `<ctx>` root (stderr keeps its own copy, for a human tailing
+the terminal). An explicit `--top-k=N`, on a unique or an ambiguous name alike, is unaffected: it keeps the
+pre-existing order and carries no `note=`, exactly as `--help=--expand` already promises.
+
+### Added — a TS/JS import spelled with a `.jsx` runtime extension, or naming only a `.d.ts`/`.d.mts`/`.d.cts` declaration, now resolves
+
+`kJsRuntimeSourceExts` (the one runtime→source table `resolveTsImport`'s precise include tier and graph.h's
+named-import binder both read) covered `.js`→`.ts`/`.tsx`, `.mjs`→`.mts` and `.cjs`→`.cts`, but not `.jsx` or the
+declaration-only case: a specifier naming a file that exists only as a hand-written `.d.ts` (no `.ts`/`.tsx`
+alongside it) stayed unresolved, and neither the CLI's `--deps` edge nor the named-import call binder saw it. Two
+additions, both matched against tsc 7.0.2's own resolver (verified against tsc's `traceResolution` diagnostic output, node16/nodenext/bundler identical):
+a `.jsx` row (`./x.jsx` tries `.tsx` then `.ts`), and a second, DECLARATION tier per runtime extension
+(`.js`→`.d.ts`, `.mjs`→`.d.mts`, `.cjs`→`.d.cts`) tried only when the source tier finds nothing — `./both.js` with
+both `both.ts` and `both.d.ts` on disk still resolves to the source, the declaration untouched, matching tsc
+exactly. The pre-existing unique-or-degrade rule for two real SOURCE candidates (e.g. both `x.ts` and `x.tsx`
+present) is unchanged and applies identically to the new `.jsx` row — a deliberate, already-shipped conservative
+choice, not something this change revisits. `test/tsimportprecisecheck.sh`'s RUNTIME-EXTENSION section gains the
+`.jsx` rows, a `.jsx` source-clash decoy, the three declaration-fallback rows, and a source-vs-declaration
+precedence row. Split out of PR #44 (native Windows port); the shared runtime→source table is
+@lennix1337's, this change completes its coverage.
+
+### Fixed — an edit could be reported "applied" while a concurrent writer silently undid it
+
+The per-file advisory edit lock tried the lock for ~200 ms and then always proceeded lock-free once it gave up
+— including when a live cooperating writer was still holding it. That writer could commit its own change after
+this edit's rename, so the edit was reported `applied` for bytes that no longer existed on disk. The lock now
+distinguishes *why* it never got in: only when every bounded attempt saw `EWOULDBLOCK` — another writer proven
+live and holding it — does the edit refuse (`-32603`, "edit lock unavailable ... file left unchanged") instead of
+racing it. A lockfile that cannot be opened, or a filesystem with no `flock`, proves no live holder and keeps
+the existing lock-free degrade; refusing there would block every edit on such a machine without serializing
+anything. `test/mcpeditracecheck.sh` arm F1b takes the lock from a separate process first and proves both the
+refusal and that the same edit applies once the holder releases. Split out of #44 (native Windows port); the
+original commit refused on every acquire failure, which this narrows to the proven-contention case. Thanks to
+@lennix1337.
+
+### Fixed — `sliceBodyLines`'s UTF-8 back-off read one byte past a slice ending on the body's last line
+
+`--expand=SYM:START-END`'s continuation-byte back-off, which trims a split multi-byte codepoint off a slice
+boundary, read `body[byteEnd]` before checking whether `byteEnd` was still inside the body. When the
+requested slice's last line is the body's own final line, `byteEnd == body.size()`. Every CLI call sits the
+view over a `std::string`, whose `operator[](size())` is defined to return the null terminator, so the read
+stayed in-bounds by accident and no existing gate ever saw it; over any buffer that ends exactly at its own
+allocation the same read is a real heap-buffer-overflow. The loop now stops at `byteEnd < body.size()` before
+indexing. `test/expandrangecheck.sh` arm 11 compiles `serialize.h` into a standalone ASan/UBSan harness over
+an exact-size buffer, so the read is sanitizer-catchable instead of silent. Split out of PR #44 (native
+Windows port); the fix is lennix1337's.
+
+### Fixed — `emptycorpuscheck`'s one-function arms never ran, and the gate said ALL PASS anyway
+
+`run_and_check` named its output file after the test name with spaces stripped (`tr -d ' '`), so `"onefn:
+default map"` wrote to `out_onefn:defaultmap` while the three assertions below it read `out_onefndefaultmap`
+— a colon apart. Each sat behind `[ -s "$OUT_FILE" ]` with no `else`, so the file was always missing, the
+block silently never ran, and the gate exited 0 having never checked that a one-function corpus's map
+actually contains `symbols="1"` and the function's name, or that `--graph-query` with the `all` source term counts it. The naming
+rule now keeps `[:alnum:]_` on write and read (and drops `:`, which Windows refuses in a filename anyway),
+the assertion matches the header's `files=1 symbols=1` instead of a bare `symbols="1"`, and a missing or
+empty output file now FAILs the block instead of skipping it.
+
+Split out of #44 (native Windows port); the naming-rule and assertion fix is @lennix1337's. Evidence: on
+origin/main, the gate exits 0 with zero `onefn: map contains …` / `onefn: --graph-query 'all' has count`
+rows in its output — the content assertions for corpus (c) never print at all. Restoring the old `tr -d ' '`
+rule under the new fail-closed guards FAILs both blocks (`onefn: … is missing or empty`), which is what
+proves the old rule was truly vacuous rather than just differently spelled. `test/emptycorpuscheck.sh` is
+the gate: on main its one-function checks never ran; with this fix they run and pass.
+
 ### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
 
 `src/infra/os.h`'s POSIX seam (below) was built on v0.6.1; this refresh carries it forward onto everything main
@@ -2070,6 +2144,131 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 `test/fieldnarrowcheck.sh` arm w is the gate. w1, w2, w4 (the narrow and its `prov="final-segment"`), w10 and the w12
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
+
+### Fixed — a Python module ALIAS no longer loses its call edge to name-level ambiguity
+
+Reported by **@SVC-MACSTUDIO** in #287: `import target_mod as tm` then `tm.run(…)` dropped the call edge into
+`graph_ambiguous` whenever `run` was ALSO defined elsewhere in the tree, even though the alias unambiguously
+names one module — a unique callee name already resolved (the bare-name ladder's own accidental win, not real
+module resolution). The alias's module is now resolved to a file (`resolve.h::resolvePythonModuleSuffix`, a
+whole-path-component-suffix fallback for an absolute spec Step-A's two exact bases can't place, reusing the
+same matcher `canonicalIdMatches`/`sameTreePath` already use) and used to narrow the candidates for
+`alias.name(…)`: bind iff exactly one candidate remains in that file, else the unchanged ambiguous/disclosed
+behaviour. Handles `import X`, `import X as Y`, dotted `import a.b.c [as Y]`, `from pkg import X as Y`, and a
+package `__init__.py` target; does not follow a package `__init__.py` that re-exports from a submodule, or a
+`from pkg import submodule` shape — both degrade safely rather than guess.
+
+A second pass closed a soundness gap review found before this shipped: the alias name can be REBOUND — a
+plain or augmented assignment, a `for`/`with`/`except … as` target, a walrus, a `del`, a nested `def`/`class`
+of the same name, or a `global`/`nonlocal` declaration — after the import and before the call, and Python
+records no local-assignment binding today, so the rebinding was invisible and the narrow bound the call to the
+STALE import anyway. Every one of those forms is now captured as veto evidence
+(`ingest_binds.h::capturePythonRebindShadowDecls`): a rebind inside a function refuses only that function's
+calls (the existing per-function shadow-evidence path, the same one a parameter shadow already used); a
+rebind at module scope, or a `global`/`nonlocal` statement anywhere in the file, refuses the alias file-wide,
+because a module-global rebind can reach every function that reads it.
+
+Measured on real Python corpora (Django, DGL, numpy): the module-alias narrow bound 26 new call edges on
+numpy alone (zero on Django/DGL, whose aliased internal imports resolve to package `__init__.py`s that
+re-export from a submodule rather than defining the name directly — the documented limitation above). A
+hand-graded sample of 17 of those 26 came back correct against source, including cases the fix also happens
+to CORRECT rather than merely add: `numpy/polynomial/tests/test_polynomial.py`'s `poly.polyval(…)` calls
+(`import numpy.polynomial.polynomial as poly`) were previously mis-attributed to the unrelated, same-named
+`numpy/lib/polynomial.py:polyval` by the bare-name ladder; they now correctly attribute to
+`numpy/polynomial/polynomial.py:polyval`. The rebind veto did not remove any of the 26 — none of the sampled
+call sites has a rebind of its alias in scope, so this pass's honest measurement is a rebinding-soundness
+fix with no numpy-corpus cost, not a trade-off.
+
+### Changed — ingest releases each raw-fact family as soon as its last consumer has run
+
+Ingest used to hold every raw-fact container until the end of the run, so the peak held all of them at once. They
+are now released as soon as their last consumer has run: the parse cache map, `refOrder`, the raw references,
+definitions, bindings and route uses, the field definitions, the `DefSpanIndex`, and the parse pool's per-thread
+fact vectors. It is a body-only change; no signature moves and no output changes.
+
+Measured on an llvm + clang checkout (10,266 files, 8,837 of them C/C++, 644 MB), `--no-cache`, five runs per binary:
+peak RSS went from 2,380–2,476 MiB to 2,223–2,248 MiB. The two ranges do not overlap; the drop averages about
+174 MiB (7%). This is a subset of the full llvm-project monorepo, which was not re-measured. Output was byte-identical
+in 14 of 14 comparisons: 8 for this change (cold and warm map and `--for`, on that corpus and on this repository)
+plus 6 from the earlier investigation. No gate guards it:
+peak memory is recorded as a measurement, not enforced as a budget. Split out of #44 (native Windows port).
+Thanks to @lennix1337.
+
+### Fixed — `readFilePrefix` reported success on a prefix a read error had truncated
+
+`readFilePrefix` reads the first `maxBytes` of a file for the prewarm grammar-sniffing heuristics (the ObjC-header
+probe is its one caller), reusing one buffer per worker across every file it samples. Its success check was
+`got > 0 || feof( fp ) != 0` — true for any nonzero byte count or a clean end-of-file, but blind to the stream's own
+error indicator. A `fread()` that returned fewer bytes than requested because the underlying read failed partway,
+not because the file was actually that short, still satisfied `got > 0`, so the truncated bytes went back as though
+they were the whole prefix and the sniff judged a header it never fully read. `readFile`, a few lines above it in
+`src/ingest_crawl.h`, compares the byte count against the size it expects and fails on any `got != want`;
+`readFilePrefix` has no expected size (a file shorter than the prefix is a clean short read), so it now consults
+the stream's error indicator instead: `ferror( fp ) == 0 && ( got > 0 || feof( fp ) != 0 )`, so a live error
+indicator fails the read regardless of how many bytes made it through. Effect is limited to the prewarm hint —
+parsing itself is unchanged either way, which is why this is neutral on output.
+
+Split out of #44 (native Windows port), where it rode inside commit 9124d689. Gate: `test/crashsweepcheck.sh` arm
+B4. B1's interposed short-read shim gains an env-selected `eio` mode — a marked `fread` delivers 16 bytes, then raises
+the stream's error indicator with `errno = EIO` and no end-of-file — and B4b compiles `readFilePrefix`'s own source
+text into a harness run under it: `ok=1 bytes=16` on the previous commit, `ok=0 bytes=0` after. B4a is the control
+(a clean read to EOF under the same shim is the whole 64-byte prefix), and B4c runs the binary on an ObjC header whose
+`@interface` sits past byte 16 with that read failing: the answer is byte-identical before and after the fix, so the
+arm pins only that it survives. Thanks to @lennix1337.
+
+### Fixed — `ripwire wrap`'s MCP JSON stanzas broke on a command path holding a quote or backslash
+
+`ripwire wrap cursor|windsurf|gemini|opencode` (and the generic `mcpServers` stanza) print a JSON config whose
+`"command"` field is either the literal string `ripwire` or, when nothing named `ripwire` resolves on `PATH`, this
+binary's own absolute path. That path went into the JSON string raw: a double quote (legal in any POSIX filename)
+or a backslash (every Windows path, and also a legal POSIX filename byte) produced a stanza that failed to parse,
+or closed the string early on the quote. `wrapMcpJson` and `wrapMcpJsonOpencode` now pass the token through
+`rw::jsonesc::escapeMcp` (`src/infra/jsonesc.h`), the escaper the MCP surface already uses elsewhere — no new
+escaping code.
+
+Split out of PR #44 (native Windows port), where it rode inside the follow-up snapshot commit e795983f on
+lennix1337/ripwire:win32-port-snapshot. The fix is @lennix1337's, forward-ported and gated here.
+
+`test/opencodewrapcheck.sh` arm 8 copies the binary into a directory whose name carries both a quote and a
+backslash, with `PATH` holding no `ripwire`, and requires the `opencode` stanza and the `mcpServers` (cursor)
+stanza to both parse as JSON and name the running binary. Red on an unescaped build (`Expecting ',' delimiter`);
+green once both printers route through the shared escaper. Thanks to @lennix1337.
+
+### Fixed — `--index-out` dropped `--no-ignore` on the generated artifact
+
+The generate path called `ingest()` without the `respectGitignore` argument, so `--index-out`'s artifact always
+honoured `.gitignore` even when `--no-ignore` was also on the command line; every other `ingest()` call site
+already passes `!cfg.noIgnore`. A `--no-ignore` consumer of that artifact found the ignored files missing and
+reparsed each one cold, which defeats the artifact's point — its whole value is that the consumer does not
+reparse. `--index-out` now threads `!cfg.noIgnore` through to the generate ingest, matching the other call sites.
+`test/indexoutcheck.sh` arm (e) is the gate: in a git fixture with an untracked file under an ignored directory,
+it reads the artifact's own file set rather than relying on restore-equivalence (which can't see a dropped
+argument — a missing record just looks like a miss) — a control default artifact must omit the file, a
+`--no-ignore` artifact must hold it, and a `--no-ignore` consumer of that artifact must report `reparsed=0`.
+Split out of #44 (the native Windows port), where the argument rode inside one bundled commit next to an
+unrelated cache-directory parameter. Thanks to @lennix1337.
+
+### Fixed — the prompt-routing hooks recommended nonsense on harness notifications and ordinary prose
+
+The Claude Code and Codex prompt hooks passed every prompt to `--help-task`, including background-agent
+notifications, and `--help-task` counted any capitalised word or single letter that happened to name an indexed
+symbol as a symbol mention. In a fixture-heavy tree, prose like "Summary: A, Fix, Report" was routed to
+`--connect=Summary,A,Fix,Report` at `confidence="high"`. The hooks now skip prompts that begin with a harness
+event tag (still logging a `skip-system` meter row). `--help-task` counts a word as a symbol only when it is
+identifier-shaped: a camel or Pascal seam, an underscore, a `::` or `.` qualifier, backticks or `()`, or at least
+four characters and not a common word. A short real symbol routes when backticked (`` `F` ``); the rule and
+that escape hatch are documented in `--help-task`, its legend and the router skill. On the labelled routing
+corpus exactly 4 of 254 decisions change, and the measured harmful rate drops from 0.016 to 0.000.
+
+### Fixed — assumptions the code tested again, and a CMake scan failure reported as "no CMake"
+
+Three `ASSUME`s (`gitmine.h`, `mention.h`, `abicheck.h`) were followed by a runtime test of the same condition.
+Each condition is guaranteed by the code that sizes both sides, so the promise stays (`EXPECTS` or `ASSUME`)
+and the unreachable fallback is removed. `test/selfcheckcheck.sh` arm T now flags an assumption that is tested
+again within the same function. `--flags` could not tell a CMake root it failed to read from a tree with no
+CMake: it now reports `cmake_scan_failed="1"` in every build (`test/flagscheck.sh` arm 11). Five
+`ASSUME_NO_ALIAS_BUF` promises on fresh local buffers state that separate storage to the compiler; each was
+checked against every caller.
 
 ## [0.6.1] — 2026-09-14
 

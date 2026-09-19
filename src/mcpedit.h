@@ -648,12 +648,16 @@ namespace mcpedit
     // HONEST LIMIT: this is ADVISORY — a non-cooperating external writer (an editor/formatter that doesn't take
     // this lock) is not serialized by it; that residual is handled by the re-check-before-rename in runEditVerb,
     // which shrinks (but cannot fully close) the external-writer window. Never blocks forever: LOCK_NB with a
-    // short bounded retry, then degrade to lock-free (the re-check still guards correctness). RAII: the fd is
+    // short bounded retry. CONTENDED past it (a live cooperating writer holds the lock) refuses the edit —
+    // proceeding would let that writer commit after this edit's rename and silently undo an edit reported as
+    // applied. A lockfile that cannot be opened, or a filesystem without flock, proves no live holder, and a
+    // refusal there would block every edit without serializing anything, so that degrade stays lock-free. RAII: the fd is
     // closed (releasing the flock) at scope exit, deterministically.
     struct EditLock
     {
-        int  fd     = -1;
-        bool locked = false;
+        int  fd        = -1;
+        bool locked    = false;
+        bool contended = false;   // every bounded attempt saw EWOULDBLOCK — another holder is live
 
         explicit EditLock( const std::string& targetPath )
         {
@@ -661,8 +665,8 @@ namespace mcpedit
             fd = os::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
             if( fd < 0 ) { DISCLOSE( "edit lockfile open failed; proceeding lock-free (re-check still guards)" ); return; }
 
-            // ~200 ms bounded acquire: 20 tries × 10 ms. If a peer holds it longer, degrade rather than hang —
-            // the freshness re-check before rename is the correctness floor, the lock is only the fast path.
+            // ~200 ms bounded acquire: 20 tries × 10 ms. If a peer holds it longer, refuse rather than hang or
+            // proceed lock-free — the latter can lose a cooperating writer's committed update.
             for( int attempt = 0; attempt < 20; ++attempt )
             {
                 if( os::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
@@ -670,12 +674,19 @@ namespace mcpedit
                 {
                     break;
                 }
+                contended = attempt == 19;
                 struct timespec ts{ 0, 10 * 1000 * 1000 };   // 10 ms
                 os::nanosleep( &ts, nullptr );
             }
-            if( !locked )
+            // `contended` is disclosed to the caller in full via runEditVerb's -32603 message below — a real
+            // refusal, not a degrade, so it needs no debug-trace-only DISCLOSE of its own here (Diagnostics.h
+            // §4b: the one-argument form tells the release user nothing; the refusal already tells them
+            // everything). Only the still-degrading, still-sink-less case keeps its trace, unchanged from before
+            // this branch split the two outcomes apart — this DISCLOSE call, and its ratchet count, is the same
+            // one main already carries.
+            if( !contended && !locked )
             {
-                DISCLOSE( "edit lock contended past timeout; proceeding lock-free (re-check still guards)" );
+                DISCLOSE( "edit lock unsupported on this filesystem; proceeding lock-free (re-check still guards)" );
             }
         }
 
@@ -1240,9 +1251,18 @@ inline mcpedit::Outcome runEditVerb( const std::string& root, mcpedit::Op op, co
 
     // F1: hold a per-file advisory lock across the ENTIRE read→check→splice→rename below, so two cooperating
     //     ripwire MCP edit ops on one file serialize instead of racing (RAII: released at function return).
-    //     Degrades to lock-free on contention/failure — the re-check before the rename is the correctness floor.
+    //     Refuses when another holder keeps the lock past the bounded acquire — proceeding could let that
+    //     cooperating writer undo this edit after it reports applied. An unopenable lockfile or a filesystem
+    //     without flock degrades lock-free (no holder is provable); the re-check is the floor for both.
     //     Keyed by the REAL disk path so cross-process serialization lands on the actual file, not the label.
     const mcpedit::EditLock editLock( disk );
+    if( editLock.contended )
+    {
+        oc.ok = false; oc.errCode = -32603;
+        oc.message = "edit lock unavailable for '" + path + "'; another edit is in progress — retry after it is released; "
+                     "file left unchanged";
+        return oc;
+    }
 
     // 2. staleness: re-read the file NOW and verify its bytes still match what the index was built from.
     //    A mismatch means the span offsets below may address shifted bytes → refuse, tell the agent to
