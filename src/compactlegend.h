@@ -29,6 +29,7 @@
 
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -944,8 +945,12 @@ inline constexpr double kCompactRepriceDensestBytesPerToken = 2.36;
     EXPECTS( oldTokens > 0 && fullBytes > 0, "a priced document has bytes and a positive price" );
     if( compactBytes <= fullBytes )
     {
-        const double removed = double( fullBytes - compactBytes ) * double( oldTokens ) / double( fullBytes );
-        const long long next = oldTokens - static_cast<long long>( removed );   // floor: the fewest tokens removed
+        // The document's average rate, QUANTISED UP to 0.05 B/token: a price must not move with bytes the rewrite did not
+        // touch (runtracecheck (G2): duration_ms="9" vs "1064" is 3 bytes of digits, and an exact ratio turned that into a
+        // one-token price change). Rounding the rate UP removes fewer tokens, so the bound stays an upper bound.
+        const double    rate    = std::ceil( double( fullBytes ) / double( oldTokens ) * 20.0 ) / 20.0;
+        const double    removed = double( fullBytes - compactBytes ) / rate;
+        const long long next    = oldTokens - static_cast<long long>( removed );   // floor: the fewest tokens removed
         return next > 0 ? next : 1;
     }
     const double    added = double( compactBytes - fullBytes ) / kCompactRepriceDensestBytesPerToken;
