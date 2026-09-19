@@ -83,7 +83,9 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # retiring its one sink-less DISCLOSE( msg ) site. 217 -> 216.
 # Train 6 (2026-09-18): re-measured on the merged 14-member tree — (R) prints 216; no other member adds or retires one.
 # lane/disclose-sink-form (2026-09-19): converted the bulk of the sink-less sites to DISCLOSE( sink, why ) — 51 on its tree.
-DISCLOSE_SINKLESS_PIN=51
+# Train 7 (2026-09-19): re-measured on the merged tree — (R) prints 50: main's darkflags root-walk site (above) was one of
+# the lane's 51 and is already in sink form; the lane's mcpedit lock site took main's new wording in its sink form.
+DISCLOSE_SINKLESS_PIN=50
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'
