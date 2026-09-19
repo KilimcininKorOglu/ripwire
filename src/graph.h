@@ -1810,6 +1810,10 @@ inline std::pair<std::uint32_t, bool> resolveJsNamedImportFile( std::string_view
     bool ambiguous = false;
     const auto probe = [ & ]( std::string_view extension, std::size_t suffixLength )
     {
+        // Every call site passes runtimeExt->runtime.size(): jsRuntimeSourceExtOf only ever returns a row
+        // whose `runtime` suffix is STRICTLY shorter than `module` (its own size guard, above) — this
+        // function makes that hold by construction, so the subtraction below can never underflow.
+        ASSUME( module.size() > suffixLength, "jsRuntimeSourceExtOf's own size guard" );
         const auto candidate = joinNormalizeLookup( includerDir( importer ), std::string( module.substr( 0, module.size() - suffixLength ) )
                                                    + std::string( extension ), files, workspace, importerFileId );
         if( candidate == kNoFile ) { return; }

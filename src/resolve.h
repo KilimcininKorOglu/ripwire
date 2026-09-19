@@ -596,6 +596,10 @@ inline std::uint32_t resolveTsImport( std::string_view includerPath, std::string
     probe( std::string( target ) );
     if( const JsRuntimeSourceExt* const runtimeExt = jsRuntimeSourceExtOf( target ) )
     {
+        // jsRuntimeSourceExtOf only ever returns a row whose `runtime` suffix is STRICTLY shorter than
+        // `target` (its own `specifier.size() > row.runtime.size()` guard, just above) — this code makes
+        // that hold by construction, so the subtraction below can never underflow.
+        ASSUME( target.size() > runtimeExt->runtime.size(), "jsRuntimeSourceExtOf's own size guard" );
         const std::string stem( target.substr( 0, target.size() - runtimeExt->runtime.size() ) );
         for( const std::string_view source : runtimeExt->sources )
         {
