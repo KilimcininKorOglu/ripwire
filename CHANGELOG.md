@@ -15,6 +15,24 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `emptycorpuscheck`'s one-function arms never ran, and the gate said ALL PASS anyway
+
+`run_and_check` named its output file after the test name with spaces stripped (`tr -d ' '`), so `"onefn:
+default map"` wrote to `out_onefn:defaultmap` while the three assertions below it read `out_onefndefaultmap`
+— a colon apart. Each sat behind `[ -s "$OUT_FILE" ]` with no `else`, so the file was always missing, the
+block silently never ran, and the gate exited 0 having never checked that a one-function corpus's map
+actually contains `symbols="1"` and the function's name, or that `--graph-query=all` counts it. The naming
+rule now keeps `[:alnum:]_` on write and read (and drops `:`, which Windows refuses in a filename anyway),
+the assertion matches the header's `files=1 symbols=1` instead of a bare `symbols="1"`, and a missing or
+empty output file now FAILs the block instead of skipping it.
+
+Split out of #44 (native Windows port); the naming-rule and assertion fix is @lennix1337's. Evidence: on
+origin/main, the gate exits 0 with zero `onefn: map contains …` / `onefn: --graph-query=all has count`
+rows in its output — the content assertions for corpus (c) never print at all. Restoring the old `tr -d ' '`
+rule under the new fail-closed guards FAILs both blocks (`onefn: … is missing or empty`), which is what
+proves the old rule was truly vacuous rather than just differently spelled. `test/emptycorpuscheck.sh` is
+the gate, red before this fix and green after.
+
 ### Changed — the self-check macro vocabulary is renamed to the conventional spellings, and degrade paths gain a sink form
 
 `VERIFY` / `VERIFY_TEXT` → `ASSUME`; `VERIFY_DEBUG_ONLY(_TEXT)` → `DASSERT`; `VERIFY_NOT_REACHED(_TEXT)` →
