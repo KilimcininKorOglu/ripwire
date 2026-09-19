@@ -32,6 +32,7 @@
 #       --legend=compact carry no <about legend="ref">.
 #   (H) L6 UN-GROUPING. On a fixture whose tests have no runner, the inline pack-task answer carries a <g n= p=> group of
 #       n <= 8; its ref twin carries the same paths as single <test> rows, each run_unknown="1", and no <g>.
+#   (I) G4. Every ref answer parses as XML and has no newline outside CDATA.
 #
 #   bash test/legendrefcheck.sh "$PWD/build/ripwire"
 
@@ -269,6 +270,19 @@ if g:
     rows = re.findall(r'<test p="([^"]*)"[^>]*run_unknown="1"/>', t3)
     check(is_ref(t3) and "<g " not in t3 and all(p in rows for p in g.group(2).split(",")),
           f"(H) its ref twin carries those {g.group(1)} paths as single <test run_unknown=\"1\"> rows and no <g>")
+
+# ── (I) G4 holds in the ref posture ────────────────────────────────────────────────────────────────────────────
+print("=== (I) a ref answer is well-formed XML with no newline outside CDATA (G4) ===")
+import xml.etree.ElementTree as ET
+illformed = []
+for i, t in refs:
+    if not is_ref(t): continue
+    try:
+        ET.fromstring(t)
+        if "\n" in strip_cdata(t).rstrip("\n"): illformed.append(CALLS[i][0] + ":newline")
+    except ET.ParseError as e:
+        illformed.append(f"{CALLS[i][0]}:{e}")
+check(NREF >= 12 and not illformed, f"(I) over {NREF} ref answers, every one parses and keeps its newlines inside CDATA ({illformed})")
 
 print(f"legendrefcheck: {'FAIL' if fails else 'PASS'} ({len(fails)} failing)")
 sys.exit(1 if fails else 0)
