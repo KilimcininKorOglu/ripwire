@@ -79,6 +79,9 @@ inline bool applyFilePooling( const IngestResult& ing, std::vector<float>& lensR
         std::sort( v.begin(), v.end(), std::greater<float>() );
         fileBest[f] = v[0];
         const std::size_t take = std::min( topK, v.size() );
+        // pooled is the outer F-sized vector; v is perFile[f], one element's own allocation — never the
+        // same storage. The "nothing to do" case (v empty) already returned above via `continue`.
+        ASSUME_NO_ALIAS_BUF( pooled, v );
         for( std::size_t k = 0; k < take; ++k )
         {
             pooled[f] += v[k];

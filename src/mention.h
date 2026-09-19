@@ -586,8 +586,12 @@ inline std::vector<RawMention> extractMentions( std::string_view task, std::uint
 inline bool applyMentionBoost( const IngestResult& ing, std::string_view task, std::vector<float>& lensRank, MentionBoostInfo* outInfo = nullptr )
 {
     using namespace mention_detail;
-    ASSUME( lensRank.size() == ing.symbols.size() );
-    if( task.empty() || lensRank.empty() || lensRank.size() != ing.symbols.size() )
+    // EXPECTS, not DASSERT (rv-s2 review, 2026-09-19): same shape as gitmine.h's applyCoChangeBoost — every
+    // caller's lensRank is sized from ing.symbols by construction (see that function's comment for the
+    // callers/producers traced), so this is the function's real precondition, not a defensive fallback for a
+    // reachable mismatch. The old `!= ing.symbols.size()` re-test below was dead code and is deleted with it.
+    EXPECTS( lensRank.size() == ing.symbols.size() );
+    if( task.empty() || lensRank.empty() )
     {
         return false;
     }

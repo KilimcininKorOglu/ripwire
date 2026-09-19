@@ -3911,6 +3911,10 @@ inline std::vector<float> biasPrior( const Graph& g, const std::vector<float>& p
         return p; // no weights (e.g. empty graph) → unchanged
     }
     std::vector<float> pw( N );
+    // pw is a fresh allocation, placed after the "nothing to do" early return above (CONTRIBUTING §3), so
+    // the promise runs on a non-null .data() and still dominates the loop below.
+    ASSUME_NO_ALIAS_BUF( pw, p );
+    ASSUME_NO_ALIAS_BUF( pw, g.priorWeight );
     double sum = 0.0;
     for( std::size_t i = 0; i < N; ++i ) { pw[i] = p[i] * g.priorWeight[i]; sum += pw[i]; }
     if( !( sum > 0.0 ) )
@@ -4572,6 +4576,9 @@ inline std::vector<float> blendMaxNorm( const std::vector<float>& a, const std::
         return a;
     }
     std::vector<float> out( a.size() );
+    // out is fresh, placed after the size/empty and degenerate-max early returns above, before the loop.
+    ASSUME_NO_ALIAS_BUF( out, a );
+    ASSUME_NO_ALIAS_BUF( out, b );
     const float ia = ( 1.0f - lambda ) / amax, ib = lambda / bmax;
     for( std::size_t i = 0; i < a.size(); ++i )
     {

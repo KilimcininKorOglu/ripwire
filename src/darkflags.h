@@ -769,6 +769,16 @@ struct CMakeScan
 {
     std::vector<std::string> files;        // sorted
     std::uint64_t            escaped = 0;  // links whose target left the root — EXACT count
+    // The root itself could not be walked (permission denied, missing, …). `files` and `escaped` then read
+    // exactly like a healthy repo with zero CMake presence — that is the lie this flag exists to prevent:
+    // the caller must disclose that cmake= and escaped_root= are floors, not totals, for this run.
+    bool                      rootWalkFailed = false;
+
+    // rv-s2 review LOW-4: CMakeScan IS the field the caller already reads for this answer, so it models
+    // Diagnostics::DisclosureSink directly rather than the flag being set beside a sink-less DISCLOSE — the
+    // flag-setting becomes the disclosure itself, and disclose() is the ONE place rootWalkFailed is written.
+    enum class DisclosureWhy : std::uint8_t { RootWalkFailed };
+    void disclose( DisclosureWhy ) noexcept { rootWalkFailed = true; }
 };
 
 // The CMake files under `root`, sorted. ingest() never collects these (CMake is not one of the indexed
@@ -783,8 +793,18 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
     namespace fs = std::filesystem;
     CMakeScan       out;
     std::error_code ec;
+    // libc++ AND libstdc++ swallow EACCES on the ROOT itself under skip_permission_denied below (the flag is
+    // meant for subdirectories encountered mid-walk, not the root the walk starts from): an unreadable root
+    // then reads as an EMPTY successful walk with `ec` clear — exactly the false zero rootWalkFailed exists
+    // to disclose (measured: `ec=0 atEnd=1` with the flag, `ec=13 Permission denied` without it, both libc++
+    // and libstdc++). Probe the root without the flag first, mirroring main.cpp's rootIsReadable shape, which
+    // this walk cannot rely on: `--flags` reaches this walk on a warm index even after the root's mode
+    // changed out from under it, a path rootIsReadable's own one-shot CLI check never revisits. One combined
+    // check below (not two DISCLOSE sites) so a TOCTOU between the two constructions is still caught.
+    std::error_code pec;
+    { const fs::directory_iterator probe( root, pec ); }
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( ec ) { DISCLOSE( "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
+    if( pec || ec ) { DISCLOSE( out, CMakeScan::DisclosureWhy::RootWalkFailed, "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );
 
     const fs::recursive_directory_iterator end;
@@ -847,6 +867,9 @@ struct FlagsResult
     // as one that was never declared. There is no ROW class here the way --skipped has one — this walk has no
     // drop taxonomy at all (its --exclude and denylist prunes are silent too) — so the count is the disclosure.
     std::uint64_t     escapedRoot  = 0;
+    // The CMake sub-walk (§SEC1) never reached the root at all — cmake=/escaped_root= above are a floor for
+    // this run, not a total; see CMakeScan::rootWalkFailed. Absent from the XML when false, same house rule.
+    bool              cmakeScanFailed = false;
     std::string       filter;          // H14/M6: the --flags=SUBSTR this harvest was narrowed by ("" = none)
     // H7 (capture-audit 2026-09-04): true when --flags=SUBSTR names no DECLARED gate at all. `gates="0"`
     // beside `files="1550"` reads exactly like the true and interesting fact "this repo has no dark gates",
@@ -1029,6 +1052,7 @@ inline FlagsResult computeFlags( const IngestResult& ing, const std::string& roo
     FlagsResult res;
     res.filesScanned = harvest.size();
     res.escapedRoot  = cmakeScan.escaped;   // §SEC1 — a refusal this verb made is this verb's to disclose
+    res.cmakeScanFailed = cmakeScan.rootWalkFailed;
     std::size_t filterNameHits = 0;
     for( auto& [ name, g ] : gates )
     {
@@ -1198,9 +1222,11 @@ inline void writeFlags( std::FILE* out, const FlagsResult& res, std::size_t maxS
     // §SEC1 — absent when zero, so every repository without a hostile symlink keeps a byte-identical report.
     const std::string fgEscapedAttr = res.escapedRoot == 0 ? std::string()
                                                            : " escaped_root=\"" + std::to_string( res.escapedRoot ) + "\"";
-    rw::emitTo( out, "<flags gates=\"{}\" dark_gates=\"{}\" compile=\"{}\" cmake=\"{}\" env=\"{}\" files=\"{}\"{}{}{}>",
+    // Absent when false: a repo whose CMake sub-walk always succeeds keeps a byte-identical report.
+    const std::string fgCmakeFailedAttr = res.cmakeScanFailed ? " cmake_scan_failed=\"1\"" : std::string();
+    rw::emitTo( out, "<flags gates=\"{}\" dark_gates=\"{}\" compile=\"{}\" cmake=\"{}\" env=\"{}\" files=\"{}\"{}{}{}{}>",
                   res.gates.size(), res.dark, res.compileCount, res.cmakeCount, res.envCount, res.filesScanned,
-                  fgEscapedAttr.c_str(), fgFilterAttr.c_str(), flagsNext.c_str() );
+                  fgEscapedAttr.c_str(), fgCmakeFailedAttr.c_str(), fgFilterAttr.c_str(), flagsNext.c_str() );
     for( const Gate& g : res.gates )
     {
         writeGate( out, g, ex, maxSites, pageOffset );
