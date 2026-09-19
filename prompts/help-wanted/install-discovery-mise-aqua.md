@@ -266,7 +266,7 @@ directories); keep the line's shape; and assert the probe order against cases (a
   depends on directory iteration order or timestamps. `--doctor` is exempt from byte-identity, but it
   names its live fields in `volatile=`.
 - **Honesty in output.** "Not found" is never "does not exist". A doctor check that compared zero skills
-  has verified nothing and must say so. `DEGRADED_PATH_ALERT` compiles out in Release, so a user-visible
+  has verified nothing and must say so. `DISCLOSE` compiles out in Release, so a user-visible
   degrade is disclosed in the output, not only by an alert.
 - **Gate before code**, observed RED (`CONTRIBUTING.md` §2). A control mutates real input and re-runs the
   identical command; prove the mutation took before trusting the result.

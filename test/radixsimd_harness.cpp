@@ -95,7 +95,7 @@ static std::vector< Key > seamValues()
 {
     if constexpr( std::is_same_v< Key, float > )
     {
-        // finite only — the contract requires finite keys (VERIFY'd in sortWordOf)
+        // finite only — the contract requires finite keys (ASSUME'd in sortWordOf)
         return { 0.0f, -0.0f, 1e-45f, -1e-45f,                                  // zeros collapse; denormals
                  std::numeric_limits< float >::min(), -std::numeric_limits< float >::min(),
                  1.5f, -1.5f, 255.0f, 256.0f, 3.25e8f, -3.25e8f,

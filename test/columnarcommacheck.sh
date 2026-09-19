@@ -46,7 +46,7 @@ command -v "$CXX" >/dev/null 2>&1 || CXX=g++
 . "$ROOT/scripts/cxxstd.sh"
 CXXSTD="$( ripwire_cxx_std_flag "$CXX" )"
 # diagnostics.cpp supplies Diagnostics::ConsoleLog::handleAssert — link it exactly as every other
-# standalone harness in test/ does, now that buildPathTable carries a VERIFY_NO_ALIAS3 guard.
+# standalone harness in test/ does, now that buildPathTable carries an ASSUME_NO_ALIAS3 guard.
 "$CXX" "$CXXSTD" -I "$ROOT/src" -I "$ROOT/src/infra" -I "$ROOT/third_party" "$SRC" "$ROOT/src/infra/diagnostics.cpp" -o "$TMP/t" 2>"$TMP/build.err"
 if [ -x "$TMP/t" ]; then
     ok "standalone gate binary built"

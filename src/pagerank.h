@@ -19,7 +19,7 @@ struct PageRankConfig
 // `maxIterationCount` with the L1 residual still above `tolerance`, so `rank` is a TRUNCATION of the
 // computation — a rank vector that stopped short, not the fixed point it claims to approximate.
 //
-// WHY A RETURN AND NOT AN ALERT. The non-convergence branch already fires DEGRADED_PATH_ALERT, and it still
+// WHY A RETURN AND NOT AN ALERT. The non-convergence branch already fires DISCLOSE, and it still
 // does — but that macro compiles to nothing under NDEBUG, which is every shipped binary. So the only signal
 // a release build had for "this ranking is unfinished" was deleted by the preprocessor, and the caller had
 // no way to disclose what it could not see. The pair travels with the result instead; src/prconverge.h turns

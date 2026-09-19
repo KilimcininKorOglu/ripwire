@@ -14,7 +14,8 @@
 //   FILTER  := kind( EXPR , KIND )       keep nodes of KIND  (fn|method|cls|struct|iface|var|sec|macro)
 //            | cx(   EXPR , INT )         keep nodes with cyclomatic complexity >= INT
 //            | fanin(EXPR , INT )         keep nodes with in-degree (caller count) >= INT
-//            | file( EXPR , "RE" )        keep nodes whose file PATH matches the ECMAScript regex RE
+//            | file( EXPR , "RE" )        keep nodes whose ROOT-RELATIVE file path (the p= the verb prints) matches the
+//                                         ECMAScript regex RE
 //            | layer(EXPR , NAME )        keep nodes in architecture LAYER (game|infra|render|math|audio|ai|test)
 //   CLOSURE := callers( EXPR [, INT=1] )  nodes that transitively (<= INT hops) CALL any node in EXPR
 //            | callees( EXPR [, INT=1] )  nodes transitively (<= INT hops) CALLED BY any node in EXPR
@@ -26,7 +27,8 @@
 //         — the functions that transitively (<= 2 hops) call parseArchRules.
 //
 // Determinism: every operator returns a SORTED, UNIQUE NodeId vector; the closure BFS visits in
-// ascending-id order. Robustness: a malformed file() regex or any parse error sets ok=false and yields the
+// ascending-id order. Robustness: a file() regex the guard refuses (malformed, non-portable, or catastrophic —
+// src/regexguard.h), a match the engine abandons, or any parse error sets ok=false and yields the
 // empty set (the CLI then reports err and exits 1) — the evaluator never throws past this seam, and the
 // only recursion into the graph is the hop-bounded closure, so it can neither hang nor blow the stack on a
 // cyclic call graph (a `seen` set caps every node at one visit).
@@ -34,12 +36,12 @@
 #include "model.h"
 #include "graph.h"
 #include "arch.h"          // P0-5: builtinLayer() — THE layer taxonomy, the same one the map's layer= attribute carries
+#include "regexguard.h"    // file(): the screen, the compile and the guarded match every user-authored pattern takes
 #include "infra/Diagnostics.h"
 
 #include <algorithm>
 #include <cctype>
 #include <functional>
-#include <regex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -115,6 +117,36 @@ bool tryParsePredicateOnAll( Eval& e, std::function<std::vector<NodeId>( std::ve
 // e.expr() on the non-pushdown arm unconditionally instead of checking either side's cardinality first (see
 // querycheck.sh's and(∅,X) arms, which a "skip the other side" optimization here would silently defeat).
 std::vector<NodeId> evalAnd( Eval& e );
+
+// The deepest parenthesis nesting --graph-query evaluates. The evaluator recurses once per level, and a
+// `not(not(not(…` of ~50,000 levels (a quarter of a megabyte of argument) overflowed the main thread's stack:
+// SIGSEGV, exit 139, before a word of output. 256 levels is far past any composed query a person or an agent
+// writes; deeper is refused with the reason, before evaluation starts.
+inline constexpr std::size_t kMaxQueryNesting = 256;
+
+// The deepest `(` nesting in `expr`, outside "quoted" literals (quoted() takes no escapes, so a quote always
+// toggles). A pure scan, so the refusal never depends on how far the evaluator got.
+inline std::size_t queryParenNesting( std::string_view expr ) noexcept
+{
+    std::size_t depth = 0, deepest = 0;
+    bool        inQuote = false;
+    for( const char c : expr )
+    {
+        if( c == '"' )
+        {
+            inQuote = !inQuote;
+        }
+        else if( !inQuote && c == '(' )
+        {
+            deepest = std::max( deepest, ++depth );
+        }
+        else if( !inQuote && c == ')' && depth > 0 )
+        {
+            --depth;
+        }
+    }
+    return deepest;
+}
 
 // One-pass recursive-descent parse-and-evaluate. The operator set is small and each node-set is
 // materialized eagerly — the graphs ripwire handles fit comfortably in memory.
@@ -271,19 +303,45 @@ struct Eval
         return set;
     }
 
+    // The regex is compiled ONCE per file() and decided ONCE per distinct FILE (every symbol of a file shares its
+    // path), then applied to the set in order — so the sorted-unique contract above holds. The comment this
+    // replaced said "paths are short, so std::regex_search here cannot meaningfully back-track-blow-up"; a 44-byte
+    // run of 'a' in a directory name aborted the process with `(a+)+z` (rc 134, libc++). A refused pattern and an
+    // abandoned match both refuse the query by name: count="0" would read as "no such file".
     std::vector<NodeId> filterFile( std::vector<NodeId> set, const std::string& re )
     {
-        std::regex rx;
-        try { rx = std::regex( re, std::regex::ECMAScript ); }
-        catch( const std::regex_error& )
+        const RegexCompile compiled = compileGuardedRegex( re, kRegexEcmaScript );
+        if( compiled.refusal )
         {
-            DEGRADED_PATH_ALERT( "query: malformed file() regex — empty result" );
-            fail( "malformed file() regex" );
+            DISCLOSE( "query: file() regex refused — empty result" );
+            fail( "file(\"" + re + "\") refused: " + *compiled.refusal );
             return {};
         }
-        // Paths are short (<~300 B) so std::regex_search here cannot meaningfully back-track-blow-up.
-        set.erase( std::remove_if( set.begin(), set.end(),
-                   [ & ]( NodeId id ) { return !std::regex_search( ing.files[ ing.symbols[id].fileId ], rx ); } ), set.end() );
+        enum : std::uint8_t { kUndecided, kMiss, kHit };
+        std::vector<std::uint8_t> fileVerdict( ing.files.size(), kUndecided );
+        std::size_t               keptCount = 0;
+        for( const NodeId id : set )
+        {
+            const std::uint32_t fileId = ing.symbols[id].fileId;
+            if( fileVerdict[ fileId ] == kUndecided )
+            {
+                const std::string_view path    = rootRelPath( ing, fileId );   // #253: the root-relative seam, never the typed root spelling
+                const RegexVerdict     verdict = compiled.regex.search( path );
+                if( verdict == RegexVerdict::Exhausted )
+                {
+                    DISCLOSE( "query: file() regex match abandoned by the engine — empty result" );
+                    fail( "file(\"" + re + "\") could not be evaluated on " + std::string( path ) + ": " + std::string( kRegexAbandonedReason )
+                          + " — refusing rather than reporting a count the engine did not finish" );
+                    return {};
+                }
+                fileVerdict[ fileId ] = ( verdict == RegexVerdict::Hit ) ? kHit : kMiss;
+            }
+            if( fileVerdict[ fileId ] == kHit )
+            {
+                set[ keptCount++ ] = id;
+            }
+        }
+        set.resize( keptCount );
         return set;
     }
 
@@ -309,18 +367,21 @@ struct Eval
         }
         // Does ANY indexed file carry a layer at all? Asked over ing.files rather than over `set`, so a
         // narrowed sub-expression cannot make an unlayered tree look layered or the reverse.
-        const bool treeHasLayers = std::any_of( ing.files.begin(), ing.files.end(),
-                                                []( const std::string& path ) { return *builtinLayer( path ) != '\0'; } );
+        bool treeHasLayers = false;
+        for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ) && !treeHasLayers; ++f )
+        {
+            treeHasLayers = *builtinLayer( rootRelPath( ing, f ) ) != '\0';
+        }
         if( !treeHasLayers )
         {
-            DEGRADED_PATH_ALERT( "query: layer() on a tree with no layer taxonomy — refused, not answered 0" );
+            DISCLOSE( "query: layer() on a tree with no layer taxonomy — refused, not answered 0" );
             fail( "no layer taxonomy in this tree: no indexed path has a directory component naming a layer, so layer('" + name
                   + "') cannot be answered. Refusing rather than reporting count=0, which would read as 'no such code'. "
                     "Layers come from directory names (" + std::string( kLayerVocabulary ) + "); the map's layer= attribute shows which files have one" );
             return {};
         }
         set.erase( std::remove_if( set.begin(), set.end(),
-                   [ & ]( NodeId id ) { return std::string_view( builtinLayer( ing.files[ ing.symbols[id].fileId ] ) ) != name; } ), set.end() );
+                   [ & ]( NodeId id ) { return std::string_view( builtinLayer( rootRelPath( ing, ing.symbols[id].fileId ) ) ) != name; } ), set.end() );
         return set;
     }
 
@@ -494,6 +555,11 @@ struct Eval
     // top-level: evaluate the whole expression; require all input consumed.
     std::vector<NodeId> run()
     {
+        if( queryParenNesting( src ) > kMaxQueryNesting )
+        {
+            fail( "the expression nests deeper than " + std::to_string( kMaxQueryNesting ) + " levels — refused before evaluating it" );
+            return {};
+        }
         std::vector<NodeId> r = expr();
         skipWs();
         if( ok && pos != src.size() )

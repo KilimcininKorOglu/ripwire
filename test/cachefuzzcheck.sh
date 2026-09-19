@@ -50,8 +50,22 @@
 # `--quality-delta --no-cache`-equivalent run with the qsnap blob deleted; every mutation must degrade
 # to the SAME byte-identical output.
 #
+# ── Part 2's huge-count arms, and why they run under a bounded allocator ──────────────────────────────
+# A checksum-valid qsnap blob whose vector count reads 0xFFFFFFFF used to reach `reserve` straight from the
+# blob: 32 GiB for a u64 vector. Linux (no overcommit for that size) threw std::bad_alloc, which nothing on
+# the CLI path catches — SIGABRT (134) on every run until the blob was evicted, reproduced on Ubuntu. The
+# macOS allocator overcommits the reservation and never touches it, so a plain macOS run of the same blob
+# exits 0 against the defect. The arms therefore run the huge-count mutations under a BOUND that turns the
+# reservation into the failure a small host would see: `ulimit -v` for a plain Linux binary, and ASan's
+# max_allocation_size_mb for an instrumented binary on any platform (the ASan sweep below carries it for
+# every mutation). A plain macOS binary has no such bound, and the arm says so rather than passing blind.
+# The layout offsets (magic 4, scheme 4, cacheVer 4, parserVer 4, producer 8, sha 8, then the ten field counts from
+# byte 32) are the ones deserializeSnapshot reads; the map-count and sha arms used to write at 16 and 8,
+# which a guard ahead of the one they were written for rejected first.
+#
 # ── Part 3: one out-of-range ENUM byte per field class in a checksum-valid ingest record (see its header below).
 # ── Part 4: a span-tier memo (ripwire-stier-*) tier byte past SpanTier — a blob with no checksum at all.
+# ── Part 5: qchurn blob (deserializeRawCommitStream) — the same huge-count rows for the churn memo ────────
 #
 # Usage:
 #   bash test/cachefuzzcheck.sh
@@ -90,6 +104,23 @@ stderr_sane(){
     lines="$( wc -l < "$f" | tr -d ' ' )"
     bytes="$( wc -c < "$f" | tr -d ' ' )"
     [ "$lines" -le "$STDERR_LINE_CAP" ] && [ "$bytes" -le "$STDERR_BYTE_CAP" ]
+}
+
+# The allocation bound the huge-count arms run under (header): which one `$1`'s build can take, or empty.
+bound_mode_of(){
+    if LC_ALL=C grep -q -a '__asan_init' "$1" 2>/dev/null; then echo asan
+    elif [ "$( uname -s )" = "Linux" ]; then echo ulimit
+    fi
+}
+# Run "$@" under bound mode $1. An address-space limit that cannot be set exits 97, so the caller reports a
+# skip instead of a pass that ran unbounded.
+bounded(){
+    local mode="$1"; shift
+    case "$mode" in
+        asan)   ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}max_allocation_size_mb=1024" "$@" ;;
+        ulimit) ( ulimit -v 8388608 2>/dev/null || exit 97; "$@" ) ;;
+        *)      "$@" ;;
+    esac
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -293,6 +324,25 @@ def mut_record_offset_inside_table(b):
     return with_recomputed_trailer(p)
 mutations["record_range_overlaps_table"] = mut_record_offset_inside_table
 
+def mut_table_offset_near_u64_max(b):
+    # a trailer naming a table offset one short of 2^64. The exact-fit check refused it, but through
+    # `tableOffset + entries + trailer`, a sum that wraps — which the G1 sanitizer build's -fsanitize=integer aborts on.
+    # Found by the reader fuzzer (test/fuzz/readers, reader ingestframe); the check is now written without the wrap.
+    p = bytearray(b)
+    struct.pack_into("<Q", p, len(p) - TRAILER, (1 << 64) - 1)
+    return bytes(p)
+mutations["table_offset_near_u64_max"] = mut_table_offset_near_u64_max
+
+def mut_record_offset_near_u64_max(b):
+    # a table entry whose record offset is 16 short of 2^64 with a 64-byte length: `recOffset + recLength` wrapped to 48,
+    # which is below the table offset, so the per-entry bound ACCEPTED the entry. The frame is rebuilt so every digest
+    # agrees; only a wrap-free bound can refuse it.
+    p = bytearray(b[:payload_len])
+    struct.pack_into("<Q", p, TABLE_OFF + 8, (1 << 64) - 16)
+    struct.pack_into("<I", p, TABLE_OFF + 24, 64)
+    return with_recomputed_trailer(p)
+mutations["record_offset_near_u64_max"] = mut_record_offset_near_u64_max
+
 # -- checksum mismatch only: a single deep bit flip, checksum left STALE (the shallowest guard alone) --
 def mut_deep_bitflip_stale(b):
     # inside record[0], leaving BOTH digests stale: the table is untouched so tableSum still verifies,
@@ -405,7 +455,7 @@ SYMDANGLE="$TMP/symlink_dangling.cache"
 ln -sf "$TMP/does_not_exist_$$" "$SYMDANGLE"
 run_one_dev "symlink_dangling" "$SYMDANGLE"
 
-# ── disclosure (2026-09-06 stranger audit): a Release binary keeps NO DEGRADED_PATH_ALERT, so every reject
+# ── disclosure (2026-09-06 stranger audit): a Release binary keeps NO DISCLOSE, so every reject
 #    above used to be byte-identical to a healthy run — a torn blob, an older binary's blob, a full disk: all
 #    silent, every run. The map stays byte-identical (arms above); stderr now says what happened, once. The
 #    ordinary cold-start miss stays silent, and a good cache says nothing (the controls). ──
@@ -430,6 +480,44 @@ for dname in trailer_bytes_corrupted empty_file; do
         ok "[disclose:$dname] stderr names the cache file and the reject reason"
     else
         no "[disclose:$dname] no disclosure on stderr for a rejected cache: $(head -c 200 "$TMP/disc_$dname.err")"
+    fi
+done
+# A record offset near 2^64 is a CORRUPT FRAME, refused whole — not a table entry whose read fails later. The per-entry
+# bound was `recOffset + recLength > tableOffset`; at recOffset = 2^64-16, recLength = 64 the sum wrapped to 48 and the
+# entry was accepted (blob_entries=6, one "read failed mid-load" reparse). Its control is the non-wrapping twin already in
+# the table, a record range reaching into the table, which both forms refuse. Cut fresh from $GOOD like the two above.
+python3 - "$GOOD" "$DISCDIR" <<'PYWRAP'
+import struct, sys
+good, outdir = sys.argv[1], sys.argv[2]
+b = open(good, "rb").read()
+TABLE_OFF, N = struct.unpack_from("<QI", b, len(b) - 24)[0:2]
+def blob_checksum(data):
+    P, M = 1099511628211, (1 << 64) - 1
+    lane = [1469598103934665603, 1099511628211, 0x100000001b3, 0x9e3779b97f4a7c15,
+            0xc2b2ae3d27d4eb4f, 0x165667b19e3779f9, 0xff51afd7ed558ccd, 0xc4ceb9fe1a85ec53]
+    k8 = len(data) - len(data) % 8
+    for i in range(0, k8, 8):
+        for k in range(8):
+            lane[k] = ((lane[k] ^ data[i + k]) * P) & M
+    for k, i in enumerate(range(k8, len(data))):
+        lane[k] = ((lane[k] ^ data[i]) * P) & M
+    h = 1469598103934665603
+    for k in range(8):
+        h = ((h ^ lane[k]) * P) & M
+    return h
+for name, off in (("record_offset_near_u64_max", (1 << 64) - 16), ("record_range_overlaps_table", TABLE_OFF)):
+    p = bytearray(b[:len(b) - 24])
+    struct.pack_into("<Q", p, TABLE_OFF + 8, off)
+    struct.pack_into("<I", p, TABLE_OFF + 24, 64)
+    tbl = bytes(p[:25]) + bytes(p[TABLE_OFF:TABLE_OFF + N * 32])
+    open("%s/%s.cache" % (outdir, name), "wb").write(bytes(p) + struct.pack("<QIIQ", TABLE_OFF, N, 0, blob_checksum(tbl)))
+PYWRAP
+for dname in record_range_overlaps_table record_offset_near_u64_max; do
+    RIPWIRE_CACHE_STATS=1 "$BIN" "$FIXTURE" --cache="$DISCDIR/$dname.cache" --no-stable >/dev/null 2>"$TMP/disc_$dname.err"
+    if grep -q "ripwire: cache .*$dname.cache: corrupt-frame — not used" "$TMP/disc_$dname.err" && grep -q 'blob_entries=0' "$TMP/disc_$dname.err"; then
+        ok "[disclose:$dname] refused whole as corrupt-frame (blob_entries=0), never read entry by entry"
+    else
+        no "[disclose:$dname] expected a corrupt-frame refusal with blob_entries=0, got: $( grep -E 'ripwire: cache|cache-stats' "$TMP/disc_$dname.err" | tr '\n' ' ' | cut -c1-220 )"
     fi
 done
 "$BIN" "$FIXTURE" --cache="$GOOD" --no-stable >/dev/null 2>"$TMP/disc_good.err"
@@ -530,10 +618,11 @@ else
     ok "Part 2: baseline qsnap blob produced ($QBLOB)"
     cp "$QBLOB" "$TMP/q_good.bin"
 
-    python3 - "$TMP/q_good.bin" "$MUTDIR" <<'PYEOF'
+    QHEAD="$( git -C "$QREPO" rev-parse --verify HEAD 2>/dev/null )"
+    python3 - "$TMP/q_good.bin" "$MUTDIR" "$QHEAD" <<'PYEOF' || no "Part 2: the qsnap header layout this table mutates no longer matches the blob (see the line above) — the offset rows would be refused by an earlier guard and prove nothing"
 import struct, sys
 
-good_path, outdir = sys.argv[1], sys.argv[2]
+good_path, outdir, head_sha = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(good_path, "rb") as f:
     good = bytearray(f.read())
 
@@ -565,17 +654,40 @@ def mut_wrong_scheme(b):
     p = bytearray(b[:body_len]); v = struct.unpack_from("<I", p, 4)[0]; struct.pack_into("<I", p, 4, v + 1); return with_recomputed_trailer(p)
 muts["qsnap_wrong_scheme_recomputed_checksum"] = mut_wrong_scheme
 
+# The offset rows below are only worth anything if they write where deserializeSnapshot READS — a row that lands in
+# a field an earlier guard checks is refused by that guard and passes while proving nothing (the stale-offset
+# defect these rows were rewritten for). So the layout is VERIFIED on the good blob before any row is built: the
+# u64 at QSNAP_SHA_OFF must be fnv1a64(HEAD sha), the field the reader checks last before the counts. A header
+# that grows a field moves the sha and fails here loudly, instead of silently re-aiming every row.
+QSNAP_SHA_OFF    = 24   # magic(4) + scheme(4) + cacheVer(4) + parserVer(4) + producer(8): the producer identity (qsnapproducercheck)
+QSNAP_COUNTS_OFF = QSNAP_SHA_OFF + 8   # the first of the ten field counts (7 maps, then 3 u64 vectors)
+if len(good) < QSNAP_COUNTS_OFF + 8 or struct.unpack_from("<Q", good, QSNAP_SHA_OFF)[0] != fnv1a64(head_sha.encode()):
+    print("qsnap layout: the u64 at offset %d is not fnv1a64(HEAD sha %s)" % (QSNAP_SHA_OFF, head_sha or "<none>"))
+    sys.exit(3)
+
 def mut_wrong_sha(b):
-    p = bytearray(b[:body_len]); struct.pack_into("<Q", p, 8, 0xDEADBEEFDEADBEEF & ((1<<64)-1)); return with_recomputed_trailer(p)
+    p = bytearray(b[:body_len]); struct.pack_into("<Q", p, QSNAP_SHA_OFF, 0xDEADBEEFDEADBEEF & ((1<<64)-1)); return with_recomputed_trailer(p)
 muts["qsnap_wrong_sha_recomputed_checksum"] = mut_wrong_sha
 
 def mut_huge_map_count(b):
     p = bytearray(b[:body_len])
-    off = 16   # first field-map count (ccxBySym), right after magic(4)+scheme(4)+sha(8)
-    if off + 4 <= len(p):
-        struct.pack_into("<I", p, off, 0xFFFFFFF0)
+    struct.pack_into("<I", p, QSNAP_COUNTS_OFF, 0xFFFFFFF0)   # ccxBySym's count
     return with_recomputed_trailer(p)
 muts["qsnap_huge_map_count_recomputed_checksum"] = mut_huge_map_count
+
+# The three VECTOR counts (cloneGroups, dead, publicApi): the maps ahead of them read as empty, and the
+# target count claims 0xFFFFFFFF u64 records in a body with none left. Each is its own row so a guard on one
+# vector cannot hide a missing guard on another.
+def huge_vec_count(field):
+    def mut(b):
+        p = bytearray(b[:QSNAP_COUNTS_OFF])
+        for _ in range(7 + field):
+            p += struct.pack("<I", 0)
+        p += struct.pack("<I", 0xFFFFFFFF)
+        return with_recomputed_trailer(p)
+    return mut
+for field, name in enumerate(("clonegroups", "dead", "publicapi")):
+    muts["qsnap_huge_vec_count_" + name + "_recomputed_checksum"] = huge_vec_count(field)
 
 def mut_garbage_body(b):
     p = bytearray(b[:body_len])
@@ -611,7 +723,7 @@ print("\n".join(sorted(names)))
 PYEOF
 
     QMUT_NAMES=( $( ls "$MUTDIR"/qsnap_*.bin 2>/dev/null | xargs -n1 basename | sed 's/\.bin$//' | sort ) )
-    for name in "${QMUT_NAMES[@]}"; do
+    for name in ${QMUT_NAMES[@]+"${QMUT_NAMES[@]}"}; do
         cp "$MUTDIR/$name.bin" "$QBLOB"
         out="$TMP/q_${name}.out"; err="$TMP/q_${name}.err"
         qrun >"$out" 2>"$err"; rc=$?
@@ -627,6 +739,33 @@ PYEOF
         fi
         cp "$TMP/q_good.bin" "$QBLOB"   # restore for the next mutation
     done
+
+    # The huge VECTOR counts once more, under a bound (see the header): red on a reader that reserves from the
+    # count, green on one that measures the count against the bytes left first.
+    QHUGE_NAMES=( $( ls "$MUTDIR"/qsnap_huge_vec_count_*.bin 2>/dev/null | xargs -n1 basename | sed 's/\.bin$//' | sort ) )
+    [ "${#QHUGE_NAMES[@]}" -eq 3 ] && ok "huge vector-count rows generated (${#QHUGE_NAMES[@]})" \
+                                   || no "expected 3 huge vector-count rows, generated ${#QHUGE_NAMES[@]}"
+    QBOUND="$( bound_mode_of "$BIN" )"
+    [ -n "$QBOUND" ] || note "huge vector counts: no allocation bound for a plain $( uname -s ) binary — its allocator overcommits the reservation, so only the ASan sweep below or a Linux run can turn these rows red"
+    if [ -n "$QBOUND" ]; then
+        for name in ${QHUGE_NAMES[@]+"${QHUGE_NAMES[@]}"}; do
+            cp "$MUTDIR/$name.bin" "$QBLOB"
+            out="$TMP/qb_${name}.out"; err="$TMP/qb_${name}.err"
+            bounded "$QBOUND" qrun >"$out" 2>"$err"; rc=$?
+            if [ "$rc" -eq 97 ]; then
+                skip "[bounded:$QBOUND:$name] the address-space limit could not be set here"
+            elif [ "$rc" -ne 0 ] || grep -qiE 'AddressSanitizer|bad_alloc|terminate called' "$err"; then
+                no "[bounded:$QBOUND:$name] exit $rc — the count reached an allocation before any byte-count check"; sed -n '1,6p' "$err"
+            elif ! diff -q "$TMP/q_truth" "$out" >/dev/null 2>&1; then
+                no "[bounded:$QBOUND:$name] OUTPUT POISONED under the bound"
+            elif ! grep -q 'HEAD Snapshot cache corrupt' "$err"; then
+                no "[bounded:$QBOUND:$name] exit 0 but the blob was not disclosed as corrupt"
+            else
+                ok "[bounded:$QBOUND:$name] exit 0, byte-identical, disclosed as a corrupt cache"
+            fi
+            cp "$TMP/q_good.bin" "$QBLOB"
+        done
+    fi
 
     # filesystem-shape: directory at the qsnap blob path.
     rm -f "$QBLOB"; mkdir -p "$QBLOB"
@@ -646,10 +785,27 @@ PYEOF
         echo
         echo "=== Part 2: qsnap mutation table — ASan build ==="
         asanq_fail=0
-        for name in "${QMUT_NAMES[@]}"; do
+        # PRESENCE GUARD — the ASan binary must READ the blob these rows mutate. The qsnap filename folds the
+        # PRODUCER IDENTITY (the build's source hash, quality.h producerIdentity), so an ASan binary built from
+        # different sources than $BIN looks up a different key, misses, recomputes cold, and every row below
+        # passes without ever opening its mutant. Measured on integration/train-1: a qsnapCountFits->true stub
+        # in the ASan build left all three huge vector-count rows green here while the qchurn rows (not
+        # producer-keyed) went red. A corrupt blob at $QBLOB must make that binary say so on stderr.
+        cp "$MUTDIR/qsnap_wrong_magic_recomputed_checksum.bin" "$QBLOB"
+        env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$ASAN_BIN" "$QREPO" --quality-delta >/dev/null 2>"$TMP/qasan_guard.err"
+        cp "$TMP/q_good.bin" "$QBLOB"
+        if grep -q 'HEAD Snapshot cache corrupt' "$TMP/qasan_guard.err"; then
+            ok "qsnap ASan sweep reads the blob its rows mutate (a corrupt blob at that path is disclosed by $( basename "$ASAN_BIN" ))"
+        else
+            no "qsnap ASan sweep: $ASAN_BIN never read the blob at the mutated path — it keys a different qsnap blob (built from different sources than $BIN?), so every row below would pass unread. Rebuild both from one tree."
+            asanq_fail=1
+            QMUT_NAMES=()
+        fi
+        for name in ${QMUT_NAMES[@]+"${QMUT_NAMES[@]}"}; do
             cp "$MUTDIR/$name.bin" "$QBLOB" 2>/dev/null || { mkdir -p "$( dirname "$QBLOB" )"; cp "$MUTDIR/$name.bin" "$QBLOB"; }
             err="$TMP/qasan_${name}.err"
-            ASAN_OPTIONS="halt_on_error=1:abort_on_error=0" env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$ASAN_BIN" "$QREPO" --quality-delta >/dev/null 2>"$err"
+            # max_allocation_size_mb: the bound the huge-count rows need to go red on an overcommitting host (header).
+            ASAN_OPTIONS="halt_on_error=1:abort_on_error=0:max_allocation_size_mb=1024" env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$ASAN_BIN" "$QREPO" --quality-delta >/dev/null 2>"$err"
             rc=$?
             if grep -qiE 'AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|heap-buffer-overflow|stack-buffer-overflow|SEGV|ERROR: ' "$err" || [ "$rc" -ge 128 ]; then
                 no "[asan:$name] SANITIZER REPORT / crash (exit $rc)"; sed -n '1,10p' "$err"
@@ -694,6 +850,10 @@ fi
 #       never loaded (a key mismatch, an earlier refusal) would otherwise pass while proving nothing.
 # The enumerator counts are DERIVED from src/model.h, not written here, so appending an enumerator without
 # moving its k*Count constant turns (c)'s last-enumerator control red instead of going unnoticed.
+#
+# The same three runs cover the 16-BIT FIELDS the writer stores in a u32 slot (readDef's ppAlt and params,
+# readRef's argCount — hazardpatterncheck.sh rule D). `std::uint16_t( r.u32() )` kept the low bits of 0x10000
+# and believed a 0: (a) values 0x10000 and 0xFFFFFFFF must refuse that record, (c) 0xFFFF must be accepted.
 echo
 echo "=== Part 3: out-of-range enum byte in a checksum-valid ingest-cache record — DEV build ==="
 EFX="$TMP/enumfx"; mkdir -p "$EFX/ffi" "$EFX/routes"
@@ -758,15 +918,18 @@ for i in range(n):
         global p; ln = u32(); p += ln
     def site(cls):
         sites.setdefault(cls, (p, blob[p])); skip(1)
+    def site32(cls, rel):                                                 # a u32 slot `rel` bytes ahead; p does not move
+        sites.setdefault(cls, (p + rel, struct.unpack_from("<I", blob, p + rel)[0]))
     s(); skip(4 * 8 + 5 * 4)                                              # path, hash/size/mtime/ctime, FileHealth
     for _ in range(u32()):                                                # defs (LEAN family: no subtoken rows)
+        site32("def.ppAlt", 9 * 4); site32("def.params", 13 * 4)
         skip(14 * 4 + 5); site("def.kind"); site("def.lang"); s(); s(); skip(8)
     for _ in range(u32()):                                                # refs
-        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); skip(9)
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(10)   # line, argCount, argCountKnown, viaArrow
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds
-        skip(4); site("bind.lang"); site("bind.kind"); skip(8); s(); s(); s()
+        skip(4); site("bind.lang"); site("bind.kind"); skip(1 + 8); s(); s(); s()   # isFromAssignment, spanStart/End
     for _ in range(u32()):                                                # FFI aliases
         site("ffi.kind"); skip(1); s(); s(); s()
     for _ in range(u32()):                                                # route defs
@@ -793,8 +956,12 @@ def blob_checksum(data):
         h = ((h ^ lane[k]) * P) & M
     return h
 
-def rebuilt_with(off, value):
-    b = bytearray(blob); b[off] = value
+def rebuilt_with(off, value, width=1):
+    b = bytearray(blob)
+    if width == 1:
+        b[off] = value
+    else:
+        struct.pack_into("<I", b, off, value)
     for i in range(n):
         e = table_off + i * ENTRY
         ro = struct.unpack_from("<Q", b, e + 8)[0]; rl = struct.unpack_from("<I", b, e + 24)[0]
@@ -814,6 +981,14 @@ for cls, enum in ENUM_OF.items():
         path = f"{outdir}/{cls}.{tag}.cache"
         open(path, "wb").write(data)
         print(f"{cls}\t{enum}\t{tag}\t{value}\t{orig}\t{c}")
+for cls in ("def.ppAlt", "def.params", "ref.argCount"):
+    if cls not in sites:
+        print(f"{cls}\tu16\tABSENT\t-\t-\t-")
+        continue
+    off, orig = sites[cls]
+    for tag, value in (("wide", 0x10000), ("allones", 0xFFFFFFFF), ("inrange", 0xFFFF)):
+        open(f"{outdir}/{cls}.{tag}.cache", "wb").write(rebuilt_with(off, value, 4))
+        print(f"{cls}\tu16\t{tag}\t{value}\t{orig}\t65536")
 PYEOF
 planRc=$?
 if [ "$planRc" -ne 0 ]; then
@@ -826,6 +1001,7 @@ elif [ -n "$GOOD_RECORDS" ]; then
             continue
         fi
         mutant="$EDIR/$cls.$tag.cache"
+        if [ "$enum" = "u16" ]; then what="16-bit field stored wider than 16 bits"; else what="$enum byte past the last enumerator (count $enumCount)"; fi
         if cmp -s "$mutant" "$EDIR/good.cache"; then
             no "[enum:$cls=$value] the mutation did not take (mutant equals the good cache)"
             continue
@@ -836,23 +1012,23 @@ elif [ -n "$GOOD_RECORDS" ]; then
         records="$( cachedRecords "$EDIR/out.err" )"
         if [ "$tag" = "inrange" ]; then
             if [ "$rc" -eq 0 ] && [ "$records" = "$GOOD_RECORDS" ]; then
-                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the enum read"
+                ok "[enum:$cls control] in-range $enum value $value (was $orig): record accepted, cached_records=$records of $GOOD_RECORDS — the arms reach the field read"
             else
-                no "[enum:$cls control] in-range $enum value $value (last enumerator of $enumCount, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale k*Count bound, or a digest the mutation did not rebuild"
+                no "[enum:$cls control] in-range $enum value $value (the largest value that fits, or 0) was REFUSED or crashed: exit $rc, cached_records=${records:-none} of $GOOD_RECORDS — a stale bound, or a digest the mutation did not rebuild"
             fi
             continue
         fi
         if [ "$rc" -ge 128 ]; then
-            no "[enum:$cls=$value] CRASH — exit $rc on a $enum byte past the last enumerator"
+            no "[enum:$cls=$value] CRASH — exit $rc on a $what"
         elif [ "$rc" -ne 0 ]; then
             no "[enum:$cls=$value] nonzero exit ($rc) — an out-of-range cache byte must degrade, not fail the run"
         elif [ "$records" != "$expectRefused" ]; then
-            no "[enum:$cls=$value] $enum byte past the last enumerator (count $enumCount) was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
+            no "[enum:$cls=$value] $what was ACCEPTED: cached_records=${records:-none}, expected $expectRefused of $GOOD_RECORDS"
         elif ! cmp -s "$EDIR/truth.xml" "$EDIR/out.xml"; then
             no "[enum:$cls=$value] record refused but the output still differs from --no-cache"
             diff "$EDIR/truth.xml" "$EDIR/out.xml" | head -4
         else
-            ok "[enum:$cls=$value] $enum past the last enumerator: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
+            ok "[enum:$cls=$value] $what: that record refused (cached_records=$records of $GOOD_RECORDS), output byte-identical to --no-cache"
         fi
     done <"$EDIR/plan.tsv"
 
@@ -1013,6 +1189,103 @@ PYEOF
             skip "Part 4 ASan sweep — no ASan binary supplied at $ASAN_BIN (see Part 1's skip)"
         fi
     fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# PART 5 — qchurn blob (deserializeRawCommitStream) — the co-change/churn history memo behind --for
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Same reader family as Part 2 (readQSnapBlob + qsnapGet), a different layout: magic "QCHN"(4), scheme(4),
+# fnv(key)(8), then a u32 commit count, and per commit an i64 epoch and a u32 path count ahead of its
+# length-prefixed paths. Both counts used to size a reserve before any byte of the records was read: 2^32-1
+# commits is ~128 GiB and 2^32-1 paths ~96 GiB, and Linux answered either with an uncaught std::bad_alloc
+# (SIGABRT on every --for until the blob was evicted). A rejected blob is a SILENT miss by this memo's contract
+# (a stale key is the ordinary case), so the proof that the reader refused it rather than trusting it is that
+# the recompute rewrote the blob byte-identical to the good one.
+echo
+echo "=== Part 5: qchurn blob huge counts (--for) ==="
+if command -v git >/dev/null 2>&1 && [ -n "${QREPO:-}" ] && [ -d "$QREPO" ]; then
+    crun(){ env -u TMPDIR XDG_CACHE_HOME="$QXDG" "$@" "$QREPO" --for=helper; }
+    crun "$BIN" >"$TMP/c_truth" 2>/dev/null                 # cold: walks git log, writes the blob
+    CBLOB="$( find "$QCACHEDIR" -maxdepth 2 -type f -name 'ripwire-qchurn-*.bin' 2>/dev/null | head -1 )"
+    if [ -z "$CBLOB" ]; then
+        no "Part 5: no qchurn blob produced — cannot proceed with the qchurn rows"
+    else
+        cp "$CBLOB" "$TMP/c_good.bin"
+        crun "$BIN" >"$TMP/c_warm" 2>/dev/null
+        diff -q "$TMP/c_truth" "$TMP/c_warm" >/dev/null && ok "Part 5: the warm qchurn run is byte-identical to the cold one" \
+                                                         || no "Part 5: the warm qchurn run already differs from the cold one — the harness cannot judge a mutation"
+        python3 - "$TMP/c_good.bin" "$MUTDIR" <<'PYEOF3' || no "Part 5: the qchurn layout the rows mutate no longer matches the blob (see the line above) — they would prove nothing"
+import struct, sys
+good = open(sys.argv[1], "rb").read()
+def fnv1a64(data):
+    h = 14695981039346656037
+    for c in data:
+        h = ((h ^ c) * 1099511628211) & ((1 << 64) - 1)
+    return h
+QCHURN_COUNT_OFF = 16   # magic(4) + scheme(4) + fnv(key)(8): the key check must pass for the count to be read at all
+# Verify the layout on the good blob before aiming a row at it: walking commits and paths from QCHURN_COUNT_OFF must
+# land exactly on the trailer. A header that grew a field would make that walk miss, and the rows would then be
+# refused by an earlier guard while passing — so a miss fails the arm instead.
+off = QCHURN_COUNT_OFF
+try:
+    (n_commits,) = struct.unpack_from("<I", good, off); off += 4
+    for _ in range(n_commits):
+        off += 8
+        (n_paths,) = struct.unpack_from("<I", good, off); off += 4
+        for _ in range(n_paths):
+            (length,) = struct.unpack_from("<I", good, off); off += 4 + length
+except struct.error:
+    off = -1
+if off != len(good) - 8:
+    print("qchurn layout: walking the good blob from offset %d does not land on its trailer" % QCHURN_COUNT_OFF)
+    sys.exit(3)
+header = good[:QCHURN_COUNT_OFF]
+rows = {
+    "qchurn_huge_commit_count": header + struct.pack("<I", 0xFFFFFFFF),
+    "qchurn_huge_path_count":   header + struct.pack("<I", 1) + struct.pack("<q", 0) + struct.pack("<I", 0xFFFFFFFF),
+}
+for name, body in rows.items():
+    open(sys.argv[2] + "/" + name + ".bin", "wb").write(body + struct.pack("<Q", fnv1a64(body)))
+PYEOF3
+        CBOUND="$( bound_mode_of "$BIN" )"
+        [ -n "$CBOUND" ] || note "qchurn huge counts: no allocation bound for a plain $( uname -s ) binary — its allocator overcommits the reservation, so only the ASan leg or a Linux run can turn these rows red"
+        judge_qchurn(){   # $1 = row label, $2 = rc, $3 = out, $4 = err
+            if [ "$2" -eq 97 ]; then
+                skip "[$1] the address-space limit could not be set here"
+            elif [ "$2" -ne 0 ] || grep -qiE 'AddressSanitizer|bad_alloc|terminate called' "$4"; then
+                no "[$1] exit $2 — a qchurn count reached an allocation before any byte-count check"; sed -n '1,6p' "$4"
+            elif ! diff -q "$TMP/c_truth" "$3" >/dev/null 2>&1; then
+                no "[$1] OUTPUT POISONED by the corrupt qchurn blob"
+            elif ! cmp -s "$TMP/c_good.bin" "$CBLOB"; then
+                no "[$1] exit 0, but the blob on disk is not the recomputed one — the reader did not reject it"
+            else
+                ok "[$1] exit 0, byte-identical, and the recompute rewrote the rejected blob"
+            fi
+        }
+        # The unbounded row is a CORRECTNESS row: it proves the blob is refused and rewritten, and it is named so,
+        # because on an overcommitting allocator it cannot see the allocation. Only the bounded and ASan legs can.
+        for name in qchurn_huge_commit_count qchurn_huge_path_count; do
+            [ -f "$MUTDIR/$name.bin" ] || { no "[$name] no mutant was built — nothing to judge"; continue; }
+            cp "$MUTDIR/$name.bin" "$CBLOB"
+            crun "$BIN" >"$TMP/c_$name.out" 2>"$TMP/c_$name.err"; rc=$?
+            judge_qchurn "correctness:$name" "$rc" "$TMP/c_$name.out" "$TMP/c_$name.err"
+            if [ -n "$CBOUND" ]; then
+                cp "$MUTDIR/$name.bin" "$CBLOB"
+                bounded "$CBOUND" crun "$BIN" >"$TMP/cb_$name.out" 2>"$TMP/cb_$name.err"; rc=$?
+                judge_qchurn "bounded:$CBOUND:$name" "$rc" "$TMP/cb_$name.out" "$TMP/cb_$name.err"
+            fi
+            if [ -x "$ASAN_BIN" ] && [ "$ASAN_BIN" != "$BIN" ]; then
+                cp "$MUTDIR/$name.bin" "$CBLOB"
+                bounded asan crun "$ASAN_BIN" >"$TMP/ca_$name.out" 2>"$TMP/ca_$name.err"; rc=$?
+                judge_qchurn "asan:$name" "$rc" "$TMP/ca_$name.out" "$TMP/ca_$name.err"
+            elif [ "$CBOUND" != "asan" ]; then
+                skip "[asan:$name] no separate sanitizer binary at ${ASAN_BIN:-<unset>} — the instrumented leg did not run"
+            fi
+            cp "$TMP/c_good.bin" "$CBLOB"
+        done
+    fi
+else
+    skip "Part 5: needs git and Part 2's scratch repository"
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# noaliascheck.sh — VERIFY_NO_ALIAS (src/infra/Diagnostics.h §6) is a DEBUG CHECK and a RELEASE OPTIMIZER FACT.
+# noaliascheck.sh — ASSUME_NO_ALIAS (src/infra/Diagnostics.h §6) is a DEBUG CHECK and a RELEASE OPTIMIZER FACT.
 #
 # THE DEFICIENCY THIS GATE EXISTS FOR (measured 2026-09-12, Apple clang 21, arm64 and x86-64). The macro
-# used to be `VERIFY_TEXT( &a != &b, … )`, which -DNDEBUG lowers to `__builtin_assume( &a != &b )`. LLVM
+# used to be `ASSUME( &a != &b, … )`, which -DNDEBUG lowers to `__builtin_assume( &a != &b )`. LLVM
 # keeps that assume in the IR and alias analysis never reads it: codegen was BYTE-IDENTICAL to having no
 # macro at all, while the header said "the no-alias contract that __restrict would assert". The
 # replacement adds `__builtin_assume_separate_storage( &a, &b )` (clang 17+), which BasicAA does consume;
@@ -11,7 +11,7 @@
 # ARMS. Every optimizer arm compiles its OWN probe with the system compiler at -O2 -DNDEBUG, because the dev
 # build (no build type) never defines NDEBUG and the release expansion is otherwise only ever exercised by
 # CI's Release flavour:
-#   1  debug catches:  VERIFY_NO_ALIAS3( out, a, b ) with distinct objects exits 0; `acc( x, y, x )` traps and
+#   1  debug catches:  ASSUME_NO_ALIAS3( out, a, b ) with distinct objects exits 0; `acc( x, y, x )` traps and
 #                      stderr names BOTH expressions ('out' and 'b').
 #   2  release optimizes: the function's IR carries "separate_storage" and NO reload of `a` after the store
 #                      to `out`; the objdump instruction count sits in a band BELOW the plain function.
@@ -28,8 +28,8 @@
 #                      `__has_builtin( __remove_reference_t )` and refuses to compile with the macro forced
 #                      to 0, and the debug header includes <atomic>. The debug fallback is compiled for real
 #                      by arms 1 and 7 whenever $CXX is a compiler without the builtin (the gcc CI legs).
-#   6  buffer form:    VERIFY_NO_ALIAS_BUF( dst, src ) on two std::vector<uint32_t> makes the release
-#                      `dst[i] += src[i]*3` loop SHORTER than plain; VERIFY_NO_ALIAS on the same two OBJECTS
+#   6  buffer form:    ASSUME_NO_ALIAS_BUF( dst, src ) on two std::vector<uint32_t> makes the release
+#                      `dst[i] += src[i]*3` loop SHORTER than plain; ASSUME_NO_ALIAS on the same two OBJECTS
 #                      must NOT (the header separation says nothing about the heap buffers) — the buffer
 #                      form's negative control.
 #   7  buffer debug:   two EMPTY vectors pass (the promise over two null data() is vacuous); the same vector
@@ -103,7 +103,7 @@ QUIET=( -Wno-macro-redefined -Wno-builtin-macro-redefined )
 [ -f "$HDR" ] || { echo "no $HDR"; exit 2; }
 command -v "$CXX" >/dev/null 2>&1 || { echo "no C++ compiler at $CXX"; exit 2; }
 command -v "$OBJDUMP" >/dev/null 2>&1 || { echo "no objdump at $OBJDUMP"; exit 2; }
-grep -q 'define VERIFY_NO_ALIAS' "$HDR" || { echo "  FAIL  presence guard: $HDR defines no VERIFY_NO_ALIAS"; exit 1; }
+grep -q 'define ASSUME_NO_ALIAS' "$HDR" || { echo "  FAIL  presence guard: $HDR defines no ASSUME_NO_ALIAS"; exit 1; }
 
 echo "noaliascheck: CXX=$CXX OBJDUMP=$OBJDUMP"
 
@@ -135,7 +135,7 @@ cat > "$WORK/probe.cpp" <<'EOF'
 // The definition this tree shipped before 2026-09-12, inlined verbatim as the NEGATIVE CONTROL: in release it
 // is a bare __builtin_assume( &a != &b ), which alias analysis never reads.
 #define OLD_NO_ALIAS( a, b )                                                                                   \
-    VERIFY_TEXT( static_cast<const void*>( &( a ) ) != static_cast<const void*>( &( b ) ),                     \
+    ASSUME( static_cast<const void*>( &( a ) ) != static_cast<const void*>( &( b ) ),                     \
                  "aliasing violation: '" #a "' and '" #b "' are the same object" )
 #define OLD_NO_ALIAS3( a, b, c ) do { OLD_NO_ALIAS( a, b ); OLD_NO_ALIAS( a, c ); OLD_NO_ALIAS( b, c ); } while( 0 )
 
@@ -143,7 +143,7 @@ extern "C" void noalias_probe_anchor() {}   // keeps the first real function off
 
 extern "C" __attribute__(( noinline )) void accNew( uint32_t& out, const uint32_t& a, const uint32_t& b )
 {
-    VERIFY_NO_ALIAS3( out, a, b );
+    ASSUME_NO_ALIAS3( out, a, b );
     out = a; out += b; out += a;
 }
 extern "C" __attribute__(( noinline )) void accOld( uint32_t& out, const uint32_t& a, const uint32_t& b )
@@ -240,7 +240,7 @@ if [ -x "$WORK/probe_dbg" ]; then
     # gate's output; the probe's stderr is the file
     ( "$WORK/probe_dbg" alias > "$WORK/d2.out" 2> "$WORK/d2.err"; exit $? ) 2>/dev/null; rc=$?
     if [ "$rc" != 0 ]; then ok "arm 1: acc( x, y, x ) traps in debug (rc=$rc)"
-    else no "arm 1: acc( x, y, x ) exited 0 in debug — VERIFY_NO_ALIAS3 did not fire"; fi
+    else no "arm 1: acc( x, y, x ) exited 0 in debug — ASSUME_NO_ALIAS3 did not fire"; fi
     if grep -q "'out' and 'b' are the same object" "$WORK/d2.err"; then ok "arm 1: stderr names both expressions ('out' and 'b')"
     else no "arm 1: stderr does not name 'out' and 'b'"; sed 's/^/    /' "$WORK/d2.err" | head -8; fi
 fi
@@ -313,14 +313,14 @@ cat > "$WORK/shape.cpp" <<'EOF'
 #include <cstdint>
 #include "Diagnostics.h"
 struct Buf { uint32_t* p; uint32_t* data() const { return p; } };
-void shapeScalar( uint32_t& p, uint32_t& q, uint32_t& r ) { VERIFY_NO_ALIAS( p, q ); VERIFY_NO_ALIAS3( p, q, r ); }
-void shapeBuf( Buf& d, Buf& s ) { VERIFY_NO_ALIAS_BUF( d, s ); }
+void shapeScalar( uint32_t& p, uint32_t& q, uint32_t& r ) { ASSUME_NO_ALIAS( p, q ); ASSUME_NO_ALIAS3( p, q, r ); }
+void shapeBuf( Buf& d, Buf& s ) { ASSUME_NO_ALIAS_BUF( d, s ); }
 EOF
 GCCSHAPE=( -U__clang__ -D__GNUC__=13 '-D__has_builtin(x)=0' "${QUIET[@]}" )
 if "$CXX" "$CXXSTD" -fsyntax-only -DNDEBUG "${GCCSHAPE[@]}" "${INC[@]}" "$WORK/shape.cpp" 2> "$WORK/cc5.log"; then ok "arm 5: header compiles with __has_builtin forced 0 and __clang__ undefined (-DNDEBUG)"
 else no "arm 5: header does not compile under the GCC shape (-DNDEBUG)"; sed 's/^/    /' "$WORK/cc5.log" | grep -E 'error' | head -8; fi
 # The probe functions are the LAST thing in the TU, so "from shapeScalar to end of file" is exactly their
-# expansion — clang's release VERIFY_TEXT carries _Pragma lines, which -E prints on lines of their own, so a
+# expansion — clang's release ASSUME carries _Pragma lines, which -E prints on lines of their own, so a
 # per-line grep on the function name would see only the first line of each.
 "$CXX" "$CXXSTD" -E -DNDEBUG "${GCCSHAPE[@]}" "${INC[@]}" "$WORK/shape.cpp" 2>/dev/null | sed -n '/shapeScalar/,$p' > "$WORK/shape.pp"
 grep -q 'shapeScalar' "$WORK/shape.pp" || no "arm 5: preprocessed output lost the probe functions (wrong artifact)"
@@ -332,7 +332,7 @@ if [ "$HAS_BUILTIN" = 1 ]; then
     else no "arm 5: NO CONTRAST — the natural expansion never reaches the builtin either; the fallback arm proves nothing"; fi
 fi
 
-# ── the buffer probe: VERIFY_NO_ALIAS_BUF (axpyBuf) vs VERIFY_NO_ALIAS on the objects (axpyObj) vs plain ──────
+# ── the buffer probe: ASSUME_NO_ALIAS_BUF (axpyBuf) vs ASSUME_NO_ALIAS on the objects (axpyObj) vs plain ──────
 cat > "$WORK/bufprobe.cpp" <<'EOF'
 #include <cstdint>
 #include <cstdio>
@@ -348,12 +348,12 @@ extern "C" __attribute__(( noinline )) void axpyPlain( std::vector<uint32_t>& ds
 }
 extern "C" __attribute__(( noinline )) void axpyObj( std::vector<uint32_t>& dst, const std::vector<uint32_t>& src )
 {
-    VERIFY_NO_ALIAS( dst, src );
+    ASSUME_NO_ALIAS( dst, src );
     for( std::size_t i = 0; i < dst.size(); ++i ) { dst[ i ] += src[ i ] * 3u; }
 }
 extern "C" __attribute__(( noinline )) void axpyBuf( std::vector<uint32_t>& dst, const std::vector<uint32_t>& src )
 {
-    VERIFY_NO_ALIAS_BUF( dst, src );
+    ASSUME_NO_ALIAS_BUF( dst, src );
     for( std::size_t i = 0; i < dst.size(); ++i ) { dst[ i ] += src[ i ] * 3u; }
 }
 // The builtin on the BUFFERS called directly, no header macro: the loop-path classification probe (LOOP_CONSUMED
@@ -399,14 +399,14 @@ if [ "$RELEASE_ARMS" = 1 ]; then
         LOOPCLASS=LOOP_NOT_CONSUMED; [ "$bBuiltin" -ge 8 ] && [ "$bBuiltin" -le $(( bPlain - 2 )) ] && LOOPCLASS=LOOP_CONSUMED
         echo "  info  optimizer reaches the LOOP vectorizer with \"separate_storage\": $LOOPCLASS (axpyBuiltin $bBuiltin vs plain $bPlain)"
         if [ "$LOOPCLASS" = LOOP_CONSUMED ]; then
-            if [ "$bBuf" -ge 8 ] && [ "$bBuf" -le $(( bPlain - 2 )) ]; then ok "arm 6: VERIFY_NO_ALIAS_BUF loop $bBuf instructions, at least 2 below plain ($bPlain)"
-            else no "arm 6: VERIFY_NO_ALIAS_BUF loop $bBuf instructions is not below plain ($bPlain) — the buffer promise bought nothing, and the direct builtin did ($bBuiltin): the header is what is wrong"; fi
-            if [ "$bObj" -ge $(( bPlain - 1 )) ]; then ok "arm 6: negative control — VERIFY_NO_ALIAS on the two OBJECTS leaves the loop at $bObj (plain $bPlain)"
+            if [ "$bBuf" -ge 8 ] && [ "$bBuf" -le $(( bPlain - 2 )) ]; then ok "arm 6: ASSUME_NO_ALIAS_BUF loop $bBuf instructions, at least 2 below plain ($bPlain)"
+            else no "arm 6: ASSUME_NO_ALIAS_BUF loop $bBuf instructions is not below plain ($bPlain) — the buffer promise bought nothing, and the direct builtin did ($bBuiltin): the header is what is wrong"; fi
+            if [ "$bObj" -ge $(( bPlain - 1 )) ]; then ok "arm 6: negative control — ASSUME_NO_ALIAS on the two OBJECTS leaves the loop at $bObj (plain $bPlain)"
             else no "arm 6: negative control lost — the object form ALSO shortened the loop ($bObj vs plain $bPlain); the buffer form is no longer the discriminating one"; fi
         else
             warn "arm 6: LOOP_NOT_CONSUMED on $CXXID — the direct builtin leaves the loop at $bBuiltin (plain $bPlain): this optimizer does not carry \"separate_storage\" into the loop vectorizer (llvm/llvm-project#64666, fixed in LLVM 18 by #76770); the loop-shortening rows are not claimed here"
-            if [ "$bBuf" -le "$bBuiltin" ]; then ok "arm 6: VERIFY_NO_ALIAS_BUF loop $bBuf instructions is no worse than the direct builtin ($bBuiltin) — the header is not the limit"
-            else no "arm 6: VERIFY_NO_ALIAS_BUF loop $bBuf instructions is WORSE than the direct builtin ($bBuiltin) — the header costs something the builtin does not"; fi
+            if [ "$bBuf" -le "$bBuiltin" ]; then ok "arm 6: ASSUME_NO_ALIAS_BUF loop $bBuf instructions is no worse than the direct builtin ($bBuiltin) — the header is not the limit"
+            else no "arm 6: ASSUME_NO_ALIAS_BUF loop $bBuf instructions is WORSE than the direct builtin ($bBuiltin) — the header costs something the builtin does not"; fi
         fi
     else
         no "arm 6: buffer probe failed to compile"; sed 's/^/    /' "$WORK/cc6.log"
@@ -425,7 +425,7 @@ if "$CXX" "$CXXSTD" -O1 -g -Wall -Wextra "${INC[@]}" "$WORK/bufprobe.cpp" "$ROOT
     else no "arm 7: distinct / empty vectors: rc=$rc out=$( cat "$WORK/b1.out" )"; sed 's/^/    /' "$WORK/b1.err" | head -8; fi
     ( "$WORK/buf_dbg" same > "$WORK/b2.out" 2> "$WORK/b2.err"; exit $? ) 2>/dev/null; rc=$?
     if [ "$rc" != 0 ]; then ok "arm 7: axpyBuf( v, v ) traps in debug (rc=$rc)"
-    else no "arm 7: axpyBuf( v, v ) exited 0 in debug — VERIFY_NO_ALIAS_BUF did not fire"; fi
+    else no "arm 7: axpyBuf( v, v ) exited 0 in debug — ASSUME_NO_ALIAS_BUF did not fire"; fi
     if grep -q "'dst' and 'src' are the same container" "$WORK/b2.err"; then ok "arm 7: stderr names both expressions ('dst' and 'src')"
     else no "arm 7: stderr does not name 'dst' and 'src'"; sed 's/^/    /' "$WORK/b2.err" | head -8; fi
 else
@@ -485,7 +485,7 @@ else
     warn "arm 8 skipped: $CXX has no __builtin_assume_separate_storage or rejects -mllvm (accepted: $FLAG_ACCEPTED)"
 fi
 
-# ── arm 9: VERIFY_NO_ALIAS_BUF refuses views at compile time — two std::span can look into ONE allocation ───
+# ── arm 9: ASSUME_NO_ALIAS_BUF refuses views at compile time — two std::span can look into ONE allocation ───
 # separate_storage is a promise per ALLOCATION; two non-overlapping spans over one vector would make it a lie the
 # release build acts on while the object check passes. The header static_asserts on Diagnostics::detail::isView.
 cat > "$WORK/view.cpp" <<'EOF9'
@@ -494,12 +494,12 @@ cat > "$WORK/view.cpp" <<'EOF9'
 #include <string_view>
 #include <vector>
 #include "Diagnostics.h"
-void spanPair( std::span<uint32_t> d, std::span<const uint32_t> s ) { VERIFY_NO_ALIAS_BUF( d, s ); (void)d; (void)s; }
+void spanPair( std::span<uint32_t> d, std::span<const uint32_t> s ) { ASSUME_NO_ALIAS_BUF( d, s ); (void)d; (void)s; }
 EOF9
 cat > "$WORK/view2.cpp" <<'EOF9'
 #include <string_view>
 #include "Diagnostics.h"
-void svPair( std::string_view a, std::string_view b ) { VERIFY_NO_ALIAS_BUF( a, b ); (void)a; (void)b; }
+void svPair( std::string_view a, std::string_view b ) { ASSUME_NO_ALIAS_BUF( a, b ); (void)a; (void)b; }
 EOF9
 cat > "$WORK/owner.cpp" <<'EOF9'
 #include <array>
@@ -507,10 +507,10 @@ cat > "$WORK/owner.cpp" <<'EOF9'
 #include <vector>
 #include "Diagnostics.h"
 void owners( std::vector<int>& v, std::string& s, std::array<int, 4>& a, std::vector<int>& w, std::string& t, std::array<int, 4>& b )
-{ VERIFY_NO_ALIAS_BUF( v, w ); VERIFY_NO_ALIAS_BUF( s, t ); VERIFY_NO_ALIAS_BUF( a, b ); }
+{ ASSUME_NO_ALIAS_BUF( v, w ); ASSUME_NO_ALIAS_BUF( s, t ); ASSUME_NO_ALIAS_BUF( a, b ); }
 EOF9
 for f in view view2; do
-    if "$CXX" "$CXXSTD" -fsyntax-only "${INC[@]}" "$WORK/$f.cpp" 2> "$WORK/cc9_$f.log"; then no "arm 9: $f.cpp (a pair of views) COMPILED — VERIFY_NO_ALIAS_BUF no longer refuses views"
+    if "$CXX" "$CXXSTD" -fsyntax-only "${INC[@]}" "$WORK/$f.cpp" 2> "$WORK/cc9_$f.log"; then no "arm 9: $f.cpp (a pair of views) COMPILED — ASSUME_NO_ALIAS_BUF no longer refuses views"
     elif grep -q 'can share one allocation with another view' "$WORK/cc9_$f.log"; then ok "arm 9: $f.cpp refused at compile time with the view message"
     else no "arm 9: $f.cpp failed to compile for some OTHER reason"; sed 's/^/    /' "$WORK/cc9_$f.log" | head -6; fi
 done

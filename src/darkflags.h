@@ -37,7 +37,7 @@
 #include "docparse.h"           // lowerExtOf / isDocExtension — which files are PROSE, not code
 #include "pageview.h"           // §P8: pageWindow / effectiveRowCap / secondaryCutAttrs — the ONE paging contract
 #include "nextverb.h"           // P3: nextAttrXml — the ONE pasteable follow-up a cut root carries
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -62,12 +62,13 @@ constexpr std::size_t kMaxSitesShown    = 8;          // <read> sites per gate; 
 constexpr std::size_t kMaxEnvNameLen    = 128;        // longest plausible environment-variable name
 
 enum class GateKind : std::uint8_t { Compile = 0, CMake, Env };
+inline constexpr std::size_t kGateKindCount = static_cast<std::size_t>( GateKind::Env ) + 1;
+static_assert( enumCountIsExact<GateKind, kGateKindCount>(), "kGateKindCount must name the LAST GateKind — move it with the append" );
 
-inline const char* gateKindTag( GateKind k ) noexcept
-{
-    static const char* kTag[] = { "compile", "cmake", "env" };
-    return kTag[ std::size_t( k ) ];
-}
+inline constexpr const char* kGateKindTag[] = { "compile", "cmake", "env" };
+static_assert( std::size( kGateKindTag ) == kGateKindCount, "kGateKindTag is indexed by GateKind — one tag per enumerator" );
+
+inline const char* gateKindTag( GateKind k ) noexcept { return kGateKindTag[ std::size_t( k ) ]; }
 
 struct Site
 {
@@ -783,7 +784,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
     CMakeScan       out;
     std::error_code ec;
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( ec ) { DEGRADED_PATH_ALERT( "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
+    if( ec ) { DISCLOSE( "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );
 
     const fs::recursive_directory_iterator end;
@@ -824,7 +825,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
             if( isLink && !rw::crawlPathStaysInRoot( p, rootReal ) )
             {
                 ++out.escaped;
-                DEGRADED_PATH_ALERT( "flags: a CMake file's symlink target leaves the root — file refused" );
+                DISCLOSE( "flags: a CMake file's symlink target leaves the root — file refused" );
                 continue;
             }
             out.files.push_back( p );

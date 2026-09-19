@@ -21,13 +21,13 @@
 //     fixed-size blocks, partials summed in canonical block order. Bit-stable run-to-run —
 //     load-bearing because PageRank output is a sorted top-K with no tolerance band.
 //
-// Layering: depends ONLY on platform.h (VERIFY + cache-line const) — no threading
+// Layering: depends ONLY on platform.h (ASSUME + cache-line const) — no threading
 // dependency here. Parallelism is INJECTED by the caller: the SpMV is embarrassingly
 // parallel by row and the reductions are block-structured for a deterministic parallel
 // reduce (compute partials[block] in parallel, sum them in block order → identical
 // result). This header stays single-threaded so any dispatch mechanism can drive it.
 
-#include "platform.h"   // VERIFY / infra::platform::hardware_constructive_interference_size
+#include "platform.h"   // ASSUME / infra::platform::hardware_constructive_interference_size
 
 #include <cstddef>
 #include <cstdint>
@@ -317,7 +317,7 @@ private:
 template<class T>
 inline T dominantEigenvector( const sparseCsr<T>& A, T* x, T tol = T( 1e-6 ), unsigned maxIter = 1000 )
 {
-    VERIFY( A.rows() == A.cols() );
+    ASSUME( A.rows() == A.cols() );
     const std::size_t N = A.rows();
     if( N == 0 )
     {
@@ -328,7 +328,7 @@ inline T dominantEigenvector( const sparseCsr<T>& A, T* x, T tol = T( 1e-6 ), un
 
     {
         const T nrm = std::sqrt( csrdetail::blockReduceDot( x, x, N ) );
-        VERIFY( nrm > T( 0 ) );
+        ASSUME( nrm > T( 0 ) );
         csrdetail::scaleVec( x, T( 1 ) / nrm, N );
     }
 
@@ -339,7 +339,7 @@ inline T dominantEigenvector( const sparseCsr<T>& A, T* x, T tol = T( 1e-6 ), un
 
         lambda = csrdetail::blockReduceDot( y, x, N );         // Rayleigh xᵀAx (x is unit)
         const T ynrm = std::sqrt( csrdetail::blockReduceDot( y, y, N ) );
-        VERIFY( ynrm > T( 0 ) );
+        ASSUME( ynrm > T( 0 ) );
         const T inv = T( 1 ) / ynrm;
 
         T resid = T( 0 );                                      // ‖y/‖y‖ − x‖₂, then update x

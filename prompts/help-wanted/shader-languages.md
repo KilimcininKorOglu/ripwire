@@ -176,7 +176,7 @@ definition of that name, and one method gained 2,107 false callers on a real cor
 - Determinism is a contract: two runs are byte-identical, and a warm run equals a cold one.
 - A zero means "none found".
 - Every truncation is disclosed.
-- Never `VERIFY( false )` on a degrade path.
+- Never `ASSUME( false )` on a degrade path.
 - Never use `std::map` or `std::unordered_map`.
 
 **Grammars are vendored and pinned by full SHA.**

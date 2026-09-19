@@ -62,6 +62,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <string_view>
 
 #if defined( __ARM_NEON )
@@ -105,6 +106,9 @@ struct Masks
     std::uint32_t lower = 0;      // [a-z]
     std::uint32_t digit = 0;      // [0-9]
 };
+// bit k is byte k of a block of at most kMaxBlockBytes, set by `1 << k`: the block must not outgrow the mask
+static_assert( kMaxBlockBytes <= std::numeric_limits<decltype( Masks::alnum )>::digits,
+               "strkern: a block longer than the class masks are wide would shift past them — widen Masks first" );
 
 // ── the two-stage nibble table (Lemire 2023/07/13) ──────────────────────────────────────────────────
 // A class is a set of bytes, and pshufb/vqtbl1q can only look up 16 entries — so a byte's membership is

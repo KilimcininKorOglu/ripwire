@@ -54,18 +54,60 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 # test/lib/strayfixture.sh's throwaway repo (branch `main` + a divergent `lane/probe`) exactly as
 # precedencecheck / substrfiltercheck / mcpclidiffcheck now do. Presence-guarded: no ref, no assertion.
 . "$ROOT/test/lib/strayfixture.sh"
-SFIX="$( mktemp -d )"; trap 'rm -rf "$SFIX"' EXIT
+SFIX="$( mktemp -d )"
+MFIX_CLEANUP=""
+trap 'rm -rf "$SFIX" $MFIX_CLEANUP' EXIT
 mkStrayFixture "$SFIX"
 strayFixtureHasRef "$SFIX" || {
     echo "  FAIL  fixture: no lane/* ref in the throwaway repo — the filter rows would refuse for the wrong reason"
     echo "1 CHECK(S) FAILED"; exit 1; }
 echo "  PASS  fixture: throwaway repo carries a lane/* ref for the kind=lane filter rows to select"
-echo "mcpattrparitycheck: BIN=$BIN  CORPUS=$ROOT  REFFIX=$SFIX"
 
-python3 - "$BIN" "$ROOT" "$SFIX" <<'PY'
-import json, re, subprocess, sys
+# A2 (found-items 2026-09-17): the CLI and MCP spellings of the "sidecar present but unreadable" baseline
+# marker diverged (git-HEAD (sidecar unreadable) vs git-HEAD (unreadable sidecar ignored)). Build a
+# throwaway repo with a pre-stamp v5 sidecar — qbaselineproducercheck.sh's own (F) technique, present on
+# disk but unrecognizable — so the VALUE probe below (attrparity above is deliberately name-only) can pin
+# both surfaces to the ONE documented spelling (verbs_quality.h's own legend).
+MFIX="$( mktemp -d )"; MFIX_CLEANUP="$MFIX"
+( cd "$MFIX" && git init -q . -b main >/dev/null 2>&1 \
+    && git config user.email fx@example.invalid && git config user.name fx \
+    && printf 'int f(){return 1;}\n' > a.cpp && git add -A && git commit -qm seed >/dev/null 2>&1 )
+"$BIN" "$MFIX" --quality-baseline >/dev/null 2>&1
+if [ -f "$MFIX/.ripwire_quality_baseline" ]; then
+    sed '1s/^# ripwire quality baseline v[0-9]* /# ripwire quality baseline v5 /' "$MFIX/.ripwire_quality_baseline" >"$MFIX/.rqb.new"
+    mv "$MFIX/.rqb.new" "$MFIX/.ripwire_quality_baseline"
+fi
+# The analyze twin arm needs a corpus BOTH windows show WHOLE: over the full repo each surface keeps its
+# own top-200 slice, so window drift (any commit that nudges one ranking) can drop the merged const/
+# non-const pair from one side alone — a false divergence with no contract changed. Ten rows, one
+# overloading pair, shown entirely by both dialects.
+AFX="$( mktemp -d )"; MFIX_CLEANUP="$MFIX_CLEANUP $AFX"   # #279 analyze-twin fixture; cleaned by the trap above
+cat > "$AFX/afx.hpp" <<'EOF'
+struct Box {
+    int* buf();
+    const int* buf() const;
+    int size();
+    void fill( int n );
+};
+inline int helper_add( int a, int b ) { return a + b; }
+inline int helper_sub( int a, int b ) { return a - b; }
+inline int helper_mul( int a, int b ) { return a * b; }
+EOF
+cat > "$AFX/afx.cpp" <<'EOF'
+#include "afx.hpp"
+int* Box::buf() { return nullptr; }
+const int* Box::buf() const { return nullptr; }
+int Box::size() { return 0; }
+void Box::fill( int ) {}
+int client() { Box b; b.fill( 1 ); return b.size() + helper_add( 1, 2 ); }
+EOF
+echo "mcpattrparitycheck: BIN=$BIN  CORPUS=$ROOT  REFFIX=$SFIX  MARKERFIX=$MFIX  ANFIX=$AFX"
 
-BIN, ROOT, SFIX = sys.argv[1], sys.argv[2], sys.argv[3]
+python3 - "$BIN" "$ROOT" "$SFIX" "$MFIX" "$AFX" <<'PY'
+import json, os, re, subprocess, sys
+
+BIN, ROOT, SFIX, MFIX, AFX = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+
 fails = 0
 def check( cond, msg ):
     global fails
@@ -189,6 +231,25 @@ else:
     report( "quality_delta root", xmlRootAttrs( qdXml, "quality-delta" ) or set(),
             jsonTopKeys( qdMcp ), declaredLens( qdMcp ) )
 
+# A2 (found-items 2026-09-17): VALUE parity for the "sidecar present but unreadable" baseline marker.
+# attrparity above is deliberately NAME-only (a git stamp or a root path legitimately differs by value),
+# but this one string is a closed, documented vocabulary (verbs_quality.h's own legend) and CLI/MCP must
+# spell it identically — MFIX carries a pre-stamp v5 sidecar (present, unrecognizable) built above.
+markSide = os.path.join( MFIX, ".ripwire_quality_baseline" )
+if not os.path.isfile( markSide ):
+    check( False, "A2 fixture: no .ripwire_quality_baseline under MFIX — the marker-parity probe has nothing to corrupt" )
+else:
+    mkXml = cliAt( MFIX, [ "--quality-delta" ] )
+    mkMcp = mcp( "quality_delta", { "path": MFIX } )
+    mCli = re.search( r'\bbaseline="([^"]*)"', stripComments( mkXml ) )
+    try:    mMcpVal = json.loads( mkMcp ).get( "baseline" ) if not mkMcp.startswith( "__ERROR__" ) else None
+    except Exception: mMcpVal = None
+    check( bool( mCli ) and mCli.group( 1 ) == "git-HEAD (sidecar unreadable)",
+           "A2: CLI baseline= on a present-but-unreadable sidecar is \"git-HEAD (sidecar unreadable)\" (got %r)"
+           % ( mCli.group( 1 ) if mCli else None, ) )
+    check( mMcpVal == "git-HEAD (sidecar unreadable)",
+           "A2: MCP quality_delta baseline spells the same state identically to the CLI (got %r)" % ( mMcpVal, ) )
+
 # cochange — CLI XML root vs MCP JSON
 ccXml = cli( [ "--cochange=src/main.cpp" ] )
 ccMcp = mcp( "cochange", { "path": ROOT, "file": "src/main.cpp" } )
@@ -223,11 +284,19 @@ else:
 # analyze — the default CLI map's <s> rows vs MCP analyze's. This is the pair whose drop is DELIBERATE:
 # --stable omits the globally volatile k= so an unedited prefix stays byte-identical, and MCP serves the
 # stable order. The gate demands the declaration, not the attribute.
-mapXml = cli( [] )
-anMcp  = mcp( "analyze", { "path": ROOT } )
+#
+# The corpus is a FIXTURE, not $ROOT, on purpose: both surfaces serve a top-200 window, so comparing the
+# two windows over a 2,000-symbol tree grades which rows each window happened to keep, not whether the
+# dialects agree. An unrelated commit that shifts one ranking can drop the merged const/non-const pair
+# out of one window alone (the exact shape of the mcpattrparitycheck rc=1 that followed the --lsp hover
+# tiers — no contract changed, the window just moved). The fixture is ten rows: every surface shows the
+# whole corpus, so an attribute one dialect can carry and the other cannot is a real divergence again.
+mapXml = cliAt( AFX, [] )
+anMcp  = mcp( "analyze", { "path": AFX } )
 if anMcp.startswith( "__ERROR__" ):
     check( False, "analyze probe: " + anMcp[ :120 ] )
 else:
+    check( 'overloads="' in mapXml, "analyze fixture: the CLI map merges the const/non-const pair (the twin arm is not vacuous)" )
     report( "analyze rows", xmlRowAttrs( mapXml, "s" ), xmlRowAttrs( anMcp, "s" ), declaredLens( anMcp ) )
 
 # ═══ CLI-vs-CLI dialects: the same property between a verb's own two spellings ══════════════════════════

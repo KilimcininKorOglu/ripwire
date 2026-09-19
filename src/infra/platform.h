@@ -41,8 +41,8 @@
 
 #define memorycopy(dst,src,size)  __builtin_memcpy(dst,src,size)
 
-// Diagnostics.h provides VERIFY, VERIFY_TEXT, VERIFY_NOT_REACHED, PANIC, and
-// DEGRADED_PATH_ALERT. Included here, not merely alongside, because this header is
+// Diagnostics.h provides ASSUME, EXPECTS, ENSURES, DASSERT, UNREACHABLE, VALIDATE, PANIC, and
+// DISCLOSE. Included here, not merely alongside, because this header is
 // the one every infra consumer already takes for the attribute macros and the
 // cache-line constants — sparseCsr.h and radixSort.h document that dependency.
 #include "Diagnostics.h"

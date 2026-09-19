@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 
 #if !defined( RIPWIRE_INGEST_TU )
 #error "ingest_crawl.h is a SECTION of src/ingest.cpp's translation unit - include it only from ingest.cpp (see the ingest-family split note there)"
@@ -57,7 +58,7 @@ struct LangEntry
 // Order does not matter (linear scan); kept grouped by language for readability.
 // The extent is EXACT, not headroom: it was 32 with 32 rows, .toml made it 33, .pyi made it 34 and the
 // .yml/.yaml pair made it 36, the .php/.phtml/.lua trio made it 40, the .ex/.exs pair made it 42, the
-// .rst/.adoc/.org/.mdx prose quartet made it 46, .dart made it 47 and .kt made it 48. Sizing it to the row count is what
+// .rst/.adoc/.org/.mdx prose quartet made it 46, .dart made it 47, .kt made it 48, .hxx made it 49 and .gd made it 50. Sizing it to the row count is what
 // makes
 // `std::array<bool, kLangTable.size()> present` (the grammar-prewarm set,
 // below) exact too, and it turns "added a row and forgot the extent" into a compile error rather than a
@@ -86,7 +87,7 @@ struct LangEntry
 // the latter a list item), so those files carry the file-level node alone and serve as ONE whole-file
 // unit. A heading detector per format is a later lane with its own measurement. `.mdx` is markdown with
 // JSX, which the block grammar already reads as html blocks (opaque). Gate: test/textdocscheck.sh.
-constexpr std::array<LangEntry, 48> kLangTable = {{
+constexpr std::array<LangEntry, 50> kLangTable = {{
     { ".cpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".cc",   Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".cxx",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
@@ -142,6 +143,12 @@ constexpr std::array<LangEntry, 48> kLangTable = {{
     { ".h",    Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".hpp",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".hh",   Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
+    // A4 (found-items 2026-09-17): `.hxx` (a C++ header spelling, same status as `.hpp`/`.hh`) had no row
+    // here — every OTHER per-extension table in the tree (flipimpact.h's dead-code header set, layout.h's
+    // --layout scan, lintrules.h, quality.h's isHeaderPath/isTestScriptPath twin, resolve.h's include
+    // resolver, verbs_lint.h) already lists `.hxx` alongside `.h`/`.hpp`/`.hh`, so a repository that spells
+    // its headers `.hxx` was invisible to the crawl even though every downstream table was ready for it.
+    { ".hxx",  Lang::Cpp,        &tree_sitter_cpp,        "cpp"        },
     { ".c",    Lang::C,          &tree_sitter_c,          "c"          },   // plain C (L3) — was entirely invisible before this table gained its own row
     { ".py",   Lang::Python,     &tree_sitter_python,     "python"     },
     { ".pyi",  Lang::Python,     &tree_sitter_python,     "python"     },   // typing stub — often a library's ONLY Python-visible API (a Rust/C core's whole Python surface lives in one .pyi)
@@ -180,6 +187,11 @@ constexpr std::array<LangEntry, 48> kLangTable = {{
     // Lua: no classes, no imports. The five function-definition spellings and the one call node are the
     // whole extractable structure (queries/lua/tags.scm states the metatable/dynamic-dispatch floor).
     { ".lua",  Lang::Lua,        &tree_sitter_lua,        "lua"        },   // Lua — function/method defs (5 shapes) + calls
+    // GDScript (.gd): Godot's language. A .gd FILE IS A CLASS BODY — `class_name` names it, top-level
+    // `func`/`var` are its members — which is why queries/gdscript/tags.scm captures file-scope defs as
+    // function/var rather than needing an enclosing class node. `.tscn`/`.tres`/`.gdshader` are NOT
+    // indexed: they are scene/resource/shader formats with their own grammars, and none is vendored here.
+    { ".gd",   Lang::GDScript,   &tree_sitter_gdscript,   "gdscript"   },   // GDScript — class/func/var/const/enum/signal defs + calls
     // Kotlin: `.kts` (Gradle script DSL) is deliberately NOT a row here yet — its trailing-lambda
     // density needs its own parse-quality probe before riding this grammar; `.kt` only for now.
     { ".kt",   Lang::Kotlin,     &tree_sitter_kotlin,     "kotlin"     },   // Kotlin — classes/objects/interfaces/functions + calls; JVM-bridged to Java (graph.h langCompatible)
@@ -211,6 +223,51 @@ constexpr bool everyMarkdownGrammarExtHasARow() noexcept
 static_assert( everyMarkdownGrammarExtHasARow(),
                "every docparse::kMarkdownGrammarExts entry needs a kLangTable row on Lang::Markdown — "
                "a prose format admitted by one and not the other is indexed nowhere while every lens calls it prose" );
+
+// SIBLING-COMPLETENESS GUARD #2, the same idea for the verb-time language classifier. lintrules.h's langOfPath buckets
+// an indexed file by language for --lint-rules, --deps/--arch, co-change's dep_capable=, --nonlocal-state and the lint
+// catalog, from its own kLintExtRows table. That table used to be "kept in sync by hand", and hand sync is how PR #233
+// lost its `.gd` row. This is the one translation unit that sees both tables, so the sync is asserted here:
+//   - every kLangTable row carries an extension and a grammar (a zero-filled tail row has neither);
+//   - a CODE row (model.h isCodeLang) is in kLintExtRows with the SAME Lang, and a data/doc row is not;
+//   - every kLintExtRows row names a kLangTable row with the same Lang (a lint row the crawl never admits is dead).
+// Each check returns the first offending ROW INDEX, and the table's size when clean. It never returns an extension
+// string: the first draft did, with "" for clean, and a zero-filled row's extension is also "", so the check passed
+// the very defect it exists for. The index is what the compiler's note prints ("'41 == 48'").
+constexpr std::size_t firstCrawlRowLangOfPathMisbuckets() noexcept
+{
+    for( std::size_t index = 0; index < kLangTable.size(); ++index )
+    {
+        const LangEntry&  row  = kLangTable[index];
+        const LintExtRow* lint = findByField( kLintExtRows, &LintExtRow::ext, row.ext );
+        const bool isMirrored  = lint != nullptr && lint->lang == row.lang;
+        if( row.ext.empty() || row.grammar == nullptr || ( isCodeLang( row.lang ) ? !isMirrored : lint != nullptr ) )
+        {
+            return index;
+        }
+    }
+    return kLangTable.size();
+}
+
+constexpr std::size_t firstLangOfPathRowTheCrawlNeverAdmits() noexcept
+{
+    for( std::size_t index = 0; index < std::size( kLintExtRows ); ++index )
+    {
+        const LintExtRow& row   = kLintExtRows[index];
+        const LangEntry*  crawl = findByField( kLangTable, &LangEntry::ext, row.ext );
+        if( crawl == nullptr || crawl->lang != row.lang )
+        {
+            return index;
+        }
+    }
+    return std::size( kLintExtRows );
+}
+
+static_assert( firstCrawlRowLangOfPathMisbuckets() == kLangTable.size(),
+               "a kLangTable row is empty, or a CODE row is missing from lintrules.h kLintExtRows (or names another Lang), "
+               "or a data/doc row is in it — langOfPath would call an indexed file the wrong language" );
+static_assert( firstLangOfPathRowTheCrawlNeverAdmits() == std::size( kLintExtRows ),
+               "a lintrules.h kLintExtRows row names an extension kLangTable does not admit under the same Lang" );
 
 const LangEntry* lookupLang( std::string_view ext ) noexcept
 {
@@ -1141,7 +1198,7 @@ void recordRootEscape( CrawlSkips& skips, const std::string& path, std::string_v
     {
         skips.escaped.push_back( { path, 0ull, std::string( ext ) } );
     }
-    DEGRADED_PATH_ALERT( "ingest: a symlink's target leaves the crawl root — file refused (see --skipped why=escaped-root)" );
+    DISCLOSE( "ingest: a symlink's target leaves the crawl root — file refused (see --skipped why=escaped-root)" );
 }
 
 // §L1: the crawl's two NON-SIZE drop tests, together, because they are one decision with one ordering
@@ -1270,12 +1327,12 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     {
         return out;
     }
-    const std::string cmd = "git -C " + shSingleQuote( rootDir == nullptr ? std::string( "." ) : std::string( rootDir ) )
+    const std::string cmd = gitCmd( " -C " ) + shSingleQuote( rootDir == nullptr ? std::string( "." ) : std::string( rootDir ) )
                           + " -c core.quotepath=false ls-files --others --ignored --exclude-standard --directory -z 2>/dev/null";
     std::FILE* pipe = ::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
-        DEGRADED_PATH_ALERT( "ingest: cannot run git for the ignore probe — full walk" );
+        DISCLOSE( "ingest: cannot run git for the ignore probe — full walk" );
         return out;
     }
     std::string buf;
@@ -1297,7 +1354,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     }
     if( overflowed )
     {
-        DEGRADED_PATH_ALERT( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
+        DISCLOSE( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
         return out;
     }
 
@@ -1476,7 +1533,7 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
     fs::recursive_directory_iterator it( root, opts, ec );
     if( ec )
     {
-        DEGRADED_PATH_ALERT( "ingest: cannot open root directory — empty result" );
+        DISCLOSE( "ingest: cannot open root directory — empty result" );
         return { std::move( out ), std::move( skipped ), std::move( skips ) };
     }
 
@@ -1504,17 +1561,20 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
                 return full;
             };
 
-            // user --exclude substrings prune dirs and drop files (vendored/generated trees). Multi-root (A12):
-            // match against the LABELED spelling so one excludes list applies uniformly across roots.
+            // user --exclude substrings prune dirs and drop files (vendored/generated trees). #228/A1: match
+            // against the ROOT-RELATIVE spelling (relForHash), never the raw typed path — an absolute or
+            // trailing-slash root spelling must not let an --exclude substring hit the checkout location
+            // above the root (the same defect class rootRelPath fixes for the index-builder seams). Multi-root
+            // (A12): match against the LABELED spelling so one excludes list applies uniformly across roots.
             bool excluded = false;
             if( !excludeSubstr.empty() )
             {
-                std::string labeledBuf;
-                std::string_view matchPath = fullPath();
+                std::string             labeledBuf;
+                const std::string_view  rel       = relForHash( fullPath(), rootDir );
+                std::string_view        matchPath = rel;
                 if( !excludeLabel.empty() )
                 {
                     labeledBuf.assign( excludeLabel );
-                    const std::string_view rel = relForHash( fullPath(), rootDir );
                     if( !rel.empty() ) { labeledBuf.push_back( '/' );  labeledBuf.append( rel ); }
                     matchPath = labeledBuf;
                 }
@@ -1685,42 +1745,41 @@ CrawlResult collectSources( const char* rootDir, const std::vector<std::string>&
 // ---- read a file's bytes (false when it cannot be opened, sized or read in full) ----
 // Deliberately an out-parameter, unlike docparse::detail::readWholeFile: the parse pool and the AST-query pass
 // each hand in one worker-local buffer and reuse it for every file they read, so its capacity carries over.
+//
+// The stream is OWNED (rw::OwnedFile), so every return closes it. It used to be a raw FILE* closed inside
+// `( got == want ) && ( std::fclose( fp ) == 0 )`, which short-circuited past the close on every short read: a
+// file truncated between the size probe and the read leaked one descriptor per read, per re-ingest of a long-lived
+// server, until nothing more could be opened and every later file dropped out of the answer with exit 0.
 bool readFile( const std::string& path, std::string& out )
 {
     PROFILE_SCOPE_DESCRIBE( "ingest/readFile: fopen+read whole file" );
 
-    std::FILE* fp = std::fopen( path.c_str(), "rb" );
-    if( fp == nullptr )
+    OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
+    if( !fp )
     {
         return false;
     }
 
-    if( std::fseek( fp, 0, SEEK_END ) != 0 )
+    if( std::fseek( fp.file, 0, SEEK_END ) != 0 )
     {
-        std::fclose( fp );
         return false;
     }
-    const long len = std::ftell( fp );
-    if( len < 0 )
+    const long len = std::ftell( fp.file );
+    if( len < 0 || std::fseek( fp.file, 0, SEEK_SET ) != 0 )
     {
-        std::fclose( fp );
-        return false;
-    }
-    if( std::fseek( fp, 0, SEEK_SET ) != 0 )
-    {
-        std::fclose( fp );
         return false;
     }
 
     out.resize( static_cast<std::size_t>( len ) );
     const std::size_t want = out.size();
-    const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp );
-    const bool ok = ( got == want ) && ( std::fclose( fp ) == 0 );
-    if( !ok )
+    const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp.file );
+    const bool        closedOk = fp.close();
+    if( got != want || !closedOk )
     {
         out.clear();
+        return false;
     }
-    return ok;
+    return true;
 }
 
 // The first `maxBytes` of a file, into `out` for the same reason as readFile: each prewarm hash worker reuses one
@@ -1729,17 +1788,17 @@ bool readFilePrefix( const std::string& path, std::string& out, std::size_t maxB
 {
     PROFILE_SCOPE_DESCRIBE( "ingest/readFilePrefix: fopen+read prefix" );
 
-    std::FILE* fp = std::fopen( path.c_str(), "rb" );
-    if( fp == nullptr )
+    OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
+    if( !fp )
     {
         return false;
     }
 
     out.resize( maxBytes );
-    const std::size_t got = maxBytes == 0 ? 0 : std::fread( out.data(), 1, maxBytes, fp );
-    const bool readOk = std::ferror( fp ) == 0 && ( got > 0 || std::feof( fp ) != 0 );
-    const bool closeOk = std::fclose( fp ) == 0;
-    if( !readOk || !closeOk )
+    const std::size_t got      = maxBytes == 0 ? 0 : std::fread( out.data(), 1, maxBytes, fp.file );
+    const bool        readOk   = std::ferror( fp.file ) == 0 && ( got > 0 || std::feof( fp.file ) != 0 );
+    const bool        closedOk = fp.close();
+    if( !readOk || !closedOk )
     {
         out.clear();
         return false;
@@ -1780,15 +1839,17 @@ inline StatInfo statSizeTimes( const std::string& path ) noexcept
     {
         return { -1, -1, -1 };
     }
+    // saturatingNanoseconds (infra/statclock.h): a timestamp past 2262 overflowed the plain product — undefined
+    // behaviour in release and an abort under the sanitizer build, on any ext4/XFS/tmpfs file or tar restore carrying one.
 #if defined( __APPLE__ )
-    const long long m = (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
-    const long long c = (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
+    const long long m = saturatingNanoseconds( st.st_mtimespec );
+    const long long c = saturatingNanoseconds( st.st_ctimespec );
 #elif defined( __linux__ )
-    const long long m = (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
-    const long long c = (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
+    const long long m = saturatingNanoseconds( st.st_mtim );
+    const long long c = saturatingNanoseconds( st.st_ctim );
 #else
-    const long long m = (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
-    const long long c = (long long)st.st_ctime * 1000000000LL;
+    const long long m = saturatingNanoseconds( (long long)st.st_mtime, 0 );   // whole-second fallback
+    const long long c = saturatingNanoseconds( (long long)st.st_ctime, 0 );
 #endif
     return { m, (long long)st.st_size, c };
 }
@@ -1825,7 +1886,7 @@ inline bool isReadableCacheBlob( const std::string& path ) noexcept
     const PathShape shape = shapeOfPath( path );
     if( shape == PathShape::Other )
     {
-        DEGRADED_PATH_ALERT( "ingest: cache path is not a regular file (directory/device/fifo) — cache treated as corrupt (full reparse)" );
+        DISCLOSE( "ingest: cache path is not a regular file (directory/device/fifo) — cache treated as corrupt (full reparse)" );
     }
     return shape == PathShape::RegularFile;
 }
@@ -1991,7 +2052,7 @@ TSQuery* compiledQueryFor( const LangEntry& le )
     // pool later needs. Compiling here would WRITE the shared cache from a worker thread (data race on the
     // non-thread-safe map). Degrade instead: skip the file (caller treats nullptr as "skip"); the normal
     // prewarm path repopulates on the next run.
-    DEGRADED_PATH_ALERT( "ingest: tags query not prewarmed for a grammar — file skipped" );
+    DISCLOSE( "ingest: tags query not prewarmed for a grammar — file skipped" );
     return nullptr;
 }
 }   // namespace — ingest_crawl.h section of ingest.cpp

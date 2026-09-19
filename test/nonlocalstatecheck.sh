@@ -46,6 +46,9 @@
 #   (H) provenance   — a transitively-reached cell names the callee it came through (via=), a directly
 #                      touched one names its use site (at=); the two are never both present on one cell
 #   (I) honesty      — the root carries counts_floor="1" and the legend discloses the unsound cases
+#   (J) typing stubs — a `m.py` global restated in its `m.pyi` stub is ONE cell (it counted twice once langOfPath learned
+#                      `.pyi`); the same stub with no `m.py` beside it keeps its cell (a C extension's only declaration);
+#                      and the pair's row binds to m.py, not to the stub
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -279,6 +282,32 @@ if cmp -s "$TMP/map1" "$TMP/map2" && ! grep -q 'direct_writes=' "$TMP/map1"; the
     ok "(F) the flagless map is unchanged and carries no nonlocal-state attribute"
 else
     no "(F) the flagless map is not additive-clean (differs across runs, or leaks direct_writes=)"
+fi
+
+# ── (J) a typing stub does not double-count its module's globals ───────────────────────────────────────
+STUBPAIR="$TMP/stubpair"; STUBONLY="$TMP/stubonly"
+mkdir -p "$STUBPAIR" "$STUBONLY"
+printf 'COUNT = 0\n\ndef bump():\n    global COUNT\n    COUNT = COUNT + 1\n\ndef peek():\n    return COUNT\n' > "$STUBPAIR/m.py"
+printf 'COUNT: int\n\ndef bump() -> None: ...\ndef peek() -> int: ...\n' > "$STUBPAIR/m.pyi"
+cp "$STUBPAIR/m.pyi" "$STUBONLY/m.pyi"
+pairOut="$( "$BIN" "$STUBPAIR" --nonlocal-state --no-cache 2>/dev/null )"
+onlyOut="$( "$BIN" "$STUBONLY" --nonlocal-state --no-cache 2>/dev/null )"
+pairCells="$( printf '%s' "$pairOut" | grep -o '<nonlocal_state [^>]*' | sed -n 's/.* cells="\([0-9]*\)".*/\1/p' )"
+onlyCells="$( printf '%s' "$onlyOut" | grep -o '<nonlocal_state [^>]*' | sed -n 's/.* cells="\([0-9]*\)".*/\1/p' )"
+if [ "$pairCells" = "1" ]; then
+    ok "(J) m.py + its m.pyi stub: COUNT is one cell (cells=\"1\")"
+else
+    no "(J) m.py + its m.pyi stub report cells=\"${pairCells:-unreadable}\" — the stub's restatement of COUNT is counted as a second cell"
+fi
+if [ "$onlyCells" = "1" ]; then
+    ok "(J) control: the same stub with no m.py beside it keeps its cell (cells=\"1\"), so the pair's 1 is a dedupe, not a stub blind spot"
+else
+    no "(J) control: a stub-only module reports cells=\"${onlyCells:-unreadable}\" — a stub with no source is the module's only declaration and must count"
+fi
+if printf '%s' "$pairOut" | grep -q '<cell n="COUNT" p="m.py:1"' && ! printf '%s' "$pairOut" | grep -q 'p="m.pyi'; then
+    ok "(J) the pair's cell rows bind to m.py:1 and never to the stub"
+else
+    no "(J) the pair's cell rows do not bind COUNT to m.py:1 alone: $( printf '%s' "$pairOut" | grep -o '<cell [^>]*' | head -3 | tr '\n' ' ' )"
 fi
 
 # ── well-formedness (G4): the report must pipe clean through an XML parser ────────────────────────────

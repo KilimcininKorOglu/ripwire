@@ -170,7 +170,7 @@ diff -q "$TMP/det1" "$TMP/det2" >/dev/null \
 # ── (4) §P11.1 — hits are ordered SOURCE-FIRST, before the row cap ──────────────────────────────
 #
 # The finding: --grep emitted hits in plain path-alphabetical order and then cut at 100 rows. On this
-# repo that is a systematic bias against code — `--grep=DEGRADED_PATH_ALERT` filled 66 of its 100 shown
+# repo that is a systematic bias against code — `--grep=DISCLOSE` filled 66 of its 100 shown
 # rows with markdown and left no `test/` row at all, because `AGENTS.md` and other long-named docs sort above `src/`
 # and the cap always cuts the tail.
 #
@@ -230,7 +230,7 @@ grep -q '<f p="[^"]*AAA_notes\.md"' "$TMP/tier_o3.xml" \
     || { no "--offset=3 --limit=1 did not return the doc row"; cat "$TMP/tier_o3.xml"; }
 
 # (4c) the finding's own repro, on this repo's real corpus: the capped first screen is all code
-"$BIN" "$ROOT" --grep=DEGRADED_PATH_ALERT >"$TMP/repro.xml" 2>/dev/null
+"$BIN" "$ROOT" --grep=DISCLOSE >"$TMP/repro.xml" 2>/dev/null
 hitpaths <"$TMP/repro.xml" >"$TMP/repro.paths"
 
 [ "$( wc -l <"$TMP/repro.paths" | tr -d ' ' )" -gt 0 ] \
@@ -257,7 +257,7 @@ grep -qE '(^|/)src/verify\.h:' "$TMP/repro.paths" || grep -qE '(^|/)src/' "$TMP/
     || no "capped first screen lost every src/ row to config rows"
 
 # (4d) with the cap lifted, EVERY doc row still sorts after EVERY code row
-"$BIN" "$ROOT" --grep=DEGRADED_PATH_ALERT --limit=1000 >"$TMP/repro_all.xml" 2>/dev/null
+"$BIN" "$ROOT" --grep=DISCLOSE --limit=1000 >"$TMP/repro_all.xml" 2>/dev/null
 hitpaths <"$TMP/repro_all.xml" >"$TMP/repro_all.paths"
 firstDocRow="$( grep -n '\.md:'  "$TMP/repro_all.paths" | head -1 | cut -d: -f1 )"
 lastCodeRow="$( grep -vn '\.md:' "$TMP/repro_all.paths" | tail -1 | cut -d: -f1 )"

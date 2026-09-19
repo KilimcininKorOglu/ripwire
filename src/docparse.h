@@ -14,22 +14,29 @@
 // override instead of the raw bytes, so a notebook is indexed + recalled by its prose, not its JSON.
 // Determinism: every parser is a pure function of the file bytes; the post-pass runs each cold OR warm.
 //
-// Style: Allman braces; spaces inside parens; VERIFY/DEGRADED_PATH_ALERT; ~160–200 col wrap.
+// Style: Allman braces; spaces inside parens; ASSUME/DISCLOSE; ~160–200 col wrap.
 
 #include "infra/Diagnostics.h"
 #include "infra/jsonesc.h"   // A4-F27 residual: rw::shSingleQuote — canonical shell single-quote, forwarded
                         // to below instead of carrying a local copy; STL-only, no coupling cost here.
 
 #include "infra/sortutil.h"  // svLess — the memcmp-then-length string_view order the sorted tables below use
+#include "infra/ownedfile.h" // rw::OwnedFile — the whole-file readers own their stream, so every return closes it
+#include "pathguard.h"        // rw::pathguard::NoFollowRead — the owned line stream a fixed-name file is read through
 
 #include <algorithm>   // std::binary_search — the membership test, instead of a hand-rolled scan loop
 #include <iterator>
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <fcntl.h>     // ::open( O_NONBLOCK ) — readRegularFile asks a FIFO for an answer instead of waiting on it
+#include <sys/stat.h>  // ::fstat — readRegularFile asks the DESCRIPTOR what it opened
+#include <unistd.h>    // ::close — the one descriptor fdopen may decline to take
+#include <mutex>       // openRegularFileStream discloses a refused path once per process
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>      // openRegularFileStream: the paths already disclosed
 
 namespace rw
 {
@@ -177,44 +184,116 @@ inline bool isProseExtension( std::string_view extLower ) noexcept
 namespace detail
 {
 
-// The whole file, or nullopt when it cannot be opened, sized or read in full. An EMPTY file is an engaged empty
-// string, not a failure — a caller for which empty and unreadable mean the same thing says so with value_or.
-inline std::optional<std::string> readWholeFile( const std::string& path )
+// The rest of an open stream from its start, or nullopt when it cannot be sized or read in full. The ONE body both
+// whole-file readers below share; the stream stays owned by the caller, who closes it on every path.
+inline std::optional<std::string> readAllOfStream( std::FILE* fp )
 {
-    std::FILE* fp = std::fopen( path.c_str(), "rb" );
-    if( fp == nullptr )
-    {
-        return std::nullopt;
-    }
-
     if( std::fseek( fp, 0, SEEK_END ) != 0 )
     {
-        std::fclose( fp );
         return std::nullopt;
     }
     const long len = std::ftell( fp );
-    if( len < 0 )
+    if( len < 0 || std::fseek( fp, 0, SEEK_SET ) != 0 )
     {
-        std::fclose( fp );
         return std::nullopt;
     }
-    if( std::fseek( fp, 0, SEEK_SET ) != 0 )
-    {
-        std::fclose( fp );
-        return std::nullopt;
-    }
-
     std::string       out( std::size_t( len ), '\0' );
     const std::size_t want = out.size();
     const std::size_t got  = want == 0 ? 0 : std::fread( out.data(), 1, want, fp );
-    // fclose unconditionally: `( got == want ) && ( std::fclose( fp ) == 0 )` short-circuited past it and leaked the
-    // FILE on every short read (clang-analyzer-unix.Stream) — githarden's git-config probe and the notebook reader share this.
-    const bool closedOk = std::fclose( fp ) == 0;
-    if( got != want || !closedOk )
+    if( got != want )
     {
         return std::nullopt;
     }
     return out;
+}
+
+// The whole file, or nullopt when it cannot be opened, sized or read in full. An EMPTY file is an engaged empty
+// string, not a failure — a caller for which empty and unreadable mean the same thing says so with value_or.
+inline std::optional<std::string> readWholeFile( const std::string& path )
+{
+    // Owned, so the close runs on every return: `( got == want ) && ( std::fclose( fp ) == 0 )` short-circuited
+    // past it and leaked the FILE on every short read (clang-analyzer-unix.Stream).
+    OwnedFile fp = openOwnedFile( path.c_str(), "rb" );
+    if( !fp )
+    {
+        return std::nullopt;
+    }
+    std::optional<std::string> out      = readAllOfStream( fp.file );
+    const bool                 closedOk = fp.close();
+    if( !closedOk )
+    {
+        return std::nullopt;
+    }
+    return out;
+}
+
+// A fixed-name file in the tree (.ripwire_config, the quality-acks ledger) whose CONTENT is the repository's to decide
+// but whose SHAPE is not, opened as a line stream only when it is a regular file. Anything else at that name — a
+// FIFO, a directory, a device, or a symlink to one — is refused before a byte is read, and `what` names it on
+// stderr, because each of those shapes used to hold or take down the process:
+//   - a FIFO blocked the open until a writer appeared, so every --quality-delta hung before any output;
+//   - a symlink to /dev/zero or /dev/urandom never reaches end of file;
+//   - a directory opens on Linux, and where its seek reports LLONG_MAX (overlayfs) a whole-file read sizes a string
+//     to that — the shape ingest_crawl.h's PathShape note measured for --cache=<dir>.
+// The open carries O_NONBLOCK so a FIFO answers instead of waiting, and the shape is asked of the DESCRIPTOR (fstat),
+// so nothing can swap the name between the question and the read. A symlink to a regular file is still followed:
+// that is the ordinary way a user-authored file is shared, and refusing it is a different policy with its own owner.
+//
+// The stream comes back inside pathguard's NoFollowRead, the house line reader over a descriptor-checked stream: it
+// owns the FILE from fdopen on, so every return closes it, and readLine streams one line at a time — a large ledger
+// is never held whole. No stream (file == nullptr) means absent, unreadable or refused.
+inline rw::pathguard::NoFollowRead openRegularFileStream( std::string_view what, const std::string& path )
+{
+    rw::pathguard::NoFollowRead stream;
+    const int                   fd = ::open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    if( fd < 0 )
+    {
+        return stream;   // absent or unreadable: the caller's own "no such file" reading
+    }
+    stream.file = ::fdopen( fd, "rb" );   // owned from here: NoFollowRead's destructor fcloses it on every return
+    if( stream.file == nullptr )
+    {
+        ::close( fd );   // fdopen did not take the descriptor, so it is still ours to close
+        return stream;
+    }
+    stream.opened = true;
+    struct stat st{};
+    if( ::fstat( ::fileno( stream.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
+    {
+        // Once per path per process: .ripwire_config is read several times in one --quality-delta, and the same sentence
+        // three times says nothing the first did not.
+        static std::mutex               disclosedMutex;
+        static std::vector<std::string> disclosed;
+        bool                            firstTime = false;
+        {
+            const std::lock_guard<std::mutex> lock( disclosedMutex );
+            if( std::find( disclosed.begin(), disclosed.end(), path ) == disclosed.end() )
+            {
+                disclosed.push_back( path );
+                firstTime = true;
+            }
+        }
+        if( firstTime )
+        {
+            rw::emitTo( stderr, "ripwire: ignoring {} at '{}': it is not a regular file (a FIFO, a directory or a device), "
+                                "so it was not read and counts as absent\n", what, path );
+        }
+        DISCLOSE( "docparse: a fixed-name file in the tree is not a regular file — refused before reading" );
+        return rw::pathguard::NoFollowRead{};   // `stream` closes as it leaves scope; the caller gets no stream
+    }
+    return stream;
+}
+
+// The whole of such a file, for a caller that parses it as one text (.ripwire_config, and --quality-ack's
+// byte-for-byte comparison of a ledger it is about to rewrite). nullopt when openRegularFileStream gave no stream.
+inline std::optional<std::string> readRegularFile( std::string_view what, const std::string& path )
+{
+    const rw::pathguard::NoFollowRead stream = openRegularFileStream( what, path );
+    if( stream.file == nullptr )
+    {
+        return std::nullopt;
+    }
+    return readAllOfStream( stream.file );
 }
 
 // Decode the JSON string starting at s[i]=='"' into `out`, advancing i past the closing quote. Handles the
@@ -547,7 +626,7 @@ inline std::string runMarkitdown( const std::string& path )
     std::FILE* pipe = ::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
-        DEGRADED_PATH_ALERT( "docparse: popen failed for markitdown bridge" );
+        DISCLOSE( "docparse: popen failed for markitdown bridge" );
         return {};
     }
     std::string         out;
@@ -581,7 +660,7 @@ inline std::string parseDocFile( const std::string& path, std::string_view extLo
             const std::optional<std::string> bytes = detail::readWholeFile( path );
             if( !bytes )
             {
-                DEGRADED_PATH_ALERT( "docparse: cannot read document file" );
+                DISCLOSE( "docparse: cannot read document file" );
                 rw::emitTo( stderr, "ripwire: doc {}: cannot read — omitted from the index (the skipped verb counts it as unmeasured)\n", path.c_str() );   // 2026-09-06
                 return {};
             }
@@ -590,13 +669,16 @@ inline std::string parseDocFile( const std::string& path, std::string_view extLo
                 case DocKind::Ipynb: return extractIpynb( *bytes );
                 case DocKind::Html:  return extractHtml( *bytes );
                 case DocKind::Csv:   return extractCsv( *bytes );
-                default:             return {};
+                case DocKind::Markitdown:                       // routed by the outer switch, never read here
+                case DocKind::None:  return {};
             }
+            return {};
         }
 
-        default:
+        case DocKind::None:
             return {};
     }
+    return {};
 }
 
 // ── generated-document signals ───────────────────────────────────────────────────────────────────────

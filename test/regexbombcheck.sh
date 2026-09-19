@@ -38,7 +38,8 @@
 #       (2) the refusal is structural — same verdict against a corpus with no bomb file in it at all;
 #       (3) the precision battery is NOT refused — safe patterns still scan the same fixture at exit 0;
 #       (4) determinism — stdout AND stderr byte-identical run to run;
-#       (5) informational — the mid-match degrade path survives as belt-and-braces.
+#       (5) informational — the mid-match catch survives as belt-and-braces (a refusal by name since
+#           src/regexguard.h; test/regexguardcheck.sh arm (b) asserts it on every entry point).
 #
 # Usage: RIPWIRE_BIN=build/ripwire bash test/regexbombcheck.sh
 # Exits non-zero on any failure. Does NOT touch regression.sh.
@@ -220,16 +221,17 @@ if diff -q "$TMP/s1" "$TMP/s2" >/dev/null; then ok "deterministic on the safe sc
 
 # ── (5) informational: the MID-MATCH catch survives as belt-and-braces ──────────────────────────────────
 # The structural guard is a static approximation and says so — overlapping alternation like (a|a)+b is a
-# real bomb it cannot see. The try/catch around std::sregex_iterator is therefore NOT removed; on libc++ it
-# still converts a mid-match error_complexity into a skipped file. It is informational because on
-# libstdc++ that error never arrives (the whole reason for the guard) and because DEGRADED_PATH_ALERT
-# compiles to nothing under NDEBUG, so its absence proves nothing either way.
+# real bomb it cannot see. The catch around the match is therefore NOT removed; it lives in
+# src/regexguard.h now, and on libc++ it converts a mid-match error_complexity into a REFUSAL by name at
+# exit 1 (it used to skip the file silently, leaving hits= a floor nothing disclosed). It stays
+# informational HERE because on libstdc++ that error never arrives (the whole reason for the guard);
+# test/regexguardcheck.sh arm (b) asserts the refusal on every platform through a fault switch.
 rc="$( capRun 30 "$TMP/out" "$TMP/err" "$CORPUS" --regex='(a|a)+b' --no-prefilter --no-cache )"
 if [ "$rc" = TIMEOUT ]; then
     printf '  INFO  overlapping-alternation bomb (a|a)+b ran past 30 s — a KNOWN gap in the static guard on a\n'
     printf '        libstdc++-shaped engine; documented in src/search.h, not asserted here\n'
 elif grep -qi 'regex' "$TMP/err"; then
-    ok "informational: mid-match degrade path still wired ($( grep -i regex "$TMP/err" | head -1 ))"
+    ok "informational: mid-match catch still wired ($( grep -i regex "$TMP/err" | head -1 | head -c 160 ))"
 else
     printf '  INFO  (a|a)+b completed at exit %s with no degrade alert (expected under NDEBUG, or if the\n' "$rc"
     printf '        engine simply matched it) — the belt-and-braces catch is not asserted, only kept\n'
