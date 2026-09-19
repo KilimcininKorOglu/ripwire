@@ -354,7 +354,7 @@ inline std::string finishNameHitsXml( std::string elem, bool compactDialect, boo
     if( overCeiling )
     {
         const std::size_t openEnd = elem.find( '>' );
-        ENSURES( openEnd != std::string::npos, "namehits: finishNameHitsXml expects a well-formed opening tag" );
+        EXPECTS( openEnd != std::string::npos, "namehits: finishNameHitsXml expects a well-formed opening tag" );
         elem.insert( openEnd, " over_ceiling=\"1\"" );
     }
     elem += "<!--";
