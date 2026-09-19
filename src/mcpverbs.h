@@ -1912,7 +1912,10 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                           + std::string( rw::kMcpForLensColumnsLegend )
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
                           + " -->"
-                          + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
+                          // r2-LO: at= rides this root (mcpForAtAttrStr) and was defined nowhere in the document — the CLI twin passes
+                          // its at= condition here and this twin did not. Its 24 B are exempt from the sigs charge below, so the served
+                          // rows are byte-identical to the answer that left at= undefined.
+                          + rw::forRootRelPathsLegendShort( !flRootArg.empty(), !mcpForAtAttrStr.empty() );   // W3-S item 5: closes the gap this comment used to record
     // W3-S item 5 (2026-08-19): both --for dialects now carry rw::kForRootRelPathsLegendShort (graphlegend.h)
     // — the SAME short spelling, appended here exactly as the CLI twin (forLensHeaderText, main.cpp) does,
     // so byte-consistency between the two dialects (this file's own standing contract) still holds. See that
@@ -1951,7 +1954,8 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // …and the SAME decision the append made, so the ledger can never subtract a clause the header never wrote
     // (the CLI twin's own idRouteParts ledger, verbs_for.h, for the identical reason).
     const std::size_t mcpIdRouteExemptBytes = mcpIdRouteParts.bytes();
-    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes
+    const std::size_t mcpAtLegendExemptBytes = !flRootArg.empty() && !mcpForAtAttrStr.empty() ? rw::kForAtStampProse.size() : 0;   // r2-LO, above
+    const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes - mcpAtLegendExemptBytes
                                  + legoStr.size() + composeStr.size() + routeStr.size() + 6;   // + "</ctx>"
     const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
 
@@ -2052,6 +2056,9 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // reason the CLI's could disagree with itself. Charged AFTER the sigs budget on purpose: a disclosure's
     // contract is disclosure only, and charging its ~18 bytes against the ranked head would drop a row to pay
     // for the attribute that describes the head — the same exemption mcpConfidenceExemptBytes already makes.
+    // r2-LO: a completeness attribute this bundle carries and its own legend never spells (at=, ccx=, next=) gets its compact
+    // reading — BEFORE pricing, so est_tokens= prices the bytes served, and after the sigs budget, so the rows are unchanged.
+    closeRosterGaps( out );
     priceForTaskRoot( out, budgetTokens );   // R1: est_tokens=, and over_ceiling="1" when it exceeds budgetTokens
     return out;
 }

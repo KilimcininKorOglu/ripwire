@@ -927,6 +927,85 @@ inline std::string compactLegendText( const CompactLegendSpec& spec, std::string
     return out;
 }
 
+// ── the roster closure (lane r2-LO) ──────────────────────────────────────────────────────────────────────────
+// Does any comment of `doc` outside CDATA spell `attr=` (the definitional form every legend here uses)?
+inline bool commentsSpellAttr( std::string_view doc, std::string_view attr )
+{
+    std::string needle( attr );
+    needle += '=';
+    std::size_t i = 0;
+    while( i < doc.size() )
+    {
+        const std::size_t cdata   = doc.find( "<![CDATA[", i );
+        const std::size_t comment = doc.find( "<!--", i );
+        if( comment == std::string_view::npos )
+        {
+            return false;
+        }
+        if( cdata != std::string_view::npos && cdata < comment )
+        {
+            const std::size_t j = doc.find( "]]>", cdata );
+            i = j == std::string_view::npos ? doc.size() : j + 3;
+            continue;
+        }
+        const std::size_t close = doc.find( "-->", comment );
+        const std::string_view text = doc.substr( comment, close == std::string_view::npos ? doc.size() - comment : close - comment );
+        for( std::size_t at = text.find( needle ); at != std::string_view::npos; at = text.find( needle, at + 1 ) )
+        {
+            const char before = at == 0 ? ' ' : text[ at - 1 ];
+            if( !std::isalnum( static_cast<unsigned char>( before ) ) && before != '_' )
+            {
+                return true;
+            }
+        }
+        i = close == std::string_view::npos ? doc.size() : close + 3;
+    }
+    return false;
+}
+
+// A NATIVE-legend answer (one this layer does not rewrite: the MCP `for` bundle) that carries a completeness attribute
+// its own legend never spells gets that attribute's compact reading, in ONE comment after the comments that open the
+// root. The class it closes, generally: a completeness attribute riding an answer undefined — found on MCP `for` as
+// at= (stamped on the root, defined nowhere), ccx= (cx= alone was read) and next= (on the r=1 row). On a compact answer
+// it is a no-op by construction: compactLegendText reads every present term. Returns whether anything was added.
+inline bool closeRosterGaps( std::string& doc )
+{
+    const CompactRootInfo root = findCompactRoot( doc );
+    if( root.tag.empty() )
+    {
+        return false;
+    }
+    const std::string_view view = doc;
+    std::string add;
+    for( const std::uint16_t i : compactPresentTerms( compactDocHead( view, root ), view ) )
+    {
+        const CompactCompletenessTerm& t = kCompactCompletenessTerms[ i ];
+        if( !commentsSpellAttr( view, t.attr ) && add.find( std::string( t.attr ) + "=" ) == std::string::npos )
+        {
+            add += ' ';
+            add.append( t.reading );
+            add += '.';
+        }
+    }
+    if( add.empty() )
+    {
+        return false;
+    }
+    // After the comments that follow the root's open tag (the legend a reader meets first), before the first row.
+    std::size_t at = root.openEnd;
+    while( view.substr( at ).starts_with( "<!--" ) )
+    {
+        const std::size_t close = view.find( "-->", at );
+        if( close == std::string_view::npos )
+        {
+            break;
+        }
+        at = close + 3;
+    }
+    doc.insert( at, "<!--" + add + " -->" );
+    return true;
+}
+
 // ── the root finder + the rewrite ─────────────────────────────────────────────────────────────────────────
 
 // The spec for (root tag, hint). A hint names the key when the root is shared (`r`, `ctx`); an empty hint
