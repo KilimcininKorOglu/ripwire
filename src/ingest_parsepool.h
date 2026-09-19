@@ -353,18 +353,11 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
     RawFacts&       out  = sh.tFacts[ t ];
     std::size_t     warmGrowths = 0;   // P1-11: thread-local, folded into sh.warmGrowths once at the end (never an atomic in the loop)
 
+    // Neither allocation can come back null: tree-sitter's allocator aborts rather than return null (third_party/deps/tree_sitter/lib/src/alloc.c), and no ripwire code calls ts_set_allocator — so there is no degrade here to disclose.
     ParserGuard pg;
-    if( pg.p == nullptr )
-    {
-        DISCLOSE( "ingest: ts_parser_new failed on a worker — its files skipped" );
-        return;
-    }
+    ASSUME( pg.p != nullptr, "ts_parser_new: the default tree-sitter allocator aborts on failure" );
     TSQueryCursor* cursor = ts_query_cursor_new();
-    if( cursor == nullptr )
-    {
-        DISCLOSE( "ingest: ts_query_cursor_new failed on a worker — its files skipped" );
-        return;
-    }
+    ASSUME( cursor != nullptr, "ts_query_cursor_new: the default tree-sitter allocator aborts on failure" );
 
     // B0.2: per-worker subtoken-stats builder — after a file's defs are extracted (and the file's
     // bytes are STILL in memory), tokenize each new def's doc/body spans ONCE into its persisted

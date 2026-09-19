@@ -2722,12 +2722,9 @@ inline std::vector<CoGroup> cochangeViolationGroups( std::vector<CoViolation>& v
                 core = f;
             }
         }
-        if( core == UINT32_MAX )
-        {   // unreachable while `remaining` counts the same set the degrees are built from — but a silent
-            // infinite loop is the failure mode if it ever is, so degrade loudly and stop covering.
-            DISCLOSE( "cochangeViolationGroups: uncovered pairs remain but no file carries one — cover abandoned" );
-            break;
-        }
+        // remaining > 0 means some violation is uncovered, and the degree pass just counted both of its endpoints, so
+        // best >= 1 and a core was chosen: `remaining` and `degree` are built from the same `covered` set, by this function.
+        ASSUME( core != UINT32_MAX, "an uncovered violation gives its endpoints a nonzero degree" );
         CoGroup g{ core, {} };
         for( std::size_t vi = 0; vi < viol.size(); ++vi )
         {

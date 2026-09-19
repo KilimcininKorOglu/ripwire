@@ -1207,12 +1207,14 @@ inline constexpr std::string_view overCeilingLegendFor( bool namesBudgetTokens, 
 }
 
 // Splices `attrs` into the FIRST start-tag of `doc` (the root — its own attribute values are XML-escaped, so
-// the first '>' closes it). No-op, with a degrade alert, if the document has no start-tag at all.
+// the first '>' closes it).
 inline void spliceRootAttrs( std::string& doc, std::string_view attrs, std::size_t rootTagAt = 0 )
 {
     const std::size_t lt = doc.find( '<', rootTagAt );
     const std::size_t gt = lt == std::string::npos ? std::string::npos : doc.find( '>', lt );
-    if( gt == std::string::npos ) { DISCLOSE( "pricedRoot: document has no root start-tag — est_tokens= not spliced" );  return; }
+    // Every caller composed `doc` itself around its own root start tag (main.cpp's <ctx>, packtask/tracelocus's bundle,
+    // handoff's packet, the MCP for bundle — traced 2026-09-19), so a document without one is a caller bug.
+    EXPECTS( gt != std::string::npos, "spliceRootAttrs: the caller built a document with a root start tag" );
     const bool selfClosing = gt > 0 && doc[ gt - 1 ] == '/';
     doc.insert( selfClosing ? gt - 1 : gt, attrs );
 }

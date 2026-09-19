@@ -296,13 +296,11 @@ IngestResult ingest( const char* rootDir, const std::vector<std::string>& exclud
     verifyCacheRecordMinimaTripwire();
 
     IngestResult result;
-    // A4-F17: rootDir is a runtime-falsifiable input (caller/CLI-supplied), so degrade — never ASSUME here.
-    // In release ASSUME becomes __builtin_assume, which would delete the very guard below (the CLAUDE.md trap).
-    if( rootDir == nullptr )
-    {
-        DISCLOSE( "ingest: null root directory — empty result" );
-        return result;
-    }
+    // A4-F17 said the root is a runtime-falsifiable input, and its CONTENT is: the crawl below degrades on a root that does
+    // not exist or cannot be read. Its POINTER is not: every caller hands a std::string's c_str() or an argv entry behind an
+    // argc check (main.cpp, mcpverbs.h, mcpindex.h, quality.h, dmm.h, mergescout.h, editpreview.h, tsprobe.cpp and the
+    // test harnesses, traced 2026-09-19), so a null here is a caller bug, which EXPECTS blames.
+    EXPECTS( rootDir != nullptr, "ingest: the caller passes a root path, never null" );
 
     // a zero/absurd ceiling would silently crawl nothing — clamp to the default (degrade, never trap).
     if( maxFileBytes == 0 )

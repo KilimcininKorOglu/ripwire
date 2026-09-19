@@ -150,14 +150,12 @@ inline std::string configPath( std::string_view root ) { return rootQualifiedSid
 template<class Value>
 using ScratchMap = stree::dyn::dynamic_map<std::uint64_t, Value, 32>;   // uint64 keys on Apple cache lines; use only when a hard capacity bound is obvious
 
-inline bool insertScratchSeen( ScratchMap<std::uint8_t>& seen, std::uint64_t key, const char* capacityMsg )
+// Every caller sizes `seen` at ing.symbols.size() and inserts at most one key per symbol it iterates (traced 2026-09-19:
+// the per-symbol, api, mask and churn passes of quality.h), so the container can never reject a new key.
+inline bool insertScratchSeen( ScratchMap<std::uint8_t>& seen, std::uint64_t key )
 {
     const auto [ it, inserted ] = seen.insert( { key, 1 } );
-    if( it == seen.end() )
-    {
-        DISCLOSE( capacityMsg );
-        return false;
-    }
+    ASSUME( it != seen.end(), "a scratch map is sized at the symbol count and takes at most one key per symbol" );
     return inserted;
 }
 
@@ -6767,7 +6765,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                 continue;
             }
             const std::uint64_t key   = keyByNode[i];
-            if( !insertScratchSeen( reported, key, "quality: per-symbol seen scratch capacity exceeded" ) )
+            if( !insertScratchSeen( reported, key ) )
             {
                 continue; // already reported at an earlier overload
             }
@@ -7043,7 +7041,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             continue;
         }
         const std::uint64_t key = keyByNode[i];
-        if( !insertScratchSeen( apiSeen, key, "quality: api seen scratch capacity exceeded" ) )
+        if( !insertScratchSeen( apiSeen, key ) )
         {
             continue; // overload of an already-reported symbol
         }
@@ -7124,7 +7122,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             {
                 continue; // this symbol masks no errors now
             }
-            if( !insertScratchSeen( maskSeen, key, "quality: mask seen scratch capacity exceeded" ) )
+            if( !insertScratchSeen( maskSeen, key ) )
             {
                 continue; // already reported at an earlier overload of this id
             }
@@ -7219,7 +7217,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                     // bare-canonId key folded every same-named symbol in the tree into one identity, so
                     // gates 2+3 judged cross-file FOLDS (see bodyHashesBySym's doc; gate: §1d).
                     const std::uint64_t key = pathQualifiedKey( relForHash( ing.files[ s.fileId ], root ), s );
-                    if( !insertScratchSeen( churnSeen, key, "quality: churn seen scratch capacity exceeded" ) )
+                    if( !insertScratchSeen( churnSeen, key ) )
                     {
                         continue; // one report per (file, scope, name) identity — same-file overloads fold
                     }
