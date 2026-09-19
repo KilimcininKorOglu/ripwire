@@ -103,6 +103,18 @@
 
 (struct_specifier name: (qualified_identifier) @name body:(_)) @definition.class
 
+; ---- class SPECIALIZATION headers (ripwire addition — C++ template scopes, test/cpptmplscopecheck.sh) ----
+; `template <> struct Info<char> : CharBase {};` and `template <class T> struct Slot<T*> : Base { … };` name their
+; class with a template_type, which none of the class patterns above bind, so a specialization's BASE CLAUSE was
+; never read: a specialization that only inherits its members was invisible, and the resolver's template-family
+; fallback could pin a call to a sibling that does not apply. Captured as @definition.specialization, which ingest
+; never turns into a symbol (the members already carry the specialization's canonical scope): it emits only the
+; header's inherit refs, with the specialization's canonical template-id as the derived name
+; (ingest_names.h captureSpecializationHeader).
+(class_specifier name: (template_type) @name body:(_)) @definition.specialization
+
+(struct_specifier name: (template_type) @name body:(_)) @definition.specialization
+
 ; ---- module-level settings constants (ripwire addition — r3 q10) ----
 ; Same rationale and --match-verified declarator shapes as queries/c/tags.scm (the C++ grammar
 ; extends tree-sitter-c): file-scope `static const char* DEFAULT_HOSTS[] = { … }` tables and
@@ -354,6 +366,28 @@
 (call_expression
   function: (template_function
     (identifier) @name)) @reference.call
+
+; MEMBER CALLS WITH EXPLICIT TEMPLATE ARGUMENTS: `r.f<T>( x )` / `p->f<T>( x )` parse as
+; call_expression function: (field_expression field: (template_method name: (field_identifier) arguments: …)),
+; and the disambiguated `x.template f<T>()` / `this->template f<T>()` wrap that template_method in a
+; dependent_name. The member pattern above binds `field: (field_identifier)` and the pattern just above binds
+; a template_function, so neither shape minted a reference (measured 2026-09-16: `--callers=get` count="0"
+; for `r.get<K>( 1 )` beside count="1" for `r.plain( 1 )`, and --quality-delta read a method reached only
+; this way as dead code). test/cppqualcheck.sh §12.
+;
+; @name is the field_identifier, as in the plain member pattern, so the NAME needs no text surgery. What the
+; wrapper does change is every parent walk that starts at @name: receiverOf (ingest_binds.h) climbs through
+; template_method/dependent_name to the field_expression — otherwise `other.f<T>()` reads as a BARE call and
+; the enclosing-class rule pins it to the caller's own same-named method — and callArity's bounded parent
+; walk still reaches the call node (3 hops, 4 behind `template`).
+;
+; One alternation, one pattern: a node matches exactly one branch, so each call is minted once.
+(call_expression
+  function: (field_expression
+    field: [
+      (template_method name: (field_identifier) @name)
+      (dependent_name (template_method name: (field_identifier) @name))
+    ])) @reference.call
 
 ; MACRO-DEFINED TEST BODIES (LB-E, r10 gitnexus harvest 2026-08-20): `TEST_CASE( "title" ) { … }` —
 ; doctest/Catch2's block-forming test macros — cannot be expanded by tree-sitter, so the source parses

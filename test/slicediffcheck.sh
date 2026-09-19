@@ -264,6 +264,52 @@ esac
 case "${out##*<slice }" in *'<sd op="-"'*) no '(8b) sym_absent_at_rev emitted a removed row' ;; *) ok '(8b) sym_absent_at_rev emits no removed row' ;; esac
 NEW_C="$( G "$C" rev-parse HEAD )"
 
+# (8c) A6 (found-items 2026-09-17): a blob that is NOT PARSEABLE SOURCE at REV (binary content committed
+# under a .cpp path — a corpus does hold these: a misnamed asset, a vendored binary, a merge gone wrong)
+# must not be told the SAME story as a genuinely new definition. Before the fix, ingestOneFile found no
+# `worker` in the tree-sitter ERROR-node soup and this reported status="sym_absent_at_rev" — "the file was
+# there and the definition was not" — exactly the sym_absent_at_rev wording (8) just pinned for a REAL new
+# definition, even though nothing here can honestly say the symbol is new: the blob was never valid C++.
+D="$WORK/d"; newrepo "$D"
+cat > "$D/src/d.cpp" <<'EOF'
+void sink( int v );
+
+int worker( int limit )
+{
+    int v = 111;
+    sink( v );
+    return v + limit;
+}
+EOF
+commitall "$D" "base"
+# deterministic invalid-UTF-8 garbage — never /dev/urandom (a random draw can coincidentally recover as
+# whitespace/identifiers with zero ERROR nodes, an intermittently-red arm CONTRIBUTING §2 forbids) — and
+# deliberately NO NUL byte (ingest.h's looksBinary sniffs the first bytes for one and SKIPS the file
+# outright before it is ever handed to the parser at all, which is a THIRD status this arm is not testing:
+# a skipped file is unmeasured, model.h's fileParseDegraded contract, not degraded). High, non-UTF-8-lead
+# bytes alone reliably ERROR the C++ grammar without tripping that skip.
+for _i in $( seq 1 20 ); do printf '\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8'; done > "$D/src/d.cpp"
+commitall "$D" "binary content lands on the same path"
+BIN_D="$( G "$D" rev-parse HEAD )"
+cat > "$D/src/d.cpp" <<'EOF'
+void sink( int v );
+
+int worker( int limit )
+{
+    int v = 111;
+    sink( v );
+    return v + limit;
+}
+EOF
+commitall "$D" "real source again"
+out="$( "$BIN" "$D" --slice=src/d.cpp:worker:v --since="$BIN_D" --no-cache 2>/dev/null )"
+case "$out" in
+  *'status="unparsed_at_rev"'*'comparable="0"'*) ok '(8c) a binary blob at REV: status="unparsed_at_rev" comparable="0", not the sym_absent_at_rev "new code" story' ;;
+  *'status="sym_absent_at_rev"'*) no '(8c) a binary blob at REV was told the sym_absent_at_rev "new code" story instead of unparsed_at_rev' ;;
+  *) no "(8c) a binary blob at REV produced neither status: $( printf '%s' "$out" | grep -oE '<since[^>]*>' )" ;;
+esac
+case "${out##*<slice }" in *'<sd '*) no '(8c) unparsed_at_rev emitted a row — comparable="0" must mean no rows' ;; *) ok '(8c) unparsed_at_rev emits no rows' ;; esac
+
 # (9) the definition existed, the VARIABLE did not
 cat > "$C/src/c.cpp" <<'EOF'
 void sink( int v );

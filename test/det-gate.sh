@@ -17,7 +17,7 @@
 #   diff    catches §H1  — a leaked stack byte varies run to run (ASLR), so byte-identity fails.
 #   xmllint catches §B14 — an snprintf truncation is PERFECTLY deterministic and byte-identical every run,
 #                          so diff can never see it; only a parser can.
-# It also diffs STDERR, which the arms above capture and never compare (so DEGRADED_PATH_ALERT is outside
+# It also diffs STDERR, which the arms above capture and never compare (so DISCLOSE is outside
 # the gate), and it self-verifies its own premise: if the emitted p= is not actually wider than the buffers
 # under test, the arm FAILS rather than passing for the wrong reason.
 #

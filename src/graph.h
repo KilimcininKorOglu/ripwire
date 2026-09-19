@@ -12,7 +12,7 @@
                                  // restrictDependencyHealth() needs (owns the extension table, kept in sync
                                  // by hand with ingest.cpp's kLangTable per its own header comment)
 #include "infra/sparseCsr.h"     // first-party infra math (src/infra/)
-#include "infra/csrverify.h"     // structural gate, VERIFY'd after every production CSR build
+#include "infra/csrverify.h"     // structural gate, ASSUME'd after every production CSR build
 #include "infra/hashutil.h"      // fnv1aAbsorb — internDeclinedList buckets a declined call's candidate list by its bytes
 #include "pagerank.h"            // double-precision PageRank kernel over float CSR storage
 #include "prconverge.h"          // W2-F: RankDisclosure — the power iteration's own account, carried with its result
@@ -170,6 +170,7 @@ inline const char* provLabel( std::uint8_t prov ) noexcept
         case 2u: return "binding";   // A4-R5 cross-language FFI alias
         case 3u: return "split";     // C1 one arm of a k-way split the resolver could not choose between
         case 4u: return "import";    // an ES named-import binding named the module and the export
+        case 5u: return "final-segment";   // narrowed by a QUALIFIED written receiver type's last name alone (resolve.h finalSegmentTypeAt)
     }
     return "";
 }
@@ -220,12 +221,11 @@ inline bool langCompatible( Lang a, Lang b ) noexcept
 // disagreeing. Like langCompatible it can only ever REMOVE a candidate, never invent one, and it preserves
 // candidate order, so it is safe to `&&` into any admission site.
 //
-// RefRole::Call is UN-NARROWED, deliberately and permanently. In C++ the spelling `Foo( x )` is legitimately
-// a constructor call, a functional cast, OR a free function; narrowing Call to Function|Method would DROP
-// real edges, and resolve.h's standing doctrine is that a WRONG narrow is worse than no narrow. Read/Write
-// are un-narrowed for the same reason one step down — a value read can name a variable, a function used as
-// a value, or an enumerator — and Import names a FILE, not a kind. test/nsfiltercheck.sh arm 2 is the
-// executable form of this paragraph.
+// RefRole::Call is UN-NARROWED, deliberately and permanently. In C++ the spelling `Foo( x )` is legitimately a
+// constructor call, a functional cast, OR a free function; narrowing Call to Function|Method would DROP real edges,
+// and resolve.h's standing doctrine is that a WRONG narrow is worse than no narrow. Read/Write are un-narrowed for
+// the same reason one step down — a value read can name a variable, a function used as a value, or an enumerator —
+// and Import names a FILE, not a kind. test/nsfiltercheck.sh arm 2 is the executable form of this paragraph.
 //
 // MEASURED, and stated here so the next round does not re-derive it: inside buildGraph's call-edge loop
 // this predicate is a PROVABLE NO-OP. That loop admits only role=Call (un-narrowed above) and role=Macro,
@@ -253,11 +253,12 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         {
             return kind == SymKind::Macro;
         }
-        default:
+        case RefRole::Call: case RefRole::Read: case RefRole::Write: case RefRole::Import:
         {
-            return true;   // Call / Read / Write / Import — see the doctrine above
+            return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }
     }
+    return true;
 }
 
 // ---- aider-style name-quality prior weights --------------------------------------------------------
@@ -726,7 +727,7 @@ inline bool keepRustQualifiedCandidates( const IngestResult& ing, ChaConeMemo& c
         // a scope-less def answers ONLY for the file module it actually lives in — never for any qualifier.
         const bool memberOfFileModule =    candScope.empty()
                                         && cs.fileId < ing.files.size()
-                                        && rustFileModuleOf( ing.files[ cs.fileId ] ) == qualifier;
+                                        && rustFileModuleOf( rootRelPath( ing, cs.fileId ) ) == qualifier;
         if( candScope == qualifier || memberOfFileModule || implementsQualifier( candScope ) )
         {
             survivors.push_back( c );
@@ -1079,26 +1080,116 @@ inline FnPtrBindTables buildFnPtrBindTables( const IngestResult& ing )
 
 // ── P2-D Rule 2b field-narrow tables (W1-P1-12) — built once per buildGraph, consumed via
 // Narrower::rule2bFieldRecvType in the resolve loop. Two tables, Rule 2's exact conservatism:
-//   fieldTypeByClass — "ClassName#fieldName" → the field's DECLARED type name, from the S5-E HAS-A field
-//     captures (isCompose refs: fromSymbol = the declaring class def, fieldName = the member, calleeName =
-//     the written type's name). Symbol scopes drop namespaces, so two same-NAMED classes collapse onto one
-//     key here — a same-named field bound to two DIFFERENT types is TOMBSTONED ("" value) and never
-//     narrows; a duplicate declaration of the SAME type (header re-parse, repeated patterns across roots)
-//     is harmless and keeps the entry. The type name is only ever USED as a canonByName scope, so an
-//     unindexed type simply never hits and degrades to the unchanged ladder.
-//   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind (Type + the r9 VarDecl shadow records +
-//     FnDecl/FnAssign). Any local evidence means the name is a LOCAL in that scope — a parameter or
-//     declared variable shadows a same-named field in real C++ lookup, so Rule 2b must refuse.
+//   fieldTypeByClass — "ClassName#fieldName" → the field's DECLARED type name, from the S5-E HAS-A field captures (isCompose refs: fromSymbol = the
+//     declaring class def, fieldName = the member, calleeName = the written type's name). Symbol scopes drop namespaces, so two same-NAMED classes
+//     collapse onto one key here — a same-named field bound to two DIFFERENT types is TOMBSTONED ("" value) and never narrows; a duplicate declaration
+//     of the SAME type (header re-parse, repeated patterns across roots) is harmless and keeps the entry. The type name is only ever USED as a canonByName
+//     scope, so an unindexed type simply never hits and degrades to the unchanged ladder. A type written in `std` records "" (resolve.h
+//     fieldTypeWrittenInStd): it names no in-repo class, and it still tombstones a same-named class's other type, which a skip would not.
+//     A type written in any other namespace keeps its name and marks the entry qualified: prov="final-segment" (fieldFinalSegmentAt).
+//   localNameSet — "<fromSymbol>#<var>" for EVERY binding kind, valued by the evidence it holds (resolve.h localNameEvidence):
+//     any record makes the name a VARIABLE (Rule 2c, the Phase 5 veto); only a DECLARATION makes it a LOCAL, which hides a
+//     same-named field in real C++ lookup, so Rule 2b refuses on that bit alone — `m_p = makePool();` declares nothing.
 // Both tables empty on a field-capture-free corpus → the resolve loop's Rule 2b block never fires →
 // byte-identical output there. Deterministic: ing.references / ing.bindings are totally ordered; first
 // type wins, a later conflict tombstones, and set membership is order-independent.
 struct FieldNarrowTables
 {
-    HashMap<std::string, std::string> fieldTypeByClass;
+    HashMap<std::string, FlatRecvType> fieldTypeByClass;
     HashMap<std::string, char>        localNameSet;
+    HashMap<std::string, rw::SmallVec<VarSpan, 1>> localShadowSpans; // VarDecl spans keyed "<fromSymbol>#<var>"
+    HashMap<std::string, char>        javaFieldShadow;              // class-field names copied onto methods
 };
 
-inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
+// Issue #74: every Java class field NAME, grouped by its owning class (a Java class, interface or struct symbol a binding
+// attributes to) — owners in first-seen order (ing.bindings is totally ordered), each owner's names in binding order.
+struct JavaFieldOwnerGroups
+{
+    std::vector<NodeId>                        owners;   // distinct owners in first-seen order
+    std::vector<std::vector<std::string_view>> fields;   // parallel: that owner's field names, in binding order
+};
+
+inline JavaFieldOwnerGroups buildJavaFieldOwnerGroups( const IngestResult& ing )
+{
+    JavaFieldOwnerGroups           groups;
+    HashMap<NodeId, std::uint32_t> javaOwnerSlot;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
+        {
+            continue;
+        }
+        const Symbol& owner = ing.symbols[ b.fromSymbol ];
+        if( owner.lang != Lang::Java
+            || ( owner.kind != SymKind::Class && owner.kind != SymKind::Interface
+                 && owner.kind != SymKind::Struct ) )
+        {
+            continue;
+        }
+        const auto [ slot, inserted ] = javaOwnerSlot.try_emplace( owner.id, std::uint32_t( groups.owners.size() ) );
+        if( inserted )
+        {
+            groups.owners.push_back( owner.id );
+            groups.fields.emplace_back();
+        }
+        groups.fields[ slot->second ].push_back( b.var );
+    }
+    return groups;
+}
+
+// the "<symbolId>#<field>" key of each of one Java owner's field names, into the Java field-shadow set — and first into
+// Rule 2b's local-name set when `alsoLocalName` (a method or function inside the owner, never the owner itself)
+inline void addJavaFieldShadowKeys( std::string& key, NodeId symbolId, const std::vector<std::string_view>& fields, FieldNarrowTables& t, bool alsoLocalName )
+{
+    for( std::string_view field : fields )
+    {
+        key.clear();
+        Narrower::appendUint( key, symbolId );
+        key.push_back( '#' );
+        key.append( field );
+        if( alsoLocalName )
+        {
+            t.localNameSet.try_emplace( key, 1 );
+        }
+        t.javaFieldShadow.try_emplace( key, 1 );
+    }
+}
+
+// Issue #74: copy each Java class's field names onto the class and onto every method or function inside its byte range,
+// in Rule 2b's local-name set and the Java field-shadow set (buildFieldNarrowTables' note says why). `key` is the
+// caller's reused key buffer.
+inline void shadowJavaFieldsOntoMethods( const IngestResult& ing, const JavaFieldOwnerGroups& groups, FieldNarrowTables& t, std::string& key )
+{
+    if( groups.owners.empty() )
+    {
+        return;
+    }
+    // model.h::symbolsByFile — the shared bucket-and-sort, id order (no reordering wanted). Built
+    // only when a Java class field exists, so a Java-free corpus pays nothing at all.
+    const SymbolsByFile byFile = symbolsByFileInIdOrder(
+        ing, []( const Symbol& s ) { return s.kind == SymKind::Method || s.kind == SymKind::Function; } );
+    for( std::size_t oi = 0; oi < groups.owners.size(); ++oi )
+    {
+        const Symbol&                          owner  = ing.symbols[ groups.owners[ oi ] ];
+        const std::vector<std::string_view>&   fields = groups.fields[ oi ];
+        addJavaFieldShadowKeys( key, owner.id, fields, t, false );
+        if( owner.fileId >= byFile.size() )
+        {
+            continue;
+        }
+        for( NodeId sid : byFile[ owner.fileId ] )
+        {
+            const Symbol& s = ing.symbols[ sid ];
+            if( s.id == owner.id || s.sigStartByte < owner.sigStartByte || s.endByte > owner.endByte )
+            {
+                continue;
+            }
+            addJavaFieldShadowKeys( key, s.id, fields, t, true );
+        }
+    }
+}
+
+inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing, const HashMap<std::string, char>& classNames )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2d: Rule-2b field-narrow tables" );
     FieldNarrowTables t;
@@ -1112,15 +1203,16 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         key.clear();
         key.append( ing.symbols[ cr.fromSymbol ].name ).push_back( '#' );
         key.append( cr.fieldName );
-        const auto [ it, inserted ] = t.fieldTypeByClass.try_emplace( key, cr.calleeName );
-        if( !inserted && !it->second.empty() && it->second != cr.calleeName )
-        {
-            it->second.clear();   // same class-name#field-name, different declared types → tombstone
-        }
+        // same class-name#field-name with different declared types, or one reached through `->` alone (a smart pointer's pointee) → tombstone
+        recordFlatRecvTypeFact( t.fieldTypeByClass, key, fieldTypeWrittenInStd( cr ) ? std::string_view{} : std::string_view( cr.calleeName ), !cr.qualifier.empty(), cr.viaArrow );
     }
     t.localNameSet.reserve( ing.bindings.size() );
+    t.localShadowSpans.reserve( ing.bindings.size() );
     for( const Binding& b : ing.bindings )
     {
+        // Every record, an assignment's included: localNameEvidence keeps an assignment out of Rule 2b's declared bit (the
+        // member it assigns stays typed, which is what assignmentNamesNoClass guarded here), while Rule 2c still reads it as
+        // proof the token is a variable (test/fieldnarrowcheck.sh arm v3).
         if( b.fromSymbol == kNoNode || b.var.empty() )
         {
             continue;
@@ -1129,9 +1221,194 @@ inline FieldNarrowTables buildFieldNarrowTables( const IngestResult& ing )
         Narrower::appendUint( key, b.fromSymbol );
         key.push_back( '#' );
         key.append( b.var );
-        t.localNameSet.try_emplace( key, 1 );
+        t.localNameSet[ key ] |= localNameEvidence( b.kind );
+        if( b.kind == LocalBindKind::VarDecl )
+        {
+            t.localShadowSpans[ key ].push_back( VarSpan{ b.spanStart, b.spanEnd } );
+        }
     }
+    // Java fields attribute to the class symbol; method-reference sites attribute to the
+    // method. Copy class-scope names onto every contained method so a field named like a
+    // type vetoes Identifier::method the same way a parameter or local does — for the
+    // whole method, which is Java field lookup. Locals/parameters are NOT copied here;
+    // JavaTypeCandidate consults localShadowSpans at the call-site byte instead.
+    //
+    // GROUPED BY OWNING CLASS, and the grouping is the point: the field NAMES of one class are
+    // collected first, then that class's file bucket is walked ONCE. Written per-binding it was a
+    // full `ing.symbols` scan for every Java field — O(fields × symbols) on every run, and the
+    // scan's own first test was "is this symbol even in the owner's file". The key SET is
+    // unchanged: the bucket predicate carries the kind filter, the bucket carries the file filter,
+    // and the byte-range containment test is the same one.
+    shadowJavaFieldsOntoMethods( ing, buildJavaFieldOwnerGroups( ing ), t, key );
     return t;
+}
+
+inline bool javaClassNamed( const HashMap<std::string, char>& classNames, std::string_view name )
+{
+    return !name.empty() && classNames.find( std::string( name ) ) != classNames.end();
+}
+
+inline bool javaLeadingShadowed( const FieldNarrowTables& t, NodeId from, std::string_view name,
+                                std::uint32_t startByte, std::string& key )
+{
+    if( name.empty() || from == kNoNode )
+    {
+        return false;
+    }
+    key.clear();
+    Narrower::appendUint( key, from );
+    key.push_back( '#' );
+    key.append( name );
+    if( t.javaFieldShadow.find( key ) != t.javaFieldShadow.end() )
+    {
+        return true;
+    }
+    const auto it = t.localShadowSpans.find( key );
+    if( it == t.localShadowSpans.end() )
+    {
+        return false;
+    }
+    for( const VarSpan& v : it->second )
+    {
+        if( startByte >= v.startByte && startByte < v.endByte )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Prove a Java method-reference receiver is a type, not a value, and RETURN the type it names —
+// the receiver's LAST segment, which is the type the member must be resolved against. Empty view
+// ⇒ not proven; a proof never yields an empty name, so the two are distinguishable.
+//   Widget              — last (only) segment is an indexed class, leading name not shadowed
+//   Outer.Inner         — leading is a class: every segment is a class; only leading is shadowed
+//   com.example.Widget  — leading is not a class and not shadowed; last segment is a class
+// Expression receivers (this/super/calls) never reach here with a dotted type spelling;
+// System.out fails because leading is a class and `out` is not.
+// The view borrows r.recvVar and is consumed inside the same resolve-loop iteration.
+inline std::string_view javaProvenTypeReceiver( const Reference& r, const HashMap<std::string, char>& classNames,
+                                                const FieldNarrowTables& fieldNarrow, std::string& qkey )
+{
+    if( r.recvVar.empty() || r.fromSymbol == kNoNode )
+    {
+        return {};
+    }
+    const std::string_view recv = r.recvVar;
+    const std::size_t firstDot = recv.find( '.' );
+    const std::string_view leading = firstDot == std::string_view::npos ? recv : recv.substr( 0, firstDot );
+    const std::size_t lastDot = recv.rfind( '.' );
+    const std::string_view last = lastDot == std::string_view::npos ? recv : recv.substr( lastDot + 1 );
+    if( leading.empty() || last.empty() || !javaClassNamed( classNames, last ) )
+    {
+        return {};
+    }
+    if( javaLeadingShadowed( fieldNarrow, r.fromSymbol, leading, r.startByte, qkey ) )
+    {
+        return {};
+    }
+    if( firstDot == std::string_view::npos )
+    {
+        return last;
+    }
+    if( !javaClassNamed( classNames, leading ) )
+    {
+        return last;   // package-qualified type: last is a class, leading is not a value
+    }
+    std::size_t begin = 0;
+    while( begin < recv.size() )
+    {
+        const std::size_t end = recv.find( '.', begin );
+        const std::string_view segment( recv.data() + begin,
+                                        ( end == std::string_view::npos ? recv.size() : end ) - begin );
+        if( !javaClassNamed( classNames, segment ) )
+        {
+            return {};
+        }
+        if( end == std::string_view::npos )
+        {
+            break;
+        }
+        begin = end + 1;
+    }
+    return last;
+}
+
+// ── Java `Class::method` → definition ids, for the issue-#74 receiver resolution ────────────────────
+// The SAME shape `canonByName` holds for every language whose defs carry a `Symbol::scope` — and Java's
+// do not (ingest_sidecap.h populates scope for C++/Python/Rust/Elixir/Ruby/Kotlin only), so canonByName
+// has no Java key to find. Deriving it here rather than at extraction is deliberate: `Symbol::scope` is a
+// CACHED field, so writing it would change the extraction identity, and this map is a pure function of
+// `ing.symbols` that buildGraph recomputes on every run.
+//
+// The scope is the INNERMOST containing class — the same thing `Symbol::scope` means elsewhere ("a nested
+// scope's last segment is the innermost class"), which is what makes `Outer.Inner::makeFn` resolve to
+// `Inner::makeFn` and NOT to a same-named method of `Outer`. Definitions only, matching canonByName: an
+// interface's abstract method declares no body, and `methodOnTypeOrBases` promises every id it returns is
+// a real definition. Empty on a Java-free corpus, so the Java arm of the resolve loop is inert there.
+// Deterministic: symbols are visited in id order and every bucket is appended in that order.
+inline HashMap<std::string, rw::SmallVec<NodeId, 2>> buildJavaTypeMembers( const IngestResult& ing )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2e: Java Class::method members (issue #74)" );
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> members;
+    const auto isJavaType = []( const Symbol& s ) {
+        return s.lang == Lang::Java && ( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface );
+    };
+    if( std::ranges::none_of( ing.symbols, isJavaType ) )
+    {
+        return members;   // a Java-free corpus builds no buckets at all
+    }
+    // class-like Java defs bucketed per file, id order kept (model.h symbolsByFileInIdOrder): a method scans only its
+    // own file's types. Scanning every Java type for every method was O(methods × types) (CodeRabbit on #281); the
+    // types a method could be inside were always its own file's, in the same order, so the innermost pick is unchanged.
+    const SymbolsByFile typesByFile = symbolsByFileInIdOrder( ing, isJavaType );
+    std::string key;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( s.lang != Lang::Java || ( s.kind != SymKind::Method && s.kind != SymKind::Function )
+            || !isDefinitionNotDeclaration( s ) || s.fileId >= typesByFile.size() )
+        {
+            continue;
+        }
+        const Symbol* innermost = nullptr;
+        for( NodeId tid : typesByFile[ s.fileId ] )
+        {
+            const Symbol& t = ing.symbols[ tid ];
+            if( s.sigStartByte < t.sigStartByte || s.endByte > t.endByte )
+            {
+                continue;
+            }
+            if( innermost == nullptr || t.sigStartByte > innermost->sigStartByte )
+            {
+                innermost = &t;   // the deepest container wins — Outer.Inner's methods scope to Inner
+            }
+        }
+        if( innermost == nullptr )
+        {
+            continue;
+        }
+        key.clear();
+        key.append( innermost->name ).append( "::" ).append( s.name );
+        members[ key ].push_back( s.id );
+    }
+    return members;
+}
+
+// ── Issue #74: the one taxonomy both JavaTypeCandidate give-up exits use ────────────────────────────
+// A `Type::method` site that fails its receiver proof, and a proven receiver whose type declares no such
+// member, are the same kind of refusal — and the vocabulary is the resolver's own (see the Elixir note in
+// the resolve loop): a spelling some in-repo definition carries is `unresolved=` (an in-tree def was found
+// and dropped); a spelling NO definition carries at all is undefined, which has no header surface because
+// it is dominated by genuine externals. `String::valueOf` and `System.out::println` are that second case,
+// and counting them into `unresolved=` would claim ripwire missed an internal definition of `valueOf`.
+inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool nameHasInRepoDef )
+{
+    if( !nameHasInRepoDef )
+    {
+        return CallDisposition::Undefined;
+    }
+    ++g.unresolvedOut[ r.fromSymbol ];
+    return CallDisposition::Unresolved;
 }
 
 // ── Phase 5 external-name veto tables (docs/EVALS.md "Phase 5", mechanism 1; src/externalnames.h) ─────
@@ -1188,7 +1465,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
     {
         for( std::uint32_t f = 0; f < ing.files.size(); ++f )
         {
-            const std::string_view path = ing.files[ f ];
+            const std::string_view path = rootRelPath( ing, f );   // #228: segments ABOVE the root are not this tree's modules
             fileIndex.emplace( lexicalNormalize( path ), f );
             std::size_t seg = 0;
             while( seg <= path.size() )
@@ -1221,7 +1498,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
             {
                 verdict = 'i';   // a relative import cannot leave the package
             }
-            else if( resolvePreciseInclude( ing.files[ b.fileId ], b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )
+            else if( resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )   // same view as fileIndex's keys
             {
                 verdict = 'i';
             }
@@ -1469,7 +1746,7 @@ inline HashMap<std::string, char> jsModuleVocabulary( const IngestResult& ing )
     names.reserve( ing.files.size() * 2 );
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
-        const std::string_view path = ing.files[ f ];
+        const std::string_view path = rootRelPath( ing, f );   // #228: segments ABOVE the root are not this tree's modules
         std::size_t seg = 0;
         while( seg <= path.size() )
         {
@@ -1583,7 +1860,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
     files.reserve( ing.files.size() );
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
-        files.emplace( lexicalNormalize( ing.files[ fileId ] ), fileId );
+        files.emplace( lexicalNormalize( rootRelPath( ing, fileId ) ), fileId );
     }
     // Two views of the same export bindings: by the EXPORTED name (what an importer writes) and by the
     // LOCAL one (what the definition is called). `export { f as g }` makes them different words, so a
@@ -1638,7 +1915,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
         // this import's call, and there is no module question to ask.
         const auto [ moduleFile, moduleOutcome ] = b.importedName.empty()
             ? std::pair<std::uint32_t, JsImportOutcome>{ kNoFile, JsImportOutcome::Refused }
-            : resolveJsImportModule( ing.files[ b.fileId ], b.typeName, b.fileId, ctx );
+            : resolveJsImportModule( rootRelPath( ing, b.fileId ), b.typeName, b.fileId, ctx );
         target.outcome = moduleOutcome;
         if( moduleFile != kNoFile )
         {
@@ -1787,33 +2064,42 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // ambiguity. Definitions only (body present); the obj.method()/unqualified halves stay bare-name (and
     // keep their honest `amb`). C++ only (scope is populated for Lang::Cpp).
     HashMap<std::string, rw::SmallVec<NodeId, 2>> canonByName;
+    HashMap<std::string, rw::SmallVec<NodeId, 2>> canonFamilyByName;   // C++ specializations under their template's `T::name`, plus existence markers (resolve.h)
     canonByName.reserve( N );
     std::string canonKey;
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/1f: canonByName (scope::name -> def ids)" );
         for( const Symbol& s : ing.symbols )
         {
-            if( s.scope.empty() || !isDefinitionNotDeclaration( s ) )
-            {
-                continue;
-            }
-            canonKey.clear();
-            canonKey.append( s.scope ).append( "::" ).append( s.name );
-            canonByName[ canonKey ].push_back( s.id );
+            // a definition under scope::name; a C++ specialization's definition again under its template's family key, and
+            // any symbol a specialization scopes (declarations too) as that specialization's existence marker
+            indexCanonicalScope( canonByName, canonFamilyByName, canonKey, s );
         }
+    }
+
+    // Rule 2c class-name set (docs/EVALS.md "Phase 4b"): every Class/Struct/Interface definition NAME in the corpus, so
+    // `Cls.m()` can read its receiver token as the type it names (Narrower::rule2cClassNameRecv) — and the assignment
+    // guard's (resolve.h assignmentNamesNoClass): Rule 2's table and the local-name set below drop a C++ assignment's
+    // callee-read type that no class is called, `t = llvm::cast<Target>( y )` recording `cast` over the written `Target* t`.
+    HashMap<std::string, char> classNames;
+    {
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/1g: classNames set" );
+        classNames = classNameSet( ing );
     }
 
     // P2-D Rule 2 binding table: per-scope `(fromSymbol, var) → type` from ingest's local var→type bindings,
     // for receiver-VARIABLE narrowing (`Foo x; x.m()` → `Foo::m`). CONSERVATIVE — a var bound to ≥2 DISTINCT
-    // types in one scope (reassigned to a different type) is TOMBSTONED (value set to ""), so it never narrows;
-    // only an unambiguous single-type binding is usable. A binding's `type` is matched as a SCOPE in canonByName
-    // by Rule 2, so a type that names no class (e.g. inferred from a non-constructor `auto x = makeT()`) simply
-    // never produces a `type::method` hit and degrades to the name-based fallback — the safety net for constructor-inferred types.
+    // types in one scope (two declarations, or a constructor assignment of another class) is TOMBSTONED (value set to
+    // ""), so it never narrows; only an unambiguous single-type binding is usable. A binding's `type` is matched as a
+    // SCOPE in canonByName by Rule 2, so a DECLARATION's type that names no class (`auto x = makeT()`) never produces a
+    // `type::method` hit — but it still conflicts with a sibling declaration of the name, which is the point: that
+    // declaration's type is simply unrecorded (test/narrowcheck.sh arm 48). An ASSIGNMENT's such type is no fact at all
+    // and is skipped (resolve.h assignmentNamesNoClass, arms 44-46).
     // Deterministic: ing.bindings is in (file, byte, var) order; first binding wins, a later conflict tombstones.
-    HashMap<std::string, std::string> varType;
+    HashMap<std::string, FlatRecvType> varType;
     varType.reserve( ing.bindings.size() );
     {
-        PROFILE_SCOPE_DESCRIBE( "buildGraph/1g: varType binding table" );
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/1h: varType binding table" );
         std::string key;   // reused key buffer — same "<fromSymbol>#var" bytes as before, one alloc amortized
         for( const Binding& b : ing.bindings )
         {
@@ -1821,39 +2107,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 continue; // L3 var→function records live in varFn/varFnFile below — never in Rule 2's table
             }
-            if( b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() )
+            if( b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() || assignmentNamesNoClass( b, classNames ) )
             {
-                continue; // file-scope/empty → unusable
+                continue; // file-scope/empty → unusable; an assignment's callee that no class is called → no type fact
             }
-            key.clear();
-            Narrower::appendUint( key, b.fromSymbol );
-            key.push_back( '#' );
-            key.append( b.var );
-            const auto [ it, inserted ] = varType.try_emplace( key, b.typeName );
-            if( !inserted && !it->second.empty() && it->second != b.typeName )
-            {
-                it->second.clear();   // conflicting types for one var in one scope → tombstone (never narrow this var)
-            }
+            buildShadowKey( key, b.fromSymbol, b.var );   // "<fromSymbol>#var"
+            recordFlatRecvType( varType, key, b );         // a conflicting or `std::` type tombstones (resolve.h)
         }
     }
 
     // P2-D Rule 2b field-narrow tables (class#field → declared type, plus the local-shadow veto set) —
     // built by buildFieldNarrowTables above; consumed via Narrower::rule2bFieldRecvType in the resolve loop.
-    const FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing );
-    // Rule 2c class-name set (docs/EVALS.md "Phase 4b"): every Class/Struct/Interface definition NAME in the
-    // corpus, so `Cls.m()` can read its receiver token as the type it names. Consumed via Narrower::rule2cClassNameRecv.
-    HashMap<std::string, char> classNames;
-    classNames.reserve( N / 8 + 1 );
-    {
-        PROFILE_SCOPE_DESCRIBE( "buildGraph/1h: classNames set" );
-        for( const Symbol& s : ing.symbols )
-        {
-            if( s.kind == SymKind::Class || s.kind == SymKind::Struct || s.kind == SymKind::Interface )
-            {
-                classNames.try_emplace( s.name, '\0' );
-            }
-        }
-    }
+    const FieldNarrowTables fieldNarrow = buildFieldNarrowTables( ing, classNames );
 
     // Phase 5 external-name veto evidence (docs/EVALS.md "Phase 5") — built by buildExternalVetoTables above;
     // consumed by the veto step in the resolve loop, after every receiver rule has missed.
@@ -1960,11 +2225,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const bool ffiActive = !pybindAlias.empty() || !externCAlias.empty();
 
-    // P2-D one-hop type narrowing: reuses the canonical scope::name map above (no new pass). Rule 1 pins a
-    // `this->m()` / `self.m()` call to the caller's enclosing class; Rule 2 pins an `x.m()` named-receiver call
-    // to the variable's type; Rule 3 pins a call to the ONE file the caller includes that defines it — all
-    // BEFORE the bare-name spray below. See resolve.h.
-    const Narrower narrower( canonByName, varType, fileIncludes, symFileId );
+    // P2-D one-hop type narrowing over the canonical scope::name map above (no new pass): Rule 1 pins `this->m()` / `self.m()` to the caller's enclosing class; Rule 2
+    // pins `x.m()` to the variable's type (a parameter's through the lexical table); Rule 3 pins a call to the ONE included file defining it — all BEFORE the spray. See resolve.h.
+    const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
+    const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
+    const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
+    const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
+    // Issue #74: the same Narrower over Java's containment-derived `Class::method` map, so a proven
+    // `Type::method` receiver resolves through the ONE type-side probe (methodOnTypeOrBases) instead of a
+    // second copy of its base walk. A separate instance rather than extra keys in canonByName: merging
+    // Java members into the shared map would put them in reach of the Kotlin↔Java bridge's Rule-1 lookups,
+    // which is a resolution change #74 does not ask for. Empty map on a Java-free corpus ⇒ never hits.
+    const HashMap<std::string, rw::SmallVec<NodeId, 2>> javaTypeMembers = buildJavaTypeMembers( ing );
+    const Narrower javaNarrower( javaTypeMembers, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     const ElixirResolver elixirResolver( ing );
     // ONE apply step for every receiver rule (1 / 2 / 2c / 2b): keep the rule's definition ids that are
     // language-compatible with the call and inside the same root, and say whether anything survived. The
@@ -2018,6 +2291,12 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // unmarked would let a NEW resolution mechanism inherit the
                                                  // confidence label of the old one, silently. Not reserved, for the
                                                  // reason spelled out for splitEdges below.
+    HashMap<std::uint64_t, char> finalSegmentEdges;   // (from<<32|to) keys of edges a receiver's QUALIFIED written type chose by
+                                                      // its last name alone (Rule 2, or CHA-lite pruning by that type) —
+                                                      // consumed below to stamp prov (outProv=5). The qualifier was never
+                                                      // checked against the class's namespace, so such an edge can be a
+                                                      // precise-looking WRONG one (test/narrowcheck.sh arm 24); an absent
+                                                      // prov= would call it uniquely resolved. Not reserved, like splitEdges.
     HashMap<std::uint64_t, char> splitEdges;     // C1: (from<<32|to) keys of edges that are an ARM of a k-way split the
                                                  // resolver could not choose between — the per-EDGE half of the per-SYMBOL
                                                  // ambOut counter, consumed below to stamp prov (outProv=3). ambOut says K
@@ -2033,7 +2312,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
-    std::vector<std::size_t> locShare;   // reused per-candidate sharedLocality memo (computed once per tier, below)
+    std::vector<std::size_t> locShare;   // reused per-candidate localityRank memo (computed once per tier, below)
 
     // ── B2.1 CHA-lite inheritance NAME graph (built once, consumed in the resolve loop below). A class is
     // keyed by its final-segment NAME, exactly like byName — so a same-name collision only ever ENLARGES a
@@ -2077,11 +2356,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 declared.push_back( ir.calleeName );   // source order (ing.references is in (file, byte) order)
             }
         }
-        // dedup each adjacency list — membership is order-independent, so this stays deterministic.
+        addTypeAliasBases( ing, chaUp );   // a typedef / using alias continues at its target class; dedup below is order-independent
         for( auto& [ k, v ] : chaUp )   { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
         for( auto& [ k, v ] : chaDown ) { std::sort( v.begin(), v.end() ); v.erase( std::unique( v.begin(), v.end() ), v.end() ); }
     }
+    const std::vector<std::string> specializationsWithBases = sortedSpecializationNames( chaUp );   // resolve.h: what a C++ specialization inherits
     ChaConeMemo              chaCones( chaUp, chaDown );   // one cone per receiver type, computed on first use (see the type)
+    const ClassIdentity      classIds = buildClassIdentity( ing, chaUp );   // Rule 2's class identity: nesting, owners, real inheritance (resolve.h)
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
 
     // ---- census arming + the ORACLE side (eval-only; src/pincensus.h) ------------------------------
@@ -2175,6 +2456,24 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
+        // Java issue #74: the grammar labels both `Widget::makeFn` and `widget::makeFn`
+        // with an identifier receiver. A method-reference capture is therefore admitted only when
+        // repository evidence proves the receiver is a type at this site. Every other receiver is
+        // a known callback expression: stop before the bare-name ladder, which would otherwise
+        // manufacture an ordinary call edge by member spelling. The proven TYPE is carried to the
+        // resolution step below — `Widget::makeFn` must land on Widget's member, not on whichever
+        // same-named definition the locality tie-break finds nearest the caller.
+        std::string_view javaProvenType;
+        if( !scipPinned && r.recv == RecvKind::JavaTypeCandidate )
+        {
+            javaProvenType = javaProvenTypeReceiver( r, classNames, fieldNarrow, qkey );
+            if( javaProvenType.empty() )
+            {
+                disposition = javaCandidateRefused( g, r, it != byName.end() );
+                continue;
+            }
+        }
+
         // ---- A4-R5 FFI binding fallback: compute cross-language alias candidates UP FRONT. Applied below ONLY
         // if the normal ladder finds no compatible local def (so a same-language local def always wins). Two
         // sound gates keep it silent on binding-free corpora: pybind fires only for a foreign-language caller of
@@ -2265,21 +2564,23 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             canonical = true;
         }
+        // E#4 canonical tier (resolve.h appendCanonicalCandidates): the defs keyed "qualifier::name", built in the reused
+        // qkey buffer and admitted by language and root. An exact template-id keys exactly its specialization
+        // (`Traits<int>::encode`), which is what keeps a delegation between specializations an edge. A C++ template-id
+        // qualifier that keys nothing is answered from its template's FAMILY only when that answer cannot be missing
+        // a body the call may reach:
+        //   * the id names a specialization that exists but does not define the name → what IT inherits (chaUp holds
+        //     specialization headers' base clauses), or no answer;
+        //   * otherwise what the PRIMARY supplies, itself or through its bases — `CastInfo` defines no `isPossible` but
+        //     inherits `CastIsPossible::isPossible` — joined by every specialization's own or inherited member; more
+        //     than one candidate is a disclosed split;
+        //   * with nothing visible from the primary, only a split of two or more specializations answers.
+        // No answer leaves `cand` empty, so the bare-name ladder decides exactly as it did before the family fallback,
+        // and no family answer ever reaches a same-named definition outside the template.
         if( !scipPinned && r.lang != Lang::Elixir && !r.qualifier.empty() )
         {
-            qkey.clear();                                       // "qualifier::name" — reused buffer, identical bytes
-            qkey.append( r.qualifier ).append( "::" ).append( r.calleeName );
-            const auto cit = canonByName.find( qkey );
-            if( cit != canonByName.end() )
-            {
-                for( NodeId c : cit->second )
-                {
-                    if( langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ) )
-                    {
-                        cand.push_back( c );
-                    }
-                }
-            }
+            appendCanonicalCandidates( cand, qkey, r, CanonicalScopes { canonByName, canonFamilyByName, specializationsWithBases, narrower, chaUp, ing.symbols },
+                                       [ & ]( NodeId c ) { return langCompatible( ing.symbols[c].lang, r.lang ) && sameRoot( c, r.fileId ); } );
             canonical = !cand.empty();
         }
         // ── L3 fn-pointer/callback binding resolve — BEFORE Rule 1, because a local variable shadows a
@@ -2293,6 +2594,39 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // keeps role="call": it IS a real call; only the RESOLUTION came from the binding — the same trust
         // level as Rule 2 receiver narrowing.
         bool narrowed = false;
+        // TS/JS literal receivers (issue #163): only names that really are members of the literal's
+        // built-in type leave the ladder. Bind a scope-matched polyfill first (JS `Foo.prototype.NAME`,
+        // TS has no protomethod capture); else External if the name exists in-repo, Undefined if it
+        // does not. A name that is NOT a member of that type (`shout`, named-function proto, Object.assign)
+        // falls through to today's path. !ctor.empty() stays: a future Lit* kind without a ctor must not
+        // match every unscoped method.
+        if( !scipPinned && r.role == RefRole::Call && isJsTsLitRecv( r.recv ) )
+        {
+            const std::string_view ctor = jsLitCtorName( r.recv );
+            if( !ctor.empty() && isJsTsBuiltinMember( ctor, r.calleeName ) )
+            {
+                if( it == byName.end() )
+                {
+                    disposition = CallDisposition::Undefined;   // no in-repo def of this builtin name — not external=
+                    continue;
+                }
+                for( NodeId c : it->second )
+                {
+                    const Symbol& sy = ing.symbols[c];
+                    if( sy.kind == SymKind::Method && sy.scope == ctor
+                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        cand.push_back( c );
+                    }
+                }
+                if( cand.empty() )
+                {
+                    disposition = vetoExternal( r );
+                    continue;
+                }
+                narrowed = true;
+            }
+        }
         // ── ES named-import binding resolve — the JS/TS twin of the L3 block above, and BEFORE every
         // receiver rule for the same reason: `import { f } from './m.js'` is a name-lookup FACT, so a
         // bound ES name never falls through to the global spelling ladder. SCIP remains authoritative.
@@ -2375,6 +2709,26 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
             }
         }
+        // Issue #74: the receiver is PROVEN to name an indexed Java type, so the target is that type's
+        // member — `Narrower::methodOnTypeOrBases` against the receiver's last segment, the same type-side
+        // probe Rule 2c uses for `Cls.m()`, walking the type's bases on a miss of its own method set.
+        // Driven through `javaNarrower` because Java definitions carry no `Symbol::scope` and therefore no
+        // canonByName key; see buildJavaTypeMembers.
+        //
+        // A MISS IS A REFUSAL, not a fallback. Reaching the bare-name ladder from here is exactly the bug
+        // this closes: `Widget::makeFn` resolved to the caller's own file's `A::makeFn` and `Base::makeFn`,
+        // because the ladder sprays the member spelling and the S6-C locality tie-break then hands the site
+        // to whichever candidate sits nearest. The receiver is the whole evidence a method reference has; a
+        // member the proven type does not declare is a call to something outside the indexed tree.
+        if( !scipPinned && !canonical && !narrowed && r.recv == RecvKind::JavaTypeCandidate )
+        {
+            narrowed = narrowTo( javaNarrower.methodOnTypeOrBases( javaProvenType, r, chaUp ), r, cand );
+            if( !narrowed )
+            {
+                disposition = javaCandidateRefused( g, r, it != byName.end() );
+                continue;
+            }
+        }
         // P2-D Rule 1 (class membership): a `this->m()` / `self.m()` call resolves to the caller's enclosing
         // class's own `m`, BEFORE the bare-name spray — the deterministic [TYPE] cut to method ambiguity. Only
         // when the receiver is this/self AND the enclosing class actually defines `m` (canonByName, defs only);
@@ -2398,35 +2752,36 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             disposition = vetoExternal( r );
             continue;
         }
-        // P2-D Rule 2 (receiver-variable type): a named-receiver call `x.m()` / `x->m()` resolves to the method
-        // on the VARIABLE's type (`Foo::m` for `Foo x;`), BEFORE the bare-name spray — the other half of the
-        // [TYPE] cut. Only when the var has a single unambiguous in-scope binding AND that type defines `m`
-        // (canonByName, defs only); otherwise narrowed stays false and we fall through to the name-based fallback. Skipped when the
-        // call was already pinned canonically or by Rule 1 (those are the more specific / already-resolved signals).
+        // P2-D Rule 2 (receiver-variable type): a named-receiver call `x.m()` / `x->m()` resolves to the method on the VARIABLE's type (`Foo::m`
+        // for `Foo x;`), BEFORE the bare-name spray — the other half of the [TYPE] cut — read through class identity (resolve.h identityNarrow:
+        // nested namesakes dropped, an inherited body, an interface's dispatch split); otherwise narrowed stays false and the name-based fallback
+        // runs. Skipped when the call was already pinned canonically or by Rule 1 (the more specific / already-resolved signals).
+        const bool narrowedBeforeReceiverRules = narrowed;
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2RecvVarType( r ), r, cand );
+            narrowed = narrowTo( narrower.rule2RecvVarType( r, classIds, chaUp ), r, cand ) || narrower.forgetClaim();
         }
-        // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base
-        // defining `m`) when Cls is an in-repo class no local shadows. After Rule 2 (a typed LOCAL wins), before
-        // 2b (a class name outranks a same-named field). See Narrower::rule2cClassNameRecv.
+        // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base defining `m`) when Cls is an in-repo class that no
+        // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2cClassNameRecv( r, classNames, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }
-        // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver
-        // names a FIELD of the caller's enclosing class resolves to the method on the field's DECLARED type
-        // (walking direct bases when the type itself doesn't define it), BEFORE the bare-name spray — the
-        // bare-field member call is the idiomatic C++ shape Rule 2's local-binding table can never see. Fires
-        // only when NO local binding shadows the name, the class#field→type fact is unambiguous corpus-wide
-        // (tombstoned otherwise), and the type (or exactly one base) defines the method — every other shape
-        // degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
+        // P2-D Rule 2b (receiver-FIELD type, W1-P1-12): a named-receiver call `f.m()` / `f->m()` whose receiver names a FIELD of the caller's
+        // enclosing class — or of the one base declaring it, when the class declares none — resolves to the method on the field's DECLARED
+        // type (walking direct bases when the type itself doesn't define it), BEFORE the bare-name spray: the bare-field member call is the
+        // idiomatic C++ shape Rule 2's local-binding table can never see. Fires only when NO local binding shadows the name, the
+        // class#field→type fact is unambiguous corpus-wide (tombstoned otherwise), and the type (or exactly one base) defines the method —
+        // every other shape degrades to the unchanged honest ladder. Skipped when already pinned canonically / by Rule 1 / Rule 2
         // (Rule 2 first: a typed LOCAL beats a same-named field in real C++ lookup, and the veto inside 2b
         // refuses any locally-declared name outright).
+        bool fieldTypeNarrowed = false;   // Rule 2b decided the site: its prov="final-segment" question reads the field entry
         if( !scipPinned && !canonical && !narrowed )
         {
-            narrowed = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, fieldNarrow.fieldTypeByClass, fieldNarrow.localNameSet, chaUp ), r, cand );
+            narrowed          = narrowTo( narrower.rule2bFieldRecvType( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp }, fieldNarrow.localNameSet ), r, cand );
+            fieldTypeNarrowed = narrowed;
         }
+        const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
         // P2-D Rule 3 (import/include-based file narrow): when the name is ambiguous (K same-name defs) but the
         // caller's file #includes / imports EXACTLY ONE file that defines it, resolve to that file's def(s) and
         // DROP the rest — BEFORE the bare-name spray. Sound with no type info: it consumes only the file→file
@@ -2551,10 +2906,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             continue;
         }
 
-        // ---- tier ladder (the name-based fallback) — SKIPPED when the SCIP overlay pinned this site (tier already holds the
-        // precise target(s) at full confidence; the ladder would only re-derive a guess). -----------------
-        if( !scipPinned && r.lang == Lang::Elixir ) { tier = cand; }
-        if( !scipPinned && r.lang != Lang::Elixir )
+        // ---- tier ladder (the name-based fallback) — SKIPPED when SCIP pinned this site, and for Rule 2's class-identity CLAIM (a type fact, not a locality guess)
+        const bool identityClaim = narrowed && narrower.identityClaimFor( r );
+        if( !scipPinned && ( r.lang == Lang::Elixir || identityClaim ) ) { tier = cand; }
+        if( !scipPinned && r.lang != Lang::Elixir && !identityClaim )
         {
             if( cand.empty() )
             {
@@ -2660,7 +3015,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             // transitive descendants. A virtual call on static type T can only dispatch to T, a subtype (an
             // override), or the definition T inherits from an ancestor — so the cone NEVER excludes the true
             // target; it drops only same-name methods of UNRELATED classes. Empty intersection ⇒ degrade.
-            if( tier.size() > 1 )
+            if( tier.size() > 1 && !identityClaim )   // a class-identity claim is type-verified; the cone cannot name `TBase<T, true>`
             {
                 const std::string_view recvType = narrower.receiverStaticType( r, ing.symbols[ r.fromSymbol ].scope );
                 if( !recvType.empty() )
@@ -2741,14 +3096,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // anti-evidence — it re-mints exactly the wrong pin Rule 1's bareCish guard stopped making when the
         // receiver capture widened (the sixth `recv`-ignorant site, found RED by chainguardcheck arm (a):
         // `this->m_pool.run()` pinned to App::run through THIS block after Rule 1 refused). The honest split
-        // stands instead. ThisObj/NamedVar keep the tie-break: for them the scope/locality prior is not
-        // contradicted by the receiver (`this->` IS the enclosing class; a typed var already narrowed above).
+        // stands instead. `this->` keeps the tie-break (it IS the enclosing class); a NamedVar: resolve.h receiverLocalityCap.
         // Phase 5: a `super()` receiver is excluded for the same reason — the enclosing class winning the scope
         // credit is exactly the class `super()` skips; a multi-base tie stays an honest split.
+        // Issue #74: a proven `Type::method` receiver is excluded on the same ground — the type receiver
+        // names the target outright, so the caller's own scope is anti-evidence. Two same-named classes both
+        // declaring the member is a genuine split (the shape Rule 2c also keeps whole), not a locality race.
         if( !scipPinned && !bindingPinned && r.lang != Lang::Elixir && tier.size() > 1 && !ing.symbols[ r.fromSymbol ].scope.empty()
-         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj )
+         && r.recv != RecvKind::FieldOfThis && r.recv != RecvKind::FieldOfVar && r.recv != RecvKind::SuperObj && !identityClaim
+         && !isJsTsLitRecv( r.recv ) && r.recv != RecvKind::JavaTypeCandidate )
         {
             const std::string& callerCanon = g.localityKey[ r.fromSymbol ];   // == canonId here (the caller is scoped)
+            const std::size_t localityCap = receiverLocalityCap( r, receiverTypeNarrowed, ing.files[ ing.symbols[ r.fromSymbol ].fileId ] );
             // memoize each survivor's shared-locality ONCE (was computed twice: once for bestShare, once inside the
             // stable_partition predicate). locShare[i] parallels tier[i]; the compaction below reads the memo.
             locShare.clear();
@@ -2776,7 +3135,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 // another — rubygems' composed_set.rb). Widening tier 1 past the caller would invent a
                 // cross-file edge the SAME-FILE tier already outranked, and `other.each` on a second instance
                 // of the caller's own class is a genuine self-loop, so the honest nothing stands.
-                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : sharedLocality( callerCanon, g.localityKey[c] );   // path-scoped even for a free function
+                const std::size_t sh = ( c == r.fromSymbol ) ? 0 : localityRank( callerCanon, g.localityKey[c], ( r.recv == RecvKind::None && r.qualifier.empty() ) || r.recv == RecvKind::ThisObj, localityCap );   // path-scoped even for a free function
                 locShare.push_back( sh );
                 if( sh > bestShare )
                 {
@@ -2913,6 +3272,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
         const float base = conf / float( nReal );              // split over real (non-self) targets
+        // a qualified written type decided this site by its last name — Rule 2 or 2b narrowed on it, or CHA-lite pruned by it — so every edge it
+        // commits is prov="final-segment" (resolve.h finalSegmentTypeAt, fieldFinalSegmentAt); never a class-identity CLAIM, whose one class was verified
+        const bool  finalSegmentType = ( ( receiverTypeNarrowed || censusCone ) && !identityClaim && narrower.finalSegmentTypeAt( r ) )
+                                    || ( fieldTypeNarrowed && narrower.fieldFinalSegmentAt( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp } ) );
         for( NodeId to : tier )
         {
             if( to == r.fromSymbol )
@@ -2935,6 +3298,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 importEdges[ekey] = 1;  // remember (from,to) for prov="import"
             }
+            if( finalSegmentType )
+            {
+                finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
+            }
         }
         disposition = CallDisposition::Bound;
     }
@@ -2942,7 +3309,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // edges are right and the census's conservation line is not. Every plain build says so, census or not.
     if( g.callDispositions[ std::size_t( CallDisposition::Unaccounted ) ] > 0 )
     {
-        DEGRADED_PATH_ALERT( "buildGraph: a call reference left the resolve loop without a disposition (pincensus.h CallDisposition)" );
+        DISCLOSE( "buildGraph: a call reference left the resolve loop without a disposition (pincensus.h CallDisposition)" );
     }
     if( census )
     {
@@ -2987,10 +3354,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     //   1 = PRECISE (SCIP-pinned) → prov="scip";  2 = A4-R5 cross-language FFI binding → prov="binding";
     //   3 = C1 one arm of a k-way split the resolver could not choose between → prov="split";
     //   4 = an ES named-import binding named the module and the export → prov="import".
-    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() )
+    //   5 = a receiver's QUALIFIED written type chose this edge by its last name alone → prov="final-segment".
+    // The value per edge comes from resolve.h edgeProvenance, which owns the precedence between them.
+    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() || !finalSegmentEdges.empty() )
     {
         g.outProv.assign( edges.size(), 0u );
     }
+    const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges };
     {
         std::vector<std::uint32_t> cur( g.outOff.begin(), g.outOff.begin() + N );
         for( const E& e : edges )
@@ -2999,25 +3369,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             g.outTargets[ pos ] = e.to;
             g.outVals[ pos ]    = e.w;
             g.wOutDeg[ e.from ] += e.w;
-            if( scip && scip->isPrecise( e.from, e.to ) )
+            // one value per edge, by resolve.h edgeProvenance's fixed precedence: scip PINS an edge (precise), binding and
+            // import NAME the mechanism that resolved it, split says the resolver could not choose, final-segment says it
+            // chose by a qualified type's last name. A binding edge that is also a split keeps the more specific label;
+            // the symbol's amb= counts it either way, so nothing is lost by the ordering.
+            if( !g.outProv.empty() )
             {
-                g.outProv[pos] = 1u; // (from,to) pinned by SCIP
-            }
-            else if( !bindingEdges.empty() && bindingEdges.find( ( std::uint64_t( e.from ) << 32 ) | e.to ) != bindingEdges.end() )
-            {
-                g.outProv[ pos ] = 2u;                                             // (from,to) an FFI binding edge
-            }
-            // C1 precedence, and it is deliberate: scip PINS an edge (precise), binding NAMES the mechanism that
-            // resolved it (and already carries its own amb= mark), split says the resolver could not choose. A
-            // binding edge that is also a split keeps the more specific label; prov= is single-valued, and the
-            // symbol's amb= counts it either way, so nothing is lost by the ordering.
-            else if( !importEdges.empty() && importEdges.find( ( std::uint64_t( e.from ) << 32 ) | e.to ) != importEdges.end() )
-            {
-                g.outProv[ pos ] = 4u;                                             // (from,to) an ES named-import edge
-            }
-            else if( !splitEdges.empty() && splitEdges.find( ( std::uint64_t( e.from ) << 32 ) | e.to ) != splitEdges.end() )
-            {
-                g.outProv[ pos ] = 3u;                                             // (from,to) one arm of a k-way split
+                g.outProv[ pos ] = edgeProvenance( scip && scip->isPrecise( e.from, e.to ), provSets, ( std::uint64_t( e.from ) << 32 ) | e.to );
             }
         }
     }
@@ -3039,8 +3397,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         std::vector<std::uint32_t> cur( ro, ro + N );
         for( const E& e : edges ) { const std::uint32_t pos = cur[ e.to ]++; ci[ pos ] = e.from; val[ pos ] = e.w; }
     }
-    VERIFY_DEBUG_ONLY( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
-    VERIFY_DEBUG_ONLY( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
+    DASSERT( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
+    DASSERT( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
     }
 
     // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
@@ -3180,9 +3538,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/7: HAS-A compose edges" );
     for( const Reference& r : ing.references )
     {
-        if( !r.isCompose || r.fromSymbol == kNoNode )
+        if( !r.isCompose || r.fromSymbol == kNoNode || fieldTypeWrittenInStd( r ) || isTypeAliasRecord( r ) || r.viaArrow )
         {
-            continue;
+            continue;   // a member type written in namespace std names no in-repo class, whatever its final segment; an alias is no member; a smart pointer's pointee is Rule 2b's alone
         }
         const auto it = byName.find( r.calleeName );
         if( it == byName.end() )
@@ -3604,6 +3962,62 @@ inline bool filePathContains( std::string_view haystack, std::string_view needle
     return collapsed.find( needle ) != std::string::npos;
 }
 
+// A selector path's part AFTER the crawl root, when the path is spelled from the cwd: it starts with one of the root's
+// recorded prefixes (IngestResult::crawlRootPrefixes — the root as typed, relative to the cwd, or absolute) and a '/'.
+// A relative prefix is compared with the path's leading `./` dropped; the prefix "." (the root IS the cwd) takes a
+// `./`-prefixed path's tail. Empty when no prefix fits — the caller's root-relative reading stands.
+inline std::string_view selectorRootTail( const IngestResult& ing, std::string_view needle ) noexcept
+{
+    std::string_view typed = needle;
+    while( typed.size() >= 2 && typed[0] == '.' && typed[1] == '/' )
+    {
+        typed.remove_prefix( 2 );
+    }
+    for( const std::string& prefix : ing.crawlRootPrefixes )
+    {
+        if( prefix == "." )
+        {
+            if( typed.size() < needle.size() && !typed.empty() )
+            {
+                return typed;   // `./a.cpp` under `ripwire .`
+            }
+            continue;
+        }
+        const std::string_view path = prefix.front() == '/' ? needle : typed;
+        if( path.size() > prefix.size() + 1 && path.compare( 0, prefix.size(), prefix ) == 0 && path[ prefix.size() ] == '/' )
+        {
+            return path.substr( prefix.size() + 1 );
+        }
+    }
+    return {};
+}
+
+// A1 (found-items 2026-09-17, review round): the ROOT-RELATIVE twin of filePathContains, above. Every
+// PATH-PATTERN selector (file:name qualifiers, --verify's FILE argument, --at=FILE:LINE, MCP edit-hint
+// matching, the selector-refusal "is this file even indexed" diagnosis) must match against fileId's
+// ROOT-RELATIVE spelling — never `filePathContains( ing.files[fileId], … )` directly, which is exactly the
+// #228-class defect A1 found: under an absolute or trailing-slash root spelling, a short pattern (e.g. a
+// directory name one component of the checkout path shares) can match the CHECKOUT LOCATION rather than
+// anything inside the tree, so `--verify`'s FILE argument confirmed a claim about a file that was never
+// indexed. ONE helper so the next path-pattern consumer cannot independently reintroduce the raw form.
+//
+// The ROOT-RELATIVE match is tried first. On a miss, a needle SPELLED FROM THE CWD — the root as typed plus the file
+// (`test/fixture/geometry.cpp` under `ripwire test/fixture`, `./a.cpp` under `ripwire .`, `../repo/a.cpp` under
+// `ripwire ../repo`) or an absolute path under the root — is matched by its root-relative tail (selectorRootTail).
+// A1's first version dropped that second reading, so every file:name selector an agent typed relative to its own cwd
+// refused a file that 0.6.1 found (#281's CI: xmlwellformed `--edit-check=test/fixture/geometry.cpp:distance`).
+// test/rootspellingcheck.sh pins both spellings on --edit-check, --callers, --at and --affected.
+inline bool filePathContainsRootRel( const IngestResult& ing, std::uint32_t fileId, std::string_view needle )
+{
+    const std::string_view rel = rootRelPath( ing, fileId );
+    if( filePathContains( rel, needle ) )
+    {
+        return true;
+    }
+    const std::string_view tail = selectorRootTail( ing, needle );
+    return !tail.empty() && filePathContains( rel, tail );
+}
+
 // shared "name" | "file:name" spec splitter (X9(b)) — the ONE disambiguation rule --around/--lego/
 // --edit-check (via resolveFocus, single lowest-id pick) and --callers/--impact (via
 // resolveAllByNameQualified, every match) now both route through, so a same-named-across-files symbol
@@ -3704,7 +4118,7 @@ inline AtSeed resolveAtSeed( const IngestResult& ing, std::string_view spec )
 
     for( std::uint32_t fileId = 0; fileId < std::uint32_t( ing.files.size() ); ++fileId )
     {
-        if( filePathContains( ing.files[ fileId ], r.fileHalf ) )
+        if( filePathContainsRootRel( ing, fileId, r.fileHalf ) )
         {
             r.fileMatches.push_back( fileId );
         }
@@ -4055,7 +4469,7 @@ inline std::vector<std::uint32_t> fanInFromInEdges( const IngestResult& ing, con
     const std::size_t          symbolCount = ing.symbols.size();
     std::vector<std::uint32_t> fanIn( symbolCount, 0u );
     const auto*                ro = g.inEdges.rowOffsets();
-    if( !ro ) { DEGRADED_PATH_ALERT( "bundle: in-edge CSR unavailable — in= omitted from the bundle rows" );  return {}; }
+    if( !ro ) { DISCLOSE( "bundle: in-edge CSR unavailable — in= omitted from the bundle rows" );  return {}; }
     for( std::size_t i = 0; i < symbolCount; ++i )
     {
         fanIn[i] = ro[i + 1] - ro[i];
@@ -4192,7 +4606,7 @@ inline std::size_t definitionCountOfName( const IngestResult& ing, NodeId focus 
 inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std::vector<char>& isDecl,
                                              const std::vector<char>& isCand, std::vector<char>& proven )
 {
-    VERIFY_NO_ALIAS3( isDecl, isCand, proven );   // three same-role dense arrays: proven[] is written while isDecl[]/isCand[] are read
+    ASSUME_NO_ALIAS3( isDecl, isCand, proven );   // three same-role dense arrays: proven[] is written while isDecl[]/isCand[] are read
     // The index: ONE entry per DECLARATION file, keyed the way buildPreciseIncludeAdj keys its own
     // (lexicalNormalize on BOTH sides, so a `.`-rooted crawl's `./a/x.h` and a resolved `a/x.h` agree).
     HashMap<std::string, std::uint32_t> declIndex;
@@ -4200,7 +4614,7 @@ inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std:
     {
         if( isDecl[ f ] != 0 )
         {
-            declIndex.emplace( lexicalNormalize( ing.files[ f ] ), f );
+            declIndex.emplace( lexicalNormalize( rootRelPath( ing, f ) ), f );
         }
     }
     // Multi-root: fileRoot/rootLabels/rootAbs reproduce the same-root soundness gate and the root-relative
@@ -4228,7 +4642,7 @@ inline void markCandidateFilesIncludingDecl( const IngestResult& ing, const std:
         {
             continue;
         }
-        const std::uint32_t to = resolvePreciseInclude( ing.files[ inc.fileId ], inc.target, inc.isAngle, declIndex,
+        const std::uint32_t to = resolvePreciseInclude( rootRelPath( ing, inc.fileId ), inc.target, inc.isAngle, declIndex,   // same view as declIndex's keys
                                                         {}, false, ws, inc.fileId, nullptr );
         if( to != kNoFile && to < isDecl.size() && isDecl[ to ] != 0 )
         {
@@ -4475,7 +4889,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     std::vector<NodeId> out;
     for( const Symbol& s : ing.symbols )
     {
-        if( elixirNameMatches( s, name ) && ( file.empty() || filePathContains( ing.files[ s.fileId ], file ) ) )
+        if( elixirNameMatches( s, name ) && ( file.empty() || filePathContainsRootRel( ing, s.fileId, file ) ) )
         {
             out.push_back( s.id );
         }
@@ -4647,7 +5061,7 @@ struct FieldUseAnswer
 inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fieldId )
 {
     FieldUseAnswer out;
-    VERIFY( fieldId < ing.fields.size() );
+    ASSUME( fieldId < ing.fields.size() );
     const Symbol& field = ing.fields[ fieldId ];
 
     // every field sharing the name, by owner scope (field-index order inside each bucket)
@@ -4664,25 +5078,26 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     out.ownersOfName = everyOwner.size();
 
     // "<fromSymbol>#<var>" → the var's declared type: Rule 2's own binding table (kind Type — a typed local, a
-    // constructor-initialised one) PLUS the parameter written types (kind ParamType, captured for this index
-    // alone); a conflicting re-declaration tombstones.
-    HashMap<std::string, std::string> localType;
+    // constructor-initialised one) PLUS the parameter written types (kind ParamType), folded by Rule 2's own rule
+    // (resolve.h recordFlatRecvType): a conflicting re-declaration tombstones, and so does a type written in `std` — it
+    // names no in-repo class, and a skip would hand a same-named variable's other declaration every site of the name.
+    // An assignment's callee-read type that no class is called is skipped, as Rule 2's table skips it (test/narrowcheck.sh
+    // arm 49: `t = llvm::cast<Target>( y )` tombstoned `Target* t`, and `t->count` lost its owner).
+    const HashMap<std::string, char> classNames = classNameSet( ing );
+    HashMap<std::string, FlatRecvType> localType;
     localType.reserve( ing.bindings.size() );
     std::string key;
     for( const Binding& b : ing.bindings )
     {
-        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty() )
+        if( ( b.kind != LocalBindKind::Type && b.kind != LocalBindKind::ParamType ) || b.fromSymbol == kNoNode || b.var.empty() || b.typeName.empty()
+            || assignmentNamesNoClass( b, classNames ) )
         {
             continue;
         }
         buildShadowKey( key, b.fromSymbol, b.var );
-        const auto [ it, inserted ] = localType.try_emplace( key, b.typeName );
-        if( !inserted && !it->second.empty() && it->second != b.typeName )
-        {
-            it->second.clear();
-        }
+        recordFlatRecvType( localType, key, b );
     }
-    const FieldNarrowTables narrow = buildFieldNarrowTables( ing );   // "Class#field" → declared type (S5-E)
+    const FieldNarrowTables narrow = buildFieldNarrowTables( ing, classNames );   // "Class#field" → declared type (S5-E)
 
     const LocalShadowSpans localSpans = localShadowSpans( ing );   // a bare name a LOCAL declaration covers is that local, never the field
 
@@ -4705,18 +5120,25 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         key.clear();
         key.append( owner ).push_back( '#' );
         key.append( member );
+        // a smart-pointer pointee (arrowOnly) is taken whatever the access: a std smart pointer has no data members, so a member
+        // read through one is `->` by construction
         const auto it = narrow.fieldTypeByClass.find( key );
-        return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second );
+        return it == narrow.fieldTypeByClass.end() ? std::string_view{} : std::string_view( it->second.type );
     };
-    const auto localTypeOf = [ & ]( NodeId encl, std::string_view var ) -> std::string_view
+    // a receiver variable's type: a local or parameter declaration of the name in this definition decides, and a
+    // tombstoned one answers "" — never the same-named member of the enclosing class, which that declaration
+    // shadows; with no declaration the name is that member
+    const auto receiverTypeOf = [ & ]( NodeId encl, std::string_view var, std::string_view ctxOwner ) -> std::string_view
     {
-        if( encl == kNoNode || var.empty() )
+        if( encl != kNoNode && !var.empty() )
         {
-            return {};
+            buildShadowKey( key, encl, var );
+            if( const auto it = localType.find( key ); it != localType.end() )
+            {
+                return it->second.type;
+            }
         }
-        buildShadowKey( key, encl, var );
-        const auto it = localType.find( key );
-        return it == localType.end() ? std::string_view{} : std::string_view( it->second );
+        return fieldTypeOf( ctxOwner, var );
     };
 
     std::vector<FieldId> cand;
@@ -4767,6 +5189,10 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
         {
             case RecvKind::ElixirModule:
             case RecvKind::ElixirSelfModule:
+            case RecvKind::JavaTypeCandidate:
+            {
+                // Call-only ingest stamp; read/write field collection can never own this site.
+            }
             break; // module receivers name callables, not instance fields
             case RecvKind::None:
             {
@@ -4785,12 +5211,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             break;
             case RecvKind::NamedVar:
             {
-                std::string_view type = localTypeOf( r.fromSymbol, r.recvVar );
-                if( type.empty() )
-                {
-                    type = fieldTypeOf( ctxOwner, r.recvVar );   // the receiver is a member of the enclosing class
-                }
-                candidatesIn( type, r.lang );
+                candidatesIn( receiverTypeOf( r.fromSymbol, r.recvVar, ctxOwner ), r.lang );
                 if( cand.empty() )
                 {
                     everyCompatibleOwner( r.lang );
@@ -4808,18 +5229,19 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
             break;
             case RecvKind::FieldOfVar:
             {
-                std::string_view baseType = localTypeOf( r.fromSymbol, r.recvVar );
-                if( baseType.empty() )
-                {
-                    baseType = fieldTypeOf( ctxOwner, r.recvVar );
-                }
-                candidatesIn( fieldTypeOf( baseType, r.fieldName ), r.lang );
+                candidatesIn( fieldTypeOf( receiverTypeOf( r.fromSymbol, r.recvVar, ctxOwner ), r.fieldName ), r.lang );
                 if( cand.empty() )
                 {
                     everyCompatibleOwner( r.lang );   // includes the "receiver too rich to classify" shape (empty recvVar)
                 }
             }
             break;
+            case RecvKind::LitString:
+            case RecvKind::LitArray:
+            case RecvKind::LitRegex:
+            case RecvKind::LitNumber:
+            case RecvKind::LitBoolean:
+            break; // a certain built-in receiver is not a field owner
         }
         if( std::find( cand.begin(), cand.end(), fieldId ) == cand.end() )
         {
@@ -5940,7 +6362,7 @@ inline std::vector<char> testSymbolForwardReach( const IngestResult& ing, const 
 // dist(uint16) + prev(NodeId) + a via-out bit, reused nothing inside the BFS loop after the assigns.
 namespace connectcfg
 {
-    inline constexpr std::size_t   kMaxTerminals  = 16;        // >16 is the CALLER's usage error; the core CLAMPS (never VERIFYs on hostile input)
+    inline constexpr std::size_t   kMaxTerminals  = 16;        // >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input)
     inline constexpr std::uint32_t kMaxNodes      = 96;        // total emitted node cap (§3 size caps)
     inline constexpr std::uint32_t kMaxEdges      = 256;       // total emitted edge cap
     inline constexpr std::uint32_t kMinRadius     = 1;         // --connect-radius clamp band (design §2.2)
@@ -6039,7 +6461,7 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
     res.radius = std::clamp( radius, connectcfg::kMinRadius, connectcfg::kMaxRadius );
 
     // sanitize terminals: drop out-of-range ids, dedup, ascending; CLAMP to the cap (lowest ids win — a
-    // deterministic degrade, since hostile input must never trip a VERIFY; the CLI enforces the usage error).
+    // deterministic degrade, since hostile input must never trip an ASSUME; the CLI enforces the usage error).
     for( NodeId t : terminalSpecs )
     {
         if( t < N )
@@ -6684,7 +7106,7 @@ inline std::string graphCountFloorAttrJson( const Graph& g )
 // candidates, so the list count stays under half the entry count and the uint32 list numbers cannot wrap first.
 inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
-    VERIFY( cand.size() >= 2 );   // tier 3 declines only a set it could not narrow to one
+    ASSUME( cand.size() >= 2 );   // tier 3 declines only a set it could not narrow to one
     std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
     const char* const bytes = reinterpret_cast<const char*>( cand.data() );
     for( std::size_t byteIndex = 0; byteIndex < cand.size_bytes(); ++byteIndex )
@@ -6705,7 +7127,7 @@ inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<st
     constexpr std::size_t kOffsetCeiling = UINT32_MAX;
     if( cand.size() > kOffsetCeiling - g.declinedListCand.size() )
     {
-        DEGRADED_PATH_ALERT( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
+        DISCLOSE( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
         return;
     }
     bucket.push_back( std::uint32_t( g.declinedListCallCount.size() ) );

@@ -108,7 +108,7 @@
 #include "arch.h"               // relForHash — ing.files' root-prefixed path -> the git-relative spelling diffRaw reports
 #include "infra/jsonesc.h"      // shSingleQuote — the merge-base call
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include "btree.hpp"        // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -166,7 +166,7 @@ inline std::size_t kindIndex( std::string_view tag ) noexcept
             return i;
         }
     }
-    return kKindCount;                                        // caller VERIFYs; no kind reaches here unnamed
+    return kKindCount;                                        // caller ASSUMEs; no kind reaches here unnamed
 }
 
 inline bool kindFlag  ( std::string_view tag, KindFlag col ) noexcept { const std::size_t i = kindIndex( tag ); return i < kKindCount && kKindPolicy[i].*col; }
@@ -182,7 +182,7 @@ struct KindCounts
     void add( std::string_view tag ) noexcept
     {
         const std::size_t i = kindIndex( tag );
-        VERIFY( i < kKindCount );
+        ASSUME( i < kKindCount );
         if( i < kKindCount )
         {
             ++n[i];
@@ -482,7 +482,7 @@ inline void collectAuthoredSites( const std::string& root, const std::vector<cro
                                                           + shSingleQuote( result.headSha ) + " 2>/dev/null" );
         if( base.empty() )
         {
-            DEGRADED_PATH_ALERT( "abi: no merge-base for a ref (unrelated history?) — that ref is counted, not compared" );
+            DISCLOSE( "abi: no merge-base for a ref (unrelated history?) — that ref is counted, not compared" );
             ++result.unrelated;
             continue;
         }
@@ -561,7 +561,7 @@ inline void modelRefBlobs( const std::string& root, layout::ModelCtx& ctx, const
             {
                 continue;
             }
-            VERIFY( mit->second.size() == pit->second.size() );
+            ASSUME( mit->second.size() == pit->second.size() );
 
             for( std::size_t ci = 0; ci < pit->second.size() && ci < mit->second.size(); ++ci )
             {

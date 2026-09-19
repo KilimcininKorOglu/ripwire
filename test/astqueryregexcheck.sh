@@ -17,6 +17,10 @@
 #   * the REFUSAL. A malformed pattern threw out of the constructor, was caught, and left `ok = true` —
 #     i.e. it filtered NOTHING. Precompiling moves that throw from the match to the build, so the arm has
 #     to be preserved deliberately; getting it wrong turns a broken rule into a rule that drops every row.
+#     SINCE src/regexguard.h: that fallback is kept for the BUILT-IN packs (constant patterns of this
+#     binary), while a USER's --match refuses a pattern the guard rejects, by name, at exit 1 — rows a
+#     predicate never judged are not the query's answer. C4 pins the user half; the golden's
+#     match-malformed section is therefore empty (the refusal prints nothing on stdout).
 #   * the CAPTURE-typed argument. `(#match? @a @b)` has no constant to precompile — it must stay dynamic.
 #   * THREAD SAFETY. The compiled regex is now SHARED across the query pool's workers instead of being
 #     built per match. Concurrent const use of a standard library object is data-race-free by
@@ -36,8 +40,8 @@
 #           makes both select two, which is the mutation the round actually ran; see the note below).
 #        C2 search, not match — a bare substring "oo" must select both of them.
 #        C3 complement       — #not-match? on a pattern must select exactly the rows #match? does not.
-#        C4 refusal          — a malformed pattern "(" must filter NOTHING, i.e. return the same rows as
-#           the same query with no predicate at all.
+#        C4 refusal          — a malformed pattern "(" in --match is REFUSED: exit 1, the pattern named on
+#           stderr, no <match> element (it used to filter NOTHING and print every row at exit 0).
 #   D  CAPTURE-TYPED ARGUMENT. `(#match? @a @b)` still evaluates per match (its pattern is not a constant),
 #      and the probe's answer is pinned in the golden with the rest.
 #   E  MUTATION CONTROL for arm C. Each of C1-C4 is re-run with its expectation INVERTED and must fail —
@@ -169,7 +173,13 @@ fi
 expect "C2" "$( hits 'match-substring' )" "2" "regex_SEARCH, not regex_match: the bare substring \"oo\" selects both"
 C3N="$( hits 'match-not-anchor' )"; C3A="$( hits 'match-no-predicate' )"
 expect "C3" "$C3N" "$(( ${C3A:-0} - ${C1L:-0} ))" "#not-match? is the exact complement of #match? over the same rows"
-expect "C4" "$( hits 'match-malformed' )" "$C3A" "a MALFORMED pattern filters NOTHING (the constructor's throw leaves ok = true)"
+"$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"(\"))" >"$TMP/c4.out" 2>"$TMP/c4.err"; C4RC=$?
+expect "C4" "$C4RC" "1" "a MALFORMED pattern in a user's --match is REFUSED (src/regexguard.h), not answered with unfiltered rows"
+if grep -qF "'(' refused" "$TMP/c4.err" && ! grep -q '<match ' "$TMP/c4.out"; then
+    ok "C4: the refusal names the pattern on stderr and prints no <match> element"
+else
+    no "C4: refusal stderr/stdout wrong — stderr: $( head -c 200 "$TMP/c4.err" )"
+fi
 
 # ── D. capture-typed argument: no constant to precompile, so it must still be evaluated ──────────────
 # NON-VACUITY, not just presence (CodeRabbit #127 / 3985249714 asked for it; the review's premise — that
@@ -195,7 +205,7 @@ check_inverts(){ [ "$1" != "$2" ] && inverted=$(( inverted + 1 )); }
 check_inverts "$C1L/$C1R"                 "2/2"                              # what an icase build returns
 check_inverts "$( hits 'match-substring' )" "0"                              # what regex_match would return
 check_inverts "$C3N"                      "$C3A"                             # a #not-match? that filtered nothing
-check_inverts "$( hits 'match-malformed' )" "0"                              # a refusal that dropped every row
+check_inverts "$C4RC"                     "0"                                # a malformed pattern answered at exit 0
 if [ "$inverted" -eq 4 ]; then
     ok "E: all 4 inverted expectations are FALSE — arms C1-C4 are comparing real, distinguishable answers"
 else
@@ -216,6 +226,82 @@ elif [ "$same" -eq 1 ]; then
 else
     no "F: --lint is not deterministic across runs"
 fi
+
+# ── G (F-B4) — a #match? subject too long for the engine on this thread REFUSES, naming the site ───────
+# RIPWIRE_FAULT_REGEX_LINE_BOUND=1 forces src/regexguard.h's per-thread subject-length bound to (near) zero on
+# every platform (macOS libc++ has no natural bound to force — same hook regexguardcheck.sh uses), so a
+# captured node's text that would normally MATCH is instead never handed to the engine at all
+# (RegexVerdict::Skipped). A skipped subject must refuse like an abandoned one (never a silent non-match, never
+# a silent Pass that keeps a row no predicate actually judged). "o+" (quantified, not a bare literal) is used
+# rather than arm C2's "oo" so the probe actually reaches the engine: a pure literal answers off regexguard.h's
+# literal-plan byte search, which no subject is ever too long for, so it would never observe the bound at all.
+CTRL_RC=0
+"$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"o+\"))" >"$TMP/g_ctrl.out" 2>"$TMP/g_ctrl.err" || CTRL_RC=$?
+[ "$CTRL_RC" -eq 0 ] && grep -q '<match ' "$TMP/g_ctrl.out" \
+    && ok "G control: the same #match? probe with no fault answers normally (exit 0, a <match> element)" \
+    || no "G control: the probe is not a genuine control (exit $CTRL_RC): $( head -c 200 "$TMP/g_ctrl.err" )"
+
+# RIPWIRE_FAULT_* switches are compiled out under NDEBUG (src/infra/emit.h faultSwitchOn), so on a Release leg the fault
+# run IS the control run. Probe the switch itself (the regexguardcheck.sh (m) fixture: one line past the 64-byte forced bound).
+FAULTS=0; mkdir -p "$TMP/faultprobe"
+{ head -c 100 /dev/zero | tr '\0' 'x'; printf ' aab\naab\n'; } >"$TMP/faultprobe/f.md"
+RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$TMP/faultprobe" --no-cache --regex='a+b' 2>/dev/null | grep -q 'regex_lines_skipped="[1-9]' && FAULTS=1
+if [ "$FAULTS" -eq 1 ]; then
+    FAULT_RC=0
+    RIPWIRE_FAULT_REGEX_LINE_BOUND=1 "$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"o+\"))" >"$TMP/g_fault.out" 2>"$TMP/g_fault.err" || FAULT_RC=$?
+    [ "$FAULT_RC" -eq 1 ] \
+        && ok "G: a forced too-long #match? subject refuses (exit 1), not a silent non-match" \
+        || no "G: forced skip exited $FAULT_RC, expected 1 (refusal)"
+    if grep -q '<match ' "$TMP/g_fault.out"; then
+        no "G: a refused --match still emitted a <match> element: $( head -c 200 "$TMP/g_fault.out" )"
+    else
+        ok "G: no <match> element on the refused run"
+    fi
+    grep -qE 'could not be decided|too long' "$TMP/g_fault.err" \
+        && ok "G: the refusal names the reason on stderr" \
+        || no "G: stderr does not name a reason: $( head -c 300 "$TMP/g_fault.err" )"
+else
+    printf '  INFO  G: this binary compiles fault switches out (NDEBUG); the forced skip is proved on the plain-flavour leg\n'
+fi
+
+# ── H (CI on #283) — an ordinary short subject is DECIDED on the caller's own thread, on every leg ───────────────
+# #match?, the skill scan and --arch path rules bound their subjects by kCallerStackBytesFloor (src/infra/stackthreads.h).
+# Under libstdc++ a 512 KiB floor left the engine 0 visits, so every subject was Skipped: #match? refused, every skill
+# scored CRITICAL, every path rule went undecided — on every Linux leg, and invisibly on macOS, where libc++ has no bound.
+# No fault switch here: a few-byte identifier, a clean skill's prose lines and a short path must each reach the engine
+# and get a real answer. Each pattern is quantified or captures, so no literal fast path answers in the engine's place.
+# regexguard.h static_asserts the libstdc++ floor's budget on every platform; this arm proves the behaviour on each leg.
+echo "--- H: a short subject is decided (not Skipped) by #match?, --scan-skill and --arch on the caller's thread ---"
+H_RC=0
+"$BIN" "$FIX" --no-cache "--match=$FN_DEF (#match? @n \"^[a-z]+[0-9]\"))" >"$TMP/h_match.out" 2>"$TMP/h_match.err" || H_RC=$?
+[ "$H_RC" -eq 0 ] && grep -q '<match ' "$TMP/h_match.out" && ! grep -qE 'could not be decided|too long' "$TMP/h_match.err" \
+    && ok "H: #match? with a quantified pattern decides every short identifier (exit 0, a <match>, no undecided disclosure)" \
+    || no "H: #match? on short identifiers did not decide (exit $H_RC): $( head -c 300 "$TMP/h_match.err" )"
+
+H_SKILL="$TMP/h_skill/plain-skill/SKILL.md"; mkdir -p "$( dirname "$H_SKILL" )"
+cat >"$H_SKILL" <<'EOF'
+---
+name: plain-skill
+description: an ordinary skill whose every line must be scanned and found clean.
+---
+
+Read the map, then open the file it names. Nothing here asks for anything unusual.
+EOF
+H_RC=0
+"$BIN" "--scan-skill=$H_SKILL" >"$TMP/h_skill.out" 2>"$TMP/h_skill.err" || H_RC=$?
+[ "$H_RC" -eq 0 ] && ! grep -q 'SCAN-INCOMPLETE' "$TMP/h_skill.out" \
+    && ok "H: --scan-skill scans every line of a plain skill and finds it clean (exit 0, no SCAN-INCOMPLETE)" \
+    || no "H: --scan-skill did not fully scan a plain skill (exit $H_RC): $( head -c 300 "$TMP/h_skill.out" )"
+
+H_ARCH="$TMP/h_arch"; mkdir -p "$H_ARCH/test/v25" "$H_ARCH/render"
+: >"$H_ARCH/render/shader.h"
+printf '#include "../../render/shader.h"\nint h_arch_main() { return 0; }\n' >"$H_ARCH/test/v25/main.cpp"
+printf 'deny path test/(\\w+)/main\\.cpp -> render/shader\\.h\n' >"$TMP/h_arch_rules.txt"
+H_RC=0
+( cd "$H_ARCH" && "$BIN" . "--arch=$TMP/h_arch_rules.txt" --no-cache >"$TMP/h_arch.out" 2>"$TMP/h_arch.err" ) || H_RC=$?
+[ "$H_RC" -eq 2 ] && ! grep -qE 'undecided|could not be evaluated' "$TMP/h_arch.err" \
+    && ok "H: an --arch path rule decides its edge and reports the violation (exit 2, no undecided disclosure)" \
+    || no "H: an --arch path rule did not decide its edge (exit $H_RC, want 2): $( head -c 300 "$TMP/h_arch.err" )"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

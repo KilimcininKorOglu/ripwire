@@ -20,7 +20,9 @@ reviews:
     - path: "src/**"
       instructions: >-
         MSVC is not a target; do not raise MSVC-only portability. Never suggest std::map/unordered_map.
-        A degrade path uses DEGRADED_PATH_ALERT, never VERIFY(false). A count that cannot be a total must be
+        ASSUME/EXPECTS/ENSURES are free invariants: flag only side effects, external input (VALIDATE), ASSUME(false).
+        A degrade path uses DISCLOSE( sink, why ), never ASSUME(false): a one-argument DISCLOSE( msg ) is a debug trace
+        that ships nothing, and a Diagnostics::answerUnchanged reason must be true. A count that cannot be a total must be
         labelled a floor; a zero means none found. Flag silent zeros, undisclosed truncation, and gate arms
         that cannot fail.
   sequence_diagrams: false

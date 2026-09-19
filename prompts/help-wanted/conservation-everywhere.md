@@ -82,7 +82,7 @@ silent spots below is language-specific.
   reference)"` *(#136)*
   - `DispositionTally` counts each iteration's disposition in its destructor, so every `continue` is
     counted.
-  - An exit that names nothing is counted `Unaccounted`, and that raises `DEGRADED_PATH_ALERT` on plain
+  - An exit that names nothing is counted `Unaccounted`, and that raises `DISCLOSE` on plain
     builds.
   - `vetoExternal` returns `CallDisposition::External`.
   - A tier-3 decline increments `g.declinedOut[caller]` and appends its candidates to the CSR
@@ -278,8 +278,8 @@ Plan three parts that land independently, in this order of risk.
   - Units stay stated: a count of call SITES is never a count of site × candidate.
   - Every dialect carries it: XML, `--json`, `--format=columnar`, and the MCP twin
     (`test/mcpattrparitycheck.sh`).
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on an `Unaccounted` bucket. Release deletes
-  whatever follows a false VERIFY.
+- **`DISCLOSE`, never `ASSUME( false )`**, on an `Unaccounted` bucket. Release deletes
+  whatever follows a false ASSUME.
 - **No `std::map` or `std::unordered_map`.** Use `HashMap<>` (and reserve it) or `gtl::btree_map`; see
   "Containers" in CONTRIBUTING.md.
 - **Style** (CONTRIBUTING.md §3):
@@ -308,7 +308,7 @@ Plan three parts that land independently, in this order of risk.
      it).
    - Name the buckets in the plan.
 2. **Mutation.** Delete one named disposition from each new loop. Its gate arm must go red, with
-   `unaccounted` ≥ 1 and a `DEGRADED_PATH_ALERT` on stderr on the plain build. The arm reads the build
+   `unaccounted` ≥ 1 and a `DISCLOSE` on stderr on the plain build. The arm reads the build
    flavour from `--version`, so a Release leg is not red and the plain build is not blind;
    `test/estchargecheck.sh` shows how to read it.
 3. **`--lego`.**
@@ -352,7 +352,7 @@ filter candidates; they do not end the reference.
 `isResolvableCallReference` has rejected the non-calls. A tally constructed before that filter would
 count every inheritance reference as an `Unaccounted` call.
 
-**The alert is compiled out in Release.** `DEGRADED_PATH_ALERT` prints only when `NDEBUG` is undefined. A
+**The alert is compiled out in Release.** `DISCLOSE` prints only when `NDEBUG` is undefined. A
 gate that greps stderr for it must read the build flavour from `--version`. Otherwise it is red on CI's
 Release leg, and silently blind if you ever configure Release locally.
 

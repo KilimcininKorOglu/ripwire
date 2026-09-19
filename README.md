@@ -50,7 +50,7 @@ claim cannot quietly drift. The row-by-row ledger is
 </details>
 
 **Languages:** Rust · C++ · Objective-C/C++ · C · Metal · CUDA · Python · Go · Swift · TypeScript ·
-JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · Bash · C# · JSON · TOML · YAML · Markdown — see
+JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
 **ripwire 0.6.1 — out now. The answers an agent reads got smaller.** A compact answer is 46–66% smaller per
@@ -822,9 +822,9 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 ## What it answers
 
 <details>
-<summary><b>180 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
+<summary><b>181 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
 
-Around the core sit 180 long flags advertised in `--help`, across seven families — plus an MCP
+Around the core sit 181 long flags advertised in `--help`, across seven families — plus an MCP
 server, so a coding agent can call any of them mid-task instead of grepping and reading whole files.
 `--help` prints one line per flag (~4.5K tokens); `--help=--FLAG` prints that flag's full entry with
 every caveat, `--help=SECTION` one family, and `--help=all` the whole catalog.
@@ -1817,9 +1817,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>618 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>637 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **618 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **637 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2008,7 +2008,7 @@ are one contributor's corpus away from being measurably better, and we cannot se
 ## Languages
 
 <details>
-<summary><b>24</b> vendored grammars, and what each parser does and does not see — CUDA launch edges, PHP dynamic dispatch, Lua metatables</summary>
+<summary><b>25</b> vendored grammars, and what each parser does and does not see — CUDA launch edges, PHP dynamic dispatch, Lua metatables</summary>
 
 C, C++, Objective-C / Objective-C++, **Metal** (Metal Shading Language, `.metal` — indexed with the
 C++ grammar, since MSL is a C++14 dialect, so a dual-compile header's symbols resolve from both the
@@ -2026,7 +2026,7 @@ a runtime call with no syntax to read, so a Lua corpus reports no inheritance ed
 implied), **Dart** (`.dart` — classes, mixins, extensions, enums, typedefs, functions, methods, getters/setters; `recv.m()`, `recv?.m()` and cascade `..m()` invocations are edges. Two stated floors: named constructors and factories index under the CLASS name, so `C()`, `C.seeded()` and `factory C.fromA()` are overloads of `C`; and `noSuchMethod` dynamic dispatch names its callee at run time. The grammar makes a function body a SIBLING of its signature rather than a child, so the definition span is extended through it at capture time — without that, every call in a body attributes to the enclosing class), **Elixir** (`.ex`/`.exs` — nested modules, structs, protocols and implementations, functions, macros, guards,
 delegates, types, callbacks, attributes and literal ExUnit tests; module/name/arity resolution with lexical aliases,
 filtered imports, default arguments, captures and pipes; see the
-[static-analysis limits](docs/ARCHITECTURE.md#elixir-extraction)), **Kotlin** (`.kt` — classes, objects, companion objects, interfaces, enum classes and functions, extension functions included; bare and navigation calls, constructor delegation and imports are edges. Kotlin and Java share one call graph, and a call reaches the other language only when its own defines no candidate of that name, so adding `.kt` files never moves a Java edge. Stated floors: an explicit receiver (`A.f()`) does not narrow candidates; a multiplatform `expect`/`actual` type pair is two candidates; `.kts` is not indexed; and a file nesting string templates past 128 levels is refused and listed by `--skipped` — see the [Kotlin limits](docs/ARCHITECTURE.md#kotlin-extraction)), Bash, Go, Rust, Swift, C#, JSON + TOML + YAML (config keys — a
+[static-analysis limits](docs/ARCHITECTURE.md#elixir-extraction)), **Kotlin** (`.kt` — classes, objects, companion objects, interfaces, enum classes and functions, extension functions included; bare and navigation calls, constructor delegation and imports are edges. Kotlin and Java share one call graph, and a call reaches the other language only when its own defines no candidate of that name, so adding `.kt` files never moves a Java edge. Stated floors: an explicit receiver (`A.f()`) does not narrow candidates; a multiplatform `expect`/`actual` type pair is two candidates; `.kts` is not indexed; and a file nesting string templates past 128 levels is refused and listed by `--skipped` — see the [Kotlin limits](docs/ARCHITECTURE.md#kotlin-extraction)), **GDScript** (`.gd` — a Godot file is a class body: `class_name` names it and its file-scope `func`/`var` are its members, with inner classes, constants, enums and their members, signals and call edges; `preload`/`load` produce no dependency edge yet, and `.tscn`/`.tres`/`.gdshader` are not indexed — see the [GDScript notes](docs/ARCHITECTURE.md#gdscript-extraction)), Bash, Go, Rust, Swift, C#, JSON + TOML + YAML (config keys — a
 `[tool.ruff.lint]` table is one symbol under its full dotted name, and
 `pyproject.toml`/`Cargo.toml`/CI workflows become greppable), and **Markdown** (`.md`/`.markdown` —
 the DOC tier: every heading, ATX or setext, is a section symbol whose span runs to the next
@@ -2258,7 +2258,7 @@ your shell profile. It does not register hooks. To register hooks, run
    ```
 
 **Note:** do not add `-DCMAKE_BUILD_TYPE=Release` to the *development* tree. Release defines
-`NDEBUG`. `NDEBUG` removes the `DEGRADED_PATH_ALERT` diagnostics at compile time. A gate that
+`NDEBUG`. `NDEBUG` removes the `DISCLOSE( msg )` traces at compile time. A gate that
 asserts a degrade path then passes without evidence. That is why the two builds above write to two
 trees, and why `scripts/pgobuild.sh` writes to a third: CMakeLists refuses a profile-guided build in
 `build/` or `asan/` by name, because every gate and bench number in this repository is measured
@@ -2368,7 +2368,7 @@ identity of the index, and says which one is at fault.
 
 ### 5. Command families
 
-The `--help` output groups 180 long flags advertised in `--help` into seven families. The `--help=`
+The `--help` output groups 181 long flags advertised in `--help` into seven families. The `--help=`
 column below is the argument that prints one family: `ripwire --help=navigate`. `ripwire
 --help=--FLAG` prints one flag's full text — the caveats, the units, what it refuses and why.
 `ripwire --help=all` is the whole catalog, about 46,000 tokens.
@@ -2555,7 +2555,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 212 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 221 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.
@@ -2638,7 +2638,7 @@ The CLI write verbs and the MCP write verbs use the same safety contract:
 
 ### 12. Supported languages and formats
 
-The tool vendors 24 tree-sitter grammars. A table maps a file extension to a grammar and a query
+The tool vendors 25 tree-sitter grammars. A table maps a file extension to a grammar and a query
 file. One query engine runs over every language. A new language requires a vendored grammar, a query
 file, and one row in the extension table.
 
@@ -2650,7 +2650,7 @@ file, and one row in the extension table.
 | Metal (MSL) | `.metal` | Indexed with the C++ grammar. |
 | CUDA | `.cu`, `.cuh` | `<<<>>>` launch sites are call edges. |
 | Python | `.py` | |
-| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx` | Named imports and default imports resolve. One vendored dependency supplies two of the 24 grammars, `typescript` and `tsx`. |
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx` | Named imports and default imports resolve. One vendored dependency supplies two of the 25 grammars, `typescript` and `tsx`. |
 | Java | `.java` | Qualified `new` calls resolve in a precise tier. |
 | Kotlin | `.kt` | Shares one call graph with Java. A file with string templates past 128 levels is refused and listed by `--skipped`. |
 | Ruby | `.rb` | Superclasses, mixins, `autoload`, and constant receivers are read. |
@@ -2663,6 +2663,7 @@ file, and one row in the extension table.
 | Go | `.go` | Qualified calls are rejected and fenced, not guessed. |
 | Rust | `.rs` | Scoped, turbofish, and `Self::` calls resolve in a precise tier. |
 | Bash | `.sh`, `.bash` | |
+| GDScript | `.gd` | A file is a class body: `class_name` names it and file-scope `func`/`var` are its members. A signal is indexed as a member. `preload`/`load` produce no dependency edge. `.tscn`, `.tres`, and `.gdshader` are not indexed. |
 | JSON | `.json` | Config keys become symbols. The lane emits no call edges. |
 | TOML | `.toml` | A table header is one symbol. Keys below it are one level down. |
 | YAML | `.yml`, `.yaml` | Mapping depth 2 is the cut. Sequence levels are transparent. |

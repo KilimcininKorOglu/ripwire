@@ -602,7 +602,7 @@ std::optional<int> runChangeViews( const MainDispatch& d )
             ccOut = std::fopen( ccPath.c_str(), "wb" );
             if( !ccOut )
             {
-                DEGRADED_PATH_ALERT( "writeCcJson: could not open output file" );
+                DISCLOSE( "writeCcJson: could not open output file" );
                 rw::emitTo( stderr, "ripwire: --export=cc.json:{}: cannot open file for writing\n", ccPath.c_str() );
                 return 1;
             }
@@ -691,6 +691,11 @@ std::optional<int> runFromTrace( const MainDispatch& d )
                                                                     : std::string_view();   // R-R
 
     const FromTraceResult res = fromTraceBundleText( ing, g, *text, src == "-" ? "<stdin>" : src, in );
+    if( res.isBufferLost )
+    {
+        rw::emitRaw( stderr, "ripwire: write error — a --from-trace buffer lost bytes; the bundle is withheld, not printed without its blocks\n" );
+        return 1;   // the exit code main's A4-F18 check gives a short write to stdout
+    }
     if( !res.ok )
     {
         rw::emitTo( stderr, "ripwire: --from-trace: no stack-trace / sanitizer / compiler frames found in '{}' — nothing to map\n",
@@ -1156,6 +1161,11 @@ std::optional<int> runRunTrace( const MainDispatch& d )
     in.preludeMeasuredDigits = std::to_string( cap.durationMs ).size();   // R1: priced at a fixed width, never charged live
 
     const FromTraceResult res = fromTraceBundleText( d.ing, d.g, text, label, in );
+    if( res.isBufferLost )
+    {
+        rw::emitRaw( stderr, "ripwire: write error — a --run-trace buffer lost bytes; the bundle is withheld, not printed without its blocks\n" );
+        return 1;
+    }
     if( res.ok )
     {
         std::fwrite( res.xml.data(), 1, res.xml.size(), stdout );
@@ -1354,7 +1364,7 @@ std::optional<int> runPlanLanes( const MainDispatch& d )
     std::vector<std::uint32_t> churn( ing.files.size(), 0u );
     if( !gitChurnCounts( root, ing, churn, "12 months ago" ) )
     {
-        DEGRADED_PATH_ALERT( "plan-lanes: no git churn history for this root — claims.files churn/hotspot_rank report 0/null" );
+        DISCLOSE( "plan-lanes: no git churn history for this root — claims.files churn/hotspot_rank report 0/null" );
     }
     in.churn  = &churn;
     in.tested = d.testedPtr;

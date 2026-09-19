@@ -107,7 +107,7 @@ print( "\n".join( sorted( out ) ) )
 '
 }
 # the independent oracle: grep -nE, path-relative, same `path:line` spelling
-oracle(){ ( cd "$C" && grep -rnE -- "$1" . 2>/dev/null | sed 's|^\./||' | cut -d: -f1,2 | sort -u ); }
+oracle(){ ( cd "$C" && grep -rnE -- "$1" . 2>/dev/null | sed 's|^\./||' | cut -d: -f1,2 | LC_ALL=C sort -u ); }
 
 rw(){ "$BIN" "$C" --regex="$1" --grep-in=any --limit=100000 --no-cache 2>/dev/null; }
 

@@ -87,6 +87,15 @@
 #       above on this fixture and red here. The call site is checked because scoping the rule to the
 #       function's own body leaves `classify_skipped(rc, out[:800])` passing a gate that claims no ruler
 #       survives anywhere.
+#   (I) AN NDEBUG SKIP FROM A BUILD WITHOUT NDEBUG IS A FAILURE (2026-09-16) — DISCLOSE is compiled out
+#       only where NDEBUG is defined, and CMake defines it for the Release / RelWithDebInfo / MinSizeRel build
+#       types that --version names. A gate that skips an alert arm "because alerts are compiled out" on any other
+#       flavour asserted nothing and said something false about why. Three gates did exactly that on every plain
+#       run after e7688981 turned their `--since=notadate` probe into a refusal (churnjoincheck G2,
+#       preproccondcheck, w3fixlegendcheck arm 6), and the suite stayed green because an arm-level skip inside a
+#       passing gate is a pass. The harness now reads the build type once and FAILS such a gate, whole-gate or
+#       arm-level. Pinned both ways (a Release binary makes the same transcripts honest), against a control
+#       whose skip blames something else, and with the DISARMED disclosure when no build type can be read.
 #
 # WHAT THIS GATE DOES NOT HOLD. The rule counts a WHOLE-GATE skip that prints any PASS row before its skip
 # marker as a PASS — it is indistinguishable in a transcript from a gate that proved an arm and then skipped
@@ -180,9 +189,9 @@ else
 fi
 
 # ── the harness's own answer, read machine-readably ──────────────────────────────────────────────────────
-classify(){         # classify <corpus-root> <probe-name> -> "skip" | "pass" | "fail:<rc>" | "absent"
+classify(){         # classify <corpus-root> <probe-name> [binary] -> "skip" | "pass" | "fail:<rc>" | "absent"
     local j="$TMP/j.$$.json"
-    python3 "$PARGATES" "$1" "$FAKEBIN" --only "$2" --json "$j" >/dev/null 2>&1
+    python3 "$PARGATES" "$1" "${3:-$FAKEBIN}" --only "$2" --json "$j" >/dev/null 2>&1
     python3 - "$j" "$2.sh" <<'PYEOF'
 import json, sys
 try:
@@ -374,5 +383,66 @@ if sliced:
 print( "  PASS  (G) classify_skipped() is a documented function of (rc, out) with no fixed-size prefix slice in it, and its %d call site(s) hand it the transcript whole" % len( calls ) )
 PYEOF
 [ $? -eq 0 ] || fail=1
+
+# ── (I) AN NDEBUG SKIP FROM A BUILD WITHOUT NDEBUG IS A FAILURE ──────────────────────────────────────────
+# Two fake binaries that differ ONLY in the build type their --version names, and the same probes run under both:
+# whatever flips between them is the build type's doing. The arm-level probe's skip row is the line
+# preproccondcheck printed on every plain run before 2026-09-16, byte for byte.
+mkversionbin(){     # mkversionbin <path> <build-type>
+    printf '#!/usr/bin/env bash\nif [ "${1:-}" = --version ]; then echo "ripwire 0.0.0 (%s, probe)"; fi\ntrue\n' "$2" > "$1"
+    chmod +x "$1"
+}
+DEVBIN="$TMP/devbin";  mkversionbin "$DEVBIN" dev
+RELBIN="$TMP/relbin";  mkversionbin "$RELBIN" Release
+{ "$DEVBIN" --version | grep -q '(dev,' && "$RELBIN" --version | grep -q '(Release,' && [ -z "$( "$FAKEBIN" --version )" ]; } \
+    && ok "(I) fixture: the dev and Release fake binaries name their build types, and the plain fake names none" \
+    || no "(I) fixture: the fake binaries do not print the build types this arm depends on — every (I) row below proves nothing"
+
+cat > "$TMP/body_ndebugarm" <<'BODY'
+printf '  PASS  600-deep guard stack: exits 0 (degrades, does not fail)\n'
+printf '  SKIP  600-deep guard stack: DISCLOSE compiled out of this binary (NDEBUG); the plain-flavour leg proves it\n'
+printf 'probe: ALL PASS\n'
+BODY
+cat > "$TMP/body_ndebugwhole" <<'BODY'
+printf '  SKIP  G2: alerts are compiled out on this build — the alert arm cannot observe anything\n'
+BODY
+cat > "$TMP/body_otherskip" <<'BODY'
+printf '  PASS  instrument: the hand-derived answer reproduces\n'
+printf '  SKIP  no RIPWIRE_BASE reference binary — nothing was compared\n'
+printf 'probe: ALL PASS\n'
+BODY
+mkprobe "$ORDERROOT" probendebugarmgate   "$TMP/body_ndebugarm"
+mkprobe "$ORDERROOT" probendebugwholegate "$TMP/body_ndebugwhole"
+mkprobe "$ORDERROOT" probeotherskipgate   "$TMP/body_otherskip"
+
+vArmDev="$( classify "$ORDERROOT" probendebugarmgate "$DEVBIN" )"
+[ "$vArmDev" = "fail:1" ] \
+    && ok "(I) an ARM-level 'compiled out (NDEBUG)' skip inside a passing gate FAILS on a dev build" \
+    || no "(I) an arm-level NDEBUG skip on a dev build was classified '$vArmDev', want fail:1 — the shape that hid three dead alert arms still reads as green"
+vWholeDev="$( classify "$ORDERROOT" probendebugwholegate "$DEVBIN" )"
+[ "$vWholeDev" = "fail:1" ] \
+    && ok "(I) a WHOLE-gate 'compiled out' skip FAILS on a dev build (a skip is not the escape hatch)" \
+    || no "(I) a whole-gate 'compiled out' skip on a dev build was classified '$vWholeDev', want fail:1"
+vArmRel="$( classify "$ORDERROOT" probendebugarmgate "$RELBIN" )"
+vWholeRel="$( classify "$ORDERROOT" probendebugwholegate "$RELBIN" )"
+{ [ "$vArmRel" = "pass" ] && [ "$vWholeRel" = "skip" ]; } \
+    && ok "(I) the SAME two transcripts from a Release binary are honest: arm-level pass, whole-gate skip" \
+    || no "(I) on a Release binary the probes were classified arm='$vArmRel' whole='$vWholeRel', want pass/skip — the check fires on the flavour that really compiles alerts out"
+vOtherDev="$( classify "$ORDERROOT" probeotherskipgate "$DEVBIN" )"
+[ "$vOtherDev" = "pass" ] \
+    && ok "(I) control: a dev-build skip that blames something ELSE (no reference binary) is untouched — the check reads the reason, not the word SKIP" \
+    || no "(I) control: an unrelated arm-level skip on a dev build was classified '$vOtherDev', want pass — the check is failing every skip"
+
+ndOut="$( python3 "$PARGATES" "$ORDERROOT" "$DEVBIN" --only probendebugarmgate 2>&1 )"
+printf '%s\n' "$ndOut" | grep -A12 '^FAILURES' | grep -q "build type 'dev'" \
+    && printf '%s\n' "$ndOut" | grep -A12 '^FAILURES' | grep -qF 'DISCLOSE compiled out of this binary (NDEBUG)' \
+    && ok "(I) the FAILURES report names the build type and quotes the offending skip row" \
+    || { no "(I) the FAILURES report for an NDEBUG skip on a dev build does not name the build type and quote the row:"; printf '%s\n' "$ndOut" | grep -A8 '^FAILURES' | sed 's/^/        /'; }
+
+vArmNone="$( classify "$ORDERROOT" probendebugarmgate "$FAKEBIN" )"
+noneOut="$( python3 "$PARGATES" "$ORDERROOT" "$FAKEBIN" --only probendebugarmgate 2>&1 )"
+{ [ "$vArmNone" = "pass" ] && printf '%s\n' "$noneOut" | grep -q '^ndebug-skip check: DISARMED'; } \
+    && ok "(I) a binary whose --version names no build type leaves the verdict alone and says the check is DISARMED" \
+    || no "(I) no build type: classified '$vArmNone' / disclosure: '$( printf '%s\n' "$noneOut" | grep 'ndebug-skip' )' — want pass plus a DISARMED line, never a guess in either direction"
 
 [ "$fail" -eq 0 ] && echo "skipclassifycheck: ALL PASS" || { echo "skipclassifycheck: SOME CHECKS FAILED"; exit 1; }

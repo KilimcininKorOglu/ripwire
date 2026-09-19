@@ -23,8 +23,9 @@
 #include "recall.h"
 #include "situ.h"
 #include "workspace.h"          // multi-root `paths` array (A11): root hygiene + labels + merge
+#include "infra/statclock.h"    // rw::saturatingNanoseconds — the staleness stat reads without signed overflow past 2262
 #include "quality.h"            // computeSnapshot/computeDelta + writeBaseline + gitHeadSha/computeHeadSnapshot — the quality_delta/quality_baseline verbs reuse the exact CLI logic
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — no-op in release; the visible line on a watcher-degrade path
+#include "infra/Diagnostics.h"  // DISCLOSE — no-op in release; the visible line on a watcher-degrade path
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
 
 #include <sys/stat.h>
@@ -48,7 +49,7 @@
 // nobody can reproduce locally.
 //
 // L2 (Linux runtime probe) — why FsWatcher::arm's no-kqueue branch is SILENT while its kqueue()-failed
-// branch still emits DEGRADED_PATH_ALERT. An alert marks an UNEXPECTED fallback: something that normally
+// branch still emits DISCLOSE. An alert marks an UNEXPECTED fallback: something that normally
 // works did not, this run. On a build with no kqueue at all (every Linux build, and any
 // -DRIPWIRE_HAS_KQUEUE=0 build), the stat-sweep is not a fallback — it is the only path the binary has,
 // taken on every arm() call for the life of the process, forever. Alerting on it made every Linux MCP run
@@ -89,7 +90,8 @@ namespace rw
 
 namespace mcpdetail
 {
-    // nanosecond mtime out of a filled `struct stat`. The sub-second field is spelled DIFFERENTLY per
+    // nanosecond mtime out of a filled `struct stat`, saturating past 2262 (infra/statclock.h) where the plain product
+    // overflowed. The sub-second field is spelled DIFFERENTLY per
     // platform — st_mtimespec on Darwin/BSD, st_mtim on Linux (POSIX.1-2008) — and neither name exists on
     // the other, so this is a compile error, not a portability nicety. Same ladder (and same whole-second
     // last resort) as ingest.cpp's statSizeTimes; kept local rather than shared because that one lives in a
@@ -97,11 +99,11 @@ namespace mcpdetail
     inline long long mtimeNsOf( const struct stat& st ) noexcept
     {
 #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
+        return saturatingNanoseconds( st.st_mtimespec );
 #elif defined( __linux__ )
-        return (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+        return saturatingNanoseconds( st.st_mtim );
 #else
-        return (long long)st.st_mtime * 1000000000LL;   // whole-second fallback
+        return saturatingNanoseconds( (long long)st.st_mtime, 0 );   // whole-second fallback
 #endif
     }
 
@@ -123,11 +125,11 @@ namespace mcpdetail
     inline long long ctimeNsOf( const struct stat& st ) noexcept
     {
 #if defined( __APPLE__ ) || defined( __FreeBSD__ ) || defined( __OpenBSD__ ) || defined( __NetBSD__ )
-        return (long long)st.st_ctimespec.tv_sec * 1000000000LL + st.st_ctimespec.tv_nsec;
+        return saturatingNanoseconds( st.st_ctimespec );
 #elif defined( __linux__ )
-        return (long long)st.st_ctim.tv_sec * 1000000000LL + st.st_ctim.tv_nsec;
+        return saturatingNanoseconds( st.st_ctim );
 #else
-        return (long long)st.st_ctime * 1000000000LL;   // whole-second fallback
+        return saturatingNanoseconds( (long long)st.st_ctime, 0 );   // whole-second fallback
 #endif
     }
 
@@ -282,7 +284,7 @@ namespace mcpdetail
             (void) dirs; return;
 #else
             kq = ::kqueue();
-            if( kq < 0 ) { DEGRADED_PATH_ALERT( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
+            if( kq < 0 ) { DISCLOSE( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
 
             dirFds.reserve( dirs.size() );
             for( const std::string& d : dirs )
@@ -299,7 +301,7 @@ namespace mcpdetail
                 }
                 if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
                 {
-                    DEGRADED_PATH_ALERT( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
+                    DISCLOSE( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
                     reset();
                     return;
                 }
@@ -1095,7 +1097,7 @@ inline void maybePrefetchHeadSnapshot( const std::string& root, std::size_t file
     // quality_delta uses with the SAME default args (so it warms the IDENTICAL qsnap key), then clears the
     // in-flight flag via an RAII guard on EVERY exit path. (3) discard-on-error: a throw (OOM at operator new)
     // is swallowed; the flag is always cleared so the mechanism never wedges.
-    std::thread( [ root, timingsOn ]()
+    std::thread( [ root, timingsOn ]() noexcept
     {
         struct FlagGuard { ~FlagGuard(){ mcpPrefetchInFlight().store( false, std::memory_order_release ); } } guard;
         try   { (void)rw::quality::computeHeadSnapshot( root ); }      // side effect: warm the sha-keyed qsnap (atomic publish)
@@ -1274,7 +1276,7 @@ inline const McpIndex& getIndex( const std::string& root )
 // identity and there is nothing to strip.
 inline void handleIdentity( const McpIndex& ix, NodeId id, std::string& canonOut, std::string& pathOut )
 {
-    VERIFY_NO_ALIAS( canonOut, pathOut );
+    ASSUME_NO_ALIAS( canonOut, pathOut );
     const Symbol&          s       = ix.ing.symbols[ id ];
     const std::string_view rootArg = ix.ing.realPaths.empty() ? std::string_view( ix.root ) : std::string_view();
     canonOut = ( id < ix.g.canonId.size() ) ? canonicalIdForEmit( ix.ing, s, rootArg ) : s.name;
