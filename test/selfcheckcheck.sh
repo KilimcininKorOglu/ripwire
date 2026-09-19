@@ -302,37 +302,65 @@ def scan_code( rel, text, findings, counts, ratchet = True, contract_tu = False 
                 key = callee if not member else callee.split( "::" )[ -1 ]
                 if key in ACCESSORS or key in ALLOW: continue
                 findings.append( ( "C", where, "%s calls %s — not an accessor and not on ALLOW" % ( name, key ) ) )
-        # (T) ASSUMED-THEN-TESTED: the promise is a bare top-level equality `LHS == RHS` (no other top-level
-        # && / || outside parens — a compound predicate is not this shape), and within the next TWINDOW lines
-        # of CODE (comments/strings already blanked) a runtime `if( … )` tests the literal negation
-        # `LHS != RHS` / `RHS != LHS` as one of its clauses. Release compiles the promise to an optimizer
-        # fact, so that `if` can never be reached with a false LHS==RHS — the exact shipped-bug shape
-        # CONTRIBUTING.md non-negotiable #4 and Diagnostics.h warn about (gitmine.h/mention.h's
-        # applyCoChangeBoost/applyMentionBoost, found 2026-09-16 on #286). A whitespace-stripped substring
-        # match, not a parser: deliberately loose on WHERE inside the if the clause sits (one clause of an
-        # `||` chain still counts, as in the motivating case), deliberately tight on WHAT it must say (the
-        # exact operands, both orders) so a coincidental shared identifier is not enough.
+        # (T) ASSUMED-THEN-TESTED: the promise is a bare top-level `LHS == RHS` or `LHS != RHS` (no other
+        # top-level && / || outside parens — a compound predicate is not this shape), and within the next
+        # TWINDOW lines of CODE (comments/strings already blanked), BOUNDED TO THE ENCLOSING FUNCTION (rv-s2
+        # review LOW-1: the window used to run past the promise's own closing brace into the NEXT function,
+        # so a correct ASSUME could be flagged by an unrelated `if` two functions later), a runtime `if( … )`
+        # tests the literal negation as one of its clauses: `LHS != RHS` / `RHS != LHS` for an `==` promise
+        # (rv-s2 LOW-2 V1/V14), `!( LHS == RHS )` / `!( RHS == LHS )` for the same (V2), or the mirror for a
+        # `!=` promise — `LHS == RHS` / `RHS == LHS` / `!( LHS != RHS )` / `!( RHS != LHS )` (V3). Release
+        # compiles the promise to an optimizer fact, so that `if` can never be reached on the promise's own
+        # predicate being false — the exact shipped-bug shape CONTRIBUTING.md non-negotiable #4 and
+        # Diagnostics.h warn about (gitmine.h/mention.h's applyCoChangeBoost/applyMentionBoost, found
+        # 2026-09-16 on #286). A whitespace-stripped substring match, not a parser: deliberately loose on
+        # WHERE inside the if the clause sits (one clause of an `||` chain still counts, as in the motivating
+        # case), deliberately tight on WHAT it must say (the exact operands, both orders) so a coincidental
+        # shared identifier is not enough. KNOWN GAPS, listed not chased (rv-s2 LOW-2; the same substring
+        # machinery would extend to each, with a different negation table): an ordering promise
+        # (`ASSUME( a <= b )` then `if( a > b )`), a bare bool (`ASSUME( ok )` then `if( !ok )`), a
+        # null-pointer promise (`ASSUME( p != nullptr )` then `if( !p )`), a loop-bound double guard
+        # (`i < a.size() && i < b.size()`, this lane's own abicheck.h shape — not gated, fixed by hand), and a
+        # re-test past the TWINDOW/function-bound cutoff.
         if name in FALSEABLE:
             whole = re.sub( r"\s+", "", body )
-            d2 = 0; toplevel_bool = False; eqpos = -1; k2 = 0
+            d2 = 0; toplevel_bool = False; oppos = -1; opstr = None; k2 = 0
             while k2 < len( whole ):
                 c2 = whole[ k2 ]
                 if c2 == "(": d2 += 1
                 elif c2 == ")": d2 -= 1
                 elif d2 == 0 and whole[ k2:k2 + 2 ] in ( "&&", "||" ): toplevel_bool = True; break
-                elif d2 == 0 and whole[ k2:k2 + 2 ] == "==" and whole[ k2 - 1:k2 ] not in ( "!", "<", ">", "=" ) and eqpos < 0:
-                    eqpos = k2
+                elif d2 == 0 and whole[ k2:k2 + 2 ] == "==" and whole[ k2 - 1:k2 ] not in ( "!", "<", ">", "=" ) and oppos < 0:
+                    oppos = k2; opstr = "=="
+                elif d2 == 0 and whole[ k2:k2 + 2 ] == "!=" and oppos < 0:
+                    oppos = k2; opstr = "!="
                 k2 += 1
-            if not toplevel_bool and eqpos > 0:
-                lhs = whole[ :eqpos ]; rhs = whole[ eqpos + 2: ]
+            if not toplevel_bool and oppos > 0:
+                lhs = whole[ :oppos ]; rhs = whole[ oppos + 2: ]
                 if lhs and rhs and re.search( r"[A-Za-z_]", lhs ) and re.search( r"[A-Za-z_]", rhs ):
                     TWINDOW = 10
-                    win = re.sub( r"\s+", "", "\n".join( after.split( "\n" )[ :TWINDOW ] ) )
-                    neg1 = lhs + "!=" + rhs; neg2 = rhs + "!=" + lhs
-                    if ( neg1 in win or neg2 in win ) and where not in ASSUMED_THEN_TESTED_ALLOW:
+                    win_text = "\n".join( after.split( "\n" )[ :TWINDOW ] )
+                    # ASSUMED_THEN_TESTED_FUNCTION_BOUND: stop the window at the first `}` that closes BELOW
+                    # the promise's own scope (a balanced nested block — an `if`/`for` that opens and closes
+                    # within the window — does not trip this; only a brace that closes an ENCLOSING scope,
+                    # i.e. the promise's own function, does). Matches rv-s2's fix shape exactly (LOW-1).
+                    fd = 0; cut = len( win_text )
+                    for fi, fc in enumerate( win_text ):
+                        if fc == "{": fd += 1
+                        elif fc == "}":
+                            if fd == 0: cut = fi; break
+                            fd -= 1
+                    win = re.sub( r"\s+", "", win_text[ :cut ] )
+                    if opstr == "==":
+                        candidates = ( lhs + "!=" + rhs, rhs + "!=" + lhs,
+                                       "!(" + lhs + "==" + rhs + ")", "!(" + rhs + "==" + lhs + ")" )
+                    else:
+                        candidates = ( lhs + "==" + rhs, rhs + "==" + lhs,
+                                       "!(" + lhs + "!=" + rhs + ")", "!(" + rhs + "!=" + lhs + ")" )
+                    if any( c in win for c in candidates ) and where not in ASSUMED_THEN_TESTED_ALLOW:
                         findings.append( ( "T", where,
-                            "%s( %s == %s ) then if(...%s!=%s...) within %d lines — release folds the check away"
-                            % ( name, lhs[ :50 ], rhs[ :50 ], lhs[ :30 ], rhs[ :30 ], TWINDOW ) ) )
+                            "%s( %s %s %s ) then a re-test of it within %d lines of the SAME function — release folds the check away"
+                            % ( name, lhs[ :50 ], opstr, rhs[ :50 ], TWINDOW ) ) )
 
 def main():
     root = sys.argv[ 1 ]; mode = sys.argv[ 2 ]
@@ -426,6 +454,12 @@ void gt2( const S& a, const S& b, int i )
     (void)i;
     if( a.size() != b.size() ) { (void)i; }   // twelve lines below the promise: outside the T window
 }
+// rv-s2 LOW-1 (2026-09-19): the FUNCTION-BOUND look-alike. gt3 is a correct, tiny ASSUME with nothing wrong
+// with it; gt4 is a DIFFERENT function whose first line just happens to negate gt3's predicate. Before the
+// function bound, gt3's own ASSUME fell inside gt4's line window and this pair was a false positive that
+// would have blocked a legitimate new ASSUME — the one thing the owner wants zero-ceremony.
+void gt3( const S& a, const S& b ) { ASSUME( a.size() == b.size() ); }
+void gt4( const S& a, const S& b, int i ) { if( a.size() != b.size() ) { (void)i; } }
 EOF
 cat > "$FX/src/red_r.h" <<'EOF'
 struct Sink { void disclose( int ) noexcept {} };
@@ -470,6 +504,26 @@ bool rt( const V& lensRank, const V& symbols, int census )
     }
     return true;
 }
+// rv-s2 LOW-2 (2026-09-19): V2, `!( a == b )` as the re-test of an `==` promise.
+bool rt2( const V& a, const V& b )
+{
+    ASSUME( a.size() == b.size() );
+    if( !( a.size() == b.size() ) )
+    {
+        return false;
+    }
+    return true;
+}
+// rv-s2 LOW-2 (2026-09-19): V3, the mirror — a `!=` promise re-tested by `==`.
+bool rt3( const V& a, const V& b )
+{
+    ASSUME( a.size() != b.size() );
+    if( a.size() == b.size() )
+    {
+        return false;
+    }
+    return true;
+}
 EOF
 for f in red_b.h red_c.h red_d.h red_e.h red_a.md red_r.h red_u.h red_t.h; do [ -s "$FX/src/$f" ] || no "F: fixture $f did not take"; done
 grep -q 'ASSUME( n = i )' "$FX/src/red_b.h" || no "F: the planted (B) defect is not on disk"
@@ -490,7 +544,7 @@ want B red_b.h 3
 want C red_c.h 1
 want D red_d.h 2
 want E red_e.h 2
-want T red_t.h 1
+want T red_t.h 3
 want U red_u.h 2
 if grep -q "${T}src/green.h:" "$WORK/fx.tsv"; then no "F: look-alikes produced findings:"; grep "${T}src/green.h:" "$WORK/fx.tsv" | sed 's/^/    /'
 else ok "F: every look-alike (feature name, literals, comments, a #define body, DASSERT call, multi-line compare, VALIDATE in if/while/?:) stays clean"; fi
