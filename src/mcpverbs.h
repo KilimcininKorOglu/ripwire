@@ -2116,13 +2116,9 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
             {
                 composeStr = composePricing.stubXml;
             }
-            // R2-L2p: same TRUTH TABLE as the CLI's `if( legoWillStub || composeWillStub ) sectionsStubNote = …`
-            // (verbs_for.h ~2858) — the legend rides iff at least one section actually collapsed. Spelled `|`
-            // rather than `||`: both operands are already-evaluated `const bool` locals with no side effects,
-            // so the two are semantically identical, and `|` is one less branch for forTaskText's own
-            // (already very large) complexity count to carry — the CLI's `||` lives in a separate function
-            // with its own separately-tracked baseline, so this is not a divergence from its behavior.
-            mcpSectionsWillStub = mcpLegoWillStub | mcpComposeWillStub;
+            // R2-L2p: same truth table as the CLI's `if( legoWillStub || composeWillStub ) sectionsStubNote = …`
+            // (verbs_for.h ~2858): the legend rides iff at least one section actually collapsed.
+            mcpSectionsWillStub = mcpLegoWillStub || mcpComposeWillStub;
         }
     }
     std::fwrite( sigsStr.data(), 1, sigsStr.size(), mem );
