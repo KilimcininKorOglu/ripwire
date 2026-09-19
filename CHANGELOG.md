@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `sliceBodyLines`'s UTF-8 back-off read one byte past a slice ending on the body's last line
+
+`--expand=SYM:START-END`'s continuation-byte back-off, which trims a split multi-byte codepoint off a slice
+boundary, read `body[byteEnd]` before checking whether `byteEnd` was still inside the body. When the
+requested slice's last line is the body's own final line, `byteEnd == body.size()`. Every CLI call sits the
+view over a `std::string`, whose `operator[](size())` is defined to return the null terminator, so the read
+stayed in-bounds by accident and no existing gate ever saw it; over any buffer that ends exactly at its own
+allocation the same read is a real heap-buffer-overflow. The loop now stops at `byteEnd < body.size()` before
+indexing. `test/expandrangecheck.sh` arm 11 compiles `serialize.h` into a standalone ASan/UBSan harness over
+an exact-size buffer, so the read is sanitizer-catchable instead of silent. Split out of PR #44 (native
+Windows port); the fix is lennix1337's.
+
 ### Fixed — `emptycorpuscheck`'s one-function arms never ran, and the gate said ALL PASS anyway
 
 `run_and_check` named its output file after the test name with spaces stripped (`tr -d ' '`), so `"onefn:
