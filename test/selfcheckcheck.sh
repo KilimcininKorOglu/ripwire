@@ -78,6 +78,7 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # rv-s2 review LOW-4 (2026-09-19): darkflags.h's collectCMakeFiles root-walk-failure site converted to the sink
 # form — CMakeScan now models Diagnostics::DisclosureSink directly (disclose() sets rootWalkFailed itself) —
 # retiring its one sink-less DISCLOSE( msg ) site. 217 -> 216.
+# Train 6 (2026-09-18): re-measured on the merged 14-member tree — (R) prints 216; no other member adds or retires one.
 DISCLOSE_SINKLESS_PIN=216
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
