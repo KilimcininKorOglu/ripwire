@@ -784,11 +784,8 @@ struct CMakeScan
     };
     void disclose( DisclosureWhy why ) noexcept   // the DISCLOSE sink: the fields the emitter reads
     {
-        switch( why )
-        {
-            case DisclosureWhy::RootWalkFailed:     rootWalkFailed = true; break;
-            case DisclosureWhy::SymlinkEscapesRoot: ++escaped;             break;
-        }
+        rootWalkFailed = rootWalkFailed || why == DisclosureWhy::RootWalkFailed;
+        escaped += why == DisclosureWhy::SymlinkEscapesRoot ? 1u : 0u;
     }
 };
 
