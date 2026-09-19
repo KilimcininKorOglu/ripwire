@@ -3321,16 +3321,14 @@ inline constexpr std::string_view kPathValuePrefixes[] =
     "--eval-stray=", "--from-trace=", "--with-profile=", "--brief=", "--html=", "--affected="
 };
 
-inline bool isPathValuePrefix( std::string_view prefix ) noexcept
+// intake: a path-valued flag's value takes the program's path spelling here, once (argv storage is mutable, and Config
+// borrows it as a view, so the rewrite is in place and never longer). POSIX: nothing — os::normalize_path_arg is empty.
+inline void normalizePathValueAtIntake( std::string_view prefix, std::string_view value ) noexcept
 {
-    for( const std::string_view pathPrefix : kPathValuePrefixes )
+    if( std::ranges::find( kPathValuePrefixes, prefix ) != std::ranges::end( kPathValuePrefixes ) )
     {
-        if( prefix == pathPrefix )
-        {
-            return true;
-        }
+        os::normalize_path_arg( const_cast<char*>( value.data() ) );
     }
-    return false;
 }
 
 inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
@@ -3342,12 +3340,7 @@ inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
             continue;
         }
         const std::string_view value = arg.substr( vf.prefix.size() );
-        if( isPathValuePrefix( vf.prefix ) )
-        {
-            // intake: a path-valued flag's value takes the program's path spelling here, once (argv storage is mutable,
-            // and Config borrows it as a view, so the rewrite is in place and never longer)
-            os::normalize_path_arg( const_cast<char*>( value.data() ) );
-        }
+        normalizePathValueAtIntake( vf.prefix, value );
         // §B5: the EMPTY-value decision is the row's, never this loop's. Refuse prints here; Meaningful and
         // HandlerRefuses both fall through to the assignment — the difference between them is which code
         // OWNS the refusal, and the row records it (the consteval floor beside the table pins the columns).
