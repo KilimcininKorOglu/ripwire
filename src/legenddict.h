@@ -172,30 +172,32 @@ inline const std::string& dictionaryVersion()
 // The first line of both servings: the schema of the text and the version its body hashes to.
 inline constexpr std::string_view kDictionaryHeadOpen = "ripwire legend dictionary ripwire.dict/v1 dictv=";
 
-// The whole dictionary (`ripwire --legend-dict`, ripwire://legend-dict/full).
-inline std::string fullDictionaryText()
+// One serving: the head line, the entries [0, endId), and an optional closing line.
+inline std::string dictionaryText( std::size_t endId, std::string_view scope, std::string_view footer )
 {
     std::string out( kDictionaryHeadOpen );
     out += dictionaryVersion();
-    out += " entries=";
-    out += std::to_string( kEntryCount );
+    out += ' ';
+    out += scope;
     out += '\n';
-    out += dictionaryBody( 0, kEntryCount );
+    out += dictionaryBody( 0, endId );
+    out += footer;
     return out;
+}
+
+// The whole dictionary (`ripwire --legend-dict`, ripwire://legend-dict/full).
+inline std::string fullDictionaryText()
+{
+    return dictionaryText( kEntryCount, "entries=" + std::to_string( kEntryCount ), {} );
 }
 
 // The core the session switch serves (ripwire://legend-dict): the core entries and how the rest arrives.
 inline std::string coreDictionaryText()
 {
-    std::string out( kDictionaryHeadOpen );
-    out += dictionaryVersion();
-    out += " core\n";
-    out += dictionaryBody( 0, kCoreCount );
-    out += "every other definition is sent once, the first time an answer in this session needs it, in a comment after the "
-           "rows; ripwire://legend-dict/full (or ripwire --legend-dict) holds all ";
-    out += std::to_string( kEntryCount );
-    out += '\n';
-    return out;
+    return dictionaryText( kCoreCount, "core",
+                           "every other definition is sent once, the first time an answer in this session needs it, in a comment "
+                           "after the rows; ripwire://legend-dict/full (or ripwire --legend-dict) holds all "
+                           + std::to_string( kEntryCount ) + "\n" );
 }
 
 // ── the roster ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -279,10 +281,6 @@ namespace detail
 
 // The attributes that stay on a ref root: the answer's identity (prereg R2-LO, KEEP).
 inline constexpr std::string_view kIdentityAttrs[] = { "task", "changed", "from", "to" };
-inline bool isIdentityAttr( std::string_view name ) noexcept
-{
-    return std::find( std::begin( kIdentityAttrs ), std::end( kIdentityAttrs ), name ) != std::end( kIdentityAttrs );
-}
 
 struct RootAttr
 {
@@ -717,7 +715,12 @@ inline RefParts assembleRef( std::string_view view, const RefShape& s, const Hea
     p.opened = "<" + std::string( s.root.tag );
     for( const RootAttr& a : startTagAttrs( s.rootOpen, s.root.nameEnd - s.root.openBegin ) )
     {
-        ( isIdentityAttr( a.name ) ? p.opened : moved ).append( a.whole );   // identity stays; the rest move, in order
+        bool isIdentity = false;
+        for( const std::string_view k : kIdentityAttrs )
+        {
+            isIdentity = isIdentity || a.name == k;
+        }
+        ( isIdentity ? p.opened : moved ).append( a.whole );   // identity stays; the rest move, in order
     }
     p.opened += '>';
     std::size_t copied    = 0;
