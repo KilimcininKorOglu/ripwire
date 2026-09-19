@@ -429,6 +429,105 @@ inline std::uint32_t resolvePythonImport( std::string_view includerPath, std::st
     return ( hit == kNoFile || hit == kNoFile - 1 ) ? kNoFile : hit;   // unique-or-degrade
 }
 
+// A relative JS/TS specifier may spell the RUNTIME file its source compiles to: TypeScript's node16/nodenext
+// resolution requires `import './api.js'` for `api.ts`, and a `.mjs`/`.cjs` specifier names its `.mts`/`.cts`
+// source. ONE table, read by the precise include tier (resolveTsImport below) and by graph.h's named-import binder
+// (resolveJsNamedImportFile), so --deps and the call binder cannot disagree about which file a runtime spelling
+// names. No directory-index row: TypeScript never maps `./lib.js` onto `lib/index.ts` (verified live, tsc 7.0.2
+// --traceResolution, node16/nodenext/bundler identical: "was not resolved").
+//
+// Two tiers, source before declaration (same trace): a stray `.d.ts`/`.d.mts`/`.d.cts` is tried ONLY when
+// `sources` answers NOTHING — `./d.js` with only `d.d.ts` on disk resolves to it, but `./both.js` with BOTH
+// `both.ts` and `both.d.ts` resolves to `both.ts` and never even probes the declaration (source wins outright,
+// not "first written"). `sources` itself keeps the existing unique-or-degrade discipline unchanged: if two
+// SOURCE alternates both exist (e.g. a tree with both `tj.ts` and `tj.tsx` for one `./tj.js` specifier), tsc's
+// real resolver breaks the tie by fixed order (`tj.ts` wins, not ambiguous) — this table does not implement
+// that tie-break (matches the pre-existing `.js`->{ts,tsx} row's shipped behaviour, a deliberate conservative
+// choice already documented above: two real candidates degrade to unresolved rather than guess). `decl` is
+// UNAMBIGUOUS by construction — TypeScript declaration files never fork on tsx/jsx, so there is exactly one
+// declaration spelling per runtime extension, never a pair to degrade between.
+struct JsRuntimeSourceExt
+{
+    std::string_view runtime;        // the emitted spelling the specifier carries
+    std::string_view sources[ 2 ];   // the source spellings it may name; an empty slot is unused
+    std::string_view decl;           // declaration-only fallback, tried iff `sources` found nothing at all; empty = none
+};
+
+inline constexpr JsRuntimeSourceExt kJsRuntimeSourceExts[] = {
+    { ".js",  { ".ts", ".tsx" }, ".d.ts"  },
+    // .jsx before .js in iteration order doesn't matter here (`ends_with(".js")` is false on a ".jsx" specifier —
+    // the two runtime spellings share no suffix), but jsRuntimeSourceExtOf takes the FIRST row whose runtime
+    // suffix matches, so this row still owns every ".jsx" specifier outright. Source order .tsx-then-.ts matches
+    // tsc live: `./jx.jsx`->jx.tsx (only .tsx present), `./jts.jsx`->jts.ts (only .ts present). The `.d.ts`
+    // fallback for a bare `.jsx` specifier is not in the archived tsc trace (its probe list only carried .js/.jsx
+    // rows that already had a source hit) — it is the same single declaration-file rule as `.js` because
+    // TypeScript never emits a `.d.jsx`/`.d.tsx`; kept here for that reason, not because it was traced directly.
+    { ".jsx", { ".tsx", ".ts" }, ".d.ts"  },
+    { ".mjs", { ".mts", {} },    ".d.mts" },
+    { ".cjs", { ".cts", {} },    ".d.cts" },
+};
+
+// The row a specifier's suffix selects, or nullptr when it carries no runtime extension.
+inline const JsRuntimeSourceExt* jsRuntimeSourceExtOf( std::string_view specifier ) noexcept
+{
+    for( const JsRuntimeSourceExt& row : kJsRuntimeSourceExts )
+    {
+        if( specifier.size() > row.runtime.size() && specifier.ends_with( row.runtime ) )
+        {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
+// The two-tier probe `kJsRuntimeSourceExts` exists for: `runtimeExt`'s SOURCE alternates first
+// (unique-or-degrade among `sources`), then — ONLY when the source tier found NOTHING at all, never when
+// it is ambiguous — its single DECLARATION fallback. `seedHit` folds in a caller's own already-resolved
+// candidate (an exact/literal probe of the specifier itself) under the SAME unique-or-degrade rule, so a
+// caller needs no separate merge step: the returned `fileId` already accounts for it. Shared by
+// resolveTsImport (below) and graph.h's resolveJsNamedImportFile, so the two-tier precedence — source
+// before declaration, tsc live-verified (see kJsRuntimeSourceExts above) — and the underlying lookup
+// (joinNormalizeLookup) cannot drift between the include tier and the named-import binder.
+//
+// Returns { fileId, ambiguous }: fileId is kNoFile on EITHER "nothing answered" or "ambiguous" — ambiguous
+// says which, the same two-outcome contract resolveJsNamedImportFile already promised its own callers.
+inline std::pair<std::uint32_t, bool> probeJsRuntimeSourceExt( std::string_view dir, std::string_view target,
+                                                                const JsRuntimeSourceExt& runtimeExt,
+                                                                const HashMap<std::string, std::uint32_t>& fileIndex,
+                                                                const WsIncludeCtx* ws, std::uint32_t includerFileId,
+                                                                std::uint32_t seedHit = kNoFile )
+{
+    // `runtimeExt` must be the row `jsRuntimeSourceExtOf( target )` itself returned — its own size guard
+    // (`specifier.size() > row.runtime.size()`, just above) is what makes forming `stem` safe below; this
+    // function does not re-derive `runtimeExt` from `target`, so that contract is the CALLER's to keep.
+    // `seedHit` must not already be the `kNoFile - 1` ambiguous marker: it is folded in as an ordinary
+    // candidate, not as a pre-existing ambiguity, and no caller has a reason to pass that sentinel in.
+    EXPECTS( target.size() > runtimeExt.runtime.size(), "caller must pass runtimeExt from jsRuntimeSourceExtOf( target )" );
+    EXPECTS( seedHit != kNoFile - 1, "seedHit is an ordinary candidate, never the ambiguous marker" );
+    const std::string stem( target.substr( 0, target.size() - runtimeExt.runtime.size() ) );
+    std::uint32_t hit = seedHit;
+    bool ambiguous = false;
+    const auto probe = [ & ]( std::string_view extension )
+    {
+        const std::uint32_t candidate = joinNormalizeLookup( dir, stem + std::string( extension ), fileIndex, ws, includerFileId );
+        if( candidate == kNoFile ) { return; }
+        if( hit != kNoFile && hit != candidate ) { ambiguous = true; }
+        hit = candidate;
+    };
+    for( const std::string_view source : runtimeExt.sources )
+    {
+        if( !source.empty() )
+        {
+            probe( source );
+        }
+    }
+    if( !ambiguous && hit == kNoFile && !runtimeExt.decl.empty() )
+    {
+        probe( runtimeExt.decl );
+    }
+    return { ambiguous ? kNoFile : hit, ambiguous };
+}
+
 // ── TS/JS Step-A — SOUND (closest to C quote-includes). Relative specifier `./x` / `../a/b` → probe a
 // FIXED extension list then index files, relative-to-includer; a BARE specifier (`react`, `lodash` — no
 // leading dot) is node_modules/external → kNoFile (unresolved, never matched). Resolve IFF exactly ONE
@@ -539,8 +638,17 @@ inline std::uint32_t resolveTsImport( std::string_view includerPath, std::string
             hit = kNoFile - 1; // second distinct file → ambiguous
         }
     };
-    // FIRST an exact hit (specifier already has an extension, e.g. `./x.js`), then extension-appended, then index.
+    // FIRST an exact hit (specifier already has an extension, e.g. `./x.js`), then the source file a runtime spelling
+    // names (kJsRuntimeSourceExts, both tiers — probeJsRuntimeSourceExt above), then extension-appended, then
+    // index. One accumulator for all of them (probeJsRuntimeSourceExt is SEEDED with it and folds its own
+    // result back in), so a tree holding BOTH api.js and api.ts leaves `./api.js` unresolved rather than
+    // guessing which module was meant.
     probe( std::string( target ) );
+    if( const JsRuntimeSourceExt* const runtimeExt = jsRuntimeSourceExtOf( target ) )
+    {
+        const auto [ extHit, extAmbiguous ] = probeJsRuntimeSourceExt( dir, target, *runtimeExt, fileIndex, ws, includerFileId, hit );
+        hit = extAmbiguous ? ( kNoFile - 1 ) : extHit;
+    }
     for( std::string_view e : kFileExt )
     {
         probe( std::string( target ) + std::string( e ) );

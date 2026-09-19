@@ -1801,25 +1801,17 @@ inline std::pair<std::uint32_t, bool> resolveJsNamedImportFile( std::string_view
     // source alternatives; competing emitted and source files are deliberately unresolved — and the
     // second return value says WHICH kind of unresolved, because "two files answer this" is contrary
     // in-tree evidence while "no file answers this" may simply be a module we cannot follow.
-    if( ( !module.starts_with( "./" ) && !module.starts_with( "../" ) )
-        || ( !module.ends_with( ".js" ) && !module.ends_with( ".mjs" ) && !module.ends_with( ".cjs" ) ) )
+    const JsRuntimeSourceExt* const runtimeExt = jsRuntimeSourceExtOf( module );   // resolve.h: the ONE runtime→source table
+    if( ( !module.starts_with( "./" ) && !module.starts_with( "../" ) ) || runtimeExt == nullptr )
     {
         return { resolvePreciseInclude( importer, module, false, files, {}, false, workspace, importerFileId ), false };
     }
-    std::uint32_t hit = joinNormalizeLookup( includerDir( importer ), std::string( module ), files, workspace, importerFileId );
-    bool ambiguous = false;
-    const auto probe = [ & ]( std::string_view extension, std::size_t suffixLength )
-    {
-        const auto candidate = joinNormalizeLookup( includerDir( importer ), std::string( module.substr( 0, module.size() - suffixLength ) )
-                                                   + std::string( extension ), files, workspace, importerFileId );
-        if( candidate == kNoFile ) { return; }
-        if( hit != kNoFile && hit != candidate ) { ambiguous = true; }
-        hit = candidate;
-    };
-    if( module.ends_with( ".js" ) ) { probe( ".ts", 3 ); probe( ".tsx", 3 ); }
-    else if( module.ends_with( ".mjs" ) ) { probe( ".mts", 4 ); }
-    else if( module.ends_with( ".cjs" ) ) { probe( ".cts", 4 ); }
-    return { ambiguous ? kNoFile : hit, ambiguous };
+    // resolve.h::probeJsRuntimeSourceExt runs both tiers (source alternates, then the declaration fallback
+    // iff the source tier found nothing) and folds in this exact/literal probe as its seed, so a tree
+    // carrying BOTH a literal `module` file and a source/declaration alternate still degrades to ambiguous
+    // exactly as it did before this shared out.
+    const std::uint32_t seedHit = joinNormalizeLookup( includerDir( importer ), std::string( module ), files, workspace, importerFileId );
+    return probeJsRuntimeSourceExt( includerDir( importer ), module, *runtimeExt, files, workspace, importerFileId, seedHit );
 }
 
 // WHERE a named import's module lands, and — when it lands nowhere — WHICH kind of nowhere. The three

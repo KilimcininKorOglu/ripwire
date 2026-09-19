@@ -15,6 +15,23 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — a TS/JS import spelled with a `.jsx` runtime extension, or naming only a `.d.ts`/`.d.mts`/`.d.cts` declaration, now resolves
+
+`kJsRuntimeSourceExts` (the one runtime→source table `resolveTsImport`'s precise include tier and graph.h's
+named-import binder both read) covered `.js`→`.ts`/`.tsx`, `.mjs`→`.mts` and `.cjs`→`.cts`, but not `.jsx` or the
+declaration-only case: a specifier naming a file that exists only as a hand-written `.d.ts` (no `.ts`/`.tsx`
+alongside it) stayed unresolved, and neither the CLI's `--deps` edge nor the named-import call binder saw it. Two
+additions, both matched against tsc 7.0.2's own resolver (`--traceResolution`, node16/nodenext/bundler identical):
+a `.jsx` row (`./x.jsx` tries `.tsx` then `.ts`), and a second, DECLARATION tier per runtime extension
+(`.js`→`.d.ts`, `.mjs`→`.d.mts`, `.cjs`→`.d.cts`) tried only when the source tier finds nothing — `./both.js` with
+both `both.ts` and `both.d.ts` on disk still resolves to the source, the declaration untouched, matching tsc
+exactly. The pre-existing unique-or-degrade rule for two real SOURCE candidates (e.g. both `x.ts` and `x.tsx`
+present) is unchanged and applies identically to the new `.jsx` row — a deliberate, already-shipped conservative
+choice, not something this change revisits. `test/tsimportprecisecheck.sh`'s RUNTIME-EXTENSION section gains the
+`.jsx` rows, a `.jsx` source-clash decoy, the three declaration-fallback rows, and a source-vs-declaration
+precedence row. Split out of PR #44 (native Windows port); the shared runtime→source table is
+@lennix1337's, this change completes its coverage.
+
 ### Fixed — an edit could be reported "applied" while a concurrent writer silently undid it
 
 The per-file advisory edit lock tried the lock for ~200 ms and then always proceeded lock-free once it gave up
