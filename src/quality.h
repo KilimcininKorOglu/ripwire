@@ -1977,7 +1977,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 24;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 115;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 116;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 116 = 2026-09-18 (issue #287 round 2:
+                                                          //    capturePythonRebindShadowDecls' rebind
+                                                          //    veto evidence; see src/ingest_cache.h)
                                                           // 115 = 2026-09-18 (issue #287: RawBind::importedName
                                                           //    marks a Python Import bind "module" vs a
                                                           //    from-import member; see src/ingest_cache.h)

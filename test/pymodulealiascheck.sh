@@ -90,6 +90,21 @@ run_arms(){   # $1 = binary, $2 = arm-label suffix (e.g. "new" or "old")
     # 115). `helper_fn.run()` is a call on THAT value (numpy: `greater_equal.outer(...)`, a ufunc METHOD,
     # not numeric.py's free `outer`) and must NOT be narrowed onto target_mod.py's own `run`.
     assert_not_bound "$B" pkg/target_mod.py:run         uses_fromimport_member "from-import member is not the module ($L)"
+    # rebind arms (issue #287 round 2, review rv-p6.md HIGH finding): each of these files re-binds the
+    # alias name `tm` AFTER `import target_mod as tm` and BEFORE `tm.run(...)`, in one of the forms
+    # capturePythonRebindShadowDecls now recognises — every one must refuse, the same as the pre-existing
+    # parameter-shadow arm above (uses_shadowed).
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_assign    "rebind: plain local assignment ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_module    "rebind: module-level reassignment ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_for       "rebind: for-loop target ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_with      "rebind: with-as target ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_except    "rebind: except-as target ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_walrus    "rebind: walrus target ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_defshadow "rebind: nested def shadow ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_global    "rebind: global statement elsewhere in file ($L)"
+    # negative control: a DIFFERENT name's global rebind in the SAME file must NOT veto `tm` — the veto is
+    # per-name, not "any rebind anywhere in the file poisons every alias in it".
+    assert_bound     "$B" pkg/target_mod.py:run         uses_rebind_negctrl   "rebind negative control: unrelated name ($L)"
 }
 
 # ── the binary under test: every arm ────────────────────────────────────────────────────────────────
@@ -134,6 +149,20 @@ monotonic_check()
         assert_not_bound "$OLDBIN" "$1" "$2" "monotonicity ($3), old"
         assert_not_bound "$BIN"    "$1" "$2" "monotonicity ($3), new"
     }
+    # $1 target  $2 caller  $3 label — round-2 rebind arms (review rv-p6.md HIGH finding): the committed
+    # HEAD at the time round 2 landed (65138664) wrongly bound these — RED on that pre-fix binary, GREEN
+    # on the one under test. Once round 2 is itself committed HEAD carries the fix too and this converges
+    # to must_stay_unbound's shape; kept as its own helper so the RED half stays a real, dated assertion
+    # rather than silently reading as "nothing to prove" the moment it lands.
+    must_fix_rebind(){
+        callers_out "$OLDBIN" "$1"
+        if bound_in_last "$2"; then
+            ok "round-2 RED on pre-fix HEAD ($3): $1 wrongly bound $2"
+        else
+            skip "round-2 ($3): HEAD already refuses $1 -> $2 — the rebind fix is already on HEAD"
+        fi
+        assert_not_bound "$BIN" "$1" "$2" "round-2 fix ($3), new"
+    }
 
     must_not_regress  pkg/target_mod.py:run        uses_module_alias   "alias"
     must_not_regress  pkg/sub/deep.py:run           uses_dotted_alias   "dotted alias"
@@ -145,6 +174,15 @@ monotonic_check()
     must_stay_unbound a2/samestem.py:run            uses_samestem_alias "ambiguous stem a"
     must_stay_unbound b2/samestem.py:run            uses_samestem_alias "ambiguous stem b"
     must_stay_unbound pkg/target_mod.py:run         uses_fromimport_member "from-import member"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_assign    "plain local assignment"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_module    "module-level reassignment"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_for       "for-loop target"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_with      "with-as target"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_except    "except-as target"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_walrus    "walrus target"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_defshadow "nested def shadow"
+    must_fix_rebind   pkg/target_mod.py:run         uses_rebind_global    "global statement elsewhere in file"
+    must_not_regress  pkg/target_mod.py:run         uses_rebind_negctrl   "rebind negative control: unrelated name"
 }
 monotonic_check
 

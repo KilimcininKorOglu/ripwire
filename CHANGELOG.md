@@ -1995,6 +1995,40 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
+### Fixed — a Python module ALIAS no longer loses its call edge to name-level ambiguity
+
+Reported by **@SVC-MACSTUDIO** in #287: `import target_mod as tm` then `tm.run(…)` dropped the call edge into
+`graph_ambiguous` whenever `run` was ALSO defined elsewhere in the tree, even though the alias unambiguously
+names one module — a unique callee name already resolved (the bare-name ladder's own accidental win, not real
+module resolution). The alias's module is now resolved to a file (`resolve.h::resolvePythonModuleSuffix`, a
+whole-path-component-suffix fallback for an absolute spec Step-A's two exact bases can't place, reusing the
+same matcher `canonicalIdMatches`/`sameTreePath` already use) and used to narrow the candidates for
+`alias.name(…)`: bind iff exactly one candidate remains in that file, else the unchanged ambiguous/disclosed
+behaviour. Handles `import X`, `import X as Y`, dotted `import a.b.c [as Y]`, `from pkg import X as Y`, and a
+package `__init__.py` target; does not follow a package `__init__.py` that re-exports from a submodule, or a
+`from pkg import submodule` shape — both degrade safely rather than guess.
+
+A second pass closed a soundness gap review found before this shipped: the alias name can be REBOUND — a
+plain or augmented assignment, a `for`/`with`/`except … as` target, a walrus, a `del`, a nested `def`/`class`
+of the same name, or a `global`/`nonlocal` declaration — after the import and before the call, and Python
+records no local-assignment binding today, so the rebinding was invisible and the narrow bound the call to the
+STALE import anyway. Every one of those forms is now captured as veto evidence
+(`ingest_binds.h::capturePythonRebindShadowDecls`): a rebind inside a function refuses only that function's
+calls (the existing per-function shadow-evidence path, the same one a parameter shadow already used); a
+rebind at module scope, or a `global`/`nonlocal` statement anywhere in the file, refuses the alias file-wide,
+because a module-global rebind can reach every function that reads it.
+
+Measured on real Python corpora (Django, DGL, numpy): the module-alias narrow bound 26 new call edges on
+numpy alone (zero on Django/DGL, whose aliased internal imports resolve to package `__init__.py`s that
+re-export from a submodule rather than defining the name directly — the documented limitation above). A
+hand-graded sample of 17 of those 26 came back correct against source, including cases the fix also happens
+to CORRECT rather than merely add: `numpy/polynomial/tests/test_polynomial.py`'s `poly.polyval(…)` calls
+(`import numpy.polynomial.polynomial as poly`) were previously mis-attributed to the unrelated, same-named
+`numpy/lib/polynomial.py:polyval` by the bare-name ladder; they now correctly attribute to
+`numpy/polynomial/polynomial.py:polyval`. The rebind veto did not remove any of the 26 — none of the sampled
+call sites has a rebind of its alias in scope, so this pass's honest measurement is a rebinding-soundness
+fix with no numpy-corpus cost, not a trade-off.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

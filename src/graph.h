@@ -1430,6 +1430,17 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 change a veto verdict — narrower scope, smaller blast radius). Consulted by the module-
 //                 alias receiver narrow in buildGraph's resolve loop, BEFORE the bare-name spray.
 //   fileScopeDef — Python module-level Function/Class definitions per file: same-file definition evidence.
+//   pythonModuleRebind — issue #287 round 2 (review rv-p6.md HIGH finding): "<fileId>#name" present iff
+//                 `name` is REBOUND at Python MODULE scope in this file (a plain top-level assignment, `for`,
+//                 `with`/`except … as`, walrus, a top-level `def`/`class`, or a `global`/`nonlocal`
+//                 statement ANYWHERE in the file — capturePythonRebindShadowDecls, ingest_binds.h) by
+//                 something OTHER than the import itself. Consulted by recordImportBindFile below, BEFORE
+//                 it ever populates importBindFile for that key: a module-global rebind can reach every
+//                 function that reads the name, so the alias stops being trustworthy file-wide, not just at
+//                 one call site. A function-LOCAL reassignment is a narrower fact (only THAT function's
+//                 calls are unsafe) and is carried the existing way instead — a `LocalBindKind::VarDecl`
+//                 Binding attributed to that function, read by `ExternalVeto::hasLocal` exactly like a
+//                 parameter shadow already was.
 //   freeName    — C-family: the NAME of every scope-less (free) symbol or macro, declaration or definition,
 //                 anywhere in the corpus, restricted to names in the C-family table. A bare C++ call can
 //                 reach a free function given some declaration (an angle include is not path-resolvable, so
@@ -1441,6 +1452,7 @@ struct ExternalVetoTables
     HashMap<std::string, char>          importBind;
     HashMap<std::string, std::uint32_t> importBindFile;
     HashMap<std::string, char>          fileScopeDef;
+    HashMap<std::string, char>          pythonModuleRebind;
     HashMap<std::string, char>          freeName;
 };
 
@@ -1451,7 +1463,8 @@ struct ExternalVetoTables
 // `resolved` is Step-A's fileId for `b.typeName` (kNoFile if Step-A missed) — the caller already computed
 // it once for the verdict ladder, so this reuses rather than re-resolving.
 inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, const HashMap<std::string, std::uint32_t>& fileIndex,
-                                  std::string& key, HashMap<std::string, std::uint32_t>& importBindFile )
+                                  const HashMap<std::string, char>& pythonModuleRebind, std::string& key,
+                                  HashMap<std::string, std::uint32_t>& importBindFile )
 {
     // Both are the SAME filter buildExternalVetoTables' own loop already applies before calling this (kind
     // != Import, an empty var or an empty typeName all `continue` there) — restated here because `.front()`
@@ -1462,6 +1475,11 @@ inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, cons
     {
         return;   // `from m import x [as y]` — x/y names a MEMBER of m, not m itself; see the field's doc
     }
+    key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
+    if( pythonModuleRebind.find( key ) != pythonModuleRebind.end() )
+    {
+        return;   // issue #287 round 2: something else in this file rebinds `b.var` at module scope — never trust the alias
+    }
     std::uint32_t moduleFile = resolved;
     if( moduleFile == kNoFile && b.typeName.front() != '.' )
     {
@@ -1471,7 +1489,6 @@ inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, cons
     {
         return;
     }
-    key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
     const auto [ fit, finserted ] = importBindFile.try_emplace( key, moduleFile );
     if( !finserted && fit->second != moduleFile )
     {
@@ -1532,6 +1549,32 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
                 seg = slash + 1;
             }
         }
+        // issue #287 round 2 (review rv-p6.md HIGH finding): pythonModuleRebind — built BEFORE the loop
+        // below so recordImportBindFile can consult it for every entry regardless of processing order.
+        // A Binding whose `fromSymbol` names a Function/Method sits inside a REAL callable scope —
+        // capturePythonRebindShadowDecls (ingest_binds.h) scopes THAT rebind narrower instead (a `VarDecl`
+        // Binding read by `ExternalVeto::hasLocal` via `buildFieldNarrowTables`, the same path a parameter
+        // shadow already used). Everything else lands here: `fromSymbol==kNoNode` (no enclosing span at
+        // all) is the common case, but a module-level `tm = …` ALSO indexes its own `SymKind::Var` symbol
+        // named `tm` — the SAME name the rebind fact carries — so `bindSweep.find` (ingest_model.h
+        // emitBindings) resolves the rebind's own startByte to THAT var's tiny def-span, not to kNoNode. A
+        // symbol lookup a byte position resolves to is never a function/method here is still "no enclosing
+        // callable", so it belongs in this bucket, not `hasLocal`'s.
+        for( const Binding& b : ing.bindings )
+        {
+            if( b.kind != LocalBindKind::VarDecl || b.var.empty() || b.fileId >= ing.files.size() )
+            {
+                continue;
+            }
+            const bool inCallableScope = b.fromSymbol != kNoNode && b.fromSymbol < ing.symbols.size()
+                                       && ( ing.symbols[ b.fromSymbol ].kind == SymKind::Function || ing.symbols[ b.fromSymbol ].kind == SymKind::Method );
+            if( inCallableScope )
+            {
+                continue;   // a narrower, function-scoped fact — buildFieldNarrowTables/hasLocal already carries it
+            }
+            fileKey( b.fileId, b.var );
+            t.pythonModuleRebind.try_emplace( key, '\0' );
+        }
         for( const Binding& b : ing.bindings )
         {
             if( b.kind != LocalBindKind::Import || b.var.empty() || b.typeName.empty() || b.fileId >= ing.files.size() )
@@ -1563,7 +1606,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
             // issue #287: importBindFile — Step-A's fileId when it pinned one; else (absolute spec only)
             // the whole-path-component-suffix match; GATED on importedName=="module" so a `from m import x`
             // value (not the module itself) can never populate it. See recordImportBindFile above.
-            recordImportBindFile( b, resolved, fileIndex, key, t.importBindFile );
+            recordImportBindFile( b, resolved, fileIndex, t.pythonModuleRebind, key, t.importBindFile );
             fileKey( b.fileId, b.var );
             const auto [ it, inserted ] = t.importBind.try_emplace( key, verdict );
             if( !inserted && it->second == 'x' && verdict != 'x' )
