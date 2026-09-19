@@ -150,5 +150,50 @@ else
     no "UNAVAIL control: the pass-through shim run is not the healthy answer (exit $rcC) — the mutation is void: $( armAttrs "$TMP/uc.xml" armB ) / ${WTREF:-no working-tree arm}"
 fi
 
+# ── LEGAL EMPTY BASE: a merge-base whose TREE has zero files is not a materialize/ingest FAILURE ───────
+# CodeRabbit review (src/mergescout.h:245-267, indexCommittish): a committish that materializes fine but
+# ingests with zero files (a genuinely empty tree — e.g. the very first commit of a history, before
+# anything was added) used to be indistinguishable from a materialize/ingest FAILURE — both left
+# SymTreeIndex::isIndexed=false, so computeNamedArm refused a perfectly legal comparison (ok="0"
+# changed="0", as though the tree could not be read), and the SAME check in headChangedKeysSince marked
+# head_conflicts_ok="0" too. Fixture: a `git commit-tree` seed commit with the well-known EMPTY tree,
+# no parent; mainline adds f1.py as SEED's child; armE branches off SEED DIRECTLY (before f1.py exists)
+# and adds its own g1.py — so merge-base(armE, mainline) IS the empty-tree seed commit.
+REPO2="$TMP/repo2"
+mkdir -p "$REPO2"
+git -C "$REPO2" init -q
+git -C "$REPO2" config user.email "dev@x.com"
+git -C "$REPO2" config user.name  "Dev"
+EMPTY_TREE="$( git -C "$REPO2" hash-object -t tree /dev/null )"
+SEED="$( GIT_AUTHOR_DATE="2026-06-01T10:00:00" GIT_COMMITTER_DATE="2026-06-01T10:00:00" \
+         git -C "$REPO2" commit-tree "$EMPTY_TREE" -m "seed (empty tree)" )"
+git -C "$REPO2" checkout -qb mainline "$SEED"
+printf 'def f_one():\n    return 1\n' >"$REPO2/f1.py"
+git -C "$REPO2" add -A
+GIT_AUTHOR_DATE="2026-06-01T11:00:00" GIT_COMMITTER_DATE="2026-06-01T11:00:00" \
+    git -C "$REPO2" commit -qm "mainline adds f1"
+git -C "$REPO2" checkout -qb armE "$SEED"
+printf 'def g_one():\n    return 2\n' >"$REPO2/g1.py"
+git -C "$REPO2" add -A
+GIT_AUTHOR_DATE="2026-06-01T10:30:00" GIT_COMMITTER_DATE="2026-06-01T10:30:00" \
+    git -C "$REPO2" commit -qm "armE adds g1, off the empty-tree seed"
+git -C "$REPO2" checkout -q mainline
+
+EOUT="$TMP/empty-base.xml"
+"$BIN" "$REPO2" --merge-scout=armE --no-cache >"$EOUT" 2>/dev/null
+armAttrs "$EOUT" armE | grep -q 'ok="1"' \
+    && ok "empty-base: armE (merge-base = empty-tree seed) reports ok=\"1\", not refused as unavailable" \
+    || no "empty-base: armE wrongly refused (a legal empty base read as an unavailable tree): $( armAttrs "$EOUT" armE )"
+ARME_ROW="$( armAttrs "$EOUT" armE )"
+if printf '%s' "$ARME_ROW" | grep -q 'changed="1"' \
+   && grep -q '<arm ref="armE"[^>]*changed="1"[^>]*><sym p="g1\.py" id="g_one"/></arm>' "$EOUT"; then
+    ok "empty-base: armE's g_one counts as added against the empty base (changed=1)"
+else
+    no "empty-base: armE's own symbol did not surface as changed: $ARME_ROW"
+fi
+armAttrs "$EOUT" armE | grep -q 'head_conflicts_ok="0"' \
+    && no "empty-base: head_conflicts_ok=\"0\" still leaks from the SAME isIndexed check on a legal empty base: $( armAttrs "$EOUT" armE )" \
+    || ok "empty-base: head_conflicts_ok stays correct (absent = held) — the empty base did not poison the head-conflict lane either"
+
 [ "$fail" = 0 ] && { echo "ALL PASS"; exit 0; }
 echo "FAILURES"; exit 1

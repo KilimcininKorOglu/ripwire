@@ -251,6 +251,24 @@ inline std::string msCachePath( const std::string& repoHex, const std::string& e
 // 967 MB, 6-cold-ingest finding (mergescout.h:115). `repoHex`/`exclHex` are computed once by the caller
 // (TreeIndexMemo) and threaded through so this per-committish call is a single hash-format + lookup, not
 // a repeated realpath/hash-config cost per tree.
+// Is `committish`'s tree independently VERIFIED empty by git itself — not merely "the materialize/ingest
+// pipeline produced no files"? materializeCommitTree's own success check cannot tell those apart: its
+// `git archive … | tar -x …` pipeline's exit status is `tar`'s (no `pipefail`), which reads 0 whether the
+// tar stream had zero entries because the tree is genuinely empty OR because `git archive` failed upstream
+// and piped nothing at all — `tar -x` on an empty stream is not itself an error. Comparing the commit's own
+// tree object against the empty-tree hash `git` computes for THIS repo (sha1 or sha256, never hardcoded) is
+// a second, independent signal that does not go through that pipeline at all.
+inline bool commitTreeIsEmpty( const std::string& root, const std::string& committish )
+{
+    const std::string emptyTree = quality::gitOneLine( root, "hash-object -t tree /dev/null 2>/dev/null" );
+    if( emptyTree.empty() )
+    {
+        return false;   // could not even ask git — never claim "verified empty" on a query that itself failed
+    }
+    const std::string thisTree = quality::gitOneLine( root, "rev-parse " + shSingleQuote( committish + "^{tree}" ) + " 2>/dev/null" );
+    return !thisTree.empty() && thisTree == emptyTree;
+}
+
 inline SymTreeIndex indexCommittish( const std::string& root, const std::string& committish,
                                      const std::vector<std::string>& excludes, std::size_t maxFileBytes,
                                      const std::string& repoHex, const std::string& exclHex )
@@ -262,15 +280,24 @@ inline SymTreeIndex indexCommittish( const std::string& root, const std::string&
     const std::string tmpRoot = quality::materializeCommitTree( root, committish, "qms" );
     if( tmpRoot.empty() )
     {
-        return {};
+        return {};   // materialize genuinely failed — isIndexed stays false, the arm refuses (below)
     }
     quality::TmpTreeGuard guard{ tmpRoot };
     const std::string cachePath = msCachePath( repoHex, exclHex, committish );
     IngestResult ing = ingest( tmpRoot.c_str(), excludes, std::string_view( cachePath ), maxFileBytes, /*captureValueUses=*/false );
-    if( ing.symbols.empty() && ing.files.empty() )
+    // `ing.files`/`ing.symbols` empty means either (a) a LEGAL empty tree (a fresh root commit, or an arm
+    // that deleted everything) or (b) the archive/extract pipeline silently produced nothing on a REAL
+    // failure (commitTreeIsEmpty's comment). The previous `-> isIndexed=false` for BOTH conflated them, so
+    // computeNamedArm (and, through the same isIndexed check, headChangedKeysSince's head-conflict lane)
+    // refused a legal empty base as though its tree could not be read at all (CodeRabbit review,
+    // src/mergescout.h:245-267). Ask git directly, independent of the pipeline, to tell them apart.
+    if( ing.symbols.empty() && ing.files.empty() && !commitTreeIsEmpty( root, committish ) )
     {
-        return {};
+        return {};   // not verified empty — a real materialize/ingest failure, isIndexed stays false
     }
+    // buildTreeIndex on an empty IngestResult already produces an empty-but-valid SymTreeIndex —
+    // diffTreeIndex against it correctly reads every symbol on the OTHER side as added, the right answer
+    // for a genuinely empty base.
     SymTreeIndex index = buildTreeIndex( ing, tmpRoot );
     index.isIndexed    = true;
     return index;
