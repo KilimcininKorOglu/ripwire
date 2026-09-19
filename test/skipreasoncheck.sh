@@ -288,10 +288,11 @@ command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$XP/cold.xml" 2>/dev/nu
 # ── (10a) THE PARSER-VERSION FLOOR — the CI half of (10b), which runs without a base binary ─────────────────────
 # (10b) needs RIPWIRE_BASE and SKIPs in CI. What makes it true everywhere is the bump itself: a cache whose header names
 # an older kParserVer is refused (test/cacheidentitycheck.sh forges one and asserts reason="parser-version"), so every
-# cache written before extract-partial existed (kParserVer <= 114) is re-extracted. This pins the floor, from source:
-# kParserVer >= 115 and quality.h's mirror equal to it. THE LANDING TRAIN raises this floor when it re-derives kParserVer
-# past other members — a later bump keeps it green; only a revert below 115 reds it.
-PV_FLOOR=115
+# cache written before extract-partial existed (kParserVer <= 116) is re-extracted. This pins the floor, from source:
+# kParserVer >= 117 and quality.h's mirror equal to it. The lane pinned 115 over its own base (114); train 7 landed it
+# as 117 (one past main's 116 from train 6), so a 115/116 cache predates extract-partial and the floor is 117. A later
+# bump keeps it green; only a revert below 117 reds it.
+PV_FLOOR=117
 PV="$( sed -nE 's/^constexpr std::uint32_t kParserVer +=[ ]*([0-9]+);.*/\1/p' "$ROOT/src/ingest_cache.h" )"
 PVM="$( sed -nE 's/^constexpr std::uint32_t kIngestParserVerMirror +=[ ]*([0-9]+);.*/\1/p' "$ROOT/src/quality.h" )"
 if [ -n "$PV" ] && [ "$PV" -ge "$PV_FLOOR" ] && [ "$PVM" = "$PV" ]; then
