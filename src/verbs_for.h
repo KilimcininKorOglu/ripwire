@@ -403,6 +403,10 @@ struct ForLensJsonInputs
     // resolved surface <sigs> selects). REQUIRED, not defaulted — a defaulted pointer is how a dialect
     // silently loses a surface its XML twin serves.
     const rw::FileTail*               fileTail;
+    // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls noteIndex for emptiness (d.notesDegraded,
+    // MainDispatch) — REQUIRED like fileTail above, for the same reason: a defaulted bool is how a degrade
+    // silently drops off this dialect while the XML twin keeps carrying it.
+    bool                               notesDegraded;
 };
 
 // The lens bundle's opening keys. Every note is absent-unless-present — the same silence-means-nothing-
@@ -1062,7 +1066,10 @@ inline std::string forLensJsonHeader( std::string_view task, const ForLensNotes&
 // §B1.3: the auto-surfaced field notes ride the rows inside the sigs array; this stanza is their DISCLOSURE
 // — `notes_total` counts what the tree matched, `notes_kept` what survived the byte ladder, the same pair
 // --pack-task --json reports. Empty unless a NoteIndex exists, so a tree with no .ripwire_notes keeps its
-// pre-feature bytes exactly (the L3 inertness contract).
+// pre-feature bytes exactly (the L3 inertness contract). notes_degraded= is a SEPARATE, independent splice at
+// the call site (below) rather than a third parameter here — `active` gates notes_total/kept, a fully-degraded
+// read (every line unparsed) can leave `active` false with nothing to count, and the two facts must not be
+// entangled into one signature.
 inline std::string forLensNotesStanza( const rw::JsonSigNoteCounts& counts, bool active )
 {
     if( !active )
@@ -1181,6 +1188,9 @@ struct ForLensRootFinish
     std::string_view autoAttr, sigsCeilingAttr, capAttrs;                 // root attributes, before the first "><!--"
     bool             weak = false;                                       // weak="1", before the last " -->"
     std::string_view droppedPositiveNote, sigsCeilingNote, capNote;      // clauses, before the last " -->"
+    // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker — the attribute before "><!--" like its
+    // siblings above, the reading before " -->" like its siblings below. Absent on a clean read.
+    std::string_view notesDegradedAttr, notesDegradedNote;
     bool             measured = false;
     std::string_view estTokensLegend, overCeilingLegend;
     // M3: the ceiling ladder's VERDICT, carried as a value. False ⇒ the ladder did not run, or stopped above its
@@ -1220,6 +1230,7 @@ inline ForLensPricedHeader finishForLensHeaderPriced( std::string header, const 
     spliceBefore( header, "><!--", /*fromEnd=*/false, f.autoAttr );
     spliceBefore( header, "><!--", /*fromEnd=*/false, f.sigsCeilingAttr );
     spliceBefore( header, "><!--", /*fromEnd=*/false, f.capAttrs );
+    spliceBefore( header, "><!--", /*fromEnd=*/false, f.notesDegradedAttr );   // L3 follow-up (CodeRabbit 4053600616)
 
     // R4 + §L2: weak="1" goes in AHEAD of est_tokens, so its 9 bytes are an exact count inside header.size()
     // below rather than bytes of the document the number describing it had not measured (CA4 verifier L2).
@@ -1232,6 +1243,7 @@ inline ForLensPricedHeader finishForLensHeaderPriced( std::string header, const 
     spliceBefore( header, " -->", /*fromEnd=*/true, f.droppedPositiveNote );
     spliceBefore( header, " -->", /*fromEnd=*/true, f.sigsCeilingNote );
     spliceBefore( header, " -->", /*fromEnd=*/true, f.capNote );
+    spliceBefore( header, " -->", /*fromEnd=*/true, f.notesDegradedNote );   // L3 follow-up (CodeRabbit 4053600616)
     if( !f.measured )
     {
         return { std::move( header ), 0 };
@@ -1438,7 +1450,13 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
         }
     }
 
-    const std::string notesStanza = forLensNotesStanza( noteCounts, in.noteIndex != nullptr );
+    std::string notesStanza = forLensNotesStanza( noteCounts, in.noteIndex != nullptr );
+    // L3 follow-up (CodeRabbit 4053600616): independent of the stanza above (see its own comment) — absent on
+    // a clean read.
+    if( in.notesDegraded )
+    {
+        notesStanza += rw::notes::kNotesDegradedJsonKey;
+    }
     // A2 (survey card, 2026-09-03) — the JSON twin of the XML root's dropped_positive= attribute: emitted ONLY
     // when nonzero (the pr_converged precedent, src/prconverge.h), so the overwhelming no-drop path pays 0
     // bytes here exactly as the ENOMEM degrade path above does (sigsDroppedPositive stays 0, never set).
@@ -2484,7 +2502,7 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                                    &forClone, testedPtr, ampPtr, redactPtr,
                                                                    cfg.packBudgetBytes, cfg.tokenBudget, notesPtr,
                                                                    legoTotal, composeTotal, routesTotal, flRootArg,
-                                                                   &forFileTail } );
+                                                                   &forFileTail, d.notesDegraded } );
             // §B0: this early return skipped the end-of-function tally below, so a --for --json run redacted
             // SILENTLY — the one stderr line that tells the user a secret was in their tree never appeared.
             reportRedactions( stderr, redactCounts );
@@ -2778,8 +2796,13 @@ std::optional<int> runForLens( const MainDispatch& d )
         // COST: zero unless a cap actually bit.
         const std::string capAttrsStr = lr.capAttrs;
         const std::string capNoteStr  = lr.capNote;
+        // L3 follow-up (CodeRabbit 4053600616): known this early (d.notesDegraded needs no render), folded into
+        // the SAME reserve as the splices above so the ladder's remaining-budget arithmetic sees it too.
+        const std::string notesDegradedAttrStr = d.notesDegraded ? std::string( rw::notes::kNotesDegradedAttr ) : std::string();
+        const std::string notesDegradedNoteStr = d.notesDegraded ? ( " [" + std::string( rw::notes::kNotesDegradedReading ) + "]" ) : std::string();
         const std::size_t droppedPositiveSpliceReserve = droppedPositiveNote.size() + sigsCeilingNote.size() + sigsCeilingAttr.size()
-                                                       + capAttrsStr.size() + capNoteStr.size();
+                                                       + capAttrsStr.size() + capNoteStr.size()
+                                                       + notesDegradedAttrStr.size() + notesDegradedNoteStr.size();
 
         // §P3 × §P4: the budget trim above can drop files the lego scope still references — narrow the lego
         // block to the RENDERED sigs' files and re-render (a byte-subset of what the budget already charged
@@ -2938,6 +2961,8 @@ std::optional<int> runForLens( const MainDispatch& d )
             .droppedPositiveNote  = droppedPositiveNote,
             .sigsCeilingNote      = sigsCeilingNote,
             .capNote              = capNoteStr,
+            .notesDegradedAttr    = notesDegradedAttrStr,
+            .notesDegradedNote    = notesDegradedNoteStr,
             .measured             = blockCharge.isMeasured,   // every pre-rendered block whole: sigs AND its siblings
             .estTokensLegend      = kForEstTokensLegend,
             .overCeilingLegend    = kForOverCeilingLegend,
@@ -3384,6 +3409,7 @@ std::optional<int> runPackTask( const MainDispatch& d )
     in.amp                  = d.ampPtr;
     in.redact               = d.redactPtr;
     in.notes                = d.notesPtr;
+    in.notesDegraded        = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616)
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
     in.rootArg = ( ing.realPaths.empty() && cfg.roots.size() == 1 ) ? cfg.roots[0] : std::string_view();
 

@@ -506,6 +506,10 @@ struct PackTaskInputs
     // the real fix is (the CalleeCallsSink no-defaults-on-any-member shape).
     RedactCounts*                      redact = nullptr;
     const notes::NoteIndex*            notes  = nullptr;
+    // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls `notes` for emptiness, so a sidecar
+    // that left EVERY line unparsed (notes empty, but the read was not clean) still reaches this bundle's root
+    // — the same reason MainDispatch carries notesDegraded beside notesPtr (main.cpp).
+    bool                                notesDegraded = false;
 
     // Query relevance for ORDERING each emitted body's <calls> callee listing when the 16-row cap or the
     // byte budget CUTS it — serialize.h CalleeCallsSink::rank carries the finding and the measurement.
@@ -1821,6 +1825,12 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             j += "]}";
         }
         j += "]";
+        // L3 follow-up (CodeRabbit 4053600616): the JSON twin of the XML root's notes_degraded= — absent on a
+        // clean read, same condition droppedPositiveAttr above tests.
+        if( in.notesDegraded )
+        {
+            j += std::string( notes::kNotesDegradedJsonKey );
+        }
 
         // E1: tests_total/tests_kept count test FILES exactly as the XML section's total=/shown= do — one entry
         // per file on both sides of the cut. The JSON tail renders the SAME kept prefix through the SAME
@@ -1909,6 +1919,13 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         droppedPositiveAttr += " render_failed=\"" + renderFaults.names() + "\"";
         report += " | render_failed= names sections whose render FAILED (the section is empty and marked render_failed=\"1\"; "
                   "not a budget omission; body-probe = a body priced out because its cost could not be measured)";
+    }
+    // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker, spelled identically on every notes-surfacing
+    // emitter — absent on a clean read (no sidecar, or every line parsed), so the L3 inertness contract holds.
+    if( in.notesDegraded )
+    {
+        droppedPositiveAttr += std::string( notes::kNotesDegradedAttr );
+        report += " | ";  report += notes::kNotesDegradedReading;
     }
 
     // The clause is now BUILT (the root-relative sentence is conditional, so the seam composes a string

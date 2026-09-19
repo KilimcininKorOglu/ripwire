@@ -901,6 +901,10 @@ struct FromTraceInputs
     // Until then the net is held by test/fixedbufsweep.sh's population sweep, not by the compiler.
     RedactCounts*                      redact = nullptr;
     const notes::NoteIndex*            notes  = nullptr;
+    // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls `notes` for emptiness, so a sidecar
+    // that left EVERY line unparsed still reaches this bundle's root (mcpverbs.h fromTraceText sets it from
+    // NoteIndex::degraded before its own notesPtr is nulled).
+    bool                                notesDegraded = false;
     // VT-1 (--run-trace): pre-rendered XML the caller wants INSIDE the bundle, immediately after the header
     // comment and before <trace> — the exec verb's <run> record + <lines> view ride here so the run report
     // and the mapping stay ONE document under ONE budget ledger (the prelude's bytes are charged against the
@@ -1018,6 +1022,13 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         // the user's query in — so it is machine-readable and VERBATIM (escapeXml + M2 character references),
         // beside the lossy readable echo in the comment. This lens emitted a bare `<ctx>` and had neither.
         std::string h = ctxRootOpen( srcNoteIn, {} );
+        // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker — absent on a clean read. Measured
+        // directly from `h`/`whole`'s own bytes downstream (no separate reserve to keep in sync), the same
+        // way this root's own est_tokens is priced (spliceRootAttrs on the FINISHED document, below).
+        if( in.notesDegraded && h.size() > 1 && h.back() == '>' )
+        {
+            h.insert( h.size() - 1, notes::kNotesDegradedAttr );
+        }
         // P3 (L7, nextverb.h): the one follow-up — the def-use slice AT the innermost in-corpus frame's line
         // (--slice=@FILE:LINE, FILE as the index spells it); absent when no frame landed in the corpus.
         if( !part.suspects.empty() && h.size() > 1 && h.back() == '>' )
@@ -1081,6 +1092,10 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
              "when none), max_tokens= is the body ceiling you passed via the max_tokens flag (absent when none); over_ceiling= is 1 when "
              "est_tokens exceeds the smallest ceiling named here (the bundle is then complete, not trimmed).";
         h += extraNotes;
+        if( in.notesDegraded )
+        {
+            h += " ";  h += notes::kNotesDegradedReading;  h += ".";
+        }
         // P3 (L7): next= defined where the reader meets it
         h += " next= is the one pasteable follow-up: the slice at the innermost in-corpus frame (@FILE:LINE); absent when none landed.";
         h += " -->";

@@ -1771,6 +1771,12 @@ struct MapAnnotations
     // An appended payload section the caller could not charge (its chargeSection degraded): the map's est_tokens then
     // leaves those bytes out, so serialize labels it est_measured="0". Set by the caller's DISCLOSE, never guessed.
     bool payloadUncharged = false;
+
+    // L3 follow-up (CodeRabbit 4053600616): the .ripwire_notes read that fed this map's NoteIndex left something
+    // out (a skipped line, or the sidecar refused) — notes::NoteIndex::degraded, read BEFORE the caller nulls its
+    // pointer for emptiness (main.cpp), so a fully-degraded read still reaches this root. Absent on a clean read,
+    // the L3 inertness contract's only permitted exception. Filled by assignment, like the trailing fields above.
+    bool notesDegraded = false;
 };
 
 // F3: the <recent> element — rank_by=churn-decay's file-level answer FIRST, paths + age in days at HEAD's clock +
@@ -2541,6 +2547,13 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     }
     const bool ignoreCut = ing.crawlSkips.ignoredFiles > 0 || ing.crawlSkips.ignoredDirs > 0;
     legend += ignoreCut ? kIgnoredLegend : "";   // §N6-C — charged to the map that carries it; see kIgnoredLegend
+    // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker, spelled identically on every notes-surfacing
+    // emitter — absent on a clean read (no sidecar, or every line parsed), so a map with nothing to disclose
+    // stays byte-identical to before this lane.
+    if( ann.notesDegraded )
+    {
+        legend += std::string( notes::kNotesDegradedComment );
+    }
     // W2-F: the pr_iters= / pr_converged= definition, charged to the maps that carry the attributes — empty
     // for a lexical or HITS ordering, and the prose half only on the map whose iteration stopped short.
     legend += renderDisclosure( ann.prDisclosure, DiscloseAs::LegendComment );
@@ -2741,6 +2754,9 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // simply gone. lens= names what is missing, so "absent" reads as "not served here", never as "not
         // computed". Gate: test/mcpattrparitycheck.sh, whose lens= arm also fails on a stale name.
         if( stable ) { h += " lens=\"k,est_tokens\""; }
+        // L3 follow-up (CodeRabbit 4053600616): TRULY last, past every pre-existing attribute — same placement
+        // rule as lens= just above, so no attribute-adjacency assertion in test/ can break on it.
+        if( ann.notesDegraded ) { h += notes::kNotesDegradedAttr; }
         h += ">";
         return h;
     };

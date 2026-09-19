@@ -795,7 +795,12 @@ inline void editCheckPriceRoot( std::string& doc )
 inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g, const std::string& root,
                                         std::size_t maxFileBytes, const std::vector<std::string>& excludes, NodeId focus,
                                         const notes::NoteIndex* ni = nullptr, bool preview = false,
-                                        int pageLimit = 0, int pageOffset = 0, std::size_t unprovenDefs = 0 )
+                                        int pageLimit = 0, int pageOffset = 0, std::size_t unprovenDefs = 0,
+                                        // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls `ni`
+                                        // for emptiness (main.cpp's MainDispatch::notesDegraded), so a sidecar
+                                        // that left EVERY line unparsed still reaches this root. Defaults false,
+                                        // matching `ni`'s own nullptr default (the MCP verb passes neither today).
+                                        bool notesDegraded = false )
 {
     const Symbol& fsym = ing.symbols[ focus ];
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h) — the ONE
@@ -928,6 +933,13 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // caller is the exact shape §H4 measured, and this legend's own "the tree as it stands" paragraph reads
     // as if the caller SET were complete.
     out += graphCountDisclosure( g.unindexedFiles > 0 );
+    // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker, spelled identically on every notes-surfacing
+    // emitter — absent on a clean read (no sidecar, every line parsed, or `ni` itself null, as the MCP verb
+    // passes today), so the L3 inertness contract holds.
+    if( notesDegraded )
+    {
+        out += " ";  out += notes::kNotesDegradedReading;  out += ".";   // plain text: this whole block is ONE open comment
+    }
     out += "-->";
     // §B14 — composed on std::string, NOT snprintf'd into a fixed buffer. `ex()` has already escaped the name
     // and the path, so a truncating snprintf here would cut the ESCAPED form: mid-entity, mid-attribute-name or
@@ -995,6 +1007,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // group for the placement reason stated at root=/preview= above. Rule 1's noun-prefixed pair plus rule 6's
     // paging half (pageview.h), describing the UNFLAGGED rows and only those. Silent on an answer that fits.
     out += editCheckWindowAttrs( rowWindow, pageLimit, pageOffset );
+    if( notesDegraded ) { out += notes::kNotesDegradedAttr; }   // L3 follow-up (CodeRabbit 4053600616)
     out += ">";
     // L3/D5 note surfacing (paper-noteedit): a note targeting THIS symbol (its canonical id) or the FILE it
     // is defined in rides as a <note> child of <edit-check>, same shape/order/escaping renderNoteChildren

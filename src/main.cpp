@@ -505,6 +505,11 @@ struct MainDispatch
     rw::RedactCounts&                     redactCounts;
     rw::RedactCounts*                     redactPtr;
     const rw::notes::NoteIndex*           notesPtr;   // L3: field-notes surfacing index (nullptr ⇒ inert: no/empty file, or multi-root)
+    bool                                   notesDegraded = false;   // L3 follow-up (CodeRabbit 4053600616): the sidecar
+                                                                     //   read left something out this run — set once,
+                                                                     //   beside notesPtr, before notesPtr is nulled for
+                                                                     //   emptiness (so a fully-degraded, zero-note read
+                                                                     //   still reaches the map/--expand <ctx>/<r> roots)
     const GrepScanPhases*                 grepPhases = nullptr;   // §P4.1: prefetched grep scan (nullptr ⇒ compute inline)
     bool                                   valueUses  = false;     // card A1: the captureValueUses this run's ingest actually used, so the
                                                                     //   pre-apply preview re-parses its one spliced file the SAME way
@@ -1800,6 +1805,7 @@ int runDefaultMap( const MainDispatch& d )
                                 recentOf };
     mapAnn.recentMinedHistory = recentAnyHistory;   // the block rides on the FACT (serialize.h writeRecentRows)
     mapAnn.recentMergeBombsSkipped = recentMergeBombsSkipped;   // rides <recent> (the rows' own window), filled by assignment like seed
+    mapAnn.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616): onto every <r> this run emits
     // C1-b (2026-09-12): --in=DIR — the scoped block and the map stub, filled by assignment like seed. The two next= strings
     // outlive every serialize() call below (mapAnn holds views into them). The scoped next= is the SAME run at the next
     // offset, page size carried when the caller set one; the stub's next= is the same run without in= (the map it stubbed).
@@ -4845,11 +4851,15 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     // contract. Retrieval handlers below read notesPtr; --note-add/--notes have their own handler.
     const rw::notes::NoteIndex noteIndex = multiRoot ? rw::notes::NoteIndex{} : rw::notes::loadNoteIndex( root );
     const rw::notes::NoteIndex* const notesPtr = ( !multiRoot && !noteIndex.empty() ) ? &noteIndex : nullptr;
+    // L3 follow-up (CodeRabbit 4053600616): read BEFORE notesPtr's emptiness nulling, so a sidecar that left
+    // EVERY line unparsed (notes empty, but the read was not clean) still reaches the map/--expand roots —
+    // the exact gap notesPtr's own nullptr would otherwise hide (see MainDispatch::notesDegraded).
+    const bool                        notesDegraded = noteIndex.degraded;
 
     // Phase B7.2: bundle the shared post-graph state; each verb handler below reads what it needs.
     const MainDispatch dsp{ cfg, ing, g, root, multiRoot, ws, fanIn, fanInPtr, qmetrics,
                            ampPtr, cboPtr, testedPtr, lcom4Ptr, impurePtr, forChurn, redactCounts, redactPtr, notesPtr,
-                           grepPhases.valid ? &grepPhases : nullptr, needsValueUses };
+                           notesDegraded, grepPhases.valid ? &grepPhases : nullptr, needsValueUses };
 
     if( std::optional<int> handled = runForLens( dsp ) )
     {
