@@ -544,8 +544,7 @@ template< typename EmitFn >
 inline PrTrimRender prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
 {
     PrTrimRender out;
-    const rw::Rendered r = rw::renderToString( [ & ]( std::FILE* ms ) { emitFiles( ms, trim, &out.testFiles ); },
-                                                "pr-context: open_memstream failed — this level was not measured" );
+    const rw::Rendered r = rw::renderToString( [ & ]( std::FILE* ms ) { emitFiles( ms, trim, &out.testFiles ); } );
     out.body     = r.text;
     out.rendered = r.ok;
     if( !r.ok )

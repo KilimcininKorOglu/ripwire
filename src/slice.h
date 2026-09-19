@@ -322,13 +322,23 @@ struct SliceScan
     // feeds is the LAST state, an under-approximation. The scan is the DISCLOSE sink for it, and the root then carries
     // reach_converged="0" beside reach= (defined in the same header) — reach="cfg" alone claims a finished flow analysis.
     bool                                    rdUnconverged = false;
+    // The same sink records a parse that never happened: parseOk stays false, which every surface refuses by name.
     enum class DisclosureWhy : std::uint8_t
     {
         FixpointBoundHit,
+        ParserUnavailable,    // ts_parser_new returned null
+        GrammarAbiMismatch,   // the grammar's ABI is not this tree-sitter's
+        ParseFailed,          // the parse returned no tree
     };
-    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
+    void disclose( DisclosureWhy why ) noexcept
     {
-        rdUnconverged = true;
+        switch( why )
+        {
+            case DisclosureWhy::FixpointBoundHit:   rdUnconverged = true; break;
+            case DisclosureWhy::ParserUnavailable:
+            case DisclosureWhy::GrammarAbiMismatch:
+            case DisclosureWhy::ParseFailed:        parseOk = false; break;
+        }
     }
 };
 
@@ -2598,19 +2608,19 @@ inline SliceScan sliceScanDefinition( const std::string& src, const Symbol& sym,
     TSParser* parser = ts_parser_new();
     if( parser == nullptr )
     {
-        DISCLOSE( "slice: ts_parser_new returned null" );
+        DISCLOSE( scan, SliceScan::DisclosureWhy::ParserUnavailable, "slice: ts_parser_new returned null" );
         return scan;
     }
     if( !ts_parser_set_language( parser, grammar ) )
     {
-        DISCLOSE( "slice: grammar ABI mismatch" );
+        DISCLOSE( scan, SliceScan::DisclosureWhy::GrammarAbiMismatch, "slice: grammar ABI mismatch" );
         ts_parser_delete( parser );
         return scan;
     }
     TSTree* tree = ts_parser_parse_string( parser, nullptr, src.data(), std::uint32_t( src.size() ) );
     if( tree == nullptr )
     {
-        DISCLOSE( "slice: parse returned null" );
+        DISCLOSE( scan, SliceScan::DisclosureWhy::ParseFailed, "slice: parse returned null" );
         ts_parser_delete( parser );
         return scan;
     }

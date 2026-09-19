@@ -369,13 +369,13 @@ inline std::string mcpUnknownFieldRefusal( const std::string& scope, std::string
     return {};
 }
 
-// Capture one FILE*-writing renderer into a string — infra/emit.h's ONE renderToString seam with this
-// surface's own degrade wording. It kept its own copy of the memstream dance until the review of #214
+// Capture one FILE*-writing renderer into a string — infra/emit.h's ONE renderToString seam (whose Rendered sink
+// discloses a failure as ok == false; this surface keeps only the text). It kept its own copy of the memstream dance until the review of #214
 // gave the tree a single seam for it; the contract is unchanged (an allocation failure is an empty string,
 // never a NULL deref), and it now also ALERTS, which this copy never did.
 inline std::string captureXml( const std::function<void( std::FILE* )>& render )
 {
-    return rw::renderToString( render, "mcp: open_memstream failed — this verb answers empty" ).text;
+    return rw::renderToString( render ).text;
 }
 
 // The seven verbs below that render into their own memstream (for, owners, exemplar, impact, uses, path_between,

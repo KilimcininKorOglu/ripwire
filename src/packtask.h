@@ -838,13 +838,14 @@ inline std::vector<float> buildMaskedRank( const IngestResult& ing, const std::v
 }
 
 // every packTaskBundleText section (and renderRankingWithFar below) renders through infra/emit.h's ONE
-// renderToString seam, with this file's own degrade wording. It keeps the name it had: a section that
-// degrades is SKIPPED from the budget (empty string, the caller's documented path), so the `ok` flag the
-// seam returns has no second reading here and the call sites stay one expression long.
+// renderToString seam. A section whose render degrades comes back EMPTY and is absent from the DOCUMENT, not
+// merely from the budget — the seam's Rendered sink records ok == false, but this wrapper keeps only the text, so
+// the bundle carries no marker for the missing section yet (an open item of the degrade-disclosure lane: a
+// section-omission marker needs its own vocabulary, in the compact dialect and the JSON keys alike).
 template<class Emit>
 inline std::string packTaskRenderToString( Emit&& emit )
 {
-    return rw::renderToString( std::forward<Emit>( emit ), "pack-task: open_memstream failed — section skipped from the budget" ).text;
+    return rw::renderToString( std::forward<Emit>( emit ) ).text;
 }
 
 // R2: section 1 as ONE cohesive unit — the distance-masked packSignatures call (eligibleIds only) PLUS the
