@@ -30,7 +30,7 @@ This release carries that work in the shape `os.h` set out: every Windows body i
 under the same POSIX names call sites already spell, and every piece of it that is not a Win32 call — the
 Win32→errno table, UTF-8/UTF-16, `CreateProcessW` quoting (adapted from libuv, notice in `THIRD_PARTY.md`),
 reparse-tag and wait-status decoding — is in `src/infra/os_win32_logic.h`, which every Linux and macOS leg now
-compiles and tests (`test/oswin32logiccheck.sh`: 27 cases, 4,480,640 assertions, a sanitizer arm and a mutant arm
+compiles and tests (`test/oswin32logiccheck.sh`: 29 cases, 4,480,667 assertions, a sanitizer arm and a mutant arm
 that must fail). A Windows build adds only `cmake/Windows.cmake`: `os_win32.cpp`, a manifest (`longPathAware`,
 UTF-8 active code page), `ws2_32`/`advapi32`/`shell32`, `/EHsc`. No force-include, no compat headers, no
 libc-renaming macros.
@@ -42,6 +42,30 @@ quality snapshot's two serializers, the `built_from` length in `--doctor`). The 
 used (map, 25 verbs, `--run-trace`, MCP stdio and `--listen`, the sidecar and index writes) are byte-identical.
 
 Not yet proven on Windows by anyone who ran it: this exact branch still needs @lennix1337's build and gate run.
+
+A review pass (no Windows machine, read plus a macOS/Linux-provable subset) found one MED and five LOWs, none
+touching POSIX; this fix round closes the MED and three of the LOWs, still on top of @lennix1337's work:
+
+- Paths past ~260 characters now get the `\\?\` extended-length prefix (`NativePath`, reusing the existing
+  `extendedLengthPath` helper behind a length threshold, `os_win32.cpp`/`os_win32_logic.h`): without it, a file
+  deeper than that on a default-policy Windows (`LongPathsEnabled=0`) failed `CreateFileW` with
+  `ERROR_PATH_NOT_FOUND` — `ENOENT` for a file that exists — and the crawl or sidecar silently skipped it.
+- `ERROR_IO_PENDING` (997) now maps to `EWOULDBLOCK` in the Win32→errno table, alongside `ERROR_LOCK_VIOLATION`
+  (33), as a defence for the edit-lock contention loop.
+- `getline`'s buffer growth no longer reads `*capacity` while `*line` is `NULL` (POSIX ignores it in that case).
+- The `stat_t::st_ino` comment now says what the code does (`BY_HANDLE_FILE_INFORMATION`'s 64-bit file index; a
+  ReFS/DevDrive volume's 128-bit id is not queried) instead of describing a fold that never happens.
+- `--in=`, `--doc-drift=` and `--exclude=` join the path-valued flags normalized at intake (`--scope=`, a glob
+  set, and `--layout=`, a type name, deliberately do not).
+- `--doctor`'s binary-path row is marked `degraded="1"` on Windows (Git Bash's MSYS `which` never prints
+  `.exe`, so the row's file comparison can disagree with a correct install) rather than left to read as a false
+  mismatch; POSIX is unaffected. The honest fix — a native `os::which` PATH/PATHEXT search — is a follow-up.
+- `openat`'s handle-anchored join (kept as-is this release, not `NtCreateFile`) now documents its residual: the
+  final `CreateFileW` re-walks a freshly built path string, so a link swapped in above the anchored directory in
+  that narrow window is followed, unlike a true handle-relative open.
+
+Left for a contributor's own Windows run (checklist in the coordination history): MSYS bash re-parsing
+`spawn_sh`'s command line, and `openat` on a volume mounted without a drive letter.
 
 ### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
 
