@@ -277,7 +277,9 @@ inline constexpr std::string_view kForPageLegend =
     "file cannot monopolise), ties by the best symbol's lens score then path; n= positive-score symbols in the "
     "file; sym= its top symbols by lens rank; p= the file. coverage= is the lens root's gauge: the same share "
     "for the top-ranked symbol alone (name, doc and body). extra=K: K rows appended AFTER the ranked rows, "
-    "chosen only by task-word overlap with the file path (not by score=); they carry p= score= only. "
+    "chosen only by task-word overlap with the file path (not by score=); they carry p= score= only. An "
+    "extra row can resurface as an ordinary ranked row on a later page of the same walk, by construction, "
+    "not a duplicate bug. "
     "shown=/total=/capped=1 when this page cut the list; "
     "offset=/limit=/has_more=/next_offset= page it and next= is the next page, pasted as-is";
 inline constexpr std::string_view kForPageLegendCompact =
@@ -285,7 +287,8 @@ inline constexpr std::string_view kForPageLegendCompact =
     "file: score= IDF-weighted share of the query's "
     "subtokens the file's top 8 symbols cover together (%, a term counts once), ties by best symbol then path; "
     "n= positive symbols; sym= top symbols; coverage= the top symbol's own share; "
-    "extra=K: K path-word-matched rows appended after the ranked ones (p= score= only); "
+    "extra=K: K path-word-matched rows appended after the ranked ones (p= score= only); an extra row can "
+    "repeat as a real ranked row on a later page of the same walk (by construction); "
     "shown=/total=/capped=1 when cut; "
     "offset=/limit=/has_more=/next_offset= page it, next= the next page; root= the crawl root";
 
