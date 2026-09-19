@@ -38,6 +38,8 @@ sections in call order: the lazy tags.scm prewarm (`ingest_prewarm.h`), the para
 (`ingest_parsepool.h`), the document post-pass (`ingest_docpass.h`), and the build-model tail —
 dedup, symbol assignment, span attribution, ordered emit (`ingest_model.h`).
 
+`--doctor`'s `layout` row compares the shared model's recorded `sizeof`/`alignof` facts across translation units and reports evidence of a possible mixed binary instead of guessing which object is stale; agreement covers only the registered facts.
+
 **Crawl order is deterministic, and that is load-bearing.** The walk *collects every candidate path
 first*, sorts them lexicographically by byte, and only then assigns node IDs and parses. Node IDs are
 indices into that sorted list, so they are stable across runs of the same tree; if IDs followed
@@ -94,7 +96,7 @@ can only over-count), and the vendored scanner additionally carries the one-line
   `*_pb2.py`, `*.pb.go`.
 
 Ingest never throws — a bad file, a missing grammar or a corrupt cache degrades and prints a one-line
-`DEGRADED_PATH_ALERT` to stderr. **The ordinary denylist prunes above are silent**, deliberately: they
+`DISCLOSE( msg )` trace to stderr in debug builds. **The ordinary denylist prunes above are silent**, deliberately: they
 are the normal state of every crawl and a note per skipped directory would be noise, not evidence. The
 size-ceiling drops sit between the two — silent on stderr, but *counted* into the header's
 `skipped_oversize=N`, so a corpus that shrank says so in the output rather than vanishing quietly.
@@ -252,6 +254,33 @@ Elixir extraction landed at revision 78 (rich 79) — `kParserVer` in `src/inges
 `kIngestParserVerMirror` in `src/quality.h`. The required `qschemetrip` source-change pin is refreshed
 for this extraction change; snapshot scheme 8 is unchanged.
 
+<a id="gdscript-extraction"></a>
+
+GDScript needs no capture-filter module: unlike Elixir, its grammar carries real definition nodes, so
+`queries/gdscript/tags.scm` alone is the extraction. A `.gd` FILE IS A CLASS BODY — `class_name` names
+the class and file-scope `func`/`var` are its members — so a file-scope `func` is `fn` (as every other
+language treats a file-scope definition) while a `func` inside an explicit `class Inner:` is `method`.
+`enum` rides `@definition.type` as Java/C#/TypeScript do. Two capture choices are forced by gates in
+`ingest_names.h`, not taste: enum MEMBERS ride `@definition.constant` because `@definition.enummember`
+is gated by `isPyEnumMemberTarget` and would silently drop every GDScript enumerator, and member
+variables ride `@definition.var` because `fieldCaptureKept()` returns false for every language but
+Python and C/C++. A `signal` has no SymKind of its own and is DISCLOSED as `t="var"`. The Godot 4
+spellings were read off real parses, not node types; `queries/gdscript/tags.scm` records which shapes
+are not what the node-type list implies.
+
+THE FLOOR, measured before vendoring: 98.88% of 2938 real `.gd` files parse clean. Three upstream
+grammar gaps survive — the `%` unique-name inside a path, a column-0 comment in an indented block, and
+the Godot 3 RPC keywords still reserved — and none is patched (guardrail G3). Recovery is LOCAL, so a
+file holding them still yields every definition and call edge; `test/gdscriptcheck.sh` asserts that
+survival rather than the failure. `preload`/`load("res://…")` resolution is NOT implemented, so a `.gd`
+file is never a node in the `--deps`/`--arch` graph and `dependencyCapable()` is not claimed for it.
+`extends` produces NO inheritance edge yet either: the base name is not captured, so a subclass and
+its base are unrelated in the graph and `--uses` on the base reports no `role="extends"` site.
+`.tscn`, `.tres` and `.gdshader` are not indexed.
+
+GDScript extraction landed at revision 98 — `kParserVer` in `src/ingest_cache.h`, mirrored by
+`kIngestParserVerMirror` in `src/quality.h`; snapshot scheme is unchanged.
+
 The three config lanes are *data*, not code: they emit `t="sec"` symbols and **zero call edges**, and
 `langCompatible` keeps a config key from ever resolving a same-spelled code symbol. They differ in
 where the navigable unit sits. JSON cuts at document depth — top-level and second-level object
@@ -403,7 +432,7 @@ the teleport prior — so `residual_k ≤ 2·α^k`, and `2·0.85^k < 1e-6` at `k
 raise `α` toward 1, or hand the ranker a shape the contraction argument stops covering, and the
 attribute is what tells a reader before the ranking does.
 
-The mechanism matters as much as the attribute. `DEGRADED_PATH_ALERT` still fires on the truncating
+The mechanism matters as much as the attribute. `DISCLOSE( msg )` still fires on the truncating
 exit and is still the only thing that names *which site* degraded — but it is `#ifndef NDEBUG`, so
 on every shipped Release binary it is not code at all. Before this contract, `rankGraphTeleport`
 discarded the kernel's return value, which meant a Release build emitted a ranking from an
@@ -595,14 +624,14 @@ why, in the output, where the caller reads it.
 
 CI builds and runs the full suite twice — once `Release`, once with no build type.
 
-`Release` defines `NDEBUG`. Under `NDEBUG`, `VERIFY` lowers to `__builtin_assume` and
-`DEGRADED_PATH_ALERT` compiles away entirely. Both facts have teeth:
+`Release` defines `NDEBUG`. Under `NDEBUG`, `ASSUME` lowers to `__builtin_assume` and
+the `DISCLOSE( msg )` trace compiles away entirely. Both facts have teeth:
 
-- **Release catches optimizer-only bugs.** With `__builtin_assume` in play, a `VERIFY( p != nullptr )`
+- **Release catches optimizer-only bugs.** With `__builtin_assume` in play, an `ASSUME( p != nullptr )`
   followed by a defensive `if( p == nullptr ) return;` licenses the optimizer to delete the defensive
   branch. Code that is correct at `-O0` can be wrong at `-O2`, and only the Release build sees it.
 - **The plain build catches degrade paths.** A gate that asserts a degrade path asserts on
-  `DEGRADED_PATH_ALERT` output. Compiled out, that gate cannot observe what it asserts — it passes
+  `DISCLOSE( msg )` output. Compiled out, that gate cannot observe what it asserts — it passes
   while being blind. This happened here: for three development cycles, every degrade-path gate in CI
   was green for exactly that reason, and a real fix to one of them was invisible to CI until after it
   landed.

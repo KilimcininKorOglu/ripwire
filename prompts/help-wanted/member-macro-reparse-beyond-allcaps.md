@@ -155,7 +155,7 @@ attribute that is emitted.
   first.
 - **Honesty.** New attributes are absent at zero, defined by the legend only on output that carries them,
   and counted in the headers. A skipped repair is disclosed, never silent.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, when a re-parse fails or is refused.
+- **`DISCLOSE`, never `ASSUME( false )`**, when a re-parse fails or is refused.
 - **No `std::map` / `std::unordered_map`.** Sorted vectors and `std::binary_search`.
 - **Style:** Allman braces, braces on every body, spaces inside parens (`CONTRIBUTING.md` §3).
 - **Build discipline:** plain dev build with no build type; never edit while a build runs; build a

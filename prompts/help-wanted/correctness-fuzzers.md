@@ -36,10 +36,10 @@ fuzzer needs. This work turns "it didn't crash" into "it's right".
 | `test/fuzz/run.sh` | The bounded local sweep: 120 s per grammar by default, 4 jobs, inputs up to 64 KiB, artifacts kept on failure. "Not part of normal regression" |
 | `test/fuzz/seeds/<grammar>/valid`, `test/fuzz/seeds/common/utf8.txt` | The seed corpus. Note the extensionless names (trap 4) |
 | `test/cachefuzzcheck.sh` | The existing **correctness** fuzzer, for cache blobs: a fixed table of about 26 byte-level and 5 filesystem-shape mutations; the oracle is output byte-identical to a `--no-cache` run. In the regression loop, and a named CI step under ASan. **The model for everything below:** a fixed table, never a random seed at gate time |
-| `src/infra/csrverify.h`, `verifyCsr` | The CSR invariants: shape equals node count, `rowOffsets[0] == 0`, `rowOffsets[n] == nnz`, monotone offsets, every column index in range, every value finite and non-negative. Called through `VERIFY` at the end of `buildGraph` (`src/graph.h`) and at the top of `pageRankDouble` (`src/pagerank.cpp`) |
+| `src/infra/csrverify.h`, `verifyCsr` | The CSR invariants: shape equals node count, `rowOffsets[0] == 0`, `rowOffsets[n] == nnz`, monotone offsets, every column index in range, every value finite and non-negative. Called through `ASSUME` at the end of `buildGraph` (`src/graph.h`) and at the top of `pageRankDouble` (`src/pagerank.cpp`) |
 | `test/verify_csr.cpp`, `test/verify_pagerank.cpp` | Doctest property tests: random CSRs from 0 to 10,000 nodes with adjacency round-trip, a 70,001-edge row, NaN and negative rejection, `buildGraph` orientation on a hand-built `IngestResult`; PageRank's empty boundary, a hand-derived dangling vector, all-dangling equals teleport, mass within 1e-9, top-K order with the id tie-break |
 | `test/mcpincrementalcheck.sh`, `test/racymtimecheck.sh`, `test/freshnesscheck.sh` | Warm-versus-cold under edit, delete and add; the racy-mtime stat gate; the same-size same-mtime edit that only `ctime` betrays |
-| `src/pincensus.h`, `test/declinecheck.sh` arm (F) | Since [#136](https://github.com/redhat-et/ripwire/pull/136) (merged 2026-09-11), `--pin-census=FILE` ends with `# dispositions calls=N bound=… unaccounted=K`: `calls=` is re-derived from the references, the buckets must sum to it, and `unaccounted` must be 0. It raises `DEGRADED_PATH_ALERT` on plain builds. The fixture covers 17 languages |
+| `src/pincensus.h`, `test/declinecheck.sh` arm (F) | Since [#136](https://github.com/redhat-et/ripwire/pull/136) (merged 2026-09-11), `--pin-census=FILE` ends with `# dispositions calls=N bound=… unaccounted=K`: `calls=` is re-derived from the references, the buckets must sum to it, and `unaccounted` must be 0. It raises `DISCLOSE` on plain builds. The fixture covers 17 languages |
 | `docs/ARCHITECTURE.md`, "Crawl order is deterministic" | Paths are sorted before node ids are assigned; per-thread parse results are re-sorted, so collection order never reaches the output |
 | `src/ingest_parsepool.h` | The parse worker count is `min( hardware_concurrency, nfiles )`. No flag or environment variable overrides it |
 | `.github/workflows/ci.yml`, det-gate | Two runs of the **same** argv, byte-diffed. It never varies discovery order or worker count |
@@ -65,7 +65,7 @@ Two gaps worth knowing before you start, both verified on `main`:
   `rw::buildGraph( ing )` (`src/graph.h`). No parser is involved, so it is fast and fully deterministic.
   A second harness can feed random source text through `ingest()` on a temporary directory.
 - **Oracle.**
-  - `verifyCsr( g.inEdges, N )` is true, **evaluated explicitly**, never through `VERIFY` (trap 1).
+  - `verifyCsr( g.inEdges, N )` is true, **evaluated explicitly**, never through `ASSUME` (trap 1).
   - Every out-edge target is below `N`.
   - No self-loops, since the builders state they drop them. Assert it; do not assume it.
   - The in-edge CSR holds exactly the same (from, to, weight) multiset as the out-edge arrays.
@@ -107,7 +107,7 @@ Two gaps worth knowing before you start, both verified on `main`:
 - **Oracle.**
   - Parse the `# dispositions` line from `--pin-census=FILE`. The buckets sum to `calls=` and
     `unaccounted=0`.
-  - A plain build prints no `DEGRADED_PATH_ALERT`.
+  - A plain build prints no `DISCLOSE`.
   - The header gauges (`declined=`, `external=`, `unresolved=`) equal the census buckets
     `test/declinecheck.sh` re-derives them from.
 - **Prerequisite satisfied.** #136 landed the dispositions this oracle reads.
@@ -153,7 +153,7 @@ bash test/fuzz/run.sh fuzz 60                  # bounded local sweep: build dir,
   that executed 0 inputs is a FAIL, not a pass.
 - **Test hooks are not flags (G5).** No parser entry, no `--help` line, a gate arm that asserts both, and
   proof that the unset hook leaves output byte-identical.
-- **Any new degrade path in `src/` uses `DEGRADED_PATH_ALERT`,** never `VERIFY( false )`
+- **Any new degrade path in `src/` uses `DISCLOSE`,** never `ASSUME( false )`
   (non-negotiable 4).
 - **House C++ style** in harnesses too: Allman braces, braces on every body, spaces inside parens, no
   `std::map` or `std::unordered_map` (CONTRIBUTING.md §3).
@@ -187,7 +187,7 @@ bash test/fuzz/run.sh fuzz 60                  # bounded local sweep: build dir,
 
 ## Known traps
 
-1. **`VERIFY` is an optimizer hint in a release build.** Under `NDEBUG`, `src/infra/Diagnostics.h`
+1. **`ASSUME` is an optimizer hint in a release build.** Under `NDEBUG`, `src/infra/Diagnostics.h`
    compiles it to `__builtin_assume` (Clang) or an `if( !expr ) __builtin_unreachable()` (GCC). A
    violated invariant in a Release build is undefined behaviour, not a report. Evaluate oracles
    explicitly, in a non-`NDEBUG` tree.
@@ -206,7 +206,7 @@ bash test/fuzz/run.sh fuzz 60                  # bounded local sweep: build dir,
    toolchain that ships it, or Linux.
 7. **Leak detection differs by platform.** `test/fuzz/run.sh` turns leak detection off on macOS and on
    elsewhere, with `lsan_suppressions.txt`. A leak-clean replay on macOS proves nothing about leaks.
-8. **The census alert is plain-build only.** `DEGRADED_PATH_ALERT` compiles out of Release, so a Release
+8. **The census alert is plain-build only.** `DISCLOSE` compiles out of Release, so a Release
    run reports a non-zero `unaccounted` only in the census line. Parse the line; never rely on stderr alone.
 9. **A hook that changes output when unset is a behaviour switch.** Prove it inert first, as
    `test/prconvergecheck.sh` arm (C) does for its own hook.

@@ -21,7 +21,7 @@
 // both arms and reaches neither.) fmt is NOT vendored: the standard library has the feature, so a vendored
 // copy would be a G3 regression.
 
-#include "Diagnostics.h"   // DEGRADED_PATH_ALERT — renderToString's open_memstream degrade, below
+#include "Diagnostics.h"   // DISCLOSE — renderToString's open_memstream degrade, below
 
 #include <cstddef>
 #include <cstdlib>
@@ -171,13 +171,11 @@ template<class... A> inline std::size_t formatTo( char* buf, std::size_t cap, st
 // documented path. Never a silent empty body, and never a silent SHORT one.
 //
 // CodeRabbit on #214: the first version asked open_memstream and then ignored what fflush and fclose
-// answered, setting ok=true regardless. Both can fail, and either failure means the same thing: `buf`/`sz`
-// are not the whole document. A memstream grows by realloc, so an allocation failure the per-row fwrites
-// swallowed surfaces at the FLUSH; and it is fclose's final flush that publishes *buf and *sz at all, so a
-// failure there leaves them stale or unset. Reading them anyway is exactly how a TRUNCATED document passes
-// for a whole one — the same defect as the empty body above, one size smaller and harder to see. Both
-// results are checked; fclose still runs whatever fflush said, because the stream has to be closed either
-// way, and it runs exactly once. `buf` is freed once, on every path (free( nullptr ) is a no-op).
+// answered, setting ok=true regardless. Reading `buf`/`sz` after a failed write is exactly how a TRUNCATED
+// document passes for a whole one — the same defect as the empty body above, one size smaller and harder to
+// see. The fix checked fflush and fclose, on the reasoning that an allocation failure the per-row fwrites
+// swallowed surfaces at the FLUSH. MEASURED later, it does not, on macOS: see MemoryStream below, which reads the
+// stream's error flag as well and is now the one owner of every memstream in the tree.
 struct Rendered
 {
     std::string text;
@@ -234,16 +232,109 @@ inline bool isRenderCopyThrowFaultInjected() noexcept
     return isOn;
 }
 
+// ── THE MEMORY STREAM: an owned open_memstream whose bytes come back whole, or not at all ─────────────────
+// Every `open_memstream` in this tree ended the same way, written by hand at each site: flush, close, then read
+// `buf`/`sz`. The result of that close was thrown away at twenty-two of them, and at the one that did check (this
+// file's renderToString, after CodeRabbit on #214) the check could not see the failure it was written for.
+//
+// MEASURED 2026-09-16, not assumed: a DYLD interposer that fails ONE chosen realloc call, run against open_memstream on
+// macOS 26.5.1 (Apple libc), over 5 KB, 50 KB and 200 KB streams written in 1 KB chunks. All 19 runs whose injection
+// landed inside the stream made exactly one fwrite short and set the stream's error flag. Each lost 152 to 976 bytes,
+// as late as chunk 177 of 200, so the hole is in the middle of the document and `sz` comes back short. fflush and
+// fclose BOTH RETURNED 0 in all 19. So checking fflush and fclose alone passes a document with a hole in it. The error
+// indicator is what records a lost write (POSIX ferror), so finish() reads it after the flush, before the close.
+//
+// THE SHAPE: a holder, because the stream and its buffer are two resources with one lifetime, and a value, because a
+// failure is an answer the caller must branch on, never an exception (this layer does not throw).
+//   open()      opens through open_memstream, or through a caller's own opener with the same signature (serialize.h's
+//               fault-injectable openChargeBuffer). nullptr when the open fails; the caller takes its degrade.
+//   finish()    flush, read the error flag, close, exactly once, and report BY VALUE: `isWhole` is true only when the
+//               flush succeeded, no write ever failed, the close succeeded (the close is what publishes the buffer and
+//               its size) and the buffer exists. `bytes` views the buffer, and is empty unless the stream is whole.
+//               [[nodiscard]]: a caller that does not read the answer is the defect this type exists to end.
+//   ~MemoryStream  closes a stream nobody finished (an early return, a throw from the writer) and frees the buffer on
+//               every path, so no site frees or closes anything by hand. NOT movable: libc holds the addresses of the
+//               buffer pointer and the size, so the object must stay where it was opened.
+// test/estchargecheck.sh #14g refuses an open_memstream, or a fflush/fclose of one, anywhere outside this class and
+// the one opener it is handed; #14f drives every caller's degrade through the fault switch below.
+//
+// FAULT INJECTION, the same shape as the two switches above: INFRA_FAULT_MEMSTREAM_FINISH=1 on a non-NDEBUG build makes
+// every finish() report failure AFTER really closing the stream. Read once per process; constexpr false in release.
+inline bool isMemstreamFinishFaultInjected() noexcept
+{
+    static const bool isOn = faultSwitchOn( "INFRA_FAULT_MEMSTREAM_FINISH" );
+    return isOn;
+}
+
+struct MemoryStreamBytes
+{
+    std::string_view bytes;             // the whole document, valid while its MemoryStream lives; empty unless isWhole
+    bool             isWhole = false;
+};
+
+class MemoryStream
+{
+public:
+    MemoryStream() noexcept = default;
+    MemoryStream( const MemoryStream& )            = delete;
+    MemoryStream& operator=( const MemoryStream& ) = delete;
+    MemoryStream( MemoryStream&& )                 = delete;   // libc holds &m_buf and &m_size
+    MemoryStream& operator=( MemoryStream&& )      = delete;
+
+    ~MemoryStream()
+    {
+        if( m_file != nullptr )
+        {
+            std::fclose( m_file );   // unfinished: its bytes were never read, so its answer has nobody to tell
+        }
+        std::free( m_buf );
+    }
+
+    [[nodiscard]] std::FILE* open() noexcept { return openWith( []( char** buf, std::size_t* size ) noexcept { return open_memstream( buf, size ); } ); }
+
+    template<class Opener>
+    [[nodiscard]] std::FILE* openWith( Opener&& opener ) noexcept
+    {
+        if( m_file == nullptr && !m_isFinished )
+        {
+            m_file = opener( &m_buf, &m_size );
+        }
+        return m_file;
+    }
+
+    [[nodiscard]] bool isOpen() const noexcept { return m_file != nullptr; }
+
+    [[nodiscard]] MemoryStreamBytes finish() noexcept
+    {
+        if( m_file == nullptr )
+        {
+            return {};
+        }
+        const bool isFlushed   = std::fflush( m_file ) == 0;
+        const bool isErrorFree = std::ferror( m_file ) == 0;
+        const bool isClosed    = std::fclose( m_file ) == 0;
+        m_file       = nullptr;
+        m_isFinished = true;
+        const bool isWhole = isFlushed && isErrorFree && isClosed && m_buf != nullptr && !isMemstreamFinishFaultInjected();
+        return isWhole ? MemoryStreamBytes{ std::string_view( m_buf, m_size ), true } : MemoryStreamBytes{};
+    }
+
+private:
+    std::FILE*  m_file       = nullptr;
+    char*       m_buf        = nullptr;
+    std::size_t m_size       = 0;
+    bool        m_isFinished = false;
+};
+
 template<class Emit>
 inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
 {
-    Rendered    out;
-    char*       buf = nullptr;
-    std::size_t sz  = 0;
-    std::FILE*  m   = open_memstream( &buf, &sz );
-    if( !m )
+    Rendered     out;
+    MemoryStream stream;
+    std::FILE* const m = stream.open();
+    if( m == nullptr )
     {
-        DEGRADED_PATH_ALERT( degradeMsg );
+        DISCLOSE( degradeMsg );
         return out;
     }
     try
@@ -255,40 +346,31 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
     }
     catch( ... )
     {
-        // Everything this function owns, released once, in the order the non-throwing path releases it. The
-        // stream is closed rather than flushed first: there is no document to salvage, and fclose frees the
-        // FILE either way. `out` is still the default-constructed failure — empty text, ok == false.
-        std::fclose( m );
-        std::free( buf );
+        // What this function owns is released by `stream` on the way out: the unfinished stream is closed and its
+        // buffer freed, once. `out` is still the default-constructed failure — empty text, ok == false.
         // NOT degradeMsg: that one says the BUFFER failed, and here it did not — the emitter did. The macro
         // takes a const char*, so this is its own literal rather than a composed string; the caller is named
         // anyway, because __PRETTY_FUNCTION__ carries the Emit lambda's own file and line.
-        DEGRADED_PATH_ALERT( "renderToString: the emitter THREW — nothing was measured, "
+        DISCLOSE( "renderToString: the emitter THREW — nothing was measured, "
                              "the caller takes its documented fallback" );
         return out;
     }
-    // Order matters: fflush first (it reports the write error), then fclose UNCONDITIONALLY (it owns the
-    // stream, and skipping it on a flush failure would leak it). A null buf after a clean close is itself a
-    // failure — an emitter that wrote nothing still gets a zero-length, null-terminated buffer.
-    const bool flushed = std::fflush( m ) == 0;
-    const bool closed  = std::fclose( m ) == 0;
-    out.ok             = flushed && closed && buf != nullptr;
+    // MemoryStream::finish owns the order (flush, error flag, close) and the null-buffer rule — an emitter that wrote
+    // nothing still gets a zero-length, null-terminated buffer, so null is itself a failure.
+    const MemoryStreamBytes rendered = stream.finish();
+    out.ok = rendered.isWhole;
     if( out.ok )
     {
         // THE LAST ALLOCATION IS STILL AN ALLOCATION. This copy is the one throwing statement on the success
         // path, and it used to stand outside every handler: a std::bad_alloc here escaped a function whose
-        // contract is that a failure is ALERTED and returned as ok == false, and it jumped the free() below
-        // on the way out, leaking the memstream buffer. Caught here rather than in one handler around the
-        // whole body, because the two failures need different cleanup: the emitter's throw owns an OPEN
-        // stream (fclose + free, in the catch above), while by this point the stream is already closed and
-        // only `buf` is left — and control falls THROUGH to the single free() below, so buf is released
-        // exactly once on every path, success and failure alike.
+        // contract is that a failure is ALERTED and returned as ok == false. It is caught here, and the buffer is
+        // freed by `stream` either way.
         try
         {
             // The injected fault stands exactly where a real std::bad_alloc would: the buffer is complete
             // and closed, and the copy of it is what fails.
             if( isRenderCopyThrowFaultInjected() ) { throw std::bad_alloc(); }
-            out.text.assign( buf, sz );
+            out.text.assign( rendered.bytes );
         }
         catch( ... )
         {
@@ -297,15 +379,14 @@ inline Rendered renderToString( Emit&& emit, const char* degradeMsg )
             // NOT degradeMsg, and not the emitter's literal either: the buffer did not fail and the emitter
             // did not throw — the copy out of a complete buffer did. Same reasoning as the catch above, so
             // the caller reads which of the three failures it actually hit.
-            DEGRADED_PATH_ALERT( "renderToString: the final COPY out of the buffer THREW — nothing was "
+            DISCLOSE( "renderToString: the final COPY out of the buffer THREW — nothing was "
                                  "measured, the caller takes its documented fallback" );
         }
     }
     else
     {
-        DEGRADED_PATH_ALERT( degradeMsg );
+        DISCLOSE( degradeMsg );
     }
-    std::free( buf );
     return out;
 }
 

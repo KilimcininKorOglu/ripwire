@@ -152,7 +152,7 @@ expected to move and how you will show it:
 ## Reproduce the gap
 
 Build first: `cmake -S . -B build && cmake --build build -j`, the plain dev build. **Never configure
-with `-DCMAKE_BUILD_TYPE=Release`**: it compiles `DEGRADED_PATH_ALERT` out, and a gate over a degrade
+with `-DCMAKE_BUILD_TYPE=Release`**: it compiles `DISCLOSE` out, and a gate over a degrade
 path then passes blind.
 
 This script writes one tree in two spellings that differ **only** in three specifiers. Write it outside
@@ -405,7 +405,7 @@ directory. Resolve a bare specifier equal to a member name to that package's sou
   equals cold.
 - **Containers.** No `std::map` or `std::unordered_map`: `HashMap<>` with `reserve()`, or
   `gtl::btree_map` for ordered iteration.
-- **Degrade paths** use `DEGRADED_PATH_ALERT`, never `VERIFY( false )`.
+- **Degrade paths** use `DISCLOSE`, never `ASSUME( false )`.
 - **Style** (CONTRIBUTING.md §3): Allman braces on every body, spaces inside parens, declarative tables,
   output through `rw::emitTo` or the existing writer.
 - **Build discipline.** Plain dev build. Never edit while a build runs. After a branch switch or rebase,

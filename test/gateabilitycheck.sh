@@ -13,7 +13,7 @@
 # Repo-wide: drift = 2 (UNDATED) + 0 (DATED) + 1 (MIXED) = 3; dated = 0 + 2 + 1 = 3. gateability must list
 # exactly {MIXED.md: live=1, UNDATED.md: live=2} and compute projected_drift = drift(3) - (1+2) = 0 — i.e.
 # annotating BOTH listed docs would account for every currently-live row (the invariant writeDocDrift's own
-# VERIFY pins: liveTotal == res.drift). DATED.md and CLEAN.md must be ABSENT from the list.
+# ASSUME pins: liveTotal == res.drift). DATED.md and CLEAN.md must be ABSENT from the list.
 #
 # Also asserts: --gateability alone (no --doc-drift) refuses loudly (exit != 0, no XML on stdout); the
 # gateability block is present ONLY under the flag (bare --doc-drift omits it); xmllint-clean; determinism.

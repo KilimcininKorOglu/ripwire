@@ -25,7 +25,7 @@ cmake -S . -B build && cmake --build build -j
 ```
 
 **Never configure a local dev tree with `-DCMAKE_BUILD_TYPE=Release`.** Release defines `NDEBUG`,
-which compiles `DEGRADED_PATH_ALERT` out. A gate that asserts a degrade path then goes blind and
+which compiles the `DISCLOSE( msg )` trace out. A gate that asserts a degrade path then goes blind and
 passes for the wrong reason. See §5 for why CI builds both flavours.
 
 ### Sanitizer build (the G1 stack — required before you open a PR)
@@ -185,7 +185,7 @@ binary that is not on `PATH` (Homebrew's LLVM is not, on macOS, by default).
 `WarningsAsErrors`, CI runs it with `continue-on-error`, and the config is curated down to
 `bugprone-*` / `clang-analyzer-*` / `performance-*` / `misc-dangling-*`. Its default catalogue argues
 for a different C++ than the data-oriented one §3 and G2 mandate — POD and SoA, C arrays, 32-bit
-handles, `VERIFY` instead of exceptions — so read its output as a to-triage list, never as a queue of
+handles, `ASSUME` instead of exceptions — so read its output as a to-triage list, never as a queue of
 defects.
 
 ---
@@ -278,15 +278,51 @@ already knew about the others, several while fixing one. So the rule is mechanic
 
 ### Self-check, don't throw
 
-- `VERIFY( cond )` at every precondition and invariant. It is free in release (`-DNDEBUG` lowers it
-  to `__builtin_assume`: zero cost, plus an optimizer hint).
-- A **recoverable** runtime error — an unreadable file, a full pool, a missing grammar — is a
-  **degrade**, not a failure: return `nullptr` / `false` / empty / a clamped value, emit
-  `DEGRADED_PATH_ALERT( "msg" )`, and keep going. The whole pipeline must survive a malformed repo.
+Self-checking is this codebase's primary correctness mechanism, ahead of tests: a check at an invariant runs on
+every input the tool ever sees, costs nothing in release, and tells the optimizer a fact. **Add them freely.**
+`test/selfcheckcheck.sh` objects only to:
+- a side effect inside a check;
+- a call it has never seen inside a promise (one line in its ALLOW table, once);
+- `ASSUME( false )`;
+- external input handed to anything but `VALIDATE`;
+- a new one-argument `DISCLOSE`;
+- an `answerUnchanged` without a reason.
+
+| word | promises | release | use for | never for |
+| --- | --- | --- | --- | --- |
+| `ASSUME( e[, "why"] )` | e holds because THIS code makes it hold | not evaluated; the optimizer may rely on it | invariants, indices you bounded, sizes you set | argv, files, git, sockets, the environment |
+| `EXPECTS( e[, "why"] )` | the caller met this function's contract | as ASSUME | preconditions; the report blames the caller | a boundary whose callers you do not control (VALIDATE) |
+| `ENSURES( e[, "why"] )` | this function met its own contract | as ASSUME | postconditions before a return | anything the caller can still change |
+| `DASSERT( e[, "why"] )` | nothing: debug-only check | nothing, not evaluated | expensive or floating-point checks; corruptible structure (`verifyCsr`) | facts the optimizer should have |
+| `ASSUME_NO_ALIAS( a, b )` / `3` / `_BUF` | separate allocations | separate_storage fact | out-params and read/write pairs of one type | views; members of one struct; elements of one array |
+| `ASSUME_SAME_THREAD()` | this SITE runs on one thread | nothing | process singletons (the MCP index) | a body pool workers reach on different objects |
+| `ASSUME_SAME_THREAD_AS( obj )` | obj is touched only by its owner (`release()` hands it on) | nothing, no storage | worker result slots, prefetch results | lock-protected state; per-node records |
+| `UNREACHABLE( ["why"] )` | control never arrives here | `__builtin_unreachable()` | exhaustive `switch` defaults | a path bad input can reach |
+| `VALIDATE( e[, "why"] )` | nothing: e is external input | evaluated, one compare | the condition of the refusing or degrading `if` | invariants |
+| `DISCLOSE( sink, why[, "msg"] )` | the answer carries its incompleteness | `sink.disclose( why )` runs | every degrade: the sink is the struct whose field the emitter reads; `why` is its own scoped enum | — |
+| `DISCLOSE( Diagnostics::answerUnchanged, "reason" )` | this degrade changes cost, never content | nothing, but the reason is listed by the gate | a rejected or unwritable cache, a same-bytes fallback, a lock skipped under a re-check | dropped/truncated/guessed rows, stored partial facts, refusals, unreachable guards |
+| `DISCLOSE( "msg" )` | **nothing to the user**: a debug trace | nothing | existing sites only, until converted (ratchet) | any new degrade |
+| `PANIC( "why" )` | we cannot continue | report and abort | a corrupt state | anything recoverable |
+
+**The error ladder:**
+- A **recoverable** runtime error (an unreadable file, a full pool, a missing grammar) is a **degrade**, not a
+  failure. Return `nullptr` / `false` / empty / a clamped value, **tell the reader in the document**, and keep
+  going. The whole pipeline must survive a malformed repo.
+  - Write `DISCLOSE( sink, Sink::DisclosureWhy::Reason[, "subsystem: condition — consequence"] )`. The sink is the
+    object whose field the emitter already reads (`complete=`, `ok="0"`, `why=`, `*_capped="1"`, `counts_floor="1"`,
+    an omitted `est_tokens=`); give it a scoped `DisclosureWhy` and a `noexcept` `disclose()` that sets that field.
+    The compiler checks the contract.
+  - `docs/ARCHITECTURE.md`: "A disclosure that lives only in an assertion is a disclosure that does not ship."
+  - If the degrade genuinely cannot change this answer (a cache rejected and rebuilt, a cache write that only
+    makes the next run cold), write `DISCLOSE( Diagnostics::answerUnchanged, "why this answer is unchanged" )`.
+    The gate prints that reason on every run.
+  - The one-argument `DISCLOSE( msg )` is a debug trace that ships nothing. It remains only on sites not yet
+    converted, and `test/selfcheckcheck.sh` refuses a new one.
+- **External input** is checked with `VALIDATE` in the condition of the refusal, never `ASSUME`d.
 - A **corrupt invariant** is a `PANIC`.
-- **Never write `VERIFY( false )` on a degrade path.** In release the assert compiles away and the
-  optimizer deletes the fallback behind it — that is a real shipped-bug shape, not a hypothetical.
-  Guard, don't assert.
+- **Never `ASSUME( false )` (or an `EXPECTS`/`ENSURES` of false) on a degrade path.** In release the assert
+  compiles away and the optimizer deletes the fallback behind it — that is a real shipped-bug shape, not a
+  hypothetical. Guard, don't assert.
 - Throw only at the `operator new` seam. A throw escaping a worker thread is `std::terminate`, so
   wrap thread bodies in `try { … } catch( ... ) { … }`.
 - **Avoid exception handling. Where a throw is unavoidable, RAII is what makes the code exception-safe:
@@ -296,13 +332,15 @@ already knew about the others, several while fixing one. So the rule is mechanic
   until someone adds an early `return` above it. One owner whose destructor releases what it holds
   collapses that to a single handler whose only job is the conversion this codebase actually wants: a
   recoverable error becomes a degrade, returned, never propagated. Measured on `216802ad`, 2026-09-14:
-  of **27 `catch` blocks under `src/`, exactly one releases a resource by hand** — `infra/emit.h`'s
-  `renderToString`, which `fclose`s a memstream and `free`s its buffer. The other 26 convert a throw
-  into a degrade, set a flag, return a message, or `continue`; they own nothing, which is why they are
-  one line each. Re-derive rather than trust: a bare `grep -cE '\bcatch[[:space:]]*\('` over `src/`
-  reports **35**, and 8 of those hits are the word inside a `//` comment or inside a tree-sitter query
-  string — most of them in `lintrules.h`, whose subject is *detecting* empty catch blocks in other
-  people's code. Exclude comment and string context, then read each surviving handler's first body
+  of 27 `catch` blocks under `src/`, exactly one released a resource by hand — `infra/emit.h`'s
+  `renderToString`, which `fclose`d a memstream and `free`d its buffer. Re-derived after that buffer
+  moved into `rw::MemoryStream` (2026-09-16, `lane/compile-time-checks`): **26 `catch` blocks, and none
+  releases a resource by hand** — `renderToString`'s two handlers now leave the stream and its buffer to
+  the owner's destructor. Every handler converts a throw into a degrade, sets a flag, returns a message,
+  or `continue`s; they own nothing, which is why they are one line each. Re-derive rather than trust: a
+  bare `grep -cE '\bcatch[[:space:]]*\('` over `src/` reports **34** there, and 8 of those hits are the
+  word inside a `//` comment or inside a tree-sitter query string — most of them in `lintrules.h`, whose
+  subject is *detecting* empty catch blocks in other people's code. Exclude comment and string context, then read each surviving handler's first body
   line, because the resource question is answered by reading it and not by counting.
 
 ### Naming encodes what the type cannot
@@ -353,7 +391,7 @@ already knew about the others, several while fixing one. So the rule is mechanic
   `#if __STDC_VERSION__ < 199901` / `#define __restrict` (empty), and `__STDC_VERSION__` is
   undefined in C++, so every `__restrict` that follows any libc/libc++ include is silently deleted.
   `__restrict__` is a keyword, not a macro, and survives.
-- **Prefer `VERIFY_NO_ALIAS( a, b )` (objects) or `VERIFY_NO_ALIAS_BUF( a, b )` (OWNING containers only: `std::vector`, `std::string`, `std::array`) in
+- **Prefer `ASSUME_NO_ALIAS( a, b )` (objects) or `ASSUME_NO_ALIAS_BUF( a, b )` (OWNING containers only: `std::vector`, `std::string`, `std::array`) in
   the body over a qualifier on the signature.** For a container, the promise has to land on
   `.data()` — on the objects themselves it is inert for the loop, because the optimizer reaches the
   heap buffer through a pointer loaded from the header, not through the header's own address. Never a
@@ -416,7 +454,7 @@ already knew about the others, several while fixing one. So the rule is mechanic
   it (measured 2026-09-08). Testing the macro means every toolchain BUILDS — which is why the choice is
   DISCLOSED: `--version` prints `emit=std::print` or `emit=std::format+fputs` (`test/versioncheck.sh` #6),
   every CI and release leg asserts `std::print` (gcc-14 on the ubuntu legs, gcc-toolset-14 on RHEL and the
-  manylinux containers, Xcode 16.2 on macOS), and the `fallback-emitter` job builds the fallback arm with
+  manylinux containers, Xcode 26.6 on macOS), and the `fallback-emitter` job builds the fallback arm with
   the stock ubuntu g++ 13 on purpose and proves it emits the same bytes. A silent fallback is the failure
   this whole arrangement exists to make impossible.
 - **A conversion is byte-parity-fenced, not reviewed by eye.** `test/printffmtparitycheck.sh` hashes
@@ -507,13 +545,73 @@ Both are load-bearing, and the reason is a real regression this project shipped:
 
 - **Release catches optimizer-only bugs** — code that is correct at `-O0` and wrong once
   `__builtin_assume` and inlining are in play, including the "assert it, then defend against it"
-  trap where a `VERIFY` lets the optimizer delete the defensive branch that follows.
-- **The plain build catches degrade paths** — `DEGRADED_PATH_ALERT` is compiled out under `NDEBUG`,
+  trap where an `ASSUME` lets the optimizer delete the defensive branch that follows.
+- **The plain build catches degrade paths** — the `DISCLOSE( msg )` trace is compiled out under `NDEBUG`,
   so a Release-only suite cannot observe the alert that a degrade-path gate asserts. For three
   development cycles, every degrade-path gate in CI passed for exactly that reason.
 
 **If you add a degrade path, it is the plain-flavour run that proves it.** Do not assume a green
 Release CI job covered it.
+
+### Light set vs. full matrix
+
+`.github/workflows/ci.yml` does not run the full 31-job matrix on every event. A `plan` job computes one
+`full` output from the event name, the pull request's labels and the ref, and every heavy job reads that
+output (fallback-emitter/rhel/asan through `if:`, `release` through the matrix `plan` itself computes,
+since a job-level `if:` cannot see the matrix context).
+
+- **Push to `main`**, and **pull requests carrying the `train-member` label** (maintainer-only — a fork
+  PR cannot label its own PR), run the **light set**: the `style` job plus the single
+  `ubuntu-24.04`/`Release`/`clang` release leg (all 4 gate shards), which already includes the
+  determinism and G4 XML checks.
+- **Every other pull request** (`integration/*` train PRs, direct-land PRs, contributor PRs),
+  **`workflow_dispatch`**, and a nightly **`schedule`** (05:41 UTC — off `:00`, and a different minute
+  from `nightly.yml`'s own 07:17 TSan run) all run the **full matrix**. Always dispatch a full run against
+  the exact commit you are about to tag; a green light-set push or an earlier nightly does not stand in
+  for it.
+
+A failure on the scheduled full-matrix run opens or updates `ci.yml`'s OWN tracking issue, titled "Nightly
+checks failing on main (full matrix)". It is a separate issue from `nightly.yml`'s TSan one, on purpose:
+every tracking issue carries the shared `nightly-failure` label (so "every nightly-scale failure" is one
+query) plus a workflow-specific second label — `nightly-full-matrix` here, `nightly-tsan` in
+`nightly.yml` — and every open/comment/close filters on BOTH labels together. Before this split the two
+workflows shared one issue and each had its own green-schedule job closing it on its OWN verdict alone;
+a green TSan night could close an issue the full matrix had opened while the matrix was still red, and
+the reverse. With two labels and two issues, a green run in one workflow can only ever touch the issue
+carrying its own second label, so it can no longer close the other workflow's still-open failure.
+
+### What runs nightly instead of on every pull request
+
+`.github/workflows/nightly.yml` runs the slower checks once a day, at 07:17 UTC, against `main`. Today
+that is a ThreadSanitizer build (`-DRIPWIRE_TSAN=ON`) and the gates that drive ripwire's threads: the
+MCP prefetch worker, the edit lock, a long-lived server's re-ingest, concurrent `--quality-ack` writers, the parallel
+ingest and `--match` fan-out, `--grep`'s prefetch thread, the `--doc-drift` workers and the git-spawn
+pool. Each gate runs through a wrapper that fails on a non-zero exit or on any TSan report file, and the
+job first proves that check can fail: a planted race must be reported and its race-free twin must not.
+
+It is not a per-PR leg on purpose. TSan builds already run often on contributors' and maintainers' own
+machines, and every PR already waits on the macOS runners, so a TSan leg on each push would cost more
+CI than it adds coverage. What a local run cannot promise is that someone ran it on what is actually on
+`main` before a tag, and once a day covers that. A scheduled run skips the heavy jobs when `main` has
+not moved since the last green scheduled run and no open issue carries BOTH `nightly-failure` and
+`nightly-tsan` — this workflow's own tracking issue, not `ci.yml`'s full-matrix one; while it is open,
+every scheduled run checks again.
+
+**Where failures appear:** the workflow's run in the Actions tab, and one issue titled "Nightly checks
+failing on main (TSan)" (labels `nightly-failure` and `nightly-tsan`). A failing night on `main` opens
+it, or comments on it if it is already open, with the failing jobs and steps, the commit, the run link
+and the head of the first TSan report. The next green scheduled run comments "green again at <sha>" and
+closes it — and only it: `ci.yml`'s full-matrix schedule keeps its own separate issue (see "Light set vs.
+full matrix" above), so this job never closes that one, and a green TSan night is never mistaken for a
+green full-matrix night. A pull request that edits the workflow runs it too, without the issue reporting.
+To reproduce a TSan failure locally, route the reports to files the way the job does, because many gates
+discard the server's stderr:
+
+```bash
+cmake -S . -B tsan -DRIPWIRE_TSAN=ON && cmake --build tsan -j
+TSAN_OPTIONS=halt_on_error=1:log_path=/tmp/tsanlog RIPWIRE_BIN=tsan/ripwire bash test/qsnapprefetchcheck.sh
+ls /tmp/tsanlog.*     # one file per process that raced; none means no report
+```
 
 ---
 

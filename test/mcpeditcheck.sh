@@ -524,6 +524,48 @@ cmp -s "$W9B/notes.md" "$TMP/notes9.orig" \
     && ok "(9d) @seed on a doc Section: doc byte-identical after the refusal" \
     || no "(9d) @seed on a doc Section: doc changed on a refusal"
 
+# ═══════════════════════════════════════════════════════════════════════════
+echo
+echo "=== 10. A1 (found-items 2026-09-17, review round): the 'file' hint's root-spelling invariance ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# mcpedit.h::editHintMatches — the MCP write verbs' `file` disambiguation-hint predicate — matched the RAW
+# stored path (never root-relative), so a hint that exists only in the CHECKOUT LOCATION above the crawl
+# root — never inside any file's own tree-relative path — could satisfy the predicate under an absolute
+# root spelling and not under `.`. Staged under a directory whose absolute path itself contains the
+# marker "zzzmarker9" (never present in any fixture file's own relative path): pre-fix, `file:"zzzmarker9"`
+# falsely matched BOTH geometry.cpp and geometry.h under the absolute `path`, so `distance` (defined in
+# both) read AMBIGUOUS — a wrong reason with a wrong candidate list — instead of the honest "no indexed
+# file matches the hint at all" every spelling must agree on.
+W10="$( mktemp -d "$TMP/w10marker.XXXXXX" )"
+MARKDIR="$W10/zzzmarker9/edithint"
+mkdir -p "$MARKDIR"
+cp -R "$FIX/"* "$MARKDIR/"
+cp "$MARKDIR/geometry.cpp" "$TMP/geo10.orig"
+NEWBODY10='double distance( Point a, Point b )\n{\n    return 0.0;\n}'
+mcp_call \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"replace_symbol_body\",\"arguments\":{\"path\":\"$MARKDIR\",\"symbol\":\"distance\",\"file\":\"zzzmarker9\",\"new_body\":\"$NEWBODY10\"}}}" \
+    >"$TMP/r10abs"
+R10ABS="$( inner_or_err "$TMP/r10abs" )"
+R10DOT="$( cd "$MARKDIR" && printf '%s\n%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"replace_symbol_body\",\"arguments\":{\"path\":\".\",\"symbol\":\"distance\",\"file\":\"zzzmarker9\",\"new_body\":\"$NEWBODY10\"}}}" \
+    | "$BIN" --mcp 2>/dev/null > "$TMP/r10dot"; inner_or_err "$TMP/r10dot" )"
+case "$R10ABS" in
+    __ERROR__*"no indexed file matches 'zzzmarker9'"*) ok "(10) A1 abs spelling: bogus hint refuses honestly (no indexed file matches)";;
+    *) no "(10) A1 abs spelling: expected 'no indexed file matches', got: $( echo "$R10ABS" | head -c 300 )";;
+esac
+case "$R10DOT" in
+    __ERROR__*"no indexed file matches 'zzzmarker9'"*) ok "(10) A1 dot spelling: bogus hint refuses honestly (no indexed file matches)";;
+    *) no "(10) A1 dot spelling: expected 'no indexed file matches', got: $( echo "$R10DOT" | head -c 300 )";;
+esac
+[ "$R10ABS" = "$R10DOT" ] \
+    && ok "(10) A1: the refusal is byte-identical under the absolute and dot root spellings" \
+    || no "(10) A1: the refusal differs by root spelling: abs=[$( echo "$R10ABS" | head -c 150 )] dot=[$( echo "$R10DOT" | head -c 150 )]"
+cmp -s "$MARKDIR/geometry.cpp" "$TMP/geo10.orig" \
+    && ok "(10) A1: geometry.cpp left byte-identical (no false-positive-hint write happened)" \
+    || no "(10) A1: geometry.cpp was WRITTEN despite the bogus hint — the false-match edit went through"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then

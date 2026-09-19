@@ -34,7 +34,7 @@ BIN="$WORK/connectcoreharness"
 echo "connectcorecheck: CXX=$CXX"
 
 # ── compile the harness against graph.h (header-only): infra + src on the include path ────────────────────────
-# diagnostics.cpp supplies Diagnostics::ConsoleLog::handleDegraded (the DEGRADED_PATH_ALERT seam) — link it exactly
+# diagnostics.cpp supplies Diagnostics::ConsoleLog::handleDegraded (the DISCLOSE seam) — link it exactly
 # as the real ripwire target does, so any degrade path resolves at link time.
 if ! "$CXX" "$CXXSTD" -O2 -g -Wall -Wextra \
         -I"$ROOT/src/infra" -I"$ROOT/third_party" -I"$ROOT/src" \

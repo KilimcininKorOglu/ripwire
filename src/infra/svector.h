@@ -73,7 +73,7 @@
 //
 // ONE DELIBERATE OMISSION, so nobody re-litigates it: **`at()` is absent on purpose.** It reports a
 // range error by throwing `std::out_of_range`, and CONTRIBUTING.md §3 permits a throw only at the
-// `operator new` seam — preconditions here are `VERIFY`. An `at()` would be a house-style violation
+// `operator new` seam — preconditions here are `ASSUME`. An `at()` would be a house-style violation
 // dressed as a convenience. Use `operator[]`. The omission fails LOUDLY (a compile error at the call
 // site), which is the right failure mode and makes the one-alias flip self-checking.
 //

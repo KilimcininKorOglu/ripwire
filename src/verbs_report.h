@@ -341,6 +341,23 @@ IsolateStats isolateStats( const rw::IngestResult& ing, const rw::Graph& graph,
     return stats;
 }
 
+// --arch: a path-rule that could not be JUDGED on an edge — the engine gave up (src/regexguard.h: RegexVerdict::Exhausted),
+// its FROM or substituted-TO subject was too long to hand the engine at all (RegexVerdict::Skipped, F-B4), or the
+// TO pattern this edge's backreferences produced is one the guard refuses — is neither satisfied nor violated
+// there, and a CI gate that reports violations="0" or exit 0 over an edge it could not judge is the failure --arch
+// exists to prevent. The caller refuses at exit 1 after this names the rule, the edge and the reason, before any byte
+// of the answer.
+static void refuseUndecidedPathRule( const rw::PathRule& pr, const rw::PathRuleVerdict& verdict, std::string_view src, std::string_view dst )
+{
+    const std::string reason = verdict.isRefused ? "its TO pattern became '" + verdict.refusedTo + "' after backreference substitution, which is refused: " + verdict.refusal
+                                                   + " (a TO template with a backreference is judged per edge: only this edge's capture completed it)"
+                              : verdict.isSkipped ? std::string( rw::kRegexOversizeReason )
+                                                   : std::string( rw::kRegexAbandonedReason );
+    rw::emitTo( stderr, "ripwire: --arch: path-rule '{} -> {}' could not be evaluated on the edge {} -> {}: {} — refusing rather than "
+                        "reporting a violation count the rule did not measure\n",
+                pr.from, pr.to, src, dst, reason );
+}
+
 std::optional<int> runArchViews( const MainDispatch& d )
 {
     using namespace rw;
@@ -446,6 +463,7 @@ std::optional<int> runArchViews( const MainDispatch& d )
             std::string   toLayer;       // layer name of `to`   (or the path-rule label)
         };
         std::vector<Viol> viols;
+        std::uint64_t     pathRulesUndecided = 0;   // F-B4: edges settled by a decisive rule despite meeting an undecided one along the way
         for( std::size_t f = 0; f < adj.size(); ++f )
         {
             for( std::uint32_t g : adj[f] )
@@ -470,10 +488,19 @@ std::optional<int> runArchViews( const MainDispatch& d )
                 // ABS-4 regex path-rules: sibling-isolation etc. Independent of layers (an edge can be a
                 // path-rule violation even when both files are unlayered). A self-edge can't happen (g!=f
                 // by resolveIncludeAdj), so no same-module guard needed beyond the rule's own regex.
-                std::size_t ruleIdx = 0;
-                if( !ar.pathRules.empty() && pathRuleForbids( ar, relFiles[f], relFiles[g], ruleIdx ) )
+                const PathRuleVerdict pathVerdict = ar.pathRules.empty() ? PathRuleVerdict{} : pathRuleForbids( ar, relFiles[f], relFiles[g] );
+                if( pathVerdict.isAbandoned || pathVerdict.isSkipped || pathVerdict.isRefused )
                 {
-                    const PathRule&     pr    = ar.pathRules[ ruleIdx ];
+                    refuseUndecidedPathRule( ar.pathRules[ pathVerdict.ruleIndex ], pathVerdict, relFiles[f], relFiles[g] );
+                    return 1;
+                }
+                if( pathVerdict.hadUndecided )
+                {
+                    ++pathRulesUndecided;   // a decisive rule settled this edge anyway — disclosed below, never refused for it
+                }
+                if( pathVerdict.isForbidden )
+                {
+                    const PathRule&     pr    = ar.pathRules[ pathVerdict.ruleIndex ];
                     const std::string   label = std::string( "path:" ) + pr.from + "->" + pr.to;
                     const std::uint64_t h     = archViolHash( relFiles[f], relFiles[g], label );
                     viols.push_back( { std::uint32_t( f ), g, h, std::string( "path" ), pr.from + "->" + pr.to } );
@@ -491,6 +518,15 @@ std::optional<int> runArchViews( const MainDispatch& d )
             }
             return a.fromLayer < b.fromLayer;
         } );
+
+        // F-B4: an edge whose verdict a decisive rule already settled, despite an undecided one along the way, is
+        // never refused for it — but "never refused" must not read as "nothing was undecided". Disclosed once,
+        // covering every exit path below (baseline / baseline-update / normal), same as the baseline tally above it.
+        if( pathRulesUndecided != 0 )
+        {
+            rw::emitTo( stderr, "ripwire arch: {} edge(s) met an undecided path-rule evaluation (abandoned, too long "
+                                "for the engine, or a refused substituted TO pattern) that a decisive rule elsewhere settled anyway\n", pathRulesUndecided );
+        }
 
         const std::string sidecarPath = archBaselinePath( std::string( cfg.archRules ) );
 
@@ -783,7 +819,7 @@ int emitClonesReport( const rw::Config& cfg, const rw::IngestResult& ing )
         bool allExempt = true, allScript = true;
         for( NodeId id : gp.members )
         {
-            const std::string& p        = ing.files[ ing.symbols[id].fileId ];
+            const std::string_view p   = rootRelPath( ing, ing.symbols[id].fileId );
             const bool         isScript = quality::isTestScriptPath( p );
             if( !isScript && !quality::isFixturePath( p ) )
             {
@@ -1122,7 +1158,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
 
         // §P0.5c: an unresolvable --since used to degrade to ALL history while stdout still printed
         // window="12mo" — a false NON-zero. The churn numbers are real; the window they are labelled with is
-        // not, and the only honest signal was a DEGRADED_PATH_ALERT on stderr, invisible to every MCP client.
+        // not, and the only honest signal was a DISCLOSE on stderr, invisible to every MCP client.
         // --hotspots is a measurement verb and its window is part of the measurement, so refuse instead.
         if( !cfg.since.empty() && !sinceScope.active )
         {
@@ -1209,7 +1245,7 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
             if( !ccxSum[f] )     { if( suspectSyms[f] > 0 ) { ++unrankedExtentSuspect; } else { ++unrankedNoComplexity; } continue; }
             order.push_back( f );
         }
-        VERIFY( order.size() + unrankedNoChurn + unrankedNoComplexity + unrankedExtentSuspect == ing.files.size() );
+        ASSUME( order.size() + unrankedNoChurn + unrankedNoComplexity + unrankedExtentSuspect == ing.files.size() );
         const auto score = [ & ]( std::uint32_t f ) { return std::uint64_t( churn[f] ) * ccxSum[f]; };
         std::sort( order.begin(), order.end(), [ & ]( std::uint32_t a, std::uint32_t b )
                    { return score( a ) != score( b ) ? score( a ) > score( b ) : ing.files[a] < ing.files[b]; } );
@@ -2939,7 +2975,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
         std::vector<NodeId> testSeeds;
         for( NodeId i = 0; i < N; ++i )
         {
-            if( rw::isTestPath( ing.files[ing.symbols[i].fileId] ) )
+            if( rw::isTestPath( rw::rootRelPath( ing, ing.symbols[i].fileId ) ) )
             {
                 testSeeds.push_back( i );
             }

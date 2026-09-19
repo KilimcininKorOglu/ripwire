@@ -381,7 +381,7 @@ else
             FAIL*) no "${_row#FAIL }" ;;
         esac
     done < "$TMP/cxxflags.rows"
-    # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
+    # ASSUME's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
     DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
     DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
     if "$CXX" "${CXX_FLAGS[@]}" "${CXX_DEFINES[@]}" "${CXX_INCLUDES[@]}" -I"$ROOT/src" \

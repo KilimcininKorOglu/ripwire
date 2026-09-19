@@ -34,6 +34,143 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-17, TRAIN 5 (integration/train-5 on main a6868f75: #282 ad7a9d56, lane/rule2b-assignment-veto 626810b3,
+#   lane/field-base-member 6b8f539e): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its
+#   mirror in merge order over main's 112: #282 = 113, the veto lane = 114 (its ingest fix records a reference-returning
+#   definition's parameters); field-base-member is resolve-side and changes no extraction. kCacheVersion is #282's 24
+#   (the ref record gained viaArrow) and its mirror moves with it; kQSnapCacheScheme stays 14 (no member changes a
+#   manifest function). The member entries below are renumbered to the train's numbers.
+# 2026-09-17, REFERENCE-RETURNING DEFINITIONS (test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am and q8,
+#   lane/rule2b-assignment-veto): kParserVer and its mirror -> 114 on integration/train-5 after #282's 113 (the lane
+#   declared 112 over its own base) — a C++/ObjC definition returning `T&`/`T&&` records its parameters, and an
+#   attributed declarator its VarDecl, so Rule 2b's declaration-only veto has the records it reads. The extracted bind
+#   SET changes; kCacheVersion stays 24, kQSnapCacheScheme stays 14.
+# 2026-09-17, SMART-POINTER MEMBERS (test/fieldnarrowcheck.sh arm p, PR #282): kParserVer and its mirror -> 113 and
+#   kCacheVersion and its mirror -> 24 on integration/train-5 (the PR declared 103 -> 104 and 22 -> 23 over its base; main
+#   had spent 112 and 23). A member written `std::unique_ptr<T>` / `std::shared_ptr<T>` records T, reached through `->`
+#   alone, and every call reference records whether its member access was `->`: the ref record grows one u8, a FORMAT
+#   change. The qsnap scheme does not move — the snapshot LAYOUT is unchanged, and the producer identity already keys every
+#   blob to the build whose resolution made it.
+# 2026-09-17, TRAIN 4 (integration/train-4 on main a2b3cd6e: lane/rule2-irbuilder-local 217544bc, lane/using-base-reexport
+#   2ca5fe7a, lane/followups-scan-0917 fee1516b, lane/skillscan-unscanned-file 116ad012, #279 b2514bd2, #280 e5f9a50a,
+#   #231 via lane/finish-231 9eacccc6, #224 e9c5f283): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer
+#   and its mirror over main's 110 in merge order: the vexing-parse locals lane = 111 (it claimed 111), #280 = 112 (it
+#   claimed 111); every other member is resolve-, verb- or test-side and changes no extraction. kCacheVersion stays 23;
+#   kQSnapCacheScheme stays 14 (no member changes a manifest function). #280's entry below is renumbered; the
+#   vexing-parse lane carried no entry of its own.
+# 2026-09-17, BLOCK-SCOPE DIRECT-INITIALIZED LOCALS (test/narrowcheck.sh arms 52-60, lane/rule2-irbuilder-local):
+#   kParserVer and its mirror 110 -> 111 on integration/train-4 — a body-local `IRBuilder<> Builder(Rem);` no longer
+#   mints a function symbol, so its type binding attributes to the enclosing function. Symbols and fact attribution
+#   change; kCacheVersion stays 23, kQSnapCacheScheme stays 14.
+# 2026-09-17, TYPE ALIASES (test/fieldnarrowcheck.sh arm t, PR #280): kParserVer and its quality.h mirror -> 112 on
+#   integration/train-4 after the vexing-parse locals lane's 111 (the PR declared 99 -> 105, then 111 on its merge of main
+#   a2b3cd6e) — a C/C++/ObjC typedef / using
+#   alias of a named class records its target on the compose record shape (format unchanged, kCacheVersion stays 23).
+#   kQSnapCacheScheme stays 14: the extraction identity (the mirrors) keys every blob. Re-pinned on the merged tree; the
+#   landing train assigns the number and re-derives this pin.
+# 2026-09-17, JAVA CATCH / ENHANCED-FOR / RESOURCE SHADOWS (test/javamethodrefcheck.sh, PR #281's CodeRabbit round on
+#   #235's code): kParserVer and its mirror 109 -> 110 on integration/train-3 — three Java declaration forms now emit
+#   VarDecl shadow binds, an extraction change. kCacheVersion stays 23; kQSnapCacheScheme stays 14 (no manifest function
+#   changed). Re-pinned on the train tree.
+# 2026-09-17, TRAIN 3 (integration/train-3 on integration/train-1b a9549214, then 1b's fix push 30f6893c: #268 e5ca33b5,
+#   #276 50b97b7b + 97b499f0, lane/small-fixes-0917 d33e4522, #278 379d9faa, #235 caaf84e2, #233 1ca964b8, #267 b3270335):
+#   RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over
+#   train 1b's 103: #268 changes no extraction, #276 = 104, small-fixes = 105, #278 = 106, #235 = 107 (two PR steps land as
+#   one), #233 = 108, #267 = 109. The members declared 103, 100, 104, 98, 98 and 97 over their own bases and pinned their
+#   own hashes; none hashed 109. kCacheVersion is #278's 23 and its mirror moves with it; kQSnapCacheScheme stays train 1's
+#   14 (no member changes a manifest function). The member entries below are renumbered to the train's numbers.
+# 2026-09-15, JAVA TYPE::METHOD REVIEW (test/javamethodrefcheck.sh, issue #74, PR #235): parserVer and its quality mirror
+#   move to 107 on integration/train-3 after #278's 106 (the PR declared two steps, 96 -> 97 -> 98, over main) — Java
+#   shadow binds gain lexical spans and inferred lambda parameters are captured. Extracted bind facts change; kCacheVersion
+#   stays #278's 23 and kQSnapCacheScheme stays train 1's 14 (Binding already has spans).
+# 2026-09-15, JAVA TYPE::METHOD (test/javamethodrefcheck.sh, issue #74, PR #235): the PR's first step (declared 96 -> 97;
+#   107 with the review step on the train) — method_reference member names after `::` plus declaration-aware resolver
+#   gating. #216 had already spent 96 on internalLinkage, so the PR re-bumped (never-reuse). RecvKind::JavaTypeCandidate
+#   is appended (after train 2b's literal kinds), record shapes and snapshot semantics are unchanged. Old extraction facts
+#   must be re-parsed.
+# 2026-09-17, ASSIGNMENT TYPES (test/narrowcheck.sh arms 44-51, PR #278): kCacheVersion 22 -> 23 and kParserVer -> 106 on
+#   integration/train-3 after small-fixes' 105 (the PR declared 99 -> 104 over main), with both quality.h mirrors — a C++
+#   assignment's bind record gains the isFromAssignment u8, and buildGraph keeps its callee-read type only when a class of
+#   that name exists. kQSnapCacheScheme stays train 1's 14: the extraction identity (the two mirrors) and the producer
+#   identity already key every blob, and no snapshot semantics changed.
+# 2026-09-17, A4 (lane/small-fixes-0917, found-items 2026-09-17): kParserVer -> 105 on integration/train-3 after
+#   #276's 104 (the lane declared 99 -> 100 over main), mirrored in
+#   src/quality.h's kIngestParserVerMirror in the same diff (test/qextractionkeycheck.sh asserts the
+#   equality) — `.hxx` gained a src/ingest_crawl.h kLangTable row (Lang::Cpp, same as .hpp/.hh); the crawl
+#   previously skipped every `.hxx` file outright, so a tree that spells its headers `.hxx` now yields NEW
+#   files/symbols/edges a pre-bump cache never saw. kQSnapCacheScheme stays 14: no cache KEY or blob-shape
+#   semantics changed, only the extraction identity (old extraction facts must be re-parsed, not re-keyed).
+# 2026-09-17, TEMPLATE ARGUMENTS IN A RECEIVER'S TYPE (test/narrowcheck.sh arms 39-43, PR #276): parserVer and its quality
+#   mirror move to 104 on integration/train-3 (the PR declared 99 -> 103 over main; train 1b's 103 is ahead of it) — a C++
+#   declaration's Type/ParamType record takes its type's last name through the grammar's fields, so an unqualified
+#   template-id records a type at last and `Outer<int>::Inner` records `Inner`, not `Outer`. Record layouts are unchanged,
+#   so kCacheVersion stays 22; kQSnapCacheScheme stays train 1's 14: no key or snapshot semantics changed, only the
+#   extraction identity. Old extraction facts must be re-parsed. The train re-derives this pin on the merged tree.
+# 2026-09-17, TRAIN 1b (#277, integration/train-1b, built on train 2b): kParserVer and its mirror 102 -> 103 for the
+#   maintainer fix on #244's JS/TS literal receivers (a signed numeric literal, (-1).toFixed(), is a number receiver;
+#   CodeRabbit on #277). An extraction change, so the parser version moves and the mirror moves with it; the qsnap
+#   scheme does not (the snapshot LAYOUT is unchanged, only which extraction produced it). Re-pinned on the train tree.
+# 2026-09-17, TRAIN 2b (integration/train-2b: #244 a948bf46, #243 6b234717, #256 8464f3be, lane/field-final-segment
+#   a23f4ec3, built on main bcd3b016, then merged with main ea03af88 and b09b53a9 = train 1): RE-DERIVED ON THE FINAL
+#   MERGED TREE, carried from no side. kParserVer and its mirror are assigned in merge order over trains 1 and 2's 99:
+#   #244 = 100, #243 = 101, #256 = 102 (the lanes declared 97, 99 and 100); the field lane does not bump.
+#   kCacheVersion stays 22; kQSnapCacheScheme is train 1's 14 (this train changes no snapshot semantics). Every lane pin hashed its
+#   own number over its own base, so none hashed the merged declaration lines; the three lane entries below are
+#   renumbered to the train's numbers.
+# 2026-09-16, C++ TEMPLATE SCOPES (test/cpptmplscopecheck.sh, PR #256): parserVer and its quality mirror move to 102 on
+#   integration/train-2b (the PR declared 100) — a primary template's out-of-line member keys the bare template name,
+#   a specialization keeps its canonical template-id, a reference keeps the template-id it writes, and a class
+#   specialization header's base clause is captured as inherit refs. No record layout changes: kCacheVersion stays 22. kQSnapCacheScheme stays
+#   12: no manifest function changed, only extraction identity. Old extraction facts must be re-parsed.
+# 2026-09-16, MEMBER TEMPLATE CALLS (lane/template-call-edges; test/cppqualcheck.sh §12): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
+#   kParserVer and kIngestParserVerMirror -> 101 on integration/train-2b (the PR declared 96 -> 99); kCacheVersion STAYS 22. A C++ member call with explicit
+#   template arguments (`r.f<T>()`, `p->f<T>()`, `x.template f<T>()`) now mints a call reference, and the `template`
+#   disambiguator no longer leaks into a qualified call's name or qualifier, so the extracted SET and names change and
+#   only the parser version can reject a v96 blob; no record changes shape. No manifest function changed.
+# 2026-09-16, TS/JS LITERAL RECEIVERS (issue #163, PR #244): kParserVer and its quality mirror move to 100 on
+#   integration/train-2b (the PR declared 96 -> 97; renumbered in merge order over train 2's 99).
+#   RecvKind gains LitString/LitArray/LitRegex/LitNumber/LitBoolean (appended u8). Cache format unchanged
+#   (kCacheVersion stays 22). A `"x".replace()` call no longer takes the bare-name ladder. Extraction
+#   identity moved; snapshot scheme unchanged. Old extraction facts must be re-parsed.
+# 2026-09-17, TRAIN 1 x TRAIN 2 (integration/train-1 merging main bcd3b016 = #265): RE-DERIVED ON THE MERGED TREE,
+#   carried from neither side. Train 1 pinned a37d1539 over kQSnapCacheScheme 14 (#253 13, #255 14) with parserVer 96;
+#   train 2 pinned 95818fe5 over parserVer 99 (#248 97, #254 98, #257 99) with the scheme at 12. Neither hashed the
+#   other's lines. The merged manifest carries scheme 14 and parserVer/mirror 99, and qextractionkeycheck proves the
+#   mirror. No new bump: train 2 moved extraction only, and train 1's producer identity already keys every blob per build.
+# 2026-09-17, TRAIN 2 (integration/train-2 on main 9f44a363: #248 186fcb84, #254 0585b2f3, #257 50129f8c): RE-DERIVED ON
+#   THE MERGED TREE, carried from no side. kParserVer is assigned in merge order from main's 96: #248 = 97, #254 = 98,
+#   #257 = 99, the numbers each lane already declared. kCacheVersion stays 22; kQSnapCacheScheme stays 12. Main's pin
+#   (37dac79a, #249's qsnapCountFits) hashed parserVer 96 over the new deserializeSnapshot; the lanes' pins (#248
+#   db0e8cce at 97, #254 8ca11f67 at 98, #257 01ea4c63 at 99) hashed their numbers over the manifest before #249,
+#   so none of them hashed the merged declaration lines. #243 also declares 99 and carries #257's pin 01ea4c63: a
+#   clean merge of a wrong population, so it re-bumps over this train's number when it lands.
+# 2026-09-16, STD-TYPED MEMBER FIELDS (test/fieldnarrowcheck.sh arm q): parserVer and its quality mirror move 98 -> 99 —
+#   a C++ field's compose record carries the namespace its type was written in as its qualifier (`std` for
+#   `std::string name_;`). Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key
+#   or snapshot semantics changed, only the extraction identity. Old extraction facts must be re-parsed.
+# 2026-09-16, RECEIVER QUALIFIERS (test/narrowcheck.sh arms 17-24): parserVer and its quality mirror move 97 -> 98 — a
+#   C++ assignment from a constructor (`x = std::map<K, V>()`) records the constructor's qualified text, as a
+#   declaration's record already did at 97 (parameter receivers, lane/param-receiver-binding, re-pinned there).
+#   Record layouts are unchanged, so kCacheVersion stays 22; kQSnapCacheScheme stays 12: no key or snapshot semantics
+#   changed, only the extraction identity. Old extraction facts must be re-parsed.
+# 2026-09-16, PRODUCER IDENTITY (test/qsnapproducercheck.sh): serializeSnapshot/deserializeSnapshot write and refuse
+#   a new header field — fnv1a64 of the build's source identity (cmake/source_identity.cmake) — and qsnapExclHex /
+#   qbodyExclHex fold it into the key, because a dead set is a function of call RESOLUTION and nothing in the key
+#   moved with it: two builds that resolve differently served each other's dead set. HEADER SHAPE change →
+#   kQSnapCacheScheme 13 -> 14 (13 is the root-spelling bump below; the two landed in one integration train) and
+#   kQBodyCacheScheme 3 -> 4, then re-pinned. Extraction unchanged: parserVer 96.
+#   Since this pin a missed bump no longer serves a wrong answer across builds (any source change renames the
+#   blob); this gate still asks the question, and its log still records the answer.
+# 2026-09-16, ROOT-SPELLING INVARIANCE (#228, test/rootspellingcheck.sh): isDeadCandidate reads the fixture and
+#   test-script exemptions off model.h::rootRelPath instead of the path as the root was typed, and the call graph
+#   a Snapshot is built from now resolves root-relative imports under every root spelling (resolve.h, graph.h —
+#   files this manifest cannot hash, which is why the bump is argued here rather than detected). A v12 blob for an
+#   unchanged sha can carry the pre-fix dead set: kQSnapCacheScheme moves 12 -> 13. Extraction identity unchanged.
+# 2026-09-16, CRASH LANE (#249; test/cachefuzzcheck.sh Parts 2 and 5): RE-PIN ONLY, kQSnapCacheScheme STAYS 12.
+#   deserializeSnapshot now checks each vector count against the bytes left (qsnapCountFits) before it reserves.
+#   The check only refuses a count no blob of that length can hold, and every blob serializeSnapshot writes
+#   passes it. It refuses a corrupt blob earlier, on the path that already refused it, so nothing about what a
+#   cached Snapshot means or how it is laid out changed. Extraction identity is unchanged.
 # 2026-09-16, PYTHON DISPATCH (#228): inherited self/cls calls make overrides possible live targets.
 #   kQSnapCacheScheme moves 11 -> 12; pythonDispatchedMethodIds joins the semantic manifest.
 #   Both snapshot and delta consult the same set; extraction identity is unchanged.

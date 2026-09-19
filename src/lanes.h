@@ -94,7 +94,7 @@
 #include "quality.h"            // pathQualifiedKey — the one body-hash/claim key space (§KEY)
 #include "arch.h"               // relForHash / fnv1a64
 #include "serialize.h"          // jsonStr
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -200,6 +200,7 @@ struct Claim
     std::string   id;                        // canonicalId, or "" ⇒ emitted as null (it would be a bare name)
     std::uint32_t amb = 0, cx = 0, ccx = 0, churn = 0;
     std::uint8_t  tested = 0;
+    bool          nonSource = false;         // isTestPath on the ROOT-RELATIVE path (#228: never a directory above the root)
 };
 
 struct LaneFileRow
@@ -436,6 +437,7 @@ inline Claim makeClaim( const IngestResult& ing, const Graph& g, const ClaimLens
     c.overloads      = lens.ident->defsForKey[ node ];
     c.idCollidesWith = lens.ident->idCollidesWith[ node ];
     c.path           = ing.files[ s.fileId ];
+    c.nonSource      = isTestPath( rootRelPath( ing, s.fileId ) );
     c.name           = s.name;
     c.scope          = s.scope;
     c.cx             = s.cx;
@@ -768,7 +770,7 @@ inline WarnTally tallyClaims( const std::vector<Lane>& lanes )
             {
                 ++t.idCollisions;
             }
-            if( isTestPath( c.path ) )
+            if( c.nonSource )
             {
                 ++t.nonSourceClaims;
             }
@@ -1117,7 +1119,7 @@ inline void measureLaneOverlap( const IngestResult& ing, const std::vector<Lane>
 // caller's own root already implies) — no ref resolution, no archive, no second ingest.
 inline PlanLanesResult computePlanLanes( const LanesInputs& in )
 {
-    VERIFY( in.ing != nullptr && in.g != nullptr && in.root != nullptr );
+    ASSUME( in.ing != nullptr && in.g != nullptr && in.root != nullptr );
     const IngestResult& ing = *in.ing;
     const Graph&        g   = *in.g;
 
@@ -1177,7 +1179,7 @@ inline PlanLanesResult computePlanLanes( const LanesInputs& in )
     buildWarnings( in, result );
     if( result.lanes.empty() )
     {
-        DEGRADED_PATH_ALERT( "plan-lanes: the task's ranked surface produced no assignable lane — emitting a plan with zero lanes" );
+        DISCLOSE( "plan-lanes: the task's ranked surface produced no assignable lane — emitting a plan with zero lanes" );
     }
     return result;
 }
