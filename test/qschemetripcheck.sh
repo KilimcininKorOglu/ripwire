@@ -40,6 +40,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   veto a rebound alias); no other member changes extraction, so no second bump. The lane left this pin at main's value
 #   (the gate was red on its head). kCacheVersion stays 24, kQSnapCacheScheme stays 14 (no member changes a manifest
 #   function; the ingest_cache.h declaration text is the only manifest input that moved).
+# 2026-09-19, DEGRADE DISCLOSURE (test/skipreasoncheck.sh arm 10, lane/disclose-sink-form): kParserVer and its mirror
+#   114 -> 115 over main e54b688e (the landing train re-derives the number) — a partially extracted file is written to the
+#   cache as UNKNOWN and itemized why="extract-partial"; a cache written before stored its partial facts under the real
+#   hash, which a warm run would serve as whole. kCacheVersion stays 24, kQSnapCacheScheme stays 14.
 # 2026-09-17, TRAIN 5 (integration/train-5 on main a6868f75: #282 ad7a9d56, lane/rule2b-assignment-veto 626810b3,
 #   lane/field-base-member 6b8f539e): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its
 #   mirror in merge order over main's 112: #282 = 113, the veto lane = 114 (its ingest fix records a reference-returning

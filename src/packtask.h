@@ -496,6 +496,9 @@ struct PackTaskInputs
     // here, at the two places the budget is spent: the section shares trim to leave room for it, and the ladder
     // prices it, so the label fires when the trim cannot get there. 0 ⇒ every other caller, byte-identical.
     std::size_t                        trailingSectionBytes = 0;
+    // The caller's trailing section could not be charged (its chargeSection degraded, so trailingSectionBytes is 0 and
+    // it streams directly): est_tokens leaves those bytes out and the root labels itself est_measured="0".
+    bool                               isTrailingUncharged  = false;
 
     // R-E (2026-08-17 harvest): the single-root run's OWN root argument — same convention serialize()'s
     // rootArg takes (empty ⇒ multi-root, or a caller that never resolved one, e.g. an MCP call against a
@@ -838,13 +841,14 @@ inline std::vector<float> buildMaskedRank( const IngestResult& ing, const std::v
 }
 
 // every packTaskBundleText section (and renderRankingWithFar below) renders through infra/emit.h's ONE
-// renderToString seam, with this file's own degrade wording. It keeps the name it had: a section that
-// degrades is SKIPPED from the budget (empty string, the caller's documented path), so the `ok` flag the
-// seam returns has no second reading here and the call sites stay one expression long.
+// renderToString seam. A section whose render degrades comes back EMPTY and is absent from the DOCUMENT, not
+// merely from the budget — the seam's Rendered sink records ok == false, but this wrapper keeps only the text, so
+// the bundle carries no marker for the missing section yet (an open item of the degrade-disclosure lane: a
+// section-omission marker needs its own vocabulary, in the compact dialect and the JSON keys alike).
 template<class Emit>
 inline std::string packTaskRenderToString( Emit&& emit )
 {
-    return rw::renderToString( std::forward<Emit>( emit ), "pack-task: open_memstream failed — section skipped from the budget" ).text;
+    return rw::renderToString( std::forward<Emit>( emit ) ).text;
 }
 
 // R2: section 1 as ONE cohesive unit — the distance-masked packSignatures call (eligibleIds only) PLUS the
@@ -1886,6 +1890,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             std::string       attrs       = rw::pricedRootAttr( markupBytes, rw::kBytesPerTokenDefault, bodiesStr.size(), &estTokens );
             attrs += " budget_tokens=\"" + std::to_string( budgetTokens ) + "\"";
             if( lastRungFired || ( budgetTokens > 0 && estTokens > budgetTokens ) ) { attrs += " over_ceiling=\"1\""; }
+            if( in.isTrailingUncharged ) { attrs += " est_measured=\"0\""; }   // defined by the comment spliced in below
             return attrs;
         };
         const std::size_t             rootAttrsBound = rootAttrsFor( whole, /*lastRungFired=*/true ).size();
@@ -1917,6 +1922,13 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // rung now (serialize.h CeilingLadderChoice). The token comparison beside it is unchanged and is still
         // what labels an honest overshoot the ladder did not fire on. Gate: test/ceilingverdictcheck.sh (6)-(8).
         rw::spliceRootAttrs( whole, rootAttrsFor( whole, chosen.rung == rw::CeilingRung::OverCeiling ) );
+        if( in.isTrailingUncharged )
+        {
+            // est_measured= is defined where it is met: the clause rides first inside the root it qualifies
+            const std::size_t rootOpenEnd = whole.find( '>', whole.find( "<ctx" ) );
+            ASSUME( rootOpenEnd != std::string::npos );   // this function composed the <ctx …> start tag itself, above
+            whole.insert( rootOpenEnd + 1, rw::kEstModelledLegend );
+        }
     }
 
     // §6 --partition: the bundle's own surface (see the contract above). topRanked already contains bodyIds

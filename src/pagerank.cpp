@@ -192,12 +192,13 @@ PageRankRun pageRankDouble( const sparseCsr<float>& inEdges, std::span<const dou
     // the only thing that says WHICH site degraded on a dev build. It is no longer the only thing that says
     // the ranking is unfinished: that fact now leaves the function with the ranking it describes, so an
     // NDEBUG build — where this macro is nothing at all — still discloses it in the document it emits.
+    PageRankRun run{ iterationCount, true };
     if( !hasConverged )
     {
-        DISCLOSE( "PageRank reached max iterations before L1 convergence" );
+        DISCLOSE( run, PageRankRun::DisclosureWhy::MaxIterationsReached, "PageRank reached max iterations before L1 convergence" );
     }
     std::copy( currentRank.begin(), currentRank.end(), rank.begin() );
-    return { iterationCount, hasConverged };
+    return run;
 }
 
 } // namespace rw

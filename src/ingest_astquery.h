@@ -452,7 +452,8 @@ GrammarQueries compileGrammarQueries( const TSLanguage* g, const std::vector<Ast
             {
                 ts_query_delete( comb );
             }
-            DISCLOSE( "astQuery: combined per-grammar query did not compile - falling back to one tree walk per spec" );
+            DISCLOSE( Diagnostics::answerUnchanged, "the per-spec walks emit the same captures, total-key sorted: only slower",
+                      "astQuery: combined per-grammar query did not compile - falling back to one tree walk per spec" );
         }
     }
     return gqs;
@@ -1649,7 +1650,8 @@ inline bool spanTierMemoLoad( const std::string& diskPath, const StatInfo& now, 
     const bool tiersInRange = std::all_of( loaded.tier.begin(), loaded.tier.end(), []( const std::uint8_t tier ) noexcept { return tier < kSpanTierCount; } );
     if( !VALIDATE( tiersInRange ) )
     {
-        DISCLOSE( "grep: span-tier memo carries a tier byte past SpanTier — memo refused, the file is re-parsed" );
+        DISCLOSE( Diagnostics::answerUnchanged, "the memo is refused and the file re-parsed: the tiers are recomputed, never guessed",
+                  "grep: span-tier memo carries a tier byte past SpanTier — memo refused, the file is re-parsed" );
         return false;
     }
     loaded.isParsed = true;

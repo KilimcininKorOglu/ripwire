@@ -581,11 +581,7 @@ inline PatternProgram compileFor( const TSLanguage* grammar, std::string_view gr
             src += std::string( tmpl.substr( slot + 2 ) );
 
             TSParser* parser = ts_parser_new();
-            if( parser == nullptr )
-            {
-                DISCLOSE( "pattern: ts_parser_new returned null" );
-                continue;
-            }
+            ASSUME( parser != nullptr, "ts_parser_new: the default tree-sitter allocator aborts on failure (alloc.c)" );
             if( !ts_parser_set_language( parser, grammar ) )
             {
                 ts_parser_delete( parser );

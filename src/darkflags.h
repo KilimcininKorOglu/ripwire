@@ -776,9 +776,20 @@ struct CMakeScan
 
     // rv-s2 review LOW-4: CMakeScan IS the field the caller already reads for this answer, so it models
     // Diagnostics::DisclosureSink directly rather than the flag being set beside a sink-less DISCLOSE — the
-    // flag-setting becomes the disclosure itself, and disclose() is the ONE place rootWalkFailed is written.
-    enum class DisclosureWhy : std::uint8_t { RootWalkFailed };
-    void disclose( DisclosureWhy ) noexcept { rootWalkFailed = true; }
+    // flag-setting becomes the disclosure itself, and disclose() is the ONE place rootWalkFailed and escaped are written.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        RootWalkFailed,
+        SymlinkEscapesRoot,
+    };
+    void disclose( DisclosureWhy why ) noexcept   // the DISCLOSE sink: the fields the emitter reads
+    {
+        switch( why )
+        {
+            case DisclosureWhy::RootWalkFailed:     rootWalkFailed = true; break;
+            case DisclosureWhy::SymlinkEscapesRoot: ++escaped;             break;
+        }
+    }
 };
 
 // The CMake files under `root`, sorted. ingest() never collects these (CMake is not one of the indexed
@@ -844,8 +855,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
             const bool      isLink = it->is_symlink( lec );
             if( isLink && !rw::crawlPathStaysInRoot( p, rootReal ) )
             {
-                ++out.escaped;
-                DISCLOSE( "flags: a CMake file's symlink target leaves the root — file refused" );
+                DISCLOSE( out, CMakeScan::DisclosureWhy::SymlinkEscapesRoot, "flags: a CMake file's symlink target leaves the root — file refused" );
                 continue;
             }
             out.files.push_back( p );
