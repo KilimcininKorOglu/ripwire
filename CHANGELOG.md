@@ -2295,6 +2295,45 @@ CMake: it now reports `cmake_scan_failed="1"` in every build (`test/flagscheck.s
 `ASSUME_NO_ALIAS_BUF` promises on fresh local buffers state that separate storage to the compiler; each was
 checked against every caller.
 
+### Fixed — a degraded answer now says so in every build, including Release
+
+Before this change, 217 degrade paths recorded that an answer was incomplete only through a debug-build assertion.
+Release builds compile those checks out, so the binary users run printed a partial answer as if it were whole. The
+self-check `DISCLOSE( sink, why )` form now records the degrade into the output document in every build. 51
+one-argument sites remain, each listed with its reason. Where an answer was wrong rather than just incomplete, the
+output now says so:
+- `--note-add` refuses a sidecar line it cannot parse instead of deleting it, and `--notes` reports `lines_skipped=`.
+- A refused symlinked notes or arch sidecar is named.
+- `--grep` marks its hit count as a floor when a file could not be read or the scan stopped part-way.
+- `--for` reports `reason="degraded"` when it could not serve bodies.
+- `--max-tokens` reports `fit_unmeasured` when it could not measure the fit, in both XML and JSON.
+- `--whereis` no longer claims `complete="1"` after dropping a ref, and a failed git worker's refs read as unknown,
+  not merged.
+- `--slice` reports `reach_converged="0"` when its fixpoint stopped at the bound, and it refuses (and says why)
+  when git's answer for a date baseline is not an object name.
+- merge-scout no longer diffs against an unavailable tree as if it were empty.
+- A file whose extraction came back partial is listed under the new `--skipped` class `extract-partial`, is no
+  longer cached as complete, and older caches are invalidated.
+- When the token measurement fails, `est_tokens` keeps its modelled number and is labelled `est_measured="0"`.
+- `--layout` exits **3** when a definition's file cannot be read (2 still means drift, 0 means verified), so a CI
+  gate on its exit code no longer passes an unverified mirror.
+
+Refusals whose only disclosure is the refusal itself (a non-zero exit, an MCP error, a query failure) are recorded
+through `answerRefused`. Ten guards that could not fire were removed after tracing each one: those guarded by our own
+code became `ASSUME`/`EXPECTS`, and those touching external input kept a checked, disclosed path.
+`CONTRIBUTING.md`'s error ladder now says a degrade that still prints an answer must record into the document.
+
+### Changed — `--help-task` routes four more question shapes to a first verb
+
+`--help-task` used to abstain on four common question shapes. It now routes them:
+- which tests cover a file → `--affected`
+- what else changes with a file → `--situ`
+- how one named file reaches another → `--for`
+- where a named thing is implemented → `--for`
+
+On the labelled routing corpus none of the 254 decisions changed, and held-out precision stays 1.000 with harmful
+recommendations at 0.000. A 12-question paraphrase arm routes 10 correctly, with no wrong verb.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
