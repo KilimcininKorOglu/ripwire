@@ -375,7 +375,10 @@ case "$rest" in
 esac
 
 route="$( ripwire "$cwd" --help-task="$prompt" 2>/dev/null )" || exit 0
-case "$route" in *'<task-route status="recommend"'*) status=recommend;; *) status=abstain;; esac
+# The root's ATTRIBUTE, not a byte prefix: since the compact legend became the CLI default (L1) the root reads
+# <task-route schema="ripwire.help-task/v1" status=…>, and an older binary still prints status= first. Both match.
+status=abstain
+[[ "$route" =~ \<task-route[^\>]*\ status=\"recommend\" ]] && status=recommend
 
 resolve_arm "${session:-prompt}"
 
