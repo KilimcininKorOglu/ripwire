@@ -1420,7 +1420,27 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 its head segment names no .py stem and no directory anywhere in the tree), 'u' = unknown
 //                 (unresolvable but the head names something in the tree — a package the crawl was not
 //                 rooted at; never vetoed). A name bound twice in one file keeps the non-'x' verdict.
+//   importBindFile — issue #287: the SAME Python Import bindings, but keyed to the one indexed fileId the
+//                 bound name's module resolves to (resolvePreciseInclude's Step-A, falling back to the
+//                 whole-path-component-suffix match, resolvePythonModuleSuffix, for an absolute spec Step-A
+//                 alone can't place — see resolve.h). Populated ONLY when the module resolves to EXACTLY
+//                 one file; a name rebound in the same file to a SECOND, different file degrades the entry
+//                 to kNoFile (never guess). Independent of `importBind`'s verdict char (that table answers
+//                 "is this external", this one answers "which file, if any" and is deliberately not used to
+//                 change a veto verdict — narrower scope, smaller blast radius). Consulted by the module-
+//                 alias receiver narrow in buildGraph's resolve loop, BEFORE the bare-name spray.
 //   fileScopeDef — Python module-level Function/Class definitions per file: same-file definition evidence.
+//   pythonModuleRebind — issue #287 round 2 (review rv-p6.md HIGH finding): "<fileId>#name" present iff
+//                 `name` is REBOUND at Python MODULE scope in this file (a plain top-level assignment, `for`,
+//                 `with`/`except … as`, walrus, a top-level `def`/`class`, or a `global`/`nonlocal`
+//                 statement ANYWHERE in the file — capturePythonRebindShadowDecls, ingest_binds.h) by
+//                 something OTHER than the import itself. Consulted by recordImportBindFile below, BEFORE
+//                 it ever populates importBindFile for that key: a module-global rebind can reach every
+//                 function that reads the name, so the alias stops being trustworthy file-wide, not just at
+//                 one call site. A function-LOCAL reassignment is a narrower fact (only THAT function's
+//                 calls are unsafe) and is carried the existing way instead — a `LocalBindKind::VarDecl`
+//                 Binding attributed to that function, read by `ExternalVeto::hasLocal` exactly like a
+//                 parameter shadow already was.
 //   freeName    — C-family: the NAME of every scope-less (free) symbol or macro, declaration or definition,
 //                 anywhere in the corpus, restricted to names in the C-family table. A bare C++ call can
 //                 reach a free function given some declaration (an angle include is not path-resolvable, so
@@ -1429,10 +1449,152 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 the veto fires only when the name's in-repo definitions are ALL members.
 struct ExternalVetoTables
 {
-    HashMap<std::string, char> importBind;
-    HashMap<std::string, char> fileScopeDef;
-    HashMap<std::string, char> freeName;
+    HashMap<std::string, char>          importBind;
+    HashMap<std::string, std::uint32_t> importBindFile;
+    HashMap<std::string, char>          fileScopeDef;
+    HashMap<std::string, char>          pythonModuleRebind;
+    HashMap<std::string, char>          freeName;
 };
+
+// issue #287: populate ExternalVetoTables::importBindFile for ONE Python Import binding — split out of
+// buildExternalVetoTables's own loop to keep ITS branching flat (--quality-delta flagged the inlined form
+// as a complexity regression: the loop already carries the pre-existing verdict ladder). See
+// importBindFile's doc comment on ExternalVetoTables for the WHY; this is purely the "how" of one entry.
+// `resolved` is Step-A's fileId for `b.typeName` (kNoFile if Step-A missed) — the caller already computed
+// it once for the verdict ladder, so this reuses rather than re-resolving.
+inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, const HashMap<std::string, std::uint32_t>& fileIndex,
+                                  const HashMap<std::string, char>& pythonModuleRebind, std::string& key,
+                                  HashMap<std::string, std::uint32_t>& importBindFile )
+{
+    // Both are the SAME filter buildExternalVetoTables' own loop already applies before calling this (kind
+    // != Import, an empty var or an empty typeName all `continue` there) — restated here because `.front()`
+    // below is UB on an empty typeName, and a future caller of this free function would not see that loop.
+    EXPECTS( b.kind == LocalBindKind::Import, "importBindFile is a Python-Import-only table" );
+    EXPECTS( !b.typeName.empty(), "typeName.front() below reads the leading-dot marker" );
+    if( b.importedName != "module" )
+    {
+        return;   // `from m import x [as y]` — x/y names a MEMBER of m, not m itself; see the field's doc
+    }
+    key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
+    if( pythonModuleRebind.find( key ) != pythonModuleRebind.end() )
+    {
+        return;   // issue #287 round 2: something else in this file rebinds `b.var` at module scope — never trust the alias
+    }
+    std::uint32_t moduleFile = resolved;
+    if( moduleFile == kNoFile && b.typeName.front() != '.' )
+    {
+        moduleFile = resolvePythonModuleSuffix( b.typeName, fileIndex );   // absolute spec only (never relative)
+    }
+    // issue #287 round 3 (review rv-p6.md HIGH): try_emplace runs even when THIS import is unresolved
+    // (moduleFile==kNoFile) — an import whose target is outside the indexed tree (stdlib/third-party/
+    // unknown) is STILL a rebinding of `b.var`, not an absence of one. Skipping the emplace here (the
+    // round-1/2 shape) let a LATER unresolved re-import (`import os as tm` after `import target_mod as
+    // tm`) leave an EARLIER resolved entry untouched, so the stale first import kept winning. A lone
+    // unresolved import (nothing else binds this key) is observationally unchanged by inserting kNoFile:
+    // Rule 2d's own guard (`ait->second != kNoFile`) already refuses a kNoFile entry exactly like a
+    // missing one; a LATER import (resolved or not) now correctly contests whatever an earlier one left,
+    // and an earlier unresolved entry (kNoFile) correctly poisons a later import that DOES resolve.
+    const auto [ fit, finserted ] = importBindFile.try_emplace( key, moduleFile );
+    if( !finserted && fit->second != moduleFile )
+    {
+        fit->second = kNoFile;   // two DIFFERENT modules bound to the same name in one file → ambiguous, never guess
+    }
+}
+
+// issue #287 rounds 2-3 (review rv-p6.md): ExternalVetoTables::pythonModuleRebind's own construction,
+// split out of buildExternalVetoTables to keep THAT function's complexity at its pre-#287 baseline
+// (accumulated growth across three review rounds crossed the gate; --quality-delta=origin/main..HEAD
+// flagged it as preexisting-worse where each round's own small delta against the PREVIOUS commit had
+// not). See the field's own doc comment on ExternalVetoTables for the WHY/semantics; this is purely the
+// "how" — a free function over `ing` alone, same shape as this file's own buildJavaFieldOwnerGroups.
+//
+// No EXPECTS/ASSUME here, deliberately, matching resolvePythonModuleSuffix's precedent (resolve.h):
+// `b.fromSymbol < ing.symbols.size()` is the one real bound this function depends on, and it is already
+// a plain GUARD in the ternary below (`b.fromSymbol != kNoNode && b.fromSymbol < ing.symbols.size()`),
+// not a caller contract — `ing` comes straight from ingest, a Binding's `fromSymbol` is data derived from
+// PARSED SOURCE (however many defs a malformed or adversarial file produces), and converting that guard
+// into an assert would compile it away in Release on the one path it exists to protect.
+inline HashMap<std::string, char> buildPythonModuleRebindVetoes( const IngestResult& ing )
+{
+    HashMap<std::string, char> pythonModuleRebind;
+    std::string                key;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::VarDecl || b.var.empty() || b.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        const SymKind* enclosing = ( b.fromSymbol != kNoNode && b.fromSymbol < ing.symbols.size() ) ? &ing.symbols[ b.fromSymbol ].kind : nullptr;
+        if( enclosing && ( *enclosing == SymKind::Function || *enclosing == SymKind::Method ) )
+        {
+            continue;   // a narrower, function-scoped fact — buildFieldNarrowTables/hasLocal already carries it
+        }
+        if( enclosing && *enclosing == SymKind::Class )
+        {
+            continue;   // a class body's own scope — reaches no call site anywhere; ExternalVetoTables' doc explains why
+        }
+        key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
+        pythonModuleRebind.try_emplace( key, '\0' );
+    }
+    return pythonModuleRebind;
+}
+
+// issue #287 (rounds 1-3): the Python import-binding verdict ladder plus importBindFile population, split
+// out of buildExternalVetoTables for the same reason as buildPythonModuleRebindVetoes above. `fileIndex`/
+// `moduleNames` are the views buildExternalVetoTables' own (pre-existing, unmoved) setup loop already
+// built; `pythonModuleRebind` is buildPythonModuleRebindVetoes' result, consulted by recordImportBindFile
+// before it ever populates `importBindFile` for a rebound name.
+struct PythonImportVetoes
+{
+    HashMap<std::string, char>          importBind;
+    HashMap<std::string, std::uint32_t> importBindFile;
+};
+
+inline PythonImportVetoes buildPythonImportVetoes( const IngestResult& ing, const HashMap<std::string, std::uint32_t>& fileIndex,
+                                                    const HashMap<std::string, char>& moduleNames,
+                                                    const HashMap<std::string, char>& pythonModuleRebind )
+{
+    EXPECTS( !fileIndex.empty(), "buildExternalVetoTables only calls this once its own anyImport gate found ≥1 Import binding, which is what populated fileIndex" );
+    PythonImportVetoes t;
+    std::string        key;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::Import || b.var.empty() || b.typeName.empty() || b.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        // the module fileId Step-A pins, computed unconditionally (even for a relative spec, where
+        // `verdict` below is already 'i' without needing it) — recordImportBindFile wants the REAL file,
+        // not just verdict's "cannot leave the package" evidence.
+        const std::uint32_t resolved = resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex );
+        char verdict = 'x';
+        if( b.typeName.front() == '.' )
+        {
+            verdict = 'i';   // a relative import cannot leave the package
+        }
+        else if( resolved != kNoFile )
+        {
+            verdict = 'i';
+        }
+        else
+        {
+            const std::size_t dot = b.typeName.find( '.' );
+            const std::string head( dot == std::string::npos ? std::string_view( b.typeName ) : std::string_view( b.typeName ).substr( 0, dot ) );
+            if( moduleNames.find( head ) != moduleNames.end() )
+            {
+                verdict = 'u';
+            }
+        }
+        recordImportBindFile( b, resolved, fileIndex, pythonModuleRebind, key, t.importBindFile );
+        key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
+        const auto [ it, inserted ] = t.importBind.try_emplace( key, verdict );
+        if( !inserted && it->second == 'x' && verdict != 'x' )
+        {
+            it->second = verdict;   // any in-repo/unknown binding of the name outranks an external one
+        }
+    }
+    return t;
+}
 
 inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
 {
@@ -1487,37 +1649,18 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
                 seg = slash + 1;
             }
         }
-        for( const Binding& b : ing.bindings )
-        {
-            if( b.kind != LocalBindKind::Import || b.var.empty() || b.typeName.empty() || b.fileId >= ing.files.size() )
-            {
-                continue;
-            }
-            char verdict = 'x';
-            if( b.typeName.front() == '.' )
-            {
-                verdict = 'i';   // a relative import cannot leave the package
-            }
-            else if( resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )   // same view as fileIndex's keys
-            {
-                verdict = 'i';
-            }
-            else
-            {
-                const std::size_t dot = b.typeName.find( '.' );
-                const std::string head( dot == std::string::npos ? std::string_view( b.typeName ) : std::string_view( b.typeName ).substr( 0, dot ) );
-                if( moduleNames.find( head ) != moduleNames.end() )
-                {
-                    verdict = 'u';
-                }
-            }
-            fileKey( b.fileId, b.var );
-            const auto [ it, inserted ] = t.importBind.try_emplace( key, verdict );
-            if( !inserted && it->second == 'x' && verdict != 'x' )
-            {
-                it->second = verdict;   // any in-repo/unknown binding of the name outranks an external one
-            }
-        }
+        // issue #287 (rounds 1-3, review rv-p6.md): the Python-specific veto construction — computed BEFORE
+        // the two tables below can be assigned so recordImportBindFile (called inside buildPythonImportVetoes)
+        // can consult pythonModuleRebind for every entry regardless of processing order. Split into their own
+        // functions (buildPythonModuleRebindVetoes / buildPythonImportVetoes, just above) rather than inlined
+        // here: three review rounds' worth of accumulated branching pushed this function's own complexity
+        // past its pre-#287 baseline (each round's OWN delta against the previous commit looked fine; the
+        // WHOLE branch's delta against origin/main did not) — see their own doc comments for the WHY/semantics
+        // of what each table means; this call site is purely the "where".
+        t.pythonModuleRebind = buildPythonModuleRebindVetoes( ing );
+        PythonImportVetoes iv = buildPythonImportVetoes( ing, fileIndex, moduleNames, t.pythonModuleRebind );
+        t.importBind          = std::move( iv.importBind );
+        t.importBindFile      = std::move( iv.importBindFile );
     }
     for( const Symbol& sy : ing.symbols )
     {
@@ -2770,6 +2913,52 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             fieldTypeNarrowed = narrowed;
         }
         const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
+        // Python Rule 2d (module-ALIAS receiver narrow, issue #287): `alias.m(...)` where `alias` is bound in
+        // the caller's file by `import X as alias` / `import X` / `from pkg import X as alias` to a module X
+        // that resolves to EXACTLY ONE indexed file (ExternalVetoTables::importBindFile — Step-A, plus the
+        // whole-path-component-suffix fallback for an absolute spec Step-A alone can't place; resolve.h).
+        // Restricts the bare-name candidates to that ONE file's def(s) — a strictly finer cut than Rule 3
+        // below, which narrows by the caller's FILE-level import set rather than by which specific alias
+        // named which specific module. Fires only when the alias resolves to one file AND that file defines
+        // EXACTLY ONE `r.calleeName` among the bare-name candidates; 0 or ≥2 on either axis leaves `narrowed`
+        // false and the ladder falls through unchanged — it can only PICK among candidates the bare ladder
+        // would also reach, never invent one. Before Rule 3 (more specific: a named alias beats a file-level
+        // import-set narrow). Skipped when already pinned canonically / by an earlier, more specific rule, or
+        // when a LOCAL (parameter/assignment) in the caller shadows the alias name — same veto-side guard
+        // `ExternalVeto::isExternalBound` already applies before trusting an import binding (a shadowed name
+        // is not the module import any more; the ladder below decides it on its own terms). The lookup is
+        // inlined against `extVeto.importBindFile` directly (the `bindKey` buffer the A4-R5 ctypes-handle
+        // gate above already reuses) rather than a THIRD `ExternalVeto` accessor beside hasLocal/importVerdict
+        // — that shape read as a clone of both (--quality-delta), being the same two lines a third time.
+        if( !scipPinned && !canonical && !narrowed && it != byName.end()
+            && r.lang == Lang::Python && r.recv == RecvKind::NamedVar && !r.recvVar.empty()
+            && !externalVeto.hasLocal( r, r.recvVar ) )
+        {
+            bindKey.clear();  Narrower::appendUint( bindKey, r.fileId );  bindKey.push_back( '#' );  bindKey.append( r.recvVar );
+            if( const auto ait = extVeto.importBindFile.find( bindKey ); ait != extVeto.importBindFile.end() && ait->second != kNoFile )
+            {
+                const std::uint32_t aliasFile = ait->second;
+                NodeId              only      = kNoNode;
+                std::size_t         found     = 0;
+                for( NodeId c : it->second )
+                {
+                    if( langCompatible( ing.symbols[c].lang, r.lang ) && symFileId[c] == aliasFile )
+                    {
+                        only = c;
+                        if( ++found > 1 )
+                        {
+                            break;
+                        }
+                    }
+                }
+                ASSUME( found <= 2, "the loop above breaks the instant a SECOND match is found" );
+                if( found == 1 )
+                {
+                    cand.push_back( only );
+                    narrowed = true;
+                }
+            }
+        }
         // P2-D Rule 3 (import/include-based file narrow): when the name is ambiguous (K same-name defs) but the
         // caller's file #includes / imports EXACTLY ONE file that defines it, resolve to that file's def(s) and
         // DROP the rest — BEFORE the bare-name spray. Sound with no type info: it consumes only the file→file

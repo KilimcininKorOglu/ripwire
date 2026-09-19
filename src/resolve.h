@@ -528,6 +528,53 @@ inline std::pair<std::uint32_t, bool> probeJsRuntimeSourceExt( std::string_view 
     return { ambiguous ? kNoFile : hit, ambiguous };
 }
 
+// ── Python Step-A, SUFFIX fallback (issue #287) — for an ABSOLUTE (non-relative) spec Step-A's two bases
+// (relative-to-file, relative-to-crawl-root) both miss: `import target_mod` naming an indexed
+// `pkg/target_mod.py` that lives under a package directory neither base probes (no sys.path modelling —
+// same limit Step-A already has). Reuses `samePathTail` (arch.h) — the SAME whole-path-COMPONENT-boundary
+// suffix test already used to match a canonical id's root-relative spelling (graph.h::canonicalIdMatches)
+// and a git tree path against an ingest path (crossref.h::sameTreePath) — rather than a new, looser
+// matcher: `target_mod.py` hits `pkg/target_mod.py` on a real path-component boundary, never
+// `xtarget_mod.py` or a bare `.py`. `fileIndex` is the same ingest-root-relative universe Step-A probes;
+// unique-or-degrade exactly like Step-A's own probe (0 or ≥2 distinct fileIds hit ⇒ kNoFile).
+//
+// NEVER applied to a relative spec — a leading `.` fixes the base to the includer's own file, so
+// suffix-scanning it would be a real loosening (matching some unrelated same-named file elsewhere in the
+// tree), not a mirror of Step-A. Guarded here too (kNoFile on a relative/empty target) so a future call
+// site can't skip the gate silently.
+inline std::uint32_t resolvePythonModuleSuffix( std::string_view target, const HashMap<std::string, std::uint32_t>& fileIndex )
+{
+    if( target.empty() || target.front() == '.' )
+    {
+        return kNoFile;
+    }
+    std::string modPath;
+    modPath.reserve( target.size() );
+    for( const char c : target )
+    {
+        modPath.push_back( c == '.' ? '/' : c );
+    }
+    const std::string tailPy   = modPath + ".py";
+    const std::string tailInit = modPath + "/__init__.py";
+
+    std::uint32_t hit = kNoFile;
+    for( const auto& kv : fileIndex )
+    {
+        if( samePathTail( kv.first, tailPy ) || samePathTail( kv.first, tailInit ) )
+        {
+            if( hit == kNoFile )
+            {
+                hit = kv.second; // first distinct hit
+            }
+            else if( kv.second != hit )
+            {
+                return kNoFile; // a SECOND distinct file → ambiguous, never guess
+            }
+        }
+    }
+    return hit;
+}
+
 // ── TS/JS Step-A — SOUND (closest to C quote-includes). Relative specifier `./x` / `../a/b` → probe a
 // FIXED extension list then index files, relative-to-includer; a BARE specifier (`react`, `lodash` — no
 // leading dot) is node_modules/external → kNoFile (unresolved, never matched). Resolve IFF exactly ONE

@@ -788,6 +788,11 @@ enum class LocalBindKind : std::uint8_t
                //     bound name's module is inside the indexed tree. Rule 2 (kind == Type), the L3 fn tables
                //     and shadow suppression all skip it by kind. Python captures these; a `from m import *`
                //     records nothing (no name is bound). APPENDED for the same cache reason as VarDecl.
+               //     issue #287 (kParserVer 115): `importedName` carries one more bit for Python — "module"
+               //     iff `var` names the MODULE itself (`import a.b`/`import a.b as c`), empty for `from m
+               //     import x [as y]` (`var` names a MEMBER of m, not m). The module-alias receiver narrow
+               //     (graph.h buildGraph) reads this to refuse `x.attr()` when `x` was bound the second way
+               //     — `x` there is a value from inside m, and `.attr` is not a lookup in m's own namespace.
     JsImport,  // named ES import: var=local name, typeName=module, importedName=export (empty for type-only).
     JsExport,  // ES export: var=EXPORTED name; importedName=the LOCAL name it binds (empty on the declaration
                //     form, where the two are the same word). spanStart/spanEnd is the region a definition must
