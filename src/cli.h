@@ -869,6 +869,11 @@ inline constexpr char kHelpHead[] =
         "                               the intent, integer score/margin and repository facts; never calls a model, executes\n"
         "                               the recommendation, or accesses the network. Structured claims/traces/symbols outrank\n"
         "                               lexical cues. Recommendation only; pipe trace text to stdin for --from-trace=-.\n"
+        "                               A symbol NAME resolves as evidence only when it is identifier-shaped (camelCase,\n"
+        "                               snake_case, a ::/. scope) or marked as code in the task text -- a short bare word\n"
+        "                               (a lone letter, a SCREAMING name, or an ordinary word that happens to match an\n"
+        "                               indexed name, e.g. django's F) does not resolve on its own. Wrap it in backticks\n"
+        "                               (task text: `F`) or write it in call form (F()) to route on it by name.\n"
         "    --for=TASK                 the task lens: say what you are doing, get the signatures and bodies to read first\n"
         "                               the task lens: ranked signatures + metrics framed for reuse. The bundle enforces a\n"
         // §B7.5 (CA4): this said <sigs payload="capped"> — the STRING ENUM the §P8 vocabulary migration

@@ -3124,9 +3124,11 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
                       "(100/100 on a structural route, one the shipped parser itself accepts). <facts> is the "
                       "repository evidence the decision read: git= dirty= a git repo and an uncommitted diff, "
                       "trace= a pasted stack/sanitizer shape, resolved_symbols= how many indexed names the task "
-                      "NAMES. <choice> is the recommendation: intent= the route, skill= the skill that owns it, "
-                      "reason= the evidence in words, and <run> the command, pasteable as is. This tool "
-                      "recommends only: it never runs what it names. ";
+                      "NAMES (a short bare word — a lone letter, a SCREAMING name, or an ordinary word that happens "
+                      "to match an indexed name — does not count on its own; backtick it or write it in call form, "
+                      "e.g. `F` or F(), to route on it by name). <choice> is the recommendation: intent= the route, "
+                      "skill= the skill that owns it, reason= the evidence in words, and <run> the command, "
+                      "pasteable as is. This tool recommends only: it never runs what it names. ";
     out += rw::kNextLegendClause;
     out += "-->";
     out += "<task-route status=\"";

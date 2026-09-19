@@ -251,6 +251,30 @@ promptBytes="$( printf '%s' "$prompt" | wc -c | tr -d ' ' )"
 case "$promptBytes" in ''|*[!0-9]*) exit 0;; esac
 [ "$promptBytes" -le 8192 ] || exit 0
 
+# HARNESS/SYSTEM EVENT GUARD, checked before the classifier is ever invoked. A background-task completion
+# (`<task-notification>…</task-notification>`) or an injected reminder (`<system-reminder>…</system-reminder>`)
+# can arrive on this same channel, not from the user, and `--help-task` has no concept of "this names no
+# task" — it answers the report prose anyway (docs/EVALS.md, the routing-noise round). Narrow and
+# POSITIONAL on purpose: only the prompt's own leading bytes, after whitespace, are tested, so a genuine
+# prompt that merely mentions one of these markers mid-sentence is untouched. The classifier is never
+# called, but the row is still written (status=skip-system) so coverage stays measurable from the log.
+rest="$( printf '%s' "$prompt" | sed -e 's/^[[:space:]]*//' )"
+case "$rest" in
+    '<task-notification>'*|'<system-reminder>'*)
+        if meter_home; then
+            promptHash="$( hash_text "$prompt" )"
+            [ -n "$session" ] || session="prompt:$promptHash"
+            sessionHash="$( hash_text "$session" )"
+            now="$( date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true )"
+            jq -cn --arg at "$now" --arg hash "$promptHash" --arg sessionHash "$sessionHash" \
+                --argjson bytes "$promptBytes" \
+                '{v:2,at:$at,event:"UserPromptSubmit",status:"skip-system",intent:"",recommended:"",
+                  session_hash:$sessionHash,prompt_hash:$hash,prompt_bytes:$bytes}' >>"$routingLog" 2>/dev/null || true
+        fi
+        exit 0
+        ;;
+esac
+
 route="$( ripwire "$cwd" --help-task="$prompt" 2>/dev/null )" || exit 0
 case "$route" in *'<task-route status="recommend"'*) status=recommend;; *) status=abstain;; esac
 

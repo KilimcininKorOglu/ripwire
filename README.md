@@ -2388,7 +2388,10 @@ first column are not themselves valid arguments.
 
 Not sure which command answers the task? Run `ripwire . --help-task="<task in words>"`. The command
 returns one recommended command, or it abstains when the evidence is thin. The command gives advice
-only. It does not run the recommendation.
+only. It does not run the recommendation. A short bare word — a lone letter, a SCREAMING name, or an
+ordinary word that happens to match an indexed name (django's `F`, for instance) — does not resolve on
+its own; only genuine identifier shape does (camelCase, snake_case, `::`/`.`). Mark it as code in the
+task text — backtick it or write it in call form, e.g. `` `F` `` or `F()` — to route on it by name.
 
 ### 6. Output format
 

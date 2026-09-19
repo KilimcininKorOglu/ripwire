@@ -417,3 +417,80 @@ cue), neither is a row this lane wrote, and the count has been 2 throughout. A n
 measured is not a measurement, which is the same rule this file applied to the byte-identity claim.
 
 **Seal: sha256(prompts.tsv) = `bb802dabd45bf228b51296cca2a0f35c54824895f429954959ef7219416d0f30`** (rows=249, dev=119, test=130).
+
+## 2026-09-19 — the routing-noise round (`lane/route-noise`) — harness events are not tasks
+
+**The defect.** `--help-task` has no concept of "this text is a harness event, not something the user
+typed". Claude Code delivers a background-task completion (`<task-notification>…</task-notification>`)
+and an injected reminder (`<system-reminder>…</system-reminder>`) to `UserPromptSubmit` through the same
+channel a real prompt arrives on, and the classifier answered the report prose anyway: `symbolMention`'s
+old "strong" test was ANY uppercase/underscore/colon/dollar byte anywhere in an indexed name, so a
+single-word capitalized class name (`Fix`, `Report`, `Summary`, `Lane`, `Split`, `WORK`, a bare `A` or
+`E` — ripwire's own fixture corpora define real symbols with exactly these names, written for unrelated
+rounds) passed on a leading capital alone. A background-task report quoting ordinary prose like "Summary:
+A, Fix, Report" then minted a spurious `--connect='Split,Summary,A,Fix,Report'` recommendation out of
+text that never named a task at all; a system-reminder mentioning "Lane E WORK" minted
+`--connect='Lane,E,WORK'`; a report quoting a sanitizer excerpt minted `--from-trace=-`.
+
+**The fix, two layers.** (1) `hooks/ripwire-claude-route.sh` and `hooks/ripwire-codex-route.sh` skip
+calling the classifier at all when the prompt starts (after whitespace) with `<task-notification>` or
+`<system-reminder>` — still writing a `status="skip-system"` meter row so coverage stays measurable,
+mirroring the existing notification guard in `hooks/ripwire-claude-toolroute.sh` (which already covered
+`<task-notification>`/`[SYSTEM NOTIFICATION` inside a Bash command/Grep pattern/Read path — untouched by
+this round; a `<system-reminder>` block does not appear in tool-call arguments by construction, so its
+exposure there is a different question this round found no evidence for). (2) `src/taskroute.h` carries
+the identical guard (`looksLikeSystemEvent`) for `--help-task` calls that reach the classifier directly
+(a test, an MCP client, a future integration) — belt and suspenders, not a redundant pair. Independently,
+`symbolMention`'s strong-mention test (`identifierMentionShape`) now requires genuine identifier SHAPE —
+an interior uppercase after a lowercase (a real camel/Pascal seam), an underscore, a `::`/`.` qualifier,
+or explicit backtick/`()` marking in the prompt — or, failing shape, a bare word at least 4 bytes that is
+not an ordinary English word (`commentcoherence.h::isCommentStopword`, reused, plus a small
+`kShapelessCollisionWords` addendum — `lane`, `report`, `split`, `summary` — for the ordinary nouns a
+general function-word stoplist does not carry). A SCREAMING word or a lone capital letter never qualifies
+by shape alone. This fix is independent of (1): a noise prompt with no `<task-notification>` wrapper at
+all (a paraphrased report, a copy-pasted summary line) is caught by this layer even when neither hook
+guard fires.
+
+**Rows added: 5, `provenance=harness-event`.** A new provenance tag, not `handwritten*`: this is
+harness-generated event text (task-id/status/summary XML, a background-task report), not authored prose,
+so `contamination_screen.py`'s trigram screen does not apply to it the same structural way `templated`
+and `instrumented-cli` rows are exempt — the screen only iterates rows whose `provenance` starts with
+`handwritten`. Split by the same content-hash rule (`sha256(prompt)[0] < 0x4D → dev`), computed
+mechanically per row (TSV discipline: literal `\n` for the multi-line notification bodies). Two rows are
+the exact reproductions from the bug report (`Split-out lane: edit-hint finished…` and `…Lane E WORK`);
+three more, anonymized (synthetic task ids, no private paths): a plain background-task completion with no
+collision words (an always-negative control), a task-notification quoting an AddressSanitizer excerpt
+(the `--from-trace=-` false-positive shape), and a system-reminder combining the agent-quote shape from
+the bug report with the collision words again.
+
+**The eval fixture had to grow to reproduce the bug at all.** `bench/taskroute_eval.py::make_repo`
+(and `test/taskroutecheck.sh`'s own fixture, and `test/routehookcheck.sh`'s dedicated `NREPO`
+fixture) gained the same single-word capitalized classes (`A`, `E`, `Fix`, `Report`, `Summary`, `Lane`,
+`WORK`, `Split`) the bug report named — without them, the corpus rows above score `abstain` on the
+UNFIXED binary too (the classifier never had anything to over-resolve), which would make the "red before,
+green after" proof vacuous. Measured directly (`build/ripwire` at `57d713dd`, the commit before this lane,
+with this round's extended fixture): 4 of the 5 new rows recommend on the unfixed binary
+(`connect-symbols` ×3, `trace-debug` ×1); the 5th (the always-negative control) correctly abstains on
+both. Fixed binary: all 5 abstain. Full-corpus diff (254 rows, base vs. branch, same fixture): exactly
+these 4 rows change decision; nothing else moves.
+
+**Screen result: 2 flagged lines** (61 `i change its`, 176 `the value of`), both pre-existing and
+unrelated to this round — unchanged from the previous seal. The 5 new rows are `harness-event`
+provenance and are not screened by construction (see above).
+
+**Held-out floors** (`bench/taskroute_eval.py`, 254 rows, this round's fixed binary):
+
+| split | rows | accuracy | precision | harmful | neg-specificity | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| test | 133 | **0.947** | 1.000 | 0.000 | 1.000 | 0.918 |
+| dev | 121 | **0.950** | 1.000 | 0.000 | 1.000 | 0.933 |
+| all | 254 | **0.949** | 1.000 | 0.000 | 1.000 | 0.925 |
+
+The original 249 rows are unaffected: coverage and every confusion line are unchanged from the previous
+seal's numbers on this binary (0.946/0.950/0.948 accuracy by split); the identifier-shape fix only
+narrows what counts as evidence for names carrying a capital/underscore/colon/dollar, and every
+pre-existing positive row in the corpus uses genuine camelCase/PascalCase shape or the cue-gated
+all-lowercase weak tier, neither of which this round touched.
+
+**Seal: sha256(prompts.tsv) = `6641fcb174e5aafc897c73f915c674fc1b53b6fd1f0af813518f629b8069c220`**
+(rows=254, dev=121, test=133).
