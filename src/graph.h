@@ -1823,6 +1823,14 @@ inline std::pair<std::uint32_t, bool> resolveJsNamedImportFile( std::string_view
             probe( source, runtimeExt->runtime.size() );
         }
     }
+    // Declaration fallback, second tier (resolve.h::kJsRuntimeSourceExts — source before declaration, tsc
+    // live-verified): tried ONLY when the exact probe and every source alternate above found NOTHING —
+    // `!ambiguous && hit == kNoFile` excludes the case where two source alternates both hit (that stays a
+    // degrade, never falls through to guess a declaration neither source needed).
+    if( !ambiguous && hit == kNoFile && !runtimeExt->decl.empty() )
+    {
+        probe( runtimeExt->decl, runtimeExt->runtime.size() );
+    }
     return { ambiguous ? kNoFile : hit, ambiguous };
 }
 

@@ -433,17 +433,38 @@ inline std::uint32_t resolvePythonImport( std::string_view includerPath, std::st
 // resolution requires `import './api.js'` for `api.ts`, and a `.mjs`/`.cjs` specifier names its `.mts`/`.cts`
 // source. ONE table, read by the precise include tier (resolveTsImport below) and by graph.h's named-import binder
 // (resolveJsNamedImportFile), so --deps and the call binder cannot disagree about which file a runtime spelling
-// names. No directory-index row: TypeScript never maps `./lib.js` onto `lib/index.ts`.
+// names. No directory-index row: TypeScript never maps `./lib.js` onto `lib/index.ts` (verified live, tsc 7.0.2
+// --traceResolution, node16/nodenext/bundler identical: "was not resolved").
+//
+// Two tiers, source before declaration (same trace): a stray `.d.ts`/`.d.mts`/`.d.cts` is tried ONLY when
+// `sources` answers NOTHING — `./d.js` with only `d.d.ts` on disk resolves to it, but `./both.js` with BOTH
+// `both.ts` and `both.d.ts` resolves to `both.ts` and never even probes the declaration (source wins outright,
+// not "first written"). `sources` itself keeps the existing unique-or-degrade discipline unchanged: if two
+// SOURCE alternates both exist (e.g. a tree with both `tj.ts` and `tj.tsx` for one `./tj.js` specifier), tsc's
+// real resolver breaks the tie by fixed order (`tj.ts` wins, not ambiguous) — this table does not implement
+// that tie-break (matches the pre-existing `.js`->{ts,tsx} row's shipped behaviour, a deliberate conservative
+// choice already documented above: two real candidates degrade to unresolved rather than guess). `decl` is
+// UNAMBIGUOUS by construction — TypeScript declaration files never fork on tsx/jsx, so there is exactly one
+// declaration spelling per runtime extension, never a pair to degrade between.
 struct JsRuntimeSourceExt
 {
     std::string_view runtime;        // the emitted spelling the specifier carries
     std::string_view sources[ 2 ];   // the source spellings it may name; an empty slot is unused
+    std::string_view decl;           // declaration-only fallback, tried iff `sources` found nothing at all; empty = none
 };
 
 inline constexpr JsRuntimeSourceExt kJsRuntimeSourceExts[] = {
-    { ".js",  { ".ts", ".tsx" } },
-    { ".mjs", { ".mts", {} } },
-    { ".cjs", { ".cts", {} } },
+    { ".js",  { ".ts", ".tsx" }, ".d.ts"  },
+    // .jsx before .js in iteration order doesn't matter here (`ends_with(".js")` is false on a ".jsx" specifier —
+    // the two runtime spellings share no suffix), but jsRuntimeSourceExtOf takes the FIRST row whose runtime
+    // suffix matches, so this row still owns every ".jsx" specifier outright. Source order .tsx-then-.ts matches
+    // tsc live: `./jx.jsx`->jx.tsx (only .tsx present), `./jts.jsx`->jts.ts (only .ts present). The `.d.ts`
+    // fallback for a bare `.jsx` specifier is not in the archived tsc trace (its probe list only carried .js/.jsx
+    // rows that already had a source hit) — it is the same single declaration-file rule as `.js` because
+    // TypeScript never emits a `.d.jsx`/`.d.tsx`; kept here for that reason, not because it was traced directly.
+    { ".jsx", { ".tsx", ".ts" }, ".d.ts"  },
+    { ".mjs", { ".mts", {} },    ".d.mts" },
+    { ".cjs", { ".cts", {} },    ".d.cts" },
 };
 
 // The row a specifier's suffix selects, or nullptr when it carries no runtime extension.
@@ -582,6 +603,16 @@ inline std::uint32_t resolveTsImport( std::string_view includerPath, std::string
             {
                 probe( stem + std::string( source ) );
             }
+        }
+        // Declaration fallback, second tier: `hit == kNoFile` here means the exact probe above AND every
+        // source alternate found NOTHING — not the `kNoFile - 1` ambiguous marker, which this check
+        // deliberately excludes, so two conflicting source hits still degrade rather than fall through to a
+        // declaration neither of them needed. tsc, live: `./both.js` with both `both.ts` and `both.d.ts` on
+        // disk resolves to `both.ts` and never touches the declaration; `./d.js` with only `d.d.ts` resolves
+        // to it.
+        if( hit == kNoFile && !runtimeExt->decl.empty() )
+        {
+            probe( stem + std::string( runtimeExt->decl ) );
         }
     }
     for( std::string_view e : kFileExt )
