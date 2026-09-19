@@ -741,12 +741,22 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     const std::string blastNote = situShowingNote( blastShown, affected.size(), "files",
                                                    situNextInvocation( page.selector, affected.size() ),
                                                    " prcontext_cap=20 (--pr-context's own per-file list is cut at 20 too)" );
-    rw::emitTo( out, "  [1] blast radius: {} symbols across {} files transitively depend on these changes{}\n",
-                  reach.size(), affected.size(), blastNote.c_str() );
-    // F3: the decl/def partner FIRST — it is the answer to "what else has to change with this file" that the
-    // dependent-symbol ranking below can never produce, because a header does not depend on its own source.
+    // R2-AF (round 2, answer-first ordering, owner-approved): the decl/def partner and lexical-sibling
+    // blocks print BEFORE the [1] blast radius header line — both are LOOKUPS ("what else has to change
+    // with this file", "what sits beside it"), not blast-radius members, so a reader gets the cheap answer
+    // before paying for the header's counts. The blast radius line itself moves AS A WHOLE (every cap and
+    // count it carries is unchanged, only its position is), and everything that reads as its own
+    // continuation — the graph-count gauge line, then the affected-file rows — stays right after it,
+    // exactly as before this lane. F3: the decl/def partner FIRST of the two — it is the answer to "what
+    // else has to change with this file" that the dependent-symbol ranking below can never produce, because
+    // a header does not depend on its own source.
     const std::vector<DeclDefPartner> situPartners = declDefPartners( ing, changedFile );
     writeSituDeclDefRows( out, situPartners, situPathRel );
+    // L-D: the lexical neighbours of the changed files, which the caller walk above can never reach.
+    const SituSiblings situSibs = lexicalSiblings( ing, changedFile );
+    writeSituSiblingRows( out, situSibs, situPathRelStr, page );
+    rw::emitTo( out, "  [1] blast radius: {} symbols across {} files transitively depend on these changes{}\n",
+                  reach.size(), affected.size(), blastNote.c_str() );
     {   // H5/M15: the same floor + gauge the XML graph verbs mark, in this report's prose — through the SAME
         // fold, graphGaugeTotals, that graphGaugeAttrXml and graphGaugeAttrJson go through. PR #72 (382e66e6)
         // introduced that fold in the same commit that widened the gauge to three, precisely to stop the two
@@ -756,9 +766,6 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
         const auto [gaugeAmb, gaugeUnresolved] = graphGaugeTotals( g.ambOut, g.unresolvedOut );
         rw::emitTo( out, kGraphCountFloorTextLine, gaugeAmb, gaugeUnresolved, graphUnindexedTextClause( g.unindexedFiles ).c_str() );
     }
-    // L-D: the lexical neighbours of the changed files, which the caller walk above can never reach.
-    const SituSiblings situSibs = lexicalSiblings( ing, changedFile );
-    writeSituSiblingRows( out, situSibs, situPathRelStr, page );
     for( std::size_t i = blastPage.begin; i < blastPage.end; ++i )
     {
         const std::string_view rp = situPathRel( affected[i] );

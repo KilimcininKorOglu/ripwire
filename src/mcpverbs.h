@@ -1898,6 +1898,10 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     }
     // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
     const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
+    // R2-AF (round 2, S4): the SAME resolver the CLI twin calls (rw::forNamedHeaderRows, mention.h) — one
+    // resolution, both surfaces. Rows are emitted right after headerStr is flushed, below; the legend
+    // clause (present-only, never ceiling-dropped — this dialect has no ceiling ladder at all) goes here.
+    const std::vector<rw::ForNamedHeaderRow> mcpForHdrRows = rw::forNamedHeaderRows( ing, task );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
@@ -1913,6 +1917,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                             " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
                             " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens"
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
+                          + ( mcpForHdrRows.empty() ? std::string() : std::string( rw::kForHdrLegend ) )   // R2-AF: present-only
                           + " -->"
                           + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
     // W3-S item 5 (2026-08-19): both --for dialects now carry rw::kForRootRelPathsLegendShort (graphlegend.h)
@@ -2020,6 +2025,32 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         }
     }
     std::fwrite( headerStr.data(), 1, headerStr.size(), mem );
+    // R2-AF (round 2, S4): first rows inside the root, right after the legend — the CLI twin's exact rule
+    // (verbs_for.h renderForHdrRowsXml), duplicated here rather than shared because main.cpp includes this
+    // file (mcp.h, line 48) before verbs_for.h (line 525) — the render is ~10 lines over the SAME resolver
+    // (rw::forNamedHeaderRows, mention.h), which is the part a divergence would actually cost.
+    if( !mcpForHdrRows.empty() )
+    {
+        const std::string mcpHdrRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
+        const auto         mcpHdrRel        = [ & ]( std::uint32_t f ) -> std::string
+        {
+            return flRootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], mcpHdrRootPrefix ) );
+        };
+        std::vector<char> mcpHdrEsc;
+        std::string       mcpHdrXml;
+        for( const rw::ForNamedHeaderRow& row : mcpForHdrRows )
+        {
+            // same local invariant as the CLI twin's renderForHdrRowsXml (verbs_for.h): the resolver
+            // (rw::forNamedHeaderRows, mention.h) is the only producer of these ids.
+            ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
+            mcpHdrXml += "<hdr p=\"";
+            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.partnerFile ), mcpHdrEsc );
+            mcpHdrXml += "\" of=\"";
+            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.namedFile ), mcpHdrEsc );
+            mcpHdrXml += "\"/>";
+        }
+        std::fwrite( mcpHdrXml.data(), 1, mcpHdrXml.size(), mem );
+    }
     // §P3 × §P4 (parity with the CLI --for): narrow the lego block to the files the budget-trimmed sigs
     // actually kept and re-render (a byte-subset of what the budget already charged for) — reads sigsStr
     // directly now rather than re-slicing it back out of the flushed memstream buffer.

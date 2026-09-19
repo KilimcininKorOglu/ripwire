@@ -502,6 +502,11 @@ struct ForLensHeaderParts
     std::string_view rootArg;              // R-E (2026-08-17): the single-root run's own root= — the ladder's
                                             // route-dropped rebuild below calls ctxRootOpen a second time and
                                             // must carry the SAME root as the pre-built rootOpenStr did.
+    bool             hdrLegend  = false;    // R2-AF (round 2, S4): present-only — set when forHdrRows (mention.h
+                                            // rw::forNamedHeaderRows) is non-empty. NOT ceiling-droppable (unlike
+                                            // tailLegend/idRouteLegend/confidenceNote): the rows themselves are a
+                                            // small, bounded lookup outside the H1 payload budget, so their
+                                            // definition rides with them rather than falling to the ceiling.
     bool             scPresent = true;      // PR #215 review: does any row this bundle serves carry sc=? The two
                                             // dialects' sc= readings are present-only on it, and the dropped-legend
                                             // note names sc= only when it had something to define. Defaults TRUE —
@@ -719,6 +724,10 @@ inline constexpr std::string_view kForCompactLegendBodies =
     "; b t= n= p= l= full bodies, c n= l= callee signatures";
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), r= rank (gap = trimmed)";
+// R2-AF (round 2, S4): the COMPACT dialect's `<hdr p= of=/>` clause — verbatim, round-2 amendment §R7.
+// 96 B, present-only like every clause in this dialect (appendCompactForLegend below).
+inline constexpr std::string_view kForCompactLegendHdr =
+    "; hdr p= of=: the named file's one same-dir same-stem decl/impl partner, listed first (a lookup)";
 
 // The data notes in their compact spelling: the numbers stay, the sentence goes. Unknown shapes pass
 // through VERBATIM — a note this table does not know is never shortened into something it did not say.
@@ -805,6 +814,10 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     if( p.tailLegend )
     {
         h += kForCompactLegendTail;
+    }
+    if( p.hdrLegend )
+    {
+        h += kForCompactLegendHdr;   // R2-AF (round 2, S4): present-only, never ceiling-dropped
     }
     if( p.legendDropped )
     {
@@ -938,6 +951,10 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
+    }
+    if( p.hdrLegend )
+    {
+        h.append( rw::kForHdrLegend );   // R2-AF (round 2, S4): present-only, never ceiling-dropped
     }
     if( p.legendDropped )
     {
@@ -2048,6 +2065,40 @@ inline std::string renderForFileTailXml( const rw::FileTail& tail, std::size_t t
     return rw::renderFileTailXml( tail, rw::fileTailShownForBudget( tail, tailAllowed, esc ), esc );
 }
 
+// R2-AF (round 2, S4): render the task's named-file/decl-impl-partner rows (rw::forNamedHeaderRows,
+// mention.h — the resolution rule and its rationale live there) as `<hdr p= of=/>`, root-relative like
+// every other --for path, no wrapping element (§R7: "first row(s) inside the root", a lookup rather than
+// a ranked/graph list with its own total=/shown=/capped= triple). "" when the task names nothing with a
+// unique partner — the common case, byte-identical to before this feature.
+inline std::string renderForHdrRowsXml( const rw::IngestResult& ing, const std::vector<rw::ForNamedHeaderRow>& rows,
+                                        std::string_view rootArg )
+{
+    if( rows.empty() )
+    {
+        return {};
+    }
+    const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
+    const auto         rel       = [ & ]( std::uint32_t f ) -> std::string
+    {
+        return rootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], rootPrefix ) );
+    };
+    std::vector<char> esc;
+    std::string        x;
+    for( const rw::ForNamedHeaderRow& row : rows )
+    {
+        // local invariant: forNamedHeaderRows only ever returns fileIds it read out of ing.files itself
+        // (mention.h), so an out-of-range id here would mean that resolver's own contract broke, not a
+        // renderer bug — worth trapping right at the point the bad index would otherwise index OOB below.
+        ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
+        x += "<hdr p=\"";
+        x += rw::escapeXml( rel( row.partnerFile ), esc );
+        x += "\" of=\"";
+        x += rw::escapeXml( rel( row.namedFile ), esc );
+        x += "\"/>";
+    }
+    return x;
+}
+
 std::optional<int> runForLens( const MainDispatch& d )
 {
     using namespace rw;
@@ -2325,6 +2376,14 @@ std::optional<int> runForLens( const MainDispatch& d )
         const std::string forAtStamp   = flSingleRoot ? gitstamp::stampAt( root ) : std::string();
         const std::string forAtAttrStr = forAtStamp.empty() ? std::string() : ( " at=\"" + forAtStamp + "\"" );
 
+        // R2-AF (round 2, S4): resolved once, ahead of the header build below, so its legend clause can be
+        // present-only in BOTH dialects. The rows themselves are emitted later (right after headerStr is
+        // flushed, before <sigs>) and are NOT charged against the H1 payload budget below — a small, bounded
+        // lookup, not a trimmable list; §R7's own clause bounds their bytes directly (any held-out row
+        // rising more than +365 B self-rejects). Not part of the --json dialect (that branch already
+        // returned above); the extra resolve on a --json call is cheap and unused, not wrong.
+        const std::vector<rw::ForNamedHeaderRow> forHdrRows = rw::forNamedHeaderRows( ing, cfg.forTask );
+
         // H1 (B0 r2): the bundle is emitted under a GLOBAL payload budget (serialize.h kForPayloadBudgetBytes; an
         // EXPLICIT --token-budget=N overrides it at the same conservative byte rate the --max-tokens fitter uses).
         // Trimming happens inside <sigs> only, so the header is built as a string and the sibling blocks (lego,
@@ -2363,7 +2422,7 @@ std::optional<int> runForLens( const MainDispatch& d )
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
                                         /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
-                                        forScPresent };
+                                        /*hdrLegend=*/!forHdrRows.empty(), forScPresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -3080,6 +3139,12 @@ std::optional<int> runForLens( const MainDispatch& d )
         headerStr = finishForLensHeader( std::move( headerStr ), rootFinish );
 
         std::fwrite( headerStr.data(), 1, headerStr.size(), stdout );
+        // R2-AF (round 2, S4): first rows inside the root, right after the legend — see forHdrRows above.
+        if( !forHdrRows.empty() )
+        {
+            const std::string forHdrXml = renderForHdrRowsXml( ing, forHdrRows, flRootArg );
+            std::fwrite( forHdrXml.data(), 1, forHdrXml.size(), stdout );
+        }
         if( sigsPreRendered )
         {
             std::fwrite( sigsStr.data(), 1, sigsStr.size(), stdout );
