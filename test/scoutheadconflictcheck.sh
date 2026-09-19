@@ -313,6 +313,15 @@ grep -q 'ok="0" means it did not run at all' "$FULLOUT" \
 #     reason= reads) in EVERY build — only its accompanying debug TRACE is compiled out under NDEBUG — so this
 #     asserts the field, not the trace, still reaches the answer when built with -DCMAKE_BUILD_TYPE=Release.
 RELBIN="${RIPWIRE_RELEASE_BIN:-}"
+# TRAIN 9: CI builds its Release flavour into build/ and sets no env var, so the two fallback paths below
+# exist on a developer's machine and nowhere else. The binary under test IS the Release binary on that leg —
+# ask --version (the forautobodycheck/kotlincheck reading) before looking for a second one. And when no
+# Release build exists anywhere, this arm SKIPs with its reason named: an arm that cannot run is not a
+# failure, and the plain-flavour legs still prove (a)-(d).
+SHC_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+case "$SHC_FLAVOUR" in
+    Release|RelWithDebInfo|MinSizeRel) [ -z "$RELBIN" ] && RELBIN="$BIN" ;;
+esac
 if [ -z "$RELBIN" ]; then
     for cand in "$ROOT/relbuild/ripwire" "$ROOT/build_release/ripwire"; do
         [ -x "$cand" ] && RELBIN="$cand" && break
@@ -330,7 +339,7 @@ if [ -n "$RELBIN" ] && [ -x "$RELBIN" ]; then
         ok "T9(e) RELEASE: the debug trace is silent, as NDEBUG demands — reason= is carrying the disclosure now, not stderr"
     fi
 else
-    no "T9(e) RELEASE: no Release binary found (set RIPWIRE_RELEASE_BIN, or build one at \$ROOT/relbuild) — this arm cannot run"
+    printf '  SKIP  T9(e) RELEASE: this binary is a %s build and no Release one is available (set RIPWIRE_RELEASE_BIN, or build one at $ROOT/relbuild); the Release CI leg runs this arm\n' "${SHC_FLAVOUR:-dev}"
 fi
 
 [ "$fail" = 0 ] && { echo "ALL PASS"; exit 0; }
