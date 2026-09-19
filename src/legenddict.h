@@ -47,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -168,24 +169,33 @@ inline const std::string& dictionaryVersion()
     return v;
 }
 
-inline std::string dictionaryHeader( std::string_view scope )
-{
-    return "ripwire legend dictionary ripwire.dict/v1 dictv=" + dictionaryVersion() + " " + std::string( scope ) + "\n";
-}
+// The first line of both servings: the schema of the text and the version its body hashes to.
+inline constexpr std::string_view kDictionaryHeadOpen = "ripwire legend dictionary ripwire.dict/v1 dictv=";
 
 // The whole dictionary (`ripwire --legend-dict`, ripwire://legend-dict/full).
 inline std::string fullDictionaryText()
 {
-    return dictionaryHeader( "entries=" + std::to_string( kEntryCount ) ) + dictionaryBody( 0, kEntryCount );
+    std::string out( kDictionaryHeadOpen );
+    out += dictionaryVersion();
+    out += " entries=";
+    out += std::to_string( kEntryCount );
+    out += '\n';
+    out += dictionaryBody( 0, kEntryCount );
+    return out;
 }
 
 // The core the session switch serves (ripwire://legend-dict): the core entries and how the rest arrives.
 inline std::string coreDictionaryText()
 {
-    return dictionaryHeader( "core" ) + dictionaryBody( 0, kCoreCount )
-         + "every other definition is sent once, the first time an answer in this session needs it, in a comment after the "
-           "rows; ripwire://legend-dict/full (or ripwire --legend-dict) holds all "
-         + std::to_string( kEntryCount ) + "\n";
+    std::string out( kDictionaryHeadOpen );
+    out += dictionaryVersion();
+    out += " core\n";
+    out += dictionaryBody( 0, kCoreCount );
+    out += "every other definition is sent once, the first time an answer in this session needs it, in a comment after the "
+           "rows; ripwire://legend-dict/full (or ripwire --legend-dict) holds all ";
+    out += std::to_string( kEntryCount );
+    out += '\n';
+    return out;
 }
 
 // ── the roster ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -268,9 +278,10 @@ namespace detail
 {
 
 // The attributes that stay on a ref root: the answer's identity (prereg R2-LO, KEEP).
+inline constexpr std::string_view kIdentityAttrs[] = { "task", "changed", "from", "to" };
 inline bool isIdentityAttr( std::string_view name ) noexcept
 {
-    return name == "task" || name == "changed" || name == "from" || name == "to";
+    return std::find( std::begin( kIdentityAttrs ), std::end( kIdentityAttrs ), name ) != std::end( kIdentityAttrs );
 }
 
 struct RootAttr
@@ -345,18 +356,6 @@ inline std::vector<Span> headComments( std::string_view doc, const CompactRootIn
     i = root.openEnd;
     scan( doc.size() );
     return out;
-}
-
-// Removes the first occurrence of `what` from `s`; true when it was there.
-inline bool eraseFirst( std::string& s, std::string_view what )
-{
-    const std::size_t at = s.find( what );
-    if( at == std::string::npos || what.empty() )
-    {
-        return false;
-    }
-    s.erase( at, what.size() );
-    return true;
 }
 
 // A comment whose body is only punctuation and space after the removals carries nothing: dropped.
@@ -540,155 +539,194 @@ inline std::size_t specEntryId( const CompactLegendSpec* spec ) noexcept
 
 } // namespace detail
 
-// Reduce one finished inline answer to the ref posture, in place — see the header. `doc` is the answer as the inline
-// posture serves it: the compact dialect for a verb that declares `legend` (compactlegend.h already applied), the
-// native legend for MCP `for`. Only called once `session.refOn`.
-inline RefOutcome applyRefPosture( std::string& doc, LegendSession& session )
+namespace detail
 {
-    EXPECTS( session.refOn, "the ref posture exists only after the session was served the dictionary core" );
-    session.served.resize( kEntryCount, 0 );
-    const CompactRootInfo root = findCompactRoot( doc );
-    if( root.tag.empty() )
-    {
-        return RefOutcome::NotApplicable;   // a JSON or prose payload: no legend to reduce
-    }
-    const std::string_view view     = doc;
-    const std::string_view rootOpen = view.substr( root.openBegin, root.openEnd - root.openBegin );
 
-    // Which legend family? A compact root names its schema; the MCP `for` bundle is the <ctx> whose head opens its lens.
-    const std::string_view    key  = detail::schemaKey( rootOpen );
-    const CompactLegendSpec*  spec = nullptr;
-    if( !key.empty() )
-    {
-        for( const CompactLegendSpec& s : kCompactLegendSpecs )
-        {
-            if( s.rootTag == root.tag && s.key == key ) { spec = &s;  break; }
-        }
-    }
-    const std::vector<detail::Span> head = detail::headComments( view, root );
-    const bool isFor = spec == nullptr && root.tag == "ctx"
-                    && std::any_of( head.begin(), head.end(), [ & ]( const detail::Span& c )
-                                    { return view.substr( c.begin ).starts_with( "<!-- ripwire lens for \"" ); } );
-    if( spec == nullptr && !isFor )
-    {
-        return RefOutcome::NotApplicable;   // a legend this dictionary does not hold stays inline, whole
-    }
+// What applyRefPosture needs to know about one answer before it touches it.
+struct RefShape
+{
+    CompactRootInfo          root;
+    std::string_view         rootOpen;
+    std::string_view         key;              // the compact schema key, or empty (MCP `for`)
+    const CompactLegendSpec* spec  = nullptr;  // the compact legend family, or null
+    bool                     isFor = false;    // the MCP `for` bundle's native legend
+    std::vector<Span>        head;
+    std::string              closeTag;
+    std::size_t              closeAt = 0;      // where the root's close begins (its open's end when self-closing)
+    bool                     selfClosing = false;
+};
 
-    // The root's close: the answer ends with it (whitespace after it at most).
-    const bool        selfClosing = rootOpen.ends_with( "/>" );
-    const std::string closeTag    = "</" + std::string( root.tag ) + ">";
-    std::size_t       closeAt     = selfClosing ? root.openEnd : view.rfind( closeTag );
-    if( closeAt == std::string_view::npos || closeAt < root.openEnd
-        || view.substr( selfClosing ? root.openEnd : closeAt + closeTag.size() ).find_first_not_of( " \n\r\t" ) != std::string_view::npos )
+// Which legend family the answer carries, and where its root closes; nullopt when the dictionary cannot reduce it (not
+// XML, a legend it does not hold, or anything after the root's close).
+inline std::optional<RefShape> inferRefShape( std::string_view view )
+{
+    RefShape s;
+    s.root = findCompactRoot( view );
+    if( s.root.tag.empty() )
+    {
+        return std::nullopt;   // a JSON or prose payload: no legend to reduce
+    }
+    s.rootOpen = view.substr( s.root.openBegin, s.root.openEnd - s.root.openBegin );
+    s.key      = schemaKey( s.rootOpen );
+    for( const CompactLegendSpec& c : kCompactLegendSpecs )
+    {
+        if( !s.key.empty() && c.rootTag == s.root.tag && c.key == s.key ) { s.spec = &c;  break; }
+    }
+    s.head  = headComments( view, s.root );
+    s.isFor = s.spec == nullptr && s.root.tag == "ctx"
+           && std::any_of( s.head.begin(), s.head.end(), [ & ]( const Span& c ) { return view.substr( c.begin ).starts_with( "<!-- ripwire lens for \"" ); } );
+    if( s.spec == nullptr && !s.isFor )
+    {
+        return std::nullopt;   // a legend this dictionary does not hold stays inline, whole
+    }
+    s.selfClosing = s.rootOpen.ends_with( "/>" );
+    s.closeTag    = "</" + std::string( s.root.tag ) + ">";
+    const std::size_t closeAt = s.selfClosing ? s.root.openEnd : view.rfind( s.closeTag );
+    const std::size_t after   = s.selfClosing ? s.root.openEnd : closeAt + s.closeTag.size();
+    if( closeAt == std::string_view::npos || closeAt < s.root.openEnd || view.substr( after ).find_first_not_of( " \n\r\t" ) != std::string_view::npos )
     {
         DISCLOSE( Diagnostics::answerUnchanged, "ref posture: the inline answer is served whole, every row and attribute unchanged",
                   "legenddict: the answer does not end with its root's close — nothing after it may move" );
-        return RefOutcome::NotApplicable;
+        return std::nullopt;
     }
+    s.closeAt = closeAt;
+    return s;
+}
 
-    // The entries each head comment spends, and what stays of it. `touched` lists every entry whose bytes this answer
-    // carries inline (the fallback marks them served); `kept` those the ref answer keeps (not yet served).
+// What the head comments leave: the entries the answer carries inline (`touched`, all marked served once it is sent)
+// and the comments a ref answer keeps after its rows (`residual`: unserved entries and data).
+struct HeadReduction
+{
     std::vector<std::size_t> touched;
     std::vector<std::string> residual;
-    const std::string compactOpener = spec != nullptr ? compactLegendOpener( *spec ) : std::string();
-    // A native (`for`) legend is reduced by verbatim match: its fixed clauses, and the readings of the completeness terms it
-    // carries (closeRosterGaps put any its own legend lacked into the answer). Longest first, so no match eats a longer one.
+};
+
+// THE compact legend, rebuilt from its parts — it must be byte-identical to what compactlegend.h wrote, or nothing is
+// dropped. Its purpose and present terms are entries; its window and sub-cap clauses are core (served before any ref).
+inline bool reduceCompactLegend( std::string_view comment, std::string_view view, const RefShape& s, const LegendSession& session,
+                                 HeadReduction& r )
+{
+    const std::string_view docHead = compactDocHead( view, s.root );
+    if( comment != compactLegendText( *s.spec, docHead, view ) )
+    {
+        DISCLOSE( Diagnostics::answerUnchanged, "ref posture: the inline answer is served whole, every row and attribute unchanged",
+                  "legenddict: the compact legend differs from its recomputed parts — no entry can be dropped safely" );
+        return false;
+    }
+    std::vector<std::size_t> ids{ specEntryId( s.spec ) };
+    for( const std::uint16_t t : compactPresentTerms( docHead, view ) )
+    {
+        ids.push_back( kTermBase + t );
+    }
+    std::string kept;
+    for( const std::size_t id : ids )
+    {
+        r.touched.push_back( id );
+        if( !session.isServed( id ) )
+        {
+            kept += kept.empty() ? "" : " ";
+            kept.append( entryBody( id ) );
+            kept += '.';
+        }
+    }
+    if( !kept.empty() )
+    {
+        r.residual.push_back( "<!-- " + kept + " -->" );   // the schema id rides <about schema=>: no opener
+    }
+    return true;
+}
+
+// Any other head comment: a native `for` legend loses every entry the session was already sent (verbatim, longest first,
+// so no match eats a longer one) and the task it echoes; a data comment moves whole.
+inline bool reduceOtherComment( std::string_view comment, const RefShape& s, const std::vector<std::size_t>& forOrder,
+                                const LegendSession& session, HeadReduction& r )
+{
+    std::string rest( comment );
+    if( s.isFor )
+    {
+        for( const std::size_t id : forOrder )
+        {
+            const std::size_t at = rest.find( entryBody( id ) );
+            if( at == std::string::npos )
+            {
+                continue;
+            }
+            r.touched.push_back( id );
+            if( session.isServed( id ) )
+            {
+                rest.erase( at, entryBody( id ).size() );
+            }
+        }
+        rest = tidyComment( stripTaskEcho( rest, s.rootOpen ) );
+    }
+    if( isEmptyComment( rest ) )
+    {
+        return true;
+    }
+    if( rest.find( "--", 4 ) != rest.size() - 3 )
+    {
+        DISCLOSE( Diagnostics::answerUnchanged, "ref posture: the inline answer is served whole, every row and attribute unchanged",
+                  "legenddict: a reduced comment would hold \"--\" (ill-formed XML) — kept inline" );
+        return false;
+    }
+    r.residual.push_back( std::move( rest ) );
+    return true;
+}
+
+inline std::optional<HeadReduction> reduceHead( std::string_view view, const RefShape& s, const LegendSession& session )
+{
+    // The native legend's candidates: its fixed clauses, and the readings of the completeness terms it carries
+    // (closeRosterGaps put any its own legend lacked into the answer).
     std::vector<std::size_t> forOrder;
-    if( isFor )
+    if( s.isFor )
     {
         for( std::size_t k = 0; k < kForCount; ++k ) { forOrder.push_back( kForBase + k ); }
-        for( const std::uint16_t t : compactPresentTerms( compactDocHead( view, root ), view ) ) { forOrder.push_back( kTermBase + t ); }
+        for( const std::uint16_t t : compactPresentTerms( compactDocHead( view, s.root ), view ) ) { forOrder.push_back( kTermBase + t ); }
+        std::sort( forOrder.begin(), forOrder.end(), []( std::size_t a, std::size_t b )
+                   { return entryBody( a ).size() != entryBody( b ).size() ? entryBody( a ).size() > entryBody( b ).size() : a < b; } );
     }
-    std::sort( forOrder.begin(), forOrder.end(), []( std::size_t a, std::size_t b )
-               { return entryBody( a ).size() != entryBody( b ).size() ? entryBody( a ).size() > entryBody( b ).size() : a < b; } );
-    for( const detail::Span& c : head )
+    const std::string compactOpener = s.spec != nullptr ? compactLegendOpener( *s.spec ) : std::string();
+    HeadReduction r;
+    for( const Span& c : s.head )
     {
         const std::string_view comment = view.substr( c.begin, c.end - c.begin );
-        if( spec != nullptr && comment.starts_with( compactOpener ) )
+        const bool isLegend = s.spec != nullptr && comment.starts_with( compactOpener );
+        if( !( isLegend ? reduceCompactLegend( comment, view, s, session, r ) : reduceOtherComment( comment, s, forOrder, session, r ) ) )
         {
-            // THE compact legend: rebuilt from its parts, and it must be byte-identical to what compactlegend.h wrote.
-            const std::string_view docHead = compactDocHead( view, root );
-            if( comment != compactLegendText( *spec, docHead, view ) )
-            {
-                DISCLOSE( Diagnostics::answerUnchanged, "ref posture: the inline answer is served whole, every row and attribute unchanged",
-                          "legenddict: the compact legend differs from its recomputed parts — no entry can be dropped safely" );
-                return RefOutcome::NotApplicable;
-            }
-            std::string kept;
-            const std::size_t purposeId = detail::specEntryId( spec );
-            touched.push_back( purposeId );
-            if( !session.isServed( purposeId ) )
-            {
-                kept.append( spec->purpose );
-                kept += '.';
-            }
-            for( const std::uint16_t t : compactPresentTerms( docHead, view ) )
-            {
-                touched.push_back( kTermBase + t );
-                if( !session.isServed( kTermBase + t ) )
-                {
-                    kept += kept.empty() ? "" : " ";
-                    kept.append( kCompactCompletenessTerms[ t ].reading );
-                    kept += '.';
-                }
-            }
-            if( !kept.empty() )
-            {
-                residual.push_back( "<!-- " + kept + " -->" );   // the schema id rides <about schema=>: no opener
-            }
-            continue;   // the window and sub-cap clauses are core: served before any ref answer
-        }
-        std::string rest( comment );
-        if( isFor )
-        {
-            for( const std::size_t id : forOrder )
-            {
-                const std::size_t at = rest.find( entryBody( id ) );
-                if( at == std::string::npos )
-                {
-                    continue;
-                }
-                touched.push_back( id );
-                if( session.isServed( id ) )
-                {
-                    rest.erase( at, entryBody( id ).size() );
-                }
-            }
-        }
-        if( isFor )
-        {
-            rest = detail::tidyComment( detail::stripTaskEcho( rest, rootOpen ) );
-        }
-        if( !detail::isEmptyComment( rest ) )
-        {
-            if( rest.find( "--", 4 ) != rest.size() - 3 )
-            {
-                DISCLOSE( Diagnostics::answerUnchanged, "ref posture: the inline answer is served whole, every row and attribute unchanged",
-                          "legenddict: a reduced comment would hold \"--\" (ill-formed XML) — kept inline" );
-                return RefOutcome::NotApplicable;
-            }
-            residual.push_back( std::move( rest ) );
+            return std::nullopt;
         }
     }
+    return r;
+}
 
-    // Root attributes: identity stays, the rest move to the trailer in their order.
-    std::string keepAttrs;
-    std::string moved;
-    for( const detail::RootAttr& a : detail::startTagAttrs( rootOpen, root.nameEnd - root.openBegin ) )
-    {
-        ( detail::isIdentityAttr( a.name ) ? keepAttrs : moved ).append( a.whole );
-    }
-
-    // Assemble: [before the head] <root identity> rows [head comments] <about …/> </root>.
-    // Everything before the root except the head comments (an XML declaration, if any, stays where it was).
+// The ref answer's four pieces: [before the root, head comments out] <root identity> rows [kept comments]<about/> </root>.
+struct RefParts
+{
     std::string prefix;
-    std::size_t copied = 0;
-    std::size_t bodyBegin = root.openEnd;
-    for( const detail::Span& c : head )
+    std::string opened;
+    std::string body;
+    std::string trailer;
+
+    std::size_t bytes( const RefShape& s ) const noexcept { return prefix.size() + opened.size() + body.size() + trailer.size() + s.closeTag.size(); }
+};
+
+inline RefParts assembleRef( std::string_view view, const RefShape& s, const HeadReduction& r )
+{
+    RefParts p;
+    std::string moved;
+    p.opened = "<" + std::string( s.root.tag );
+    for( const RootAttr& a : startTagAttrs( s.rootOpen, s.root.nameEnd - s.root.openBegin ) )
     {
-        if( c.begin < root.openBegin )
+        ( isIdentityAttr( a.name ) ? p.opened : moved ).append( a.whole );   // identity stays; the rest move, in order
+    }
+    p.opened += '>';
+    std::size_t copied    = 0;
+    std::size_t bodyBegin = s.root.openEnd;
+    for( const Span& c : s.head )
+    {
+        if( c.begin < s.root.openBegin )
         {
-            prefix.append( view.substr( copied, c.begin - copied ) );
+            p.prefix.append( view.substr( copied, c.begin - copied ) );   // an XML declaration, if any, stays where it was
             copied = c.end;
         }
         else
@@ -696,36 +734,58 @@ inline RefOutcome applyRefPosture( std::string& doc, LegendSession& session )
             bodyBegin = c.end;
         }
     }
-    prefix.append( view.substr( copied, root.openBegin - copied ) );
-    std::string body = selfClosing ? std::string() : std::string( view.substr( bodyBegin, closeAt - bodyBegin ) );
-    std::string trailer;
-    for( const std::string& r : residual ) { trailer += r; }
-    trailer += "<about" + moved + " legend=\"ref\" dict=\"ripwire --legend-dict\" dictv=\"" + dictionaryVersion() + "\"/>";
+    p.prefix.append( view.substr( copied, s.root.openBegin - copied ) );
+    if( !s.selfClosing )
+    {
+        p.body.assign( view.substr( bodyBegin, s.closeAt - bodyBegin ) );
+    }
+    for( const std::string& kept : r.residual ) { p.trailer += kept; }
+    p.trailer += "<about" + moved + " legend=\"ref\" dict=\"ripwire --legend-dict\" dictv=\"" + dictionaryVersion() + "\"/>";
+    return p;
+}
 
-    const std::string opened = "<" + std::string( root.tag ) + keepAttrs + ">";
-    const std::size_t refBytes = prefix.size() + opened.size() + body.size() + trailer.size() + closeTag.size();
+} // namespace detail
+
+// Reduce one finished inline answer to the ref posture, in place — see the header. `doc` is the answer as the inline
+// posture serves it: the compact dialect for a verb that declares `legend` (compactlegend.h already applied), the
+// native legend for MCP `for`. Only called once `session.refOn`.
+inline RefOutcome applyRefPosture( std::string& doc, LegendSession& session )
+{
+    EXPECTS( session.refOn, "the ref posture exists only after the session was served the dictionary core" );
+    session.served.resize( kEntryCount, 0 );
+    const std::string_view view = doc;
+    const std::optional<detail::RefShape> shape = detail::inferRefShape( view );
+    if( !shape )
+    {
+        return RefOutcome::NotApplicable;
+    }
+    const std::optional<detail::HeadReduction> head = detail::reduceHead( view, *shape, session );
+    if( !head )
+    {
+        return RefOutcome::NotApplicable;
+    }
+    detail::RefParts  parts    = detail::assembleRef( view, *shape, *head );
+    const std::size_t refBytes = parts.bytes( *shape );
+    for( const std::size_t id : head->touched ) { session.markServed( id ); }   // sent now, in either posture
     if( refBytes > doc.size() )
     {
         // The trailer and the unserved entries cost more than the legend they replace: the inline answer is served and
         // everything it carried counts as served, so the next answer of this shape takes the ref posture.
-        for( const std::size_t id : touched ) { session.markServed( id ); }
         DISCLOSE( Diagnostics::answerUnchanged, "ref posture: the inline answer is served whole, every row and attribute unchanged",
                   "legenddict: the ref answer would be longer than the inline one — the budget the inline answer met holds" );
         return RefOutcome::InlineKept;
     }
     // L6: small runner-less groups print as rows, paid for by what the dropped legend freed.
     std::size_t slack = doc.size() - refBytes;
-    detail::ungroupWithin( body, detail::groupRowTag( key ), slack );
-
+    detail::ungroupWithin( parts.body, detail::groupRowTag( shape->key ), slack );
     std::string out;
     out.reserve( doc.size() - slack );
-    out += prefix;
-    out += opened;
-    out += body;
-    out += trailer;
-    out += closeTag;
+    out += parts.prefix;
+    out += parts.opened;
+    out += parts.body;
+    out += parts.trailer;
+    out += shape->closeTag;
     ENSURES( out.size() <= doc.size(), "a ref answer is never longer than the inline answer it replaces" );
-    for( const std::size_t id : touched ) { session.markServed( id ); }
     doc.swap( out );
     return RefOutcome::Ref;
 }

@@ -557,6 +557,14 @@ inline bool mcpOmitsGitVerbs( const McpDispatchPolicy& policy ) noexcept
 inline constexpr std::string_view kMcpLegendDictUri     = "ripwire://legend-dict";
 inline constexpr std::string_view kMcpLegendDictFullUri = "ripwire://legend-dict/full";
 
+// The stdio server's legend session: one per process (one client, one request line at a time — runMcp's loop).
+inline legenddict::LegendSession& mcpStdioLegendSession()
+{
+    ASSUME_SAME_THREAD( "the stdio request loop is the one thread that dispatches, and so the one that reads or writes the session" );
+    static legenddict::LegendSession session;
+    return session;
+}
+
 // The `initialize` pointer, only where a session can exist (stdio). Kept short: hosts may truncate instructions past
 // ~1 KB (Graft's measured constraint), and this rides every session start. dictv= names the version a ref answer's
 // <about dictv=> repeats, so a reader can tell two server builds apart.
@@ -572,16 +580,33 @@ inline std::string mcpLegendPointer( const McpDispatchPolicy& policy )
            "that takes it keeps that answer's legend inline.";
 }
 
+// One resources/list row.
+inline void appendLegendResource( std::string& out, std::string_view uri, std::string_view name, std::string_view description )
+{
+    out += "{\"uri\":\"";
+    out += uri;
+    out += "\",\"name\":\"";
+    out += name;
+    out += "\",\"mimeType\":\"text/plain\",\"description\":\"";
+    out += description;
+    out += "\"}";
+}
+
 // resources/list: the two dictionary resources. Plain text, one definition per line.
 inline std::string mcpLegendResourcesList( const std::string& id )
 {
-    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"resources\":["
-           "{\"uri\":\"" + std::string( kMcpLegendDictUri ) + "\",\"name\":\"legend_dict\",\"mimeType\":\"text/plain\","
-           "\"description\":\"The legend dictionary's core. Read it once: this session's answers then list rows first and carry "
-           "each definition only the first time the session meets it.\"},"
-           "{\"uri\":\"" + std::string( kMcpLegendDictFullUri ) + "\",\"name\":\"legend_dict_full\",\"mimeType\":\"text/plain\","
-           "\"description\":\"Every definition any answer can carry (the whole dictionary). Reading it also switches the session, "
-           "and answers then carry no definitions at all.\"}]}}";
+    std::string out = "{\"jsonrpc\":\"2.0\",\"id\":";
+    out += id;
+    out += ",\"result\":{\"resources\":[";
+    appendLegendResource( out, kMcpLegendDictUri, "legend_dict",
+                          "The legend dictionary's core. Read it once: this session's answers then list rows first and carry each "
+                          "definition only the first time the session meets it." );
+    out += ',';
+    appendLegendResource( out, kMcpLegendDictFullUri, "legend_dict_full",
+                          "Every definition any answer can carry (the whole dictionary). Reading it also switches the session, and "
+                          "answers then carry no definitions at all." );
+    out += "]}}";
+    return out;
 }
 
 // resources/read: serve one of the two, and — on a transport that holds a session — record that it was served.
@@ -2156,10 +2181,9 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
         defaultRoot = mcpCanonRoot( root );
     }
 
-    McpDispatchPolicy policy;      // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed
+    // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed; r2-LO: this process's one legend session
+    McpDispatchPolicy policy{ .legendSession = &mcpStdioLegendSession() };
     policy.defaultRoot = defaultRoot;   // "" unless a startup root was given — see the comment above
-    legenddict::LegendSession legendSession;   // r2-LO: this process's one legend session (one client, one line at a time)
-    policy.legendSession = &legendSession;
 
     // R2a (the 2026-08-12 usage mine): with NO startup root, resolve the launch cwd ONCE as the softest
     // default — see McpDispatchPolicy::assumedRoot for the full contract and mcpResolveAssumedRoot for

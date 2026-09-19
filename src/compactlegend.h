@@ -875,8 +875,13 @@ inline std::string compactWindowClause( std::string_view head, std::string_view 
 // The sub-cap clause — " importers_capped=/…: 1 = cut." — or empty when no payload attribute ends in _capped.
 inline std::string compactSubcapClause( std::string_view doc )
 {
-    const std::string subcaps = payloadSubCapAttrs( doc );
-    return subcaps.empty() ? std::string() : " " + subcaps + ": 1 = cut.";
+    std::string clause = payloadSubCapAttrs( doc );
+    if( !clause.empty() )
+    {
+        clause.insert( clause.begin(), ' ' );
+        clause += ": 1 = cut.";
+    }
+    return clause;
 }
 
 // The completeness terms this document carries, as indices into kCompactCompletenessTerms, in table order.
