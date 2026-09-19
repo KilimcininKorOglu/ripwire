@@ -212,9 +212,22 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
 #elif defined( __linux__ )
 [[gnu::always_inline]] inline int exepath( char* buf, std::size_t bufCount )
 {
-    const ssize_t byteCount = ::readlink( "/proc/self/exe", buf, bufCount - 1 );
+    // readlink returns exactly bufCount when the target does not fit, with no way to tell "exact fit" from
+    // "truncated" after the fact — so the call is given the FULL capacity, and a result that reaches it is
+    // refused rather than NUL-terminated as if it were complete. bufCount == 0 has no room for a terminator.
+    if( bufCount == 0 )
+    {
+        errno = ERANGE;
+        return -1;
+    }
+    const ssize_t byteCount = ::readlink( "/proc/self/exe", buf, bufCount );
     if( byteCount <= 0 )
     {
+        return -1;
+    }
+    if( std::size_t( byteCount ) >= bufCount )
+    {
+        errno = ENAMETOOLONG;
         return -1;
     }
     buf[ byteCount ] = '\0';
