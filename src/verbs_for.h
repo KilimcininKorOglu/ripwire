@@ -2798,30 +2798,52 @@ std::optional<int> runForLens( const MainDispatch& d )
         }
 
         // L2 (round-1 lever B1, §9.3 disclosed cut): collapse <lego>/<compose> to a counted stub BY DEFAULT —
-        // total= is the count each renderer above already computed for its own (about-to-be-discarded) full
-        // body, shown="0" discloses that nothing was rendered here, and next= is the ONE restoring spelling
-        // (E41 rule b: nextverb.h's capped composer) that returns BOTH sections byte-identical to this
-        // un-stubbed render, in ONE call. --sections=lego,compose (cli.h validateSectionsModifier) opts a
-        // caller back into the pre-stub render of either or both. No stub for a section that would have been
-        // EMPTY: legoStr/composeStr are only ever non-empty here when their packer actually emitted a
-        // section, so an absent section stays absent either way.
+        // total= is that section's own pre-cap row count, shown="0" discloses that nothing was rendered here,
+        // and next= is the ONE restoring spelling (E41 rule b: nextverb.h's capped composer) that returns
+        // BOTH sections byte-identical to this un-stubbed render, in ONE call. --sections=lego,compose
+        // (cli.h validateSectionsModifier) opts a caller back into the pre-stub render of either or both. No
+        // stub for a section that would have been EMPTY.
+        //
+        // FAULT-INJECTION FIX (independent review, 2026-09-19): total= — and therefore the stub-or-full
+        // decision itself — must be reachable WITHOUT the buffered render legoStr/composeStr came from,
+        // because that render can fail (open_memstream degrades, legoPreRendered/composePreRendered==false)
+        // and the section is then emitted directly to stdout further down (the ORIGINAL degrade path, unaware
+        // of --sections=). legoPreCapRowCount/composePreCapRowCount (serialize.h) compute the SAME count with
+        // no FILE* and no buffering — provably identical to packLego/packCompose's own tally (see their own
+        // comments) — so both the happy path below and the degrade path further down make the identical
+        // decision from the identical number. legoScoped/g.composeEdges/lensSurfaceIds are read here in
+        // whichever state they are already in (post-narrow on the happy path, since narrowing already ran
+        // above; un-narrowed on the degrade path, since narrowing never runs there either) — the same state
+        // each path's own render (buffered or direct-to-stdout) would use.
         const bool sectionsWantLego    = rw::sectionsWant( cfg.sections, "lego" );
         const bool sectionsWantCompose = rw::sectionsWant( cfg.sections, "compose" );
-        std::string sectionsStubNote;   // present-only legend clause (kForSectionStubLegend), spliced below
-        if( ( !legoStr.empty() && !sectionsWantLego ) || ( !composeStr.empty() && !sectionsWantCompose ) )
+        const std::size_t legoStubTotal    = legoPreRendered    ? legoPreCapCount    : rw::legoPreCapRowCount( ing, legoScoped );
+        const std::size_t composeStubTotal = composePreRendered ? composePreCapCount : rw::composePreCapRowCount( ing, g.composeEdges, lensSurfaceIds );
+        const bool legoHasContent    = legoPreRendered    ? !legoStr.empty()    : legoStubTotal > 0;
+        const bool composeHasContent = composePreRendered ? !composeStr.empty() : composeStubTotal > 0;
+        const bool legoWillStub      = legoHasContent && !sectionsWantLego;
+        const bool composeWillStub   = composeHasContent && !sectionsWantCompose;
+        // the ONE restoring invocation, built once and used at every site (buffered substitution below, and
+        // the degrade-path fallback further down) that needs it — never a second, differently-spelled build.
+        std::string sectionsNextInvocation;
+        if( legoWillStub || composeWillStub )
         {
-            std::string sectionsNext = rw::nextFlag( "--for=", cfg.forTask );
-            sectionsNext += ' ';
-            sectionsNext += rw::nextFlag( "--sections=", "lego,compose" );
-            if( !legoStr.empty() && !sectionsWantLego )
-            {
-                legoStr = rw::sectionStubXml( "lego", legoPreCapCount, sectionsNext );
-            }
-            if( !composeStr.empty() && !sectionsWantCompose )
-            {
-                composeStr = rw::sectionStubXml( "compose", composePreCapCount, sectionsNext );
-            }
+            sectionsNextInvocation = rw::nextFlag( "--for=", cfg.forTask );
+            sectionsNextInvocation += ' ';
+            sectionsNextInvocation += rw::nextFlag( "--sections=", "lego,compose" );
+        }
+        std::string sectionsStubNote;   // present-only legend clause (kForSectionStubLegend), spliced below
+        if( legoWillStub || composeWillStub )
+        {
             sectionsStubNote = rw::kForSectionStubLegend;
+        }
+        if( legoPreRendered && legoWillStub )
+        {
+            legoStr = rw::sectionStubXml( "lego", legoStubTotal, sectionsNextInvocation );
+        }
+        if( composePreRendered && composeWillStub )
+        {
+            composeStr = rw::sectionStubXml( "compose", composeStubTotal, sectionsNextInvocation );
         }
         const std::size_t sectionsStubSpliceReserve = sectionsStubNote.size();
 
@@ -3131,17 +3153,39 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             std::fwrite( legoStr.data(), 1, legoStr.size(), stdout );
         }
-        else
+        else if( legoStubTotal == 0 )
+        {
+            // nothing to emit — matches packLego's own no-op on an empty ifaces set (never a fabricated stub)
+        }
+        else if( sectionsWantLego )
         {
             packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg ); // same scope+identity on the degrade path (§P3; un-narrowed — sigs bytes unknown here)
+        }
+        else
+        {
+            // L2 fault-injection fix: the buffered render never ran, so there is no legoStr to stub in
+            // place — the same collapse the happy path applies above, built from legoStubTotal (computed
+            // without rendering) instead of a captured out-param.
+            const std::string legoStub = rw::sectionStubXml( "lego", legoStubTotal, sectionsNextInvocation );
+            std::fwrite( legoStub.data(), 1, legoStub.size(), stdout );
         }
         if( composePreRendered )
         {
             std::fwrite( composeStr.data(), 1, composeStr.size(), stdout );
         }
-        else if( !g.composeEdges.empty() )
+        else if( composeStubTotal == 0 )
+        {
+            // nothing to emit — matches packCompose's own no-op on no matched edges
+        }
+        else if( sectionsWantCompose )
         {
             packCompose( stdout, ing, g.composeEdges, lensSurfaceIds );
+        }
+        else
+        {
+            // L2 fault-injection fix: same collapse as the lego arm above, on the compose degrade path.
+            const std::string composeStub = rw::sectionStubXml( "compose", composeStubTotal, sectionsNextInvocation );
+            std::fwrite( composeStub.data(), 1, composeStub.size(), stdout );
         }
         if( routePreRendered )
         {

@@ -157,6 +157,12 @@ ROSTER = [
     # first screen no other row here reaches; both dialects, since the compact one carries its own short legend.
     ("for-page",           [SMALL, "--for=rank symbols by pagerank", "--limit=10"]),
     ("for-page-compact",   [SMALL, "--legend=compact", "--for=rank symbols by pagerank", "--limit=10"]),
+    # …and the RESTORED lego/compose dialect (L2, round-1 lever B1, 2026-09-19): --sections=lego,compose
+    # opts back into the full <lego><iface…>/<compose><field…> render the ranked bundle collapses to a
+    # counted stub by default — a first screen (<iface>/<impl>/<m>/<field> attributes) no other row here
+    # reaches, since every plain "for" row above stays at the default stub. ROOT (this repo), not SMALL:
+    # this lane already confirmed this exact query reaches a real interface AND a real compose edge on it.
+    ("for-sections",       [ROOT, "--for=shape interface implementors", "--sections=lego,compose"]),
     ("pack-task",          [SMALL, "--pack-task=rank symbols by pagerank"]),
     ("exemplar",           [SMALL, "--exemplar=rank symbols"]),
     ("hotspots",           [ROOT,  "--hotspots"]),

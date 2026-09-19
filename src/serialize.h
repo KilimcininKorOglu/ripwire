@@ -6277,6 +6277,63 @@ inline constexpr std::string_view kForSectionStubLegend =
     "pre-cap row count, shown=\"0\" (nothing rendered here), next= names the sections=lego,compose flag "
     "that restores both sections byte-identically in one call";
 
+// L2 fault-injection fix (independent review, 2026-09-19): packLego/packCompose's out-params give the stub
+// its total= on the buffered (memstream) path, but the ranked --for lens's OPEN_MEMSTREAM DEGRADE PATH
+// (verbs_for.h, legoPreRendered/composePreRendered==false — RIPWIRE_FAULT_CHARGE_BUFFER=1 forces it) never
+// buffers either section at all, so it had no count to build a stub from and fell back to emitting the FULL
+// section regardless of --sections= — a silent bypass of the default cut. These two functions compute the
+// SAME total= WITHOUT rendering or buffering anything (no FILE*, no allocation beyond one HashMap/sort), so
+// the degrade path can build a correct stub even when open_memstream itself is the thing that is failing.
+//
+// legoPreCapRowCount mirrors packLego's own RANKED-mode selection (has a non-empty implementors list, deduped
+// by name) exactly, and is provably interchangeable with it: packLego's dedup keeps the highest-RANKED
+// survivor per name, but the COUNT of distinct names is independent of which survivor is kept or what order
+// they are visited in, so this order-free walk yields the identical total= packLego's own render would have.
+// Focused mode (--lego=TYPE, focusId != kNoNode) is a different shape (exactly one row, even at
+// implementors=0) and is never routed through the ranked degrade path this exists for, so it is out of scope
+// here — callers only reach this from the ranked (--for) lens.
+inline std::size_t legoPreCapRowCount( const IngestResult& ing, const std::vector<std::vector<NodeId>>& implementors ) noexcept
+{
+    HashMap<std::string, char> seenName;
+    std::size_t                count = 0;
+    for( NodeId i = 0; i < implementors.size(); ++i )
+    {
+        if( i < ing.symbols.size() && !implementors[i].empty() && seenName.emplace( ing.symbols[i].name, char( 1 ) ).second )
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// composePreCapRowCount mirrors packCompose's own inSet/ownerSym membership test verbatim (no cap exists on
+// this section, so "pre-cap" and "emitted" are the same count, exactly as packCompose's own out-param
+// documents) — the degrade-path twin of legoPreCapRowCount above, for the same reason.
+inline std::size_t composePreCapRowCount( const IngestResult& ing, const std::vector<ComposeEdge>& composeEdges,
+                                          const std::vector<NodeId>& relevantIds )
+{
+    if( composeEdges.empty() || relevantIds.empty() )
+    {
+        return 0;
+    }
+    std::vector<NodeId> relevant( relevantIds );
+    std::sort( relevant.begin(), relevant.end() );
+    const auto inSet = [ &relevant ]( NodeId id ) noexcept -> bool
+    {
+        const auto it = std::lower_bound( relevant.begin(), relevant.end(), id );
+        return it != relevant.end() && *it == id;
+    };
+    std::size_t count = 0;
+    for( const ComposeEdge& ce : composeEdges )
+    {
+        if( ( inSet( ce.ownerSym ) || inSet( ce.typeSym ) ) && ce.ownerSym < ing.symbols.size() )
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
 inline std::string sectionStubXml( const char* tag, std::size_t total, std::string_view nextInvocation )
 {
     // true by construction at every call site: a stub is only ever built in place of a section that just

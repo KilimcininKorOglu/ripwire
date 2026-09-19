@@ -186,8 +186,72 @@ sys.exit(0 if ('<lego total=' in t and '<iface' not in t) or '<lego' not in t el
     grep -q '"error"' "$TMP/mcp_bad.json" && grep -q 'sections' "$TMP/mcp_bad.json" \
         && ok "(8b) MCP for: sections=\"bogus\" refuses with a message naming the field" \
         || no "(8b) MCP for: sections=\"bogus\" did not refuse cleanly: $( cat "$TMP/mcp_bad.json" )"
+
+    # (8c) independent review, 2026-09-19: PRESENT-BUT-EMPTY must refuse exactly like the CLI's own
+    # --sections= (empty value) does — the F9/F11 ABSENT-vs-PRESENT-BUT-EMPTY rule `legend` already
+    # follows. `sections:""` used to be silently read as "restore nothing" (the guard was `!sections.empty()`,
+    # which cannot distinguish absent from present-but-empty) — a real, shipped bug caught before landing.
+    MCPEMPTY='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/legofix","task":"shape interface implementors","sections":""}}}'
+    printf '%s\n' "$MCPEMPTY" | "$BIN" --mcp >"$TMP/mcp_empty.json" 2>/dev/null
+    grep -q '"error"' "$TMP/mcp_empty.json" && grep -q 'sections' "$TMP/mcp_empty.json" \
+        && ok "(8c) MCP for: sections=\"\" (present, empty) refuses — not silently read as absent" \
+        || no "(8c) MCP for: sections=\"\" did not refuse — present-but-empty was read as absent: $( cat "$TMP/mcp_empty.json" )"
 else
     ok "(8) MCP arm skipped (python3 absent)"
+fi
+
+# ── (9) independent review, 2026-09-19: the OPEN_MEMSTREAM DEGRADE PATH must honour --sections= too ──────
+# The buffered stub-substitution above (arms 1-8) only ever runs when legoStr/composeStr were successfully
+# pre-rendered into memory. When that pre-render itself fails (open_memstream degrades — real allocation
+# failure in production, forced here the same way test/estchargecheck.sh's #14 family forces it), the
+# ORIGINAL code streamed the section straight to stdout from packLego/packCompose UNCONDITIONALLY — a
+# silent bypass of the default stub that this arm exists to catch red-first and keep caught.
+#
+# THE SWITCH EXISTS ONLY ON THE NON-NDEBUG FLAVOUR (serialize.h's own header comment on
+# RIPWIRE_FAULT_CHARGE_BUFFER): on a Release/NDEBUG binary the switch is compiled to constexpr-false and
+# setting the env var injects nothing, which would make this arm trivially (and falsely) green. Detected the
+# estchargecheck.sh way: force an UNRELATED, always-present degrade path (the --scip corrupt-index alert) and
+# check whether its own DISCLOSE reaches stderr — if it cannot, no alert in this binary can be observed, and
+# forcing RIPWIRE_FAULT_CHARGE_BUFFER on it proves nothing either. SKIP (not silently PASS) is correct there;
+# CI's non-NDEBUG leg is what actually proves this arm.
+printf 'not a scip index at all\n' > "$TMP/flavour.scip"
+"$BIN" test/fixture --scip="$TMP/flavour.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/flavour.err"
+if grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/flavour.err"; then
+    "$BIN" test/legofix --no-cache --legend=full --for="$LFQ" >"$TMP/fault_stub.xml" 2>"$TMP/fault_stub.err"
+    RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/legofix --no-cache --legend=full --for="$LFQ" >"$TMP/fault_stub2.xml" 2>"$TMP/fault_stub2.err"
+    if grep -q 'open_memstream failed' "$TMP/fault_stub2.err"; then
+        # NOTE on (9a)/(9d): RIPWIRE_FAULT_CHARGE_BUFFER fails EVERY openChargeStream call in the process
+        # (serialize.h's own header: "one seam for two reasons" — it is deliberately the whole est_tokens
+        # family, not lego/compose alone), so <sigs> ALSO degrades to direct emission under this switch and
+        # the WHOLE document takes a different shape (a different route/serving posture, no est_tokens=,
+        # etc.) — comparing the fault run to the buffered run byte-for-byte would fail for reasons that have
+        # nothing to do with this fix. These arms instead compare just the <lego>/<compose> FRAGMENT (or its
+        # total=), which is the one thing this fix controls and the one thing that must still agree.
+        FAULT_TOTAL="$( grep -o '<lego total="[0-9]*"' "$TMP/fault_stub2.xml" | grep -o '[0-9]*' )"
+        [ "$FAULT_TOTAL" = "3" ] \
+            && ok "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: stub total=\"3\" matches the buffered path's own count" \
+            || no "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: stub total=\"$FAULT_TOTAL\", expected \"3\" (the buffered path's count)"
+        grep -Eq '<lego total="[0-9]+" shown="0" next="[^"]*"/>' "$TMP/fault_stub2.xml" \
+            && ok "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: default run still collapses to the counted stub (no bypass)" \
+            || no "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: no stub found on the degrade path — $( grep -o '<lego[^>]*' "$TMP/fault_stub2.xml" | head -1 )"
+        grep -q '<iface\|<impl' "$TMP/fault_stub2.xml" \
+            && no "(9c) RIPWIRE_FAULT_CHARGE_BUFFER=1: full <iface>/<impl> rows leaked past the stub on the degrade path" \
+            || ok "(9c) RIPWIRE_FAULT_CHARGE_BUFFER=1: no full <iface>/<impl> rows on the degrade path"
+        RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/legofix --no-cache --legend=full --for="$LFQ" --sections=lego,compose >"$TMP/fault_restored.xml" 2>/dev/null
+        [ "$( sections "$TMP/fault_restored.xml" )" = "$( sections "$TMP/lf_restored.xml" )" ] && [ -n "$( sections "$TMP/fault_restored.xml" )" ] \
+            && ok "(9d) RIPWIRE_FAULT_CHARGE_BUFFER=1 + --sections=lego,compose: the <lego>/<compose> fragment matches the buffered restore" \
+            || no "(9d) RIPWIRE_FAULT_CHARGE_BUFFER=1 + --sections=lego,compose: the <lego>/<compose> fragment differs from the buffered restore"
+        if command -v xmllint >/dev/null 2>&1; then
+            xmllint --noout "$TMP/fault_stub2.xml" 2>/dev/null && xmllint --noout "$TMP/fault_restored.xml" 2>/dev/null \
+                && ok "(9e) degrade-path shapes are well-formed XML" \
+                || no "(9e) degrade-path shapes are malformed XML"
+        fi
+    else
+        no "(9) RIPWIRE_FAULT_CHARGE_BUFFER=1 produced no 'open_memstream failed' DISCLOSE on a build that CAN observe alerts (the unrelated --scip probe fired) — the openChargeStream seam or the switch regressed. This is a FAILURE, not a skip."
+    fi
+else
+    skip(){ printf '  SKIP  %s\n' "$*"; }
+    skip "(9) open_memstream degrade arms — DISCLOSE is compiled out of this binary (the unrelated --scip decode degrade path produced no alert either, so alerts are unobservable globally here, not this seam having broken). RIPWIRE_FAULT_CHARGE_BUFFER does not exist on this flavour. Proven by the PLAIN-flavour CI leg, the estchargecheck.sh #14 precedent."
 fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
