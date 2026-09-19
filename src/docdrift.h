@@ -1730,42 +1730,13 @@ inline bool isSkippedProbeDir( std::string_view dirName ) noexcept
 
 inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<std::string>& excludes )
 {
-    namespace fs = std::filesystem;
-    RepoPaths       out;
-    std::error_code ec;
-    // An unlistable root is an empty SUCCESSFUL walk under skip_permission_denied (see darkflags::crawlRootIsListable), so it is
-    // probed first — collectCMakeFiles' shape (darkflags.h) — and both answers fold into one check.
-    const bool isListable = darkflags::crawlRootIsListable( root );
-    fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( !isListable || ec ) { DISCLOSE( out, RepoPaths::DisclosureWhy::RootWalkFailed, "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
+    RepoPaths         out;
     const std::string rootReal = canonicalCrawlRoot( root );   // §SEC1 — the crawl boundary, canonicalized once
-
-    const fs::recursive_directory_iterator end;
-    for( ; it != end; it.increment( ec ) )
+    // darkflags::walkCrawlFiles is the one prune-aware walk this and the CMake harvest share; it refuses an unlistable
+    // root (an empty SUCCESSFUL walk under skip_permission_denied otherwise) and that refusal is disclosed below.
+    const bool isWalked = darkflags::walkCrawlFiles( root, excludes, []( const std::string& base ) { return isSkippedProbeDir( base ); },
+                                                     [ & ]( const std::filesystem::directory_entry& entry, const std::string& full, const std::string& base )
     {
-        if( ec ) { ec.clear(); continue; }
-        const std::string base = it->path().filename().string();
-        if( it->is_directory( ec ) )
-        {
-            std::error_code sec;
-            if( isSkippedProbeDir( base ) || std::filesystem::exists( it->path() / "CMakeCache.txt", sec ) )
-            {
-                it.disable_recursion_pending();
-            }
-            continue;
-        }
-
-        const std::string full = it->path().string();
-        bool              skip = false;
-        for( const std::string& x : excludes )
-        {
-            if( !x.empty() && full.find( x ) != std::string::npos ) { skip = true; break; }
-        }
-        if( skip )
-        {
-            continue;
-        }
-
         // §SEC1 — THE CRAWL BOUNDARY, the third walker (ingest.h owns the rule; ingest's own crawl and
         // darkflags.h's CMake harvest are the other two). This one is not merely an existence probe: every
         // auxFull path is OPENED and its identifiers harvested, so a symlinked CMakeLists.txt/README pointing
@@ -1774,10 +1745,10 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
         // that answers "present" for a path whose content lives outside the root is answering about the wrong
         // file. is_symlink() reads the cached readdir type; only a symlink pays the realpath.
         std::error_code lec;
-        if( it->is_symlink( lec ) && !crawlPathStaysInRoot( full, rootReal ) )
+        if( entry.is_symlink( lec ) && !crawlPathStaysInRoot( full, rootReal ) )
         {
             DISCLOSE( out, RepoPaths::DisclosureWhy::SymlinkEscapesRoot, "doc-drift: a file's symlink target leaves the root — file refused" );
-            continue;
+            return;
         }
 
         out.rel.emplace_back( relForHash( full, root ) );
@@ -1785,6 +1756,11 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
         {
             out.auxFull.push_back( full );
         }
+    } );
+    if( !isWalked )
+    {
+        DISCLOSE( out, RepoPaths::DisclosureWhy::RootWalkFailed, "doc-drift: cannot walk the root — the on-disk existence probe is skipped" );
+        return out;
     }
     std::sort( out.rel.begin(), out.rel.end() );
     std::sort( out.auxFull.begin(), out.auxFull.end() );
