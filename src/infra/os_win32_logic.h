@@ -26,6 +26,7 @@
 // (owner directive 2026-09-16: RAII and return values, no exception handling): the ones that build a std::string can
 // only fail by exhausting memory, which the house treats as the operator-new seam, not as a recoverable error.
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstddef>
@@ -200,14 +201,8 @@ constexpr int errnoFromWin32( std::uint32_t code ) noexcept
 
 constexpr bool isWin32ErrnoTableSorted() noexcept
 {
-    for( std::size_t i = 1; i < std::size( kWin32ErrnoTable ); ++i )
-    {
-        if( kWin32ErrnoTable[ i - 1 ].code >= kWin32ErrnoTable[ i ].code )
-        {
-            return false;
-        }
-    }
-    return true;
+    const auto isOutOfOrder = []( const ErrnoRow& a, const ErrnoRow& b ) { return a.code >= b.code; };
+    return std::ranges::adjacent_find( kWin32ErrnoTable, isOutOfOrder ) == std::ranges::end( kWin32ErrnoTable );
 }
 static_assert( isWin32ErrnoTableSorted(), "kWin32ErrnoTable must be strictly ascending by code — errnoFromWin32 binary-searches it" );
 
@@ -217,27 +212,13 @@ static_assert( isWin32ErrnoTableSorted(), "kWin32ErrnoTable must be strictly asc
 // Windows without a word. Extend this list when a call site starts testing a new errno.
 constexpr bool win32TableProduces( int errnoValue ) noexcept
 {
-    for( const ErrnoRow& row : kWin32ErrnoTable )
-    {
-        if( row.errnoValue == errnoValue )
-        {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of( kWin32ErrnoTable, [ errnoValue ]( const ErrnoRow& row ) { return row.errnoValue == errnoValue; } );
 }
 inline constexpr int kErrnoValuesCallSitesTest[] = { ELOOP, EWOULDBLOCK, EINTR, ENOENT, EACCES, EEXIST, EINVAL, ENOTDIR, EISDIR,
                                                     EPIPE, EBUSY, ENOSPC, ENAMETOOLONG, EILSEQ, EADDRINUSE, ECONNRESET, ETIMEDOUT };
 constexpr bool win32TableIsComplete() noexcept
 {
-    for( const int value : kErrnoValuesCallSitesTest )
-    {
-        if( !win32TableProduces( value ) )
-        {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of( kErrnoValuesCallSitesTest, []( int value ) { return win32TableProduces( value ); } );
 }
 static_assert( win32TableIsComplete(), "an errno that a call site tests is produced by no Win32 code in kWin32ErrnoTable" );
 static_assert( errnoFromWin32( 5 ) == EACCES && errnoFromWin32( 33 ) == EWOULDBLOCK && errnoFromWin32( 1921 ) == ELOOP
@@ -1037,32 +1018,6 @@ constexpr bool hasExtension( std::string_view path ) noexcept
     return dot != std::string_view::npos && dot > 0 && dot + 1 < name.size();
 }
 
-// Is the extension of `path` one of the ';'-separated, case-insensitive entries of `pathext` (".COM;.EXE;...")?
-constexpr bool extensionInList( std::string_view path, std::string_view pathext ) noexcept
-{
-    if( !hasExtension( path ) )
-    {
-        return false;
-    }
-    const std::string_view extension = path.substr( path.rfind( '.' ) );
-    std::size_t at = 0;
-    while( at <= pathext.size() )
-    {
-        const std::size_t end = pathext.find( ';', at );
-        const std::string_view entry = pathext.substr( at, ( end == std::string_view::npos ? pathext.size() : end ) - at );
-        if( !entry.empty() && equalsAsciiCaseless( entry, extension ) )
-        {
-            return true;
-        }
-        if( end == std::string_view::npos )
-        {
-            break;
-        }
-        at = end + 1;
-    }
-    return false;
-}
-
 // The next entry of a ';'-separated PATH list starting at `at` (advanced past it); empty entries are returned as
 // empty views for the caller to skip.
 constexpr std::string_view nextPathListEntry( std::string_view list, std::size_t& at ) noexcept
@@ -1076,6 +1031,26 @@ constexpr std::string_view nextPathListEntry( std::string_view list, std::size_t
         entry = entry.substr( 1, entry.size() - 2 );   // PATH entries may be quoted when they contain ';'
     }
     return entry;
+}
+
+// Is the extension of `path` one of the ';'-separated, case-insensitive entries of `pathext` (".COM;.EXE;...")? The
+// list is read with nextPathListEntry, the same reader PATH itself goes through.
+constexpr bool extensionInList( std::string_view path, std::string_view pathext ) noexcept
+{
+    if( !hasExtension( path ) )
+    {
+        return false;
+    }
+    const std::string_view extension = path.substr( path.rfind( '.' ) );
+    for( std::size_t at = 0; at <= pathext.size(); )
+    {
+        const std::string_view entry = nextPathListEntry( pathext, at );
+        if( !entry.empty() && equalsAsciiCaseless( entry, extension ) )
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 }   // namespace rw::oswin
