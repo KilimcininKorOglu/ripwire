@@ -315,6 +315,57 @@ def is_declaration_head( code, pos ):
         return t not in CALL_KEYWORDS and not t.isdigit()
     return t[-1] in "*&>" and t not in ( "&&", "->", ">>" )
 
+def matching_close( code, openPos, openCh, closeCh ):
+    depth, j = 0, openPos
+    while j < len( code ):
+        if code[j] == openCh: depth += 1
+        elif code[j] == closeCh:
+            depth -= 1
+            if depth == 0: return j
+        j += 1
+    return None
+
+def enclosing_block( code, pos ):
+    """The [start,end] span a declaration AT pos shadows an unqualified call within: the function body when pos
+    sits inside that function's own parenthesized parameter list (a callable parameter, `Accept accept`), else
+    the nearest enclosing { ... } (a class/struct member, a local), else None — no enclosing brace at all, a
+    genuine file-scope declaration, which really does shadow the whole file (this scanner does not track
+    namespaces, so two same-named globals in different namespaces are not told apart either way)."""
+    i, pdepth, parenStart = pos - 1, 0, None
+    while i >= 0:
+        c = code[i]
+        if c == ")":
+            pdepth += 1
+        elif c == "(":
+            if pdepth == 0:
+                parenStart = i
+                break
+            pdepth -= 1
+        elif c in "{}":
+            break               # a brace first: pos is not inside an enclosing parameter list
+        i -= 1
+    if parenStart is not None:
+        close = matching_close( code, parenStart, "(", ")" )
+        if close is not None:
+            j = close + 1
+            while j < len( code ) and code[j] in " \t\r\n": j += 1
+            if j < len( code ) and code[j] == "{":
+                end = matching_close( code, j, "{", "}" )
+                if end is not None:
+                    return ( j, end )
+    depth, i = 0, pos - 1
+    while i >= 0:
+        c = code[i]
+        if c == "}":
+            depth += 1
+        elif c == "{":
+            if depth == 0:
+                end = matching_close( code, i, "{", "}" )
+                return ( i, end ) if end is not None else ( i, len( code ) )
+            depth -= 1
+        i -= 1
+    return None
+
 def detect_F( rel, raw ):
     code = non_directive_code( strip( raw, False ) )
     hits = []
@@ -326,16 +377,21 @@ def detect_F( rel, raw ):
         if m.group( 1 ) == "remove" and top_level_args( code, m.end() - 1 ) != 1: continue
         hits.append( "%s:%d: std::%s(" % ( rel, line_of( code, m.start() ), m.group( 1 ) ) )
     # F3: unqualified POSIX calls — not a member access, not qualified, not a declaration, and not a name the
-    #     file itself declares (a parser's accept(), a class's own write(), a callable parameter named accept)
-    declared = set()
+    #     ENCLOSING SCOPE declares (a parser's accept(), a class's own write(), a callable parameter named accept).
+    #     Scoped, not file-wide: a struct's own `read` member must not hide an unrelated raw `read(fd, buf, n)`
+    #     elsewhere in the same file (CodeRabbit #290 — a name match is not symbol resolution). declared_at
+    #     answers per call site instead of building one file-wide name set.
+    declared = []   # [(name, scope)]; scope is enclosing_block(...) at the declaration, or None (true file scope)
     for m in re.finditer( r'\b(%s)\s*([(),;={])' % FUNC_ALT, code ):
         before = code[ max( 0, m.start() - 2 ):m.start() ]
         if before.endswith( ( ".", "->", "::" ) ) or re.search( r'::\s*$', code[ max( 0, m.start() - 4 ):m.start() ] ): continue
         if is_declaration_head( code, m.start() ):
-            declared.add( m.group( 1 ) )          # a function, lambda, parameter or variable of that name
+            declared.append( ( m.group( 1 ), enclosing_block( code, m.start() ) ) )
+    def declared_at( name, pos ):
+        return any( n == name and ( scope is None or scope[0] <= pos <= scope[1] ) for n, scope in declared )
     for m in re.finditer( r'(?<![\w.:>~])(%s)\s*\(' % FUNC_ALT, code ):
         name = m.group( 1 )
-        if name in declared or is_declaration_head( code, m.start() ): continue
+        if declared_at( name, m.start() ) or is_declaration_head( code, m.start() ): continue
         if code[ max( 0, m.start() - 2 ):m.start() ].endswith( "->" ): continue
         hits.append( "%s:%d: %s(" % ( rel, line_of( code, m.start() ), name ) )
     # F4: raw POSIX types at a call site
@@ -498,7 +554,11 @@ PLANT = {
     "A'": ( "#ifdef MSG_NOSIGNAL\nint a;\n#endif\n#if __has_include( <sys/event.h> )\nint b;\n#endif\n", 2 ),
     "B":  ( "#include <unistd.h>\n#  include <sys/stat.h>\n#include <windows.h>\n", 3 ),
     "D":  ( "#define open _open\n#define fclose( f ) rw_fclose( f )\n#undef rename\n", 3 ),
-    "F":  ( "void f( int fd ) { ::close( fd ); if( std::rename( a, b ) ) {} FILE* p = popen( c, \"r\" ); struct stat st; ssize_t n = 0; }\n", 5 ),
+    # the last two statements are CodeRabbit #290's control: a struct's own `read` member must not hide an
+    # unrelated raw `read( fd, buf, n )` in a sibling scope of the same file (a file-wide declared-name set would
+    # miss it; the fix scopes each declaration to its own enclosing block).
+    "F":  ( "void f( int fd ) { ::close( fd ); if( std::rename( a, b ) ) {} FILE* p = popen( c, \"r\" ); struct stat st; ssize_t n = 0; }\n"
+            "struct QRead { void read( int c ); };\nvoid h( int fd, char* buf, unsigned n ) { read( fd, buf, n ); }\n", 6 ),
     "G":  ( "void f() { if( os::kWindows ) {} bool b = rw::os::kApple; }\nnamespace rw::os { }\n", 3 ),
 }
 CLEAN = ( "// __APPLE__ and ::open( and #include <unistd.h> are only words in a comment\n"
