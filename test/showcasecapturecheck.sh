@@ -349,7 +349,7 @@ COVSCRIPT="$ROOT/test/showcase_coverage_check.py"
 if [ ! -f "$COVSCRIPT" ]; then
     no "(D-G) missing $COVSCRIPT"
 else
-    newestCapture="$( ls -1 "$ROOT"/docs/captures/COMMANDS_showcase_*.md 2>/dev/null | sort | tail -1 )"
+    newestCapture="$( ls -1 "$ROOT"/docs/captures/COMMANDS_showcase_*.md 2>/dev/null | LC_ALL=C sort | tail -1 )"
     if [ -z "$newestCapture" ]; then
         no "(D-G) no docs/captures/COMMANDS_showcase_*.md found"
     else

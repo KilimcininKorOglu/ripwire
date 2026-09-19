@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 
 
 // handoff.h — `--handoff`: the deterministic continuation packet for the NEXT agent session.
@@ -84,7 +85,7 @@ namespace handoff_detail
 
 inline std::string gitOneLine( const std::string& root, const char* args )
 {
-    const GitCommandLines r = gitCommandLines( "git -C " + shSingleQuote( root ) + " " + args + " 2>/dev/null" );
+    const GitCommandLines r = gitCommandLines( gitCmd( " -C " ) + shSingleQuote( root ) + " " + args + " 2>/dev/null" );
     return ( r.isStarted && r.status == 0 && !r.lines.empty() ) ? r.lines[0] : std::string();
 }
 

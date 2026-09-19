@@ -92,11 +92,11 @@ add_compile_options(${RIPWIRE_ARCH_FLAGS})
 # trade. The person building to USE ripwire wants the fast binary and is already on Release, so they
 # get it without asking. Both are overridable: -DRIPWIRE_LTO=ON on a dev tree, OFF on Release.
 #
-# DELIBERATELY NOT COUPLED TO NDEBUG/VERIFY. It would be tidier to say "checked build = slow, real
+# DELIBERATELY NOT COUPLED TO NDEBUG/ASSUME. It would be tidier to say "checked build = slow, real
 # build = fast" and fold LTO into the Release flavour, but that puts LTO and the assertions in
 # mutually exclusive builds — and LTO is precisely an OPTIMIZER change, the class of bug CLAUDE.md
 # says the Release leg exists to catch. Keeping the axes independent means a CI leg can run LTO WITH
-# VERIFY and DEGRADED_PATH_ALERT live, which is the only configuration that can catch an
+# ASSUME and the DISCLOSE( msg ) trace live, which is the only configuration that can catch an
 # LTO-induced miscompile the assertions would have flagged. Coupling them would create the blind
 # spot exactly where this optimization can hurt.
 # Determinism is unaffected: pagerank.cpp's -fno-fast-math is a per-function IR attribute that
@@ -250,6 +250,7 @@ set(_ripwire_query_names
   java
   javascript
   json
+  gdscript
   kotlin
   lua
   objc
@@ -287,17 +288,34 @@ file(APPEND "${_ripwire_embedded_queries}" "}};\n\ninline constexpr std::string_
 # the two can never silently drift. Short build info (compiler id/version, build type) rides along so a
 # bug report's "ripwire --version" line is enough to reproduce the toolchain, no separate --doctor call.
 # CMAKE_BUILD_TYPE is empty for the plain dev configure the house style mandates (CLAUDE.md: "never
-# -DCMAKE_BUILD_TYPE=Release" locally — Release defines NDEBUG, which compiles DEGRADED_PATH_ALERT out).
+# -DCMAKE_BUILD_TYPE=Release" locally — Release defines NDEBUG, which compiles the DISCLOSE( msg ) trace out).
 # "unspecified" told a bug reporter nothing about what they actually ran; "dev" is the honest, specific
 # label for that configure (§P6.10, 2026-07-28 output audit) — it is the first thing a bug report pastes.
-if(NOT CMAKE_BUILD_TYPE)
-  set(_ripwire_build_type_str "dev")
+# A MULTI-CONFIG generator (Ninja Multi-Config, Xcode) has no CMAKE_BUILD_TYPE: the configuration is picked at
+# build time (`cmake --build b --config Release`), so "dev" would mislabel an NDEBUG binary, and gates that read
+# the token to decide whether alerts are compiled in would believe it. The token is `$<CONFIG>` there, and the
+# header is per-configuration too: one shared version.h is rewritten by whichever configuration stamped last, and
+# a cross-config Ninja Multi-Config build collapses the stamp into ONE command, so every configuration's binary
+# carried the first one's token. Each configuration owns generated/<Config>/version.h, searched ahead of
+# generated/. A single-config tree keeps generated/version.h and its exact command line
+# (test/buildtypestampcheck.sh).
+get_property(_ripwire_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_ripwire_multi_config)
+  set(_ripwire_build_type_str "$<CONFIG>")
+  set(_ripwire_version_header "${_ripwire_generated_dir}/$<CONFIG>/version.h")
+  set(_ripwire_generated_include_dirs "${_ripwire_generated_dir}/$<CONFIG>" "${_ripwire_generated_dir}")
 else()
-  set(_ripwire_build_type_str "${CMAKE_BUILD_TYPE}")
+  if(NOT CMAKE_BUILD_TYPE)
+    set(_ripwire_build_type_str "dev")
+  else()
+    set(_ripwire_build_type_str "${CMAKE_BUILD_TYPE}")
+  endif()
+  set(_ripwire_version_header "${_ripwire_generated_dir}/version.h")
+  set(_ripwire_generated_include_dirs "${_ripwire_generated_dir}")
 endif()
-set(_ripwire_version_header "${_ripwire_generated_dir}/version.h")
 # Always run before the two executable targets. copy_if_different inside the script keeps the header's
-# mtime stable when neither HEAD nor tracked bytes changed, so this gives exact provenance without
+# mtime stable when neither HEAD nor tracked bytes changed (per configuration on a multi-config generator,
+# so switching --config does not rewrite the other's header), so this gives exact provenance without
 # recompiling main.cpp on every incremental build.
 add_custom_target(ripwire_version_stamp ALL
   COMMAND ${CMAKE_COMMAND}
@@ -309,6 +327,24 @@ add_custom_target(ripwire_version_stamp ALL
     -DRIPWIRE_COMPILER_VER=${CMAKE_CXX_COMPILER_VERSION}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version_stamp.cmake
   BYPRODUCTS ${_ripwire_version_header}
+  VERBATIM)
+
+# The producer identity (cmake/source_identity.cmake): one generated DEFINITION, compiled into both
+# executables, that src/quality.h keys its Snapshot caches on — so a blob one build computed is never
+# served to a build whose sources differ. A .cpp rather than a header: see src/sourceidentity.h.
+# It is a hash of src/ and queries/ only, the same for every configuration, so it is ONE shared file with its
+# OWN always-run target, never a second COMMAND of ripwire_version_stamp. In a cross-config Ninja Multi-Config
+# build, a target with a shared byproduct runs one configuration's commands only, so it cannot also write the
+# per-configuration version.h. Every other configuration's header is then "missing and no known rule"
+# (test/buildtypestampcheck.sh #6). Collapsing is harmless for the identity alone, whose command does not
+# depend on the configuration. copy_if_different keeps an unchanged tree from recompiling it.
+set(_ripwire_source_identity_cpp "${_ripwire_generated_dir}/source_identity.cpp")
+add_custom_target(ripwire_source_identity ALL
+  COMMAND ${CMAKE_COMMAND}
+    -DRIPWIRE_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DRIPWIRE_OUTPUT=${_ripwire_source_identity_cpp}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/source_identity.cmake
+  BYPRODUCTS ${_ripwire_source_identity_cpp}
   VERBATIM)
 
 # ---- tree-sitter CORE (static) ----
@@ -474,6 +510,18 @@ add_ts_grammar(lua    https://github.com/tree-sitter-grammars/tree-sitter-lua.gi
 # deliberately not a kLangTable row yet — see the note there.
 add_ts_grammar(kotlin https://github.com/fwcd/tree-sitter-kotlin.git 1852ea17b7f60fb3f9d84e0b1555d56b46b39fb1)  # main, post-0.3.8
 
+# GDScript (.gd): PrestonKnopp/tree-sitter-gdscript — the only maintained GDScript grammar; there is no
+# first-party one under tree-sitter/. LANGUAGE_VERSION 14, inside [MIN_COMPATIBLE, LANGUAGE_VERSION]=[13,15]
+# for the vendored core. Ships a scanner.c (significant indentation: INDENT/DEDENT/NEWLINE, like Python's)
+# which the macro picks up. The SHA below is 12 commits ahead of upstream's newest tag — `git describe
+# --tags` reports v6.1.0-12-gc5c8fa4 — so it is a master commit by choice, not for want of a tag.
+# PARSE RATE MEASURED, not assumed, before vendoring (STEP 0 of prompts/add-a-language.md): 98.88% of 2938
+# real .gd files parse with zero ERROR/MISSING nodes — 13 open-source Godot projects (2611 files, 98.81%)
+# plus a private 327-file game (99.39%); 8159 error bytes out of 25.3 MB (0.032%). The three known blind
+# spots are disclosed in queries/gdscript/tags.scm and test/gdscriptcheck.sh; all three are upstream grammar
+# gaps, NOT patched here (guardrail G3 — this repo carries no grammar fork).
+add_ts_grammar(gdscript https://github.com/PrestonKnopp/tree-sitter-gdscript.git c5c8fa4861b5a4f04a7e60d97587fc3b6cc5639e)  # master, ABI 14
+
 # PHP (.php): the official tree-sitter org grammar. Like TypeScript this repo hosts TWO sub-grammars
 # in subdirectories — `php/` (the full one: HTML text interleaved with `<?php … ?>` blocks) and
 # `php_only/` (no surrounding text). ONLY `php/` is vendored and built: a real .php file in a real
@@ -506,7 +554,7 @@ add_ts_object(tstsx ${ts_typescript_SOURCE_DIR}/tsx/src)
 
 # ---- explicit, easy-to-extend executable source list ----
 # Later stages (graph/rank/serialize/main) get appended here. ingest.cpp + infra's
-# diagnostics.cpp (VERIFY/DEGRADED handlers link partner) are the foundation.
+# diagnostics.cpp (ASSUME/DEGRADED handlers link partner) are the foundation.
 set(RIPWIRE_SRCS
   src/ingest.cpp
   src/pagerank.cpp
@@ -535,6 +583,7 @@ set(RIPWIRE_TS_OBJECTS
   $<TARGET_OBJECTS:ts_lua>
   $<TARGET_OBJECTS:ts_dart>
   $<TARGET_OBJECTS:ts_kotlin>
+  $<TARGET_OBJECTS:ts_gdscript>
   $<TARGET_OBJECTS:ts_elixir>
   $<TARGET_OBJECTS:ts_php>
   $<TARGET_OBJECTS:ts_toml>
@@ -558,30 +607,32 @@ find_package(Threads REQUIRED)
 add_executable(ripwire_probe
   src/tsprobe.cpp
   ${RIPWIRE_SRCS}
+  ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire_probe PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire_probe PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
-  ${_ripwire_generated_dir}
+  ${_ripwire_generated_include_dirs}
   src/infra
   third_party
   src)
-add_dependencies(ripwire_probe ripwire_version_stamp)
+add_dependencies(ripwire_probe ripwire_version_stamp ripwire_source_identity)
 
 # ---- the real ripwire binary: full pipeline (ingest → graph → PageRank → minified XML) ----
 # main.cpp forward-declares rw::ingest(); linking ingest.cpp supplies the real tree-sitter one.
 add_executable(ripwire
   src/main.cpp
   ${RIPWIRE_SRCS}
+  ${_ripwire_source_identity_cpp}
   ${RIPWIRE_TS_OBJECTS})
 target_link_libraries(ripwire PRIVATE tree-sitter Threads::Threads)
 target_include_directories(ripwire PRIVATE
   ${tree_sitter_SOURCE_DIR}/lib/include
-  ${_ripwire_generated_dir}
+  ${_ripwire_generated_include_dirs}
   src/infra
   third_party
   src)
-add_dependencies(ripwire ripwire_version_stamp)
+add_dependencies(ripwire ripwire_version_stamp ripwire_source_identity)
 
 # ---- small-vector A/B knobs (bench/svectorab.py drives both; see bench/SVECTORAB.md) ----
 # RIPWIRE_SMALLVEC selects which container src/smallvec.h's `rw::SmallVec` alias resolves to:
@@ -686,7 +737,7 @@ endforeach()
 #
 # Three properties this option deliberately keeps:
 #   * SEPARATE BUILD TREE, no build type. Remarks only describe an OPTIMIZED build, but the repo forbids
-#     -DCMAKE_BUILD_TYPE=Release in a dev tree (NDEBUG compiles DEGRADED_PATH_ALERT out and blinds the
+#     -DCMAKE_BUILD_TYPE=Release in a dev tree (NDEBUG compiles the DISCLOSE( msg ) trace out and blinds the
 #     degrade-path gates — CONTRIBUTING.md §5). No build type is needed here: RIPWIRE_ARCH_FLAGS already
 #     puts the plain configuration at -O2, so build_remarks/ describes the SAME codegen build/ ships,
 #     with the degrade paths still compiled in. The option is nonetheless refused inside build/ below.
@@ -745,7 +796,7 @@ endif()
 set(RIPWIRE_GRAMMAR_TARGETS
   ts_cpp ts_python ts_go ts_rust ts_tsts ts_tstsx ts_swift ts_objc
   ts_javascript ts_bash ts_java ts_ruby ts_json ts_toml ts_yaml ts_csharp ts_c ts_cuda ts_markdown
-  ts_php ts_lua ts_elixir ts_dart ts_kotlin)
+  ts_php ts_lua ts_elixir ts_dart ts_kotlin ts_gdscript)
 set(RIPWIRE_RUNTIME_COMPILE_TARGETS ripwire_probe ripwire tree-sitter ${RIPWIRE_GRAMMAR_TARGETS})
 set(RIPWIRE_RUNTIME_LINK_TARGETS ripwire_probe ripwire)
 # The C++ subset of the compile list — the only targets that include a C++ standard library at all, and so
@@ -900,6 +951,25 @@ if(RIPWIRE_ASAN)
     COMMENT "Run the G1 fixture with the platform leak-detection policy")
 endif()
 
+# ---- compile-time fences: two warnings that are errors on OUR C++ targets, every compiler, every flavour ----
+# The tree passes no warning set (no -Wall), so until this block a check only a warning could make was a check nobody
+# read, and on GCC -Wswitch did not run at all: GCC enables it only under -Wall, Clang by default.
+#   -Werror=switch                  a switch over an enum with no `default:` must name every enumerator, so appending
+#                                   one (a Lang, a SymKind, a RefRole) is a compile error at every per-value switch that
+#                                   has to decide it. The house rule that makes this bite: a switch returning one answer
+#                                   PER ENUMERATOR carries no `default:`, and ends with a plain `return` for a byte past
+#                                   the enum (a corrupt cache value); GCC's -Wreturn-type needs that line and Clang
+#                                   accepts it. A switch over a deliberate SUBSET keeps its `default:`.
+#   -Werror=implicit-fallthrough    a case body that falls into the next label says so with [[fallthrough]].
+# Both were measured at 0 diagnostics on this tree before they became errors (AppleClang and Homebrew clang, debug and
+# -DNDEBUG), so they cost nothing today and fence the next edit. GCC's first run of them is CI's.
+# OUR TARGETS ONLY, the same rule the sanitizer and separate-storage blocks follow: the tree-sitter core and the grammar
+# objects are generated C we do not own, and their scanners fall through by design.
+set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough)
+foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
+  target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})
+endforeach()
+
 # ---- G-race ThreadSanitizer build (the qsnap-prefetch worker vs the request loop) ----
 # A SEPARATE target/dir from ASan (TSan and ASan are mutually exclusive). Vets the one concurrent path in the
 # server: the detached HEAD-snapshot prefetch thread against a request-thread ingest, serialized by
@@ -915,12 +985,12 @@ if(RIPWIRE_TSAN)
 endif()
 
 # ---- separate-storage alias analysis: -mllvm -basic-aa-separate-storage (LLVM 17 keeps it OFF) ----
-# src/infra/Diagnostics.h §6's VERIFY_NO_ALIAS lowers, in release, to `llvm.assume [ "separate_storage"(a, b) ]`
+# src/infra/Diagnostics.h §6's ASSUME_NO_ALIAS lowers, in release, to `llvm.assume [ "separate_storage"(a, b) ]`
 # through __builtin_assume_separate_storage. The FRONT END has emitted that bundle since clang 17; whether BasicAA
 # READS it is a separate switch inside the optimizer, llvm/lib/Analysis/BasicAliasAnalysis.cpp:
 #     static cl::opt<bool> EnableSeparateStorageAnalysis("basic-aa-separate-storage", cl::Hidden, cl::init(false))
 # in LLVM 17, and cl::init(true) from LLVM 18 on. So on an LLVM-17 toolchain — AppleClang 16.0.0.16000026 (Xcode
-# 16.2), the macos-14 CI runners and release.yml's macos-arm64 leg — the header compiles, the IR carries the bundle,
+# 16.2: the macos-14 CI runners and release.yml's macos-arm64 leg through 0.6.1) — the header compiles, the IR carries the bundle,
 # and codegen is byte-identical to no promise at all. Found by CI job "release (macos-14, plain, appleclang, shard
 # 4/4)" on PR #200: test/noaliascheck.sh arms 2, 2/3 and 6 red ("accNew still reloads a after the store", "NO
 # CONTRAST", "not at least 2 below plain"), arm 7 and the IR-bundle row green — the front-end half worked, the
@@ -996,7 +1066,7 @@ if(RIPWIRE_CXX_HAS_BASIC_AA_SEPARATE_STORAGE)
   endif()
   message(STATUS "separate-storage alias analysis: forced on (-mllvm -basic-aa-separate-storage — turns BasicAA's separate_storage reader on for LLVM 17 / AppleClang 16, a no-op on LLVM 18+); ${_ripwire_separate_storage_link}")
 else()
-  message(STATUS "separate-storage alias analysis: compiler default (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not accept -mllvm -basic-aa-separate-storage; VERIFY_NO_ALIAS keeps its debug check, the release promise is whatever this optimizer does by default)")
+  message(STATUS "separate-storage alias analysis: compiler default (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not accept -mllvm -basic-aa-separate-storage; ASSUME_NO_ALIAS keeps its debug check, the release promise is whatever this optimizer does by default)")
 endif()
 
 # ---- opt-in ingestion fuzzing: isolated coverage-instrumented parser objects ----
@@ -1072,5 +1142,53 @@ if(RIPWIRE_FUZZ)
   add_ripwire_fuzzer(elixir     tree_sitter_elixir     elixir)
   add_ripwire_fuzzer(lua        tree_sitter_lua        lua)
   add_ripwire_fuzzer(kotlin     tree_sitter_kotlin     kotlin)
+  add_ripwire_fuzzer(gdscript   tree_sitter_gdscript   gdscript)
   add_custom_target(ripwire_fuzzers DEPENDS ${RIPWIRE_FUZZ_TARGETS})
+
+  # ---- reader fuzzers: ripwire's OWN parsers of bytes it did not create (test/fuzz/readers/) ----
+  # The grammar targets above fuzz the vendored parsers; these fuzz the code a hostile cache blob, sidecar, SCIP
+  # index, MCP frame or repository document actually reaches. Each reader family compiles ONCE into the static
+  # library (readers_ingest.cpp IS the ingest translation unit, instrumented); each ripwire_fuzz_reader_<name> is one
+  # tiny entry TU that names its reader, so the linker pulls only the family it calls. Crash oracles only — the
+  # correctness oracles are help-wanted issue #149's.
+  set(RIPWIRE_FUZZ_READER_SOURCES
+    test/fuzz/readers/readers_light.cpp
+    test/fuzz/readers/readers_domain.cpp
+    test/fuzz/readers/readers_mcphttp.cpp
+    test/fuzz/readers/readers_ingest.cpp
+    src/pagerank.cpp
+    src/infra/diagnostics.cpp)
+  set(RIPWIRE_FUZZ_READER_INCLUDES
+    ${tree_sitter_SOURCE_DIR}/lib/include ${_ripwire_generated_dir} src/infra third_party src test/fuzz/readers)
+  add_library(ripwire_fuzz_readers STATIC EXCLUDE_FROM_ALL ${RIPWIRE_FUZZ_READER_SOURCES})
+  target_include_directories(ripwire_fuzz_readers PRIVATE ${RIPWIRE_FUZZ_READER_INCLUDES})
+  target_compile_definitions(ripwire_fuzz_readers PRIVATE PROFILE_ENABLED=0)
+  target_compile_options(ripwire_fuzz_readers PRIVATE ${RIPWIRE_FUZZ_COMPILE_OPTIONS})
+  if(RIPWIRE_HAS_CLANG_INTEGER_SANITIZER)
+    target_compile_options(ripwire_fuzz_readers PRIVATE "-fsanitize-ignorelist=${_ripwire_libstdcxx_ignorelist}")
+  endif()
+  add_dependencies(ripwire_fuzz_readers ripwire_version_stamp)
+  add_library(ripwire_fuzz_reader_grammars STATIC EXCLUDE_FROM_ALL ${RIPWIRE_TS_OBJECTS})
+  set_target_properties(ripwire_fuzz_reader_grammars PROPERTIES LINKER_LANGUAGE C)
+
+  set(RIPWIRE_FUZZ_READER_TARGETS)
+  function(add_ripwire_reader_fuzzer NAME)
+    set(_ripwire_reader_target "ripwire_fuzz_reader_${NAME}")
+    add_executable(${_ripwire_reader_target} EXCLUDE_FROM_ALL test/fuzz/readers/fuzz_reader.cpp)
+    target_compile_definitions(${_ripwire_reader_target} PRIVATE RIPWIRE_FUZZ_READER=${NAME})
+    target_compile_options(${_ripwire_reader_target} PRIVATE ${RIPWIRE_FUZZ_COMPILE_OPTIONS})
+    target_link_options(${_ripwire_reader_target} PRIVATE ${RIPWIRE_FUZZ_LINK_OPTIONS})
+    target_link_libraries(${_ripwire_reader_target} PRIVATE
+      ripwire_fuzz_readers ripwire_fuzz_reader_grammars ripwire_tree_sitter_fuzz Threads::Threads)
+    set(RIPWIRE_FUZZ_READER_TARGETS ${RIPWIRE_FUZZ_READER_TARGETS} ${_ripwire_reader_target} PARENT_SCOPE)
+  endfunction()
+
+  # The reader list is declared ONCE, here; test/fuzz/readers/run.sh and test/g1configcheck.sh derive theirs from it.
+  set(RIPWIRE_FUZZ_READERS
+    mcpjson mcphttp docparse tracein skillscan scip resolvecfg lintrules
+    qsnap qchurn oracle sidecars qscope ingestrecord ingestframe stiermemo)
+  foreach(_ripwire_reader IN LISTS RIPWIRE_FUZZ_READERS)
+    add_ripwire_reader_fuzzer(${_ripwire_reader})
+  endforeach()
+  add_custom_target(ripwire_reader_fuzzers DEPENDS ${RIPWIRE_FUZZ_READER_TARGETS})
 endif()

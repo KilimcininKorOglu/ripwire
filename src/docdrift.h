@@ -103,7 +103,7 @@
 #include "mention.h"            // mention_detail::pathSuffixMatches — the whole-segment suffix match
 #include "workspace.h"          // wsdetail::segmentsOf
 #include "smallvec.h"           // rw::SmallVec — small basename→path lists
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 #include "gitstamp.h"           // r26-stamp Task A: gitstamp::stampAt — the at="<sha>[+dirty]" root anchor
 #include "layout.h"             // layout::isCFamilyPath — shared C/C++/ObjC/CUDA extension classifier
 #include "nextverb.h"           // P3: nextAttrXml — the ONE pasteable follow-up a cut root carries
@@ -153,8 +153,11 @@ constexpr std::size_t   kMaxFrontMatter  = 12;
 // ── anchor kinds, drift verdicts and unchecked reasons: declarative tables, not switch chains ────────────
 
 enum class AnchorKind : std::uint8_t { FileLine = 0, Symbol, Const, Array };
+inline constexpr std::size_t kAnchorKindCount = static_cast<std::size_t>( AnchorKind::Array ) + 1;
+static_assert( enumCountIsExact<AnchorKind, kAnchorKindCount>(), "kAnchorKindCount must name the LAST AnchorKind — move it with the append" );
 
 inline constexpr const char* kAnchorKindTag[] = { "file-line", "symbol", "const", "array" };
+static_assert( std::size( kAnchorKindTag ) == kAnchorKindCount, "kAnchorKindTag is indexed by AnchorKind — one tag per enumerator" );
 
 inline const char* anchorKindTag( AnchorKind k ) noexcept { return kAnchorKindTag[ std::size_t( k ) ]; }
 
@@ -162,8 +165,11 @@ inline const char* anchorKindTag( AnchorKind k ) noexcept { return kAnchorKindTa
 // here", deleted says "this repo HAD it and commit X removed it". Only the history oracle can say the second,
 // so a run without --with-history never emits it.
 enum class Drift : std::uint8_t { Holds = 0, MissingFile, PastEof, LineMoved, Undefined, Deleted, ConstValue, ArrayExtent, RangeStraddles };
+inline constexpr std::size_t kDriftCount = static_cast<std::size_t>( Drift::RangeStraddles ) + 1;
+static_assert( enumCountIsExact<Drift, kDriftCount>(), "kDriftCount must name the LAST Drift — move it with the append" );
 
 inline constexpr const char* kDriftTag[] = { "holds", "missing-file", "past-eof", "line-moved", "undefined", "deleted", "const-value", "array-extent", "range-straddles" };
+static_assert( std::size( kDriftTag ) == kDriftCount, "kDriftTag is indexed by Drift — one tag per enumerator" );
 
 inline const char* driftTag( Drift d ) noexcept { return kDriftTag[ std::size_t( d ) ]; }
 
@@ -486,7 +492,7 @@ inline bool literalTerminatesInProse( std::string_view s, std::size_t i )
 // keeps the two from drifting apart.
 inline bool matchBracketExtent( std::string_view s, std::size_t openIndex, std::size_t& closeIndex, std::uint64_t& extent )
 {
-    VERIFY( openIndex < s.size() && s[ openIndex ] == '[' );
+    ASSUME( openIndex < s.size() && s[ openIndex ] == '[' );
 
     std::size_t k = openIndex + 1;
     while( k < s.size() && s[k] == ' ' )
@@ -735,7 +741,7 @@ inline bool matchArrayClaim( std::string_view line, std::size_t afterName, std::
 // the token walk both the doc's value lane and the code harvest use to visit each identifier exactly once.
 inline bool identStartsAt( std::string_view s, std::size_t i ) noexcept
 {
-    VERIFY( i < s.size() );
+    ASSUME( i < s.size() );
     return darkflags::identByte( (unsigned char)s[i] ) && !( i > 0 && darkflags::identByte( (unsigned char)s[ i - 1 ] ) );
 }
 
@@ -1700,7 +1706,7 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
     RepoPaths       out;
     std::error_code ec;
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( ec ) { DEGRADED_PATH_ALERT( "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
+    if( ec ) { DISCLOSE( "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );   // §SEC1 — the crawl boundary, canonicalized once
 
     const fs::recursive_directory_iterator end;
@@ -1740,7 +1746,7 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
         if( it->is_symlink( lec ) && !crawlPathStaysInRoot( full, rootReal ) )
         {
             ++out.escaped;
-            DEGRADED_PATH_ALERT( "doc-drift: a file's symlink target leaves the root — file refused" );
+            DISCLOSE( "doc-drift: a file's symlink target leaves the root — file refused" );
             continue;
         }
 
@@ -2018,7 +2024,7 @@ inline void forEachIndexParallel( std::size_t count, const char* what, Work&& wo
     }
 
     std::atomic<std::size_t> nextIndex{ 0 };
-    const auto               indexWorker = [ & ]()
+    const auto               indexWorker = [ & ]() noexcept
     {
         try
         {
@@ -2363,7 +2369,7 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
     {
         if( !scan.isDocRead[d] )
         {
-            DEGRADED_PATH_ALERT( "doc-drift: cannot read a markdown file — its anchors are omitted" );
+            DISCLOSE( "doc-drift: cannot read a markdown file — its anchors are omitted" );
             ++res.docsUnread;   // 2026-09-06: the doc used to vanish from docs= with no trace a Release binary keeps
             rw::emitTo( stderr, "ripwire: doc-drift: cannot read {} — its anchors are omitted (docs_unread= counts it)\n", scan.docRel[d].c_str() );
             continue;
@@ -2385,7 +2391,7 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
         perDocResolving.push_back( std::move( scan.perDocResolving[d] ) );
         ++keptCount;
     }
-    VERIFY( keptCount == rows.size() && keptCount == perDoc.size() );
+    ASSUME( keptCount == rows.size() && keptCount == perDoc.size() );
     res.docsScanned = std::uint32_t( rows.size() );
 
     // ── pass B: one parallel scan of the corpus, answering every name the docs asked about ───────────────
@@ -2454,7 +2460,7 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
         }
 
         // A prose `= N` was never an anchor, so it leaves the tally rather than inflating "unchecked".
-        VERIFY( row.anchorCount >= prose );
+        ASSUME( row.anchorCount >= prose );
         row.anchorCount -= prose;
         res.prose       += prose;
 
@@ -2475,7 +2481,7 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
                 ++res.datedBy[std::size_t( a.rec )];
             }
         }
-        VERIFY( row.datedCount <= drifted.size() );
+        ASSUME( row.datedCount <= drifted.size() );
         res.dated  += row.datedCount;
         res.drift  += std::uint32_t( drifted.size() ) - row.datedCount;
         row.drifted = std::move( drifted );
@@ -2500,7 +2506,7 @@ template<class Spec>
 inline void writeTally( std::FILE* out, const char* tag, std::span<const Spec> table,
                         std::span<const std::uint32_t> counts, const XmlEscaper& ex )
 {
-    VERIFY( table.size() == counts.size() );
+    ASSUME( table.size() == counts.size() );
     for( std::size_t r = 0; r < counts.size(); ++r )
     {
         if( counts[r] )
@@ -2573,14 +2579,14 @@ inline void writeGateability( std::FILE* out, const DriftResult& res, const XmlE
     // two agree and projected_drift is 0: dating the whole list below removes ALL of drift=, because the list
     // is exhaustive by construction. A disagreement would mean this block and that accumulation came apart.
     //
-    // DEGRADE, not VERIFY, deliberately. `VERIFY( liveTotal == res.drift )` compiles to __builtin_assume under
+    // DEGRADE, not ASSUME, deliberately. `ASSUME( liveTotal == res.drift )` compiles to __builtin_assume under
     // NDEBUG, which entitles the optimizer to fold the clamp below to a literal 0 and so DELETE the fallback
     // that makes a broken invariant survivable — the shipped-bug trap Diagnostics.h warns about, and one CI
     // (which configures Release) could never observe. This is an EMITTER, and a bad accounting total is
     // recoverable: clamp it, and say out loud that it was clamped, in the builds that can still hear.
     if( liveTotal != res.drift )
     {
-        DEGRADED_PATH_ALERT( "doc-drift gateability: live total disagrees with drift= — projected_drift clamped to a floor of 0" );
+        DISCLOSE( "doc-drift gateability: live total disagrees with drift= — projected_drift clamped to a floor of 0" );
     }
     const std::uint32_t projectedDrift = res.drift > liveTotal ? res.drift - liveTotal : 0u;
 
@@ -2844,7 +2850,7 @@ inline void writeDocDriftPage( std::FILE* out, const DriftResult& res, std::size
         // THE VERDICT IS COMPUTED FROM THE FULL SET, NOT THE WINDOW: both numbers below are taken from
         // row.drifted.size() / row.datedCount, which the cap never touches. Asserted rather than trusted —
         // the whole class this round closes is a count that quietly starts following the emitted rows.
-        VERIFY( row.datedCount <= row.drifted.size() );
+        ASSUME( row.datedCount <= row.drifted.size() );
         rw::emitTo( out, "<doc p=\"{}\" anchors=\"{}\" checked=\"{}\" drift=\"{}\" dated=\"{}\"",
                       ex( row.path ).c_str(), row.anchorCount, row.checkedCount + std::uint32_t( row.drifted.size() ),
                       row.drifted.size() - row.datedCount, row.datedCount );

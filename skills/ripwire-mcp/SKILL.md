@@ -147,6 +147,17 @@ edit verbs are refused over remote unless you pass `--allow-remote-edits` (which
 Full flag/env reference, the `curl` recipe, and each refusal's exact wire behavior →
 [`mcp-reference.md`](mcp-reference.md#remote-transport).
 
+## Editor transport: `--lsp` (navigation LSP server) — read-only, Phase 1
+
+`--mcp` answers agents and `--listen` serves a team; `--lsp` answers **editors**: a read-only,
+navigation-focused LSP 3.x server over stdio — lifecycle (`initialize`/`shutdown`/`exit`) plus
+`definition`, `references`, `documentSymbol` (member variables merged into the outline), workspace
+symbol, and `hover`. Same warm index as `--mcp` — no second parser, no second process. Saved-state
+answers only: an unsaved buffer is absent from the index, not mispositioned, and every count is a
+floor, not a total (the hover text says so in place, since JSON-RPC results have no metadata channel).
+UTF-8 positions; refuses to combine with `--mcp`/`--listen` — one protocol per stdin. The PoC plan and
+its locked decisions live in `docs/LSP.md`.
+
 ## The lazy-body posture: names/signatures by default, bodies by handle on request
 
 `find_symbol` and `find_referencing_symbols` attach a stable `handle` to every symbol object they return

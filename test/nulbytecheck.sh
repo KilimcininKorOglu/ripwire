@@ -90,12 +90,28 @@ BINARY_EXTENSIONS = {
                # hashes the contents and would red first.
 }
 
+# Directories whose tracked files are legitimately binary, matched as a repo-relative path PREFIX that ends in "/" —
+# never a substring, so `x/test/fuzz/readers/seeds/f`, `test/fuzz/readers/seedsX/f` and `test/fuzz/readers/seeds_old/f`
+# are NOT excused (arm (d) plants each of those and requires the scanner to flag it). A directory row exists only where no
+# extension can express the population, and arm (c) requires it to hold at least one tracked NUL-bearing file.
+BINARY_DIRECTORIES = (
+    "test/fuzz/readers/seeds/",  # the reader fuzzers' seed corpus (lane/reader-fuzzers): inputs deliberately built from
+               # the real binary writers by make_seeds.sh, plus minimized crash regressions. NUL-bearing bytes are
+               # the point of a fuzz input, the files are extensionless because libFuzzer reads a directory, and a
+               # "text" seed with a NUL is a legitimate adversarial input too. Added 2026-09-17, the round this gate's
+               # header anticipated: train 1b's CI (PR #277, release ubuntu-24.04 plain gcc shard 4/4) failed arm (a)
+               # naming 22 of these files, and this is the row plus the reason.
+)
+
+def isBinaryPath(path):
+    return os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS or any(path.startswith(d) for d in BINARY_DIRECTORIES)
+
 def scan(paths, label):
     offenders = []
     scanned = 0
     links = 0
     for path in paths:
-        if os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS:
+        if isBinaryPath(path):
             continue
         if not os.path.lexists(path):
             continue  # tracked deletion in a dirty review tree; there are no working-tree bytes to scan
@@ -193,7 +209,7 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 echo
-echo "=== (c) every allowlisted extension is backed by a real tracked file ==="
+echo "=== (c) every allowlisted extension and directory is backed by a real tracked file ==="
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 # The allowlist is the gate's only hole, so it is itself asserted: a row nothing matches is either a stale
 # leftover or a speculative exemption, and both are how a real NUL gets waved through later.
@@ -221,10 +237,53 @@ for ext in rows:
 if not rows:
     print("  FAIL  (c) could not parse BINARY_EXTENSIONS out of the gate")
     fails += 1
+# A DIRECTORY row is a wider hole than an extension row, so it must be backed by more than a file: by at least one
+# tracked file under it that really carries a NUL. A directory whose binary files all left is a stale exemption.
+dirBlock = src.split("BINARY_DIRECTORIES = (", 1)[1].split("\n)", 1)[0]
+dirRows = re.findall(r'^\s*"([^"]+/)",', dirBlock, re.M)
+for d in dirRows:
+    under = [p.decode("utf-8", "replace") for p in tracked if p and p.decode("utf-8", "replace").startswith(d)]
+    withNul = [p for p in under if os.path.isfile(p) and not os.path.islink(p) and b"\0" in open(p, "rb").read()]
+    if withNul:
+        print("  PASS  (c) directory row %s is backed by %d tracked file(s), %d carrying a NUL" % (d, len(under), len(withNul)))
+    else:
+        print("  FAIL  (c) directory row %s holds %d tracked file(s) and NONE carries a NUL — stale, remove it" % (d, len(under)))
+        fails += 1
+if not dirRows:
+    print("  FAIL  (c) could not parse BINARY_DIRECTORIES out of the gate")
+    fails += 1
 # and the converse: any tracked extension that carries NULs must BE on the list, or arm (a) is failing for it
-print("  INFO  (c) %d allowlist rows, %d distinct tracked extensions" % (len(rows), len(present)))
+print("  INFO  (c) %d extension rows, %d directory rows, %d distinct tracked extensions" % (len(rows), len(dirRows), len(present)))
 sys.exit(1 if fails else 0)
 PY
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+echo
+echo "=== (d) the directory row is a PREFIX: a NUL file just outside it is still flagged ==="
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+# The same scanner arm (a) runs, pointed at planted NUL files in a scratch directory whose layout mirrors the repo.
+# Each near-miss spelling must be FLAGGED (expect-dirty); the control, a file really under the row, must be EXCUSED
+# (expect-clean). Without the control the four flags would pass for a scanner that excuses nothing at all.
+ANCHOR="$TMP/anchor"
+for rel in test/fuzz/readers/seedsX/f test/fuzz/readers/seeds_old/f x/test/fuzz/readers/seeds/f test/fuzz/readers/seeds/sub/f; do
+    mkdir -p "$ANCHOR/$( dirname "$rel" )"
+done
+for rel in test/fuzz/readers/seedsX/f test/fuzz/readers/seeds_old/f x/test/fuzz/readers/seeds/f; do
+    printf 'near\000miss' >"$ANCHOR/$rel"
+done
+printf 'excused\000seed' >"$ANCHOR/test/fuzz/readers/seeds/sub/f"
+for rel in test/fuzz/readers/seedsX/f test/fuzz/readers/seeds_old/f x/test/fuzz/readers/seeds/f; do
+    if ( cd "$ANCHOR" && python3 "$TMP/nulscan.py" expect-dirty "$rel" >"$TMP/anchor.out" 2>&1 ); then
+        ok "(d) $rel is flagged — not excused by the test/fuzz/readers/seeds/ row"
+    else
+        no "(d) $rel was EXCUSED — the directory row is not anchored as a prefix: $( tail -1 "$TMP/anchor.out" )"
+    fi
+done
+if ( cd "$ANCHOR" && python3 "$TMP/nulscan.py" expect-clean test/fuzz/readers/seeds/sub/f >"$TMP/anchor.out" 2>&1 ); then
+    ok "(d) control: a NUL file under test/fuzz/readers/seeds/ IS excused, so the flags above measured the anchoring"
+else
+    no "(d) control: a file under test/fuzz/readers/seeds/ was flagged — the directory row excuses nothing: $( tail -1 "$TMP/anchor.out" )"
+fi
 
 echo
 [ "$fail" = 0 ] && { echo "nulbytecheck: ALL PASS"; exit 0; }

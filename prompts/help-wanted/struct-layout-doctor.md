@@ -95,7 +95,7 @@ plus `sizeof( std::string )`. The record must:
   disagreement you are trying to see (trap 1).
 - **Carry a translation-unit identity.** `__FILE__` inside a header names the header, not the unit that
   includes it (trap 4). A compile definition set per source file from CMake is one way.
-- **Survive a Release build.** Not `VERIFY`, not `DEGRADED_PATH_ALERT`, not guarded by `NDEBUG` — all of
+- **Survive a Release build.** Not `ASSUME`, not `DISCLOSE`, not guarded by `NDEBUG` — all of
   those change or vanish in Release. It must also survive LTO: something the linker can prove unused may
   be dropped.
 - **Be reachable from `--doctor`.** A registration at static-initialization time into a registry owned
@@ -125,7 +125,7 @@ found either way.
 
 **House rules that apply here.** Gate before code. Allman braces, braces on every body, spaces inside
 parens, structured-binding returns (CONTRIBUTING.md §3). No `std::map` or `std::unordered_map`. No timing
-assertions. Any new degrade path uses `DEGRADED_PATH_ALERT`, never `VERIFY( false )`, although a doctor
+assertions. Any new degrade path uses `DISCLOSE`, never `ASSUME( false )`, although a doctor
 finding is a reported failure rather than a degrade path.
 
 ---

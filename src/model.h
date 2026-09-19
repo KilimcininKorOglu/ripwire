@@ -10,13 +10,16 @@
 
 #include "infra/profileScope.h"
 #include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
+#include "infra/sortutil.h"  // svLess — JS/TS builtin-member tables below (binary_search, no signed-char wrap)
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
+#include "structlayout.h"   // cross-translation-unit sizeof/alignof tripwire for the shared model
 
-#include <algorithm>   // std::sort — symbolsByFile below
+#include <algorithm>   // std::sort — symbolsByFile below; std::binary_search — isJsTsBuiltinMember
 #include <tuple>       // std::tie — lessUnindexedExt's mixed-direction compare
 #include <array>       // Symbol::evWhy — the fixed-size ev_why tag counters
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>   // std::is_trivially_copyable_v — the VarSpan layout pin below
 #include <vector>
 
@@ -78,8 +81,9 @@ inline const char* symTag( SymKind k ) noexcept
         case SymKind::Section:   return "sec";    // markdown heading (doc structure; isolated in the graph)
         case SymKind::Macro:     return "macro";  // #define (disclosed-degraded: replacement text, not a parsed body)
         case SymKind::Field:     return "field";  // member variable (id=path::Owner::field; use-sites via --uses=Owner.field)
-        default:                 return "other";
+        case SymKind::Other:     return "other";
     }
+    return "other";   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent "other"
 }
 
 // NOTE: Json sits AFTER Unknown deliberately. serialize.h pins `static_assert( int(Lang::Unknown)==12 )`
@@ -111,23 +115,24 @@ inline const char* symTag( SymKind k ) noexcept
 // JVM-bridged to Java via graph.h's langCompatible (mirroring the existing Cpp<->ObjC and Cpp<->C
 // bridges) so a mixed Kotlin+Java module (the Android norm) resolves calls across the language
 // boundary instead of dropping every one of them as unresolved.
-enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC, Markdown, JavaScript, Bash, Java, Ruby, Unknown, Json, CSharp, C, Toml, Yaml, Php, Lua, Elixir, Dart, Kotlin };
+enum class Lang : std::uint8_t { Cpp, Python, TypeScript, Go, Rust, Swift, ObjC, Markdown, JavaScript, Bash, Java, Ruby, Unknown, Json, CSharp, C, Toml, Yaml, Php, Lua, Elixir, Dart, Kotlin, GDScript };
 // The number of Lang enumerators. MUST stay ( last enumerator + 1 ): any per-language array sized by
 // a LITERAL silently drops the tail when a language is appended, and the drop is invisible because
 // the affected code paths just see a zero. That happened: nonlocalstate.h's filesByLang was a
 // hardcoded 16 while Php(18), Lua(19) and Elixir(20) existed, so --nonlocal-state never disclosed
 // those three as unanalyzed even though kUnanalyzedLangs listed Php and Lua. Size per-language
 // arrays with this, never with a number.
-inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::Kotlin ) + 1;
+inline constexpr std::size_t kLangCount = static_cast<std::size_t>( Lang::GDScript ) + 1;
 // ...and the cache readers validate every cached Lang byte against it, so a stale kLangCount would also refuse
 // the new language's records. The compile-time proof (infra/enumcount.h) makes the append a build error instead.
 static_assert( enumCountIsExact<Lang, kLangCount>(), "kLangCount must name the LAST Lang enumerator — move it with the append" );
 
-// short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt").
+// short lang label — the terse XML/JSON attribute (lang="cpp|py|ts|go|rs|swift|objc|js|sh|java|rb|md|json|cs|c|toml|yaml|php|lua|ex|dart|kt|gd").
 // The canonical home for this switch: previously duplicated privately in htmlexport.h, moved here so a THIRD
 // caller (naming-consistency's per-language vote groups) reuses it instead of growing a second copy.
 /// Return the stable short output label for a language, or "?" for an unknown value.
-inline const char* langTag( Lang l ) noexcept
+/// constexpr so main.cpp's registration asserts can ask it about the value one past kLangCount.
+inline constexpr const char* langTag( Lang l ) noexcept
 {
     switch( l )
     {
@@ -153,8 +158,30 @@ inline const char* langTag( Lang l ) noexcept
         case Lang::Elixir:     return "ex";
         case Lang::Dart:       return "dart";
         case Lang::Kotlin:     return "kt";
-        default:               return "?";
+        case Lang::GDScript:   return "gd";
+        case Lang::Unknown:    return "?";
     }
+    return "?";   // a byte past the enum (a corrupt cache value) still reads "?"; a NEW Lang is a -Werror=switch error above
+}
+
+// Is this a CODE language (functions, calls, state), as opposed to a data or document format or no language at all?
+// It is the ONE declared exemption the per-language registration checks read: main.cpp's asserts and ingest_crawl.h's
+// kLangTable mirror check. Appending a Lang used to mean remembering five tables in four files, and three shipped or
+// nearly shipped one language short (02f798e3 Dart, 9418e35e five unanalyzed languages, PR #233's `.gd` row).
+// There is no `default:` here on purpose: a new enumerator is a -Wswitch error on this switch, so whether it is code is
+// a decision, and every table the checks read then has to agree with that decision at compile time.
+inline constexpr bool isCodeLang( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Cpp: case Lang::Python: case Lang::TypeScript: case Lang::Go: case Lang::Rust: case Lang::Swift:
+        case Lang::ObjC: case Lang::JavaScript: case Lang::Bash: case Lang::Java: case Lang::Ruby: case Lang::CSharp:
+        case Lang::C: case Lang::Php: case Lang::Lua: case Lang::Elixir: case Lang::Dart: case Lang::Kotlin: case Lang::GDScript:
+            return true;
+        case Lang::Markdown: case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Unknown:
+            return false;
+    }
+    return false;   // a byte past the enum (a corrupt cache value) is not a language
 }
 
 // Call-site RECEIVER classification (P2-D one-hop type narrowing). Captured at ingest from the AST shape
@@ -183,10 +210,108 @@ inline const char* langTag( Lang l ) noexcept
 //              `@external` veto, never a spray. APPENDED so no persisted value renumbers (RawRef rides the
 //              cache with recv as a u8). Python only: isMemberAccessNode classifies C++/Python receivers and
 //              C++ has no `super`.
-enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule };
+//   LitString / LitArray / LitRegex / LitNumber / LitBoolean — TS/JS member call whose receiver type the
+//              syntax already proves (a literal, or a chain of built-in methods that stay certain). APPENDED
+//              so the cache u8 does not renumber. isMemberAccessNode stays false for TS/JS; receiverOf
+//              classifies these beside that function, TS/JS only. A matching Foo.prototype.NAME extension
+//              may bind; anything else is vetoExternal. Object literals, identifier receivers, this, casts,
+//              and element-returning links (find/at/pop/shift/reduce/subscript/!) stay None.
+//   JavaTypeCandidate — Java `identifier::method` (issue #74): syntax alone cannot say type or value. Ingest stamps
+//              the candidate; graph resolution admits it only when the identifier names an indexed class and no Java
+//              declaration in the caller shadows that name. APPENDED after the literal kinds: persisted values stay stable.
+enum class RecvKind : std::uint8_t { None, ThisObj, NamedVar, FieldOfThis, FieldOfVar, SuperObj, ElixirModule, ElixirSelfModule, LitString, LitArray, LitRegex, LitNumber, LitBoolean,
+    JavaTypeCandidate };
 // The number of RecvKind enumerators — the bound readRef validates a cached receiver byte against (see kSymKindCount).
-inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::ElixirSelfModule ) + 1;
+inline constexpr std::size_t kRecvKindCount = static_cast<std::size_t>( RecvKind::JavaTypeCandidate ) + 1;
 static_assert( enumCountIsExact<RecvKind, kRecvKindCount>(), "kRecvKindCount must name the LAST RecvKind enumerator — move it with the append" );
+
+inline bool isJsTsLitRecv( RecvKind k ) noexcept
+{
+    return k == RecvKind::LitString || k == RecvKind::LitArray || k == RecvKind::LitRegex
+        || k == RecvKind::LitNumber || k == RecvKind::LitBoolean;
+}
+
+inline std::string_view jsLitCtorName( RecvKind k ) noexcept
+{
+    switch( k )
+    {
+        case RecvKind::LitString:  return "String";
+        case RecvKind::LitArray:   return "Array";
+        case RecvKind::LitRegex:   return "RegExp";
+        case RecvKind::LitNumber:  return "Number";
+        case RecvKind::LitBoolean: return "Boolean";
+        default:                   return {};
+    }
+}
+
+inline bool isJsTsBuiltinCtor( std::string_view ctor ) noexcept
+{
+    return ctor == "String" || ctor == "Array" || ctor == "RegExp" || ctor == "Number" || ctor == "Boolean";
+}
+
+// Names that really are members of the literal's built-in type. A Lit* call whose callee is in the
+// matching table may bind a scope-matched polyfill or go External/Undefined; any other name keeps
+// today's ladder (so String.prototype.shout / named-function / Object.assign / declare global survive).
+inline constexpr std::string_view kJsTsStringMembers[] = {
+    "anchor", "at", "big", "blink", "bold", "charAt", "charCodeAt", "codePointAt", "concat", "endsWith",
+    "fixed", "fontcolor", "fontsize", "includes", "indexOf", "isWellFormed", "italics", "lastIndexOf",
+    "link", "localeCompare", "match", "matchAll", "normalize", "padEnd", "padStart", "repeat", "replace",
+    "replaceAll", "search", "slice", "small", "split", "startsWith", "strike", "sub", "substr", "substring",
+    "sup", "toLocaleLowerCase", "toLocaleUpperCase", "toLowerCase", "toString", "toUpperCase", "toWellFormed",
+    "trim", "trimEnd", "trimLeft", "trimRight", "trimStart", "valueOf",
+};
+inline constexpr std::string_view kJsTsArrayMembers[] = {
+    "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "findLast",
+    "findLastIndex", "flat", "flatMap", "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf",
+    "map", "pop", "push", "reduce", "reduceRight", "reverse", "shift", "slice", "some", "sort", "splice",
+    "toLocaleString", "toReversed", "toSorted", "toSpliced", "toString", "unshift", "values", "with",
+};
+inline constexpr std::string_view kJsTsRegExpMembers[] = {
+    "compile", "exec", "test", "toString",
+};
+inline constexpr std::string_view kJsTsNumberMembers[] = {
+    "toExponential", "toFixed", "toLocaleString", "toPrecision", "toString", "valueOf",
+};
+inline constexpr std::string_view kJsTsBooleanMembers[] = {
+    "toString", "valueOf",
+};
+
+static_assert( std::is_sorted( std::begin( kJsTsStringMembers ),  std::end( kJsTsStringMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsArrayMembers ),   std::end( kJsTsArrayMembers ),   rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsRegExpMembers ),  std::end( kJsTsRegExpMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsNumberMembers ),  std::end( kJsTsNumberMembers ),  rw::sortutil::svLess ) );
+static_assert( std::is_sorted( std::begin( kJsTsBooleanMembers ), std::end( kJsTsBooleanMembers ), rw::sortutil::svLess ) );
+
+inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) noexcept
+{
+    const std::string_view* b = nullptr;
+    const std::string_view* e = nullptr;
+    if( ctor == "String" )
+    {
+        b = std::begin( kJsTsStringMembers );  e = std::end( kJsTsStringMembers );
+    }
+    else if( ctor == "Array" )
+    {
+        b = std::begin( kJsTsArrayMembers );   e = std::end( kJsTsArrayMembers );
+    }
+    else if( ctor == "RegExp" )
+    {
+        b = std::begin( kJsTsRegExpMembers );  e = std::end( kJsTsRegExpMembers );
+    }
+    else if( ctor == "Number" )
+    {
+        b = std::begin( kJsTsNumberMembers );  e = std::end( kJsTsNumberMembers );
+    }
+    else if( ctor == "Boolean" )
+    {
+        b = std::begin( kJsTsBooleanMembers ); e = std::end( kJsTsBooleanMembers );
+    }
+    else
+    {
+        return false;
+    }
+    return std::binary_search( b, e, name, rw::sortutil::svLess );
+}
 
 // ABS-3 reference / use-site ROLE: WHAT a reference does at the use site, captured at ingest so a
 // use-site index (`--uses=SYM`) can report the resolvable places a name is referenced, not just calls.
@@ -234,8 +359,8 @@ inline const char* refRoleTag( RefRole r ) noexcept
         case RefRole::Extends: return "extends";
         case RefRole::Macro:   return "macro";
         case RefRole::Type:    return "type";
-        default:               return "read";
     }
+    return "read";   // a byte past the enum; every enumerator is named above, so a NEW role is a -Werror=switch error
 }
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
@@ -243,7 +368,7 @@ inline const char* refRoleTag( RefRole r ) noexcept
 // adding a tag later is a compatible extension, renaming one is not. Declaration order MUST track the
 // EvWhyTag indices ingest.cpp writes — the table is the single source both emitters read.
 inline constexpr std::size_t kEvWhyTagCount = 8;
-inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
+inline constexpr const char* kEvWhyTagTable[] = {
     "guard-return",     // return/throw whose escape crosses at least one construct (incl. §1.3's guard clause)
     "loop-escape",      // break/continue out of a loop from under an intervening construct
     "switch-escape",    // break (or Java yield) out of a switch from under an intervening construct
@@ -253,6 +378,7 @@ inline constexpr const char* kEvWhyTagTable[ kEvWhyTagCount ] = {
     "fallthrough",      // Go fallthrough — an explicit intra-switch goto
     "multi-entry",      // a case label displaced into a loop/branch (Duff's device; §2.6)
 };
+static_assert( std::size( kEvWhyTagTable ) == kEvWhyTagCount, "kEvWhyTagTable: one spelling per ev_why tag — a spelled extent zero-fills a missing one into a null the emitter prints" );
 
 // A definition = one node in the graph. symbols[i].id == i (dense, deterministic order).
 struct Symbol
@@ -525,6 +651,9 @@ struct Reference
     std::uint16_t argCount   = 0;         // B2.2: number of positional args at the call site when countable; 0 otherwise
     bool          argCountKnown = false;  // B2.2: true ⇒ the call-site argument list was reliably counted (no spread /
                                           //   splat / apply) → arity-filter candidates against argCount; false ⇒ never filter
+    bool          viaArrow   = false;     // a C++/ObjC member call written `->` (`p->m()`, not `p.m()`). On a compose ref: calleeName is the
+                                          //   POINTEE of a member written `std::unique_ptr<T>` / `std::shared_ptr<T>`, which `->` reaches and
+                                          //   `.` never does (`p.reset()` is the smart pointer's own member) — Rule 2b requires the call's bit
     std::string   calleeName;             // referenced name (final identifier segment)
     std::string   qualifier;              // explicit scope at the call site (`A` in `A::b()`); "" if bare/method — for canonical resolve
     std::string   recvVar;                // receiver variable identifier when recv==NamedVar/FieldOfVar (`x` in `x->m()`); "" otherwise — for Rule 2
@@ -641,10 +770,15 @@ enum class LocalBindKind : std::uint8_t
                //     (kind != Type) and the L3 fn tables skip it (typeName empty). APPENDED so no persisted
                //     kind value renumbers (RawBind rides kind through the cache as a u8).
     ParamType, // member-variable round (card A3): a C++/ObjC function DEFINITION parameter's WRITTEN type
-               //     (`void f( Counter& c )` → c:Counter), so `c.count` resolves to Counter.count in the field
-               //     use-site index (graph.h collectFieldUseSites). Consumed THERE ONLY, deliberately: Rule 2's
-               //     call narrowing (kind == Type) does not read it, so no call edge changes; the L3 fn tables
-               //     skip it by kind; shadow suppression already holds the parameter's VarDecl record.
+               //     (`void f( Counter& c )` → c:Counter) — also a lambda parameter's, a typed range-for
+               //     variable's and a reference local's — so `c.count` resolves to Counter.count in the field
+               //     use-site index (graph.h collectFieldUseSites). Rule 2's call narrowing reads it too, but
+               //     LEXICALLY (resolve.h buildScopedRecvDecls, 2026-09-16): every one of these shapes is scoped
+               //     narrower than the whole function or can be redeclared inside it, so the flat per-function
+               //     varType table would leak the type to other declarations of the name. The L3 fn tables skip
+               //     it by kind; shadow suppression already holds the declaration's VarDecl record. importedName
+               //     holds the written type WHOLE when it is qualified (`std::map<K, V>`), else "" — the same on a
+               //     declaration's Type record — so the lexical lookup can refuse a name that is only a final segment.
                //     APPENDED for the same cache reason as VarDecl.
     Import,    // Phase 5 (docs/EVALS.md "Phase 5", kParserVer 77): a FILE-SCOPE import binding — `var` is the
                //     name the import binds in the module namespace, `typeName` the module target as written
@@ -679,6 +813,14 @@ struct Binding
     NodeId        fromSymbol = kNoNode;   // enclosing function/method (the binding's scope); kNoNode if file-scope
     std::uint32_t fileId     = 0;
     LocalBindKind kind       = LocalBindKind::Type;
+    bool          isFromAssignment = false;   // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
+                                              //   a function's name as often as a class's, so buildGraph drops it unless a class of
+                                              //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
+    std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
+                                          //   VarDecl and its typed record (Type or ParamType) carry the SAME
+                                          //   value — that shared byte is how Rule 2's lexical receiver lookup
+                                          //   (buildScopedRecvDecls) knows a scope and a written type belong to
+                                          //   one declaration. Rides the padding after `kind`: no size change.
     std::uint32_t spanStart  = 0;         // VarDecl: the byte span the name shadows within — a block
     std::uint32_t spanEnd    = 0;         //   declaration runs from its DECLARATION POINT (end of the complete
                                           //   declarator, [basic.scope.pdecl]) to the block's end; a whole-scope
@@ -688,12 +830,15 @@ struct Binding
                                           //   {0,0} on a scope-less shadow capture (contains nothing).
     std::string   var;                    // the declared variable identifier (`x`)
     std::string   importedName;           // JsImport: the requested export name; never a global-name fallback.
+                                          //   Type/ParamType: the written type WHOLE when it is qualified, else "".
                                           //   JsExport: the LOCAL name the exported spelling binds (empty when
                                           //   the two are identical). Elixir: see LocalBindKind's field contracts.
     std::string   typeName;               // kind==Type: the written type's final segment (`Foo`), resolved to a
                                           //   class in buildGraph. kind==FnDecl/FnAssign: the bound FUNCTION
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
+static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
+               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT
@@ -1043,6 +1188,22 @@ struct IngestResult
     std::vector<std::string>   rootPaths;    // root index → the root path as passed (post-dedupe)
     std::vector<std::string>   rootReals;    // root index → realpath (cross-root include probes, git -C)
 
+    // ── The crawl root, as the crawl joined it onto every path (single root only). `files` keep that spelling
+    //    because it is also the disk spelling every read and edit opens — but it must never decide an ANSWER.
+    //    `ripwire .`, `ripwire "$PWD"`, `ripwire "$PWD/"`, a symlink to the tree and `ripwire ../repo` are one
+    //    tree, and every question about a file's place IN that tree (which file an import names, whether it
+    //    sits under test/ or fixtures/, how many path bytes a row prints) reads rootRelPath below instead.
+    //    Recorded once by ingest(); a single-file root records the file's directory. EMPTY on a multi-root
+    //    merge, whose `files` are already the labeled root-relative identity (rootRelPath is then the identity).
+    std::string                crawlRoot;
+    // …and every PREFIX a selector path typed from the cwd can start with before the root-relative part (graph.h
+    // selectorRootTail): the root as typed, then the root expressed relative to the cwd, then its absolute spellings
+    // (joined onto the shell's logical $PWD and onto getcwd, and its realpath — a user types the logical spelling, and
+    // a symlinked prefix such as /tmp vs /private/tmp makes the two differ). "." means the root IS the cwd, so a `./`
+    // path is root-relative. Lexically normalised, no trailing '/', each once. Recorded once by ingest(); empty on a
+    // multi-root merge, like crawlRoot.
+    std::vector<std::string>   crawlRootPrefixes;
+
     // ── P1-15: how many files this run actually RE-EXTRACTED (cache miss / changed / new) rather than
     //    reusing from the content-hash cache — the number RIPWIRE_CACHE_STATS has always printed as
     //    `reparsed=`, promoted to a field so the MCP server can disclose an incremental pass's cost
@@ -1053,9 +1214,113 @@ struct IngestResult
     std::size_t                reparsedFiles = 0;
 };
 
+// These aggregates cross the ingest/main translation-unit boundary. The record is emitted once per TU by
+// structlayout.h, so a header change that leaves a mixed binary can be diagnosed after linking instead of
+// passing a self-consistent static_assert in each half.
+RIPWIRE_LAYOUT_REGISTER_TYPES( RIPWIRE_LAYOUT_TYPE_ENTRY( std::string ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( Symbol ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( Reference ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( Include ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( ConstOpen ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( Binding ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( BindingAlias ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( RouteDef ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( RouteUse ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( FileHealth ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( SkippedOversize ),
+                               RIPWIRE_LAYOUT_TYPE_ENTRY( IngestResult ) );
+
 // multi-root workspace cap: a sane bound on N crawl roots — an agent joining a
 // handful of checkouts is the use case; hundreds of roots is a mis-glued path list, refused loudly.
 inline constexpr std::size_t kMaxWorkspaceRoots = 16;
+
+// ── S2: root-relative path for BASELINE HASHING (root-spelling portability) ─────────────────────────────
+//
+// .ripwire_arch_baseline is meant to be COMMITTED and portable; .ripwire_quality_baseline is gitignored,
+// re-pinned before a change, and stamped with the build that pinned it (a dead set depends on call resolution),
+// but both must still hash the same file the same way under every root spelling. And every path in ing.files is spelled `<ingest-root>/<relative>` verbatim — the crawl just
+// prepends the root argument. So `ripwire .` embeds `./game/x.cpp` while `ripwire /abs/repo` embeds
+// `/abs/repo/game/x.cpp`, giving DIFFERENT hashes for the same file → a baseline written under one root
+// spelling falsely fails enforcement under another (exit 0 vs 2 for a teammate/CI with a different root).
+//
+// relForHash strips the ingest-root prefix LEXICALLY (never a realpath — that would be nondeterministic and
+// pull in the filesystem, and would break on a symlinked/`..`-containing root), producing the SAME
+// root-relative key for both spellings. Every use is a root-spelling NORMALIZATION of exactly this shape:
+// the baseline hash paths, and — W3FIX — the --dead-code `./`-anchored path filter, whose "position 0 is the
+// repo root" rule holds only for a root-relative path and so silently matched nothing under an absolute root
+// spelling. It never touches `g.canonId`, resolution, or any storage key (see the S2 trap: canonId is
+// load-bearing far beyond the baseline). Determinism: pure function of (path, root); no I/O, no state.
+//
+// R-R (root-relative emission) AMENDED THE LAST CLAUSE. This used to add "and it is never an emitted VALUE
+// — only ever a comparison key". That is no longer true, deliberately: resolve.h::canonicalIdForEmit runs
+// the path segment of every EMITTED `id=` (and the MCP handle that hashes it) through this same strip, so
+// the emitted identity and the committed baseline key finally spell a file the same way. What the S2 trap
+// actually protects is unchanged and still absolute: g.canonId — the in-memory identity that resolution,
+// overload-set grouping and Regression::key depend on — is never rewritten. Emission is a VIEW of that
+// identity; the identity itself does not move.
+//
+// #228 AMENDED "never resolution". rootRelPath below applies this strip to the root ingest() recorded, and
+// the include/import index, the path predicates and the path-byte charges now read that view — the fix for
+// answers that moved with the root's spelling. The storage key and g.canonId are still never rewritten.
+//
+// The strip is: remove a leading `root` prefix (with an optional trailing '/'), then normalize any residual
+// leading `./` and leading `/`. A path that does not start with `root` (shouldn't happen — every file is
+// under the crawl root) is returned only leading-`./`/`/`-normalized, so it degrades to a stable key rather
+// than an empty one. Empty root ⇒ just the leading-`./`/`/` normalization (equivalent to root ".").
+inline std::string_view relForHash( std::string_view path, std::string_view root ) noexcept
+{
+    // 1) strip the ingest-root prefix if present (allow one optional trailing '/' on the root).
+    std::string_view rootTrim = root;
+    while( rootTrim.size() > 1 && rootTrim.back() == '/' )
+    {
+        rootTrim.remove_suffix( 1 ); // "/abs/repo/" → "/abs/repo"
+    }
+    if( !rootTrim.empty() && rootTrim != "." && path.size() >= rootTrim.size()
+        && path.compare( 0, rootTrim.size(), rootTrim ) == 0 )
+    {
+        // matched the root; the next char (if any) must be a '/' so we strip whole path components only
+        // ("/abs/repo" must not eat the "repo" in "/abs/repository/...").
+        std::string_view rest = path.substr( rootTrim.size() );
+        if( rest.empty() || rest.front() == '/' )
+        {
+            path = rest;
+        }
+    }
+
+    // 2) normalize residual leading "./" then leading "/" so "." / "./x" / "/x" all collapse to "x".
+    while( path.size() >= 2 && path[0] == '.' && path[1] == '/' )
+    {
+        path.remove_prefix( 2 );
+    }
+    while( !path.empty() && path.front() == '/' )
+    {
+        path.remove_prefix( 1 );
+    }
+    while( path.size() >= 2 && path[0] == '.' && path[1] == '/' )
+    {
+        path.remove_prefix( 2 );
+    }
+    return path;
+}
+
+// The ONE root-relative seam, the dual of the disk-path seam below: every DECISION about a file's place in the tree reads
+// this, never ing.files[fileId] directly. It is relForHash against the root the crawl recorded, so it costs a
+// prefix compare and no allocation or syscall, and it is a VIEW — the stored spelling (and so every printed
+// path, cache key and disk open) is untouched.
+//
+// Why it exists (#228). `ing.files` carry the root exactly as it was typed, and until this seam the index
+// builders and the path predicates read that spelling raw. So the answer moved with the spelling: Python's
+// root-relative import probe matched only under `ripwire .` (a Django clone read graph_ambiguous=5958 under
+// `.` and 3135 under "$PWD"); every include index collapsed to one empty key under `ripwire ../repo`, because
+// lexicalNormalize refuses a path that starts above its base; and a checkout that merely LIVES under a
+// directory named tests/ or fixtures/ had every file classified as a test or a fixture under an absolute root
+// and none under `.`. The --quality-delta HEAD side always ingests at an absolute temp root, so an unchanged
+// tree gated under `.` and passed under "$PWD". test/rootspellingcheck.sh pins all of it.
+inline std::string_view rootRelPath( const IngestResult& ing, std::uint32_t fileId ) noexcept
+{
+    const std::string_view path = ing.files[ fileId ];
+    return ing.crawlRoot.empty() ? path : relForHash( path, ing.crawlRoot );
+}
 
 // The ONE disk-path seam: every file read/stat must go through this instead of ing.files[fileId] directly.
 // Single-root (realPaths empty): returns ing.files[fileId] — byte-identical behavior, zero cost.
@@ -1294,6 +1559,20 @@ inline bool shadowSuppressedSite( const Reference& r, const ShadowEvidence& ev, 
     if( r.recv != RecvKind::None || !r.qualifier.empty() )
     {
         return false;   // a receiver- or scope-qualified name can never resolve to a plain local
+    }
+    // JAVA IS REFUSED OUTRIGHT, and this arm is load-bearing rather than defensive. This pass is
+    // C++/ObjC evidence: it deletes a reference because a declared local of that name shadows it at
+    // that byte. Java's VarDecl records (ingest_binds.h captureJavaShadowDecls) exist for one
+    // unrelated consumer — the JavaTypeCandidate receiver proof for issue #74 — and Java call sites
+    // carry no classified receiver, so `b.name(name)` inside `make( Builder b, String name )` reaches
+    // here as a BARE call whose name a parameter declares, and lost its call edge and its `--uses`
+    // row. The refusal is not a heuristic: Java has no free functions and no callable locals, so a
+    // Java call NEVER resolves to a local and there is nothing here to prevent. Python keeps its
+    // veto-only evidence at an empty span for the same reason (ingest_binds.h, the note above
+    // capturePythonParamShadowDecls); Java needs real spans, so the refusal lives at the consumer.
+    if( r.lang == Lang::Java )
+    {
+        return false;
     }
     // ORDER IS A COST DECISION, not a semantic one: all four guards are pure predicates ANDed together, so
     // any order gives the same verdict — but they are not equally selective. `varSpans` is keyed on

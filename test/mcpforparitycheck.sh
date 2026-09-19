@@ -118,10 +118,10 @@ for q in "${CONCEPTUAL[@]}"; do
         no "(1) '$q': candidate pool CLI=$cpool MCP=$mpool, both must equal the shared cap $CAP (CLI $cserved+$cdrop, MCP $mserved+$mdrop)"
         pool_fail=1
     fi
-    only_cli=$( comm -23 "$TMP/c.rows" "$TMP/m.rows" | grep -c . )
+    only_cli=$( LC_ALL=C comm -23 "$TMP/c.rows" "$TMP/m.rows" | grep -c . )
     if [ "$only_cli" != 0 ]; then
         no "(2) '$q': $only_cli row(s) served by the CLI are absent from the MCP set — the two ladders started from different heads"
-        comm -23 "$TMP/c.rows" "$TMP/m.rows" | head -5
+        LC_ALL=C comm -23 "$TMP/c.rows" "$TMP/m.rows" | head -5
         subset_fail=1
     fi
 done
@@ -265,7 +265,7 @@ else
     cmp -s "$TMP/nr.off.rows" "$TMP/nr.routed.rows" \
         && no "(6) no_route:true served the SAME rows as the routed call — the argument is inert" \
         || ok "(6) no_route:true changes the served set, as --no-route does on the CLI"
-    missing="$( comm -23 "$TMP/nr.cli.off.rows" "$TMP/nr.off.rows" | head -3 )"
+    missing="$( LC_ALL=C comm -23 "$TMP/nr.cli.off.rows" "$TMP/nr.off.rows" | head -3 )"
     [ -z "$missing" ] \
         && ok "(6) every CLI --no-route row is present in the MCP no_route set" \
         || no "(6) MCP no_route dropped CLI --no-route rows: $( printf '%s' "$missing" | tr '\n' ' ' )"

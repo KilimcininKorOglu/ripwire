@@ -281,7 +281,7 @@ inline IngestResult mergeWorkspaceIngests( const std::vector<WorkspaceRoot>& roo
                                            std::vector<IngestResult>&        parts )
 {
     IngestResult m;
-    VERIFY( roots.size() == parts.size() );
+    ASSUME( roots.size() == parts.size() );
     // §N6-C: seed the merged ignore mode from the FIRST part, not from IngestResult's own default. The
     // merge below keeps the WEAKEST mode across roots (mergeCrawlDisclosures), and a reduction seeded with
     // the "nothing was consulted" default would report exactly that for a workspace where every root's

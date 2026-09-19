@@ -91,12 +91,12 @@ Two other help-wanted kits overlap with this one. Do not duplicate them; link th
    Every reduction folds `kReductionBlockSize = 1024` blocks in index order (`src/pagerank.cpp:27`).
    "Identical across thread counts" does not apply. What applies is identical results across repeated
    runs, and correct results across the 1024-element block seam.
-8. **`VERIFY` is not a test oracle.** In a plain or ASan build a failed `VERIFY` calls the assert
+8. **`ASSUME` is not a test oracle.** In a plain or ASan build a failed `ASSUME` calls the assert
    handler, which ends the process. Under `NDEBUG` it becomes an optimizer assumption
-   (`src/infra/Diagnostics.h:89-141`), so a violated precondition in a Release build is undefined
-   behaviour. doctest has no death tests. Never give a test an input that violates a `VERIFY`; test the
+   (`src/infra/Diagnostics.h:265-321`), so a violated precondition in a Release build is undefined
+   behaviour. doctest has no death tests. Never give a test an input that violates an `ASSUME`; test the
    predicate (`verifyCsr`) directly.
-9. **`DEGRADED_PATH_ALERT` logs once per call site per process** (`Diagnostics.h:170-176`). In a test
+9. **`DISCLOSE` logs once per call site per process** (`Diagnostics.h:543-550`). In a test
    binary, the non-convergence alert prints on the first truncated run and never again. The part you can
    test is the returned `PageRankRun`.
 10. **`RIPWIRE_TEST_PR_MAXITERS` is read once per process** (`src/pagerank.cpp:56`). A test cannot vary
@@ -137,9 +137,9 @@ Two other help-wanted kits overlap with this one. Do not duplicate them; link th
 | `:2836` | `radixSortByFromTo` | sources in a row are ascending, whatever order the references arrived in | G4, G10 |
 | `:2839-2869` | out-edge offsets, targets and values; `wOutDeg[from] += w` | `wOutDeg` must equal the column sums: the kernel's mass conservation depends on it, and the kernel does not check | G8, G10 |
 | `:2893-2907` | in-degree count, `uint32` prefix sum, scatter | this builds the in-edge CSR; the prefix sum has no overflow guard before `:2909` | G1, G4, G8; overflow **untestable** at unit scale |
-| `:2909` | `VERIFY( verifyCsr( … ) )` | a post-condition that `NDEBUG` compiles out | G10 calls `verifyCsr` explicitly |
+| `:2909` | `ASSUME( verifyCsr( … ) )` | a post-condition that `NDEBUG` compiles out | G10 calls `verifyCsr` explicitly |
 | `buildGraph` overall | `N == 0`; a callee that resolves to nothing | — | G0, G9 |
-| `pageRankDouble`, `src/pagerank.cpp:99-121` | eleven `VERIFY` preconditions: shape, alpha range, tolerance, ceiling, aliasing, finite non-negative inputs, teleport mass within 1e-9 | a violation ends a plain build and is undefined under `NDEBUG` | **not tested in-process** (fact 8) |
+| `pageRankDouble`, `src/pagerank.cpp:99-121` | eleven `ASSUME` preconditions: shape, alpha range, tolerance, ceiling, aliasing, finite non-negative inputs, teleport mass within 1e-9 | a violation ends a plain build and is undefined under `NDEBUG` | **not tested in-process** (fact 8) |
 | `:108-109` | the environment ceiling can only lower `maxIterationCount` | — | E1 (optional) |
 | `:110-113` | `nodeCount == 0` returns `{ 0, true }` and leaves `rank` alone | "vacuously converged" (`src/pagerank.h:28-30`) | K0 |
 | `:144`, `:151` | `wOutDeg > 0 ? … : …`: dangling rank counts toward the dangling mass, and its scaled rank is zero | dangling redistribution, which naive PageRank gets wrong | K1, K3, K4, K6, K9 |
@@ -147,26 +147,26 @@ Two other help-wanted kits overlap with this one. Do not duplicate them; link th
 | `:156-164` | the in-edge gather, including empty rows | — | K3 to K9 |
 | `:138`, `:168` | block folds that reach a second block (`nodeCount > 1024`) | the determinism contract's fixed partition | K15 |
 | `:180-185` | `residual < tolerance` (strict), with the count incremented before `break` | the off-by-one that decides `pr_iters=` | K12 |
-| `:192-195` | running out; `DEGRADED_PATH_ALERT` | the disclosure must survive `NDEBUG` | K13, K14; gate arm 2 |
+| `:192-195` | running out; `DISCLOSE` | the disclosure must survive `NDEBUG` | K13, K14; gate arm 2 |
 | `:196` | the newer iterate is copied out | a truncated rank is x_k, not x_(k−1) | K14 |
 | `:103` | `alpha == 0` is accepted | — | K11 |
 | kernel inputs | a self-loop in the CSR is used, not dropped | dropping self-loops is `buildGraph`'s job | K2 |
 | `testIterationCeiling`, `:54-75` | unset, empty, longer than 9 characters, a non-digit, `0`, a valid number | strict parsing | E1; `test/prconvergecheck.sh` arm C covers most of these strings |
 | `biasPrior`, `src/graph.h:3228` | the weight vector's size differs from the prior's (`:3231`): the prior is returned | — | B2 |
-| `:3238` | the weighted sum is not positive: the prior is returned **silently**, with no alert | a degrade path without `DEGRADED_PATH_ALERT` | B3 |
+| `:3238` | the weighted sum is not positive: the prior is returned **silently**, with no alert | a degrade path without `DISCLOSE` | B3 |
 | `:3242-3246` | renormalize to Σ = 1, in float | — | B1 |
 | `rankGraphTeleport`, `:3265` | `N == 0` skips the kernel (`:3273`) | — | R4 |
-| `:3280` | the `teleportMass > 0` guard | its else branch would hand an unnormalized vector to the kernel's mass `VERIFY`; every shipped prior builder already falls back to uniform, so it is unreachable today | **not tested**; note it |
+| `:3280` | the `teleportMass > 0` guard | its else branch would hand an unnormalized vector to the kernel's mass `ASSUME`; every shipped prior builder already falls back to uniform, so it is unreachable today | **not tested**; note it |
 | `:3288`, then narrowing to `float` | `double( 0.85f )` reaches the kernel | — | R1, R3 |
 | `takeRank`, `:3299` | fills the disclosure with `isPageRank = true` | — | R2 |
 | `rankGraph`, `:3306` | uniform prior; an empty graph | — | R4, R5 |
 
-**Degrade paths.** The kernel has exactly one `DEGRADED_PATH_ALERT` (`src/pagerank.cpp:194`). There is
+**Degrade paths.** The kernel has exactly one `DISCLOSE` (`src/pagerank.cpp:194`). There is
 none in `sparseCsr.h`, in `csrverify.h`, in the CSR section of `buildGraph`, in `biasPrior` or in
 `rankGraphTeleport`. `biasPrior`'s fallback is silent.
 
 **Nearby, out of scope.** These read the CSR but are not in scope; they are listed so nobody assumes
-they are covered: `fanInFromInEdges` raises `DEGRADED_PATH_ALERT` when the CSR has no offsets
+they are covered: `fanInFromInEdges` raises `DISCLOSE` when the CSR has no offsets
 (`src/graph.h:3915`), and `computeImpure` silently skips propagation when the CSR shape mismatches
 (`:4590`).
 
@@ -375,7 +375,7 @@ check that its own E1 runs executed assertions.
    - **Arm 2, NDEBUG.** Compile `test/verify_pagerank.cpp`, `src/pagerank.cpp` (with `-fno-fast-math`,
      as CMake does) and `src/infra/diagnostics.cpp` directly with `$CXX -DNDEBUG -O2`, using the target's
      include paths (`src/infra`, `third_party`, `src`, `third_party/deps/doctest`). Run K12, K13 and K14.
-     The truncation contract exists because `DEGRADED_PATH_ALERT` vanishes under `NDEBUG`
+     The truncation contract exists because `DISCLOSE` vanishes under `NDEBUG`
      (`src/pagerank.h:22-26`); this arm is where a unit test proves the returned value survives.
    - **Arm 3, can go red.** Copy `src/` into the scratch directory, mutate the copy with `sed`, prove the
      mutation took with `cmp -s`, build the affected target against the copy, and require failures that
@@ -502,7 +502,7 @@ Follow `CONTRIBUTING.md` §3; the rules that come up most in tests:
 - **The floors,** and the case and assertion counts they came from.
 - **The CI legs** that ran the gate, with one job link per leg.
 - **Every expectation that needed judgement:** G6, G7, K15 at N = 2049, and E1 if you took it.
-- **What stays uncovered, and why:** the `VERIFY` preconditions, `nnz > UINT32_MAX`, overflow of the
+- **What stays uncovered, and why:** the `ASSUME` preconditions, `nnz > UINT32_MAX`, overflow of the
   `uint32` prefix sum, `dominantEigenvector`, `hits`, and `rankGraphTeleport`'s unreachable zero-mass
   branch.
 

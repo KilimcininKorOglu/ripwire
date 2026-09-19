@@ -54,6 +54,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>   // the compile-time row check reads each spelling's length
 
 #include <tree_sitter/api.h>
 
@@ -75,6 +76,7 @@ enum class NodeField : std::uint8_t
     Receiver, Right, Scope, Source, Subject,
     Superclasses, Target, Trait, Type, Update,
     Value,
+    Op,
     Count
 };
 
@@ -82,27 +84,53 @@ inline constexpr std::size_t kNodeFieldCount = static_cast<std::size_t>( NodeFie
 
 // The grammar spelling of each NodeField, and its length. The length is carried rather than recomputed
 // because `ts_language_field_id_for_name` takes one and `std::strlen` on the fallback path would put the
-// libc call back that this header exists to remove.
+// libc call back that this header exists to remove. Each row NAMES the enumerator it spells: the table is indexed by
+// the enum, and a row that sits at another enumerator's index would hand every lookup after it its neighbour's field.
 struct NodeFieldName
 {
+    NodeField     field;
     const char*   text;
     std::uint32_t len;
 };
 
 inline constexpr std::array<NodeFieldName, kNodeFieldCount> kNodeFieldNames = { {
-    { "alias", 5 },          { "alternative", 11 },   { "argument", 8 },       { "arguments", 9 },      { "attribute", 9 },
-    { "body", 4 },           { "captures", 8 },       { "condition", 9 },      { "consequence", 11 },   { "constructor", 11 },
-    { "declaration", 11 },   { "declarator", 10 },    { "default_value", 13 }, { "definition", 10 },    { "directive", 9 },
-    { "field", 5 },          { "function", 8 },       { "initializer", 11 },   { "key", 3 },            { "left", 4 },
-    { "method", 6 },         { "module_name", 11 },   { "name", 4 },           { "object", 6 },         { "operand", 7 },
-    { "operator", 8 },
-    { "parameter", 9 },      { "parameters", 10 },    { "path", 4 },           { "pattern", 7 },        { "property", 8 },
-    { "receiver", 8 },       { "right", 5 },          { "scope", 5 },          { "source", 6 },         { "subject", 7 },
-    { "superclasses", 12 },  { "target", 6 },         { "trait", 5 },          { "type", 4 },           { "update", 6 },
-    { "value", 5 },
+    { NodeField::Alias, "alias", 5 },                 { NodeField::Alternative, "alternative", 11 },    { NodeField::Argument, "argument", 8 },
+    { NodeField::Arguments, "arguments", 9 },         { NodeField::Attribute, "attribute", 9 },         { NodeField::Body, "body", 4 },
+    { NodeField::Captures, "captures", 8 },           { NodeField::Condition, "condition", 9 },         { NodeField::Consequence, "consequence", 11 },
+    { NodeField::Constructor, "constructor", 11 },    { NodeField::Declaration, "declaration", 11 },    { NodeField::Declarator, "declarator", 10 },
+    { NodeField::DefaultValue, "default_value", 13 }, { NodeField::Definition, "definition", 10 },      { NodeField::Directive, "directive", 9 },
+    { NodeField::Field, "field", 5 },                 { NodeField::Function, "function", 8 },           { NodeField::Initializer, "initializer", 11 },
+    { NodeField::Key, "key", 3 },                     { NodeField::Left, "left", 4 },                   { NodeField::Method, "method", 6 },
+    { NodeField::ModuleName, "module_name", 11 },     { NodeField::Name, "name", 4 },                   { NodeField::Object, "object", 6 },
+    { NodeField::Operand, "operand", 7 },             { NodeField::Operator, "operator", 8 },           { NodeField::Parameter, "parameter", 9 },
+    { NodeField::Parameters, "parameters", 10 },      { NodeField::Path, "path", 4 },                   { NodeField::Pattern, "pattern", 7 },
+    { NodeField::Property, "property", 8 },           { NodeField::Receiver, "receiver", 8 },           { NodeField::Right, "right", 5 },
+    { NodeField::Scope, "scope", 5 },                 { NodeField::Source, "source", 6 },               { NodeField::Subject, "subject", 7 },
+    { NodeField::Superclasses, "superclasses", 12 },  { NodeField::Target, "target", 6 },               { NodeField::Trait, "trait", 5 },
+    { NodeField::Type, "type", 4 },                   { NodeField::Update, "update", 6 },               { NodeField::Value, "value", 5 },
+    { NodeField::Op, "op", 2 },
 } };
 
-static_assert( kNodeFieldNames.size() == kNodeFieldCount, "kNodeFieldNames must carry exactly one spelling per NodeField" );
+// ORDER, COUNT AND LENGTH, checked at compile time. The old assert compared kNodeFieldNames.size() with the extent the
+// same declaration spells, which cannot fail: a row left out became a zero-filled { Alias, nullptr, 0 } tail, and a
+// field inserted into the enum above a row the table did not move re-mapped every field after it. So every row must
+// name the enumerator at its own index, carry a spelling, and declare that spelling's length. Returns the first
+// offending INDEX and kNodeFieldCount when clean — never a spelling, which a zero-filled row can also produce.
+constexpr std::size_t firstNodeFieldRowOutOfPlace() noexcept
+{
+    for( std::size_t index = 0; index < kNodeFieldNames.size(); ++index )
+    {
+        const NodeFieldName& row = kNodeFieldNames[index];
+        if( row.field != static_cast<NodeField>( index ) || row.text == nullptr || row.len == 0
+            || row.len != std::string_view( row.text ).size() )
+        {
+            return index;
+        }
+    }
+    return kNodeFieldCount;
+}
+static_assert( firstNodeFieldRowOutOfPlace() == kNodeFieldCount,
+               "kNodeFieldNames: a row is missing, out of order (it names another NodeField than its index) or declares a wrong length" );
 
 // ---- the [grammar][field] table ------------------------------------------------------------------
 //

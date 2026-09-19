@@ -46,7 +46,7 @@
 #include "crossref.h"
 #include "mergescout.h"
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 #include "gitstamp.h"           // r26-stamp Task A: gitstamp::stampAt — the at="<sha>[+dirty]" root anchor
 
 #include <cstdint>
@@ -156,7 +156,7 @@ inline PlanResult computePlan( const std::string& root, std::string_view filter,
     result.scoutOk = result.scout.ok;
     if( !result.scoutOk )
     {
-        DEGRADED_PATH_ALERT( "landing-plan: merge-scout refused the selected landing set — reporting the sweep without arms/conflicts/order" );
+        DISCLOSE( "landing-plan: merge-scout refused the selected landing set — reporting the sweep without arms/conflicts/order" );
     }
     return result;
 }

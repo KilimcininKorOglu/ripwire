@@ -129,7 +129,7 @@
 #include "ingest.h"             // AstQuerySpec / AstMatch / astQuery
 #include "layout.h"             // isCFamilyPath
 #include "docdrift.h"           // hasWholeWord — the house whole-word predicate
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include "btree.hpp"       // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -179,9 +179,10 @@ inline const char* shapeName( LoopShape s ) noexcept
     {
         case LoopShape::Index: return "index";
         case LoopShape::Chase: return "chase";
-        case LoopShape::Mixed: return "mixed";
-        default:           return "unknown";
+        case LoopShape::Mixed:   return "mixed";
+        case LoopShape::Unknown: return "unknown";
     }
+    return "unknown";
 }
 
 // A byte-half-open span within one file, shared shape for every correlation step below.
@@ -487,8 +488,9 @@ inline const char* confidenceName( ChaseConfidence c ) noexcept
     {
         case ChaseConfidence::SelfRef:    return "self-ref";
         case ChaseConfidence::TmplApprox: return "tmpl-approx";
-        default:                          return "";
+        case ChaseConfidence::None:       return "";
     }
+    return "";
 }
 
 // Can a declared field of this AS-WRITTEN type spelling be the target of a raw-pointer chase advance at
