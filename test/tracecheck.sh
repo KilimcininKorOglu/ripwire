@@ -498,19 +498,28 @@ tb_run(){ ( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" ${1:+--token-bud
 tb_full(){ ( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" ${1:+--token-budget=$1} --no-cache --legend=full 2>/dev/null ); }
 allowance_of(){ python3 -c "import sys; print(int(int(sys.argv[1])*2.36*0.90*(1.15/0.90)))" "$1"; }
 
-# (T1) the ledger EXISTS and states both numbers, at every budget including the default.
-T1_DEF="$( tb_full '' )"
-printf '%s' "$T1_DEF" | grep -qE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' \
-    && ok "(T1) --from-trace states a budget ledger (budget= + allowance=)" \
-    || { no "(T1) no budget ledger in the --from-trace header"; printf '%s\n' "$T1_DEF" | head -c 400; }
+# (T1) the ledger EXISTS and states both numbers, at every budget including the default — in BOTH postures. L1 fix round
+# (rv-r1-L1 MED-1/LOW-5): L1 moved these arms to the full legend only, and the DEFAULT answer then dropped the allowance
+# (the ceiling actually applied, stated nowhere else) with no arm to notice. The default keeps it as a data comment,
+# `<!-- ledger: budget=N bytes (allowance M bytes = …) -->`; the full copy stays asserted beside it.
+for posture in full default; do
+    if [ "$posture" = full ]; then T1_DEF="$( tb_full '' )"; else T1_DEF="$( tb_run '' )"; fi
+    printf '%s' "$T1_DEF" | grep -qE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' \
+        && ok "(T1) [$posture] --from-trace states a budget ledger (budget= + allowance=)" \
+        || { no "(T1) [$posture] no budget ledger in the --from-trace header"; printf '%s\n' "$T1_DEF" | head -c 400; }
+done
 
 # (T2) the ledger's arithmetic is the family's, not a second constant — re-derived here from the tokens.
 for tb in 50 500 2000; do
     want="$( allowance_of "$tb" )"
     got="$( tb_full "$tb" | grep -oE 'allowance [0-9]+ bytes' | head -1 | grep -oE '[0-9]+' )"
     [ "$got" = "$want" ] \
-        && ok "(T2) --token-budget=$tb allowance=$got == tokens x 2.36 x 1.15 (== ceilingAllowanceBytes)" \
-        || no "(T2) --token-budget=$tb allowance=$got, expected $want — the lens drifted off the shared arithmetic"
+        && ok "(T2) [full] --token-budget=$tb allowance=$got == tokens x 2.36 x 1.15 (== ceilingAllowanceBytes)" \
+        || no "(T2) [full] --token-budget=$tb allowance=$got, expected $want — the lens drifted off the shared arithmetic"
+    got="$( tb_run "$tb" | grep -oE '<!-- ledger: budget=[0-9]+ bytes \(allowance [0-9]+ bytes' | head -1 | grep -oE 'allowance [0-9]+' | grep -oE '[0-9]+' )"
+    [ "$got" = "$want" ] \
+        && ok "(T2) [default] --token-budget=$tb keeps the allowance=$got ledger as data (== the full dialect's)" \
+        || no "(T2) [default] --token-budget=$tb allowance='$got', expected $want in a kept <!-- ledger: --> comment — the default dropped the ceiling it applied"
 done
 
 # (T3) an overrun is LABELLED. A budget this small cannot fit the first whole signature, so the honest
@@ -537,9 +546,10 @@ T4="$( tb_run 20000 )";  t4n=$( printf '%s' "$T4" | wc -c | tr -d ' ' );  t4a="$
 # (T5) §B1.7 root attrs — the trace SOURCE is this lens's request text and is now carried VERBATIM in the
 #      task= attribute (ctxRootOpen), beside the lossy readable echo in the comment. The bundle opened with a
 #      bare <ctx> before, so a consumer had no machine-readable copy of what it had asked about at all.
-printf '%s' "$T1_DEF" | grep -q '^<ctx task="traces/py.txt"' \
+T5_FULL="$( tb_full '' )"   # the full legend's root (the compact one leads with schema=); T1_DEF above ends on the default posture
+printf '%s' "$T5_FULL" | grep -q '^<ctx task="traces/py.txt"' \
     && ok "(T5) the bundle root carries the verbatim source (ctxRootOpen task=)" \
-    || { no "(T5) <ctx> has no verbatim task= root attribute"; printf '%s' "$T1_DEF" | head -c 80; echo; }
+    || { no "(T5) <ctx> has no verbatim task= root attribute"; printf '%s' "$T5_FULL" | head -c 80; echo; }
 
 # (T6) every budgeted shape stays G4-clean and byte-deterministic — the ladder must not be able to splice a
 #      header that breaks the document, and its choice is a pure function of its inputs.

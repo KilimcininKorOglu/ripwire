@@ -394,9 +394,14 @@ grep -aq 'max_tokens=\|fit_bytes=' "$TMP/neutral.out" \
 #    It must say which, in its own legend. ─────────────────────────────────────────────────────────────
 "$BIN" src --pack-task="estimate tokens" --partition=2 --no-cache >"$TMP/part.out" 2>/dev/null
 if grep -aq '<bundle [^>]*est_tokens=' "$TMP/part.out"; then
-    grep -aq '2\.36' "$TMP/part.out" \
-        && ok "#6 --partition's bundle legend names the 2.36 B/tok rate its est_tokens uses" \
-        || no "#6 --partition reports est_tokens with no statement of which estimator/rate produced it"
+    # NON-VACUOUS (L1 fix round, the iter1a measurement): the rate must be stated in the answer's own COMMENTS. A document-wide
+    # grep passed on a ranked body that merely quoted "2.36" in its CDATA, while the compact legend never said it.
+    python3 -c 'import re, sys
+d = open( sys.argv[ 1 ], encoding = "utf-8", errors = "replace" ).read()
+d = re.sub( r"<!\[CDATA\[.*?\]\]>", "", d, flags = re.S )
+sys.exit( 0 if any( "2.36" in c for c in re.findall( r"<!--.*?-->", d, re.S ) ) else 1 )' "$TMP/part.out" \
+        && ok "#6 --partition's bundle legend names the 2.36 B/tok rate its est_tokens uses (in a comment, outside CDATA)" \
+        || no "#6 --partition reports est_tokens with no statement (in its legend comments) of which estimator/rate produced it"
     # and it must remain EXACT-over-measured-bytes: bytes/2.36, rounded to nearest (tokensForEmittedBytes)
     python3 - "$TMP/part.out" <<'PY' && ok "#6 every <bundle est_tokens= equals its own bytes/2.36 (measured, exact)" \
         || no "#6 a <bundle est_tokens= no longer equals bytes/2.36 — the third estimator drifted"
