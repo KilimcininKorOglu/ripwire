@@ -349,7 +349,11 @@ if grep -q 'emitter THREW' "$TMP/rf.err"; then
     grep -q '<sigs render_failed="1">' "$TMP/rf.xml" && grep -q '<bodies [^>]*render_failed="1"' "$TMP/rf.xml" \
         && ok "RENDER: the ranking and bodies sections are present and marked render_failed=\"1\"" \
         || no "RENDER: a failed section is absent or unmarked: $( grep -o '<sigs[^>]*>\|<bodies[^>]*>' "$TMP/rf.xml" | tr '\n' ' ' )"
-    xmllint --noout "$TMP/rf.xml" 2>/dev/null && ok "RENDER: the faulted bundle is well-formed XML" || no "RENDER: the faulted bundle fails xmllint"
+    if xmllint --noout "$TMP/rf.xml" 2>/dev/null; then
+        ok "RENDER: the faulted bundle is well-formed XML"
+    else
+        no "RENDER: the faulted bundle fails xmllint"
+    fi
     if [ "$rcJ" = 0 ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("ranking",1) is None and d.get("bodies",1) is None and "ranking" in d.get("render_failed","") else 1)' "$TMP/rf.json" 2>/dev/null; then
         ok "RENDER: --json stays valid JSON: ranking/bodies null, render_failed names them"
     else

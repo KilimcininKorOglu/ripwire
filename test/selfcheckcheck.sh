@@ -85,7 +85,9 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # lane/disclose-sink-form (2026-09-19): converted the bulk of the sink-less sites to DISCLOSE( sink, why ) — 51 on its tree.
 # Train 7 (2026-09-19): re-measured on the merged tree — (R) prints 50: main's darkflags root-walk site (above) was one of
 # the lane's 51 and is already in sink form; the lane's mcpedit lock site took main's new wording in its sink form.
-DISCLOSE_SINKLESS_PIN=50
+# train7-fix1 (2026-09-19): docdrift.h's collectRepoPaths root-walk site converted to the RepoPaths sink (RootWalkFailed),
+# the doc-drift twin of the darkflags conversion above. 50 -> 49.
+DISCLOSE_SINKLESS_PIN=49
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'
