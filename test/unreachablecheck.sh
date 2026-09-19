@@ -74,7 +74,8 @@ gp 'in="last_return"'        && no "FALSE POSITIVE: Python last_return flagged" 
 
 # 6. golden-neutral — the DEFAULT map (no --lint) must be byte-identical to golden.xml
 if [ -f "$ROOT/test/golden.xml" ]; then
-    "$BIN" test/fixture --no-cache 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
+    # L1 (2026-09-19): the CLI default legend is compact; golden.xml was recorded from the FULL default, so this compares against the full legend.
+    "$BIN" test/fixture --no-cache --legend=full 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
         && ok "golden-neutral: default map byte-identical to test/golden.xml" \
         || no "default map drifted from golden.xml — unreachable-code leaked into the default map"
 else

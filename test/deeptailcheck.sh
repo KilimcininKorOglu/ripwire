@@ -48,7 +48,8 @@ for i in 01 02 03 04 05 06 07 08 09 10 11 12; do
 done
 Q="widget frobnicate helper"
 
-XML="$( "$BIN" "$CORPUS" --no-cache --for="$Q" --pack-top-n=4 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; arm 8 reads the FULL legend's prose off $XML, so it asks for it.
+XML="$( "$BIN" "$CORPUS" --no-cache --for="$Q" --pack-top-n=4 --legend=full 2>/dev/null )"
 printf '%s' "$XML" > "$TMP/for.xml"
 
 # ── 1) d2: the file-grain tail — present, complete, disjoint from the head ─────────────────────────────

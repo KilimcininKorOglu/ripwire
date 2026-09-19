@@ -143,7 +143,8 @@ UNCAP="--limit=1000000"
 # (A) THE VERDICT IS COMPUTED OVER THE FULL CALLER SET, AND THE FLAGGED ROW SURVIVES THE WINDOW
 # ===================================================================================================
 echo "--- (A) verdict over the full set; the flagged caller past the window is still emitted ---"
-ec "$TMP/ans" target            > "$TMP/a_def.xml"
+# L1 (2026-09-19): the CLI default legend is compact; the (A) DISCLOSURE arm reads the FULL legend's prose, so this run asks for it.
+ec "$TMP/ans" target --legend=full > "$TMP/a_def.xml"
 ec "$TMP/ans" target  $UNCAP    > "$TMP/a_all.xml"
 
 # CROSSING — read off the DEFAULT run's own FULL-SET counts, so the assertion holds on a pre-change binary

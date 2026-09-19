@@ -111,7 +111,9 @@ CONCEPT="how does resolution work"
 # ladder trimmed used to appear in neither section), and the clause defining the tail says so. Verified before
 # re-pinning: with every comment and est_tokens= normalized out, old and new documents are byte-identical —
 # this fixture's head covers every file, so its tail is unchanged and every ranking byte is unmoved.
-"$BIN" routefix --no-cache --for="$CONCEPT" --no-route >"$TMP/concept_noroute.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; golden_for.xml was recorded from the full default and the --query arm
+# reads the full legend's "routed:" comment, so those two runs ask for the full legend.
+"$BIN" routefix --no-cache --for="$CONCEPT" --no-route --legend=full >"$TMP/concept_noroute.xml" 2>/dev/null
 diff -q "$TMP/concept_noroute.xml" "$ROOT/test/routefix/golden_for.xml" >/dev/null \
     && ok "safe fallback: conceptual --for --no-route byte-identical to the pre-routing golden" \
     || no "conceptual --for --no-route drifted from test/routefix/golden_for.xml"
@@ -155,7 +157,7 @@ else
 fi
 
 # ── --query also routes by default (name-exact pick surfaces as a leading comment before the map) ───────
-"$BIN" routefix --no-cache --query="buildGraph" >"$TMP/q.xml" 2>/dev/null
+"$BIN" routefix --no-cache --query="buildGraph" --legend=full >"$TMP/q.xml" 2>/dev/null
 grep -q 'routed: name-exact' "$TMP/q.xml" \
     && ok "--query='buildGraph' DEFAULTS to name-exact (leading routed comment before the map)" \
     || no "--query identifier did not route to name-exact"

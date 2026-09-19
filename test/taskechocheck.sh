@@ -73,8 +73,9 @@ m = re.search( r"ceiling ([0-9]+)", sys.stdin.read() )
 sys.stdout.write( m.group( 1 ) if m else "" )
 ' 2>/dev/null; }
 
-XMLFOR="$(  "$BIN" "$CORPUS" --for="$TASK" 2>/dev/null )"
-XMLPT="$(   "$BIN" "$CORPUS" --pack-task="$TASK" 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; the lens comment echo and the "ceiling N" budget clause are FULL-legend text, so the XML probes ask for it.
+XMLFOR="$(  "$BIN" "$CORPUS" --for="$TASK" --legend=full 2>/dev/null )"
+XMLPT="$(   "$BIN" "$CORPUS" --pack-task="$TASK" --legend=full 2>/dev/null )"
 JSONFOR="$( "$BIN" "$CORPUS" --for="$TASK" --json 2>/dev/null )"
 JSONPT="$(  "$BIN" "$CORPUS" --pack-task="$TASK" --json 2>/dev/null )"
 
@@ -133,7 +134,7 @@ fi
 # fails if the query ever stops anchoring (CONTRIBUTING §2). The task still carries a real
 # double-hyphen flag name, which is the input this whole gate exists for.
 TASK2="ceilingArithmetic --token-budget"
-XMLFOR2="$( "$BIN" "$CORPUS" --for="$TASK2" 2>/dev/null )"
+XMLFOR2="$( "$BIN" "$CORPUS" --for="$TASK2" --legend=full 2>/dev/null )"
 [ -n "$XMLFOR2" ] || no "arm 4b: the auto-shape probe produced nothing — the twin cannot observe its contract"
 printf '%s' "$XMLFOR2" | grep -q 'bundle="auto"' \
     && ok "arm 4b presence: the twin query routes name-exact and serves the AUTO shape" \
@@ -195,7 +196,7 @@ else
 fi
 
 # ── §B1.6 arm 3: an explicit --token-budget moves the ceiling, and both dialects track it together ─
-xc2="$( "$BIN" "$CORPUS" --pack-task="$TASK" --token-budget=2000 2>/dev/null | xmlCeilingOf )"
+xc2="$( "$BIN" "$CORPUS" --pack-task="$TASK" --token-budget=2000 --legend=full 2>/dev/null | xmlCeilingOf )"
 jc2="$( "$BIN" "$CORPUS" --pack-task="$TASK" --token-budget=2000 --json 2>/dev/null | jsonKeyStr budget_ceiling_bytes )"
 if [ -n "$xc2" ] && [ "$xc2" = "$jc2" ] && [ "$xc2" != "$xmlCeiling" ]; then
     ok "--token-budget=2000 moves the ceiling and both dialects report the same new value ($jc2)"
@@ -243,7 +244,7 @@ else
 fi
 
 # ── determinism ───────────────────────────────────────────────────────────────────────────────────
-if [ "$( "$BIN" "$CORPUS" --for="$TASK" 2>/dev/null )" = "$XMLFOR" ]; then ok "--for XML is byte-identical run-to-run"; else no "--for XML is not deterministic"; fi
+if [ "$( "$BIN" "$CORPUS" --for="$TASK" --legend=full 2>/dev/null )" = "$XMLFOR" ]; then ok "--for XML is byte-identical run-to-run"; else no "--for XML is not deterministic"; fi
 if [ "$( "$BIN" "$CORPUS" --pack-task="$TASK" --json 2>/dev/null )" = "$JSONPT" ]; then ok "--pack-task JSON is byte-identical run-to-run"; else no "--pack-task JSON is not deterministic"; fi
 
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; }

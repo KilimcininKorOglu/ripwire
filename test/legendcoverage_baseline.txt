@@ -270,12 +270,7 @@ for-budgeted | ctx@bodies
 for-budgeted | ctx@reason
 for-budgeted | ctx@task
 for-budgeted | d@pure
-# L1 (0.6.1), the COMPACT dialect at the same rung. The roster had no --legend=compact row of any kind, so every
-# string in that dialect's legend inventory was outside the ratchet. Seven lines, and six of them are the same
-# gaps the default-dialect --for rows already record (d@next / d@pure / field@* above, same reasons). The new one:
-#   ctx@schema — `schema="ripwire.for/v1"`, emitted ONLY by the compact dialect (rootOpenWithSchema) and named
-#   nowhere in its legend. The compact legend opens with the schema string itself ("ripwire for ripwire.for/v1:")
-#   so a reader does meet the value, but `schema=` is never spelled — grey by intent, recorded as debt, not
-#   closed by pretending the opening words are a definition.
-for-budgeted-compact | ctx@schema
-for-budgeted-compact | d@pure
+# L1 (0.6.1), the COMPACT dialect at the same rung: seven lines recorded here (ctx@schema, d@next, d@pure, field@*) were
+# CLOSED by the L1 fix round (rv-r1-L1 HIGH-1), which gave the compact --for legend its definitions — "schema=ripwire.for/v1",
+# "task= the query", "pure= 1 (pure: const/constexpr sig)", "next= the follow-up to paste", and "field name= type= owner=
+# rel=: a member of owner=, rel=creates held by value, uses by reference/pointer" (verbs_for.h appendCompactForLegend).

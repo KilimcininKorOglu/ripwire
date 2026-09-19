@@ -132,7 +132,8 @@ ABS="$( grep -E '^absorbed ' "$D/.ripwire_quality_baseline" 2>/dev/null | awk '{
 grep -qE '^dirty 1' "$D/.ripwire_quality_baseline" 2>/dev/null \
     && ok "R3: the sidecar records that it was pinned on a dirty tree (dirty 1)" \
     || no "R3: the sidecar does not record the dirty pin"
-( cd "$D" && "$BIN" . --no-cache --quality-delta > "$D/d.xml" 2>"$D/d.err" ); rc=$?
+# L1 (2026-09-19): the CLI default legend is compact; R4 reads the FULL legend's baseline_absorbed definition, so it asks for it.
+( cd "$D" && "$BIN" . --no-cache --quality-delta --legend=full > "$D/d.xml" 2>"$D/d.err" ); rc=$?
 R="$( root_of "$D/d.xml" )"
 printf '%s' "$R" | grep -q 'baseline="sidecar"' \
     && ok "R4: the sidecar is honored (baseline=\"sidecar\")" \

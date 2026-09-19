@@ -102,7 +102,8 @@ budgetFor(){
 VERBS="callers impact uses"
 
 for v in $VERBS; do
-    "$BIN" "$ROOT" "--$v=rootRelPathsLegend" >"$TMP/$v.xml" 2>/dev/null
+    # L1 (2026-09-19): the CLI default legend is compact; (a) budgets and (b) reads the FULL legend, so it is asked for.
+    "$BIN" "$ROOT" "--$v=rootRelPathsLegend" --legend=full >"$TMP/$v.xml" 2>/dev/null
     read -r total legend payload <<<"$( measure "$TMP/$v.xml" )"
     budget="$( budgetFor "$v" )"
     if [ "$legend" -le "$budget" ]; then
@@ -147,7 +148,7 @@ for v in $VERBS; do
     if command -v xmllint >/dev/null 2>&1; then
         if xmllint --noout "$TMP/$v.xml" 2>/dev/null; then ok "(c) --$v is well-formed XML"; else no "(c) --$v fails xmllint"; fi
     fi
-    "$BIN" "$ROOT" "--$v=rootRelPathsLegend" >"$TMP/$v.2.xml" 2>/dev/null
+    "$BIN" "$ROOT" "--$v=rootRelPathsLegend" --legend=full >"$TMP/$v.2.xml" 2>/dev/null
     if diff -q "$TMP/$v.xml" "$TMP/$v.2.xml" >/dev/null; then ok "(c) --$v deterministic (byte-identical twice)"; else no "(c) --$v differs across two runs"; fi
 done
 

@@ -107,7 +107,8 @@ awk -v a="${sOnNr:-0}" -v b="${sOffNr:-0}" 'BEGIN{exit !(a>b)}' \
 
 "$BIN" "$FIX" --for="$Q" --no-cache 2>/dev/null | grep -q 'doc mentions:' \
     && ok "--for header names the doc-mention lift" || no "--for header note missing"
-"$BIN" "$FIX" --pack-task="$Q" --no-cache 2>/dev/null | grep -q 'doc mentions:' \
+# L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL --pack-task legend's doc-mention note, so it asks for it.
+"$BIN" "$FIX" --pack-task="$Q" --no-cache --legend=full 2>/dev/null | grep -q 'doc mentions:' \
     && ok "--pack-task carries the same note (shared computeLensRanking)" || no "--pack-task note missing"
 
 # ── (ii) never outranks the code it discusses; anchor (#1) unaffected ──────────────────────────────────

@@ -26,7 +26,9 @@ cd "$ROOT"
 
 echo "duprowcheck: BIN=$BIN  CORPUS=test/duprowfix"
 
-OUT="$( "$BIN" test/duprowfix --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; arms 8/9 read the FULL legend (its overloads= clause, and
+# real <s rows the compact legend also spells), and arm 7 compares to a golden recorded from the full default.
+OUT="$( "$BIN" test/duprowfix --no-cache --legend=full 2>/dev/null )"
 [ -n "$OUT" ] || { echo "no output — binary or fixture broken"; exit 2; }
 
 # ── 1) exactly one row carries id="...Box::data" — the const/non-const pair is collapsed ──────────────
@@ -58,7 +60,7 @@ else
 fi
 
 # ── 6) determinism — two runs byte-identical ────────────────────────────────────────────────────────────
-OUT2="$( "$BIN" test/duprowfix --no-cache 2>/dev/null )"
+OUT2="$( "$BIN" test/duprowfix --no-cache --legend=full 2>/dev/null )"
 if [ "$OUT" = "$OUT2" ]; then ok "deterministic (byte-identical run-to-run)"; else no "non-deterministic output"; fi
 
 # ── 8) §A8.7: the v1 legend closes the shown=/overloads= arithmetic — the ONE clause a reader needs to
@@ -82,7 +84,7 @@ done
 
 # ── 7) golden-neutral — the default map on test/fixture (no overload collisions there) is unaffected ──
 if [ -f "$ROOT/test/golden.xml" ]; then
-    "$BIN" test/fixture --no-cache 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
+    "$BIN" test/fixture --no-cache --legend=full 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
         && ok "golden-neutral: test/fixture default map byte-identical to test/golden.xml" \
         || no "default map drifted on the golden fixture (no overload collision expected there)"
 else

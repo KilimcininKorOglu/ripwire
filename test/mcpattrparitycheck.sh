@@ -116,6 +116,10 @@ def check( cond, msg ):
 
 # ── the three surfaces ────────────────────────────────────────────────────────────────────────────────
 def cliAt( corpus, args ):
+    # L1 (2026-09-19): the CLI default legend is compact; every twin here is the FULL posture (see M1 below), so the CLI
+    # operand asks for full too — unless the arm spells its own --legend=, or reads --json (no XML legend).
+    if not any( a.startswith( "--legend=" ) or a == "--json" for a in args ):
+        args = args + [ "--legend=full" ]
     return subprocess.run( [ BIN, corpus ] + args, capture_output = True, text = True ).stdout
 
 def cli( args ):

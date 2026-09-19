@@ -313,7 +313,8 @@ fi
 
 # ── (J) DISCLOSURE ──────────────────────────────────────────────────────────────────────────────────────────
 cp "$TMP/d2" "$SIDE" 2>/dev/null
-rw "$REPO" --quality-delta >"$TMP/j.out" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; (J) reads the FULL legend's prose, so this run asks for it.
+rw "$REPO" --quality-delta --legend=full >"$TMP/j.out" 2>/dev/null
 grep -q 'baseline="git-HEAD (foreign sidecar ignored)" means' "$TMP/j.out" \
     && ok "(J) the full legend defines the foreign marker it emits" \
     || no "(J) the full legend does not define baseline=\"git-HEAD (foreign sidecar ignored)\""

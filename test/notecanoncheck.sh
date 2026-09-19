@@ -224,7 +224,8 @@ else
 fi
 # A second add on the SAME target must not re-canonicalise into a second key (one target, two notes).
 ( cd "$D" && "$BIN" . --no-cache --note-add="Widget::uniqueOnlyHere: and the bound is exclusive" >/dev/null 2>/dev/null )
-TCOUNT="$( ( cd "$D" && "$BIN" . --no-cache --notes 2>/dev/null ) | grep -o '<target ' | wc -l | tr -d ' ' )"
+# L1 (2026-09-19): the CLI default legend is compact and spells <target > inside its comment; R6 counts real groups, so it asks for the full legend.
+TCOUNT="$( ( cd "$D" && "$BIN" . --no-cache --notes --legend=full 2>/dev/null ) | grep -o '<target ' | wc -l | tr -d ' ' )"
 [ "$TCOUNT" = "1" ] \
     && ok "R6: two spellings of one symbol collapse to ONE target group" \
     || no "R6: two spellings of one symbol produced $TCOUNT target groups"

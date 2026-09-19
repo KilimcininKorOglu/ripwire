@@ -506,10 +506,12 @@ B14
 printf 'cmake_minimum_required( VERSION 3.20 )\nproject( n14 )\noption( FEATURE_ZETA "the dark one" OFF )\n' > "$N14/CMakeLists.txt"
 ( cd "$N14" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
 printf 'int gamma_fn( int x ) { return x - 1; }\n' >> "$N14/src/b.cpp"
+# L1 (2026-09-19): the CLI default legend is compact; (14) reads the FULL legend's run-hint clause (both the must-carry and
+# the must-not-carry halves), so every probed document asks for the full legend.
 CLAUSE='run= is the command that discharges a test row'
 bad14=""
 for v in --handoff --pr-context --test-gate --affected=src/a.cpp; do
-    o="$( cd "$N14" && "$BIN" . $v --no-cache 2>/dev/null )"
+    o="$( cd "$N14" && "$BIN" . $v --no-cache --legend=full 2>/dev/null )"
     rows="$( printf '%s' "$o" | python3 "$ROWPATHS" paths xml | grep -c . )"
     has="$( printf '%s' "$o" | grep -c "$CLAUSE" )"
     [ "$rows" -eq 0 ] && [ "$has" -ne 0 ] && bad14="$bad14 $v(0 rows, clause present)"
@@ -518,7 +520,7 @@ done
 # --flags --flip on the same no-test corpus: zero <t> rows, so no clause either
 FN14="$( ( cd "$N14" && "$BIN" . --flags --no-cache 2>/dev/null ) | grep -oE '<gate name="[^"]+"' | head -1 | sed -E 's/^<gate name="([^"]*)"$/\1/' )"
 if [ -n "$FN14" ]; then
-    o="$( cd "$N14" && "$BIN" . --flags --flip="$FN14" --no-cache 2>/dev/null )"
+    o="$( cd "$N14" && "$BIN" . --flags --flip="$FN14" --no-cache --legend=full 2>/dev/null )"
     rows="$( printf '%s' "$o" | python3 "$ROWPATHS" paths xml | grep -c . )"
     has="$( printf '%s' "$o" | grep -c "$CLAUSE" )"
     [ "$rows" -eq 0 ] && [ "$has" -ne 0 ] && bad14="$bad14 --flags --flip=$FN14(0 rows, clause present)"
@@ -529,7 +531,7 @@ fi
 
 # the positive control: the grouping fixture from arm 12 DOES carry rows, so the same verbs must carry it
 for v in --handoff --pr-context; do
-    o="$( rw2 $v )"
+    o="$( rw2 $v --legend=full )"
     rows="$( printf '%s' "$o" | python3 "$ROWPATHS" paths xml | grep -c . )"
     has="$( printf '%s' "$o" | grep -c "$CLAUSE" )"
     [ "$rows" -gt 0 ] && [ "$has" -eq 0 ] && bad14="$bad14 control:$v($rows rows, clause MISSING)"

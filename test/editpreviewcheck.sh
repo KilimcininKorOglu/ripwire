@@ -95,8 +95,10 @@ printf 'int trim( int a, int b )\n{\n    return \000 a;\n}\n' > "$WORK/gen/nul.t
 norm(){ printf '%s' "$1" | perl -0pe 's/<overwrite [^>]*><!\[CDATA\[.*?\]\]><\/overwrite>//s' | sed -e 's/<!--.*-->//' -e 's/ at="[^"]*"//g' -e 's/ preview="1"//g' -e 's/ est_tokens="[0-9]*"//g'; }
 statusOf(){ printf '%s' "$1" | sed -e 's/<!--.*-->//' | grep -oE 'status="[a-z-]+"' | head -1; }
 
+# L1 (2026-09-19): the CLI default legend is compact; (D)/(R) read the FULL legend's prose and (N) compares against an MCP
+# document asked for in "legend": "full", so the preview (and the applied document it is swept against) ask for the full legend.
 preview(){ # $1 selector  $2 payload-path
-    ( cd "$BASE" && "$BIN" . --edit-check="$1" --edit-payload="$2" --dry-run --no-cache 2>/dev/null )
+    ( cd "$BASE" && "$BIN" . --edit-check="$1" --edit-payload="$2" --dry-run --no-cache --legend=full 2>/dev/null )
 }
 previewrc(){
     ( cd "$BASE" && "$BIN" . --edit-check="$1" --edit-payload="$2" --dry-run --no-cache >/dev/null 2>&1; echo $? )
@@ -106,7 +108,7 @@ applied(){ # $1 name  $2 file  $3 payload-path  → the POST-apply --edit-check 
     local w="$WORK/apply.$$.$RANDOM"
     mkcorpus "$w"
     ( cd "$w" && "$BIN" . --replace-symbol-body="$1" --edit-target-file="$2" --edit-payload="$3" ) >/dev/null 2>&1
-    ( cd "$w" && "$BIN" . --edit-check="$2:$1" --no-cache 2>/dev/null )
+    ( cd "$w" && "$BIN" . --edit-check="$2:$1" --no-cache --legend=full 2>/dev/null )
     rm -rf "$w"
 }
 

@@ -150,7 +150,9 @@ printf '%s' "$MAP" | grep -q 'n="rk_devAccum"' \
 #     indexing the table. The test reads the attributes off the <uses> element rather than grepping the
 #     document for `external="1"`, because the schema LEGEND explains that attribute in prose — a naive
 #     whole-output grep matches the legend and fails on a correct run.
-"$BIN" "$FIX" --no-cache --uses=rk_scaleTable >"$TMP/u2" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact, whose root also carries schema= before of=; this arm pins the full-default
+# root spelling (<uses of= defs= external=), so it asks for the full legend.
+"$BIN" "$FIX" --no-cache --uses=rk_scaleTable --legend=full >"$TMP/u2" 2>/dev/null
 grep -q 'role="read" p="[^"]*reduceKernels\.cu:[0-9]' "$TMP/u2" \
     && grep -q 'uses of="rk_scaleTable" defs="[1-9][0-9]*" external="0"' "$TMP/u2" \
     && ok "--uses=rk_scaleTable resolves the device-side read to a real def (defs>=1, external=0)" \

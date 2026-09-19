@@ -98,7 +98,7 @@ grep -qE '^\s*return require\("\./Widget"\);\s*$' "$FIX/lib/barrel.js" \
     && ok "fixture guard: barrel.js's require sits on its own line inside the getter's body" \
     || no "fixture guard: barrel.js drifted — the barrel arm below cannot trust its shape"
 
-i(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --impact="$1" --no-cache 2>/dev/null; }
+i(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --impact="$1" --no-cache "${@:2}" 2>/dev/null; }
 # The legend now SPELLS the row shape (`<f via="import" p="…"/>`), so a naive grep for a row matches the
 # documentation of the row. Every row-level assertion runs against the ELEMENT, not the whole document.
 body(){ printf '%s' "$1" | sed 's/^.*<impact /<impact /'; }
@@ -108,7 +108,9 @@ OUT_W="$( i Widget )"
 
 # ── #1 EXTRACTION: `require("./x")` is a file→file dependency edge, top-level OR function-body ─────────
 # The fixture is seven importers of one module; pre-71 the whole dependency graph over it was empty.
-DEPS="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --deps --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact, whose root tag leads with schema=; #1 pins `<deps files=`, and #6/#8
+# read the FULL legend's prose — those three documents ask for the full legend.
+DEPS="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --deps --no-cache --legend=full 2>/dev/null )"
 DEPS_FILES="$( printf '%s' "$DEPS" | grep -oE '<deps files="[0-9]+"' | grep -oE '[0-9]+' )"
 [ "${DEPS_FILES:-0}" -ge 7 ] \
     && ok "--deps sees the require() edges: files=$DEPS_FILES (>=7 importers with a dependency edge)" \
@@ -173,7 +175,7 @@ IC="$( attr importers_capped "$OUT_W" )"
     || no "--impact=Widget: shown_importers='$SI' importers_capped='$IC', expected 7 and 0"
 
 # ── #5 an EMPTY import tier is a measurement, not a missing attribute ─────────────────────────────────
-OUT_O="$( i lonely )"
+OUT_O="$( i lonely --legend=full )"
 { [ "$( attr importers "$OUT_O" )" = 0 ] && [ "$( attr shown_importers "$OUT_O" )" = 0 ] \
     && [ "$( attr importers_capped "$OUT_O" )" = 0 ]; } \
     && ok "--impact=lonely: importers=0 shown_importers=0 importers_capped=0 (nobody imports orphan.js)" \
@@ -214,7 +216,7 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 # ── #8 --format=columnar discloses the COUNT (its row form is the symbol table only) ──────────────────
-COL="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --impact=Widget --format=columnar --no-cache 2>/dev/null )"
+COL="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --impact=Widget --format=columnar --no-cache --legend=full 2>/dev/null )"
 [ "$( attr importers "$COL" )" = 7 ] \
     && ok "--format=columnar: importers=7 on the root (count disclosed even where rows are not emitted)" \
     || no "--format=columnar: importers= missing from the columnar root"

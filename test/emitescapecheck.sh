@@ -151,7 +151,10 @@ run_arm()   # $1=label  $2=validator(xml|json)  $3...=ripwire args
 }
 
 run_arm "--for (escapeXml)"          xml  --for="bytesoup fixture"
-run_arm "--expand (appendCdataSafe)" xml  --expand=fixtureAlpha
+# L1 fix round: --expand chooses its serving on the price the posture DELIVERS (main.cpp chooseExpandServe), and on this
+# fixture the compact default's cheaper document is the bundle, whose body does not hold the soup comment. The arm is about
+# the whole-file serving's CDATA escaper, so it asks for the posture that serves the whole file here.
+run_arm "--expand (appendCdataSafe)" xml  --expand=fixtureAlpha --legend=full
 run_arm "--for --json (escapeInto)"  json --for="bytesoup fixture" --json
 run_arm "--pack-task --json (bodies)" json --pack-task="bytesoup fixture" --json
 

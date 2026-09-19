@@ -289,8 +289,12 @@ fi
 #    legend. Contract: the PROSE legend bytes (every comment except the data ones — "<!-- body omitted", "<!-- slice ",
 #    "<!-- truncated -->") of the partitioned document are <= 1.3x the single bundle's legend bytes, and no inner ctx
 #    opens a "<!-- ripwire task bundle for" comment.
-"$BIN" "$ROOT" --pack-task="$TASK" --partition=3 --no-cache >"$TMP/p10.part" 2>/dev/null
-"$BIN" "$ROOT" --pack-task="$TASK" --no-cache >"$TMP/p10.single" 2>/dev/null
+# L1 fix round: the 1.3x ratio is measured in the FULL legend, the dialect it was written for. The compact default's one
+# legend DEFINES the partition envelope (<ctx-partitions> counts, each <bundle>'s role/symbols/bytes/tokens=bytes/2.36, the
+# inner ctx attributes) that a single bundle does not carry, so its ratio measures those definitions, not repetition; the
+# default's own contract — ONE legend, none per slice — is asserted right after this arm.
+"$BIN" "$ROOT" --pack-task="$TASK" --partition=3 --no-cache --legend=full >"$TMP/p10.part" 2>/dev/null
+"$BIN" "$ROOT" --pack-task="$TASK" --no-cache --legend=full >"$TMP/p10.single" 2>/dev/null
 read -r P10_PART P10_SINGLE P10_INNER <<EOF2
 $( python3 - "$TMP/p10.part" "$TMP/p10.single" <<'PY'
 import re, sys
@@ -309,6 +313,15 @@ if [ -n "$P10_SINGLE" ] && [ "$P10_SINGLE" -gt 0 ] && [ $(( P10_PART * 10 )) -le
     ok "P10: partitioned prose legend $P10_PART B <= 1.3x the single bundle's $P10_SINGLE B"
 else
     no "P10: partitioned prose legend $P10_PART B exceeds 1.3x the single bundle's ${P10_SINGLE:-?} B"
+fi
+"$BIN" "$ROOT" --pack-task="$TASK" --partition=3 --no-cache >"$TMP/p10.def" 2>/dev/null
+P10_DEF_LEGENDS="$( python3 -c 'import re, sys
+d = re.sub( r"<!\[CDATA\[.*?\]\]>", "", open( sys.argv[ 1 ], encoding = "utf-8", errors = "replace" ).read(), flags = re.S )
+print( sum( 1 for c in re.findall( r"<!--.*?-->", d, re.S ) if c.startswith( "<!-- ripwire " ) ) )' "$TMP/p10.def" )"
+if [ "$P10_DEF_LEGENDS" = 1 ]; then
+    ok "P10: the partitioned DEFAULT answer carries exactly one legend (none per slice)"
+else
+    no "P10: the partitioned default answer carries ${P10_DEF_LEGENDS:-?} legend comments, want 1"
 fi
 if [ "$P10_INNER" = 0 ]; then ok "P10: no inner ctx repeats the task-bundle legend"; else no "P10: $P10_INNER inner ctx document(s) still open a task-bundle legend"; fi
 

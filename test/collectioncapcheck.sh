@@ -387,7 +387,8 @@ esac
 
 echo
 echo "=== (H) rows_capped= is a SAMPLE over EXACT counts — never counts_floor (the control the enumeration needed) ==="
-runBin "$TMP/lint_rows.xml" . --lint --limit=3 --no-cache
+# L1 (2026-09-19): the CLI default legend is compact; (H) reads the FULL --lint/--skipped legend prose, so both runs ask for it.
+runBin "$TMP/lint_rows.xml" . --lint --limit=3 --no-cache --legend=full
 RC_ROWS="$( grep -oE '<rule [^>]*rows_capped="1"[^>]*/>' "$TMP/lint_rows.xml" | wc -l | tr -d ' ' )"
 if [ "$RC_ROWS" = "0" ]; then
     no "(H) presence guard — no <rule> row carries rows_capped=\"1\" under --lint --limit=3 on this repo$( whyEmpty "$TMP/lint_rows.xml" )"
@@ -406,7 +407,7 @@ printf 'int a() { return 1; }\n' >"$FIXR/a.cpp"
 python3 -c 'import sys,os
 d=sys.argv[1]
 for i in range(501): open(os.path.join(d,"blob%03d.zzz"%i),"w").write("x\n")' "$FIXR"
-runBin "$TMP/rep501.md" "$FIXR" --skipped --no-cache
+runBin "$TMP/rep501.md" "$FIXR" --skipped --no-cache --legend=full
 REL="$( grep -oE '<[a-zA-Z_-]+ [^>]*rows_capped="1"[^>]*>' "$TMP/rep501.md" | head -1 )"
 if [ -z "$REL" ]; then
     no "(H) presence guard — --skipped on 501 unsupported files carries no rows_capped=\"1\" element ($( grep -oE 'unsupported="[0-9]+"' "$TMP/rep501.md" | head -1 ))$( whyEmpty "$TMP/rep501.md" )"

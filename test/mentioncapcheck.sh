@@ -63,7 +63,9 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 command -v git >/dev/null 2>&1 || { echo "mentioncapcheck: git required"; exit 2; }
 echo "mentioncapcheck: BIN=$BIN"
 
-run(){ "$BIN" "$@" --no-cache 2>/dev/null; }
+# L1 (2026-09-19): the CLI default legend is compact, which drops the lens prose (mention anchor: N files + N symbols named ...)
+# the crossing probes count, so every run asks for the full legend.
+run(){ "$BIN" "$@" --no-cache --legend=full 2>/dev/null; }
 # the B8 prose note's own counts, which exist on the base binary too — the CROSSING half of arms B and C
 anchorFiles(){ printf '%s' "$1" | grep -o 'mention anchor: [0-9]* file' | grep -o '[0-9]*' | head -1; }
 anchorSyms(){  printf '%s' "$1" | grep -o '+ [0-9]* symbols named' | grep -o '[0-9]*' | head -1; }

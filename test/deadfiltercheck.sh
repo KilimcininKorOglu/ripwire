@@ -27,7 +27,9 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 echo "deadfiltercheck: BIN=$BIN  ROOT=$ROOT"
 
-deadCount(){ "$BIN" "$ROOT" "$@" 2>/dev/null | grep -oE '<dead-code count="[0-9]+"' | grep -oE '[0-9]+'; }
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; the count reads below
+# anchor on `<dead-code count=`, the full-posture root shape, so these runs ask for --legend=full (rows identical).
+deadCount(){ "$BIN" "$ROOT" "$@" --legend=full 2>/dev/null | grep -oE '<dead-code count="[0-9]+"' | grep -oE '[0-9]+'; }
 
 BARE="$( deadCount --dead-code )"
 if [ "${BARE:-0}" -ge 3 ]; then ok "bare --dead-code: count=$BARE"; else no "bare --dead-code: count=${BARE:-<none>} (expected >= 3)"; fi
@@ -64,7 +66,7 @@ if [ "$rc2" -eq 1 ]; then ok "--dead-code=sr (partial component) refuses"; else 
 
 # ── 5. a REAL indexed directory that simply holds no dead code stays a MEASUREMENT (exit 0, count="0").
 #      The refusal must fire on "names nothing in the tree", never on "found nothing there".
-"$BIN" "$ROOT" --dead-code=scripts >"$TMP/tp" 2>/dev/null; rc3=$?
+"$BIN" "$ROOT" --dead-code=scripts --legend=full >"$TMP/tp" 2>/dev/null; rc3=$?
 [ "$rc3" -eq 0 ] && grep -q '<dead-code count="0"' "$TMP/tp" \
     && ok "--dead-code=scripts (real dir, no dead code) exits 0 with count=\"0\" — a measurement" \
     || no "--dead-code=scripts exits $rc3 without a count=\"0\" measurement"

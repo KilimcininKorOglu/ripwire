@@ -54,7 +54,11 @@ fileBytes="$( wc -c <"$TMP/fix/small.c" | tr -d ' ' )"
 # have to pay a descriptive header comment for, so small.c carries NO leading comment (unlike big.c,
 # whose bulk swamps a header either way) — a comment here was previously masking the correct comparison
 # by inflating the file side just enough to keep mode="whole-file" for the wrong reason.
-"$BIN" fix --expand=smallProbe --no-cache >"$TMP/small.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact. Arm (4)'s identity — reason='s served price IS the delivered
+# byte count — is priced by chooseExpandServe in the FULL dialect (both candidates, before any compaction), so the four
+# documents arm (4) reads ask for the full legend; under the compact default reason= keeps the full-dialect candidate
+# prices, recorded as a found item in the L1 lane report rather than hidden by moving one of the two numbers.
+"$BIN" fix --expand=smallProbe --no-cache --legend=full >"$TMP/small.xml" 2>/dev/null
 grep -q 'mode="whole-file"' "$TMP/small.xml" \
     && ok "(1) small-file --expand serves mode=\"whole-file\"" \
     || no "(1) small-file --expand did not serve mode=\"whole-file\" (the 5.65x-over-file bundle again)"
@@ -84,7 +88,7 @@ fi
 # it now ALSO defaults its own map to top-k=0 — the ranked map that used to ride inside "bundle" mode is
 # gone, and the root discloses the default with topk_default="0" (test/expandtopk0check.sh is the dedicated
 # gate for that mechanism; this arm just keeps M6's bundle-vs-whole-file byte comparison honest under it).
-"$BIN" fix --expand=bigProbe007 --no-cache >"$TMP/big.xml" 2>/dev/null
+"$BIN" fix --expand=bigProbe007 --no-cache --legend=full >"$TMP/big.xml" 2>/dev/null
 grep -q 'mode="bundle"' "$TMP/big.xml" \
     && ok "(2) large-file --expand keeps mode=\"bundle\"" \
     || no "(2) large-file --expand lost the bundle mode"
@@ -145,11 +149,11 @@ if command -v xmllint >/dev/null 2>&1; then
         if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "(G4) $f.xml well-formed"; else no "(G4) $f.xml fails xmllint"; fi
     done
 fi
-"$BIN" fix --expand=smallProbe --no-cache >"$TMP/small2.xml" 2>/dev/null
+"$BIN" fix --expand=smallProbe --no-cache --legend=full >"$TMP/small2.xml" 2>/dev/null
 diff -q "$TMP/small.xml" "$TMP/small2.xml" >/dev/null \
     && ok "(det) whole-file mode byte-identical twice" \
     || no "(det) whole-file mode differs across two runs"
-"$BIN" fix --expand=bigProbe007 --no-cache >"$TMP/big2.xml" 2>/dev/null
+"$BIN" fix --expand=bigProbe007 --no-cache --legend=full >"$TMP/big2.xml" 2>/dev/null
 diff -q "$TMP/big.xml" "$TMP/big2.xml" >/dev/null \
     && ok "(det) bundle mode byte-identical twice" \
     || no "(det) bundle mode differs across two runs"
@@ -204,7 +208,7 @@ for pad in 600 700 800 900 1000 1100 1200; do
         python3 -c "import sys; sys.stdout.write( 'x' * $pad )"
         printf '*/\n'
     } > "$TMP/narrow/n.c"
-    ( cd "$TMP" && "$BIN" narrow --expand=narrowProbe --no-cache ) >"$TMP/narrow.xml" 2>/dev/null
+    ( cd "$TMP" && "$BIN" narrow --expand=narrowProbe --no-cache --legend=full ) >"$TMP/narrow.xml" 2>/dev/null
     got="$( wc -c <"$TMP/narrow.xml" | tr -d ' ' )"
     sweep_n=$(( sweep_n + 1 ))
     if grep -q 'mode="whole-file"' "$TMP/narrow.xml"; then
@@ -242,7 +246,7 @@ for f in a b; do
         printf '*/\nint other_%s( void ) { return dupSym( 1 ); }\n' "$f"
     } > "$TMP/ambig/$f.c"
 done
-( cd "$TMP" && "$BIN" ambig --expand=dupSym --no-cache ) >"$TMP/ambig.xml" 2>/dev/null
+( cd "$TMP" && "$BIN" ambig --expand=dupSym --no-cache --legend=full ) >"$TMP/ambig.xml" 2>/dev/null
 ambTotal="$( wc -c <"$TMP/ambig.xml" | tr -d ' ' )"
 amb_num="$( reason_num "$TMP/ambig.xml" bundle )"
 if ! grep -q '<r ' "$TMP/ambig.xml"; then

@@ -49,7 +49,9 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 required for XML assertion
 echo "jsonlangcheck: BIN=$BIN  FIX=$FIX"
 
 MAP_OUT="$TMP/map.xml"
-$BIN "$FIX" --no-cache >"$MAP_OUT" 2>"$TMP/map.err"
+# L1 (2026-09-19): the CLI default legend is compact and its prose spells "edges= distinct call edges"; the
+# edges= reads below take the first match, so these maps ask for the full legend (rows identical across postures).
+$BIN "$FIX" --no-cache --legend=full >"$MAP_OUT" 2>"$TMP/map.err"
 MAP_EXIT=$?
 if [ "$MAP_EXIT" -eq 0 ]; then ok "default map: exits 0 on JSON fixture"; else no "default map: exited $MAP_EXIT: $( cat "$TMP/map.err" )"; fi
 
@@ -139,7 +141,7 @@ cat > "$XL/app.js" <<'JSEOF'
 function react() { return 1; }
 function main() { return react(); }
 JSEOF
-XL_OUT="$( $BIN "$XL" --no-cache 2>/dev/null )"
+XL_OUT="$( $BIN "$XL" --no-cache --legend=full 2>/dev/null )"
 XL_EDGES="$( echo "$XL_OUT" | grep -o 'edges=[0-9]*' | head -1 )"
 if [ "$XL_EDGES" = "edges=1" ]; then ok "mixed JSON+JS: $XL_EDGES (only the JS-internal main->react edge)"; else no "mixed JSON+JS: expected edges=1, got $XL_EDGES"; fi
 XL_CR="$( $BIN "$XL" --callers=react --no-cache 2>/dev/null )"
@@ -149,7 +151,7 @@ echo "$XL_CR" | grep -q 'count="1"' && echo "$XL_CR" | grep -q 'app.js' \
 
 # mutation: rename the JS call site → the ONLY edge must vanish (non-tautological)
 sed 's/return react()/return reactX()/' "$XL/app.js" >"$XL/app.js.tmp" && mv "$XL/app.js.tmp" "$XL/app.js"
-XL_MUT="$( $BIN "$XL" --no-cache 2>/dev/null | grep -o 'edges=[0-9]*' | head -1 )"
+XL_MUT="$( $BIN "$XL" --no-cache --legend=full 2>/dev/null | grep -o 'edges=[0-9]*' | head -1 )"
 if [ "$XL_MUT" = "edges=0" ]; then ok "mutation: renamed JS call site → edges=0 (the edge assertion is real)"; else no "mutation: expected edges=0 after rename, got $XL_MUT"; fi
 
 # ═══════════════════════════════════════════════════════════════════════════

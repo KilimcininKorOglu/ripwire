@@ -239,8 +239,10 @@ fi
 # M11 (2026-09-04): the root's est_tokens= prices the document INCLUDING the label's own bytes, so it is the
 # fourth (derived) place the label shows — normalised with it.
 norm(){ printf '%s' "$1" | sed -E 's/src="[^"]*"/src="X"/; s/trace-to-locus for "[^"]*"/trace-to-locus for "X"/; s/<ctx task="[^"]*"/<ctx task="X"/; s/ est_tokens="[0-9]+"//'; }
-STDIN_OUT="$( cd "$WORK" && "$BIN" . --from-trace=- --no-cache < "$WORK/traces/py.txt" 2>/dev/null )"
-FILE_OUT="$( tr_run py.txt )"
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema= (so norm's '<ctx task=' never fires) and whose
+# legend echoes the source label; both operands ask for the full legend (FILE_OUT is tr_run's exact invocation plus --legend=full).
+STDIN_OUT="$( cd "$WORK" && "$BIN" . --from-trace=- --no-cache --legend=full < "$WORK/traces/py.txt" 2>/dev/null )"
+FILE_OUT="$( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" --no-cache --legend=full 2>/dev/null )"
 [ "$( norm "$STDIN_OUT" )" = "$( norm "$FILE_OUT" )" ] \
     && ok "'-' reads the trace from stdin (identical bundle apart from the source label)" \
     || { no "stdin form differs from the file form beyond the source label"; diff <(norm "$STDIN_OUT") <(norm "$FILE_OUT") | head; }
@@ -354,7 +356,9 @@ cat > "$WORK/a2/traces/stale.txt" <<'EOF'
     #0 0x1 in alpha src/mod.cpp:8:1
     #1 0x2 in __libc_start_main /usr/lib/libc.so.6:0
 EOF
-STALE="$( a2_run stale.txt )"
+# L1 (2026-09-19): the CLI default legend is compact; (A2b/c) reads the FULL legend's prose off $STALE, so this run asks for it
+# (a2_run's exact invocation plus --legend=full).
+STALE="$( cd "$WORK/a2" && "$BIN" . --from-trace="traces/stale.txt" --no-cache --legend=full 2>/dev/null )"
 [ "$( a2_attr n frame "$STALE" )" = "alpha" ] \
     && ok "(A2a) a stale-line frame resolves to the symbol it NAMES (alpha), not the one squatting on the line" \
     || { no "(A2a) rank 1 is not alpha — the frame's own name was discarded"; printf '%s' "$STALE" | grep -oE '<frame[^>]*>'; }
@@ -488,21 +492,34 @@ fi
 #                 = tokens x 2.36 x 1.15  == ceilingAllowanceBytes( tokens )   [serialize.h]
 # Every arm below is red on base_w3 and green on the fixed binary.
 tb_run(){ ( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" ${1:+--token-budget=$1} --no-cache 2>/dev/null ); }
+# L1 (2026-09-19): the CLI default legend is compact. (T1)/(T2) read the budget LEDGER sentence and (T5) the root's
+# first attribute, both of the full legend's form (compact drops the prose ledger and leads the root with schema=), so
+# those three arms ask for it; (T3)/(T4)/(T6) keep reading the default posture's labels and bytes.
+tb_full(){ ( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" ${1:+--token-budget=$1} --no-cache --legend=full 2>/dev/null ); }
 allowance_of(){ python3 -c "import sys; print(int(int(sys.argv[1])*2.36*0.90*(1.15/0.90)))" "$1"; }
 
-# (T1) the ledger EXISTS and states both numbers, at every budget including the default.
-T1_DEF="$( tb_run '' )"
-printf '%s' "$T1_DEF" | grep -qE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' \
-    && ok "(T1) --from-trace states a budget ledger (budget= + allowance=)" \
-    || { no "(T1) no budget ledger in the --from-trace header"; printf '%s\n' "$T1_DEF" | head -c 400; }
+# (T1) the ledger EXISTS and states both numbers, at every budget including the default — in BOTH postures. L1 fix round
+# (rv-r1-L1 MED-1/LOW-5): L1 moved these arms to the full legend only, and the DEFAULT answer then dropped the allowance
+# (the ceiling actually applied, stated nowhere else) with no arm to notice. The default keeps it as a data comment,
+# `<!-- ledger: budget=N bytes (allowance M bytes = …) -->`; the full copy stays asserted beside it.
+for posture in full default; do
+    if [ "$posture" = full ]; then T1_DEF="$( tb_full '' )"; else T1_DEF="$( tb_run '' )"; fi
+    printf '%s' "$T1_DEF" | grep -qE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' \
+        && ok "(T1) [$posture] --from-trace states a budget ledger (budget= + allowance=)" \
+        || { no "(T1) [$posture] no budget ledger in the --from-trace header"; printf '%s\n' "$T1_DEF" | head -c 400; }
+done
 
 # (T2) the ledger's arithmetic is the family's, not a second constant — re-derived here from the tokens.
 for tb in 50 500 2000; do
     want="$( allowance_of "$tb" )"
-    got="$( tb_run "$tb" | grep -oE 'allowance [0-9]+ bytes' | head -1 | grep -oE '[0-9]+' )"
+    got="$( tb_full "$tb" | grep -oE 'allowance [0-9]+ bytes' | head -1 | grep -oE '[0-9]+' )"
     [ "$got" = "$want" ] \
-        && ok "(T2) --token-budget=$tb allowance=$got == tokens x 2.36 x 1.15 (== ceilingAllowanceBytes)" \
-        || no "(T2) --token-budget=$tb allowance=$got, expected $want — the lens drifted off the shared arithmetic"
+        && ok "(T2) [full] --token-budget=$tb allowance=$got == tokens x 2.36 x 1.15 (== ceilingAllowanceBytes)" \
+        || no "(T2) [full] --token-budget=$tb allowance=$got, expected $want — the lens drifted off the shared arithmetic"
+    got="$( tb_run "$tb" | grep -oE '<!-- ledger: budget=[0-9]+ bytes \(allowance [0-9]+ bytes' | head -1 | grep -oE 'allowance [0-9]+' | grep -oE '[0-9]+' )"
+    [ "$got" = "$want" ] \
+        && ok "(T2) [default] --token-budget=$tb keeps the allowance=$got ledger as data (== the full dialect's)" \
+        || no "(T2) [default] --token-budget=$tb allowance='$got', expected $want in a kept <!-- ledger: --> comment — the default dropped the ceiling it applied"
 done
 
 # (T3) an overrun is LABELLED. A budget this small cannot fit the first whole signature, so the honest
@@ -529,9 +546,10 @@ T4="$( tb_run 20000 )";  t4n=$( printf '%s' "$T4" | wc -c | tr -d ' ' );  t4a="$
 # (T5) §B1.7 root attrs — the trace SOURCE is this lens's request text and is now carried VERBATIM in the
 #      task= attribute (ctxRootOpen), beside the lossy readable echo in the comment. The bundle opened with a
 #      bare <ctx> before, so a consumer had no machine-readable copy of what it had asked about at all.
-printf '%s' "$T1_DEF" | grep -q '^<ctx task="traces/py.txt"' \
+T5_FULL="$( tb_full '' )"   # the full legend's root (the compact one leads with schema=); T1_DEF above ends on the default posture
+printf '%s' "$T5_FULL" | grep -q '^<ctx task="traces/py.txt"' \
     && ok "(T5) the bundle root carries the verbatim source (ctxRootOpen task=)" \
-    || { no "(T5) <ctx> has no verbatim task= root attribute"; printf '%s' "$T1_DEF" | head -c 80; echo; }
+    || { no "(T5) <ctx> has no verbatim task= root attribute"; printf '%s' "$T5_FULL" | head -c 80; echo; }
 
 # (T6) every budgeted shape stays G4-clean and byte-deterministic — the ladder must not be able to splice a
 #      header that breaks the document, and its choice is a pure function of its inputs.

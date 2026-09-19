@@ -43,7 +43,9 @@ refuseCase nonsense
 refuseCase notaref9z          # the digit used to slip past looksLikeDate and become an arbitrary window
 
 # ── 2. a VALID window is reported honestly in BOTH places — attribute and header comment (§P9 N7)
-"$BIN" "$ROOT" --hotspots --since="2 weeks ago" >"$TMP/ok" 2>/dev/null; rc=$?
+# L1 (2026-09-19): the CLI default legend is compact (root leads with schema=, no (window=...) header clause); these
+# arms read the full-default root start-tag and the FULL legend's prose, so they ask for --legend=full.
+"$BIN" "$ROOT" --hotspots --since="2 weeks ago" --legend=full >"$TMP/ok" 2>/dev/null; rc=$?
 if [ "$rc" -eq 0 ]; then ok '--since="2 weeks ago": exit 0'; else no "--since=\"2 weeks ago\": exit $rc (expected 0)"; fi
 grep -q '<hotspots window="2 weeks ago"' "$TMP/ok" && ok 'window= says "2 weeks ago"' \
     || no "window= is not \"2 weeks ago\": $( grep -oE '<hotspots [^>]*' "$TMP/ok" | head -c 120 )"
@@ -53,13 +55,13 @@ grep -q '(window=12mo)' "$TMP/ok" && no 'header comment still hardcodes (window=
     || ok 'header comment no longer hardcodes 12mo'
 
 # a revision boundary is the deterministic form and must keep working
-"$BIN" "$ROOT" --hotspots --since=HEAD~5 >"$TMP/rev" 2>/dev/null; rcr=$?
+"$BIN" "$ROOT" --hotspots --since=HEAD~5 --legend=full >"$TMP/rev" 2>/dev/null; rcr=$?
 [ "$rcr" -eq 0 ] && grep -q '<hotspots window="HEAD~5"' "$TMP/rev" \
     && ok "--since=HEAD~5 (revision) still scopes and exits 0" \
     || no "--since=HEAD~5: exit $rcr without window=\"HEAD~5\""
 
 # ── 3. no --since at all: the default window, in both places, unchanged
-"$BIN" "$ROOT" --hotspots >"$TMP/def" 2>/dev/null; rcd=$?
+"$BIN" "$ROOT" --hotspots --legend=full >"$TMP/def" 2>/dev/null; rcd=$?
 # F1 (round C): the default window is HEAD-anchored and its label says so, in BOTH places — the attribute
 # and the header comment must still agree, which is the property this arm exists for.
 [ "$rcd" -eq 0 ] && grep -q '<hotspots window="12mo@HEAD"' "$TMP/def" && grep -q '(window=12mo@HEAD)' "$TMP/def" \
@@ -113,7 +115,7 @@ else
         || no "--hotspots files=$HS_FILES disagrees with the map's files=${MAP_FILES:-<unread>}"
     # the legend must SAY that no_churn conflates a quiet file with one the git-path join never bound —
     # otherwise the number reads as a measure of quietness, which it is not.
-    "$BIN" "$ROOT" --hotspots 2>/dev/null | grep -oE '<!--[^>]*-->' | head -1 | grep -q 'join never bound' \
+    "$BIN" "$ROOT" --hotspots --legend=full 2>/dev/null | grep -oE '<!--[^>]*-->' | head -1 | grep -q 'join never bound' \
         && ok "--hotspots legend states that unranked_no_churn conflates quiet files with unbound ones" \
         || no "--hotspots legend does not disclose what unranked_no_churn conflates"
 fi

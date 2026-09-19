@@ -83,7 +83,8 @@ legend(){ sed 's/<doctor .*//' "$1" | head -c 20000; }
 # (A) THE ROW EXISTS — --doctor carries an index-cache check at all, and doctor's own checks= denominator
 #     counts it (a row that does not move the denominator is a row half the parsers will never see).
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
-"$BIN" "$FIXTURE" --doctor > "$TMP/doc_auto.xml" 2> "$TMP/doc_auto.err"
+# L1 (2026-09-19): the CLI default legend is compact; (A) reads the full-posture root shape and (C) the FULL legend's prose, so this run asks for it.
+"$BIN" "$FIXTURE" --doctor --legend=full > "$TMP/doc_auto.xml" 2> "$TMP/doc_auto.err"
 R_AUTO="$( row "$TMP/doc_auto.xml" )"
 if [ -n "$R_AUTO" ]; then
     ok "(A) --doctor emits <c n=\"index-cache\">"

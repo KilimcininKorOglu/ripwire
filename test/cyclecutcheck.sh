@@ -98,7 +98,8 @@ fi
 #        that --deps on test/fixture emits NO <cycles> block (nothing to be neutral about going wrong).
 FX="$ROOT/test/fixture"
 if [ -d "$FX" ]; then
-    FD="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$FX" --deps --no-cache 2>/dev/null )"
+    # L1 (2026-09-19): the CLI default legend is compact and names <cycles> inside its comment; this arm looks for a real block, so it asks for the full legend.
+    FD="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$FX" --deps --no-cache --legend=full 2>/dev/null )"
     if printf '%s' "$FD" | grep -q '<cycles>'; then
         no "test/fixture unexpectedly has a <cycles> block — golden-neutrality assumption invalid, recheck regression.sh golden"
     else

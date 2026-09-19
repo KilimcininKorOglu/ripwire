@@ -132,7 +132,8 @@ expect_rows Gauge.count   "(B) Gauge.count"   "write shapes.cpp:28" "write shape
 expect_rows Gauge.level   "(B) Gauge.level"   "write shapes.cpp:27" "read shapes.cpp:27" "read shapes.cpp:43"
 expect_rows Counter.step  "(B) Counter.step"  "read shapes.cpp:11"
 expect_rows Counter.label "(B) Counter.label" "write shapes.cpp:40"
-CC="$( "$BIN" "$FIX" --uses=Counter.count --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; (I) reads the FULL legend's prose off $CC, so this run asks for it.
+CC="$( "$BIN" "$FIX" --uses=Counter.count --no-cache --legend=full 2>/dev/null )"
 if [ "$( attr count "$CC" )" = "9" ]; then ok '(B) Counter.count count="9"'; else no "(B) Counter.count count=$( attr count "$CC" ) (want 9)"; fi
 if [ "$( attr pinned "$CC" )" = "8" ]; then ok '(B) Counter.count pinned="8"'; else no "(B) Counter.count pinned=$( attr pinned "$CC" ) (want 8)"; fi
 if [ "$( attr amb_sites "$CC" )" = "1" ]; then ok '(B) Counter.count amb_sites="1"'; else no "(B) Counter.count amb_sites=$( attr amb_sites "$CC" ) (want 1)"; fi

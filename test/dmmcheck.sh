@@ -171,7 +171,9 @@ attr(){ printf '%s' "$2" | grep -o " $1=\"[^\"]*\"" | head -1 | sed 's/^.*="//; 
 expect(){
     local label="$1" range="$2" ec="$3" es="$4" ex="$5" ei="$6"
     local out ac as ax ai
-    out="$( "$BIN" "$FX" "--dmm=$range" 2>"$TMP/err" )"
+    # L1 (2026-09-19): the CLI default legend is compact and spells <p k= dmm=> inside its comment, which rootOf would cut at;
+    # every --dmm run read here (and the (N) full-legend-honesty arm) asks for the full legend.
+    out="$( "$BIN" "$FX" "--dmm=$range" --legend=full 2>"$TMP/err" )"
     if [ -z "$out" ]; then no "$label: --dmm=$range produced no output ($( head -1 "$TMP/err" ))"; return; fi
     ac="$( attr dmm "$( rootOf "$out" )" )"
     as="$( attr dmm "$( propOf "$out" size )" )"
@@ -207,7 +209,7 @@ expect "(E) interfacing 3 is HIGH (c10)"  "$C9..$C10" 0.667 1.000 1.000 0.000
 expect "(F) params-only change (c11)" "$C10..$C11" 0.000 UNAVAILABLE UNAVAILABLE 0.000
 
 # the integers behind (F) must be visible, not just the ratio
-f_out="$( "$BIN" "$FX" "--dmm=$C10..$C11" 2>/dev/null )"
+f_out="$( "$BIN" "$FX" "--dmm=$C10..$C11" --legend=full 2>/dev/null )"
 f_if="$( propOf "$f_out" interfacing )"
 if [ "$( attr d_low "$f_if" )" = "-4" ] && [ "$( attr d_high "$f_if" )" = "4" ] \
    && [ "$( attr good "$f_if" )" = "0" ] && [ "$( attr bad "$f_if" )" = "8" ]
@@ -216,15 +218,15 @@ else no "(F) interfacing deltas wrong: $f_if"
 fi
 
 # ── (G) the single-rev form is REV~1..REV ─────────────────────────────────────────────────────────────────
-g_one="$( "$BIN" "$FX" "--dmm=$C6" 2>/dev/null )"
-g_two="$( "$BIN" "$FX" "--dmm=$C5..$C6" 2>/dev/null )"
+g_one="$( "$BIN" "$FX" "--dmm=$C6" --legend=full 2>/dev/null )"
+g_two="$( "$BIN" "$FX" "--dmm=$C5..$C6" --legend=full 2>/dev/null )"
 if [ -n "$g_one" ] && [ "$g_one" = "$g_two" ]
 then ok "(G) --dmm=REV is byte-identical to --dmm=REV~1..REV"
 else no "(G) --dmm=REV disagreed with --dmm=REV~1..REV"
 fi
 
 # ── (I) the root commit has no parent ─────────────────────────────────────────────────────────────────────
-i_out="$( "$BIN" "$FX" "--dmm=$C0" 2>/dev/null )"; i_rc=$?
+i_out="$( "$BIN" "$FX" "--dmm=$C0" --legend=full 2>/dev/null )"; i_rc=$?
 i_root="$( rootOf "$i_out" )"
 if [ $i_rc -eq 0 ] && [ "$( attr available "$i_root" )" = "0" ] && [ "$( attr dmm "$i_root" )" = "UNAVAILABLE" ] \
    && [ -n "$( attr reason "$i_root" )" ]
@@ -234,7 +236,7 @@ fi
 
 # ── (H) the working-tree default ──────────────────────────────────────────────────────────────────────────
 printf '\nint tiny3( int a )\n{\n    return a + 9;\n}\n' >> "$FX/a.c"
-h_out="$( "$BIN" "$FX" --dmm 2>/dev/null )"; h_rc=$?
+h_out="$( "$BIN" "$FX" --dmm --legend=full 2>/dev/null )"; h_rc=$?
 h_root="$( rootOf "$h_out" )"
 if [ $h_rc -eq 0 ] && [ "$( attr dmm "$h_root" )" = "1.000" ] && [ "$( attr target "$h_root" )" = "working-tree" ]
 then ok "(H) working-tree default scores the uncommitted tree against HEAD: 1.000"
@@ -243,8 +245,8 @@ fi
 git -C "$FX" checkout -q -- a.c
 
 # ── (L) determinism ───────────────────────────────────────────────────────────────────────────────────────
-"$BIN" "$FX" "--dmm=$C1..$C2" >"$TMP/d1" 2>/dev/null
-"$BIN" "$FX" "--dmm=$C1..$C2" >"$TMP/d2" 2>/dev/null
+"$BIN" "$FX" "--dmm=$C1..$C2" --legend=full >"$TMP/d1" 2>/dev/null
+"$BIN" "$FX" "--dmm=$C1..$C2" --legend=full >"$TMP/d2" 2>/dev/null
 if cmp -s "$TMP/d1" "$TMP/d2"; then ok "(L) two runs are byte-identical"; else no "(L) output is not deterministic"; fi
 
 # ── (M) well-formedness ───────────────────────────────────────────────────────────────────────────────────
@@ -272,7 +274,7 @@ else no "(N) attributes emitted but undefined in the legend:$missing"; fi
 # ── (J) a non-git root degrades, it does not crash or lie ─────────────────────────────────────────────────
 mkdir -p "$TMP/plain"
 cp "$FX/a.c" "$TMP/plain/a.c"
-j_out="$( "$BIN" "$TMP/plain" --dmm 2>/dev/null )"; j_rc=$?
+j_out="$( "$BIN" "$TMP/plain" --dmm --legend=full 2>/dev/null )"; j_rc=$?
 j_root="$( rootOf "$j_out" )"
 if [ $j_rc -eq 0 ] && [ "$( attr available "$j_root" )" = "0" ] && [ -n "$( attr reason "$j_root" )" ]
 then ok "(J) non-git root: available=0 with a reason, exit 0"

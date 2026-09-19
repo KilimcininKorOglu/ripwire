@@ -209,7 +209,9 @@ CPP
 git -C "$FIX" commit -q -am "split the router" >/dev/null 2>&1
 
 FIXOUT="$TMP/fixture.xml"
-"$BIN" "$FIX" --naming-calibration >"$FIXOUT" 2>"$TMP/fixture.err"
+# L1 (2026-09-19): the CLI default legend is compact; the honesty arm reads the FULL legend's NOISY PROXY caveat,
+# so this run (and its determinism twin) ask for it.
+"$BIN" "$FIX" --naming-calibration --legend=full >"$FIXOUT" 2>"$TMP/fixture.err"
 rc=$?
 if [ "$rc" = "0" ]; then ok "instrument: exit 0 (a measurement, never a verdict)"; else no "instrument: exit $rc, expected 0"; fi
 
@@ -276,7 +278,7 @@ grep -q 'o="oldRouter"' "$FIXOUT" && no "instrument: a one-to-many split was sco
     || no "instrument: drop_new_absent=$( attr "$hdr" drop_new_absent ), expected >=1"
 
 # determinism, well-formedness, minification, and the G5 additivity contract
-"$BIN" "$FIX" --naming-calibration >"$TMP/fixture2.xml" 2>/dev/null
+"$BIN" "$FIX" --naming-calibration --legend=full >"$TMP/fixture2.xml" 2>/dev/null
 if cmp -s "$FIXOUT" "$TMP/fixture2.xml"; then ok "instrument: two runs byte-identical"; else no "instrument: NOT deterministic"; fi
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$FIXOUT" 2>/dev/null; then ok "instrument: XML well-formed"; else no "instrument: XML not well-formed"; fi

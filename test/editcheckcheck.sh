@@ -37,7 +37,9 @@ EOF
 
 echo "editcheckcheck: BIN=$BIN  (temp git repo)"
 
-ec(){ ( cd "$WORK" && "$BIN" . --edit-check="$1" --no-cache 2>/dev/null ); }
+# L1 (2026-09-19): the CLI default legend is compact (its root also carries schema= before sym=); these arms read the FULL
+# legend's prose and pin the full-default <edit-check sym= spelling, so ec()/sec() ask for the full legend.
+ec(){ ( cd "$WORK" && "$BIN" . --edit-check="$1" --no-cache --legend=full 2>/dev/null ); }
 ecrc(){ ( cd "$WORK" && "$BIN" . --edit-check="$1" --no-cache >/dev/null 2>&1; echo $? ); }
 
 # ── (1) clean tree -> unchanged, exit 0, and lists the one known caller ────────────────────────────────
@@ -246,7 +248,7 @@ int callerTwo( void ) { return widget( 1, 2 ); }
 EOF
 ( cd "$SHRINK" && git init -q && git config user.email t@t && git config user.name t \
   && git add -A && git commit -qm init >/dev/null 2>&1 )
-sec(){ ( cd "$SHRINK" && "$BIN" . --edit-check="$1" --no-cache 2>/dev/null ); }
+sec(){ ( cd "$SHRINK" && "$BIN" . --edit-check="$1" --no-cache --legend=full 2>/dev/null ); }
 
 OUTG0="$( sec widget )"
 { printf '%s' "$OUTG0" | grep -q 'status="unchanged"' && [ "$( defs_of "$OUTG0" )" = 'defs="2"' ] \

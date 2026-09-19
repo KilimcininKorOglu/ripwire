@@ -136,7 +136,9 @@ echo
 echo "=== M2/M13 — exemplar goes through selectExemplar; MCP == CLI (both arms) ==="
 # The probe the finding used: a nonsense task. The CLI flags low_confidence and falls back to fn; the
 # hand-rolled MCP clone returned a confident pick of a different kind. Byte-compare the <exemplar> tag.
-CLI_EX="$( "$BIN" "$ROOT" --exemplar="zzz qqq wibble" 2>/dev/null | tr '<' '\n' | grep '^exemplar ' | head -1 )"
+# L1 (2026-09-19): the CLI default legend is compact; the MCP twins here ask legend:"full" (M1), so the CLI operand
+# asks for the full legend too (M2/M4 byte-compare the root tag; M13 greps a wording that lives in the full legend).
+CLI_EX="$( "$BIN" "$ROOT" --exemplar="zzz qqq wibble" --legend=full 2>/dev/null | tr '<' '\n' | grep '^exemplar ' | head -1 )"
 LIVE_EX="$( mcp_text "$( call exemplar '{"path":"'"$ROOT"'","kind":"zzz qqq wibble"}' )" | tr '<' '\n' | grep '^exemplar ' | head -1 )"
 BAT_EX="$( batch_sub '{"verb":"exemplar","task":"zzz qqq wibble"}' | tr '<' '\n' | grep '^exemplar ' | head -1 )"
 [ -n "$CLI_EX" ] || no "M2: the CLI --exemplar probe produced no <exemplar> tag (probe broken, not the tool)"
@@ -151,7 +153,7 @@ case "$LIVE_EX" in *'low_confidence="1"'*) ok "M2: low_confidence= is REACHABLE 
 # M13: one wording, three surfaces. The selection rule is exemplar.h's constant, so a distinctive phrase
 # from it must appear in the CLI legend, the MCP legend AND the tools/list description.
 RULE='chosen by ROLE, NEVER by text similarity'
-"$BIN" "$ROOT" --exemplar=fn 2>/dev/null | grep -qF "$RULE" && m13cli=1 || m13cli=0
+"$BIN" "$ROOT" --exemplar=fn --legend=full 2>/dev/null | grep -qF "$RULE" && m13cli=1 || m13cli=0
 mcp_text "$( call exemplar '{"path":"'"$ROOT"'","kind":"fn"}' )" | grep -qF "$RULE" && m13mcp=1 || m13mcp=0
 grep -qF "$RULE" "$TMP/tools.json" && m13list=1 || m13list=0
 [ "$m13cli$m13mcp$m13list" = "111" ] \
@@ -176,7 +178,7 @@ echo
 echo "=== M4 — limit/offset are HONORED (both arms), byte-identically to the CLI ==="
 IMP_LIVE="$( mcp_text "$( call impact '{"path":"'"$ROOT"'","symbol":"escapeXml","limit":3,"offset":2}' )" | tr '<' '\n' | grep '^impact ' | head -1 )"
 IMP_BAT="$( batch_sub '{"verb":"impact","symbol":"escapeXml","limit":3,"offset":2}'                        | tr '<' '\n' | grep '^impact ' | head -1 )"
-IMP_CLI="$( "$BIN" "$ROOT" --impact=escapeXml --limit=3 --offset=2 2>/dev/null | tr '<' '\n' | grep '^impact ' | head -1 )"
+IMP_CLI="$( "$BIN" "$ROOT" --impact=escapeXml --limit=3 --offset=2 --legend=full 2>/dev/null | tr '<' '\n' | grep '^impact ' | head -1 )"
 [ -n "$IMP_CLI" ] || no "M4: the CLI --impact probe produced no <impact> tag (probe broken)"
 [ "$IMP_LIVE" = "$IMP_CLI" ] \
     && ok "M4 [live]: paged <impact> is byte-identical to --impact --limit=3 --offset=2" \

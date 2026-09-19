@@ -204,7 +204,8 @@ else
 fi
 
 # ── 4. PARITY — results count == native --lint findings count, same run ─────────────────────────
-"$BIN" "$CORPUS" --lint --no-cache >"$TMP/native.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema=; NATIVE_N reads findings= as the root's first attribute, so the native run asks for the full legend.
+"$BIN" "$CORPUS" --lint --no-cache --legend=full >"$TMP/native.xml" 2>/dev/null
 NATIVE_N="$( grep -oE '<lint findings="[0-9]+"' "$TMP/native.xml" | head -1 | grep -oE '[0-9]+' )"
 SARIF_N="$( python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['runs'][0]['results']))" "$TMP/out1.json" 2>/dev/null )"
 if [ -n "${NATIVE_N:-}" ] && [ -n "${SARIF_N:-}" ] && [ "$NATIVE_N" = "$SARIF_N" ]; then

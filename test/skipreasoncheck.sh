@@ -122,7 +122,9 @@ fi
                  || no "(2) unsupported_ext=$UNS, want 4"
 
 # ── (3) unindexed= on the DEFAULT map ────────────────────────────────────────────────────────────────
-"$BIN" corpus --no-cache > "$TMP/map.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact, which defines unindexed= in the map legend by design; the (9) negative
+# arm guards the FULL map legend's --max-tokens headroom, so this run asks for the full legend (the header attribute is posture-free).
+"$BIN" corpus --no-cache --legend=full > "$TMP/map.xml" 2>/dev/null
 UNIDX="$( python3 - "$TMP/map.xml" <<'PY'
 import re,sys
 x=open(sys.argv[1]).read(); m=re.search(r'unindexed="([^"]*)"',x)
@@ -181,7 +183,8 @@ printf 'int genThing( void ) { return 5; }\n'    > "$TMP/pruned/genstuff/g.cpp"
     && ok "(8) fixture has a source file under each of the 3 built-in-pruned subtrees" \
     || no "(8) fixture is missing a pruned-subtree source file — the arms below would pass by finding nothing"
 
-"$BIN" pruned --skipped --no-cache > "$TMP/prune_plain.xml" 2>/dev/null
+# L1 (2026-09-19): arms (8)/(9) read the FULL --skipped legend's prose from this run, so it asks for the full legend.
+"$BIN" pruned --skipped --no-cache --legend=full > "$TMP/prune_plain.xml" 2>/dev/null
 PR_PLAIN="$( attr "$TMP/prune_plain.xml" pruned_dirs )"
 EX_PLAIN="$( attr "$TMP/prune_plain.xml" excluded_dirs )"
 echo "    (8) no --exclude: pruned_dirs=\"$PR_PLAIN\" excluded_dirs=\"$EX_PLAIN\""

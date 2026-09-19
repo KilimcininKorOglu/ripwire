@@ -95,7 +95,9 @@ EOF
 
 echo "chainguardcheck: BIN=$BIN  CORPUS=$FIX + $FIX2 (generated)"
 
-MAP="$( "$BIN" "$FIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+# L1 (2026-09-19): the CLI default legend is compact and spells ambiguous=/edges= inside its comment; arms (i)/(j)
+# read the real header gauges, so the two maps they read ask for the full legend.
+MAP="$( "$BIN" "$FIX" --no-cache --legend=full 2>/dev/null | tr '>' '\n' )"
 callees(){ "$BIN" "$FIX" "--callees=$1" --no-cache 2>/dev/null | grep -o '<callees.*</callees>' | tr '/' '\n'; }
 
 # ── presence guards (a gate that cannot observe what it asserts is green-while-inert) ──
@@ -203,7 +205,7 @@ EDG="$( printf '%s\n' "$MAP" | grep -o 'edges=[0-9]*' | head -1 )"
     || no "(i) header gauge is '$EDG', expected edges=15 — a recovered edge is missing or one was lost"
 
 # ── (j) cross-language stability (FIX2): Python/TS chained-call edges are byte-stable ─────────────────
-MAP2="$( "$BIN" "$FIX2" --no-cache 2>/dev/null | tr '>' '\n' )"
+MAP2="$( "$BIN" "$FIX2" --no-cache --legend=full 2>/dev/null | tr '>' '\n' )"
 printf '%s\n' "$MAP2" | grep -qF 'n="go" sc="PApp"' || no "(j) presence guard: PApp.go not indexed in FIX2"
 GO2="$( "$BIN" "$FIX2" --callees=go --no-cache 2>/dev/null | grep -o '<callees.*</callees>' | tr '/' '\n' )"
 ( printf '%s\n' "$GO2" | grep -q 'p.py:2"' ) && ( printf '%s\n' "$GO2" | grep -q 'p.py:6"' ) \

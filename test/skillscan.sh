@@ -119,7 +119,9 @@ fi
 # purely about the NEW stdout element.
 
 # ── check 14: a clean single-file scan still emits `<skillscan>` with findings="0" verdict="clean" ─────
-"$BIN" "--scan-skill=$ROOT/test/skillfix/clean.md" >"$TMP/clean_out.txt" 2>/dev/null
+# L1 (2026-09-19): the CLI default posture is compact, whose root leads with schema=; checks 14/15/17 pin the full-posture
+# <skillscan files= …> root (byte-identical to the pre-change default), so these runs ask for --legend=full.
+"$BIN" "--scan-skill=$ROOT/test/skillfix/clean.md" --legend=full >"$TMP/clean_out.txt" 2>/dev/null
 if grep -q '<skillscan files="1" findings="0"[^>]* verdict="clean">' "$TMP/clean_out.txt" \
     && ! grep -q '<f ' "$TMP/clean_out.txt"; then
     ok "clean.md emits <skillscan files=\"1\" findings=\"0\" verdict=\"clean\"> with no <f> rows"
@@ -128,7 +130,7 @@ else
 fi
 
 # ── check 15: a CRITICAL single-file scan's artifact carries one <f> row per finding, sev + p="path:line" ─
-"$BIN" "--scan-skill=$ROOT/test/skillfix/inject.md" >"$TMP/inject_out.txt" 2>/dev/null
+"$BIN" "--scan-skill=$ROOT/test/skillfix/inject.md" --legend=full >"$TMP/inject_out.txt" 2>/dev/null
 INJECT_FROWS="$( grep -oE '<f ' "$TMP/inject_out.txt" | wc -l | tr -d ' ' )"
 [ "$INJECT_FROWS" = "3" ] && ok "inject.md <skillscan> has exactly 3 <f> rows (one per finding)" \
                           || no "inject.md <skillscan> has $INJECT_FROWS <f> rows, expected 3"
@@ -145,7 +147,7 @@ command -v xmllint >/dev/null 2>&1 \
     || ok "xml well-formed (xmllint absent — skipped)"
 
 # ── check 17: --scan-skills combines every scanned file into ONE <skillscan> artifact (files= == count) ─
-"$BIN" "--scan-skills=$ROOT/test/skillfix" >"$TMP/dir_out.txt" 2>"$TMP/dir_err.txt"
+"$BIN" "--scan-skills=$ROOT/test/skillfix" --legend=full >"$TMP/dir_out.txt" 2>"$TMP/dir_err.txt"
 DIR_SKILLSCAN_COUNT="$( grep -o '<skillscan ' "$TMP/dir_out.txt" | wc -l | tr -d ' ' )"
 [ "$DIR_SKILLSCAN_COUNT" = "1" ] && ok "--scan-skills emits exactly ONE <skillscan> artifact (not one per file)" \
                                   || no "--scan-skills emitted $DIR_SKILLSCAN_COUNT <skillscan> artifacts, expected 1"

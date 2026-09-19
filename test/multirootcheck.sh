@@ -68,7 +68,9 @@ run(){ TMPDIR="$CACHE" "$BIN" "$@"; }
 
 # ── G-solo: the N=1 quarantine — single-root output byte-identical to today's committed golden ──────
 # (relative root spelling, from $ROOT — the golden's paths are crawl-arg-prefixed `test/fixture/...`)
-( cd "$ROOT" && TMPDIR="$CACHE" "$BIN" test/fixture ) >"$TMP/solo.xml" 2>/dev/null
+# L1 (2026-09-19): test/golden.xml was recorded from the FULL-legend default; the CLI default is now compact, so
+# this run asks for --legend=full (the golden stays valid; rows are identical across postures).
+( cd "$ROOT" && TMPDIR="$CACHE" "$BIN" test/fixture --legend=full ) >"$TMP/solo.xml" 2>/dev/null
 if diff -q "$TMP/solo.xml" "$ROOT/test/golden.xml" >/dev/null; then ok "G-solo: N=1 byte-identical to test/golden.xml"
 else no "G-solo: N=1 output diverged from test/golden.xml"; fi
 

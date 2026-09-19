@@ -95,7 +95,8 @@ int orphan( void ) { return 3; }
 EOF
 
 echo "== P2.1 silent truncation: --impact =="
-"$BIN" "$SRC" --impact=leaf > "$TMP/impact.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; these arms count real rows ('<s ', '<m ', '<hit '), and the compact legend spells those row shapes inside its comment, so they ask for the full legend.
+"$BIN" "$SRC" --impact=leaf --legend=full > "$TMP/impact.xml" 2>/dev/null
 rch="$( attr "$TMP/impact.xml" reaches )"; shw="$( attr "$TMP/impact.xml" shown )"; cap="$( attr "$TMP/impact.xml" capped )"
 rows="$( grep -o '<s ' "$TMP/impact.xml" | wc -l | tr -d ' ' )"
 if [ "$rch" = "60" ]; then ok "--impact reaches=60 (true blast radius)"; else no "--impact reaches='$rch' (want 60)"; fi
@@ -121,14 +122,14 @@ if has "$TMP/impact.col" 'shown="40"'; then ok "--impact --format=columnar carri
 if has "$TMP/impact.col" 'capped="1"'; then ok "--impact --format=columnar carries capped"; else no "--impact columnar lost capped"; fi
 
 echo "== P2.1 silent truncation: --match / --grep / --seams / --external-surface =="
-"$BIN" "$SRC" --match='(call_expression function: (identifier) @f)' --pack-top-n=5 > "$TMP/match.xml" 2>/dev/null
+"$BIN" "$SRC" --match='(call_expression function: (identifier) @f)' --pack-top-n=5 --legend=full > "$TMP/match.xml" 2>/dev/null
 mh="$( attr "$TMP/match.xml" hits )"; ms="$( attr "$TMP/match.xml" shown )"; mc="$( attr "$TMP/match.xml" capped )"
 mrows="$( grep -o '<m ' "$TMP/match.xml" | wc -l | tr -d ' ' )"
 [ -n "$mh" ] && [ "$ms" = "5" ] && [ "$mc" = "1" ] && [ "$mrows" = "5" ] \
     && ok "--match hits=$mh shown=5 capped=1 over 5 rows" || no "--match hits='$mh' shown='$ms' capped='$mc' rows=$mrows"
 if has "$TMP/match.xml" 'hits_capped='; then ok "--match reports hits_capped (hits= floor vs total)"; else no "--match has no hits_capped"; fi
 
-"$BIN" "$SRC" --grep=leaf --pack-top-n=4 > "$TMP/grep.xml" 2>/dev/null
+"$BIN" "$SRC" --grep=leaf --pack-top-n=4 --legend=full > "$TMP/grep.xml" 2>/dev/null
 gh="$( attr "$TMP/grep.xml" hits )"; gs="$( attr "$TMP/grep.xml" shown )"; gc="$( attr "$TMP/grep.xml" capped )"
 grows="$( grep -o '<hit ' "$TMP/grep.xml" | wc -l | tr -d ' ' )"
 [ "$gs" = "4" ] && [ "$gc" = "1" ] && [ "$grows" = "4" ] \
@@ -366,7 +367,8 @@ if grep -q '<r[ >]' "$TMP/def1.xml"; then ok "default map still the bare, UNWRAP
 
 # the hard G5 proof: the committed golden for test/fixture must still match byte-for-byte.
 if [ -f "$ROOT/test/golden.xml" ]; then
-    ( cd "$ROOT" && "$BIN" test/fixture --no-cache > "$TMP/gold.now" 2>/dev/null )
+    # L1 (2026-09-19): the CLI default legend is compact; test/golden.xml was recorded from the full default, so this run asks for it.
+    ( cd "$ROOT" && "$BIN" test/fixture --no-cache --legend=full > "$TMP/gold.now" 2>/dev/null )
     cmp -s "$TMP/gold.now" "$ROOT/test/golden.xml" && ok "test/golden.xml still byte-identical (default output unchanged)" \
                                                   || no "test/golden.xml DIFFERS — the default map changed"
 fi
@@ -492,14 +494,15 @@ else
     fi
 fi
 # the claim itself must still be printed, or (Z2a) is asserting against nothing
-"$BIN" "$ZSB" --grep=ZEROMARK_probe --no-cache 2>/dev/null | grep -q 'always EMITTED, never suppressed' \
+# L1 (2026-09-19): the CLI default legend is compact; the (Z2a)/(Z2h) presence guards read the FULL legend's prose, so they ask for it.
+"$BIN" "$ZSB" --grep=ZEROMARK_probe --no-cache --legend=full 2>/dev/null | grep -q 'always EMITTED, never suppressed' \
     && ok "(Z2a) presence guard: the legend clause under test is still printed by the verb" \
     || no "(Z2a) presence guard: --grep no longer prints the 'always EMITTED, never suppressed' clause"
 
 # ── (Z2h) regex_lines_skipped= — "(regex only, always present)" ─────────────────────────────────────
 # The long-line count is the proof that no line was kept from the regex engine, so "0" must ride; absence would read
 # equally as "none skipped" and "the emitter dropped it".
-"$BIN" "$ZSB" --regex='ZEROMARK_probe' --no-cache >"$TMP/z2h.xml" 2>/dev/null
+"$BIN" "$ZSB" --regex='ZEROMARK_probe' --no-cache --legend=full >"$TMP/z2h.xml" 2>/dev/null
 zRegexRoot="$( grep -o '<grep [^>]*>' "$TMP/z2h.xml" | head -1 )"
 if [ -z "$zRegexRoot" ]; then
     no "(Z2h) presence guard: --regex produced no <grep> root on the zero corpus — the probe is inert"

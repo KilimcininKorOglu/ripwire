@@ -300,8 +300,9 @@ printf '%s' "$A_OUT" | grep -q 'complete="1"' \
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (8) the legend defines the tier vocabulary exactly when it appears ==="
 # ═══════════════════════════════════════════════════════════════════════════
-D_LEGEND="$( printf '%s' "$D_OUT" | grep -o '<!--.*-->' | head -1 )"
-A_LEGEND="$( printf '%s' "$A_OUT" | grep -o '<!--.*-->' | head -1 )"
+# L1 (2026-09-19): the CLI default legend is compact; (8)/(8b) read the FULL legend's tier prose, so both legends are taken from full-legend runs.
+D_LEGEND="$( "$BIN" "$SB" --no-cache --grep=TIERTOKEN_frob --legend=full 2>/dev/null | grep -o '<!--.*-->' | head -1 )"
+A_LEGEND="$( "$BIN" "$SB" --no-cache --grep=TIERTOKEN_frob --grep-in=any --legend=full 2>/dev/null | grep -o '<!--.*-->' | head -1 )"
 printf '%s' "$D_LEGEND" | grep -qi 'suppressed_comment' \
     && ok "(8) the suppressing answer defines its own tier attributes in-band" \
     || no "(8) rows were suppressed and the legend never said what suppressed_comment means"

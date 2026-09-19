@@ -248,8 +248,9 @@ mkdir -p "$TMP/plain"; printf 'int main(){return 0;}\n' > "$TMP/plain/m.cpp"
 if [ $? -eq 1 ]; then ok "--stray-content --abi on a non-git root refuses loudly (exit 1)"; else no "--stray-content --abi on a non-git root did not exit 1"; fi
 
 # ── 1) the real run: exit code, determinism, xmllint ──────────────────────────────────────────────────
-"$BIN" "$R" --stray-content --abi >"$TMP/a" 2>/dev/null; rc=$?
-"$BIN" "$R" --stray-content --abi >"$TMP/b" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; the §L10b arms read the FULL legend's prose, so this run asks for it.
+"$BIN" "$R" --stray-content --abi --legend=full >"$TMP/a" 2>/dev/null; rc=$?
+"$BIN" "$R" --stray-content --abi --legend=full >"$TMP/b" 2>/dev/null
 if cmp -s "$TMP/a" "$TMP/b"; then ok "abi determinism (byte-identical)"; else no "abi output is non-deterministic"; fi
 if [ "$rc" -eq 2 ]; then ok "exit 2 (a real drift is present)"; else no "exit code was $rc, want 2 (feat-abi-break is a real drift)"; fi
 S="$( cat "$TMP/a" )"

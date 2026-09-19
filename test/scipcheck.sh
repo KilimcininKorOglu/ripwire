@@ -53,7 +53,8 @@ fi
 IDX="$TMP/index.scip"    # use the fresh one for the rest of the gate
 
 # 1) BASELINE (no --scip): ambiguous>0 and the run→handler call is a SPLIT edge (two handler children).
-BASE="$( "$BIN" "$CORPUS" $EXC --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and defines `ambiguous=`/`precise=` in its comment; these arms read the header's values, so they ask for the full legend.
+BASE="$( "$BIN" "$CORPUS" $EXC --no-cache --legend=full 2>/dev/null )"
 AMB_BASE="$( printf '%s' "$BASE" | grep -o 'ambiguous=[0-9]*' | head -1 | grep -o '[0-9]*' )"
 [ -n "$AMB_BASE" ] && [ "$AMB_BASE" -gt 0 ] && ok "baseline ambiguous=$AMB_BASE (>0, resolver guessed)" \
     || { no "baseline ambiguous not >0 (got '${AMB_BASE:-none}')"; printf '    %s\n' "$BASE"; }
@@ -64,7 +65,7 @@ N_BASE="$( printf '%s' "$RUN_BASE" | grep -c 'n="handler"' )"
     || { no "baseline run→handler not split (found $N_BASE handler edges, want 2)"; printf '    %s\n' "$RUN_BASE"; }
 
 # 2) OVERLAY (--scip): exactly ONE precise handler edge with prov="scip", ambiguous reduced, precise=1.
-OV="$( "$BIN" "$CORPUS" --scip="$IDX" $EXC --no-cache 2>/dev/null )"
+OV="$( "$BIN" "$CORPUS" --scip="$IDX" $EXC --no-cache --legend=full 2>/dev/null )"
 AMB_OV="$( printf '%s' "$OV" | grep -o 'ambiguous=[0-9]*' | head -1 | grep -o '[0-9]*' )"
 [ -n "$AMB_OV" ] && [ "$AMB_OV" -lt "$AMB_BASE" ] && ok "ambiguous reduced by SCIP ($AMB_BASE → $AMB_OV)" \
     || { no "ambiguous not reduced (baseline=$AMB_BASE overlay=${AMB_OV:-none})"; printf '    %s\n' "$OV"; }

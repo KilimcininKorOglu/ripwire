@@ -51,10 +51,12 @@ run_doctor()
 {
     HOME="$HOME_FAKE" CODEX_HOME="$CODEX_FAKE" AGENTS_HOME="$AGENTS_FAKE" \
         PATH="$BINDIR:/usr/bin:/bin" TMPDIR="$CACHE" \
-        "$BINDIR/ripwire" "$REPO" --doctor --agent=codex --no-cache 2>&1
+        "$BINDIR/ripwire" "$REPO" --doctor --agent=codex --no-cache "$@" 2>&1
 }
 
-OUT="$( run_doctor )"; RC=$?
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; the checks= read below
+# anchors on the full-posture `<doctor checks=` shape, so this run asks for --legend=full (rows identical).
+OUT="$( run_doctor --legend=full )"; RC=$?
 if [ "$RC" -eq 0 ]; then ok "fully wired fake Codex surface exits 0"; else no "healthy Codex doctor exited $RC: $OUT"; fi
 # DERIVED, not pinned at 10: what this arm actually asserts is that --agent=codex adds exactly FOUR rows to
 # whatever the base doctor emits, that every row passed on a fully wired surface, and that the report is

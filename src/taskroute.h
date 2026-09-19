@@ -17,7 +17,6 @@
 #include "query.h"           // isKnownLayerWord — the layer vocabulary --verify enforces at evaluation
 #include "sarif.h"           // rootRelativeUri / rootPrefixOf — the ONE root-relative path rule the map emits with
 #include "verify.h"          // parseClaim — the SHIPPED claim grammar; the router never re-implements it
-#include "compactlegend.h"  // rw::legendCompactAppliesTo — ONE answer to "does --legend=compact apply here"
 #include "commentcoherence.h" // rw::isCommentStopword — the general-English stoplist, reused rather than duplicated
 
 namespace rw::taskroute
@@ -908,7 +907,7 @@ inline std::optional<RouteChoice> instrumentedTaskChoice( std::string_view task,
         if( !quoted.empty() )
         {
             return RouteChoice{ "grep-handles", "ripwire-mcp", "safe-edit handle wording plus a quoted literal to anchor them",
-                                commandWithValue( root, "--grep=", quoted ) + " --handles --legend=compact", 100, 88 };
+                                commandWithValue( root, "--grep=", quoted ) + " --handles", 100, 88 };
         }
     }
     if( has( lower, "compact legend" ) || ( has( lower, "legend" ) && has( lower, "compact" ) ) )
@@ -920,13 +919,13 @@ inline std::optional<RouteChoice> instrumentedTaskChoice( std::string_view task,
      && ( has( lower, "doctor" ) || has( lower, "integration" ) || has( lower, "wired" ) || has( lower, "set up" ) || has( lower, "setup" ) ) )
     {
         return RouteChoice{ "codex-doctor", "ripwire-mcp", "codex plus integration/health wording",
-                            ripRoot + "--doctor --agent=codex --legend=compact", 100, 86 };
+                            ripRoot + "--doctor --agent=codex", 100, 86 };
     }
     if( ( has( lower, "shell gate" ) || has( lower, "test gate" ) || has( lower, "test-gate" ) )
      && ( has( lower, "evidence" ) || has( lower, "why" ) || has( lower, "which" ) || has( lower, "picked" ) || has( lower, "chose" ) ) )
     {
         return RouteChoice{ "gate-evidence", "ripwire-change-check", "shell-gate selection asked for by its evidence",
-                            ripRoot + "--test-gate --legend=compact", 100, 85 };
+                            ripRoot + "--test-gate", 100, 85 };
     }
     return std::nullopt;
 }
@@ -946,7 +945,7 @@ inline std::optional<RouteChoice> flowTaskChoice( std::string_view task, std::st
     if( !fileLine.empty() )
     {
         return RouteChoice{ "at-line", "ripwire-navigate", "a file:line location named in the task",
-                            commandWithValue( root, "--slice=", "@" + fileLine ) + " --legend=compact", 100, 84 };
+                            commandWithValue( root, "--slice=", "@" + fileLine ), 100, 84 };
     }
     // who-writes: "who writes/sets/modifies/assigns SYM" needs exactly one resolved symbol, the same
     // discipline edit-contract uses. --uses=SYM is the closest shipped surface (every resolvable
@@ -962,7 +961,7 @@ inline std::optional<RouteChoice> flowTaskChoice( std::string_view task, std::st
     {
         return RouteChoice{ "who-writes", "ripwire-navigate",
                             "one exact indexed symbol plus writer-attribution wording (Owner.field coupling deferred)",
-                            commandWithValue( root, "--uses=", symbols[0] ) + " --legend=compact", 100, 81 };
+                            commandWithValue( root, "--uses=", symbols[0] ), 100, 81 };
     }
     // data-flow: "where does this value come from" / "which statements feed X" / "trace the flow of X"
     // needs exactly one resolved symbol too — --slice needs a SYM to pick the one definition to slice.
@@ -983,11 +982,11 @@ inline std::optional<RouteChoice> flowTaskChoice( std::string_view task, std::st
         {
             return RouteChoice{ "data-flow", "ripwire-navigate",
                                 "one exact indexed symbol plus data-flow wording plus a variable-slot mention",
-                                commandWithValue( root, "--slice=", symbols[0] + ":" + variable ) + " --slice-flow=back --legend=compact", 100, 83 };
+                                commandWithValue( root, "--slice=", symbols[0] + ":" + variable ) + " --slice-flow=back", 100, 83 };
         }
         return RouteChoice{ "data-flow", "ripwire-navigate",
                             "one exact indexed symbol plus data-flow wording (no variable named — lists its locals)",
-                            commandWithValue( root, "--slice=", symbols[0] ) + " --legend=compact", 100, 83 };
+                            commandWithValue( root, "--slice=", symbols[0] ), 100, 83 };
     }
     return std::nullopt;
 }
@@ -1020,7 +1019,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     if( handoffScore >= 7 )
     {
         return RouteChoice{ "handoff-brief", "ripwire-handoff", "briefing a SECOND party (successor/teammate/next session)",
-                            ripRoot + "--handoff --legend=compact", 100, 79 };
+                            ripRoot + "--handoff", 100, 79 };
     }
     // plan-lint: a PLAN/DESIGN file's structure. Value-carrying — the verb refuses a file that is not
     // there, so the route fires only when the task names one.
@@ -1036,7 +1035,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
         if( !planDoc.empty() )
         {
             return RouteChoice{ "plan-lint", "ripwire-before-you-build", "plan/design structure wording plus a named markdown file",
-                                commandWithValue( root, "--plan-lint=", planDoc ) + " --legend=compact", 100, 78 };
+                                commandWithValue( root, "--plan-lint=", planDoc ), 100, 78 };
         }
     }
     // trace-prose: the user SAYS they are holding a trace instead of pasting one. looksLikeTrace matches a
@@ -1050,7 +1049,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
        || has( lower, "translate" ) || has( lower, "i have" ) || has( lower, "here is" ) || has( lower, "frames" ) ) )
     {
         return RouteChoice{ "trace-prose", "ripwire-find-bug", "a trace/report described rather than pasted; pass it on stdin",
-                            ripRoot + "--from-trace=- --legend=compact", 100, 77 };
+                            ripRoot + "--from-trace=-", 100, 77 };
     }
     // security-scan: vetting something UNTRUSTED before installing it. --scan-skills defaults its directory,
     // so the valueless form is a real command; a named file upgrades it to --scan-skill=FILE.
@@ -1063,9 +1062,9 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
         const std::string skillFile = firstPathTokenWithSuffix( task, { ".md", ".markdown", ".json", ".sh" } );
         return skillFile.empty()
              ? RouteChoice{ "scan-skills", "ripwire-security-scan", "pre-install vetting wording; --scan-skills defaults its directory",
-                            ripRoot + "--scan-skills --legend=compact", 100, 76 }
+                            ripRoot + "--scan-skills", 100, 76 }
              : RouteChoice{ "scan-skill", "ripwire-security-scan", "pre-install vetting wording plus a named file",
-                            commandWithValue( root, "--scan-skill=", skillFile ) + " --legend=compact", 100, 76 };
+                            commandWithValue( root, "--scan-skill=", skillFile ), 100, 76 };
     }
     // opt-remarks: clang optimization remarks while building ripwire itself. The ONLY skill with no verb of
     // its own — the ranked lens is what finds the symbol a remark names, and the reason says exactly that
@@ -1086,7 +1085,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     if( layersScore >= 8 )
     {
         return RouteChoice{ "architecture-health", "ripwire-layers", "architecture-health wording (--arch=FILE is the gating form and needs a rules file)",
-                            ripRoot + "--deps --legend=compact", 100, 74 };
+                            ripRoot + "--deps", 100, 74 };
     }
     // quality-bar: what YOU just wrote, before you call it done. Deliberately narrow so it cannot steal the
     // dirty-worktree review route below, whose wording is about a DIFF and a push rather than about debt.
@@ -1101,7 +1100,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     if( qualityScore >= 9 )
     {
         return RouteChoice{ "quality-check", "ripwire-quality-bar", "own-code quality wording (what got WORSE), not merge safety",
-                            ripRoot + "--quality-delta --legend=compact", 100, 73 };
+                            ripRoot + "--quality-delta", 100, 73 };
     }
     // perf-target: a MEASURED profile that NAMES a symbol. Static metrics are not runtime heat, so this
     // needs the profile wording AND the one symbol the profile named — never the wording alone.
@@ -1112,7 +1111,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     if( symbols.size() == 1 && perfScore >= 7 )
     {
         return RouteChoice{ "perf-symbol", "ripwire-perf-target", "a measured profile plus the one symbol it names",
-                            commandWithValue( root, "--around=", symbols[0] ) + " --legend=compact", 100, 72 };
+                            commandWithValue( root, "--around=", symbols[0] ), 100, 72 };
     }
     // graph-query: a closure question the fixed verbs cannot phrase. The EXPRESSION is built only out of
     // what the task supplied — the symbol it named and the direction it asked for — and the depth is a
@@ -1125,7 +1124,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
         const bool outward = has( lower, "reachable from" ) || has( lower, "everything it calls" ) || has( lower, "downstream of" );
         const std::string expr = std::string( outward ? "callees(name(\"" : "callers(name(\"" ) + symbols[0] + "\"),3)";
         return RouteChoice{ "graph-query", "ripwire-graph-query", "a bounded-closure question plus one named symbol (depth 3 is the default; raise it)",
-                            commandWithValue( root, "--graph-query=", expr ) + " --legend=compact", 100, 71 };
+                            commandWithValue( root, "--graph-query=", expr ), 100, 71 };
     }
     // fresh-eyes: maintenance risk in code the speaker did NOT write. LAST of the catalog tier because its
     // vocabulary is the broadest, so every more specific reading above gets first refusal.
@@ -1136,7 +1135,7 @@ inline std::optional<RouteChoice> catalogTaskChoice( std::string_view task, std:
     if( riskScore >= 8 )
     {
         return RouteChoice{ "maintenance-risk", "ripwire-fresh-eyes", "maintenance-risk wording about code the speaker did not write",
-                            ripRoot + "--hotspots --legend=compact", 100, 70 };
+                            ripRoot + "--hotspots", 100, 70 };
     }
     return std::nullopt;
 }
@@ -1380,13 +1379,12 @@ inline std::optional<RouteChoice> testCoverageTaskChoice( const RouteContext& ct
         return std::nullopt;
     }
     return RouteChoice{ "test-coverage", "ripwire-change-check", "test-coverage wording plus one indexed file",
-                        commandWithValue( ctx.root, "--affected=", file ) + " --legend=compact", 100, 64 };
+                        commandWithValue( ctx.root, "--affected=", file ), 100, 64 };
 }
 
 // `if I change F, what else has to change (with it)` / `what breaks if I edit F` / `blast radius of F` /
 // `what depends on F` — one indexed file plus change-impact wording routes to --situ=F. --situ is a PROSE
-// verb (legendCompactAppliesTo refuses it the compact flag, measured: exit 1), so unlike every card
-// above this one the command is never suffixed with --legend=compact.
+// verb; like every card here (classify's comment) its command spells no legend posture.
 inline std::optional<RouteChoice> changeImpactTaskChoice( const RouteContext& ctx )
 {
     const int impactScore = phraseScore( ctx.lower, { { "what else has to change", 9 }, { "what breaks if", 9 },
@@ -1535,7 +1533,7 @@ inline std::optional<RouteChoice> directTaskChoice( const RouteContext& ctx )
     if( !quoted.empty() )
     {
         return RouteChoice{ "exact-grep", "ripwire-navigate", "quoted literal plus exact-search wording",
-                            commandWithValue( ctx.root, "--grep=", quoted ) + " --grep-context=2 --limit=40 --legend=compact", 100, 85 };
+                            commandWithValue( ctx.root, "--grep=", quoted ) + " --grep-context=2 --limit=40", 100, 85 };
     }
     const int postEditScore = phraseScore( ctx.lower, { { "just edited", 9 }, { "just finished editing", 9 },
                                                         { "my edit to", 9 }, { "changed its signature", 9 },
@@ -1550,7 +1548,7 @@ inline std::optional<RouteChoice> directTaskChoice( const RouteContext& ctx )
     {
         return RouteChoice{ "edit-contract", "ripwire-change-check",
                             "one exact indexed symbol plus post-edit contract wording",
-                            commandWithValue( ctx.root, "--edit-check=", ctx.symbols[0] ) + " --legend=compact", 100, 82 };
+                            commandWithValue( ctx.root, "--edit-check=", ctx.symbols[0] ), 100, 82 };
     }
     // at-line / who-writes / data-flow: structural or phrase-scored the same way the categories above
     // are, just extracted into their own function (see flowTaskChoice's own comment) to keep this ladder
@@ -1583,38 +1581,14 @@ inline std::optional<RouteChoice> directTaskChoice( const RouteContext& ctx )
     return std::nullopt;
 }
 
-// ONE PLACE APPLIES THE COMPACT-LEGEND POSTURE (PR #215 review item 5). A1-2 put --legend=compact on 26 route
-// commands by editing 26 strings, which is 26 chances to miss one and no rule for the 27th. classifyRoutes below
-// is the whole router; classify() is the one exit, and it applies the posture to every choice it returns — which
-// is what makes the 27th free: #218's recency intent (merged here) spells its commands without the flag and
-// gets it anyway, without knowing the rule exists.
+// THE ROUTER SPELLS NO LEGEND POSTURE (L1 fix round, rv-r1-L1 LOW-2). PR #215 item 5 had classify() append --legend=compact
+// to every command the binary would accept it on, and 26 route strings carried it by hand. Since L1 compact IS the CLI
+// default, so the suffix bought nothing — and it PINNED a posture: a caller that maps a routed command onto a session
+// posture (the legend-once lane's `ref`, served per session over MCP) would carry compact-per-call and defeat it. Commands
+// now spell the verb and its arguments only; the binary's default decides the posture. The one exception is the
+// compact-legend intent, whose ANSWER is the flag. Gate: test/taskroutecheck.sh R-LEG still runs every generated command.
 //
-// WHAT DECIDES: rw::legendCompactAppliesTo (compactlegend.h), the SAME list of non-XML surfaces cli.h REFUSES the flag
-// on, asked of a command string instead of a parsed Config. So the router cannot generate a command its own
-// binary rejects — which it did: `--zoom --legend=compact --mermaid` shipped in a skill, and a hand-listed gate
-// enforced it. --for is exempt by policy, not by refusal, and legendCompactAppliesTo says so in one place.
-// Idempotent: a command that already carries --legend= is left alone, so the hand-applied ones are untouched and
-// this is a no-op on them. Gate: test/taskroutecheck.sh runs every generated command against the binary.
-//
-// caps rides through untouched (#218): classify() decides nothing about routing, it only applies the posture to
-// what classifyRoutes returned, so every routing input is forwarded verbatim.
-inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
-                                       const RouterCaps& caps );
-
-inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
-                                 const RouterCaps& caps = {} )
-{
-    TaskRouteResult result = classifyRoutes( task, root, ing, git, dirty, caps );
-    for( RouteChoice& choice : result.choices )
-    {
-        if( rw::legendCompactAppliesTo( choice.command ) )
-        {
-            choice.command += " --legend=compact";
-        }
-    }
-    return result;
-}
-
+// So the wrapper that applied the posture (classify) is gone: callers ask classifyRoutes, the router itself.
 inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
                                        const RouterCaps& caps )
 {
@@ -1639,7 +1613,7 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
         result.score   = 100;
         result.margin  = 100;
         result.choices.push_back( { "verify-claim", "ripwire-navigate", "closed claim grammar",
-                                    commandWithValue( root, "--verify=", task ) + " --legend=compact", 100, 100 } );
+                                    commandWithValue( root, "--verify=", task ), 100, 100 } );
         return result;
     }
     if( result.facts.trace )
@@ -1647,7 +1621,7 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
         result.status = RouteStatus::Recommend;
         result.score  = result.margin = 100;
         result.choices.push_back( { "trace-debug", "ripwire-find-bug", "stack-trace shape; pass the trace on stdin",
-                                    "ripwire " + shSingleQuote( root ) + " --from-trace=- --legend=compact", 100, 90 } );
+                                    "ripwire " + shSingleQuote( root ) + " --from-trace=-", 100, 90 } );
         return result;
     }
     if( std::optional<RouteChoice> direct = directTaskChoice( RouteContext{ task, lower, root, result.facts.resolvedSymbols, ing } ) )
@@ -1662,7 +1636,7 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
         result.status = RouteStatus::Recommend;
         result.score  = result.margin = 100;
         result.choices.push_back( { "connect-symbols", "ripwire-navigate", "three or more exact indexed symbols",
-                                    commandWithValue( root, "--connect=", commaSymbols( result.facts.resolvedSymbols ) ) + " --legend=compact", 100, 80 } );
+                                    commandWithValue( root, "--connect=", commaSymbols( result.facts.resolvedSymbols ) ), 100, 80 } );
         return result;
     }
     if( result.facts.resolvedSymbols.size() == 1 && ( has( lower, "understand" ) || has( lower, "implementation" ) || has( lower, "how does" ) ) )
@@ -1670,7 +1644,7 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
         result.status = RouteStatus::Recommend;
         result.score  = result.margin = 100;
         result.choices.push_back( { "understand-symbol", "ripwire-navigate", "one exact indexed symbol plus understand wording",
-                                    commandWithValue( root, "--expand=", result.facts.resolvedSymbols[0] ) + " --legend=compact", 100, 70 } );
+                                    commandWithValue( root, "--expand=", result.facts.resolvedSymbols[0] ), 100, 70 } );
         return result;
     }
 
@@ -1686,18 +1660,18 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
     const int planScore = phraseScore( lower, { { "plan", 5 }, { "implementation", 2 }, { "feature", 4 },
                                                 { "scope", 4 }, { "multi-symbol", 4 }, { "before building", 4 }, { "new ", 1 } } );
     addLexical( candidates, "plan-feature", "ripwire-before-you-build", "prospective feature planning wording",
-                commandWithValue( root, "--pack-task=", task ) + " --legend=compact", planScore, 8, 50 );
+                commandWithValue( root, "--pack-task=", task ), planScore, 8, 50 );
 
     const int reuseScore = phraseScore( lower, { { "about to write", 8 }, { "one helper", 5 }, { "one function", 5 },
                                                  { "one class", 5 }, { "helper", 3 }, { "function", 2 }, { "class", 2 } } );
     addLexical( candidates, "reuse-one-symbol", "ripwire-reuse-first", "about-to-write one-symbol wording",
-                commandWithValue( root, "--exemplar=", task ) + " --legend=compact", reuseScore, 10, 40 );
+                commandWithValue( root, "--exemplar=", task ), reuseScore, 10, 40 );
 
     const int writeTestsScore = phraseScore( lower, { { "missing coverage", 8 }, { "no tests", 6 }, { "untested", 5 },
                                                       { "regression gate", 4 }, { "add", 3 }, { "write", 3 },
                                                       { "find", 2 }, { "cover", 2 } } );
     addLexical( candidates, "write-tests", "ripwire-write-tests", "test-gap wording plus a test-writing action",
-                "ripwire " + shSingleQuote( root ) + " --seams --legend=compact", writeTestsScore, 8, 35 );
+                "ripwire " + shSingleQuote( root ) + " --seams", writeTestsScore, 8, 35 );
 
     const int locateScore = phraseScore( lower, { { "find the code", 8 }, { "locate", 7 }, { "responsible", 4 },
                                                   { "bug", 3 }, { "wrong output", 4 }, { "crash", 4 }, { "symptom", 3 } } );

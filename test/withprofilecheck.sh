@@ -72,8 +72,10 @@ printf 'not a profile at all\n' > "$TMP/junk.txt"
 if [ "$rc" -eq 1 ] && grep -q 'PROF_TSV' "$TMP/e3"; then ok "sentinel-less file refuses (exit 1, names the block)"; else no "junk file: rc=$rc"; fi
 
 # 6. the heat legend is armed-only
-if grep -q 'with-profile: heat_\*' "$OUT"; then ok "heat legend present when armed"; else no "heat legend missing when armed"; fi
-"$BIN" "$CORPUS" --lint --no-cache > "$TMP/plain" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; arm 6 reads the FULL legend's heat clause (armed and bare), so both runs ask for it.
+"$BIN" "$CORPUS" --lint --with-profile="$TMP/prof.txt" --no-cache --legend=full > "$TMP/out1full" 2>/dev/null
+if grep -q 'with-profile: heat_\*' "$TMP/out1full"; then ok "heat legend present when armed"; else no "heat legend missing when armed"; fi
+"$BIN" "$CORPUS" --lint --no-cache --legend=full > "$TMP/plain" 2>/dev/null
 grep -q 'heat_' "$TMP/plain" && no "bare --lint leaked heat_* content" || ok "bare --lint carries no heat_* (legend and attrs)"
 
 # 8. an out-of-range line column joins nothing. 4294967329 is 2^32 + 33: through std::atoi (undefined past INT_MAX; libc

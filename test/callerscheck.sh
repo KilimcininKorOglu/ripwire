@@ -89,7 +89,9 @@ if [ -n "$cdefs" ] && [ "$cdefs" = "$udefs" ]; then
 else
     no "P10.6: --callers defs= '$cdefs' missing or disagrees with --uses '$udefs'"
 fi
-if "$BIN" "$ROOT" --callees=empty 2>/dev/null | grep -qE '<callees of="empty" defs="[0-9]+"'; then ok "P10.6: --callees carries defs= (a count=0 is now a measurement over N known defs)"; else no "P10.6: --callees root missing defs="; fi
+# L1 (2026-09-19): the CLI default is the compact posture, whose root leads with schema=; this arm reads the
+# full-posture `<callees of= defs=` root shape, so it asks for --legend=full (rows identical across postures).
+if "$BIN" "$ROOT" --callees=empty --legend=full 2>/dev/null | grep -qE '<callees of="empty" defs="[0-9]+"'; then ok "P10.6: --callees carries defs= (a count=0 is now a measurement over N known defs)"; else no "P10.6: --callees root missing defs="; fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

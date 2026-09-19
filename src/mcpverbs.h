@@ -4232,7 +4232,7 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
         flowSpec.out = &flowOut;
     }
 
-    slicev::SliceEmitOpts emit;   // full legend always — the MCP payload stays byte-identical to the CLI default
+    slicev::SliceEmitOpts emit;   // legend posture from the argument below — the MCP payload stays byte-identical to the CLI at the same posture
     emit.flow          = flowActive ? &flowSpec : nullptr;
     emit.seed          = seededRun ? &seedInfo : nullptr;
     emit.compactLegend = compactLegend;   // decision 3: the same posture flag the CLI --legend=compact sets

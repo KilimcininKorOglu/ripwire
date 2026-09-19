@@ -30,8 +30,10 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 echo "flagscheck: BIN=$BIN  CORPUS=$CORPUS"
 
-"$BIN" "$CORPUS" --flags --no-cache >"$TMP/a" 2>/dev/null
-"$BIN" "$CORPUS" --flags --no-cache >"$TMP/b" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact (its root also leads with schema=); these arms read the FULL
+# legend's files= clause and parse the full-default root start-tag, so they ask for it.
+"$BIN" "$CORPUS" --flags --no-cache --legend=full >"$TMP/a" 2>/dev/null
+"$BIN" "$CORPUS" --flags --no-cache --legend=full >"$TMP/b" 2>/dev/null
 if cmp -s "$TMP/a" "$TMP/b"; then ok "determinism (byte-identical)"; else no "--flags is non-deterministic"; fi
 F="$( cat "$TMP/a" )"
 

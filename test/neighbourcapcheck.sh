@@ -103,7 +103,9 @@ CAP_USES=100     # kUseSiteRowCap — use SITES are the unit --grep caps at 100,
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (0) presence guard: more neighbours than the cap, and source sorts LAST by path ==="
 # ═══════════════════════════════════════════════════════════════════════════
-FULL="$( rw --callers=neighbourHubFn --limit=500 )"
+# L1 (2026-09-19): the CLI default legend is compact and spells row shapes (<s t= n= p=>) inside its comment; the arms below
+# count real rows and read the FULL legend prose (9/9b), so every counted/read answer asks for the full legend.
+FULL="$( rw --callers=neighbourHubFn --limit=500 --legend=full )"
 full_count="$( attr count "$FULL" )"
 [ "${full_count:-0}" -gt "$CAP_CALL" ] \
     && ok "(0) the fixture has $full_count callers, over the $CAP_CALL cap" \
@@ -136,7 +138,7 @@ printf '%s' "$lastRow" | grep -q 'tests/' \
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (2) the cap fires and is disclosed ==="
 # ═══════════════════════════════════════════════════════════════════════════
-DEF="$( rw --callers=neighbourHubFn )"
+DEF="$( rw --callers=neighbourHubFn --legend=full )"
 def_rows="$( rowCount "$DEF" s )"
 def_shown="$( attr shown "$DEF" )"
 def_capped="$( attr capped "$DEF" )"
@@ -172,7 +174,7 @@ echo "=== (4) escape hatch: --limit raises it, --offset pages it ==="
 [ "$( rowCount "$FULL" s )" = "$full_count" ] \
     && ok "(4) --limit=500 serves every one of the $full_count rows" \
     || no "(4) --limit=500 served $( rowCount "$FULL" s ) of $full_count rows"
-PAGE2="$( rw --callers=neighbourHubFn --limit=10 --offset=10 )"
+PAGE2="$( rw --callers=neighbourHubFn --limit=10 --offset=10 --legend=full )"
 p2_rows="$( rowCount "$PAGE2" s )"
 p2_next="$( attr next_offset "$PAGE2" )"
 p2_more="$( attr has_more "$PAGE2" )"
@@ -191,7 +193,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (5) inert under the cap: an uncapped, unpaged answer says nothing ==="
 # ═══════════════════════════════════════════════════════════════════════════
-SMALL="$( rw --callers=neighbourHubCallee )"
+SMALL="$( rw --callers=neighbourHubCallee --legend=full )"
 small_rows="$( rowCount "$SMALL" s )"
 if [ "$small_rows" -gt 0 ] && [ "$small_rows" -lt "$CAP_CALL" ]; then
     if printf '%s' "$SMALL" | grep -qE ' shown="| capped="'; then
@@ -209,11 +211,11 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (6) --callees is the same code path and the same contract ==="
 # ═══════════════════════════════════════════════════════════════════════════
-CE="$( rw --callees=neighbourHubCaller )"
+CE="$( rw --callees=neighbourHubCaller --legend=full )"
 printf '%s' "$CE" | grep -q '<callees ' \
     && ok "(6) --callees still answers" \
     || no "(6) --callees stopped answering"
-CE_CAP="$( rw --callees=neighbourHubCaller --limit=1 )"
+CE_CAP="$( rw --callees=neighbourHubCaller --limit=1 --legend=full )"
 if [ "$( rowCount "$CE_CAP" s )" = "1" ] && [ "$( attr capped "$CE_CAP" )" = "1" ]; then
     ok "(6b) --callees windows and discloses exactly as --callers does"
 else
@@ -223,9 +225,9 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (7) --uses: same ordering, its own cap ==="
 # ═══════════════════════════════════════════════════════════════════════════
-U_FULL="$( rw --uses=neighbourHubFn --limit=500 )"
+U_FULL="$( rw --uses=neighbourHubFn --limit=500 --legend=full )"
 u_count="$( attr count "$U_FULL" )"
-U_DEF="$( rw --uses=neighbourHubFn )"
+U_DEF="$( rw --uses=neighbourHubFn --legend=full )"
 u_rows="$( rowCount "$U_DEF" u )"
 # the fixture has 63 call sites + 1 def-site-adjacent row or so — under 100, so the cap must NOT fire here,
 # and that is the arm: --uses keeps its own unit (sites), so the SYMBOL cap must not leak onto it.
@@ -241,7 +243,7 @@ u_first="$( printf '%s' "$U_DEF" | grep -oE '<u role="[^"]*" p="[^"]*"' | head -
 printf '%s' "$u_first" | grep -q 'zsrc/' \
     && ok "(7b) --uses leads with the source-tier site, against the path order" \
     || no "(7b) --uses is still in plain path order: first row is $u_first"
-U_CAP="$( rw --uses=neighbourHubFn --limit=5 )"
+U_CAP="$( rw --uses=neighbourHubFn --limit=5 --legend=full )"
 if [ "$( rowCount "$U_CAP" u )" = "5" ] && [ "$( attr capped "$U_CAP" )" = "1" ] && [ "$( attr count "$U_CAP" )" = "$u_count" ]; then
     ok "(7c) --uses windows with shown=/capped= and leaves count= at the true total"
 else

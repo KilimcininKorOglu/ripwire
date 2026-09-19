@@ -93,7 +93,8 @@ fi
 
 # ── 6) golden-neutrality: the default map is untouched ─────────────────────────────────────────────────
 if [ -f "$ROOT/test/golden.xml" ]; then
-    "$BIN" test/fixture --no-cache 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
+    # L1 (2026-09-19): the CLI default legend is compact; test/golden.xml was recorded from the full default, so this arm asks for it.
+    "$BIN" test/fixture --no-cache --legend=full 2>/dev/null | diff -q - "$ROOT/test/golden.xml" >/dev/null \
         && ok "golden-neutral: default map byte-identical to test/golden.xml" \
         || no "default map drifted from golden.xml (--connect leaked into the default run)"
 else

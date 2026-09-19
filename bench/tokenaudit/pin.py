@@ -74,7 +74,8 @@ def main():
     try:
         shutil.copytree(fixture, os.path.join(tmp, "f"))
         for label, argv in PINNED:
-            p = subprocess.run([binpath, "f"] + argv, capture_output=True, cwd=tmp)
+            # the pinned counts describe the FULL-legend document (tokenbudgetcheck #18 asks for the same posture)
+            p = subprocess.run([binpath, "f"] + argv + ["--legend=full"], capture_output=True, cwd=tmp)
             if p.returncode != 0:
                 print("pin.py: '%s' exited %d" % (label, p.returncode), file=sys.stderr)
                 return 1

@@ -255,10 +255,11 @@ printf '%s' "$HDR" | grep -q 'scope="line"' \
 printf '%s' "$HDR" | grep -qE 'terms_suppressed="[0-9]+"' \
     && ok "(4c) terms_suppressed= present" \
     || no "(4c) terms_suppressed= missing: $HDR"
-run --and=ANDTOKEN_B | grep -q 'terms= (present only with and/not)' \
+# L1 (2026-09-19): the CLI default legend is compact; (4d)/(4e) read the FULL legend's definitions, so they ask for it.
+run --and=ANDTOKEN_B --legend=full | grep -q 'terms= (present only with and/not)' \
     && ok "(4d) legend defines terms=" \
     || no "(4d) legend never defines terms="
-run --and=ANDTOKEN_B | grep -q 'scope=file requires every term ANYWHERE' \
+run --and=ANDTOKEN_B --legend=full | grep -q 'scope=file requires every term ANYWHERE' \
     && ok "(4e) legend defines scope=" \
     || no "(4e) legend never defines scope="
 # a PLAIN run (no and/not) must stay byte-identical to before G3 — no terms=/scope= leak on the ROOT

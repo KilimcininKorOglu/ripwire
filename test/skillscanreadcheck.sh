@@ -130,7 +130,9 @@ fi
 # §P6.9: this IS a real (non-refused) scan, so it MUST carry the <skillscan files="0" findings="0"
 # verdict="clean"> artifact — "honest zero" now means a present, zeroed artifact, not just exit 0.
 EMPTYDIR="$TMP/empty_skills_dir"; mkdir -p "$EMPTYDIR"
-rc="$( run "--scan-skills=$EMPTYDIR" )"
+# L1 (2026-09-19): the CLI default legend is compact (root leads with schema=, and the legend comment spells
+# skipped=); these arms grep the full-default artifact byte for byte, so they ask for --legend=full.
+rc="$( run "--scan-skills=$EMPTYDIR" --legend=full )"
 if [ "$rc" = "0" ]; then ok "--scan-skills on a real empty dir exits 0 (honest zero, not a refusal)"; else no "--scan-skills on a real empty dir exited $rc (expected 0)"; cat "$TMP/err.txt"; fi
 if grep -q '<skillscan files="0" findings="0"[^>]* verdict="clean">' "$TMP/out.txt"; then
     ok "--scan-skills on a real empty dir emits <skillscan files=\"0\" findings=\"0\" verdict=\"clean\"> (present, not absent)"
@@ -234,12 +236,12 @@ chmod 644 "$B13R/locked.md" 2>/dev/null || true
 #    rule every existing artifact and gate rides on).
 B13C="$TMP/b13clean"; mkdir -p "$B13C"
 cp "$CLEAN" "$B13C/skill.md"
-"$BIN" "--scan-skills=$B13C" >"$TMP/b13c.out" 2>/dev/null
+"$BIN" "--scan-skills=$B13C" --legend=full >"$TMP/b13c.out" 2>/dev/null
 grep -q 'skipped=' "$TMP/b13c.out" \
     && no "§B13.3: skipped= leaked on a directory where nothing was skipped (breaks artifact byte-identity)" \
     || ok "§B13.3: skipped= is absent when nothing was skipped"
 # and the single-file form's artifact is unchanged
-"$BIN" "--scan-skill=$CLEAN" >"$TMP/b13s.out" 2>/dev/null
+"$BIN" "--scan-skill=$CLEAN" --legend=full >"$TMP/b13s.out" 2>/dev/null
 grep -q 'skipped=' "$TMP/b13s.out" \
     && no "§B13.3: the single-file artifact grew a skipped= attribute it has no use for" \
     || ok "§B13.3: the single-file artifact is byte-unchanged (skips nothing, says nothing)"

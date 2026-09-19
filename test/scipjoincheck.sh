@@ -52,7 +52,8 @@ awk -F'\t' '$1=="C" && $6 ~ /^b\.py::K::run#/ && $7=="helper"' "$TMP/plain.tsv" 
     && ok "(A) K.run -> helper is decided" || no "(A) no decided K.run -> helper row"
 
 # ── (B) the control: an ordinary in-repo resolution is transcribed as before ─────────────────────
-"$BIN" "$CORPUS" $EXC --no-cache --scip="$IDX" --pin-census="$TMP/scip.tsv" >"$TMP/scip.xml" 2>"$TMP/scip.err" || no "(B) --scip run failed"
+# L1 (2026-09-19): the CLI default legend is compact and defines `precise=K` in its comment; (E) reads the header's precise=, so scip.xml (and its (H) twin) ask for the full legend.
+"$BIN" "$CORPUS" $EXC --no-cache --legend=full --scip="$IDX" --pin-census="$TMP/scip.tsv" >"$TMP/scip.xml" 2>"$TMP/scip.err" || no "(B) --scip run failed"
 awk -F'\t' '$1=="O" && $2 ~ /^b\.py::K::run#/ && $3=="helper" && $4 ~ /^b\.py::helper#/' "$TMP/scip.tsv" | grep -q . \
     && ok "(B) O row K.run -> helper names b.py::helper (in-repo oracle, unchanged)" \
     || { no "(B) no in-repo O row for K.run -> helper"; grep '^O' "$TMP/scip.tsv" | sed 's/^/          /'; }
@@ -105,7 +106,7 @@ assert uni[ "sentinel_external" ] == 1, uni
 PY
 
 # ── (H) G5 additivity + determinism + well-formedness ─────────────────────────────────────────────
-"$BIN" "$CORPUS" $EXC --no-cache --scip="$IDX" >"$TMP/scip2.xml" 2>/dev/null
+"$BIN" "$CORPUS" $EXC --no-cache --legend=full --scip="$IDX" >"$TMP/scip2.xml" 2>/dev/null
 cmp -s "$TMP/scip.xml" "$TMP/scip2.xml" && ok "(H) stdout byte-identical with and without --pin-census under --scip" \
     || no "(H) --pin-census changed stdout under --scip"
 "$BIN" "$CORPUS" $EXC --no-cache --scip="$IDX" --pin-census="$TMP/scip3.tsv" >"$TMP/scip3.xml" 2>/dev/null

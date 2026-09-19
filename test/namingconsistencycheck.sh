@@ -27,13 +27,15 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 echo "namingconsistencycheck: BIN=$BIN  FIX=$FIX"
 
-OUT="$( "$BIN" "$FIX" --naming-consistency --no-cache 2>"$TMP/err" )"; rc=$?
+# L1 (2026-09-19): the CLI default legend is compact and hoists schema= into the root element; arm 4 pins the
+# full-default root prefix `<naming-consistency groups=`, so this run (and its arm-2 determinism twin) asks for the full legend.
+OUT="$( "$BIN" "$FIX" --naming-consistency --no-cache --legend=full 2>"$TMP/err" )"; rc=$?
 
 # ── 1) runs clean and exit code is always 0 (a lens, never a gate) ─────────────────────────────────────
 if [ $rc -eq 0 ]; then ok "runs clean, exit 0"; else { no "exit code $rc (want 0 — this verb never gates)"; cat "$TMP/err"; }; fi
 
 # ── 2) deterministic: two runs byte-identical ───────────────────────────────────────────────────────────
-OUT2="$( "$BIN" "$FIX" --naming-consistency --no-cache 2>/dev/null )"
+OUT2="$( "$BIN" "$FIX" --naming-consistency --no-cache --legend=full 2>/dev/null )"
 if [ "$OUT" = "$OUT2" ]; then ok "two runs are byte-identical"; else no "two runs differ — determinism broken"; fi
 
 # ── 3) well-formed XML ──────────────────────────────────────────────────────────────────────────────────

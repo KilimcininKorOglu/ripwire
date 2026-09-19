@@ -4345,9 +4345,9 @@ $ ./build/ripwire . --callers=rankGraphTeleport --format=bogus
 
 ### `--legend=full|compact`
 
-**Answers:** choose the legend posture for every XML verb — use compact when calling repeatedly output legend posture for EVERY XML verb.
+**Answers:** legend posture for every XML verb — compact is the default;
 
-MAKING REPEATED CALLS (an agent, a script, a benchmark harness)? USE compact. The legend is a FIXED ~3 KB per call, so its share is a function of ANSWER SIZE, not of the verb: at least 45% of a small --callers/--uses/--impact/--affected answer (and more on --callees and --edit-check), a little of a large --for bundle. Every ROW is byte-identical; the only payload change is a schema="ripwire.<verb>/v1" attribute the root GAINS. The CLI default is full because a human reading ONE map needs the prose; the MCP server already defaults to compact, so the CLI is the path that pays. full is byte-identical to the default. compact keeps every row byte and every data/completeness attribute (counts_floor= capped= shown= total= has_more= next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned schema id on the root (schema="ripwire.<verb>/v1") and replaces the explanatory prose with ONE legend naming those attributes — the meanings live here and in the full legend. DATA comments stay (the map header, pack-task's body-omitted rows, +more). Per call this drops 2.8-5.8 KB on the navigation verbs (--edit-check 6.3 KB -> 0.5 KB); the MCP twin is the argument legend: on every XML-answering verb, where compact is the DEFAULT and legend:"full" restores this prose (M1, 2026-09-05: the ten-verb MCP edit loop pays 2,866 B of legend instead of 30,839 B). The CLI default stays full. Runs with nothing to compact refuse it, naming the verb: prose/markdown/JSON answers (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval*) and the writers (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export).
+full restores the prose output legend posture for EVERY XML verb. The DEFAULT is compact: the legend is a FIXED ~3 KB of prose per call in its full form, so its share is a function of ANSWER SIZE, not of the verb: at least 40% of a small --callers/--uses/--impact/--affected answer (and more on --callees and --edit-check), a little of a large --for bundle — and the callers who pay it are agents, scripts and harnesses making repeated calls. READING ONE MAP AS A HUMAN, or need a definition's reasoning (a term you do not recognise, a floor or cap explained)? pass --legend=full: it restores the full prose legend, byte-identical to the default of 0.6.1 and earlier. compact keeps every row byte and every data/completeness attribute (counts_floor= capped= shown= total= has_more= next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned schema id on the root (schema="ripwire.<verb>/v1") and replaces the explanatory prose with ONE legend defining exactly the attributes the answer carries — the meanings live here and in the full legend. DATA comments stay (the map header, pack-task's body-omitted rows, +more). Per call this drops 2.8-5.8 KB on the navigation verbs (--edit-check's legend 7.4 KB -> 0.9 KB). --for compacts too (ripwire.for/v1 header); under --token-budget it never costs a row --legend=full would keep. The MCP twin is the argument legend, compact by default there as well, legend:"full" restores the prose. Runs with nothing to compact ignore the default; an ASKED --legend=compact refuses there, naming the verb: prose/markdown/JSON answers (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval* --json), where --legend=full is a no-op, and the writers and servers (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export, the server transports), which refuse either posture.
 
 **Try it**
 
@@ -4368,7 +4368,8 @@ $ ./build/ripwire . --quality-delta --legend=compact
 
 **Caveats (stated by the binary):**
 
-- Runs with nothing to compact refuse it, naming the verb: prose/markdown/JSON answers (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval*) and the writers (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export).
+- READING ONE MAP AS A HUMAN, or need a definition's reasoning (a term you do not recognise, a floor or cap explained)? pass --legend=full: it restores the full prose legend, byte-identical to the default of 0.6.1 and earlier.
+- under --token-budget it never costs a row --legend=full would keep.
 
 ### `--json`
 
@@ -4385,7 +4386,7 @@ $ ./build/ripwire . --hotspots --json
 (empty)
 ```
 
-**Shaped by:** `--max-tokens`, `--token-budget`, `--for`, `--in`
+**Shaped by:** `--max-tokens`, `--token-budget`, `--for`, `--in`, `--legend`
 
 **Caveats (stated by the binary):**
 

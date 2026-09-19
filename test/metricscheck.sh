@@ -29,8 +29,10 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 echo "metricscheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # ── the metrics map (with --metrics) and the default map (without) ─────────────────────────────────────
-"$BIN" "$CORPUS" --no-cache --metrics >"$TMP/m1" 2>/dev/null
-"$BIN" "$CORPUS" --no-cache --metrics >"$TMP/m2" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; the legend arms read the FULL legend's prose off $MAP, so m1 (and its
+# determinism twin m2) ask for it.
+"$BIN" "$CORPUS" --no-cache --metrics --legend=full >"$TMP/m1" 2>/dev/null
+"$BIN" "$CORPUS" --no-cache --metrics --legend=full >"$TMP/m2" 2>/dev/null
 "$BIN" "$CORPUS" --no-cache           >"$TMP/def" 2>/dev/null
 MAP="$( cat "$TMP/m1" )"
 DEF="$( cat "$TMP/def" )"

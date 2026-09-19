@@ -306,8 +306,9 @@ and the three controls below it.
 ```
 
 `cx=` complexity, `churn=` git edit frequency, `amp=` change amplification, `r=` rank; `<hops>` rows
-carry the one-hop call context, caps disclosed. Every attribute is defined in the one legend at the
-top of the real output, which also self-reports the bundle's cost — `est_tokens="3995"` here.
+carry the one-hop call context, caps disclosed. The one legend at the top of the real output defines
+them — tersely by default, every reading in full with `--legend=full` — and the root self-reports the
+bundle's cost — `est_tokens="3995"` here.
 
 </details>
 

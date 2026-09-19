@@ -85,7 +85,8 @@ rootTag(){ grep -o '<r [^>]*>' "$1" | head -1; }
 # The number is asserted as a RANGE, not a value: pinning 13 would red on any corpus edit and teach the
 # next agent to update the expectation instead of reading it. What must hold is that it is a real
 # iteration count — at least one iteration ran, and it is inside the ceiling the kernel ships with.
-"$BIN" "$CORPUS" --no-cache >"$TMP/a.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; (B) and (I) read the FULL legend's pr_converged= prose, so these runs ask for it.
+"$BIN" "$CORPUS" --no-cache --legend=full >"$TMP/a.xml" 2>/dev/null
 aRoot="$( rootTag "$TMP/a.xml" )"
 aIters="$( printf '%s' "$aRoot" | sed -n 's/.* pr_iters="\([0-9]*\)".*/\1/p' )"
 if [ -n "$aIters" ] && [ "$aIters" -ge 1 ] 2>/dev/null && [ "$aIters" -le 100 ]; then
@@ -99,7 +100,7 @@ case "$aRoot" in
 esac
 
 # ── (B) the truncating exit, plain build ──────────────────────────────────────────────────────────
-RIPWIRE_TEST_PR_MAXITERS=2 "$BIN" "$CORPUS" --no-cache >"$TMP/b.xml" 2>/dev/null
+RIPWIRE_TEST_PR_MAXITERS=2 "$BIN" "$CORPUS" --no-cache --legend=full >"$TMP/b.xml" 2>/dev/null
 bRoot="$( rootTag "$TMP/b.xml" )"
 case "$bRoot" in
     *' pr_iters="2"'*' pr_converged="0"'*) ok "(B) plain build discloses the truncation: $bRoot" ;;
@@ -150,7 +151,7 @@ fi
 # hook would be a behaviour switch rather than a test ceiling, and every arm above would be measuring a
 # binary nobody ships.
 for v in 100 100000 0 "" "2x" "x2" " 2" "-2"; do
-    RIPWIRE_TEST_PR_MAXITERS="$v" "$BIN" "$CORPUS" --no-cache >"$TMP/c.xml" 2>/dev/null
+    RIPWIRE_TEST_PR_MAXITERS="$v" "$BIN" "$CORPUS" --no-cache --legend=full >"$TMP/c.xml" 2>/dev/null
     if cmp -s "$TMP/a.xml" "$TMP/c.xml"; then
         ok "(C) RIPWIRE_TEST_PR_MAXITERS='$v' leaves the document byte-identical (cannot raise, cannot corrupt)"
     else

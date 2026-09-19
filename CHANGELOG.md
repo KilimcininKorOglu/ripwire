@@ -15,6 +15,52 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — the CLI's default legend is compact; `--legend=full` restores the prose legend
+
+Every XML answer now leads with the compact legend unless `--legend=full` is passed — `--for` included, whose
+own `ripwire.for/v1` header is its compact dialect. The compact legend defines every attribute the answer
+carries — each verb's purpose, the completeness vocabulary (`counts_floor=`, `shown=`/`total=`/`capped=`, the
+paging window, `est_tokens=`, `over_ceiling=`, the resolver gauges …) and every descriptive or cut attribute
+(`renames_window_truncated=`, `script_gates_unmodelled=`, `hcut=`/`rcut=`, …), each reading present only where
+the answer carries it. The full prose, which used to be the default, is one flag away and byte-identical to what
+0.6.1 printed without it. Rows never change between the two, with one chosen exception: `--expand` serves the
+bundle or the whole file by whichever the posture DELIVERS cheaper, so the two postures can serve different ones. The MCP server has defaulted to compact since
+0.4.0, so both surfaces now agree. Measured on this repository: `--callers` 6,305 → 3,212 B, `--edit-check`
+9,750 → 3,313 B, `--affected=src/cli.h` 2,103 → 1,234 B, `--for` 10,010 → 9,117 B (method: the same argv,
+`--legend=full` against this default, `wc -c`).
+
+What else moved with it, because a default has to be honest where an opt-in could be terse:
+
+- **Nothing the default prints is undefined, and nothing it drops is a disclosure.** `--from-trace` keeps the
+  ceiling it applied (`<!-- ledger: budget=N bytes (allowance M bytes …) -->`), `--notes` keeps its
+  `notes= targets= dangling=` counts, `--pack-task` keeps its budget ledger, and the withheld-map record reads
+  as a withheld map.
+- **A compacted answer is priced at the bytes it delivers, and trimmed at that price.** `est_tokens=` used to
+  keep the full legend's price after compaction (`--connect` here: 1,200 tokens for 1,037 bytes); it is now
+  moved by the removed bytes at the document's own rate. `over_ceiling="1"` and `--pr-context`'s
+  `budget-floor-exceeded` follow the repriced number, the flagless map's `--token-budget` gate decides on the
+  compact price, and `--pr-context`, `--pack-task`, `--from-trace` and `--expand`'s serving choice decide their
+  cuts on the price the answer will print — `--pr-context` at `--token-budget=4000` here kept 22 changed files
+  where it had kept 10, with the same budget.
+- **`--for` under `--token-budget` never loses a row `--legend=full` keeps.** Its compact sig ledger subtracted
+  the full dialect's enrichment clause (~450 B the compact header never carried); the charge is now capped at
+  the full dialect's. Re-measured over 66 budgets (300..3550 step 50) on a 72- and a 12-function fixture: the
+  default lands over its budget on 15 and 15, `--legend=full` on 11 and 12; every overshoot is labelled
+  `over_ceiling="1"`.
+- **Nothing the default cannot shape fails because of it.** A run whose answer has no XML legend passes through
+  unchanged. `--legend=full` is accepted, as a no-op, by the read answers that only have the full form (`--situ`,
+  `--recall`, `--report`, `--mermaid`, `--html`, `--plan-lanes`, `--sarif`, `--eval*`); an asked
+  `--legend=compact` still refuses there, and the writers and servers refuse either. `--pin-census` takes a
+  posture (its map is the answer). The servers (`--mcp`, `--listen`, `--lsp`) and `--json` keep no default.
+- `--help` now promises "at least 40%" of a small `--callers`/`--uses`/`--impact`/`--affected` answer saved by
+  the compact legend, down from 45%: the definitions it gained cost `--affected` four points (41% measured).
+- `--query`'s `<!-- routed: … -->` note is kept where the root carries no `route=`; the router's generated
+  commands no longer append `--legend=compact`; the prompt-route hooks read `status=` as an attribute, so they
+  route under either root attribute order.
+
+Scripts that parse the full legend's prose, or match a root's first attribute byte for byte, should pass
+`--legend=full`.
+
 ### Added — `--for` lists a named file's one declaration/implementation partner first, and `--situ` puts partners before the blast radius
 
 When a `--for` task names a path that resolves to exactly one indexed file, and that file has exactly one

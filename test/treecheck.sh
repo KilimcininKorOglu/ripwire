@@ -35,7 +35,8 @@ cd "$ROOT"
 echo "treecheck: BIN=$BIN  CORPUS=test/queryfix"
 
 run(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$FIX" "$@" --no-cache 2>/dev/null; }
-TREE="$( run --tree )"
+# L1 (2026-09-19): the CLI default legend is compact and spells `<file …>` inside its comment; the row counts below read real rows, so they ask for the full legend.
+TREE="$( run --tree --legend=full )"
 MAP="$( run )"
 
 # ── 1) exactly 2 <file> entries ──────────────────────────────────────────────────────────────────────
@@ -157,7 +158,7 @@ if [ -n "$REPO_TREE" ]; then
     # shown=/capped=/total=/next_offset= + next=), so "drops nothing" is asserted on the explicit whole-tree window
     # (--limit=1000000), and the default is asserted to print exactly min(80, total) rows.
     emitted="$( printf '%s\n' "$REPO_FILES" | grep -c . )"
-    PAGED="$( perl -e 'alarm 120; exec @ARGV' "$BIN" "$ROOT" --tree --limit=1000000 2>/dev/null )"
+    PAGED="$( perl -e 'alarm 120; exec @ARGV' "$BIN" "$ROOT" --tree --limit=1000000 --legend=full 2>/dev/null )"
     total="$( printf '%s' "$PAGED" | grep -oE '<tree [^>]*>' | grep -oE 'total="[0-9]+"' | grep -oE '[0-9]+' )"
     allrows="$( printf '%s' "$PAGED" | grep -o '<file p=' | wc -l | tr -d ' ' )"
     { [ -n "$total" ] && [ "$allrows" = "$total" ]; } \

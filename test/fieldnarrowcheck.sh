@@ -112,7 +112,9 @@ EOF
 
 echo "fieldnarrowcheck: BIN=$BIN  CORPUS=$FIX + $FIX2 (generated)"
 
-MAP="$( "$BIN" "$FIX" --no-cache 2>/dev/null | tr '>' '\n' )"
+# L1 (2026-09-19): the CLI default legend is compact and spells a bare `ambiguous=` inside its comment ahead of the header
+# gauge that (h)/(n) read with head -1, so these maps ask for the full legend.
+MAP="$( "$BIN" "$FIX" --no-cache --legend=full 2>/dev/null | tr '>' '\n' )"
 callees(){ "$BIN" "$FIX" "--callees=$1" --no-cache 2>/dev/null | grep -o '<callees.*</callees>' | tr '/' '\n'; }
 
 # ── presence guards (a gate that cannot observe what it asserts is green-while-inert) ──
@@ -222,7 +224,7 @@ AMB="$( printf '%s\n' "$MAP" | grep -o 'ambiguous=[0-9]*' | head -1 )"
     || no "(h) header gauge is '$AMB', expected ambiguous=6 (3 field-typed calls narrowed, 6 honest splits kept)"
 
 # ── (n) same-NAMED class collision (FIX2): conflicting same-named fields tombstone — NEITHER Dup::go narrows ──
-MAP2="$( "$BIN" "$FIX2" --no-cache 2>/dev/null | tr '>' '\n' )"
+MAP2="$( "$BIN" "$FIX2" --no-cache --legend=full 2>/dev/null | tr '>' '\n' )"
 printf '%s\n' "$MAP2" | grep -qF 'n="go" sc="Dup"' || no "(n) presence guard: Dup::go not indexed in FIX2"
 AMB2="$( printf '%s\n' "$MAP2" | grep -o 'ambiguous=[0-9]*' | head -1 )"
 [ "$AMB2" = "ambiguous=2" ] \
