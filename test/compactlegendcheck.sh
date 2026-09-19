@@ -363,6 +363,11 @@ probeFor()
 # RE-PINNED 2026-09-17 (lane/regex-long-lines): ripwire.grep/v1 360 -> 440 (measured 422, the --regex=dist.* probe). Every
 # --regex answer now carries regex_lines_skipped= — how many lines were too long for the regex engine's stack and never
 # matched, 0 included — so its compact reading rides every regex probe (73 B). The literal --grep probe does not move.
+# RE-PINNED 2026-09-19 (lane/r2-namehits, LB3x round-2 lever): ripwire.for/v1 670 -> 760 (measured 748, the
+# --for=geometry probe). Attributed: the loop's ONE new whole-document reading `namehits/nh p=: <=3 unnamed
+# files by file-name/path word match…` (94 B, namehits.h kForCompactLegendNameHits) rides every --for compact
+# answer in the default regime (no explicit --token-budget) — 654 + 94 = 748. Same rule as every anchor above:
+# the largest measured (U) probe, rounded up to the next multiple of 10 B, plus 10.
 # schema                      pin  measured
 PIN_TABLE='
 ripwire.map/v1                   910   892
@@ -431,7 +436,7 @@ ripwire.pack-task/v1             990   974
 ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1           240   230
-ripwire.for/v1                   670   654
+ripwire.for/v1                   760   748
 '
 pinFor()
 {
@@ -553,7 +558,11 @@ echo
 # A1' rebuilt --for's compact legend present-only, and it is a THIN answer here, so it also carries for-widen's
 # coverage= reading, +162 B); the other nine verbs are 317/770/271/425/212/400/339/708/287 B and did not move. Same
 # rule as every anchor above: the next multiple of 100 B over the measured total.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,700 B (29,824 B in full on the ripwire tree) ==="
+# RE-ANCHORED 2026-09-19 (lane/r2-namehits, LB3x round-2 lever): 4,700 -> 4,800 B, measured 4,739. Attributed: the
+# loop's `--for=geometry distance` probe is the only verb of the ten that carries namehits/nh's new compact
+# clause (94 B, present only on --for's default regime) — every other verb is unchanged. Same rule as every
+# anchor above: the next multiple of 100 B over the measured total.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,800 B (29,824 B in full on the ripwire tree) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -562,8 +571,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 4700 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 4,700 B; full: $fullBytes B)"
+[ "$loopBytes" -le 4800 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 4,800 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="

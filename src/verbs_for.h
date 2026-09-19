@@ -5,6 +5,7 @@
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
+#include "namehits.h"   // LB3x: the <namehits> append (round-2 lever, Amendment 1 §R2)
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -494,6 +495,10 @@ struct ForLensHeaderParts
     bool             idRouteLegend = true;    // row 6 (2026-09-12): the sc=/route= readings (graphlegend.h
                                               //   kForIdRouteLegend) — ceiling-droppable exactly like the two
                                               //   above; rung zero clears all three and the note names them
+    bool             nameHitsLegend = false;  // LB3x: set true only when the <namehits> element will actually
+                                              //   ride (default regime, cfg.tokenBudget==0) — NOT part of the
+                                              //   droppable trio: the ladder never runs in that regime, so there
+                                              //   is nothing to drop it FROM (see namehits.h's scope note).
     bool             legendDropped = false;   // …and rung zero SAYS SO: set with the two clears above, it splices
                                               //   kForLegendDroppedNote. A field rather than a note the rung
                                               //   appends once, because the ladder rebuilds this header up to
@@ -806,6 +811,10 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     {
         h += kForCompactLegendTail;
     }
+    if( p.nameHitsLegend )
+    {
+        h += rw::kForCompactLegendNameHits;
+    }
     if( p.legendDropped )
     {
         // L1: the droppable clauses went to the ceiling — the attributes stay, and the note names exactly the
@@ -938,6 +947,10 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
+    }
+    if( p.nameHitsLegend )
+    {
+        h.append( rw::kForFullLegendNameHits );   // LB3x: defines the <namehits> element (namehits.h)
     }
     if( p.legendDropped )
     {
@@ -2358,11 +2371,16 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             forScPresent = lensRank[i] > 0 && rw::hasScopeAttr( ing.symbols[i] );
         }
+        // LB3x: the <namehits> element rides only in the default regime — no explicit --token-budget (the
+        // ceiling ladder does not yet price it; see namehits.h's scope note) — and its legend clause is
+        // present exactly when the element itself will be (present-only, like every other reading here).
+        const bool forNameHitsOn = cfg.tokenBudget == 0;
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
-                                        /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
+                                        /*tailLegend=*/true, /*idRouteLegend=*/true, /*nameHitsLegend=*/forNameHitsOn,
+                                        /*legendDropped=*/false, flRootArg,
                                         forScPresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
@@ -2916,6 +2934,31 @@ std::optional<int> runForLens( const MainDispatch& d )
                                                                + routeStr.size() + graphSection.xml.size() + detailSection.xml.size()
                                                                + autoSection.xml.size() + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve );
 
+        // LB3x — the <namehits> append, RENDERED HERE (not at the emission site) so its bytes are part of
+        // est_tokens' fixpoint below: a document that claims a token price and then appends an unpriced
+        // element is exactly the "quietly omits" surface the honesty rule forbids (estchargecheck.sh #11).
+        // Default regime only (forNameHitsOn); "" on the explicit-budget regime, where the ladder does not
+        // yet price this element (namehits.h's scope note) — an empty string costs nothing below.
+        std::string nameHitsStr;
+        if( forNameHitsOn )
+        {
+            HashMap<std::string, std::uint8_t> nhNamed;
+            for( NodeId sid : shownSigIds )
+            {
+                if( sid < ing.symbols.size() )
+                {
+                    nhNamed[ lensRowPath( ing, ing.symbols[ sid ].fileId, flRootArg ) ] = 1;
+                }
+            }
+            for( const std::string& p : forFileTailShown.paths )
+            {
+                nhNamed[ p ] = 1;
+            }
+            const std::vector<NameHitsRanked> nhRanked = rankNameHits( ing, nameHitsToks( cfg.forTask ) );
+            std::vector<char>                 nhEsc;
+            nameHitsStr = renderNameHitsXml( ing, nhRanked, nhNamed, flRootArg, nhEsc );
+        }
+
         // N1: the last rung's note DEFINES the root attribute it accompanies (over_ceiling= …), so the attribute is
         // never on a document whose legend does not explain it; the bracket spelling stays. It is PROSE ONLY now —
         // M3 took the verdict off it. finishForLensHeader used to recover "the last rung fired" by finding this
@@ -2944,7 +2987,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             // F2: everything OUTSIDE the header at the markup rate. enrich.markupBytes is the compact <hops> section,
             // folded in here rather than charged separately — one rate, one rounding (ForEnrichmentPlan).
             .nonHeaderMarkupBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                  + enrich.markupBytes + tailStr.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
+                                  + enrich.markupBytes + tailStr.size() + nameHitsStr.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate; LB3x: namehits priced the same way)
             // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above)
             .bodyTokens           = detailSection.tokens + enrich.bodyTokens,
             .tokenBudget          = cfg.tokenBudget,
@@ -3146,6 +3189,14 @@ std::optional<int> runForLens( const MainDispatch& d )
         if( cfg.withGraph )
         {
             rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
+        }
+
+        // LB3x — the <namehits> append: OWN element, LAST child of the root, APPEND-ONLY (namehits.h),
+        // rendered earlier (nameHitsStr) so its bytes are part of est_tokens' fixpoint above; this site only
+        // streams the bytes already priced. Empty ("") on the explicit-budget regime — a no-op write.
+        if( !nameHitsStr.empty() )
+        {
+            std::fwrite( nameHitsStr.data(), 1, nameHitsStr.size(), stdout );
         }
 
         rw::emitRaw( stdout, "</ctx>" );

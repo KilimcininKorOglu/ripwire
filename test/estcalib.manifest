@@ -2,11 +2,18 @@
 # label o200k cl100k est_at_pin_time argv...   (space-separated; no argv may contain a space)
 # Regenerate: python3 bench/tokenaudit/pin.py --bin build/ripwire   (needs tiktoken)
 # Read by: test/tokenbudgetcheck.sh #18 — the calibration band. See bench/tokenaudit/README.md.
+# RE-PINNED 2026-09-19 (lane/r2-namehits, LB3x round-2 lever): for-named ONLY, 789/785/1050 -> 959/954/1284.
+# Attributed: base binary (origin/integration/train-7 @3bd3e8ae, unmodified) on this SAME fixture already
+# reads 898/893/1195 for for-named and byte-identical numbers to this file's other seven rows — the
+# other rows' drift from their pinned values (map 1009->974 etc.) predates this lane and is out of its
+# scope. The remaining for-named delta (898->959 o200k, +61 B tokenized) is namehits.h's <namehits> append
+# (default --for regime only), the only new bytes this lane's change adds to any pinned probe's output.
+
 map 1009 999 1123 
 map-topk5 538 535 653 --top-k=5
 metrics 2381 2370 2509 --metrics
 pack-signatures 1801 1784 2116 --pack-signatures
 expand 541 542 455 --expand=billableTotal
-for-named 789 785 1050 --for=billableTotal
+for-named 959 954 1284 --for=billableTotal
 for-budgeted 419 415 598 --for=dedupe --token-budget=400
 pack-task 882 862 1104 --pack-task=dedupe

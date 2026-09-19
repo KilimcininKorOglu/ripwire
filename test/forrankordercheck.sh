@@ -136,7 +136,14 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # replace, so the byte-shaped <sigs> section fits five more signature rows, and the legend that grew 154 B (the sc=
 # rule, the route= code's reading and the merged-callee reading) is paid for several times over in rows. The other
 # nine stay at their for-widen bases: -1.11%, +0.36%, -0.45%, +1.54%, +0.02%, +1.66%, +0.18%, -0.56%, +2.30%.
-REPO_BASE=( 10134 10029 10080 10102 9880 9397 10009 10070 9966 9861 )
+# RE-PINNED 2026-09-19 (lane/r2-namehits, LB3x round-2 lever, Amendment 1 §R2): all ten follow, the q5
+# precedent above. Attributed: the ONLY output change is the new <namehits> append (default --for regime;
+# up to 3 unpriced files + its legend clause) — measured on THIS tree, base binary (origin/integration/
+# train-7 @3bd3e8ae, unmodified) vs this lane's binary: +310/+137/+185/+154/+8/+166/+32/+144/+193/+127 B
+# (q5's small delta is a THIN answer with few unnamed candidates left to append; q7 likewise). The bases
+# below already absorb the ordinary corpus drift the earlier notes in this block describe (measured against
+# the SAME base binary on the SAME tree, so none of that drift is attributed to this lane).
+REPO_BASE=( 10444 10318 10406 10393 9875 9546 10211 10283 10183 10265 )
 
 # ── (1)+(2) rank order + p= on every row, four dialects ───────────────────────────────────────────────────
 order_fail=0
@@ -188,15 +195,24 @@ done
 # 3,488 B (+6 B is `root="."` against `root="fixture"`, so 3,494 B); this build 3,494 B. The typed root `fixture` matched
 # pathTierOf's `fixture/` segment, so every file of the tree was tiered test/bench and its notes.md headings could not
 # carry a doc mention; read root-relative they do (doc_mentions="1", r=3/r=4 swap). The other eight bases do not move.
-FX_BASE="fixture|geometry area of a shape|3494
-fixture|call a native function from python|3510
-fixture|parse the config and load it|3711
-ffifix|geometry area of a shape|2082
-ffifix|call a native function from python|3488
-ffifix|parse the config and load it|3897
-hostilefix|geometry area of a shape|3166
-hostilefix|call a native function from python|2106
-hostilefix|parse the config and load it|3380"
+# RE-PINNED 2026-09-19 (lane/r2-namehits, LB3x round-2 lever), the nine fixture bundles, the q5 precedent
+# again: measured base binary (origin/integration/train-7 @3bd3e8ae, unmodified) vs this lane's binary on
+# THESE git-less copies: fixture/geometry 3494 -> 3768 (+274, the only one over +222 — one fewer already-
+# named file left an extra unnamed candidate to fill the 3-row cap), fixture/call 3557 -> 3779, fixture/parse
+# 3733 -> 3955, ffifix/geometry 2119 -> 2341, ffifix/call 3534 -> 3756, ffifix/parse 3934 -> 4156,
+# hostilefix/geometry 3181 -> 3403, hostilefix/call 2143 -> 2365, hostilefix/parse 3350 -> 3572 — all +222 B
+# but the first: <namehits n="3"> (3 rows + its legend clause, default --for regime). The "base" column below
+# is the base binary's measurement on this SAME tree, so it already absorbs whatever ordinary drift moved
+# these fixtures since their last pin (none of that is attributed to this lane).
+FX_BASE="fixture|geometry area of a shape|3768
+fixture|call a native function from python|3779
+fixture|parse the config and load it|3955
+ffifix|geometry area of a shape|2341
+ffifix|call a native function from python|3756
+ffifix|parse the config and load it|4156
+hostilefix|geometry area of a shape|3403
+hostilefix|call a native function from python|2365
+hostilefix|parse the config and load it|3572"
 echo "  ledger: nine fixture bundles — base bytes @d5ac29a7 → now"
 while IFS='|' read -r fx q base; do
     now="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null | wc -c | tr -d ' ' )"
