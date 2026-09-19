@@ -101,6 +101,43 @@ else
     echo "  SKIP  (H) xmllint not on PATH"
 fi
 
+# ── (I)/(J) rv-p5-expand HIGH fix: an EXPLICIT --top-k=N opts OUT of the #289 reorder (and the note=
+#     disclosure) entirely, on BOTH a unique name and an ambiguous one — docs/COMMANDS.md's --help text
+#     promises explicit --top-k "keeps the classic undecorated shape", and that includes byte ORDER, not
+#     just which attributes ride. Structural, single-binary assertions (no second/base binary needed): the
+#     classic shape IS "map before bodies, no note= attribute" — the exact shape emitted before #289 ever
+#     ran, and the exact shape chooseExpandServe/serialize() emit unconditionally once mapTopK>0 reaches
+#     serialize() ahead of the §H7 bodies append. RED on f738e13d (the early-bodies block was gated only on
+#     `!expandNodes.empty()`, so it also fired here); GREEN once the guard also requires
+#     `noteAppliesToBundle` (which carries `!cfg.topKExplicit`).
+"$BIN" "$FIX" --expand=uniqueTarget --top-k=5 --no-cache >"$TMP/uniq_tk5.xml" 2>"$TMP/uniq_tk5.err"
+uMapOff="$(    grep -bo '<r '     "$TMP/uniq_tk5.xml" | head -1 | cut -d: -f1 )"
+uBodiesOff="$( grep -bo '<bodies' "$TMP/uniq_tk5.xml" | head -1 | cut -d: -f1 )"
+if [ -z "$uMapOff" ] || [ -z "$uBodiesOff" ]; then
+    no "(I) --expand=uniqueTarget --top-k=5: expected BOTH a map and a <bodies> tag, got map=${uMapOff:-none} bodies=${uBodiesOff:-none}"
+elif [ "$uMapOff" -lt "$uBodiesOff" ]; then
+    ok "(I) unique symbol + explicit --top-k=5: map (byte $uMapOff) BEFORE <bodies> (byte $uBodiesOff) — classic shape, the #289 reorder does not apply"
+else
+    no "(I) unique symbol + explicit --top-k=5: <bodies> (byte $uBodiesOff) reordered BEFORE the map (byte $uMapOff) — the #289 reorder leaked onto an explicit --top-k, breaking the 'classic shape' contract"
+fi
+grep -q 'note="the ranked top-' "$TMP/uniq_tk5.xml" \
+    && no "(I) unique symbol + explicit --top-k=5 wrongly carries the note= disclosure (explicit --top-k opts out of it too)" \
+    || ok "(I) unique symbol + explicit --top-k=5 carries no note= (explicit --top-k opts out)"
+
+"$BIN" "$FIX" --expand=dupTarget --top-k=5 --pack-budget-bytes=10 --no-cache >"$TMP/dup_tk5.xml" 2>"$TMP/dup_tk5.err"
+aMapOff="$(    grep -bo '<r '     "$TMP/dup_tk5.xml" | head -1 | cut -d: -f1 )"
+aBodiesOff="$( grep -bo '<bodies' "$TMP/dup_tk5.xml" | head -1 | cut -d: -f1 )"
+if [ -z "$aMapOff" ] || [ -z "$aBodiesOff" ]; then
+    no "(J) --expand=dupTarget --top-k=5: expected BOTH a map and a <bodies> tag, got map=${aMapOff:-none} bodies=${aBodiesOff:-none}"
+elif [ "$aMapOff" -lt "$aBodiesOff" ]; then
+    ok "(J) ambiguous symbol + explicit --top-k=5: map (byte $aMapOff) BEFORE <bodies> (byte $aBodiesOff) — classic shape, the #289 reorder does not apply"
+else
+    no "(J) ambiguous symbol + explicit --top-k=5: <bodies> (byte $aBodiesOff) reordered BEFORE the map (byte $aMapOff) — the #289 reorder leaked onto an explicit --top-k, breaking the 'classic shape' contract"
+fi
+grep -q 'note="the ranked top-' "$TMP/dup_tk5.xml" \
+    && no "(J) ambiguous symbol + explicit --top-k=5 wrongly carries the note= disclosure (explicit --top-k opts out of it too)" \
+    || ok "(J) ambiguous symbol + explicit --top-k=5 carries no note= (explicit --top-k opts out)"
+
 if [ "$fail" -eq 0 ]; then
     echo "ALL PASS"
 else

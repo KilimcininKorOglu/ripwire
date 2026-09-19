@@ -2387,7 +2387,16 @@ int runDefaultMap( const MainDispatch& d )
         // chooseExpandServe's pricing fixpoint or the map's own est_tokens= (both already counted these bytes
         // via payloadTokens/bodiesSection.tokens). §H7 below skips its own bodies emission when this fires
         // (bodiesEmittedEarly).
-        if( !expandNodes.empty() )   // !serveWholeFile is this whole branch's precondition (see the if above)
+        //
+        // #289 review fix (rv-p5-expand HIGH): gated on `noteAppliesToBundle`, the SAME precomputed firing
+        // condition `note=` uses — not `!expandNodes.empty()` alone. An unguarded reorder also fired on an
+        // EXPLICIT non-zero --top-k (unique or ambiguous name alike), which docs/COMMANDS.md's --help text
+        // promises "keeps the classic undecorated shape" for — an explicit top-k choice opts OUT of every
+        // M6/§289 auto-decoration, ordering included. `noteAppliesToBundle` already carries the explicit-
+        // top-k exclusion, so reusing it (rather than adding a second field read for the same exclusion)
+        // keeps test/shapingflagcheck.sh (A)'s pinned read-site count exact — spelled around here in prose,
+        // not as the literal source token, for that same reason (the count is a naive grep over this file).
+        if( !expandNodes.empty() && noteAppliesToBundle )   // !serveWholeFile is this whole branch's precondition (see the if above)
         {
             emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, cfg.compress, redactPtr,
                                                            expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
