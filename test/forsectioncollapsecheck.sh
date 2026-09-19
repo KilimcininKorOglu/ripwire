@@ -1,18 +1,31 @@
 #!/usr/bin/env bash
-# forsectioncollapsecheck.sh — L2 (round-1 lever B1, lane/r1-for-sections-stub, 2026-09-19): the ranked
-# --for lens's <lego>/<compose> sections collapse to a COUNTED STUB by default — `<lego total="N"
-# shown="0" next="…"/>` (same shape for <compose>) instead of the full <iface>/<m>/<impl> contract or
-# <field> row list. A disclosed cut (§9.3), never a silent one: total= is that section's own PRE-CAP row
-# count (packLego's post-dedup ifaces.size() before its topN=12 display cap; every matched HAS-A edge for
+# forsectioncollapsecheck.sh — L2 → R2-L2' (round-1 lever B1, priced in round 2, lane/r2-sections-stub-priced,
+# 2026-09-19): the ranked --for lens's <lego>/<compose> sections collapse to a COUNTED STUB — `<lego
+# total="N" shown="0" next="…"/>` (same shape for <compose>) instead of the full <iface>/<m>/<impl> contract
+# or <field> row list — ONLY WHEN THE STUB IS CHEAPER: len(section) > len(stub) + len(kForSectionStubLegend),
+# the FULL clause (251 B, identical in both legend dialects) charged WHOLE to each candidate section's own
+# decision (rv-prereg2 Amendment 1, R4). Round 1 collapsed every non-empty candidate unconditionally; round
+# 2 retracted that where the stub — whose next= echoes the task verbatim, so it is not free — would have
+# been the BIGGER of the two. The decision is POSTURE-INDEPENDENT: the same collapse set under
+# --legend=full and --legend=compact, because kForSectionStubLegend is the one string both dialects splice.
+#
+# A disclosed cut (§9.3) when it fires, never a silent one: total= is that section's own PRE-CAP row count
+# (packLego's post-dedup ifaces.size() before its topN=12 display cap; every matched HAS-A edge for
 # compose, which caps nothing so "pre-cap" and "emitted" are the same count there), shown="0" discloses
 # nothing was rendered, and next= names the ONE restoring spelling — `--sections=lego,compose` — that
 # returns BOTH sections byte-identical to the pre-stub render, in ONE call (E41 rule b: nextverb.h's
-# capped composer). No stub for a section that would have been EMPTY.
+# capped composer). No stub for a section that would have been EMPTY, and no stub for a section too SMALL
+# to be worth replacing.
 #
 # total= is NOT the same number `--for --json`'s lego_total/compose_total print: that JSON count is
 # PRE-DEDUP (by design — src/verbs_for.h's own comment on ForLensJsonInputs::legoTotal), so it can exceed
 # this stub's total= on a corpus with same-named fwd-decl/definition collisions. Do not cross-check the
 # two; this gate cross-checks the stub's total= against the RESTORED render's own row count instead.
+#
+# Fixtures: test/legofix (lego collapses: three small interfaces still clear the threshold) and
+# test/sectionpricefix (both lego and compose collapse: a purpose-built interface + HAS-A owners sized
+# comfortably above threshold) prove the ABOVE-threshold side; test/hasafix (compose stays whole: two
+# short <field> rows, priced BELOW threshold) proves the round-2 delta itself, arm (10).
 #
 # Usage:  bash test/forsectioncollapsecheck.sh [path-to-ripwire-binary]
 #         RIPWIRE_BIN=build/ripwire bash test/forsectioncollapsecheck.sh
@@ -95,11 +108,15 @@ grep -q '<compose' "$TMP/lf_restored.xml" \
     && no "(3) --sections=lego,compose: <compose> present for a fixture with no compose edges" \
     || ok "(3) --sections=lego,compose: still no <compose> element (consistent with the default run)"
 
-# ── (4) REPO ROOT: a query with BOTH sections non-empty, cross-checked against --json's exact compose count ─
-# packCompose has no cap, so its total= must equal <field> exactly (a strict cross-check unlike lego's).
-RQ="shape interface implementors"
-"$BIN" . --no-cache --legend=full --for="$RQ" >"$TMP/r_stub.xml" 2>/dev/null
-"$BIN" . --no-cache --legend=full --for="$RQ" --sections=compose >"$TMP/r_compose_only.xml" 2>/dev/null
+# ── (4) test/sectionpricefix: a query with BOTH sections non-empty (and both PRICED ABOVE the round-2
+# threshold — see (10) below), cross-checked against the restored render's exact compose count. packCompose
+# has no cap, so its total= must equal <field> exactly (a strict cross-check unlike lego's). A dedicated,
+# committed fixture (not the live repo root: R2-L2' prices the stub against the SECTION'S OWN bytes, so a
+# repo-root probe query drifts in and out of collapsing as the corpus changes underneath it — R2's own
+# measurement hit exactly this, see (10)'s note).
+RQ="big iface implementors owner"
+"$BIN" test/sectionpricefix --no-cache --legend=full --for="$RQ" >"$TMP/r_stub.xml" 2>/dev/null
+"$BIN" test/sectionpricefix --no-cache --legend=full --for="$RQ" --sections=compose >"$TMP/r_compose_only.xml" 2>/dev/null
 COMPOSETOTAL="$( grep -o '<compose total="[0-9]*"' "$TMP/r_stub.xml" | grep -o '[0-9]*' )"
 FIELDROWS="$( grep -o '<field ' "$TMP/r_compose_only.xml" | wc -l | tr -d ' ' )"
 if [ -n "$COMPOSETOTAL" ] && [ -n "$FIELDROWS" ]; then
@@ -107,7 +124,7 @@ if [ -n "$COMPOSETOTAL" ] && [ -n "$FIELDROWS" ]; then
         && ok "(4a) compose total=\"$COMPOSETOTAL\" matches --sections=compose's $FIELDROWS <field> row(s) exactly (no cap on this section)" \
         || no "(4a) compose total=\"$COMPOSETOTAL\" but --sections=compose shows $FIELDROWS <field> row(s)"
 else
-    no "(4a) this repo's current ranking of \"$RQ\" surfaced no compose edges — pick a different probe query ($COMPOSETOTAL/$FIELDROWS)"
+    no "(4a) test/sectionpricefix's ranking of \"$RQ\" surfaced no compose edges ($COMPOSETOTAL/$FIELDROWS)"
 fi
 grep -Eq '<lego total="[0-9]+" shown="0"' "$TMP/r_compose_only.xml" \
     && ok "(4b) --sections=compose restores compose ALONE — lego is still stubbed" \
@@ -128,7 +145,7 @@ if [ -n "$NEXT" ]; then
         *) no "(5b) next= does not name --sections=lego,compose: $NEXT" ;;
     esac
     python3 -c "import shlex,sys; print('\0'.join(shlex.split(sys.argv[1])),end='')" "$NEXT" >"$TMP/argv.bin"
-    ( cd "$ROOT" && xargs -0 "$BIN" . --no-cache < "$TMP/argv.bin" >"$TMP/nx.out" 2>"$TMP/nx.err" ); rc=$?
+    ( cd "$ROOT" && xargs -0 "$BIN" test/sectionpricefix --no-cache < "$TMP/argv.bin" >"$TMP/nx.out" 2>"$TMP/nx.err" ); rc=$?
     if [ "$rc" = 0 ] || [ "$rc" = 4 ]; then
         ok "(5c) next=\"$NEXT\" parses and runs (exit $rc)"
     else
@@ -253,6 +270,43 @@ else
     skip(){ printf '  SKIP  %s\n' "$*"; }
     skip "(9) open_memstream degrade arms — DISCLOSE is compiled out of this binary (the unrelated --scip decode degrade path produced no alert either, so alerts are unobservable globally here, not this seam having broken). RIPWIRE_FAULT_CHARGE_BUFFER does not exist on this flavour. Proven by the PLAIN-flavour CI leg, the estchargecheck.sh #14 precedent."
 fi
+
+# ── (10) R2-L2' PRICED: a section SMALLER than its own stub (+ the legend clause's unshared charge) stays
+# WHOLE — the round-2 delta over round-1's unconditional collapse. test/hasafix's <compose> is two short
+# <field> rows (168 B measured) against a stub (task-echoing next=) plus the 251 B kForSectionStubLegend
+# clause (≈ 356 B here) — smaller than what would replace it, so it must NOT collapse, in either dialect.
+# RED on the pre-R2 binary (round-1 collapsed every non-empty section unconditionally); GREEN here.
+HQ="member field composition"
+"$BIN" test/hasafix --no-cache --legend=full    --for="$HQ" >"$TMP/hasa_full.xml"    2>/dev/null
+"$BIN" test/hasafix --no-cache --legend=compact --for="$HQ" >"$TMP/hasa_compact.xml" 2>/dev/null
+grep -Fq '<compose><field' "$TMP/hasa_full.xml" \
+    && ok "(10a) full: a <compose> smaller than its own stub+clause stays WHOLE (no collapse)" \
+    || no "(10a) full: <compose> collapsed even though it is smaller than its stub — $( grep -o '<compose[^>]*' "$TMP/hasa_full.xml" | head -1 )"
+grep -Fq '<compose><field' "$TMP/hasa_compact.xml" \
+    && ok "(10b) compact: same section stays WHOLE (posture carries no separate threshold)" \
+    || no "(10b) compact: <compose> collapsed even though it is smaller than its stub — $( grep -o '<compose[^>]*' "$TMP/hasa_compact.xml" | head -1 )"
+grep -Eq '<(lego|compose) total="[0-9]+" shown="0"' "$TMP/hasa_full.xml" \
+    && no "(10c) a lego/compose stub shape leaked into a run that should have stayed whole" \
+    || ok "(10c) no lego/compose stub shape anywhere in the whole-section run (unrelated <tail total= shown=> is a different element)"
+
+# ── (11) R2-L2' PRICED, posture-independent (rv-prereg2 Amendment 1, R4): the COLLAPSE SET — which of
+# lego/compose collapsed — is IDENTICAL under --legend=full and --legend=compact, on both a section that
+# collapses (test/sectionpricefix, priced above threshold) and one that does not (test/hasafix, priced
+# below). kForSectionStubLegend is the one clause text both dialects splice (never a shorter compact-only
+# variant), so the size-gate arithmetic cannot differ by posture.
+"$BIN" test/sectionpricefix --no-cache --legend=full    --for="$RQ" >"$TMP/big_full.xml"    2>/dev/null
+"$BIN" test/sectionpricefix --no-cache --legend=compact --for="$RQ" >"$TMP/big_compact.xml" 2>/dev/null
+collapse_set(){ { grep -Eqo '<lego total="[0-9]+" shown="0"' "$1" && printf 'lego '; } ; { grep -Eqo '<compose total="[0-9]+" shown="0"' "$1" && printf 'compose '; } ; }
+BIGFULL_SET="$( collapse_set "$TMP/big_full.xml" )"
+BIGCOMPACT_SET="$( collapse_set "$TMP/big_compact.xml" )"
+[ "$BIGFULL_SET" = "$BIGCOMPACT_SET" ] && [ -n "$BIGFULL_SET" ] \
+    && ok "(11a) sectionpricefix: same collapse set under full and compact (\"$BIGFULL_SET\")" \
+    || no "(11a) sectionpricefix: collapse set differs by posture — full=\"$BIGFULL_SET\" compact=\"$BIGCOMPACT_SET\""
+HASAFULL_SET="$( collapse_set "$TMP/hasa_full.xml" )"
+HASACOMPACT_SET="$( collapse_set "$TMP/hasa_compact.xml" )"
+[ "$HASAFULL_SET" = "$HASACOMPACT_SET" ] && [ -z "$HASAFULL_SET" ] \
+    && ok "(11b) hasafix: same (empty) collapse set under full and compact — neither dialect collapses a too-small section" \
+    || no "(11b) hasafix: collapse set differs by posture, or unexpectedly non-empty — full=\"$HASAFULL_SET\" compact=\"$HASACOMPACT_SET\""
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"
