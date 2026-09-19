@@ -835,7 +835,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     //    naming-calibration, dmm, comment-coherence, help-task facts.
     // doctor: src/verbs_doctor.h runDoctor / doctorIndexCacheRow / doctorGitConfigTrustAttrs / doctorLayoutCheck / doctorAgentRows
     { "n", "n=: the check's name (binary-path, grammars, cache-dir, git, tree-sitter, index-cache, layout ...)", true, "c", MapHeaderRead::No, {}, "doctor" },
-    { "agent", "agent=: codex or claude; that agent's live-integration c rows follow the built-in checks", false, "doctor", MapHeaderRead::No, {}, "doctor" },
+    { "agent", "agent=: the agent named by the agent flag; its live-integration c rows follow the built-in checks", false, "doctor", MapHeaderRead::No, {}, "doctor" },
     { "copied", "copied=1: the PATH binary is a byte-identical copy of this one, an ok copied install", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "loaded", "loaded=/expected=: grammars whose tags query compiled / grammars compiled in; a shortfall fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines expected=
     { "dir", "dir=: the per-user cache directory scanned (TMPDIR/XDG_CACHE_HOME ladder); unwritable fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
@@ -941,7 +941,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // doctor purpose line (compactlegend.h:179) spells c name= but the emitter writes n= (verbs_doctor.h row lambda, doctorAgentRows); the n row above defines it; consider fixing the purpose to c n= ok=.
     // doctor truncated= means two different things on two c rows (cache-dir: scan cut, bytes/blobs short; tracked-binaries: scan skipped, stale=0 unmeasured); one KEY-qualified row carries both.
     // doctor p0=/src0= are numbered: tracked-binaries emits p0..p7/src0..src7 (kShown=8); only p0/src0 get a reading, so p1..p7/src1..src7 stay undefined if a gate reads every name (needs 14 more rows or a prefix rule).
-    // doctor conditional rows not in today's output (present-only): agent (root, agent flag), copied, blobs_floor, shallow, p0, more, type, unit0 group; codex/claude agent rows append check-specific attrs from codexdoctor::Check.attrs, not audited here.
+    // doctor conditional rows not in today's output (present-only): agent (root, agent flag), copied, blobs_floor, shallow, p0, more, type, unit0 group; the agent rows append check-specific attrs from codexdoctor::Check.attrs, not audited here.
     // quality-panel conditional rows not in today's output: unavailable, unavailable_why (split: not provably always co-emitted), unreadable_files, state_floor, findings_capped+floor_rules, s uncounted, s unavail.
     // naming-calibration: p at= is a path:line, NOT the commit stamp; the existing tool-wide at=: commit+dirty+shallow term also fires on these answers, so the p at row disambiguates. Conditional: r (probed=0 root), truncated, new_fires.
     // naming-calibration root r= and r row element share a name; the r row is onTag naming-calibration so it only fires on the probed=0 root.
