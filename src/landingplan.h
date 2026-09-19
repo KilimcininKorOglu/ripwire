@@ -236,7 +236,9 @@ inline void writePlan( std::FILE* out, const PlanResult& p )
                        "are the same commit: head= is the bare 9 hex chars this verb has always printed, at= is the "
                        "tool wide anchor and is head= plus a \"+dirty\" suffix when the working tree is not clean. Prefer "
                        "at= (it is the one spelling every other repo reading verb uses, and the only one that tells you "
-                       "whether uncommitted work was in scope); head= is kept for callers already keyed to it. -->" );
+                       "whether uncommitted work was in scope); head= is kept for callers already keyed to it. "
+                       "refs_dropped= (present only when non-zero) counts local branches git listed that the sweep could "
+                       "NOT read (a tip that is not an object name): they are in none of the counts and none of the rows. -->" );
     // r26-stamp Task A: head= (pre-existing, bare 9-char sha, unchanged) and at= (this round's sha[+dirty]
     // anchor) are BOTH kept here rather than converged onto one: head= is an established attribute name this
     // verb already shipped and other callers may already key off, so it stays byte-for-byte what it was;
@@ -248,11 +250,12 @@ inline void writePlan( std::FILE* out, const PlanResult& p )
     // DOCUMENTED instead: the header above states the containment in the OUTPUT, where consumers read it.
     // Converge by retiring head= across the whole family at once, never one verb at a time.
     const std::string atAttr = p.atStamp.empty() ? std::string() : ( " at=\"" + p.atStamp + "\"" );
+    const std::string droppedAttr = p.stray.refsDropped == 0 ? std::string() : ( " refs_dropped=\"" + std::to_string( p.stray.refsDropped ) + "\"" );
     rw::emitTo( out, "<landing-plan head=\"{:.9}\" refs=\"{}\" unmerged=\"{}\" superseded=\"{}\" merged=\"{}\" "
-                       "undetermined=\"{}\" scouted=\"{}\" bounded=\"{}\" scout-ok=\"{}\"{}>",
+                       "undetermined=\"{}\" scouted=\"{}\" bounded=\"{}\" scout-ok=\"{}\"{}{}>",
                   p.stray.headSha.c_str(), p.stray.refsScanned, p.scouted.size() + p.bounded.size(),
                   supersededCount, p.stray.mergedRefs, p.undetermined.size(), p.scouted.size(), p.bounded.size(),
-                  p.scoutOk ? 1 : 0, atAttr.c_str() );
+                  p.scoutOk ? 1 : 0, atAttr.c_str(), droppedAttr.c_str() );
 
     for( std::size_t i : p.scouted )
     {

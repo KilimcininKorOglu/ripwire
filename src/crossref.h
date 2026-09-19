@@ -1051,6 +1051,9 @@ struct StrayResult
     std::size_t          distinctBlobs = 0;
     std::size_t          refsScanned   = 0;
     std::uint32_t        mergedRefs    = 0;   // scanned, found fully present on the live line, and OMITTED below
+    // refs for-each-ref listed that enumerateRefs DROPPED (a tip that is not an object name): in none of the counts
+    // above, so while it is non-zero refs= and the four buckets describe a sweep that skipped them — refs_dropped= says so.
+    std::uint32_t        refsDropped   = 0;
     std::vector<RefRow>  refs;                // only refs with stray content — merged ones are noise in a 30-ref sweep
 };
 
@@ -1303,7 +1306,9 @@ inline StrayResult computeStrayContent( const std::string& root, std::string_vie
     result.headRef = quality::gitOneLine( root, "rev-parse --abbrev-ref HEAD 2>/dev/null" );
 
     std::size_t                filterNameHits = 0;
-    const std::vector<RefInfo> refs = enumerateRefs( root, filter, result.headSha, &filterNameHits );
+    RefEnumeration             enumeration;   // a dropped ref is in no count below, so the root discloses it (refs_dropped=)
+    const std::vector<RefInfo> refs = enumerateRefs( root, filter, result.headSha, &filterNameHits, &enumeration );
+    result.refsDropped = enumeration.refsDropped;
     result.filterMatchedNothing = !filter.empty() && filterNameHits == 0;
     if( result.filterMatchedNothing ) { result.ok = false; return result; }
     if( refs.size() > kMaxRefs ) { result.ok = false; result.tooManyRefs = true; return result; }
@@ -2086,7 +2091,10 @@ inline void writeStrayContentPage( std::FILE* out, const StrayResult& res, std::
                        "SECONDARY listing (it repeats complete and identical on every page) and is capped by detail, not "
                        "by limit / offset, which page the OUTER ref listing and report their own shown= / capped=. "
                        "at= is the git commit these numbers were computed at; a trailing +shallow means the clone's history is truncated (a depth-limited clone: churn counts only the commits present), and a trailing +dirty means the working tree "
-                       "differed from that commit (head= is the same commit, bare sha, kept for compatibility). -->" );
+                       "differed from that commit (head= is the same commit, bare sha, kept for compatibility). "
+                       "refs_dropped= (present only when non-zero) is how many local branches git listed that this sweep "
+                       "could NOT read (a tip that is not an object name): they are in none of the counts, so refs= and the "
+                       "four buckets describe only the branches that were swept. -->" );
     // §P8: shipped as `head-ref=` while its own --abi sibling (abicheck.h's `<abi head_ref=>`, over the SAME
     // field, reached by the SAME command line) shipped `head_ref=` — the tool's only kebab/snake pair, so a
     // parser written against one half read nothing from the other. Unified onto snake_case: it is the
@@ -2099,9 +2107,10 @@ inline void writeStrayContentPage( std::FILE* out, const StrayResult& res, std::
     // H14/M6: refs="2" under a ref-name filter reads as "this repo has two branches" unless the filter is
     // named. --doc-drift already echoed its own filter=; this is the same attribute on a sibling that did not.
     const std::string filterAttr = res.filter.empty() ? std::string() : ( " filter=\"" + ex( res.filter ) + "\"" );
-    rw::emitTo( out, "<stray-content head=\"{:.9}\" head_ref=\"{}\" refs=\"{}\" blobs=\"{}\" unmerged=\"{}\" superseded=\"{}\" merged=\"{}\" unknown=\"{}\"{}{}{}>",
+    const std::string droppedAttr = res.refsDropped == 0 ? std::string() : ( " refs_dropped=\"" + std::to_string( res.refsDropped ) + "\"" );
+    rw::emitTo( out, "<stray-content head=\"{:.9}\" head_ref=\"{}\" refs=\"{}\" blobs=\"{}\" unmerged=\"{}\" superseded=\"{}\" merged=\"{}\" unknown=\"{}\"{}{}{}{}>",
                   res.headSha.c_str(), ex( res.headRef ).c_str(), res.refsScanned, res.distinctBlobs, unmerged, superseded, res.mergedRefs, unknown,
-                  filterAttr.c_str(),
+                  filterAttr.c_str(), droppedAttr.c_str(),
                   pageDisclosure( srab, sizeof( srab ), refPage.end - refPage.begin, res.refs.size(), refPage.end, pageLimit, pageOffset, false ),
                   atAttrStr.c_str() );
     for( std::size_t refIndex = refPage.begin; refIndex < refPage.end; ++refIndex )

@@ -271,6 +271,27 @@ SHEOF
         no "whereis (14b control): the pass-through shim lost complete= — the shim is broken and the mutation is void: $W14C"
     fi
 
+    # ── 14c) MUTATION: the same dropped ref must be DISCLOSED by --stray-content and its --plan ──────────────
+    # --stray-content called enumerateRefs with no sink, so the ref dropped above vanished from refs= and every
+    # bucket with nothing on the root saying a branch was skipped (CodeRabbit on #295). The sweep now carries the
+    # count to the root as refs_dropped=, on --plan as well. Same shim, same control discipline as 14b.
+    for V in "--stray-content" "--stray-content --plan"; do
+        TAG="$( [ "$V" = "--stray-content" ] && echo stray-content || echo landing-plan )"
+        # shellcheck disable=SC2086
+        PATH="$SHIM:$PATH" "$BIN" "$R" $V --no-cache >"$TMP/s14c.xml" 2>/dev/null; rcC=$?
+        # shellcheck disable=SC2086
+        PATH="$SHIM:$PATH" RW_SHIM_MANGLE=1 "$BIN" "$R" $V --no-cache >"$TMP/s14m.xml" 2>/dev/null; rcM=$?
+        S14C="$( root_of "$TAG" <"$TMP/s14c.xml" )"; S14M="$( root_of "$TAG" <"$TMP/s14m.xml" )"
+        if [ "$rcC" = 0 ] && [ -n "$S14C" ] && ! printf '%s' "$S14C" | grep -q 'refs_dropped='; then
+            ok "$V (14c control): the pass-through shim answers (exit 0) with no refs_dropped="
+            { [ "$rcM" = 0 ] && printf '%s' "$S14M" | grep -q 'refs_dropped="1"'; } \
+                && ok "$V MUTATION: a ref dropped at enumeration is disclosed on the root (refs_dropped=\"1\")" \
+                || { no "$V MUTATION: a ref the sweep never read left no refs_dropped= on <$TAG> (exit $rcM)"; printf '%s\n' "$S14M"; }
+        else
+            no "$V (14c control): the pass-through run did not answer cleanly (exit $rcC) — the mutation is void: $S14C"
+        fi
+    done
+
     # ── 15) MUTATION: an OVERSIZED text blob (silently unscannable) must drop the claim ────────────────
     # kMaxBlobBytes is 2 MB; a symbol inside a larger blob is invisible to the scan, so the scan may
     # not claim exhaustiveness over a tree that contains one.
