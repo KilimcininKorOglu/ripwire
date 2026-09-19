@@ -30,7 +30,7 @@ instead of after it; the lines themselves are unchanged, only their order. Gates
 ### Changed — `--for` collapses a `<lego>`/`<compose>` section to a counted stub when the stub is smaller
 
 A `<lego>` or `<compose>` section in a `--for` answer is now replaced by a counted stub,
-`<lego total="N" shown="0" next="…"/>`, but only when the stub plus its legend clause is smaller than the section
+`<lego total="N" shown="0" capped="1" next="…"/>`, but only when the stub plus its legend clause is smaller than the section
 it replaces; a small section stays whole. `total=` is the section's own pre-cap row count, and `next=` names the
 new `--sections=lego,compose` flag, which restores both sections byte-identically in one call. The legend clause
 is present only when a section was actually stubbed, in both legend dialects and on the MCP `for` verb

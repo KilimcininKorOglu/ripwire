@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # forsectioncollapsecheck.sh — L2 → R2-L2' (round-1 lever B1, priced in round 2, lane/r2-sections-stub-priced,
 # 2026-09-19): the ranked --for lens's <lego>/<compose> sections collapse to a COUNTED STUB — `<lego
-# total="N" shown="0" next="…"/>` (same shape for <compose>) instead of the full <iface>/<m>/<impl> contract
+# total="N" shown="0" capped="1" next="…"/>` (same shape for <compose>) instead of the full <iface>/<m>/<impl> contract
 # or <field> row list — ONLY WHEN THE STUB IS CHEAPER: len(section) > len(stub) + len(kForSectionStubLegend),
 # the FULL clause (251 B, identical in both legend dialects) charged WHOLE to each candidate section's own
 # decision (rv-prereg2 Amendment 1, R4). Round 1 collapsed every non-empty candidate unconditionally; round
@@ -54,9 +54,9 @@ LFQ="shape interface implementors"
 
 [ -s "$TMP/lf_stub.xml" ] && [ -s "$TMP/lf_restored.xml" ] || no "(1) empty output — the rest of this gate is meaningless"
 
-printf '%s' "$( cat "$TMP/lf_stub.xml" )" | grep -Eq '<lego total="[0-9]+" shown="0" next="[^"]*"/>' \
+printf '%s' "$( cat "$TMP/lf_stub.xml" )" | grep -Eq '<lego total="[0-9]+" shown="0" capped="1" next="[^"]*"/>' \
     && ok "(1a) default run: <lego> is a self-closing counted stub" \
-    || no "(1a) default run: no <lego total= shown=\"0\" next=…/> stub found — $( grep -o '<lego[^>]*' "$TMP/lf_stub.xml" | head -1 )"
+    || no "(1a) default run: no <lego total= shown=\"0\" capped=\"1\" next=…/> stub found — $( grep -o '<lego[^>]*' "$TMP/lf_stub.xml" | head -1 )"
 
 grep -q '<iface\|<impl' "$TMP/lf_stub.xml" \
     && no "(1b) default run: full <iface>/<impl> rows leaked past the stub" \
@@ -248,7 +248,7 @@ if grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/flavour.err"
         [ "$FAULT_TOTAL" = "3" ] \
             && ok "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: stub total=\"3\" matches the buffered path's own count" \
             || no "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: stub total=\"$FAULT_TOTAL\", expected \"3\" (the buffered path's count)"
-        grep -Eq '<lego total="[0-9]+" shown="0" next="[^"]*"/>' "$TMP/fault_stub2.xml" \
+        grep -Eq '<lego total="[0-9]+" shown="0" capped="1" next="[^"]*"/>' "$TMP/fault_stub2.xml" \
             && ok "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: default run still collapses to the counted stub (no bypass)" \
             || no "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: no stub found on the degrade path — $( grep -o '<lego[^>]*' "$TMP/fault_stub2.xml" | head -1 )"
         grep -q '<iface\|<impl' "$TMP/fault_stub2.xml" \

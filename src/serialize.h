@@ -6280,7 +6280,7 @@ inline bool sectionsWant( std::string_view sections, std::string_view name ) noe
     return false;
 }
 
-// L2 (round-1 lever B1): the COUNTED STUB `<lego total="N" shown="0" next="…"/>` (or `<compose …/>`) that
+// L2 (round-1 lever B1): the COUNTED STUB `<lego total="N" shown="0" capped="1" next="…"/>` (or `<compose …/>`) that
 // replaces a ranked --for/`for` section by DEFAULT — a §9.3 disclosed cut, not a silent one: total= is the
 // section's own pre-cap row count (packLego's post-dedup ifaces.size(), or packCompose's matched-edge
 // count — the SAME tally each renderer already computes for its real body, never a second guess), shown="0"
@@ -6298,7 +6298,7 @@ inline bool sectionsWant( std::string_view sections, std::string_view name ) noe
 // ("the auto-bodies flag", never "--auto-bodies") for exactly the same reason.
 inline constexpr std::string_view kForSectionStubLegend =
     "; lego/compose collapse to a counted stub by default (a disclosed cut): total= that section's own "
-    "pre-cap row count, shown=\"0\" (nothing rendered here), next= names the sections=lego,compose flag "
+    "pre-cap row count, shown=\"0\" capped=\"1\" (nothing rendered here), next= names the sections=lego,compose flag "
     "that restores both sections byte-identically in one call";
 
 // L2 fault-injection fix (independent review, 2026-09-19): packLego/packCompose's out-params give the stub
@@ -6367,7 +6367,7 @@ inline std::string sectionStubXml( const char* tag, std::size_t total, std::stri
     std::string s;
     s.reserve( 40 + std::string_view( tag ).size() * 2 + nextInvocation.size() );
     s += '<';  s += tag;
-    s += " total=\"";  s += std::to_string( total );  s += "\" shown=\"0\"";
+    s += " total=\"";  s += std::to_string( total );  s += "\" shown=\"0\" capped=\"1\"";
     s += rw::nextAttrXml( nextInvocation );
     s += "/>";
     return s;

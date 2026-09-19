@@ -1601,7 +1601,8 @@ inline void spliceForSectionStubLegend( std::string& doc, bool stubbed )
     {
         return;
     }
-    const std::size_t legendAt = doc.find( " -->" );
+    const std::size_t legendAt   = doc.find( " -->" );
+    const std::size_t sizeBefore = doc.size();
     // ASSUME, not VALIDATE: not external input — `stubbed` is only ever true once the header above has
     // already been fully built and fwritten (its closing " -->" is unconditionally emitted by ctxRootOpen's
     // own comment), so the boundary is provably present, not merely hoped for.
@@ -1610,8 +1611,8 @@ inline void spliceForSectionStubLegend( std::string& doc, bool stubbed )
     {
         doc.insert( legendAt, rw::kForSectionStubLegend );
     }
-    ENSURES( doc.find( rw::kForSectionStubLegend ) != std::string::npos,
-             "spliceForSectionStubLegend: a section stubbed but the legend clause is not present in the returned document" );
+    ENSURES( doc.size() == sizeBefore + rw::kForSectionStubLegend.size(),
+             "spliceForSectionStubLegend: a section stubbed but the legend clause was not spliced into the returned document" );
 }
 
 inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
