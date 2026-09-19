@@ -113,9 +113,12 @@ elif op == "payload":  # the payload with the root's schema attribute removed �
     sys.stdout.write( pay )
 elif op == "legend":   sys.stdout.write( "".join( leg ) )
 elif op == "prose":    # PROSE legend bytes: comments this document carries that the FULL document (argv[3]) does not carry
+    # L1: a DATA comment that carries a price (the map header's est_tokens=N) is the same comment in both dialects —
+    # compact reprices the number to the bytes it delivers — so the value is masked before the set comparison.
     full = open( sys.argv[3], encoding = "utf-8", errors = "replace" ).read()
-    fleg, _ = split( full ); fset = set( fleg )
-    print( sum( len( x ) for x in leg if x not in fset ) )
+    unpriced = lambda c: re.sub( r"(?<= )est_tokens=[0-9]+", "est_tokens=N", c )
+    fleg, _ = split( full ); fset = set( unpriced( x ) for x in fleg )
+    print( sum( len( x ) for x in leg if unpriced( x ) not in fset ) )
 elif op == "headattrs":  # attribute names on the root and its first child (where the completeness terms are read)
     names = set( re.findall( r'([\w:.-]+)="', m.group( 2 ) ) ) if m else set()
     if m:
@@ -167,15 +170,33 @@ rrun(){ ( cd "$REPO" && "$BIN" . "$@" 2>"$TMP/rerr" ); }
 "$BIN" "$FIX" >/dev/null 2>&1 || true
 ( cd "$REPO" && "$BIN" . >/dev/null 2>&1 ) || true
 
-echo "=== (A) the original four: default == --legend=full; schema ids; shrink; completeness attributes ==="
+echo "=== (A) the original four: default == the DEFAULT POSTURE (compact since L1); --legend=full == the pre-L1 bytes; schema ids; shrink ==="
+# L1 (round 1 of the answer-size loop, 2026-09-19; owner decision): the CLI default legend became COMPACT. This arm
+# used to assert `default == --legend=full`; that is now false by design, so it asserts the two halves of the new
+# contract instead, and both are red on a pre-L1 binary for the right reason:
+#   1. the DEFAULT is the posture cli.h names as kDefaultLegendPosture — read from source, so a round-2 `ref` default
+#      re-points this arm instead of silently comparing against the wrong posture (posture-generic);
+#   2. --legend=full is BYTE-IDENTICAL to what the default printed before L1 — pinned below (A-PIN) against outputs
+#      recorded from the pre-L1 binary, not against this binary's own full dialect (a self-referential pin passes
+#      whatever full became).
+DEFAULT_POSTURE="$( sed -n 's/^inline constexpr std::string_view kDefaultLegendPosture *= *"\([a-z]*\)";.*/\1/p' "$ROOT/src/cli.h" )"
+case "$DEFAULT_POSTURE" in
+    full|compact) ok "(A) the default posture read from src/cli.h: $DEFAULT_POSTURE" ;;
+    *)            no "(A) could not read kDefaultLegendPosture from src/cli.h (got '$DEFAULT_POSTURE') — every default-posture arm below would compare against nothing"; DEFAULT_POSTURE=compact ;;
+esac
 run --for='geometry distance' >"$TMP/for.default"
 run --for='geometry distance' --legend=full >"$TMP/for.full"
+run --for='geometry distance' --legend="$DEFAULT_POSTURE" >"$TMP/for.posture"
 run --grep=distance --grep-in=any >"$TMP/grep.default"
 run --grep=distance --grep-in=any --legend=full >"$TMP/grep.full"
-if diff -q "$TMP/for.default" "$TMP/for.full" >/dev/null && diff -q "$TMP/grep.default" "$TMP/grep.full" >/dev/null; then
-    ok 'default == explicit --legend=full for --for and --grep'
+run --grep=distance --grep-in=any --legend="$DEFAULT_POSTURE" >"$TMP/grep.posture"
+if cmp -s "$TMP/for.default" "$TMP/for.posture" && cmp -s "$TMP/grep.default" "$TMP/grep.posture"; then
+    ok "(A) default == explicit --legend=$DEFAULT_POSTURE for --for and --grep (the flip reached both native dialects)"
 else
-    no 'explicit --legend=full changed default output'
+    no "(A) the default is NOT --legend=$DEFAULT_POSTURE for --for/--grep: default $( wc -c <"$TMP/for.default" | tr -d ' ' )/$( wc -c <"$TMP/grep.default" | tr -d ' ' ) B vs $( wc -c <"$TMP/for.posture" | tr -d ' ' )/$( wc -c <"$TMP/grep.posture" | tr -d ' ' ) B"
+fi
+if [ "$DEFAULT_POSTURE" != full ] && cmp -s "$TMP/for.default" "$TMP/for.full"; then
+    no "(A) the default --for answer still equals --legend=full although the default posture is $DEFAULT_POSTURE"
 fi
 run --for='geometry distance' --legend=compact >"$TMP/for.compact"; rc_for=$?
 run --grep=distance --grep-in=any --legend=compact >"$TMP/grep.compact"; rc_grep=$?
@@ -192,8 +213,8 @@ if [ "$rc_grep" -eq 0 ] && [ "$rc_regex" -eq 0 ] \
 else
     no '--grep/--regex compact legends missing/refused ripwire.grep/v1 schema id'
 fi
-for_kind_bytes="$( wc -c <"$TMP/for.default" | tr -d ' ' ) $( wc -c <"$TMP/for.compact" | tr -d ' ' )"
-grep_kind_bytes="$( wc -c <"$TMP/grep.default" | tr -d ' ' ) $( wc -c <"$TMP/grep.compact" | tr -d ' ' )"
+for_kind_bytes="$( wc -c <"$TMP/for.full" | tr -d ' ' ) $( wc -c <"$TMP/for.compact" | tr -d ' ' )"
+grep_kind_bytes="$( wc -c <"$TMP/grep.full" | tr -d ' ' ) $( wc -c <"$TMP/grep.compact" | tr -d ' ' )"
 if set -- $for_kind_bytes; [ "$2" -lt "$1" ]; then ok "--for compact is smaller ($2 < $1 bytes)"; else no "--for compact did not shrink ($2 >= $1 bytes)"; fi
 if set -- $grep_kind_bytes; [ "$2" -lt "$1" ]; then ok "--grep compact is smaller ($2 < $1 bytes)"; else no "--grep compact did not shrink ($2 >= $1 bytes)"; fi
 grep -q '<grep[^>]* complete="1"' "$TMP/grep.compact" \
@@ -233,16 +254,61 @@ if command -v xmllint >/dev/null 2>&1; then
     fi
 fi
 
+echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned from the pre-L1 binary) ==="
+# The pins in test/compactlegendfix/pre_l1_full/ were recorded by the binary built from 7d72e723 (integration/train-6,
+# the last commit before L1) with NO --legend flag — i.e. the old default — on this gate's own two-commit fixture repo,
+# root spelled "." so no checkout path rides in the bytes. ONE normalisation, applied to both sides: at="<sha>" is the
+# fixture repo's HEAD, which differs per run (commit timestamps), so its value is masked. Nothing else is. Re-record
+# only against a binary whose DEFAULT is the full legend (a pre-L1 build) — recording with this binary's
+# --legend=full would make the pin self-referential and let a full-dialect regression pin itself:
+#   for each row below:  ( cd <the fixture repo> && <pre-L1 bin> . <args> ) > <pin>   (pinNorm masks at= on compare)
+PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
+# the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
+# sed does not): at="…" masked, trailing newlines dropped.
+pinNorm(){ python3 -c 'import re, sys
+t = open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read()
+sys.stdout.write( re.sub( r" at=\"[^\"]*\"", " at=\"*\"", t ).rstrip( "\n" ) )' "$1"; }
+nPin=0
+for row in "for|--for=geometry distance" "grep|--grep=distance --grep-in=any" "callers|--callers=distance" "impact|--impact=distance" \
+           "edit-check|--edit-check=total_area" "test-gate|--test-gate=geometry.cpp" "map|"; do
+    pname="${row%%|*}"; pargs="${row#*|}"
+    [ -f "$PIN_DIR/$pname.xml" ] || { no "(A-PIN) missing pin $PIN_DIR/$pname.xml"; continue; }
+    if [ "$pname" = for ]; then
+        rrun "--for=geometry distance" --legend=full </dev/null >"$TMP/pin.raw"
+    else
+        # shellcheck disable=SC2086
+        rrun $pargs --legend=full </dev/null >"$TMP/pin.raw"
+    fi
+    pinNorm "$TMP/pin.raw" >"$TMP/pin.$pname"; pinNorm "$PIN_DIR/$pname.xml" >"$TMP/pin.$pname.want"
+    nPin=$(( nPin + 1 ))
+    if [ -s "$TMP/pin.$pname" ] && cmp -s "$TMP/pin.$pname" "$TMP/pin.$pname.want"; then
+        ok "(A-PIN) ${pargs:-<flagless map>} --legend=full == the pre-L1 default ($( wc -c <"$PIN_DIR/$pname.xml" | tr -d ' ' ) B)"
+    else
+        no "(A-PIN) ${pargs:-<flagless map>} --legend=full DIFFERS from the pre-L1 default: $( cmp "$TMP/pin.$pname" "$TMP/pin.$pname.want" 2>&1 | head -c 160 )"
+    fi
+done
+[ "$nPin" -ge 7 ] || no "(A-PIN) only $nPin pins compared (want 7) — the arm proves less than it says"
+
 echo
 echo "=== (R) refusal — re-pinned to P1's contract: a NON-XML verb refuses compact, naming the flag ==="
 # Before P1 this arm asserted that --callers refused compact (the "for/grep/regex/slice only" sentence).
 # P1 made --callers a member; the refusal contract now belongs to the verbs with nothing to compact.
-for v in --situ --recall=geometry --report --mermaid --plan-lanes=2; do
-    rrun $v --legend=compact >"$TMP/bad.out"; rc_bad=$?
-    if [ "$rc_bad" -ne 0 ] && [ ! -s "$TMP/bad.out" ] && grep -q -- '--legend' "$TMP/rerr"; then
-        ok "(R) $v --legend=compact refuses (exit $rc_bad, empty stdout, stderr names --legend)"
+# L1: BOTH postures, because both are now something a caller ASKS for (the default is neither spelled nor refused):
+# an asked posture on a run with no XML legend refuses whichever it names, and the same run WITHOUT the flag answers.
+for v in --situ --recall=geometry --report --mermaid "--plan-lanes=2 --task=geometry"; do
+    for posture in compact full; do
+        rrun $v --legend=$posture >"$TMP/bad.out"; rc_bad=$?
+        if [ "$rc_bad" -ne 0 ] && [ ! -s "$TMP/bad.out" ] && grep -q -- '--legend' "$TMP/rerr"; then
+            ok "(R) $v --legend=$posture refuses (exit $rc_bad, empty stdout, stderr names --legend)"
+        else
+            no "(R) $v --legend=$posture: exit=$rc_bad stdout=$( wc -c <"$TMP/bad.out" | tr -d ' ' )B stderr=[$( head -c 120 "$TMP/rerr" | tr '\n' ' ' )]"
+        fi
+    done
+    rrun $v >"$TMP/bad.def"; rc_def=$?
+    if [ "$rc_def" -eq 0 ] && [ -s "$TMP/bad.def" ] && ! grep -q -- '--legend' "$TMP/rerr"; then
+        ok "(R) $v with no --legend answers (exit 0, $( wc -c <"$TMP/bad.def" | tr -d ' ' ) B) — the compact DEFAULT never refuses a run it cannot shape"
     else
-        no "(R) $v --legend=compact: exit=$rc_bad stdout=$( wc -c <"$TMP/bad.out" | tr -d ' ' )B stderr=[$( head -c 120 "$TMP/rerr" | tr '\n' ' ' )]"
+        no "(R) $v with no --legend: exit=$rc_def stdout=$( wc -c <"$TMP/bad.def" | tr -d ' ' )B stderr=[$( head -c 120 "$TMP/rerr" | tr '\n' ' ' )] — a default posture must not be the reason a run fails"
     fi
 done
 
@@ -437,12 +503,19 @@ pinFor()
 {
     printf '%s\n' "$PIN_TABLE" | awk -v schema="$1" '$1 == schema { printf "%s", $2; exit }'
 }
-nXml=0; nXmlBad=0; nRefuse=0; nSkip=0; loopBytes=0; xmlVerbs=""
+nXml=0; nXmlBad=0; nRefuse=0; nSkip=0; loopBytes=0; xmlVerbs=""; nDefBad=0
 while IFS="$( printf '\t' )" read -r flag kind example policy; do
     [ -n "$flag" ] || continue
     case "$kind" in int) probe="${flag}3" ;; *) probe="$( probeFor "$flag" )" || { nSkip=$(( nSkip + 1 )); continue; } ;; esac
-    ( cd "$REPO" && "$BIN" . "$probe" >"$TMP/u.full" 2>"$TMP/u.fullerr" </dev/null ); rcFull=$?
-    isxml="$( leg isxml "$TMP/u.full" )"
+    # L1: the DEFAULT run classifies (XML or not) and must equal the default posture; the FULL reference is asked for
+    # by name, because the default is no longer full. A non-XML run's default is its only answer (--legend refuses).
+    ( cd "$REPO" && "$BIN" . "$probe" >"$TMP/u.def" 2>"$TMP/u.deferr" </dev/null ); rcDef=$?
+    isxml="$( leg isxml "$TMP/u.def" )"
+    if [ "$isxml" = "1" ]; then
+        ( cd "$REPO" && "$BIN" . "$probe" --legend=full >"$TMP/u.full" 2>"$TMP/u.fullerr" </dev/null ); rcFull=$?
+    else
+        cp "$TMP/u.def" "$TMP/u.full"; rcFull=$rcDef
+    fi
     if [ "$isxml" != "1" ]; then
         # not an XML answer (a refusal, text, JSON, html): compact must refuse — or, when the default itself
         # refused, refuse for its own reason (compact must not turn a refusal into an answer)
@@ -456,6 +529,9 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
     fi
     nXml=$(( nXml + 1 )); name="${flag%%=*}"; xmlVerbs="$xmlVerbs $name"
     ( cd "$REPO" && "$BIN" . "$probe" --legend=compact >"$TMP/u.c" 2>"$TMP/u.cerr" </dev/null ); rcC=$?
+    # the default IS the default posture, on every XML verb (posture-generic: DEFAULT_POSTURE read from cli.h in (A))
+    if [ "$DEFAULT_POSTURE" = compact ]; then defRef="$TMP/u.c"; else defRef="$TMP/u.full"; fi
+    cmp -s "$TMP/u.def" "$defRef" || { no "(U) $probe: the DEFAULT answer is not the --legend=$DEFAULT_POSTURE answer ($( wc -c <"$TMP/u.def" | tr -d ' ' ) B vs $( wc -c <"$defRef" | tr -d ' ' ) B, exit $rcDef)"; nDefBad=$(( nDefBad + 1 )); }
     if [ "$rcC" -ne "$rcFull" ] || [ ! -s "$TMP/u.c" ]; then
         no "(U) $probe --legend=compact: exit $rcC (full: $rcFull), $( wc -c <"$TMP/u.c" | tr -d ' ' ) B — stderr=[$( head -c 140 "$TMP/u.cerr" | tr '\n' ' ' )]"
         nXmlBad=$(( nXmlBad + 1 ))
@@ -514,15 +590,137 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
 done < "$UNIV"
 [ "$nXml" -ge 60 ] && [ "$nXmlBad" -eq 0 ] && ok "(U) $nXml XML flags answer under --legend=compact (schema id, legend within its per-verb pin, rows byte-identical, root attrs kept):$xmlVerbs" \
                    || no "(U) $nXml XML flags probed, $nXmlBad refused compact (want ≥ 60 probed, 0 refused — rows above name them):$xmlVerbs"
+[ "$nXml" -ge 60 ] && [ "$nDefBad" -eq 0 ] && ok "(U) every one of the $nXml XML flags answers at the DEFAULT with exactly its --legend=$DEFAULT_POSTURE bytes"
 [ "$nRefuse" -ge 60 ] && ok "(U) $nRefuse non-XML flags refuse --legend=compact (empty stdout, non-zero exit); $nSkip write/serve/exec flags not probed" \
                       || no "(U) only $nRefuse non-XML flags refused compact (want ≥ 60)"
 
 echo
-echo "=== (F) full stays byte-identical: default == --legend=full on the new members ==="
+echo "=== (F) the DEFAULT is the default posture; --legend=full restores MORE legend over the SAME payload (L1) ==="
+# Pre-L1 this arm read "default == --legend=full". L1 made the default compact, so the arm now states the CLI twin of
+# (N)'s MCP contract, per verb: the default is byte-identical to --legend=$DEFAULT_POSTURE, --legend=full carries
+# strictly more legend bytes (full is restorable, and is the big one), and the payload does not move between them.
+# Red on a pre-L1 binary: its default equals --legend=full, so assertion 1 fails on every row.
 for v in --callers=distance --edit-check=total_area --quality-delta --impact=distance --test-gate=geometry.cpp; do
-    rrun $v >"$TMP/f.def"; rrun $v --legend=full >"$TMP/f.full"
-    if cmp -s "$TMP/f.def" "$TMP/f.full"; then ok "(F) $v: default == --legend=full"; else no "(F) $v: explicit --legend=full changed the default output"; fi
+    rrun $v >"$TMP/f.def"; rrun $v --legend=full >"$TMP/f.full"; rrun $v --legend="$DEFAULT_POSTURE" >"$TMP/f.post"
+    if ! cmp -s "$TMP/f.def" "$TMP/f.post"; then
+        no "(F) $v: the default is not --legend=$DEFAULT_POSTURE ($( wc -c <"$TMP/f.def" | tr -d ' ' ) B vs $( wc -c <"$TMP/f.post" | tr -d ' ' ) B)"
+        continue
+    fi
+    dLeg="$( leg bytes "$TMP/f.def" )"; fLeg="$( leg bytes "$TMP/f.full" )"
+    if [ "$DEFAULT_POSTURE" != full ] && [ "$fLeg" -le "$dLeg" ]; then
+        no "(F) $v: --legend=full carries $fLeg B of legend against the default's $dLeg B — the full legend is not restorable"
+        continue
+    fi
+    leg payload "$TMP/f.def" >"$TMP/f.pd"; leg payload "$TMP/f.full" >"$TMP/f.pf"
+    if cmp -s "$TMP/f.pd" "$TMP/f.pf"; then
+        ok "(F) $v: default == --legend=$DEFAULT_POSTURE ($dLeg B legend), --legend=full restores $fLeg B, payload byte-identical"
+    else
+        no "(F) $v: the PAYLOAD moved between the default and --legend=full — only the legend may differ"
+    fi
 done
+
+echo
+echo "=== (P) L1: compact BUYS rows and never loses one; a compact answer is PRICED at the bytes it delivers ==="
+# The prereg's review (rv-prereg1 R7c/A4) put two conditions on making compact the default, and this section is them.
+#
+# (P1) rows(default) ⊇ rows(--legend=full) for --for under a budget. --for's compact header is shorter, so under a
+# --token-budget the ceiling ladder keeps MORE ranked rows (held-out q05 gained a gold row that way). The direction is
+# the whole claim: the smaller legend may buy rows, it may never cost one. A ROW here is an answer row — a <d>/<b>
+# symbol row (file, name, line) or a <t> file-grain tail row (file). A tail FILE the default promoted into a symbol row
+# is covered, not lost (the tail lists files OUTSIDE the sigs, so a bigger sigs section legitimately shortens it).
+# Posture-generic: it compares the default against --legend=full, whatever the default is. The arm must also BIND —
+# at least one argv where the default carries strictly more rows — or it would pass on a binary whose default is full.
+cat > "$TMP/rows.py" <<'PY'
+import re, sys
+def rows( path ):
+    t = open( path, encoding = "utf-8", errors = "replace" ).read()
+    t = re.sub( r"<!\[CDATA\[.*?\]\]>", "", t, flags = re.S ); t = re.sub( r"<!--.*?-->", "", t, flags = re.S )
+    sym, files = set(), set()
+    for m in re.finditer( r"<([a-z][\w-]*)\s([^>]*)>", t ):
+        a = dict( re.findall( r'([\w:.-]+)="([^"]*)"', m.group( 2 ) ) )
+        if m.group( 1 ) in ( "d", "b" ) and "n" in a:
+            sym.add( ( a.get( "p", "" ), a[ "n" ], a.get( "l", "" ) ) ); files.add( a.get( "p", "" ) )
+        elif m.group( 1 ) == "t" and "p" in a:
+            files.add( a[ "p" ] )
+    return sym, files
+ds, df = rows( sys.argv[ 1 ] ); fs, ff = rows( sys.argv[ 2 ] )
+lostSym = sorted( fs - ds ); lostFiles = sorted( ff - df )
+print( len( ds ), len( fs ), len( lostSym ) + len( lostFiles ), ( lostSym + lostFiles )[ :3 ] )
+PY
+p1n=0; p1bad=0; p1more=0
+for task in "rank symbols by pagerank" "token budget ceiling ladder" "parse command line flags" "legend posture compact" "escapeXml"; do
+    for tb in 700 1500 3000 6000; do
+        "$BIN" "$ROOT/src" --for="$task" --token-budget=$tb >"$TMP/p1.def" 2>/dev/null
+        "$BIN" "$ROOT/src" --for="$task" --token-budget=$tb --legend=full >"$TMP/p1.full" 2>/dev/null
+        set -- $( python3 "$TMP/rows.py" "$TMP/p1.def" "$TMP/p1.full" | tr -d "[](),'" )
+        p1n=$(( p1n + 1 ))
+        if [ "${3:-1}" -ne 0 ]; then
+            p1bad=$(( p1bad + 1 )); no "(P1) --for='$task' --token-budget=$tb: the default LOST $3 answer row(s) that --legend=full carries (default $1, full $2 symbol rows): ${4:-} ${5:-} ${6:-}"
+        fi
+        [ "${1:-0}" -gt "${2:-0}" ] && p1more=$(( p1more + 1 ))
+    done
+done
+[ "$p1bad" -eq 0 ] && [ "$p1n" -eq 20 ] && ok "(P1) rows(default) ⊇ rows(--legend=full) on all $p1n budgeted --for runs (5 tasks x 4 budgets)"
+[ "$p1more" -gt 0 ] && ok "(P1) the arm binds: on $p1more of $p1n runs the default carries MORE symbol rows than --legend=full" \
+                    || no "(P1) on none of $p1n runs does the default carry more rows than --legend=full — the default is not the compact posture, or the budget no longer binds; the superset arm proved nothing"
+
+# (P2) the default map's --token-budget gate decides on the price the default PRINTS. It used to decide on the full
+# dialect's price before the compact layer ran, so a map that fits once compacted was withheld (exit 3). Budget = the
+# compact price itself: the default must answer (exit 0), --legend=full must still withhold (exit 3), and the full price
+# must really be the larger one, or the arm proves nothing.
+rrun --legend=full >"$TMP/p2.full"; rrun >"$TMP/p2.def"
+p2f="$( grep -o 'est_tokens="[0-9]*"' "$TMP/p2.full" | head -1 | tr -dc '0-9' )"; p2c="$( grep -o 'est_tokens="[0-9]*"' "$TMP/p2.def" | head -1 | tr -dc '0-9' )"
+if [ -n "$p2f" ] && [ -n "$p2c" ] && [ "$p2c" -lt "$p2f" ]; then
+    rrun --token-budget="$p2c" >"$TMP/p2.b"; rcB=$?
+    rrun --token-budget="$p2c" --legend=full >"$TMP/p2.bf"; rcBF=$?
+    if [ "$rcB" -eq 0 ] && cmp -s "$TMP/p2.b" "$TMP/p2.def" && [ "$rcBF" -eq 3 ]; then
+        ok "(P2) flagless map at --token-budget=$p2c (its compact price; full prices $p2f): the default answers byte-identically, --legend=full withholds (exit 3)"
+    else
+        no "(P2) flagless map at --token-budget=$p2c (compact price; full $p2f): default exit $rcB (want 0, identical to the unbudgeted default), --legend=full exit $rcBF (want 3)"
+    fi
+else
+    no "(P2) could not read two prices with compact < full (full='$p2f' default='$p2c') — the arm proves nothing"
+fi
+
+# (P3) a compacted answer's est_tokens= prices the bytes it DELIVERS (compactlegend.h compactRepriceDelta): within the
+# 12% band attrvocabcheck §4 holds the whole-document price to, at kBytesPerTokenDefault (2.50), and never BELOW the
+# bytes at the widest markup rate in the table (2.55) — an upper bound, never an under-read. Body-free verbs only (a
+# CDATA body is priced at 3.80 B/token, which no whole-document markup band describes). Asked with
+# --legend=compact by name, so it reads the same dialect on any binary (red on one whose layer does not reprice).
+# (--query is not in this list: its FULL dialect already prices 2,024 B at 781 tokens, 2.59 B/token — under-read before
+# the compact layer ever runs, recorded as a found item in the L1 lane report; this arm is about what the layer does.)
+for v in "--connect=total_area,distance,perimeter" --edit-check=total_area --handoff --around=distance "--order=stable"; do
+    rrun $v --legend=compact >"$TMP/p3.c"
+    pb="$( wc -c <"$TMP/p3.c" | tr -d ' ' )"; pe="$( grep -oE ' est_tokens="?[0-9]+' "$TMP/p3.c" | head -1 | tr -dc '0-9' )"   # root attr, or the map header field under order=stable
+    if [ -z "$pe" ]; then no "(P3) $v --legend=compact carries no est_tokens= on its root — nothing priced"; continue; fi
+    truth=$(( pb * 100 / 250 )); floor=$(( pb * 100 / 255 )); diff=$(( pe - truth )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
+    if [ $(( diff * 100 )) -le $(( truth * 12 )) ] && [ "$pe" -ge "$floor" ]; then
+        ok "(P3) $v --legend=compact: est_tokens=$pe for $pb B delivered (bytes/2.50 = $truth; never below bytes/2.55 = $floor)"
+    else
+        no "(P3) $v --legend=compact: est_tokens=$pe does not price the $pb B delivered (bytes/2.50 = $truth, floor $floor)"
+    fi
+done
+
+# (P4) --for's compact sig ledger exempts the enrichment clause the compact header CARRIES (verbs_for.h
+# planForEnrichment). It used to exempt the FULL clause's ~450 B, so a budgeted compact bundle bought rows with bytes it
+# never saved and overshot its ceiling where the full dialect fitted. Fixture: forrootlegendcheck's twelve-routine
+# corpus, root ".", so no checkout path rides in the price. The claim is relative, per budget: the compact answer is
+# inside the budget, or no further over it than the full answer is.
+P4="$TMP/p4"; mkdir -p "$P4/src"
+for i in 0 1 2; do for j in 0 1 2 3; do
+    printf 'def widgetRoutine%d_%d( alpha, beta ):\n    """Route stage %d.%d."""\n    return alpha + beta\n\n\n' "$i" "$j" "$i" "$j" >> "$P4/src/mod$i.py"
+done; done
+( cd "$P4" && git init -q . && git add -A && git -c user.email=gate@example.invalid -c user.name=gate commit -qm init ) || no "(P4) could not build the fixture repo"
+p4bad=0
+for tb in 850 1000 1100 1200; do
+    pc="$( cd "$P4" && "$BIN" . --for="widget routine dispatcher" --token-budget=$tb --legend=compact 2>/dev/null | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
+    pf="$( cd "$P4" && "$BIN" . --for="widget routine dispatcher" --token-budget=$tb --legend=full 2>/dev/null | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
+    lim=$tb; [ "${pf:-0}" -gt "$lim" ] && lim=$pf
+    if [ -z "$pc" ] || [ "$pc" -gt "$lim" ]; then
+        p4bad=$(( p4bad + 1 )); no "(P4) --token-budget=$tb: the compact --for answer prices est_tokens=${pc:-?} — over the budget AND over the full answer's ${pf:-?}"
+    fi
+done
+[ "$p4bad" -eq 0 ] && ok "(P4) at --token-budget 850/1000/1100/1200 the compact --for answer is inside its budget or no further over it than the full one"
 
 echo
 # RE-ANCHORED 2026-09-10 (--edit-check answer-safe window): 4,000 → 4,100 B, measured 4,056 (from 4,000-56).
@@ -557,7 +755,7 @@ echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 4,700 B 
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
-    rrun "$v" --legend=compact >"$TMP/l.c"; rrun "$v" >"$TMP/l.f"
+    rrun "$v" --legend=compact >"$TMP/l.c"; rrun "$v" --legend=full >"$TMP/l.f"   # L1: the full bill is asked for by name
     [ -s "$TMP/l.c" ] || no "(L) $v --legend=compact answered NOTHING (a refusal is not a 0 B legend): $( head -c 120 "$TMP/rerr" )"
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
