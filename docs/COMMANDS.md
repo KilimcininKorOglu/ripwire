@@ -50,7 +50,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **security — scan skill files for injection / exfiltration patterns (exit 2 = CRITICAL, 1 = WARN,** — [`--scan-skill`](#--scan-skillfile) · [`--scan-skills`](#--scan-skillsdir) · [`--force`](#--force)
 
-**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
+**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--legend-dict`](#--legend-dictroster) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
 
 ---
 
@@ -4339,7 +4339,7 @@ $ ./build/ripwire . --callers=rankGraphTeleport --format=bogus
 
 **Answers:** choose the legend posture for every XML verb — use compact when calling repeatedly output legend posture for EVERY XML verb.
 
-MAKING REPEATED CALLS (an agent, a script, a benchmark harness)? USE compact. The legend is a FIXED ~3 KB per call, so its share is a function of ANSWER SIZE, not of the verb: at least 45% of a small --callers/--uses/--impact/--affected answer (and more on --callees and --edit-check), a little of a large --for bundle. Every ROW is byte-identical; the only payload change is a schema="ripwire.<verb>/v1" attribute the root GAINS. The CLI default is full because a human reading ONE map needs the prose; the MCP server already defaults to compact, so the CLI is the path that pays. full is byte-identical to the default. compact keeps every row byte and every data/completeness attribute (counts_floor= capped= shown= total= has_more= next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned schema id on the root (schema="ripwire.<verb>/v1") and replaces the explanatory prose with ONE legend naming those attributes — the meanings live here and in the full legend. DATA comments stay (the map header, pack-task's body-omitted rows, +more). Per call this drops 2.8-5.8 KB on the navigation verbs (--edit-check 6.3 KB -> 0.5 KB); the MCP twin is the argument legend: on every XML-answering verb, where compact is the DEFAULT and legend:"full" restores this prose (M1, 2026-09-05: the ten-verb MCP edit loop pays 2,866 B of legend instead of 30,839 B). The CLI default stays full. Runs with nothing to compact refuse it, naming the verb: prose/markdown/JSON answers (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval*) and the writers (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export).
+MAKING REPEATED CALLS (an agent, a script, a benchmark harness)? USE compact. The legend is a FIXED ~3 KB per call, so its share is a function of ANSWER SIZE, not of the verb: at least 45% of a small --callers/--uses/--impact/--affected answer (and more on --callees and --edit-check), a little of a large --for bundle. Every ROW is byte-identical; the only payload change is a schema="ripwire.<verb>/v1" attribute the root GAINS. The CLI default is full because a human reading ONE map needs the prose; the MCP server already defaults to compact, so the CLI is the path that pays. full is byte-identical to the default. compact keeps every row byte and every data/completeness attribute (counts_floor= capped= shown= total= has_more= next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned schema id on the root (schema="ripwire.<verb>/v1") and replaces the explanatory prose with ONE legend naming those attributes — the meanings live here and in the full legend. DATA comments stay (the map header, pack-task's body-omitted rows, +more). Per call this drops 2.8-5.8 KB on the navigation verbs (--edit-check 6.3 KB -> 0.5 KB); the MCP twin is the argument legend: on every XML-answering verb, where compact is the DEFAULT and legend:"full" restores this prose (M1, 2026-09-05: the ten-verb MCP edit loop pays 2,866 B of legend instead of 30,839 B). The CLI default stays full. Runs with nothing to compact refuse it, naming the verb: prose/markdown/JSON answers (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval*) and the writers (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export). ref is the MCP server's SESSION posture, not a CLI one: once a session reads the resource ripwire://legend-dict, answers list rows first, carry each definition once per session and end with <about legend="ref" dict= dictv=/>. A CLI run has no session to hold a definition, so --legend=ref refuses; --legend-dict prints them all.
 
 **Try it**
 
@@ -4361,6 +4361,38 @@ $ ./build/ripwire . --quality-delta --legend=compact
 **Caveats (stated by the binary):**
 
 - Runs with nothing to compact refuse it, naming the verb: prose/markdown/JSON answers (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval*) and the writers (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export).
+- ref is the MCP server's SESSION posture, not a CLI one: once a session reads the resource ripwire://legend-dict, answers list rows first, carry each definition once per session and end with <about legend="ref" dict= dictv=/>.
+- A CLI run has no session to hold a definition, so --legend=ref refuses;
+
+### `--legend-dict[=roster]`
+
+**Answers:** print the session legend dictionary;
+
+=roster: the completeness attributes it defines print the dictionary the MCP server serves as ripwire://legend-dict/full: one definition per line, headed by its dictv= (FNV-1a 64 of the lines, the version a ref answer's <about dictv=> names). =roster lists the completeness attributes it defines (attr, element, source), the roster test/legendrefcheck.sh reads. Answered wherever it stands on the command line; nothing else runs.
+
+**Try it**
+
+_The session legend dictionary the MCP server serves as ripwire://legend-dict/full — one definition per line, headed by its dictv= version; no corpus needed. =roster lists the completeness attributes it defines._
+
+```
+$ ./build/ripwire . --legend-dict
+ripwire legend dictionary ripwire.dict/v1 dictv=008d19d05db003ea entries=185
+<about legend="ref" dict= dictv=>: the answer's rows come first; its root keeps only task= changed= from= to=, and this LAST child carries every other root attribute unchanged (schema= included); legend="ref": a definition is sent once per session (this dictionary's core, or the first answer that ne … [line truncated: 83 more bytes on this line]
+schema=ripwire.KEY/v1: the line ripwire.KEY/v1 below reads the answer's rows
+window: shown= total= capped= has_more= next_offset= offset= limit= page a list (capped=1 cut; next_offset= pastes as offset=)
+X_capped= (any attribute ending _capped): 1 = cut
+under ref, est_tokens= and over_ceiling= price the answer with its inline legend: an upper bound
+under ref, a <g n= p=> group of n <= 8 runner-less rows prints as its n single rows, each run_unknown=1
+ripwire.map/v1 <r>: ranked symbol map: <f p= layer=> groups <s t= n= sc= k= amb=> rows (k= rank), <c n=> resolved callees; the header comment is data
+ripwire.map-diff/v1 <r>: the ranked map anchored at at=: what the diff touched, the map's row vocabulary
+ripwire.metrics/v1 <r>: the ranked map with per-symbol metrics: in/out, cx/ccx, loc, params, nest, humps/deep, locals, cbo, amp, tested, ev
+ripwire.around/v1 <r>: call neighbourhood of of=: depth= hops, fanout= kept per hop; absent rows lie outside that boundary
+ripwire.query/v1 <r>: lexical-rank map for the query term, the map's row vocabulary
+ripwire.pack-signatures/v1 <ctx>: the ranked map plus <sigs><d l= n= sc= pure=> signature rows
+... [18 more line(s); run it to see the whole thing]
+```
+
+**Shaped by:** `--legend`
 
 ### `--json`
 
