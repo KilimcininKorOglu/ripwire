@@ -1739,7 +1739,7 @@ int setenv( const char* name, const char* value, int overwrite )
 }
 
 // which: the program a shell would start for `command`. PATH is ';'-separated; an entry that is empty or relative (the
-// current directory) is never searched — a checkout carrying its own ripwire.exe or git.exe must not answer; a name
+// current directory) is never searched — a checkout carrying its own copy of this program or of git.exe must not answer; a name
 // without an extension is tried with each PATHEXT extension, one with an extension as given (if PATHEXT lists it).
 // The answer is in the program's spelling.
 std::string which( std::string_view command )

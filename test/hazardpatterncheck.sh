@@ -492,6 +492,10 @@ alloccount.cpp	countedAlloc	malloc	1	the counting allocator's own storage, freed
 alloccount.cpp	operator new	aligned_alloc	1	the counting allocator's aligned storage, freed by its operator delete (A/B instrument, never shipped)
 infra/dynamic_map.hpp	compact	new	4	the rebuilt pools replace the old ones (delete[] before the swap, owned by ~dynamic_map after it); the two scratch arrays are delete[]d before the return
 infra/dynamic_map.hpp	dynamic_map	new	2	the constructor's pools, owned by ~dynamic_map
+infra/os_win32.cpp	getline	realloc	1	Windows body of os::getline: POSIX getline's contract hands the grown *line buffer to the caller, who frees it (pathguard.h NoFollowRead frees its lineBuf)
+infra/os_win32.cpp	open_memstream	malloc	1	Windows body of os::open_memstream: POSIX hands *buffer to the caller, who frees it (rw::MemoryStream's destructor)
+infra/os_win32.cpp	publishMemoryStream	realloc	1	Windows os::fflush / os::fclose republishing a memstream's *buffer: the caller's pointer is replaced in place and the caller frees it, as with POSIX open_memstream
+infra/os_win32.cpp	realpath	malloc	1	Windows body of os::realpath( path, nullptr ): POSIX returns malloc'd storage the caller frees
 infra/profileScope.h	alloc	new	1	profiling build only: pushed into RecordArena::m_blocks, deleted by ~RecordArena
 infra/profileScope.h	create	new	1	profiling build only: registered in m_threads, deleted when the thread retires
 infra/profileScope.h	registry	new	1	profiling build only: the registry core is leaked on purpose so retire() is safe during static destruction
