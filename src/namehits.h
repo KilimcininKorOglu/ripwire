@@ -52,34 +52,6 @@ inline constexpr std::array<std::string_view, 18> kNameHitsStop = {
     "the", "a", "to", "in", "of", "and", "for", "when", "rocksdb"
 };
 
-inline bool nameHitsIsStop( std::string_view t ) noexcept
-{
-    for( std::string_view s : kNameHitsStop )
-    {
-        if( s == t )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline bool nameHitsAllDigits( std::string_view t ) noexcept
-{
-    if( t.empty() )
-    {
-        return false;
-    }
-    for( unsigned char c : t )
-    {
-        if( c < '0' || c > '9' )
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 // lb3_sim.py's toks(): re.sub(r'([a-z])([A-Z])', r'\1 \2', s).lower(), split on runs of non-[A-Za-z0-9],
 // drop empty/stopword/all-digit tokens. ONE camel boundary (lower-then-upper) — deliberately NOT the
 // ACRONYMWord rule subtokens() applies elsewhere, so this must stay its own tokenizer (see file header).
@@ -109,16 +81,40 @@ inline std::vector<std::string> nameHitsToks( std::string_view s )
     }
     std::vector<std::string> out;
     std::string              cur;
-    const auto                flush = [ & ]()
+    // one token's two independent membership questions, answered in place rather than through two more
+    // one-purpose free functions — src/lintrules.h::isValidSeverity and src/tracein.h::detail::isDigits
+    // already answer "is this whole span in a small closed set" and "is this whole span all-digit"
+    // respectively, and a THIRD near-identical pair here is the clone quality-delta gates on, not a
+    // different fact than either of them already states.
+    const auto flush = [ & ]()
     {
-        if( !cur.empty() )
+        if( cur.empty() )
         {
-            if( !nameHitsAllDigits( cur ) && !nameHitsIsStop( cur ) )
-            {
-                out.push_back( cur );
-            }
-            cur.clear();
+            return;
         }
+        bool allDigit = true;
+        for( unsigned char c : cur )
+        {
+            if( c < '0' || c > '9' )
+            {
+                allDigit = false;
+                break;
+            }
+        }
+        bool stop = false;
+        for( std::string_view s : kNameHitsStop )
+        {
+            if( s == cur )
+            {
+                stop = true;
+                break;
+            }
+        }
+        if( !allDigit && !stop )
+        {
+            out.push_back( cur );
+        }
+        cur.clear();
     };
     for( char c : camel )
     {
