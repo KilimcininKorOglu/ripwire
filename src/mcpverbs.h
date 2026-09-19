@@ -2040,6 +2040,14 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // surfaces do not need two spellings), and the SAME shared size gate (rw::priceSectionStub,
     // serialize.h). This surface has no buffered/degrade-path split (renderToString always renders whole),
     // so hasRenderedBytes is always true here and the size gate always has a true length to price.
+    //
+    // R2-L2p (independent review, 2026-09-19): mcpLegoWillStub/mcpComposeWillStub decide the SAME collapse
+    // the CLI twin discloses via kForSectionStubLegend (verbs_for.h finishForLensHeaderPriced), but this
+    // block used to just swap legoStr/composeStr for their stubs and never carried that clause anywhere —
+    // an MCP caller got a stubbed section with no legend explaining the cut. mcpSectionsWillStub survives
+    // this block's scope so the splice below (after `out` is assembled, mirroring priceForTaskRoot's own
+    // late-insertion technique for kOverCeilingLegend) knows whether to add it.
+    bool mcpSectionsWillStub = false;
     {
         const bool mcpWantLego    = sectionsWant( sections, "lego" );
         const bool mcpWantCompose = sectionsWant( sections, "compose" );
@@ -2072,6 +2080,9 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
             {
                 composeStr = composePricing.stubXml;
             }
+            // R2-L2p: mirrors the CLI's `if( legoWillStub || composeWillStub ) sectionsStubNote = …` exactly
+            // (verbs_for.h ~2858) — the legend rides iff at least one section actually collapsed.
+            mcpSectionsWillStub = mcpLegoWillStub || mcpComposeWillStub;
         }
     }
     std::fwrite( sigsStr.data(), 1, sigsStr.size(), mem );
@@ -2094,6 +2105,34 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         return std::nullopt;   // the buffer lost bytes: the same internal error as the failed open above
     }
     std::string out = std::move( *answer );
+    // R2-L2p (independent review, 2026-09-19): the MCP twin of the CLI's sectionsStubNote splice
+    // (verbs_for.h finishForLensHeaderPriced, `spliceBefore( header, " -->", /*fromEnd=*/true, … )`) — same
+    // shared clause text (rw::kForSectionStubLegend), inserted only when mcpSectionsWillStub fired above.
+    // `out` is the fully-assembled document (header + sigs + lego/compose + routes + tail), so this is the
+    // SAME late-insertion technique priceForTaskRoot below already uses for kOverCeilingLegend on this exact
+    // string — headerStr itself is long since fwritten into the memstream (before mcpLegoWillStub/
+    // mcpComposeWillStub even exist), so there is no header string left to mutate in place; only the
+    // flushed document is. `out.find( " -->" )` — first occurrence, not last — is safe here for the same
+    // reason it is safe for priceForTaskRoot just below: the header's own closing comment is the ONLY place
+    // "-->" can appear in this document at this point (every rendered row's text is escapeXml'd, which turns
+    // '<'/'>' into entities, so raw "-->" cannot leak in from a symbol name, path or task string), and
+    // nothing has spliced anything before it yet. Done BEFORE priceForTaskRoot so the clause's bytes are
+    // part of the est_tokens price exactly as the CLI's own version is (finishForLensHeaderPriced splices
+    // sectionsStubNote before its price fixpoint, not after).
+    if( mcpSectionsWillStub )
+    {
+        const std::size_t legendAt = out.find( " -->" );
+        // ASSUME, not VALIDATE: this is not external input — mcpSectionsWillStub is only ever true once the
+        // header above has already been fully built and fwritten (its closing " -->" is unconditionally
+        // emitted by ctxRootOpen's own comment), so the boundary is provably present, not merely hoped for.
+        ASSUME( legendAt != std::string::npos, "forTaskText: a section stubbed but the header's closing \"-->\" was not found to carry the legend" );
+        if( legendAt != std::string::npos )
+        {
+            out.insert( legendAt, rw::kForSectionStubLegend );
+        }
+        ENSURES( out.find( rw::kForSectionStubLegend ) != std::string::npos,
+                 "forTaskText: a section stubbed but the legend clause is not present in the returned document" );
+    }
     // F5 (terminality round A 2026-09-05): PRICE the bundle instead of declaring it unpriced. The document is
     // complete here, so this is the same measurement the CLI twin makes over its own (deliberately different)
     // bytes: pricedRootAttr's ≤4-pass fixpoint at kBytesPerTokenDefault, spliced onto the <ctx> root by the

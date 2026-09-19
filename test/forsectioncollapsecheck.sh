@@ -308,5 +308,68 @@ HASACOMPACT_SET="$( collapse_set "$TMP/hasa_compact.xml" )"
     && ok "(11b) hasafix: same (empty) collapse set under full and compact — neither dialect collapses a too-small section" \
     || no "(11b) hasafix: collapse set differs by posture, or unexpectedly non-empty — full=\"$HASAFULL_SET\" compact=\"$HASACOMPACT_SET\""
 
+# ── (12) R2-L2p (independent review, 2026-09-19): the MCP `for` twin must carry the SAME disclosure the CLI
+# does when a stub happens — rw::kForSectionStubLegend, spliced into the header comment (the CLI splices it
+# via finishForLensHeaderPriced/spliceBefore; the MCP twin, forTaskText in src/mcpverbs.h, computes the same
+# collapse decision through the shared rw::priceSectionStub but used to swap legoStr/composeStr for their
+# stub XML and never carry the clause explaining the cut — arm (8a) above only proves no FULL render leaked,
+# it never checked for the legend). test/sectionpricefix's "big iface implementors owner" (RQ, the same
+# fixture/query the CLI-side arms (4)/(11a) already use) collapses <compose> on the MCP surface too (no
+# <lego> element on this route — the MCP bundle ranking differs slightly from the CLI's own bundle choice,
+# which does not matter here: this arm only needs ONE section to have collapsed to prove the legend rides
+# it, exactly the "at least one section" condition both dialects share).
+if command -v python3 >/dev/null 2>&1; then
+    MCPRQ='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/sectionpricefix","task":"big iface implementors owner"}}}'
+    printf '%s\n' "$MCPRQ" | "$BIN" --mcp >"$TMP/mcp_legend.json" 2>/dev/null
+    python3 -c "
+import json,sys
+d = json.load(open(sys.argv[1]))
+t = d.get('result',{}).get('content',[{}])[0].get('text','')
+stubbed = ('<lego total=' in t) or ('<compose total=' in t)
+legend = 'lego/compose collapse to a counted stub by default' in t
+sys.exit(0 if (stubbed and legend) else 1)
+" "$TMP/mcp_legend.json" \
+        && ok "(12a) MCP for: a stubbed lego/compose section carries the kForSectionStubLegend clause" \
+        || no "(12a) MCP for: a section stubbed but the legend clause is missing — $( head -c 400 "$TMP/mcp_legend.json" )"
+
+    python3 -c "
+import json,sys
+d = json.load(open(sys.argv[1]))
+t = d.get('result',{}).get('content',[{}])[0].get('text','')
+sys.exit(0 if '<compose total=\"5\" shown=\"0\"' in t else 1)
+" "$TMP/mcp_legend.json" \
+        && ok "(12b) MCP for: the stub itself is unchanged by the fix (compose total=\"5\" shown=\"0\")" \
+        || no "(12b) MCP for: the stub shape changed unexpectedly — $( head -c 400 "$TMP/mcp_legend.json" )"
+
+    if command -v xmllint >/dev/null 2>&1; then
+        python3 -c "
+import json,sys
+d = json.load(open(sys.argv[1]))
+sys.stdout.write(d.get('result',{}).get('content',[{}])[0].get('text',''))
+" "$TMP/mcp_legend.json" > "$TMP/mcp_legend.xml"
+        xmllint --noout "$TMP/mcp_legend.xml" 2>/dev/null \
+            && ok "(12c) MCP for: the legend-carrying document is well-formed XML (G4)" \
+            || no "(12c) MCP for: the legend-carrying document is malformed XML"
+    else
+        ok "(12c) xml well-formed (xmllint absent — skipped)"
+    fi
+
+    # (12d) no-stub control: --sections=lego,compose opts back into the full render (arm (8) already proves
+    # this for the CLI), so nothing collapses and the clause must be PRESENT-ONLY — absent here, not padded
+    # onto an answer with nothing to disclose.
+    MCPNOSTUB='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/sectionpricefix","task":"big iface implementors owner","sections":"lego,compose"}}}'
+    printf '%s\n' "$MCPNOSTUB" | "$BIN" --mcp >"$TMP/mcp_nostub.json" 2>/dev/null
+    python3 -c "
+import json,sys
+d = json.load(open(sys.argv[1]))
+t = d.get('result',{}).get('content',[{}])[0].get('text','')
+sys.exit(0 if 'lego/compose collapse to a counted stub by default' not in t else 1)
+" "$TMP/mcp_nostub.json" \
+        && ok "(12d) MCP for: --sections=lego,compose (nothing stubbed) carries NO legend clause" \
+        || no "(12d) MCP for: the legend clause leaked onto a run where nothing was stubbed"
+else
+    ok "(12) MCP legend disclosure arm skipped (python3 absent)"
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"
