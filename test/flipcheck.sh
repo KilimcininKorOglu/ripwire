@@ -234,5 +234,29 @@ flip "$FIX" FIXTURE_DARK_FEATURE | sed -n 's/.*<!--\(.*\)-->.*/\1/p' | grep -q -
 if bash "$ROOT/test/flagscheck.sh" >/dev/null 2>&1; then ok "test/flagscheck.sh still passes (--flags unchanged)"
 else no "test/flagscheck.sh broke — --flip must not change --flags output"; fi
 
+# ── the binding cap is disclosed, in every build flavour ──────────────────────────────────────────────────────────
+# The value lane keeps at most kMaxBindings (32) constexpr bindings of one gate. With 40, bindings="32" and the 32
+# branch sites reached through them used to read as totals — the legend says the verdict counts are taken over the
+# FULL sets — with only a one-argument DISCLOSE (nothing in Release). The scan's sink now puts <capped what="bindings"
+# at="32"/> in the report, and a clause defining capped= rides with it.
+BC="$TMP/bindcap"; mkdir -p "$BC"
+python3 - "$BC/a.cpp" <<'PYEOF'
+import sys
+s = "#ifndef FEATURE_X\n#define FEATURE_X 0\n#endif\n" + "".join( "constexpr bool kB%d = FEATURE_X;\n" % i for i in range( 40 ) )
+s += "int run( int v )\n{\n" + "".join( "    if constexpr ( kB%d ) { v += %d; }\n" % ( i, i ) for i in range( 40 ) ) + "    return v;\n}\n"
+open( sys.argv[1], "w" ).write( s )
+PYEOF
+flip "$BC" FEATURE_X >"$BC/out.xml"
+grep -q '<flip [^>]* bindings="32"' "$BC/out.xml" \
+    && ok "binding cap (guard): 40 bindings are cut to the 32 the scan keeps" \
+    || no "binding cap (guard): the fixture did not reach the cap — the arm is void: $( grep -o '<flip [^>]*>' "$BC/out.xml" | head -c 200 )"
+grep -q '<capped what="bindings" at="32"/>' "$BC/out.xml" \
+    && ok "binding cap: the report says bindings= is a floor — <capped what=\"bindings\" at=\"32\"/>" \
+    || no "binding cap: bindings=\"32\" reads as the total with no cap row"
+grep -q 'capped what= at=: ' "$BC/out.xml" \
+    && ok "binding cap: capped what= at= is defined in the same document" || no "binding cap: the capped row rides with no definition"
+command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$BC/out.xml" 2>/dev/null \
+    && ok "binding cap: the report is well-formed" || no "binding cap: the report fails xmllint"; }
+
 [ $fail -eq 0 ] && echo "flipcheck: ALL PASS" || echo "flipcheck: FAILURES"
 exit $fail

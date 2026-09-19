@@ -163,6 +163,17 @@ struct FlipResult
     std::string               parent;                // set when the FLIPPED gate is itself an alias child
     std::uint32_t             siblingCount = 0;      // other children of that parent (what the parent's flip adds)
     bool                      familyCapped = false;
+    bool                      bindingsCapped = false;   // more value bindings than kMaxBindings: bindings= and its branches are a floor
+
+    // The DISCLOSE sink for the alias walk's cut: familyCapped is the <capped what="family"> row.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        FamilyOverCap,
+    };
+    void disclose( DisclosureWhy ) noexcept
+    {
+        familyCapped = true;
+    }
 
     std::vector<FamilyMember> family;
     std::vector<LitRegion>    regions;
@@ -438,10 +449,10 @@ inline NodeId innermostAtLine( const IngestResult& ing, const SymbolLineIndex& i
 // every gate that aliases (transitively) to it. Flipping a leaf lights only the leaf — which falls out of
 // the same walk returning a single-element family.
 inline std::vector<std::string> aliasDescendants( const gtl::btree_map<std::string, darkflags::Gate>& byName,
-                                                  const std::string& root, bool& capped )
+                                                  const std::string& root, FlipResult& res )
 {
     std::vector<std::string> family{ root };
-    capped = false;
+    bool                     capped = false;
     for( std::uint32_t depth = 0; depth < kMaxChainDepth; ++depth )
     {
         std::vector<std::string> next;
@@ -481,7 +492,7 @@ inline std::vector<std::string> aliasDescendants( const gtl::btree_map<std::stri
     }
     if( capped )
     {
-        DISCLOSE( "flip: alias family hit the fan-out cap — the radius below is a lower bound" );
+        DISCLOSE( res, FlipResult::DisclosureWhy::FamilyOverCap, "flip: alias family hit the fan-out cap — the radius below is a lower bound" );
     }
     return family;
 }
@@ -492,6 +503,16 @@ struct ValueScanResult
 {
     std::vector<LitBranch>    branches;
     std::vector<ValueBinding> bindings;
+    bool                      bindingsCapped = false;
+    // The DISCLOSE sink for the binding cap: the flag becomes FlipResult::bindingsCapped, the <capped what="bindings"> row.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        BindingsOverCap,
+    };
+    void disclose( DisclosureWhy ) noexcept
+    {
+        bindingsCapped = true;
+    }
 };
 
 // darkflags' line splitter with the value lane's filter on top: ORDINARY-CODE lines only. Both passes go
@@ -569,7 +590,7 @@ inline void scanGateMentions( const IngestResult& ing, const std::string& root,
                                      []( const ValueBinding& a, const ValueBinding& b ) { return a.name == b.name; } ), out.bindings.end() );
     if( out.bindings.size() > kMaxBindings )
     {
-        DISCLOSE( "flip: more value bindings than the scan cap — branch sites below are a lower bound" );
+        DISCLOSE( out, ValueScanResult::DisclosureWhy::BindingsOverCap, "flip: more value bindings than the scan cap — branch sites below are a lower bound" );
         out.bindings.resize( kMaxBindings );
     }
 }
@@ -835,7 +856,8 @@ inline void collectValueBranches( const IngestResult& ing, const SiteLocator& lo
                                   const std::vector<std::string>& family, FlipResult& res )
 {
     ValueScanResult vs = scanValueLane( ing, root, family );
-    res.bindings = std::move( vs.bindings );
+    res.bindings       = std::move( vs.bindings );
+    res.bindingsCapped = vs.bindingsCapped;
     for( LitBranch& b : vs.branches )
     {
         attachHost( ing, loc, b, res );
@@ -1004,7 +1026,7 @@ inline FlipResult computeFlip( const IngestResult& ing, const Graph& g, const st
     adoptGateIdentity( byName, gate, res );
 
     // (1) the family this ONE flip lights — the gate plus every gate that aliases (transitively) to it
-    const std::vector<std::string> family = aliasDescendants( byName, gate.name, res.familyCapped );
+    const std::vector<std::string> family = aliasDescendants( byName, gate.name, res );
 
     // (2) the lit sites, by lane, each joined to the def that holds it
     const SiteLocator loc = buildSiteLocator( ing, root );
@@ -1145,6 +1167,30 @@ inline constexpr const char* kFlipRowLegend =
 // for a rule about rows it has none of. The caller renders the rows first and passes the count it got.
 // `rootRelativeRuns` is testmap.h's runsAreRootRelative for this run, decided by writeFlip (which holds the
 // ingest and the root) and passed in: the legend sentence and the command spelling answer to one predicate.
+// The one exception to "THE VERDICT IS NEVER THE WINDOW": a cut made BEFORE the counting, so the counts it feeds are
+// floors. The clause is defined only where a capped row rides, and the rows follow the root.
+inline void writeFlipCapLegend( std::FILE* out, const FlipResult& res )
+{
+    if( res.familyCapped || res.bindingsCapped )
+    {
+        rw::emitRaw( out, "<!-- capped what= at=: a cut made before counting, so what it feeds is a LOWER BOUND — what=family: the alias "
+                          "family stopped at at= members (family= and every count rolled up from it); what=bindings: more value bindings "
+                          "than at= were found (bindings= and the branch sites reached through them). -->" );
+    }
+}
+
+inline void writeFlipCapRows( std::FILE* out, const FlipResult& res )
+{
+    if( res.familyCapped )
+    {
+        rw::emitTo( out, "<capped what=\"family\" at=\"{}\"/>", kMaxFamily );
+    }
+    if( res.bindingsCapped )
+    {
+        rw::emitTo( out, "<capped what=\"bindings\" at=\"{}\"/>", kMaxBindings );
+    }
+}
+
 inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEscaper& ex,
                              const std::string& nextInvocation, std::size_t testFilesRendered,
                              bool rootRelativeRuns, std::string_view rootAttr )
@@ -1173,6 +1219,7 @@ inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEsc
     // and the run= commands beside them had nothing to be relative to either. The attribute and the one
     // sentence that defines it are emitted together, the same pairing every other verb's root= keeps.
     rw::emitRaw( out, rw::rootRelPathsLegend( !rootAttr.empty() ) );
+    writeFlipCapLegend( out, res );
 
     rw::emitTo( out, "<flip gate=\"{}\" kind=\"{}\" default=\"{}\" dark=\"{}\" runtime=\"{}\" p=\"{}\" l=\"{}\""
                        " family=\"{}\" regions=\"{}\" loc=\"{}\" branches=\"{}\" bindings=\"{}\""
@@ -1199,10 +1246,7 @@ inline void writeFlipHeader( std::FILE* out, const FlipResult& res, const XmlEsc
     {
         rw::emitTo( out, "<parent name=\"{}\" siblings=\"{}\"/>", ex( res.parent ).c_str(), res.siblingCount );
     }
-    if( res.familyCapped )
-    {
-        rw::emitTo( out, "<capped what=\"family\" at=\"{}\"/>", kMaxFamily );
-    }
+    writeFlipCapRows( out, res );
 
     for( const FamilyMember& m : res.family )
     {
