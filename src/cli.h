@@ -4087,7 +4087,8 @@ inline constexpr std::string_view kDefaultLegendPosture = "compact";
     else if( c.qualityBaseline )              { nonXml = "--quality-baseline (writes the sidecar)"; }
     else if( c.qualityAck || !c.qualityAckReason.empty() || !c.qualityAckOnly.empty() ) { nonXml = "--quality-ack (writes the ledger)"; }
     else if( !c.indexOut.empty() )            { nonXml = "--index-out (writes an index)"; }
-    else if( !c.pinCensus.empty() )           { nonXml = "--pin-census (writes a census)"; }
+    // (--pin-census is not here since L1: it writes its census BESIDE the map and the map is this run's answer, so once
+    // the default map is compact, refusing an asked --legend=full would leave no way to read that map's full legend.)
     else if( c.baseline || c.baselineUpdate ) { nonXml = "--arch --baseline (writes the baseline)"; }
     else if( !c.replaceSymbolBody.empty() || !c.insertBeforeSymbol.empty() || !c.insertAfterSymbol.empty() || !c.editPlan.empty() ) { nonXml = "the edit verbs (JSON receipts)"; }
     else if( c.mcp || !c.listen.empty() )     { nonXml = "--mcp/--listen (pass legend:\"compact\" per call instead)"; }

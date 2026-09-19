@@ -58,7 +58,7 @@ inline bool legendCompactAppliesTo( std::string_view command )
         "--legend=",                                                              // already stated
         "--for=",                                                                 // spelling kept stable (see above), not a refusal
         "--situ", "--recall=", "--report", "--mermaid", "--html", "--plan-lanes", "--sarif", "--eval",
-        "--export", "--note-add=", "--quality-baseline", "--quality-ack", "--index-out=", "--pin-census=",
+        "--export", "--note-add=", "--quality-baseline", "--quality-ack", "--index-out=",
         "--baseline", "--replace-symbol-body", "--insert-before-symbol", "--insert-after-symbol", "--edit-plan=",
         "--mcp", "--listen=", "--lsp",
     };
@@ -983,7 +983,9 @@ inline bool repriceEstTokensIn( std::string& doc, std::size_t begin, std::size_t
     return true;
 }
 
-inline CompactOutcome applyCompactDialectOnce( std::string& doc, std::string_view hint )
+// `priceBasisBytes`: the size of the document its est_tokens= was PRICED for, when that is not `doc` itself — the
+// over_ceiling settle below removes a label from the original after its emitter priced it (0 = doc.size()).
+inline CompactOutcome applyCompactDialectOnce( std::string& doc, std::string_view hint, std::size_t priceBasisBytes = 0 )
 {
     const CompactRootInfo root = findCompactRoot( doc );
     if( root.tag.empty() ) { return CompactOutcome::NotXml; }
@@ -1074,18 +1076,19 @@ inline CompactOutcome applyCompactDialectOnce( std::string& doc, std::string_vie
     out.insert( at, legend );
     // the price follows the bytes (see compactRepricedTokens): the root's est_tokens=, then the map header's field
     const std::size_t compactBytes = out.size();
-    if( compactBytes != doc.size() )
+    const std::size_t pricedBytes  = priceBasisBytes > 0 ? priceBasisBytes : doc.size();
+    if( compactBytes != pricedBytes )
     {
         const CompactRootInfo outRoot = findCompactRoot( out );
         if( !outRoot.tag.empty() )
         {
-            repriceEstTokensIn( out, outRoot.openBegin, outRoot.openEnd, doc.size(), compactBytes );
+            repriceEstTokensIn( out, outRoot.openBegin, outRoot.openEnd, pricedBytes, compactBytes );
         }
         const std::string_view header = compactMapHeader( out );
         if( !header.empty() )
         {
             const std::size_t hb = static_cast<std::size_t>( header.data() - out.data() );
-            repriceEstTokensIn( out, hb, hb + header.size(), doc.size(), compactBytes );
+            repriceEstTokensIn( out, hb, hb + header.size(), pricedBytes, compactBytes );
         }
     }
     doc.swap( out );
@@ -1176,70 +1179,21 @@ inline bool settleOverCeilingLabel( std::string& original, std::string_view comp
     return true;
 }
 
-// ── --expand's reason= PRICES THE DOCUMENT IT SERVES (L1, 2026-09-19) ─────────────────────────────────────────
-// --expand chooses whole-file vs bundle serving and states the winner's price on the root: reason="bundle 2555B <= file
-// 11844B" / reason="file 459B …", where the served mode's number IS the delivered document's byte count (main.cpp M6;
-// expandmodecheck (4a)/(4b) hold that identity). Compaction changes the delivered bytes, so the served number is moved
-// to the compacted size — only when it equalled the full document exactly (the identity held), and to a fixed point,
-// since the number's own digits are part of the document it counts. The REJECTED candidate's number is untouched: it
-// was never rendered in this dialect, so the full dialect's measurement is the only one there is.
-inline void settleServedPriceInReason( std::string& doc, std::size_t fullBytes )
-{
-    const CompactRootInfo root = findCompactRoot( doc );
-    if( root.tag != "ctx" )
-    {
-        return;
-    }
-    const std::string_view open = std::string_view( doc ).substr( root.openBegin, root.openEnd - root.openBegin );
-    const bool wholeFile = open.find( " mode=\"whole-file\"" ) != std::string_view::npos;
-    const bool bundle    = open.find( " mode=\"bundle\"" ) != std::string_view::npos;
-    const std::size_t reasonAt = open.find( " reason=\"" );
-    if( ( !wholeFile && !bundle ) || reasonAt == std::string_view::npos )
-    {
-        return;
-    }
-    const std::string key = std::string( wholeFile ? "file " : "bundle " );
-    const std::size_t numAt = open.find( key, reasonAt );
-    const std::size_t valueEnd = open.find( '"', reasonAt + 9 );
-    if( numAt == std::string_view::npos || numAt > valueEnd )
-    {
-        return;
-    }
-    const std::size_t d = root.openBegin + numAt + key.size();
-    std::size_t e = d;
-    while( e < doc.size() && std::isdigit( static_cast<unsigned char>( doc[ e ] ) ) ) { ++e; }
-    std::size_t stated = 0;
-    if( e == d || e >= doc.size() || doc[ e ] != 'B' || std::from_chars( doc.data() + d, doc.data() + e, stated ).ec != std::errc() || stated != fullBytes )
-    {
-        return;   // not the M6 identity (a hand-built or already-moved number): nothing this rule may claim
-    }
-    for( int pass = 0; pass < 4; ++pass )
-    {
-        const std::string now = std::to_string( doc.size() );
-        if( now == std::string_view( doc ).substr( d, e - d ) )
-        {
-            break;
-        }
-        doc.replace( d, e - d, now );
-        e = d + now.size();
-    }
-    ENSURES( std::to_string( doc.size() ) == std::string_view( doc ).substr( d, e - d ), "the served mode's price is the delivered size" );
-}
-
 inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint )
 {
-    std::string original = doc;
-    CompactOutcome outcome = applyCompactDialectOnce( doc, hint );
+    std::string       original    = doc;
+    const std::size_t pricedBytes = doc.size();   // what the emitter's est_tokens= describes
+    CompactOutcome    outcome     = applyCompactDialectOnce( doc, hint );
     if( outcome == CompactOutcome::Rewritten && settleOverCeilingLabel( original, doc ) )
     {
         doc = original;
-        outcome = applyCompactDialectOnce( doc, hint );
+        outcome = applyCompactDialectOnce( doc, hint, pricedBytes );
         ENSURES( outcome == CompactOutcome::Rewritten, "a label correction never changes whether the root has a compact dialect" );
     }
-    if( outcome == CompactOutcome::Rewritten )
-    {
-        settleServedPriceInReason( doc, original.size() );
-    }
+    // NOT moved here: --expand's reason="file NB < bundle MB". Both numbers are the FULL dialect's prices of the two
+    // candidates the M6 choice compared (main.cpp chooseExpandServe), and moving only the served one made the stated
+    // comparison false ("file 1292B < bundle 1267B", expandmodecheck (4c)); the choice itself is made on full-dialect
+    // prices — recorded in the L1 lane report as a found item, not papered over with one corrected number.
     return outcome;
 }
 
