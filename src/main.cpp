@@ -878,7 +878,15 @@ std::optional<int> runNotes( const MainDispatch& d )
         const std::string branch = sha.empty() ? std::string()
                                   : notes::sanitizeField( rw::quality::gitOneLine( d.root, "rev-parse --abbrev-ref HEAD 2>/dev/null" ) );
         const std::string path = notes::notesPath( d.root );
-        const std::string line = notes::addNote( path, target, date, text, sha, branch );
+        notes::NotesReadStats noteStats;
+        const std::string     line = notes::addNote( path, noteStats, target, date, text, sha, branch );
+        if( noteStats.linesSkipped != 0 )
+        {
+            rw::emitTo( stderr, "ripwire: --note-add: {} holds {} line(s) that are not <target>\\t<date>\\t<text> — refusing to rewrite it, "
+                                "which would delete them (fix or remove those lines first; --notes counts them as lines_skipped=)\n",
+                        path.c_str(), noteStats.linesSkipped );
+            return 1;
+        }
         if( line.empty() )
         {
             rw::emitTo( stderr, "ripwire: --note-add: could not write {}\n", path.c_str() );
@@ -894,7 +902,8 @@ std::optional<int> runNotes( const MainDispatch& d )
     {
         // D5: read + normalize every stored target to ROOT-RELATIVE (readNotesRelative) — a legacy absolute
         // entry from before this fix keeps matching correctly instead of always reading dangling="1".
-        std::vector<notes::Note> all = notes::readNotesRelative( notes::notesPath( d.root ), d.root );
+        notes::NotesReadStats    noteStats;
+        std::vector<notes::Note> all = notes::readNotesRelative( notes::notesPath( d.root ), d.root, noteStats );
         notes::sortNotes( all );
 
         // the set of LIVE targets in the indexed tree: every symbol's canonical id + every file path, BOTH
@@ -943,7 +952,23 @@ std::optional<int> runNotes( const MainDispatch& d )
                            " both omitted entirely on a note stored before provenance stamping (absent means none recorded, never empty) -->",
                            all.size(), targetCount, danglingCount );
             w.write( hdr );
-            w.write( "<notes>" );
+            // The read's own shortfall, on <notes> itself and ONLY when there is one (a clean sidecar's bytes are
+            // unchanged), each carrying its definition in the same write so the attribute is never undefined where met.
+            if( noteStats.symlinkRefused )
+            {
+                w.write( "<!-- refused=\"symlink\": the sidecar at the notes name is a SYMLINK, refused unopened, so no note was read (not the same answer as no sidecar) -->"
+                         "<notes refused=\"symlink\">" );
+            }
+            else if( noteStats.linesSkipped != 0 )
+            {
+                w.write( "<!-- lines_skipped= counts sidecar lines that are not <target>TAB<date>TAB<text> (or have an empty target): on disk, "
+                         "absent below and from notes=; note-add refuses to rewrite the sidecar while any remain -->" );
+                w.write( "<notes lines_skipped=\"" + std::to_string( noteStats.linesSkipped ) + "\">" );
+            }
+            else
+            {
+                w.write( "<notes>" );
+            }
             for( std::size_t i = 0; i < all.size(); )
             {
                 std::size_t j = i;
@@ -1779,7 +1804,7 @@ int runDefaultMap( const MainDispatch& d )
         std::FILE* const m = rw::openChargeStream( probe );
         if( !m )
         {
-            DISCLOSE( "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
+            DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
         serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut );
@@ -1787,7 +1812,7 @@ int runDefaultMap( const MainDispatch& d )
         if( !measured.isWhole )
         {
             // a short size would read as a SMALLER map and pass a ceiling the real one breaks; 0 is the documented unmeasured answer
-            DISCLOSE( "runDefaultMap: the --max-tokens fit probe's buffer did not finish whole — the map is emitted unshaped and its ceiling unverified" );
+            DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: the --max-tokens fit probe's buffer did not finish whole — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
         return measured.bytes.size();
@@ -1821,7 +1846,7 @@ int runDefaultMap( const MainDispatch& d )
         std::FILE* const m = rw::openChargeStream( probe );
         if( !m )
         {
-            DISCLOSE( "runDefaultMap: open_memstream failed for the --max-tokens JSON ceiling probe — the ceiling verdict is unverified" );
+            DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: open_memstream failed for the --max-tokens JSON ceiling probe — the ceiling verdict is unverified" );
             return 0;                                // reads as "fits" — the same safe direction measureMapBytes takes
         }
         serializeJson( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics,
@@ -1830,7 +1855,7 @@ int runDefaultMap( const MainDispatch& d )
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
-            DISCLOSE( "runDefaultMap: the --max-tokens JSON ceiling probe's buffer did not finish whole — the ceiling verdict is unverified" );
+            DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: the --max-tokens JSON ceiling probe's buffer did not finish whole — the ceiling verdict is unverified" );
             return 0;                                // the same "unmeasured" answer the open failure above gives
         }
         return measured.bytes.size();

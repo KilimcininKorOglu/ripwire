@@ -1645,6 +1645,21 @@ struct MapAnnotations
         std::size_t askedTokens   = 0;
         std::size_t ceilingBytes  = 0;
         bool        isOverCeiling = false;   // ⇒ ` over_ceiling="1"`; absent means the cap was honoured (measured, not assumed)
+        // A fit probe could not MEASURE the map (its buffer failed to open or lost a write): the cap is unverified, so
+        // over_ceiling=1 rides fail-closed beside fit_unmeasured=1 — "absent = cap held" would otherwise be a claim no
+        // measurement backs. This struct is the DISCLOSE sink for both probes in main.cpp's runDefaultMap.
+        bool        isUnmeasured  = false;
+        enum class DisclosureWhy : std::uint8_t
+        {
+            ProbeUnmeasured,
+        };
+        void disclose( DisclosureWhy why ) noexcept
+        {
+            switch( why )
+            {
+                case DisclosureWhy::ProbeUnmeasured: isUnmeasured = true; break;
+            }
+        }
     };
     const MaxTokensFit* maxTokensFit = nullptr;
 
@@ -2109,6 +2124,8 @@ inline constexpr const char* kMetricsLegend =
 // marker no legend defines is the §B7 class this round is already closing. Kept to one hyphenated phrase for
 // that reason, and spelled WITHOUT the `=1` the attribute carries so that the literal `over_ceiling=1` occurs
 // in a document only where the map actually asserts it (a gate greping the marker cannot match its own gloss).
+inline constexpr const char* kMaxTokensUnmeasuredLegend =
+    "<!-- fit_unmeasured=1: the fit probe could not measure this map, so the cap is UNVERIFIED and over_ceiling=1 is set fail-closed -->";
 inline constexpr const char* kMaxTokensFitLegend =
     "<!-- max_tokens=asked fit_bytes=honoured: fit_bytes = max_tokens x 2.36 (densest-language B/tok) x 0.90 "
     "headroom, a CONSERVATIVE cap, so est_tokens (this corpus's own rate) lands ~10-20% BELOW max_tokens by "
@@ -2479,6 +2496,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     if( ann.maxTokensFit != nullptr )
     {
         legend += kMaxTokensFitLegend; // §B13.4, --max-tokens-only (ditto)
+        legend += ann.maxTokensFit->isUnmeasured ? kMaxTokensUnmeasuredLegend : "";   // only on the degrade that sets it
     }
     const bool ignoreCut = ing.crawlSkips.ignoredFiles > 0 || ing.crawlSkips.ignoredDirs > 0;
     legend += ignoreCut ? kIgnoredLegend : "";   // §N6-C — charged to the map that carries it; see kIgnoredLegend
@@ -2555,9 +2573,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     char fitAttr[ 96 ];  fitAttr[ 0 ] = '\0';
     if( ann.maxTokensFit != nullptr )
     {
-        rw::formatTo( fitAttr, sizeof( fitAttr ), " max_tokens={} fit_bytes={}{}",
+        rw::formatTo( fitAttr, sizeof( fitAttr ), " max_tokens={} fit_bytes={}{}{}",
                        ann.maxTokensFit->askedTokens, ann.maxTokensFit->ceilingBytes,
-                       ann.maxTokensFit->isOverCeiling ? " over_ceiling=1" : "" );
+                       ann.maxTokensFit->isOverCeiling || ann.maxTokensFit->isUnmeasured ? " over_ceiling=1" : "",
+                       ann.maxTokensFit->isUnmeasured ? " fit_unmeasured=1" : "" );
     }
     // order= marker: T3's auto-flip must be OBSERVABLE, not a silent behaviour change — "important-
     // last(auto:fill)" is distinct from the explicit "important-last" so a reader (or a diff) can tell
@@ -7205,7 +7224,7 @@ inline void writeJsonMapStamp( JsonWriter& w, std::string& esc, const MapAnnotat
         char fit[ 160 ];
         rw::formatTo( fit, sizeof( fit ), ",\"max_tokens\":{},\"fit_bytes\":{},\"fit_measured_in\":\"xml\"{}",
                        ann->maxTokensFit->askedTokens, ann->maxTokensFit->ceilingBytes,
-                       ann->maxTokensFit->isOverCeiling ? ",\"over_ceiling\":true" : "" );
+                       ann->maxTokensFit->isOverCeiling || ann->maxTokensFit->isUnmeasured ? ",\"over_ceiling\":true" : "" );
         w.write( fit );
     }
 }

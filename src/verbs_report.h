@@ -692,9 +692,15 @@ std::optional<int> runArchViews( const MainDispatch& d )
                           viols.size(), basedViols.size(), newViols.size() );
         }
 
-        rw::emitTo( stdout, "<!-- ripwire arch: layering fitness function — edges that violate your declared rules (layer rules and regex path-rules). exit=2 if any NEW (un-baselined) violation. <metrics> = descriptive Martin Ca/Ce/I/A/D + reachability, never gates.{} -->", kArchMatchDomain );
-        rw::emitTo( stdout, "<arch layers=\"{}\" rules=\"{}\" pathRules=\"{}\" violations=\"{}\" baselined=\"{}\" new_violations=\"{}\">",
-                     ar.layerNames.size(), ar.rules.size(), ar.pathRules.size(), viols.size(), basedViols.size(), newViols.size() );
+        // A refused sidecar carries its own definition, and only then: a run with a baseline or with none is unchanged.
+        static constexpr const char* kArchBaselineRefused =
+            " baseline=\"symlink-refused\": the baseline sidecar is a SYMLINK, refused unopened — no violation was"
+            " suppressed, so every one below counts as new; this is not the same answer as having no baseline.";
+        rw::emitTo( stdout, "<!-- ripwire arch: layering fitness function — edges that violate your declared rules (layer rules and regex path-rules). exit=2 if any NEW (un-baselined) violation. <metrics> = descriptive Martin Ca/Ce/I/A/D + reachability, never gates.{}{} -->",
+                     kArchMatchDomain, baselineRead.symlinkRefused ? kArchBaselineRefused : "" );
+        rw::emitTo( stdout, "<arch layers=\"{}\" rules=\"{}\" pathRules=\"{}\" violations=\"{}\" baselined=\"{}\" new_violations=\"{}\"{}>",
+                     ar.layerNames.size(), ar.rules.size(), ar.pathRules.size(), viols.size(), basedViols.size(), newViols.size(),
+                     baselineRead.symlinkRefused ? " baseline=\"symlink-refused\"" : "" );
         for( const Viol& v : viols )
         {
             emitViol( v, hasBaseline && baseline.count( v.hash ) );
@@ -2252,7 +2258,13 @@ std::optional<int> runLayout( const MainDispatch& d )
         // `enum class`/`enum struct` (§P6.11) is its own case, named explicitly: it used to fall through to
         // findDefBody's generic aggregate scan (a scoped enum's head contains the word "class"/"struct" too)
         // and silently degrade to a confident modeled="1" zero-field struct instead of refusing.
-        if( result.enumCandidates > 0 )
+        if( result.unreadableDefs > 0 )
+        {
+            // Not "no such struct": the name IS indexed and its definition's file could not be read when this ran.
+            rw::emitTo( stderr, "ripwire: --layout: '{}' is indexed, but {} definition file(s) could not be read (removed or unreadable since the index) — no layout computed\n",
+                        std::string_view( cfg.layoutStruct.data(), cfg.layoutStruct.size() ), result.unreadableDefs );
+        }
+        else if( result.enumCandidates > 0 )
         {
             rw::emitTo( stderr, "ripwire: --layout: '{}' is an enum, --layout models structs (a scoped/unscoped enum's underlying type is not a byte layout)\n", std::string_view( cfg.layoutStruct.data(), cfg.layoutStruct.size() ) );
         }

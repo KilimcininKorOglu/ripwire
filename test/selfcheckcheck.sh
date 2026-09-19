@@ -40,6 +40,9 @@
 #                   plain and the NDEBUG flavour, it must compile WITHOUT A WARNING (its static_asserts pin what does and
 #                   does not model Diagnostics::DisclosureSink); and once per RW_NEG_* case, in both flavours, it must
 #                   FAIL, with a diagnostic naming the defect. The as-is compile is every negative's contrast.
+#   (S) SHIPS       the same TU built as a program (RW_RUN_SINKS) at -O2, NDEBUG and plain: both sink-form sites must RECORD
+#                   (truncated=1 unreadable=1, exit 0). The NDEBUG leg is the release expansion a user runs; it is what lets a
+#                   plain-flavour-only gate (a non-NDEBUG fault switch) stand for the Release wiring of a converted site.
 #   (F) CONTROLS    every arm above runs the SAME scanner over a fixture holding one planted defect per arm plus a
 #                   look-alike that must stay clean; each plant must be found by the right arm, the look-alikes by
 #                   none, and each plant is re-read from disk before the verdict is trusted.
@@ -68,7 +71,7 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # regexguard.h/lsp.h/resolve.h show none currently — and lost 3 to unrelated fixes in skillscan.h/verbs_for.h; see
 # the landing report for the per-site classification of the 25). LOWER THIS NUMBER, never raise it. At landing, set
 # it to what (R) prints.
-DISCLOSE_SINKLESS_PIN=217
+DISCLOSE_SINKLESS_PIN=201
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'
@@ -494,6 +497,35 @@ NEGS
             fi
         done < "$WORK/negs.txt"
         [ "$refused" = "$negN" ] && ok "K($flav): all $negN negative cases refused, each naming its defect"
+    done
+fi
+
+# ── (S) SHIPS: the sink form records in the flavour a user runs ────────────────────────────────────────────────────
+# (K) proves the contract COMPILES; this proves it RUNS where it matters. The same TU, built as a program (RW_RUN_SINKS)
+# at -O2, once with -DNDEBUG (the release expansion, where the one-argument trace is `do { } while( 0 )`) and once plain
+# (the trace linked from src/infra/diagnostics.cpp): both must print truncated=1 unreadable=1 — the two sink-form sites
+# recorded their reasons — and exit 0. This is the flavour-independence every converted site in src/ rests on: a gate
+# that can only drive a degrade on the plain build (a non-NDEBUG fault switch) still proves the Release wiring, because
+# the sink call is this same expansion in both. Red on a header whose sink form were compiled out under NDEBUG.
+if [ ! -f "$TU" ] || ! command -v "$KCXX" >/dev/null 2>&1; then
+    skip "S: no contract TU or no C++ compiler — the shipped sink form was not run"
+else
+    for flav in NDEBUG plain; do
+        fl=( -O2 -DRW_RUN_SINKS ); src=( "$TU" )
+        if [ "$flav" = NDEBUG ]; then fl+=( -DNDEBUG ); else src+=( "$ROOT/src/infra/diagnostics.cpp" ); fi
+        if "$KCXX" "$KSTD" "${fl[@]}" -I"$ROOT/src" "${src[@]}" -o "$WORK/sinks_$flav" > "$WORK/s_$flav.log" 2>&1; then
+            out="$( "$WORK/sinks_$flav" 2>"$WORK/s_$flav.err" )"; rc=$?
+            if [ "$rc" = 0 ] && [ "$out" = "truncated=1 unreadable=1" ]; then
+                ok "S($flav): DISCLOSE( sink, why ) recorded both reasons in an -O2 $flav program ($out)"
+            else
+                no "S($flav): the sink form did not record (rc=$rc, printed '$out') — a converted site would disclose nothing in this flavour"
+            fi
+            if [ "$flav" = NDEBUG ] && [ -s "$WORK/s_$flav.err" ]; then
+                no "S(NDEBUG): the release-flavour program wrote a trace to stderr — is NDEBUG really in force? $( head -c 160 "$WORK/s_$flav.err" )"
+            fi
+        else
+            no "S($flav): the contract TU does not build as a program:"; grep -m5 'error' "$WORK/s_$flav.log" | sed 's/^/    /'
+        fi
     done
 fi
 

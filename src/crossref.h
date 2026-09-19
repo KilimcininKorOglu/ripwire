@@ -691,9 +691,31 @@ struct RefInfo
 // out.size(): a filter matching only the checked-out branch has SELECTED something (the answer is "nothing
 // but the ref you are on"), while a filter matching no branch name at all has selected nothing and must
 // refuse rather than report refs="0" — which reads as "no branch carries stray work".
-inline std::vector<RefInfo> enumerateRefs( const std::string& root, std::string_view filter, const std::string& headSha,
-                                           std::size_t* filterNameHits = nullptr )
+//
+// `enumeration` (optional out) is the DISCLOSE sink for a ref DROPPED here (a tip that is not an object name): it is
+// in no count the caller prints, so a caller that claims completeness must read refsDropped — --whereis withholds
+// complete= on it. A caller passing none has no such claim to withhold.
+struct RefEnumeration
 {
+    enum class DisclosureWhy : std::uint8_t
+    {
+        TipNotObjectName,
+    };
+    std::uint32_t refsDropped = 0;
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::TipNotObjectName: ++refsDropped; break;
+        }
+    }
+};
+
+inline std::vector<RefInfo> enumerateRefs( const std::string& root, std::string_view filter, const std::string& headSha,
+                                           std::size_t* filterNameHits = nullptr, RefEnumeration* enumeration = nullptr )
+{
+    RefEnumeration  unread;   // the sink when the caller keeps none
+    RefEnumeration& dropSink = enumeration != nullptr ? *enumeration : unread;
     const std::string raw = gitCapture( root, "for-each-ref --sort=refname --format='%(refname:short)|%(objectname)|%(committerdate:short)' refs/heads 2>/dev/null" );
     std::vector<RefInfo> out;
     for( std::string_view line : splitLines( raw ) )
@@ -731,7 +753,7 @@ inline std::vector<RefInfo> enumerateRefs( const std::string& root, std::string_
             // %(objectname) is always a full object name, so this cannot fire on well-formed output — which
             // is exactly why it is checked HERE, at the one place ref tips enter the module. Every git
             // command downstream takes this value as a revision argument.
-            DISCLOSE( "crossref: for-each-ref yielded a ref whose tip is not an object name — skipping it" );
+            DISCLOSE( dropSink, RefEnumeration::DisclosureWhy::TipNotObjectName, "crossref: for-each-ref yielded a ref whose tip is not an object name — skipping it" );
             continue;
         }
         if( !filter.empty() && name.find( filter ) == std::string_view::npos )
@@ -808,9 +830,33 @@ constexpr std::uint32_t kNoPair        = 0xFFFFFFFFu; // "this ref needs no diff
 // Run `body( i )` for every i in [0,count), across a small pool. DETERMINISM: every body writes only to the
 // slot its OWN index owns and reads nothing another body writes, so the result is identical to the serial
 // order by construction — the parallelism is in the fork/exec wait, never in the answer.
-template<class Body>
-inline void parallelIndexed( std::size_t count, Body body )
+//
+// A worker that throws abandons the indices it had not reached, and a slot nobody wrote holds its DEFAULT — which for a
+// RefPlumbing reads ok=true, base="" and rendered as Merged. So the pool reports which indices finished through
+// `sweep`, the DISCLOSE sink of its one degrade: each caller marks every unfinished slot as a failed analysis
+// (ok="0" v="unknown" in the document) instead of reading a default as an answer.
+struct ParallelSweep
 {
+    enum class DisclosureWhy : std::uint8_t
+    {
+        WorkerThrew,   // a worker's loop threw: the indices it had not reached were never run
+    };
+    std::vector<char> done;                     // done[i] = 1 once body( i ) returned; one writer per slot
+    std::atomic<bool> isIncomplete{ false };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::WorkerThrew: isIncomplete.store( true, std::memory_order_relaxed ); break;
+        }
+    }
+    bool isDone( std::size_t i ) const noexcept { return !isIncomplete.load( std::memory_order_relaxed ) || ( i < done.size() && done[ i ] != 0 ); }
+};
+
+template<class Body>
+inline void parallelIndexed( std::size_t count, Body body, ParallelSweep& sweep )
+{
+    sweep.done.assign( count, 0 );
     if( count == 0 )
     {
         return;
@@ -827,6 +873,7 @@ inline void parallelIndexed( std::size_t count, Body body )
         for( std::size_t i = 0; i < count; ++i )
         {
             body( i );
+            sweep.done[ i ] = 1;
         }
         return;
     }
@@ -841,9 +888,10 @@ inline void parallelIndexed( std::size_t count, Body body )
             for( std::size_t i = nextIndex.fetch_add( 1 ); i < count; i = nextIndex.fetch_add( 1 ) )
             {
                 body( i );
+                sweep.done[ i ] = 1;
             }
         }
-        catch( ... ) { DISCLOSE( "crossref: a git worker threw — this shard of the sweep is incomplete" ); }
+        catch( ... ) { DISCLOSE( sweep, ParallelSweep::DisclosureWhy::WorkerThrew, "crossref: a git worker threw — this shard of the sweep is incomplete" ); }
     };
 
     {   // symmetric bare scope: the workers live exactly as long as the pass they serve
@@ -889,7 +937,20 @@ public:
     void run( const std::string& root )
     {
         rows_.resize( pairs_.size() );
-        parallelIndexed( pairs_.size(), [ & ]( std::size_t i ) { rows_[i] = diffRaw( root, pairs_[i].a, pairs_[i].b ); } );
+        ParallelSweep sweep;
+        parallelIndexed( pairs_.size(), [ & ]( std::size_t i ) { rows_[i] = diffRaw( root, pairs_[i].a, pairs_[i].b ); }, sweep );
+        unfinished_.assign( pairs_.size(), 0 );
+        for( std::size_t i = 0; i < pairs_.size(); ++i )
+        {
+            unfinished_[ i ] = sweep.isDone( i ) ? 0 : 1;
+        }
+    }
+
+    // Was this pair's diff actually RUN? An empty row list is also what a diff nobody ran holds, and it reads as "no
+    // change"; a pair a thrown worker never reached is not an answer. kNoPair (no diff needed) is finished.
+    bool isFinished( std::uint32_t pairIndex ) const noexcept
+    {
+        return pairIndex == kNoPair || std::size_t( pairIndex ) >= unfinished_.size() || unfinished_[ pairIndex ] == 0;
     }
 
     const std::vector<RawRow>& rows( std::uint32_t pairIndex ) const
@@ -910,6 +971,7 @@ private:
 
     std::vector<DiffPair>                     pairs_;
     std::vector<std::vector<RawRow>>          rows_;        // sized once in run(), one owner per slot
+    std::vector<char>                         unfinished_;  // 1 ⇒ a thrown worker never ran that pair's diff
     gtl::btree_map<std::string, std::uint32_t> index_;
     std::size_t                               reuseCount_ = 0;
 };
@@ -1228,10 +1290,19 @@ inline StrayResult computeStrayContent( const std::string& root, std::string_vie
     // Refs are independent and each worker writes only its own slot, so this is the serial answer computed
     // in parallel — not a different answer.
     std::vector<RefPlumbing> plumbing( refs.size() );
-    parallelIndexed( refs.size(), [ & ]( std::size_t i ) { plumbing[i] = probeRefBase( root, refs[i], result.headSha ); } );
+    ParallelSweep            probeSweep;
+    parallelIndexed( refs.size(), [ & ]( std::size_t i ) { plumbing[i] = probeRefBase( root, refs[i], result.headSha ); }, probeSweep );
+    for( std::size_t i = 0; i < refs.size(); ++i )
+    {
+        plumbing[ i ].ok = plumbing[ i ].ok && probeSweep.isDone( i );   // a probe never run is a failed analysis, not a default
+    }
 
     // ── phases 2-4: the distinct diffs, then ONE batched blob read for the whole sweep ───────────────────
     const DiffPairTable diffs = gatherRefDiffs( root, refs, result.headSha, plumbing );
+    for( RefPlumbing& plumb : plumbing )
+    {
+        plumb.ok = plumb.ok && diffs.isFinished( plumb.refDiffPair ) && diffs.isFinished( plumb.headDiffPair );
+    }
 
     BlobStore blobs( root );
     registerSweepBlobs( diffs, plumbing, blobs );
@@ -1661,7 +1732,8 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
         result.fate = evidence.history->fateOf( result.sym );
     }
 
-    std::vector<RefInfo> refs = enumerateRefs( root, filter, result.headSha );
+    RefEnumeration       enumeration;   // a dropped ref is searched nowhere, so it forfeits complete= like an empty tree
+    std::vector<RefInfo> refs = enumerateRefs( root, filter, result.headSha, nullptr, &enumeration );
     refs.insert( refs.begin(), RefInfo{ "HEAD", result.headSha, quality::gitCommitterDateIso( root ) } );
     if( refs.size() > kMaxRefs ) { result.ok = false; return result; }
 
@@ -1706,7 +1778,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
 
     // T1: exhaustive-over-text iff every sha streamed clean AND no ref's tree listing was suspect. An empty
     // sha list (every scanned tree empty, or none) trivially streamed clean — anyEmptyTree covers that shape.
-    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree;
+    result.scanExhaustive = blobStats.exhaustiveOverText() && !anyEmptyTree && enumeration.refsDropped == 0;
 
     // §A7: HEAD's rows are the INDEX's answer, not the shape test's — before the sort, because "definitions
     // before references" is a sort key and a wrong label re-orders the first screen.

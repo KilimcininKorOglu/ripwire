@@ -352,6 +352,15 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --regex's long-line disclosure (search.h grepScanText / regexguard.h maxEngineSubjectBytes): the count rides every
     // regex answer, the bound only beside a nonzero count.
     { "regex_lines_skipped", "regex_lines_skipped=N: N lines too long for the regex engine, never matched" },
+    // The degrade-disclosure lane's attributes (each set through a DISCLOSE( sink, why ) sink, present only on the degrade,
+    // so a clean answer's legend is unchanged). Element-qualified where the name alone is generic.
+    { "unread_files",      "unread_files=N: N indexed files unreadable when scanned (hits= is a floor)" },
+    { "scan_degraded",     "scan_degraded=1: the scan stopped part-way (hits= is a floor)" },
+    { "unreadable",        "unreadable=N: N same-name definitions unreadable when this ran, absent from defs=", false, "layout" },
+    { "lines_skipped",     "lines_skipped=N: N sidecar lines unparsed, absent from notes=", false, "notes" },
+    { "refused",           "refused=symlink: the sidecar is a symlink, refused unopened: no note was read", false, "notes" },
+    { "baseline",          "baseline=symlink-refused: the sidecar is a symlink, refused unopened: every violation is new", false, "arch",
+      MapHeaderRead::No, "symlink-refused" },
     { "regex_line_max",    "regex_line_max=: the longest line it could take" },
     { "regex_stack_bytes", "regex_stack_bytes=: the smaller stack every scan thread was held to" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
@@ -394,6 +403,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "ignored_files",     "ignored_files=K: K files git's ignore rules dropped", false, {}, MapHeaderRead::Only },
     { "ignored_dirs",      "ignored_dirs=K: K subtrees git's ignore rules pruned, contents unknown", false, {}, MapHeaderRead::Only },
     { "max_tokens",        "max_tokens=/fit_bytes=: tokens asked/the byte cap applied", false, {}, MapHeaderRead::Only },
+    { "fit_unmeasured",    "fit_unmeasured=1: the fit probe could not measure the map; the cap is unverified", false, {}, MapHeaderRead::Only },
     // THE THIRD SWEEP (2026-09-12), the same defect on conditional fields the first two sweeps never produced. --zoom's
     // <module children=> rides only a module AT the levels_shown= cut, and a map's <recent> file rows only a single-root
     // rank_by=churn-decay (kChurnDecayRankLegend's `recent:` clause). Both clauses are prose. Both rows are ELEMENT-qualified:

@@ -460,7 +460,6 @@ cat > "$TMP/reg_a.tsv" <<'REGA'
 gitoracle.h	loadOracleCache	Fate	1	range-checked against kFateTable in the same record's guard, before the record enters the index; Fate's underlying type is uint8_t, so the construction itself is defined
 REGA
 cat > "$TMP/reg_b1.tsv" <<'REGB1'
-crossref.h	parallelIndexed	alert-only	1	FINDING (disclosure lane): a git worker that throws leaves its shard of the --stray-content sweep unread, and Release says nothing — needs the DISCLOSE sink form
 infra/emit.h	emitTo	silent	1	not an answer path: std::print's failed write is made silent to keep fputs's contract, which the header documents
 ingest_astquery.h	astQueryGrouped	silent	1	FINDING: a file whose query walk throws drops out of --match/--lint hits with no disclosure in any build; file held by the regexguard and crash-fixes lanes
 ingest_astquery.h	spanTiersOfFiles	alert-only	1	FINDING (disclosure lane): a tier worker that throws leaves its files unclassified for --grep-in, silent in Release

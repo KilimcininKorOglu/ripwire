@@ -103,15 +103,36 @@ inline void forgetNestRefusalsForCache( IngestFileScan& scan ) noexcept
 // third_party/patches/kotlin/, so this is the FIRST of two independent layers). Unlike those three guards a refusal here
 // is ITEMIZED — its size lands in scan.nestRefusedBytes, which collectNestRefusals turns into --skipped rows — because a
 // .kt file refused here takes real code out of the map. True means "refused: skip the parse".
+// The DISCLOSE sink for one refusal: recording the refused file's size in its scan slot IS the disclosure — collectNestRefusals
+// turns the slot into the --skipped row (why="nest-refused") and nest_refused=, in every build flavour.
+struct NestRefusal
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        KotlinStringTemplates,
+    };
+    IngestFileScan& scan;
+    std::size_t     fileId;
+    std::uint32_t   bytes;
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::KotlinStringTemplates: scan.nestRefusedBytes[ fileId ] = bytes; break;
+        }
+    }
+};
+
 inline bool refuseKotlinNesting( const LangEntry& le, std::string_view bytes, const char* path, std::size_t fileId, IngestFileScan& scan )
 {
     if( le.lang != Lang::Kotlin || !kotlinStringsNestTooDeep( bytes ) )
     {
         return false;
     }
-    DISCLOSE( "ingest: a .kt file nests string templates past kMaxKotlinStringNestDepth — refused before the parse (--skipped why=nest-refused)" );
+    NestRefusal refusal{ scan, fileId, static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) ) };
+    DISCLOSE( refusal, NestRefusal::DisclosureWhy::KotlinStringTemplates,
+              "ingest: a .kt file nests string templates past kMaxKotlinStringNestDepth — refused before the parse (--skipped why=nest-refused)" );
     rw::emitTo( stderr, "[ripwire] {}: kotlin string-template nesting > {} levels — refused before the parse (skipped)\n", path, kMaxKotlinStringNestDepth );
-    scan.nestRefusedBytes[ fileId ] = static_cast<std::uint32_t>( std::min<std::size_t>( bytes.size(), UINT32_MAX ) );
     return true;
 }
 
