@@ -986,12 +986,15 @@ struct ForNamedHeaderRow
 namespace mention_detail
 {
 
-// the file extension (no dot), or "" when the basename carries none — stripExt()'s complement.
+// the file extension (no dot), or "" when the basename carries none — DERIVED from stripExt() rather than
+// a second rfind('.'): quality-delta flagged the first cut as a new clone of that reused helper (both were
+// "find the last dot, slice around it"), so this composes stripExt's own answer instead of re-deriving it,
+// the same way pathStem above is stripExt(baseNameOf(path)) rather than its own scan.
 inline std::string_view fileExtOf( std::string_view path ) noexcept
 {
     const std::string_view base = baseNameOf( path );
-    const std::size_t      dot  = base.rfind( '.' );
-    return ( dot == std::string_view::npos || dot == 0 ) ? std::string_view() : base.substr( dot + 1 );
+    const std::string_view stem = stripExt( base );
+    return stem.size() == base.size() ? std::string_view() : base.substr( stem.size() + 1 );
 }
 
 // path minus its basename (no trailing '/'), or "" at the root — composed from baseNameOf rather than a
