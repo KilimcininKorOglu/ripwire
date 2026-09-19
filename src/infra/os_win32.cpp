@@ -24,6 +24,7 @@
 #undef near             // <windows.h> still defines these 16-bit keywords, and the program uses `near` as a name
 #undef far
 
+#include "Diagnostics.h"       // EXPECTS — the thread calls' preconditions
 #include "os.h"
 #include "os_win32_logic.h"    // the pure logic, compiled and tested on every platform
 
@@ -2472,11 +2473,13 @@ int pthread_getname_np( pthread_t, char* name, std::size_t nameCount )
 // join reports nullptr, which is what the one caller asks for.
 int pthread_attr_init( pthread_attr_t* attr )
 {
+    EXPECTS( attr != nullptr, "pthread_attr_init: the caller owns the attribute object" );
     *attr = pthread_attr_t {};
     return 0;
 }
 int pthread_attr_setstacksize( pthread_attr_t* attr, std::size_t stackBytes )
 {
+    EXPECTS( attr != nullptr, "pthread_attr_setstacksize: the caller owns the attribute object" );
     if( stackBytes > UINT_MAX )
     {
         return EINVAL;   // _beginthreadex's size is an unsigned; POSIX: a size the implementation cannot honour is EINVAL
@@ -2503,6 +2506,7 @@ unsigned __stdcall threadTrampoline( void* raw )
 
 int pthread_create( pthread_t* thread, const pthread_attr_t* attr, void* ( *start )( void* ), void* arg )
 {
+    EXPECTS( thread != nullptr && start != nullptr, "pthread_create: an out-handle and an entry point" );
     std::unique_ptr<ThreadStart> launch( new( std::nothrow ) ThreadStart { start, arg } );
     if( !launch )
     {
