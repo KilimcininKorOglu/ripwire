@@ -453,9 +453,39 @@ for dp, dn, fn in os.walk( os.path.join( ROOT, "src" ) ):
             files.append( os.path.relpath( os.path.join( dp, f ), ROOT ) )
 files.sort()
 texts = { r: open( os.path.join( ROOT, r ), encoding="utf-8", errors="surrogateescape" ).read() for r in files }
-cmake_files = sorted( [ "CMakeLists.txt" ] + [ os.path.join( "cmake", f ) for f in os.listdir( os.path.join( ROOT, "cmake" ) ) if f.endswith( ".cmake" ) ]
-                      if os.path.isdir( os.path.join( ROOT, "cmake" ) ) else [ "CMakeLists.txt" ] )
-cmake_files = [ f for f in cmake_files if os.path.exists( os.path.join( ROOT, f ) ) ]
+def cmake_reachable_files( root ):
+    """Repository-owned CMake inputs the root build can reach: CMakeLists.txt, cmake/*.cmake, and — recursively —
+    every CMakeLists.txt / *.cmake a FetchContent_Declare vendors into third_party/deps/<name> (CodeRabbit #290:
+    doctest's own CMakeLists.txt and its scripts/cmake/*.cmake were unscanned, reached via FetchContent_MakeAvailable
+    when RIPWIRE_TESTS is ON). EXCLUDED: a name the root CMakeLists.txt itself declares SOURCE_SUBDIR _none_ for —
+    its CMakeLists.txt is never configured by this build, so there is nothing to reach. add_ts_grammar's macro body
+    sets that for every grammar it is invoked with; three explicit blocks (swift, php, ts_typescript) set it by
+    hand. Both are read out of CMakeLists.txt itself, not hand-listed, so a new grammar or a new plain
+    FetchContent_Declare both stay covered without a second edit here."""
+    files = [ "CMakeLists.txt" ]
+    cdir = os.path.join( root, "cmake" )
+    if os.path.isdir( cdir ):
+        files += sorted( os.path.join( "cmake", f ) for f in os.listdir( cdir ) if f.endswith( ".cmake" ) )
+    root_txt = open( os.path.join( root, "CMakeLists.txt" ), encoding="utf-8", errors="replace" ).read()
+    none_names = set( re.findall( r'add_ts_grammar\(\s*([A-Za-z0-9_]+)', root_txt ) )
+    for m in re.finditer( r'FetchContent_Declare\(\s*([A-Za-z0-9_]+)', root_txt ):
+        openParen = root_txt.index( "(", m.start() )
+        close = matching_close( root_txt, openParen, "(", ")" )
+        body = root_txt[ openParen:close ] if close is not None else root_txt[ openParen: ]
+        if re.search( r'SOURCE_SUBDIR\s+_none_', body ):
+            none_names.add( m.group( 1 ) )
+    deps_dir = os.path.join( root, "third_party", "deps" )
+    if os.path.isdir( deps_dir ):
+        for name in sorted( os.listdir( deps_dir ) ):
+            if name in none_names or not os.path.isdir( os.path.join( deps_dir, name ) ):
+                continue
+            for dp, dn, fn in os.walk( os.path.join( deps_dir, name ) ):
+                dn.sort()
+                for f in sorted( fn ):
+                    if f == "CMakeLists.txt" or f.endswith( ".cmake" ):
+                        files.append( os.path.relpath( os.path.join( dp, f ), root ) )
+    return sorted( f for f in files if os.path.exists( os.path.join( root, f ) ) )
+cmake_files = cmake_reachable_files( ROOT )
 wf_dir = os.path.join( ROOT, ".github", "workflows" )
 yaml_files = sorted( os.path.join( ".github", "workflows", f ) for f in os.listdir( wf_dir ) if f.endswith( ( ".yml", ".yaml" ) ) ) if os.path.isdir( wf_dir ) else []
 
