@@ -94,6 +94,12 @@ mapout="$( "$BIN" "$FIX" --no-cache --top-k=500 2>/dev/null )"
 printf '%s' "$mapout" | grep -q 'n="IntrinsicHost"' && ok "intrinsic.tsx still yields its real symbol IntrinsicHost (svg:rect/fragment did not break the file)" \
                                                      || no "IntrinsicHost missing from the map — intrinsic.tsx failed to extract at all"
 
+# ── §5b `<_Widget />` — only ASCII-lowercase is intrinsic; `_` is a legal component lead char ───────
+n5b="$( "$BIN" "$FIX" --no-cache --callers=_Widget 2>"$TMP/err5b" )"
+n5bn="$( printf '%s' "$n5b" | attr count )"
+[ "$n5bn" = "1" ] && ok "<_Widget />: leading underscore is a COMPONENT, not intrinsic (--callers count=1)" \
+                  || no "<_Widget />: --callers=_Widget count=$n5bn (want 1) — stderr: $( cat "$TMP/err5b" )"
+
 # ── §6 decoy — import binding, not name spray ────────────────────────────────────────────────────────
 n6real="$( "$BIN" "$FIX" --no-cache --callers='decoy/real.tsx:Widget'  2>/dev/null | attr count )"
 n6decoy="$( "$BIN" "$FIX" --no-cache --callers='decoy/other.ts:Widget' 2>/dev/null | attr count )"
