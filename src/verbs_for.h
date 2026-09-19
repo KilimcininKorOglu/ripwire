@@ -2835,43 +2835,24 @@ std::optional<int> runForLens( const MainDispatch& d )
             sectionsNextInvocation += ' ';
             sectionsNextInvocation += rw::nextFlag( "--sections=", "lego,compose" );
         }
-        // R2-L2' (round-2, priced re-registration of L2/B1): a candidate collapses to its stub ONLY WHEN the
-        // stub — plus its OWN, UNSHARED charge for the legend clause that defines it
-        // (kForSectionStubLegend.size(), charged WHOLE to EACH candidate section's decision even when both
-        // lego and compose collapse in the same answer and the clause itself is spliced only once into the
-        // header) — is SMALLER than the section it would replace. This is the pre-registered simplification
-        // (rv-prereg2 Amendment 1, R4): it needs no per-answer bookkeeping of who already "paid" for the
-        // clause, and it is POSTURE-INDEPENDENT — the identical decision under --legend=full and
-        // --legend=compact — because kForSectionStubLegend is the ONE string both dialects splice (never a
-        // shorter compact-only variant; see its own comment). A tiny section (fewer rows than the stub's own
-        // next= — which echoes the whole task — plus its clause) now stays WHOLE rather than "collapsing" to
-        // something bigger than what it replaced.
-        //
-        // The buffered (happy) path knows each section's true rendered byte length and gates on it directly.
-        // The DEGRADE path (open_memstream failed; lego/composePreRendered==false) has only a ROW COUNT —
-        // legoPreCapRowCount/composePreCapRowCount compute total= WITHOUT rendering, by construction (see
-        // their own comments) — never a byte length. Sizing a section this function never actually measured
-        // would be exactly the guessed, undisclosed estimate §9.3 forbids, so the degrade path keeps round
-        // 1's unconditional rule: collapse whenever the section has content and --sections did not opt it
-        // back in. That is the conservative direction — it never risks streaming an un-sized full section on
-        // the one path where the render that would have sized it is the thing already failing.
-        std::string legoStubXml, composeStubXml;
-        if( legoCandidate )    { legoStubXml    = rw::sectionStubXml( "lego",    legoStubTotal,    sectionsNextInvocation ); }
-        if( composeCandidate ) { composeStubXml = rw::sectionStubXml( "compose", composeStubTotal, sectionsNextInvocation ); }
-        // local invariant: a CANDIDATE always has a non-empty pre-cap count (legoHasContent/composeHasContent
-        // are what make it a candidate in the first place), so sectionStubXml — which itself refuses total=0 —
-        // always ran above when the size gate below is about to read its result.
-        ASSUME( !legoCandidate    || !legoStubXml.empty(),    "R2-L2': legoCandidate but legoStubXml was never built" );
-        ASSUME( !composeCandidate || !composeStubXml.empty(), "R2-L2': composeCandidate but composeStubXml was never built" );
-        const bool legoWillStub    = legoCandidate
-            && ( !legoPreRendered    || legoStr.size()    > legoStubXml.size()    + rw::kForSectionStubLegend.size() );
-        const bool composeWillStub = composeCandidate
-            && ( !composePreRendered || composeStr.size() > composeStubXml.size() + rw::kForSectionStubLegend.size() );
+        // R2-L2' (round-2, priced re-registration of L2/B1, rv-prereg2 Amendment 1 R4): a candidate collapses
+        // ONLY WHEN CHEAPER — see rw::priceSectionStub (serialize.h) for the shared rule (posture-independent
+        // by construction) and the DEGRADE-path fallback it documents (no rendered bytes to gate on there, so
+        // it keeps round 1's unconditional collapse). Pulled into one small function so this already-long
+        // lens carries none of the pricing branching itself.
+        const rw::SectionStubPricing legoPricing    = legoCandidate
+            ? rw::priceSectionStub( "lego",    legoStubTotal,    sectionsNextInvocation, legoPreRendered,    legoStr.size() )
+            : rw::SectionStubPricing{};
+        const rw::SectionStubPricing composePricing = composeCandidate
+            ? rw::priceSectionStub( "compose", composeStubTotal, sectionsNextInvocation, composePreRendered, composeStr.size() )
+            : rw::SectionStubPricing{};
+        const bool legoWillStub    = legoCandidate    && legoPricing.collapse;
+        const bool composeWillStub = composeCandidate && composePricing.collapse;
         // postcondition of the rule itself: whichever section actually collapses is, by construction, smaller
         // than what it replaced (the WHOLE point of pricing it) — never a stub that grew the answer.
-        ENSURES( !( legoPreRendered && legoWillStub )    || legoStubXml.size()    < legoStr.size(),
+        ENSURES( !( legoPreRendered && legoWillStub )    || legoPricing.stubXml.size()    < legoStr.size(),
                  "R2-L2': a lego stub collapsed without being smaller than the section it replaced" );
-        ENSURES( !( composePreRendered && composeWillStub ) || composeStubXml.size() < composeStr.size(),
+        ENSURES( !( composePreRendered && composeWillStub ) || composePricing.stubXml.size() < composeStr.size(),
                  "R2-L2': a compose stub collapsed without being smaller than the section it replaced" );
         std::string sectionsStubNote;   // present-only legend clause (kForSectionStubLegend), spliced below
         if( legoWillStub || composeWillStub )
@@ -2880,11 +2861,11 @@ std::optional<int> runForLens( const MainDispatch& d )
         }
         if( legoPreRendered && legoWillStub )
         {
-            legoStr = std::move( legoStubXml );
+            legoStr = legoPricing.stubXml;
         }
         if( composePreRendered && composeWillStub )
         {
-            composeStr = std::move( composeStubXml );
+            composeStr = composePricing.stubXml;
         }
         const std::size_t sectionsStubSpliceReserve = sectionsStubNote.size();
 

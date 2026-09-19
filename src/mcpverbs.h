@@ -2037,11 +2037,9 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // R2-L2' (round-2, priced re-registration of L2/B1): the CLI twin's exact stub substitution
     // (verbs_for.h) — same rule, same restoring spelling (kept as the CLI flag form: this dialect's next=
     // is already CLI-flag-shaped everywhere else, e.g. the r=1 row's --expand=FILE:NAME, so the two
-    // surfaces do not need two spellings), and the SAME size gate: a candidate section collapses only when
-    // its stub — plus kForSectionStubLegend's own unshared byte charge — is smaller than the section it
-    // would replace. See verbs_for.h's identical comment for the full reasoning. This surface has no
-    // buffered/degrade-path split (renderToString always renders whole), so the size gate always has a
-    // true rendered length to gate on.
+    // surfaces do not need two spellings), and the SAME shared size gate (rw::priceSectionStub,
+    // serialize.h). This surface has no buffered/degrade-path split (renderToString always renders whole),
+    // so hasRenderedBytes is always true here and the size gate always has a true length to price.
     {
         const bool mcpWantLego    = sectionsWant( sections, "lego" );
         const bool mcpWantCompose = sectionsWant( sections, "compose" );
@@ -2052,29 +2050,27 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
             std::string sectionsNextMcp = nextFlag( "--for=", task );
             sectionsNextMcp += ' ';
             sectionsNextMcp += nextFlag( "--sections=", "lego,compose" );
-            std::string mcpLegoStub, mcpComposeStub;
-            if( mcpLegoCandidate )    { mcpLegoStub    = sectionStubXml( "lego",    legoPreCapCount,    sectionsNextMcp ); }
-            if( mcpComposeCandidate ) { mcpComposeStub = sectionStubXml( "compose", composePreCapCount, sectionsNextMcp ); }
-            // same local invariant as the CLI twin (verbs_for.h): a candidate is only ever built from a
-            // non-empty legoStr/composeStr, so its pre-cap count — and therefore the stub built from it —
-            // is never empty when the size gate below reads it.
-            ASSUME( !mcpLegoCandidate    || !mcpLegoStub.empty(),    "R2-L2' MCP twin: mcpLegoCandidate but mcpLegoStub was never built" );
-            ASSUME( !mcpComposeCandidate || !mcpComposeStub.empty(), "R2-L2' MCP twin: mcpComposeCandidate but mcpComposeStub was never built" );
-            const bool mcpLegoWillStub    = mcpLegoCandidate    && legoStr.size()    > mcpLegoStub.size()    + kForSectionStubLegend.size();
-            const bool mcpComposeWillStub = mcpComposeCandidate && composeStr.size() > mcpComposeStub.size() + kForSectionStubLegend.size();
+            const SectionStubPricing legoPricing    = mcpLegoCandidate
+                ? priceSectionStub( "lego",    legoPreCapCount,    sectionsNextMcp, /*hasRenderedBytes=*/true, legoStr.size() )
+                : SectionStubPricing{};
+            const SectionStubPricing composePricing = mcpComposeCandidate
+                ? priceSectionStub( "compose", composePreCapCount, sectionsNextMcp, /*hasRenderedBytes=*/true, composeStr.size() )
+                : SectionStubPricing{};
+            const bool mcpLegoWillStub    = mcpLegoCandidate    && legoPricing.collapse;
+            const bool mcpComposeWillStub = mcpComposeCandidate && composePricing.collapse;
             // postcondition of the rule itself, checked BEFORE the swap below discards the original size:
             // whichever section actually collapses is, by construction, smaller than what it replaced.
-            ENSURES( !mcpLegoWillStub    || mcpLegoStub.size()    < legoStr.size(),
+            ENSURES( !mcpLegoWillStub    || legoPricing.stubXml.size()    < legoStr.size(),
                      "R2-L2' MCP twin: a lego stub collapsed without being smaller than the section it replaced" );
-            ENSURES( !mcpComposeWillStub || mcpComposeStub.size() < composeStr.size(),
+            ENSURES( !mcpComposeWillStub || composePricing.stubXml.size() < composeStr.size(),
                      "R2-L2' MCP twin: a compose stub collapsed without being smaller than the section it replaced" );
             if( mcpLegoWillStub )
             {
-                legoStr = std::move( mcpLegoStub );
+                legoStr = legoPricing.stubXml;
             }
             if( mcpComposeWillStub )
             {
-                composeStr = std::move( mcpComposeStub );
+                composeStr = composePricing.stubXml;
             }
         }
     }

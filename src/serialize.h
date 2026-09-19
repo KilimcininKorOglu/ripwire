@@ -6349,6 +6349,36 @@ inline std::string sectionStubXml( const char* tag, std::size_t total, std::stri
     return s;
 }
 
+// R2-L2' (round-2, priced re-registration of L2/B1): the ONE size-gate decision both call sites (the CLI
+// --for lens, verbs_for.h; its MCP twin, mcpverbs.h) share — pulled out to a standalone function so the
+// price rule lives in exactly one place and neither caller's own (already long) function carries its
+// branching. Builds the candidate stub itself (the caller reuses it verbatim on a collapse, never a second,
+// differently-priced build) and decides: collapse iff the section is SMALLER than what would replace it —
+// stub bytes PLUS the unshared, whole charge for kForSectionStubLegend (never split between lego and
+// compose, even when both collapse in the same answer and the clause itself is spliced once) — the
+// pre-registered simplification (rv-prereg2 Amendment 1, R4). Posture-independent by construction:
+// kForSectionStubLegend is the one string both --legend=full and --legend=compact splice.
+//
+// hasRenderedBytes=false is the open_memstream DEGRADE PATH: no buffered render exists to measure, only a
+// row count (the caller's preCapTotal, computed by legoPreCapRowCount/composePreCapRowCount WITHOUT
+// rendering) — sizing a section this function never measured would be the undisclosed guess §9.3 forbids,
+// so that case keeps round 1's unconditional rule (collapse whenever there is content), the conservative
+// direction: it never risks streaming an un-sized full section on the one path already failing.
+struct SectionStubPricing
+{
+    bool        collapse;
+    std::string stubXml;   // always built for a real candidate, whether or not collapse ends up true —
+                           // the caller's ENSURES prices it either way, and a collapse reuses it as-is.
+};
+
+inline SectionStubPricing priceSectionStub( const char* tag, std::size_t preCapTotal, std::string_view nextInvocation,
+                                            bool hasRenderedBytes, std::size_t renderedBytes )
+{
+    SectionStubPricing p{ .collapse = false, .stubXml = sectionStubXml( tag, preCapTotal, nextInvocation ) };
+    p.collapse = !hasRenderedBytes || renderedBytes > p.stubXml.size() + kForSectionStubLegend.size();
+    return p;
+}
+
 // B6.3 HTTP-route cross-service view: for a set of relevant symbols, emit the synthesized route USE→DEF
 // edges (client call → server handler) as a <routes> block. ONLY called from --for and --around (NOT the
 // default map) — see model.h RouteEdge / graph.h buildGraph's B6.3 section for how these are matched.
