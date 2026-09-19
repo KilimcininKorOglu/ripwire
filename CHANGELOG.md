@@ -2248,6 +2248,28 @@ argument — a missing record just looks like a miss) — a control default arti
 Split out of #44 (the native Windows port), where the argument rode inside one bundled commit next to an
 unrelated cache-directory parameter. Thanks to @lennix1337.
 
+### Fixed — the prompt-routing hooks recommended nonsense on harness notifications and ordinary prose
+
+The Claude Code and Codex prompt hooks passed every prompt to `--help-task`, including background-agent
+notifications, and `--help-task` counted any capitalised word or single letter that happened to name an indexed
+symbol as a symbol mention. In a fixture-heavy tree, prose like "Summary: A, Fix, Report" was routed to
+`--connect=Summary,A,Fix,Report` at `confidence="high"`. The hooks now skip prompts that begin with a harness
+event tag (still logging a `skip-system` meter row). `--help-task` counts a word as a symbol only when it is
+identifier-shaped: a camel or Pascal seam, an underscore, a `::` or `.` qualifier, backticks or `()`, or at least
+four characters and not a common word. A short real symbol routes when backticked (`` `F` ``); the rule and
+that escape hatch are documented in `--help-task`, its legend and the router skill. On the labelled routing
+corpus exactly 4 of 254 decisions change, and the measured harmful rate drops from 0.016 to 0.000.
+
+### Fixed — assumptions the code tested again, and a CMake scan failure reported as "no CMake"
+
+Three `ASSUME`s (`gitmine.h`, `mention.h`, `abicheck.h`) were followed by a runtime test of the same condition.
+Each condition is guaranteed by the code that sizes both sides, so the promise stays (`EXPECTS` or `ASSUME`)
+and the unreachable fallback is removed. `test/selfcheckcheck.sh` arm T now flags an assumption that is tested
+again within the same function. `--flags` could not tell a CMake root it failed to read from a tree with no
+CMake: it now reports `cmake_scan_failed="1"` in every build (`test/flagscheck.sh` arm 11). Five
+`ASSUME_NO_ALIAS_BUF` promises on fresh local buffers state that separate storage to the compiler; each was
+checked against every caller.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
