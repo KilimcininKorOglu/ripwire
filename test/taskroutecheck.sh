@@ -134,7 +134,7 @@ case "$LC" in *'--connect='*) no "three lowercase words minted a --connect route
 NOISE1='Split-out lane: edit-hint finished. Real-fix NO. Summary: A, Fix, Report'
 N1="$( route "$NOISE1" )"
 case "$N1" in *'--connect='*) no "capitalized-but-shapeless prose minted a --connect route: $N1";; *) ok "capitalized-but-shapeless prose never satisfies the three-symbol --connect";; esac
-NOISE2='run the next round of ripwire improvements as an orchestrator. NEXT_SESSION_ripwire.md Lane E WORK'
+NOISE2='run the next round of ripwire improvements as an orchestrator. continuation_notes.md Lane E WORK'
 N2="$( route "$NOISE2" )"
 case "$N2" in *'--connect='*) no "a SCREAMING word and single letters minted a --connect route: $N2";; *) ok "a SCREAMING word and single letters never satisfy the three-symbol --connect";; esac
 # The positive control: real identifier SHAPE (a camel seam) still routes on exactly the same three-symbol
@@ -159,7 +159,7 @@ SYS1="$( routeRaw '<task-notification>
 </task-notification>' )"
 case "$SYS1" in *'status="abstain"'*'resolved_symbols="0"'*) ok "a <task-notification>-shaped task abstains, and nothing below it is even evaluated";; *) no "task-notification-shaped task did not abstain cleanly: $SYS1";; esac
 SYS2="$( routeRaw '<system-reminder>
-run the next round of ripwire improvements as an orchestrator. NEXT_SESSION_ripwire.md Lane E WORK
+run the next round of ripwire improvements as an orchestrator. continuation_notes.md Lane E WORK
 </system-reminder>' )"
 case "$SYS2" in *'status="abstain"'*'resolved_symbols="0"'*) ok "a <system-reminder>-shaped task abstains, and nothing below it is even evaluated";; *) no "system-reminder-shaped task did not abstain cleanly: $SYS2";; esac
 # Leading whitespace before the marker still counts (the harness may deliver it after a blank line).

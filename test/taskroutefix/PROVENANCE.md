@@ -494,3 +494,24 @@ all-lowercase weak tier, neither of which this round touched.
 
 **Seal: sha256(prompts.tsv) = `6641fcb174e5aafc897c73f915c674fc1b53b6fd1f0af813518f629b8069c220`**
 (rows=254, dev=121, test=133).
+
+## Re-seal 2026-09-19 (train-6 fix round, CI run 35418635836) — cosmetic, no row added or removed
+
+`ripwirepubliccheck.sh` arm 8 (no dangling reference to a culled internal-pattern `.md` name) flagged the
+`harness-event` row at line 252 (and its `test/taskroutecheck.sh`/`test/routehookcheck.sh` siblings, same
+fixture text duplicated three ways): the fabricated filename (an underscore-joined `NEXT_SESSION`-prefixed
+stem ending `.md`) matches arm 8's internal-doc-name pattern and does not ship anywhere in this tree — a dangling reference, not a real
+citation; it was never meant as one, just plausible noise text alongside the collision words (`Lane`, `E`,
+`WORK`) the routing-noise round's fixture needs. Renamed to `continuation_notes.md` (no
+`PLAN_|AUDIT|DESIGN_|RESEARCH_|NEXT_SESSION|KICKOFF_|HANDOFF_|IDEAS_|REPORT_|SPEC` prefix, so it cannot
+retrigger arm 8) in all three sites; nothing else on the row changed. Split assignment for this row is the
+stored TSV column (`dev`), not re-derived from the edited text — the content-hash split rule above governs
+authoring new rows, not editing one in place — so row counts are unchanged: 254 rows, 121 dev, 133 test,
+same as the previous seal. Re-ran `bench/taskroute_eval.py` (254 rows, this round's binary): identical
+floors to the previous seal (test 0.947 / dev 0.950 / all 0.949 accuracy, 1.000 precision, 0.000 harmful,
+1.000 negative-specificity) and the SAME full-corpus decision diff as before this edit (only the 4 rows the
+identifier-shape fix changes; this round's filename edit changes none) — `test/taskroutecheck.sh` and
+`test/routehookcheck.sh` both ALL PASS unpiped against the rebuilt binary.
+
+**Seal: sha256(prompts.tsv) = `69baa9d6bb038d2a1669a0f57f213d103145ff6a8873301d7b1e7445e2eabc18`**
+(rows=254, dev=121, test=133).

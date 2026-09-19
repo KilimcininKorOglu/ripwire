@@ -528,7 +528,7 @@ git -C "$NREPO" add router.cpp
 git -C "$NREPO" commit -qm base
 
 NOISE1="$( printf '<task-notification>\n<task-id>bn211i65j</task-id>\n<status>completed</status>\n<summary>Split-out lane: edit-hint finished. Real-fix NO. Summary: A, Fix, Report</summary>\n</task-notification>' )"
-NOISE2="$( printf '<system-reminder>\nrun the next round of ripwire improvements as an orchestrator. NEXT_SESSION_ripwire.md Lane E WORK\n</system-reminder>' )"
+NOISE2="$( printf '<system-reminder>\nrun the next round of ripwire improvements as an orchestrator. continuation_notes.md Lane E WORK\n</system-reminder>' )"
 
 # This shape is fixed at TWO layers on purpose (the classifier's own system-event guard, src/taskroute.h
 # looksLikeSystemEvent, and this hook's guard below it) — belt and suspenders, not a redundant pair one
