@@ -156,7 +156,7 @@ $ ./build/ripwire . --token-budget=100
 
 **Answers:** describe a task, get ONE recommended command back — or an honest abstention deterministic enhanced help: recommend ONE executable Ripwire CLI command for this repository and task, or abstain when evidence/applicability is insufficient.
 
-Reports the intent, integer score/margin and repository facts; never calls a model, executes the recommendation, or accesses the network. Structured claims/traces/symbols outrank lexical cues. Recommendation only; pipe trace text to stdin for --from-trace=-.
+Reports the intent, integer score/margin and repository facts; never calls a model, executes the recommendation, or accesses the network. Structured claims/traces/symbols outrank lexical cues. Recommendation only; pipe trace text to stdin for --from-trace=-. A symbol NAME resolves as evidence only when it is identifier-shaped (camelCase, snake_case, a ::/. scope) or marked as code in the task text -- a short bare word (a lone letter, a SCREAMING name, or an ordinary word that happens to match an indexed name, e.g. django's F) does not resolve on its own. Wrap it in backticks (task text: `F`) or write it in call form (F()) to route on it by name.
 
 **Try it**
 

@@ -19,6 +19,12 @@ behind the pick (intent, score/margin, repository facts) — or honestly abstain
 too thin to name a winner. One hop cheaper than reading this whole map: paste the task, run what it
 recommends. Advice only — it never executes the recommendation.
 
+A short bare word abstains even when it names a real symbol — a lone letter, a SCREAMING name, or an
+ordinary word that happens to match an indexed name (`F` in `--help-task="understand F"`, django's ORM
+class, is a real example) does not resolve on its own; only genuine identifier SHAPE does
+(camelCase/snake_case/`::`/`.`). Mark it as code in the task text instead — backtick it (`` `F` ``) or
+write it in call form (`F()`) — to route on it by name.
+
 | The moment you're in | The ONE skill | Its opening move |
 |---|---|---|
 | **Cold-start** — landed in an unfamiliar repo, "what is this / what matters here" | **ripwire-orient** | `--recall` then `--report` |
