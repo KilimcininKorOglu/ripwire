@@ -12,7 +12,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
-#include "infra/os.h"   // rw::os::access / stat — the PATH walk and the same-file check
+#include "infra/os.h"   // rw::os::which / stat — the PATH search and the same-file check
 #include <vector>
 
 namespace rw::codexdoctor
@@ -46,28 +46,7 @@ inline std::string readSmallFile( const std::filesystem::path& path, bool& ok )
 
 inline std::string resolveExecutable( std::string_view command )
 {
-    if( command.empty() ) { return {}; }
-    const auto executable = []( const std::string& path )
-    {
-        return os::access( path.c_str(), X_OK ) == 0;
-    };
-    if( command.find( '/' ) != std::string_view::npos )
-    {
-        const std::string path( command );
-        return executable( path ) ? path : std::string();
-    }
-    const char* pathEnv = std::getenv( "PATH" );
-    std::string_view remaining = pathEnv ? std::string_view( pathEnv ) : std::string_view();
-    while( !remaining.empty() )
-    {
-        const std::size_t split = remaining.find( ':' );
-        const std::string_view dir = remaining.substr( 0, split );
-        const std::string candidate = std::string( dir.empty() ? "." : dir ) + "/" + std::string( command );
-        if( executable( candidate ) ) { return candidate; }
-        if( split == std::string_view::npos ) { break; }
-        remaining.remove_prefix( split + 1 );
-    }
-    return {};
+    return os::which( command );   // POSIX: the PATH walk this function used to hold; Windows: ';', PATHEXT, no relative entries
 }
 
 inline Check binaryCheck( const std::string& selfPath )

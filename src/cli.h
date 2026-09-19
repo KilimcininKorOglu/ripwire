@@ -18,6 +18,7 @@
 #include "ingest.h"   // rw::kDefaultMaxFileBytes — the canonical crawl size ceiling (--max-file-size)
 #include "version.h"  // configure-generated kRipwireVersion + short build info (--version)
 #include "infra/emit.h" // rw::emitTo + kEmitterName — --version discloses the emitter that compiled in (emit=)
+#include "infra/os.h"   // rw::os::normalize_path_arg — path-valued arguments take the program's path spelling at intake
 
 namespace rw
 {
@@ -3310,6 +3311,28 @@ static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kI
 // flag matched, and did its value survive" is one question with one answer.
 enum class ViewFlagMatch : std::uint8_t { NoMatch, Assigned, Refused };
 
+// The view flags whose value is a PATH (lennix1337's list from PR #44): the one set whose value takes the program's path
+// spelling at intake (os::normalize_path_arg). A --grep pattern, a symbol or a number must never be rewritten.
+inline constexpr std::string_view kPathValuePrefixes[] =
+{
+    "--eval-mined=", "--eval-skills=", "--arch=", "--cache=", "--index-out=", "--scip=", "--pin-census=",
+    "--lint-rules=", "--exercises=", "--cochange=", "--situ=", "--test-gate=", "--scan-skills=", "--dead-code=",
+    "--plan-lint=", "--scan-skill=", "--batch=", "--at=", "--edit-payload=", "--edit-target-file=", "--edit-plan=",
+    "--eval-stray=", "--from-trace=", "--with-profile=", "--brief=", "--html=", "--affected="
+};
+
+inline bool isPathValuePrefix( std::string_view prefix ) noexcept
+{
+    for( const std::string_view pathPrefix : kPathValuePrefixes )
+    {
+        if( prefix == pathPrefix )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
 {
     for( const ViewFlag& vf : kViewFlags )
@@ -3319,6 +3342,12 @@ inline ViewFlagMatch applyViewFlag( std::string_view arg, Config& c )
             continue;
         }
         const std::string_view value = arg.substr( vf.prefix.size() );
+        if( isPathValuePrefix( vf.prefix ) )
+        {
+            // intake: a path-valued flag's value takes the program's path spelling here, once (argv storage is mutable,
+            // and Config borrows it as a view, so the rewrite is in place and never longer)
+            os::normalize_path_arg( const_cast<char*>( value.data() ) );
+        }
         // §B5: the EMPTY-value decision is the row's, never this loop's. Refuse prints here; Meaningful and
         // HandlerRefuses both fall through to the assignment — the difference between them is which code
         // OWNS the refusal, and the row records it (the consteval floor beside the table pins the columns).
@@ -5135,6 +5164,7 @@ inline Config parseArgs( int argc, char** argv ) noexcept
                 rw::emitTo( stderr, "ripwire: too many roots (max {}): '{}'\n", kMaxWorkspaceRoots, std::string_view( a.data(), a.size() ) );
                 c.ok = false;  return c;
             }
+            os::normalize_path_arg( const_cast<char*>( a.data() ) );   // intake: a root takes the program's path spelling once
             if( c.rootPath.empty() )
             {
                 c.rootPath = a; // roots[0] alias (A1)

@@ -965,7 +965,7 @@ inline std::uint64_t gitHeadMoveToken( const std::string& root )
         {
             return 0;
         }
-        if( gd.front() != '/' )
+        if( !os::path_is_absolute( gd ) )   // "/x" here; "C:/x" in a Windows checkout's .git file (git writes that spelling)
         {
             gd = root + "/" + gd; // relative gitdir → resolve against root
         }
