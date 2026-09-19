@@ -394,6 +394,9 @@ struct PlanLanesResult
     std::vector<PairRow>     pairs;
     std::vector<std::string> landingOrder;
     std::vector<Warning>     warnings;
+    // L3 follow-up (CodeRabbit 4053600616): NoteIndex::degraded, carried onto the root exactly like every
+    // other notes-surfacing emitter — absent on a clean read (no sidecar, or every line parsed).
+    bool                     notesDegraded = false;
 };
 
 // ── inputs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -414,6 +417,9 @@ struct LanesInputs
     const std::vector<std::uint32_t>*      churn     = nullptr;                 // per file, --hotspots' own axis
     const std::vector<std::uint8_t>*       tested    = nullptr;                 // per symbol
     const notes::NoteIndex*                notes     = nullptr;
+    // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls `notes` for emptiness (main.cpp's
+    // MainDispatch::notesDegraded is the source), so a fully-unreadable sidecar still reaches the root.
+    bool                                    notesDegraded = false;
     CorpusStats                            corpus;
 };
 
@@ -1130,6 +1136,7 @@ inline PlanLanesResult computePlanLanes( const LanesInputs& in )
     result.source    = in.autoCarve ? "partition" : "brief";
     result.requested = in.requested;
     result.corpus    = in.corpus;
+    result.notesDegraded = in.notesDegraded;
 
     const ClaimIdentity ident = buildClaimIdentity( ing, g, *in.root );
     const ClaimLens     lens{ &ident, in.churn, in.tested };
@@ -1348,9 +1355,16 @@ inline void writePlanLanes( std::FILE* out, const PlanLanesResult& r )
     writeJsonStringOrNull( out, r.task );                     // null in brief mode
     rw::emitTo( out, ",\"source\":\"{}\",\"requested\":{},\"lane_count\":{},"
                        "\"claim_key\":\"path+scope+name\",\"on_conflict\":\"producing-lane-rebases\","
-                       "\"corpus\":{{\"files\":{},\"symbols\":{},\"edges\":{},\"ambiguous\":{},\"unresolved\":{}}},\"carve\":",
+                       "\"corpus\":{{\"files\":{},\"symbols\":{},\"edges\":{},\"ambiguous\":{},\"unresolved\":{}}}",
                   jsonStr( r.source ).c_str(), r.requested, r.lanes.size(),
                   r.corpus.files, r.corpus.symbols, r.corpus.edges, r.corpus.ambiguous, r.corpus.unresolved );
+    // L3 follow-up (CodeRabbit 4053600616): absent on a clean read — the same byte notes.h's kNotesDegradedJsonKey
+    // spells on every other notes-surfacing JSON root (pack-task, edit-check, fetch_body).
+    if( r.notesDegraded )
+    {
+        rw::emitRaw( out, notes::kNotesDegradedJsonKey );
+    }
+    rw::emitRaw( out, ",\"carve\":" );
     writeCarve( out, r );
     rw::emitRaw( out, ",\"core\":" );
     writeCore( out, r );

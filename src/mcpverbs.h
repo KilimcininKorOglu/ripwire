@@ -2067,6 +2067,22 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
             headerStr.insert( closeAt, " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]" );
         }
     }
+    // L3 follow-up (CodeRabbit 4053600616): same splice shape as dropped_positive=/budget_bytes= above — absent
+    // entirely on a clean read. `noteIndex.degraded` is read here (not through notesPtr, which is nulled on an
+    // EMPTY index even when the read itself was not clean — see notesPtr's own comment above).
+    if( noteIndex.degraded )
+    {
+        const std::size_t rootCloseAt = headerStr.find( "><!--" );
+        if( rootCloseAt != std::string::npos )
+        {
+            headerStr.insert( rootCloseAt, std::string( rw::notes::kNotesDegradedAttr ) );
+        }
+        const std::size_t closeAt = headerStr.rfind( " -->" );
+        if( closeAt != std::string::npos )
+        {
+            headerStr.insert( closeAt, " [" + std::string( rw::notes::kNotesDegradedReading ) + "]" );
+        }
+    }
     std::fwrite( headerStr.data(), 1, headerStr.size(), mem );
     // R2-AF (round 2, S4): first rows inside the root, right after the legend — the CLI twin's exact rule
     // (verbs_for.h renderForHdrRowsXml), duplicated here rather than shared because main.cpp includes this
@@ -3902,6 +3918,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     in.impure       = &impure;
     in.redact       = redact;
     in.notes        = notesPtr;
+    in.notesDegraded = noteIndex.degraded;   // L3 follow-up (CodeRabbit 4053600616): read before notesPtr's nulling
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h) — the
     // CLI twin (main.cpp runPackTask) sets the identical field so the two dialects cannot diverge.
     in.rootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();
@@ -3942,6 +3959,7 @@ inline FromTraceResult fromTraceText( const std::string& root, const std::string
     in.impure = &impure;
     in.redact = redact;
     in.notes  = notesPtr;
+    in.notesDegraded = noteIndex.degraded;   // L3 follow-up (CodeRabbit 4053600616): read before notesPtr's nulling
     in.rootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();   // R-R
 
     const FromTraceResult res = fromTraceBundleText( ing, g, trace, "mcp trace input", in );
@@ -4639,6 +4657,13 @@ inline FetchOutcome fetchBody( const std::string& root, const std::string& handl
                 first = false;
             }
             notesJson += "]";
+        }
+        // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker — absent on a clean read. `ni` is a local
+        // value here (never nulled for emptiness), so degraded() reaches this JSON body even when the sidecar
+        // matched nothing (every line unparsed, or the whole file refused).
+        if( ni.degraded )
+        {
+            notesJson += std::string( notes::kNotesDegradedJsonKey );
         }
     }
 

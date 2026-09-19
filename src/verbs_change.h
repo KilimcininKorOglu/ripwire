@@ -688,6 +688,7 @@ std::optional<int> runFromTrace( const MainDispatch& d )
     in.amp      = d.ampPtr;
     in.redact   = d.redactPtr;
     in.notes    = d.notesPtr;
+    in.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616)
     in.rootArg  = ( ing.realPaths.empty() && cfg.roots.size() == 1 ) ? std::string_view( cfg.roots[0] )
                                                                     : std::string_view();   // R-R
 
@@ -1140,6 +1141,7 @@ std::optional<int> runRunTrace( const MainDispatch& d )
     in.amp      = d.ampPtr;
     in.redact   = d.redactPtr;
     in.notes    = d.notesPtr;
+    in.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616)
     in.rootArg  = ( d.ing.realPaths.empty() && cfg.roots.size() == 1 ) ? std::string_view( cfg.roots[0] )
                                                                       : std::string_view();   // R-R
 
@@ -1294,6 +1296,7 @@ std::optional<int> runPlanLanes( const MainDispatch& d )
     in.g     = &g;
     in.root  = &root;
     in.notes = d.notesPtr;
+    in.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616)
 
     BriefFile brief;
     if( !cfg.laneBrief.empty() )

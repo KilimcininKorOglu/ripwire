@@ -324,7 +324,9 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     // --for/--expand surface. The set is changed ∪ BLAST, not changed alone: a note on a caller you are
     // about to break is precisely what the next session needs and precisely what it cannot see coming.
     const HashMap<std::string, std::uint8_t> verifiedTargets = verifiedNoteTargets( ing, facts, root );
-    std::vector<notes::Note> committed = notes::readNotesRelative( notes::notesPath( root ), root );
+    notes::NotesReadStats    committedNoteStats;   // L3 follow-up: the channel this call never had (notes.h loadNoteIndex's twin)
+    std::vector<notes::Note> committed = notes::readNotesRelative( notes::notesPath( root ), root, committedNoteStats );
+    const bool                notesDegraded = committedNoteStats.degraded();   // -> kNotesDegradedAttr on <handoff>, below
     notes::sortNotes( committed );
     std::size_t nNotes = 0;
     for( const notes::Note& n : committed )
@@ -389,6 +391,9 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
         std::string doc = kHandoffLegendHead;
         doc += rw::runHintClauseIfRows( hoTests.files, rw::runsAreRootRelative( ing, root ) );   // M21(b): the ONE wording through the ONE gate — never a seventh paraphrase
         if( anySymsCapped ) { doc += handoffSymsCapClause(); }   // absent unless an <f> row was cut
+        // L3 follow-up (CodeRabbit 4053600616): plain text — this whole block is ONE open comment
+        // (kHandoffLegendHead ... kHandoffLegendTail), so no nested "<!--"/"-->" here. Absent on a clean read.
+        if( notesDegraded ) { doc += " ";  doc += std::string( notes::kNotesDegradedReading );  doc += ". "; }
         doc += kHandoffLegendTail;
         doc += "<handoff";
         doc += at;
@@ -410,6 +415,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
                                   // second spelling of the same fact.
         doc += escapeXml( subject, esc );
         doc += "\" gitok=\"" + std::string( gitOk ? "1" : "0" ) + "\"";
+        if( notesDegraded ) { doc += std::string( notes::kNotesDegradedAttr ); }   // L3 follow-up (CodeRabbit 4053600616)
         if( tokenBudget > 0 )
         {
             // M11: withheld= is a BOOLEAN (the map's spelling); the dropped-row COUNT rides beside it.
