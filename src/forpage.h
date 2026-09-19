@@ -47,8 +47,8 @@
 // kForPageExtendMaxRows MORE rows are appended AFTER them, drawn only from the rows this call does not already
 // show (window.end..total), chosen by the SAME blend key L3 registered (score/100 + path-subtoken overlap share).
 // offset=0 ONLY (the single "follow-up page", not a walk-wide feature) — a later --offset= page of the same
-// walk appends nothing, so a row offset=0 pulled in as "extra" can never collide with a row a later page of
-// the SAME walk legitimately shows (forwidencheck.sh arm (3)'s no-overlap / concatenation invariant). So a
+// walk appends nothing, so the ranked walk itself never overlaps (arm (3)); but an offset=0 "extra" row IS drawn
+// from rows a later page shows, and repeats there as a ranked row by design (arm (8); both legends say so). So a
 // file the task names by path can surface even when its lens score alone would not earn it a shown slot.
 // The appended rows carry p= and score= only (no n=/sym=: they were never absorbed into a <ctx> ranking pass,
 // so naming their symbols would overstate what the row is — a lookup, not graph evidence) and the root gains
