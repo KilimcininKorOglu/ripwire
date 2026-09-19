@@ -1474,21 +1474,23 @@ inline std::optional<RouteChoice> locateImplementationTaskChoice( std::string_vi
 // The three FILE-keyed round-1 L4 cards, bundled into one dispatcher the same way flowTaskChoice and
 // catalogTaskChoice already bundle their own tiers — so directTaskChoice gains one call here, not three,
 // as this round's card count grows (added in review: the un-bundled form was what pushed
-// directTaskChoice's own body past its verbosity bar). locate-implementation is NOT here: it runs after
-// the whole catalog tier (see its own comment), so it stays a separate call in directTaskChoice.
+// directTaskChoice's own body past its verbosity bar). A declarative table walked in a loop, not three
+// sequential if-returns (CONTRIBUTING.md SS3 "declarative constexpr tables over scattered switch/if") —
+// also added in review, after --quality-delta flagged the sequential-if form as a structural clone of
+// screenRegexPattern's unrelated three-step chain (regexguard.h) at 71 duplicated tokens; two functions
+// implementing the same idiom with different names still clone-match on shape. locate-implementation is
+// NOT in this table: it runs after the whole catalog tier (see its own comment), so it stays a separate
+// call in directTaskChoice.
 inline std::optional<RouteChoice> roundOneL4Choice( const RouteContext& ctx )
 {
-    if( std::optional<RouteChoice> coverage = testCoverageTaskChoice( ctx ) )
+    using Card = std::optional<RouteChoice> ( * )( const RouteContext& );
+    static constexpr Card kCards[] = { testCoverageTaskChoice, changeImpactTaskChoice, reachTaskChoice };
+    for( const Card card : kCards )
     {
-        return coverage;
-    }
-    if( std::optional<RouteChoice> impact = changeImpactTaskChoice( ctx ) )
-    {
-        return impact;
-    }
-    if( std::optional<RouteChoice> reach = reachTaskChoice( ctx ) )
-    {
-        return reach;
+        if( std::optional<RouteChoice> choice = card( ctx ) )
+        {
+            return choice;
+        }
     }
     return std::nullopt;
 }
