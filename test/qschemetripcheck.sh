@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-19, TRAIN 8 (integration/train-8 on main 92bc055e: lane/r2-answer-first 9637d1a3,
+#   lane/r2-sections-stub-priced 632ad12f, lane/t8-cr-followups 3085d8ca, lane/t8-notes-degrade 9d90f1d2):
+#   RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1 — the hash is unchanged at t8-cr's a8b6c050…
+#   (kParserVer 118 is t8-cr's; no other member touches a manifest function or kParserVer/kCacheVersion).
 # 2026-09-19, lane/t8-cr-followups (CodeRabbit follow-up, thread 4053600599, on main 92bc055e):
 #   kParserVer and its mirror 117 -> 118 — isJsxIntrinsicTagIdentifier (src/ingest_names.h) now tests
 #   ASCII-lowercase directly instead of `!isUppercase`, so `<_Widget/>`/`<$Widget/>` are kept as
