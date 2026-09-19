@@ -15,6 +15,19 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
+
+Reported by @mariadb-KyleHutchinson in #289: `--expand=SYM` on a name matching more than one definition, in a
+file over `--pack-budget-bytes`, served `mode="bundle"` — the ~200-symbol default ranked map, then the
+requested `<bodies>`. On a real ambiguous name (`--expand=write` on this repo's own source) the body landed
+86% into the document, and the existing `--top-k=0` escape hatch ("the ranked map rides along... add
+--top-k=0 for the bodies alone") was stderr-only, invisible to a caller reading only stdout. When the map
+rides along WITHOUT an explicit `--top-k` (the caller never asked for it, `chooseExpandServe` picked bundle
+mode on its own), the requested bodies are now served before the map, and the escape hatch also rides the
+document itself, as a `note=` attribute on the `<ctx>` root (stderr keeps its own copy, for a human tailing
+the terminal). An explicit `--top-k=N`, on a unique or an ambiguous name alike, is unaffected: it keeps the
+pre-existing order and carries no `note=`, exactly as `--help=--expand` already promises.
+
 ### Added — a TS/JS import spelled with a `.jsx` runtime extension, or naming only a `.d.ts`/`.d.mts`/`.d.cts` declaration, now resolves
 
 `kJsRuntimeSourceExts` (the one runtime→source table `resolveTsImport`'s precise include tier and graph.h's
