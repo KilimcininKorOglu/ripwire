@@ -757,11 +757,14 @@ inline void addLexical( std::vector<RouteChoice>& choices, const char* id, const
     }
 }
 
-// A path the user actually WROTE, recognised by its extension. The router never invents one: --edit-plan
-// and --plan-lint both refuse a file that is not there, and recommending a command the verb refuses is a
-// prerequisite violation, not a suggestion. One extractor for every value-carrying path route, so the two
-// cannot disagree about what counts as a written path.
-inline std::string firstPathTokenWithSuffix( std::string_view task, std::initializer_list<std::string_view> suffixes )
+// THE token walk shared by every reader of "the tokens of this task, stripped of surrounding break
+// characters and trailing sentence punctuation" — firstPathTokenWithSuffix (first token matching a
+// suffix) and codeFileTokens (every code-extensioned token, position order) used to duplicate this walk
+// byte-for-byte (measured: 263 duplicated tokens, --quality-delta round-1 L4 review). `visit` runs once
+// per cleaned token in position order; returning true stops the walk early (the first-match reader uses
+// this, the collect-all reader never does).
+template< typename Visit >
+inline void walkTaskTokens( std::string_view task, Visit visit )
 {
     constexpr std::string_view kBreaks = " \t\n\r\"'`(),;";
     for( std::size_t i = 0; i < task.size(); )
@@ -781,16 +784,34 @@ inline std::string firstPathTokenWithSuffix( std::string_view task, std::initial
         {
             token.remove_suffix( 1 );
         }
+        if( visit( token ) )
+        {
+            return;
+        }
+        i = end + 1;
+    }
+}
+
+// A path the user actually WROTE, recognised by its extension. The router never invents one: --edit-plan
+// and --plan-lint both refuse a file that is not there, and recommending a command the verb refuses is a
+// prerequisite violation, not a suggestion. One extractor for every value-carrying path route, so the two
+// cannot disagree about what counts as a written path.
+inline std::string firstPathTokenWithSuffix( std::string_view task, std::initializer_list<std::string_view> suffixes )
+{
+    std::string found;
+    walkTaskTokens( task, [&]( std::string_view token )
+    {
         for( const std::string_view suffix : suffixes )
         {
             if( token.size() > suffix.size() && token.ends_with( suffix ) )
             {
-                return std::string( token );
+                found = std::string( token );
+                return true;
             }
         }
-        i = end + 1;
-    }
-    return {};
+        return false;
+    } );
+    return found;
 }
 
 inline std::string firstJsonPathToken( std::string_view task )
@@ -799,32 +820,16 @@ inline std::string firstJsonPathToken( std::string_view task )
 }
 
 // ── file-grain readers shared by the coverage / impact / reach cards below ────────────────────────────
-// Every source-extensioned token in the task, position order, literal duplicates collapsed. A second
-// walk alongside firstPathTokenWithSuffix rather than a call to it: that function takes its suffix set as
-// an initializer_list (a literal at each call site), and kCodeExtensions is an array — the reader
-// firstFileLineToken/looksLikeFileToken already share, reused here instead of a third copy of the suffix
-// list.
+// Every source-extensioned token in the task, position order, literal duplicates collapsed — built on the
+// SAME walkTaskTokens core firstPathTokenWithSuffix uses above (not a second copy of it): the two differ
+// only in what a token is tested against (kCodeExtensions vs. an initializer_list of suffixes) and in
+// whether the walk stops at the first hit or collects every one, both of which `visit`'s bool return and
+// this lambda's own accumulator already express.
 inline std::vector<std::string> codeFileTokens( std::string_view task )
 {
-    constexpr std::string_view kBreaks = " \t\n\r\"'`(),;";
     std::vector<std::string> out;
-    for( std::size_t i = 0; i < task.size(); )
+    walkTaskTokens( task, [&]( std::string_view token )
     {
-        const std::size_t begin = task.find_first_not_of( kBreaks, i );
-        if( begin == std::string_view::npos )
-        {
-            break;
-        }
-        std::size_t end = task.find_first_of( kBreaks, begin );
-        if( end == std::string_view::npos )
-        {
-            end = task.size();
-        }
-        std::string_view token = task.substr( begin, end - begin );
-        while( !token.empty() && ( token.back() == '.' || token.back() == '?' || token.back() == '!' ) )
-        {
-            token.remove_suffix( 1 );
-        }
         if( looksLikeFileToken( token ) )
         {
             const bool duplicate = std::any_of( out.begin(), out.end(), [&]( const std::string& s ) { return s == token; } );
@@ -833,8 +838,8 @@ inline std::vector<std::string> codeFileTokens( std::string_view task )
                 out.push_back( std::string( token ) );
             }
         }
-        i = end + 1;
-    }
+        return false;   // never stop early — this reader collects every match, not just the first
+    } );
     return out;
 }
 
@@ -1341,70 +1346,82 @@ inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std:
 // does not exist (round 2), so --for=task is the only verb, and the two-file count is what keeps an
 // ordinary `how does X work` sentence (0 or 1 file) out of this gate regardless of score.
 
+// The read-only view every round-1 L4 card (and directTaskChoice itself) needs: the task in both
+// spellings, the root, the resolved symbols, and the ingest facts a file-structural card checks a name
+// against. One struct instead of a five-parameter argument list at every call site — added in review
+// (--quality-delta flagged directTaskChoice's own param count growing 4->5 as a gating api-surface
+// regression; bundling collapses it back to one). Reference members only — this is a non-owning view
+// built fresh at each classifyRoutes call, never stored.
+struct RouteContext
+{
+    std::string_view                task;
+    std::string_view                lower;
+    const std::string&              root;
+    const std::vector<std::string>& symbols;
+    const IngestResult&             ing;
+};
+
 // `which tests cover F` / `test(s) for F` / `test files exercise F` — one indexed file plus
 // coverage/exercise wording routes to --affected=F, the transitive test list for that file.
-inline std::optional<RouteChoice> testCoverageTaskChoice( std::string_view task, std::string_view lower,
-                                                          const std::string& root, const IngestResult& ing )
+inline std::optional<RouteChoice> testCoverageTaskChoice( const RouteContext& ctx )
 {
-    const int coverScore = phraseScore( lower, { { "which tests cover", 9 }, { "tests cover", 7 },
-                                                 { "test for", 6 }, { "tests for", 6 }, { "tests exist for", 7 },
-                                                 { "test(s) for", 7 }, { "test files exercise", 8 }, { "files exercise", 5 },
-                                                 { "unit tests should i run", 8 }, { "covered by any test", 8 },
-                                                 { "test coverage", 6 } } );
+    const int coverScore = phraseScore( ctx.lower, { { "which tests cover", 9 }, { "tests cover", 7 },
+                                                     { "test for", 6 }, { "tests for", 6 }, { "tests exist for", 7 },
+                                                     { "test(s) for", 7 }, { "test files exercise", 8 }, { "files exercise", 5 },
+                                                     { "unit tests should i run", 8 }, { "covered by any test", 8 },
+                                                     { "test coverage", 6 } } );
     if( coverScore < 6 )
     {
         return std::nullopt;
     }
-    const std::string file = firstIndexedCodeFile( task, root, ing );
+    const std::string file = firstIndexedCodeFile( ctx.task, ctx.root, ctx.ing );
     if( file.empty() )
     {
         return std::nullopt;
     }
     return RouteChoice{ "test-coverage", "ripwire-change-check", "test-coverage wording plus one indexed file",
-                        commandWithValue( root, "--affected=", file ) + " --legend=compact", 100, 64 };
+                        commandWithValue( ctx.root, "--affected=", file ) + " --legend=compact", 100, 64 };
 }
 
 // `if I change F, what else has to change (with it)` / `what breaks if I edit F` / `blast radius of F` /
 // `what depends on F` — one indexed file plus change-impact wording routes to --situ=F. --situ is a PROSE
 // verb (legendCompactAppliesTo refuses it the compact flag, measured: exit 1), so unlike every card
 // above this one the command is never suffixed with --legend=compact.
-inline std::optional<RouteChoice> changeImpactTaskChoice( std::string_view task, std::string_view lower,
-                                                          const std::string& root, const IngestResult& ing )
+inline std::optional<RouteChoice> changeImpactTaskChoice( const RouteContext& ctx )
 {
-    const int impactScore = phraseScore( lower, { { "what else has to change", 9 }, { "what breaks if", 9 },
-                                                  { "blast radius", 7 }, { "what depends on", 7 },
-                                                  { "need to update alongside", 8 }, { "update alongside", 6 },
-                                                  { "if i change", 4 }, { "if i edit", 4 }, { "if i modify", 4 } } );
+    const int impactScore = phraseScore( ctx.lower, { { "what else has to change", 9 }, { "what breaks if", 9 },
+                                                      { "blast radius", 7 }, { "what depends on", 7 },
+                                                      { "need to update alongside", 8 }, { "update alongside", 6 },
+                                                      { "if i change", 4 }, { "if i edit", 4 }, { "if i modify", 4 } } );
     if( impactScore < 7 )
     {
         return std::nullopt;
     }
-    const std::string file = firstIndexedCodeFile( task, root, ing );
+    const std::string file = firstIndexedCodeFile( ctx.task, ctx.root, ctx.ing );
     if( file.empty() )
     {
         return std::nullopt;
     }
     return RouteChoice{ "change-impact", "ripwire-change-check", "change-impact wording plus one indexed file",
-                        commandWithValue( root, "--situ=", file ), 100, 63 };
+                        commandWithValue( ctx.root, "--situ=", file ), 100, 63 };
 }
 
 // `how does A reach B` / `call chain from A into B` / `how is A used by B` — two files the task itself
 // names, both indexed, plus reach/call-chain wording. --for=task is the only shipped surface for a
 // file-grain path question (no file-grain --path exists; round 2 backlog), so this widens the same
 // --for bundle locate-task and locate-implementation already use rather than inventing a new verb.
-inline std::optional<RouteChoice> reachTaskChoice( std::string_view task, std::string_view lower,
-                                                    const std::string& root, const IngestResult& ing )
+inline std::optional<RouteChoice> reachTaskChoice( const RouteContext& ctx )
 {
-    const int reachScore = phraseScore( lower, { { "call chain from", 9 }, { "call chain", 6 }, { "reaches", 5 },
-                                                 { "reach", 5 }, { "used by", 5 }, { "how does", 2 }, { "how is", 2 } } );
+    const int reachScore = phraseScore( ctx.lower, { { "call chain from", 9 }, { "call chain", 6 }, { "reaches", 5 },
+                                                     { "reach", 5 }, { "used by", 5 }, { "how does", 2 }, { "how is", 2 } } );
     if( reachScore < 7 )
     {
         return std::nullopt;
     }
     std::vector<std::string> files;
-    for( const std::string& token : codeFileTokens( task ) )
+    for( const std::string& token : codeFileTokens( ctx.task ) )
     {
-        if( fileInCorpus( token, root, ing ) )
+        if( fileInCorpus( token, ctx.root, ctx.ing ) )
         {
             files.push_back( token );
             if( files.size() == 2 )
@@ -1422,7 +1439,7 @@ inline std::optional<RouteChoice> reachTaskChoice( std::string_view task, std::s
     ASSUME( files[0] != files[1], "codeFileTokens de-duplicates; two collected tokens are distinct paths" );
     return RouteChoice{ "reach-flow", "ripwire-navigate",
                         "two indexed file paths plus reach/call-chain wording (no file-grain --path surface)",
-                        commandWithValue( root, "--for=", task ), 100, 61 };
+                        commandWithValue( ctx.root, "--for=", ctx.task ), 100, 61 };
 }
 
 // `where is X implemented` / `which file implements X` — X is often a commit subject or a feature
@@ -1436,7 +1453,9 @@ inline std::optional<RouteChoice> reachTaskChoice( std::string_view task, std::s
 // carries that bigram for the recency route, and the screened corpus quotes `the implementation of`
 // verbatim in unrelated review prose — a third word attached to it would be a new card trigram this round
 // does not need: `which file implements` and the where-is/implemented pair already cover every registered
-// template and 2 of 3 S1 paraphrases without it).
+// template and 2 of 3 S1 paraphrases without it). Takes task/lower/root directly rather than a
+// RouteContext: it is the one round-1 L4 card that reads neither ing nor symbols, and directTaskChoice
+// calls it standalone (after the whole catalog tier), not through roundOneL4Choice below.
 inline std::optional<RouteChoice> locateImplementationTaskChoice( std::string_view task, std::string_view lower, const std::string& root )
 {
     const bool whereIsImplemented = boundedFind( lower, "where is" ) != std::string_view::npos
@@ -1452,6 +1471,28 @@ inline std::optional<RouteChoice> locateImplementationTaskChoice( std::string_vi
                         commandWithValue( root, "--for=", task ), 100, 60 };
 }
 
+// The three FILE-keyed round-1 L4 cards, bundled into one dispatcher the same way flowTaskChoice and
+// catalogTaskChoice already bundle their own tiers — so directTaskChoice gains one call here, not three,
+// as this round's card count grows (added in review: the un-bundled form was what pushed
+// directTaskChoice's own body past its verbosity bar). locate-implementation is NOT here: it runs after
+// the whole catalog tier (see its own comment), so it stays a separate call in directTaskChoice.
+inline std::optional<RouteChoice> roundOneL4Choice( const RouteContext& ctx )
+{
+    if( std::optional<RouteChoice> coverage = testCoverageTaskChoice( ctx ) )
+    {
+        return coverage;
+    }
+    if( std::optional<RouteChoice> impact = changeImpactTaskChoice( ctx ) )
+    {
+        return impact;
+    }
+    if( std::optional<RouteChoice> reach = reachTaskChoice( ctx ) )
+    {
+        return reach;
+    }
+    return std::nullopt;
+}
+
 // The intents whose command IS a --for bundle over the task text, and which a file-grain page therefore
 // WIDENS. Keyed by INTENT and never by searching the command for the flag: a task that quotes the flag
 // itself (`plan the new feature: replace the for= flag scoring`) puts that string inside another verb's
@@ -1461,14 +1502,12 @@ inline std::optional<RouteChoice> locateImplementationTaskChoice( std::string_vi
 inline constexpr std::string_view kForShapedIntents[] = { "compact-legend", "locate-task", "opt-remark",
                                                            "reach-flow", "locate-implementation" };
 
-inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::string_view lower,
-                                                    const std::string& root, const std::vector<std::string>& symbols,
-                                                    const IngestResult& ing )
+inline std::optional<RouteChoice> directTaskChoice( const RouteContext& ctx )
 {
     // The instrumented surfaces are asked for BY NAME, so they outrank the generic literal/post-edit
     // shapes: "find every occurrence of 'X' and give me safe-edit handles" is a handles request that
     // happens to contain a grep, not the other way round.
-    if( std::optional<RouteChoice> named = instrumentedTaskChoice( task, lower, root ) )
+    if( std::optional<RouteChoice> named = instrumentedTaskChoice( ctx.task, ctx.lower, ctx.root ) )
     {
         return named;
     }
@@ -1479,65 +1518,58 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
     // having to match one blessed spelling. Neither floor is the whole gate: exact-grep still needs a
     // literal the user actually quoted, and edit-contract still needs exactly one resolved symbol, so the
     // widened vocabulary can only choose BETWEEN routes, never invent one out of prose.
-    const int exactScore = phraseScore( lower, { { "exact occurrence", 9 }, { "exact literal", 9 },
-                                                 { "every occurrence", 8 }, { "occurrences of", 8 }, { "verbatim", 8 },
-                                                 { "find every", 7 }, { "every place", 7 }, { "search for", 7 },
-                                                 { "look for", 6 }, { "grep", 6 }, { "the string", 5 },
-                                                 { "where does", 5 }, { "exactly", 4 }, { "literal", 4 },
-                                                 { "show up", 4 }, { "across the repo", 4 }, { "in the codebase", 3 } } );
-    const std::string quoted = exactScore >= 6 ? firstQuotedLiteral( task ) : std::string();
+    const int exactScore = phraseScore( ctx.lower, { { "exact occurrence", 9 }, { "exact literal", 9 },
+                                                     { "every occurrence", 8 }, { "occurrences of", 8 }, { "verbatim", 8 },
+                                                     { "find every", 7 }, { "every place", 7 }, { "search for", 7 },
+                                                     { "look for", 6 }, { "grep", 6 }, { "the string", 5 },
+                                                     { "where does", 5 }, { "exactly", 4 }, { "literal", 4 },
+                                                     { "show up", 4 }, { "across the repo", 4 }, { "in the codebase", 3 } } );
+    const std::string quoted = exactScore >= 6 ? firstQuotedLiteral( ctx.task ) : std::string();
     if( !quoted.empty() )
     {
         return RouteChoice{ "exact-grep", "ripwire-navigate", "quoted literal plus exact-search wording",
-                            commandWithValue( root, "--grep=", quoted ) + " --grep-context=2 --limit=40 --legend=compact", 100, 85 };
+                            commandWithValue( ctx.root, "--grep=", quoted ) + " --grep-context=2 --limit=40 --legend=compact", 100, 85 };
     }
-    const int postEditScore = phraseScore( lower, { { "just edited", 9 }, { "just finished editing", 9 },
-                                                    { "my edit to", 9 }, { "changed its signature", 9 },
-                                                    { "changed its contract", 9 }, { "compatible with callers", 8 },
-                                                    { "break its callers", 8 }, { "break any caller", 8 },
-                                                    { "did i change", 8 }, { "i edited", 8 }, { "i modified", 8 },
-                                                    { "i just changed", 8 }, { "after my patch", 7 },
-                                                    { "after my change", 7 }, { "since my edit", 7 },
-                                                    { "contract change", 7 }, { "still compatible", 7 },
-                                                    { "break anyone", 7 } } );
-    if( symbols.size() == 1 && postEditScore >= 7 )
+    const int postEditScore = phraseScore( ctx.lower, { { "just edited", 9 }, { "just finished editing", 9 },
+                                                        { "my edit to", 9 }, { "changed its signature", 9 },
+                                                        { "changed its contract", 9 }, { "compatible with callers", 8 },
+                                                        { "break its callers", 8 }, { "break any caller", 8 },
+                                                        { "did i change", 8 }, { "i edited", 8 }, { "i modified", 8 },
+                                                        { "i just changed", 8 }, { "after my patch", 7 },
+                                                        { "after my change", 7 }, { "since my edit", 7 },
+                                                        { "contract change", 7 }, { "still compatible", 7 },
+                                                        { "break anyone", 7 } } );
+    if( ctx.symbols.size() == 1 && postEditScore >= 7 )
     {
         return RouteChoice{ "edit-contract", "ripwire-change-check",
                             "one exact indexed symbol plus post-edit contract wording",
-                            commandWithValue( root, "--edit-check=", symbols[0] ) + " --legend=compact", 100, 82 };
+                            commandWithValue( ctx.root, "--edit-check=", ctx.symbols[0] ) + " --legend=compact", 100, 82 };
     }
     // at-line / who-writes / data-flow: structural or phrase-scored the same way the categories above
     // are, just extracted into their own function (see flowTaskChoice's own comment) to keep this ladder
     // from growing without bound as more "where did this value come from" surfaces are added.
-    if( std::optional<RouteChoice> flow = flowTaskChoice( task, lower, root, symbols ) )
+    if( std::optional<RouteChoice> flow = flowTaskChoice( ctx.task, ctx.lower, ctx.root, ctx.symbols ) )
     {
         return flow;
     }
-    // round-1 L4: test-coverage and change-impact are FILE-structural (one indexed file), so they sit
-    // ahead of the phrase-only catalog tier the same way flowTaskChoice's structural cards do.
-    if( std::optional<RouteChoice> coverage = testCoverageTaskChoice( task, lower, root, ing ) )
+    // round-1 L4: test-coverage, change-impact, reach-flow — bundled in roundOneL4Choice (see its own
+    // comment) so this ladder gains one call, not three, sitting ahead of the phrase-only catalog tier the
+    // same way flowTaskChoice's structural cards do.
+    if( std::optional<RouteChoice> l4 = roundOneL4Choice( ctx ) )
     {
-        return coverage;
-    }
-    if( std::optional<RouteChoice> impact = changeImpactTaskChoice( task, lower, root, ing ) )
-    {
-        return impact;
-    }
-    if( std::optional<RouteChoice> reach = reachTaskChoice( task, lower, root, ing ) )
-    {
-        return reach;
+        return l4;
     }
     // catalog tier LAST: the verbs and skills the router could not name at all before 2026-09-10. Every
     // route above this line is older and more specific and keeps its rows unchanged (measured: all 189
     // corpus rows byte-identical on status/intent across this addition).
-    if( std::optional<RouteChoice> catalog = catalogTaskChoice( task, lower, root, symbols ) )
+    if( std::optional<RouteChoice> catalog = catalogTaskChoice( ctx.task, ctx.lower, ctx.root, ctx.symbols ) )
     {
         return catalog;
     }
     // locate-implementation is the BROADEST of round-1 L4's four cards (`where is X implemented` alone,
     // no file, no symbol), so it runs last of all — every older and more specific reading above it,
     // including the whole catalog tier, keeps first refusal.
-    if( std::optional<RouteChoice> impl = locateImplementationTaskChoice( task, lower, root ) )
+    if( std::optional<RouteChoice> impl = locateImplementationTaskChoice( ctx.task, ctx.lower, ctx.root ) )
     {
         return impl;
     }
@@ -1611,7 +1643,7 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
                                     "ripwire " + shSingleQuote( root ) + " --from-trace=- --legend=compact", 100, 90 } );
         return result;
     }
-    if( std::optional<RouteChoice> direct = directTaskChoice( task, lower, root, result.facts.resolvedSymbols, ing ) )
+    if( std::optional<RouteChoice> direct = directTaskChoice( RouteContext{ task, lower, root, result.facts.resolvedSymbols, ing } ) )
     {
         result.status = RouteStatus::Recommend;
         result.score  = result.margin = 100;
