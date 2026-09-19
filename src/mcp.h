@@ -19,6 +19,7 @@
 
 #include "mcpverbs.h"      // the read/flagship verb builders runMcp dispatches to (pulls mcpindex.h → mcpjson.h)
 #include "compactlegend.h"   // P1 (L7): the legend:"compact" rewrite applied in textResult
+#include "legenddict.h"      // r2-LO: the session dictionary and the legend="ref" posture (resources/read, textResult)
 #include "mcpedit.h"       // the edit verbs + runEditVerb runMcp dispatches to
 
 #include "infra/stdinline.h"     // R4: readByteSafeLine — the byte-safe stdin line reader the request loop runs on
@@ -337,6 +338,10 @@ struct McpDispatchPolicy
     std::string assumedRoot;        // "" = no guessable root; else the canonicalized launch cwd (stdio, no startup root) — see above
     bool        pinnedRootHasGit = true;   // see above — only read when pinnedRoot is non-empty
     bool        pinnedRootIsGitDir = false;   // see above — only read when pinnedRootHasGit is false
+    // r2-LO: the legend session this transport can hold, or null. The stdio loop owns one (one client, one line at a
+    // time); the HTTP transport passes none, so every answer there keeps its legend inline and the resource read that
+    // switches a stdio session to legend="ref" only serves text. See legenddict.h.
+    legenddict::LegendSession* legendSession = nullptr;
 };
 
 // canonicalize a root path for the workspace-pin comparison: realpath when it resolves, else the string
@@ -547,6 +552,60 @@ inline bool mcpOmitsGitVerbs( const McpDispatchPolicy& policy ) noexcept
     return !policy.pinnedRoot.empty() && !policy.pinnedRootHasGit;
 }
 
+// ── r2-LO: the legend session's two MCP surfaces ─────────────────────────────────────────────────────────────
+// The two resources: the dictionary's core (reading it switches a stdio session to legend="ref") and the whole thing.
+inline constexpr std::string_view kMcpLegendDictUri     = "ripwire://legend-dict";
+inline constexpr std::string_view kMcpLegendDictFullUri = "ripwire://legend-dict/full";
+
+// The `initialize` pointer, only where a session can exist (stdio). Kept short: hosts may truncate instructions past
+// ~1 KB (Graft's measured constraint), and this rides every session start. dictv= names the version a ref answer's
+// <about dictv=> repeats, so a reader can tell two server builds apart.
+inline std::string mcpLegendPointer( const McpDispatchPolicy& policy )
+{
+    if( policy.legendSession == nullptr )
+    {
+        return {};
+    }
+    return " Legends: each answer defines its own attributes until this session reads the resource ripwire://legend-dict "
+           "once (dictv=" + legenddict::dictionaryVersion() + "); after that answers list rows first, carry a definition "
+           "only the first time the session meets it, and end with <about legend=\"ref\"/>. legend:\"compact\" on a call "
+           "that takes it keeps that answer's legend inline.";
+}
+
+// resources/list: the two dictionary resources. Plain text, one definition per line.
+inline std::string mcpLegendResourcesList( const std::string& id )
+{
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"resources\":["
+           "{\"uri\":\"" + std::string( kMcpLegendDictUri ) + "\",\"name\":\"legend_dict\",\"mimeType\":\"text/plain\","
+           "\"description\":\"The legend dictionary's core. Read it once: this session's answers then list rows first and carry "
+           "each definition only the first time the session meets it.\"},"
+           "{\"uri\":\"" + std::string( kMcpLegendDictFullUri ) + "\",\"name\":\"legend_dict_full\",\"mimeType\":\"text/plain\","
+           "\"description\":\"Every definition any answer can carry (the whole dictionary). Reading it also switches the session, "
+           "and answers then carry no definitions at all.\"}]}}";
+}
+
+// resources/read: serve one of the two, and — on a transport that holds a session — record that it was served.
+inline std::string mcpLegendResourceRead( const std::string& id, std::string_view uri, legenddict::LegendSession* session )
+{
+    const bool isCore = uri == kMcpLegendDictUri;
+    const bool isFull = uri == kMcpLegendDictFullUri;
+    if( !VALIDATE( isCore || isFull, "a client names the resource" ) )
+    {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":-32002,\"message\":\""
+             + mcpdetail::jsonEscape( "resource not found: '" + std::string( uri ) + "' — this server serves "
+                                      + std::string( kMcpLegendDictUri ) + " and " + std::string( kMcpLegendDictFullUri ) )
+             + "\"}}";
+    }
+    const std::string text = isFull ? legenddict::fullDictionaryText() : legenddict::coreDictionaryText();
+    if( session != nullptr )
+    {
+        if( isFull ) { session->serveAll(); }
+        else         { session->serveCore(); }
+    }
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"contents\":[{\"uri\":\"" + std::string( uri )
+         + "\",\"mimeType\":\"text/plain\",\"text\":\"" + mcpdetail::jsonEscape( text ) + "\"}]}}";
+}
+
 // the result of handling one JSON-RPC request line — shared by both transports.
 struct McpDispatchResult
 {
@@ -639,6 +698,24 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
         {
             resp = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}";
         }
+        // r2-LO: the legend dictionary, as MCP resources (the `resources` capability `initialize` announces).
+        else if( method == "resources/list" )
+        {
+            resp = mcpLegendResourcesList( id );
+        }
+        else if( method == "resources/read" )
+        {
+            const McpStringArg uriArg = mcpStringArg( paramsArg.span, "uri" );
+            if( !uriArg.refusal.empty() )
+            {
+                resp = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":-32602,\"message\":\""
+                     + mcpdetail::jsonEscape( uriArg.refusal ) + "\"}}";
+            }
+            else
+            {
+                resp = mcpLegendResourceRead( id, uriArg.value, policy.legendSession );
+            }
+        }
         else if( method == "initialize" )
         {
             // W3FIX H3: the key lookups are TOP-LEVEL-only now (mcpjson.h's findKeyValuePos), and
@@ -677,8 +754,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                                                          : kMcpLatestProtocolVersion;
                 resp = "{\"jsonrpc\":\"2.0\",\"id\":" + id +
                        ",\"result\":{\"protocolVersion\":\"" + std::string( negotiatedVersion ) +
-                       "\",\"serverInfo\":{\"name\":\"ripwire\",\"version\":\"1.0\"},\"capabilities\":{\"tools\":{}},"
+                       "\",\"serverInfo\":{\"name\":\"ripwire\",\"version\":\"1.0\"},\"capabilities\":{\"tools\":{},\"resources\":{}},"
                        "\"instructions\":\"" + mcpdetail::jsonEscape( std::string( kMcpServerInstructions )   // V3/F4: the
+                                                    + mcpLegendPointer( policy )   // r2-LO: the session dictionary, where a session exists
                                                     + mcprefuse::gitOnlyOmissionNote( omitGitVerbs, policy.pinnedRootIsGitDir ) ) + "\"}}";  // omission announces itself, finding #7: qualified by which cause it is
             }
         }
@@ -940,6 +1018,14 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // ABSENT or "compact" ⇒ compact; only an explicit "full" restores the historic legend. Any other
             // value never reaches here — it is refused below, before a byte is written.
             const bool legendCompactPosture = legendDeclaredHere && legendArg != "full";
+            // r2-LO: the REF posture (legenddict.h). Only on a transport that holds a session, only after that session read
+            // ripwire://legend-dict in THIS process, never where the caller asked for an inline legend ("compact"/"full"),
+            // and only on the verbs whose legend the dictionary holds: the ones that declare `legend` (compacted first,
+            // then reduced) and `for` (its native dialect). `legend:"ref"` before the read is the compact posture: an
+            // answer is never ref before the dictionary was served.
+            legenddict::LegendSession* const legendSession = policy.legendSession;
+            const bool legendRefPosture = legendSession != nullptr && legendSession->refOn
+                                        && ( legendDeclaredHere ? ( legendArg.empty() || legendArg == "ref" ) : name == "for" );
 
             // ── W3FIX H4/M5: every NUMERIC argument through the ONE guarded reader ─────────────────────────
             //
@@ -1040,6 +1126,15 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     compacted = text;
                     rw::applyCompactDialect( compacted, mcpCompactLegendHint( name ) );
                     body = &compacted;
+                }
+                if( legendRefPosture )
+                {
+                    if( body == &text )
+                    {
+                        compacted = text;
+                        body      = &compacted;
+                    }
+                    legenddict::applyRefPosture( compacted, *legendSession );
                 }
                 return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\""
                      + mcpdetail::jsonEscape( *body ) + "\"}],\"_index\":\"" + mcpdetail::jsonEscape( stamp )
@@ -1232,7 +1327,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // F9/F11 (V2): ABSENT and PRESENT-BUT-EMPTY are two different requests — `legend:""` is refused
             // here with the unknown-value case, the way the CLI's own `--legend=` refuses (M6's empty-value rule).
             if( !pathsUsageError && ( ( legendIsPresent && legendArg.empty() )
-                                      || ( !legendArg.empty() && legendArg != "compact" && legendArg != "full" ) ) )
+                                      || ( !legendArg.empty() && legendArg != "compact" && legendArg != "full" && legendArg != "ref" ) ) )
             {
                 resp = errResultMsg( -32602, mcprefuse::badValueRefusal( "legend", legendArg ) );
                 pathsUsageError = true;
@@ -1922,6 +2017,18 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                             {
                                 applyCompactToBatchSubs( subs );
                             }
+                            // r2-LO: …and the ref posture reaches inside it too, sub-answer by sub-answer, on the verbs
+                            // whose legend the dictionary holds — the standalone twins' own rule (legendRefPosture).
+                            if( legendRefPosture )
+                            {
+                                for( BatchSub& sub : subs )
+                                {
+                                    if( sub.ok && ( mcpVerbDeclaresLegend( sub.verb ) || sub.verb == "for" ) )
+                                    {
+                                        legenddict::applyRefPosture( sub.payload, *legendSession );
+                                    }
+                                }
+                            }
                             resp = textResult( batchText( subs, requested, kBatchCap ) );
                         }
                     }
@@ -2051,6 +2158,8 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
 
     McpDispatchPolicy policy;      // stdio: no HARD workspace pinning (pinnedRoot stays ""), edit verbs allowed
     policy.defaultRoot = defaultRoot;   // "" unless a startup root was given — see the comment above
+    legenddict::LegendSession legendSession;   // r2-LO: this process's one legend session (one client, one line at a time)
+    policy.legendSession = &legendSession;
 
     // R2a (the 2026-08-12 usage mine): with NO startup root, resolve the launch cwd ONCE as the softest
     // default — see McpDispatchPolicy::assumedRoot for the full contract and mcpResolveAssumedRoot for

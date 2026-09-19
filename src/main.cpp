@@ -3727,6 +3727,29 @@ int main( int argc, char** argv )
         return runWrap( argc, argv, selfExecutablePath( argv[0] ) );
     }
 
+    // r2-LO: the session legend dictionary for a human (or a harness that holds a session of its own) — the text
+    // ripwire://legend-dict/full serves, or `=roster`, the completeness attributes it defines (legenddict.h). Like
+    // --version, answered wherever it stands and nothing else runs.
+    for( int i = 1; i < argc; ++i )
+    {
+        const std::string_view a = argv[ i ];
+        if( a == "--legend-dict" )
+        {
+            rw::emitRaw( stdout, legenddict::fullDictionaryText().c_str() );
+            return 0;
+        }
+        if( a.starts_with( "--legend-dict=" ) )
+        {
+            if( a.substr( 14 ) != "roster" )
+            {
+                rw::emitTo( stderr, "ripwire: --legend-dict= takes roster — got '{}'; bare --legend-dict prints the dictionary\n", a.substr( 14 ) );
+                return 1;
+            }
+            rw::emitRaw( stdout, legenddict::rosterText().c_str() );
+            return 0;
+        }
+    }
+
     const Config cfg = parseArgs( argc, argv );
     if( !cfg.ok )
     {
