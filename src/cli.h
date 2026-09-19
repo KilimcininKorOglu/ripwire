@@ -4095,17 +4095,22 @@ inline constexpr std::string_view kDefaultLegendPosture = "compact";
     return nonXml;
 }
 
-// THE DEFAULT, RESOLVED ONCE (L1). An XML run that names no posture gets kDefaultLegendPosture here, so every
-// downstream reader (--for/--grep/--slice's native dialects, --batch's sub-answers, main.cpp's rewrite layer) asks
-// ONE question — cfg.legend == "compact" — and cannot disagree about the default. legendDefaulted records that
-// nobody asked: main.cpp then passes an answer the dialect cannot shape through unchanged instead of refusing it.
-// --json keeps no default posture: its JSON answers carry no legend to shape.
+// THE DEFAULT, RESOLVED ONCE (L1). A run that names no posture gets kDefaultLegendPosture here, so every downstream
+// reader (--for/--grep/--slice's native dialects, --batch's sub-answers, main.cpp's rewrite layer) asks ONE question —
+// cfg.legend == "compact" — and cannot disagree about the default. legendDefaulted records that nobody asked:
+// main.cpp then passes an answer the dialect cannot shape through unchanged instead of refusing it — which is why the
+// default is NOT withheld from a run carrying a non-XML flag. Dispatch precedence can hand such a run to an XML verb
+// (`--exemplar=X --recall=Y` answers --exemplar), and that answer must be the one --exemplar alone prints
+// (dispatchordercheck); a prose/JSON/markdown answer simply passes through. Only three things keep no default: the
+// servers (--mcp/--listen/--lsp own stdout for their whole life and take the posture per request), and --json, whose
+// answers carry no legend to shape.
 static inline void validateLegendModifier( Config& c ) noexcept
 {
     const char* nonXml = legendNonXmlSurface( c );
     if( c.legend.empty() )
     {
-        if( nonXml == nullptr && !c.json )
+        const bool servesStdout = c.mcp || !c.listen.empty() || c.lsp;
+        if( !servesStdout && !c.json )
         {
             c.legend          = kDefaultLegendPosture;
             c.legendDefaulted = true;
