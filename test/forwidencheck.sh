@@ -301,5 +301,50 @@ cattrs="$( rootattrs <"$TMP/page40.xml" )"; mattrs="$( rootattrs <"$TMP/mcp.xml"
 [ -n "$cattrs" ] && [ "$cattrs" = "$mattrs" ] && ok "(7) page root attribute names agree across the two dialects ($cattrs)" \
                                                 || no "(7) page root attribute names differ — CLI: [$cattrs] MCP: [$mattrs]"
 
+# ── (8) L3 (routing-loop round 1, Amendment 1): the page order BLENDS score with path-subtoken overlap ───
+# THE DEFECT (mining finding, R0 ladder): the page ranks by score/best/path alone, so a file the QUESTION
+# NAMES (by directory or filename) can sit behind an equal- or higher-scoring file the question never
+# mentions. Registered formula: key = score/100 + (task-matched path subtokens / path subtoken count), W=1,
+# no named-directory term (that variant is frozen-fitted and NOT shipped — PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_
+# REPORTS/11_round1_PREREG.md §B). A small in-gate fixture makes this a DECISIVE (not near-tied) row swap:
+# two files carry the IDENTICAL score (same one term, same tf, so share and best-symbol score tie exactly),
+# so the pre-lever order falls back to path ascending ("other/..." < "widget/..."); the query names "widget",
+# which is a path subtoken of ONLY the second file, so the blend must place it first.
+TMP2="$( mktemp -d )"; trap 'rm -rf "$TMP" "$TMP2"' EXIT
+FIX2="$TMP2/corpus"
+mkdir -p "$FIX2/other" "$FIX2/widget"
+printf 'int gamma_gamma_gamma_case_one() { return 1; }\n' >"$FIX2/other/bbb.cpp"
+printf 'int gamma_gamma_gamma_case_two() { return 2; }\n' >"$FIX2/widget/aaa.cpp"
+run2(){ "$BIN" "$FIX2" --no-cache --legend=full "$@" 2>"$TMP2/err"; }
+run2 --for="gamma widget" --limit=10 >"$TMP2/blend.xml"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^<files ' "$TMP2/blend.xml"; then
+    ok "(8) blend fixture: --for --limit=10 --legend=full exits 0 with a <files> root"
+else
+    no "(8) blend fixture: exited $rc / no <files> root: $( head -c 300 "$TMP2/err" "$TMP2/blend.xml" | tr '\n' ' ' )"
+fi
+grep -q ' order="blend"' "$TMP2/blend.xml" && ok "(8) the page root discloses order=\"blend\" (one header attribute, per the prereg)" \
+                                             || no "(8) the page root does not disclose its ordering: $( grep -o '^<files [^>]*>' "$TMP2/blend.xml" | cut -c1-300 )"
+python3 "$TMP/rows.py" <"$TMP2/blend.xml" >"$TMP2/blend.rows"
+scores="$( grep -o '<f p="[^"]*" score="[0-9]*"' "$TMP2/blend.xml" | grep -o 'score="[0-9]*"' | sort -u )"
+[ "$( printf '%s\n' "$scores" | grep -c . )" = 1 ] && ok "(8) blend fixture: the two rows tie on score= exactly (a decisive, not near-tied, swap)" \
+                                                     || no "(8) blend fixture: the two rows do not tie on score= ($scores) — the fixture no longer isolates the blend term"
+first="$( head -1 "$TMP2/blend.rows" )"
+if [ "$first" = "widget/aaa.cpp" ]; then
+    ok "(8) RED-FIRST (was RED pre-lever: path-ascending tie-break put other/bbb.cpp first): blend ranks widget/aaa.cpp (path names the query's \"widget\") ABOVE other/bbb.cpp — GREEN"
+else
+    no "(8) blend did not reorder the tie: rows are $( tr '\n' ' ' <"$TMP2/blend.rows" ) (expected widget/aaa.cpp first)"
+fi
+run2 --for="gamma widget" --limit=10 >"$TMP2/blend2.xml"
+cmp -s "$TMP2/blend.xml" "$TMP2/blend2.xml" && ok "(8) two runs of the blend fixture are byte-identical (determinism)" \
+                                             || no "(8) two runs of the blend fixture differ"
+# no path/task overlap at all ⇒ the blend term is 0 for every row ⇒ falls back to the pre-lever order
+# (share desc, best desc, path asc) — restated here for the specific tie pair, with --legend=full so a
+# later L1 default-compact flip cannot mask it.
+run2 --for="gamma" --limit=10 >"$TMP2/noblend.xml"
+python3 "$TMP/rows.py" <"$TMP2/noblend.xml" >"$TMP2/noblend.rows"
+first0="$( head -1 "$TMP2/noblend.rows" )"
+[ "$first0" = "other/bbb.cpp" ] && ok "(8) no task/path overlap: the tie falls back to path ascending (other/bbb.cpp first), unchanged" \
+                                 || no "(8) no task/path overlap: tie order is '$first0', expected other/bbb.cpp (the pre-blend rule)"
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"

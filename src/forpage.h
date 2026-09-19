@@ -255,14 +255,182 @@ inline constexpr std::string_view kForPageLegend =
     "top 8 symbols cover between them (whole percent; a term counts once however often it recurs, so one huge "
     "file cannot monopolise), ties by the best symbol's lens score then path; n= positive-score symbols in the "
     "file; sym= its top symbols by lens rank; p= the file. coverage= is the lens root's gauge: the same share "
-    "for the top-ranked symbol alone (name, doc and body). shown=/total=/capped=1 when this page cut the list; "
-    "offset=/limit=/has_more=/next_offset= page it and next= is the next page, pasted as-is";
+    "for the top-ranked symbol alone (name, doc and body). order= names the page's own ranking key over score= "
+    "(\"blend\": score plus the share of the file's path subtokens the task also names). shown=/total=/capped=1 "
+    "when this page cut the list; offset=/limit=/has_more=/next_offset= page it and next= is the next page, "
+    "pasted as-is";
 inline constexpr std::string_view kForPageLegendCompact =
     ": file-grain widening page (task= the query, route= the ranker that answered), one <f> row per positive-score "
     "file: score= IDF-weighted share of the query's "
     "subtokens the file's top 8 symbols cover together (%, a term counts once), ties by best symbol then path; "
-    "n= positive symbols; sym= top symbols; coverage= the top symbol's own share; shown=/total=/capped=1 when cut; "
-    "offset=/limit=/has_more=/next_offset= page it, next= the next page; root= the crawl root";
+    "n= positive symbols; sym= top symbols; coverage= the top symbol's own share; order= the page's ranking key "
+    "over score= (\"blend\": score plus the file path's subtoken overlap with the task); shown=/total=/capped=1 "
+    "when cut; offset=/limit=/has_more=/next_offset= page it, next= the next page; root= the crawl root";
+
+// ── L3 (routing-loop round 1, Amendment 1, 2026-09-19): PAGE ORDER BLEND ────────────────────────────────
+// Mining finding (R0 ladder): step 2 (this page) is ripwire's weakest step — it ranks generic same-term
+// files ahead of the file the QUESTION NAMES. Graft's own file ranking blends name×3 + path×2 fields; this
+// ports that idea as a registered, reproduced formula (PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_REPORTS/
+// 11_round1_PREREG.md §B, band: held-out gold@2 >= +4, complete@2 >= +1). Registered key = score/100 + W *
+// (task-matched path subtokens / path subtoken count), W=1, blended AFTER the existing (share desc, best
+// desc, path asc) order so ties fall back to it exactly as the simulator's own stable sort does — it
+// re-sorts the ALREADY page-ordered rows read back from the shipped page, so tying on that incoming order
+// is what makes the C++ page and the simulator agree row for row. A NAMED-DIRECTORY term (+1.0 when the
+// file shares a directory with a path the task names) was also tried and is FROZEN-FITTED — its only
+// evidence is one frozen question, selected on that outcome — and is deliberately NOT shipped.
+// W=1 (registered) is baked directly into forPageBlendKeyGreater's cross-multiplied comparison below,
+// not carried as a runtime multiplier — see that function for why the whole key avoids floating point.
+
+// The task-language stopwords the registered simulator's toks() drops: RocksDB's own file extensions
+// (cc/h) plus the closed set of connective words the ladder's question templates use. This list IS the
+// registered formula, not a re-derivation of it — keep it in lockstep with pagesim.py if either changes.
+inline constexpr std::string_view kForPageBlendStop[] =
+{
+    "cc", "h", "how", "does", "reach", "where", "is", "implemented", "the", "a", "to", "in", "of", "and",
+    "for", "when", "rocksdb",
+};
+
+inline bool forPageBlendIsStop( std::string_view t ) noexcept
+{
+    for( const std::string_view w : kForPageBlendStop )
+    {
+        if( t == w ) { return true; }
+    }
+    return false;
+}
+
+// EXPECTS: called only on a non-empty token (forPageBlendToks's flush() short-circuits on cur.empty()).
+inline bool forPageBlendAllDigits( std::string_view t ) noexcept
+{
+    EXPECTS( !t.empty(), "forPageBlendToks flushes only non-empty tokens" );
+    for( const char c : t )
+    {
+        if( c < '0' || c > '9' ) { return false; }
+    }
+    return true;
+}
+
+// The SAME tokenizer the registered simulator (pagesim.py's toks()) runs: a lowercase letter directly
+// followed by an uppercase one is a camelCase split (one rule — NOT the acronym-aware ladder
+// rw::subtokens() applies), any run of non-alnum bytes splits, stopwords and pure-digit tokens are
+// dropped. Deliberately not rw::subtokens(): that function also drops <2-byte tokens and folds an
+// uppercase run into one token, a DIFFERENT, stricter contract than the one the band was measured on —
+// reusing it would silently drift the shipped ranking away from the registered simulation.
+inline void forPageBlendToks( std::string_view s, std::vector<std::string>& out )
+{
+    std::string cur;
+    char        prevRaw = 0;
+    auto        flush = [ & ]()
+    {
+        if( !cur.empty() && !forPageBlendIsStop( cur ) && !forPageBlendAllDigits( cur ) )
+        {
+            out.push_back( cur );
+        }
+        cur.clear();
+    };
+    for( const char raw : s )
+    {
+        const unsigned char c     = static_cast<unsigned char>( raw );
+        const bool          alnum = ( c >= '0' && c <= '9' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' );
+        if( !alnum )
+        {
+            flush();
+            prevRaw = 0;
+            continue;
+        }
+        const bool camelBoundary = prevRaw >= 'a' && prevRaw <= 'z' && c >= 'A' && c <= 'Z';
+        if( camelBoundary )
+        {
+            flush();
+        }
+        cur.push_back( char( c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c ) );
+        prevRaw = raw;
+    }
+    flush();
+}
+
+// hits (WITH repeats, as the registered simulator counts them) of PATH's subtokens present in the task's
+// subtoken set, and PATH's own subtoken count (never 0: an empty tokenization is a share of 0/1, not a
+// div-by-zero). Kept as two integers, not a ratio — see forPageBlendKeyGreater for why.
+struct ForPageBlendPathHits
+{
+    std::size_t hits     = 0;
+    std::size_t pathToks = 1;
+};
+
+inline ForPageBlendPathHits forPageBlendPathShare( std::string_view path, const std::vector<std::string>& taskToks )
+{
+    std::vector<std::string> pathToks;
+    forPageBlendToks( path, pathToks );
+    if( pathToks.empty() )
+    {
+        return {};
+    }
+    std::size_t hits = 0;
+    for( const std::string& t : pathToks )
+    {
+        for( const std::string& q : taskToks )
+        {
+            if( t == q ) { ++hits; break; }
+        }
+    }
+    ENSURES( hits <= pathToks.size(), "hits counts a subset of pathToks" );
+    return { hits, pathToks.size() };
+}
+
+// One row's registered-formula term: scorePct/100 + W*(hits/pathToks), W=1, kept as three small integers
+// rather than folded into one float. score/100 + hits/pathToks is compared EXACTLY by cross-multiplication
+// (int64_t; scorePct <= 100 and hits <= pathToks are both small, so the product never approaches overflow) —
+// never as a float. A float key ties two real rows within 1 ULP on this corpus (score=13/pathToks=4 vs
+// score=18/pathToks=10: 0.13+0.75 and 0.18+0.7 land one ULP apart under this TU's -ffast-math reassociation,
+// which is free to reorder the sum and flip which double compares larger), and a page's own row order is
+// exactly the kind of output the determinism contract (CLAUDE.md: "anything that makes output depend on
+// [...] reassociation is a bug") forbids drifting with the optimizer. Cross-multiplied integers have no
+// such tie: the comparison is exact for every input this function can receive.
+struct ForPageBlendTerm
+{
+    int         scorePct = 0;
+    std::size_t hits     = 0;
+    std::size_t pathToks = 1;
+};
+
+inline bool forPageBlendKeyGreater( const ForPageBlendTerm& a, const ForPageBlendTerm& b ) noexcept
+{
+    ASSUME( a.pathToks > 0 && b.pathToks > 0, "forPageBlendPathShare never returns pathToks==0" );
+    const std::int64_t lhs = std::int64_t( a.scorePct ) * std::int64_t( a.pathToks ) * std::int64_t( b.pathToks )
+                            + std::int64_t( a.hits ) * 100 * std::int64_t( b.pathToks );
+    const std::int64_t rhs = std::int64_t( b.scorePct ) * std::int64_t( a.pathToks ) * std::int64_t( b.pathToks )
+                            + std::int64_t( b.hits ) * 100 * std::int64_t( a.pathToks );
+    return lhs > rhs;
+}
+
+// The page's row order for THIS task: page.rows' own (share desc, best desc, path asc) order, stable-
+// blended with the path-subtoken term. std::stable_sort ties on the incoming index order — page.rows'
+// order — which is exactly what the registered simulator's own stable sort falls back to (see the header
+// above), so this function and the simulator reorder the same rows identically.
+inline std::vector<std::uint32_t> forPageBlendOrder( const IngestResult& ing, const ForFilePage& page, std::string_view task, std::string_view rootArg )
+{
+    std::vector<std::string> taskToks;
+    forPageBlendToks( task, taskToks );
+    const std::size_t              n = page.rows.size();
+    std::vector<std::uint32_t>     order( n );
+    std::vector<ForPageBlendTerm>  term( n );
+    for( std::size_t i = 0; i < n; ++i )
+    {
+        order[i]              = std::uint32_t( i );
+        const int scorePct    = int( page.rows[i].share * 100.0 + 0.5 );
+        term[i].scorePct      = scorePct;
+        if( !taskToks.empty() )
+        {
+            const ForPageBlendPathHits ph = forPageBlendPathShare( lensRowPath( ing, page.rows[i].fileId, rootArg ), taskToks );
+            term[i].hits     = ph.hits;
+            term[i].pathToks = ph.pathToks;
+        }
+    }
+    std::stable_sort( order.begin(), order.end(), [ & ]( std::uint32_t a, std::uint32_t b ) { return forPageBlendKeyGreater( term[a], term[b] ); } );
+    ENSURES( order.size() == n, "a permutation of every row, none dropped or duplicated" );
+    return order;
+}
 
 // What the page document is rendered from, beside the rows: the task and the lens root's own open tag (ctxRootOpen's
 // output — task=/route=/root= and the scrub tells — re-tagged <files>, so the two roots spell and escape their shared
@@ -286,6 +454,11 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     const std::size_t total  = page.rows.size();
     const PageWindow  window = pageWindow( total, p.limit, p.offset );
     const std::size_t shown  = window.end - window.begin;
+    // L3 (routing-loop round 1): the row SEQUENCE this page pages through is the blend order, not
+    // page.rows' own (share, best, path) order — computed over every row so offset=/limit= continue the
+    // SAME sequence across calls (pagination is a slice of this order, never a re-derivation per page).
+    const std::vector<std::uint32_t> blendOrder = forPageBlendOrder( ing, page, p.task, p.rootArg );
+    ENSURES( blendOrder.size() == total, "a permutation of the page's own rows" );
 
     x += "<files";
     if( p.rootOpen.size() > 5 && p.rootOpen.substr( 0, 4 ) == "<ctx" && p.rootOpen.back() == '>' )
@@ -296,6 +469,7 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     {
         x += " coverage=\"" + std::to_string( p.coveragePct ) + "\"";
     }
+    x += " order=\"blend\"";   // the ranking key this page's row order used — see kForPageLegend[Compact]
     char disc[ kPageDisclosureCap ];
     x += pageDisclosure( disc, sizeof( disc ), shown, total, window.end, p.limit, p.offset, /*discloseCap=*/true );
     if( window.end < total )
@@ -309,7 +483,7 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     x += forRootRelPathsLegendShort( !p.rootArg.empty() );
     for( std::size_t r = window.begin; r < window.end; ++r )
     {
-        const ForFileRow& row = page.rows[r];
+        const ForFileRow& row = page.rows[ blendOrder[r] ];
         x += "<f p=\"";  x += escapeXml( lensRowPath( ing, row.fileId, p.rootArg ), esc );
         x += "\" score=\"" + std::to_string( int( row.share * 100.0 + 0.5 ) );
         x += "\" n=\"" + std::to_string( row.symbolCount ) + "\" sym=\"";
