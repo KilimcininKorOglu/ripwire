@@ -15,7 +15,7 @@
 #     byte-identical to a run with a valid artifact. The `--index-out` -> `--cache=` CI workflow that
 #     `--help` recommends therefore has no way to verify the artifact was used at all — the cocoindex half
 #     ("only re-indexes changed files" as a CONTRACT rather than an implementation detail).
-#   - the version/parserVer/arch refusals do speak, but only through DEGRADED_PATH_ALERT, which
+#   - the version/parserVer/arch refusals do speak, but only through DISCLOSE, which
 #     `src/infra/Diagnostics.h` compiles to `do { } while (0)` under NDEBUG. Every binary `install.sh`
 #     produces is `-DCMAKE_BUILD_TYPE=Release`, so on the binary users actually run the refusal is
 #     COMPLETELY silent. `test/portablecachecheck.sh`'s own header already names this failure mode as the

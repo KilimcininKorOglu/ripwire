@@ -75,7 +75,7 @@
 // working tree or any ref, and never mutates repo state. An unresolvable REF is a loud refusal (the
 // caller exits non-zero, naming the ref) decided BEFORE any archive work starts — never a silently-empty
 // arm buried in otherwise-good output. A non-git root / repo with no HEAD commit degrades to an empty
-// result (DEGRADED_PATH_ALERT), matching quality.h's own non-git convention.
+// result (DISCLOSE), matching quality.h's own non-git convention.
 
 #include "model.h"
 #include "ingest.h"
@@ -86,7 +86,7 @@
 #include "infra/jsonesc.h"      // shSingleQuote
 #include "serialize.h"          // escapeXml
 #include "workspace.h"          // wsdetail::segmentsOf — the shared delimiter-split primitive (also splits the CSV ref list)
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration, cache-friendly (house rule: never std::map)
 
@@ -409,7 +409,7 @@ inline Arm computeNamedArm( std::string_view ref, const std::string& refSha, con
     if( arm.baseSha.empty() )
     {
         arm.ok = false;   // unrelated histories / merge-base failed — degrade, never crash
-        DEGRADED_PATH_ALERT( "merge-scout: no merge-base for ref (unrelated history?) — reporting an empty arm" );
+        DISCLOSE( "merge-scout: no merge-base for ref (unrelated history?) — reporting an empty arm" );
         return arm;
     }
     arm.changed = diffTreeIndex( memo.get( arm.baseSha ), memo.get( refSha ) );
@@ -743,7 +743,7 @@ inline void writeScoutArm( std::FILE* out, const Arm& arm, const XmlEscaper& ex 
     // §L10: <no-work> is a claim about a COMPARISON that ran and found nothing — it must not fire when
     // ok="0", where changed="0" means the comparison never happened at all (no merge-base, unrelated
     // histories). Printing it there read as "compared, nothing divergent" on an arm this verb never
-    // compared; DEGRADED_PATH_ALERT already says so on stderr, but nothing said so in-band before this.
+    // compared; DISCLOSE already says so on stderr, but nothing said so in-band before this.
     if( arm.changed.empty() && arm.ok )
     {
         rw::emitRaw( out, "<no-work note=\"no divergent work vs merge-base — see --stray-content\"/>" );

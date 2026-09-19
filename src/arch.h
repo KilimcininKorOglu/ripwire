@@ -32,8 +32,10 @@
 
 #include "model.h"
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — THE one atomic no-follow open the sidecar writers share
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — graceful-degrade on a malformed path-regex (never throw at match time)
+#include "infra/Diagnostics.h"  // DISCLOSE — graceful-degrade on a malformed path-regex (never throw at match time)
+#include "regexguard.h"          // path-rules: the screen, the compile and the guarded match every user-authored pattern takes
 #include "infra/hashutil.h"     // sanitizer-clean modulo-2^64 FNV multiplication
+#include "infra/stackthreads.h" // kCallerStackBytesFloor — path-rule matching runs on whatever thread --arch is on, never one it sized itself
 
 #include <algorithm>
 #include <array>
@@ -43,7 +45,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <regex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -137,17 +139,22 @@ inline const char* builtinLayer( std::string_view path ) noexcept
 //   means: a file under src/<X>/ may not depend on src/<Y>/ for any Y != X. `allow path` is an explicit
 //   EXCEPTION — if a deny would fire on an edge but an allow path-rule ALSO matches it, the edge is
 //   permitted (allow wins). Determinism: rules are applied in file order; the match is pure regex (no
-//   global/mutable state). Soundness: a malformed FROM/TO regex is SKIPPED at parse time (kept but
-//   flagged `bad`, never compiled into a matcher) so it can never fire, hang, or crash — std::regex on a
-//   BOUNDED corpus terminates, and the substituted-backreference text is regex-escaped so a captured
-//   path segment can never inject a pathological sub-pattern.
+//   global/mutable state). Soundness: a FROM regex the guard refuses (malformed, non-portable, or the
+//   catastrophic-backtracking family — src/regexguard.h), and a TO template the structural screen refuses,
+//   reject the WHOLE rules file with the line named, the D9 rule. The substituted-backreference text is
+//   regex-escaped, so a captured path segment can never inject a sub-pattern the screen did not read. What the
+//   old note claimed here — "std::regex on a BOUNDED corpus terminates" — was false on both standard
+//   libraries: `deny path zz/.* -> (a+)+z` aborted the process on libc++ (an uncaught error_complexity, rc 134)
+//   and backtracks without end on libstdc++. A match the engine still abandons (RegexVerdict::Exhausted, e.g.
+//   overlapping alternation), and a TO pattern that only becomes invalid once an edge's captures are substituted
+//   into it (`a{2,\1}` → `a{2,1}`), are reported by pathRuleForbids and refused by the verb, never read as "no match".
 struct PathRule
 {
     std::string from;        // FROM_REGEX source (as written)
     std::string to;          // TO_REGEX source (with \1..\9 placeholders, pre-substitution)
     bool        allow;       // true ⇒ allow (exception); false ⇒ deny
-    bool        bad;         // true ⇒ FROM (or a no-backref TO) failed to compile → rule is inert (skipped)
-    std::regex  fromRe;      // compiled FROM matcher (only valid when !bad)
+    bool         bad;        // true ⇒ FROM (or a no-backref TO) failed to compile → rule is inert (skipped)
+    GuardedRegex fromRe;     // compiled FROM matcher (only valid when !bad)
 };
 
 struct ArchRules
@@ -185,10 +192,12 @@ inline std::string regexEscapeLiteral( std::string_view s )
     return out;
 }
 
-// Substitute \1..\9 in a TO_REGEX template with the regex-escaped literal of the matching FROM capture.
-// An out-of-range or absent group substitutes empty (a rule referencing a group its FROM never captured
-// simply never matches a real sibling — inert, not an error). A literal "\\" passes through unchanged.
-inline std::string substituteBackrefs( std::string_view toTemplate, const std::smatch& m )
+// Substitute \1..\9 in a TO_REGEX template with `groupText( n )`: the regex-escaped literal of the matching FROM
+// capture when an edge is judged (substituteBackrefs), or a placeholder atom when the template itself is validated
+// at parse time (toTemplateRefusal). An out-of-range or absent group substitutes empty (a rule referencing a group
+// its FROM never captured simply never matches a real sibling — inert, not an error). A literal "\\" passes through.
+template<typename GroupText>
+inline std::string substituteBackrefsWith( std::string_view toTemplate, GroupText&& groupText )
 {
     std::string out;
     out.reserve( toTemplate.size() + 16 );
@@ -199,11 +208,7 @@ inline std::string substituteBackrefs( std::string_view toTemplate, const std::s
             const char nxt = toTemplate[ i + 1 ];
             if( nxt >= '1' && nxt <= '9' )
             {
-                const std::size_t grp = std::size_t( nxt - '0' );
-                if( grp < m.size() && m[grp].matched )
-                {
-                    out += regexEscapeLiteral( m[grp].str() );
-                }
+                out += groupText( std::size_t( nxt - '0' ) );
                 i += 1;                                   // consume the digit
                 continue;
             }
@@ -218,54 +223,196 @@ inline std::string substituteBackrefs( std::string_view toTemplate, const std::s
     return out;
 }
 
+inline std::string substituteBackrefs( std::string_view toTemplate, const RegexCaptures& m )
+{
+    return substituteBackrefsWith( toTemplate, [ & ]( std::size_t grp )
+    { return ( grp < m.size() && m[grp].matched ) ? regexEscapeLiteral( m[grp].str() ) : std::string(); } );
+}
+
+// Can this TO template compile for ANY edge? A captured segment arrives as a run of escaped literal ATOMS, so the
+// template's structure — group and class balance, what a quantifier applies to — does not depend on the capture.
+// It is therefore judged at parse time with a single placeholder atom, "9", in every \1..\9: valid as ordinary
+// literal text ANYWHERE a capture can sit, and also a valid interval digit at the one position where a capture's
+// content (not just its presence) decides validity — an interval such as a{2,\1}. "9" specifically, not the
+// older two-placeholder "x"-then-"9": "x" is not a digit, so it FAILS every numeric-interval position on its own
+// non-numeric-ness (error_brace) whether or not the template is otherwise sound — a{10,\1} rejected BOTH ({10,x}
+// non-numeric, {10,9} since 9<10) at parse time even though \1="20" is a perfectly valid edge (CodeRabbit #277).
+// So: a template that fails to compile with "9" is refused for every edge UNLESS the ONLY reason is
+// error_badbrace — an out-of-order {min,max}, a fact about the digits "9" happened to supply, not about the
+// template — in which case it is accepted here and pathRuleMatches/pathRuleForbids judge each edge's REAL
+// capture, refusing by name (isRefused) only the edges whose own digits are invalid, never every edge for an
+// order only one arbitrary placeholder had wrong. Any OTHER failure (unbalanced groups, a bad escape — nothing a
+// real capture's digits could fix either) still condemns the template for every edge, exactly as before.
+// The deferral needs a backreference to defer TO (CodeRabbit on #283): a template with no \1..\9 has digits no
+// capture can change, so `a{2,1}` is refused at load like any other broken template — otherwise a rule whose FROM
+// side never matches would sit loaded and silently inert. Whether a backreference actually reaches the offending
+// interval is not analysed; a template that has one still defers, and each edge's real capture decides.
+inline std::optional<std::string> toTemplateRefusal( std::string_view toTemplate )
+{
+    bool              hasBackref  = false;
+    const std::string substituted = substituteBackrefsWith( toTemplate, [ & ]( std::size_t ) { hasBackref = true; return std::string( "9" ); } );
+    RegexCompile       compiled   = compileGuardedRegex( substituted, kRegexEcmaScript );
+    if( !compiled.refusal || ( compiled.isIntervalRangeOnly && hasBackref ) )
+    {
+        return std::nullopt;   // compiles outright, or an interval order a DIFFERENT capture's digits could satisfy — defer to the edge
+    }
+    return std::move( compiled.refusal );
+}
+
 // Does the regex path-rule set FORBID the edge src→dst? deny path-rule matches the (src,dst) pair AND no
 // allow path-rule matches it (allow = explicit exception). `bad` (uncompilable) rules are skipped — they
-// can never fire. Pure function of its inputs (deterministic). Returns the 0-based index of the matching
-// DENY rule via `outRuleIndex` (for a stable label) when it returns true; otherwise leaves it untouched.
-inline bool pathRuleForbids( const ArchRules& r, std::string_view src, std::string_view dst, std::size_t& outRuleIndex )
+// can never fire. Pure function of its inputs (deterministic). `ruleIndex` is the 0-based index of the matching
+// DENY rule (for a stable label) when `isForbidden`, or of the rule that could not be JUDGED on this edge — the
+// engine abandoned its match (`isAbandoned`), the edge's FROM or substituted-TO subject was too long for the
+// engine on this thread and never reached it at all (`isSkipped`, F-B4 — src/regexguard.h RegexVerdict::Skipped,
+// the same bound `--regex` uses on a long matching line), or its TO pattern, after this edge's backreferences
+// were substituted, is one the guard refuses (`isRefused`, with the substituted text and the reason). An
+// undecided rule is neither permitted nor forbidden but unknown, so the caller refuses rather than choose.
+struct PathRuleVerdict
 {
-    const std::string srcS( src ), dstS( dst );
+    bool        isForbidden = false;
+    bool        isAbandoned = false;
+    bool        isSkipped   = false;
+    bool        isRefused   = false;
+    std::size_t ruleIndex   = 0;
+    std::string refusedTo;   // isRefused only: the TO pattern as substituted for this edge
+    std::string refusal;     // isRefused only: the guard's reason, in the words --regex prints
 
-    // 1) is the edge explicitly ALLOWED by any allow path-rule? (exception wins → never a violation)
-    for( const PathRule& pr : r.pathRules )
+    // F-B4: appended last so every existing positional PathRuleVerdict{...} construction stays valid. True when
+    // pathRuleForbids met an undecided rule (Exhausted/Skipped/refused) while resolving THIS edge but a decisive
+    // rule elsewhere settled the verdict anyway — the edge is still isForbidden/permitted, not refused, and the
+    // caller discloses the count rather than treating it as unknown.
+    bool        hadUndecided = false;
+};
+
+// One rule against one edge: FROM against src, then (on a hit) the backreference-substituted TO against dst. The
+// substituted TO is compiled per edge because its text depends on this edge's captures. Its template was screened at
+// parse time, and substitution cannot add a construct the screen reads (every captured character is escaped) — but
+// it CAN make the text unparseable: `a{2,\1}` is a well-formed template and `a{2,1}` is an invalid interval on every
+// standard library. That used to leave the rule silently inert for the edge (a CI gate reporting exit 0 over an edge
+// its rule never judged); it is now a verdict the caller refuses by name.
+struct PathRuleMatch
+{
+    RegexVerdict               verdict = RegexVerdict::Miss;
+    std::string                substitutedTo;   // set only when `refusal` is
+    std::optional<std::string> refusal;
+};
+
+// F-B4: subjects here are ROOT-RELATIVE PATHS (arch.h's own top-of-file note — realistically a few KB), so the
+// caller thread's own bound (kCallerStackBytesFloor, the smallest stack this tree runs work on) is what protects
+// an adversarial FROM/TO regex the same way skillscan.h and #match? are protected — this runs off the grep
+// line-loop's own bounding, on whatever thread --arch happens to run on.
+inline PathRuleMatch pathRuleMatches( const PathRule& pr, std::string_view src, std::string_view dst )
+{
+    RegexCaptures      fromCaptures;
+    const RegexVerdict fromVerdict = pr.fromRe.search( src, fromCaptures, kCallerStackBytesFloor );
+    if( fromVerdict != RegexVerdict::Hit )
     {
-        if( pr.bad || !pr.allow )
-        {
-            continue;
-        }
-        std::smatch fm;
-        if( !std::regex_search( srcS, fm, pr.fromRe ) )
-        {
-            continue;
-        }
-        std::regex toRe;
-        try { toRe = std::regex( substituteBackrefs( pr.to, fm ), std::regex::ECMAScript ); }
-        catch( const std::regex_error& ) { continue; }       // malformed-after-substitution → inert
-        if( std::regex_search( dstS, toRe ) )
-        {
-            return false; // an allow rule matches → permitted
-        }
+        return { fromVerdict, {}, std::nullopt };
     }
+    std::string        substitutedTo = substituteBackrefs( pr.to, fromCaptures );
+    RegexCompile       toCompiled    = compileGuardedRegex( substitutedTo, kRegexEcmaScript );
+    if( toCompiled.refusal )
+    {
+        return { RegexVerdict::Miss, std::move( substitutedTo ), std::move( toCompiled.refusal ) };
+    }
+    return { toCompiled.regex.search( dst, kCallerStackBytesFloor ), {}, std::nullopt };
+}
 
-    // 2) does any DENY path-rule match? (first match wins for the label, file order = deterministic)
-    for( std::size_t i = 0; i < r.pathRules.size(); ++i )
+// The verdict for rule `ruleIndex` when its match could not be decided on this edge, or nullopt when it was.
+inline std::optional<PathRuleVerdict> undecidedPathRule( PathRuleMatch& match, std::size_t ruleIndex )
+{
+    if( match.refusal )
+    {
+        return PathRuleVerdict{ false, false, false, true, ruleIndex, std::move( match.substitutedTo ), std::move( *match.refusal ) };
+    }
+    if( match.verdict == RegexVerdict::Exhausted )
+    {
+        return PathRuleVerdict{ false, true, false, false, ruleIndex, {}, {} };
+    }
+    if( match.verdict == RegexVerdict::Skipped )
+    {
+        return PathRuleVerdict{ false, false, true, false, ruleIndex, {}, {} };
+    }
+    return std::nullopt;
+}
+
+// DENY FIRST, and refuse only when an undecided rule COULD change the verdict — never merely because one was met
+// along the way (F-B4). The answer is "forbidden" exactly when some deny matches and no allow does, with the FIRST
+// matching deny as the label. So:
+//   * every deny misses            ⇒ permitted, whatever the allows would say — none is consulted (an allow whose
+//                                    pattern the engine cannot finish can no longer turn a determinable "not a
+//                                    violation" into a refusal);
+//   * a deny is undecided, but a LATER deny decisively matches ⇒ forbidden either way — the undecided one never
+//                                    needed an answer; disclosed (hadUndecided), not refused (F-B4: this used to
+//                                    stop and refuse at the FIRST undecided deny, even when a later one settled it);
+//   * every deny is either a decided miss or undecided, none a decided hit ⇒ the FIRST undecided one is the
+//                                    verdict — it might have been the matching one (or the label) — unless an
+//                                    allow decisively matches, which permits the edge either way;
+//   * a deny matches               ⇒ consult the allows: any allow that matches permits the edge, even after an
+//                                    earlier allow was undecided; only when none matches does an undecided allow
+//                                    matter, because it might have been the exception.
+// Every decided edge gets the answer the old allow-first order gave, and the same label.
+inline PathRuleVerdict pathRuleForbids( const ArchRules& r, std::string_view src, std::string_view dst )
+{
+    // 1) the first DENY that DECISIVELY matches wins the label; an undecided deny met along the way is a fallback,
+    // not a stop — scanning continues so a later decisive deny can settle the edge regardless of it (mirrors the
+    // allow loop below, which already scanned past an undecided allow this way).
+    std::optional<PathRuleVerdict> undecidedDeny;
+    std::optional<PathRuleVerdict> denyVerdict;
+    for( std::size_t i = 0; i < r.pathRules.size() && !denyVerdict; ++i )
     {
         const PathRule& pr = r.pathRules[i];
         if( pr.bad || pr.allow )
         {
             continue;
         }
-        std::smatch fm;
-        if( !std::regex_search( srcS, fm, pr.fromRe ) )
+        PathRuleMatch match = pathRuleMatches( pr, src, dst );
+        if( match.verdict == RegexVerdict::Hit )
+        {
+            denyVerdict = PathRuleVerdict{ true, false, false, false, i, {}, {} };
+            continue;
+        }
+        if( !undecidedDeny )
+        {
+            undecidedDeny = undecidedPathRule( match, i );
+        }
+    }
+    if( !denyVerdict )
+    {
+        denyVerdict = undecidedDeny;    // no deny decisively fired; this edge's answer truly depends on the first undecided one
+    }
+    else if( undecidedDeny )
+    {
+        denyVerdict->hadUndecided = true;   // a later deny fired anyway; the earlier undecided one never mattered
+    }
+    if( !denyVerdict )
+    {
+        return {};   // no deny can forbid this edge
+    }
+
+    // 2) an ALLOW that matches is the exception; an undecided one matters only if none matches
+    std::optional<PathRuleVerdict> undecidedAllow;
+    for( std::size_t i = 0; i < r.pathRules.size(); ++i )
+    {
+        const PathRule& pr = r.pathRules[i];
+        if( pr.bad || !pr.allow )
         {
             continue;
         }
-        std::regex toRe;
-        try { toRe = std::regex( substituteBackrefs( pr.to, fm ), std::regex::ECMAScript ); }
-        catch( const std::regex_error& ) { continue; }       // malformed-after-substitution → inert
-        if( std::regex_search( dstS, toRe ) ) { outRuleIndex = i; return true; }
+        PathRuleMatch match = pathRuleMatches( pr, src, dst );
+        if( match.verdict == RegexVerdict::Hit && !match.refusal )
+        {
+            PathRuleVerdict permitted;
+            permitted.hadUndecided = denyVerdict->hadUndecided || bool( undecidedAllow );
+            return permitted;   // an allow rule matches → permitted
+        }
+        if( !undecidedAllow )
+        {
+            undecidedAllow = undecidedPathRule( match, i );
+        }
     }
-    return false;
+    return undecidedAllow ? std::move( *undecidedAllow ) : std::move( *denyVerdict );
 }
 
 inline int archLayerId( const ArchRules& r, std::string_view name )   // name → id; '*' → -1; unknown → -2
@@ -352,10 +499,10 @@ inline ArchRules parseArchRules( const std::string& path )
     // one line. Every non-blank, non-comment line MUST resolve to a recognized, well-formed rule/layer;
     // the first one that doesn't aborts the WHOLE file with a specific `path:lineNo: reason` message,
     // mirroring parseLintRuleFile's badLine/"file skipped" contract exactly.
-    const auto badLine = [ & ]( std::size_t lineNo, const char* why ) -> bool
+    const auto badLine = [ & ]( std::size_t lineNo, std::string_view why ) -> bool
     {
         rw::emitTo( stderr, "ripwire: --arch: {}:{}: {} — rules file rejected\n", path.c_str(), lineNo, why );
-        DEGRADED_PATH_ALERT( "arch: malformed rules line — rules file rejected" );
+        DISCLOSE( "arch: malformed rules line — rules file rejected" );
         return false;
     };
 
@@ -404,13 +551,11 @@ inline ArchRules parseArchRules( const std::string& path )
                 pr.to    = toRe;
                 pr.allow = ( kw == "allow" );
                 pr.bad   = false;
-                // Compile the FROM regex now; a malformed PATTERN (well-formed line, bad regex syntax) is
-                // kept-but-flagged `bad` so it can NEVER fire (the soundness guard — no hang, no throw at
-                // match time) — a semantic issue, not the structural "line didn't parse" this fix targets,
-                // so it stays a soft degrade rather than rejecting the whole file. The TO regex is compiled
-                // per-edge after backref substitution (so it is validated there too).
-                try { pr.fromRe = std::regex( fromRe, std::regex::ECMAScript ); }
-                catch( const std::regex_error& )
+                // Compile the FROM regex now, through the guard. The TO regex is compiled per-edge after backref
+                // substitution, so only its TEMPLATE can be judged here: screened, and compiled with a placeholder
+                // atom in each \1..\9 (toTemplateRefusal) — a template no capture can make valid never gets stored.
+                RegexCompile fromCompiled = compileGuardedRegex( fromRe, kRegexEcmaScript );
+                if( fromCompiled.refusal && !fromCompiled.isScreened )
                 {
                     // 2026-09-06 stranger audit: this used to keep the rule (pathRules= counted it) and skip it,
                     // so one stray paren turned a CI gate's exit 2 into exit 0 with violations="0". Same D9
@@ -418,6 +563,17 @@ inline ArchRules parseArchRules( const std::string& path )
                     ok = badLine( lineNo, "FROM path-regex does not compile as ECMAScript — check parentheses and escapes (want e.g.: deny path src/a\\.cpp -> src/b\\.cpp)" );
                     break;
                 }
+                if( fromCompiled.refusal )
+                {
+                    ok = badLine( lineNo, "FROM path-regex '" + fromRe + "' refused: " + *fromCompiled.refusal );
+                    break;
+                }
+                if( const std::optional<std::string> toRefusal = toTemplateRefusal( toRe ) )
+                {
+                    ok = badLine( lineNo, "TO path-regex '" + toRe + "' refused: " + *toRefusal );
+                    break;
+                }
+                pr.fromRe = std::move( fromCompiled.regex );
                 r.pathRules.push_back( std::move( pr ) );
             }
             else                                               // layer-name rule: `allow|deny FROM -> TO`
@@ -526,69 +682,8 @@ inline std::uint64_t fnv1a64( std::string_view s ) noexcept
     return h;
 }
 
-// ── S2: root-relative path for BASELINE HASHING (committed-sidecar portability) ───────────────────────
-//
-// Both baseline sidecars (.ripwire_arch_baseline, .ripwire_quality_baseline) are meant to be COMMITTED and
-// portable. But every path in ing.files is spelled `<ingest-root>/<relative>` verbatim — the crawl just
-// prepends the root argument. So `ripwire .` embeds `./game/x.cpp` while `ripwire /abs/repo` embeds
-// `/abs/repo/game/x.cpp`, giving DIFFERENT hashes for the same file → a baseline written under one root
-// spelling falsely fails enforcement under another (exit 0 vs 2 for a teammate/CI with a different root).
-//
-// relForHash strips the ingest-root prefix LEXICALLY (never a realpath — that would be nondeterministic and
-// pull in the filesystem, and would break on a symlinked/`..`-containing root), producing the SAME
-// root-relative key for both spellings. Every use is a root-spelling NORMALIZATION of exactly this shape:
-// the baseline hash paths, and — W3FIX — the --dead-code `./`-anchored path filter, whose "position 0 is the
-// repo root" rule holds only for a root-relative path and so silently matched nothing under an absolute root
-// spelling. It never touches `g.canonId`, resolution, or any storage key (see the S2 trap: canonId is
-// load-bearing far beyond the baseline). Determinism: pure function of (path, root); no I/O, no state.
-//
-// R-R (root-relative emission) AMENDED THE LAST CLAUSE. This used to add "and it is never an emitted VALUE
-// — only ever a comparison key". That is no longer true, deliberately: resolve.h::canonicalIdForEmit runs
-// the path segment of every EMITTED `id=` (and the MCP handle that hashes it) through this same strip, so
-// the emitted identity and the committed baseline key finally spell a file the same way. What the S2 trap
-// actually protects is unchanged and still absolute: g.canonId — the in-memory identity that resolution,
-// overload-set grouping and Regression::key depend on — is never rewritten. Emission is a VIEW of that
-// identity; the identity itself does not move.
-//
-// The strip is: remove a leading `root` prefix (with an optional trailing '/'), then normalize any residual
-// leading `./` and leading `/`. A path that does not start with `root` (shouldn't happen — every file is
-// under the crawl root) is returned only leading-`./`/`/`-normalized, so it degrades to a stable key rather
-// than an empty one. Empty root ⇒ just the leading-`./`/`/` normalization (equivalent to root ".").
-inline std::string_view relForHash( std::string_view path, std::string_view root ) noexcept
-{
-    // 1) strip the ingest-root prefix if present (allow one optional trailing '/' on the root).
-    std::string_view rootTrim = root;
-    while( rootTrim.size() > 1 && rootTrim.back() == '/' )
-    {
-        rootTrim.remove_suffix( 1 ); // "/abs/repo/" → "/abs/repo"
-    }
-    if( !rootTrim.empty() && rootTrim != "." && path.size() >= rootTrim.size()
-        && path.compare( 0, rootTrim.size(), rootTrim ) == 0 )
-    {
-        // matched the root; the next char (if any) must be a '/' so we strip whole path components only
-        // ("/abs/repo" must not eat the "repo" in "/abs/repository/...").
-        std::string_view rest = path.substr( rootTrim.size() );
-        if( rest.empty() || rest.front() == '/' )
-        {
-            path = rest;
-        }
-    }
-
-    // 2) normalize residual leading "./" then leading "/" so "." / "./x" / "/x" all collapse to "x".
-    while( path.size() >= 2 && path[0] == '.' && path[1] == '/' )
-    {
-        path.remove_prefix( 2 );
-    }
-    while( !path.empty() && path.front() == '/' )
-    {
-        path.remove_prefix( 1 );
-    }
-    while( path.size() >= 2 && path[0] == '.' && path[1] == '/' )
-    {
-        path.remove_prefix( 2 );
-    }
-    return path;
-}
+// relForHash — the S2 root-relative path view — moved to model.h (beside rootRelPath and the disk-path seam) so every
+// header that reads ing.files can reach it without pulling in arch.h. Its contract is unchanged.
 
 // relForHash's read-side twin: does `tail` name the same path as `full`, allowing `full` to carry a leading
 // prefix that `tail` has already had stripped? Equal, or `full` ends with `tail` cut on a whole-path-COMPONENT
@@ -663,7 +758,7 @@ inline std::string archBaselinePath( const std::string& /*rulesPath*/ ) noexcept
 inline rw::pathguard::NoFollowRead readArchBaselineSidecar( const std::string& sidecarPath ) noexcept
 {
     rw::pathguard::NoFollowRead sidecar = rw::pathguard::openNoFollowRead( "the arch baseline sidecar", sidecarPath );
-    if( sidecar.refused ) { DEGRADED_PATH_ALERT( "arch: refusing to read the arch baseline sidecar through a symlink" ); }
+    if( sidecar.refused ) { DISCLOSE( "arch: refusing to read the arch baseline sidecar through a symlink" ); }
     return sidecar;
 }
 
@@ -725,7 +820,7 @@ inline int openArchBaselineSidecar( const std::string& sidecarPath ) noexcept
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the arch baseline sidecar", sidecarPath );
     if( fd < 0 && openErr == ELOOP )
     {
-        DEGRADED_PATH_ALERT( "arch: refusing to write the arch baseline sidecar through a symlink" );
+        DISCLOSE( "arch: refusing to write the arch baseline sidecar through a symlink" );
     }
     return fd;
 }

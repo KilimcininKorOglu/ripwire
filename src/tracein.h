@@ -23,7 +23,7 @@
 //   * NEVER FABRICATES — a line that does not match any shape yields no frame (empty input → zero frames →
 //     the handler refuses loudly rather than emitting an empty map).
 
-#include "infra/Diagnostics.h"   // VERIFY — the frames-seen tally's own invariant (§B10)
+#include "infra/Diagnostics.h"   // ASSUME — the frames-seen tally's own invariant (§B10)
 
 #include <cstdint>
 #include <optional>
@@ -210,6 +210,105 @@ inline std::optional<ParsedFrame> parsePython( std::string_view line )
     return fr;
 }
 
+// §A2a / L5 (input blow-up guard) — parseAsan's own invariants, computed ONCE per line instead of once
+// PER CANDIDATE. The source location is the LAST space-separated token of `after` that parses as
+// path:line[:col], found by scanning from the RIGHT: splitting at the FIRST space cut a DEMANGLED C++
+// name in half (`runDefaultMap(MainDispatch const&) src/main.cpp:5155` -> func="runDefaultMap(MainDispatch"
+// / path="const&) src/main.cpp"), so every trailing token is tried, widest-first, until one parses.
+//
+// The straightforward way to write that (re-derive `splitPathLine` on a growing right-anchored suffix,
+// one call per candidate) redoes the SAME work on every widening try: `rfind(':')`/`rfind(' ')` over a
+// substring that only grows. Every quantity that re-derivation recomputes is actually INVARIANT once the
+// growing window first reaches it — a colon's position never moves, and "does this stretch contain
+// '.'/'/'" can only flip false→true as the window grows left, never back — so a candidate that fails at a
+// given boundary fails at EVERY later (wider) boundary too, and the naive rescan is pure waste: O(k^2) in
+// the space-separated word count k. A pathological line (thousands of short "words", no valid trailing
+// location) turned 160 KB of trace text into ~4 s of it. This struct is that one backward pass.
+struct AsanLocationInvariants
+{
+    std::size_t      lastColon          = std::string_view::npos;
+    std::size_t      secondColon        = std::string_view::npos;
+    std::size_t      pathCharBeforeLast = std::string_view::npos;   // rightmost '.'/'/' strictly before lastColon
+    std::size_t      pathCharBeforeSecond = std::string_view::npos; // rightmost '.'/'/' strictly before secondColon
+    std::string_view tailAfterLastColon;                            // fixed for every candidate (shares the right edge)
+    bool             colDigits = false;                             // the path:line:col shape's middle digit run is valid
+    bool             reachable = false;                              // false -> no candidate, however wide, can ever parse
+};
+
+inline AsanLocationInvariants computeAsanLocationInvariants( std::string_view after ) noexcept
+{
+    AsanLocationInvariants inv;
+    inv.lastColon = after.rfind( ':' );
+    if( inv.lastColon == std::string_view::npos )
+    {
+        return inv;                                       // no colon anywhere -> stays unreachable
+    }
+    inv.tailAfterLastColon = after.substr( inv.lastColon + 1 );
+    if( !isDigits( inv.tailAfterLastColon ) )
+    {
+        return inv;   // this segment is the SAME bytes for every candidate, so one check retires every
+                       // candidate the naive per-word rescan would have tried
+    }
+
+    // the `path:line:col` shape's second colon, and its own (also fixed) digit run
+    inv.secondColon = ( inv.lastColon == 0 ) ? std::string_view::npos : after.rfind( ':', inv.lastColon - 1 );
+    inv.colDigits   = inv.secondColon != std::string_view::npos
+                    && isDigits( after.substr( inv.secondColon + 1, inv.lastColon - inv.secondColon - 1 ) );
+
+    // the RIGHTMOST path-shaped byte ('.' or '/') strictly before each colon: looksLikePath's answer for a
+    // window that grows LEFTWARD from a fixed right edge is exactly "has the window reached this position
+    // yet", so the rightmost occurrence below a colon IS the threshold at which a growing window first
+    // qualifies — found once, never rescanned.
+    inv.pathCharBeforeLast   = ( inv.lastColon == 0 ) ? std::string_view::npos : after.find_last_of( "./", inv.lastColon - 1 );
+    inv.pathCharBeforeSecond = ( inv.secondColon == std::string_view::npos || inv.secondColon == 0 )
+                              ? std::string_view::npos : after.find_last_of( "./", inv.secondColon - 1 );
+    inv.reachable = inv.pathCharBeforeLast != std::string_view::npos;   // else no candidate could ever look path-shaped
+    return inv;
+}
+
+// Word boundaries (maximal runs of non-space bytes), right to left — the same ' '-delimited candidates a
+// naive per-space loop would try, visited via one shrinking window instead of a rescan per space: each
+// byte of `after` is visited by at most one of the two find_last_of/find_last_not_of calls below, so this
+// is O(after.size()) total, not O(words^2).
+inline std::optional<ParsedFrame> scanAsanWordBoundaries( std::string_view after, const AsanLocationInvariants& inv )
+{
+    for( std::size_t searchEnd = after.size(); searchEnd > 0; )
+    {
+        const std::size_t wordLast = after.find_last_not_of( ' ', searchEnd - 1 );
+        if( wordLast == std::string_view::npos )
+        {
+            break;                                          // nothing but spaces remain
+        }
+        const std::size_t sp = after.find_last_of( ' ', wordLast );
+        if( sp == std::string_view::npos )
+        {
+            break;                                          // this word starts at 0 — no space precedes it,
+                                                              // so the naive loop could never reach it either
+        }
+        const std::size_t start = sp + 1;
+
+        ParsedFrame fr;
+        fr.format = FrameFormat::Asan;
+        if( inv.colDigits && inv.pathCharBeforeSecond != std::string_view::npos && start <= inv.pathCharBeforeSecond )
+        {
+            fr.path.assign( trim( after.substr( start, inv.secondColon - start ) ) );
+            fr.line = toUint( after.substr( inv.secondColon + 1, inv.lastColon - inv.secondColon - 1 ), fr.lineOverflowed );
+            fr.func.assign( trim( after.substr( 0, sp ) ) );
+            return fr;
+        }
+        if( start <= inv.pathCharBeforeLast )
+        {
+            fr.path.assign( trim( after.substr( start, inv.lastColon - start ) ) );
+            fr.line = toUint( inv.tailAfterLastColon, fr.lineOverflowed );
+            fr.func.assign( trim( after.substr( 0, sp ) ) );
+            return fr;
+        }
+
+        searchEnd = sp;
+    }
+    return std::nullopt;                                             // no source location → an in-module-only frame
+}
+
 // ASan/UBSan stack frame: `    #0 0x108a in doWork src/engine.cpp:5:8`  (#0 = innermost crash site)
 inline std::optional<ParsedFrame> parseAsan( std::string_view line )
 {
@@ -224,24 +323,13 @@ inline std::optional<ParsedFrame> parseAsan( std::string_view line )
         return std::nullopt;
     }
     const std::string_view after = trim( t.substr( in + 4 ) );      // `doWork src/engine.cpp:5:8`
-    ParsedFrame fr;
-    fr.format = FrameFormat::Asan;
 
-    // §A2a: the source location is the LAST space-separated token that parses as path:line[:col], so scan from
-    // the RIGHT. Splitting at the FIRST space cut a DEMANGLED C++ name in half — `runDefaultMap(MainDispatch
-    // const&) src/main.cpp:5155` yielded func="runDefaultMap(MainDispatch" and path="const&) src/main.cpp",
-    // which still suffix-matched the file while destroying the one thing name resolution needs. Trailing
-    // non-location junk (a `(BuildId: …)` tail) just fails the probe and the scan steps left.
-    for( std::size_t sp = after.rfind( ' ' ); sp != std::string_view::npos; sp = sp == 0 ? std::string_view::npos : after.rfind( ' ', sp - 1 ) )
+    const AsanLocationInvariants inv = computeAsanLocationInvariants( after );
+    if( !inv.reachable )
     {
-        if( !splitPathLine( trim( after.substr( sp + 1 ) ), fr.path, fr.line, fr.lineOverflowed ) )
-        {
-            continue;
-        }
-        fr.func.assign( trim( after.substr( 0, sp ) ) );
-        return fr;
+        return std::nullopt;
     }
-    return std::nullopt;                                             // no source location → an in-module-only frame
+    return scanAsanWordBoundaries( after, inv );
 }
 
 // node/js stack frame: `    at inner (web/worker.js:2:9)` or `    at web/worker.js:2:9`  (throw site topmost)
@@ -346,7 +434,7 @@ inline std::optional<ParsedFrame> parseGeneric( std::string_view line )
 } // namespace detail
 
 // §B10 — the OUTER denominator. Everything downstream partitions the frames this file EXTRACTED
-// (`in_corpus = suspects + merged + unresolved`, airtight and VERIFY-backed), but a line the input clearly
+// (`in_corpus = suspects + merged + unresolved`, airtight and ASSUME-backed), but a line the input clearly
 // presented as a stack frame and no format shape could read lands in NO bucket and simply vanishes: the
 // capture's own ASan trace has five `#N` frames and reports parsed="4", because the dyld frame carries no
 // source location at all. Nothing in the report said a frame had been dropped, so 4 read as "this trace has
@@ -420,7 +508,7 @@ inline FrameScan extractFrames( std::string_view text )
             ++scan.frameShapedLines;
         }
     }
-    VERIFY( scan.frames.size() <= scan.frameShapedLines );
+    ASSUME( scan.frames.size() <= scan.frameShapedLines );
     return scan;
 }
 

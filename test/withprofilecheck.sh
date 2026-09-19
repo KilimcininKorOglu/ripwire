@@ -11,6 +11,7 @@
 #      #PROF_TSV sentinel pair exits 1 — "joined nothing" and "read the wrong file" never look alike
 #   6. the heat legend appears ONLY when the flag is armed; bare --lint output carries no heat_*
 #   7. xmllint-clean
+#   8. a line column past INT_MAX joins nothing (std::atoi kept its low 32 bits and joined it); control at line 33
 # Does NOT edit test/regression.sh (the orchestrator wires it).
 #
 #   RIPWIRE_BIN=build/ripwire bash test/withprofilecheck.sh
@@ -74,6 +75,25 @@ if [ "$rc" -eq 1 ] && grep -q 'PROF_TSV' "$TMP/e3"; then ok "sentinel-less file 
 if grep -q 'with-profile: heat_\*' "$OUT"; then ok "heat legend present when armed"; else no "heat legend missing when armed"; fi
 "$BIN" "$CORPUS" --lint --no-cache > "$TMP/plain" 2>/dev/null
 grep -q 'heat_' "$TMP/plain" && no "bare --lint leaked heat_* content" || ok "bare --lint carries no heat_* (legend and attrs)"
+
+# 8. an out-of-range line column joins nothing. 4294967329 is 2^32 + 33: through std::atoi (undefined past INT_MAX; libc
+#    keeps the low 32 bits) it read as line 33 and annotated the L38 finding with a site that is not there. A line that
+#    does not parse as a positive int is a row that carries nothing joinable, like a short row.
+printf '#PROF_TSV_BEGIN\thdr\nscope\tfile\tline\tcalls\ttotal_ms\nwide\tunfriendly.cpp\t4294967329\t9\t9.000\n#PROF_TSV_END\n' > "$TMP/profwide.txt"
+"$BIN" "$CORPUS" --lint --with-profile="$TMP/profwide.txt" --no-cache > "$TMP/outwide" 2>/dev/null; rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'heat_joined="0"' "$TMP/outwide" && ! grep -q 'heat_scope="wide"' "$TMP/outwide"; then
+    ok 'an out-of-range line column (2^32+33) joins nothing: heat_joined="0"'
+else
+    no "an out-of-range line column joined a finding (rc=$rc, $( grep -o 'heat_joined="[0-9]*"' "$TMP/outwide" ), $( grep -c 'heat_scope="wide"' "$TMP/outwide" ) row(s) carry it)"
+fi
+# control: the same row with the line written in range (33) joins the L38 finding, so the arm above reads the parse
+sed 's/4294967329/33/' "$TMP/profwide.txt" > "$TMP/profnarrow.txt"
+"$BIN" "$CORPUS" --lint --with-profile="$TMP/profnarrow.txt" --no-cache > "$TMP/outnarrow" 2>/dev/null
+if grep -q 'heat_joined="1"' "$TMP/outnarrow" && grep -q 'heat_scope="wide"' "$TMP/outnarrow"; then
+    ok "control: the same row at line 33 joins (heat_joined=\"1\")"
+else
+    no "control: the same row at line 33 did not join — the out-of-range arm above cannot conclude"
+fi
 
 # 7. xmllint
 if xmllint --noout "$OUT" 2>/dev/null; then ok "xmllint clean"; else no "xmllint reported malformed XML"; fi

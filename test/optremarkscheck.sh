@@ -107,7 +107,7 @@ cmake -S "$ROOT" -B "$TMP/build_rel" -DCMAKE_BUILD_TYPE=Release >"$TMP/rel.log" 
     || { no "Release did not imply RIPWIRE_LTO ON (rc=$relRc)"; tail -5 "$TMP/rel.log"; }
 cmake -S "$ROOT" -B "$TMP/build_devlto" -DRIPWIRE_LTO=ON >"$TMP/devlto.log" 2>&1; devLtoRc=$?
 [ "$devLtoRc" -eq 0 ] && grep -q 'RIPWIRE_LTO: ON' "$TMP/devlto.log" \
-    && ok "-DRIPWIRE_LTO=ON overrides the dev default (LTO WITH VERIFY live is buildable — the leg that catches an LTO miscompile)" \
+    && ok "-DRIPWIRE_LTO=ON overrides the dev default (LTO WITH ASSUME live is buildable — the leg that catches an LTO miscompile)" \
     || { no "-DRIPWIRE_LTO=ON did not override the dev default (rc=$devLtoRc)"; tail -5 "$TMP/devlto.log"; }
 cmake -S "$ROOT" -B "$TMP/build_nolto" -DCMAKE_BUILD_TYPE=Release -DRIPWIRE_LTO=OFF >"$TMP/nolto.log" 2>&1; noLtoRc=$?
 [ "$noLtoRc" -eq 0 ] && ! grep -q 'RIPWIRE_LTO: ON' "$TMP/nolto.log" \
@@ -153,7 +153,7 @@ else
         CLANGPIN="1"
         ok "front end: default is $CXXID, so the Clang-only arms below are pinned to the box's clang++ (coverage kept, not skipped)"
     else
-        CLANGONLY_SKIP="the default front end is $CXXID and no clang++ is on PATH; -Rpass=/-fsave-optimization-record and .profdata are Clang-only spellings, so a successful configure is not expressible here. CI's macos-14 legs (AppleClang) run these arms."
+        CLANGONLY_SKIP="the default front end is $CXXID and no clang++ is on PATH; -Rpass=/-fsave-optimization-record and .profdata are Clang-only spellings, so a successful configure is not expressible here. CI's macOS legs (AppleClang) run these arms."
     fi
 fi
 # cmake_cc <args...> — configure with the Clang-only arms' toolchain, whatever that turned out to be.
@@ -191,7 +191,7 @@ fi
 
 grep -q 'CMAKE_BUILD_TYPE' "$ROOT/scripts/optremarks.sh" \
     && no "scripts/optremarks.sh mentions CMAKE_BUILD_TYPE — a Release remarks tree blinds the degrade-path gates" \
-    || ok "the remarks driver passes no build type (NDEBUG would compile DEGRADED_PATH_ALERT out)"
+    || ok "the remarks driver passes no build type (NDEBUG would compile DISCLOSE out)"
 
 # ── (3) the two optimization builds the remarks pass produced: same build-tree contract, fail-loud ──
 # RIPWIRE_PGO's failure mode is the sharpest in this file: -fprofile-use pointed at a missing profile

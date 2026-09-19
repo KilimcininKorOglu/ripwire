@@ -62,7 +62,7 @@ cd test/declinefix                                  # every selector below is re
 ```
 
 **Never configure with `-DCMAKE_BUILD_TYPE=Release`.** Release defines `NDEBUG`, which compiles
-`DEGRADED_PATH_ALERT` out, and a gate that asserts a degrade path then passes blind (`CLAUDE.md`, "Build").
+`DISCLOSE` out, and a gate that asserts a degrade path then passes blind (`CLAUDE.md`, "Build").
 
 `ctwin` is defined twice in one directory, `cpp/pair/one.cpp:3` (`struct One`) and `cpp/pair/two.cpp:3`
 (`struct Two`), and called once, as `t.ctwin()` on a template parameter at `cpp/pair/user.cpp:3`. The
@@ -293,7 +293,7 @@ the plan; these are its edges.
   comment in the gate.
 - **House rules** (`CLAUDE.md`, `CONTRIBUTING.md` section 3): write the gate before the code; Allman braces and
   braces on every body; spaces inside parentheses; output through `rw::emitTo`; never `std::map` or
-  `std::unordered_map`; a degrade path uses `DEGRADED_PATH_ALERT`, never `VERIFY( false )`.
+  `std::unordered_map`; a degrade path uses `DISCLOSE`, never `ASSUME( false )`.
 
 ---
 

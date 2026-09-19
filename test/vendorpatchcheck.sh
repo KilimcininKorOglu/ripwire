@@ -77,6 +77,16 @@
 #      implicit-conversion check aborts on every `key: value` line. Neither CI leg has an unsigned
 #      char, so this arm does not use $BIN: it compiles the vendored grammar itself, -fsigned-char and
 #      -funsigned-char, and requires identical trees, plus a clean -funsigned-char sanitizer run.
+#   L  tree_sitter/001 — ts_query__parse_pattern returned TSQueryErrorField without deleting the capture
+#      quantifiers it had just parsed for that field's sub-pattern. A structural query is compiled against
+#      every linked grammar (--match's grammar disclosure probes them all), so one naming a field some
+#      grammar lacks, over a capturing sub-pattern, leaked 16 bytes per such grammar. LeakSanitizer turns
+#      that into an abort at exit: the Linux ASan leg died with SIGABRT running crashsweepcheck's S2 query
+#      `right: (unary_expression argument: (call_expression … @c))`. A leak detector is the only way to see
+#      it, so the arm uses what the host has. On a sanitizer binary with LeakSanitizer (Linux), the run's
+#      exit code decides. On macOS it runs the plain binary under `leaks --atExit`, which reported
+#      "1 leak for 16 total leaked bytes" on the unpatched build and 0 on the patched one, with a
+#      field-free control query that must report 0 on both. Anywhere else it SKIPs by name.
 #
 # Usage:
 #   test/vendorpatchcheck.sh
@@ -271,6 +281,14 @@ serializeClassOf(){
                                            # is what keeps it from coming back.
         cpp|cuda)         echo static ;;
         python)           echo loop1 ;;
+        # gdscript: AUDITED against python's, which its scanner is derived from — the two serialize()
+        # bodies are structurally identical. Prefix: a delimiter_count clamped to UINT8_MAX then an
+        # UNGUARDED memcpy of that many bytes, so the pre-loop write is at most 1 + 255 = 256 against a
+        # 1024-byte buffer (python's is 257: it writes inside_f_string first). Bounded by the clamp, not
+        # by a buffer check — the same accepted shape as python's. Indent loop: bare
+        # `size < BUFFER_SIZE` guard paired with a 1-byte `buffer[size++]` write, which is exactly what
+        # loop1 asserts must stay paired.
+        gdscript)         echo loop1 ;;
         yaml)             echo loopwide ;;
         *)                echo unknown ;;
     esac
@@ -714,6 +732,37 @@ else
             fi
         fi
     fi
+fi
+
+# ── L: tree_sitter/001 — a field the grammar lacks, over a capture, leaks nothing ─────────────────────
+LDIR="$TMP/fieldleak"; mkdir -p "$LDIR"
+printf 'int f( int x ) { return x; }\n' > "$LDIR/a.c"
+LQUERY='(binary_expression operator: ["&&" "||"] right: (unary_expression argument: (call_expression function: (_) @c)) (#match? @c "^(fclose|close)$"))'
+LCONTROL='(binary_expression operator: ["&&" "||"] right: (call_expression function: (_) @c) (#match? @c "^(fclose|close)$"))'
+leaksOf(){ grep -oE '[0-9]+ leaks? for [0-9]+ total leaked bytes' "$1" | head -1 | grep -oE '^[0-9]+'; }
+if LC_ALL=C grep -q -a '__lsan_' "$BIN" 2>/dev/null && [ "$( uname -s )" = "Linux" ]; then
+    ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1:log_path=stderr" LSAN_OPTIONS="suppressions=$ROOT/lsan_suppressions.txt" \
+        "$BIN" "$LDIR" --match="$LQUERY" >"$TMP/fieldleak.out" 2>"$TMP/fieldleak.err"; lrc=$?
+    if [ "$lrc" -eq 0 ] && ! grep -q 'LeakSanitizer' "$TMP/fieldleak.err"; then
+        ok "L: tree_sitter/001 — a query naming a field some grammar lacks exits 0 under LeakSanitizer"
+    else
+        no "L: tree_sitter/001 — exit $lrc under LeakSanitizer: $( grep -m1 -A3 'LeakSanitizer' "$TMP/fieldleak.err" | tr '\n' ' ' | cut -c1-240 )"
+    fi
+elif command -v leaks >/dev/null 2>&1 && [ "$( uname -s )" = "Darwin" ] && ! LC_ALL=C grep -q -a '__asan_init' "$BIN" 2>/dev/null; then
+    leaks --atExit -- "$BIN" "$LDIR" --match="$LCONTROL" >"$TMP/fieldleak_control.txt" 2>&1
+    leaks --atExit -- "$BIN" "$LDIR" --match="$LQUERY"   >"$TMP/fieldleak.txt" 2>&1
+    lcontrol="$( leaksOf "$TMP/fieldleak_control.txt" )"; lcount="$( leaksOf "$TMP/fieldleak.txt" )"
+    if [ -z "$lcontrol" ] || [ -z "$lcount" ]; then
+        skip "L: tree_sitter/001 — leaks(1) printed no leak count here (control '${lcontrol:-none}', query '${lcount:-none}'), so nothing was measured"
+    elif [ "$lcontrol" -ne 0 ]; then
+        no "L: tree_sitter/001 — the field-free CONTROL query already leaks $lcontrol object(s); the arm cannot attribute a leak to the field path"
+    elif [ "$lcount" -eq 0 ]; then
+        ok "L: tree_sitter/001 — leaks(1): 0 leaks for a query naming a field some grammar lacks (control 0)"
+    else
+        no "L: tree_sitter/001 — leaks(1): $lcount leak(s) for a query naming a field some grammar lacks (control 0): the field-error return skipped its quantifier delete"
+    fi
+else
+    skip "L: tree_sitter/001 — no leak detector for this binary here (LeakSanitizer needs a Linux sanitizer build; leaks(1) needs macOS and a plain build)"
 fi
 
 # ── verdict ─────────────────────────────────────────────────────────────────────────────────────

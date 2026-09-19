@@ -8,7 +8,7 @@
 # entirely. Live, pre-fix:
 #
 #   --regex='fnv1a\w+'          root says hits="75" shown="75" capped="0"   and emits 98 hit sites
-#   --grep=DEGRADED_PATH_ALERT  root says shown="100"                       and emits 129 hit sites
+#   --grep=DISCLOSE  root says shown="100"                       and emits 129 hit sites
 #   MCP grep limit=3            ships 3 hits and 29 unindexed objects       (2,805 B for a 3-row answer)
 #   --grep=e --limit=1          root says shown="1"  → 381,283 unindexed rows / 98,278,581 bytes of stdout
 #
@@ -94,7 +94,7 @@ PY
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (1) the sub-list carries its own count/shown/capped ==="
 # ═══════════════════════════════════════════════════════════════════════════
-"$BIN" "$ROOT" --grep=DEGRADED_PATH_ALERT >"$TMP/d.xml" 2>/dev/null
+"$BIN" "$ROOT" --grep=DISCLOSE >"$TMP/d.xml" 2>/dev/null
 read -r d_root d_count d_shown d_capped d_rows <<<"$( sublist_facts "$TMP/d.xml" )"
 if [ "$d_count" != "-" ] && [ "$d_shown" != "-" ] && [ "$d_capped" != "-" ]; then
     ok "(1a) <unindexed> carries count=$d_count shown=$d_shown capped=$d_capped"
@@ -119,7 +119,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (2) the sub-list obeys the window, and its count does not move with the page ==="
 # ═══════════════════════════════════════════════════════════════════════════
-"$BIN" "$ROOT" --grep=DEGRADED_PATH_ALERT --limit=2 >"$TMP/d2.xml" 2>/dev/null
+"$BIN" "$ROOT" --grep=DISCLOSE --limit=2 >"$TMP/d2.xml" 2>/dev/null
 read -r w_root w_count w_shown w_capped w_rows <<<"$( sublist_facts "$TMP/d2.xml" )"
 [ "$w_rows" -le 2 ] 2>/dev/null \
     && ok "(2a) --limit=2 cut the sub-list to $w_rows row(s)" \
@@ -225,7 +225,7 @@ r = json.load( sys.stdin )
 print( "__ERROR__:" + r["error"].get( "message", "" ) if "error" in r else r["result"]["content"][0]["text"] )
 '
 }
-# 2026-09-06: the probe moved from THIS repository (pattern DEGRADED_PATH_ALERT) to the hermetic sandbox (3c)
+# 2026-09-06: the probe moved from THIS repository (pattern DISCLOSE) to the hermetic sandbox (3c)
 # built above. The 1,500 B budget is a claim about the payload's SHAPE for a 3-row answer; probing the live
 # tree made it a claim about which three source lines happen to match first — removing one alert site in
 # arch.h (the stranger-audit refusal fix) promoted a hit with a 30-char-longer enclosing name and pushed
@@ -270,7 +270,7 @@ echo "=== (7) the PROPERTY, derived from the answer rather than enumerated ==="
 # For every container under a grep-family root that holds row children and is NOT the primary <f> class,
 # assert R1 (its own count/shown/capped) and R2 (it obeyed the window). A secondary row class added later
 # has to comply or this arm reds with nobody editing it.
-for probe in "--grep=DEGRADED_PATH_ALERT" "--regex=fnv1a\\w+"; do
+for probe in "--grep=DISCLOSE" "--regex=fnv1a\\w+"; do
     "$BIN" "$ROOT" "$probe" --limit=2 >"$TMP/p.xml" 2>/dev/null
     python3 - "$TMP/p.xml" 2 <<'PY' >"$TMP/p.res" 2>&1
 import sys, xml.etree.ElementTree as ET
@@ -309,7 +309,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (9) determinism + well-formedness on every surface touched ==="
 # ═══════════════════════════════════════════════════════════════════════════
-"$BIN" "$ROOT" --grep=DEGRADED_PATH_ALERT --limit=2 >"$TMP/det2.xml" 2>/dev/null
+"$BIN" "$ROOT" --grep=DISCLOSE --limit=2 >"$TMP/det2.xml" 2>/dev/null
 diff -q "$TMP/d2.xml" "$TMP/det2.xml" >/dev/null \
     && ok "(9a) the windowed grep answer is byte-identical across runs" \
     || no "(9a) the windowed grep answer is not deterministic"

@@ -1320,6 +1320,7 @@ struct SideArms
     RustImplCtx* rust  = nullptr;
     BindCtx*     bind  = nullptr;
     UseCtx*      uses  = nullptr;
+    TypeAliasCtx* alias = nullptr;   // C/C++/ObjC typedef / using → target class (writes its own vector, not refs)
 };
 
 // see EMISSION ORDER above: the two passes that write `refs` must never be armed together.
@@ -1330,13 +1331,14 @@ inline bool sideArmsAreOrderSafe( const SideArms& arms ) noexcept
 
 void streamSideCaptures( TSNode root, const SideArms& arms )
 {
-    VERIFY_DEBUG_ONLY( sideArmsAreOrderSafe( arms ) );   // an internal ordering invariant: checked, not promised
+    DASSERT( sideArmsAreOrderSafe( arms ) );   // an internal ordering invariant: checked, not promised
 
     std::uint32_t deepest = 0;
     if( arms.ffi   != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.route != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.bind  != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.uses  != nullptr ) { deepest = std::max( deepest, kSideDepthUses ); }
+    if( arms.alias != nullptr ) { deepest = std::max( deepest, kSideDepthStd ); }
     if( arms.rust  != nullptr ) { deepest = kSideDepthUnbounded; }
     if( deepest == 0 )
     {
@@ -1366,12 +1368,13 @@ void streamSideCaptures( TSNode root, const SideArms& arms )
         const TSNode n = frame.node;
         const char*  t = ts_node_type( n );
 
-        // original pass order: FFI, routes, Rust impls, bindings, value-uses.
+        // original pass order: FFI, routes, Rust impls, bindings, value-uses; type aliases (2026-09-17) last.
         if( arms.ffi   != nullptr && frame.depth <= kSideDepthStd )  { ffiVisitNode   ( *arms.ffi,   n, t ); }
         if( arms.route != nullptr && frame.depth <= kSideDepthStd )  { routesVisitNode( *arms.route, n, t ); }
         if( arms.rust  != nullptr )                                  { rustImplVisitNode( *arms.rust, n, t ); }
         if( arms.bind  != nullptr && frame.depth <= kSideDepthStd )  { bindsVisitNode ( *arms.bind,  n, t ); }
         if( arms.uses  != nullptr && frame.depth <= kSideDepthUses ) { usesVisitNode  ( *arms.uses,  n, t ); }
+        if( arms.alias != nullptr && frame.depth <= kSideDepthStd )  { captureTypeAlias( *arms.alias, n, t ); }
 
         collectChildren( n, cursor.cur, kids );
         for( std::size_t i = kids.size(); i > 0; --i )
@@ -1421,6 +1424,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
 
         // P2-D Rule 2: local var→type bindings (`Foo x;`), for receiver-variable narrowing. C++/ObjC/Python/TS
         // (the languages whose receiver shape `receiverOf` captures as a recvVar) — others have no consumer yet.
+        // Java contributes declaration-name vetoes only, for issue #74's ambiguous Identifier::method receiver.
         // L3 adds Lang::C for the fn-pointer/callback var→function capture only: the Rule-2 branches inside
         // gate themselves on Cpp/ObjC/Python/TS, so type narrowing is byte-identical on C files.
         BindCtx bindCtx;
@@ -1434,6 +1438,9 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         // the languages whose assignment/update grammar shapes isWriteTarget knows. role=Read/Write refs NEVER
         // enter the call graph (buildGraph skips role != Call), so PageRank and the default map are unchanged.
         UseCtx useCtx { fileId, le.lang, src, &refs };
+
+        // C/C++/ObjC type aliases → their target class, for the resolver's base walk (ingest_relations.h captureTypeAlias).
+        TypeAliasCtx aliasCtx { fileId, le.lang, src, {} };
 
         SideArms arms;
         if( ffiCtx.cish || ffiCtx.py )
@@ -1449,6 +1456,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
             arms.rust = &rustCtx;
         }
         if( le.lang == Lang::Cpp || le.lang == Lang::ObjC || le.lang == Lang::Python || le.lang == Lang::TypeScript
+            || le.lang == Lang::Java
             || le.lang == Lang::C )
         {
             arms.bind = &bindCtx;
@@ -1457,6 +1465,10 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         {
             arms.uses = &useCtx;
         }
+        if( le.lang == Lang::Cpp || le.lang == Lang::ObjC || le.lang == Lang::C )
+        {
+            arms.alias = &aliasCtx;
+        }
 
         streamSideCaptures( root, arms );
 
@@ -1464,6 +1476,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         {
             bindsFinalize( bindCtx );   // L3 noise gates + clobber sweep — the tail of the old captureBindings
         }
+        refs.insert( refs.end(), std::make_move_iterator( aliasCtx.out.begin() ), std::make_move_iterator( aliasCtx.out.end() ) );
 
 #ifdef RIPWIRE_FUSE_PROBE
         {
@@ -1491,7 +1504,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
 
         // #72 follow-up: everything the side passes just appended for THIS file, filtered through the one
         // decided-dead rule.
-        //   refs  — captureIncludes' import sites plus the value-use / type-mention rows.
+        //   refs  — captureIncludes' import sites plus the value-use / type-mention rows and the type-alias records.
         //   incs  — the FILE dependency the same directive minted. Dropping the use-site while keeping
         //           the dependency would leave the two halves of one `#include` disagreeing about
         //           whether the line exists.
@@ -1677,6 +1690,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             if( !haveRole )
             {
                 continue;
+            }
+            if( captureSpecializationHeader( isDef, le.lang, defCapSv, roleNode, nameNode, fileId, src, refs ) )
+            {
+                continue;   // a C++ specialization header: its base clause only, never a symbol
             }
 
             // C1 (memgraph F1) — see cppDefNameReseat. A null node is "nothing to re-seat".
@@ -1948,7 +1965,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             d.internalLinkage = internalLinkageBit( le.lang, defNode, src );
             if( le.lang == Lang::Cpp )                              // canonical scope (E#4): out-of-line `A::b` → "A", else enclosing class/namespace
             {
-                d.scope = qualifierOf( nameNode, src );
+                d.scope = qualifierOfDefinition( nameNode, src );   // `Box<T>::grow` (primary) → "Box"; a specialization keeps its id
                 if( d.scope.empty() )
                 {
                     d.scope = enclosingScopeOf( nameNode, src );
@@ -1998,6 +2015,16 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
               // Kotlin<->Java langCompatible bridge (graph.h) — an unqualified name-only match is
               // exactly the false-candidate risk that bridge's own comment names.
                 d.scope = kotlinEnclosingScopeOf( nameNode, src );
+            }
+            else if( ( le.lang == Lang::JavaScript || le.lang == Lang::TypeScript )
+                     && defCapSv == "definition.protomethod" )
+            { // only the five built-in ctors: every Foo.prototype.bar gaining sc= would mint a new
+              // canonical id and move quality baselines (node lib/ has ~163 anonymous protomethods)
+                const std::string_view ctor = prototypeCtorName( nameNode, src );
+                if( isJsTsBuiltinCtor( ctor ) )
+                {
+                    d.scope = std::string( ctor );
+                }
             }
             // extent honesty: did the parse RECOVER this def's container or kind? Only asked in a file whose root
             // holds an error (fileHasError, one O(1) flag test per file) — see parseRecoveredBits.
@@ -2072,51 +2099,21 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( le.lang == Lang::Cpp )
                 {
                     r.qualifier = qualifierOf( nameNode, src ); // `A::b()` → "A" (E#4 canonical resolve)
+                    cppResplitRefName( r, nameTxt );            // H4 RE-SPLIT at 3+ segments, operator tails, `template` disambiguator
                 }
                 else if( le.lang == Lang::Rust )
                 {
                     r.qualifier = rustQualifierOf( nameNode, src ); // H4: `Widget::new()` → "Widget"
                 }
 
-                // H4 RE-SPLIT: the widened qualified-call pattern binds the INNER node, so a 3+-segment call's
-                // captured text still carries scope (`inner::targetFn`). Recover the pair the canonical tier
-                // keys on — name = the final segment, qualifier = the IMMEDIATE scope — from the text itself.
-                // This must run INSTEAD OF the finalSegment() above (it overwrites both fields): finalSegment
-                // truncates at the first '<', which would name `numeric_limits<std::size_t>::max` as
-                // `numeric_limits` and mint an edge to the wrong symbol. Inert for every 2-segment call
-                // (`rw::midFn` binds a bare identifier — no top-level `::` in the text) and for
-                // `ns::tmplFn<int>()` (whose `::` sits inside no group but whose captured text is just
-                // `tmplFn<int>`), so those keep their qualifierOf() result untouched.
-                if( le.lang == Lang::Cpp )
-                {
-                    // An OPERATOR tail is recognised first: its `<`/`>` are part of the NAME, so handing it to
-                    // the angle-depth scan below binds the wrong scope for the whole `>` family. See
-                    // operatorNameStart. When the operator spelling starts at index 0 the capture IS the bare
-                    // operator name, its parent is the qualified_identifier, and qualifierOf() already put the
-                    // immediate scope in r.qualifier — nothing to re-split.
-                    const std::size_t opStart = operatorNameStart( nameTxt );
-                    const bool        opScoped = opStart != std::string_view::npos && opStart >= 2
-                                              && nameTxt[ opStart - 1 ] == ':' && nameTxt[ opStart - 2 ] == ':';
-                    if( opScoped )
-                    {
-                        r.name      = finalSegment( nameTxt.substr( opStart ) );                                  // `operator>` verbatim
-                        r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, opStart - 2 ) ) );
-                    }
-                    else if( opStart == std::string_view::npos )
-                    {
-                        if( const std::size_t sep = lastTopLevelScopeSep( nameTxt ); sep != std::string_view::npos )
-                        {
-                            r.name      = finalSegment( nameTxt.substr( sep + 2 ) );
-                            r.qualifier = immediateScope( namesplit::stripTemplateArgs( nameTxt.substr( 0, sep ) ) );
-                        }
-                    }
-                }
-
                 if( !isImportRef && le.lang != Lang::Elixir )                             // an import site has no receiver and no argument list —
                 {                                                                        //   the defaults (RecvKind::None, argCountKnown=false) are the truth
-                    RecvShape rs = receiverOf( nameNode, le.lang, src );                 // P2-D: `this`/`self`/`x`/`base.field` shape
+                    RecvShape rs = le.lang == Lang::Java
+                                 ? javaMethodReferenceReceiver( roleNode, src )
+                                 : receiverOf( nameNode, le.lang, src );                 // P2-D: `this`/`self`/`x`/`base.field` shape
                     r.recv = rs.kind;  r.recvVar = std::move( rs.var );                  //   → one-hop narrowing in resolve.h
                     r.fieldName = std::move( rs.field );                                 //   depth-2 intermediate field; "" otherwise
+                    r.viaArrow  = rs.viaArrow;                                           //   `p->m()`: Rule 2b's smart-pointer pointee needs it
                     auto [ ac, ak ] = callArity( nameNode, le.lang, src );               // B2.2: call-site positional arg count
                     r.argCount = ac;  r.argCountKnown = ak;                              //   → arity filter in graph.h
                 }

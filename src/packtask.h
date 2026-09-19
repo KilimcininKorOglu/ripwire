@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -812,7 +813,7 @@ inline void partitionByEligibility( const std::vector<NodeId>& topRanked, const 
                                     const std::vector<char>& d1Mark,
                                     std::vector<NodeId>& eligibleIds, std::vector<NodeId>& d2plusIds )
 {
-    VERIFY_NO_ALIAS3( topRanked, eligibleIds, d2plusIds );
+    ASSUME_NO_ALIAS3( topRanked, eligibleIds, d2plusIds );
     for( NodeId id : topRanked )
     {
         ( ( id < d0Mark.size() && d0Mark[id] ) || ( id < d1Mark.size() && d1Mark[id] ) ? eligibleIds : d2plusIds ).push_back( id );
@@ -909,7 +910,7 @@ inline RankingSection renderRankingWithFar( const IngestResult& ing, const Ranki
     }
     else if( !far.xml.empty() )
     {
-        DEGRADED_PATH_ALERT( "pack-task: <sigs> did not end with the expected closing tag — <far> omitted" );
+        DISCLOSE( "pack-task: <sigs> did not end with the expected closing tag — <far> omitted" );
     }
     return out;
 }
@@ -1082,7 +1083,7 @@ inline std::string restatePackTaskBodiesWrapper( const IngestResult& ing, const 
     const bool         closesRight = bodiesXml.size() >= 9 && bodiesXml.compare( bodiesXml.size() - 9, 9, "</bodies>" ) == 0;
     if( openEnd == std::string::npos || !closesRight )
     {
-        DEGRADED_PATH_ALERT( "pack-task: <bodies> did not have the expected open/close shape — restated omissions dropped" );
+        DISCLOSE( "pack-task: <bodies> did not have the expected open/close shape — restated omissions dropped" );
         return bodiesXml;
     }
     // compress="1" restated with shown=/total=: this wrapper REPLACES packBodies' own open tag, so the
@@ -1137,6 +1138,10 @@ inline std::vector<NodeId> selectMonotoneBodySubset( const IngestResult& ing, co
         return {};
     }
     const std::size_t        n = bodyIds.size();   // kPackTaskBodyCandidates today — small by construction
+    // the subset enumeration below shifts 1u by n: n must stay under the mask's width, which the constant guarantees
+    static_assert( kPackTaskBodyCandidates < std::numeric_limits<std::uint32_t>::digits,
+                   "selectMonotoneBodySubset enumerates subsets in a std::uint32_t — 1u << kPackTaskBodyCandidates must fit" );
+    ASSUME( n <= kPackTaskBodyCandidates );
     std::vector<std::size_t> cost( n, 0 );
     std::size_t               wrapperLen = 0;
     {
@@ -1465,7 +1470,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         std::vector<NodeId> testSeeds;
         for( NodeId b : bodyIds )
         {
-            if( b < ing.symbols.size() && !rw::isTestPath( ing.files[ing.symbols[b].fileId] ) )
+            if( b < ing.symbols.size() && !rw::isTestPath( rw::rootRelPath( ing, ing.symbols[b].fileId ) ) )
             {
                 testSeeds.push_back( b );
             }
@@ -1488,7 +1493,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         for( NodeId n : reach )
         {
             const std::uint32_t f = ing.symbols[n].fileId;
-            if( f < fseen.size() && !fseen[f] && rw::isTestPath( ing.files[f] ) ) { fseen[f] = 1;  testFiles.push_back( f ); }
+            if( f < fseen.size() && !fseen[f] && rw::isTestPath( rw::rootRelPath( ing, f ) ) ) { fseen[f] = 1;  testFiles.push_back( f ); }
         }
         std::sort( testFiles.begin(), testFiles.end(), [ & ]( std::uint32_t a, std::uint32_t b ) { return ing.files[a] < ing.files[b]; } );
         // §A9.5 / §P11.4: the one-call bundle names the tests you owe; it now also names how to RUN them,

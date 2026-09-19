@@ -38,7 +38,10 @@
 #                                  each other — an internal "[math degraded] … ignoring it" alert, then
 #                                  "ignoring it; the verb's own default window applies", then the host's
 #                                  "refusing rather than…". Only the last was true. Nothing is ignored now,
-#                                  so nothing says so.
+#                                  so nothing says so. "No alert" is an ABSENCE, and NDEBUG makes every
+#                                  absence true: the alert half asserts only where --version names a
+#                                  non-NDEBUG build type, beside a positive control (a --scip index that opens
+#                                  and fails to decode) proving this binary prints alerts at all.
 #   - determinism:                 --since=HEAD~3 (REV form) is byte-identical run-to-run
 #   - shell safety:                a --since value with shell metacharacters executes nothing
 #   - the git SINK (2026-09-10):   git is handed the RESOLVED commit, never the caller's --since string, and a
@@ -57,7 +60,7 @@ fail=0
 ok(){ echo "  PASS  $1" || { fail=1; echo "  FAIL  could not write the PASS line for: $1"; }; return 0; }
 no(){ echo "  FAIL  $1"; fail=1; }
 
-REPO="$(mktemp -d)"; SHIMDIR="$(mktemp -d)"; trap 'rm -rf "$REPO" "$SHIMDIR"' EXIT
+REPO="$(mktemp -d)"; SHIMDIR="$(mktemp -d)"; PROBEDIR="$(mktemp -d)"; trap 'rm -rf "$REPO" "$SHIMDIR" "$PROBEDIR"' EXIT
 # SHIMDIR holds S2/S3's git PATH shim OUTSIDE the fixture: a file inside $REPO is crawled and would move the bytes S1 compares
 SRCDIR="$( cd "$( dirname "$0" )/.." && pwd )/src"   # N4 source arm reads src/; resolve it before leaving this dir
 cd "$REPO" || exit 1
@@ -90,6 +93,27 @@ bad="$("$BIN" "$REPO" --hotspots --since=not-a-rev-or-date --no-cache 2>"$baderr
 rm -f "$baderr"
 
 # ── M8: all FOUR --since hosts refuse an unresolvable value, with ONE message ────────────────────────────
+# The ONE-message rows assert that NO "[math degraded]" line rides along with the refusal. Until 2026-09-16 that was
+# a bare absence, and an absence is true of every run on a Release binary (NDEBUG compiles DISCLOSE out)
+# and of every run on a build whose alerts broke — measured: a dev-labelled binary with every alert line stripped
+# from stderr passed all four rows. So the alert half decides from --version's build type (kotlincheck §12) and, on
+# a flavour that compiles alerts IN, first proves this binary really prints one: a --scip index that OPENS and fails
+# to DECODE (the degrade qualitystalecheck.sh probes; PROBEDIR is outside the fixture, which S1 byte-compares).
+M8_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+m8_alerts_live=0
+case "$M8_FLAVOUR" in
+  Release|RelWithDebInfo|MinSizeRel)
+    echo "  SKIP  M8 alert half (no [math degraded] line beside the refusal): this $M8_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out and the absence is true of every run; the 'ignoring it' half still asserts below, and the plain-flavour leg proves the alert half" ;;
+  *)
+    printf 'not a scip index at all\n' > "$PROBEDIR/probe.scip"
+    "$BIN" "$REPO" --scip="$PROBEDIR/probe.scip" --top-k=1 --no-cache >/dev/null 2>"$PROBEDIR/probe.err"
+    if grep -qF '[math degraded] --scip: corrupt/truncated index' "$PROBEDIR/probe.err"; then
+      m8_alerts_live=1
+      ok "M8 positive control: this '${M8_FLAVOUR:-unknown}' (non-NDEBUG) build prints alerts — an undecodable --scip index raised one, so an absent alert below is evidence"
+    else
+      no "M8 positive control: '${M8_FLAVOUR:-unknown}' is a non-NDEBUG build, yet an undecodable --scip index raised no DISCLOSE — this binary prints no alerts, so the four no-alert rows were NOT evaluated: $(head -c 200 "$PROBEDIR/probe.err")"
+    fi ;;
+esac
 for host in "--hotspots" "--rank-by=churn" "--cochange" "--slice=a"; do
   err="$(mktemp)"
   out="$("$BIN" "$REPO" $host --since=not-a-rev-or-date --no-cache 2>"$err")"; rc=$?
@@ -98,10 +122,17 @@ for host in "--hotspots" "--rank-by=churn" "--cochange" "--slice=a"; do
   else
     no "M8 $host --since=<garbage>: exit $rc, stderr=$(head -c 160 "$err") stdout=$(printf '%s' "$out" | head -c 80)"
   fi
-  if grep -q 'ignoring it' "$err" || grep -qF '[math degraded]' "$err"; then
-    no "M8 $host: the refusal still says 'ignoring' (or logs a degrade) on its way to refusing: $(head -c 200 "$err")"
+  if grep -q 'ignoring it' "$err"; then
+    no "M8 $host: the refusal still says 'ignoring' on its way to refusing: $(head -c 200 "$err")"
   else
-    ok "M8 $host: ONE message — nothing claims the value was ignored"
+    ok "M8 $host: nothing claims the value was ignored"
+  fi
+  if [ "$m8_alerts_live" -eq 1 ]; then
+    if grep -qF '[math degraded]' "$err"; then
+      no "M8 $host: the refusal still logs a degrade alert on its way to refusing: $(grep -F '[math degraded]' "$err" | head -1 | head -c 200)"
+    else
+      ok "M8 $host: ONE message — no degrade alert rides along with the refusal (on a binary the control proved prints alerts)"
+    fi
   fi
   rm -f "$err"
 done

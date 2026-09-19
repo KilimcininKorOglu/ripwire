@@ -80,7 +80,7 @@ PR #136 did this for call resolution:
 
 - Every resolve iteration ends in one of `bound`, `self`, `external`, `unresolved`, `undefined`,
   `qualified_external`, `declined`, `file_scope` or `other_root`.
-- Anything left over lands in `unaccounted`, which raises `DEGRADED_PATH_ALERT` on plain builds.
+- Anything left over lands in `unaccounted`, which raises `DISCLOSE` on plain builds.
 - The census re-derives `calls=` from the references instead of summing its own buckets.
 
 That balance exposed two silent losses:

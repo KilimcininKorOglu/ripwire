@@ -423,6 +423,198 @@ void rustImplVisitNode( RustImplCtx& cx, TSNode node, const char* t )
     }
 }
 
+// the namespace a member's type was written in — `std` for `std::string name_;` — or "" for an unqualified type, a
+// global `::Foo` and a class-template scope (`Outer<int>::Inner`, no namespace). captureFields reads only the two-
+// segment spelling (a type_identifier directly under the qualified_identifier), so this is ONE segment; a class scope
+// `Outer::Inner` parses the same way and records `Outer`. Its readers act on `std` alone (resolve.h fieldTypeWrittenInStd):
+// no in-repo class IS a std:: type, so Rule 2b records no type for the field and the HAS-A edges draw none (kParserVer 99).
+inline std::string_view writtenTypeNamespace( TSNode typeNode, std::string_view src ) noexcept
+{
+    if( !kindIs( ts_node_type( typeNode ), "qualified_identifier" ) )
+    {
+        return {};
+    }
+    const TSNode scope = fieldChild( typeNode, NodeField::Scope );
+    return ( !ts_node_is_null( scope ) && kindIs( ts_node_type( scope ), "namespace_identifier" ) ) ? nodeTextOf( scope, src ) : std::string_view{};
+}
+
+// the class NAME a type specifier denotes by itself — its final segment with template arguments dropped: `IRBuilder<F, I>`
+// and `llvm::IRBuilder<F>` → IRBuilder, `ir::QBase` → QBase, `struct Node` → Node. "" for every specifier that names no class
+// on its own: a primitive, `auto`, `decltype( … )`, a dependent `typename T::X`, an enum, an anonymous struct.
+inline std::string_view aliasTargetName( TSNode spec, std::string_view src ) noexcept
+{
+    for( int guard = 0; guard < 16 && !ts_node_is_null( spec ); ++guard )
+    {
+        const char* kind = ts_node_type( spec );
+        if( kindIs( kind, "type_identifier" ) )
+        {
+            return nodeTextOf( spec, src );
+        }
+        if( !kindIs( kind, "qualified_identifier" ) && !kindIs( kind, "template_type" )
+            && !kindIs( kind, "struct_specifier" ) && !kindIs( kind, "class_specifier" ) && !kindIs( kind, "union_specifier" ) )
+        {
+            return {};
+        }
+        spec = fieldChild( spec, NodeField::Name );
+    }
+    return {};
+}
+
+// captureTypeAlias's arm on the shared side stream (ingest_sidecap.h streamSideCaptures). Records collect in `out` and join `refs`
+// after the walk, so during it `refs` keeps at most one writer per file (EMISSION ORDER there: value-uses on C++).
+struct TypeAliasCtx
+{
+    std::uint32_t       fileId = 0;
+    Lang                lang {};
+    std::string_view    src;
+    std::vector<RawRef> out;
+};
+
+// the {type specifier, alias name} a PLAIN alias node declares; a null specifier when the node is no alias of a class itself. A
+// typedef's names are its plain declarators — it can declare several (`typedef Foo A, *PA;` aliases Foo as A only) — so its name
+// node is null and captureTypeAlias walks them.
+inline std::pair<TSNode, TSNode> aliasSpecifierAndName( TSNode n, const char* t ) noexcept
+{
+    if( kindIs( t, "type_definition" ) )
+    {
+        return { fieldChild( n, NodeField::Type ), TSNode{} };
+    }
+    if( !kindIs( t, "alias_declaration" ) )
+    {
+        return {};
+    }
+    const TSNode descriptor = fieldChild( n, NodeField::Type );
+    if( ts_node_is_null( descriptor ) || !ts_node_is_null( fieldChild( descriptor, NodeField::Declarator ) ) )
+    {
+        return {};   // `using P = Foo*;` / `using F = void( int );` — not the class itself
+    }
+    return { fieldChild( descriptor, NodeField::Type ), fieldChild( n, NodeField::Name ) };
+}
+
+// true ⇒ `n` sits in a function body or a lambda — or deeper than the side stream's own cap, where its enclosure is unknown
+inline bool insideFunctionBody( TSNode n ) noexcept
+{
+    TSNode parent = ts_node_parent( n );
+    for( int depth = 0; !ts_node_is_null( parent ); ++depth, parent = ts_node_parent( parent ) )
+    {
+        const char* pt = ts_node_type( parent );
+        if( depth >= 256 || kindIs( pt, "compound_statement" ) || kindIs( pt, "function_definition" ) || kindIs( pt, "lambda_expression" ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
+inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
+{
+    const std::string_view alias = nodeTextOf( aliasNode, cx.src );
+    if( alias.empty() || alias == target )
+    {
+        return;   // a self-alias (`typedef struct Node Node;`) adds nothing to walk
+    }
+    RawRef r;
+    r.fileId     = cx.fileId;
+    r.startByte  = ts_node_start_byte( aliasNode );
+    r.line       = ts_node_start_point( aliasNode ).row + 1;
+    r.lang       = cx.lang;
+    r.isCompose  = true;
+    r.composeRel = "alias";
+    r.name       = target;
+    r.recvVar    = alias;
+    r.qualifier  = writtenTypeNamespace( spec, cx.src );
+    cx.out.push_back( std::move( r ) );
+}
+
+// C/C++/ObjC TYPE ALIAS → the class it names, for the resolver's inheritance NAME graph (resolve.h addTypeAliasBases). An alias
+// declares no class, so a base walk keyed by class names dead-ended at one: `class CGBuilderTy : public CGBuilderBaseTy` with
+// `typedef llvm::IRBuilder<F, I> CGBuilderBaseTy;` stopped at CGBuilderBaseTy, and a member `CGBuilderTy Builder;` never reached
+// IRBuilderBase::CreateCall (test/fieldnarrowcheck.sh arm t). Rides the compose record shape — cached field for field, so the blob
+// format is unchanged — marked composeRel "alias" with an EMPTY fieldName, the one shape no member record has: `recvVar` = the
+// alias, `name` = the target's class name, `qualifier` = the namespace the target was written in (a `std` target is refused by
+// its reader). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
+// class (aliasTargetName), a self-alias and an alias local to a function body (it types no member, and the name graph has no
+// scopes to keep it local) record nothing.
+inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
+{
+    const auto [ spec, nameNode ] = aliasSpecifierAndName( n, t );
+    const std::string_view target = aliasTargetName( spec, cx.src );
+    if( target.empty() || insideFunctionBody( n ) )
+    {
+        return;
+    }
+    if( !ts_node_is_null( nameNode ) )
+    {
+        if( kindIs( ts_node_type( nameNode ), "type_identifier" ) )
+        {
+            emitTypeAlias( cx, nameNode, spec, target );
+        }
+        return;
+    }
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        const char* field = ts_tree_cursor_current_field_name( &cursor.cur );
+        if( field != nullptr && kindIs( field, "declarator" ) && kindIs( ts_node_type( c ), "type_identifier" ) )
+        {
+            emitTypeAlias( cx, c, spec, target );
+        }
+        return true;
+    } );
+}
+
+// The std smart pointers whose `->` reaches their FIRST template argument. No other template is read through: an in-repo
+// Holder<T> or util::Box<T> may overload `->` onto anything, std::weak_ptr has no `->`, and std::auto_ptr left in C++17.
+inline constexpr std::array<std::string_view, 2> kStdSmartPointers{ "unique_ptr", "shared_ptr" };
+
+// The pointee of a member type written `std::unique_ptr<T>` / `std::shared_ptr<T>`, spelled the way a compose ref spells a type:
+// T's final segment and the namespace T was written in (`std` for `std::unique_ptr<std::string>`, which the readers refuse like
+// any std type). An empty name for every other type — including a global `::std::…`, which the two-segment capture does not read
+// (see writtenTypeNamespace) — and when T is not a plain type: `Widget`, `const gfx::Widget` and `Gen<int>` are; `Widget[]` (it
+// has no `->`), `int`, an expression, a comment and a qualified template are not.
+struct WrittenPointee
+{
+    std::string_view name;
+    std::string_view qualifier;
+};
+
+inline WrittenPointee stdSmartPointee( TSNode typeNode, std::string_view src ) noexcept
+{
+    const TSNode tmpl = writtenTypeNamespace( typeNode, src ) == "std" ? fieldChild( typeNode, NodeField::Name ) : TSNode{};
+    if( ts_node_is_null( tmpl ) || !kindIs( ts_node_type( tmpl ), "template_type" ) )
+    {
+        return {};
+    }
+    const std::string_view tmplName = nodeFieldText( tmpl, NodeField::Name, src );
+    if( std::find( kStdSmartPointers.begin(), kStdSmartPointers.end(), tmplName ) == kStdSmartPointers.end() )
+    {
+        return {};
+    }
+    const TSNode args  = fieldChild( tmpl, NodeField::Arguments );
+    const TSNode first = ( ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 ) ? TSNode{} : ts_node_named_child( args, 0 );
+    if( ts_node_is_null( first ) || !kindIs( ts_node_type( first ), "type_descriptor" ) || !ts_node_is_null( fieldChild( first, NodeField::Declarator ) ) )
+    {
+        return {};
+    }
+    const TSNode      type = fieldChild( first, NodeField::Type );
+    const char* const kind = ts_node_is_null( type ) ? "" : ts_node_type( type );
+    if( kindIs( kind, "type_identifier" ) )
+    {
+        return { nodeTextOf( type, src ), {} };
+    }
+    if( kindIs( kind, "template_type" ) )
+    {
+        return { nodeFieldText( type, NodeField::Name, src ), {} };
+    }
+    const TSNode name = kindIs( kind, "qualified_identifier" ) ? fieldChild( type, NodeField::Name ) : TSNode{};
+    if( !ts_node_is_null( name ) && kindIs( ts_node_type( name ), "type_identifier" ) )
+    {
+        return { nodeTextOf( name, src ), writtenTypeNamespace( type, src ) };
+    }
+    return {};
+}
+
 // S5-E HAS-A composition edges: walk a class/struct node's field_declaration_list and emit a
 // compose RawRef for each typed member variable whose type name matches a known class/struct name.
 // Two sub-relations:
@@ -430,6 +622,10 @@ void rustImplVisitNode( RustImplCtx& cx, TSNode node, const char* t )
 //   "uses"    — the member is a REFERENCE or POINTER (SoundEngine& m_sound; Foo* p;) — injected dep.
 // These edges carry isCompose=true and are NEVER inserted into the call graph CSR; they live only in
 // Graph::composeEdges for the <compose> block in --for and --around. C++ only (priority per PLAN).
+// The name is the type's final segment and the qualifier the NAMESPACE it was written in (writtenTypeNamespace):
+// the same (name, immediate qualifier) pair a call ref carries, so `std::string name_;` is `string` in `std`. A std smart
+// pointer records its POINTEE with viaArrow set: `std::unique_ptr<Widget> w_;` is `Widget`, which `w_->m()` reaches and
+// `w_.m()` does not (kParserVer 113). Every other qualified template (`std::vector<Widget> v_;`) still records nothing.
 void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
 {
     if( lang != Lang::Cpp )
@@ -472,8 +668,9 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
             const char* tnType = ts_node_type( typeNode );
 
             // Determine the type name and whether this is a reference/pointer (uses) or value (creates).
-            std::string typeName;
-            bool isRefOrPtr = false;   // reference (&) or pointer (*) → "uses"; else "creates"
+            std::string    typeName;
+            bool           isRefOrPtr = false;   // reference (&) or pointer (*) → "uses"; else "creates"
+            WrittenPointee pointee;              // `std::unique_ptr<Widget>` / `std::shared_ptr<Widget>`: Widget
 
             if( kindIs( tnType, "type_identifier" ) )
             {
@@ -494,6 +691,13 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
                 // In practice tree-sitter-cpp puts the ref/ptr in the "declarator" field, not "type".
                 // This branch covers unusual parses; the main path is via the declarator below.
                 continue;
+            }
+            else if( pointee = stdSmartPointee( typeNode, src ); !pointee.name.empty() )
+            {
+                // `std::unique_ptr<Widget> w_;` records Widget, reached through `->` alone (arm p). Not the other std templates:
+                // recording `std::vector<Widget> v_;` as a std type would only tombstone same-named classes' same-named members,
+                // and on rocksdb and llvm-project that lost six correct narrows and refused no wrong one (2026-09-17).
+                typeName = std::string( pointee.name );
             }
             else
             {
@@ -552,6 +756,10 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
                 fieldName = std::string( src.substr( da, db - da ) );
                 declIsRefOrPtr = false;
             }
+            else if( !pointee.name.empty() && kindIs( dt, "pointer_declarator" ) )
+            {
+                continue;   // `std::unique_ptr<Widget>* p_;` — `p_->` reaches the smart pointer, not Widget
+            }
             else if( kindIs( dt, "reference_declarator" ) || kindIs( dt, "pointer_declarator" ) )
             {
                 declIsRefOrPtr = true;
@@ -586,8 +794,14 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
             r.lang       = lang;
             r.isCompose  = true;
             r.name       = typeName;        // the member-type name (SpherePool, SoundEngine, ...)
+            r.qualifier  = writtenTypeNamespace( typeNode, src );   // `std` for `std::string name_;`, "" unqualified
             r.fieldName  = std::move( fieldName );
             r.composeRel = ( isRefOrPtr || declIsRefOrPtr ) ? "uses" : "creates";
+            if( !pointee.name.empty() )
+            {
+                r.qualifier = std::string( pointee.qualifier );   // the POINTEE's namespace: `std` for `std::unique_ptr<std::string>`
+                r.viaArrow  = true;
+            }
             refs.push_back( std::move( r ) );
         }
     }
@@ -2004,7 +2218,7 @@ void captureIncludes( TSNode root, Lang lang, std::uint32_t fileId, std::string_
             // descent reaches every arm of a chain — no separate alternative-following pass.
             if( frame.depth >= kMaxImportContainerDepth )
             {
-                DEGRADED_PATH_ALERT( "ingest: import-container nesting past the depth bound — deeper imports not captured" );
+                DISCLOSE( "ingest: import-container nesting past the depth bound — deeper imports not captured" );
             }
             else
             {

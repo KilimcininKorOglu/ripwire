@@ -16,9 +16,16 @@
 // it runs no hook on the very fixture whose hook fires under `git status`); if any root configures the HOOK form,
 // append `core.fsmonitor=false` to git's GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n environment
 // override, which every git child inherits, and DISCLOSE it: one stderr line per root carrying
-// git_harden=fsmonitor-hook, and --doctor's git-config-trust row. The BOOLEAN form — git's builtin daemon, a real
-// speedup on 100k-file trees — is deliberately left alone: only the form that executes code is neutralised. A
-// caller's own GIT_CONFIG_COUNT block is preserved; ours is appended after it, never in place of it.
+// git_harden=fsmonitor-hook, and --doctor's git-config-trust row. The environment override is scoped to the hook
+// form, and a caller's own GIT_CONFIG_COUNT block is preserved; ours is appended after it, never in place of it.
+//
+// DETECTION IS THE DISCLOSURE; THE BOUNDARY IS THE COMMAND LINE. The neutralisation itself is the prefix every
+// git child now carries (gitcmd.h: --no-optional-locks -c core.fsmonitor=false, for every form of the key, in
+// every directory). What this header does is TELL the user when a root they pointed at carries the hook form,
+// and keep the env override as a second layer there. Because the governing config need not sit in `root/.git`
+// — it can live up the parent chain, or in a per-worktree gitdir plus a shared commondir — `gitResolvedConfigDirs`
+// asks git itself (`rev-parse --absolute-git-dir --git-common-dir`, the hook disabled on that probe's OWN
+// command line) which dir governs the root, and the probe and disclosure run for THAT repo whatever its depth.
 //
 // The trust decision is PER PROCESS: a long-lived --mcp server probes its roots once at start. A config edited
 // under a running server is not re-read — the same freshness contract every other startup-only fact has here.
@@ -29,11 +36,13 @@
 // a read-only call. The `ext::` transport is already refused at the one place a URL reaches git (main.cpp's clone).
 
 #include "arch.h"            // rw::ciEqualAscii — the case-insensitive ASCII compare the tree already has (reused, not re-rolled)
-#include "docparse.h"        // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
+#include "pathguard.h"       // pathguard::readRegularFileNoFollow — config candidates are read non-blocking and regular-file-only
 #include "gitmine.h"         // rw::popenTrimmed — the one popen-and-trim shape in the tree (never a second)
 #include "infra/emit.h"      // rw::emitTo — the house emitter; no new printf-family site
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include "infra/jsonesc.h"   // rw::shSingleQuote
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -125,9 +134,112 @@ inline std::string trimmedFirstLine( std::string_view text )
     return std::string( line );
 }
 
+// The prefix every PROBE git call carries. The two startup probes (governing-gitdir resolution and the
+// authoritative value read) run BEFORE the environment override below is installed, so each one disables
+// the hook form on its OWN command line — `-c core.fsmonitor=false` — and the resolution therefore cannot
+// itself trigger the very hook it is looking for. `git config --get core.fsmonitor` is the one exception:
+// it must NOT carry the flag, because a command-line `-c core.fsmonitor=false` would BE the value it read
+// back and mask the real one — and a plain `git config --get` refreshes no index, so it runs no hook.
+inline std::string hardenedGitPrefix( const std::string& root )
+{
+    return gitCmd( " -C " ) + shSingleQuote( root );
+}
+
+// Resolve the GOVERNING git directory for any crawl root by asking git itself, with the hook neutralised on
+// the probe's own command line, so the disclosure names the repository that actually governs the root
+// whatever its depth. `--absolute-git-dir` yields the per-worktree gitdir; `--git-common-dir` yields the
+// shared dir a linked worktree's config lives beside. Both are canonicalised against `root` (git's CWD) when
+// git prints a relative form. The hand-rolled `root/.git` inspection below is a git-absent fallback for the
+// repo-root and worktree-root shapes. Empty ⇒ not a repository, or git could not answer — nothing to probe.
+//
+// Git discovers a repository by walking up from its CWD to the first `.git` entry, or takes GIT_DIR from the
+// environment. A root with neither has no repository to govern it, so the probe spawns no git child for it:
+// a non-git tree stays git-free (test/nongitqmetricscheck.sh).
+inline bool gitMayGovernRoot( const std::string& root )
+{
+    if( const char* gitDir = std::getenv( "GIT_DIR" ); gitDir != nullptr && *gitDir != '\0' )
+    {
+        return true;
+    }
+    std::error_code       ec;
+    std::filesystem::path dir = std::filesystem::absolute( std::filesystem::path( root ), ec );
+    if( ec )
+    {
+        return true;   // cannot tell from here; let git answer
+    }
+    for( ;; )
+    {
+        if( std::filesystem::exists( std::filesystem::symlink_status( dir / ".git", ec ) ) )
+        {
+            return true;
+        }
+        ec.clear();
+        const std::filesystem::path parent = dir.parent_path();
+        if( parent == dir )
+        {
+            return false;
+        }
+        dir = parent;
+    }
+}
+
+inline std::vector<std::filesystem::path> gitResolvedConfigDirs( const std::string& root )
+{
+    std::vector<std::filesystem::path> dirs;
+    if( !gitMayGovernRoot( root ) )
+    {
+        return dirs;
+    }
+    const std::string out = popenTrimmed( hardenedGitPrefix( root )
+                                          + " rev-parse --absolute-git-dir --git-common-dir 2>/dev/null" );
+    if( out.empty() )
+    {
+        return dirs;
+    }
+    std::error_code       ec;
+    const std::filesystem::path rootPath( root );
+    std::size_t                 start = 0;
+    while( start <= out.size() )
+    {
+        const std::size_t nl   = out.find( '\n', start );
+        const std::size_t stop = nl == std::string::npos ? out.size() : nl;
+        std::string_view  line = std::string_view( out ).substr( start, stop - start );
+        while( !line.empty() && ( line.back() == '\r' || line.back() == ' ' ) ) { line.remove_suffix( 1 ); }
+        if( !line.empty() )
+        {
+            std::filesystem::path dir( line );
+            if( dir.is_relative() ) { dir = rootPath / dir; }                       // git printed it relative to its -C CWD
+            dir = std::filesystem::weakly_canonical( dir, ec );
+            if( ec ) { dir = std::filesystem::path( line ); ec.clear(); }
+            if( std::find( dirs.begin(), dirs.end(), dir ) == dirs.end() ) { dirs.push_back( dir ); }
+        }
+        if( nl == std::string::npos ) { break; }
+        start = nl + 1;
+    }
+    return dirs;
+}
+
 inline std::vector<std::filesystem::path> localConfigCandidates( const std::filesystem::path& root )
 {
     std::vector<std::filesystem::path> out;
+
+    // Authoritative first: git resolves the governing gitdir/commondir for ANY root, subdirectory and
+    // worktree and GIT_DIR included. Its config, its per-worktree config.worktree, and the shared common
+    // config are the files a hook value could be spelled in (directly or through an include the cheap scan
+    // also catches).
+    for( const std::filesystem::path& dir : gitResolvedConfigDirs( root.string() ) )
+    {
+        out.push_back( dir / "config" );
+        out.push_back( dir / "config.worktree" );
+    }
+    if( !out.empty() )
+    {
+        return out;
+    }
+
+    // Fallback for a tree git cannot speak for (git absent, or an unreadable repo): the original root/.git
+    // inspection. It handles the repo-root and worktree-root shapes only — which is why the git resolution
+    // above leads, and this remains just so a git-less environment still degrades sanely.
     const std::filesystem::path        dotGit = root / ".git";
     std::error_code                    ec;
     if( std::filesystem::is_directory( dotGit, ec ) && !ec )
@@ -136,7 +248,7 @@ inline std::vector<std::filesystem::path> localConfigCandidates( const std::file
         out.push_back( dotGit / "config.worktree" );
         return out;
     }
-    const std::string head = docparse::detail::readWholeFile( dotGit.string() ).value_or( std::string() );
+    const std::string head = pathguard::readRegularFileNoFollow( dotGit.string() ).value_or( std::string() );
     if( !head.starts_with( "gitdir:" ) )
     {
         return out;   // not a repository at all — nothing for git to read, nothing to probe
@@ -148,7 +260,7 @@ inline std::vector<std::filesystem::path> localConfigCandidates( const std::file
     }
     out.push_back( gitDir / "config" );
     out.push_back( gitDir / "config.worktree" );
-    if( const std::optional<std::string> common = docparse::detail::readWholeFile( ( gitDir / "commondir" ).string() ) )
+    if( const std::optional<std::string> common = pathguard::readRegularFileNoFollow( ( gitDir / "commondir" ).string() ) )
     {
         std::filesystem::path commonDir = trimmedFirstLine( *common );
         if( commonDir.is_relative() )
@@ -164,7 +276,7 @@ inline bool localConfigMayCarryFsmonitor( const std::string& root )
 {
     for( const std::filesystem::path& candidate : localConfigCandidates( root ) )
     {
-        std::optional<std::string> bytes = docparse::detail::readWholeFile( candidate.string() );
+        std::optional<std::string> bytes = pathguard::readRegularFileNoFollow( candidate.string() );
         if( !bytes )
         {
             continue;
@@ -266,7 +378,7 @@ inline const Report& hardenForRoots( std::span<const std::string_view> roots )
     {
         if( form == FsmonitorForm::Hook )
         {
-            emitTo( stderr, "ripwire: git: {} configures core.fsmonitor as a hook COMMAND — neutralised for this run (git_harden=fsmonitor-hook): ripwire's git calls are read-only and need no hook; a boolean core.fsmonitor is left untouched\n", root );
+            emitTo( stderr, "ripwire: git: {} configures core.fsmonitor as a hook COMMAND — neutralised for this run (git_harden=fsmonitor-hook): ripwire's git calls are read-only, and every one runs with core.fsmonitor=false\n", root );
         }
     }
     return r;

@@ -49,7 +49,7 @@ struct FieldUsesArgs
 
 inline std::string renderFieldUses( const IngestResult& ing, FieldId fieldId, const FieldUsesArgs& args )
 {
-    VERIFY( fieldId < ing.fields.size() );
+    ASSUME( fieldId < ing.fields.size() );
     const Symbol&        field  = ing.fields[ fieldId ];
     const FieldUseAnswer answer = collectFieldUseSites( ing, fieldId );
 

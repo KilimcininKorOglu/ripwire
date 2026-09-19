@@ -43,7 +43,7 @@
 #include "docparse.h"           // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
 #include "pageview.h"           // pageWindow + pageDisclosure — THE TRUNCATION VOCABULARY
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — an unreadable file degrades the scan, never aborts it
+#include "infra/Diagnostics.h"  // DISCLOSE — an unreadable file degrades the scan, never aborts it
 
 #include <algorithm>
 #include <cmath>
@@ -116,7 +116,7 @@ inline double posnettScore( double volume, double lineCount, double entropy ) no
 }
 
 // The measurement pass. Reads each indexed file at most once; a file that cannot be read is counted and
-// skipped (DEGRADED_PATH_ALERT), never fatal — the whole pipeline must survive a malformed repo.
+// skipped (DISCLOSE), never fatal — the whole pipeline must survive a malformed repo.
 inline ReadabilityScan computeReadability( const IngestResult& ing )
 {
     ReadabilityScan scan;
@@ -154,7 +154,7 @@ inline ReadabilityScan computeReadability( const IngestResult& ing )
             {
                 fileFailed[s.fileId] = 1;
                 ++scan.unreadableFileCount;
-                DEGRADED_PATH_ALERT( "readability: an indexed file could not be read — its functions are absent from the report" );
+                DISCLOSE( "readability: an indexed file could not be read — its functions are absent from the report" );
             }
             fileBytes[s.fileId] = std::move( bytes ).value_or( std::string() );
         }

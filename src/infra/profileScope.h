@@ -424,7 +424,7 @@ inline bool isInitialThread() noexcept
 // the report already prints "unnamed" for that case.
 inline void copyThreadName( char* buffer, std::size_t bufferCount ) noexcept
 {
-    VERIFY( buffer != nullptr && bufferCount > 0 );
+    ASSUME( buffer != nullptr && bufferCount > 0 );
     buffer[ 0 ] = '\0';
 #if defined( __APPLE__ ) || defined( __linux__ )
     pthread_getname_np( pthread_self(), buffer, bufferCount );
