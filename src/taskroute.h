@@ -12,7 +12,11 @@
 #include <utility>
 #include <vector>
 
-#include "infra/jsonesc.h"   // shSingleQuote — the repository's canonical POSIX argv quoting
+#include "infra/jsonesc.h"      // shSingleQuote — the repository's canonical POSIX argv quoting
+#include "infra/tablelookup.h"  // rw::isOneOf — moved here (routing-loop round 1 Amendment 1 fix round)
+                                 // once forpage.h needed the identical predicate; unqualified isOneOf()
+                                 // calls below now resolve to rw::isOneOf by enclosing-namespace lookup,
+                                 // text-unchanged at every call site.
 #include "model.h"           // IngestResult
 #include "query.h"           // isKnownLayerWord — the layer vocabulary --verify enforces at evaluation
 #include "sarif.h"           // rootRelativeUri / rootPrefixOf — the ONE root-relative path rule the map emits with
@@ -73,12 +77,11 @@ inline std::string lowerAscii( std::string_view text )
     return out;
 }
 
-// "is this word one of these?" — the shape four tables' predicates were each writing out by hand, which is
-// how a five-line any_of becomes a duplication finding against its own neighbours.
-inline bool isOneOf( std::string_view word, const std::string_view* table, std::size_t count ) noexcept
-{
-    return std::any_of( table, table + count, [word]( const std::string_view t ) { return t == word; } );
-}
+// isOneOf moved to infra/tablelookup.h (rw::isOneOf) — see the #include above. Re-exported as a member
+// of this namespace too: main.cpp calls it QUALIFIED (rw::taskroute::isOneOf), which plain enclosing-
+// namespace lookup does not reach — a using-declaration is the one-line fix that keeps that call site
+// text-unchanged as well.
+using rw::isOneOf;
 
 inline bool wordByte( char c ) noexcept
 {

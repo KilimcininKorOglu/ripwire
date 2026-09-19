@@ -44,6 +44,15 @@ inline bool isOneOf( std::string_view word, std::span<const std::string_view> ta
     return false;
 }
 
+// (word, first, count) — the pointer+count spelling taskroute.h's own five call sites already use
+// (std::begin/std::size on a table). A thin span forward, not a second body: taskroute.h::isOneOf moved
+// here verbatim rather than becoming a sixth clone of itself, and this overload is what let its call
+// sites stay text-unchanged (out of scope for this fix to touch — see the header note above).
+inline bool isOneOf( std::string_view word, const std::string_view* table, std::size_t count ) noexcept
+{
+    return isOneOf( word, std::span<const std::string_view>( table, count ) );
+}
+
 // moved from tracein.h::detail (routing-loop round 1 Amendment 1 fix round): a second caller
 // (forpage.h) needed the identical "every byte 0-9, and at least one byte" predicate, and infra/ is
 // where a helper goes once it has two callers in headers that share nothing else (the findByField
