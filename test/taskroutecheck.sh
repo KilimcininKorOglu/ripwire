@@ -718,7 +718,8 @@ PARA_S1=( 'which file implements the WRITE_STALL start time fix'
           'find the code for MultiGet skip_memtable handling'
           'where does rocksdb record persist_user_defined_timestamps in the manifest' )
 PARA_S4=( 'call chain from db/db_iter.cc into db/wide/wide_columns_helper.h'
-          'how is util/heap.h used by table/iter_heap.h' )
+          'how is util/heap.h used by table/iter_heap.h'
+          'how does db/write_batch.cc reach cache/lru_cache.cc on the write path' )
 PARA_WRONG=0
 para_check(){
     local shape="$1" acceptRe="$2"; shift 2
