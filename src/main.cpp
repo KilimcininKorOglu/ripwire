@@ -585,6 +585,9 @@ static_assert( rw::langreg::firstLangLintCannotName() == rw::kLangCount,
 static_assert( std::string_view( rw::langTag( rw::Lang( rw::kLangCount ) ) ) == "?",
                "an enumerator was appended after the one kLangCount names — move kLangCount to the new last enumerator" );
 
+// L1: defined with the compact-legend layer below; the --token-budget gate prices a compact-posture map with it.
+static std::string_view compactLegendHint( const rw::Config& c, std::string_view doc );
+
 namespace
 {
 
@@ -1003,8 +1006,28 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, std::size_t t
 // way; this one holds the map itself, rendered once, and nothing can render it again. So a buffer that did not finish
 // whole (rw::MemoryStream::finish: a write lost inside it, or the close failed) is not printed short. The run says so
 // on stderr in every build and exits 1, the exit code main's own A4-F18 check gives a short write to stdout.
-inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, std::FILE* real,
-                                                 std::size_t mapEstTokens, std::size_t tokenBudget, bool asJson )
+// L1: the PRICE a compact-posture run will actually print for this body. The budget gate decides BEFORE the compact
+// layer (runWithCompactLegend) rewrites stdout, so without this it withheld a map on its FULL-dialect price — a map the
+// caller would have received inside the budget, lost to prose it was never going to be sent. The body is compacted
+// here the same way the layer will compact it and repriced by the same delta (compactlegend.h compactRepriceDelta),
+// so the number decided on is the number the root prints. A body the dialect cannot shape keeps its own price.
+static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_view body, std::size_t fullEstTokens )
+{
+    if( cfg.legend != "compact" || fullEstTokens == 0 )
+    {
+        return fullEstTokens;
+    }
+    std::string compacted( body );
+    if( rw::applyCompactDialect( compacted, compactLegendHint( cfg, compacted ) ) != rw::CompactOutcome::Rewritten )
+    {
+        return fullEstTokens;
+    }
+    const long long priced = static_cast<long long>( fullEstTokens ) + rw::compactRepriceDelta( body.size(), compacted.size() );
+    return priced > 0 ? static_cast<std::size_t>( priced ) : 1u;
+}
+
+inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, std::FILE* real, std::size_t fullEstTokens,
+                                                 std::size_t tokenBudget, bool asJson, const rw::Config& cfg )
 {
     const bool                  isBuffered = stream.isOpen();
     const rw::MemoryStreamBytes body       = isBuffered ? stream.finish() : rw::MemoryStreamBytes{};
@@ -1014,6 +1037,7 @@ inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, std::
         rw::emitRaw( stderr, "ripwire: write error — the --token-budget buffer lost bytes; the map is withheld, not printed short\n" );
         return 1;
     }
+    const std::size_t mapEstTokens = isBuffered && !asJson ? compactPostureMapPrice( cfg, body.bytes, fullEstTokens ) : fullEstTokens;
     if( tokenBudget > 0 && mapEstTokens > tokenBudget )
     {
         // §B7.8 — withheld_est_tokens=, not est_tokens=. `est_tokens` is normatively about what THIS RUN
@@ -2524,7 +2548,7 @@ int runDefaultMap( const MainDispatch& d )
     // (composes freely with --max-tokens, which SHAPES the map to hit a target instead). §P6.8: closes the
     // buffer, and on exit 3 the buffered body never reaches stdout (finishTokenBudgetGate's own comment has
     // the full reasoning) — a small refusal record instead, shaped to match --json.
-    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, stdout, mapEstTokens, cfg.tokenBudget, cfg.json ) )
+    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, stdout, mapEstTokens, cfg.tokenBudget, cfg.json, cfg ) )
     {
         return *gated;
     }
@@ -3587,6 +3611,8 @@ static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 // an ASKED --legend=compact that meets an answer the dialect cannot shape refuses (exit 1, as before); the DEFAULT
 // posture passes that answer through unchanged at the run's own exit code — a default must never be the reason a run
 // fails. A capture that cannot be set up degrades to the full legend in both cases, disclosed on stderr.
+static_assert( rw::kCompactRepriceBytesPerToken == rw::kBytesPerTokenDefault, "the compact reprice rate is the markup rate the estimator prices prose at" );
+
 static int runWithCompactLegend( const rw::Config& cfg, char** argv )
 {
     EXPECTS( !cfg.legendDefaulted || cfg.legend == rw::kDefaultLegendPosture, "a defaulted posture is the registered default" );

@@ -28,10 +28,13 @@
 // envelope, under the opt-in `legend:"compact"` argument). Gate: test/compactlegendcheck.sh (U)/(L)/(M)/(D)/(S).
 
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+
+#include "infra/Diagnostics.h"   // ASSUME — repriceEstTokensIn's invariant
 
 namespace rw
 {
@@ -908,6 +911,69 @@ enum class CompactOutcome : std::uint8_t
 
 // Rewrite `doc` in place: prose comments out, ONE compact legend in (at the position of the first prose
 // comment, or right after the root open tag when the full dialect had none), schema= on the root.
+// ── THE PRICE FOLLOWS THE BYTES (L1, 2026-09-19) ─────────────────────────────────────────────────────────
+// A document's est_tokens= prices what its emitter WROTE, and this layer then takes the prose legend out of it — so,
+// unrepriced, a compacted answer carried the FULL dialect's price: --connect on this repo priced 1,200 tokens for
+// 1,037 delivered bytes (attrvocabcheck §4, truth ~414). While compact was opt-in that was waved through as "an
+// upper bound under compact"; with compact the CLI default (and the MCP default since M1) the bound was ~3x on the
+// small answers compact exists for, and a caller budgeting on it pages or refuses an answer that fits.
+//
+// The rewrite changes MARKUP only (prose comments out; one legend and schema= in; rows, attributes and CDATA bodies
+// untouched), so the price moves by the net markup bytes at a markup rate. The rate is the WIDEST markup rate the
+// estimator applies to prose (kBytesPerTokenDefault, 2.50 — main.cpp static_asserts the two agree): dividing the
+// removed bytes by the widest rate removes the FEWEST tokens, so the repriced number never under-reads the document
+// and the compact reading "price as emitted (an upper bound under compact)" stays true as written — now a tight one.
+// Two places carry the price: the priced root (M11) and the map header's data field (est_tokens= rides there alone
+// under order=stable). Nothing else is touched; a document with no price keeps none.
+inline constexpr double kCompactRepriceBytesPerToken = 2.50;
+
+// Rewrite the first `est_tokens=` + optional quote + digits inside [begin, end) of `doc` by `deltaTokens` (negative =
+// cheaper). Returns false when the span carries no such field (nothing to reprice), never throws on a malformed one.
+inline bool repriceEstTokensIn( std::string& doc, std::size_t begin, std::size_t end, long long deltaTokens )
+{
+    constexpr std::string_view kKey = "est_tokens=";
+    std::size_t k = doc.find( kKey, begin );
+    // the key must start the attribute (" est_tokens=") so withheld_est_tokens= is never read as the price
+    while( k != std::string::npos && k < end && k > 0 && doc[ k - 1 ] != ' ' )
+    {
+        k = doc.find( kKey, k + 1 );
+    }
+    if( k == std::string::npos || k >= end )
+    {
+        return false;
+    }
+    std::size_t d = k + kKey.size();
+    if( d < end && doc[ d ] == '"' ) { ++d; }
+    std::size_t e = d;
+    while( e < end && std::isdigit( static_cast<unsigned char>( doc[ e ] ) ) ) { ++e; }
+    if( e == d || e - d > 18 )
+    {
+        return false;   // no digits (a "~N" spelling or garbage): not a price this layer can move
+    }
+    long long oldTokens = 0;
+    if( std::from_chars( doc.data() + d, doc.data() + e, oldTokens ).ec != std::errc() )
+    {
+        return false;
+    }
+    const long long newTokens = oldTokens + deltaTokens > 0 ? oldTokens + deltaTokens : 1;
+    ASSUME( newTokens > 0, "a delivered document is never priced at zero tokens" );
+    doc.replace( d, e - d, std::to_string( newTokens ) );
+    return true;
+}
+
+// The net markup change of the rewrite, in tokens at kCompactRepriceBytesPerToken: removed bytes round DOWN (the
+// fewest tokens removed), added bytes round UP (the most added) — both toward over-reading, never under.
+inline long long compactRepriceDelta( std::size_t fullBytes, std::size_t compactBytes ) noexcept
+{
+    if( compactBytes <= fullBytes )
+    {
+        return -static_cast<long long>( double( fullBytes - compactBytes ) / kCompactRepriceBytesPerToken );
+    }
+    const double added = double( compactBytes - fullBytes ) / kCompactRepriceBytesPerToken;
+    const long long whole = static_cast<long long>( added );
+    return double( whole ) < added ? whole + 1 : whole;
+}
+
 inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint )
 {
     const CompactRootInfo root = findCompactRoot( doc );
@@ -993,6 +1059,22 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
     const std::size_t at = firstProseAt != std::string::npos ? firstProseAt
                          : ( rootOpenEndInOut != std::string::npos ? rootOpenEndInOut : out.size() );
     out.insert( at, legend );
+    // the price follows the bytes (see compactRepriceDelta): the root's est_tokens=, then the map header's field
+    const long long delta = compactRepriceDelta( doc.size(), out.size() );
+    if( delta != 0 )
+    {
+        const CompactRootInfo outRoot = findCompactRoot( out );
+        if( !outRoot.tag.empty() )
+        {
+            repriceEstTokensIn( out, outRoot.openBegin, outRoot.openEnd, delta );
+        }
+        const std::string_view header = compactMapHeader( out );
+        if( !header.empty() )
+        {
+            const std::size_t hb = static_cast<std::size_t>( header.data() - out.data() );
+            repriceEstTokensIn( out, hb, hb + header.size(), delta );
+        }
+    }
     doc.swap( out );
     return CompactOutcome::Rewritten;
 }
