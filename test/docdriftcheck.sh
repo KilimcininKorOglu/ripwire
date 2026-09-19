@@ -382,7 +382,7 @@ PY
             no "WALK: the second (0311) call produced no <doc-drift> root — the door moved: $( printf '%s' "$W2" | head -c 200 )"
         elif printf '%s' "$W2ROOT" | grep -q 'disk_walk_failed="1"'; then
             ok "WALK: a root the on-disk walk cannot list is disclosed on the root (disk_walk_failed=\"1\")"
-            printf '%s' "$W2" | grep -q 'disk_walk_failed="1" means' \
+            printf '%s' "$W2" | grep -q 'disk_walk_failed="1" means\|disk_walk_failed=1: the root could not be listed' \
                 && ok "WALK: the clause defining disk_walk_failed= rides with it" || no "WALK: disk_walk_failed= emitted with no clause defining it"
         else
             no "WALK: the on-disk walk failed with nothing on the root saying so: $W2ROOT"

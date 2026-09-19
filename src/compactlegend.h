@@ -537,6 +537,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "redacted",          "redacted=1: a credential shape rewritten to [REDACTED:kind]; the no-redact flag serves the bytes", true },
     // extent honesty (serialize.h kExtentSuspectRowLegend): a ROW-level term on the map, <d> and <b> rows alike.
     { "extent_suspect",    "extent_suspect=: span/scope/kind failed containment (name|head|scope|error)", true },
+    // train-7 fix round (CodeRabbit on #295): four present-only degrade disclosures whose full clauses ride only the
+    // answer that carries them, so the compact strip must put a reading back. Head terms, except head_conflicts_ok=
+    // (on each <arm>) and render_failed= (also on the <sigs>/<bodies> element it marks).
+    { "disk_walk_failed",  "disk_walk_failed=1: the root could not be listed, so a missing-file row may name an unindexed file that exists" },
+    { "refs_dropped",      "refs_dropped=K: K listed branches could not be read, in no count or row" },
+    { "head_conflicts_ok", "head_conflicts_ok=0: that arm's base or HEAD tree was unavailable, head_conflicts= unknown", true, "arm" },
+    { "render_failed",     "render_failed=: sections whose render FAILED (empty, not budget-omitted)", true },
 };
 
 // the paging window: these five mean the same on every element (L4's one-attribute-one-reading law), so they are
