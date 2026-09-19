@@ -789,6 +789,17 @@ struct CMakeScan
     }
 };
 
+// Can the root itself be LISTED? libc++ AND libstdc++ swallow EACCES on the root under skip_permission_denied (the flag is
+// meant for entries met mid-walk, not the walk's own starting point), so a recursive walk of an unlistable root reads as
+// an EMPTY SUCCESSFUL walk with its error_code clear (measured: `ec=0 atEnd=1` with the flag, `ec=13` without it, on both
+// libraries). A walker that must not mistake that for an empty tree probes here first, without the flag.
+inline bool crawlRootIsListable( const std::string& root )
+{
+    std::error_code                             ec;
+    const std::filesystem::directory_iterator  probe( root, ec );
+    return !ec;
+}
+
 // The CMake files under `root`, sorted. ingest() never collects these (CMake is not one of the indexed
 // grammars), so this is the ONE crawl this module owns; every other file it reads comes from the caller's
 // already-crawled, already-excluded ingest file list — which is exactly why this walk needs the crawl
@@ -809,10 +820,9 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
     // this walk cannot rely on: `--flags` reaches this walk on a warm index even after the root's mode
     // changed out from under it, a path rootIsReadable's own one-shot CLI check never revisits. One combined
     // check below (not two DISCLOSE sites) so a TOCTOU between the two constructions is still caught.
-    std::error_code pec;
-    { const fs::directory_iterator probe( root, pec ); }
+    const bool isListable = crawlRootIsListable( root );
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( pec || ec ) { DISCLOSE( out, CMakeScan::DisclosureWhy::RootWalkFailed, "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
+    if( !isListable || ec ) { DISCLOSE( out, CMakeScan::DisclosureWhy::RootWalkFailed, "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );
 
     const fs::recursive_directory_iterator end;

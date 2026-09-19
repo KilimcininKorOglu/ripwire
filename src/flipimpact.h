@@ -175,8 +175,11 @@ struct FlipResult
     };
     void disclose( DisclosureWhy why ) noexcept
     {
-        familyCapped = familyCapped || why == DisclosureWhy::FamilyOverCap;
-        depthCapped  = depthCapped || why == DisclosureWhy::ChainOverDepth;
+        switch( why )
+        {
+            case DisclosureWhy::FamilyOverCap:  familyCapped = true; break;
+            case DisclosureWhy::ChainOverDepth: depthCapped  = true; break;
+        }
     }
 
     std::vector<FamilyMember> family;

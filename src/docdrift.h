@@ -1685,8 +1685,11 @@ struct RepoPaths
     };
     void disclose( DisclosureWhy why ) noexcept   // the DISCLOSE sink: the fields the emitter reads
     {
-        rootWalkFailed = rootWalkFailed || why == DisclosureWhy::RootWalkFailed;
-        escaped += why == DisclosureWhy::SymlinkEscapesRoot ? 1u : 0u;
+        switch( why )
+        {
+            case DisclosureWhy::SymlinkEscapesRoot: ++escaped; break;
+            case DisclosureWhy::RootWalkFailed:     rootWalkFailed = true; break;
+        }
     }
 };
 
@@ -1730,13 +1733,11 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
     namespace fs = std::filesystem;
     RepoPaths       out;
     std::error_code ec;
-    // libc++ AND libstdc++ swallow EACCES on the ROOT under skip_permission_denied (the flag is for entries met
-    // mid-walk), so an unlistable root reads as an empty SUCCESSFUL walk with `ec` clear. Probe it without the
-    // flag first — collectCMakeFiles' measured shape (darkflags.h) — and fold both into one check.
-    std::error_code pec;
-    { const fs::directory_iterator probe( root, pec ); }
+    // An unlistable root is an empty SUCCESSFUL walk under skip_permission_denied (see darkflags::crawlRootIsListable), so it is
+    // probed first — collectCMakeFiles' shape (darkflags.h) — and both answers fold into one check.
+    const bool isListable = darkflags::crawlRootIsListable( root );
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( pec || ec ) { DISCLOSE( out, RepoPaths::DisclosureWhy::RootWalkFailed, "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
+    if( !isListable || ec ) { DISCLOSE( out, RepoPaths::DisclosureWhy::RootWalkFailed, "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );   // §SEC1 — the crawl boundary, canonicalized once
 
     const fs::recursive_directory_iterator end;

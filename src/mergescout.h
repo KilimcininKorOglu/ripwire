@@ -148,12 +148,12 @@ struct Arm
     };
     void disclose( DisclosureWhy why ) noexcept
     {
-        if( why == DisclosureWhy::HeadTreeUnavailable )
+        switch( why )
         {
-            headLaneOk = false;
-            return;
+            case DisclosureWhy::NoMergeBase:
+            case DisclosureWhy::TreeUnavailable:     ok = false; break;
+            case DisclosureWhy::HeadTreeUnavailable: headLaneOk = false; break;
         }
-        ok = false;
     }
 };
 
@@ -526,6 +526,23 @@ inline HeadChangedByBase planHeadConflictLane( const std::vector<std::string>& b
     return plan;
 }
 
+// The arm's head conflicts from the lane's plan: none when its base is HEAD (not in the plan), the intersection when the
+// lane ran, and UNKNOWN — disclosed on the arm as head_conflicts_ok="0" — when the lane had no tree to diff.
+inline void attachHeadConflicts( Arm& arm, const HeadChangedByBase& plan )
+{
+    const auto it = plan.find( arm.baseSha );
+    if( it == plan.end() )
+    {
+        return;
+    }
+    if( !it->second.isAvailable )
+    {
+        DISCLOSE( arm, Arm::DisclosureWhy::HeadTreeUnavailable, "merge-scout: the base or HEAD tree could not be materialized or ingested — head conflicts unknown for this arm" );
+        return;
+    }
+    arm.headConflicts = intersectHeadChanged( arm.changed, it->second.keys );
+}
+
 // Register the lane's future memo.get() calls — one extra use of each side per distinct base — BEFORE any
 // tree is materialized, so TreeIndexMemo still frees a tree right after its true LAST consumer (Y1).
 inline void reserveHeadConflictLane( const HeadChangedByBase& plan, const std::string& headSha, TreeIndexMemo& memo )
@@ -625,17 +642,7 @@ inline ScoutResult computeMergeScout( const std::string& root, std::string_view 
     for( std::size_t i = 0; i < refs.size(); ++i )
     {
         Arm arm = computeNamedArm( refs[i], refShas[i], baseShas[i], memo );
-        if( const auto it = headChangedByBase.find( arm.baseSha ); it != headChangedByBase.end() )
-        {
-            if( it->second.isAvailable )
-            {
-                arm.headConflicts = intersectHeadChanged( arm.changed, it->second.keys );
-            }
-            else
-            {
-                DISCLOSE( arm, Arm::DisclosureWhy::HeadTreeUnavailable, "merge-scout: the base or HEAD tree could not be materialized or ingested — head conflicts unknown for this arm" );
-            }
-        }
+        attachHeadConflicts( arm, headChangedByBase );
         result.arms.push_back( std::move( arm ) );
     }
 
