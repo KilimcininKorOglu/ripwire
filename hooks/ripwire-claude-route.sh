@@ -347,7 +347,16 @@ case "$promptBytes" in ''|*[!0-9]*) exit 0;; esac
 # The classifier is never called (there is nothing to classify), but the row IS still written — same
 # posture as an ordinary abstain (R8 in test/routehookcheck.sh) — so coverage stays measurable from the
 # log alone rather than silently undercounted.
-rest="$( printf '%s' "$prompt" | sed -e 's/^[[:space:]]*//' )"
+# CodeRabbit PR #292 finding 4052087914: `sed 's/^[[:space:]]*//'` strips leading whitespace from EACH
+# LINE of its input (sed's pattern space is one line at a time; `^` anchors per line, not per stream), so
+# a prompt beginning with a BLANK LINE before the marker ("\n<task-notification>…") kept that leading
+# newline in `rest` and missed the case match below — the guard then fell through to actually invoke the
+# classifier (a real subprocess), log status="abstain" instead of status="skip-system", and delete an
+# existing session's routing-pending file, none of which a harness/system event should ever cause. This
+# bash parameter-expansion form strips the FULL leading run of [:space:] bytes (space/tab/newline/CR) from
+# the whole string in one pass, not line by line.
+lead="${prompt%%[![:space:]]*}"
+rest="${prompt#"$lead"}"
 case "$rest" in
     '<task-notification>'*|'<system-reminder>'*)
         if meter_home; then

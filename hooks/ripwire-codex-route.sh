@@ -258,7 +258,13 @@ case "$promptBytes" in ''|*[!0-9]*) exit 0;; esac
 # POSITIONAL on purpose: only the prompt's own leading bytes, after whitespace, are tested, so a genuine
 # prompt that merely mentions one of these markers mid-sentence is untouched. The classifier is never
 # called, but the row is still written (status=skip-system) so coverage stays measurable from the log.
-rest="$( printf '%s' "$prompt" | sed -e 's/^[[:space:]]*//' )"
+# CodeRabbit PR #292 finding 4052087914: `sed 's/^[[:space:]]*//'` strips leading whitespace per LINE
+# (sed's `^` anchors each line of its pattern space, not the whole stream), so a prompt beginning with a
+# blank line before the marker kept that leading newline in `rest` and missed the case match below,
+# falling through to a real classifier call and status="abstain" logging instead of "skip-system". This
+# form strips the full leading run of [:space:] bytes from the whole string in one pass.
+lead="${prompt%%[![:space:]]*}"
+rest="${prompt#"$lead"}"
 case "$rest" in
     '<task-notification>'*|'<system-reminder>'*)
         if meter_home; then

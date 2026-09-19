@@ -568,6 +568,35 @@ ONOISE3="$( route_run "$HN3" "$WITH_RIPWIRE" "$( promptjson noise3 "$NREPO" "$NO
 [ -z "$ONOISE3" ] \
     && ok "N5 notification: leading whitespace before the marker still skips" \
     || no "N5 notification: leading-whitespace variant still injected: [$ONOISE3]"
+# CodeRabbit PR #292 finding 4052087914: the guard's old `sed 's/^[[:space:]]*//'` strips leading
+# whitespace PER LINE (sed's `^` anchors each line of its pattern space), so a marker after a LEADING
+# BLANK LINE ("  \n\t<task-notification>…", exactly NOISE3's own shape) kept a leading newline and missed
+# the case match here. Nothing was ever injected (the classifier's own looksLikeSystemEvent guard, a
+# second independent layer, still abstained) — N5 above cannot see this — but the hook's guard fell
+# through to a real classifier subprocess call and logged status=abstain instead of status=skip-system.
+[ "$( rowget "$HN3/routing.jsonl" 1 status )" = "skip-system" ] \
+    && ok "N5b notification: the leading-blank-line variant logs status=skip-system, not a fallen-through abstain" \
+    || no "N5b notification: leading-blank-line variant logged status=[$( rowget "$HN3/routing.jsonl" 1 status )] (expected skip-system)"
+
+# STICKY PENDING FILE: the same fall-through reaches the LATER meter block, which deletes ANY existing
+# session pending file unconditionally (`rm -f "$pending"`, "written in BOTH arms" by design — see the
+# hook's own comment). A real adoption-window pending file, written by a genuine earlier recommend turn,
+# could be wiped out by an unrelated harness/system event that merely happens to share the session id.
+# Red against the pre-fix hook: the pending file the recommend call below writes does not survive the
+# leading-blank-line notification that follows it in the SAME session.
+HN5="$TMP/hn5"; mkdir -p "$HN5"
+STICKY_SESSION="noise5sticky"
+STICKY_HASH="$( printf '%s' "$STICKY_SESSION" | cksum | cut -d' ' -f1 )"
+STICKY_PENDING="$HN5/routing-pending/$STICKY_HASH.json"
+STICKPRIME="$( route_run "$HN5" "$WITH_RIPWIRE" "$( promptjson "$STICKY_SESSION" "$NREPO" 'Explain the implementation of alphaNode' )" RIPWIRE_METER_ARM=treatment )"
+[ -f "$STICKY_PENDING" ] \
+    && ok "N5c sticky-pending setup: a genuine recommend turn writes a pending file for the session" \
+    || no "N5c sticky-pending setup: no pending file written (out=[$STICKPRIME]) — cannot test the sticky-pending arm"
+NOISE3B="$( printf '  \n\t<task-notification>\nfoo\n</task-notification>' )"
+route_run "$HN5" "$WITH_RIPWIRE" "$( promptjson "$STICKY_SESSION" "$NREPO" "$NOISE3B" )" RIPWIRE_METER_ARM=treatment >/dev/null
+[ -f "$STICKY_PENDING" ] \
+    && ok "N5d sticky-pending: a leading-blank-line notification does not delete an existing session's pending file" \
+    || no "N5d sticky-pending: the pending file was deleted by a harness/system event sharing its session id"
 
 # THE NEGATIVE CONTROL: a real user prompt that merely MENTIONS the marker mid-sentence must still route
 # normally — this is a shape test on the harness's own wake-up marker, positional only, never a ban on
