@@ -301,6 +301,9 @@ struct DriftResult
     // absent at zero, on docs_unread='s rule — a presence probe that quietly lost a file answers "missing"
     // about a file that is there, which is this verb's named cry-wolf failure.
     std::uint64_t       escapedRoot = 0;
+    // The on-disk walk (collectRepoPaths) could not list the root: missing-file rows and corpus= were decided
+    // without the filesystem fallback. Disclosed as disk_walk_failed="1", absent when false (the house rule).
+    bool                diskWalkFailed = false;
     std::uint32_t       cleanDocs   = 0;
     std::uint32_t       anchors     = 0;
     std::uint32_t       checked     = 0;
@@ -1671,13 +1674,19 @@ struct RepoPaths
     std::vector<std::string>                                 auxFull;  // unparsed-but-textual files, absolute, sorted
     HashMap<std::string, rw::SmallVec<std::uint32_t, 2>>     byBase;   // basename → indices into `rel`
     std::uint64_t                                            escaped = 0;   // §SEC1 — links whose target left the root
+    // The root itself could not be walked: `rel` is then EMPTY, not a tree with no unindexed files, so every
+    // "missing-file" this run decides from it and the auxiliary corpus are unverified — the emitter says so
+    // (disk_walk_failed=). darkflags.h's CMakeScan::rootWalkFailed is the same fact for the --flags walk.
+    bool                                                     rootWalkFailed = false;
     enum class DisclosureWhy : std::uint8_t
     {
         SymlinkEscapesRoot,
+        RootWalkFailed,
     };
-    void disclose( DisclosureWhy ) noexcept   // the DISCLOSE sink: the field the emitter reads
+    void disclose( DisclosureWhy why ) noexcept   // the DISCLOSE sink: the fields the emitter reads
     {
-        ++escaped;
+        rootWalkFailed = rootWalkFailed || why == DisclosureWhy::RootWalkFailed;
+        escaped += why == DisclosureWhy::SymlinkEscapesRoot ? 1u : 0u;
     }
 };
 
@@ -1721,8 +1730,13 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
     namespace fs = std::filesystem;
     RepoPaths       out;
     std::error_code ec;
+    // libc++ AND libstdc++ swallow EACCES on the ROOT under skip_permission_denied (the flag is for entries met
+    // mid-walk), so an unlistable root reads as an empty SUCCESSFUL walk with `ec` clear. Probe it without the
+    // flag first — collectCMakeFiles' measured shape (darkflags.h) — and fold both into one check.
+    std::error_code pec;
+    { const fs::directory_iterator probe( root, pec ); }
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( ec ) { DISCLOSE( "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
+    if( pec || ec ) { DISCLOSE( out, RepoPaths::DisclosureWhy::RootWalkFailed, "doc-drift: cannot walk the root — the on-disk existence probe is skipped" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );   // §SEC1 — the crawl boundary, canonicalized once
 
     const fs::recursive_directory_iterator end;
@@ -2423,6 +2437,7 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
     // the indexed files and the auxiliary text files form ONE index space the scan can carve into blocks.
     const RepoPaths repo = anchorTotal > 0 ? collectRepoPaths( root, excludes ) : RepoPaths{};
     res.escapedRoot      = repo.escaped;   // §SEC1 — a refusal this walk made is this verb's to disclose
+    res.diskWalkFailed   = repo.rootWalkFailed;
 
     std::vector<std::uint32_t> lineCounts( ing.files.size(), 0 );
     if( anchorTotal > 0 )
@@ -2822,6 +2837,13 @@ inline void writeDocDriftPage( std::FILE* out, const DriftResult& res, std::size
     {
         std::fputs( gitoracle::kHistoryProbeLegend, out );
     }
+    // Defined only where it is met: the clause rides exactly when the root carries the attribute.
+    if( res.diskWalkFailed )
+    {
+        rw::emitRaw( out, " disk_walk_failed=\"1\" means the root could not be LISTED for the on-disk existence probe: a "
+                          "missing-file row may then name a file that exists but is not indexed, and corpus= omits the "
+                          "unindexed text files. " );
+    }
     std::fputs( "-->", out );
     rw::emitTo( out, "<doc-drift docs=\"{}\" clean=\"{}\" anchors=\"{}\" checked=\"{}\" unchecked=\"{}\" drift=\"{}\" dated=\"{}\" prose=\"{}\" corpus=\"{}\"",
                   res.docsScanned, res.cleanDocs, res.anchors, res.checked, unchecked, res.drift, res.dated, res.prose, res.corpusFiles );
@@ -2833,6 +2855,10 @@ inline void writeDocDriftPage( std::FILE* out, const DriftResult& res, std::size
     {
         // §SEC1 — absent means no symlink under this root pointed out of it (every repository, until one is hostile)
         rw::emitTo( out, " escaped_root=\"{}\"", ( unsigned long long ) res.escapedRoot );
+    }
+    if( res.diskWalkFailed )
+    {
+        rw::emitRaw( out, " disk_walk_failed=\"1\"" );   // absent means the on-disk walk listed the root
     }
     if( !res.filter.empty() )
     {
