@@ -288,7 +288,7 @@ and make the disclosure safe under concurrency from the first commit.
    Kotlin ceiling today and needs a clause per language.
 4. **Disclosure lives in output rows, never only on stderr.** A refusal is a `--skipped` row with
    `why="nest-refused"`, counted in `nest_refused=`, plus a legend-defined refusal attribute on `--match`.
-   Gates assert those rows. They never assert the `DEGRADED_PATH_ALERT` text: the alert fires once per
+   Gates assert those rows. They never assert the `DISCLOSE` text: the alert fires once per
    call site per process (not once per file), compiles out in Release, and is written in several pieces
    that a concurrent stderr line can split, which is what made `test/kotlincheck.sh` §12's alert arm
    flaky.
@@ -314,7 +314,7 @@ and make the disclosure safe under concurrency from the first commit.
 - **Honesty in output.** Unparsed files are counted, never silently dropped; a count that cannot be a
   total carries `counts_floor="1"`; a zero means "none found". Every blind spot above is disclosed in
   the output or its legend, in the gate header, and in `docs/ARCHITECTURE.md` — not only in a comment.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any recoverable path.
+- **`DISCLOSE`, never `ASSUME( false )`**, on any recoverable path.
 - **No `std::map` or `std::unordered_map`** — `HashMap<>` (ankerl) or `gtl::btree_map`.
 - **House style** (`CONTRIBUTING.md` §3): Allman braces, braces on every control body, spaces inside
   parens, output through `rw::emitTo`, no new printf-family call site.

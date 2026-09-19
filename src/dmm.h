@@ -62,7 +62,7 @@
 #include "gitstamp.h"           // stampAt — the at="<sha>[+dirty]" anchor (M10: --dmm read git and carried no anchor)
 #include "ingest.h"             // ingest — the second side is a real parse of a materialized tree
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — every failure here degrades to UNAVAILABLE, never aborts
+#include "infra/Diagnostics.h"  // DISCLOSE — every failure here degrades to UNAVAILABLE, never aborts
 
 #include <cstdint>
 #include <cstdio>
@@ -94,7 +94,8 @@ inline constexpr std::uint32_t kUnitInterfacingLowRiskMax = 2;    // parameters
 // The three properties, in the order they are emitted. Index-addressed rather than switched: every loop in
 // this file walks all three, and a fourth would be a row here plus a threshold above.
 inline constexpr std::size_t kPropCount = 3;
-inline constexpr const char* kPropNames[kPropCount] = { "size", "complexity", "interfacing" };
+inline constexpr const char* kPropNames[] = { "size", "complexity", "interfacing" };
+static_assert( std::size( kPropNames ) == kPropCount, "kPropNames: one name per property — a spelled extent zero-fills a missing one" );
 
 // Why the run could not produce a score. Ok and NoParent/NoGit/… are NOT the same thing as BadRev: the first
 // group is the environment (degrade to an UNAVAILABLE report, exit 0), BadRev is the user's typo (a refusal
@@ -282,7 +283,7 @@ inline bool ingestCommitTree( const std::string& root, const std::string& sha, c
     out = ingest( tmpRoot.c_str(), excludes, cachePath.empty() ? std::string_view {} : std::string_view( cachePath ), maxFileBytes );
     if( out.symbols.empty() && out.files.empty() )
     {
-        DEGRADED_PATH_ALERT( "dmm: a materialized commit tree ingested empty" );
+        DISCLOSE( "dmm: a materialized commit tree ingested empty" );
         return false;
     }
     return true;

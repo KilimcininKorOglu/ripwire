@@ -16,7 +16,7 @@
 # lift: promoted N symbols in M files …]" / "[structural expansion: …]" — spliced into --for's header
 # comment and --json's own key, exactly like the existing mentionNote/boostNote precedent (present only
 # when the boost actually fired; absent and byte-free otherwise). (b) expandParams()/sibliftParams() now
-# call DEGRADED_PATH_ALERT (stderr, once per site) when the env var is SET but rejected — CONTRIBUTING §3's
+# call DISCLOSE (stderr, once per site) when the env var is SET but rejected — CONTRIBUTING §3's
 # degrade shape (clamp/fall back to OFF, and say so) — leaving the env-UNSET case wordless on purpose (this
 # experiment has no default behavior to be silent about).
 #

@@ -362,7 +362,7 @@ while IFS= read -r v; do
     rm -rf "$ARGVOUT"; mkdir -p "$ARGVOUT"
     # shellcheck disable=SC2086
     "$BIN"  $v >"$TMP/o.new"  2>"$TMP/e.new"  </dev/null; rcn=$?
-    # DEGRADED_PATH_ALERT prints __LINE__, so ANY refactor that moves code shifts every alert below it
+    # DISCLOSE prints __LINE__, so ANY refactor that moves code shifts every alert below it
     # (an adversarial pass found 7 of 11 sites in main.cpp shifted when it grew 118 lines). That is a
     # position artifact, not a behaviour change — the alert's MESSAGE and the function it names are the
     # signal, so normalise the ":NNNN" and keep everything else byte-exact. Without this the harness

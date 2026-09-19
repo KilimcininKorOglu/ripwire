@@ -131,7 +131,7 @@
 //   - Directory components. O_NOFOLLOW constrains the final component only, exactly as for the writes.
 //
 // Each sidecar keeps ONE read seam (readNotesSidecar / readBaselineSidecar / readArchBaselineSidecar) that
-// calls openNoFollowRead below and carries its own DEGRADED_PATH_ALERT, for the same once-per-site reason the
+// calls openNoFollowRead below and carries its own DISCLOSE, for the same once-per-site reason the
 // write seams keep theirs.
 //
 // ── ROUND 4: A NON-REGULAR FILE AT THE NAME, AND A READ THAT HOLDS ONE LINE ─────────────────────────────
@@ -168,17 +168,21 @@
 
 #include "infra/emit.h"   // rw::emitTo — the refusal goes to stderr through THE emitter, not fprintf
 
-#include <fcntl.h>        // ::open + O_NOFOLLOW + O_NONBLOCK — the whole mechanism, in one syscall
+#include <fcntl.h>        // ::open + O_NOFOLLOW + O_NONBLOCK + O_EXCL + O_CLOEXEC — the whole mechanism, in one syscall
 #include <sys/stat.h>     // ::lstat + S_ISLNK (mcpedit, and the post-ELOOP wording); ::fstat + S_ISREG (round 4)
-#include <unistd.h>       // ::write / ::close — the descriptor the writers hold instead of a stream
+#include <unistd.h>       // ::write / ::close / ::read / ::getpid — the descriptor the writers hold instead of a stream
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>        // std::uint64_t — the entropy-fallback mixer (round 5)
 #include <cstdio>         // std::FILE / ::fdopen / ::getline / std::fclose — the read half's line stream
 #include <cstdlib>        // std::free — POSIX getline's buffer
 #include <cstring>        // std::strerror — an honest reason for a failure that is not a link
+#include <chrono>         // std::chrono::steady_clock — the entropy-fallback mixer (round 5)
+#include <random>         // std::random_device — the entropy fallback when /dev/urandom is unavailable (round 5)
+#include <optional>       // readRegularFileNoFollow's absent-or-bytes answer
 #include <string>
 #include <string_view>
-#include <sys/types.h>    // ssize_t
+#include <sys/types.h>    // ssize_t + mode_t
 
 namespace rw::pathguard
 {
@@ -202,7 +206,7 @@ inline bool isSymlink( const std::string& path ) noexcept
 // emitter is entitled to clobber errno on its way to stderr.
 //
 // `err == ELOOP` is the link case, and it is the one the caller re-words into its own site-specific
-// DEGRADED_PATH_ALERT — see the three sidecar writers, which each keep the alert text they have always had.
+// DISCLOSE — see the three sidecar writers, which each keep the alert text they have always had.
 struct OpenedFile
 {
     int fd  = -1;
@@ -301,10 +305,11 @@ inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string
 // writeBaseline used to `return true` regardless of whether the bytes reached the disk and now returns this;
 // writeNotes already answered for its stream (`return bool( f )`) and keeps that contract through the
 // descriptor. Either way a full disk stops being reported as a written sidecar.
-inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
+// Write every byte of `bytes` to `fd` WITHOUT closing it — a short write is retried (a signal can truncate
+// one), EINTR is retried, anything else is a failure. Shared by writeAllAndClose and the round-5 temp holder.
+inline bool writeAll( int fd, std::string_view bytes ) noexcept
 {
-    bool        wrote = true;
-    std::size_t off   = 0;
+    std::size_t off = 0;
     while( off < bytes.size() )
     {
         const ssize_t n = ::write( fd, bytes.data() + off, bytes.size() - off );
@@ -317,14 +322,357 @@ inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
         {
             continue;
         }
-        wrote = false;
-        break;
+        return false;
     }
+    return true;
+}
+
+inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
+{
+    bool wrote = writeAll( fd, bytes );
     if( ::close( fd ) != 0 )
     {
         wrote = false;
     }
     return wrote;
+}
+
+// ── ROUND 5: THE TEMP FILE OF A tmp+rename PUBLISH IS CREATED EXCLUSIVELY, WITHOUT FOLLOWING A LINK ──────
+//
+// Rounds 1-4 guarded the FINAL sidecar names (openNoFollowTruncate / openNoFollowRead). The three atomic
+// "publish" writers — mcpedit::atomicWrite, quality::atomicWriteFile and ingest::saveCache — reach their
+// final name only through a rename() of a TEMP file they open beside it. That temp is now created the same
+// way the sidecar names are: as a fresh file, refusing an existing entry at the name.
+//
+// The rule is the CREATE, not a check in front of it (round 2's CWE-367 lesson): O_CREAT|O_EXCL means the
+// kernel creates the file or fails — a symlink OR any existing file at the name yields EEXIST and is never
+// opened, never followed, never truncated; O_NOFOLLOW is kept as belt-and-braces for the same intent;
+// O_CLOEXEC keeps the descriptor out of any child git/tar. The name carries a CSPRNG-drawn suffix, so an
+// existing entry at a candidate name does not block the write either — a fresh draw picks another and the
+// loop retries a few times on EEXIST. The mode argument is each writer's HISTORICAL create mode (0644 for the
+// mcpedit temp, which then fchmods to the edited file's own bits; 0666 for the two tool-state writers, whose
+// ofstream / fopen requested exactly that), so the kernel applies the umask precisely as before and every
+// file keeps today's permissions.
+//
+// D1 FOLLOW-UP: when lane/os-header lands, randomTempSuffix()'s entropy read and openExclNoFollow's ::open
+// move behind the rw::os seam (arc4random_buf / getrandom, os::open) — this local helper is the pre-D1 form
+// and is the one place that moves. Gated by test/tempfilesymlinkcheck.sh (red on main, green after).
+
+// A short, unpredictable hex suffix for a temp name. CSPRNG-quality via /dev/urandom; if that cannot be read
+// the O_EXCL|O_NOFOLLOW create still holds, so the fallback only needs to avoid a needless EEXIST retry —
+// it mixes std::random_device with the pid and a monotone clock.
+inline std::string randomTempSuffix()
+{
+    unsigned char raw[ 12 ] = { 0 };
+    bool          haveEntropy = false;
+    const int     rfd = ::open( "/dev/urandom", O_RDONLY | O_CLOEXEC );
+    if( rfd >= 0 )
+    {
+        std::size_t got = 0;
+        while( got < sizeof( raw ) )
+        {
+            const ssize_t n = ::read( rfd, raw + got, sizeof( raw ) - got );
+            if( n > 0 )
+            {
+                got += static_cast<std::size_t>( n );
+                continue;
+            }
+            if( n < 0 && errno == EINTR )
+            {
+                continue;
+            }
+            break;
+        }
+        ::close( rfd );
+        haveEntropy = ( got == sizeof( raw ) );
+    }
+    if( !haveEntropy )
+    {
+        std::random_device rd;
+        std::uint64_t      mix = ( static_cast<std::uint64_t>( rd() ) << 32 ) ^ static_cast<std::uint64_t>( rd() )
+                               ^ ( static_cast<std::uint64_t>( ::getpid() ) << 17 )
+                               ^ static_cast<std::uint64_t>( std::chrono::steady_clock::now().time_since_epoch().count() );
+        for( unsigned char& b : raw )
+        {
+            mix = mix * 6364136223846793005ULL + 1442695040888963407ULL;
+            b   = static_cast<unsigned char>( mix >> 56 );
+        }
+    }
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string           out;
+    out.reserve( sizeof( raw ) * 2 );
+    for( unsigned char b : raw )
+    {
+        out.push_back( kHex[ b >> 4 ] );
+        out.push_back( kHex[ b & 0x0f ] );
+    }
+    return out;
+}
+
+// Create EXACTLY `path` for writing, failing (never following a link, never truncating) if anything already
+// sits at the name. O_EXCL makes the create atomic — a symlink at the name yields EEXIST, not a followed
+// open — and O_NOFOLLOW is the redundant guard for the same intent. Returns the descriptor, or -1 with errno.
+inline int openExclNoFollow( const char* path, mode_t mode ) noexcept
+{
+    return ::open( path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode );
+}
+
+// An RAII holder for the temp side of a tmp+rename publish. It owns the exclusively-created descriptor and
+// the temp name, and its destructor UNLINKS the temp unless commit() has renamed it into place — so every
+// early return, and every failed write, cleans up on its own with no manual unlink at the call site. This is
+// the one place the create/cleanup discipline lives; the three publish writers hold one and never re-derive
+// it. Move-only; a moved-from holder owns nothing and does nothing.
+//
+// The write can go three ways, all supported: write() through the fd (atomicWriteFile); the caller's own
+// loop on fd() with an fchmod/fsync in between (mcpedit::atomicWrite); or releaseFd() into a FILE* the caller
+// then fcloses (ingest::saveCache). commit() closes any descriptor the holder still owns and renames.
+class ExclTempFile
+{
+public:
+    ExclTempFile() = default;
+    ExclTempFile( int fd, std::string path ) noexcept : fd_( fd ), path_( std::move( path ) ) {}
+
+    ExclTempFile( const ExclTempFile& )            = delete;
+    ExclTempFile& operator=( const ExclTempFile& ) = delete;
+    ExclTempFile& operator=( ExclTempFile&& )      = delete;
+    ExclTempFile( ExclTempFile&& other ) noexcept
+        : fd_( other.fd_ ), path_( std::move( other.path_ ) ), committed_( other.committed_ )
+    {
+        other.fd_        = -1;
+        other.committed_ = true;   // a moved-from holder owns nothing and must not unlink
+        other.path_.clear();
+    }
+    ~ExclTempFile()
+    {
+        if( fd_ >= 0 )
+        {
+            ::close( fd_ );
+        }
+        if( !committed_ && !path_.empty() )
+        {
+            ::unlink( path_.c_str() );   // an uncommitted temp never survives the writer's scope
+        }
+    }
+
+    bool               ok() const noexcept   { return !path_.empty(); }
+    int                fd() const noexcept   { return fd_; }
+    const std::string& path() const noexcept { return path_; }
+
+    // Hand the descriptor to a FILE* owner (saveCache's fdopen). The holder keeps the PATH — still unlinked
+    // on destruction unless committed — but no longer closes the fd; the new owner does.
+    int releaseFd() noexcept
+    {
+        const int f = fd_;
+        fd_ = -1;
+        return f;
+    }
+
+    // Write every byte through the fd and leave it open for a following fchmod / fsync / commit.
+    bool write( std::string_view bytes ) noexcept
+    {
+        return fd_ >= 0 && writeAll( fd_, bytes );
+    }
+
+    // Publish over `finalPath`: close any descriptor we still hold, then rename the temp over the target.
+    // On success the temp is consumed and the destructor leaves it alone; on failure nothing is published
+    // and the destructor still removes the temp.
+    bool commit( const std::string& finalPath ) noexcept
+    {
+        if( fd_ >= 0 )
+        {
+            const bool closed = ::close( fd_ ) == 0;
+            fd_ = -1;
+            if( !closed )
+            {
+                return false;
+            }
+        }
+        if( path_.empty() || std::rename( path_.c_str(), finalPath.c_str() ) != 0 )
+        {
+            return false;
+        }
+        committed_ = true;
+        return true;
+    }
+
+private:
+    int         fd_        = -1;
+    std::string path_;
+    bool        committed_ = false;
+};
+
+// Open a fresh, unpredictably-named temp file `prefix<random>suffix` beside a target, created exclusively and
+// without following a link, wrapped in the RAII holder above. `prefix` is typically "<target>." and `suffix`
+// typically ".tmp"; keeping them separate lets a caller preserve its historical temp-name SHAPE (so a `*.tmp`
+// residue glob still matches). Retries a few times on EEXIST — an existing entry at a candidate name that a
+// fresh CSPRNG draw steps past — and stops at once on any other errno. `!ok()` means the caller refuses and discloses
+// through its own path.
+inline ExclTempFile createExclTempFile( const std::string& prefix, std::string_view suffix, mode_t mode )
+{
+    for( int attempt = 0; attempt < 8; ++attempt )
+    {
+        std::string cand = prefix + randomTempSuffix() + std::string( suffix );
+        const int   fd   = openExclNoFollow( cand.c_str(), mode );
+        if( fd >= 0 )
+        {
+            return ExclTempFile( fd, std::move( cand ) );
+        }
+        if( errno != EEXIST )
+        {
+            break;
+        }
+    }
+    return ExclTempFile();
+}
+
+// A descriptor that closes itself: the RAII owner for a one-shot read. Move-only.
+class OwnedFd
+{
+public:
+    explicit OwnedFd( int fd ) noexcept : fd_( fd ) {}
+    OwnedFd( const OwnedFd& )            = delete;
+    OwnedFd& operator=( const OwnedFd& ) = delete;
+    OwnedFd& operator=( OwnedFd&& )      = delete;
+    OwnedFd( OwnedFd&& other ) noexcept : fd_( other.fd_ ) { other.fd_ = -1; }
+    ~OwnedFd()
+    {
+        if( fd_ >= 0 )
+        {
+            ::close( fd_ );
+        }
+    }
+    int  get() const noexcept   { return fd_; }
+    bool valid() const noexcept { return fd_ >= 0; }
+
+    // Close what is held and take ownership of `fd` — how a descriptor chain steps one component down.
+    void reset( int fd ) noexcept
+    {
+        if( fd_ >= 0 )
+        {
+            ::close( fd_ );
+        }
+        fd_ = fd;
+    }
+
+private:
+    int fd_ = -1;
+};
+
+// Read everything `fd` yields into `out`, retrying EINTR. False, with `out` empty, on a read error.
+inline bool readAllFromFd( int fd, std::string& out )
+{
+    char buf[ 8192 ];
+    for( ;; )
+    {
+        const ssize_t n = ::read( fd, buf, sizeof( buf ) );
+        if( n > 0 )
+        {
+            out.append( buf, static_cast<std::size_t>( n ) );
+            continue;
+        }
+        if( n == 0 )
+        {
+            return true;
+        }
+        if( errno == EINTR )
+        {
+            continue;
+        }
+        out.clear();
+        return false;
+    }
+}
+
+// The whole of `path` when it is a regular file, read through ONE non-blocking, no-follow descriptor; nullopt when it
+// is absent, a symlink at the final component, anything that is not a regular file (a FIFO never blocks the open:
+// O_NONBLOCK, then fstat), or unreadable. For small metadata a caller only inspects — never a file whose absence
+// or refusal it has to word to the user.
+inline std::optional<std::string> readRegularFileNoFollow( const std::string& path )
+{
+    const OwnedFd fd( ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+    struct stat   openedSt{};
+    if( !fd.valid() || ::fstat( fd.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+    {
+        return std::nullopt;
+    }
+    std::string bytes;
+    if( !readAllFromFd( fd.get(), bytes ) )
+    {
+        return std::nullopt;
+    }
+    return bytes;
+}
+
+// The part of `path` below `dir`, or false when `path` is not strictly beneath it — including a sibling whose name
+// merely starts with dir's ("/x/plans-other/…" is not beneath "/x/plans").
+inline bool relativeBeneath( const std::string& dir, const std::string& path, std::string_view& rel ) noexcept
+{
+    if( dir.empty() || path.size() <= dir.size() || path.compare( 0, dir.size(), dir ) != 0 )
+    {
+        return false;
+    }
+    std::size_t relStart = dir.size();
+    if( dir.back() != '/' )
+    {
+        if( path[ relStart ] != '/' )
+        {
+            return false;
+        }
+        ++relStart;
+    }
+    rel = std::string_view( path ).substr( relStart );
+    return !rel.empty();
+}
+
+// Read the whole of `path` into `out`, where the caller has already confined `path` beneath `dir` (both
+// canonical, as realpath spells them). The read goes through a descriptor chain ANCHORED at `dir`: `dir` is
+// opened once, and every component of `path` below it is opened with openat( ..., O_NOFOLLOW ) relative to the
+// previous descriptor — O_DIRECTORY for the intermediates — so no component beneath the confined directory is
+// resolved through a symbolic link at read time, and the bytes read belong to a file that really is beneath
+// `dir` when it is opened. A component that is now a link, missing, empty, "." or ".." refuses the read, as does
+// a `path` that does not start with `dir`. The final component must be a regular file (O_NONBLOCK, then fstat —
+// a FIFO never blocks). Returns false, with `out` empty, on any refusal or read failure; the caller words its
+// own refusal. POSIX openat throughout (D1 follow-up: these calls move behind rw::os with the rest).
+inline bool readWholeBeneathNoFollow( const std::string& dir, const std::string& path, std::string& out )
+{
+    out.clear();
+    std::string_view rel;
+    if( !relativeBeneath( dir, path, rel ) )
+    {
+        return false;
+    }
+
+    OwnedFd cur( ::open( dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC ) );
+    if( !cur.valid() )
+    {
+        return false;
+    }
+    for( ;; )
+    {
+        const std::size_t slash = rel.find( '/' );
+        const std::string component( rel.substr( 0, slash ) );
+        if( component.empty() || component == "." || component == ".." )
+        {
+            return false;
+        }
+        if( slash == std::string_view::npos )
+        {
+            const OwnedFd file( ::openat( cur.get(), component.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+            struct stat   openedSt{};
+            if( !file.valid() || ::fstat( file.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+            {
+                return false;
+            }
+            return readAllFromFd( file.get(), out );
+        }
+        const int next = ::openat( cur.get(), component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC );
+        if( next < 0 )
+        {
+            return false;
+        }
+        cur.reset( next );
+        rel.remove_prefix( slash + 1 );
+    }
 }
 
 // ── the read half (round 3) ───────────────────────────────────────────────────────────────────────────

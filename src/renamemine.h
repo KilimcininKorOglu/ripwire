@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -81,10 +82,12 @@
 #include "quality.h"            // gitRepoHasHistory
 #include "gitstamp.h"           // atAttr — at="<sha>[+dirty]" root anchor (M10: --naming-calibration read git and carried no anchor)
 #include "serialize.h"          // escapeXml
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>       // std::declval — the rule-mask width static_assert reads firedRuleMask's return type
+#include <limits>       // std::numeric_limits — the mask-width static_assert: an index shifted into a mask must fit it
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -297,7 +300,7 @@ inline RenameHarvest mineRenamePairs( const std::string& root )
         return harvest;
     }
 
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " log --no-merges --no-color --no-ext-diff --no-textconv --no-renames"
                             " --format='%x01%H' -p -U0 2>/dev/null";
 
@@ -349,33 +352,33 @@ inline RenameHarvest mineRenamePairs( const std::string& root )
 
     if( !walk.started )
     {
-        DEGRADED_PATH_ALERT( "renamemine: git log failed to start — the calibration corpus is empty, which the report states rather than scoring zero" );
+        DISCLOSE( "renamemine: git log failed to start — the calibration corpus is empty, which the report states rather than scoring zero" );
         return harvest;
     }
     if( walk.truncated )
     {
         harvest.truncated = true;
-        DEGRADED_PATH_ALERT( "renamemine: the history walk hit its bound — candidates= is a floor, not a total" );
+        DISCLOSE( "renamemine: the history walk hit its bound — candidates= is a floor, not a total" );
     }
     // The dangerous failure, guarded the way gitoracle guards it: the caller has established that HEAD
     // resolves, so ZERO commit headers means git failed (stderr is swallowed, popen still succeeds). An empty
     // candidate set with ok=true reads as "this repo has no renames", which is a claim, not an observation.
     if( harvest.commitsWalked == 0 )
     {
-        DEGRADED_PATH_ALERT( "renamemine: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'no renames'" );
+        DISCLOSE( "renamemine: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'no renames'" );
         return harvest;
     }
     if( walk.status != 0 )
     {
         harvest.truncated = true;
-        DEGRADED_PATH_ALERT( "renamemine: git log exited non-zero mid-walk — the partial answer is kept and marked truncated" );
+        DISCLOSE( "renamemine: git log exited non-zero mid-walk — the partial answer is kept and marked truncated" );
     }
 
     harvest.candidates.reserve( votes.size() );
     for( const auto& vote : votes )
     {
         const std::size_t sep = vote.first.find( '\x01' );
-        VERIFY( sep != std::string::npos );
+        ASSUME( sep != std::string::npos );
         harvest.candidates.push_back( { vote.first.substr( 0, sep ), vote.first.substr( sep + 1 ), vote.second } );
     }
     // The hash map's iteration order is not a contract; the emitted order is. Sort before anyone can see it.
@@ -489,6 +492,8 @@ inline std::uint32_t firedRuleMask( const Symbol& s, std::string_view sig )
     }
     return mask;
 }
+static_assert( kRuleCount <= std::numeric_limits<decltype( firedRuleMask( std::declval<const Symbol&>(), std::string_view() ) )>::digits,
+               "firedRuleMask holds one bit per naming rule — widen it before kRuleCount outgrows it" );
 
 // Read one file whole, memoized. A signature is a byte range in a file, and an unreadable file must degrade
 // to "no signature" — both role-vs-return-type rules then stay silent — rather than to a guess. The read
@@ -614,7 +619,7 @@ inline CalibrationReport scoreRenamePairs( const IngestResult& ing, RenameHarves
         }
         const RenameCandidate& candidate = harvest.candidates[pairIndex];
         const Symbol*          newSymbol = eligibleNamed( candidate.newName );
-        VERIFY( newSymbol != nullptr );
+        ASSUME( newSymbol != nullptr );
 
         Symbol oldSymbol = *newSymbol;
         oldSymbol.name   = candidate.oldName;

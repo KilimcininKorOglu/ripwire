@@ -31,7 +31,7 @@ cmake -S . -B asan -DRIPWIRE_ASAN=ON && cmake --build asan -j
 ```
 
 **Do not configure a local dev tree with `-DCMAKE_BUILD_TYPE=Release`.** Release defines `NDEBUG`,
-which compiles `DEGRADED_PATH_ALERT` out; any gate that asserts a degrade path then passes blind.
+which compiles the `DISCLOSE( msg )` trace out; any gate that asserts a degrade path then passes blind.
 CI builds *both* flavours on purpose — Release catches optimizer-only bugs, the plain build catches
 degrade paths. If you add a degrade path, the plain run is what proves it.
 
@@ -77,7 +77,10 @@ cmake --build build --clean-first -j          # and the same for asan/ if that t
 `test/g1freshcheck.sh` catches the ordinary stale binary (binary older than source) and is worth
 believing when it fires — it is not noise. It cannot catch this variant, because here the binary is
 *newer* than the source and only its contents are stale. Nothing in CMake can repair a source that
-changed mid-compile; the discipline is the fix.
+changed mid-compile; the discipline is the fix. When this variant is suspected, `--doctor`'s `layout`
+row reports the cross-translation-unit `sizeof`/`alignof` evidence; treat `state="disagree"` as a
+clean-rebuild requirement. `state="agree"` compares only the `types=` registered in `src/model.h`; a
+same-size layout change or a stale constant is invisible, so `agree` does not rule out a mixed binary.
 
 ## Verify
 
@@ -127,8 +130,10 @@ the same commit — `test/manifestcheck.sh` fails otherwise.
 3. **Honesty in output is a feature.** Counts that cannot be totals are labelled floors
    (`counts_floor="1"`); a zero means "none found", never "none exists"; every truncation is
    disclosed in the header. Do not add a surface that quietly rounds, guesses, or omits.
-4. **Never `VERIFY( false )` on a degrade path** — release deletes the fallback behind it. Use
-   `DEGRADED_PATH_ALERT`.
+4. **Never `ASSUME( false )` (or an `EXPECTS`/`ENSURES` of false) on a degrade path.** Release deletes the fallback
+   behind it. Guard the path and disclose it: `DISCLOSE( sink, why )`, whose sink sets the output field the reader
+   sees, or `DISCLOSE( Diagnostics::answerUnchanged, "reason" )` when the answer truly cannot change. A one-argument
+   `DISCLOSE( msg )` ships nothing and may not be added. External input is `VALIDATE`d, never `ASSUME`d.
 5. **Never `std::map` / `std::unordered_map`** — see the container rule in `CONTRIBUTING.md`.
 
 ## Style

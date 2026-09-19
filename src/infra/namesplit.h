@@ -16,7 +16,7 @@
 // using-declarations, so every existing call site and its gates stay BYTE-IDENTICAL — this hoist moved code,
 // it did not change behaviour.
 
-#include "Diagnostics.h" // VERIFY — the depth invariant below
+#include "Diagnostics.h" // ASSUME — the depth invariant below
 
 #include <cstddef>
 #include <string_view>
@@ -69,7 +69,7 @@ inline std::string_view stripTrailingGroup( std::string_view f, char open, char 
         }
         else if( f[i] == open )
         {
-            VERIFY( depth > 0 ); // depth is seeded by f.back() == close
+            ASSUME( depth > 0 ); // depth is seeded by f.back() == close
             if( --depth != 0 )
             {
                 continue;

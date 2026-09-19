@@ -475,6 +475,53 @@ def classify_skipped(rc, out):
     return all(skip.start() < c for c in claims)
 
 
+# --- an NDEBUG skip from a build that does not define NDEBUG is a FAILURE (2026-09-16) --------------------------
+# DISCLOSE is compiled out only where NDEBUG is defined, and CMake defines NDEBUG for exactly the build
+# types `--version` names Release / RelWithDebInfo / MinSizeRel. On any other flavour (the plain `dev` configure, an
+# ASan tree) a gate that skips an alert arm "because alerts are compiled out" asserted nothing AND gave a false
+# reason, and the classification above cannot see it: an arm-level skip inside a gate that passed is a pass.
+#
+# The red this was written from: churnjoincheck G2, preproccondcheck's depth-bound arm and w3fixlegendcheck arm 6
+# each decided the flavour by probing `--rank-by=churn --since=notadate` for an alert. e7688981 (M8) made that
+# value a refusal that exits 1 before any degrade path runs, so from that commit (2026-09-04) all three printed their
+# NDEBUG skip on the plain build too -- the leg CI keeps precisely to prove degrade paths (CONTRIBUTING.md §5) --
+# with the suite green. So the harness reads the build type ONCE and fails any gate whose skip marker blames NDEBUG or compiled-out
+# alerts on a flavour that compiles them in. It reads the gate's own skip rows (_SKIP_RE, never narration), so a
+# skip for any other reason is untouched; a binary that names no build type DISARMS the check and the summary says
+# so -- it never guesses a flavour in either direction. test/skipclassifycheck.sh arm (I) pins it both ways.
+NDEBUG_BUILD_TYPES = ("Release", "RelWithDebInfo", "MinSizeRel")
+_NDEBUG_REASON_RE = re.compile(r"NDEBUG|compiled out", re.I)
+
+
+def build_type_of(path):
+    """The build type `<binary> --version` names -- "dev" from `ripwire 0.6.1 (dev, AppleClang ...)`, the reading
+    the gates share (`sed -nE 's/^[^(]*\\(([^,)]*).*/\\1/p'`) -- or None when the binary cannot run or names none."""
+    try:
+        p = subprocess.run([path, "--version"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r"[^(\n]*\(([^,)\n]*)", p.stdout.decode("utf-8", "replace"))
+    if m is None or not m.group(1):
+        return None
+    return m.group(1)
+
+
+def ndebug_skip_rows(out):
+    """Every skip MARKER row in the transcript whose reason is NDEBUG / compiled-out alerts."""
+    return [ln.strip() for ln in out.splitlines() if _SKIP_RE.search(ln) and _NDEBUG_REASON_RE.search(ln)]
+
+
+def fail_ndebug_skips(rc, out):
+    """(rc, out) with every NDEBUG skip row turned into a failure, when the binary under test names a build type that
+    does not define NDEBUG; unchanged otherwise, including when no build type could be read. One FAIL row per
+    offending skip, so each lands under "what failed" carrying its own build type."""
+    rows = ndebug_skip_rows(out) if polices_ndebug_skips else []
+    for row in rows:
+        out += (f"\n  FAIL  pargates: skipped as if NDEBUG, on build type '{bin_build_type}', which does not define it "
+                f"(DISCLOSE is compiled IN, so this arm asserted nothing): {row}")
+    return (rc or 1) if rows else rc, out
+
+
 def skip_reason(out):
     """The gate's own skip declaration, for the SKIPPED section -- the marker line itself, never a line that
     merely mentions the word."""
@@ -679,6 +726,7 @@ def run(g):
         # the budget expired, and while its group was being stopped, is kept ahead of it: a gate killed at
         # 300 s that had already announced a failing arm used to report ONLY the word TIMEOUT.
         out += f"\nTIMEOUT after {limit}s (declared budget={limit}s{scaled})"
+    rc, out = fail_ndebug_skips(rc, out)     # before the classification: an NDEBUG skip on a dev build is no skip
     # SKIPPED vs PASSED -- the gate's first verdict decides; see classify_skipped() for the rule and the red
     # that produced it (a byte window over a transcript whose origin moves with the checkout's pathname).
     skipped = classify_skipped(rc, out)
@@ -788,6 +836,8 @@ def _dirt_watch():
 
 
 bin_before = _bin_fingerprint()
+bin_build_type = build_type_of(binp)        # None: --version names no build type -- the NDEBUG-skip check is disarmed, and says so
+polices_ndebug_skips = bin_build_type is not None and bin_build_type not in NDEBUG_BUILD_TYPES
 
 t0 = time.time()
 dirt_thread = None
@@ -863,6 +913,9 @@ if bin_moved:
     print("***   Find the gate that writes to the shared build tree and fix that first.")
 if dirt_baseline is None:
     print("\ntree tripwire: DISARMED -- git cannot report status for this root, so a gate writing into the shared checkout goes unseen here")
+if bin_build_type is None:
+    print("\nndebug-skip check: DISARMED -- the binary's --version names no build type, so a gate that skips an alert arm as "
+          "'compiled out' on a build that compiles alerts IN goes unseen here")
 if dirt_seen:
     print(f"\n*** A GATE WROTE INTO THE SHARED CHECKOUT WHILE THE SUITE RAN: {root}")
     print(f"***   sampled every {DIRT_POLL_SEC:g}s -- a shorter window can be missed, so this list is a floor, not a total:")

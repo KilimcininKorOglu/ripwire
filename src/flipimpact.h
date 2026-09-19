@@ -72,7 +72,7 @@
 #include "testmap.h"            // M21(b): TestRunnerIndex / runAttrDisclosed — the ONE run= hint the tests_to_run family shares
 #include "pageview.h"           // §P8: pageWindow / effectiveRowCap / secondaryCutAttrs — the ONE paging contract
 #include "nextverb.h"           // P3: nextAttrXml / kNextAttrMaxBytes — the ONE pasteable follow-up
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 
@@ -481,7 +481,7 @@ inline std::vector<std::string> aliasDescendants( const gtl::btree_map<std::stri
     }
     if( capped )
     {
-        DEGRADED_PATH_ALERT( "flip: alias family hit the fan-out cap — the radius below is a lower bound" );
+        DISCLOSE( "flip: alias family hit the fan-out cap — the radius below is a lower bound" );
     }
     return family;
 }
@@ -569,7 +569,7 @@ inline void scanGateMentions( const IngestResult& ing, const std::string& root,
                                      []( const ValueBinding& a, const ValueBinding& b ) { return a.name == b.name; } ), out.bindings.end() );
     if( out.bindings.size() > kMaxBindings )
     {
-        DEGRADED_PATH_ALERT( "flip: more value bindings than the scan cap — branch sites below are a lower bound" );
+        DISCLOSE( "flip: more value bindings than the scan cap — branch sites below are a lower bound" );
         out.bindings.resize( kMaxBindings );
     }
 }
@@ -861,7 +861,7 @@ inline void computeRadius( const IngestResult& ing, const Graph& g, FlipResult& 
     const auto        noteTestFile = [ & ]( NodeId n )
     {
         const std::uint32_t f = ing.symbols[n].fileId;
-        if( isTestPath( ing.files[f] ) && !testFileSeen[f] ) { testFileSeen[f] = 1; res.tests.push_back( f ); }
+        if( isTestPath( rootRelPath( ing, f ) ) && !testFileSeen[f] ) { testFileSeen[f] = 1; res.tests.push_back( f ); }
     };
     for( NodeId n : up )
     {
@@ -877,7 +877,7 @@ inline void computeRadius( const IngestResult& ing, const Graph& g, FlipResult& 
     std::vector<NodeId> testSeeds;
     for( NodeId i = 0; i < N; ++i )
     {
-        if( isTestPath( ing.files[ing.symbols[i].fileId] ) )
+        if( isTestPath( rootRelPath( ing, ing.symbols[i].fileId ) ) )
         {
             testSeeds.push_back( i );
         }

@@ -53,7 +53,14 @@ cat >"$REPO/storage/queue.cpp" <<'SRC'
 int flushPending() { return 1; }
 int drainPending() { return flushPending(); }
 SRC
-git -C "$REPO" add router.cpp package.json storage/queue.cpp
+# A4 follow-up (review round, found-items 2026-09-17): a .hxx file, so the at-line FILE:LINE token
+# recognizer (taskroute.h::kCodeExtensions) has one to name — cheap, since the routing fixture already
+# exists; this is the one extra file plus one extra route() call it costs.
+cat >"$REPO/widget.hxx" <<'SRC'
+int widgetInit() { return 1; }
+int widgetTick() { return widgetInit(); }
+SRC
+git -C "$REPO" add router.cpp package.json storage/queue.cpp widget.hxx
 git -C "$REPO" commit -qm base
 routeRaw(){ "$BIN" "$REPO" --no-cache --help-task="$1" 2>"$TMP/err"; }
 # The document opens with its LEGEND, and the legend names the attributes it defines (next=, <run>, …).
@@ -221,6 +228,8 @@ AL1="$( route 'what defines the value assigned at router.cpp:10' )"
 case "$AL1" in *'status="recommend"'*'intent="at-line"'*'--slice='*'@router.cpp:10'*) ok "literal FILE:LINE token -> --slice=@FILE:LINE";; *) no "at-line literal-token route wrong: $AL1";; esac
 AL2="$( route 'walk me through line 10 of router.cpp' )"
 case "$AL2" in *'status="recommend"'*'intent="at-line"'*'--slice='*'@router.cpp:10'*) ok "prose 'line N of FILE' -> --slice=@FILE:LINE";; *) no "at-line prose-form route wrong: $AL2";; esac
+AL3="$( route 'what defines the value assigned at widget.hxx:2' )"
+case "$AL3" in *'status="recommend"'*'intent="at-line"'*'--slice='*'@widget.hxx:2'*) ok "A4: a .hxx FILE:LINE token -> --slice=@FILE:LINE (kCodeExtensions)";; *) no "A4: .hxx at-line route wrong: $AL3";; esac
 AL0="$( route 'what happens around line 10 in the budget calculation' )"
 case "$AL0" in *'--slice='*'@'*) no "'line N' with no code-file token minted an at-line route: $AL0";; *) ok "'line N' alone (no file extension) mints no at-line route";; esac
 WW1="$( route 'who writes to targetSymbol these days' )"

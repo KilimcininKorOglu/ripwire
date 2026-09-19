@@ -1509,9 +1509,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         {
                             return errResultMsg( -32602, "for: limit/offset select the file page, which has no token budget to shape against — drop budget_tokens, or drop limit/offset for the budgeted bundle" );
                         }
-                        const std::string t = forTaskText( path, task, redactPtr,
-                                                           budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg );
-                        return t.empty() ? errResult( -32602, "no symbols found" ) : textResult( t );
+                        const std::optional<std::string> answer = forTaskText( path, task, redactPtr,
+                                                                                budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg );
+                        if( !answer )
+                        {
+                            return errResult( -32603, "internal error: the for answer buffer lost bytes — no answer served" );
+                        }
+                        return answer->empty() ? errResult( -32602, "no symbols found" ) : textResult( *answer );
                     } );
                 }
                 else if( name == "lego" && !path.empty() && !type.empty() )
@@ -1610,7 +1614,12 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     {
                     resp = pagedResult( [ & ]( McpPageArgs pg )   // M13
                     {
-                        const std::string t = ownersText( path, symbol, pg );
+                        const std::optional<std::string> answer = ownersText( path, symbol, pg );
+                        if( !answer )
+                        {
+                            return errResult( -32603, "internal error: the owners answer buffer lost bytes — no answer served" );
+                        }
+                        const std::string& t = *answer;
                         return t.empty() ? errResultMsg( -32602, symbol.empty()
                                                 ? std::string( "no git history for this tree (owners is mined from git; not a repo, or no commits)" )
                                                 : notFoundSym( symbol ) )
@@ -1623,16 +1632,22 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 {
                     // `kind` (a kind token) OR `task` (a task string) — either resolves to a target kind by ROLE.
                     const std::string arg = !kind.empty() ? kind : task;
-                    const std::string t   = exemplarText( path, arg, redactPtr );
-                    resp = t.empty() ? errResult( -32602, "no matching exemplar (no symbol of that kind, or the task matched nothing)" ) : textResult( t );
+                    const std::optional<std::string> answer = exemplarText( path, arg, redactPtr );
+                    resp = !answer        ? errResult( -32603, "internal error: the exemplar answer buffer lost bytes — no answer served" )
+                         : answer->empty() ? errResult( -32602, "no matching exemplar (no symbol of that kind, or the task matched nothing)" )
+                                           : textResult( *answer );
                 }
                 else if( name == "impact" && !path.empty() && !symbol.empty() )
                 {
                     // §B6 M4: limit/offset are read by the SAME mcpPageArgs the batch arm uses (mcpverbs.h).
                     resp = pagedResult( [ & ]( McpPageArgs pg )
                     {
-                        const std::string t = impactText( path, symbol, pg );
-                        return t.empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( t );
+                        const std::optional<std::string> answer = impactText( path, symbol, pg );
+                        if( !answer )
+                        {
+                            return errResult( -32603, "internal error: the impact answer buffer lost bytes — no answer served" );
+                        }
+                        return answer->empty() ? errResultMsg( -32602, notFoundSym( symbol ) ) : textResult( *answer );
                     } );
                 }
                 else if( name == "uses" && !path.empty() && !symbol.empty() )
@@ -1643,14 +1658,19 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // LB-G: limit/offset are read by the SAME mcpPageArgs impact uses, because this verb now
                     // honors them — it grew a default site cap in that round and needs the hatch to match.
                     resp = refusal.empty() ? pagedResult( [ & ]( McpPageArgs pg )
-                                             { return textResult( usesText( path, symbol, pg ) ); } )   // count="0" stays a valid answer
+                                             {
+                                                 const std::optional<std::string> answer = usesText( path, symbol, pg );
+                                                 return answer ? textResult( *answer )   // count="0" stays a valid answer
+                                                               : errResult( -32603, "internal error: the uses answer buffer lost bytes — no answer served" );
+                                             } )
                                            : errResultMsg( -32602, refusal );
                 }
                 else if( name == "path_between" && !path.empty() && !from.empty() && !to.empty() )
                 {
-                    const std::string t = pathText( path, from, to );
-                    resp = t.empty() ? errResultMsg( -32602, pathEndpointRefusal( getIndex( path ).ing, from, to ) )
-                                     : textResult( t );
+                    const std::optional<std::string> answer = pathText( path, from, to );
+                    resp = !answer        ? errResult( -32603, "internal error: the path_between answer buffer lost bytes — no answer served" )
+                         : answer->empty() ? errResultMsg( -32602, pathEndpointRefusal( getIndex( path ).ing, from, to ) )
+                                           : textResult( *answer );
                 }
                 // `connect` — symbols as a JSON string array (the schema form) or a comma-string (lenient);
                 // optional integer radius (core clamps to 1..12). One global computation, not a batch of paths.
@@ -1730,8 +1750,10 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // (fromTraceBundleText, tracelocus.h) — the SAME assembler --from-trace's CLI path calls.
                 else if( name == "from_trace" && !path.empty() && !trace.empty() )
                 {
-                    const std::string t = fromTraceText( path, trace, budgetTokens, redactPtr );
-                    resp = t.empty() ? errResult( -32602, "no stack-trace / sanitizer / compiler frames found in `trace` — nothing to map" ) : textResult( t );
+                    const FromTraceResult r = fromTraceText( path, trace, budgetTokens, redactPtr );
+                    resp = r.isBufferLost ? errResult( -32603, "internal error: a from_trace buffer lost bytes — the bundle is withheld, not served without its blocks" )
+                         : !r.ok          ? errResult( -32602, "no stack-trace / sanitizer / compiler frames found in `trace` — nothing to map" )
+                                          : textResult( r.xml );
                 }
                 // L4: `edit_check` — did SYM's contract (params/publicness) change vs git HEAD (editCheckBundleText,
                 // editcheck.h) — the SAME contract-comparison core --edit-check's CLI path calls.
@@ -1965,6 +1987,33 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
     }
 }
 
+// input blow-up guard: the stdio transport's own bound on a single request LINE, mirroring
+// mcpserver.h's kMaxBodyBytes (8 MiB) for the HTTP transport — HTTP was already immune (a
+// Content-Length-short/over-limit body never reaches dispatch), stdio was not: readByteSafeLine grows
+// without limit by design (the right contract for its OTHER callers, gitmine.h's pipe readers), so a
+// runaway or hostile stdio peer could exhaust memory one line at a time on a long-lived server. Sized a
+// little above HTTP's bound rather than equal to it: a stdio edit-verb call (replace_symbol_body /
+// insert_*_symbol) carries its payload inline in the SAME line as the rest of the request, where an HTTP
+// JSON-RPC body is comparably sized — "tens of MB", not the same single figure. A plain decimal literal
+// (not `32u * 1024u * 1024u`) on purpose: docs/limits_build.py's DECL regex only captures a bare number,
+// and kMaxBodyBytes above being spelled as an expression is why that cap is undocumented today — the
+// same gap this constant does not want to repeat.
+inline constexpr std::size_t kMcpStdioLineMaxBytes = 33554432;   // 32 MiB
+
+// The over-limit-line refusal runMcp()'s stdio loop sends when readByteSafeLineBounded reports overflow.
+// `line` in that case holds only the first kMcpStdioLineMaxBytes bytes, which is not the request, so it
+// is never handed to dispatchMcpLine — this is the whole answer, not a dispatch. id:null per JSON-RPC 2.0
+// (no field in an over-limit line is reliably the caller's id), the same posture dispatchMcpLine's own
+// framing gate takes for a frame it cannot trust (mcpjson.h checkFrame). The caller's loop still owns
+// "keep serving" — this function only writes the one response line.
+inline void emitMcpStdioLineOverflowRefusal()
+{
+    rw::emitTo( stdout, "{{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{{\"code\":-32600,"
+                         "\"message\":\"request line exceeds the {}-byte limit\"}}}}\n",
+                kMcpStdioLineMaxBytes );
+    std::fflush( stdout );
+}
+
 // stdio MCP loop: one JSON object per line. Returns the process exit code. `root`/`roots` are the
 // positional args `ripwire <root> --mcp` was started with (roots.size()>=2 = a multi-root workspace);
 // both default empty for the pre-X7 "no startup root" mode, in which every request must still name its
@@ -2011,13 +2060,22 @@ inline int runMcp( int topK, bool stable = false, bool noRedact = false,
         policy.assumedRoot = mcpResolveAssumedRoot();
     }
 
-    // R4: readByteSafeLine, NOT std::getline( std::cin, ... ) — libc++'s getline narrows int_type→char on
-    // every std::cin byte, so a single 0x80..0xFF request byte aborted the sanitizer build and left this
-    // whole server surface dark for non-ASCII input. Same parity contract (see stdinline.h): grows
-    // dynamically — a >1MB request is not split into garbage — delimiter consumed, trailing '\r' kept.
+    // R4: readByteSafeLineBounded, NOT std::getline( std::cin, ... ) — libc++'s getline narrows
+    // int_type→char on every std::cin byte, so a single 0x80..0xFF request byte aborted the sanitizer
+    // build and left this whole server surface dark for non-ASCII input. Same byte-safety and delimiter
+    // contract as readByteSafeLine (stdinline.h) — delimiter consumed, trailing '\r' kept — bounded at
+    // kMcpStdioLineMaxBytes (see its own comment) rather than growing without limit: a stdio peer is
+    // untrusted the same way an HTTP one is, and HTTP has had a body cap since mcpserver.h existed.
     std::string line;
-    while( readByteSafeLine( stdin, line ) )
+    bool        lineOverflowed = false;
+    while( readByteSafeLineBounded( stdin, line, kMcpStdioLineMaxBytes, lineOverflowed ) )
     {
+        if( lineOverflowed )
+        {
+            // The server keeps serving: this refusal costs one line, not the connection.
+            emitMcpStdioLineOverflowRefusal();
+            continue;
+        }
         if( line.find_first_not_of( " \t\r\n" ) == std::string::npos )
         {
             continue;
