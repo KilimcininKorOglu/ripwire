@@ -1485,10 +1485,15 @@ inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, cons
     {
         moduleFile = resolvePythonModuleSuffix( b.typeName, fileIndex );   // absolute spec only (never relative)
     }
-    if( moduleFile == kNoFile )
-    {
-        return;
-    }
+    // issue #287 round 3 (review rv-p6.md HIGH): try_emplace runs even when THIS import is unresolved
+    // (moduleFile==kNoFile) — an import whose target is outside the indexed tree (stdlib/third-party/
+    // unknown) is STILL a rebinding of `b.var`, not an absence of one. Skipping the emplace here (the
+    // round-1/2 shape) let a LATER unresolved re-import (`import os as tm` after `import target_mod as
+    // tm`) leave an EARLIER resolved entry untouched, so the stale first import kept winning. A lone
+    // unresolved import (nothing else binds this key) is observationally unchanged by inserting kNoFile:
+    // Rule 2d's own guard (`ait->second != kNoFile`) already refuses a kNoFile entry exactly like a
+    // missing one; a LATER import (resolved or not) now correctly contests whatever an earlier one left,
+    // and an earlier unresolved entry (kNoFile) correctly poisons a later import that DOES resolve.
     const auto [ fit, finserted ] = importBindFile.try_emplace( key, moduleFile );
     if( !finserted && fit->second != moduleFile )
     {
@@ -1554,23 +1559,31 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
         // A Binding whose `fromSymbol` names a Function/Method sits inside a REAL callable scope —
         // capturePythonRebindShadowDecls (ingest_binds.h) scopes THAT rebind narrower instead (a `VarDecl`
         // Binding read by `ExternalVeto::hasLocal` via `buildFieldNarrowTables`, the same path a parameter
-        // shadow already used). Everything else lands here: `fromSymbol==kNoNode` (no enclosing span at
-        // all) is the common case, but a module-level `tm = …` ALSO indexes its own `SymKind::Var` symbol
-        // named `tm` — the SAME name the rebind fact carries — so `bindSweep.find` (ingest_model.h
-        // emitBindings) resolves the rebind's own startByte to THAT var's tiny def-span, not to kNoNode. A
-        // symbol lookup a byte position resolves to is never a function/method here is still "no enclosing
-        // callable", so it belongs in this bucket, not `hasLocal`'s.
+        // shadow already used). A Class sits inside NEITHER bucket at all (issue #287 round 3, review
+        // rv-p6.md LOW): `class C: tm = {…}` then `def use(self): return tm.run(1)` — Python method bodies
+        // do NOT inherit their enclosing class body's scope (unlike a nested function inheriting its
+        // enclosing function's), so a class-body rebind reaches no call site anywhere, in C's own methods
+        // or elsewhere; `continue`s past BOTH tables rather than landing in this one over-conservatively.
+        // Everything else lands here: `fromSymbol==kNoNode` (no enclosing span at all) is the common case,
+        // but a module-level `tm = …` ALSO indexes its own `SymKind::Var` symbol named `tm` — the SAME name
+        // the rebind fact carries — so `bindSweep.find` (ingest_model.h emitBindings) resolves the rebind's
+        // own startByte to THAT var's tiny def-span, not to kNoNode. A symbol lookup a byte position
+        // resolves to that is neither a function/method NOR a class is still "no enclosing callable, and
+        // no enclosing scope that swallows the name instead", so it belongs in this bucket.
         for( const Binding& b : ing.bindings )
         {
             if( b.kind != LocalBindKind::VarDecl || b.var.empty() || b.fileId >= ing.files.size() )
             {
                 continue;
             }
-            const bool inCallableScope = b.fromSymbol != kNoNode && b.fromSymbol < ing.symbols.size()
-                                       && ( ing.symbols[ b.fromSymbol ].kind == SymKind::Function || ing.symbols[ b.fromSymbol ].kind == SymKind::Method );
-            if( inCallableScope )
+            const SymKind* enclosing = ( b.fromSymbol != kNoNode && b.fromSymbol < ing.symbols.size() ) ? &ing.symbols[ b.fromSymbol ].kind : nullptr;
+            if( enclosing && ( *enclosing == SymKind::Function || *enclosing == SymKind::Method ) )
             {
                 continue;   // a narrower, function-scoped fact — buildFieldNarrowTables/hasLocal already carries it
+            }
+            if( enclosing && *enclosing == SymKind::Class )
+            {
+                continue;   // a class body's own scope — reaches no call site at all; see the doc above
             }
             fileKey( b.fileId, b.var );
             t.pythonModuleRebind.try_emplace( key, '\0' );

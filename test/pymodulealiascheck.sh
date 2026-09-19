@@ -105,6 +105,20 @@ run_arms(){   # $1 = binary, $2 = arm-label suffix (e.g. "new" or "old")
     # negative control: a DIFFERENT name's global rebind in the SAME file must NOT veto `tm` — the veto is
     # per-name, not "any rebind anywhere in the file poisons every alias in it".
     assert_bound     "$B" pkg/target_mod.py:run         uses_rebind_negctrl   "rebind negative control: unrelated name ($L)"
+    # round-3 arms (issue #287 round 3, review rv-p6.md HIGH finding): a LATER `import ... as tm` whose
+    # target is OUTSIDE the indexed tree (stdlib, third-party, or simply unknown) is still a REBINDING of
+    # `tm` — "unresolved" must never read as "absent evidence" and let a stale earlier import keep winning.
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_outoftree  "rebind: later re-import to an out-of-tree module ($L)"
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_unresolved "rebind: later re-import to an unresolvable name ($L)"
+    # regression-only (already correct before this round; documents it stays correct): both try/except
+    # branches import `tm` from a DIFFERENT in-tree module each — genuinely ambiguous, must degrade on
+    # EITHER candidate, never guess one arm.
+    assert_not_bound "$B" pkg/target_mod.py:run         uses_rebind_tryexcept  "rebind: try/except fallback import, both in-tree ($L)"
+    assert_not_bound "$B" pkg/sub/deep.py:run           uses_rebind_tryexcept  "rebind: try/except fallback import, both in-tree, other arm ($L)"
+    # round-3 LOW (review rv-p6.md): a class-BODY rebind reaches no call site at all — Python method
+    # bodies do not inherit their enclosing class body's scope — so it must neither veto this method NOR
+    # any other function in the file; the alias narrow should bind normally here.
+    assert_bound     "$B" pkg/target_mod.py:run         uses_rebind_classbody  "rebind: class-body assignment does not leak into its own method ($L)"
 }
 
 # ── the binary under test: every arm ────────────────────────────────────────────────────────────────
@@ -125,45 +139,65 @@ run_arms "$BIN" new
 # direction its own name promises, so the assertion text stays honest whether OLD's answer today is
 # "bound" (the now-permanent case) or "not yet bound" (only possible re-running this exact gate against
 # a pre-fix HEAD, which the report captures separately).
-monotonic_check()
+# The four monotonicity comparators below all read the same script-scope $OLDBIN (set by monotonic_check
+# right before it calls any of them) — pulled out of monotonic_check's own body (--quality-delta flagged
+# that function's verbosity once round 3's arms were added inline) rather than folded into one generic
+# comparator: each name states its own OLD/NEW contract, which is the point of the whole file's assertion
+# labels, and a single parameterised version would hide exactly that in a mode flag.
+OLDBIN=""   # set by monotonic_check before any comparator below runs; empty means "not yet built"
+
+# $1 target  $2 caller  $3 label — NEW must bind at least everywhere OLD does.
+must_not_regress(){
+    callers_out "$OLDBIN" "$1"
+    if bound_in_last "$2"; then
+        assert_bound "$BIN" "$1" "$2" "monotonicity ($3): HEAD already binds this, NEW must too"
+    else
+        skip "monotonicity ($3): HEAD does not (yet) bind $1 -> $2 — nothing to enforce this run"
+    fi
+}
+# $1 target  $2 caller  $3 label — must stay UNBOUND on both (no new over-binding, ever).
+must_stay_unbound(){
+    assert_not_bound "$OLDBIN" "$1" "$2" "monotonicity ($3), old"
+    assert_not_bound "$BIN"    "$1" "$2" "monotonicity ($3), new"
+}
+# $1 target  $2 caller  $3 label — a rebind arm whose committed HEAD, at whichever round found it,
+# wrongly bound this: RED on that pre-fix binary, GREEN on the one under test. Once its own fix is
+# itself committed HEAD carries the fix too and this converges to must_stay_unbound's shape; kept as
+# its own helper so the RED half stays a real, dated assertion rather than silently reading as
+# "nothing to prove" the moment it lands. Shared across rounds (round 2's 8 forms, round 3's
+# out-of-tree/unresolved re-import) — the CONTRACT is identical, only which HEAD sha was pre-fix differs.
+must_fix_rebind(){
+    callers_out "$OLDBIN" "$1"
+    if bound_in_last "$2"; then
+        ok "RED on pre-fix HEAD ($3): $1 wrongly bound $2"
+    else
+        skip "($3): HEAD already refuses $1 -> $2 — this rebind fix is already on HEAD"
+    fi
+    assert_not_bound "$BIN" "$1" "$2" "rebind fix ($3), new"
+}
+# $1 target  $2 caller  $3 label — a precision fix for a SAFE over-refusal (review rv-p6.md LOW: a
+# class-body rebind never reached the call site at all, so refusing it was conservative, never wrong).
+# The permanent contract is just "the binary under test binds it correctly" (assert_bound on $BIN) — OLD's
+# reading is reported but never asserted either way, because unlike a wrong-bind HIGH, OLD here was NEVER
+# incorrect: before this round's fix OLD safely refused (informational only), and once this fix is itself
+# committed HEAD OLD correctly binds too — asserting "OLD must refuse" would (and once did) go stale the
+# moment the fix landed, the same lesson must_not_regress already encodes for the HIGH-class arms above.
+must_fix_overrefusal(){
+    callers_out "$OLDBIN" "$1"
+    if bound_in_last "$2"; then
+        ok "($3): pre-fix HEAD already binds $1 -> $2 too — this fix is already on HEAD"
+    else
+        ok "($3): pre-fix HEAD safely (over-)refused $1 -> $2, as it did before this precision fix landed"
+    fi
+    assert_bound "$BIN" "$1" "$2" "fix ($3), new"
+}
+
+# the monotonicity arms themselves — every target/caller/label triple, one comparator call each (see the
+# four comparators above for what each name asserts). Split out of monotonic_check's own body so THAT
+# function's setup (build OLDBIN, bail out cleanly) stays a stable, un-churned few lines across rounds —
+# only this list grows as arms are added.
+run_monotonic_arms()
 {
-    command -v git   >/dev/null 2>&1 || { skip "monotonicity: git absent"; return; }
-    command -v cmake >/dev/null 2>&1 || { skip "monotonicity: cmake absent"; return; }
-    ( cd "$ROOT" && git rev-parse --verify HEAD >/dev/null 2>&1 ) || { skip "monotonicity: not a git repo"; return; }
-
-    local OLDBIN
-    OLDBIN="$( ripwire_head_binary "$ROOT" "$TMP" )" \
-        || { headbin_refusal $? "monotonicity"; return; }
-
-    # $1 target  $2 caller  $3 label — NEW must bind at least everywhere OLD does.
-    must_not_regress(){
-        callers_out "$OLDBIN" "$1"
-        if bound_in_last "$2"; then
-            assert_bound "$BIN" "$1" "$2" "monotonicity ($3): HEAD already binds this, NEW must too"
-        else
-            skip "monotonicity ($3): HEAD does not (yet) bind $1 -> $2 — nothing to enforce this run"
-        fi
-    }
-    # $1 target  $2 caller  $3 label — must stay UNBOUND on both (no new over-binding, ever).
-    must_stay_unbound(){
-        assert_not_bound "$OLDBIN" "$1" "$2" "monotonicity ($3), old"
-        assert_not_bound "$BIN"    "$1" "$2" "monotonicity ($3), new"
-    }
-    # $1 target  $2 caller  $3 label — round-2 rebind arms (review rv-p6.md HIGH finding): the committed
-    # HEAD at the time round 2 landed (65138664) wrongly bound these — RED on that pre-fix binary, GREEN
-    # on the one under test. Once round 2 is itself committed HEAD carries the fix too and this converges
-    # to must_stay_unbound's shape; kept as its own helper so the RED half stays a real, dated assertion
-    # rather than silently reading as "nothing to prove" the moment it lands.
-    must_fix_rebind(){
-        callers_out "$OLDBIN" "$1"
-        if bound_in_last "$2"; then
-            ok "round-2 RED on pre-fix HEAD ($3): $1 wrongly bound $2"
-        else
-            skip "round-2 ($3): HEAD already refuses $1 -> $2 — the rebind fix is already on HEAD"
-        fi
-        assert_not_bound "$BIN" "$1" "$2" "round-2 fix ($3), new"
-    }
-
     must_not_regress  pkg/target_mod.py:run        uses_module_alias   "alias"
     must_not_regress  pkg/sub/deep.py:run           uses_dotted_alias   "dotted alias"
     must_not_regress  pkgy/__init__.py:run          uses_pkg_alias      "package alias"
@@ -183,6 +217,23 @@ monotonic_check()
     must_fix_rebind   pkg/target_mod.py:run         uses_rebind_defshadow "nested def shadow"
     must_fix_rebind   pkg/target_mod.py:run         uses_rebind_global    "global statement elsewhere in file"
     must_not_regress  pkg/target_mod.py:run         uses_rebind_negctrl   "rebind negative control: unrelated name"
+    must_fix_rebind      pkg/target_mod.py:run       uses_rebind_outoftree  "later re-import to an out-of-tree module"
+    must_fix_rebind      pkg/target_mod.py:run       uses_rebind_unresolved "later re-import to an unresolvable name"
+    must_stay_unbound    pkg/target_mod.py:run       uses_rebind_tryexcept  "try/except fallback import, both in-tree"
+    must_stay_unbound    pkg/sub/deep.py:run         uses_rebind_tryexcept  "try/except fallback import, both in-tree, other arm"
+    must_fix_overrefusal pkg/target_mod.py:run       uses_rebind_classbody  "class-body assignment does not leak into its own method"
+}
+
+monotonic_check()
+{
+    command -v git   >/dev/null 2>&1 || { skip "monotonicity: git absent"; return; }
+    command -v cmake >/dev/null 2>&1 || { skip "monotonicity: cmake absent"; return; }
+    ( cd "$ROOT" && git rev-parse --verify HEAD >/dev/null 2>&1 ) || { skip "monotonicity: not a git repo"; return; }
+
+    OLDBIN="$( ripwire_head_binary "$ROOT" "$TMP" )" \
+        || { headbin_refusal $? "monotonicity"; return; }
+
+    run_monotonic_arms
 }
 monotonic_check
 
