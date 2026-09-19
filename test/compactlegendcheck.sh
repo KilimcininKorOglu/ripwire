@@ -2095,7 +2095,11 @@ for tb in 900 1200 1500 2000; do
     [ "$ro" = "$lo" ] || fx4bad="$fx4bad [tb=$tb: root over_ceiling=$ro, ledger over_ceiling clause=$lo]"
     case "$led" in *'task_echo: dropped'*) fx4bad="$fx4bad [tb=$tb: ledger claims a task_echo drop the compact answer never delivered]" ;; esac
 done
-[ -z "$fx4bad" ] && ok "(FX4) --pack-task's kept ledger agrees with its root at 900/1200/1500/2000 tokens" || no "(FX4)$fx4bad"
+if [ -z "$fx4bad" ]; then
+    ok "(FX4) --pack-task's kept ledger agrees with its root at 900/1200/1500/2000 tokens"
+else
+    no "(FX4)$fx4bad"
+fi
 # (FX5) --pr-context trims at the price it DELIVERS (MED-4): a fixture whose diff the budget must trim; at every budget the
 #       default keeps at least the full dialect's files, stays inside a budget the full answer met, and keeps MORE files
 #       than full somewhere (else the arm proves nothing).
@@ -2133,7 +2137,11 @@ for a in "--situ" "--recall=legend" "--report" "--mermaid" "--lint --sarif"; do
     "$BIN" "$ROOT/src" --no-cache $a --legend=compact >/dev/null 2>&1 && fx6bad="$fx6bad [$a --legend=compact was accepted]"
 done
 ( cd "$FXT/notes" && "$BIN" . --no-cache --note-add="alpha: x" --legend=full >/dev/null 2>&1 ) && fx6bad="$fx6bad [--note-add accepted an asked --legend=full]"
-[ -z "$fx6bad" ] && ok "(FX6) --legend=full is a no-op on --situ/--recall/--report/--mermaid/--sarif; compact and writers still refuse" || no "(FX6)$fx6bad"
+if [ -z "$fx6bad" ]; then
+    ok "(FX6) --legend=full is a no-op on --situ/--recall/--report/--mermaid/--sarif; compact and writers still refuse"
+else
+    no "(FX6)$fx6bad"
+fi
 # (FX7) --expand's reason= quotes the size of the document DELIVERED (MED-7), in both servings, in both postures.
 fx7bad=""
 for sym in pageWindow emitTo; do
@@ -2145,7 +2153,11 @@ for sym in pageWindow emitTo; do
         [ "$said" = "$n" ] || fx7bad="$fx7bad [$sym ${lg:-default}: reason says ${said:-none}B, delivered ${n}B]"
     done
 done
-[ -z "$fx7bad" ] && ok "(FX7) --expand reason= names the delivered size (bundle and whole-file, default and full)" || no "(FX7)$fx7bad"
+if [ -z "$fx7bad" ]; then
+    ok "(FX7) --expand reason= names the delivered size (bundle and whole-file, default and full)"
+else
+    no "(FX7)$fx7bad"
+fi
 # (FX8) --for=X --batch=F answers the batch envelope, in the default posture like every other verb (LOW-1).
 printf 'callers escapeXml\n' > "$FXT/batch.txt"
 "$BIN" "$ROOT/src" --no-cache --for=x --batch="$FXT/batch.txt" 2>/dev/null | head -c 200 | grep -qF '<batch schema="ripwire.batch/v1"' \

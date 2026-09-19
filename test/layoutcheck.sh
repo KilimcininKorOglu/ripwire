@@ -420,7 +420,7 @@ if [ "$urc" -eq 2 ] && grep -q 'mirror="mismatch"' "$UR/warm.out"; then
         grep -o '<layout [^>]*>' "$UR/cold.out" | grep -q ' defs="1" .*unreadable="1"' \
             && ok "unreadable: the unread definition is named on the root — unreadable=\"1\" beside defs=\"1\" (every build flavour)" \
             || no "unreadable: a definition whose file could not be read vanished silently: $( grep -o '<layout [^>]*>' "$UR/cold.out" )"
-        grep -q 'unreadable="N": ' "$UR/cold.out" \
+        grep -qE 'unreadable="N": |unreadable=N: ' "$UR/cold.out" \
             && ok "unreadable: the attribute is defined in the legend of the same document" \
             || no "unreadable: unreadable= is emitted with no legend definition"
         command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$UR/cold.out" 2>/dev/null \

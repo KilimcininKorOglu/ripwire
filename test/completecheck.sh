@@ -340,7 +340,8 @@ if grep -o '<grep [^>]*>' "$UG/warm.xml" | grep -q ' hits="2".* complete="1"'; t
     if cat "$UG/tree/b.c" >/dev/null 2>&1; then
         printf '  SKIP  17: chmod 000 does not stop this user reading the file (root?) — the arm cannot plant its fault\n'
     else
-        XDG_CACHE_HOME="$UG/xdg" "$BIN" "$UG/tree" --grep=zqUnreadTok >"$UG/cold.xml" 2>/dev/null
+        # L1: the CLI default is compact; the FULL-legend arm below asks for that posture by name (the compact arm has its own run)
+        XDG_CACHE_HOME="$UG/xdg" "$BIN" "$UG/tree" --grep=zqUnreadTok --legend=full >"$UG/cold.xml" 2>/dev/null
         XDG_CACHE_HOME="$UG/xdg" "$BIN" "$UG/tree" --grep=zqUnreadTok --legend=compact >"$UG/coldc.xml" 2>/dev/null
         G17="$( grep -o '<grep [^>]*>' "$UG/cold.xml" )"
         { printf '%s' "$G17" | grep -q ' unread_files="1"' && printf '%s' "$G17" | grep -q ' counts_floor="1"' \

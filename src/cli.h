@@ -2427,7 +2427,7 @@ inline constexpr char kHelpTail[] =
         "    --legend=full|compact      legend posture for every XML verb — compact is the default; full restores the prose\n"
         "                               output legend posture for EVERY XML verb. The DEFAULT is compact: the legend is a\n"
         "                               FIXED ~3 KB of prose per call in its full form, so its share is a function of ANSWER\n"
-        "                               SIZE, not of the verb: at least 45% of a small --callers/--uses/--impact/--affected\n"
+        "                               SIZE, not of the verb: at least 40% of a small --callers/--uses/--impact/--affected\n"
         "                               answer (and more on --callees and --edit-check), a little of a large --for bundle —\n"
         "                               and the callers who pay it are agents, scripts and harnesses making repeated calls.\n"
         "                               READING ONE MAP AS A HUMAN, or need a definition's reasoning (a term you do not\n"

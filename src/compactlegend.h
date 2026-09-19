@@ -673,7 +673,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // ensemble: src/ensemble.h (root, <s><e f= why=>, <f> file rollup)
     { "eligible", "eligible=N: functions and methods with a body, the denominator; ranked + no_family = eligible", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
     { "no_family", "no_family=N: eligible symbols where no family fired", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
-    { "bar_ccx", "bar_ccx=/bar_loc=/bar_nest=/bar_params=: absolute structural bars: cognitive cx, lines, nesting, params", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },   // also defines bar_loc= bar_nest= bar_params= (one emitTo, always together)
+    { "bar_ccx", "bar_ccx=/bar_loc=/bar_nest=/bar_params=: absolute structural bars: cognitive cx, lines, nesting, params", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },   // also defines bar_loc= bar_nest= bar_params= (one emit, always together)
     { "rcut", "rcut=N: ranks the worst readability decile covers (1 to 40); rrank= inside it fires structural", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
     { "rmeasured", "rmeasured=N: functions the readability lens measured", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
     { "hcut", "hcut=N: file ranks the worst churn decile covers (1 to 40); hrank= inside it fires historical", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
@@ -691,7 +691,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "union_fam", "union_fam=N: distinct families firing anywhere in the file (weaker: may be different symbols)", true, "f", MapHeaderRead::No, {}, "ensemble" },
     { "union", "union=: the names of those families", true, "f", MapHeaderRead::No, {}, "ensemble" },
     { "syms", "syms=N: symbols in the file where at least one family fired", true, "f", MapHeaderRead::No, {}, "ensemble" },
-    // grep: src/verbs_grep.h (root emitTo, grepTierAttrs, grepUnindexedAttrs, emitGrepEncRows)
+    // grep: src/verbs_grep.h (root emit, grepTierAttrs, grepUnindexedAttrs, emitGrepEncRows)
     { "pattern", "pattern=: the search string as given", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "files", "files=N: in-index files holding hits (the whole collected set, same on every page)", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "suppressed_comment", "suppressed_comment=N: comment-tier hits held back, not in hits=; the grep-in=any flag serves them", false, "grep", MapHeaderRead::No, {}, "grep" },
@@ -719,7 +719,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "off", "off=N: computed byte offset; absent after an earlier field of unknown size", true, "f", MapHeaderRead::No, {}, "layout" },
     { "d", "d=: caveat detail: the first site this kind fired on, or a plain description", true, "caveat", MapHeaderRead::No, {}, "layout" },
     { "count", "count=N: member sites this one caveat row stands for (absent = 1)", true, "caveat", MapHeaderRead::No, {}, "layout" },
-    // merge-scout: src/mergescout.h writeScoutArm / root emitTo
+    // merge-scout: src/mergescout.h writeScoutArm / root emit
     { "head", "head=: the HEAD commit, bare 9-hex sha (at= adds +dirty)", false, "merge-scout", MapHeaderRead::No, {}, "merge-scout" },
     { "ok", "ok=0: arm not analysed (no merge base, or archive failed); its changed=0 is not a finding", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
     { "note", "no-work note=: arm compared and has no divergent work vs its merge base, so no landing slot", true, "no-work", MapHeaderRead::No, {}, "merge-scout" },
@@ -728,7 +728,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "files", "files=N: single-author files folded into this one row; detail=1 lists each", true, "uniform", MapHeaderRead::No, {}, "owners" },
     // pack-task: src/serialize.h pureFromSig + the impure lens (pureSig at the <d> row emitters)
     { "pure", "pure=1: const/constexpr signature (Swift: non-mutating) and no transitive side effect found; a hint", true, "d", MapHeaderRead::No, {}, "pack-task" },
-    // pr-context: src/prcontext.h (prAnchorAttr, prDirectionAttr, root tail formatTo, per-file impact/cochange/owners, no-ref-work)
+    // pr-context: src/prcontext.h (prAnchorAttr, prDirectionAttr, root tail format, per-file impact/cochange/owners, no-ref-work)
     { "anchor", "anchor=merge-base: diffed from merge base(base, HEAD); ref-tip-two-dot = no merge base, two-dot view", false, "pr-context", MapHeaderRead::No, {}, "pr-context" },
     { "base_sha", "base_sha=: the merge-base commit (9 hex) the diff is anchored at", false, "pr-context", MapHeaderRead::No, {}, "pr-context" },
     { "base_moved", "base_moved=N: paths the base ref changed since the fork that this work never touched; excluded", false, "pr-context", MapHeaderRead::No, {}, "pr-context" },
@@ -762,7 +762,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "sim", "sim=: minhash containment, 0 to 1, of the ref's blob in HEAD's (pure-addition evidence)", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "head-touched", "head-touched=1: the live line changed this path since the merge base", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "files", "more files=N: N more file rows of this ref withheld; shown + N = the ref's files=; detail=1 lists all", true, "more", MapHeaderRead::No, {}, "stray-content" },
-    // whereis: src/crossref.h writeWhereisPage (root emitTo, trailing <more hits=>)
+    // whereis: src/crossref.h writeWhereisPage (root emit, trailing <more hits=>)
     { "hits", "hits=N: occurrences in HEAD plus every scanned local ref's full tree (the total rows)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "on-head", "on-head=1|0: whether HEAD's tree holds it; 0 beside hits = it lives only on a branch", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "head_labels", "head_labels=index: HEAD kind= from the parsed index; lexical: text heuristic (non-HEAD rows always are)", false, "whereis", MapHeaderRead::No, {}, "whereis" },

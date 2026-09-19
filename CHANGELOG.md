@@ -23,7 +23,8 @@ carries — each verb's purpose, the completeness vocabulary (`counts_floor=`, `
 paging window, `est_tokens=`, `over_ceiling=`, the resolver gauges …) and every descriptive or cut attribute
 (`renames_window_truncated=`, `script_gates_unmodelled=`, `hcut=`/`rcut=`, …), each reading present only where
 the answer carries it. The full prose, which used to be the default, is one flag away and byte-identical to what
-0.6.1 printed without it. Rows never change between the two. The MCP server has defaulted to compact since
+0.6.1 printed without it. Rows never change between the two, with one chosen exception: `--expand` serves the
+bundle or the whole file by whichever the posture DELIVERS cheaper, so the two postures can serve different ones. The MCP server has defaulted to compact since
 0.4.0, so both surfaces now agree. Measured on this repository: `--callers` 6,305 → 3,212 B, `--edit-check`
 9,750 → 3,313 B, `--affected=src/cli.h` 2,103 → 1,234 B, `--for` 10,010 → 9,117 B (method: the same argv,
 `--legend=full` against this default, `wc -c`).
@@ -51,6 +52,8 @@ What else moved with it, because a default has to be honest where an opt-in coul
   `--recall`, `--report`, `--mermaid`, `--html`, `--plan-lanes`, `--sarif`, `--eval*`); an asked
   `--legend=compact` still refuses there, and the writers and servers refuse either. `--pin-census` takes a
   posture (its map is the answer). The servers (`--mcp`, `--listen`, `--lsp`) and `--json` keep no default.
+- `--help` now promises "at least 40%" of a small `--callers`/`--uses`/`--impact`/`--affected` answer saved by
+  the compact legend, down from 45%: the definitions it gained cost `--affected` four points (41% measured).
 - `--query`'s `<!-- routed: … -->` note is kept where the root carries no `route=`; the router's generated
   commands no longer append `--legend=compact`; the prompt-route hooks read `status=` as an attribute, so they
   route under either root attribute order.

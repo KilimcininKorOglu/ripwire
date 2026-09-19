@@ -144,7 +144,7 @@ if [ "$rcC" = 0 ] && armAttrs "$TMP/uc.xml" armB | grep -q 'head_conflicts="0">'
     armAttrs "$TMP/um.xml" "$WTREF" | grep -q 'ok="0" changed="0"' \
         && ok "UNAVAIL: the working-tree arm refuses an unavailable HEAD (ok=\"0\" changed=\"0\"), not every symbol as new work" \
         || no "UNAVAIL: working-tree arm diffed against an unavailable HEAD: $( armAttrs "$TMP/um.xml" "$WTREF" )"
-    grep -q 'head_conflicts_ok="0" (absent' "$TMP/um.xml" \
+    grep -qE 'head_conflicts_ok="0" \(absent|head_conflicts_ok=0: ' "$TMP/um.xml" \
         && ok "UNAVAIL: the legend defines head_conflicts_ok=" || no "UNAVAIL: head_conflicts_ok= emitted with no definition in the legend"
 else
     no "UNAVAIL control: the pass-through shim run is not the healthy answer (exit $rcC) — the mutation is void: $( armAttrs "$TMP/uc.xml" armB ) / ${WTREF:-no working-tree arm}"
