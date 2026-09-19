@@ -4062,6 +4062,7 @@ inline void validateLintSelectionModifierGuards( Config& c ) noexcept
 // them (compactlegendcheck (R1) asserts rows(default) ⊇ rows(--legend=full)).
 inline constexpr std::string_view kLegendPostures[]     = { "full", "compact" };
 inline constexpr std::string_view kDefaultLegendPosture = "compact";
+static_assert( std::ranges::contains( kLegendPostures, kDefaultLegendPosture ), "the default is a registered posture" );
 
 [[nodiscard]] inline bool isLegendPosture( std::string_view v ) noexcept
 {
@@ -4116,7 +4117,6 @@ static inline void validateLegendModifier( Config& c ) noexcept
             c.legend          = kDefaultLegendPosture;
             c.legendDefaulted = true;
         }
-        ENSURES( c.legend.empty() || isLegendPosture( c.legend ), "the resolved default is a registered posture" );
         return;
     }
     if( !isLegendPosture( c.legend ) )
