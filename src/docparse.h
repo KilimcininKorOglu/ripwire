@@ -1,6 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
-#include "infra/os.h"   // rw::os::popen / pclose — the markitdown bridge
+#include "infra/os.h"   // rw::os::popen / pclose — the markitdown bridge; open / fdopen / close / fstat — readRegularFile asks a FIFO for an answer instead of waiting on it, and asks the DESCRIPTOR what it opened
 
 
 // docparse.h — P1-B document ingest. Turns non-code documents that live IN a repo
@@ -25,7 +25,6 @@
 #include "infra/ownedfile.h" // rw::OwnedFile — the whole-file readers own their stream, so every return closes it
 #include "pathguard.h"        // rw::pathguard::NoFollowRead — the owned line stream a fixed-name file is read through
 
-#include "infra/os.h"  // rw::os::open / fdopen / close / fstat — readRegularFile asks a FIFO for an answer instead of waiting on it, and asks the DESCRIPTOR what it opened
 #include <algorithm>   // std::binary_search — the membership test, instead of a hand-rolled scan loop
 #include <iterator>
 #include <array>
