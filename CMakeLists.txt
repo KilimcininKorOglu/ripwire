@@ -944,13 +944,13 @@ file(WRITE "${_ripwire_libstdcxx_ignorelist}"
   "[implicit-unsigned-integer-truncation]\nsrc:*/include/c\\+\\+/*/format\n"
   "src:*/include/c\\+\\+/*/print\n")
 if(WIN32)
-  # MSVC's filesystem prefix helper intentionally subtracts the lower bound from an unsigned packed value;
-  # Clang's integer sanitizer diagnoses that defined range test before any project code runs. Keep the
-  # exemption limited to the vendor header; project arithmetic remains covered by the complete G1 stack.
+  # MSVC STL _Is_drive_prefix performs a defined unsigned wrap; third-party header, Windows-only.
+  # A single file-scoped rule below covers every function in the vendor header, so no function-name
+  # pattern (which g1configcheck.sh's audited list bans outright — a wildcard by name is the easy way
+  # to smuggle an unrelated symbol out of the sanitizer) is needed; project arithmetic elsewhere,
+  # including in this same header should it ever gain project-authored code, stays covered by G1.
   file(APPEND "${_ripwire_libstdcxx_ignorelist}"
-    "[unsigned-integer-overflow]\nsrc:*/include/filesystem\n"
-    "src:*filesystem\n"
-    "fun:*_Is_drive_prefix*\n")
+    "[unsigned-integer-overflow]\nsrc:*/include/filesystem\n")
 endif()
 
 if(RIPWIRE_ASAN)

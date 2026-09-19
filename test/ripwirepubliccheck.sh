@@ -652,12 +652,25 @@ sed -n 's/^STALE //p' "$TMP/arm1b" 2>/dev/null | while IFS= read -r _path; do
 done
 
 # ── arm 2: absolute home-directory paths ──────────────────────────────────────────────────────────
+# EXEMPT BY EXACT HIT LINE, NOT BY FILE OR PATTERN. The pattern stays a blanket `/Users/` sweep — narrowing
+# it would blind the arm to a real leak that happens to share a directory name. Windows spells its own
+# per-user profile directory identically (`C:\Users\x`, `C:/Users/x`), and test/verify_os_win32_logic.cpp's
+# Win32 path-normalization/temp-rebase/shell-allowlist fixtures use exactly that shape with the generic
+# placeholder username `x` — not a real developer's home directory. Keyed on the full `path:line:content`
+# the sweep itself prints, so an edit that changes the line (content OR line number) drops out of the
+# allowlist and is reported like any other hit, never silently waved through.
+ARM2_EXEMPT_HITS='test/verify_os_win32_logic.cpp:304:    CHECK( fromNative( u"c:\\Users\\x", 64, error, written ) == "C:/Users/x" );
+test/verify_os_win32_logic.cpp:361:    CHECK( rebaseMsysTmp( "/tmp/ripwire-1001", "C:\\Users\\x\\AppData\\Local\\Temp\\" ) == "C:/Users/x/AppData/Local/Temp/ripwire-1001" );
+test/verify_os_win32_logic.cpp:681:    CHECK( !isAcceptableShell( "C:/Users/x/AppData/Local/Microsoft/WindowsApps/bash.exe" ) );      // WSL alias'
 hits="$( sweep '/Users/' || true )"
+if [ -n "$hits" ]; then
+    hits="$( printf '%s\n' "$hits" | grep -vFx -- "$ARM2_EXEMPT_HITS" || true )"
+fi
 if [ -n "$hits" ]; then
     no "arm 2 — absolute /Users/ path in $( printf '%s\n' "$hits" | wc -l | tr -d ' ' ) place(s):"
     printf '%s\n' "$hits" | sed 's/^/          /'
 else
-    ok "arm 2 — no absolute /Users/ paths"
+    ok "arm 2 — no absolute /Users/ paths (3 Windows test-fixture literal(s) exempt by exact hit line)"
 fi
 
 # arm 2b — THE BINARY POPULATION. Arm 2 sweeps TEXT. Three tracked files are containers it cannot
@@ -736,8 +749,16 @@ PROBES
 # The owner-accepted one-off that used to sit here (the external-tool-survey PLAN, committed at
 # 7bcd8b0 as a public roadmap) was culled: its surveyed tools are folded into docs/LINEAGE.md §3b
 # and the two lessons it identified as owed became §3a rows. Its own comment said to remove the
-# exemption if the file was ever culled, so this arm now has NO exemptions — every
+# exemption if the file was ever culled, so this arm has NO whole-FILE exemptions — every
 # internal-pattern filename fails, with no exceptions to keep in sync.
+#
+# PAIR_ALLOW — same idiom as arm 5b/arm 8: an exact (path, string-literal-content) pair, never a whole
+# file and never a loosened regex. "ProgramW6432" (src/infra/os_win32.cpp) is the literal, Microsoft-
+# defined Win32 environment-variable name that exposes the 64-bit Program Files directory to a WOW64
+# process (searched alongside ProgramFiles/ProgramFiles(x86)/LOCALAPPDATA in the same fallback list) —
+# the digit the regex reads as a coordinate (`W[0-9]`) is intrinsic to the OS-defined name, not
+# something this project chose, and the pair is exact enough that a different literal in the same file
+# still fails this arm.
 ONEOFF_ACCEPTED=''
 python3 - "$TMP/tracked.z" "$ONEOFF_ACCEPTED" > "$TMP/arm3" <<'PY'
 import re, sys
@@ -745,6 +766,9 @@ paths = open(sys.argv[1], 'rb').read().split(b'\0')
 oneoff = sys.argv[2]
 coord = re.compile(r'§A|§B[0-9]|§P[0-9]|V[0-9]-[0-9]|W[0-9]|r[0-9][0-9]-')
 strlit = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+PAIR_ALLOW = frozenset( (
+    ( 'src/infra/os_win32.cpp', 'ProgramW6432' ),
+) )
 for raw in paths:
     if not raw:
         continue
@@ -770,6 +794,8 @@ for raw in paths:
             continue
         for m in strlit.finditer(line):
             if coord.search(m.group(1)):
+                if (p, m.group(1)) in PAIR_ALLOW:
+                    continue
                 print(f'{p}:{i}:{m.group(0)[:140]}')
 PY
 if [ -s "$TMP/arm3" ]; then
