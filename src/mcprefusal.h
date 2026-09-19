@@ -334,6 +334,14 @@ inline constexpr McpValueSpec kMcpValueFields[] = {
     // argument's obliged description and never for prose, and prose there would cost ~680 B against 159 B
     // of headroom. The refusal example names the NON-default value, which is the one a caller has to type.
     { "legend",        "a STRING legend posture: compact (the default) or full (restores the full legend)", "legend=\"full\"" },
+    // L2 (round-1 lever B1): `for`'s <lego>/<compose> sections collapse to a counted stub by default (the
+    // CLI --sections= twin, cli.h validateSectionsModifier) — a comma-separated, order-insensitive CLOSED
+    // set (each name at most once), the same rule the `in`/`legend` rows above state for the same reason: a
+    // typo must not silently change the shape of the answer. Description kept terse (unlike its siblings
+    // above): `example` below feeds only the refusal sentence (badValueRefusal), never tools/list, but
+    // `needs` rides every session's tools/list payload and this tool's schema was measured at the
+    // mcpmanifestcheck per-session ceiling before this field existed.
+    { "sections",      "lego, compose, or both", "sections=\"lego,compose\"" },
     // ── boolean ──
     // F-R1-07 (2026-09-10 audit): the CLI's own answer to a route MIS-FIRE is to re-run with --no-route,
     // and the MCP surface had no equivalent — an agent that reads route= and disagrees was told WHICH ranker
@@ -988,7 +996,7 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     { "memory_recall",            "path task top_k budget_tokens" },
     { "situational_awareness",    "path diff files limit offset" },
     { "mentions",                 "path paths symbol limit offset" },
-    { "for",                      "path paths task budget_tokens no_route limit offset" },   // L-W: limit/offset = the file page
+    { "for",                      "path paths task budget_tokens no_route limit offset sections" },   // L-W: limit/offset = the file page; L2: sections = the CLI --sections= twin
     { "lego",                     "path paths type legend" },
     { "owners",                   "path symbol limit offset legend" },
     { "fetch_body",               "path handle start_line end_line" },

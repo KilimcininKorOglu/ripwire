@@ -1198,6 +1198,7 @@ struct ForLensRootFinish
     std::string_view autoAttr, sigsCeilingAttr, capAttrs;                 // root attributes, before the first "><!--"
     bool             weak = false;                                       // weak="1", before the last " -->"
     std::string_view droppedPositiveNote, sigsCeilingNote, capNote;      // clauses, before the last " -->"
+    std::string_view sectionsStubNote;   // L2 (round-1 lever B1): kForSectionStubLegend, present only when this run actually stubbed <lego>/<compose>
     bool             measured = false;
     std::string_view estTokensLegend, overCeilingLegend;
     // M3: the ceiling ladder's VERDICT, carried as a value. False ⇒ the ladder did not run, or stopped above its
@@ -1249,6 +1250,7 @@ inline ForLensPricedHeader finishForLensHeaderPriced( std::string header, const 
     spliceBefore( header, " -->", /*fromEnd=*/true, f.droppedPositiveNote );
     spliceBefore( header, " -->", /*fromEnd=*/true, f.sigsCeilingNote );
     spliceBefore( header, " -->", /*fromEnd=*/true, f.capNote );
+    spliceBefore( header, " -->", /*fromEnd=*/true, f.sectionsStubNote );
     if( !f.measured )
     {
         return { std::move( header ), 0 };
@@ -2590,7 +2592,12 @@ std::optional<int> runForLens( const MainDispatch& d )
             return true;
         };
         ForLensBlockCharge blockCharge;   // a sibling block the budget could not see: est_tokens= is then omitted, not wrong
-        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg ); },
+        // L2' (round-2 lever, ported from lane/r1-for-sections-stub): the stub's total= — each renderer's OWN
+        // pre-cap row count, written by the SAME call that renders the real body (never a second, drifting
+        // tally). Overwritten below if the §P3×§P4 narrow-and-re-render fires, so it always reflects the set
+        // that would actually be restored.
+        std::size_t legoPreCapCount = 0, composePreCapCount = 0;
+        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount ); },
                                      legoStr );
         if( !legoPreRendered )
         {
@@ -2599,7 +2606,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         }
         if( !g.composeEdges.empty() )
         {
-            composePreRendered = preRender( [ & ]( std::FILE* cm ) { packCompose( cm, ing, g.composeEdges, lensSurfaceIds ); },
+            composePreRendered = preRender( [ & ]( std::FILE* cm ) { packCompose( cm, ing, g.composeEdges, lensSurfaceIds, &composePreCapCount ); },
                                             composeStr );
             if( !composePreRendered )
             {
@@ -2852,8 +2859,80 @@ std::optional<int> runForLens( const MainDispatch& d )
         if( sigsPreRendered && legoPreRendered && !legoStr.empty()
             && narrowLegoToRenderedSigs( ing, legoScoped, sigsStr, flRootArg.empty() ? std::string_view() : rw::sarif::rootPrefixOf( flRootArg ) ) )
         {
-            legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg ); } );
+            legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount ); } );
         }
+
+        // L2 (round-1 lever B1, §9.3 disclosed cut): collapse <lego>/<compose> to a counted stub BY DEFAULT —
+        // total= is that section's own pre-cap row count, shown="0" discloses that nothing was rendered here,
+        // and next= is the ONE restoring spelling (E41 rule b: nextverb.h's capped composer) that returns
+        // BOTH sections byte-identical to this un-stubbed render, in ONE call. --sections=lego,compose
+        // (cli.h validateSectionsModifier) opts a caller back into the pre-stub render of either or both. No
+        // stub for a section that would have been EMPTY.
+        //
+        // FAULT-INJECTION FIX (independent review, 2026-09-19): total= — and therefore the stub-or-full
+        // decision itself — must be reachable WITHOUT the buffered render legoStr/composeStr came from,
+        // because that render can fail (open_memstream degrades, legoPreRendered/composePreRendered==false)
+        // and the section is then emitted directly to stdout further down (the ORIGINAL degrade path, unaware
+        // of --sections=). legoPreCapRowCount/composePreCapRowCount (serialize.h) compute the SAME count with
+        // no FILE* and no buffering — provably identical to packLego/packCompose's own tally (see their own
+        // comments) — so both the happy path below and the degrade path further down make the identical
+        // decision from the identical number. legoScoped/g.composeEdges/lensSurfaceIds are read here in
+        // whichever state they are already in (post-narrow on the happy path, since narrowing already ran
+        // above; un-narrowed on the degrade path, since narrowing never runs there either) — the same state
+        // each path's own render (buffered or direct-to-stdout) would use.
+        const bool sectionsWantLego    = rw::sectionsWant( cfg.sections, "lego" );
+        const bool sectionsWantCompose = rw::sectionsWant( cfg.sections, "compose" );
+        const std::size_t legoStubTotal    = legoPreRendered    ? legoPreCapCount    : rw::legoPreCapRowCount( ing, legoScoped );
+        const std::size_t composeStubTotal = composePreRendered ? composePreCapCount : rw::composePreCapRowCount( ing, g.composeEdges, lensSurfaceIds );
+        const bool legoHasContent    = legoPreRendered    ? !legoStr.empty()    : legoStubTotal > 0;
+        const bool composeHasContent = composePreRendered ? !composeStr.empty() : composeStubTotal > 0;
+        // CANDIDATE for collapse — has content, and --sections did not already opt it back in. Round 1
+        // stubbed every candidate unconditionally; round 2 (below) additionally PRICES it.
+        const bool legoCandidate    = legoHasContent && !sectionsWantLego;
+        const bool composeCandidate = composeHasContent && !sectionsWantCompose;
+        // the ONE restoring invocation, built once and used at every site (the size-gate probe below, the
+        // buffered substitution, and the degrade-path fallback further down) that needs it — never a second,
+        // differently-spelled build.
+        std::string sectionsNextInvocation;
+        if( legoCandidate || composeCandidate )
+        {
+            sectionsNextInvocation = rw::nextFlag( "--for=", cfg.forTask );
+            sectionsNextInvocation += ' ';
+            sectionsNextInvocation += rw::nextFlag( "--sections=", "lego,compose" );
+        }
+        // R2-L2' (round-2, priced re-registration of L2/B1, rv-prereg2 Amendment 1 R4): a candidate collapses
+        // ONLY WHEN CHEAPER — see rw::priceSectionStub (serialize.h) for the shared rule (posture-independent
+        // by construction) and the DEGRADE-path fallback it documents (no rendered bytes to gate on there, so
+        // it keeps round 1's unconditional collapse). Pulled into one small function so this already-long
+        // lens carries none of the pricing branching itself.
+        const rw::SectionStubPricing legoPricing    = legoCandidate
+            ? rw::priceSectionStub( "lego",    legoStubTotal,    sectionsNextInvocation, legoPreRendered,    legoStr.size() )
+            : rw::SectionStubPricing{};
+        const rw::SectionStubPricing composePricing = composeCandidate
+            ? rw::priceSectionStub( "compose", composeStubTotal, sectionsNextInvocation, composePreRendered, composeStr.size() )
+            : rw::SectionStubPricing{};
+        const bool legoWillStub    = legoCandidate    && legoPricing.collapse;
+        const bool composeWillStub = composeCandidate && composePricing.collapse;
+        // postcondition of the rule itself: whichever section actually collapses is, by construction, smaller
+        // than what it replaced (the WHOLE point of pricing it) — never a stub that grew the answer.
+        ENSURES( !( legoPreRendered && legoWillStub )    || legoPricing.stubXml.size()    < legoStr.size(),
+                 "R2-L2': a lego stub collapsed without being smaller than the section it replaced" );
+        ENSURES( !( composePreRendered && composeWillStub ) || composePricing.stubXml.size() < composeStr.size(),
+                 "R2-L2': a compose stub collapsed without being smaller than the section it replaced" );
+        std::string sectionsStubNote;   // present-only legend clause (kForSectionStubLegend), spliced below
+        if( legoWillStub || composeWillStub )
+        {
+            sectionsStubNote = rw::kForSectionStubLegend;
+        }
+        if( legoPreRendered && legoWillStub )
+        {
+            legoStr = legoPricing.stubXml;
+        }
+        if( composePreRendered && composeWillStub )
+        {
+            composeStr = composePricing.stubXml;
+        }
+        const std::size_t sectionsStubSpliceReserve = sectionsStubNote.size();
 
         // ── §F1 (CA4 wave-1 verifier): the lens's LAST TWO payload sections, rendered and CHARGED here ──────
         // §H7 gave the default map the structural property "a section cannot be APPENDED without being
@@ -2915,7 +2994,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             if( cfg.tokenBudget > 0 )
             {
                 const std::size_t spentBytes = headerStr.size() + sigsStr.size() + legoStr.size() + composeStr.size()
-                                             + routeStr.size() + graphSection.xml.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve
+                                             + routeStr.size() + graphSection.xml.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve
                                              + rw::kForFileTailShellReserve;   // deep-tail: the shell's reserved bytes (explicit regime only — this branch)
                 const std::size_t leftBytes  = bundleBudget > spentBytes ? bundleBudget - spentBytes : 1;
                 detailBodyBudget = std::min( detailBodyBudget, leftBytes );
@@ -2944,7 +3023,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             enrich = buildForEnrichment( cfg, ing, g, lensSurfaceIds, lensRank, plan, routeAnchorDefs, redactPtr,
                                           headerStr.size() + sigsStr.size() + legoStr.size() + composeStr.size()
-                                              + routeStr.size() + graphSection.xml.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve
+                                              + routeStr.size() + graphSection.xml.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve
                                               + ( cfg.tokenBudget > 0 ? rw::kForFileTailShellReserve : 0u ),
                                           // deep-tail: under an explicit ceiling the tail SHELL's bytes are
                                           // reserved ahead of the body walk (the kAutoAttrReserve pattern) so
@@ -2979,7 +3058,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         const std::string tailStr = renderForFileTailXml( forFileTailShown, cfg.tokenBudget, bundleBudget,
                                                            headerStr.size() + sigsStr.size() + legoStr.size() + composeStr.size()
                                                                + routeStr.size() + graphSection.xml.size() + detailSection.xml.size()
-                                                               + autoSection.xml.size() + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve );
+                                                               + autoSection.xml.size() + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve );
 
         // N1: the last rung's note DEFINES the root attribute it accompanies (over_ceiling= …), so the attribute is
         // never on a document whose legend does not explain it; the bracket spelling stays. It is PROSE ONLY now —
@@ -3003,6 +3082,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             .droppedPositiveNote  = droppedPositiveNote,
             .sigsCeilingNote      = sigsCeilingNote,
             .capNote              = capNoteStr,
+            .sectionsStubNote     = sectionsStubNote,   // L2': kForSectionStubLegend, present-only (round-2: only when a section actually collapsed under the priced size gate)
             .measured             = blockCharge.isMeasured,   // every pre-rendered block whole: sigs AND its siblings
             .estTokensLegend      = kForEstTokensLegend,
             .overCeilingLegend    = kForOverCeilingLegend,
@@ -3030,7 +3110,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             const std::size_t ladderPayloadBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size()
                                                  + detailSection.xml.size() + autoSection.xml.size() + graphSection.xml.size()
                                                  + tailStr.size()                               // deep-tail: the tail is priced like every other section
-                                                 + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve;   // + "</ctx>" + the header splices below (autoAttr exact-counted; A2's own reserve is exact too)
+                                                 + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve;   // + "</ctx>" + the header splices below (autoAttr exact-counted; A2's own reserve is exact too)
             const std::size_t ladderCeiling      = rw::ceilingAllowanceBytes( cfg.tokenBudget );
             // PR #135: the ALLOWANCE shape FITS when the reserve-priced header above does AND the header it would
             // emit does — finishForLensHeader's output plus every other byte stdout receives (the body section is
@@ -3166,17 +3246,39 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             std::fwrite( legoStr.data(), 1, legoStr.size(), stdout );
         }
-        else
+        else if( legoStubTotal == 0 )
+        {
+            // nothing to emit — matches packLego's own no-op on an empty ifaces set (never a fabricated stub)
+        }
+        else if( sectionsWantLego )
         {
             packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg ); // same scope+identity on the degrade path (§P3; un-narrowed — sigs bytes unknown here)
+        }
+        else
+        {
+            // L2 fault-injection fix: the buffered render never ran, so there is no legoStr to stub in
+            // place — the same collapse the happy path applies above, built from legoStubTotal (computed
+            // without rendering) instead of a captured out-param.
+            const std::string legoStub = rw::sectionStubXml( "lego", legoStubTotal, sectionsNextInvocation );
+            std::fwrite( legoStub.data(), 1, legoStub.size(), stdout );
         }
         if( composePreRendered )
         {
             std::fwrite( composeStr.data(), 1, composeStr.size(), stdout );
         }
-        else if( !g.composeEdges.empty() )
+        else if( composeStubTotal == 0 )
+        {
+            // nothing to emit — matches packCompose's own no-op on no matched edges
+        }
+        else if( sectionsWantCompose )
         {
             packCompose( stdout, ing, g.composeEdges, lensSurfaceIds );
+        }
+        else
+        {
+            // L2 fault-injection fix: same collapse as the lego arm above, on the compose degrade path.
+            const std::string composeStub = rw::sectionStubXml( "compose", composeStubTotal, sectionsNextInvocation );
+            std::fwrite( composeStub.data(), 1, composeStub.size(), stdout );
         }
         if( routePreRendered )
         {
