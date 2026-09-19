@@ -414,9 +414,16 @@ inline SymbolMention symbolMention( std::string_view task, std::string_view lowe
     // for byte, ASCII-only): findInSymbolSlot's positions into lowerTask are handed straight back out as
     // positions into task, and that substitution is only sound when the two strings are the same length.
     ASSUME( lowerTask.size() == task.size(), "lowerTask is lowerAscii(task) — a position in one is a position in the other" );
+    // '.' is here for the same reason ':' is: identifierMentionShape treats a "::" OR "." qualifier as a
+    // scoped-name seam (see `scoped` there), so the gate that decides whether to even TRY that shape test
+    // must recognize both scope spellings, not just one. Missing this let an all-lowercase dotted name —
+    // a real indexed shape: TOML nested tables index as t="sec" symbols named literally "tool.poetry" —
+    // fall through to the weak tier, where Section-kind symbols are never weak evidence (weakEvidenceKind),
+    // so the name could not resolve even when explicitly backtick-marked in the task text (backticks are
+    // step 1 of identifierMentionShape, itself unreachable without this).
     const bool hasMark = std::any_of( name.begin(), name.end(), []( const unsigned char c )
     {
-        return std::isupper( c ) || c == '_' || c == ':' || c == '$';
+        return std::isupper( c ) || c == '_' || c == ':' || c == '.' || c == '$';
     } );
     if( hasMark )
     {

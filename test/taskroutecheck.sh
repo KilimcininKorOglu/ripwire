@@ -71,7 +71,18 @@ cat >"$REPO/widget.hxx" <<'SRC'
 int widgetInit() { return 1; }
 int widgetTick() { return widgetInit(); }
 SRC
-git -C "$REPO" add router.cpp package.json storage/queue.cpp widget.hxx
+# CodeRabbit round (PR #292, 2026-09-19): a TOML nested table indexes as a t="sec" symbol whose NAME is
+# the dotted path itself — literally "tool.poetry" — all-lowercase, no underscore/colon/dollar/uppercase.
+# `hasMark` (symbolMention's gate for even TRYING the strong shape test) used to test for ':' but not
+# '.', although identifierMentionShape treats "::" and "." as the SAME scoped-seam evidence. A dotted
+# Section-kind symbol therefore could never resolve at all: Section is excluded from the weak tier
+# (weakEvidenceKind), and the strong path — including its backtick override — was unreachable without
+# hasMark seeing the mark first. See the LTA/LTB arms below.
+cat >"$REPO/pyproject.toml" <<'TOML'
+[tool.poetry]
+name = "router-fixture"
+TOML
+git -C "$REPO" add router.cpp package.json storage/queue.cpp widget.hxx pyproject.toml
 git -C "$REPO" commit -qm base
 routeRaw(){ "$BIN" "$REPO" --no-cache --help-task="$1" 2>"$TMP/err"; }
 # The document opens with its LEGEND, and the legend names the attributes it defines (next=, <run>, …).
@@ -122,6 +133,18 @@ LS="$( route 'How does classify work? I just edited classify and report and summ
 case "$LS" in *'--connect='*) no "several lowercase words minted a --connect route: $LS";; *) ok "several lowercase words never mint --connect";; esac
 LC="$( route 'how do classify, report and summary connect?' )"
 case "$LC" in *'--connect='*) no "three lowercase words minted a --connect route: $LC";; *) ok "three lowercase words never satisfy the three-symbol --connect";; esac
+
+# ── an all-lowercase dotted name still carries scoped SHAPE (CodeRabbit round, PR #292, 2026-09-19) ─────
+# `hasMark` used to test for ':' (the "::" scope spelling) but not '.' (the OTHER spelling
+# identifierMentionShape treats identically as `scoped`), so a real indexed dotted name — a TOML nested
+# table, t="sec" symbol named literally "tool.poetry" — could never even reach the strong shape test.
+# Section-kind symbols are excluded from the weak tier (weakEvidenceKind), so the name could not resolve
+# AT ALL, not even backtick-marked (the override identifierMentionShape's step 1 grants is itself gated
+# behind hasMark). Both arms are RED against a pre-fix binary (abstain, resolved_symbols="0").
+LTA="$( route 'Explain the implementation of tool.poetry' )"
+case "$LTA" in *'status="recommend"'*'intent="understand-symbol"'*'--expand='*'tool.poetry'*) ok "bare dotted name resolves as a strong mention -> --expand";; *) no "bare dotted-name route wrong: $LTA";; esac
+LTB="$( route 'Explain the implementation of `tool.poetry`' )"
+case "$LTB" in *'status="recommend"'*'intent="understand-symbol"'*'--expand='*'tool.poetry'*) ok "backtick-marked dotted name resolves -> --expand";; *) no "backtick dotted-name route wrong: $LTB";; esac
 
 # ── a leading capital is not a camel seam (the routing-noise round, 2026-09-19) ─────────────────────────
 # `symbolMention`'s old "strong" test was ANY uppercase/underscore/colon/dollar byte anywhere in the name,
