@@ -257,8 +257,37 @@ i = d.find( b'</r>' )
 end = i + 4 if i >= 0 else len( d )
 b0, r0, b1 = d.find( b'<bodies' ), d.find( b'<r ' ), d.find( b'</bodies>' )
 if 0 <= b0 < r0 and b0 < b1 < r0:
-    rootTagEnd = d.find( b'>' ) + 1          # the <ctx ...> open tag stays in the map portion, as it does when appended
-    end -= ( b1 + len( b'</bodies>' ) ) - rootTagEnd
+    # CodeRabbit PR #292 finding 4052087945, VERIFIED AND REFINED (its own one-line suggestion —
+    # subtracting from b0, the literal "<bodies" position, instead of rootTagEnd — was checked against the
+    # real emission and found to overcorrect: everything between the root tag's '>' and the literal
+    # "<bodies" is NOT uniformly a root disclosure. src/main.cpp's ctxOpenStr (map-charged: the §F5 verdict
+    # bills it via + ctxUnprovenBytes / the note=/mapCtxOpenBytes terms) carries at most ONE thing there,
+    # ctxUnprovenLegend, appended with NOTHING between it and the tag's '>' when ctxUnprovenDefs > 0. But
+    # packBodies (serialize.h) ALSO writes kBodiesLegend — the <bodies> section's OWN "sibs=/inc=/calls"
+    # legend, ~1 KB, gated on withFileContext (always on for --expand) — immediately before the literal
+    # "<bodies" tag, and THAT is payload (bundleDoc.payloadBytes = bodiesSection.xml.size(), never a term in
+    # the §F5 verdict). A flat b0 anchor folds kBodiesLegend into the "map portion" the probe reports,
+    # overcounting by ~1 KB relative to what production actually bills to fit_bytes — measured on
+    # --expand=estimateTokens --max-tokens=6000: a synthetic three-way check (rootTagEnd anchor / b0 anchor /
+    # this fix) against a fixture carrying an unproven-legend AND a bodies-legend distinguishes all three;
+    # only this anchor matches what src/main.cpp's own verdict prices.
+    #
+    # ctxOpenStr's real end: the tag's own '>' (rootTagEnd), pushed past ctxUnprovenLegend's whole comment
+    # when one is present. Matched by its EXACT known literal opener ("<!-- ripwire expand: ",
+    # unprovenDefsVerbComment's one call site in main.cpp — shared by --expand and --outline, the only two
+    # verbs that reach this bodies-first shape), not by "any comment right here": kBodiesLegend is ALSO a
+    # comment starting immediately at rootTagEnd with no gap (measured on the real corpus — see above), so
+    # "starts with <!--" alone cannot tell the two apart; the literal opener can. FULL legend only — under
+    # --legend=compact this opener is itself rewritten (graphlegend.h's own comment on
+    # unprovenDefsVerbComment: "compactlegend.h strips it as the prose it is"), which this gate's #5/#5b/#5c
+    # arms never invoke.
+    rootTagEnd = d.find( b'>' ) + 1
+    ctxAttrEnd = rootTagEnd
+    if d[ rootTagEnd : rootTagEnd + len( b'<!-- ripwire expand: ' ) ] == b'<!-- ripwire expand: ':
+        close = d.find( b'-->', rootTagEnd )
+        if close != -1:
+            ctxAttrEnd = close + 3
+    end -= ( b1 + len( b'</bodies>' ) ) - ctxAttrEnd
 print( end )
 PY
 }
@@ -277,6 +306,76 @@ for entry in "mapdiff:3000:--map-diff" "mapdiff2:12000:--map-diff" "churn:800:--
         no "#5b --max-tokens=$N $args: map portion $PB B EXCEEDS the $LIM B ceiling, unlabelled — the probe priced a shape it did not build"
     fi
 done
+
+# ── #5c: mapbytes_of must keep a root disclosure that sits between the root tag and <bodies> (a REAL
+#    root-priced clause) while still EXCLUDING the bodies section's own legend, which ALSO sits between the
+#    root tag and the literal "<bodies" tag but is payload, not map — CodeRabbit PR #292 finding 4052087945,
+#    verified against the real emission and refined (see mapbytes_of's own comment above for why the
+#    finding's literal one-line suggestion — subtract from b0 — overcorrects: MEASURED on
+#    --expand=estimateTokens --max-tokens=6000, src/, that anchor folds packBodies' ~1 KB kBodiesLegend into
+#    the reported "map portion", which the real §F5 verdict never bills to fit_bytes). Three anchors, one
+#    fixture, one number each:
+#      rootTagEnd (the old bug)   → drops BOTH the root disclosure and the bodies legend
+#      b0 (the finding's own diff) → keeps BOTH — wrongly keeps the bodies legend too
+#      this fix (comment-aware)   → keeps ONLY the root disclosure — the one production actually bills
+python3 - <<'PY' >"$TMP/synth_5c.xml"
+import sys
+prefix      = b'<ctx est_tokens="9">'
+rootlegend  = b'<!-- ripwire expand: unproven_defs=2 (absent when 0) -- two internal-linkage definitions were dropped -->'
+bodieslegend = b'<!-- a body legend not billed to fit_bytes: sibs=/inc=/calls, priced as payload -->'
+bodies      = b'<bodies><b p="x.cpp" n="f">CODE</b></bodies>'
+mapr        = b'<r est_tokens="5"><f p="y.cpp"><s n="g"/></f></r>'
+sys.stdout.buffer.write( prefix + rootlegend + bodieslegend + bodies + mapr )
+PY
+GOT_5C="$( mapbytes_of "$TMP/synth_5c.xml" )"
+WANT_5C="$( python3 -c '
+prefix       = b"<ctx est_tokens=\"9\">"
+rootlegend   = b"<!-- ripwire expand: unproven_defs=2 (absent when 0) -- two internal-linkage definitions were dropped -->"
+mapr         = b"<r est_tokens=\"5\"><f p=\"y.cpp\"><s n=\"g\"/></f></r>"
+print( len( prefix ) + len( rootlegend ) + len( mapr ) )
+' )"
+if [ "$GOT_5C" = "$WANT_5C" ]; then
+    ok "#5c mapbytes_of: keeps the root disclosure, excludes the bodies-section legend ($GOT_5C B)"
+else
+    no "#5c mapbytes_of: got $GOT_5C B, want $WANT_5C B — either the root disclosure was dropped or the bodies legend leaked into the map charge"
+fi
+
+# ── #5d (§F5): CHARGE note= TO THE --max-tokens CEILING — CodeRabbit PR #292 finding 4052087920. The
+#    bundle selector (bundleDoc.rootAttrBytes) already counted noteBytes, but neither the binary-search
+#    that PICKS mapTopK nor the final over_ceiling verdict did — both land inside the same `<ctx ...>` open
+#    tag mapCtxOpenBytes already charges, so a near-limit map could pick a topK whose real emission (with
+#    note= riding along) overran the ceiling, unlabelled. A small isolated fixture (25 same-named,
+#    ambiguous `run` definitions — deterministic ~52 B/topK growth, easy to land exactly on the boundary)
+#    found the real one: MEASURED on the pre-fix binary at N=990, --expand=run picked top-8 and delivered
+#    2224 B against a 2102 B ceiling (over by 122 B, the exact size of the missing note=), with no
+#    over_ceiling label. Fixed, the same command picks top-5 (2082 B, within budget). Both figures pasted
+#    in the lane report; this arm re-derives them live rather than trusting the snapshot.
+F5D="$TMP/f5d_repo"; mkdir -p "$F5D"
+for i in $( seq 1 25 ); do printf 'int run() { return %d; }\n' "$i" >"$F5D/f$i.cpp"; done
+git -C "$F5D" init -q
+git -C "$F5D" config user.email ripwire@example.invalid
+git -C "$F5D" config user.name ripwire-gate
+git -C "$F5D" add -A
+git -C "$F5D" commit -qm base
+"$BIN" "$F5D" --max-tokens=990 --expand=run --no-cache >"$TMP/f5d.out" 2>/dev/null
+PB_5D="$( mapbytes_of "$TMP/f5d.out" )"
+LIM_5D=$(( 990 * 2124 / 1000 ))   # N*2.36*0.90, integer (awk's earlier "%d" truncation, same formula every other arm uses)
+OVER_5D=0; head -c "$PB_5D" "$TMP/f5d.out" | grep -aq 'over_ceiling=1' && OVER_5D=1
+if [ "$PB_5D" -le "$LIM_5D" ] 2>/dev/null; then
+    ok "#5d --max-tokens=990 --expand=run: map portion $PB_5D B within the $LIM_5D B ceiling (note= charged to the search)"
+elif [ "$OVER_5D" = 1 ]; then
+    ok "#5d --max-tokens=990 --expand=run: map portion $PB_5D B over the $LIM_5D B ceiling and SAYS SO (over_ceiling=1)"
+else
+    no "#5d --max-tokens=990 --expand=run: map portion $PB_5D B EXCEEDS the $LIM_5D B ceiling, unlabelled — note= was not charged to the search/verdict"
+fi
+# and the wording is payload-neutral (CodeRabbit finding 4052087924) — no "bodies" literal on an ambiguous
+# --expand's ride-along note, which the fixture above already exercises.
+if grep -aq 'note="[^"]*bodies' "$TMP/f5d.out"; then
+    no "#5d note= still assumes bodies-only wording"
+else
+    ok "#5d note= wording does not assume the payload is bodies"
+fi
+
 # the legend must define both markers AND name the headroom factor + rate, in the map that carries them
 grep -aq 'max_tokens=.*2\.36.*0\.90\|max_tokens=.*conservative' "$TMP/mt1500.out" \
     && ok "#5 legend clause defines max_tokens=/fit_bytes= and names the rate + headroom" \

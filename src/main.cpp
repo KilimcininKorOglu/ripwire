@@ -1396,6 +1396,17 @@ inline constexpr std::string_view kExpandWholeFileLegend =
     "text; an <s n= sc= l=/> row names each requested symbol that has an enclosing scope, and "
     "its full id composes as p::sc::n from the src row's p=. -->";
 
+// #289's ride-along `note=` FORMAT STRING, as ONE constant shared by every site that prices or prints it
+// (the §F5 top-K search, the §F5 ceiling verdict, and the actual noteBuf fill in runDefaultMap) — CodeRabbit
+// PR #292 findings 4052087920 (the search/verdict must charge these bytes, not just the bundle selector) and
+// 4052087924 (payload-neutral wording: `noteAppliesToBundle` also covers an outline-only request, which
+// emits <outline>, never <bodies>). "payload" covers --expand's <bodies> and --outline's <outline> alike
+// without naming either — the same neutral word the --top-k=0 --help text already uses for this exact
+// concept ("Use it when you want the body ... PAYLOAD-ONLY", docs/COMMANDS.md).
+inline constexpr const char* kMapRidesAlongFmt =
+    " note=\"the ranked top-{} map below rides along with the requested payload; --top-k=0 for the payload "
+    "alone (--top-k=1 for a minimal map)\"";
+
 // ── ONE PRICE FOR BOTH SERVING CANDIDATES (CodeRabbit, PR #215, second round on this comparison) ─────
 // THE DEFECT was not a missing addend, it was two counters. The bundle candidate was priced to the byte
 // (envelope, root attributes, the unproven residue, the map, the rendered <bodies>, the closing tag) by the
@@ -1842,6 +1853,27 @@ int runDefaultMap( const MainDispatch& d )
     // charged to est_tokens like the rest of the payload, not to fit_bytes.
     const bool        hasExtension    = cfg.packSignatures || cfg.packTopN > 0 || !cfg.expand.empty() || !cfg.outline.empty();
     const std::size_t mapCtxOpenBytes = ( hasExtension && !cfg.json ) ? sizeof( "<ctx>" ) - 1 : 0;
+    // CodeRabbit PR #292 finding 4052087920: the ride-along `note=` attribute (kMapRidesAlongFmt, formatted
+    // into `noteBuf` below once `mapTopK` is settled) lands INSIDE the same `<ctx ...>` open tag mapCtxOpenBytes
+    // charges — so like mapCtxOpenBytes itself, it belongs to the map portion the ceiling gates, not to
+    // payload territory. Neither the search below nor §F5's verdict charged it, so a near-limit map could
+    // emit `note=` past `fit_bytes` with `over_ceiling` never set. `noteWouldApplyGivenTopK` is
+    // `noteAppliesToBundle` minus its `mapTopK > 0` term (every candidate this search tries is >= 1, so that
+    // term is trivially true here); `noteBytesForTopK` FORMATS the real string for each candidate k rather
+    // than hand-deriving its digit count, so this can never drift from what `noteBuf` itself prints — the
+    // same "measure, don't assume" discipline `measureEmittedMapBytes` already applies. Shares
+    // kMapRidesAlongFmt with the actual `noteBuf` fill below so the two format strings cannot drift apart.
+    const bool noteWouldApplyGivenTopK = !cfg.topKExplicit && ( !cfg.expand.empty() || !cfg.outline.empty() ) && !cfg.json;
+    const auto noteBytesForTopK = [ & ]( int k ) -> std::size_t
+    {
+        if( !noteWouldApplyGivenTopK )
+        {
+            return 0;
+        }
+        char probeBuf[ 220 ] = { 0 };
+        rw::formatTo( probeBuf, sizeof( probeBuf ), kMapRidesAlongFmt, k );
+        return std::strlen( probeBuf );
+    };
     if( cfg.maxTokens > 0 )
     {
         maxTokensFit = { std::size_t( cfg.maxTokens ), maxTokensCeilingBytes, /*isOverCeiling=*/false };   // maxTokens is > 0 here (guarded above)
@@ -1856,7 +1888,7 @@ int runDefaultMap( const MainDispatch& d )
         while( lo <= hi )
         {
             const int mid = lo + ( hi - lo ) / 2;
-            if( measureMapBytes( mid, 0 ) + mapCtxOpenBytes <= maxTokensCeilingBytes ) { best = mid; lo = mid + 1; }
+            if( measureMapBytes( mid, 0 ) + mapCtxOpenBytes + noteBytesForTopK( mid ) <= maxTokensCeilingBytes ) { best = mid; lo = mid + 1; }
             else
             {
                 hi = mid - 1;
@@ -2218,9 +2250,10 @@ int runDefaultMap( const MainDispatch& d )
     {
         // In-band first: xmllint-safe (an XML comment may not carry "--", an attribute value can), so this is
         // a `note=` attribute rather than the comment style ctxUnprovenLegend/kExpandWholeFileLegend use.
-        rw::formatTo( noteBuf, sizeof( noteBuf ),
-                      " note=\"the ranked top-{} map below rides along with these bodies; --top-k=0 for bodies alone (--top-k=1 for a minimal map)\"",
-                      mapTopK );
+        // kMapRidesAlongFmt is the SAME constant noteBytesForTopK (above, §F5 search/verdict) formats — the
+        // two can never drift, which is the whole point of sharing it (CodeRabbit PR #292, findings
+        // 4052087920/4052087924).
+        rw::formatTo( noteBuf, sizeof( noteBuf ), kMapRidesAlongFmt, mapTopK );
         noteBytes = std::strlen( noteBuf );
     }
     if( expandAutoServeScope( cfg, !expandRanges.empty(), bodiesSection.isRendered ) )
@@ -2316,7 +2349,9 @@ int runDefaultMap( const MainDispatch& d )
         // a `note=` attribute rather than the comment style ctxUnprovenLegend/kExpandWholeFileLegend use.
         ASSUME( noteBytes > 0 && ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
         ctxOpenStr.insert( 4, noteBuf );
-        rw::emitTo( stderr, "ripwire: note — the ranked top-{} map rides along with your requested bodies; add --top-k=0 for the bodies alone (or --top-k=1 for a minimal map)\n", mapTopK );
+        // CodeRabbit PR #292 finding 4052087924: "bodies" assumed --expand; an --outline-only request emits
+        // <outline>, never <bodies>. "payload" (same word kMapRidesAlongFmt's note= uses) covers both.
+        rw::emitTo( stderr, "ripwire: note — the ranked top-{} map rides along with your requested payload; add --top-k=0 for the payload alone (or --top-k=1 for a minimal map)\n", mapTopK );
     }
 
     // §F5 — THE CEILING VERDICT, taken here because this is the first point where every input to the map's own
@@ -2341,8 +2376,17 @@ int runDefaultMap( const MainDispatch& d )
     // §F5 (cont.): + mapCtxOpenBytes — the `<ctx>` opener a payload verb prints ahead of serialize()'s bytes
     // is inside the delivered map portion (everything through `</r>`), so the verdict charges it exactly as
     // the search above did; see mapCtxOpenBytes's own comment for the 1-byte-over measurement that found it.
+    // + (mapRidesAlongNotice ? noteBytes : 0) — CodeRabbit PR #292 finding 4052087920: the ride-along
+    // `note=` attribute lands inside that same `<ctx ...>` open tag exactly when mapRidesAlongNotice fires
+    // (just above, and already decided by here — unlike the search, which runs before `serveWholeFile` is
+    // known and so uses noteBytesForTopK's "would it apply" price instead), so it is map-portion bytes
+    // exactly like mapCtxOpenBytes; the verdict must charge it or a near-limit map can emit `note=` past
+    // fit_bytes with over_ceiling never set. `noteBytes` is already the real formatted length for the
+    // FINAL mapTopK (computed above at the noteAppliesToBundle fill), so this reuses it exactly rather than
+    // reformatting.
     if( cfg.maxTokens > 0 && mapTopK > 0
-        && measureEmittedMapBytes( mapTopK, cfg.json ? 0 : payloadTokens ) + mapCtxOpenBytes + ctxUnprovenBytes > maxTokensCeilingBytes )
+        && measureEmittedMapBytes( mapTopK, cfg.json ? 0 : payloadTokens ) + mapCtxOpenBytes + ctxUnprovenBytes
+               + ( mapRidesAlongNotice ? noteBytes : 0 ) > maxTokensCeilingBytes )
     {
         maxTokensFit.isOverCeiling = true;
     }

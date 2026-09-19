@@ -1284,7 +1284,7 @@ inline constexpr char kHelpHead[] =
         "                               an explicit narrowing) but still gets the exact-name top-k=0 default when it applies.\n"
         "                               When the bundle wins AND no explicit --top-k was given, the requested bodies are served BEFORE\n"
         "                               the ranked map (not buried after it), and the map's escape hatch also rides the root as\n"
-        "                               note=\"...--top-k=0 for bodies alone...\" (not stderr-only): a caller reading only stdout sees\n"
+        "                               note=\"...--top-k=0 for the payload alone...\" (not stderr-only): a caller reading only stdout sees\n"
         "                               both the answer and how to drop the map on the next call. Absent whenever the bundle carries\n"
         "                               no map at all (top-k=0, exact-name default) or loses to whole-file, and whenever --top-k was\n"
         "                               explicit — the classic shape above carries no note= either.\n"
