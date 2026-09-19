@@ -400,7 +400,7 @@ UR="$TMP/unreadable"; mkdir -p "$UR/tree/a" "$UR/tree/b" "$UR/xdg"
 printf 'struct UnreadMirror { int x; int y; };\n'  >"$UR/tree/a/p.h"
 printf 'struct UnreadMirror { int x; long y; };\n' >"$UR/tree/b/p.h"
 XDG_CACHE_HOME="$UR/xdg" TMPDIR="$UR/xdg" "$BIN" "$UR/tree" --layout=UnreadMirror >"$UR/warm.out" 2>/dev/null; urc=$?
-if [ "$urc" -eq 2 ] && grep -q 'mirror="mismatch"' "$UR/warm.out"; then
+if [ "$urc" -eq 2 ] && grep -q 'mirror="mismatch"' "$UR/warm.out" && ! grep -q 'unreadable=' "$UR/warm.out"; then
     ok "unreadable (control): both halves readable → mirror=\"mismatch\", exit 2, and no unreadable= ($( grep -c 'unreadable=' "$UR/warm.out" ) hit)"
     chmod 000 "$UR/tree/b/p.h"
     if cat "$UR/tree/b/p.h" >/dev/null 2>&1; then
@@ -428,7 +428,7 @@ if [ "$urc" -eq 2 ] && grep -q 'mirror="mismatch"' "$UR/warm.out"; then
     fi
     chmod 644 "$UR/tree/b/p.h"
 else
-    no "unreadable (control): the readable mirror did not report mismatch/exit 2 (rc=$urc) — the arm is void: $( grep -o '<layout [^>]*>' "$UR/warm.out" )"
+    no "unreadable (control): the readable mirror did not report mismatch/exit 2 with no unreadable= (rc=$urc, unreadable= hits=$( grep -c 'unreadable=' "$UR/warm.out" )) — the arm is void: $( grep -o '<layout [^>]*>' "$UR/warm.out" )"
 fi
 
 # exit-code control for the owner decision: a single readable definition still exits 0, a matching mirror 0, drift 2
