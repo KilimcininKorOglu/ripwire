@@ -3311,14 +3311,18 @@ static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kI
 // flag matched, and did its value survive" is one question with one answer.
 enum class ViewFlagMatch : std::uint8_t { NoMatch, Assigned, Refused };
 
-// The view flags whose value is a PATH (lennix1337's list from PR #44): the one set whose value takes the program's path
-// spelling at intake (os::normalize_path_arg). A --grep pattern, a symbol or a number must never be rewritten.
+// The view flags whose value is a PATH (lennix1337's list from PR #44, plus --in=/--doc-drift=/--exclude= added in
+// the D3 fix round): the one set whose value takes the program's path spelling at intake (os::normalize_path_arg).
+// A --grep pattern, a symbol or a number must never be rewritten. NOT here, deliberately: --scope= (one or more
+// comma-separated GLOBS — '\' is the glob escape character, not a separator to rewrite) and --layout= (a struct/class
+// name, never a path).
 inline constexpr std::string_view kPathValuePrefixes[] =
 {
     "--eval-mined=", "--eval-skills=", "--arch=", "--cache=", "--index-out=", "--scip=", "--pin-census=",
     "--lint-rules=", "--exercises=", "--cochange=", "--situ=", "--test-gate=", "--scan-skills=", "--dead-code=",
     "--plan-lint=", "--scan-skill=", "--batch=", "--at=", "--edit-payload=", "--edit-target-file=", "--edit-plan=",
-    "--eval-stray=", "--from-trace=", "--with-profile=", "--brief=", "--html=", "--affected="
+    "--eval-stray=", "--from-trace=", "--with-profile=", "--brief=", "--html=", "--affected=",
+    "--in=", "--doc-drift=", "--exclude="
 };
 
 // intake: a path-valued flag's value takes the program's path spelling here, once (argv storage is mutable, and Config
@@ -4949,6 +4953,9 @@ inline Config parseArgs( int argc, char** argv ) noexcept
                 // with an unset $X excluded nothing and said nothing. Same refusal as its table siblings.
                 if( a.size() == 10 )
                 { refuseEmptyValue( "--exclude=", "a path substring to drop from the crawl", "--exclude=vendor/" );  c.ok = false; return c; }
+                // Windows intake (D3 fix round): hand-written, so it does not ride applyViewFlag's kViewFlags loop —
+                // called explicitly, same as every kPathValuePrefixes row. POSIX: normalizePathValueAtIntake is empty.
+                normalizePathValueAtIntake( "--exclude=", a.substr( 10 ) );
                 c.excludes.push_back( std::string( a.substr( 10 ) ) );
                 // r27-emitters T5: a BAD VALUE is not an unknown FLAG. `--rank-by=bogus` used to fall through the
                 // exact-match chain to the generic "unknown flag" arm, which told the agent the flag itself does not
