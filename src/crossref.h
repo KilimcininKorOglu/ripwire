@@ -702,12 +702,9 @@ struct RefEnumeration
         TipNotObjectName,
     };
     std::uint32_t refsDropped = 0;
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::TipNotObjectName: ++refsDropped; break;
-        }
+        ++refsDropped;
     }
 };
 
@@ -843,12 +840,9 @@ struct ParallelSweep
     };
     std::vector<char> done;                     // done[i] = 1 once body( i ) returned; one writer per slot
     std::atomic<bool> isIncomplete{ false };
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::WorkerThrew: isIncomplete.store( true, std::memory_order_relaxed ); break;
-        }
+        isIncomplete.store( true, std::memory_order_relaxed );
     }
     bool isDone( std::size_t i ) const noexcept { return !isIncomplete.load( std::memory_order_relaxed ) || ( i < done.size() && done[ i ] != 0 ); }
 };

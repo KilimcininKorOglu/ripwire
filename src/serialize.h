@@ -1653,12 +1653,9 @@ struct MapAnnotations
         {
             ProbeUnmeasured,
         };
-        void disclose( DisclosureWhy why ) noexcept
+        void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
         {
-            switch( why )
-            {
-                case DisclosureWhy::ProbeUnmeasured: isUnmeasured = true; break;
-            }
+            isUnmeasured = true;
         }
     };
     const MaxTokensFit* maxTokensFit = nullptr;

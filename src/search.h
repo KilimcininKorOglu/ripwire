@@ -1213,12 +1213,9 @@ struct ScanWorkerDegrade
         WorkerThrew,   // an exception escaped the per-file loop: the files that worker had not reached are unscanned
     };
     std::atomic<bool>& degraded;
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::WorkerThrew: degraded.store( true, std::memory_order_relaxed ); break;
-        }
+        degraded.store( true, std::memory_order_relaxed );
     }
 };
 
@@ -1520,12 +1517,9 @@ struct GrepAuxCollection
     {
         ScanThrew,
     };
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::ScanThrew: degraded = true; break;
-        }
+        degraded = true;
     }
 
     void noteRegexAbandoned( const std::string& path )

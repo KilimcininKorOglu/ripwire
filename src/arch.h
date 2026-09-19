@@ -769,12 +769,9 @@ struct ArchBaselineRead
     std::unordered_set<std::uint64_t> hashes;
     bool                              present        = false;
     bool                              symlinkRefused = false;
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::SymlinkRefused: symlinkRefused = true; break;
-        }
+        symlinkRefused = true;
     }
 };
 

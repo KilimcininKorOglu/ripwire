@@ -114,12 +114,9 @@ struct NestRefusal
     IngestFileScan& scan;
     std::size_t     fileId;
     std::uint32_t   bytes;
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::KotlinStringTemplates: scan.nestRefusedBytes[ fileId ] = bytes; break;
-        }
+        scan.nestRefusedBytes[ fileId ] = bytes;
     }
 };
 

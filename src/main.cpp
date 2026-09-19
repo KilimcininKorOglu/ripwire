@@ -1011,17 +1011,43 @@ std::optional<int> runNotes( const MainDispatch& d )
 // still ASSERTED afterward by finishTokenBudgetGate, it just can no longer WITHHOLD an over-budget map on that one run
 // (the stream never opened, so finishTokenBudgetGate's write-or-withhold branch is a no-op and the content — already
 // streamed straight to `real` — is left exactly where it is).
-inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, std::size_t tokenBudget, std::FILE* real )
+//
+// The buffer opens through rw::openChargeStream, the tree's one charge-buffer seam, so the fault switch that reaches every
+// other measuring buffer reaches this one too (it was the one that bypassed it).
+//
+// TokenBudgetStream is the DISCLOSE sink for both degrades. An unopened buffer means an over-budget map has ALREADY been
+// streamed, so finishTokenBudgetGate must not say it withheld it (it used to print withheld_est_tokens= on stderr beside
+// the very map it claimed to withhold); a buffer that lost a write means the map is withheld and the run exits 1.
+struct TokenBudgetStream
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        OpenFailed,   // the map streams straight to `real`: the budget is still asserted, but nothing can be withheld
+        LostWrite,    // the buffered map is not whole: withheld, never printed short, exit 1
+    };
+    bool isUnbuffered = false;
+    bool isLost       = false;
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::OpenFailed: isUnbuffered = true; break;
+            case DisclosureWhy::LostWrite:  isLost       = true; break;
+        }
+    }
+};
+
+inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, TokenBudgetStream& sink, std::size_t tokenBudget, std::FILE* real )
 {
     if( tokenBudget == 0 )
     {
         return real;
     }
-    if( std::FILE* const buffer = stream.open() )
+    if( std::FILE* const buffer = rw::openChargeStream( stream ) )
     {
         return buffer;
     }
-    DISCLOSE( "openTokenBudgetBuffer: open_memstream failed — falling back to direct stdout" );
+    DISCLOSE( sink, TokenBudgetStream::DisclosureWhy::OpenFailed, "openTokenBudgetBuffer: open_memstream failed — falling back to direct stdout" );
     return real;
 }
 
@@ -1035,16 +1061,27 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, std::size_t t
 // way; this one holds the map itself, rendered once, and nothing can render it again. So a buffer that did not finish
 // whole (rw::MemoryStream::finish: a write lost inside it, or the close failed) is not printed short. The run says so
 // on stderr in every build and exits 1, the exit code main's own A4-F18 check gives a short write to stdout.
-inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, std::FILE* real,
+inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, TokenBudgetStream& sink, std::FILE* real,
                                                  std::size_t mapEstTokens, std::size_t tokenBudget, bool asJson )
 {
     const bool                  isBuffered = stream.isOpen();
     const rw::MemoryStreamBytes body       = isBuffered ? stream.finish() : rw::MemoryStreamBytes{};
     if( isBuffered && !body.isWhole )
     {
-        DISCLOSE( "finishTokenBudgetGate: the --token-budget buffer did not finish whole — map withheld, exit 1" );
+        DISCLOSE( sink, TokenBudgetStream::DisclosureWhy::LostWrite, "finishTokenBudgetGate: the --token-budget buffer did not finish whole — map withheld, exit 1" );
+    }
+    if( sink.isLost )
+    {
         rw::emitRaw( stderr, "ripwire: write error — the --token-budget buffer lost bytes; the map is withheld, not printed short\n" );
         return 1;
+    }
+    if( tokenBudget > 0 && mapEstTokens > tokenBudget && sink.isUnbuffered )
+    {
+        // The map above went straight to stdout: it carries its own est_tokens=, and it was NOT withheld. Say that, and
+        // exit 3 as any over-budget run does — never the withheld_ spelling, which names a map the caller did not get.
+        rw::emitTo( stderr, "ripwire: --token-budget exceeded: est_tokens={} > budget={} — the map above was NOT withheld: its measuring buffer "
+                            "could not open, so it streamed directly\n", mapEstTokens, tokenBudget );
+        return 3;
     }
     if( tokenBudget > 0 && mapEstTokens > tokenBudget )
     {
@@ -2132,8 +2169,9 @@ int runDefaultMap( const MainDispatch& d )
     // §P6.8: `out` replaces every `stdout` from here through the map body's closing tag, so nothing reaches
     // the real stdout until finishTokenBudgetGate below has measured and decided (see openTokenBudgetBuffer's
     // comment above runDefaultMap). No-op when --token-budget is unset — `out` is just `stdout`.
-    rw::MemoryStream tbStream;
-    std::FILE* const out = openTokenBudgetBuffer( tbStream, cfg.tokenBudget, stdout );
+    rw::MemoryStream  tbStream;
+    TokenBudgetStream tbSink;   // what the buffer could not do, read back by finishTokenBudgetGate below
+    std::FILE* const  out = openTokenBudgetBuffer( tbStream, tbSink, cfg.tokenBudget, stdout );
 
     // (M6: the `<ctx>` opener used to be printed HERE, before the §H7 pre-render. Nothing writes to `out`
     // between here and the emission below — the pre-render goes to memstreams — so the open moved down to
@@ -2451,7 +2489,7 @@ int runDefaultMap( const MainDispatch& d )
     // (composes freely with --max-tokens, which SHAPES the map to hit a target instead). §P6.8: closes the
     // buffer, and on exit 3 the buffered body never reaches stdout (finishTokenBudgetGate's own comment has
     // the full reasoning) — a small refusal record instead, shaped to match --json.
-    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, stdout, mapEstTokens, cfg.tokenBudget, cfg.json ) )
+    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, tbSink, stdout, mapEstTokens, cfg.tokenBudget, cfg.json ) )
     {
         return *gated;
     }

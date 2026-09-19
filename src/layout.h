@@ -1033,12 +1033,9 @@ struct LayoutResult
     {
         UnreadableFile,
     };
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::UnreadableFile: ++unreadableDefs; break;
-        }
+        ++unreadableDefs;
     }
 };
 

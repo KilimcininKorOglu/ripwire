@@ -1170,13 +1170,9 @@ struct ForLensBlockCharge
         SiblingBlockUnmeasured,   // <lego>/<compose>/<routes> streams directly: its bytes are outside the charge
     };
     bool isMeasured = true;
-    void disclose( DisclosureWhy why ) noexcept
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
     {
-        switch( why )
-        {
-            case DisclosureWhy::SigsUnmeasured:
-            case DisclosureWhy::SiblingBlockUnmeasured: isMeasured = false; break;
-        }
+        isMeasured = false;
     }
 };
 
@@ -1417,11 +1413,16 @@ inline int emitForLensJson( std::FILE* out, const std::string& header, const For
                 sigsJson.assign( block.bytes );
             }
         }
+        ForLensBlockCharge sigsCharge;   // the sink: an unmeasured block takes the omitting path below
         if( !isSigsBuffered )
+        {
+            DISCLOSE( sigsCharge, ForLensBlockCharge::DisclosureWhy::SigsUnmeasured,
+                      "main: open_memstream failed (or its buffer lost a write) for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
+        }
+        if( !sigsCharge.isMeasured )
         {
             // ENOMEM-class, at the open or inside the buffer: emit unbudgeted rather than nothing, and report no
             // est_tokens/capped at all — a number this path cannot compute must never be fabricated.
-            DISCLOSE( "main: open_memstream failed (or its buffer lost a write) for the --for --json sigs block — emitting unbudgeted, est_tokens omitted" );
             if( redactBeforeSigs )
             {
                 *in.redact = *redactBeforeSigs;   // the rows below are the ones the summary counts
