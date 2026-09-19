@@ -769,6 +769,14 @@ struct CMakeScan
 {
     std::vector<std::string> files;        // sorted
     std::uint64_t            escaped = 0;  // links whose target left the root — EXACT count
+    enum class DisclosureWhy : std::uint8_t
+    {
+        SymlinkEscapesRoot,
+    };
+    void disclose( DisclosureWhy ) noexcept   // the DISCLOSE sink: the field the emitter reads
+    {
+        ++escaped;
+    }
 };
 
 // The CMake files under `root`, sorted. ingest() never collects these (CMake is not one of the indexed
@@ -824,8 +832,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
             const bool      isLink = it->is_symlink( lec );
             if( isLink && !rw::crawlPathStaysInRoot( p, rootReal ) )
             {
-                ++out.escaped;
-                DISCLOSE( "flags: a CMake file's symlink target leaves the root — file refused" );
+                DISCLOSE( out, CMakeScan::DisclosureWhy::SymlinkEscapesRoot, "flags: a CMake file's symlink target leaves the root — file refused" );
                 continue;
             }
             out.files.push_back( p );

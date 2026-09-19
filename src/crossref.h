@@ -456,6 +456,22 @@ struct StreamBlobStats
     std::uint32_t binary     = 0;      // NUL in the probe window — outside a text-scoped claim, not a failure
     bool          endedEarly = false;  // the batch pipe died before serving every sha
     bool          startFailed = false; // the batch never started (list file / popen failure)
+    // The DISCLOSE sink for the batch's own failures: both flags withhold every completeness claim built on the stream.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        ListUnwritable,       // the blob-batch list could not be written
+        BatchNotStarted,      // git cat-file --batch did not start
+        StreamEndedMidBlob,   // the pipe died part-way through a blob
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::ListUnwritable:
+            case DisclosureWhy::BatchNotStarted:    startFailed = true; break;
+            case DisclosureWhy::StreamEndedMidBlob: endedEarly  = true; break;
+        }
+    }
 
     bool exhaustiveOverText() const noexcept
     {
@@ -482,8 +498,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         std::FILE* lf = std::fopen( listPath.c_str(), "wb" );
         if( !lf )
         {
-            st.startFailed = true;
-            DISCLOSE( "crossref: cannot write the blob-batch list — cross-branch content unavailable" );
+            DISCLOSE( st, StreamBlobStats::DisclosureWhy::ListUnwritable, "crossref: cannot write the blob-batch list — cross-branch content unavailable" );
             return;
         }
         for( const std::string& s : shas )
@@ -499,8 +514,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
     if( !pipe )
     {
         ::unlink( listPath.c_str() );
-        st.startFailed = true;
-        DISCLOSE( "crossref: git cat-file --batch failed to start — cross-branch content unavailable" );
+        DISCLOSE( st, StreamBlobStats::DisclosureWhy::BatchNotStarted, "crossref: git cat-file --batch failed to start — cross-branch content unavailable" );
         return;
     }
 
@@ -561,9 +575,9 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         // WRONG answer, which is worse than a short one. Report this blob as unreadable and stop.
         if( got != std::size_t( size ) )
         {
-            st.endedEarly = true;
+            DISCLOSE( st, StreamBlobStats::DisclosureWhy::StreamEndedMidBlob,
+                      "crossref: git cat-file stream ended mid-blob — stopping the batch rather than risk misattributing content" );
             onBlob( shas[ served ], std::string_view{}, false );
-            DISCLOSE( "crossref: git cat-file stream ended mid-blob — stopping the batch rather than risk misattributing content" );
             break;
         }
 
@@ -1083,6 +1097,23 @@ struct RefPlumbing
     std::uint32_t headDiffPair = kNoPair;      // DiffPairTable index for diff(base, HEAD)
 
     gtl::btree_map<std::string, std::string> headBlobAt;   // path → HEAD's blob, for the paths HEAD changed
+
+    // The DISCLOSE sink for the probe's degrades: a failed probe renders ok="0" v="unknown", never a verdict.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        RevisionNotObjectName,    // the ref tip or HEAD is not a resolved object name: not probed
+        MergeBaseNotObjectName,   // git's merge-base answer is not an object name: discarded, read as no merge-base
+        NoMergeBase,              // shallow clone or unrelated history
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::RevisionNotObjectName:
+            case DisclosureWhy::NoMergeBase:            ok = false; break;
+            case DisclosureWhy::MergeBaseNotObjectName: base.clear(); break;
+        }
+    }
 };
 
 // The merge-base probe — the one git call that must happen before the diff pairs are even known, and the
@@ -1092,8 +1123,7 @@ inline RefPlumbing probeRefBase( const std::string& root, const RefInfo& ref, co
     RefPlumbing plumb;
     if( !isRevisionToken( ref.tip ) || !isRevisionToken( headSha ) )
     {
-        plumb.ok = false;
-        DISCLOSE( "crossref: ref tip or HEAD is not a resolved object name — refusing to probe, verdict is unknown" );
+        DISCLOSE( plumb, RefPlumbing::DisclosureWhy::RevisionNotObjectName, "crossref: ref tip or HEAD is not a resolved object name — refusing to probe, verdict is unknown" );
         return plumb;
     }
 
@@ -1104,16 +1134,14 @@ inline RefPlumbing probeRefBase( const std::string& root, const RefInfo& ref, co
     // to two more git commands. Anything that is not an object name is treated exactly like no merge-base.
     if( !plumb.base.empty() && !isRevisionToken( plumb.base ) )
     {
-        DISCLOSE( "crossref: merge-base returned something that is not an object name — discarding it" );
-        plumb.base.clear();
+        DISCLOSE( plumb, RefPlumbing::DisclosureWhy::MergeBaseNotObjectName, "crossref: merge-base returned something that is not an object name — discarding it" );
     }
     if( plumb.base.empty() )
     {
         // No merge-base: a SHALLOW clone (actions/checkout is shallow by default, so this is the CI default,
         // not an exotic case) or genuinely unrelated histories. Degrade, never crash — and the verdict this
         // produces is Unknown, never Merged: see writeStrayRef and Verdict's own comment.
-        plumb.ok = false;
-        DISCLOSE( "crossref: no merge-base for ref (shallow clone or unrelated history?) — verdict is unknown, not merged" );
+        DISCLOSE( plumb, RefPlumbing::DisclosureWhy::NoMergeBase, "crossref: no merge-base for ref (shallow clone or unrelated history?) — verdict is unknown, not merged" );
         return plumb;
     }
     // ref.tip == base ⇒ the ref is an ANCESTOR of HEAD, so diff(base, ref.tip) is a diff of a tree against

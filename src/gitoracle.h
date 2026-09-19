@@ -157,6 +157,27 @@ struct HistoryIndex
     bool          ok         = false;   // false ⇒ no answer at all (not a git repo, git unavailable, probe failed)
     bool          nonGitRoot = false;
     bool          truncated  = false;   // hit kMaxProbeCommits / kMaxProbeBytes / kMaxNamesTracked ⇒ a miss is Unknown
+    // The DISCLOSE sink for the probe's degrades: no answer reads probed="0" (every name unknown), a partial one
+    // truncated="1" (an unseen name unknown, never "never").
+    enum class DisclosureWhy : std::uint8_t
+    {
+        WalkNotStarted,         // git log did not start
+        NoCommits,              // git log produced no commit despite a resolvable HEAD
+        WalkBounded,            // the walk hit its bound
+        WalkExitedNonZero,      // git log exited non-zero part-way
+        UnattributedRemoval,    // a removed line arrived before any commit header: dropped, so the index is partial
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::WalkNotStarted:
+            case DisclosureWhy::NoCommits:           ok = false; break;
+            case DisclosureWhy::WalkBounded:
+            case DisclosureWhy::WalkExitedNonZero:
+            case DisclosureWhy::UnattributedRemoval: truncated = true; break;
+        }
+    }
     std::uint32_t commitsWalked = 0;
     std::string   headSha;
 
@@ -457,7 +478,8 @@ inline void recordRemoval( HistoryIndex& idx, std::string_view name, const Remov
     // WHERE it was removed; downstream treats "Removed" as a claim backed by a sha, and ASSUMEs as much.
     if( site.commit.empty() )
     {
-        DISCLOSE( "gitoracle: a removed line arrived before any commit header — dropping it rather than recording an unattributed removal" );
+        DISCLOSE( idx, HistoryIndex::DisclosureWhy::UnattributedRemoval,
+                  "gitoracle: a removed line arrived before any commit header — dropping it rather than recording an unattributed removal" );
         return;
     }
 
@@ -620,13 +642,12 @@ inline HistoryIndex runProbe( const std::string& root )
                                          [ & ] { return idx.commitsWalked <= kMaxProbeCommits; } );
     if( !walk.started )
     {
-        DISCLOSE( "gitoracle: git log failed to start — the history probe answers unknown for every name" );
+        DISCLOSE( idx, HistoryIndex::DisclosureWhy::WalkNotStarted, "gitoracle: git log failed to start — the history probe answers unknown for every name" );
         return idx;
     }
     if( walk.truncated )
     {
-        idx.truncated = true;
-        DISCLOSE( "gitoracle: history walk hit its bound — names it did not see report unknown, never never" );
+        DISCLOSE( idx, HistoryIndex::DisclosureWhy::WalkBounded, "gitoracle: history walk hit its bound — names it did not see report unknown, never never" );
     }
     const int status = walk.status;
 
@@ -638,8 +659,10 @@ inline HistoryIndex runProbe( const std::string& root )
     // Report NO ANSWER instead, so every name reads unknown.
     if( idx.commitsWalked == 0 )
     {
-        DISCLOSE( "gitoracle: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'never' for every name" );
-        return HistoryIndex{};
+        idx = HistoryIndex{};
+        DISCLOSE( idx, HistoryIndex::DisclosureWhy::NoCommits,
+                  "gitoracle: git log produced no commits despite a resolvable HEAD — reporting no answer rather than 'never' for every name" );
+        return idx;
     }
 
     // A non-zero exit with commits already in hand is the weaker version of the same problem: what we read is
@@ -648,8 +671,8 @@ inline HistoryIndex runProbe( const std::string& root )
     // away a partial answer that is honest about being partial.
     if( status != 0 )
     {
-        idx.truncated = true;
-        DISCLOSE( "gitoracle: git log exited non-zero mid-walk — the answer is kept but marked truncated, so unseen names report unknown" );
+        DISCLOSE( idx, HistoryIndex::DisclosureWhy::WalkExitedNonZero,
+                  "gitoracle: git log exited non-zero mid-walk — the answer is kept but marked truncated, so unseen names report unknown" );
     }
 
     idx.ok = true;

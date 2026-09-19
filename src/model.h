@@ -1095,6 +1095,15 @@ struct CrawlSkips
     // IN-ROOT link, never the target, for the same reason.
     std::vector<SkippedFile>  escaped;              // capped rows, path-sorted (bytes 0 = not measured)
     std::uint64_t             escapedFiles    = 0;  // EXACT count (rows may be fewer)
+    // The DISCLOSE sink for a file the crawl refused because its link left the root: the exact count escaped_root= prints.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        SymlinkEscapesRoot,
+    };
+    void disclose( DisclosureWhy ) noexcept
+    {
+        ++escapedFiles;
+    }
 };
 
 // §L1 — PARSE HEALTH: a per-indexed-file record of how much of the file the parser actually understood,

@@ -289,6 +289,14 @@ struct DriftResult
                                                   //   not a verdict, so it must not move the clean= count.
     std::uint32_t       docsScanned = 0;
     std::uint32_t       docsUnread  = 0;        // 2026-09-06: indexed docs whose read failed at scan time — omitted from docs=, disclosed as docs_unread=
+    enum class DisclosureWhy : std::uint8_t
+    {
+        UnreadableDoc,
+    };
+    void disclose( DisclosureWhy ) noexcept   // the DISCLOSE sink: the field the emitter reads
+    {
+        ++docsUnread;
+    }
     // §SEC1: files this verb's OWN walk refused because a symlink left the root. Disclosed as escaped_root=,
     // absent at zero, on docs_unread='s rule — a presence probe that quietly lost a file answers "missing"
     // about a file that is there, which is this verb's named cry-wolf failure.
@@ -1663,6 +1671,14 @@ struct RepoPaths
     std::vector<std::string>                                 auxFull;  // unparsed-but-textual files, absolute, sorted
     HashMap<std::string, rw::SmallVec<std::uint32_t, 2>>     byBase;   // basename → indices into `rel`
     std::uint64_t                                            escaped = 0;   // §SEC1 — links whose target left the root
+    enum class DisclosureWhy : std::uint8_t
+    {
+        SymlinkEscapesRoot,
+    };
+    void disclose( DisclosureWhy ) noexcept   // the DISCLOSE sink: the field the emitter reads
+    {
+        ++escaped;
+    }
 };
 
 // The AUXILIARY presence corpus: text files the INDEX does not parse but a doc legitimately names symbols
@@ -1745,8 +1761,7 @@ inline RepoPaths collectRepoPaths( const std::string& root, const std::vector<st
         std::error_code lec;
         if( it->is_symlink( lec ) && !crawlPathStaysInRoot( full, rootReal ) )
         {
-            ++out.escaped;
-            DISCLOSE( "doc-drift: a file's symlink target leaves the root — file refused" );
+            DISCLOSE( out, RepoPaths::DisclosureWhy::SymlinkEscapesRoot, "doc-drift: a file's symlink target leaves the root — file refused" );
             continue;
         }
 
@@ -2369,8 +2384,8 @@ inline DriftResult computeDocDrift( const IngestResult& ing, const std::string& 
     {
         if( !scan.isDocRead[d] )
         {
-            DISCLOSE( "doc-drift: cannot read a markdown file — its anchors are omitted" );
-            ++res.docsUnread;   // 2026-09-06: the doc used to vanish from docs= with no trace a Release binary keeps
+            // 2026-09-06: the doc used to vanish from docs= with no trace a Release binary keeps; the sink counts docs_unread=
+            DISCLOSE( res, DriftResult::DisclosureWhy::UnreadableDoc, "doc-drift: cannot read a markdown file — its anchors are omitted" );
             rw::emitTo( stderr, "ripwire: doc-drift: cannot read {} — its anchors are omitted (docs_unread= counts it)\n", scan.docRel[d].c_str() );
             continue;
         }

@@ -49,6 +49,15 @@ struct EditCheckContract
     std::uint32_t nowDefs;      //   baseline fact a MAX cannot express; see editCheckVerdict for why it exists
     bool          wasPublic;
     bool          nowPublic;
+    // The DISCLOSE sink for a comparison that cannot be made: the status the emitter prints says so.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        NoHeadBaseline,
+    };
+    void disclose( DisclosureWhy ) noexcept
+    {
+        status = "no-baseline";
+    }
 };
 
 // the overload set sharing `focus`'s DEFINITION SITE (same file + scope + name) — the was/now comparison MUST
@@ -262,8 +271,7 @@ inline EditCheckContract editCheckContractVsHead( const IngestResult& ing, const
         // 2026-09-06 stranger audit: a tarball, an export, any non-git tree used to answer "new-symbol" for a
         // symbol that plainly exists — a false contract claim whose only tell was a missing at=. No HEAD means
         // no comparison: say so, claim nothing.
-        res.status = "no-baseline";
-        DISCLOSE( "edit-check: no git HEAD baseline — status no-baseline" );
+        DISCLOSE( res, EditCheckContract::DisclosureWhy::NoHeadBaseline, "edit-check: no git HEAD baseline — status no-baseline" );
         return res;
     }
     if( base.locBySym.find( key ) == base.locBySym.end() )

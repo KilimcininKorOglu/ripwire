@@ -1213,12 +1213,12 @@ readMechArm notes           src/notes.h   'inline std::vector<Note> readNotes( c
             'readNotesSidecar( const std::string& path, NotesReadStats& stats )' readNotesSidecar \
             'notes: refusing to read the notes sidecar through a symlink' 1
 readMechArm qualitybaseline src/quality.h 'inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadStats& stats )' readBaseline \
-            'readBaselineSidecar( const std::string& path )' readBaselineSidecar \
+            'readBaselineSidecar( const std::string& path, BaselineReadStats& stats )' readBaselineSidecar \
             'quality: refusing to read the baseline sidecar through a symlink' 1
 readMechArm qualitybaseline src/quality.h 'inline std::string readBaselineHeadSha( const std::string& path )' readBaselineHeadSha \
-            'readBaselineSidecar( const std::string& path )' readBaselineSidecar '' 0
+            'readBaselineSidecar( const std::string& path, BaselineReadStats& stats )' readBaselineSidecar '' 0
 readMechArm qualitybaseline src/quality.h 'inline std::size_t readBaselineAbsorbed( const std::string& path )' readBaselineAbsorbed \
-            'readBaselineSidecar( const std::string& path )' readBaselineSidecar '' 0
+            'readBaselineSidecar( const std::string& path, BaselineReadStats& stats )' readBaselineSidecar '' 0
 readMechArm archbaseline    src/arch.h    'archReadBaseline( const std::string& sidecarPath )' archReadBaseline \
             'readArchBaselineSidecar( const std::string& sidecarPath, ArchBaselineRead& baseline )' readArchBaselineSidecar \
             'arch: refusing to read the arch baseline sidecar through a symlink' 1

@@ -4114,6 +4114,23 @@ struct BaselineReadStats
     bool        preQ1          = false;   // structure, but no per-symbol loc records: origin cannot be classified
     std::size_t badLines       = 0;       // lines of a known kind whose payload did not parse — skipped
     std::string producer;                 // the `producer` record: 64 lowercase hex, or "" when absent or malformed
+    // The DISCLOSE sink for the read's degrades: each sets the field selectBaseline turns into the root's baseline=
+    // marker or baseline_bad_lines=, so a refused, empty or partly unparsed sidecar is never read as a clean one.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        SymlinkRefused,   // a link at the name, refused unopened
+        MalformedLine,    // a known record kind whose payload did not parse (skipped)
+        Unrecognizable,   // opened, but no line of the format's structure
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::SymlinkRefused: symlinkRefused = true; break;
+            case DisclosureWhy::MalformedLine:  ++badLines; break;
+            case DisclosureWhy::Unrecognizable: unrecognizable = true; break;
+        }
+    }
 };
 
 // The v6 `producer` record's payload, into `stats.producer` when it is identity-shaped (64 lowercase hex). Only the
@@ -4127,8 +4144,7 @@ inline void readProducerRecord( std::istream& is, BaselineReadStats& stats )
     const auto isLowerHexDigit = []( char c ) { return ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' ); };
     if( value.size() != 64 || !std::all_of( value.begin(), value.end(), isLowerHexDigit ) )
     {
-        DISCLOSE( "quality: malformed baseline producer line skipped" );
-        ++stats.badLines;
+        DISCLOSE( stats, BaselineReadStats::DisclosureWhy::MalformedLine, "quality: malformed baseline producer line skipped" );
         return;
     }
     if( stats.producer.empty() )
@@ -4141,20 +4157,20 @@ inline void readProducerRecord( std::istream& is, BaselineReadStats& stats )
 // readBaselineAbsorbed, and openBaselineSidecar's other half with the same answer to a link: O_NOFOLLOW, refused
 // in the open itself. A link here used to be followed on the way in, so the link chose which file was honored as
 // the floor. Why an in-tree link is refused too is round 3 of src/pathguard.h.
-inline rw::pathguard::NoFollowRead readBaselineSidecar( const std::string& path )
+inline rw::pathguard::NoFollowRead readBaselineSidecar( const std::string& path, BaselineReadStats& stats )
 {
     rw::pathguard::NoFollowRead sidecar = rw::pathguard::openNoFollowRead( "the quality baseline sidecar", path );
-    if( sidecar.refused ) { DISCLOSE( "quality: refusing to read the baseline sidecar through a symlink" ); }
+    if( sidecar.refused ) { DISCLOSE( stats, BaselineReadStats::DisclosureWhy::SymlinkRefused, "quality: refusing to read the baseline sidecar through a symlink" ); }
     return sidecar;
 }
 
 inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadStats& stats )
 {
     stats = BaselineReadStats{};
-    rw::pathguard::NoFollowRead sidecar = readBaselineSidecar( path );
+    // "no sidecar" and "a sidecar refused unopened" are different answers: the seam's sink records the refusal
+    rw::pathguard::NoFollowRead sidecar = readBaselineSidecar( path, stats );
     if( !sidecar.opened )
     {
-        stats.symlinkRefused = sidecar.refused;   // "no sidecar" and "a sidecar refused unopened" are different answers
         return false;
     }
     stats.present = true;
@@ -4186,16 +4202,16 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         // per-symbol MAX metrics: "<kind> <hexhash> <value>". A malformed line degrades + skips (never the
         // silent hash-0 insert). An UNKNOWN kind (e.g. a future record read by this binary) is skipped
         // gracefully so forward/backward baseline versions never crash.
-        const auto readValMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint32_t>& m, const char* what )
+        const auto readValMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint32_t>& m )
         { std::uint64_t h = 0; std::uint32_t v = 0; is >> std::hex >> h >> std::dec >> v;
-          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } m[h] = v; };
-        const auto readSet = [ & ]( std::vector<std::uint64_t>& v, const char* what )
+          if( is.fail() ) { DISCLOSE( stats, BaselineReadStats::DisclosureWhy::MalformedLine ); return; } m[h] = v; };
+        const auto readSet = [ & ]( std::vector<std::uint64_t>& v )
         { std::uint64_t h = 0; is >> std::hex >> h;
-          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } v.push_back( h ); };
+          if( is.fail() ) { DISCLOSE( stats, BaselineReadStats::DisclosureWhy::MalformedLine ); return; } v.push_back( h ); };
         // "<kind> <hexkey> <hexval>" — both 64-bit hex (the raw-body-hash map). Malformed → degrade + skip.
-        const auto readHashMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint64_t>& m, const char* what )
+        const auto readHashMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint64_t>& m )
         { std::uint64_t h = 0, v = 0; is >> std::hex >> h >> v;
-          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } m[h] = v; };
+          if( is.fail() ) { DISCLOSE( stats, BaselineReadStats::DisclosureWhy::MalformedLine ); return; } m[h] = v; };
 
         if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
          || kind == "producer" )
@@ -4205,43 +4221,43 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
 
         if( kind == "ccx" )
         {
-            readValMap( out.ccxBySym, "quality: malformed baseline ccx line skipped" );
+            readValMap( out.ccxBySym );
         }
         else if( kind == "loc" )
         {
-            readValMap( out.locBySym, "quality: malformed baseline loc line skipped" );
+            readValMap( out.locBySym );
         }
         else if( kind == "nest" )
         {
-            readValMap( out.nestBySym, "quality: malformed baseline nest line skipped" );
+            readValMap( out.nestBySym );
         }
         else if( kind == "params" )
         {
-            readValMap( out.paramsBySym, "quality: malformed baseline params line skipped" );
+            readValMap( out.paramsBySym );
         }
         else if( kind == "mask" )
         {
-            readValMap( out.maskBySym, "quality: malformed baseline mask line skipped" );
+            readValMap( out.maskBySym );
         }
         else if( kind == "defs" )
         {
-            readValMap( out.defsBySym, "quality: malformed baseline defs line skipped" );
+            readValMap( out.defsBySym );
         }
         else if( kind == "bodyq" )   // v3 tag — a v2 `body` line is bare-canonId-keyed (a different key space) and falls through to the unknown-kind skip
         {
-            readHashMap( out.bodyHashBySym, "quality: malformed baseline bodyq line skipped" );
+            readHashMap( out.bodyHashBySym );
         }
         else if( kind == "clone" )
         {
-            readSet( out.cloneGroups, "quality: malformed baseline clone line skipped" );
+            readSet( out.cloneGroups );
         }
         else if( kind == "dead" )
         {
-            readSet( out.dead, "quality: malformed baseline dead line skipped" );
+            readSet( out.dead );
         }
         else if( kind == "api" )
         {
-            readSet( out.publicApi, "quality: malformed baseline api line skipped" );
+            readSet( out.publicApi );
         }
         else if( kind == "producer" )
         {
@@ -4251,8 +4267,7 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
     }
     if( recognizedLineCount == 0 )
     {
-        DISCLOSE( "quality: baseline file is empty/unrecognizable — treating it as absent" );
-        stats.unrecognizable = true;
+        DISCLOSE( stats, BaselineReadStats::DisclosureWhy::Unrecognizable, "quality: baseline file is empty/unrecognizable — treating it as absent" );
         out = Snapshot{};
         return false;
     }
@@ -4288,7 +4303,8 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
 // obeyed. `writeBaseline` only ever writes `gitHeadSha`'s output, so no legitimate sidecar is affected.
 inline std::string readBaselineHeadSha( const std::string& path )
 {
-    rw::pathguard::NoFollowRead sidecar = readBaselineSidecar( path );
+    BaselineReadStats           unread;   // no channel here: readBaseline's own read records the refusal the report prints
+    rw::pathguard::NoFollowRead sidecar = readBaselineSidecar( path, unread );
     if( !sidecar.opened )
     {
         return {};
@@ -4322,7 +4338,8 @@ inline std::string readBaselineHeadSha( const std::string& path )
 // one the report has something to say about.
 inline std::size_t readBaselineAbsorbed( const std::string& path )
 {
-    rw::pathguard::NoFollowRead sidecar = readBaselineSidecar( path );
+    BaselineReadStats           unread;   // no channel here: readBaseline's own read records the refusal the report prints
+    rw::pathguard::NoFollowRead sidecar = readBaselineSidecar( path, unread );
     if( !sidecar.opened )
     {
         return 0;

@@ -1193,12 +1193,11 @@ void recordCrawlDrop( std::vector<SkippedFile>& rows, std::uint64_t& exactCount,
 // The count is EXACT and always incremented; only the row is capped, exactly like every sibling class.
 void recordRootEscape( CrawlSkips& skips, const std::string& path, std::string_view ext )
 {
-    ++skips.escapedFiles;
+    DISCLOSE( skips, CrawlSkips::DisclosureWhy::SymlinkEscapesRoot, "ingest: a symlink's target leaves the crawl root — file refused (see --skipped why=escaped-root)" );
     if( skips.escaped.size() < kMaxSkipRowsPerClass )
     {
         skips.escaped.push_back( { path, 0ull, std::string( ext ) } );
     }
-    DISCLOSE( "ingest: a symlink's target leaves the crawl root — file refused (see --skipped why=escaped-root)" );
 }
 
 // §L1: the crawl's two NON-SIZE drop tests, together, because they are one decision with one ordering
@@ -1282,6 +1281,17 @@ struct GitIgnoreSet
     bool                     rootIgnored = false; // git answered "./" — the ROOT is itself ignored (see IgnoreMode)
     std::vector<std::string> dirs;                // root-relative, NO trailing '/', sorted
     std::vector<std::string> files;               // root-relative, sorted
+    // The DISCLOSE sink for a probe git could not answer whole: `available` stays false, which --skipped prints as
+    // ignore_mode="unavailable" (and the crawl walks everything, never a partial ignore set).
+    enum class DisclosureWhy : std::uint8_t
+    {
+        GitNotRunnable,
+        ProbeOverCeiling,
+    };
+    void disclose( DisclosureWhy ) noexcept
+    {
+        available = false;
+    }
 };
 
 // A probe answer larger than this is refused whole rather than applied in part: a PARTIAL ignore set
@@ -1332,7 +1342,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     std::FILE* pipe = ::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
-        DISCLOSE( "ingest: cannot run git for the ignore probe — full walk" );
+        DISCLOSE( out, GitIgnoreSet::DisclosureWhy::GitNotRunnable, "ingest: cannot run git for the ignore probe — full walk" );
         return out;
     }
     std::string buf;
@@ -1354,7 +1364,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     }
     if( overflowed )
     {
-        DISCLOSE( "ingest: git ignore probe exceeded its byte ceiling — full walk" );
+        DISCLOSE( out, GitIgnoreSet::DisclosureWhy::ProbeOverCeiling, "ingest: git ignore probe exceeded its byte ceiling — full walk" );
         return out;
     }
 

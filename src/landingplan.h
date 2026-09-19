@@ -82,6 +82,15 @@ struct PlanResult
                                                         // e.g. a local branch literally named "working-tree" collides
                                                         // with its reserved arm name) — degrade, arms/pairs/landing empty
     mergescout::ScoutResult   scout;                  // computeMergeScout() over `scouted`'s ref names, in order
+    enum class DisclosureWhy : std::uint8_t
+    {
+        ScoutRefused,
+    };
+    void disclose( DisclosureWhy ) noexcept   // the DISCLOSE sink: the field the emitter reads
+    {
+        scoutOk = false;
+    }
+
     std::string               atStamp;                // r26-stamp Task A: gitstamp::stampAt(root) — "" on a non-git root
 };
 
@@ -153,10 +162,10 @@ inline PlanResult computePlan( const std::string& root, std::string_view filter,
 
     const std::string refsCsv = joinRefNames( result.stray.refs, result.scouted );
     result.scout   = mergescout::computeMergeScout( root, refsCsv, workingIng, excludes, maxFileBytes );
-    result.scoutOk = result.scout.ok;
-    if( !result.scoutOk )
+    if( !result.scout.ok )
     {
-        DISCLOSE( "landing-plan: merge-scout refused the selected landing set — reporting the sweep without arms/conflicts/order" );
+        DISCLOSE( result, PlanResult::DisclosureWhy::ScoutRefused,
+                  "landing-plan: merge-scout refused the selected landing set — reporting the sweep without arms/conflicts/order" );
     }
     return result;
 }
