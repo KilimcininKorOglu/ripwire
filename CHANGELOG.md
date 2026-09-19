@@ -15,6 +15,37 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — the CLI's default legend is compact; `--legend=full` restores the prose legend
+
+Every XML answer now leads with the compact legend unless `--legend=full` is passed — `--for` included, whose
+own `ripwire.for/v1` header is its compact dialect. The compact legend defines each verb's purpose and every
+completeness attribute the answer carries (`counts_floor=`, `shown=`/`total=`/`capped=`, the paging window,
+`est_tokens=`, `over_ceiling=`, the resolver gauges …); the full prose, which used to be the default, is one
+flag away and byte-identical to what 0.6.1 printed without it. Rows never change between the two. The MCP server
+has defaulted to compact since 0.4.0, so both surfaces now agree. Measured on this repository: `--callers`
+6,305 → 3,205 B, `--edit-check` 9,744 → 3,027 B, `--affected=src/cli.h` 2,103 → 747 B, `--for` 9,775 →
+8,693 B (method: the same argv, 0.6.1's bare output against this default, `wc -c`).
+
+What else moved with it, because a default has to be honest where an opt-in could be terse:
+
+- **A compacted answer is priced at the bytes it delivers.** `est_tokens=` used to keep the full legend's
+  price after compaction (`--connect` here: 1,200 tokens for 1,037 bytes); it is now moved by the removed bytes
+  at the document's own rate, an upper bound that no longer over-reads by ~3x on small answers. `over_ceiling="1"`
+  and `--pr-context`'s `budget-floor-exceeded` follow the repriced number, and the flagless map's
+  `--token-budget` gate decides on the compact price it prints, so a map that fits is no longer withheld.
+- **`--for` under `--token-budget` buys rows and never loses one.** Its compact sig ledger subtracted the full
+  dialect's enrichment clause (~450 B the compact header never carried), so a budgeted compact bundle overshot
+  its ceiling on 55 of 66 budgets of a 72-function fixture; 12 of 66 now, against 15 for the full legend.
+- **Nothing the default cannot shape fails because of it.** A run whose answer has no XML legend passes through
+  unchanged; only an asked `--legend=` still refuses there. `--pin-census` takes a posture (its map is the
+  answer). The servers (`--mcp`, `--listen`, `--lsp`) and `--json` keep no default.
+- **Readings the compact dialect lacked:** `locals_floor=` on `--metrics` rows and `--pr-context`'s `truncated=`;
+  `--query`'s `<!-- routed: … -->` note is kept where the root carries no `route=`.
+- The prompt-route hooks read `status=` as an attribute, so they route under either root attribute order.
+
+Scripts that parse the full legend's prose, or match a root's first attribute byte for byte, should pass
+`--legend=full`.
+
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 
 Reported by @mariadb-KyleHutchinson in #289: `--expand=SYM` on a name matching more than one definition, in a
