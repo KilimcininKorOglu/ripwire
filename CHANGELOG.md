@@ -2115,6 +2115,27 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
+### Fixed — `readFilePrefix` reported success on a prefix a read error had truncated
+
+`readFilePrefix` reads the first `maxBytes` of a file for the prewarm grammar-sniffing heuristics (the ObjC-header
+probe is its one caller), reusing one buffer per worker across every file it samples. Its success check was
+`got > 0 || feof( fp ) != 0` — true for any nonzero byte count or a clean end-of-file, but blind to the stream's own
+error indicator. A `fread()` that returned fewer bytes than requested because the underlying read failed partway,
+not because the file was actually that short, still satisfied `got > 0`, so the truncated bytes went back as though
+they were the whole prefix and the sniff judged a header it never fully read. `readFile`, a few lines above it in
+`src/ingest_crawl.h`, already fails on any `got != want`; `readFilePrefix` now reads the same standard-library
+disambiguator that function relies on: `ferror( fp ) == 0 && ( got > 0 || feof( fp ) != 0 )`, so a live error
+indicator fails the read regardless of how many bytes made it through. Effect is limited to the prewarm hint —
+parsing itself is unchanged either way, which is why this is neutral on output.
+
+Split out of #44 (native Windows port), where it rode inside commit 9124d689. Gate: `test/crashsweepcheck.sh` arm
+B4. B1's interposed short-read shim gains an env-selected `eio` mode — a marked `fread` delivers 16 bytes, then raises
+the stream's error indicator with `errno = EIO` and no end-of-file — and B4b compiles `readFilePrefix`'s own source
+text into a harness run under it: `ok=1 bytes=16` on the previous commit, `ok=0 bytes=0` after. B4a is the control
+(a clean read to EOF under the same shim is the whole 64-byte prefix), and B4c runs the binary on an ObjC header whose
+`@interface` sits past byte 16 with that read failing: the answer is byte-identical before and after the fix, so the
+arm pins only that it survives. Thanks to @lennix1337.
+
 ### Fixed — `ripwire wrap`'s MCP JSON stanzas broke on a command path holding a quote or backslash
 
 `ripwire wrap cursor|windsurf|gemini|opencode` (and the generic `mcpServers` stanza) print a JSON config whose
