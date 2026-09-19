@@ -38,12 +38,33 @@
 // `--for=TASK --limit=40`; a CONFIDENT answer carries none of them (owner decision 2026-09-12: present-only) and
 // keeps `--expand=FILE:NAME`. The thresholds are a registered hypothesis (PLAN_OUTPUT_ROUTING_LOOP §1.5 L-N),
 // not a tuned number: the routing-loop ladder measures them, and a later round moves them with a measured reason.
+//
+// EXTEND-3 (routing-loop round 2, R2-L3′, re-registration of round-1 L3 as "extend3" — PLAN_OUTPUT_ROUTING_LOOP_
+// 2026-09-12_REPORTS/12_round2_PREREG.md §R3, Amendment 1 item 3). Round-1's L3 re-sorted the WHOLE page by a
+// score+path-overlap blend and self-rejected (it could DISPLACE a shipped row and lose gold — see that lane's
+// frozen q21 loss). extend3 is the cheapest variant that cannot lose a shipped row: every row this call already
+// shows (window.begin..window.end, unchanged order, unchanged attributes) stays exactly as it was; up to
+// kForPageExtendMaxRows MORE rows are appended AFTER them, drawn only from the rows this call does not already
+// show (window.end..total), chosen by the SAME blend key L3 registered (score/100 + path-subtoken overlap share).
+// offset=0 ONLY (the single "follow-up page", not a walk-wide feature) — a later --offset= page of the same
+// walk appends nothing, so a row offset=0 pulled in as "extra" can never collide with a row a later page of
+// the SAME walk legitimately shows (forwidencheck.sh arm (3)'s no-overlap / concatenation invariant). So a
+// file the task names by path can surface even when its lens score alone would not earn it a shown slot.
+// The appended rows carry p= and score= only (no n=/sym=: they were never absorbed into a <ctx> ranking pass,
+// so naming their symbols would overstate what the row is — a lookup, not graph evidence) and the root gains
+// extra="K" (present-only: K==0 says nothing a reader needs). Branch-base note: this file cherry-picks only
+// L3's tokenizer/key helpers (kForPageBlendStop, forPageBlendToks, forPageBlendKeyGreater) from
+// origin/lane/r1-page-blend:src/forpage.h (965a942d) — not that lane's page re-sort call site, and not its
+// infra/tablelookup.h / tracein.h changes (this branch never took those), so forPageBlendToks calls a small
+// local digit predicate instead of the shared rw::isDigits that lane introduced elsewhere.
 
+#include "infra/Diagnostics.h"  // ASSUME / ENSURES — self-checks on the extend-3 selection
 #include "lexical.h"     // LexTermEvidence — the term masks + df the BM25 pass already accumulated
 #include "model.h"
 #include "nextverb.h"    // nextFlag / nextAttrXml / kNextAttrMaxBytes — the ONE next= spelling
 #include "pageview.h"    // pageWindow / pageDisclosure — the shared --limit/--offset vocabulary
 #include "serialize.h"   // escapeXml, lensRowPath, ctxRootOpen, radixSortByScoreDescId
+#include "taskroute.h"   // rw::taskroute::isOneOf — reused as-is (L3's stopword check; not cloned)
 #include "testmap.h"     // splitChangedFilesOfSymbols — the ONE "distinct files of a symbol set" walk (--affected's)
 
 #include <algorithm>
@@ -255,14 +276,191 @@ inline constexpr std::string_view kForPageLegend =
     "top 8 symbols cover between them (whole percent; a term counts once however often it recurs, so one huge "
     "file cannot monopolise), ties by the best symbol's lens score then path; n= positive-score symbols in the "
     "file; sym= its top symbols by lens rank; p= the file. coverage= is the lens root's gauge: the same share "
-    "for the top-ranked symbol alone (name, doc and body). shown=/total=/capped=1 when this page cut the list; "
+    "for the top-ranked symbol alone (name, doc and body). extra=K: K rows appended AFTER the ranked rows, "
+    "chosen only by task-word overlap with the file path (not by score=); they carry p= score= only. "
+    "shown=/total=/capped=1 when this page cut the list; "
     "offset=/limit=/has_more=/next_offset= page it and next= is the next page, pasted as-is";
 inline constexpr std::string_view kForPageLegendCompact =
     ": file-grain widening page (task= the query, route= the ranker that answered), one <f> row per positive-score "
     "file: score= IDF-weighted share of the query's "
     "subtokens the file's top 8 symbols cover together (%, a term counts once), ties by best symbol then path; "
-    "n= positive symbols; sym= top symbols; coverage= the top symbol's own share; shown=/total=/capped=1 when cut; "
+    "n= positive symbols; sym= top symbols; coverage= the top symbol's own share; "
+    "extra=K: K path-word-matched rows appended after the ranked ones (p= score= only); "
+    "shown=/total=/capped=1 when cut; "
     "offset=/limit=/has_more=/next_offset= page it, next= the next page; root= the crawl root";
+
+// ── EXTEND-3 (routing-loop round 2, R2-L3′) — tokenizer + blend key, copied from L3 ─────────────────────
+// The task-language stopwords the registered simulator's toks() drops: RocksDB's own file extensions
+// (cc/h) plus the closed set of connective words the ladder's question templates use. This list IS the
+// registered formula, not a re-derivation of it — keep it in lockstep with pagesim.py if either changes.
+// Copied verbatim from origin/lane/r1-page-blend:src/forpage.h (965a942d).
+inline constexpr std::string_view kForPageBlendStop[] =
+{
+    "cc", "h", "how", "does", "reach", "where", "is", "implemented", "the", "a", "to", "in", "of", "and",
+    "for", "when", "rocksdb",
+};
+
+// The same tiny "non-empty, every byte 0-9" predicate L3 called (there, rw::isDigits, shared out of
+// infra/tablelookup.h by that lane). This branch does not take that lane's infra/tablelookup.h or
+// tracein.h changes (see the header note above), so this is a small local instance rather than a call
+// into either file's version — same contract, kept file-local on purpose.
+inline bool forPageIsDigits( std::string_view s ) noexcept
+{
+    return !s.empty() && std::all_of( s.begin(), s.end(), []( unsigned char c ) { return c >= '0' && c <= '9'; } );
+}
+
+// The SAME tokenizer the registered simulator (pagesim.py's toks()) runs: a lowercase letter directly
+// followed by an uppercase one is a camelCase split (one rule — NOT the acronym-aware ladder
+// rw::subtokens() applies), any run of non-alnum bytes splits, stopwords and pure-digit tokens are
+// dropped. Deliberately not rw::subtokens(): that function also drops <2-byte tokens and folds an
+// uppercase run into one token, a DIFFERENT, stricter contract than the one the band was measured on —
+// reusing it would silently drift the shipped ranking away from the registered simulation. Copied
+// verbatim (bar the isDigits substitution above) from origin/lane/r1-page-blend:src/forpage.h (965a942d).
+inline void forPageBlendToks( std::string_view s, std::vector<std::string>& out )
+{
+    std::string cur;
+    char        prevRaw = 0;
+    auto        flush = [ & ]()
+    {
+        if( !cur.empty() && !taskroute::isOneOf( cur, std::begin( kForPageBlendStop ), std::size( kForPageBlendStop ) ) && !forPageIsDigits( cur ) )
+        {
+            out.push_back( cur );
+        }
+        cur.clear();
+    };
+    for( const char raw : s )
+    {
+        const unsigned char c     = static_cast<unsigned char>( raw );
+        const bool          alnum = ( c >= '0' && c <= '9' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' );
+        if( !alnum )
+        {
+            flush();
+            prevRaw = 0;
+            continue;
+        }
+        const bool camelBoundary = prevRaw >= 'a' && prevRaw <= 'z' && c >= 'A' && c <= 'Z';
+        if( camelBoundary )
+        {
+            flush();
+        }
+        cur.push_back( char( c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c ) );
+        prevRaw = raw;
+    }
+    flush();
+}
+
+// hits (WITH repeats, as the registered simulator counts them) of PATH's subtokens present in the task's
+// subtoken set, and PATH's own subtoken count (never 0: an empty tokenization is a share of 0/1, not a
+// div-by-zero). Kept as two integers, not a ratio — see forPageBlendKeyGreater for why. Copied verbatim
+// from origin/lane/r1-page-blend:src/forpage.h (965a942d).
+struct ForPageBlendPathHits
+{
+    std::size_t hits     = 0;
+    std::size_t pathToks = 1;
+};
+
+inline ForPageBlendPathHits forPageBlendPathShare( std::string_view path, const std::vector<std::string>& taskToks )
+{
+    std::vector<std::string> pathToks;
+    forPageBlendToks( path, pathToks );
+    if( pathToks.empty() )
+    {
+        return {};
+    }
+    std::size_t hits = 0;
+    for( const std::string& t : pathToks )
+    {
+        for( const std::string& q : taskToks )
+        {
+            if( t == q ) { ++hits; break; }
+        }
+    }
+    ENSURES( hits <= pathToks.size(), "hits counts a subset of pathToks" );
+    return { hits, pathToks.size() };
+}
+
+// One row's registered-formula term: scorePct/100 + W*(hits/pathToks), W=1, kept as three small integers
+// rather than folded into one float. Compared EXACTLY by cross-multiplication (int64_t; scorePct <= 100
+// and hits <= pathToks are both small, so the product never approaches overflow) — never as a float, for
+// the determinism reason L3 documented (a float key ties two real rows within 1 ULP on this corpus under
+// this TU's -ffast-math reassociation, which the determinism contract forbids drifting with the
+// optimizer). Copied verbatim from origin/lane/r1-page-blend:src/forpage.h (965a942d).
+struct ForPageBlendTerm
+{
+    int         scorePct = 0;
+    std::size_t hits     = 0;
+    std::size_t pathToks = 1;
+};
+
+inline bool forPageBlendKeyGreater( const ForPageBlendTerm& a, const ForPageBlendTerm& b ) noexcept
+{
+    ASSUME( a.pathToks > 0 && b.pathToks > 0, "forPageBlendPathShare never returns pathToks==0" );
+    const std::int64_t lhs = std::int64_t( a.scorePct ) * std::int64_t( a.pathToks ) * std::int64_t( b.pathToks )
+                            + std::int64_t( a.hits ) * 100 * std::int64_t( b.pathToks );
+    const std::int64_t rhs = std::int64_t( b.scorePct ) * std::int64_t( a.pathToks ) * std::int64_t( b.pathToks )
+                            + std::int64_t( b.hits ) * 100 * std::int64_t( a.pathToks );
+    return lhs > rhs;
+}
+
+inline constexpr std::size_t kForPageExtendMaxRows = 3;   // extend-3: up to this many rows appended, never a re-sort
+
+// extend-3's OWN selection (not L3's page re-sort): candidates are the rows THIS page does not already show
+// — page.rows[windowEnd..total). offset ONLY: the PREREG names "the `--for --limit=N` follow-up page" (one
+// page, not a walk-wide feature), so this fires on offset=0 alone — the r=1 row's own widening next= and the
+// bare `--for --limit=N` call both land there. A later --offset= page of the SAME walk appends nothing: its
+// shown window already starts past offset=0's window, but offset=0's own extend rows were drawn from ANYWHERE
+// past ITS window (including rows a later page will legitimately show), so extending every offset would let
+// page N's "extra" duplicate page N+1's real rows — the exact overlap forwidencheck.sh's arm (3) polices
+// ("the second page has no row in common with the first", "pages 1+2 concatenate to the wider page"). Ranked
+// by the blend key (exact integer compare, see forPageBlendKeyGreater) with an EXPLICIT path-string tie-break
+// (never relies on the incoming order being a total order on its own). Returns up to kForPageExtendMaxRows
+// indices into page.rows, in the order they should render.
+inline std::vector<std::uint32_t> forPageExtendRows( const IngestResult& ing, const ForFilePage& page, std::string_view task,
+                                                     std::string_view rootArg, std::size_t windowEnd, int offset )
+{
+    EXPECTS( windowEnd <= page.rows.size(), "windowEnd is a valid prefix bound of page.rows" );
+    if( offset != 0 )
+    {
+        return {};
+    }
+    const std::size_t total = page.rows.size();
+    std::vector<std::uint32_t> cand;
+    cand.reserve( total > windowEnd ? total - windowEnd : 0 );
+    for( std::size_t i = windowEnd; i < total; ++i )
+    {
+        cand.push_back( std::uint32_t( i ) );
+    }
+    if( cand.empty() )
+    {
+        return cand;
+    }
+    std::vector<std::string> taskToks;
+    forPageBlendToks( task, taskToks );
+    std::vector<ForPageBlendTerm> term( total );   // indexed by page.rows index; only cand[] entries are ever read
+    for( const std::uint32_t idx : cand )
+    {
+        const ForFileRow& row     = page.rows[idx];
+        const int          scorePct = int( row.share * 100.0 + 0.5 );
+        ForPageBlendPathHits ph{};
+        if( !taskToks.empty() )
+        {
+            ph = forPageBlendPathShare( lensRowPath( ing, row.fileId, rootArg ), taskToks );
+        }
+        term[idx] = ForPageBlendTerm{ scorePct, ph.hits, ph.pathToks };
+    }
+    std::sort( cand.begin(), cand.end(), [ & ]( std::uint32_t a, std::uint32_t b )
+    {
+        if( forPageBlendKeyGreater( term[a], term[b] ) ) { return true; }
+        if( forPageBlendKeyGreater( term[b], term[a] ) ) { return false; }
+        return ing.files[ page.rows[a].fileId ] < ing.files[ page.rows[b].fileId ];   // exact tie: path string
+    } );
+    if( cand.size() > kForPageExtendMaxRows )
+    {
+        cand.resize( kForPageExtendMaxRows );
+    }
+    ENSURES( cand.size() <= kForPageExtendMaxRows, "extend-3 never appends more than kForPageExtendMaxRows rows" );
+    return cand;
+}
 
 // What the page document is rendered from, beside the rows: the task and the lens root's own open tag (ctxRootOpen's
 // output — task=/route=/root= and the scrub tells — re-tagged <files>, so the two roots spell and escape their shared
@@ -286,6 +484,11 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     const std::size_t total  = page.rows.size();
     const PageWindow  window = pageWindow( total, p.limit, p.offset );
     const std::size_t shown  = window.end - window.begin;
+    // extend-3 (R2-L3′): chosen ONCE, over the rows this call does not already show, before any XML is
+    // written — the shown rows above are untouched (same slice, same order, same attributes as before
+    // this lever existed; see forwidencheck.sh's byte-identity arm).
+    const std::vector<std::uint32_t> extendRows = forPageExtendRows( ing, page, p.task, p.rootArg, window.end, p.offset );
+    ENSURES( extendRows.size() <= kForPageExtendMaxRows, "extend-3 root attribute and row count must agree" );
 
     x += "<files";
     if( p.rootOpen.size() > 5 && p.rootOpen.substr( 0, 4 ) == "<ctx" && p.rootOpen.back() == '>' )
@@ -295,6 +498,10 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     if( p.coveragePct >= 0 )
     {
         x += " coverage=\"" + std::to_string( p.coveragePct ) + "\"";
+    }
+    if( !extendRows.empty() )
+    {
+        x += " extra=\"" + std::to_string( extendRows.size() ) + "\"";   // present-only: 0 says nothing a reader needs
     }
     char disc[ kPageDisclosureCap ];
     x += pageDisclosure( disc, sizeof( disc ), shown, total, window.end, p.limit, p.offset, /*discloseCap=*/true );
@@ -319,6 +526,14 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
             x += escapeXml( ing.symbols[ row.top[k] ].name, esc );
         }
         x += "\"/>";
+    }
+    // extend-3: appended AFTER every ranked row, p= score= only (never n=/sym= — these rows were picked by
+    // path-word overlap, not absorbed into the union-coverage ranking pass the other rows carry evidence of).
+    for( const std::uint32_t idx : extendRows )
+    {
+        const ForFileRow& row = page.rows[idx];
+        x += "<f p=\"";  x += escapeXml( lensRowPath( ing, row.fileId, p.rootArg ), esc );
+        x += "\" score=\"" + std::to_string( int( row.share * 100.0 + 0.5 ) ) + "\"/>";
     }
     x += "</files>";
     return x;

@@ -184,14 +184,21 @@ printf '%s' "$root1" | grep -q 'next="[^"]*--limit=10 --offset=10"' \
     && ok "(3) a cut page carries shown/capped/total/has_more/next_offset and next= naming the next page" \
     || no "(3) --limit=10 root has no next= naming '--limit=10 --offset=10': $( printf '%s' "$root1" | grep -o 'next="[^"]*"' )"
 python3 "$TMP/rows.py" <"$TMP/p1.xml" >"$TMP/p1.rows"; python3 "$TMP/rows.py" <"$TMP/p2.xml" >"$TMP/p2.rows"
-overlap="$( sort "$TMP/p1.rows" "$TMP/p2.rows" | uniq -d | grep -c . )"
+# extend-3 (R2-L3′, offset=0 only — see forpage.h) can append up to 3 rows to p1 AFTER its shown= rows; those
+# are an explicitly-tagged appendix (extra=, p=/score= only), not part of the ranked walk, so the no-overlap /
+# concatenation invariant below reads p1's shown= rows only — the same rows this arm pinned before extend-3
+# existed. shown1 falls back to 10 (p1's own row count pre-lever) if the root's shown= is ever unreadable.
+shown1="$( grep -o 'shown="[0-9]*"' "$TMP/p1.xml" | head -1 | tr -dc '0-9' )"; shown1="${shown1:-10}"
+head -"$shown1" "$TMP/p1.rows" >"$TMP/p1.shown.rows"
+overlap="$( sort "$TMP/p1.shown.rows" "$TMP/p2.rows" | uniq -d | grep -c . )"
 [ "$overlap" = 0 ] && [ "$( grep -c . "$TMP/p2.rows" )" = 10 ] \
-    && ok "(3) the second page has no row in common with the first and holds 10 rows" \
+    && ok "(3) the second page has no row in common with the first's shown= rows, and holds 10 rows" \
     || no "(3) page overlap=$overlap, page-2 rows=$( grep -c . "$TMP/p2.rows" )"
-cat "$TMP/p1.rows" "$TMP/p2.rows" >"$TMP/p12.rows"
-[ "$( grep -c . "$TMP/p12.rows" )" = 20 ] && head -20 "$TMP/page40.rows" | cmp -s - "$TMP/p12.rows" \
-    && ok "(3) pages 1+2 (limit 10) equal the first 20 rows of the limit-40 page, in order" \
-    || no "(3) pages 1+2 do not concatenate to the limit-40 page's first 20 rows"
+cat "$TMP/p1.shown.rows" "$TMP/p2.rows" >"$TMP/p12.rows"
+head -20 "$TMP/page40.rows" >"$TMP/page40.first20"
+[ "$( grep -c . "$TMP/p12.rows" )" = 20 ] && cmp -s "$TMP/page40.first20" "$TMP/p12.rows" \
+    && ok "(3) pages 1+2 (limit 10, shown= rows only) equal the first 20 rows of the limit-40 page, in order" \
+    || no "(3) pages 1+2 (shown= rows) do not concatenate to the limit-40 page's first 20 rows"
 grep -q 'has_more="0"' "$TMP/page40.xml" && ok "(3) the limit-40 page over 33 files says has_more=\"0\"" \
                                           || no "(3) the limit-40 page over 33 files does not say has_more=\"0\": $( grep -o '^<files [^>]*>' "$TMP/page40.xml" | cut -c1-300 )"
 
@@ -300,6 +307,111 @@ if grep -qx "$GOLD" "$TMP/mcp.rows"; then ok "(7) the MCP page names $GOLD"; els
 cattrs="$( rootattrs <"$TMP/page40.xml" )"; mattrs="$( rootattrs <"$TMP/mcp.xml" )"
 [ -n "$cattrs" ] && [ "$cattrs" = "$mattrs" ] && ok "(7) page root attribute names agree across the two dialects ($cattrs)" \
                                                 || no "(7) page root attribute names differ — CLI: [$cattrs] MCP: [$mattrs]"
+
+# ── (8) extend-3 (R2-L3′, PLAN_OUTPUT_ROUTING_LOOP_2026-09-12_REPORTS/12_round2_PREREG.md Amendment 1 item 3) ──
+# The page keeps every shipped row, byte for byte, and APPENDS up to 3 more rows (p= score= only) picked from
+# the rows this call does NOT already show, by the blend key L3 registered (score/100 + path-subtoken overlap
+# share, exact integer compare, path-string tie-break). On this fixture's THIN query, mid_08/mid_09/gold all
+# tie the blend key exactly (same union-coverage share, 0 path hits): this arm pins the tie-break itself, not
+# just presence — a naive "next 3 rows of the existing order" would answer mid_08,mid_09,gold (best-desc order,
+# see forFileRowBefore); the registered blend key ties on best= and falls to path-string, so the answer is
+# gold,mid_08,mid_09 ('g' < 'm'). RED on the pre-lever binary: no extra= attribute, page10 holds exactly 10
+# rows, not 13.
+attrnames(){ python3 -c '
+import re, sys
+row = sys.stdin.read().strip()
+print( " ".join( sorted( re.findall( r"\s([a-z]+)=\"", " " + row ) ) ) )
+'; }
+run --for="$THIN" --limit=10 >"$TMP/page10.xml"; rc=$?
+[ "$rc" = 0 ] || no "(8) --for --limit=10 exited $rc: $( head -c 200 "$TMP/err" )"
+root10="$( grep -o '^<files [^>]*>' "$TMP/page10.xml" )"
+if printf '%s' "$root10" | grep -q ' extra="3"'; then
+    ok "(8) the limit=10 page root carries extra=\"3\""
+else
+    no "(8) the limit=10 page root lacks extra=\"3\": $( printf '%s' "$root10" | cut -c1-300 )"
+fi
+python3 "$TMP/rows.py" <"$TMP/page10.xml" >"$TMP/page10.rows"
+n10="$( grep -c . "$TMP/page10.rows" )"
+[ "$n10" = 13 ] && ok "(8) the limit=10 page holds 13 rows (10 shown + 3 extend)" \
+                || no "(8) the limit=10 page holds $n10 rows (expected 13)"
+head -10 "$TMP/page10.rows" >"$TMP/page10.first10"
+head -10 "$TMP/page40.rows" >"$TMP/page40.first10"
+if cmp -s "$TMP/page10.first10" "$TMP/page40.first10"; then
+    ok "(8) byte identity: the first 10 rows of the limit=10 page equal the first 10 rows of the limit=40 page"
+else
+    no "(8) the limit=10 page's shown rows differ from the limit=40 page's first 10"
+fi
+grep -o '<f [^>]*/>' "$TMP/page10.xml" | head -10 >"$TMP/page10.shownxml"
+grep -o '<f [^>]*/>' "$TMP/page40.xml" | head -10 >"$TMP/page40.first10xml"
+if cmp -s "$TMP/page10.shownxml" "$TMP/page40.first10xml"; then
+    ok "(8) byte identity holds at the full-row level too (p= score= n= sym=, not just p=)"
+else
+    no "(8) the shown rows differ at the attribute level between limit=10 and limit=40"
+fi
+tail -3 "$TMP/page10.rows" >"$TMP/page10.extra.rows"
+printf 'gold/widen_target.cpp\nmid/mid_08.cpp\nmid/mid_09.cpp\n' >"$TMP/page10.extra.expect"
+if cmp -s "$TMP/page10.extra.rows" "$TMP/page10.extra.expect"; then
+    ok "(8) extend-3 tie-break: the appended rows are gold,mid_08,mid_09 in that order (path-string tie-break, not incoming order)"
+else
+    no "(8) extend-3 rows are $( tr '\n' ',' <"$TMP/page10.extra.rows" ) — expected gold/widen_target.cpp,mid/mid_08.cpp,mid/mid_09.cpp"
+fi
+extra_ok=1
+for i in 11 12 13; do
+    row="$( grep -o '<f [^>]*/>' "$TMP/page10.xml" | sed -n "${i}p" )"
+    attrs="$( printf '%s' "$row" | attrnames )"
+    [ "$attrs" = "p score" ] || { extra_ok=0; no "(8) extend row $i carries [$attrs], expected exactly p score: $row"; }
+done
+[ "$extra_ok" = 1 ] && ok "(8) all 3 extend rows carry p= and score= ONLY (no n=, no sym=)"
+run --for="$THIN" --limit=10 >"$TMP/page10b.xml"
+if cmp -s "$TMP/page10.xml" "$TMP/page10b.xml"; then ok "(8) two runs of the limit=10 page are byte-identical (determinism)"; else no "(8) two runs of the limit=10 page differ"; fi
+if xmllint --noout "$TMP/page10.xml" 2>/dev/null; then ok "(8) the extend-3 page is well-formed XML"; else no "(8) the extend-3 page is not well-formed XML"; fi
+# the untruncated limit=40 page (window covers the whole 33-file universe): no candidates left, so no extra=
+if printf '%s' "$( grep -o '^<files [^>]*>' "$TMP/page40.xml" )" | grep -q ' extra='; then
+    no "(8) the untruncated limit=40 page carries extra= — there are no unshown candidates to append"
+else
+    ok "(8) the untruncated limit=40 page carries no extra= (present-only: nothing left to append)"
+fi
+# both legend dialects define extra=
+for dialect in "" "--legend=compact"; do
+    run --for="$THIN" --limit=10 $dialect >"$TMP/leg10.xml"
+    legend10="$( grep -o '<!--.*-->' "$TMP/leg10.xml" | head -1 )"
+    label="full dialect"; [ -n "$dialect" ] && label="compact dialect"
+    printf '%s' "$legend10" | grep -q 'extra=' && ok "(8) $label: the page legend defines extra=" \
+                                                || no "(8) $label: the page legend never spells extra=: $( printf '%s' "$legend10" | cut -c1-200 )"
+done
+# the MCP twin carries the same extra= and the same 3 appended rows
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s","limit":10}}}\n' \
+       "$FIX" "$THIN" | "$BIN" --mcp 2>/dev/null | python3 "$TMP/mcptext.py" >"$TMP/mcp10.xml"
+mroot10="$( grep -o '^<files [^>]*>' "$TMP/mcp10.xml" )"
+printf '%s' "$mroot10" | grep -q ' extra="3"' && ok "(8) MCP limit=10 page also carries extra=\"3\" (dialect parity)" \
+                                              || no "(8) MCP limit=10 page lacks extra=\"3\": $( printf '%s' "$mroot10" | cut -c1-300 )"
+python3 "$TMP/rows.py" <"$TMP/mcp10.xml" >"$TMP/mcp10.rows"
+cmp -s "$TMP/mcp10.rows" "$TMP/page10.rows" && ok "(8) MCP limit=10 page rows equal the CLI page's rows, in order (shown AND extend)" \
+                                             || no "(8) MCP limit=10 page rows differ from the CLI page's"
+# offset>0 appends NOTHING: extend-3 is the single follow-up page, not a walk-wide feature — appending on
+# every offset would let an earlier page's "extra" duplicate a later page's real row (arm (3)'s invariant)
+run --for="$THIN" --limit=10 --offset=10 >"$TMP/page10off.xml"
+root10off="$( grep -o '^<files [^>]*>' "$TMP/page10off.xml" )"
+if printf '%s' "$root10off" | grep -q ' extra='; then
+    no "(8) --offset=10 carries extra= — extend-3 must fire on offset=0 only: $( printf '%s' "$root10off" | cut -c1-300 )"
+else
+    ok "(8) --offset=10 carries no extra= (extend-3 is offset=0 only)"
+fi
+python3 "$TMP/rows.py" <"$TMP/page10off.xml" >"$TMP/page10off.rows"
+[ "$( grep -c . "$TMP/page10off.rows" )" = 10 ] && ok "(8) --offset=10 page holds exactly 10 rows (no append)" \
+                                                 || no "(8) --offset=10 page holds $( grep -c . "$TMP/page10off.rows" ) rows (expected 10)"
+# the SHOWN portion of offset=0 (its ranked walk, not its extend appendix) still has zero overlap with
+# offset=10 — extend-3 only ever touches the appendix, never the walk itself (arm (3) already pins this at
+# the general level; this re-checks it specifically against a page that used extend-3)
+walkoverlap="$( sort "$TMP/p1.shown.rows" "$TMP/page10off.rows" | uniq -d | grep -c . )"
+[ "$walkoverlap" = 0 ] && ok "(8) the offset=0 page's SHOWN rows and the offset=10 page share no row (extend-3 touches only its own appendix)" \
+                        || no "(8) offset=0 shown rows and offset=10 overlap on $walkoverlap row(s) — extend-3 leaked into the ranked walk"
+# the appendix itself is EXPECTED to echo rows a later page will also show (gold/mid_08/mid_09 are real
+# ranked rows 11-13 — offset=10 legitimately shows them too); pin that expectation rather than leaving it
+# an unstated coincidence, so a future change either keeps disclosing it this way or updates this line.
+appendixoverlap="$( sort "$TMP/page10.extra.rows" "$TMP/page10off.rows" | uniq -d | grep -c . )"
+[ "$appendixoverlap" = 3 ] && ok "(8) offset=0's 3 extend rows (gold,mid_08,mid_09) are exactly the rows offset=10 also shows — disclosed, not hidden" \
+                            || no "(8) expected offset=0's extend rows to be the same 3 files offset=10 shows first; overlap=$appendixoverlap"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit "$fail"
