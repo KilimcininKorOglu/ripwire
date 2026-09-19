@@ -1009,7 +1009,7 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, std::size_t t
 // L1: the PRICE a compact-posture run will actually print for this body. The budget gate decides BEFORE the compact
 // layer (runWithCompactLegend) rewrites stdout, so without this it withheld a map on its FULL-dialect price — a map the
 // caller would have received inside the budget, lost to prose it was never going to be sent. The body is compacted
-// here the same way the layer will compact it and repriced by the same delta (compactlegend.h compactRepriceDelta),
+// here the same way the layer will compact it and repriced by the same rule (compactlegend.h compactRepricedTokens),
 // so the number decided on is the number the root prints. A body the dialect cannot shape keeps its own price.
 static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_view body, std::size_t fullEstTokens )
 {
@@ -1022,8 +1022,7 @@ static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_vi
     {
         return fullEstTokens;
     }
-    const long long priced = static_cast<long long>( fullEstTokens ) + rw::compactRepriceDelta( body.size(), compacted.size() );
-    return priced > 0 ? static_cast<std::size_t>( priced ) : 1u;
+    return static_cast<std::size_t>( rw::compactRepricedTokens( static_cast<long long>( fullEstTokens ), body.size(), compacted.size() ) );
 }
 
 inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, std::FILE* real, std::size_t fullEstTokens,
@@ -3611,7 +3610,7 @@ static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 // an ASKED --legend=compact that meets an answer the dialect cannot shape refuses (exit 1, as before); the DEFAULT
 // posture passes that answer through unchanged at the run's own exit code — a default must never be the reason a run
 // fails. A capture that cannot be set up degrades to the full legend in both cases, disclosed on stderr.
-static_assert( rw::kCompactRepriceBytesPerToken == rw::kBytesPerTokenDefault, "the compact reprice rate is the markup rate the estimator prices prose at" );
+static_assert( rw::kCompactRepriceDensestBytesPerToken == rw::kMinBytesPerToken, "the compact reprice prices added markup at the densest rate the estimator knows" );
 
 static int runWithCompactLegend( const rw::Config& cfg, char** argv )
 {
