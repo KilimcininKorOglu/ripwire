@@ -1995,6 +1995,32 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
+### Fixed — `readFilePrefix` reported success on a prefix a read error had truncated
+
+`readFilePrefix` reads the first `maxBytes` of a file for the prewarm grammar-sniffing heuristics (the ObjC-header
+probe is its one caller), reusing one buffer per worker across every file it samples. Its success check was
+`got > 0 || feof( fp ) != 0` — true for any nonzero byte count or a clean end-of-file, but blind to the stream's own
+error indicator. A `fread()` that returned fewer bytes than requested because the underlying read failed partway,
+not because the file was actually that short, still satisfied `got > 0`, so the truncated bytes went back as though
+they were the whole prefix and the sniff judged a header it never fully read. `readFile`, a few lines above it in
+`src/ingest_crawl.h`, already fails on any `got != want`; `readFilePrefix` now reads the same standard-library
+disambiguator that function relies on: `ferror( fp ) == 0 && ( got > 0 || feof( fp ) != 0 )`, so a live error
+indicator fails the read regardless of how many bytes made it through. Effect is limited to the prewarm hint —
+parsing itself is unchanged either way, which is why this is neutral on output.
+
+Split out of #44 (native Windows port), where it rode inside commit 9124d689. No red/green gate: reaching the
+branch this fixes needs a `fread()` that returns partial data AND sets the stream's error indicator without also
+reaching EOF, and every avenue tried to produce that through a real file path either misses the branch or isn't a
+genuine I/O error. A directory opened as a file sets a real `ferror` (confirmed: `got=0 feof=0 ferror=1 errno="Is a
+directory"`), but `got` is always 0 for that case, so the old and new formulas already agree — no differentiator. An
+`AF_UNIX` socket opened by its path fails at `fopen()` itself (`errno=ENOTSUP`, "Operation not supported on
+socket"), before any read happens. `ulimit -f` bounds writes only — confirmed empirically against a 100 KB read
+under `ulimit -f 1`, which completed with `ferror=0`. Reaching this deterministically needs a source-level
+fault-injection hook (or a TCP/UNIX-stream socket opened by fd rather than by path, which this function's contract
+doesn't take); building one is out of scope for this change. Verified instead by inspection against the C
+standard's `fread`/`ferror`/`feof` contract, matching the disambiguation `readFile` already performs. Thanks to
+@lennix1337.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
