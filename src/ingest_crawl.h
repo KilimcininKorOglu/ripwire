@@ -2061,9 +2061,8 @@ TSQuery* compiledQueryFor( const LangEntry& le )
 
     // not prewarmed — a transient readFile failure can make the prewarm miss-detection skip a grammar the
     // pool later needs. Compiling here would WRITE the shared cache from a worker thread (data race on the
-    // non-thread-safe map). Degrade instead: skip the file (caller treats nullptr as "skip"); the normal
-    // prewarm path repopulates on the next run.
-    DISCLOSE( "ingest: tags query not prewarmed for a grammar — file skipped" );
+    // non-thread-safe map). Degrade instead: nullptr, which captureTagsFacts discloses into the file's
+    // ExtractShortfall (an extract-partial --skipped row, and no cache record, so the next run re-extracts).
     return nullptr;
 }
 }   // namespace — ingest_crawl.h section of ingest.cpp

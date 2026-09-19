@@ -1080,6 +1080,11 @@ struct CrawlSkips
     // invariant's drop classes — a refused file is already inside indexed=.
     std::vector<SkippedFile>  nestRefused;          // capped rows, path-sorted
     std::uint64_t             nestRefusedFiles = 0; // EXACT count (rows may be fewer)
+    // The second PARSE-time class, filled beside nestRefused: indexed files whose facts are PARTIAL — an extraction pass
+    // stopped at a nesting bound, the grammar's tags query was unavailable, or the extraction threw part-way (the facts
+    // before the throw are kept). Inside indexed=, never cached as whole; NOT one of the accounting invariant's drop classes.
+    std::vector<SkippedFile>  extractPartial;       // capped rows, path-sorted
+    std::uint64_t             extractPartialFiles = 0; // EXACT count (rows may be fewer)
 
     // §SEC1 — files the crawl REFUSED because a symlink took them out of the root they were crawled under
     // (ingest.h's crawl-boundary rule; darkflags.h's CMake walk applies the same rule to its own harvest).

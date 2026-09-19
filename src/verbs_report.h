@@ -1809,6 +1809,20 @@ void writeNestRefusedLegend( rw::XmlWriter& w, const rw::CrawlSkips& cs )
     w.write( clause );
 }
 
+// The extract-partial clause, on nest-refused's rule: written ONLY into a document that carries extract-partial rows.
+void writeExtractPartialLegend( rw::XmlWriter& w, const rw::CrawlSkips& cs )
+{
+    if( cs.extractPartialFiles == 0 )
+    {
+        return;
+    }
+    w.write( "<!-- extract_partial= counts indexed files whose extracted facts are PARTIAL: an extraction pass stopped at a nesting"
+             " bound it will not descend past (Elixir module/alias chains, imports nested past their container bound), the"
+             " grammar's tags query was unavailable, or the extraction stopped part-way on an internal failure (the facts before it"
+             " are kept). Each is one <f why=\"extract-partial\" bytes= ext=/> row. Such a file IS inside indexed=, its symbols and"
+             " edges may be missing, and it is never cached as whole, so the next run extracts it again. -->" );
+}
+
 // MEMBER-MACRO RE-PARSE (src/macroreparse.h, gate test/macroreparsecheck.sh) — the reading of why=macro-blanked,
 // macro_blanked= and macro_blanked_files=, written only into a report that carries them, so a corpus with no re-parsed
 // file keeps every byte. XML comment text: no double hyphen, so the verbs are named in words.
@@ -2129,12 +2143,15 @@ void writeSkippedHeader( rw::XmlWriter& w, const rw::IngestResult& ing, const Sk
     const bool        rowsCapped   = cs.excluded.size() < cs.excludedFiles || cs.unsupported.size() < cs.unsupportedFiles
                                   || cs.ignored.size() < cs.ignoredFiles || cs.ignoredDirRows.size() < cs.ignoredDirs   // §N6-C
                                   || cs.nestRefused.size() < cs.nestRefusedFiles
+                                  || cs.extractPartial.size() < cs.extractPartialFiles
                                   || cs.escaped.size() < cs.escapedFiles;                                               // §SEC1
     char nestAttr[ 48 ] = "";   // absent when zero, like every attribute that only a rare corpus can make non-zero
     if( cs.nestRefusedFiles > 0 )
     {
         rw::formatTo( nestAttr, sizeof( nestAttr ), " nest_refused=\"{}\"", ( unsigned long long ) cs.nestRefusedFiles );
     }
+    // same absent-when-zero rule; a std::string, so it adds no fixed buffer (20 digits at most, well inside hdr's slack)
+    const std::string partialAttr = cs.extractPartialFiles > 0 ? " extract_partial=\"" + std::to_string( cs.extractPartialFiles ) + "\"" : std::string();
     char escAttr[ 48 ] = "";    // §SEC1 — same absent-when-zero rule: only a tree carrying an escaping symlink pays a byte
     if( cs.escapedFiles > 0 )
     {
@@ -2144,7 +2161,7 @@ void writeSkippedHeader( rw::XmlWriter& w, const rw::IngestResult& ing, const Sk
                    "<skipped indexed=\"{}\" oversize=\"{}\" excluded=\"{}\" unsupported_ext=\"{}\" excluded_dirs=\"{}\""
                    " pruned_dirs=\"{}\" ignored=\"{}\" ignored_dirs=\"{}\" ignore_mode=\"{}\""
                    " degraded_parse=\"{}\" minified_suspect=\"{}\"{} unmeasured=\"{}\" max_file_size=\"{}\" json_ceiling=\"{}\""
-                   " yaml_ceiling=\"{}\"{}{}{}",
+                   " yaml_ceiling=\"{}\"{}{}{}{}",
                    ing.files.size(), ing.skippedOversize.size(),
                    ( unsigned long long ) cs.excludedFiles, ( unsigned long long ) cs.unsupportedFiles,
                    ( unsigned long long ) cs.excludedDirs, ( unsigned long long ) cs.prunedDirs,
@@ -2153,7 +2170,7 @@ void writeSkippedHeader( rw::XmlWriter& w, const rw::IngestResult& ing, const Sk
                    skippedHealthRootAttrs( health ),   // extent_suspect_files= then macro_blanked_files=, each absent at 0
                    health.unmeasured,
                    effectiveMax, kMaxJsonConfigBytes, kMaxYamlConfigBytes,
-                   std::string_view( nestAttr ), std::string_view( escAttr ), rowsCapped ? " rows_capped=\"1\"" : "" );
+                   std::string_view( nestAttr ), std::string_view( partialAttr ), std::string_view( escAttr ), rowsCapped ? " rows_capped=\"1\"" : "" );
     w.write( hdr );
 }
 
@@ -2205,6 +2222,7 @@ std::optional<int> runSkipped( const MainDispatch& d )
         const CrawlSkips& cs = ing.crawlSkips;
         writeEscapedRootLegend( w, cs );                            // §SEC1 — only into a document that has escaped-root rows
         writeNestRefusedLegend( w, cs );                            // only into a document that has nest-refused rows
+        writeExtractPartialLegend( w, cs );                         // only into a document that has extract-partial rows
         writeSkippedHeader( w, ing, health, cfg.maxFileBytes );    // the <skipped …> counters, up to root=
         // R-E: root= is unbounded (a deep absolute path), so it is NOT folded into the fixed `hdr` buffer
         // above (the V1-1 truncation class main.cpp's own history warns about) — written separately as the
@@ -2219,6 +2237,7 @@ std::optional<int> runSkipped( const MainDispatch& d )
         writeDropRows( w, esc, cs.ignored,        "ignored",     skRootPrefix );   // §N6-C: the files git's rules covered
         writeDropRows( w, esc, cs.ignoredDirRows, "ignored-dir", skRootPrefix );   // §N6-C: the subtrees they pruned
         writeDropRows( w, esc, cs.nestRefused,    "nest-refused", skRootPrefix );  // indexed, then refused by the Kotlin nesting guard
+        writeDropRows( w, esc, cs.extractPartial, "extract-partial", skRootPrefix );   // indexed, facts partial (ingest_prewarm.h)
         writeUnindexedExtRows( w, esc, cs.unindexedExts );
         writeHealthRows( w, esc, ing, health.findings, skRootPrefix );
         writeLangRows( w, esc, computeLangCounts( ing ) );   // W3-S item 3: corpus composition by language

@@ -412,7 +412,9 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
                 }
                 const TSNode root = ts_tree_root_node( pending.tree );
                 const std::size_t firstNewDefIndex = out.defs.size();
-                captureTagsFacts( cursor, *pending.le, pending.fileId, pending.bytes, root, out.defs, out.refs, out.binds, out.incs, pending.ppDead );
+                ExtractShortfall  tagsShortfall;
+                captureTagsFacts( cursor, *pending.le, pending.fileId, pending.bytes, root, out.defs, out.refs, out.binds, out.incs, pending.ppDead, tagsShortfall );
+                notePartialExtract( scan, pending.fileId, tagsShortfall, pending.bytes.size() );
                 buildLexForNewDefs( out.defs, firstNewDefIndex, pending.bytes );   // B0.2: bytes still in memory
                 ts_tree_delete( pending.tree );
                 pending.tree = nullptr;
@@ -603,7 +605,9 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
                 // be taken from the ADOPTED tree (the member-macro re-parse may have swapped it just
                 // above), which is why it is computed here and not inside either driver.
                 std::vector<PreprocDeadRange> ppDead = preprocDeadRangesFor( *le, root, bytes );
-                captureSideFacts( *le, static_cast<std::uint32_t>( fileId ), bytes, root, out.refs, out.incs, out.binds, out.ffis, out.routeDefs, out.routeUses, out.constOpens, sh.captureValueUses, ppDead );
+                ExtractShortfall shortfall;   // every pass's disclosure for THIS file; noted on its slot once both have run
+                captureSideFacts( *le, static_cast<std::uint32_t>( fileId ), bytes, root, out.refs, out.incs, out.binds, out.ffis, out.routeDefs, out.routeUses, out.constOpens, sh.captureValueUses, ppDead, shortfall );
+                notePartialExtract( scan, fileId, shortfall, bytes.size() );   // before a queued file's tags pass, which notes its own
                 appendBlankedMacroUses( macroWork, le->lang, static_cast<std::uint32_t>( fileId ), bytes, out.refs, ppDead );
 
                 const bool canQueueParsed = !sh.prewarm.ready.load( std::memory_order_acquire )
@@ -621,13 +625,16 @@ inline void runParseWorker( ParsePoolShared& sh, unsigned t )
                     waitForQueryPrewarm( &sh.gate );
                 }
                 const std::size_t firstNewDefIndex = out.defs.size();
-                captureTagsFacts( cursor, *le, static_cast<std::uint32_t>( fileId ), bytes, root, out.defs, out.refs, out.binds, out.incs, ppDead );
+                captureTagsFacts( cursor, *le, static_cast<std::uint32_t>( fileId ), bytes, root, out.defs, out.refs, out.binds, out.incs, ppDead, shortfall );
+                notePartialExtract( scan, fileId, shortfall, bytes.size() );
                 buildLexForNewDefs( out.defs, firstNewDefIndex, bytes );   // B0.2: bytes still in memory
             }
         }
         catch( ... )
         {
-            DISCLOSE( "ingest: worker exception on a file — skipped" );
+            // the facts gathered before the throw are KEPT, so this is a partial file, not a skipped one
+            DISCLOSE( ( FileExtractThrew{ scan, fileId } ), FileExtractThrew::DisclosureWhy::WorkerThrew,
+                      "ingest: worker exception on a file — its facts so far are kept and it is marked extract-partial" );
         }
     }
     flushPendingParsed();

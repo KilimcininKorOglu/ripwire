@@ -253,5 +253,36 @@ case "$MAPLEG" in
   *)           ok '(9) the map legend is unchanged — the --max-tokens floor keeps its headroom' ;;
 esac
 
+# ── (10) EXTRACT-PARTIAL: a file the extraction could not finish is itemized, never cached as whole ────────────────
+# An extraction pass that stops at a nesting bound (here: an #include nested inside 260 #if containers, past
+# kMaxImportContainerDepth), a grammar whose tags query is unavailable, or an extraction that throws part-way, used
+# to leave only a one-argument DISCLOSE — nothing at all in a Release binary — and the partial facts were CACHED under
+# the file's real hash, so every warm run reused them as the whole answer. The pass now discloses into the file's
+# ExtractShortfall sink: --skipped carries extract_partial="N" and one <f why="extract-partial"> row, defined in the
+# same document, in every build flavour; and the file's cache record is written UNKNOWN, so the row survives warm runs.
+XP="$TMP/xpartial"; mkdir -p "$XP/tree" "$XP/xdg"
+python3 - "$XP/tree/deep.c" <<'PYEOF'
+import sys
+open(sys.argv[1], "w").write( "#if 1\n" * 260 + '#include "deep.h"\n' + "#endif\n" * 260 + "int cfn( void ) { return 1; }\n" )
+PYEOF
+printf 'int ok( void ) { return 0; }\n' >"$XP/tree/clean.c"
+XPBYTES="$( wc -c <"$XP/tree/deep.c" | tr -d ' ' )"
+for run in cold warm; do
+    XDG_CACHE_HOME="$XP/xdg" "$BIN" "$XP/tree" --skipped >"$XP/$run.xml" 2>/dev/null
+    XPROOT="$( grep -o '<skipped [^>]*>' "$XP/$run.xml" )"
+    printf '%s' "$XPROOT" | grep -q ' extract_partial="1"' \
+        && ok "(10/$run) --skipped counts the partially-extracted file: extract_partial=\"1\" (every build flavour)" \
+        || no "(10/$run) the partially-extracted file is not counted on <skipped>: $XPROOT"
+    grep -q "<f p=\"deep.c\" why=\"extract-partial\" bytes=\"$XPBYTES\" ext=\".c\"/>" "$XP/$run.xml" \
+        && ok "(10/$run) the file is itemized: <f p=\"deep.c\" why=\"extract-partial\" bytes=\"$XPBYTES\">" \
+        || no "(10/$run) no exact extract-partial row for deep.c: $( grep -o '<f p="[^"]*" why="[^"]*"[^/]*/>' "$XP/$run.xml" | head -3 )"
+done
+grep -q 'extract_partial= counts' "$XP/cold.xml" \
+    && ok "(10) extract_partial= is defined in the same document" || no "(10) extract_partial= rides with no definition"
+grep -q 'p="clean.c" why="extract-partial"' "$XP/cold.xml" \
+    && no "(10) control: the clean file was itemized extract-partial" || ok "(10) control: the clean file carries no extract-partial row"
+command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$XP/cold.xml" 2>/dev/null \
+    && ok "(10) the disclosing document is well-formed" || no "(10) the disclosing document fails xmllint"; }
+
 echo
 [ "$fail" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }
