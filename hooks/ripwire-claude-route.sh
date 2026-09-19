@@ -335,6 +335,36 @@ promptBytes="$( printf '%s' "$prompt" | wc -c | tr -d ' ' )"
 case "$promptBytes" in ''|*[!0-9]*) exit 0;; esac
 [ "$promptBytes" -le 8192 ] || exit 0
 
+# HARNESS/SYSTEM EVENT GUARD, checked before the classifier is ever invoked. Claude Code delivers a
+# background-task completion (`<task-notification>…</task-notification>`) and an injected reminder
+# (`<system-reminder>…</system-reminder>`) through this SAME UserPromptSubmit channel — they are not user
+# input, but `--help-task` has no concept of "this names no task" and answers the report prose anyway
+# (docs/EVALS.md, the routing-noise round: a background-task summary quoting words like "Summary:" and
+# "Fix," minted `--connect='Split,A,Report'` out of text that never named a task). Narrow and POSITIONAL
+# on purpose: only the prompt's own leading bytes, after whitespace, are tested, so a genuine user prompt
+# that merely MENTIONS one of these markers mid-sentence ("what does <task-notification> mean in the
+# hook?") is untouched — this is a shape test on the harness's own wake-up markers, not a guess at intent.
+# The classifier is never called (there is nothing to classify), but the row IS still written — same
+# posture as an ordinary abstain (R8 in test/routehookcheck.sh) — so coverage stays measurable from the
+# log alone rather than silently undercounted.
+rest="$( printf '%s' "$prompt" | sed -e 's/^[[:space:]]*//' )"
+case "$rest" in
+    '<task-notification>'*|'<system-reminder>'*)
+        if meter_home; then
+            promptHash="$( hash_text "$prompt" )"
+            [ -n "$session" ] || session="prompt:$promptHash"
+            sessionHash="$( hash_text "$session" )"
+            now="$( date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true )"
+            jq -cn --arg at "$now" --arg hash "$promptHash" --arg sessionHash "$sessionHash" \
+                --argjson bytes "$promptBytes" \
+                '{v:2,at:$at,agent:"claude",router:"prompt",event:"UserPromptSubmit",status:"skip-system",
+                  intent:"",recommended:"",arm:"",session_hash:$sessionHash,prompt_hash:$hash,
+                  prompt_bytes:$bytes}' >>"$routingLog" 2>/dev/null || true
+        fi
+        exit 0
+        ;;
+esac
+
 route="$( ripwire "$cwd" --help-task="$prompt" 2>/dev/null )" || exit 0
 case "$route" in *'<task-route status="recommend"'*) status=recommend;; *) status=abstain;; esac
 
