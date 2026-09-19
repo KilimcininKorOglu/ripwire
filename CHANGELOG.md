@@ -1995,6 +1995,24 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
+### Fixed — `ripwire wrap`'s MCP JSON stanzas broke on a command path holding a quote or backslash
+
+`ripwire wrap cursor|windsurf|gemini|opencode` (and the generic `mcpServers` stanza) print a JSON config whose
+`"command"` field is either the literal string `ripwire` or, when nothing named `ripwire` resolves on `PATH`, this
+binary's own absolute path. That path went into the JSON string raw: a double quote (legal in any POSIX filename)
+or a backslash (every Windows path, and also a legal POSIX filename byte) produced a stanza that failed to parse,
+or closed the string early on the quote. `wrapMcpJson` and `wrapMcpJsonOpencode` now pass the token through
+`rw::jsonesc::escapeMcp` (`src/infra/jsonesc.h`), the escaper the MCP surface already uses elsewhere — no new
+escaping code.
+
+Split out of PR #44 (native Windows port), where it rode inside the follow-up snapshot commit e795983f on
+lennix1337/ripwire:win32-port-snapshot. The fix is @lennix1337's, forward-ported and gated here.
+
+`test/opencodewrapcheck.sh` arm 8 copies the binary into a directory whose name carries both a quote and a
+backslash, with `PATH` holding no `ripwire`, and requires the `opencode` stanza and the `mcpServers` (cursor)
+stanza to both parse as JSON and name the running binary. Red on an unescaped build (`Expecting ',' delimiter`);
+green once both printers route through the shared escaper. Thanks to @lennix1337.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints
