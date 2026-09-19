@@ -7220,9 +7220,10 @@ inline void writeJsonMapStamp( JsonWriter& w, std::string& esc, const MapAnnotat
     if( ann->maxTokensFit != nullptr )
     {
         char fit[ 160 ];
-        rw::formatTo( fit, sizeof( fit ), ",\"max_tokens\":{},\"fit_bytes\":{},\"fit_measured_in\":\"xml\"{}",
+        rw::formatTo( fit, sizeof( fit ), ",\"max_tokens\":{},\"fit_bytes\":{},\"fit_measured_in\":\"xml\"{}{}",
                        ann->maxTokensFit->askedTokens, ann->maxTokensFit->ceilingBytes,
-                       ann->maxTokensFit->isOverCeiling || ann->maxTokensFit->isUnmeasured ? ",\"over_ceiling\":true" : "" );
+                       ann->maxTokensFit->isOverCeiling || ann->maxTokensFit->isUnmeasured ? ",\"over_ceiling\":true" : "",
+                       ann->maxTokensFit->isUnmeasured ? ",\"fit_unmeasured\":true" : "" );
         w.write( fit );
     }
 }

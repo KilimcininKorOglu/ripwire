@@ -242,8 +242,9 @@ case "$CV_FLAVOUR" in
             || no "(9) an unmeasured --max-tokens fit printed as a held cap: $( grep -o 'max_tokens=[0-9]* fit_bytes=[^-]*' "$TMP/m8.xml" | head -1 )"
         grep -q 'fit_unmeasured=1: ' "$TMP/m8.xml" \
             && ok "(9) fit_unmeasured= is defined in the same document" || no "(9) fit_unmeasured= rides with no definition"
-        RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$ROOT/test/fixture" --max-tokens=3000 --json --no-cache 2>/dev/null | grep -q '"fit_bytes":[0-9]*,"fit_measured_in":"xml","over_ceiling":true' \
-            && ok "(9) the JSON map carries over_ceiling:true on the same degrade" || no "(9) the JSON map's unmeasured fit reads as a held cap"
+        RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$ROOT/test/fixture" --max-tokens=3000 --json --no-cache 2>/dev/null | grep -q '"fit_bytes":[0-9]*,"fit_measured_in":"xml","over_ceiling":true,"fit_unmeasured":true' \
+            && ok "(9) the JSON map carries over_ceiling:true AND fit_unmeasured:true on the same degrade (XML parity)" \
+            || no "(9) the JSON map's unmeasured fit reads as a held cap, or as a measured overflow (no fit_unmeasured key)"
         "$BIN" "$ROOT/test/fixture" --max-tokens=3000 --no-cache 2>/dev/null | grep -q 'fit_unmeasured\|max_tokens=3000 fit_bytes=[0-9]* over_ceiling' \
             && no "(9) control: the unfaulted map carries fit_unmeasured/over_ceiling" \
             || ok "(9) control: the unfaulted map carries neither (the cap is measured and held)" ;;
