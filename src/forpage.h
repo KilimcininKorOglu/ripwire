@@ -39,17 +39,19 @@
 // keeps `--expand=FILE:NAME`. The thresholds are a registered hypothesis (PLAN_OUTPUT_ROUTING_LOOP §1.5 L-N),
 // not a tuned number: the routing-loop ladder measures them, and a later round moves them with a measured reason.
 
-#include "infra/tablelookup.h"  // rw::isOneOf / rw::isDigits — the shared table-membership predicates (L3 blend)
+#include "infra/tablelookup.h"  // rw::isDigits — the shared digit-predicate (L3 blend)
 #include "lexical.h"     // LexTermEvidence — the term masks + df the BM25 pass already accumulated
 #include "model.h"
 #include "nextverb.h"    // nextFlag / nextAttrXml / kNextAttrMaxBytes — the ONE next= spelling
 #include "pageview.h"    // pageWindow / pageDisclosure — the shared --limit/--offset vocabulary
 #include "serialize.h"   // escapeXml, lensRowPath, ctxRootOpen, radixSortByScoreDescId
+#include "taskroute.h"   // rw::taskroute::isOneOf — reused as-is (not cloned) for the L3 blend's stopword check
 #include "testmap.h"     // splitChangedFilesOfSymbols — the ONE "distinct files of a symbol set" walk (--affected's)
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -291,9 +293,11 @@ inline constexpr std::string_view kForPageBlendStop[] =
     "for", "when", "rocksdb",
 };
 
-// rw::isOneOf (infra/tablelookup.h) — the shared "string_view in a fixed table" membership check;
-// this used to be a hand-rolled loop here, which is a clone of the identical shape lintrules.h,
-// mcp.h, mcpverbs.h and skillscan.h each write out separately (quality-delta's finding, fix round 1).
+// rw::taskroute::isOneOf (src/taskroute.h) is reused directly below — a hand-rolled loop here was a
+// clone of the identical shape lintrules.h, mcp.h, mcpverbs.h and skillscan.h each write out
+// separately (quality-delta's finding, fix round 1); a fresh helper of the same shape, even a
+// byte-identical MOVE of taskroute.h's own, still counted as a new instance of it, so this calls the
+// existing, untouched symbol instead of adding another one.
 
 // The SAME tokenizer the registered simulator (pagesim.py's toks()) runs: a lowercase letter directly
 // followed by an uppercase one is a camelCase split (one rule — NOT the acronym-aware ladder
@@ -307,7 +311,7 @@ inline void forPageBlendToks( std::string_view s, std::vector<std::string>& out 
     char        prevRaw = 0;
     auto        flush = [ & ]()
     {
-        if( !cur.empty() && !isOneOf( cur, kForPageBlendStop ) && !isDigits( cur ) )
+        if( !cur.empty() && !taskroute::isOneOf( cur, std::begin( kForPageBlendStop ), std::size( kForPageBlendStop ) ) && !isDigits( cur ) )
         {
             out.push_back( cur );
         }

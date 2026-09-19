@@ -16,42 +16,21 @@
 // storage beats any lookup structure at this size and keeps the call constant-foldable. Do not
 // "optimize" this into a hash without a measurement showing one of these tables grew enough to matter.
 //
-// isOneOf / isDigits (added routing-loop round 1, Amendment 1 fix round): the same "small constexpr
-// table, linear scan" shape as findByField above, one level simpler — membership, not row lookup.
-// `--quality-delta` flagged forpage.h's own hand-rolled stopword-membership loop as a clone of FIVE
-// unrelated predicates (lintrules.h::isValidSeverity, mcp.h::isMcpProtocolVersionSupported,
-// mcpverbs.h::mcpVerbDeclaresLegend, skillscan.h::detail::toolAllowed, hasNode) that each write the
-// identical "is this string_view one of these?" any_of by hand, and forpage.h's own all-digits loop as
-// a clone of tracein.h::detail::isDigits. Both land here rather than in either caller for the same
-// reason findByField does: infra/ is below every caller and depends on none of them, so fixing the
-// clone does not couple forpage.h to tracein.h or to any of the five predicate call sites (none of
-// which this fix touches — out of scope for the lane that found it).
+// isDigits (added routing-loop round 1, Amendment 1 fix round): the same "tiny, dependency-free string
+// predicate two headers independently need" shape findByField's own header note argues for. forpage.h's
+// stopword-membership check reuses the EXISTING rw::taskroute::isOneOf (src/taskroute.h) directly rather
+// than gaining a new symbol here — quality-delta's clone census flags a clone pair the moment either
+// side is NEW, so introducing a fresh isOneOf here (even a byte-identical move of taskroute.h's own)
+// still counted as a new instance of the shape five other predicates already share (lintrules.h::
+// isValidSeverity, mcp.h::isMcpProtocolVersionSupported, mcpverbs.h::mcpVerbDeclaresLegend,
+// skillscan.h::detail::toolAllowed, hasNode) — reusing the untouched symbol is the only shape that adds
+// no new clone site. isDigits had only ONE prior instance (tracein.h::detail), so moving it here is
+// clean: infra/ is below both callers and depends on neither, same as findByField's own precedent.
 #include <cstddef>
-#include <span>
 #include <string_view>
 
 namespace rw
 {
-
-// "is `word` one of `table`?" — table is typically a small constexpr std::string_view[] (a fixed array
-// converts to std::span implicitly), so this binds without an explicit std::size().
-inline bool isOneOf( std::string_view word, std::span<const std::string_view> table ) noexcept
-{
-    for( const std::string_view t : table )
-    {
-        if( t == word ) { return true; }
-    }
-    return false;
-}
-
-// (word, first, count) — the pointer+count spelling taskroute.h's own five call sites already use
-// (std::begin/std::size on a table). A thin span forward, not a second body: taskroute.h::isOneOf moved
-// here verbatim rather than becoming a sixth clone of itself, and this overload is what let its call
-// sites stay text-unchanged (out of scope for this fix to touch — see the header note above).
-inline bool isOneOf( std::string_view word, const std::string_view* table, std::size_t count ) noexcept
-{
-    return isOneOf( word, std::span<const std::string_view>( table, count ) );
-}
 
 // moved from tracein.h::detail (routing-loop round 1 Amendment 1 fix round): a second caller
 // (forpage.h) needed the identical "every byte 0-9, and at least one byte" predicate, and infra/ is
