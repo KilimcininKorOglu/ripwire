@@ -224,6 +224,12 @@ static_assert( requires( const stat_t& st ) { st.st_mode; st.st_size; st.st_mtim
     return {};
 }
 
+// which_spelling_is_exact: does a `which NAME` answer (this which() above, or a child shell's popen `which`, as
+// --doctor's binary-path row runs) come back with NAME's own on-disk spelling, extension included? True on POSIX,
+// where a name IS the spelling. False only on Windows, where Git Bash's MSYS `which` never prints ".exe" — a call
+// site comparing that answer to a real path must not read the difference alone as proof the two files differ.
+[[gnu::always_inline]] inline bool which_spelling_is_exact() { return true; }
+
 // ── process start and path intake ──────────────────────────────────────────────────────────────────────────
 // Inside the program a path is UTF-8 with '/' separators on every platform, so the spelling is fixed where a path
 // ENTERS — argv, the environment, an MCP argument — and nowhere else. Neither call has a POSIX name because POSIX
@@ -750,6 +756,9 @@ int   setenv( const char* name, const char* value, int overwrite );
 
 // process start and path intake (see the POSIX branch)
 std::string which( std::string_view command );   // PATH is ';'-separated; PATHEXT names; relative entries (the current directory) are never searched
+// Git Bash's MSYS `which` never prints ".exe" — always false here, unlike the POSIX branch (see the POSIX branch
+// above for the full contract); no Windows API call needed, so this stays inline rather than in os_win32.cpp.
+[[gnu::always_inline]] inline bool which_spelling_is_exact() { return false; }
 void init_process( int& argc, char**& argv );
 void normalize_path_arg( char* text );
 

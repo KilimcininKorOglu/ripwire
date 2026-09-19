@@ -771,6 +771,22 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
         {
             attrs += " on_path=\"1\"";   // could stat the PATH copy but not our own argv[0]-derived path — degrade, don't fail
         }
+        // D3 fix round, owner call: `which ripwire` runs through Git Bash's MSYS `which`, which prints "/c/.../ripwire"
+        // — normalize_path_arg fixes the drive spelling but not the missing ".exe" — so on_path="0" and same_file/
+        // same_bytes above can all disagree with a correct install. This row is DEGRADED AND DISCLOSED on Windows this
+        // release rather than silently trusted: `ok` above is still whatever the (possibly Windows-spelling-confused)
+        // comparison found, but a reader now sees why it may be wrong. The call site never asks which OS it is on
+        // (osswitchcheck arm G) — it asks os::which_spelling_is_exact(), true on POSIX (byte-identical: the branch
+        // below never taken) and false only on Windows. The honest fix is a native os::which( "ripwire" )
+        // PATH/PATHEXT search (D4 follow-up), once --doctor itself is shown byte-identical between the two `which`
+        // sources.
+        if( !os::which_spelling_is_exact() )
+        {
+            // The disclosure IS the attribute (a reader of this row's own output sees it); no separate DISCLOSE()
+            // trace — that macro's sink-less form tells the user nothing (Diagnostics.h §4b) and would only grow
+            // selfcheckcheck arm R's pinned sink-less count for no benefit over the attrs= this row already carries.
+            attrs += " degraded=\"1\" degrade_reason=\"win32-which-spelling\"";
+        }
         row( "binary-path", ok, attrs );
     }
 
