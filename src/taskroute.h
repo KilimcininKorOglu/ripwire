@@ -798,6 +798,84 @@ inline std::string firstJsonPathToken( std::string_view task )
     return firstPathTokenWithSuffix( task, { ".json", ".ndjson" } );
 }
 
+// ── file-grain readers shared by the coverage / impact / reach cards below ────────────────────────────
+// Every source-extensioned token in the task, position order, literal duplicates collapsed. A second
+// walk alongside firstPathTokenWithSuffix rather than a call to it: that function takes its suffix set as
+// an initializer_list (a literal at each call site), and kCodeExtensions is an array — the reader
+// firstFileLineToken/looksLikeFileToken already share, reused here instead of a third copy of the suffix
+// list.
+inline std::vector<std::string> codeFileTokens( std::string_view task )
+{
+    constexpr std::string_view kBreaks = " \t\n\r\"'`(),;";
+    std::vector<std::string> out;
+    for( std::size_t i = 0; i < task.size(); )
+    {
+        const std::size_t begin = task.find_first_not_of( kBreaks, i );
+        if( begin == std::string_view::npos )
+        {
+            break;
+        }
+        std::size_t end = task.find_first_of( kBreaks, begin );
+        if( end == std::string_view::npos )
+        {
+            end = task.size();
+        }
+        std::string_view token = task.substr( begin, end - begin );
+        while( !token.empty() && ( token.back() == '.' || token.back() == '?' || token.back() == '!' ) )
+        {
+            token.remove_suffix( 1 );
+        }
+        if( looksLikeFileToken( token ) )
+        {
+            const bool duplicate = std::any_of( out.begin(), out.end(), [&]( const std::string& s ) { return s == token; } );
+            if( !duplicate )
+            {
+                out.push_back( std::string( token ) );
+            }
+        }
+        i = end + 1;
+    }
+    return out;
+}
+
+// True when `file` is a path this build actually indexed, spelled root-relative the way the map spells
+// p= (sarif's one root-relative rule — the same fact directoryInCorpus checks for a directory, one path
+// component instead of a prefix). Structural, never inferred: --affected and --situ both read facts about
+// a file this build indexed, and a file the task merely NAMES may not be one — recommending it anyway
+// would be the same prerequisite violation --edit-plan/--plan-lint already refuse to commit.
+inline bool fileInCorpus( std::string_view file, const std::string& root, const IngestResult& ing )
+{
+    if( file.empty() )
+    {
+        return false;
+    }
+    const std::string prefix = rw::sarif::rootPrefixOf( root );
+    for( const std::string& f : ing.files )
+    {
+        if( rw::sarif::rootRelativeUri( f, prefix ) == file )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The FIRST code-extensioned token the task names that is also indexed — the one-file reader the
+// coverage and impact cards share. A task can name a file this build never saw (a sibling repo, a
+// rocksdb path pasted into a ripwire task); codeFileTokens finds the TEXT, fileInCorpus is what turns
+// that into a file the recommended command can actually run against.
+inline std::string firstIndexedCodeFile( std::string_view task, const std::string& root, const IngestResult& ing )
+{
+    for( const std::string& token : codeFileTokens( task ) )
+    {
+        if( fileInCorpus( token, root, ing ) )
+        {
+            return token;
+        }
+    }
+    return {};
+}
+
 // Routes for surfaces whose trigger is a NAME rather than a phrase-scoring shape: the flag is asked for by
 // something close to its own vocabulary, so a weighted score would only add noise. Each requires
 // conjunctive evidence — the surface word AND an intent word — so a passing mention never routes. The two
@@ -1251,16 +1329,141 @@ inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std:
                         std::move( command ), 100, 69 };
 }
 
+// ── first-verb cards for the four question shapes the router used to abstain on (round-1 L4) ────────────
+// The mining finding (--help-task over the round's 60-question corpus): the router recommended nothing
+// on ALL 48 instances of `which tests cover F`, `if I change F what else has to change`, `how does A
+// reach B` and `where is X implemented`, and correctly named only S5 (the recency window above). Each
+// card below is FILE-STRUCTURAL wherever the target verb needs a file (test-coverage, change-impact) —
+// the same fileInCorpus discipline directoryInCorpus already uses for --in=DIR — so a task that merely
+// NAMES a file this build never indexed abstains rather than recommending a command that verb refuses
+// (measured: --affected on an unindexed path exits 1). reach-flow is structural on FILE COUNT (two
+// distinct indexed files) rather than on wording, for the same reason: the file-grain --path surface
+// does not exist (round 2), so --for=task is the only verb, and the two-file count is what keeps an
+// ordinary `how does X work` sentence (0 or 1 file) out of this gate regardless of score.
+
+// `which tests cover F` / `test(s) for F` / `test files exercise F` — one indexed file plus
+// coverage/exercise wording routes to --affected=F, the transitive test list for that file.
+inline std::optional<RouteChoice> testCoverageTaskChoice( std::string_view task, std::string_view lower,
+                                                          const std::string& root, const IngestResult& ing )
+{
+    const int coverScore = phraseScore( lower, { { "which tests cover", 9 }, { "tests cover", 7 },
+                                                 { "test for", 6 }, { "tests for", 6 }, { "tests exist for", 7 },
+                                                 { "test(s) for", 7 }, { "test files exercise", 8 }, { "files exercise", 5 },
+                                                 { "unit tests should i run", 8 }, { "covered by any test", 8 },
+                                                 { "test coverage", 6 } } );
+    if( coverScore < 6 )
+    {
+        return std::nullopt;
+    }
+    const std::string file = firstIndexedCodeFile( task, root, ing );
+    if( file.empty() )
+    {
+        return std::nullopt;
+    }
+    return RouteChoice{ "test-coverage", "ripwire-change-check", "test-coverage wording plus one indexed file",
+                        commandWithValue( root, "--affected=", file ) + " --legend=compact", 100, 64 };
+}
+
+// `if I change F, what else has to change (with it)` / `what breaks if I edit F` / `blast radius of F` /
+// `what depends on F` — one indexed file plus change-impact wording routes to --situ=F. --situ is a PROSE
+// verb (legendCompactAppliesTo refuses it the compact flag, measured: exit 1), so unlike every card
+// above this one the command is never suffixed with --legend=compact.
+inline std::optional<RouteChoice> changeImpactTaskChoice( std::string_view task, std::string_view lower,
+                                                          const std::string& root, const IngestResult& ing )
+{
+    const int impactScore = phraseScore( lower, { { "what else has to change", 9 }, { "what breaks if", 9 },
+                                                  { "blast radius", 7 }, { "what depends on", 7 },
+                                                  { "need to update alongside", 8 }, { "update alongside", 6 },
+                                                  { "if i change", 4 }, { "if i edit", 4 }, { "if i modify", 4 } } );
+    if( impactScore < 7 )
+    {
+        return std::nullopt;
+    }
+    const std::string file = firstIndexedCodeFile( task, root, ing );
+    if( file.empty() )
+    {
+        return std::nullopt;
+    }
+    return RouteChoice{ "change-impact", "ripwire-change-check", "change-impact wording plus one indexed file",
+                        commandWithValue( root, "--situ=", file ), 100, 63 };
+}
+
+// `how does A reach B` / `call chain from A into B` / `how is A used by B` — two files the task itself
+// names, both indexed, plus reach/call-chain wording. --for=task is the only shipped surface for a
+// file-grain path question (no file-grain --path exists; round 2 backlog), so this widens the same
+// --for bundle locate-task and locate-implementation already use rather than inventing a new verb.
+inline std::optional<RouteChoice> reachTaskChoice( std::string_view task, std::string_view lower,
+                                                    const std::string& root, const IngestResult& ing )
+{
+    const int reachScore = phraseScore( lower, { { "call chain from", 9 }, { "call chain", 6 }, { "reaches", 5 },
+                                                 { "reach", 5 }, { "used by", 5 }, { "how does", 2 }, { "how is", 2 } } );
+    if( reachScore < 7 )
+    {
+        return std::nullopt;
+    }
+    std::vector<std::string> files;
+    for( const std::string& token : codeFileTokens( task ) )
+    {
+        if( fileInCorpus( token, root, ing ) )
+        {
+            files.push_back( token );
+            if( files.size() == 2 )
+            {
+                break;
+            }
+        }
+    }
+    if( files.size() != 2 )
+    {
+        return std::nullopt;
+    }
+    // codeFileTokens collapses literal duplicates before this loop ever sees them, so two collected
+    // entries are always two different paths — never the same file named twice.
+    ASSUME( files[0] != files[1], "codeFileTokens de-duplicates; two collected tokens are distinct paths" );
+    return RouteChoice{ "reach-flow", "ripwire-navigate",
+                        "two indexed file paths plus reach/call-chain wording (no file-grain --path surface)",
+                        commandWithValue( root, "--for=", task ), 100, 61 };
+}
+
+// `where is X implemented` / `which file implements X` — X is often a commit subject or a feature
+// description this build never indexed verbatim (unlike the file-keyed cards above), so --for=task — a
+// ranked bundle over the whole question — is the only surface this can name. Kept separate from the
+// weighted-tier locate-task (`find the code`, `bug`, `crash`, `symptom`): that card answers what is
+// RESPONSIBLE for a symptom, this one answers where something LIVES, and the two floors would otherwise
+// have to serve two different confidence levels under one number. Narrow on purpose — `where is` ALONE is
+// ordinary English (where is the config, where is the binary) and only the co-occurrence with
+// `implemented` makes it this question. No bare `implementation of` cue here (kExplanatoryCues already
+// carries that bigram for the recency route, and the screened corpus quotes `the implementation of`
+// verbatim in unrelated review prose — a third word attached to it would be a new card trigram this round
+// does not need: `which file implements` and the where-is/implemented pair already cover every registered
+// template and 2 of 3 S1 paraphrases without it).
+inline std::optional<RouteChoice> locateImplementationTaskChoice( std::string_view task, std::string_view lower, const std::string& root )
+{
+    const bool whereIsImplemented = boundedFind( lower, "where is" ) != std::string_view::npos
+                                  && boundedFind( lower, "implemented" ) != std::string_view::npos;
+    const int implementsScore = phraseScore( lower, { { "which file implements", 9 }, { "which files implement", 9 },
+                                                      { "find the file that implements", 9 } } );
+    if( !whereIsImplemented && implementsScore < 8 )
+    {
+        return std::nullopt;
+    }
+    return RouteChoice{ "locate-implementation", "ripwire-orient",
+                        "an implementation-location question (where is X implemented / which file implements X)",
+                        commandWithValue( root, "--for=", task ), 100, 60 };
+}
+
 // The intents whose command IS a --for bundle over the task text, and which a file-grain page therefore
 // WIDENS. Keyed by INTENT and never by searching the command for the flag: a task that quotes the flag
 // itself (`plan the new feature: replace the for= flag scoring`) puts that string inside another verb's
 // quoted argument, and a continuation built from it pastes a page width onto a verb that refuses it
 // (measured: exit 1). The page's own spelling and its byte ceiling belong to forpage.h; this list is only
 // the answer to "does this recommendation have one".
-inline constexpr std::string_view kForShapedIntents[] = { "compact-legend", "locate-task", "opt-remark" };
+inline constexpr std::string_view kForShapedIntents[] = { "compact-legend", "locate-task", "opt-remark",
+                                                           "reach-flow", "locate-implementation" };
 
 inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::string_view lower,
-                                                    const std::string& root, const std::vector<std::string>& symbols )
+                                                    const std::string& root, const std::vector<std::string>& symbols,
+                                                    const IngestResult& ing )
 {
     // The instrumented surfaces are asked for BY NAME, so they outrank the generic literal/post-edit
     // shapes: "find every occurrence of 'X' and give me safe-edit handles" is a handles request that
@@ -1310,12 +1513,33 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
     {
         return flow;
     }
+    // round-1 L4: test-coverage and change-impact are FILE-structural (one indexed file), so they sit
+    // ahead of the phrase-only catalog tier the same way flowTaskChoice's structural cards do.
+    if( std::optional<RouteChoice> coverage = testCoverageTaskChoice( task, lower, root, ing ) )
+    {
+        return coverage;
+    }
+    if( std::optional<RouteChoice> impact = changeImpactTaskChoice( task, lower, root, ing ) )
+    {
+        return impact;
+    }
+    if( std::optional<RouteChoice> reach = reachTaskChoice( task, lower, root, ing ) )
+    {
+        return reach;
+    }
     // catalog tier LAST: the verbs and skills the router could not name at all before 2026-09-10. Every
     // route above this line is older and more specific and keeps its rows unchanged (measured: all 189
     // corpus rows byte-identical on status/intent across this addition).
     if( std::optional<RouteChoice> catalog = catalogTaskChoice( task, lower, root, symbols ) )
     {
         return catalog;
+    }
+    // locate-implementation is the BROADEST of round-1 L4's four cards (`where is X implemented` alone,
+    // no file, no symbol), so it runs last of all — every older and more specific reading above it,
+    // including the whole catalog tier, keeps first refusal.
+    if( std::optional<RouteChoice> impl = locateImplementationTaskChoice( task, lower, root ) )
+    {
+        return impl;
     }
     return std::nullopt;
 }
@@ -1387,7 +1611,7 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
                                     "ripwire " + shSingleQuote( root ) + " --from-trace=- --legend=compact", 100, 90 } );
         return result;
     }
-    if( std::optional<RouteChoice> direct = directTaskChoice( task, lower, root, result.facts.resolvedSymbols ) )
+    if( std::optional<RouteChoice> direct = directTaskChoice( task, lower, root, result.facts.resolvedSymbols, ing ) )
     {
         result.status = RouteStatus::Recommend;
         result.score  = result.margin = 100;
