@@ -569,13 +569,23 @@ inline PrTrimRender prRenderLevel( const EmitFn& emitFiles, const PrTrim& trim )
     return out;
 }
 
-// `delivered( candidate, windowAttrs )` is the price the ladder DECIDES on: the candidate's own est_tokens in the full posture,
-// the compact layer's price of the same document in the compact one (writePrContext). The root still prints estTokens — the
-// emitter's price of what it writes, which the layer then reprices by its own rule — so the two can never be double-moved.
-template< typename EmitFn, typename PriceFn, typename DeliveredFn >
-inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budgetTokens, const PriceFn& price,
-                                     const std::string& windowAttrs, const DeliveredFn& delivered )
+// The two prices of one candidate level (L1 fix round, rv-r1-L1 MED-4): `price` is what the root PRINTS — the emitter's price
+// of what it writes, which the compact layer then reprices by its own rule — and `delivered( candidate, windowAttrs )` is
+// what the ladder DECIDES on: the same number in the full posture, the compact layer's price of the same document in the
+// compact one (writePrContext). Kept apart so the printed number is never moved twice.
+template< typename PriceFn, typename DeliveredFn >
+struct PrLevelPricing
 {
+    const PriceFn&     price;
+    const DeliveredFn& delivered;
+};
+
+template< typename EmitFn, typename Pricing >
+inline PrTrimRender pickPrTrimLevel( const EmitFn& emitFiles, std::size_t budgetTokens, const Pricing& pricing,
+                                     const std::string& windowAttrs )
+{
+    const auto& price     = pricing.price;
+    const auto& delivered = pricing.delivered;
     constexpr std::size_t nLevels = sizeof( kPrTrims ) / sizeof( kPrTrims[0] );
     PrTrimRender out;
     for( std::size_t li = 0; li < nLevels; ++li )
@@ -1388,8 +1398,9 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
         }
         return attrs;
     };
+    const PrLevelPricing pricing{ priceOf, deliveredOf };
     const std::string noWindow;
-    PrTrimRender      chosen = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, noWindow, deliveredOf );
+    PrTrimRender      chosen = pickPrTrimLevel( emitFiles, budgetTokens, pricing, noWindow );
     if( chosen.truncated.find( "budget-floor-exceeded" ) != std::string::npos && fileEnd - filePw.begin > 1 )
     {
         std::size_t lo = 1, hi = fileEnd - filePw.begin;   // prefix lengths: lo fits (assumed for 1), hi does not
@@ -1401,7 +1412,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
             // of shown=/has_more=/next=), so the prefix it keeps is one the final pick below can still fit. The full posture
             // keeps its pre-existing probe unchanged (compactlegendcheck A-PIN).
             const std::string probeWindow = budget.compactLegend ? windowAttrsFor( fileEnd ) : noWindow;
-            const PrTrimRender probe = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, probeWindow, deliveredOf );
+            const PrTrimRender probe = pickPrTrimLevel( emitFiles, budgetTokens, pricing, probeWindow );
             if( probe.truncated.find( "budget-floor-exceeded" ) == std::string::npos ) { lo = mid; } else { hi = mid; }
         }
         fileEnd = filePw.begin + lo;
@@ -1410,7 +1421,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // R2/N4: the window disclosure is itself ~100 bytes of the document est_tokens prices, so once it is
     // known the level is chosen AGAIN with it in the price — otherwise the printed number would under-read
     // its own root tag by exactly the disclosure that says the files were cut.
-    chosen = pickPrTrimLevel( emitFiles, budgetTokens, priceOf, windowAttrs, deliveredOf );
+    chosen = pickPrTrimLevel( emitFiles, budgetTokens, pricing, windowAttrs );
     const std::string rootOpen = prRootOpenText( g, sharedAttrs,
                                                  prBudgetTail( changed.size(), skippedModeOnly, budgetTokens, chosen, ex( chosen.truncated ) )
                                                      + ( budget.isDefault ? " budget_default=\"1\"" : "" ) + windowAttrs + atAttrStr,

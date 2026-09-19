@@ -1350,7 +1350,7 @@ inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std:
 // against. One struct instead of a five-parameter argument list at every call site — added in review
 // (--quality-delta flagged directTaskChoice's own param count growing 4->5 as a gating api-surface
 // regression; bundling collapses it back to one). Reference members only — this is a non-owning view
-// built fresh at each classifyRoutes call, never stored.
+// built fresh at each classify call, never stored.
 struct RouteContext
 {
     std::string_view                task;
@@ -1583,18 +1583,9 @@ inline std::optional<RouteChoice> directTaskChoice( const RouteContext& ctx )
 // now spell the verb and its arguments only; the binary's default decides the posture. The one exception is the
 // compact-legend intent, whose ANSWER is the flag. Gate: test/taskroutecheck.sh R-LEG still runs every generated command.
 //
-// caps rides through untouched (#218): classify() decides nothing about routing.
-inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
-                                       const RouterCaps& caps );
-
+// So classify() is the router itself again: the wrapper that applied the posture had nothing left to do.
 inline TaskRouteResult classify( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
                                  const RouterCaps& caps = {} )
-{
-    return classifyRoutes( task, root, ing, git, dirty, caps );
-}
-
-inline TaskRouteResult classifyRoutes( std::string_view task, const std::string& root, const IngestResult& ing, bool git, bool dirty,
-                                       const RouterCaps& caps )
 {
     TaskRouteResult result;
     result.facts.git = git;

@@ -1061,7 +1061,8 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, TokenBudgetSt
 // layer (runWithCompactLegend) rewrites stdout, so without this it withheld a map on its FULL-dialect price — a map the
 // caller would have received inside the budget, lost to prose it was never going to be sent. The body is compacted
 // here the same way the layer will compact it and repriced by the same rule (compactlegend.h compactRepricedTokens),
-// so the number decided on is the number the root prints. A body the dialect cannot shape keeps its own price.
+// so the number decided on is the number the root prints. A body the dialect cannot shape keeps its own price — an
+// empty one (the map streamed unbuffered) and a --json one (no posture) included.
 static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_view body, std::size_t fullEstTokens )
 {
     if( cfg.legend != "compact" || fullEstTokens == 0 )
@@ -1077,8 +1078,9 @@ static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_vi
 }
 
 inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, TokenBudgetStream& sink, std::FILE* real,
-                                                 std::size_t fullEstTokens, std::size_t tokenBudget, bool asJson, const rw::Config& cfg )
+                                                 std::size_t fullEstTokens, std::size_t tokenBudget, const rw::Config& cfg )
 {
+    const bool                  asJson     = cfg.json;
     const bool                  isBuffered = stream.isOpen();
     const rw::MemoryStreamBytes body       = isBuffered ? stream.finish() : rw::MemoryStreamBytes{};
     if( isBuffered && !body.isWhole )
@@ -1090,7 +1092,7 @@ inline std::optional<int> finishTokenBudgetGate( rw::MemoryStream& stream, Token
         rw::emitRaw( stderr, "ripwire: write error — the --token-budget buffer lost bytes; the map is withheld, not printed short\n" );
         return 1;
     }
-    const std::size_t mapEstTokens = isBuffered && !asJson ? compactPostureMapPrice( cfg, body.bytes, fullEstTokens ) : fullEstTokens;
+    const std::size_t mapEstTokens = compactPostureMapPrice( cfg, body.bytes, fullEstTokens );
     if( tokenBudget > 0 && mapEstTokens > tokenBudget && sink.isUnbuffered )
     {
         // The map above went straight to stdout: it carries its own est_tokens=, and it was NOT withheld. Say that, and
@@ -2661,7 +2663,7 @@ int runDefaultMap( const MainDispatch& d )
     // (composes freely with --max-tokens, which SHAPES the map to hit a target instead). §P6.8: closes the
     // buffer, and on exit 3 the buffered body never reaches stdout (finishTokenBudgetGate's own comment has
     // the full reasoning) — a small refusal record instead, shaped to match --json.
-    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, tbSink, stdout, mapEstTokens, cfg.tokenBudget, cfg.json, cfg ) )
+    if( std::optional<int> gated = finishTokenBudgetGate( tbStream, tbSink, stdout, mapEstTokens, cfg.tokenBudget, cfg ) )
     {
         return *gated;
     }
@@ -3719,7 +3721,11 @@ static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 {
     // L1 fix round (rv-r1-L1 LOW-1): --batch outranks --for in dispatch, so `--for=X --batch=F` answers the batch envelope —
     // an answer this layer shapes. Only a run --for actually answers is skipped.
-    return !c.forTask.empty() && c.batchFile.empty();
+    if( !c.batchFile.empty() )
+    {
+        return false;   // the batch envelope answers, and this layer shapes it
+    }
+    return !c.forTask.empty();
 }
 
 // L1 fix round (rv-r1-L1 LOW-3): a DEFAULTED posture captured every run through a tmpfile, a 1.28 MB `--lint --sarif`

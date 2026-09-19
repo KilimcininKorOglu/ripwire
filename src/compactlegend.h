@@ -84,7 +84,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "ctx", "pack-task",  "one-call task bundle for task= under budget_tokens=: <sigs><d n= sc= l= p=> ranking, <far><s t= n= p=> ranked but over 1 hop out (of_top= ranked rows) > <bodies><b t= n= p= l=> with <calls><c n= l=> callees > <callers><s rel=caller|callee shared=> 1-hop from the bodies (of_top= bodies; shared= bodies reached, absent at 1) > notes > <tests><test p= run=> (run= when derivable)" },
     { "ctx", "from-trace", "trace frames mapped to indexed symbols, innermost first; the innermost in-corpus body included" },
     { "ctx", "exemplar",   "the best-in-class instance of kind= for the task, chosen by role: <exemplar n= p= in= ccx= tested=>, <bodies><b> to imitate" },
-    { "ctx-partitions", "pack-task", "N minimally overlapping agent bundles carved along call-graph communities plus one shared core; each <bundle> wraps a <ctx>; <bundle role=core|partition i= symbols= modules= bytes= tokens=>: one agent's ctx, symbols= ids assigned, bytes= its size; tokens= = est_tokens= = bytes/2.36 (flat, the densest rate; the inner ctx est_tokens= is language-weighted). Inner <ctx task= root= budget_tokens= dropped_positive=>: the task, p= base, the slice's token target, ranked candidates its budget cut. of_top=: rows ranked (far) / bodies (callers); <s rel=caller|callee shared=>: 1-hop edge, bodies reached (absent at 1)" },
+    { "ctx-partitions", "pack-task", "N minimally overlapping agent bundles carved along call-graph communities plus one shared core; each <bundle> wraps a <ctx>; bundle role=core|partition i= symbols= modules= bytes= tokens=: one agent's ctx, symbols= ids assigned, bytes= its size; tokens= = est_tokens= = bytes/2.36 (flat, the densest rate; the inner ctx est_tokens= is language-weighted). Inner ctx task= root= budget_tokens= dropped_positive=: the task, p= base, the slice's token target, ranked candidates its budget cut. of_top=: rows ranked (far) / bodies (callers); s rel=caller|callee shared=: 1-hop edge, bodies reached (absent at 1)" },
     // ── navigation ──
     { "callers",     "callers",     "1-hop CALLERS of of= (defs= matched, count= distinct symbols): <s t= n= p=>; hop_tested=/hop_untested=" },
     { "callees",     "callees",     "1-hop CALLEES of of= (defs= matched, count= distinct symbols): <s t= n= p= role= tested=>" },
@@ -530,6 +530,15 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "refs_dropped",      "refs_dropped=K: K listed branches could not be read, in no count or row" },
     { "head_conflicts_ok", "head_conflicts_ok=0: that arm's base or HEAD tree was unavailable, head_conflicts= unknown", true, "arm" },
     { "render_failed",     "render_failed=: sections whose render FAILED (empty, not budget-omitted)", true },
+
+};
+
+// ── EVERY ATTRIBUTE THE DEFAULT EMITS, DEFINED (L1 fix round, rv-r1-L1 HIGH-1) ─────────────────────────────────────────
+// A second table beside the completeness vocabulary above: the same row shape and the same present-only rule, but every
+// row KEY-qualified (onKey) — the per-verb descriptive readings, where kCompactCompletenessTerms holds the tool-wide
+// honesty terms. compactLegendText reads the vocabulary first, then these.
+inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
+{
     // ── EVERY ATTRIBUTE THE DEFAULT EMITS, DEFINED (L1 fix round, rv-r1-L1 HIGH-1) ─────────────────────────────────────
     // L1 made this dialect the CLI default and seeded legendcoverage_default_baseline.txt with 269 first-screen attributes
     // it left undefined — ~25 of them cut/floor/cap terms (renames_window_truncated=, script_gates_unmodelled=, hcut=/rcut=,
@@ -555,7 +564,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // connect: src/mcpverbs.h packConnect (radius from src/graph.h connectSubgraph, clamped 1..12)
     { "nodes", "nodes=N: symbols printed, terminals plus joins (a floor)", false, "connect", MapHeaderRead::No, {}, "connect" },
     { "radius", "radius=N: undirected hop bound searched (default 6, max 12); raise it with connect-radius=N", false, "connect", MapHeaderRead::No, {}, "connect" },
-    { "sig", "<s sig=>: the join symbol's declaration signature; dropped first when a max_tokens ceiling trims", true, "s", MapHeaderRead::No, {}, "connect" },
+    { "sig", "s sig=: the join symbol's declaration signature; dropped first when a max_tokens ceiling trims", true, "s", MapHeaderRead::No, {}, "connect" },
     // dead-code: src/verbs_quality.h (the <dead-code> root emit)
     { "evidence", "evidence=: the rule every row met, internal linkage and no caller in the index; verify before deleting", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     { "register-macro-excluded", "register-macro-excluded=N: symbols skipped as self-registering test/bench macros (TEST, BENCHMARK...); a floor", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
@@ -567,12 +576,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "low_confidence", "low_confidence=1: weak task-to-kind match, fell back to fn; pass a kind (fn|method|class...) instead", false, "exemplar", MapHeaderRead::No, {}, "exemplar" },
     // exercises: src/verbs_change.h runExercises + exercisesHarnessAttr
     { "seed_files", "seed_files=N: test files the pattern matched", false, "exercises", MapHeaderRead::No, {}, "exercises" },
-    { "shown_seed_files", "shown_seed_files=N: of those, printed as <t> rows (at most 20)", false, "exercises", MapHeaderRead::No, {}, "exercises" },
+    { "shown_seed_files", "shown_seed_files=N: of those, printed as t rows (at most 20)", false, "exercises", MapHeaderRead::No, {}, "exercises" },
     { "test_symbols", "test_symbols=N: symbols in those test files, the walk's seeds", false, "exercises", MapHeaderRead::No, {}, "exercises" },
-    { "reaches", "reaches=N: non-test symbols the tests transitively call (the <s> rows' total)", false, "exercises", MapHeaderRead::No, {}, "exercises" },
+    { "reaches", "reaches=N: non-test symbols the tests transitively call (the s rows' total)", false, "exercises", MapHeaderRead::No, {}, "exercises" },
     { "harness", "harness=script|mixed: seeds include shell gates, whose subprocess coverage is unseen; note= says so", false, "exercises", MapHeaderRead::No, {}, "exercises" },   // also defines note=
     // help-task: src/main.cpp runHelpTask
-    { "intent", "<choice intent= skill= reason=>: the route matched, the skill owning it, the evidence in words", true, "choice", MapHeaderRead::No, {}, "help-task" },   // also defines skill= and reason=
+    { "intent", "choice intent= skill= reason=: the route matched, the skill owning it, the evidence in words", true, "choice", MapHeaderRead::No, {}, "help-task" },   // also defines skill= and reason=
     // lint: src/verbs_lint.h (the <lint> root emit)
     { "findings", "findings=N: findings over the printed rules; a floor when findings_capped=1", false, "lint", MapHeaderRead::No, {}, "lint" },
     // map-metrics: src/serialize.h (metrics <s> row, in >= 8)
@@ -583,12 +592,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "groups", "groups=N: (language, kind) groups with at least one styled name", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "candidates", "candidates=N: multi-token styled names scanned", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     { "decided", "decided=N: groups whose leading style cleared both the sample and agreement floors", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
-    { "flagged", "flagged=N: off-convention names in decided groups (the <f> rows)", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
+    { "flagged", "flagged=N: off-convention names in decided groups (the f rows)", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
     // path: src/verbs_navigate.h (the <path> root emit)
     { "from_p", "from_p=/to_p=: the definitions from= and to= were bound to", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_p=
     { "from_defs", "from_defs=/to_defs=: definitions of each name, all searched; above 1, qualify file:name", false, "path", MapHeaderRead::No, {}, "path" },   // also defines to_defs=
     // quality-delta: src/verbs_quality.h (root emit) + src/quality.h identityDisclosure
-    { "stale", "stale=N: ack ledger rows whose target no longer applies (<sa> rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "stale", "stale=N: ack ledger rows whose target no longer applies (sa rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "preexisting-worse", "preexisting-worse=N: regressions on symbols that existed at baseline; only these gate (when major)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "new-symbol", "new-symbol=N: regressions on NEW code; never gate, but the debt is yours: read them", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "register-macro-excluded", "register-macro-excluded=N: symbols kept out of dead-code as self-registering test/bench macros; a floor", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
@@ -606,15 +615,16 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "modules", "modules=N: directories holding indexed symbols (a module = parent dir)", false, "seams", MapHeaderRead::No, {}, "seams" },
     { "bridges", "bridges=N: cross-directory call edges, tested or not; untested= is those no test reaches", false, "seams", MapHeaderRead::No, {}, "seams" },
     { "test_files", "test_files=N: test files whose calls seed the reach; 0 means every seam reads untested", false, "seams", MapHeaderRead::No, {}, "seams" },
-    { "seam_pairs", "seam_pairs=N: directed dir pairs with an untested edge (the <seam> rows' total)", false, "seams", MapHeaderRead::No, {}, "seams" },
+    { "seam_pairs", "seam_pairs=N: directed dir pairs with an untested edge (the seam rows' total)", false, "seams", MapHeaderRead::No, {}, "seams" },
     // test-gate: src/situ.h writeTestGateReport + computeTestGateFor, src/testmap.h buildShellGateIndex
     { "impacted", "impacted=N: symbols that transitively call the change (changed symbols excluded)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
-    { "shown_tests", "shown_tests=/shown_untested=: <t> rows and <u> rows printed, two independent counts", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines shown_untested=
+    { "shown_tests", "shown_tests=/shown_untested=: t rows and u rows printed, two independent counts", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines shown_untested=
     { "script_gates_unmodelled", "script_gates_unmodelled=N: test/*.sh runners in the corpus, a path count; not call-graph modelled", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "script_gates_registered", "script_gates_registered=N: shell gates test/regression.sh registers as suite members", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "script_gates_mapped", "script_gates_mapped=N: registered gates with exact dependency evidence (literal paths or RIPWIRE_TEST_DEPS)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "script_gates_unresolved_dynamic", "script_gates_unresolved_dynamic=N: registered gates with no mappable deps; they may cover the change unlisted", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
-    { "ccx_bar", "ccx_bar=N: the cognitive-complexity bar a <u> row's ccx= is read against", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    { "evidence", "t evidence=script_literal|manifest_declared: why a shell gate joins tests=, its text names the changed path or its RIPWIRE_TEST_DEPS does", true, "t", MapHeaderRead::No, {}, "test-gate" },
+    { "ccx_bar", "ccx_bar=N: the cognitive-complexity bar a u row's ccx= is read against", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     // uses: src/verbs_navigate.h (the <uses> root emit)
     { "defs", "defs=N: definitions the selector matched; qualify file:name to narrow the call sites", false, "uses", MapHeaderRead::No, {}, "uses" },
     { "external", "external=1: of= has no definition in the indexed tree under any spelling (stdlib/third-party)", false, "uses", MapHeaderRead::No, {}, "uses" },
@@ -673,7 +683,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "lscope", "lscope=N: eligible symbols in a language the naming pack reads; 0 = lexical family unavailable", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
     { "shown_syms", "shown_syms=N: symbol rows printed; the rest page with offset=next_offset", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
     { "shown_files", "shown_files=N: file rows printed (fixed cap 20, not paged); files_capped=1 = rows dropped", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
-    { "f", "<e f=>: the fired family: structural, lexical, confusion or historical", true, "e", MapHeaderRead::No, {}, "ensemble" },
+    { "f", "e f=: the fired family: structural, lexical, confusion or historical", true, "e", MapHeaderRead::No, {}, "ensemble" },
     { "why", "why=: the measurements that crossed, space separated; rule*N = that rule fired N times", true, "e", MapHeaderRead::No, {}, "ensemble" },
     { "top", "top=: the file's most corroborated symbol (most families on one symbol)", true, "f", MapHeaderRead::No, {}, "ensemble" },
     { "top_l", "top_l=: that symbol's line", true, "f", MapHeaderRead::No, {}, "ensemble" },
@@ -712,7 +722,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // merge-scout: src/mergescout.h writeScoutArm / root emitTo
     { "head", "head=: the HEAD commit, bare 9-hex sha (at= adds +dirty)", false, "merge-scout", MapHeaderRead::No, {}, "merge-scout" },
     { "ok", "ok=0: arm not analysed (no merge base, or archive failed); its changed=0 is not a finding", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
-    { "note", "<no-work note=>: arm compared and has no divergent work vs its merge base, so no landing slot", true, "no-work", MapHeaderRead::No, {}, "merge-scout" },
+    { "note", "no-work note=: arm compared and has no divergent work vs its merge base, so no landing slot", true, "no-work", MapHeaderRead::No, {}, "merge-scout" },
     // owners: src/verbs_report.h (CLI owners emitter near the <owners files=> comment); <uniform/> fold
     { "files", "files=N: files analysed", false, "owners", MapHeaderRead::No, {}, "owners" },
     { "files", "files=N: single-author files folded into this one row; detail=1 lists each", true, "uniform", MapHeaderRead::No, {}, "owners" },
@@ -732,7 +742,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "files_other", "files_other=N: non-changed files among those reached; the f rows are its top shown=", true, "impact", MapHeaderRead::No, {}, "pr-context" },
     { "authors", "authors=N: distinct authors of this file (0 = no git data)", true, "owners", MapHeaderRead::No, {}, "pr-context" },
     { "bf", "bf=1: one author holds over 80% of recency-weighted commits (bus-factor risk)", true, "owners", MapHeaderRead::No, {}, "pr-context" },
-    { "note", "<no-ref-work note=>: the base ref's tip is the merge base, so it has no work of its own; rows are HEAD's", true, "no-ref-work", MapHeaderRead::No, {}, "pr-context" },
+    { "note", "no-ref-work note=: the base ref's tip is the merge base, so it has no work of its own; rows are HEAD's", true, "no-ref-work", MapHeaderRead::No, {}, "pr-context" },
     // stray-content: src/crossref.h writeStrayContentPage / writeStrayRef / writeStrayFile
     { "head", "head=: the HEAD commit, bare 9-hex sha (at= adds +dirty)", false, "stray-content", MapHeaderRead::No, {}, "stray-content" },
     { "head_ref", "head_ref=: HEAD's branch (HEAD when detached); that branch itself is not scanned", false, "stray-content", MapHeaderRead::No, {}, "stray-content" },
@@ -745,7 +755,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "tip", "tip=: the branch tip commit (9 hex)", true, "ref", MapHeaderRead::No, {}, "stray-content" },
     { "date", "date=: the tip's committer date, YYYY-MM-DD", true, "ref", MapHeaderRead::No, {}, "stray-content" },
     { "files", "files=N: files with stray lines; rows capped at 12, a more element counts the rest (detail=1 lists all)", true, "ref", MapHeaderRead::No, {}, "stray-content" },
-    { "superseded", "<ref superseded=N>: of this ref's stray= lines, those in files the live line re-implemented", true, "ref", MapHeaderRead::No, {}, "stray-content" },
+    { "superseded", "ref superseded=N>: of this ref's stray= lines, those in files the live line re-implemented", true, "ref", MapHeaderRead::No, {}, "stray-content" },
     { "authored", "authored=N: lines this ref authored in the file vs its merge base", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "del", "del=N: base lines this ref removed (0 = pure addition)", true, "file", MapHeaderRead::No, {}, "stray-content" },
     { "redone", "redone=N: of del=, the base lines HEAD removed too (the supersession evidence)", true, "file", MapHeaderRead::No, {}, "stray-content" },
@@ -762,49 +772,49 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // affected: src/verbs_change.h runAffected
     { "changed", "changed=: the files/symbols argument as given", false, "affected", MapHeaderRead::No, {}, "affected" },
     // connect: src/mcpverbs.h packConnect
-    { "terminals", "terminals=/groups=/edges=: task symbols resolved, connected groups (<g>), <e> edges printed", false, "connect", MapHeaderRead::No, {}, "connect" },
+    { "terminals", "terminals=/groups=/edges=: task symbols resolved, connected groups (g), e edges printed", false, "connect", MapHeaderRead::No, {}, "connect" },
     // dead-code: src/verbs_quality.h
     { "confidence", "confidence=high count=: every row met the evidence= rule; count= the rows, a floor", false, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     // doc-drift: src/docdrift.h
     { "drift", "drift=/dated=: anchors that no longer hold / anchors skipped as dated (unverifiable by date)", false, "doc-drift", MapHeaderRead::No, {}, "doc-drift" },
     // edit-check: src/editcheck.h
-    { "callers", "callers=N: callers of sym= (the <c> rows' total; a floor)", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
+    { "callers", "callers=N: callers of sym= (the c rows' total; a floor)", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     // ensemble: src/ensemble.h
     { "families", "families=N: evidence families joined; ranked=N: symbols at least one fired on; window=: the git span the historical family read", false, "ensemble", MapHeaderRead::No, {}, "ensemble" },
     // exercises: src/verbs_change.h runExercises
     { "of", "of=: the test file pattern given", false, "exercises", MapHeaderRead::No, {}, "exercises" },
     // external-surface: src/verbs_navigate.h
-    { "names", "names=N: distinct external names (the <x> rows' total)", false, "external-surface", MapHeaderRead::No, {}, "external-surface" },
+    { "names", "names=N: distinct external names (the x rows' total)", false, "external-surface", MapHeaderRead::No, {}, "external-surface" },
     // metrics: src/serialize.h (the metrics <s> row)
-    { "cx", "<s in= out= cx= ccx= loc= params= nest= cbo= amp=>: callers, callees, cyclomatic/cognitive complexity, lines, parameters, nesting depth, coupled types, callers + co-changed files", true, "s", MapHeaderRead::No, {}, "metrics" },
+    { "cx", "s in= out= cx= ccx= loc= params= nest= cbo= amp=: callers, callees, cyclomatic/cognitive complexity, lines, parameters, nesting depth, coupled types, callers + co-changed files", true, "s", MapHeaderRead::No, {}, "metrics" },
     // pr-context: src/prcontext.h
     { "files", "files=N: changed files in the diff (shown= of them listed)", false, "pr-context", MapHeaderRead::No, {}, "pr-context" },
-    { "symbols", "<file symbols=>: indexed symbols in that changed file", true, "file", MapHeaderRead::No, {}, "pr-context" },
-    { "count", "<changed-symbols count=> / <tests count=>: that section's full count (shown= of it listed)", true, "changed-symbols", MapHeaderRead::No, {}, "pr-context" },
-    { "count", "<tests count=>: test files reaching this file (shown= of them listed)", true, "tests", MapHeaderRead::No, {}, "pr-context" },
-    { "files", "<impact files=>: files holding the transitive callers (dependents=)", true, "impact", MapHeaderRead::No, {}, "pr-context" },
-    { "deps", "<impact><f deps=>: transitive callers in that file", true, "f", MapHeaderRead::No, {}, "pr-context" },
+    { "symbols", "file symbols=: indexed symbols in that changed file", true, "file", MapHeaderRead::No, {}, "pr-context" },
+    { "count", "changed-symbols count= / tests count=: that section's full count (shown= of it listed)", true, "changed-symbols", MapHeaderRead::No, {}, "pr-context" },
+    { "count", "tests count=: test files reaching this file (shown= of them listed)", true, "tests", MapHeaderRead::No, {}, "pr-context" },
+    { "files", "impact files=: files holding the transitive callers (dependents=)", true, "impact", MapHeaderRead::No, {}, "pr-context" },
+    { "deps", "impactf deps=: transitive callers in that file", true, "f", MapHeaderRead::No, {}, "pr-context" },
     // quality-delta: src/verbs_quality.h
-    { "surface", "<r surface=>: the api-surface tier, new-symbol or contract-change", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "surface", "r surface=: the api-surface tier, new-symbol or contract-change", true, "r", MapHeaderRead::No, {}, "quality-delta" },
     // test-gate: src/situ.h writeTestGateReport
-    { "tests", "tests=/untested=: tests to run (<t> total) / impacted symbols no test reaches (<u> total)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    { "tests", "tests=/untested=: tests to run (t total) / impacted symbols no test reaches (u total)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     // uses: src/verbs_navigate.h
     { "count", "count=N: use-site rows in all (a floor)", false, "uses", MapHeaderRead::No, {}, "uses" },
     // quality-delta rows (src/verbs_quality.h): the row facets the purpose line does not spell, present-only.
-    { "sev", "<r sev=minor>: a small numeric delta, counted in minor=, never gating (absent: major)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
-    { "origin", "<r origin=new-symbol>: the finding is on NEW code, never gating (absent: preexisting-worse)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
-    { "churn", "<r churn=self|ambient>: the edit modifies lines committed inside the churn window (self) or only adds/touches older ones (ambient); informational", true, "r", MapHeaderRead::No, {}, "quality-delta" },
-    { "idiom", "<r idiom=>: the recognized clone-body shape of a duplication row", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "sev", "r sev=minor: a small numeric delta, counted in minor=, never gating (absent: major)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "origin", "r origin=new-symbol: the finding is on NEW code, never gating (absent: preexisting-worse)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "churn", "r churn=self|ambient: the edit modifies lines committed inside the churn window (self) or only adds/touches older ones (ambient); informational", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "idiom", "r idiom=: the recognized clone-body shape of a duplication row", true, "r", MapHeaderRead::No, {}, "quality-delta" },
     // --expand's bundle (src/main.cpp runDefaultMap): the ride-along note and the map it carries inside the <ctx>.
     { "note", "note=: the ranked map rides along with the payload; top-k=0 serves the payload alone", false, "ctx", MapHeaderRead::No, {}, "expand" },
-    { "pr_iters", "<r root= pr_iters=>: the ride-along map; root= its p= base, pr_iters= PageRank iterations", true, "r", MapHeaderRead::No, {}, "expand" },   // also defines root= on <r>
+    { "pr_iters", "r root= pr_iters=: the ride-along map; root= its p= base, pr_iters= PageRank iterations", true, "r", MapHeaderRead::No, {}, "expand" },   // also defines root= on <r>
     // handoff: src/handoff.h (the packet root, the heuristic block, its rows)
     { "branch", "branch=/subject=: the checked out branch and HEAD commit subject; gitok=0: the git diff probe failed, changed counts are floors", false, "handoff", MapHeaderRead::No, {}, "handoff" },   // also defines subject= gitok=
     { "cochange_window", "cochange_window=/cochange_commits=: the git window the cochange rows were mined in and the commits it held (0: could not look)", true, "heuristic", MapHeaderRead::No, {}, "handoff" },   // also defines cochange_commits=
-    { "deg", "<cochange deg=>: how often that file is edited with the changed ones (co-change degree)", true, "cochange", MapHeaderRead::No, {}, "handoff" },
-    { "s", "<doc s=>: lexical score of that plan/design doc for the branch+subject query", true, "doc", MapHeaderRead::No, {}, "handoff" },
+    { "deg", "cochange deg=: how often that file is edited with the changed ones (co-change degree)", true, "cochange", MapHeaderRead::No, {}, "handoff" },
+    { "s", "doc s=: lexical score of that plan/design doc for the branch+subject query", true, "doc", MapHeaderRead::No, {}, "handoff" },
     { "syms_total", "syms_total=: symbols that changed file defines; syms_capped=1: its symbol list was cut to that many", true, "f", MapHeaderRead::No, {}, "handoff" },
-    { "run", "<t run=>: the command that runs that test (run_unknown=1: none derivable)", true, "t", MapHeaderRead::No, {}, "handoff" },
+    { "run", "t run=: the command that runs that test (run_unknown=1: none derivable)", true, "t", MapHeaderRead::No, {}, "handoff" },
     // graph-query: src/verbs_navigate.h (the <query> root)
     { "expr", "expr=: the expression as given; count=: symbols it matched (rows page by shown=/total=)", false, "query", MapHeaderRead::No, {}, "graph-query" },   // also defines count=
     // match: src/verbs_lint.h
@@ -827,7 +837,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "topk_default", "topk_default=0: an exact name was expanded, so the ranked map was dropped; pass top-k=N to get it back", false, "ctx", MapHeaderRead::No, {}, "expand-file" },
     // slice: src/slice.h (the <slice> root emit, kSliceCountsAttrXml)
     { "sym", "sym=/lang=: the sliced definition's name and language; p= is its file:line", false, "slice", MapHeaderRead::No, {}, "slice" },   // also defines lang=
-    { "vars", "vars=N: sliceable local bindings in the definition, one <v> row each; name one to slice it", false, "slice", MapHeaderRead::No, {}, "slice" },
+    { "vars", "vars=N: sliceable local bindings in the definition, one v row each; name one to slice it", false, "slice", MapHeaderRead::No, {}, "slice" },
     { "counts", "counts=as-classified: defs=/uses=/vars=/steps= count what the name classifier rowed; neither floors nor totals", false, "slice", MapHeaderRead::No, {}, "slice" },
     // flags: src/darkflags.h (the <flags> root emit)
     { "gates", "gates=/dark_gates=: gate rows (never cut) / those whose default keeps the guarded code out of the build", false, "flags", MapHeaderRead::No, {}, "flags" },   // also defines dark_gates=
@@ -852,14 +862,14 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "shared_symbols", "shared_symbols=/union_symbols=: ids two or more partitions name / ids any partition names", false, "ctx-partitions", MapHeaderRead::No, {}, "pack-task" },   // also defines union_symbols=
     { "core_overlap", "core_overlap=: share of the core surface a partition reaches anyway", false, "ctx-partitions", MapHeaderRead::No, {}, "pack-task" },
     // from-trace: src/tracelocus.h (renderTraceBlock, buildTraceHeader via ctxRootOpen, the budget_tokens attr)
-    { "task", "task=: the trace source this bundle maps, verbatim (a file path, <stdin>, or an MCP label)", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
+    { "task", "task=: the trace source this bundle maps, verbatim (a file path, stdin, or an MCP label)", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
     { "budget_tokens", "budget_tokens=N: the token budget passed (absent when none); over_ceiling=1 if est_tokens= exceeds it", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
     { "src", "src=/format=: the trace read and its dominant frame format, python|asan|node|compiler|generic", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines format=
     { "frame_lines", "frame_lines=/parsed=: frame-shaped input lines / those yielding a path:line; the rest matched no format", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines parsed=
     { "in_corpus", "in_corpus=: parsed frames in indexed files; always suspects= + merged= + unresolved=", true, "trace", MapHeaderRead::No, {}, "from-trace" },
-    { "suspects", "suspects=/merged=/unresolved=: <frame> rows / folded into a claimed symbol / <unresolved> rows, no def", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines merged= unresolved=
-    { "skipped", "skipped=N: frames outside every root, listed as <skipped> rows, never ranked", true, "trace", MapHeaderRead::No, {}, "from-trace" },
-    { "rank", "rank=N: frame order, innermost in-corpus first; p= is the trace's own path:line, defs are <sigs> l=", true, "frame", MapHeaderRead::No, {}, "from-trace" },
+    { "suspects", "suspects=/merged=/unresolved=: frame rows / folded into a claimed symbol / unresolved rows (indexed file, no def)", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines merged= unresolved=
+    { "skipped", "skipped=N: frames outside every root, listed as skipped rows, never ranked", true, "trace", MapHeaderRead::No, {}, "from-trace" },
+    { "rank", "rank=N: frame order, innermost in-corpus first; p= is the trace's own path:line, defs are sigs l=", true, "frame", MapHeaderRead::No, {}, "from-trace" },
     { "resolved_by", "resolved_by=name|line: bound by the frame's own name, else by the def enclosing its line", true, "frame", MapHeaderRead::No, {}, "from-trace" },
     { "innermost", "innermost=1: the innermost in-corpus frame (rank 1); its full body is served", true, "frame", MapHeaderRead::No, {}, "from-trace" },
     // batch: src/mcpverbs.h (the <batch>/<q> emit)
@@ -870,7 +880,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // pack-top-n: src/serialize.h (<f layer=> from src/arch.h builtinLayer)
     { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "pack-top-n" },
     // lint-catalog: src/verbs_lint.h emitLintCatalog
-    { "rules", "rules=N: rules in the built-in registry, one <rule> row each, never cut", false, "lintcatalog", MapHeaderRead::No, {}, "lint-catalog" },
+    { "rules", "rules=N: rules in the built-in registry, one rule row each, never cut", false, "lintcatalog", MapHeaderRead::No, {}, "lint-catalog" },
     // skipped: src/verbs_report.h writeSkippedHeader / writeUnindexedExtRows / writeLangRows (+ kSkippedLegend)
     { "indexed", "indexed=N: the map's files=; indexed= + oversize= + excluded= + ignored= = every file the crawl enumerated", false, "skipped", MapHeaderRead::No, {}, "skipped" },
     { "oversize", "oversize=N: files dropped for exceeding a size ceiling (row limit= names which)", false, "skipped", MapHeaderRead::No, {}, "skipped" },
@@ -1221,13 +1231,8 @@ inline std::string_view compactMapHeader( std::string_view doc ) noexcept
 
 // Does this document carry term `t`? An element-qualified term reads its element alone (the head can carry the same NAME
 // as a different attribute); a map-header term reads the kept header's unquoted field too (Also) or instead (Only).
-inline bool isCompletenessTermPresent( const CompactCompletenessTerm& t, std::string_view head, std::string_view doc, std::string_view mapHeader,
-                                       std::string_view key )
+inline bool isCompletenessTermPresent( const CompactCompletenessTerm& t, std::string_view head, std::string_view doc, std::string_view mapHeader )
 {
-    if( !t.onKey.empty() && t.onKey != key )
-    {
-        return false;
-    }
     if( t.mapHeader != MapHeaderRead::No && spanHasAttr( mapHeader, t.attr, {} ) )
     {
         return true;
@@ -1304,15 +1309,18 @@ inline std::string compactLegendText( const CompactLegendSpec& spec, std::string
         out += ": 1 = cut.";
     }
     const std::string_view mapHeader = compactMapHeader( doc );
-    for( const CompactCompletenessTerm& t : kCompactCompletenessTerms )
+    const auto appendPresent = [ & ]( const CompactCompletenessTerm& t )
     {
-        if( isCompletenessTermPresent( t, head, doc, mapHeader, spec.key ) )
+        const bool keyMatches = t.onKey.empty() || t.onKey == spec.key;   // a key-qualified reading belongs to that verb alone
+        if( keyMatches && isCompletenessTermPresent( t, head, doc, mapHeader ) )
         {
             out += ' ';
             out.append( t.reading );
             out += '.';
         }
-    }
+    };
+    std::ranges::for_each( kCompactCompletenessTerms, appendPresent );
+    std::ranges::for_each( kCompactAttributeReadings, appendPresent );
     out += " -->";
     return out;
 }

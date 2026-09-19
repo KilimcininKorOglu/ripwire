@@ -2008,8 +2008,12 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
                 return ( delivered > 0 ? delivered : candidate.size() ) + in.trailingSectionBytes <= ceiling;
             };
         };
+        // The FREE rung (drop the task echo) buys nothing here: the echo lives in prose the compact layer never delivers, so
+        // judging the as-built header at the exact ceiling would take a rung whose note claims a drop the reader cannot
+        // see. Under the compact posture the as-built answer stands when it fits the allowance; route= (a delivered root
+        // attribute) and the over_ceiling rung keep their meaning (compactlegendcheck (FX4)).
         const rw::CeilingLadderChoice chosen = in.compactLegend && !in.innerBundle
-            ? rw::climbCeilingLadderBy( buildHeader, headerStr, deliveredFits( rw::ceilingBytes( budgetTokens ) ),
+            ? rw::climbCeilingLadderBy( buildHeader, headerStr, deliveredFits( rw::ceilingAllowanceBytes( budgetTokens ) ),
                                         deliveredFits( rw::ceilingAllowanceBytes( budgetTokens ) ), /*hasRouteAttr=*/!lr.routeNote.empty(), kNotes )
             : climbCeilingLadder( buildHeader, headerStr,
                                                                    whole.size() - headerStr.size() + in.trailingSectionBytes + rootAttrsBound,
