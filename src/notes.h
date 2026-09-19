@@ -435,8 +435,10 @@ inline int openNotesSidecar( const std::string& path )
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the field-notes sidecar", path );
     if( fd < 0 )
     {
-        if( openErr == ELOOP ) { DISCLOSE( "notes: refusing to write the notes sidecar through a symlink" ); }
-        else                   { DISCLOSE( "notes: cannot write notes file" ); }
+        if( openErr == ELOOP ) { DISCLOSE( Diagnostics::answerRefused, "--note-add exits 1: pathguard names the refused link on stderr and the verb says it could not write",
+                                           "notes: refusing to write the notes sidecar through a symlink" ); }
+        else                   { DISCLOSE( Diagnostics::answerRefused, "--note-add exits 1: pathguard names the OS reason on stderr and the verb says it could not write",
+                                           "notes: cannot write notes file" ); }
     }
     return fd;
 }

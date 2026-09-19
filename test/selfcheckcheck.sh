@@ -71,7 +71,7 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # regexguard.h/lsp.h/resolve.h show none currently — and lost 3 to unrelated fixes in skillscan.h/verbs_for.h; see
 # the landing report for the per-site classification of the 25). LOWER THIS NUMBER, never raise it. At landing, set
 # it to what (R) prints.
-DISCLOSE_SINKLESS_PIN=105
+DISCLOSE_SINKLESS_PIN=83
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'
@@ -258,13 +258,15 @@ def scan_code( rel, text, findings, counts, ratchet = True, contract_tu = False 
                     counts[ "disclose_sink" ] += 1; byfile[ 1 ] += 1
             if argc >= 2 and ratchet and not contract_tu:
                 parts = raw_args( arg, raw )
-                if re.sub( r"\s+", "", parts[ 0 ] ).lstrip( ":" ) == "Diagnostics::answerUnchanged":
+                sinkName = re.sub( r"\s+", "", parts[ 0 ] ).lstrip( ":" )
+                if sinkName in ( "Diagnostics::answerUnchanged", "Diagnostics::answerRefused" ):
                     reason = parts[ 1 ].strip()
                     body = "".join( re.findall( r'"((?:[^"\\\n]|\\.)*)"', reason ) )
+                    key = "unchanged" if sinkName.endswith( "answerUnchanged" ) else "refused"
                     if LITERAL_REASON.fullmatch( reason ) and body.strip():
-                        counts[ "unchanged" ].append( [ where, " ".join( reason.split() ) ] )
+                        counts[ key ].append( [ where, " ".join( reason.split() ) ] )
                     else:
-                        findings.append( ( "U", where, "answerUnchanged reason is not a non-empty string literal: %s" % " ".join( reason.split() )[ :80 ] ) )
+                        findings.append( ( "U", where, "%s reason is not a non-empty string literal: %s" % ( sinkName.split( "::" )[ 1 ], " ".join( reason.split() )[ :80 ] ) ) )
             continue
         if name == "VALIDATE":
             counts[ "validate" ] += 1
@@ -301,7 +303,7 @@ def main():
     else:
         files = sorted( os.path.relpath( os.path.join( d, f ), root ) for d, _, fs in os.walk( root ) for f in fs )
     findings = []; counts = { "promise": 0, "all": 0, "validate": 0, "files": 0, "disclose_all": 0, "disclose1": 0, "disclose_sink": 0,
-                              "disclose_by_file": {}, "unchanged": [] }
+                              "disclose_by_file": {}, "unchanged": [], "refused": [] }
     perfile = {}
     for rel in files:
         if not rel: continue
@@ -538,6 +540,7 @@ c = d[ "counts" ]
 print( "COUNT\t%d\t%d\t%d\t%d" % ( c[ "promise" ], c[ "all" ], c[ "validate" ], c[ "files" ] ) )
 print( "DISC\t%d\t%d\t%d" % ( c[ "disclose1" ], c[ "disclose_sink" ], c[ "disclose_all" ] ) )
 for where, reason in c[ "unchanged" ]: print( "UNCH\t%s\t%s" % ( where, reason ) )
+for where, reason in c.get( "refused", [] ): print( "REFU\t%s\t%s" % ( where, reason ) )
 for rel, n in sorted( d[ "perfile" ].items() ): print( "FILE\t%s\t%d" % ( rel, n ) )
 for arm, where, what in d[ "findings" ]: print( "HIT\t%s\t%s\t%s" % ( arm, where, what ) )
 PY
@@ -566,6 +569,11 @@ if [ "$unchN" = 0 ]; then
 else
     grep '^UNCH' "$WORK/tree.tsv" | cut -f2,3 | sed 's/^/  INFO  U: /; s/\t/  /'
     ok "U: $unchN answerUnchanged site(s) listed above, each with a non-empty literal reason"
+fi
+refuN="$( grep -c '^REFU' "$WORK/tree.tsv" )"
+if [ "$refuN" != 0 ]; then
+    grep '^REFU' "$WORK/tree.tsv" | cut -f2,3 | sed 's/^/  INFO  U(refused): /; s/\t/  /'
+    ok "U: $refuN answerRefused site(s) listed above, each with a non-empty literal reason (the refusal is the disclosure)"
 fi
 
 # (P) population

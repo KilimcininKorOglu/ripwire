@@ -69,6 +69,7 @@ static_assert( Diagnostics::DisclosureSink<Model> );
 static_assert( Diagnostics::DisclosureSink<Model&> );
 static_assert( Diagnostics::DisclosureSink<OtherSink> );
 static_assert( Diagnostics::DisclosureSink<const Diagnostics::AnswerUnchanged> );
+static_assert( Diagnostics::DisclosureSink<const Diagnostics::AnswerRefused> );
 static_assert( !Diagnostics::DisclosureSink<const Model> );     // disclose() records: a const sink cannot
 static_assert( !Diagnostics::DisclosureSink<int> );
 static_assert( !Diagnostics::DisclosureSink<NoWhy> );
@@ -82,6 +83,7 @@ inline void sites( Model& model, const char* runtimeText, Model::DisclosureWhy r
     DISCLOSE( model, Model::DisclosureWhy::Truncated );
     DISCLOSE( model, Model::DisclosureWhy::Unreadable, "contract: one file could not be read — its rows are absent from the answer" );
     DISCLOSE( Diagnostics::answerUnchanged, "contract: the cache write failed — this answer is already computed, only the next run is cold" );
+    DISCLOSE( Diagnostics::answerRefused, "contract: the verb exits 1 naming the unreadable file; no answer is printed" );
     DISCLOSE( "contract: the one-argument trace still compiles (and still ships nothing)" );
 
 #if defined( RW_NEG_NOT_A_SINK )

@@ -3999,7 +3999,8 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     }
     else
     {
-        DISCLOSE( "mcp slice: definition file unreadable" );
+        DISCLOSE( Diagnostics::answerRefused, "the MCP slice answers an error naming the unreadable file; no slice is served",
+                  "mcp slice: definition file unreadable" );
         return SliceReply{ {}, "cannot read " + path + " — the slice re-parses the definition's file and has nothing to walk" };
     }
 
@@ -4012,7 +4013,8 @@ inline SliceReply sliceText( const std::string& root, const std::string& symbol,
     }
     if( !scan.parseOk )
     {
-        DISCLOSE( "mcp slice: definition re-parse failed" );
+        DISCLOSE( Diagnostics::answerRefused, "the MCP slice answers an error naming the file it could not re-parse; no slice is served",
+                  "mcp slice: definition re-parse failed" );
         return SliceReply{ {}, "could not re-parse " + path + " (grammar missing, or the indexed span no longer fits "
                                "the file — a stale index; call any read verb to refresh, or check the CLI --doctor)" };
     }
@@ -5097,7 +5099,8 @@ inline BatchSub runBatchSub( const std::string& root, const std::string& obj, in
         // Unreachable by construction: unknownSubVerbRefusal above already refused anything outside
         // kBatchServedVerbs + kBatchVerbAliases, and every member of those has an arm. If a verb joins the
         // registry without one, THIS is the honest failure — never a silent ok="1" with an empty payload.
-        DISCLOSE( "batch: a verb in the served registry has no dispatch arm" );
+        DISCLOSE( Diagnostics::answerRefused, "the batch sub-query is refused with an explicit bug message, never an empty ok",
+                  "batch: a verb in the served registry has no dispatch arm" );
         return bad( "batch cannot answer '" + r.verb + "' — it is in the served registry but has no dispatch "
                     "arm (a ripwire bug: kBatchServedVerbs and runBatchSub have drifted)" );
     }

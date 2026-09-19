@@ -3617,7 +3617,8 @@ inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, co
     }
     if( out.ing.symbols.empty() && out.ing.files.empty() )
     {
-        DISCLOSE( "quality: a materialized commit tree ingested empty" );
+        DISCLOSE( Diagnostics::answerRefused, "the only caller, --quality-delta=A..B, refuses with the sha named; nothing is scored",
+                  "quality: a materialized commit tree ingested empty" );
         return false;
     }
     out.g    = buildGraph( out.ing, nullptr );
@@ -3967,8 +3968,10 @@ inline int openBaselineSidecar( const std::string& path )
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the quality baseline sidecar", path );
     if( fd < 0 )
     {
-        if( openErr == ELOOP ) { DISCLOSE( "quality: refusing to write the baseline sidecar through a symlink" ); }
-        else                   { DISCLOSE( "quality: cannot write baseline file" ); }
+        if( openErr == ELOOP ) { DISCLOSE( Diagnostics::answerRefused, "the baseline write fails on every surface: pathguard names the refused link, and the CLI exits non-zero",
+                                           "quality: refusing to write the baseline sidecar through a symlink" ); }
+        else                   { DISCLOSE( Diagnostics::answerRefused, "the baseline write fails on every surface: pathguard names the OS reason, and the CLI exits non-zero",
+                                           "quality: cannot write baseline file" ); }
     }
     return fd;
 }
@@ -5529,7 +5532,8 @@ inline bool writeAckRecords( const std::string& path, const gtl::btree_map<std::
     // concurrent run in eight left a single stray character on its own line in the committed ledger.
     if( !atomicWriteFile( path, renderAckRecords( acks ) ) )
     {
-        DISCLOSE( "quality: cannot write acks file" );
+        DISCLOSE( Diagnostics::answerRefused, "both callers report the failed publish and exit non-zero; no ledger is claimed written",
+                  "quality: cannot write acks file" );
         return false;
     }
     return true;

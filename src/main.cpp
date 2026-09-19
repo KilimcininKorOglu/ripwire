@@ -2010,7 +2010,8 @@ int runDefaultMap( const MainDispatch& d )
             htmlOut = std::fopen( htmlPath.c_str(), "wb" );
             if( !htmlOut )
             {
-                DISCLOSE( "writeHtml: could not open output file" );
+                DISCLOSE( Diagnostics::answerRefused, "--html exits 1 naming the file it cannot open on stderr; nothing is written",
+                          "writeHtml: could not open output file" );
                 rw::emitTo( stderr, "ripwire: --html={}: cannot open file for writing\n", htmlPath.c_str() );
                 return 1;
             }
@@ -3400,7 +3401,8 @@ static std::string_view scipIndexUnreadableReason( const std::string& scipPath )
     ::close( probeFd );
     if( !isStatted )
     {
-        DISCLOSE( "--scip: fstat on the opened index failed — file kind and size undecided, loadScipOverlay's read decides" );
+        DISCLOSE( Diagnostics::answerUnchanged, "loadScipOverlay reads the index either way: a good one loads unchanged, a bad one degrades with its own shipped notice",
+                  "--scip: fstat on the opened index failed — file kind and size undecided, loadScipOverlay's read decides" );
         return {};
     }
     if( S_ISDIR( probeStat.st_mode ) )
@@ -3555,14 +3557,16 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
     std::FILE* capture = std::tmpfile();
     if( capture == nullptr )
     {
-        DISCLOSE( "runWithCompactLegend: tmpfile() failed — the FULL legend is emitted where compact was asked for" );
+        DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one, and stderr says so: only the cost grows",
+                  "runWithCompactLegend: tmpfile() failed — the FULL legend is emitted where compact was asked for" );
         std::fputs( "ripwire: --legend=compact: could not open a capture buffer — emitting the full legend instead\n", stderr );
         return dispatchMain( cfg, argv );
     }
     const int savedStdout = dup( STDOUT_FILENO );
     if( savedStdout < 0 || dup2( fileno( capture ), STDOUT_FILENO ) < 0 )
     {
-        DISCLOSE( "runWithCompactLegend: dup/dup2 failed — the FULL legend is emitted where compact was asked for" );
+        DISCLOSE( Diagnostics::answerUnchanged, "the full legend is a correct superset of the compact one, and stderr says so: only the cost grows",
+                  "runWithCompactLegend: dup/dup2 failed — the FULL legend is emitted where compact was asked for" );
         std::fputs( "ripwire: --legend=compact: could not redirect stdout — emitting the full legend instead\n", stderr );
         if( savedStdout >= 0 ) { close( savedStdout ); }
         std::fclose( capture );

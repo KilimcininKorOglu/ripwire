@@ -502,7 +502,8 @@ inline ArchRules parseArchRules( const std::string& path )
     const auto badLine = [ & ]( std::size_t lineNo, std::string_view why ) -> bool
     {
         rw::emitTo( stderr, "ripwire: --arch: {}:{}: {} — rules file rejected\n", path.c_str(), lineNo, why );
-        DISCLOSE( "arch: malformed rules line — rules file rejected" );
+        DISCLOSE( Diagnostics::answerRefused, "--arch exits 1 with path:line and the reason on stderr; no report is printed",
+                  "arch: malformed rules line — rules file rejected" );
         return false;
     };
 
@@ -833,7 +834,8 @@ inline int openArchBaselineSidecar( const std::string& sidecarPath ) noexcept
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the arch baseline sidecar", sidecarPath );
     if( fd < 0 && openErr == ELOOP )
     {
-        DISCLOSE( "arch: refusing to write the arch baseline sidecar through a symlink" );
+        DISCLOSE( Diagnostics::answerRefused, "--baseline exits 1: pathguard names the refused link on stderr and the verb says it cannot write the sidecar",
+                  "arch: refusing to write the arch baseline sidecar through a symlink" );
     }
     return fd;
 }
