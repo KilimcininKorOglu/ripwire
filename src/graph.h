@@ -1420,6 +1420,15 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 its head segment names no .py stem and no directory anywhere in the tree), 'u' = unknown
 //                 (unresolvable but the head names something in the tree — a package the crawl was not
 //                 rooted at; never vetoed). A name bound twice in one file keeps the non-'x' verdict.
+//   importBindFile — issue #287: the SAME Python Import bindings, but keyed to the one indexed fileId the
+//                 bound name's module resolves to (resolvePreciseInclude's Step-A, falling back to the
+//                 whole-path-component-suffix match, resolvePythonModuleSuffix, for an absolute spec Step-A
+//                 alone can't place — see resolve.h). Populated ONLY when the module resolves to EXACTLY
+//                 one file; a name rebound in the same file to a SECOND, different file degrades the entry
+//                 to kNoFile (never guess). Independent of `importBind`'s verdict char (that table answers
+//                 "is this external", this one answers "which file, if any" and is deliberately not used to
+//                 change a veto verdict — narrower scope, smaller blast radius). Consulted by the module-
+//                 alias receiver narrow in buildGraph's resolve loop, BEFORE the bare-name spray.
 //   fileScopeDef — Python module-level Function/Class definitions per file: same-file definition evidence.
 //   freeName    — C-family: the NAME of every scope-less (free) symbol or macro, declaration or definition,
 //                 anywhere in the corpus, restricted to names in the C-family table. A bare C++ call can
@@ -1429,10 +1438,46 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 the veto fires only when the name's in-repo definitions are ALL members.
 struct ExternalVetoTables
 {
-    HashMap<std::string, char> importBind;
-    HashMap<std::string, char> fileScopeDef;
-    HashMap<std::string, char> freeName;
+    HashMap<std::string, char>          importBind;
+    HashMap<std::string, std::uint32_t> importBindFile;
+    HashMap<std::string, char>          fileScopeDef;
+    HashMap<std::string, char>          freeName;
 };
+
+// issue #287: populate ExternalVetoTables::importBindFile for ONE Python Import binding — split out of
+// buildExternalVetoTables's own loop to keep ITS branching flat (--quality-delta flagged the inlined form
+// as a complexity regression: the loop already carries the pre-existing verdict ladder). See
+// importBindFile's doc comment on ExternalVetoTables for the WHY; this is purely the "how" of one entry.
+// `resolved` is Step-A's fileId for `b.typeName` (kNoFile if Step-A missed) — the caller already computed
+// it once for the verdict ladder, so this reuses rather than re-resolving.
+inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, const HashMap<std::string, std::uint32_t>& fileIndex,
+                                  std::string& key, HashMap<std::string, std::uint32_t>& importBindFile )
+{
+    // Both are the SAME filter buildExternalVetoTables' own loop already applies before calling this (kind
+    // != Import, an empty var or an empty typeName all `continue` there) — restated here because `.front()`
+    // below is UB on an empty typeName, and a future caller of this free function would not see that loop.
+    EXPECTS( b.kind == LocalBindKind::Import, "importBindFile is a Python-Import-only table" );
+    EXPECTS( !b.typeName.empty(), "typeName.front() below reads the leading-dot marker" );
+    if( b.importedName != "module" )
+    {
+        return;   // `from m import x [as y]` — x/y names a MEMBER of m, not m itself; see the field's doc
+    }
+    std::uint32_t moduleFile = resolved;
+    if( moduleFile == kNoFile && b.typeName.front() != '.' )
+    {
+        moduleFile = resolvePythonModuleSuffix( b.typeName, fileIndex );   // absolute spec only (never relative)
+    }
+    if( moduleFile == kNoFile )
+    {
+        return;
+    }
+    key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
+    const auto [ fit, finserted ] = importBindFile.try_emplace( key, moduleFile );
+    if( !finserted && fit->second != moduleFile )
+    {
+        fit->second = kNoFile;   // two DIFFERENT modules bound to the same name in one file → ambiguous, never guess
+    }
+}
 
 inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
 {
@@ -1493,12 +1538,16 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
             {
                 continue;
             }
+            // issue #287: the module fileId Step-A pins, computed unconditionally (even for a relative spec,
+            // where `verdict` below is already 'i' without needing it) — importBindFile below wants the REAL
+            // file, not just verdict's "cannot leave the package" evidence.
+            const std::uint32_t resolved = resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex );   // same view as fileIndex's keys
             char verdict = 'x';
             if( b.typeName.front() == '.' )
             {
                 verdict = 'i';   // a relative import cannot leave the package
             }
-            else if( resolvePreciseInclude( rootRelPath( ing, b.fileId ), b.typeName, /*isAngle=*/ false, fileIndex ) != kNoFile )   // same view as fileIndex's keys
+            else if( resolved != kNoFile )
             {
                 verdict = 'i';
             }
@@ -1511,6 +1560,10 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
                     verdict = 'u';
                 }
             }
+            // issue #287: importBindFile — Step-A's fileId when it pinned one; else (absolute spec only)
+            // the whole-path-component-suffix match; GATED on importedName=="module" so a `from m import x`
+            // value (not the module itself) can never populate it. See recordImportBindFile above.
+            recordImportBindFile( b, resolved, fileIndex, key, t.importBindFile );
             fileKey( b.fileId, b.var );
             const auto [ it, inserted ] = t.importBind.try_emplace( key, verdict );
             if( !inserted && it->second == 'x' && verdict != 'x' )
@@ -2778,6 +2831,52 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             fieldTypeNarrowed = narrowed;
         }
         const bool receiverTypeNarrowed = narrowed && !narrowedBeforeReceiverRules;   // Rule 2, 2c or 2b chose the candidates (S6-C reads it)
+        // Python Rule 2d (module-ALIAS receiver narrow, issue #287): `alias.m(...)` where `alias` is bound in
+        // the caller's file by `import X as alias` / `import X` / `from pkg import X as alias` to a module X
+        // that resolves to EXACTLY ONE indexed file (ExternalVetoTables::importBindFile — Step-A, plus the
+        // whole-path-component-suffix fallback for an absolute spec Step-A alone can't place; resolve.h).
+        // Restricts the bare-name candidates to that ONE file's def(s) — a strictly finer cut than Rule 3
+        // below, which narrows by the caller's FILE-level import set rather than by which specific alias
+        // named which specific module. Fires only when the alias resolves to one file AND that file defines
+        // EXACTLY ONE `r.calleeName` among the bare-name candidates; 0 or ≥2 on either axis leaves `narrowed`
+        // false and the ladder falls through unchanged — it can only PICK among candidates the bare ladder
+        // would also reach, never invent one. Before Rule 3 (more specific: a named alias beats a file-level
+        // import-set narrow). Skipped when already pinned canonically / by an earlier, more specific rule, or
+        // when a LOCAL (parameter/assignment) in the caller shadows the alias name — same veto-side guard
+        // `ExternalVeto::isExternalBound` already applies before trusting an import binding (a shadowed name
+        // is not the module import any more; the ladder below decides it on its own terms). The lookup is
+        // inlined against `extVeto.importBindFile` directly (the `bindKey` buffer the A4-R5 ctypes-handle
+        // gate above already reuses) rather than a THIRD `ExternalVeto` accessor beside hasLocal/importVerdict
+        // — that shape read as a clone of both (--quality-delta), being the same two lines a third time.
+        if( !scipPinned && !canonical && !narrowed && it != byName.end()
+            && r.lang == Lang::Python && r.recv == RecvKind::NamedVar && !r.recvVar.empty()
+            && !externalVeto.hasLocal( r, r.recvVar ) )
+        {
+            bindKey.clear();  Narrower::appendUint( bindKey, r.fileId );  bindKey.push_back( '#' );  bindKey.append( r.recvVar );
+            if( const auto ait = extVeto.importBindFile.find( bindKey ); ait != extVeto.importBindFile.end() && ait->second != kNoFile )
+            {
+                const std::uint32_t aliasFile = ait->second;
+                NodeId              only      = kNoNode;
+                std::size_t         found     = 0;
+                for( NodeId c : it->second )
+                {
+                    if( langCompatible( ing.symbols[c].lang, r.lang ) && symFileId[c] == aliasFile )
+                    {
+                        only = c;
+                        if( ++found > 1 )
+                        {
+                            break;
+                        }
+                    }
+                }
+                ASSUME( found <= 2, "the loop above breaks the instant a SECOND match is found" );
+                if( found == 1 )
+                {
+                    cand.push_back( only );
+                    narrowed = true;
+                }
+            }
+        }
         // P2-D Rule 3 (import/include-based file narrow): when the name is ambiguous (K same-name defs) but the
         // caller's file #includes / imports EXACTLY ONE file that defines it, resolve to that file's def(s) and
         // DROP the rest — BEFORE the bare-name spray. Sound with no type info: it consumes only the file→file
