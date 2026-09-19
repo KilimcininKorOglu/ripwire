@@ -349,6 +349,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "run_unknown",       "run_unknown=1: no runner derivable (a guess would be worse)", true },
     { "run_unknown",       "<g n= p=a,b,c>: n runner-less rows with equal attrs as ONE row, paths verbatim; a path holding ',' is never grouped, so p= splits into exactly n=; shown=/total= over these rows counts test FILES", true, "g" },
     { "hits_capped",       "hits_capped=1: hits= is a floor" },
+    // --regex's long-line disclosure (search.h grepScanText / regexguard.h maxEngineSubjectBytes): the count rides every
+    // regex answer, the bound only beside a nonzero count.
+    { "regex_lines_skipped", "regex_lines_skipped=N: N lines too long for the regex engine, never matched" },
+    { "regex_line_max",    "regex_line_max=: the longest line it could take" },
+    { "regex_stack_bytes", "regex_stack_bytes=: the smaller stack every scan thread was held to" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
     // under max-tokens. Same number, same reading, so one row reads both places.
     { "est_tokens",        "est_tokens=: price as emitted (an upper bound under compact)", false, {}, MapHeaderRead::Also },
@@ -409,7 +414,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // XML writer. test/compactlegendcheck.sh (S) population 4 reads that legend's absence-marked row fields from source.
     { "lpin",              "lpin=K: K calls pinned by locality alone (a guess)", true },
     { "overloads",         "overloads=N: N same-name defs merged in this row; shown= counts each", true },
-    { "prov",              "prov=scip|binding|import|split: how that <c> edge bound (absent: one unique name); split = one arm of an amb= pick", true },
+    { "prov",              "prov=scip|binding|import|split|final-segment: how that <c> edge bound (absent: one unique name); split = one arm of an amb= pick; final-segment = a qualified type matched by last name only", true },
     // THE FOURTH SWEEP (2026-09-12): attributes that ride their documents with no reading here, which the earlier sweeps stopped
     // on at the byte pins. Owner decision: per-verb pins that fit honest definitions (docs/METHODOLOGY.md §9). The unconditional
     // root vocabulary of --impact, --safe-delete, --communities and --community reads in those roots' purpose lines above, and

@@ -127,7 +127,7 @@ The non-negotiables from `CLAUDE.md`:
 - **Determinism.** Output may not depend on thread timing, hash order or pointer values.
 - **Honesty.** A refused site goes through the existing `vetoExternal` path: `external=` in the header,
   one `C external` census row, no edge. A zero means none found, not none exists.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any degrade path.
+- **`DISCLOSE`, never `ASSUME( false )`**, on any degrade path.
 - **No `std::map` / `std::unordered_map`.** Use sorted arrays and `std::binary_search` with
   `rw::sortutil::svLess`, as `kStdInlineNamespaceNames` does.
 - **Style:** Allman braces, braces on every body, spaces inside parens (`CONTRIBUTING.md` §3).

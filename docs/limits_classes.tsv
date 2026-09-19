@@ -51,6 +51,7 @@ kMaxAggsModeled	INDEXING
 kMaxAliasDepth	INDEXING
 kMaxAnchorsShown	OUTPUT
 kMaxAssertChars	OUTPUT
+kMaxAstQueryNesting	BOUNDARY
 kMaxBindings	INDEXING
 kMaxCacheBlobAgeDays	BOUNDARY
 kMaxCacheBlobCount	BOUNDARY
@@ -63,6 +64,7 @@ kMaxEditDistance	BOUNDARY
 kMaxEditLockAgeDays	BOUNDARY
 kMaxEnvNameLen	BOUNDARY
 kMaxExtLen	BOUNDARY
+kMaxExtentParens	BOUNDARY
 kMaxFamily	INDEXING
 kMaxFieldsShown	OUTPUT
 kMaxFlipRows	OUTPUT
@@ -83,6 +85,7 @@ kMaxPartitions	BOUNDARY
 kMaxPlanScout	OUTPUT
 kMaxProbeCommits	INDEXING
 kMaxQualifierHops	INDEXING
+kMaxQueryNesting	BOUNDARY
 kMaxRefs	INDEXING
 kMaxSample	INDEXING
 kMaxScopeChars	OUTPUT
@@ -91,8 +94,10 @@ kMaxShown	OUTPUT
 kMaxSig	OUTPUT
 kMaxSitesShown	OUTPUT
 kMaxSkipRowsPerClass	OUTPUT
+kMaxSliceDepth	BOUNDARY
 kMaxStructsPerRef	OUTPUT
 kMaxStructsShown	OUTPUT
+kMaxUniqueQueryTerms	INDEXING
 kMeasuredDigitsPricedWidth	OUTPUT
 kMemberSpellingsShown	OUTPUT
 kMentionMaxDirectSymbols	INDEXING
@@ -104,8 +109,11 @@ kMinMentionLen	BOUNDARY
 kMinNameLen	BOUNDARY
 kMinValueNameLen	BOUNDARY
 kNameCandidateCap	OUTPUT
+kNoticeByteCap	OUTPUT
 kOtherDefCap	OUTPUT
 kRadixThreshold	BOUNDARY
+kRegexMaxGroupDepth	BOUNDARY
+kRegexMaxPatternBytes	BOUNDARY
 kRenameMaxChain	INDEXING
 kRenameMaxPairs	INDEXING
 kSelectorFilesShown	OUTPUT

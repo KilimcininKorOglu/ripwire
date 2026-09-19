@@ -182,10 +182,10 @@ void bareDecl2() { int one, run; (void)one; (void)run; }
 // declarator (`attributed_declarator`) name the child by no field at all, so the probe returns null.
 void optParam(int run = 0) { (void)run; }
 template<typename... Ts> void packParam(Ts... run) { }
-// attrDecl carries NO body use on purpose: `attributed_declarator` is a shape emitShadowVarDecls does not
-// unwrap, so it records no shadow BINDING and a body read would stay name-matched — the under-suppression
-// floor that capture already discloses. This arm pins the DECLARED name, which is never a use either way.
-void attrDecl() { int run [[maybe_unused]]; }
+// attrDecl's body read is suppressed as well: emitShadowVarDecls unwraps `attributed_declarator` like the other
+// declarators that hold their inner one by no field (2026-09-17, test/fieldnarrowcheck.sh arm v) — until then it
+// recorded no shadow binding and the `run += 1` below stayed name-matched to run().
+void attrDecl() { int run [[maybe_unused]] = 0; run += 1; }
 // (q9) GUARD: only the DECLARATOR field is a declaration site. A parameter's DEFAULT VALUE is an ordinary
 // expression living in a different field, so a call written there stays a genuine call site.
 void defaultCall(int v = probe()) { (void)v; }
@@ -223,6 +223,12 @@ void siblingBlocks() {
     { int run = 2; (void)run; }
     run();                                            //     ... each claims only its own
 }
+// (am) a definition RETURNING a reference declares its parameters too: the declarator chain reaches the function
+// declarator through reference_declarator, which holds it by no field, so these parameters recorded nothing.
+int&  refRet(int run) { run += 1; return arr3[0]; }
+int&& rvRet(int run)  { run += 1; return static_cast<int&&>(arr3[0]); }
+struct RefOwner { int& outRet(int run); };
+int& RefOwner::outRet(int run) { run += 1; return arr3[0]; }
 EOF
 
 cat >"$FIX/valueassign.cpp" <<'EOF'
@@ -446,6 +452,15 @@ emitcalls="$( printf '%s\n' "$UEM" | grep -c 'role="call".*in_id="catchPre"' )"
 printf '%s\n' "$UEM" | grep 'in_id="catchPre"' | grep -Eq 'role="(read|write)"' \
     && { no "--uses=emit lists read/write sites from inside catchPre()'s handler"; printf '%s\n' "$UEM" | grep 'in_id="catchPre"'; } \
     || ok "--uses=emit has no read/write sites from inside catchPre()'s handler"
+# ── (am) a reference-returning definition's parameter covers its body like any other definition's ──────────
+for fn in refRet rvRet outRet; do   # an out-of-line definition's in_id is qualified (`scopeguards.cpp::RefOwner::outRet`)
+    printf '%s\n' "$GRD" | grep -Eq "in_id=\"([^\"]*::)?$fn\"" \
+        && { no "--uses=run lists a site from $fn() — a definition returning a reference recorded no parameter"; printf '%s\n' "$GRD" | grep -E "in_id=\"([^\"]*::)?$fn\""; } \
+        || ok "--uses=run has ZERO sites from $fn() (a reference-returning definition's parameter shadows run)"
+done
+printf '%s\n' "$GRD" | grep -q 'in_id="paramFirst"\|in_id="rangeForPre"' \
+    && ok "(am) presence: scopeguards.cpp still contributes --uses=run rows, so the ZERO-site rows above observed a live file" \
+    || no "(am) presence guard: --uses=run lists nothing from scopeguards.cpp — the (am) arms would be vacuous"
 
 # ── (aa)-(ae) the value-assignment noise gate: a copy mints no binding, a genuine rebind still does ────
 VAL="$( uses run | grep 'valueassign.cpp' )"

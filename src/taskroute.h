@@ -419,7 +419,10 @@ inline std::string commaSymbols( const std::vector<std::string>& symbols )
 // languages --slice/--at actually serve, per their own legend) rather than "any dotted token" — a prose
 // sentence is full of dotted tokens (URLs, "e.g.", version numbers) that are not a source file.
 inline constexpr std::string_view kCodeExtensions[] = {
-    ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".c", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs",
+    // A4 follow-up (review round, found-items 2026-09-17): .hxx added alongside .h/.hpp/.hh now that the
+    // crawl itself admits it (src/ingest_crawl.h's kLangTable) — a task description naming a .hxx FILE:LINE
+    // seed used to be recognized nowhere even though the file it names now indexes fine.
+    ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".hxx", ".c", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs",
     ".java", ".rb", ".swift", ".cs", ".m", ".mm", ".cu", ".cuh", ".metal", ".kt",
 };
 

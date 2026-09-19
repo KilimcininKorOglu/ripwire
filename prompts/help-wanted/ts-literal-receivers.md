@@ -251,7 +251,7 @@ a candidate that extends that built-in (a prototype extension). Otherwise it bin
   - If you add any attribute, it is absent at zero and defined in the leading legend exactly when present
     (`test/legendcoveragecheck.sh`).
   - It is carried on every dialect and the MCP twin (`test/mcpattrparitycheck.sh`).
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any degrade path you add.
+- **`DISCLOSE`, never `ASSUME( false )`**, on any degrade path you add.
 - **No `std::map` or `std::unordered_map`**; see "Containers" in CONTRIBUTING.md.
 - **Style** (CONTRIBUTING.md §3): Allman braces on every control body, spaces inside parens, output
   through `rw::emitTo`, declarative tables.

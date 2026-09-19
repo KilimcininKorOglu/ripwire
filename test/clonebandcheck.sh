@@ -33,7 +33,7 @@ WORK="$( mktemp -d )"; trap 'rm -rf "$WORK"' EXIT
 echo "clonebandcheck: CXX=$CXX"
 
 # ── compile the harness twice: pre-gate ON (shipped) and OFF (exact baseline). Same include path + diagnostics.cpp
-#    link as type3clonecheck.sh (Diagnostics' DEGRADED_PATH_ALERT seam). ─────────────────────────────────────────
+#    link as type3clonecheck.sh (Diagnostics' DISCLOSE seam). ─────────────────────────────────────────
 build_one() {   # $1 = tag, $2.. = extra flags
     local tag="$1"; shift
     if ! "$CXX" "$CXXSTD" -O2 -g -Wall -Wextra "$@" \

@@ -266,7 +266,7 @@ kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 #       against the pre-change binary the pinned sibling is the FIRST thing deleted (it is the oldest).
 #   (i) if the pinned set ALONE still exceeds the budget, it is kept anyway (evicting it would force the
 #       full re-parse this whole change exists to prevent) and ONE `ripwire: cache …` line says so. That
-#       line is a plain stderr emit, never DEGRADED_PATH_ALERT: NDEBUG compiles the alert out and the
+#       line is a plain stderr emit, never DISCLOSE: NDEBUG compiles the alert out and the
 #       whole point is that a Release binary discloses this too.
 #   (j) the disclosure is CONDITIONAL: a run whose sweep evicts nothing writes ZERO bytes to stderr.
 # The PIN KEY is the 16-hex root field that every family's filename carries — defaultCachePath's

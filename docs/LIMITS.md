@@ -16,10 +16,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 212 | 84 | 118 | **94** |
+| 221 | 88 | 120 | **101** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 212 + 7 is the 219 constants this generator parses out of `src/`.
+are not counted as caps, and 221 + 7 is the 228 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -37,8 +37,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **114 of 212 caps are classified
-(39 INDEXING, 40 OUTPUT, 35 BOUNDARY); the remaining 98 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **122 of 221 caps are classified
+(40 INDEXING, 41 OUTPUT, 41 BOUNDARY); the remaining 99 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -88,7 +88,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 84 files that declare a cap — the 212 caps counted above, and no parameter.
+One table for each of the 88 files that declare a cap — the 221 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -351,7 +351,7 @@ Discloses: `importers_capped`
 | `kMaxEdges` | `256` | — | total emitted edge cap |
 | `kMaxNodes` | `96` | — | total emitted node cap (§3 size caps) |
 | `kMaxRadius` | `12` | — | — |
-| `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never VERIFYs on hostile input) |
+| `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input) |
 | `kMemberSpellingsShown` | `6` | OUTPUT | — |
 
 ### `src/handoff.h`
@@ -373,6 +373,14 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kBlankSpellingMaxCodePoints` | `8` | — | — |
+
+### `src/infra/diagnostics.cpp`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kNoticeByteCap` | `4096` | OUTPUT | a longer notice is cut and says so: " ... [notice truncated: kept K of N bytes]" |
 
 ### `src/infra/fieldid.h`
 
@@ -414,6 +422,7 @@ Discloses: `ellipsis_capped`, `hits_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kBinarySniffCap` | `4096` | — | NUL-byte sniff window |
+| `kMaxAstQueryNesting` | `256` | BOUNDARY | — |
 | `kMaxSkipRowsPerClass` | `500` | OUTPUT | — |
 | `kUnreachableMaxHits` | `5000` | — | — |
 
@@ -492,6 +501,7 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kMaxAssertChars` | `220` | OUTPUT | the displayed prefix of a static_assert's text |
 | `kMaxDefsShown` | `24` | BOUNDARY | a name defined more often than this is a generic, not a mirror |
+| `kMaxExtentParens` | `64` | BOUNDARY | `(` nesting DEPTH an extent expression may reach (IntEval recurses per level) |
 | `kMaxMacroDepth` | `4` | INDEXING | object-like macro expansion depth for a type name |
 | `kMaxNestDepth` | `8` | INDEXING | nested-aggregate resolution depth (a cycle stops here) |
 
@@ -505,6 +515,7 @@ Discloses: **none**
 | `kMaxIdentifierLookupWords` | `2` | — | — |
 | `kMaxLen` | `64` | — | — |
 | `kMaxShown` | `4` | OUTPUT | — |
+| `kMaxUniqueQueryTerms` | `1024` | INDEXING | — |
 
 ### `src/lintcatalog.h`
 
@@ -529,6 +540,14 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kRecentRows` | `40` | — | F3: ~45 B a row; the file-level answer, not the file list |
+
+### `src/mcp.h`
+
+Discloses: `hits_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kMcpStdioLineMaxBytes` | `33554432` | — | 32 MiB |
 
 ### `src/mcpedit.h`
 
@@ -559,7 +578,7 @@ Discloses: **none**
 
 ### `src/mcpverbs.h`
 
-Discloses: `blast_radius_capped`, `coboost_commits_capped`, `forgotten_capped`, `hits_capped`, `siblings_capped`, `unindexed_candidates_capped`
+Discloses: `blast_radius_capped`, `coboost_commits_capped`, `forgotten_capped`, `hits_capped`, `siblings_capped`, `terms_capped`, `unindexed_candidates_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -696,6 +715,14 @@ Discloses: `findings_capped`
 | --- | --- | --- | --- |
 | `kPanelRowCap` | `40` | — | — |
 
+### `src/query.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kMaxQueryNesting` | `256` | BOUNDARY | — |
+
 ### `src/readability.h`
 
 Discloses: **none**
@@ -720,6 +747,15 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kGenericMinRunLength` | `32` | — | — |
 
+### `src/regexguard.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kRegexMaxGroupDepth` | `64` | BOUNDARY | deeper group nesting is REFUSED by name — the same stack bound, for nesting |
+| `kRegexMaxPatternBytes` | `2048` | BOUNDARY | a longer pattern is REFUSED by name, never truncated — the compile-recursion stack bound |
+
 ### `src/renamemine.h`
 
 Discloses: **none**
@@ -739,7 +775,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kFieldWalkCap` | `16` | INDEXING | total visited names — bounds depth and width together |
+| `kFieldWalkCap` | `16` | INDEXING | total visited names — bounds depth and width together (methodOnTypeOrBases, memberFieldHides and fieldEntryAt) |
 
 ### `src/search.h`
 
@@ -816,6 +852,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kMaxSliceDepth` | `2048` | BOUNDARY | — |
 | `kSliceFlowDefaultDepth` | `8` | — | the disclosed default bound (depth= always states it) |
 | `kSliceFlowDepthMax` | `32` | — | — |
 | `kSliceFlowDepthMin` | `1` | — | — |
@@ -867,7 +904,7 @@ Discloses: **none**
 
 ### `src/verbs_for.h`
 
-Discloses: `coboost_commits_capped`
+Discloses: `coboost_commits_capped`, `terms_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |

@@ -373,7 +373,7 @@ fi
 # INFRA_FAULT_RENDER_EMIT_THROW=1 — serialize.h's isChargeBufferFaultInjected idiom (the INFRA_ prefix, not
 # this project's, because src/infra/ is built to travel and test/infraportcheck.sh (C) refuses a layer file
 # that names the host — it caught this switch's first spelling), and therefore living
-# ONLY on the non-NDEBUG flavour, the same flavour DEGRADED_PATH_ALERT lives on. So, like estchargecheck #14,
+# ONLY on the non-NDEBUG flavour, the same flavour DISCLOSE lives on. So, like estchargecheck #14,
 # this arm establishes that flavour with its OWN probe rather than assuming it, and must never pass for lack
 # of an alert it could not have seen.
 #
@@ -444,7 +444,7 @@ if [ -z "$PRC_FAULT_BASE" ]; then
 fi
 #
 # WHICH FLAVOUR IS THIS BINARY? ASK IT, WITH AN ALERT IT IS KNOWN TO EMIT.
-# Both the fault switch and DEGRADED_PATH_ALERT exist only on the non-NDEBUG flavour, so on a Release build
+# Both the fault switch and DISCLOSE exist only on the non-NDEBUG flavour, so on a Release build
 # there is no alert to see and this arm must not read that silence as a regression. The first version of the
 # probe settled the question by grepping `--version` for "release" — a LABEL, whose spelling is not this
 # gate's to depend on, and which the plain build spells "dev" and the Release build spells neither. It
@@ -465,7 +465,7 @@ if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! 
 fi
 #
 # (F-legend) WHY THE est-unmeasured LABEL EXISTS, and what it costs a healthy document: NOTHING. The
-# degrade's only signal used to be DEGRADED_PATH_ALERT, which Diagnostics.h compiles to `do {} while (0)`
+# degrade's only signal used to be DISCLOSE, which Diagnostics.h compiles to `do {} while (0)`
 # under NDEBUG — so the binary a user installs printed an est_tokens priced from an EMPTY body with nothing
 # at all saying the number was never measured (review of #214; non-negotiable #3). The fix discloses it in
 # truncated=, the attribute that already carries this class of fact, and DEFINES the label in the legend.
@@ -488,7 +488,7 @@ if [ "$PRC_ALERTS" -eq 0 ]; then
     # out, so this arm cannot exercise the degrade at all and must not pretend to: the PLAIN build is what
     # proves it (CLAUDE.md). What is still assertable, and worth asserting, is that the verb this arm drives
     # is not broken on this flavour — the same document the alerting leg demands, minus the degrade.
-    printf '  INFO  (F) this binary emits no DEGRADED_PATH_ALERT (NDEBUG): the emitter-throw degrade is unobservable BY DESIGN here, and the plain-flavour leg is what proves it\n'
+    printf '  INFO  (F) this binary emits no DISCLOSE (NDEBUG): the emitter-throw degrade is unobservable BY DESIGN here, and the plain-flavour leg is what proves it\n'
     if grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
         no "(F) a binary that cannot emit the charge-buffer alert emitted the emitter-throw one — the two disagree about this flavour"
     else
@@ -518,7 +518,7 @@ if [ "$PRC_ALERTS" -eq 0 ]; then
         && no "(F5) the document claims est-unmeasured on a flavour where the render fault is not compiled in — a disclosure with nothing behind it" \
         || ok "(F5) truncated= carries no est-unmeasured where nothing was left unmeasured"
 elif ! grep -aq 'renderToString: the emitter THREW' "$PRC_FAULT_ERR"; then
-    no "(F) INFRA_FAULT_RENDER_EMIT_THROW=1 produced no DEGRADED_PATH_ALERT on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the seam regressed"
+    no "(F) INFRA_FAULT_RENDER_EMIT_THROW=1 produced no DISCLOSE on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the seam regressed"
 else
     ok "(F) observability probe: this binary emits alerts (the charge-buffer fault spoke) and the emitter-throw fault alerts too"
     # (F0) the alert names the CAUSE IT HAD. degradeMsg says the BUFFER failed; on this path it did not, so
@@ -590,7 +590,7 @@ PRC_COPY_OUT="$TMP/g_copy.out"; PRC_COPY_ERR="$TMP/g_copy.err"
 INFRA_FAULT_RENDER_COPY_THROW=1 "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$PRC_COPY_OUT" 2>"$PRC_COPY_ERR"
 prc_g_rc=$?
 if [ "$PRC_ALERTS" -eq 0 ]; then
-    printf '  INFO  (G) this binary emits no DEGRADED_PATH_ALERT (NDEBUG): the copy-throw degrade is unobservable BY DESIGN here, and the plain-flavour leg is what proves it\n'
+    printf '  INFO  (G) this binary emits no DISCLOSE (NDEBUG): the copy-throw degrade is unobservable BY DESIGN here, and the plain-flavour leg is what proves it\n'
     if grep -aq 'renderToString: the final COPY' "$PRC_COPY_ERR"; then
         no "(G) a binary that cannot emit the charge-buffer alert emitted the copy-throw one — the two disagree about this flavour"
     else
@@ -604,7 +604,7 @@ if [ "$PRC_ALERTS" -eq 0 ]; then
         && ok "(G2) the document carries $g_rel <f> row(s) — the verb is intact on this flavour" \
         || no "(G2) the document carries NO <f> row over $PRC_FAULT_BASE"
 elif ! grep -aq 'renderToString: the final COPY' "$PRC_COPY_ERR"; then
-    no "(G) INFRA_FAULT_RENDER_COPY_THROW=1 produced no DEGRADED_PATH_ALERT on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the copy is still outside the no-throw contract"
+    no "(G) INFRA_FAULT_RENDER_COPY_THROW=1 produced no DISCLOSE on a binary that PROVED it can emit one (the charge-buffer probe alerted) — the copy is still outside the no-throw contract"
 else
     ok "(G) the final copy's throw is CAUGHT: the alert speaks instead of the exception escaping"
     # (G0) the alert names the cause it HAD. degradeMsg says the BUFFER failed and (F)'s literal says the

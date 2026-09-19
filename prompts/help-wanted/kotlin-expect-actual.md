@@ -209,7 +209,7 @@ declaration and must not move; members declared inside an `expect class` body st
 - **Honesty in output.** Counts that cannot be totals stay floors (`counts_floor="1"`); a zero means
   "none found". Never bind a declined call to a guessed `actual`. Write every floor you leave into the
   gate header and into the Kotlin paragraph of `docs/ARCHITECTURE.md`.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any recoverable path — Release compiles the
+- **`DISCLOSE`, never `ASSUME( false )`**, on any recoverable path — Release compiles the
   assert away and deletes the fallback behind it.
 - **No `std::map` or `std::unordered_map`.** Use `HashMap<>` (ankerl) or `gtl::btree_map`, and never
   let hash iteration order reach output.

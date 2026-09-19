@@ -419,6 +419,7 @@ handoff.h|never dropped|1
 ingest_astquery.h|never suppressed|1
 landingplan.h|always printed|1
 verbs_grep.h|always emitted|1
+verbs_grep.h|always present|1
 verbs_grep.h|never suppressed|1
 verbs_quality.h|printed even at zero|2
 verbs_report.h|never omitted|1
@@ -494,6 +495,22 @@ fi
 "$BIN" "$ZSB" --grep=ZEROMARK_probe --no-cache 2>/dev/null | grep -q 'always EMITTED, never suppressed' \
     && ok "(Z2a) presence guard: the legend clause under test is still printed by the verb" \
     || no "(Z2a) presence guard: --grep no longer prints the 'always EMITTED, never suppressed' clause"
+
+# ── (Z2h) regex_lines_skipped= — "(regex only, always present)" ─────────────────────────────────────
+# The long-line count is the proof that no line was kept from the regex engine, so "0" must ride; absence would read
+# equally as "none skipped" and "the emitter dropped it".
+"$BIN" "$ZSB" --regex='ZEROMARK_probe' --no-cache >"$TMP/z2h.xml" 2>/dev/null
+zRegexRoot="$( grep -o '<grep [^>]*>' "$TMP/z2h.xml" | head -1 )"
+if [ -z "$zRegexRoot" ]; then
+    no "(Z2h) presence guard: --regex produced no <grep> root on the zero corpus — the probe is inert"
+elif printf '%s' "$zRegexRoot" | grep -q ' regex_lines_skipped="0"'; then
+    ok "(Z2h) --regex: regex_lines_skipped=\"0\" rides at zero, as its legend promises"
+else
+    no "(Z2h) --regex DROPPED regex_lines_skipped= at zero while its own legend says 'always present' — root: $zRegexRoot"
+fi
+grep -q 'regex only, always present' "$TMP/z2h.xml" \
+    && ok "(Z2h) presence guard: the legend clause under test is still printed by the verb" \
+    || no "(Z2h) presence guard: --regex no longer prints the 'regex only, always present' clause"
 
 # ── (Z2b) tier_unclassified= — the MCP twin ─────────────────────────────────────────────────────────
 # Crossing the CLI/MCP seam is the point: an MCP-only agent has no CLI to re-ask from, so a dialect that
