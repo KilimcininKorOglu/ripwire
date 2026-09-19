@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::popen / pclose — the markitdown bridge; open / fdopen / close / fstat — readRegularFile asks a FIFO for an answer instead of waiting on it, and asks the DESCRIPTOR what it opened
 
 
 // docparse.h — P1-B document ingest. Turns non-code documents that live IN a repo
@@ -29,9 +30,6 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
-#include <fcntl.h>     // ::open( O_NONBLOCK ) — readRegularFile asks a FIFO for an answer instead of waiting on it
-#include <sys/stat.h>  // ::fstat — readRegularFile asks the DESCRIPTOR what it opened
-#include <unistd.h>    // ::close — the one descriptor fdopen may decline to take
 #include <mutex>       // openRegularFileStream discloses a refused path once per process
 #include <optional>
 #include <string>
@@ -245,20 +243,20 @@ inline std::optional<std::string> readWholeFile( const std::string& path )
 inline rw::pathguard::NoFollowRead openRegularFileStream( std::string_view what, const std::string& path )
 {
     rw::pathguard::NoFollowRead stream;
-    const int                   fd = ::open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    const int                   fd = os::open( path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
     if( fd < 0 )
     {
         return stream;   // absent or unreadable: the caller's own "no such file" reading
     }
-    stream.file = ::fdopen( fd, "rb" );   // owned from here: NoFollowRead's destructor fcloses it on every return
+    stream.file = os::fdopen( fd, "rb" );   // owned from here: NoFollowRead's destructor fcloses it on every return
     if( stream.file == nullptr )
     {
-        ::close( fd );   // fdopen did not take the descriptor, so it is still ours to close
+        os::close( fd );   // fdopen did not take the descriptor, so it is still ours to close
         return stream;
     }
     stream.opened = true;
-    struct stat st{};
-    if( ::fstat( ::fileno( stream.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
+    os::stat_t st{};
+    if( os::fstat( os::fileno( stream.file ), &st ) != 0 || !S_ISREG( st.st_mode ) )
     {
         // Once per path per process: .ripwire_config is read several times in one --quality-delta, and the same sentence
         // three times says nothing the first did not.
@@ -623,7 +621,7 @@ inline std::string shellQuote( const std::string& s )
 inline std::string runMarkitdown( const std::string& path )
 {
     const std::string cmd = "markitdown " + detail::shellQuote( path ) + " 2>/dev/null";
-    std::FILE* pipe = ::popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
         DISCLOSE( "docparse: popen failed for markitdown bridge" );
@@ -636,7 +634,7 @@ inline std::string runMarkitdown( const std::string& path )
     {
         out.append( buf.data(), n );
     }
-    const int rc = ::pclose( pipe );
+    const int rc = os::pclose( pipe );
     if( rc != 0 )
     { // markitdown absent or errored → degrade to no-doc
         return {};

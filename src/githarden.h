@@ -39,6 +39,7 @@
 #include "pathguard.h"       // pathguard::readRegularFileNoFollow — config candidates are read non-blocking and regular-file-only
 #include "gitmine.h"         // rw::popenTrimmed — the one popen-and-trim shape in the tree (never a second)
 #include "infra/emit.h"      // rw::emitTo — the house emitter; no new printf-family site
+#include "infra/os.h"   // rw::os::setenv — the GIT_CONFIG_* pins
 #include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include "infra/jsonesc.h"   // rw::shSingleQuote
 
@@ -321,7 +322,7 @@ inline bool appendGitConfigOverride( const char* key, const char* value )
     const std::string   keyN  = "GIT_CONFIG_KEY_" + std::to_string( n );
     const std::string   valN  = "GIT_CONFIG_VALUE_" + std::to_string( n );
     const std::string   count = std::to_string( n + 1 );
-    return ::setenv( keyN.c_str(), key, 1 ) == 0 && ::setenv( valN.c_str(), value, 1 ) == 0 && ::setenv( "GIT_CONFIG_COUNT", count.c_str(), 1 ) == 0;
+    return os::setenv( keyN.c_str(), key, 1 ) == 0 && os::setenv( valN.c_str(), value, 1 ) == 0 && os::setenv( "GIT_CONFIG_COUNT", count.c_str(), 1 ) == 0;
 }
 
 // ── the startup record, kept so --doctor reports the SAME probe main() acted on ─────────────────────────────

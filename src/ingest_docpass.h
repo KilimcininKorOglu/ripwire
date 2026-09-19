@@ -24,12 +24,12 @@ inline void publishDocBridgeBlob( const std::string& bridgeBlobPath, std::uint32
 {
     rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( bridgeBlobPath + ".tmp" + std::to_string( tmpKey ) + ".", "", 0666 );
     const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
-    std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
+    std::FILE*                  fp    = rawFd >= 0 ? os::fdopen( rawFd, "wb" ) : nullptr;
     if( fp == nullptr )
     {
         if( rawFd >= 0 )
         {
-            ::close( rawFd );
+            os::close( rawFd );
         }
         DISCLOSE( "ingest: doc bridge cache could not create its temp file — the text is kept, the cache is not written" );
         return;

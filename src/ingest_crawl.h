@@ -1300,14 +1300,14 @@ bool underGitRoot( const char* rootDir )
 {
     std::string dir = rootDir == nullptr ? std::string( "." ) : std::string( rootDir );
     char        resolved[ PATH_MAX ];
-    if( ::realpath( dir.c_str(), resolved ) != nullptr )
+    if( os::realpath( dir.c_str(), resolved ) != nullptr )
     {
         dir = resolved;
     }
     for( ;; )
     {
-        struct stat st;
-        if( ::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
+        os::stat_t st;
+        if( os::stat( ( dir + "/.git" ).c_str(), &st ) == 0 )
         {
             return true;
         }
@@ -1329,7 +1329,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     }
     const std::string cmd = gitCmd( " -C " ) + shSingleQuote( rootDir == nullptr ? std::string( "." ) : std::string( rootDir ) )
                           + " -c core.quotepath=false ls-files --others --ignored --exclude-standard --directory -z 2>/dev/null";
-    std::FILE* pipe = ::popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( pipe == nullptr )
     {
         DISCLOSE( "ingest: cannot run git for the ignore probe — full walk" );
@@ -1347,7 +1347,7 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
         }
         buf.append( chunk, n );
     }
-    const int rc = ::pclose( pipe );
+    const int rc = os::pclose( pipe );
     if( rc != 0 )
     {
         return out;   // not a git work tree, or no git binary — the DESIGNED degrade, silent by contract
@@ -1834,23 +1834,17 @@ bool readFilePrefix( const std::string& path, std::string& out, std::size_t maxB
 struct StatInfo { long long mtimeNs; long long sizeBytes; long long ctimeNs; };   // all -1 if the path cannot be stat'd
 inline StatInfo statSizeTimes( const std::string& path ) noexcept
 {
-    struct stat st;
-    if( ::stat( path.c_str(), &st ) != 0 )
+    os::stat_t st;
+    if( os::stat( path.c_str(), &st ) != 0 )
     {
         return { -1, -1, -1 };
     }
     // saturatingNanoseconds (infra/statclock.h): a timestamp past 2262 overflowed the plain product — undefined
-    // behaviour in release and an abort under the sanitizer build, on any ext4/XFS/tmpfs file or tar restore carrying one.
-#if defined( __APPLE__ )
-    const long long m = saturatingNanoseconds( st.st_mtimespec );
-    const long long c = saturatingNanoseconds( st.st_ctimespec );
-#elif defined( __linux__ )
-    const long long m = saturatingNanoseconds( st.st_mtim );
-    const long long c = saturatingNanoseconds( st.st_ctim );
-#else
-    const long long m = saturatingNanoseconds( (long long)st.st_mtime, 0 );   // whole-second fallback
-    const long long c = saturatingNanoseconds( (long long)st.st_ctime, 0 );
-#endif
+    // behaviour in release and an abort under the sanitizer build, on any ext4/XFS/tmpfs file or tar restore
+    // carrying one. os::st_mtim/st_ctim already abstract the field name (Darwin st_mtimespec vs POSIX st_mtim,
+    // whole-second fallback elsewhere), so no platform switch is needed at this call site.
+    const long long m = saturatingNanoseconds( os::st_mtim( st ) );
+    const long long c = saturatingNanoseconds( os::st_ctim( st ) );
     return { m, (long long)st.st_size, c };
 }
 
@@ -1873,8 +1867,8 @@ enum class PathShape : std::uint8_t { Absent, RegularFile, Other };
 
 inline PathShape shapeOfPath( const std::string& path ) noexcept
 {
-    struct stat st;
-    const bool  isStatable = ::stat( path.c_str(), &st ) == 0;
+    os::stat_t st;
+    const bool  isStatable = os::stat( path.c_str(), &st ) == 0;
     return !isStatable ? PathShape::Absent : ( S_ISREG( st.st_mode ) ? PathShape::RegularFile : PathShape::Other );
 }
 

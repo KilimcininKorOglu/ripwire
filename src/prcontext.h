@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::popen / pclose — the diff name-status walk
 #include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -221,7 +222,7 @@ inline NumstatDiff numstatChangedPaths( const std::string& root, const std::stri
     const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --numstat "
                           + revArgs + " -- 2>/dev/null";
 
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return out;
@@ -241,7 +242,7 @@ inline NumstatDiff numstatChangedPaths( const std::string& root, const std::stri
             out.paths.push_back( std::move( path ) );
         }
     }
-    const int rc = pclose( pipe );
+    const int rc = os::pclose( pipe );
     if( rc != 0 && out.paths.empty() && out.skippedModeOnly == 0 )
     {
         return out; // git failed outright

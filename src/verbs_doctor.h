@@ -55,39 +55,25 @@ extern "C"
     const TSLanguage* tree_sitter_gdscript( void );
 }
 
-// This process's own executable path, realpath'd. macOS uses _NSGetExecutablePath and Linux uses
-// /proc/self/exe because argv[0] is often just "ripwire" after shell PATH resolution. Other platforms
-// fall back to realpath(argv0), then an explicit PATH search. Never crashes: failure degrades to "".
+// This process's own executable path, realpath'd. The platform's own answer comes first (rw::os::exepath) because
+// argv[0] is often just "ripwire" after shell PATH resolution. Where the platform cannot say, fall back to
+// realpath(argv0), then an explicit PATH search. Never crashes: failure degrades to "".
 inline std::string selfExecutablePath( const char* argv0 )
 {
-#if defined( __APPLE__ )
-    char          buf[ PATH_MAX ];
-    std::uint32_t size = sizeof( buf );
-    if( _NSGetExecutablePath( buf, &size ) == 0 )
     {
-        char resolved[ PATH_MAX ];
-        if( ::realpath( buf, resolved ) )
+        char buf[ PATH_MAX ];
+        if( rw::os::exepath( buf, sizeof( buf ) ) == 0 )
         {
-            return std::string( resolved );
+            char resolved[ PATH_MAX ];
+            if( rw::os::realpath( buf, resolved ) )
+            {
+                return std::string( resolved );
+            }
+            return std::string( buf );
         }
-        return std::string( buf );
     }
-#elif defined( __linux__ )
-    char          buf[ PATH_MAX ];
-    const ssize_t byteCount = ::readlink( "/proc/self/exe", buf, sizeof( buf ) - 1 );
-    if( byteCount > 0 )
-    {
-        buf[ byteCount ] = '\0';
-        char resolved[ PATH_MAX ];
-        if( ::realpath( buf, resolved ) )
-        {
-            return std::string( resolved );
-        }
-        return std::string( buf );
-    }
-#endif
     char resolved[ PATH_MAX ];
-    if( argv0 && ::realpath( argv0, resolved ) )
+    if( argv0 && rw::os::realpath( argv0, resolved ) )
     {
         return std::string( resolved );
     }
@@ -103,7 +89,7 @@ inline std::string selfExecutablePath( const char* argv0 )
             const std::size_t split = remaining.find( ':' );
             const std::string_view dir = remaining.substr( 0, split );
             const std::string candidate = std::string( dir.empty() ? "." : dir ) + "/" + argv0;
-            if( ::realpath( candidate.c_str(), resolved ) && ::access( resolved, X_OK ) == 0 )
+            if( rw::os::realpath( candidate.c_str(), resolved ) && rw::os::access( resolved, X_OK ) == 0 )
             {
                 return std::string( resolved );
             }
@@ -197,7 +183,7 @@ inline std::string doctorNotOnPathHint( const std::string& selfPath, std::vector
 }
 
 inline std::string doctorBinaryPathVerdictAttr( bool copied, const std::string& selfPath, const std::string& whichPath,
-                                                const struct stat& selfSt, const struct stat& whichSt, std::vector<char>& esc )
+                                                const rw::os::stat_t& selfSt, const rw::os::stat_t& whichSt, std::vector<char>& esc )
 {
     if( copied )
     {
@@ -738,10 +724,10 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     {
         const std::string selfPath  = selfExecutablePath( argv0 );
         const std::string whichPath = doctorPopenTrim( "which ripwire 2>/dev/null" );
-        struct stat        selfSt {};
-        struct stat         whichSt {};
-        const bool haveSelf  = !selfPath.empty()  && ::stat( selfPath.c_str(),  &selfSt )  == 0;
-        const bool haveWhich = !whichPath.empty() && ::stat( whichPath.c_str(), &whichSt ) == 0;
+        rw::os::stat_t        selfSt {};
+        rw::os::stat_t         whichSt {};
+        const bool haveSelf  = !selfPath.empty()  && rw::os::stat( selfPath.c_str(),  &selfSt )  == 0;
+        const bool haveWhich = !whichPath.empty() && rw::os::stat( whichPath.c_str(), &whichSt ) == 0;
 
         bool        ok    = true;
         std::string attrs = "self=\"" + std::string( escapeXml( selfPath, esc ) ) + "\"";
@@ -804,13 +790,13 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // existing ripwire-* blob count + total bytes (eviction sanity: flag >50 blobs, informational) ----
     {
         const std::string dir   = cacheDirLadder();
-        const std::string probe = dir + "/.ripwire-doctor-probe-" + std::to_string( ::getpid() );
+        const std::string probe = dir + "/.ripwire-doctor-probe-" + std::to_string( rw::os::getpid() );
         bool writable = false;
         if( std::FILE* f = std::fopen( probe.c_str(), "wb" ) )
         {
             std::fputs( "doctor", f );
             std::fclose( f );
-            writable = ( ::unlink( probe.c_str() ) == 0 );
+            writable = ( rw::os::unlink( probe.c_str() ) == 0 );
         }
 
         const DoctorCacheStats stats = doctorCacheStats( dir );

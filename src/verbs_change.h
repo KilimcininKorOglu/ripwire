@@ -805,13 +805,13 @@ std::string runCaptureText( RunCapture& cap )
     return text;
 }
 
-// fork/exec `sh -c CMD` in its own process group, drain the pipe under a poll() deadline, SIGKILL the whole
-// group at the cap, and decode the exit honestly. Zero new dependencies — POSIX only (G3/G5).
+// start `sh -c CMD` in its own process group (rw::os::spawn_sh), drain the pipe under a poll() deadline, SIGKILL the
+// whole group at the cap, and decode the exit honestly. Zero new dependencies (G3/G5).
 RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
 {
     RunCapture cap;
     int fds[2];
-    if( pipe( fds ) != 0 )
+    if( rw::os::pipe( fds ) != 0 )
     {
         cap.isSpawnFailed = true;
         return cap;
@@ -821,29 +821,17 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
     const auto elapsedMs = [ & ]() -> std::int64_t
     { return std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now() - t0 ).count(); };
 
-    const pid_t childPid = fork();
+    // the child: own process group (the timeout kills the whole tree), stdin from /dev/null (a command that reads its
+    // terminal must not hang the report), both streams into ONE pipe (interleaved, as a terminal would see them), then
+    // the shell; an exec failure is the child's exit 127, sh's own command-not-found code.
+    const rw::os::pid_t childPid = rw::os::spawn_sh( cmd, fds );
     if( childPid < 0 )
     {
-        close( fds[0] );  close( fds[1] );
+        rw::os::close( fds[0] );  rw::os::close( fds[1] );
         cap.isSpawnFailed = true;
         return cap;
     }
-    if( childPid == 0 )
-    {
-        // child: own process group (the timeout kills the whole tree), stdin from /dev/null (a command that
-        // reads its terminal must not hang the report), both streams into ONE pipe (interleaved, as a
-        // terminal would see them), then the shell. _exit(127) mirrors sh's own command-not-found code.
-        setpgid( 0, 0 );
-        const int devNull = open( "/dev/null", O_RDONLY );
-        if( devNull >= 0 ) { dup2( devNull, STDIN_FILENO );  close( devNull ); }
-        dup2( fds[1], STDOUT_FILENO );  dup2( fds[1], STDERR_FILENO );
-        close( fds[0] );  close( fds[1] );
-        execl( "/bin/sh", "sh", "-c", cmd.c_str(), static_cast<char*>( nullptr ) );
-        _exit( 127 );
-    }
-
-    setpgid( childPid, childPid );   // parent side of the same race — both settings agree, whichever runs first
-    close( fds[1] );
+    rw::os::close( fds[1] );
 
     // ── drain the pipe under the deadline; after a kill, keep draining briefly (an orphaned grandchild may
     //    still hold the write side open — stop at the drain deadline rather than hanging on its EOF) ───────
@@ -858,19 +846,19 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
         {
             cap.isTimedOut  = true;
             drainDeadlineMs = nowMs + drainWindowMs;
-            kill( -childPid, SIGKILL );
-            kill( childPid, SIGKILL );
+            rw::os::kill( -childPid, SIGKILL );
+            rw::os::kill( childPid, SIGKILL );
         }
         if( cap.isTimedOut && elapsedMs() >= drainDeadlineMs )
         {
             break;
         }
         const std::int64_t untilMs = ( cap.isTimedOut ? drainDeadlineMs : timeoutMs ) - elapsedMs();
-        struct pollfd pfd { fds[0], POLLIN, 0 };
-        const int ready = poll( &pfd, 1, int( std::clamp<std::int64_t>( untilMs, 0, 1000 ) ) );
+        rw::os::pollfd pfd { fds[0], POLLIN, 0 };
+        const int ready = rw::os::poll( &pfd, 1, int( std::clamp<std::int64_t>( untilMs, 0, 1000 ) ) );
         if( ready > 0 )
         {
-            const ssize_t n = read( fds[0], buf, sizeof buf );
+            const rw::os::ssize_t n = rw::os::read( fds[0], buf, sizeof buf );
             if( n <= 0 ) { break; }                       // EOF: every writer closed the pipe
             runCaptureAppend( cap, buf, std::size_t( n ) );
         }
@@ -879,14 +867,14 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
             break;
         }
     }
-    close( fds[0] );
+    rw::os::close( fds[0] );
 
     // ── harvest the exit status, still under the cap: EOF can precede exit (a command that closed its own
     //    stdout/stderr and kept running), so the wait polls the SAME deadline instead of blocking past it ──
     int status = 0;
     for( ;; )
     {
-        const pid_t waited = waitpid( childPid, &status, cap.isTimedOut ? 0 : WNOHANG );
+        const rw::os::pid_t waited = rw::os::waitpid( childPid, &status, cap.isTimedOut ? 0 : WNOHANG );
         if( waited == childPid || waited < 0 )
         {
             break;
@@ -894,11 +882,11 @@ RunCapture runCommandCapture( const std::string& cmd, std::uint32_t timeoutSec )
         if( elapsedMs() >= timeoutMs )
         {
             cap.isTimedOut = true;
-            kill( -childPid, SIGKILL );
-            kill( childPid, SIGKILL );
+            rw::os::kill( -childPid, SIGKILL );
+            rw::os::kill( childPid, SIGKILL );
             continue;                                      // next iteration blocks: the group is dead
         }
-        poll( nullptr, 0, 20 );
+        rw::os::poll( nullptr, 0, 20 );
     }
     cap.durationMs = std::uint64_t( elapsedMs() );
     if( WIFEXITED( status ) )

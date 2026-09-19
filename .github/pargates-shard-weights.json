@@ -356,6 +356,7 @@
 "opencodewrapcheck.sh": 2.4,
 "optremarkscheck.sh": 25.7,
 "ordercheck.sh": 5.8,
+"osswitchcheck.sh": 3.1,
 "outlinecheck.sh": 1.5,
 "overbudgetcommentcheck.sh": 0.5,
 "ownerscheck.sh": 5.2,

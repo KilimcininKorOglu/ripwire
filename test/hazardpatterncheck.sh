@@ -426,9 +426,14 @@ for f in sorted(dirIterFiles):
 tsv("c.tsv", [(f, fn, k, n) for (f, fn, k), n in sorted(armC.items())])
 
 # ── (E) raw acquisitions crashsweepcheck's S2 does not name (fopen/open/popen/opendir/fdopen/open_memstream are its) ─
-ACQ = ("^(::|std::)?(socket|pipe|pipe2|dup|kqueue|epoll_create|epoll_create1|inotify_init1|eventfd|mkstemp|mkdtemp|malloc|calloc|realloc|"
+# src/infra/os.h is THE seam (see its own header comment): socket/accept/pipe/dup/kqueue now reach a call site as
+# os::X or rw::os::X, so ACQ accepts that prefix on every name (accept keeps its own alternative since it is also
+# reached bare as ::accept4?). os.h's OWN wrapper DEFINITIONS are the one place the bare libc call still appears —
+# that is the seam working as designed, not an unregistered site — so this one file is exempt by name below.
+OS_SEAM_HEADER = "infra/os.h"
+ACQ = ("^(::|std::|os::|rw::os::)?(socket|pipe|pipe2|dup|kqueue|epoll_create|epoll_create1|inotify_init1|eventfd|mkstemp|mkdtemp|malloc|calloc|realloc|"
        "strdup|strndup|posix_memalign|aligned_alloc|ts_parser_new|ts_query_new|ts_query_cursor_new|ts_tree_copy|ts_parser_parse|"
-       "ts_parser_parse_string|ts_parser_parse_string_encoding|ts_tree_cursor_new|ts_tree_cursor_copy)$|^::accept4?$")
+       "ts_parser_parse_string|ts_parser_parse_string_encoding|ts_tree_cursor_new|ts_tree_cursor_copy)$|^(::|os::|rw::os::)accept4?$")
 destructorOf = {}
 
 
@@ -441,10 +446,12 @@ def has_destructor(f, typeName):
 
 armE, owned = Counter(), 0
 for f, ln, fn, name in match('(call_expression function: [(identifier) (qualified_identifier)] @f (#match? @f "%s"))' % ACQ):
+    if f == OS_SEAM_HEADER:
+        continue
     if has_destructor(f, fn.split("::")[-1]):
         owned += 1      # acquired inside a type whose destructor releases it (the ParserGuard / ChildCursor shape)
         continue
-    armE[(f, fn, name.strip().replace("std::", "").lstrip(":"))] += 1
+    armE[(f, fn, name.strip().replace("rw::os::", "").replace("os::", "").replace("std::", "").lstrip(":"))] += 1
 for f, ln, fn, t in match('(new_expression) @n'):
     if re.match(r"^new\s*\(", t.strip()):
         continue        # placement new constructs into storage someone else owns
@@ -501,7 +508,6 @@ ingest_crawl.h	compileQueryStandalone	ts_query_new	1	returned into the process-l
 ingest_parsepool.h	runParseWorker	ts_query_cursor_new	1	deleted at the end of the worker; the returns in between belong to lambdas
 ingest_sidecap.h	parseTree	ts_parser_parse_string	1	returned to the caller, which adopts it into TreeGuard
 main.cpp	runWithCompactLegend	dup	1	closed on the failure path and after the restore on the success path
-mcpindex.h	arm	kqueue	1	held by the FS watcher, closed by its reset and its destructor
 mcpserver.h	runMcpHttp	accept	1	each accepted connection is closed after its one request
 mcpserver.h	runMcpHttp	socket	1	the listening socket is closed before every return
 pattern.h	compileFor	ts_parser_new	1	deleted right after the parse, and on the null-language return
@@ -624,6 +630,8 @@ struct ProbeOwner
     void* p = std::malloc( 8 );
     ~ProbeOwner() { std::free( p ); }
 };
+namespace os { int socket( int domain, int type, int protocol ); }   // stands in for rw::os::socket
+inline int probeOsAcquire() { return os::socket( 0, 0, 0 ); }   // os::-spelled site, unregistered: E must still catch it
 PROBEH
 if ! python3 "$TMP/scan.py" "$BIN" "$PROBE" "$TMP/probe_out" >"$TMP/probe_scan.txt" 2>&1; then
     no "static rules: the probe scan did not complete: $( tail -1 "$TMP/probe_scan.txt" )"
@@ -655,9 +663,10 @@ else
     expect_probe C 'probeDirIncrement'              0 "increment( ec ) and is_directory( ec ) do not fire"
     expect_probe E 'probeRawAlloc malloc: 1'        1 "a bare malloc fires"
     expect_probe E 'ProbeOwner'                     0 "a malloc inside a type whose destructor frees it does not fire"
-    [ "$( grep -c . "$TMP/probe_verdict.txt" )" -eq 13 ] \
-        && ok "probe: exactly the 13 planted violations fire, nothing else" \
-        || { no "probe: expected exactly 13 verdict lines, got $( grep -c . "$TMP/probe_verdict.txt" )"; sed 's/^/          /' "$TMP/probe_verdict.txt"; }
+    expect_probe E 'probeOsAcquire socket: 1'       1 "an os::-spelled unregistered site still fires (the seam's own spelling is not a free pass)"
+    [ "$( grep -c . "$TMP/probe_verdict.txt" )" -eq 14 ] \
+        && ok "probe: exactly the 14 planted violations fire, nothing else" \
+        || { no "probe: expected exactly 14 verdict lines, got $( grep -c . "$TMP/probe_verdict.txt" )"; sed 's/^/          /' "$TMP/probe_verdict.txt"; }
 fi
 
 if ! python3 "$TMP/scan.py" "$BIN" "$SRC" "$TMP/src_out" >"$TMP/src_scan.txt" 2>&1; then

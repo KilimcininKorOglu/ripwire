@@ -168,13 +168,13 @@
 
 #include "infra/emit.h"   // rw::emitTo — the refusal goes to stderr through THE emitter, not fprintf
 
-#include <fcntl.h>        // ::open + O_NOFOLLOW + O_NONBLOCK + O_EXCL + O_CLOEXEC — the whole mechanism, in one syscall
-#include <sys/stat.h>     // ::lstat + S_ISLNK (mcpedit, and the post-ELOOP wording); ::fstat + S_ISREG (round 4)
-#include <unistd.h>       // ::write / ::close / ::read / ::getpid — the descriptor the writers hold instead of a stream
+#include "infra/os.h"     // os::open + O_NOFOLLOW + O_NONBLOCK — the whole mechanism, in one syscall; os::lstat + S_ISLNK (mcpedit, and
+                          // the post-ELOOP wording); os::fstat + S_ISREG (round 4); os::write / os::read / os::close / os::getpid —
+                          // the descriptor the writers hold instead of a stream, and the entropy-fallback mixer (round 5)
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>        // std::uint64_t — the entropy-fallback mixer (round 5)
-#include <cstdio>         // std::FILE / ::fdopen / ::getline / std::fclose — the read half's line stream
+#include <cstdio>         // std::FILE / os::fdopen / os::getline / std::fclose — the read half's line stream
 #include <cstdlib>        // std::free — POSIX getline's buffer
 #include <cstring>        // std::strerror — an honest reason for a failure that is not a link
 #include <chrono>         // std::chrono::steady_clock — the entropy-fallback mixer (round 5)
@@ -182,7 +182,6 @@
 #include <optional>       // readRegularFileNoFollow's absent-or-bytes answer
 #include <string>
 #include <string_view>
-#include <sys/types.h>    // ssize_t + mode_t
 
 namespace rw::pathguard
 {
@@ -197,8 +196,8 @@ namespace rw::pathguard
 // (mcpedit, which never opens the destination) and it words an error (openNoFollowTruncate, after the fact).
 inline bool isSymlink( const std::string& path ) noexcept
 {
-    struct stat linkSt{};
-    return ::lstat( path.c_str(), &linkSt ) == 0 && S_ISLNK( linkSt.st_mode );
+    os::stat_t linkSt{};
+    return os::lstat( path.c_str(), &linkSt ) == 0 && S_ISLNK( linkSt.st_mode );
 }
 
 // What the atomic open produced: a descriptor, or the errno that explains why there is none. Both are
@@ -237,30 +236,30 @@ struct OpenedFile
 // before that point leaves the old sidecar exactly as it was.
 inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string& path )
 {
-    const int fd = ::open( path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666 );
+    const int fd = os::open( path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666 );
     if( fd >= 0 )
     {
-        struct stat openedSt{};
-        if( ::fstat( fd, &openedSt ) != 0 )
+        os::stat_t openedSt{};
+        if( os::fstat( fd, &openedSt ) != 0 )
         {
             const int statErr = errno;
-            ::close( fd );
+            os::close( fd );
             rw::emitTo( stderr, "ripwire: could not inspect {} at '{}': {}. Nothing was written.\n", what, path, std::strerror( statErr ) );
             return { -1, statErr };
         }
         if( !S_ISREG( openedSt.st_mode ) )
         {
-            ::close( fd );
+            os::close( fd );
             rw::emitTo( stderr,
                         "ripwire: refusing to write {} at '{}': that path is not a regular file (a FIFO, for example), so there is no\n"
                         "  sidecar there to write. Nothing was written. Remove it and re-run.\n",
                         what, path );
             return { -1, EINVAL };
         }
-        if( ::ftruncate( fd, 0 ) != 0 )
+        if( os::ftruncate( fd, 0 ) != 0 )
         {
             const int truncErr = errno;
-            ::close( fd );
+            os::close( fd );
             rw::emitTo( stderr, "ripwire: could not truncate {} at '{}' for writing: {}. Nothing was written.\n", what, path, std::strerror( truncErr ) );
             return { -1, truncErr };
         }
@@ -298,13 +297,6 @@ inline OpenedFile openNoFollowTruncate( std::string_view what, const std::string
     return { -1, err };
 }
 
-// Write every byte of `bytes` to `fd`, then close it — the descriptor is consumed either way. Returns false
-// if any byte did not land or the close failed, which the callers turn into their "could not write" answer.
-//
-// A short write is retried (a signal can truncate one), EINTR is retried, and anything else is a failure.
-// writeBaseline used to `return true` regardless of whether the bytes reached the disk and now returns this;
-// writeNotes already answered for its stream (`return bool( f )`) and keeps that contract through the
-// descriptor. Either way a full disk stops being reported as a written sidecar.
 // Write every byte of `bytes` to `fd` WITHOUT closing it — a short write is retried (a signal can truncate
 // one), EINTR is retried, anything else is a failure. Shared by writeAllAndClose and the round-5 temp holder.
 inline bool writeAll( int fd, std::string_view bytes ) noexcept
@@ -312,7 +304,7 @@ inline bool writeAll( int fd, std::string_view bytes ) noexcept
     std::size_t off = 0;
     while( off < bytes.size() )
     {
-        const ssize_t n = ::write( fd, bytes.data() + off, bytes.size() - off );
+        const os::ssize_t n = os::write( fd, bytes.data() + off, bytes.size() - off );
         if( n > 0 )
         {
             off += static_cast<std::size_t>( n );
@@ -327,10 +319,15 @@ inline bool writeAll( int fd, std::string_view bytes ) noexcept
     return true;
 }
 
+// Write every byte of `bytes` to `fd`, then close it — the descriptor is consumed either way. Returns false
+// if any byte did not land or the close failed, which the callers turn into their "could not write" answer.
+// writeBaseline used to `return true` regardless of whether the bytes reached the disk and now returns this;
+// writeNotes already answered for its stream (`return bool( f )`) and keeps that contract through the
+// descriptor. Either way a full disk stops being reported as a written sidecar.
 inline bool writeAllAndClose( int fd, std::string_view bytes ) noexcept
 {
     bool wrote = writeAll( fd, bytes );
-    if( ::close( fd ) != 0 )
+    if( os::close( fd ) != 0 )
     {
         wrote = false;
     }
@@ -365,13 +362,13 @@ inline std::string randomTempSuffix()
 {
     unsigned char raw[ 12 ] = { 0 };
     bool          haveEntropy = false;
-    const int     rfd = ::open( "/dev/urandom", O_RDONLY | O_CLOEXEC );
+    const int     rfd = os::open( "/dev/urandom", O_RDONLY | O_CLOEXEC );
     if( rfd >= 0 )
     {
         std::size_t got = 0;
         while( got < sizeof( raw ) )
         {
-            const ssize_t n = ::read( rfd, raw + got, sizeof( raw ) - got );
+            const os::ssize_t n = os::read( rfd, raw + got, sizeof( raw ) - got );
             if( n > 0 )
             {
                 got += static_cast<std::size_t>( n );
@@ -383,14 +380,14 @@ inline std::string randomTempSuffix()
             }
             break;
         }
-        ::close( rfd );
+        os::close( rfd );
         haveEntropy = ( got == sizeof( raw ) );
     }
     if( !haveEntropy )
     {
         std::random_device rd;
         std::uint64_t      mix = ( static_cast<std::uint64_t>( rd() ) << 32 ) ^ static_cast<std::uint64_t>( rd() )
-                               ^ ( static_cast<std::uint64_t>( ::getpid() ) << 17 )
+                               ^ ( static_cast<std::uint64_t>( os::getpid() ) << 17 )
                                ^ static_cast<std::uint64_t>( std::chrono::steady_clock::now().time_since_epoch().count() );
         for( unsigned char& b : raw )
         {
@@ -412,9 +409,9 @@ inline std::string randomTempSuffix()
 // Create EXACTLY `path` for writing, failing (never following a link, never truncating) if anything already
 // sits at the name. O_EXCL makes the create atomic — a symlink at the name yields EEXIST, not a followed
 // open — and O_NOFOLLOW is the redundant guard for the same intent. Returns the descriptor, or -1 with errno.
-inline int openExclNoFollow( const char* path, mode_t mode ) noexcept
+inline int openExclNoFollow( const char* path, os::mode_t mode ) noexcept
 {
-    return ::open( path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode );
+    return os::open( path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode );
 }
 
 // An RAII holder for the temp side of a tmp+rename publish. It owns the exclusively-created descriptor and
@@ -446,11 +443,11 @@ public:
     {
         if( fd_ >= 0 )
         {
-            ::close( fd_ );
+            os::close( fd_ );
         }
         if( !committed_ && !path_.empty() )
         {
-            ::unlink( path_.c_str() );   // an uncommitted temp never survives the writer's scope
+            os::unlink( path_.c_str() );   // an uncommitted temp never survives the writer's scope
         }
     }
 
@@ -480,14 +477,14 @@ public:
     {
         if( fd_ >= 0 )
         {
-            const bool closed = ::close( fd_ ) == 0;
+            const bool closed = os::close( fd_ ) == 0;
             fd_ = -1;
             if( !closed )
             {
                 return false;
             }
         }
-        if( path_.empty() || std::rename( path_.c_str(), finalPath.c_str() ) != 0 )
+        if( path_.empty() || os::rename( path_.c_str(), finalPath.c_str() ) != 0 )
         {
             return false;
         }
@@ -507,7 +504,7 @@ private:
 // residue glob still matches). Retries a few times on EEXIST — an existing entry at a candidate name that a
 // fresh CSPRNG draw steps past — and stops at once on any other errno. `!ok()` means the caller refuses and discloses
 // through its own path.
-inline ExclTempFile createExclTempFile( const std::string& prefix, std::string_view suffix, mode_t mode )
+inline ExclTempFile createExclTempFile( const std::string& prefix, std::string_view suffix, os::mode_t mode )
 {
     for( int attempt = 0; attempt < 8; ++attempt )
     {
@@ -538,7 +535,7 @@ public:
     {
         if( fd_ >= 0 )
         {
-            ::close( fd_ );
+            os::close( fd_ );
         }
     }
     int  get() const noexcept   { return fd_; }
@@ -549,7 +546,7 @@ public:
     {
         if( fd_ >= 0 )
         {
-            ::close( fd_ );
+            os::close( fd_ );
         }
         fd_ = fd;
     }
@@ -564,7 +561,7 @@ inline bool readAllFromFd( int fd, std::string& out )
     char buf[ 8192 ];
     for( ;; )
     {
-        const ssize_t n = ::read( fd, buf, sizeof( buf ) );
+        const os::ssize_t n = os::read( fd, buf, sizeof( buf ) );
         if( n > 0 )
         {
             out.append( buf, static_cast<std::size_t>( n ) );
@@ -589,9 +586,9 @@ inline bool readAllFromFd( int fd, std::string& out )
 // or refusal it has to word to the user.
 inline std::optional<std::string> readRegularFileNoFollow( const std::string& path )
 {
-    const OwnedFd fd( ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
-    struct stat   openedSt{};
-    if( !fd.valid() || ::fstat( fd.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+    const OwnedFd fd( os::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+    os::stat_t    openedSt{};
+    if( !fd.valid() || os::fstat( fd.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
     {
         return std::nullopt;
     }
@@ -632,7 +629,7 @@ inline bool relativeBeneath( const std::string& dir, const std::string& path, st
 // `dir` when it is opened. A component that is now a link, missing, empty, "." or ".." refuses the read, as does
 // a `path` that does not start with `dir`. The final component must be a regular file (O_NONBLOCK, then fstat —
 // a FIFO never blocks). Returns false, with `out` empty, on any refusal or read failure; the caller words its
-// own refusal. POSIX openat throughout (D1 follow-up: these calls move behind rw::os with the rest).
+// own refusal. POSIX openat throughout, behind rw::os with the rest.
 inline bool readWholeBeneathNoFollow( const std::string& dir, const std::string& path, std::string& out )
 {
     out.clear();
@@ -642,7 +639,7 @@ inline bool readWholeBeneathNoFollow( const std::string& dir, const std::string&
         return false;
     }
 
-    OwnedFd cur( ::open( dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC ) );
+    OwnedFd cur( os::open( dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC ) );
     if( !cur.valid() )
     {
         return false;
@@ -657,15 +654,15 @@ inline bool readWholeBeneathNoFollow( const std::string& dir, const std::string&
         }
         if( slash == std::string_view::npos )
         {
-            const OwnedFd file( ::openat( cur.get(), component.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
-            struct stat   openedSt{};
-            if( !file.valid() || ::fstat( file.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+            const OwnedFd file( os::openat( cur.get(), component.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC ) );
+            os::stat_t    openedSt{};
+            if( !file.valid() || os::fstat( file.get(), &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
             {
                 return false;
             }
             return readAllFromFd( file.get(), out );
         }
-        const int next = ::openat( cur.get(), component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC );
+        const int next = os::openat( cur.get(), component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC );
         if( next < 0 )
         {
             return false;
@@ -729,7 +726,7 @@ struct NoFollowRead
         {
             return false;
         }
-        const ssize_t got = ::getline( &lineBuf, &lineCap, file );
+        const os::ssize_t got = os::getline( &lineBuf, &lineCap, file );
         if( got < 0 )
         {
             return false;
@@ -759,7 +756,7 @@ struct NoFollowRead
 inline NoFollowRead openNoFollowRead( std::string_view what, const std::string& path )
 {
     NoFollowRead result;
-    const int    fd = ::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK );
+    const int    fd = os::open( path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK );
     if( fd < 0 )
     {
         result.err = errno;
@@ -789,17 +786,17 @@ inline NoFollowRead openNoFollowRead( std::string_view what, const std::string& 
     }
 
     result.opened = true;
-    struct stat openedSt{};
-    if( ::fstat( fd, &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
+    os::stat_t openedSt{};
+    if( os::fstat( fd, &openedSt ) != 0 || !S_ISREG( openedSt.st_mode ) )
     {
-        ::close( fd );   // a FIFO, a directory, a device: present, and no lines — never a read that could wait
+        os::close( fd );   // a FIFO, a directory, a device: present, and no lines — never a read that could wait
         return result;
     }
-    result.file = ::fdopen( fd, "r" );
+    result.file = os::fdopen( fd, "r" );
     if( result.file == nullptr )
     {
         result.err = errno;
-        ::close( fd );   // fdopen did not take the descriptor, so it is still this function's to close
+        os::close( fd );   // fdopen did not take the descriptor, so it is still this function's to close
     }
     return result;
 }

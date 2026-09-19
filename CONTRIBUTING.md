@@ -109,7 +109,8 @@ Please keep it that way.
 **No kqueue.** The long-lived MCP server's FS-event watcher is a macOS/BSD optimisation. On Linux it
 is compiled out and freshness comes from the per-request stat sweep — that is the designed path, not
 a degradation, so it is silent and the staleness contract is unchanged. You can build and run that
-path on a Mac with `cmake -S . -B build-nokqueue -DCMAKE_CXX_FLAGS=-DRIPWIRE_HAS_KQUEUE=0`.
+path on a Mac with `cmake -S . -B build-nokqueue -DCMAKE_CXX_FLAGS=-DRW_OS_HAS_KQUEUE=0` (the seam lives in
+`src/infra/os.h`, which may not name the project, so it is spelled `RW_OS_`).
 
 ### Determinism gate
 
@@ -384,6 +385,30 @@ every input the tool ever sees, costs nothing in release, and tells the optimize
 - **Views at seams** (`std::span`, `std::string_view`). The caller owns the storage; allocate from
   a caller-owned arena.
 - **Symmetric bare scopes** for deterministic RAII teardown.
+
+### Operating-system calls: call sites never ask which OS they are on
+
+**Call sites never ask which OS they are on; they call the `rw::os` function that says what they need.**
+`src/infra/os.h` is the one file in `src/` that tests an operating system: every `#if` naming one, every feature
+macro that is really an OS test (`MSG_NOSIGNAL`, `SO_NOSIGPIPE`, the kqueue seam), every POSIX or Windows system
+header, and every call whose behaviour differs by platform. A call site reads like Unix code with a prefix —
+`os::lstat( path, &st )`, `os::rename( tmp, dst )`, `os::flock( fd, LOCK_EX )`, `os::stat_t` — with POSIX names,
+POSIX signatures and the POSIX errno contract, and it asks nothing about the platform: no `#if`, and no platform
+fact (`os::kWindows`, `os::kApple`) in a plain `if` either — those are for `os.h`'s own use. Each POSIX body is the
+libc call itself, `[[gnu::always_inline]]`, over the call's own raw types (no copy, no errno translation, no extra
+syscall), so a release binary carries no out-of-line `rw::os` symbol; where no POSIX call says what a site needs
+(`os::exepath`, `os::dirwatch_open`), the helper is lowercase and C-shaped, its POSIX body is the code that used to
+sit at the site, and its shape keeps that code's evaluation order — a read stays on its side of a `fork` — so the
+caller compiles to the same instructions. Check that with a release build of the base commit and `objdump -d`, not
+by reading. Inside `os.h`, `#if` is kept for what does not exist on the other platform — a header, an
+API or type, a field spelled differently (`st_mtimespec`/`st_mtim`) — while pure logic selects on the facts with
+`if constexpr`, so both branches are type-checked on every CI leg and the non-native one cannot rot. **The naming
+gotcha:** a POSIX name that some libc defines as a *function-like macro* cannot be wrapped by its own name, because
+the declaration and every `os::name(` call expand before the compiler sees a function — `S_ISREG( m )`,
+`S_ISLNK( m )` and the other mode predicates everywhere, and `htons` under glibc at `-O2`. Those stay bare at call
+sites, like the `O_*`/`X_OK`/`PATH_MAX` constants, and `os.h`'s Windows branch defines them. `test/osswitchcheck.sh`
+refuses all of the above outside `os.h`; its one allowlisted file is `src/infra/profilePmc.h`, the profiler's
+undocumented-ABI counter backends.
 
 ### Aliasing: spelling, placement, contract
 
