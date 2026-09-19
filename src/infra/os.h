@@ -666,7 +666,9 @@ struct pthread_attr_t                // what os::pthread_attr_* can set: the sta
 struct stat_t
 {
     std::uint64_t st_dev   = 0;      // volume serial number
-    std::uint64_t st_ino   = 0;      // file id (FILE_ID_INFO's 128 bits folded to 64; the 64-bit index where that is all there is)
+    std::uint64_t st_ino   = 0;      // file id: BY_HANDLE_FILE_INFORMATION's 64-bit nFileIndexHigh/nFileIndexLow only — a
+                                     // ReFS/DevDrive volume's 128-bit FILE_ID_INFO is not queried, so two files whose ids
+                                     // differ only in the high 64 bits can collide here (LOW-3, not fixed this release)
     mode_t        st_mode  = 0;      // S_IFREG / S_IFDIR / S_IFLNK / S_IFIFO / S_IFCHR, plus 0700 or 0777-style permission bits
     std::uint32_t st_nlink = 0;
     uid_t         st_uid   = 0;

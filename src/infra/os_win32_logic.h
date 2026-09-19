@@ -118,6 +118,11 @@ inline constexpr ErrnoRow kWin32ErrnoTable[] = {
     { 681,   ELOOP },           // ERROR_STOPPED_ON_SYMLINK
     { 740,   EACCES },          // ERROR_ELEVATION_REQUIRED
     { 995,   ECANCELED },       // ERROR_OPERATION_ABORTED
+    { 997,   EWOULDBLOCK },     // ERROR_IO_PENDING — defence: LockFileEx( LOCKFILE_FAIL_IMMEDIATELY ) reports contention
+                                // as 33/ERROR_LOCK_VIOLATION on the synchronous handles this codebase uses (measured;
+                                // #44's rw_flock passed mcpeditracecheck's race trials on that code), never 997. If an
+                                // overlapped handle ever reaches this path, 997 must still read as contention — an
+                                // unmapped EIO would make the edit-lock retry loop give up and proceed lock-free.
     { 998,   EFAULT },          // ERROR_NOACCESS
     { 1004,  EBADF },           // ERROR_INVALID_FLAGS
     { 1100,  ENOSPC },          // ERROR_END_OF_MEDIA
@@ -661,6 +666,38 @@ inline std::u16string extendedLengthPath( std::u16string_view native ) noexcept
         out.push_back( isSep( native[ i ] ) ? u'\\' : native[ i ] );
     }
     return out;
+}
+
+// The threshold, in UTF-16 units, past which NativePath asks extendedLengthPath for the "\\?\" spelling: MAX_PATH
+// (260) minus 12 — headroom CreateFileW and friends need before the hard limit (an internal 8.3-alias work item, the
+// classic reason "just under MAX_PATH" still fails). Below it every path — short, already-prefixed, relative, UNC —
+// is left exactly as WidePath produced it, which is also what a POSIX default-policy Windows (LongPathsEnabled=0)
+// needs: past the threshold CreateFileW would otherwise fail with ERROR_PATH_NOT_FOUND → ENOENT for a file that
+// exists, and the crawl or sidecar would silently skip it.
+inline constexpr std::size_t kExtendedLengthThresholdUnits = 248;
+
+// NativePath's actual decision: `native` (already WidePath's backslash spelling) gets the "\\?\" prefix only once it
+// reaches `thresholdUnits`; below it, or when extendedLengthPath cannot prefix it (relative, drive-relative, or a
+// "."/".." component — it still needs the machine's LongPathsEnabled policy, which this does not substitute for),
+// the empty return means "unchanged": NativePath's caller keeps using the WidePath spelling it already had. Reuses
+// extendedLengthPath rather than re-implementing its grammar; this is only the length gate in front of it.
+inline std::u16string extendedLengthPathIfLong( std::u16string_view native, std::size_t thresholdUnits = kExtendedLengthThresholdUnits ) noexcept
+{
+    if( native.size() < thresholdUnits )
+    {
+        return {};
+    }
+    return extendedLengthPath( native );
+}
+
+// getline's buffer-growth arithmetic, pulled out so the NULL-line case is correct and testable without a stream.
+// POSIX: "if *lineptr is NULL... the initial value of *n [capacity] is ignored" — a caller may leave garbage in
+// *capacity when *line is NULL (the one caller here always passes 0, so this was latent), and doubling that garbage
+// instead of starting from 0 would pick an arbitrary first allocation instead of the documented 128-byte floor.
+constexpr std::size_t nextGetlineCapacity( bool lineIsNull, std::size_t capacity ) noexcept
+{
+    const std::size_t have = lineIsNull ? 0 : capacity;
+    return have < 128 ? 128 : have * 2;
 }
 
 // A child's environment entry "NAME=value" that names a temporary directory (TMP, TEMP or TMPDIR, any case) whose

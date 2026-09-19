@@ -183,6 +183,8 @@ TEST_CASE( "win32 errno: the rows call sites depend on" )
     CHECK( errnoFromWin32( 10048 ) == EADDRINUSE );   // WSAEADDRINUSE — the --listen bind failure text
     CHECK( errnoFromWin32( 10054 ) == ECONNRESET );
     CHECK( errnoFromWin32( 10060 ) == ETIMEDOUT );    // WSAETIMEDOUT — an SO_RCVTIMEO expiry
+    CHECK( errnoFromWin32( 997 ) == EWOULDBLOCK );    // ERROR_IO_PENDING (LOW-2) — defence alongside 33/ERROR_LOCK_VIOLATION,
+                                                       // the code LockFileEx actually reports on these synchronous handles
 }
 
 // ── 2. UTF-8 / UTF-16 ───────────────────────────────────────────────────────────────────────────────────────
@@ -378,6 +380,65 @@ TEST_CASE( "extendedLengthPath: only an absolute, clean path gets the \\\\?\\ pr
     CHECK( extendedLengthPath( u"C:\\a\\.\\b" ).empty() );
     CHECK( extendedLengthPath( u"C:\\..hidden\\.x" ) == u"\\\\?\\C:\\..hidden\\.x" );   // names that only start with dots are fine
     CHECK( extendedLengthPath( u"\\\\.\\pipe\\x" ).empty() );         // a device path is not a UNC share
+}
+
+TEST_CASE( "extendedLengthPathIfLong: MED-1 — prefixes only once native reaches the threshold" )
+{
+    // Below kExtendedLengthThresholdUnits (248): untouched even though extendedLengthPath alone would prefix it.
+    CHECK( extendedLengthPathIfLong( u"C:\\Users\\x\\Temp\\" ).empty() );
+
+    // The boundary is size() >= threshold, not size() > threshold — checked with an explicit threshold so the case
+    // does not depend on the default's exact value.
+    CHECK( extendedLengthPathIfLong( u"C:\\ab", 5 ) == extendedLengthPath( u"C:\\ab" ) );   // size()==5==threshold: prefixed
+    CHECK( extendedLengthPathIfLong( u"C:\\ab", 6 ).empty() );                               // size()==5<6: untouched
+
+    // 259 / 260 / 261 UTF-16 units total (just under / at / just over the classic MAX_PATH=260 failure point): an
+    // absolute drive path with one long clean component, every one past the default threshold (248) and prefixed
+    // exactly as extendedLengthPath alone would prefix it.
+    for( const std::size_t total : { 259, 260, 261 } )
+    {
+        std::u16string native = u"C:\\";
+        native.append( total - native.size(), u'a' );
+        REQUIRE( native.size() == total );
+        const std::u16string got = extendedLengthPathIfLong( native );
+        CHECK( got == extendedLengthPath( native ) );
+        CHECK( got == u"\\\\?\\" + native );
+        CHECK( got.size() == total + 4 );
+    }
+
+    // UNC, long: the \\?\UNC\ form, same as extendedLengthPath alone.
+    {
+        std::u16string unc = u"\\\\server\\share\\";
+        unc.append( 248, u'b' );
+        REQUIRE( unc.size() >= kExtendedLengthThresholdUnits );
+        CHECK( extendedLengthPathIfLong( unc ) == extendedLengthPath( unc ) );
+        CHECK( extendedLengthPathIfLong( unc ).starts_with( u"\\\\?\\UNC\\server\\share\\" ) );
+    }
+
+    // Already "\\?\"-prefixed, long: returned unchanged — extendedLengthPath's own idempotence, not a double prefix.
+    {
+        std::u16string already = u"\\\\?\\C:\\";
+        already.append( 260, u'c' );
+        CHECK( extendedLengthPathIfLong( already ) == already );
+    }
+
+    // Long but RELATIVE (not prefixable): extendedLengthPath refuses it, so "below the threshold" and "not
+    // prefixable" collapse to the same empty return — NativePath keeps using its own unprefixed spelling either way,
+    // needing the machine's LongPathsEnabled policy instead (this cannot substitute for it).
+    {
+        const std::u16string longRelative( 260, u'd' );
+        CHECK( extendedLengthPathIfLong( longRelative ).empty() );
+    }
+}
+
+TEST_CASE( "nextGetlineCapacity: POSIX ignores *capacity while *line is NULL (LOW-4)" )
+{
+    CHECK( nextGetlineCapacity( true, 0 ) == 128 );
+    CHECK( nextGetlineCapacity( true, 999999 ) == 128 );   // *line == nullptr: garbage left in *capacity must not be doubled
+    CHECK( nextGetlineCapacity( false, 0 ) == 128 );
+    CHECK( nextGetlineCapacity( false, 64 ) == 128 );
+    CHECK( nextGetlineCapacity( false, 128 ) == 256 );
+    CHECK( nextGetlineCapacity( false, 200 ) == 400 );
 }
 
 TEST_CASE( "isLongTemporaryEntry: TMP/TEMP/TMPDIR, any case, at or past the limit" )

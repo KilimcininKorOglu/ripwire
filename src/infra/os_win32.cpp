@@ -362,15 +362,31 @@ CreatedTemporary createTemporary( const char* prefix, DWORD flags )
 
 // A program path as the -W calls take it: Git for Windows' "/tmp" rebased onto the user's temp directory, a POSIX
 // fail-closed "/dev/null/..." made unopenable (os_win32_logic.h says why) — only a path starting "/tmp" or "/dev" pays
-// for either — then WidePath's UTF-16: '\' separators, "/c/..." as "C:\...", on a stack buffer below MAX_PATH.
+// for either — then WidePath's UTF-16: '\' separators, "/c/..." as "C:\...", on a stack buffer below MAX_PATH. Past
+// oswin::kExtendedLengthThresholdUnits, c_str() answers with the "\\?\" extended-length spelling instead (MED-1):
+// without it, a path deeper than that on a default-policy (LongPathsEnabled=0) machine fails CreateFileW with
+// ERROR_PATH_NOT_FOUND — ENOENT for a file that exists — and the crawl/sidecar silently skips it.
 class NativePath
 {
 public:
-    explicit NativePath( const char* path ) : rebased_( rebase( path ) ), wide_( rebased_.empty() ? path : rebased_.c_str() ) {}
+    // ENSURES: c_str() always names the same file `path` did — extended_ only ever substitutes an equivalent "\\?\"
+    // spelling for wide_'s; it never changes which file is opened.
+    explicit NativePath( const char* path )
+        : rebased_( rebase( path ) )
+        , wide_( rebased_.empty() ? path : rebased_.c_str() )
+        , extended_( wide_.ok() ? oswin::extendedLengthPathIfLong( std::u16string_view( wide_.c_str(), wide_.size() ) ) : std::u16string() )
+    {
+    }
 
     [[nodiscard]] bool    ok() const { return wide_.ok(); }
     [[nodiscard]] int     error() const { return wide_.error(); }
-    [[nodiscard]] LPCWSTR c_str() const { return reinterpret_cast<LPCWSTR>( wide_.c_str() ); }
+    // extended_ is empty (so wide_'s own spelling is used, byte-for-byte as before this fix) for every path short of
+    // the threshold, already "\\?\"-prefixed, or not prefixable (relative/drive-relative/"."/".." — those still need
+    // the machine's LongPathsEnabled policy, which this cannot substitute for).
+    [[nodiscard]] LPCWSTR c_str() const
+    {
+        return reinterpret_cast<LPCWSTR>( extended_.empty() ? wide_.c_str() : extended_.c_str() );
+    }
 
 private:
     static std::string rebase( const char* path )
@@ -388,6 +404,7 @@ private:
 
     std::string     rebased_;
     oswin::WidePath wide_;
+    std::u16string  extended_;
 };
 
 // The kernel handle behind a CRT descriptor; INVALID_HANDLE_VALUE for anything else (a socket or watcher descriptor from
@@ -959,6 +976,18 @@ int open( const char* path, int flags, mode_t mode )     { return openImpl( path
 // descriptor is open (see O_DIRECTORY above) — and opened with open()'s own flag handling, so O_NOFOLLOW still judges
 // the entry itself. A name that is empty, "." or "..", or that holds a separator or a ':' (a drive or an alternate data
 // stream) is not one entry of that directory and is refused.
+//
+// RESIDUAL (owner call, kept for this release): the join is handle-anchored, not NtCreateFile( RootDirectory=handle,
+// FILE_OPEN_REPARSE_POINT ) — the real openat. GetFinalPathNameByHandleW is re-read on every call, so a link swapped
+// in ABOVE the directory between calls is bypassed (stronger than the POSIX chain), and O_NOFOLLOW still judges the
+// final entry itself once openWide reopens it. What handle-anchoring does NOT close: `joined` is a fresh STRING —
+// directory's final path + '\' + name — and openWide's CreateFileW walks that whole string again from the root, not
+// from the directory handle. In the narrow window between GetFinalPathNameByHandleW returning it and CreateFileW
+// resolving it, an ancestor ABOVE the directory (not the directory itself, which cannot be renamed while its
+// descriptor is open) could be replaced by a link/junction, and the walk would follow it — a race true handle-relative
+// NtCreateFile( RootDirectory=... ) closes because it never re-parses a path string. Do NtCreateFile only if a
+// contributor actually hits this or the no-drive-letter case (LOW-6); it needs the whole openWide flag mapping
+// reimplemented on the NT API and cannot be reviewed without a Windows machine.
 int openat( int dirFd, const char* path, int flags )
 {
     const HANDLE directory = handleOf( dirFd );
@@ -1206,7 +1235,9 @@ std::FILE* fdopen( int fd, const char* mode ) { return ::_fdopen( fd, mode ); }
 int        fileno( std::FILE* stream )        { return ::_fileno( stream ); }
 
 // getline: POSIX's contract (the line including its '\n', NUL-terminated, the buffer grown with realloc; -1 at EOF
-// before any byte), read under one stream lock with _getc_nolock — never a locked fgetc per byte.
+// before any byte), read under one stream lock with _getc_nolock — never a locked fgetc per byte. LOW-4: while
+// *line is NULL, POSIX ignores whatever *capacity holds (a caller need not zero it first) — nextGetlineCapacity
+// applies that rule instead of doubling unread caller garbage.
 ssize_t getline( char** line, std::size_t* capacity, std::FILE* stream )
 {
     if( line == nullptr || capacity == nullptr || stream == nullptr )
@@ -1226,7 +1257,7 @@ ssize_t getline( char** line, std::size_t* capacity, std::FILE* stream )
         }
         if( *line == nullptr || used + 2 > *capacity )
         {
-            const std::size_t grown = *capacity < 128 ? 128 : *capacity * 2;
+            const std::size_t grown = oswin::nextGetlineCapacity( *line == nullptr, *capacity );
             char* const       next  = static_cast<char*>( std::realloc( *line, grown ) );
             if( next == nullptr )
             {
