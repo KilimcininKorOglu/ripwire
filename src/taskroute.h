@@ -1412,8 +1412,13 @@ inline std::optional<RouteChoice> changeImpactTaskChoice( const RouteContext& ct
 // --for bundle locate-task and locate-implementation already use rather than inventing a new verb.
 inline std::optional<RouteChoice> reachTaskChoice( const RouteContext& ctx )
 {
-    const int reachScore = phraseScore( ctx.lower, { { "call chain from", 9 }, { "call chain", 6 }, { "reaches", 5 },
-                                                     { "reach", 5 }, { "used by", 5 }, { "how does", 2 }, { "how is", 2 } } );
+    // "reach"/"reaches" are single WORDS, not phrases whose ends land on non-word characters (the
+    // CueMatch note above `cueScore`) — under phraseScore's plain substring match, "reach" fired inside
+    // "outreach"/"unreachable" and "reaches" scored twice (itself, plus "reach" as its own prefix
+    // substring). wordScore requires a non-word byte (or the string's edge) on both sides of the match.
+    const int reachScore = phraseScore( ctx.lower, { { "call chain from", 9 }, { "call chain", 6 },
+                                                     { "used by", 5 }, { "how does", 2 }, { "how is", 2 } } )
+                          + wordScore( ctx.lower, { { "reaches", 5 }, { "reach", 5 } } );
     if( reachScore < 7 )
     {
         return std::nullopt;

@@ -1291,6 +1291,7 @@ struct GitIgnoreSet
     {
         GitNotRunnable,
         ProbeOverCeiling,
+        ProbeFailed,   // git ran but exited non-zero (not a work tree, no git binary reachable via the shell, …)
     };
     void disclose( DisclosureWhy ) noexcept
     {
@@ -1364,7 +1365,12 @@ GitIgnoreSet collectGitIgnored( const char* rootDir )
     const int rc = os::pclose( pipe );
     if( rc != 0 )
     {
-        return out;   // not a git work tree, or no git binary — the DESIGNED degrade, silent by contract
+        // Not a git work tree, or no git binary — the DESIGNED degrade: the fallback (a full walk, no
+        // ignore-set pruning) is safe either way. `available` is already false here (its default), so this
+        // changes no output — it disclose()s the fact for the self-check ledger instead of leaving the
+        // degrade to a bare `return`, matching the GitNotRunnable/ProbeOverCeiling sites just above/below.
+        DISCLOSE( out, GitIgnoreSet::DisclosureWhy::ProbeFailed, "ingest: the git ignore probe exited non-zero — full walk" );
+        return out;
     }
     if( overflowed )
     {
