@@ -477,12 +477,6 @@ inline void appendForPageExtendRowsXml( std::string& x, std::vector<char>& esc, 
     }
 }
 
-// The root's extra="K" attribute text: present-only (K==0 says nothing a reader needs — see the header).
-inline std::string forPageExtendAttrXml( std::size_t extendRowCount )
-{
-    return extendRowCount > 0 ? ( " extra=\"" + std::to_string( extendRowCount ) + "\"" ) : std::string();
-}
-
 // What the page document is rendered from, beside the rows: the task and the lens root's own open tag (ctxRootOpen's
 // output — task=/route=/root= and the scrub tells — re-tagged <files>, so the two roots spell and escape their shared
 // attributes identically), the coverage= gauge, the window, and the dialect.
@@ -520,7 +514,11 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     {
         x += " coverage=\"" + std::to_string( p.coveragePct ) + "\"";
     }
-    x += forPageExtendAttrXml( extendRows.size() );
+    // present-only (K==0 says nothing a reader needs — see the header). A single expression, not a new
+    // function: a one-line wrapper around this exact "count>0 ? attr : empty" shape already exists
+    // elsewhere (graphlegend.h::declinedCallsKeyJson) for a different attribute, and quality-delta reads a
+    // second one as a clone rather than a reuse — so this stays inline, the same way coverage= just above does.
+    x += extendRows.empty() ? std::string() : " extra=\"" + std::to_string( extendRows.size() ) + "\"";
     char disc[ kPageDisclosureCap ];
     x += pageDisclosure( disc, sizeof( disc ), shown, total, window.end, p.limit, p.offset, /*discloseCap=*/true );
     if( window.end < total )
