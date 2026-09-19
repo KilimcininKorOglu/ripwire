@@ -2443,6 +2443,13 @@ inline AdaptiveCut adaptiveCut( const std::vector<float>& scores, std::size_t fl
     return cut;
 }
 
+// The legend clause that defines confidence=/margin_pct= (below). Named (lane r2-LO) so the session dictionary
+// (legenddict.h) quotes the same bytes the --for headers append.
+inline constexpr std::string_view kForConfidenceNote =
+    " [confidence= derives from the ranked head's largest relative score drop (margin_pct=, whole "
+    "percent, 0 = none; the same gap the adaptive flag cuts at). low = flat ranking: treat the set "
+    "as a starting point, not an answer]";
+
 struct ForConfidence
 {
     std::string attrs;      // ` confidence="high|low" margin_pct="N"` — root facts, every ladder rung
@@ -2463,9 +2470,7 @@ inline ForConfidence deriveForConfidence( const rw::AdaptiveCut& cut, int served
     // no "--" anywhere (rides inside an XML comment, where "--" is ill-formed — G4). TERSE on purpose:
     // this rides EVERY --for header and its bytes are charged under an explicit budget, so each word
     // competes with a sig row (the W3-S short-spelling precedent). The full mapping: the --for help text.
-    out.note = " [confidence= derives from the ranked head's largest relative score drop (margin_pct=, whole "
-               "percent, 0 = none; the same gap the adaptive flag cuts at). low = flat ranking: treat the set "
-               "as a starting point, not an answer]";
+    out.note = kForConfidenceNote;
     return out;
 }
 

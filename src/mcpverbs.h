@@ -1900,18 +1900,16 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
-                          + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
+                          + std::string( rw::kMcpForBuildingBlocksLegend )
                           + std::string( mcpIdRouteParts.sc )      // row 6: sc= — the CLI twin's exact clause, on the CLI twin's presence rule
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
                           // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
                           + std::string( mcpIdRouteParts.route )
-                          + "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb"
+                          + std::string( rw::kMcpForBundleSigsLegend )
                           + std::string( mcpForConf.note )
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
                           // hyphen is ill-formed (G4), so the CLI verb is named without its dashes.
-                          + "; lens=\"churn,amp,tested\": the three per-row quality columns the CLI for lens carries and this dialect"
-                            " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
-                            " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens"
+                          + std::string( rw::kMcpForLensColumnsLegend )
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
                           + " -->"
                           + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
@@ -2016,7 +2014,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         const std::size_t closeAt = headerStr.rfind( " -->" );
         if( closeAt != std::string::npos )
         {
-            headerStr.insert( closeAt, " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]" );
+            headerStr.insert( closeAt, rw::kForBudgetBytesNote );
         }
     }
     std::fwrite( headerStr.data(), 1, headerStr.size(), mem );

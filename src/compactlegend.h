@@ -30,8 +30,10 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace rw
 {
@@ -839,19 +841,11 @@ inline bool isCompletenessTermPresent( const CompactCompletenessTerm& t, std::st
     return headHasAttr( head, t.attr ) || ( t.wholeDoc && payloadHasAnyAttr( doc, t.attr ) );
 }
 
-// The compact legend for one document: schema id, purpose, paging window, sub-caps, and every present term.
-inline std::string compactLegendText( const CompactLegendSpec& spec, std::string_view head, std::string_view doc )
+// The paging-window clause of one compact legend — " window: shown= … (capped=1 cut)." — or empty when the payload
+// carries none of the window names. Split out of compactLegendText (lane r2-LO) so the ref posture (legenddict.h) can
+// name the exact bytes the compact legend spends on it; the composition below is unchanged byte for byte.
+inline std::string compactWindowClause( std::string_view head, std::string_view doc )
 {
-    std::string out;
-    out.reserve( 400 );
-    out += "<!-- ripwire ";
-    out.append( spec.key );
-    out += " ripwire.";
-    out.append( spec.key );
-    out += "/v1: ";
-    out.append( spec.purpose );
-    out += '.';
-    // the paging window, one clause, present names only
     std::string window;
     for( std::string_view a : kCompactPagingAttrs )
     {
@@ -871,28 +865,63 @@ inline std::string compactLegendText( const CompactLegendSpec& spec, std::string
             window += '=';
         }
     }
-    if( !window.empty() )
+    if( window.empty() )
     {
-        out += " window: ";
-        out += window;
-        out += payloadHasAnyAttr( doc, "next_offset" ) ? " (capped=1 cut; next_offset= pastes as offset=)." : " (capped=1 cut).";
+        return {};
     }
+    return " window: " + window + ( payloadHasAnyAttr( doc, "next_offset" ) ? " (capped=1 cut; next_offset= pastes as offset=)." : " (capped=1 cut)." );
+}
+
+// The sub-cap clause — " importers_capped=/…: 1 = cut." — or empty when no payload attribute ends in _capped.
+inline std::string compactSubcapClause( std::string_view doc )
+{
     const std::string subcaps = payloadSubCapAttrs( doc );
-    if( !subcaps.empty() )
+    return subcaps.empty() ? std::string() : " " + subcaps + ": 1 = cut.";
+}
+
+// The completeness terms this document carries, as indices into kCompactCompletenessTerms, in table order.
+inline std::vector<std::uint16_t> compactPresentTerms( std::string_view head, std::string_view doc )
+{
+    static_assert( std::size( kCompactCompletenessTerms ) < 0xFFFFu, "term indices are 16-bit" );
+    std::vector<std::uint16_t> present;
+    const std::string_view mapHeader = compactMapHeader( doc );
+    for( std::size_t i = 0; i < std::size( kCompactCompletenessTerms ); ++i )
+    {
+        if( isCompletenessTermPresent( kCompactCompletenessTerms[ i ], head, doc, mapHeader ) )
+        {
+            present.push_back( static_cast<std::uint16_t>( i ) );
+        }
+    }
+    return present;
+}
+
+// The opener every compact legend starts with: "<!-- ripwire KEY ripwire.KEY/v1: ".
+inline std::string compactLegendOpener( const CompactLegendSpec& spec )
+{
+    std::string out = "<!-- ripwire ";
+    out.append( spec.key );
+    out += " ripwire.";
+    out.append( spec.key );
+    out += "/v1: ";
+    return out;
+}
+
+// The compact legend for one document: schema id, purpose, paging window, sub-caps, and every present term.
+inline std::string compactLegendText( const CompactLegendSpec& spec, std::string_view head, std::string_view doc )
+{
+    std::string out;
+    out.reserve( 400 );
+    out += compactLegendOpener( spec );
+    out.append( spec.purpose );
+    out += '.';
+    // the paging window, one clause, present names only
+    out += compactWindowClause( head, doc );
+    out += compactSubcapClause( doc );
+    for( const std::uint16_t i : compactPresentTerms( head, doc ) )
     {
         out += ' ';
-        out += subcaps;
-        out += ": 1 = cut.";
-    }
-    const std::string_view mapHeader = compactMapHeader( doc );
-    for( const CompactCompletenessTerm& t : kCompactCompletenessTerms )
-    {
-        if( isCompletenessTermPresent( t, head, doc, mapHeader ) )
-        {
-            out += ' ';
-            out.append( t.reading );
-            out += '.';
-        }
+        out.append( kCompactCompletenessTerms[ i ].reading );
+        out += '.';
     }
     out += " -->";
     return out;
