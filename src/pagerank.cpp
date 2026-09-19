@@ -92,7 +92,11 @@ double probabilityMass( std::span<const double> values ) noexcept
 
 }
 
-PageRankRun pageRankDouble( const sparseCsr<float>& inEdges, std::span<const double> weightedOutDegree,
+// The PageRank power iteration itself — the numeric kernel every ranked document's order comes from.
+// Each round: gather rank along in-edges (rank / weighted out-degree), spread dangling mass back through
+// the teleport vector, damp by alpha, and measure the L1 residual; stop when it drops below tolerance or
+// at the iteration ceiling, and return which of the two ended the loop (PageRankRun, pagerank.h).
+PageRankRun pageRankDouble(const sparseCsr<float>& inEdges, std::span<const double> weightedOutDegree,
                             std::span<const double> teleport, std::span<double> rank, PageRankConfig config )
 {
     const std::size_t nodeCount = inEdges.rows();
