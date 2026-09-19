@@ -2008,18 +2008,13 @@ disambiguator that function relies on: `ferror( fp ) == 0 && ( got > 0 || feof( 
 indicator fails the read regardless of how many bytes made it through. Effect is limited to the prewarm hint —
 parsing itself is unchanged either way, which is why this is neutral on output.
 
-Split out of #44 (native Windows port), where it rode inside commit 9124d689. No red/green gate: reaching the
-branch this fixes needs a `fread()` that returns partial data AND sets the stream's error indicator without also
-reaching EOF, and every avenue tried to produce that through a real file path either misses the branch or isn't a
-genuine I/O error. A directory opened as a file sets a real `ferror` (confirmed: `got=0 feof=0 ferror=1 errno="Is a
-directory"`), but `got` is always 0 for that case, so the old and new formulas already agree — no differentiator. An
-`AF_UNIX` socket opened by its path fails at `fopen()` itself (`errno=ENOTSUP`, "Operation not supported on
-socket"), before any read happens. `ulimit -f` bounds writes only — confirmed empirically against a 100 KB read
-under `ulimit -f 1`, which completed with `ferror=0`. Reaching this deterministically needs a source-level
-fault-injection hook (or a TCP/UNIX-stream socket opened by fd rather than by path, which this function's contract
-doesn't take); building one is out of scope for this change. Verified instead by inspection against the C
-standard's `fread`/`ferror`/`feof` contract, matching the disambiguation `readFile` already performs. Thanks to
-@lennix1337.
+Split out of #44 (native Windows port), where it rode inside commit 9124d689. Gate: `test/crashsweepcheck.sh` arm
+B4. B1's interposed short-read shim gains an env-selected `eio` mode — a marked `fread` delivers 16 bytes, then raises
+the stream's error indicator with `errno = EIO` and no end-of-file — and B4b compiles `readFilePrefix`'s own source
+text into a harness run under it: `ok=1 bytes=16` on the previous commit, `ok=0 bytes=0` after. B4a is the control
+(a clean read to EOF under the same shim is the whole 64-byte prefix), and B4c runs the binary on an ObjC header whose
+`@interface` sits past byte 16 with that read failing: the answer is byte-identical before and after the fix, so the
+arm pins only that it survives. Thanks to @lennix1337.
 
 ## [0.6.1] — 2026-09-14
 

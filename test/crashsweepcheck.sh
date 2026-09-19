@@ -23,6 +23,11 @@
 #        an abort in the sanitizer build (reproduced on Linux tmpfs: "runtime error: signed integer overflow:
 #        10000000000 * 1000000000"). Both stat readers now call rw::saturatingNanoseconds (infra/statclock.h).
 #        APFS clamps timestamps at 2262, so on macOS the arm cannot build its input and says so.
+#   (B4) A PREFIX READ THAT FAILED PART-WAY PASSED AS A SHORT FILE. readFilePrefix judged its fread by
+#        `got > 0 || feof`, never by ferror, so 16 bytes followed by a read error came back as the file's whole
+#        prefix. Split out of #44 (@lennix1337). Only a prewarm hint consumes it — the binary's answer is
+#        unchanged either way, measured — so B4b compiles the function's own source text from $SRC into a harness
+#        and runs it under the shim's eio mode. Red on the base: `ok=1 bytes=16` where `ok=0 bytes=0` is right.
 #
 # THE STATIC RULES — could these have been caught before they shipped? Three of the crash shapes are visible in
 # the source, so each is now a rule, run with ripwire's own structural query (--match) over src/:
@@ -502,6 +507,7 @@ echo "=== B1: a short read closes its stream (interposed short-read shim) ==="
 SHIM_SRC="$TMP/shortread.c"
 cat > "$SHIM_SRC" <<'SHIMC'
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -538,9 +544,29 @@ FILE* rw_fopen( const char* p, const char* m )
     }
     return f;
 }
+// RWSHIM_MODE=eio (B4): a marked fread delivers its first RWSHIM_EIO_BYTES (default 16) bytes and then FAILS — the
+// stream's error indicator is raised and errno is EIO, end-of-file is not reached. That is the state a read(2) that
+// errors part-way leaves behind (got > 0, ferror set, feof clear). The indicator is raised with a write on the
+// read-only stream, which C and POSIX both define as setting it; interposing read(2) itself would not reach glibc's
+// internal read. Unset (B1): every marked fread is one byte short and nothing fails.
 size_t rw_fread( void* b, size_t s, size_t n, FILE* f )
 {
-    if( n > 1 && isMarked( f ) ) { pthread_mutex_lock( &mu ); ++shorted; pthread_mutex_unlock( &mu ); return real_fread( b, s, n - 1, f ); }
+    if( n > 1 && isMarked( f ) )
+    {
+        pthread_mutex_lock( &mu ); ++shorted; pthread_mutex_unlock( &mu );
+        const char* mode = getenv( "RWSHIM_MODE" );
+        if( mode && strcmp( mode, "eio" ) == 0 )
+        {
+            const char* kEnv = getenv( "RWSHIM_EIO_BYTES" );
+            size_t k = kEnv ? (size_t)strtoul( kEnv, NULL, 10 ) : 16;
+            if( k == 0 || k >= n ) { k = n - 1; }
+            const size_t got = real_fread( b, s, k, f );
+            (void)fputc( 0, f );
+            errno = EIO;
+            return got;
+        }
+        return real_fread( b, s, n - 1, f );
+    }
     return real_fread( b, s, n, f );
 }
 int rw_fclose( FILE* f )
@@ -605,6 +631,78 @@ else
             KEPT="$( grep -o '<f p="[^"]*z_keep_[0-9]*\.c"' "$TMP/b1_lim.txt" | sort -u | grep -c . )"
             [ "$KEPT" -eq 20 ] && ok "B1: under ulimit -n 200 all 20 ordinary files are still answered" \
                                || no "B1: under ulimit -n 200 only $KEPT of 20 ordinary files were answered — leaked descriptors starved the reads"
+        fi
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+echo
+echo "=== B4: a prefix read that FAILS part-way is a failed read, not a short prefix (shim, RWSHIM_MODE=eio) ==="
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# ingest_crawl.h's readFilePrefix judged its fread by `got > 0 || feof`, never by ferror, so a read that returned
+# 16 bytes and then failed handed those 16 back as the file's whole prefix (split out of #44, @lennix1337). Its one
+# caller is the prewarm ObjC-header sniff, and the ripwire binary's answer is the same either way: the parse reads the
+# file again and sniffs it itself (measured: stdout and stderr byte-identical between the two, on the fixture below,
+# under this shim). So the contract is asserted where it lives — the function's own source text out of $SRC,
+# compiled into a harness and run under the shim — and B4c only pins that the binary's answer survives the fault.
+# Red first: RIPWIRE_CRASHSWEEP_SRC=<base checkout>/src bash test/crashsweepcheck.sh <bin>.
+CXX_BIN="$( command -v c++ || command -v clang++ || command -v g++ || true )"
+if is_sanitized "$BIN" || LC_ALL=C grep -q -a '__tsan_init' "$BIN" 2>/dev/null || [ ! -f "$TMP/shortread.so" ]; then
+    skip "B4: no plain-binary short-read shim (see B1) — the fault cannot be injected"
+elif [ -z "$CXX_BIN" ]; then
+    skip "B4: no C++ compiler for the readFilePrefix harness"
+else
+    [ "$( uname -s )" = "Darwin" ] && PRELOAD_VAR=DYLD_INSERT_LIBRARIES || PRELOAD_VAR=LD_PRELOAD
+    awk '/^bool readFilePrefix\( /{ f = 1 } f { print } f && /^}/{ exit }' "$SRC/ingest_crawl.h" > "$TMP/b4_fn.txt"
+    if ! grep -q 'std::fread' "$TMP/b4_fn.txt" || ! grep -q '^}' "$TMP/b4_fn.txt"; then
+        no "B4: could not extract readFilePrefix's definition from $SRC/ingest_crawl.h — the harness would test nothing"
+    else
+        {
+            printf '#include <cerrno>\n#include <cstdio>\n#include <string>\n#include "ownedfile.h"\n'
+            printf '#define PROFILE_SCOPE_DESCRIBE( x ) ( (void)0 )\nnamespace rw {\n'
+            cat "$TMP/b4_fn.txt"
+            printf '}\nint main( int argc, char** argv )\n{\n    std::string out;\n    const bool ok = argc > 1 && rw::readFilePrefix( argv[1], out, 8192 );\n'
+            printf '    std::printf( "ok=%%d bytes=%%zu\\n", ok ? 1 : 0, out.size() );\n    return 0;\n}\n'
+        } > "$TMP/b4_harness.cpp"
+        "$CXX_BIN" -std=c++17 -O1 -I "$SRC/infra" -o "$TMP/b4_harness" "$TMP/b4_harness.cpp" 2>"$TMP/b4_cc.txt"
+        if [ ! -x "$TMP/b4_harness" ]; then
+            no "B4: the readFilePrefix harness did not compile: $( head -3 "$TMP/b4_cc.txt" | tr '\n' ' ' )"
+        else
+            B4F="$TMP/b4/eioprefix_probe.h"; mkdir -p "$TMP/b4"
+            printf '%064d' 0 > "$B4F"
+            # ONE env, mode included: a second `env` in the chain is /usr/bin/env, which macOS SIP strips DYLD_* from.
+            b4run(){ env "$PRELOAD_VAR=$TMP/shortread.so" RWSHIM_MATCH=eioprefix_ RWSHIM_LOG="$TMP/b4_$1.log" RWSHIM_MODE="$2" RWSHIM_EIO_BYTES=16 "${@:3}"; }
+            # a: control — the B1 mode shortens the request by one byte and fails nothing: a 64-byte file is read
+            #    whole and ends at EOF, so the prefix is all 64 bytes. Proves the harness and the interposition live.
+            A_OUT="$( b4run a '' "$TMP/b4_harness" "$B4F" )"
+            A_SH="$( sed -nE 's/.*shorted=([0-9]+).*/\1/p' "$TMP/b4_a.log" 2>/dev/null )"
+            # b: the fault — 16 bytes delivered, then the stream's error indicator, no EOF.
+            B_OUT="$( b4run b eio "$TMP/b4_harness" "$B4F" )"
+            B_SH="$( sed -nE 's/.*shorted=([0-9]+).*/\1/p' "$TMP/b4_b.log" 2>/dev/null )"
+            if [ "${A_SH:-0}" -lt 1 ] || [ "${B_SH:-0}" -lt 1 ]; then
+                skip "B4: the shim did not intercept the harness's fread (control shorted=${A_SH:-absent}, fault shorted=${B_SH:-absent})"
+            else
+                [ "$A_OUT" = "ok=1 bytes=64" ] && ok "B4a: control — a clean read to EOF under the shim is the whole 64-byte prefix ($A_OUT)" \
+                                              || no "B4a: control — a clean read to EOF should give ok=1 bytes=64, got '$A_OUT'"
+                [ "$B_OUT" = "ok=0 bytes=0" ] && ok "B4b: a read that failed after 16 bytes reports failure and an empty prefix ($B_OUT)" \
+                                             || no "B4b: a read that failed after 16 bytes was reported as '$B_OUT' — a truncated prefix passed off as the whole window (want ok=0 bytes=0)"
+            fi
+            # c: the binary under the same fault on an ObjC header whose @interface sits past byte 16 — the answer
+            #    still carries the ObjC method (the parse re-reads and re-sniffs; the prefix is only a prewarm hint).
+            B4R="$TMP/b4repo"; mkdir -p "$B4R"
+            { printf '// %0100d\n' 0; printf '#import <Foundation/Foundation.h>\n@interface EioWidget : NSObject\n- (void)eioSpin;\n@end\n'; } > "$B4R/eioprefix_objc.h"
+            printf '#import "eioprefix_objc.h"\n@implementation EioWidget\n- (void)eioSpin { }\n@end\n' > "$B4R/impl.m"
+            b4run c eio "$BIN" "$B4R" --no-cache >"$TMP/b4_c.xml" 2>"$TMP/b4_c.err"; rc=$?
+            C_SH="$( sed -nE 's/.*shorted=([0-9]+).*/\1/p' "$TMP/b4_c.log" 2>/dev/null )"
+            if [ "${C_SH:-0}" -lt 1 ]; then
+                skip "B4c: the shim did not intercept the binary's prefix read (log: '$( cat "$TMP/b4_c.log" 2>/dev/null )')"
+            elif [ "$rc" -ne 0 ]; then
+                no "B4c: exit $rc with the header's prefix read failing part-way"
+            elif grep -q 'n="eioSpin"' "$TMP/b4_c.xml"; then
+                ok "B4c: the header's prefix read failed part-way (shorted=$C_SH) and the answer still carries eioSpin"
+            else
+                no "B4c: with the header's prefix read failing part-way the answer lost eioSpin"
+            fi
         fi
     fi
 fi
