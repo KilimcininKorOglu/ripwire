@@ -1186,6 +1186,27 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // grep: corpus_excluded=, unindexed_candidates_capped= and unindexed count= (repo-root operand) added beyond the listed three;
     // from-trace line_encloses= reproduced with a frame naming escapeXml at serialize.h:141 (inside kXmlEscapeByteset): tmp/r1-L1-fix/stale3.txt.
     // Existing house row (quality-delta r churn=) is longer than 110 chars; untouched.
+    // ── TRAIN 9 (rv-r1-L1-3 LOW): the states the gate's own arms do not reach ──────────────────────────────────────
+    // The L1 fix round closed every attribute the gate's roster REACHES. A 90-argv all-instances probe then found
+    // fourteen more, each on a state no arm sets up: a --handoff that the token budget actually cut, a from-trace or
+    // expand map over a LAYERED tree, --field-affinity's per-cause refusals (nonzero only on a big C-family corpus),
+    // --external-surface with sh builtins present, and --run-trace's whole <run>/<lines> record, whose prose legend
+    // the compact posture replaces with from-trace's (run-trace shares the ripwire.from-trace/v1 key). Present-only
+    // as ever, so a run that reaches none of these states gains no bytes. Re-runnable: sim/train9-defaultdefs.py.
+    { "budget", "budget=: the token-budget cap this packet was fitted to; est_tokens= prices what it delivers", false, "handoff", MapHeaderRead::No, {}, "handoff" },
+    { "withheld_rows", "withheld_rows=N: heuristic rows the budget dropped (withheld=1 says so); verified rows are never dropped", false, "handoff", MapHeaderRead::No, {}, "handoff" },
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "d", MapHeaderRead::No, {}, "from-trace" },
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "expand" },
+    { "as_stem_ambiguous", "as_stem_ambiguous=/as_stem_unowned=/as_stem_nonptr=: chase names REFUSED - 2+ owners / no owner / owner type has no pointer marker", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },   // also defines as_stem_unowned= as_stem_nonptr=
+    { "builtins_excluded", "builtins_excluded=N: sh BUILTIN rows (echo printf cd exit test ...) dropped from names=; the include-builtins flag keeps them", false, "external-surface", MapHeaderRead::No, {}, "external-surface" },
+    // --run-trace's record. exit=/signal=/timed_out= are mutually exclusive postures of one fact (how the command
+    // ended), so they read as one row on the attribute that is present in the common case; the rest are per-attribute.
+    { "exit", "run exit=: the command's OWN exit code; signal=: the signal that killed it; timed_out=1: the timeout_s= cap did", true, "run", MapHeaderRead::No, {}, "from-trace" },   // also defines signal= timed_out=
+    { "duration_ms", "run duration_ms=: wall clock, MEASURED, not deterministic; timeout_s=: the cap it ran under", true, "run", MapHeaderRead::No, {}, "from-trace" },   // also defines timeout_s=
+    { "lines", "run lines=: non-empty captured lines; bytes=: the whole capture; dropped_bytes=: middle bytes the cap dropped", true, "run", MapHeaderRead::No, {}, "from-trace" },   // also defines bytes= dropped_bytes=
+    { "frames", "run frames=0: the command FAILED but its output carried no mappable frame, so no bundle follows", true, "run", MapHeaderRead::No, {}, "from-trace" },
+    { "view", "lines view=tail: the last shown= of total= output lines; view=relevant: shown= of relevant= error/frame-shaped ones", true, "lines", MapHeaderRead::No, {}, "from-trace" },
+    { "relevant", "lines relevant=N: captured lines that are error-marked or frame-shaped; the relevant view picks from these", true, "lines", MapHeaderRead::No, {}, "from-trace" },
 };
 
 // the paging window: these five mean the same on every element (L4's one-attribute-one-reading law), so they are

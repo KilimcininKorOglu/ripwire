@@ -290,6 +290,28 @@ ROSTER += [
     ( "regex-default",            [ SMALL, "--regex=esc.*Xml" ] ),
     ( "expand-split-default",     [ os.path.join( ROOT, "test", "zoomfix" ), "--expand=mathStepF1" ] ),
 ]
+# TRAIN 9 (rv-r1-L1-3's LOW): six more states an all-instances probe reached and the rows above do not. Each one
+# was RED here before the readings that close it. A LAYERED tree (a directory component matching a built-in arch
+# layer) is what puts layer= on a from-trace <d> row and on the ride-along map's <f> rows; ambiguity plus a tiny
+# pack budget is the cheapest way to make --expand serve a bundle WITH that map. --handoff needs a budget that
+# actually cuts heuristic rows before budget=/withheld_rows= exist, --run-trace's <run>/<lines> record is a whole
+# element family the compact posture answers for under from-trace's key, and --field-affinity's per-cause refusals
+# and --external-surface's builtins_excluded= are nonzero only on a corpus the size of this repository.
+LAY = os.path.join( TMP, "layered" )
+for d, f, body in [ ( "render", "engine.h", '#include "math/tick.h"\nint ambFn(){ return utilTick(); }\nint engineStep(){ return ambFn(); }\n' ),
+                    ( "math",   "tick.h",   'int utilTick(){ return 1; }\nint ambFn(){ return 2; }\n' ),
+                    ( "game",   "main.cc",  '#include "render/engine.h"\nint appMain(){ return engineStep(); }\n' ) ]:
+    os.makedirs( os.path.join( LAY, d ), exist_ok = True )
+    open( os.path.join( LAY, d, f ), "w" ).write( body )
+open( os.path.join( TMP, "layered.txt" ), "w" ).write( "#0 0x1 in utilTick math/tick.h:1\n#1 0x2 in engineStep render/engine.h:3\n" )
+ROSTER += [
+    ( "handoff-budget-default",     [ ROOT, "--handoff", "--token-budget=800" ] ),
+    ( "run-trace-default",          [ SMALL, "--run-trace=echo ripwire-legend-probe" ] ),
+    ( "field-affinity-root-default",[ ROOT, "--field-affinity" ] ),
+    ( "external-surface-root-default", [ ROOT, "--external-surface" ] ),
+    ( "from-trace-layered-default", [ LAY,  "--from-trace=" + os.path.join( TMP, "layered.txt" ) ] ),
+    ( "expand-layered-map-default", [ LAY,  "--expand=ambFn", "--pack-budget-bytes=80" ] ),
+]
 ROSTER += [
     ( "expand-bundle-default",    [ SMALL, "--expand=pageWindow" ] ),
     ( "expand-file-default",      [ SMALL, "--expand=emitTo" ] ),

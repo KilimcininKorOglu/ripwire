@@ -519,6 +519,12 @@ struct ForLensHeaderParts
     bool             composePresent = false;  // L1 fix: may a <compose><field> row ride this bundle? The compact dialect defines
                                             // <field> present-only on it; the same over-approximation as scPresent (an edge
                                             // touching a ranked symbol), decided before the header is built.
+    bool             legoPresent = false;    // TRAIN 9: may an <iface implementors=> row ride this bundle? Same
+                                            // over-approximation and same timing as composePresent: a ranked symbol
+                                            // with implementors, asked before the header is built rather than after
+                                            // the section is rendered (the header is priced, and re-priced, from here).
+    bool             layerPresent = false;   // TRAIN 9: does any ranked row's file sit under a built-in arch layer
+                                            // directory, so its <d> row carries layer=? Same over-approximation again.
 
     // ── THE DROPPABLE LEGEND, as ONE bit ──────────────────────────────────────────────────────────────
     // confidenceNote / tailLegend / idRouteLegend moved in lock step at every read and every write, and the
@@ -729,6 +735,14 @@ inline constexpr std::string_view kForCompactLegendFacts =
 // The <compose> block's rows (serialize.h packCompose), present-only on composePresent.
 inline constexpr std::string_view kForCompactLegendCompose =
     "; field name= type= owner= rel=: a member of owner=, rel=creates held by value, uses by reference/pointer";
+// TRAIN 9: two attributes the merged stack put on a DEFAULT --for first screen that neither member saw alone.
+// L2's --sections=lego,compose serves the lego section WHOLE, so <iface implementors=> reaches the rows; and a
+// query that ranks a file under a built-in arch layer dir (test/, bench/, infra/, render/ …) puts layer= on its
+// <d> row. Both present-only, on the same terms as the compose clause above: absent, they cost nothing.
+inline constexpr std::string_view kForCompactLegendLego =
+    "; iface implementors=N: types implementing it, m= its method contract";
+inline constexpr std::string_view kForCompactLegendLayer =
+    "; d layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=";
 
 // ONE spelling for both dialects (graphlegend.h kForRouteCodeLegend): the compact dialect and the default one
 // say the same thing about route=, so they cannot drift into two readings of one code.
@@ -840,6 +854,14 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     if( p.composePresent )
     {
         h += kForCompactLegendCompose;
+    }
+    if( p.legoPresent )
+    {
+        h += kForCompactLegendLego;
+    }
+    if( p.layerPresent )
+    {
+        h += kForCompactLegendLayer;
     }
     if( p.legendDropped )
     {
@@ -2489,12 +2511,33 @@ std::optional<int> runForLens( const MainDispatch& d )
         const auto isRanked = [ & ]( rw::NodeId id ) noexcept { return id < lensRank.size() && lensRank[ id ] > 0; };
         const bool forComposePresent = std::ranges::any_of( g.composeEdges, [ & ]( const rw::ComposeEdge& ce )
                                                             { return isRanked( ce.ownerSym ) || isRanked( ce.typeSym ); } );
+        // TRAIN 9: the same shape for the two attributes the merged stack put on a default first screen. Both are
+        // over-approximations by design — a clause with nothing to define costs a reader one clause, an undefined
+        // first-screen attribute costs them the meaning (the scPresent note above states the trade).
+        bool forLegoPresent  = false;
+        bool forLayerPresent = false;
+        for( std::size_t i = 0; i < ing.symbols.size() && !( forLegoPresent && forLayerPresent ); ++i )
+        {
+            if( lensRank[i] <= 0 )
+            {
+                continue;
+            }
+            if( i < g.implementors.size() && !g.implementors[i].empty() )
+            {
+                forLegoPresent = true;
+            }
+            if( *rw::builtinLayer( rw::rootRelPath( ing, ing.symbols[i].fileId ) ) != '\0' )
+            {
+                forLayerPresent = true;
+            }
+        }
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
                                         forConf.attrs, forConf.note, forAtAttrStr, mentionDocAttrsStr,
                                         cfg.anchor, plan.autoBodies, plan.compact, cfg.legend == "compact",
                                         /*tailLegend=*/true, /*idRouteLegend=*/true, /*legendDropped=*/false, flRootArg,
-                                        /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent };
+                                        /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent,
+                                        forLegoPresent, forLayerPresent };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
