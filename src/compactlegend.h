@@ -10,8 +10,8 @@
 // verb's measured byte pin (test/compactlegendcheck.sh pinFor: the pins fit the definitions, docs/METHODOLOGY.md §9),
 // the root gains schema="ripwire.<key>/v1", and every payload byte is untouched — rows, root attributes, CDATA
 // bodies, and the comments that CARRY DATA (the map header's <!-- files= … -->, pack-task's <!-- body omitted … -->,
-// the <!-- +more --> marker, --notes' counted header). The full dialect (the default, and --legend=full) never passes
-// through this file.
+// the <!-- +more --> marker, --notes' counted header). The full dialect (--legend=full; the default before L1) never passes
+// through this file. Compact is the CLI default since L1 (cli.h kDefaultLegendPosture).
 //
 // WHAT IS PROSE. A comment is explanatory prose iff it starts with one of kCompactProsePrefixes and none of
 // kCompactDataPrefixes — the prefixes are the legend openers the emitters use (`<!-- ripwire <verb>: …`, the
@@ -41,21 +41,23 @@ namespace rw
 // block — hold a command STRING and had no way to ask it, so the posture was applied by editing each string and
 // a skill shipped `--zoom --legend=compact --mermaid`, which this very function refuses. One list, two callers.
 //
-// The flags named here are exactly the `nonXml` arms below, plus --for, which is exempt by POLICY rather than by
-// refusal (the binary compacts --for perfectly well; A1-2's decision is that the first call of a session wants
-// the full legend, and --for's compact legend is its own dialect). A command that already states a posture is
-// left alone, so applying this twice cannot produce two --legend= flags.
+// The flags named here are exactly cli.h's legendNonXmlSurface arms, plus --for. --for WAS exempt by policy (A1-2:
+// the first call of a session wants the full legend); L1 (2026-09-19) retired that policy — compact is the CLI
+// default and --for compacts under it — so the row now only keeps the router's --for spellings byte-stable: an
+// unflagged --for command already runs compact. Since L1 every string this appends to is redundant with the
+// default too, and kept for the same reason (and for a reader holding an older binary). A command that already
+// states a posture is left alone, so applying this twice cannot produce two --legend= flags.
 // Gate: test/taskroutecheck.sh runs every command the router generates and asserts the binary never refuses it;
 // test/skilltruthcheck.sh does the same for every command the skills spell.
 inline bool legendCompactAppliesTo( std::string_view command )
 {
     static constexpr std::string_view kNotCompactable[] = {
         "--legend=",                                                              // already stated
-        "--for=",                                                                 // policy exemption, not a refusal
+        "--for=",                                                                 // spelling kept stable (see above), not a refusal
         "--situ", "--recall=", "--report", "--mermaid", "--html", "--plan-lanes", "--sarif", "--eval",
         "--export", "--note-add=", "--quality-baseline", "--quality-ack", "--index-out=", "--pin-census=",
         "--baseline", "--replace-symbol-body", "--insert-before-symbol", "--insert-after-symbol", "--edit-plan=",
-        "--mcp", "--listen=",
+        "--mcp", "--listen=", "--lsp",
     };
     for( std::string_view flag : kNotCompactable )
     {

@@ -58,7 +58,11 @@ struct Config
     bool             json            = false;              // --json (L2): the SAME content as the XML, machine-parseable, for the
                                                            // CORE verbs ONLY (default map, --for, --pack-task, --callers/--callees/
                                                            // --impact, --quality-delta, --test-gate). Keys mirror the XML attr names
-    std::string_view legend;                               // --legend=full|compact: opt-in compact legend dialect on every XML verb (P1, compactlegend.h)
+    std::string_view legend;                               // --legend=full|compact: the legend posture of every XML verb (P1, compactlegend.h);
+                                                           // an XML run that names none is RESOLVED to kDefaultLegendPosture (L1)
+    bool             legendDefaulted = false;              // L1: legend was not asked for — validateLegendModifier resolved it to the default
+                                                           // posture because the run answers XML. main.cpp reads it: a defaulted posture
+                                                           // never refuses a run (it passes the output through), an asked one does.
                                                            // 1:1. Every other verb refuses loudly (stderr + exit 1) rather than
                                                            // silently emitting XML — see main.cpp's jsonUnsupportedVerb().
     int              detail          = 0;                  // --detail=N (RESEARCH lever 3): with --for, emit FULL bodies for the
@@ -2418,28 +2422,29 @@ inline constexpr char kHelpTail[] =
         "                               (with --for/--query) a FLAT top-K export for an EXTERNAL reranker: one\n"
         "                               <cand r= s= n= id= k= p= l=><sig>..</sig></cand> row per result — identity + score +\n"
         "                               signature only, no lens/quality extras, no doc bodies. Composes with --top-k.\n"
-        "    --legend=full|compact      choose the legend posture for every XML verb — use compact when calling repeatedly\n"
-        "                               output legend posture for EVERY XML verb. MAKING REPEATED CALLS (an agent, a\n"
-        "                               script, a benchmark harness)? USE compact. The legend is a FIXED ~3 KB per call,\n"
-        "                               so its share is a function of ANSWER SIZE, not of the verb: at least 45% of a\n"
-        "                               small --callers/--uses/--impact/--affected answer (and more on --callees and\n"
-        "                               --edit-check), a little of a large --for bundle. Every ROW is byte-identical; the\n"
-        "                               only payload change is a schema=\"ripwire.<verb>/v1\" attribute the root GAINS.\n"
-        "                               The CLI default is full because a human reading ONE map needs the prose; the MCP\n"
-        "                               server already defaults to compact, so the CLI is the path that pays.\n"
-        "                               full is byte-identical to the default. compact\n"
-        "                               keeps every row byte and every data/completeness attribute (counts_floor= capped= shown=\n"
-        "                               total= has_more= next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned\n"
-        "                               schema id on the root (schema=\"ripwire.<verb>/v1\") and replaces the explanatory prose\n"
-        "                               with ONE legend naming those attributes — the meanings live here and in the full\n"
-        "                               legend. DATA comments stay (the map header, pack-task's body-omitted rows, +more). Per\n"
-        "                               call this drops 2.8-5.8 KB on the navigation verbs (--edit-check 6.3 KB -> 0.5 KB);\n"
-        "                               the MCP twin is the argument legend: on every XML-answering verb, where compact is\n"
-        "                               the DEFAULT and legend:\"full\" restores this prose (M1, 2026-09-05: the ten-verb MCP\n"
-        "                               edit loop pays 2,866 B of legend instead of 30,839 B). The CLI default stays full.\n"
-        "                               Runs with nothing to compact refuse it, naming the verb: prose/markdown/JSON answers\n"
-        "                               (--situ --recall --report --mermaid --html --plan-lanes --sarif --eval*) and the writers\n"
-        "                               (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export).\n"
+        "    --legend=full|compact      legend posture for every XML verb — compact is the default; full restores the prose\n"
+        "                               output legend posture for EVERY XML verb. The DEFAULT is compact: the legend is a\n"
+        "                               FIXED ~3 KB of prose per call in its full form, so its share is a function of ANSWER\n"
+        "                               SIZE, not of the verb: at least 45% of a small --callers/--uses/--impact/--affected\n"
+        "                               answer (and more on --callees and --edit-check), a little of a large --for bundle —\n"
+        "                               and the callers who pay it are agents, scripts and harnesses making repeated calls.\n"
+        "                               READING ONE MAP AS A HUMAN, or need a definition's reasoning (a term you do not\n"
+        "                               recognise, a floor or cap explained)? pass --legend=full: it restores the full prose\n"
+        "                               legend, byte-identical to the default of 0.6.1 and earlier. compact keeps every row\n"
+        "                               byte and every data/completeness attribute (counts_floor= capped= shown= total= has_more=\n"
+        "                               next_offset= est_tokens= at= root= graph_ambiguous= …), adds a versioned schema id\n"
+        "                               on the root (schema=\"ripwire.<verb>/v1\") and replaces the explanatory prose with\n"
+        "                               ONE legend defining exactly the attributes the answer carries — the meanings live\n"
+        "                               here and in the full legend. DATA comments stay (the map header, pack-task's\n"
+        "                               body-omitted rows, +more). Per call this drops 2.8-5.8 KB on the navigation verbs\n"
+        "                               (--edit-check 6.3 KB -> 0.5 KB). --for compacts too (its own ripwire.for/v1 header);\n"
+        "                               under --token-budget its smaller legend buys rows and never costs one. The MCP twin\n"
+        "                               is the argument legend, compact by default there as well, legend:\"full\" restores\n"
+        "                               the prose. Runs with nothing to compact ignore the default and refuse an ASKED\n"
+        "                               --legend, naming the verb: prose/markdown/JSON answers (--situ --recall --report\n"
+        "                               --mermaid --html --plan-lanes --sarif --eval* --json) and the writers and servers\n"
+        "                               (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export,\n"
+        "                               --mcp/--listen/--lsp).\n"
         "    --json                     emit JSON instead of XML; keys mirror the XML attribute names one to one\n"
         "                               machine-parseable JSON instead of XML, keys mirror the XML attr names 1:1. Every\n"
         "                               ROOT attribute survives; a verb that serves fewer SECTIONS than its XML form NAMES\n"
@@ -4044,22 +4049,30 @@ inline void validateLintSelectionModifierGuards( Config& c ) noexcept
     }
 }
 
-static inline void validateLegendModifier( Config& c ) noexcept
+// ── THE LEGEND POSTURES (L1, round 1 of the answer-size loop, 2026-09-19) ────────────────────────────────
+// One row per posture. The value space is a TABLE, not a two-valued test, because it is meant to grow: round 2's
+// legend-once-per-session posture (`ref`, A1-3) is one more row here, and every reader — the refusal below, the
+// flag table's hint, --help — reads the table rather than restating "full or compact".
+//
+// THE DEFAULT IS compact (owner decision 09-19, prereg L1 / A1-1). The MCP server has defaulted to compact since
+// M1 (2026-09-05); the CLI was the one surface still paying ~1.4-5 KB of prose per call, and the callers who pay
+// it are agents, scripts and harnesses making repeated calls. `--legend=full` restores the full prose legend
+// byte-for-byte (compactlegendcheck (A) pins it against the pre-L1 bytes). --for is no longer exempt: its compact
+// header is its own dialect (verbs_for.h), and under a --token-budget the smaller legend buys rows, never loses
+// them (compactlegendcheck (R1) asserts rows(default) ⊇ rows(--legend=full)).
+inline constexpr std::string_view kLegendPostures[]     = { "full", "compact" };
+inline constexpr std::string_view kDefaultLegendPosture = "compact";
+
+[[nodiscard]] inline bool isLegendPosture( std::string_view v ) noexcept
 {
-    if( c.legend.empty() )
-    {
-        return;
-    }
-    if( c.legend != "full" && c.legend != "compact" )
-    {
-        rw::emitTo( stderr, "ripwire: --legend needs full or compact — got '{}', e.g. --legend=compact\n", std::string_view( c.legend.data(), c.legend.size() ) );
-        c.ok = false;
-    }
-    // P1 (capture-audit 2026-09-04, L7): every XML verb honors --legend=compact (main.cpp's runWithCompactLegend
-    // + compactlegend.h; --for/--grep/--slice compact natively). The refusal now belongs to the runs with nothing to
-    // compact — text/markdown/JSON-native answers — and to the runs that WRITE or SERVE (a posture flag must never
-    // be the reason an edit, a note, a baseline or a server starts). test/compactlegendcheck.sh (U) sweeps the
-    // whole flag universe: XML at defaults ⇒ compact honored, anything else ⇒ this refusal.
+    return std::ranges::find( kLegendPostures, v ) != std::ranges::end( kLegendPostures );
+}
+
+// The runs with no XML legend to shape: text/markdown/JSON-native answers, the runs that WRITE, and the servers.
+// An ASKED --legend refuses on these (a posture flag must never be the reason an edit, a note, a baseline or a
+// server starts); the DEFAULT posture simply does not apply to them. nullptr = the run answers XML.
+[[nodiscard]] inline const char* legendNonXmlSurface( const Config& c ) noexcept
+{
     const char* nonXml = nullptr;
     if( c.situ || !c.situFiles.empty() )      { nonXml = "--situ (prose)"; }
     else if( !c.recall.empty() )              { nonXml = "--recall (markdown bodies)"; }
@@ -4078,6 +4091,37 @@ static inline void validateLegendModifier( Config& c ) noexcept
     else if( c.baseline || c.baselineUpdate ) { nonXml = "--arch --baseline (writes the baseline)"; }
     else if( !c.replaceSymbolBody.empty() || !c.insertBeforeSymbol.empty() || !c.insertAfterSymbol.empty() || !c.editPlan.empty() ) { nonXml = "the edit verbs (JSON receipts)"; }
     else if( c.mcp || !c.listen.empty() )     { nonXml = "--mcp/--listen (pass legend:\"compact\" per call instead)"; }
+    else if( c.lsp )                          { nonXml = "--lsp (an LSP server over stdio)"; }
+    return nonXml;
+}
+
+// THE DEFAULT, RESOLVED ONCE (L1). An XML run that names no posture gets kDefaultLegendPosture here, so every
+// downstream reader (--for/--grep/--slice's native dialects, --batch's sub-answers, main.cpp's rewrite layer) asks
+// ONE question — cfg.legend == "compact" — and cannot disagree about the default. legendDefaulted records that
+// nobody asked: main.cpp then passes an answer the dialect cannot shape through unchanged instead of refusing it.
+// --json keeps no default posture: its JSON answers carry no legend to shape.
+static inline void validateLegendModifier( Config& c ) noexcept
+{
+    const char* nonXml = legendNonXmlSurface( c );
+    if( c.legend.empty() )
+    {
+        if( nonXml == nullptr && !c.json )
+        {
+            c.legend          = kDefaultLegendPosture;
+            c.legendDefaulted = true;
+        }
+        ENSURES( c.legend.empty() || isLegendPosture( c.legend ), "the resolved default is a registered posture" );
+        return;
+    }
+    if( !isLegendPosture( c.legend ) )
+    {
+        rw::emitTo( stderr, "ripwire: --legend needs full or compact — got '{}', e.g. --legend=compact\n", std::string_view( c.legend.data(), c.legend.size() ) );
+        c.ok = false;
+    }
+    // P1 (capture-audit 2026-09-04, L7): every XML verb honors --legend=compact (main.cpp's runWithCompactLegend
+    // + compactlegend.h; --for/--grep/--slice compact natively). The refusal belongs to the runs with nothing to
+    // compact — legendNonXmlSurface above. test/compactlegendcheck.sh (U) sweeps the whole flag universe: XML at
+    // defaults ⇒ compact honored, anything else ⇒ this refusal.
     if( nonXml != nullptr )
     {
         rw::emitTo( stderr, "ripwire: --legend={} applies to the XML verbs only — {} has no XML legend to compact; drop --legend (e.g. ripwire <dir> --callers=SYM --legend=compact)\n", std::string_view( c.legend.data(), c.legend.size() ), nonXml );

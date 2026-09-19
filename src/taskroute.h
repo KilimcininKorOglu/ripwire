@@ -1329,7 +1329,9 @@ inline std::optional<RouteChoice> directTaskChoice( std::string_view task, std::
 // WHAT DECIDES: rw::legendCompactAppliesTo (compactlegend.h), the SAME list of non-XML surfaces cli.h REFUSES the flag
 // on, asked of a command string instead of a parsed Config. So the router cannot generate a command its own
 // binary rejects — which it did: `--zoom --legend=compact --mermaid` shipped in a skill, and a hand-listed gate
-// enforced it. --for is exempt by policy, not by refusal, and legendCompactAppliesTo says so in one place.
+// enforced it. --for gets no suffix (legendCompactAppliesTo says why in one place); since L1 compact is the CLI
+// default, so every suffix here is redundant with the binary's own default and kept only so generated commands stay
+// byte-stable and read the same on an older binary.
 // Idempotent: a command that already carries --legend= is left alone, so the hand-applied ones are untouched and
 // this is a no-op on them. Gate: test/taskroutecheck.sh runs every generated command against the binary.
 //
