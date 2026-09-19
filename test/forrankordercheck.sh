@@ -136,7 +136,13 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # replace, so the byte-shaped <sigs> section fits five more signature rows, and the legend that grew 154 B (the sc=
 # rule, the route= code's reading and the merged-callee reading) is paid for several times over in rows. The other
 # nine stay at their for-widen bases: -1.11%, +0.36%, -0.45%, +1.54%, +0.02%, +1.66%, +0.18%, -0.56%, +2.30%.
-REPO_BASE=( 10134 10029 10080 10102 9880 9397 10009 10070 9966 9861 )
+REPO_BASE=( 10134 10029 10080 10102 9880 9397 10009 10070 9966 10379 )
+# q10 RE-PINNED 2026-09-19 (lane/r1-for-sections-stub, L2 round-1 lever B1): 9861 -> 10379 B (+5.25%), an
+# OUTPUT change, the q5 precedent's pattern. This query's ranked head reaches an interface with
+# implementors — the ONLY one of the ten reference queries that does — so it is the one query in this
+# fixed set whose --for answer now carries the present-only kForSectionStubLegend clause (serialize.h)
+# beside its collapsed <lego> stub. The other nine are unaffected (unchanged bytes on this same binary,
+# confirming the clause really is present-only, not a fixed per-call cost).
 
 # ── (1)+(2) rank order + p= on every row, four dialects ───────────────────────────────────────────────────
 order_fail=0
