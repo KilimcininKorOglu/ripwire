@@ -416,6 +416,10 @@ sites, like the `O_*`/`X_OK`/`PATH_MAX` constants, and `os.h`'s Windows branch d
 refuses all of the above outside `os.h`; its one allowlisted file is `src/infra/profilePmc.h`, the profiler's
 undocumented-ABI counter backends.
 
+**Platforms.** Unix, Linux and macOS come first; native Windows is second, with clang-cl the primary compiler and
+MSVC `cl.exe` also required to build. A `cl.exe` portability problem is worth fixing, but it does not block a change
+to a POSIX-only code path.
+
 ### Aliasing: spelling, placement, contract
 
 - **Spelling: `__restrict__` only, never `__restrict`.** On macOS, `<sys/cdefs.h>` does
