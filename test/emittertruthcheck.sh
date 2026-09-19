@@ -417,6 +417,7 @@ cli.h|always carries|1
 cli.h|never dropped|2
 cli.h|never suppressed|1
 cli.h|prints even at 0|1
+compactlegend.h|never dropped|1
 handoff.h|never dropped|1
 ingest_astquery.h|never suppressed|1
 landingplan.h|always printed|1
@@ -606,6 +607,29 @@ for k in lego_total compose_total routes_total; do
 done
 [ -z "$zMissing" ] && ok "(Z2f) --for --json: lego_total/compose_total/routes_total all ride at 0" \
                    || no "(Z2f) --for --json dropped at zero:$zMissing"
+
+# ── (Z2i) --handoff verified rows — "verified rows are never dropped" (handoff.h, and TRAIN 9's compact
+#     reading of withheld_rows= in compactlegend.h, which restates the same promise in the DEFAULT posture) ──
+# The claim is about what a BUDGET may not take, so the probe has to make the budget bite: an unbudgeted run
+# gives the verified row count, and a budget small enough to set withheld="1" must leave that count identical.
+# Asserted in the default posture, which is where a reader now meets the claim.
+"$BIN" "$ROOT" --handoff --no-cache > "$TMP/zho.xml" 2>/dev/null
+"$BIN" "$ROOT" --handoff --token-budget=400 --no-cache > "$TMP/zhb.xml" 2>/dev/null
+zHoV="$( tr '<' '\n' < "$TMP/zho.xml" | sed -n '/^verified/,/^\/verified/p' | grep -c '^[a-z]' )"
+zHbV="$( tr '<' '\n' < "$TMP/zhb.xml" | sed -n '/^verified/,/^\/verified/p' | grep -c '^[a-z]' )"
+zHbRoot="$( grep -o '<handoff [^>]*>' "$TMP/zhb.xml" | head -1 )"
+if [ -z "$zHbRoot" ] || [ "$zHoV" -lt 2 ]; then
+    no "(Z2i) presence guard: --handoff produced no root or no verified rows here — the probe is inert"
+elif ! printf '%s' "$zHbRoot" | grep -q 'withheld="1"'; then
+    no "(Z2i) presence guard: --token-budget=400 did not make the budget bite (no withheld=\"1\") — the probe proves nothing"
+elif [ "$zHoV" = "$zHbV" ]; then
+    ok "(Z2i) --handoff: the budget withheld heuristic rows and left all $zHoV verified rows, as both legends promise"
+else
+    no "(Z2i) --handoff DROPPED verified rows under a budget ($zHoV -> $zHbV) while its legend says they are never dropped"
+fi
+grep -q 'verified rows are never dropped' "$TMP/zhb.xml" \
+    && ok "(Z2i) presence guard: the default posture still prints the clause under test" \
+    || no "(Z2i) presence guard: the default --handoff legend no longer prints the never-dropped clause"
 
 [ "$fail" = "0" ] && { echo "ALL PASS"; exit 0; }
 echo "FAILURES PRESENT"; exit 1

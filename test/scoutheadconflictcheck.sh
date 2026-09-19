@@ -278,18 +278,36 @@ PATH="$SHIM:$PATH" RW_SHIM_FAIL_ARCHIVE="$ARMFSHA" "$BIN" "$REPO4" --merge-scout
 armAttrs "$FAILOUT" armF | grep -q 'ok="0" reason="tree_unavailable"' \
     && ok "T9(c) a genuine git-archive failure still refuses (ok=\"0\") AND now names reason=\"tree_unavailable\" in-band" \
     || no "T9(c) expected ok=\"0\" reason=\"tree_unavailable\"; got: $( armAttrs "$FAILOUT" armF )"
-grep -q 'reason="no_merge_base" (no merge base with HEAD' "$FAILOUT" \
-    && ok "T9(d) the legend defines both reason= values (no_merge_base spelled verbatim)" \
-    || no "T9(d) the legend does not define reason=\"no_merge_base\""
-grep -q 'reason="tree_unavailable" (a side' "$FAILOUT" \
-    && ok "T9(d) the legend defines reason=\"tree_unavailable\" verbatim" \
-    || no "T9(d) the legend does not define reason=\"tree_unavailable\""
-grep -q 'ok="1" on an arm row means' "$FAILOUT" \
-    && ok "T9(d) the legend defines ok= for the ok=\"1\" posture" \
-    || no "T9(d) the legend does not define the ok=\"1\" posture"
-grep -q 'ok="0" means it did not run at all' "$FAILOUT" \
-    && ok "T9(d) the legend defines ok= for the ok=\"0\" posture" \
-    || no "T9(d) the legend does not define the ok=\"0\" posture"
+# TRAIN 9: the default posture is the COMPACT legend, so (d) now asserts BOTH dialects — the compact one on the
+# answer the arm above already produced (the default), and the full prose on a second run with the posture flag.
+# Each dialect is checked in its OWN wording: a reading that exists only in the one nobody gets by default is the
+# failure this arm is for.
+grep -q 'reason=no_merge_base (no merge base with HEAD' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines reason=no_merge_base verbatim" \
+    || no "T9(d) compact: the legend does not define reason=\"no_merge_base\""
+grep -q 'reason=tree_unavailable (a side' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines reason=tree_unavailable verbatim" \
+    || no "T9(d) compact: the legend does not define reason=\"tree_unavailable\""
+grep -q 'ok=1 on an arm row means the comparison RAN' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines ok= for the ok=\"1\" posture" \
+    || no "T9(d) compact: the legend does not define the ok=\"1\" posture"
+grep -q 'ok=0 means it did not run at all' "$FAILOUT" \
+    && ok "T9(d) compact: the legend defines ok= for the ok=\"0\" posture" \
+    || no "T9(d) compact: the legend does not define the ok=\"0\" posture"
+FULLOUT="$TMP/tree-unavailable-full.xml"
+PATH="$SHIM:$PATH" RW_SHIM_FAIL_ARCHIVE="$ARMFSHA" "$BIN" "$REPO4" --merge-scout=armF --no-cache --legend=full >"$FULLOUT" 2>/dev/null
+grep -q 'reason="no_merge_base" (no merge base with HEAD' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines both reason= values (no_merge_base spelled verbatim)" \
+    || no "T9(d) full: the legend does not define reason=\"no_merge_base\""
+grep -q 'reason="tree_unavailable" (a side' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines reason=\"tree_unavailable\" verbatim" \
+    || no "T9(d) full: the legend does not define reason=\"tree_unavailable\""
+grep -q 'ok="1" on an arm row means' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines ok= for the ok=\"1\" posture" \
+    || no "T9(d) full: the legend does not define the ok=\"1\" posture"
+grep -q 'ok="0" means it did not run at all' "$FULLOUT" \
+    && ok "T9(d) full: the legend defines ok= for the ok=\"0\" posture" \
+    || no "T9(d) full: the legend does not define the ok=\"0\" posture"
 
 # (e) RELEASE LEG: the reason must survive an NDEBUG build. DISCLOSE( sink, why ) writes the sink field (what
 #     reason= reads) in EVERY build — only its accompanying debug TRACE is compiled out under NDEBUG — so this

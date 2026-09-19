@@ -730,7 +730,12 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "count", "count=N: member sites this one caveat row stands for (absent = 1)", true, "caveat", MapHeaderRead::No, {}, "layout" },
     // merge-scout: src/mergescout.h writeScoutArm / root emit
     { "head", "head=: the HEAD commit, bare 9-hex sha (at= adds +dirty)", false, "merge-scout", MapHeaderRead::No, {}, "merge-scout" },
-    { "ok", "ok=0: arm not analysed (no merge base, or archive failed); its changed=0 is not a finding", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
+    // TRAIN 9 (L1 x t9-mergescout): the lane put both ok= postures and reason= in the FULL prose legend, which was
+    // the default when it was written. L1 makes compact the default, so the same two facts read here. ok="1" needs
+    // saying out loud because the whole point of that lane is that a legally EMPTY comparison is a real ok="1" with
+    // changed="0", not a refusal; reason= is present only on a refusal, so its reading is too.
+    { "ok", "ok=1 on an arm row means the comparison RAN, so changed=/head_conflicts= are real and may legitimately be 0 (an empty but materialized tree is a real index); ok=0 means it did not run at all", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
+    { "reason", "arm reason= (only with ok=0): reason=no_merge_base (no merge base with HEAD) or reason=tree_unavailable (a side's tree could not be materialized or ingested)", true, "arm", MapHeaderRead::No, {}, "merge-scout" },
     { "note", "no-work note=: arm compared and has no divergent work vs its merge base, so no landing slot", true, "no-work", MapHeaderRead::No, {}, "merge-scout" },
     // owners: src/verbs_report.h (CLI owners emitter near the <owners files=> comment); <uniform/> fold
     { "files", "files=N: files analysed", false, "owners", MapHeaderRead::No, {}, "owners" },
