@@ -2132,6 +2132,16 @@ inline void capturePythonImportBinds( TSNode stmt, const char* t, std::uint32_t 
         b.kind      = LocalBindKind::Import;
         b.var.assign( bound );
         b.typeName  = std::move( clauseTarget );
+        // issue #287 (kParserVer 115): `importedName` is otherwise unused by a Python Import bind (no
+        // reader keys on it before this — checked), so it carries ONE bit here: "module" iff `bound` names
+        // the MODULE itself (`import a.b` / `import a.b as c`, isFrom==false) — the shape a receiver-alias
+        // narrow may trust to mean "this variable's namespace IS the module's". Left empty for `from m
+        // import x [as y]` (isFrom==true): there `bound` names a MEMBER of m (a function, class, ufunc
+        // instance, …), and `bound.anything()` is a call on THAT member, not on m's namespace — numpy's
+        // `from numpy.core.numeric import greater_equal` then `greater_equal.outer(...)` is exactly this:
+        // `.outer` is a ufunc method, not numeric.py's free `outer`, and conflating the two shapes narrowed
+        // the alias-receiver rule onto it (caught on the numpy corpus before this marker existed).
+        b.importedName = isFrom ? std::string {} : "module";
         binds.push_back( std::move( b ) );
         return true;
     } );

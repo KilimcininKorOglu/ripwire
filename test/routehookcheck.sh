@@ -499,6 +499,114 @@ done
     && ok "P1 docs: EVALS.md carries the pre-registered metric and band this hook is the instrument for" \
     || no "P1 docs: EVALS.md is missing:$PMISS"
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# (N) NOTIFICATION-SHAPED PROMPTS NEVER ROUTE — the routing-noise round (docs/EVALS.md)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Claude Code delivers a background-task completion (`<task-notification>…</task-notification>`) and an
+# injected reminder (`<system-reminder>…</system-reminder>`) through this SAME UserPromptSubmit channel,
+# not from the user. `--help-task` has no concept of "this names no task" and answered the report prose
+# anyway: a fixture repo carrying single-word CAPITALIZED symbols — the exact collision class the round
+# found (ripwire's own test fixtures for unrelated rounds define symbols literally named A, Fix, Report,
+# Summary, Lane, WORK) — proves the guard on a REAL, indexed, reachable route rather than on a fixture
+# too small to ever have tripped it.
+NREPO="$TMP/nrepo"; mkdir -p "$NREPO"
+git -C "$NREPO" init -q
+git -C "$NREPO" config user.email "dev@x.com"
+git -C "$NREPO" config user.name "Dev"
+cat >"$NREPO/router.cpp" <<'SRC'
+int alphaNode() { return 1; }
+class A {};
+class E {};
+class Fix {};
+class Report {};
+class Summary {};
+class Lane {};
+class WORK {};
+class Split {};
+SRC
+git -C "$NREPO" add router.cpp
+git -C "$NREPO" commit -qm base
+
+NOISE1="$( printf '<task-notification>\n<task-id>bn211i65j</task-id>\n<status>completed</status>\n<summary>Split-out lane: edit-hint finished. Real-fix NO. Summary: A, Fix, Report</summary>\n</task-notification>' )"
+NOISE2="$( printf '<system-reminder>\nrun the next round of ripwire improvements as an orchestrator. continuation_notes.md Lane E WORK\n</system-reminder>' )"
+
+# This shape is fixed at TWO layers on purpose (the classifier's own system-event guard, src/taskroute.h
+# looksLikeSystemEvent, and this hook's guard below it) — belt and suspenders, not a redundant pair one
+# of which "should" prove the other unnecessary. That means a PRECHECK against the shipped binary's raw
+# `--help-task` can no longer demonstrate the wrapped noise mis-routing (the classifier's own guard
+# already catches it) without also re-deriving whichever layer is under test, so N0 checks the fixture's
+# own shape instead: the four collision symbols really are indexed, so N1-N6 below exercise a REACHABLE
+# route rather than a fixture too small to ever have tripped the bug this round fixed (the base binary +
+# base hook reproduction is pasted in the lane report, not re-derived here on every gate run).
+[ "$( "$BIN" "$NREPO" --for='A Fix Report Summary Lane WORK Split' --legend=compact 2>/dev/null | grep -oE 'n="(A|Fix|Report|Summary|Lane|WORK|Split)"' | sort -u | wc -l | tr -d ' ' )" -ge 3 ] \
+    && ok "N0 fixture: the collision-class symbols (A, Fix, Report, Summary, Lane, WORK, Split) really are indexed" \
+    || no "N0 fixture: fewer than three of the collision symbols are indexed — N1-N6 may not be testing a reachable route"
+
+HN1="$TMP/hn1"; mkdir -p "$HN1"
+ONOISE1="$( route_run "$HN1" "$WITH_RIPWIRE" "$( promptjson noise1 "$NREPO" "$NOISE1" )" RIPWIRE_METER_ARM=treatment )"; RCNOISE1=$?
+[ "$RCNOISE1" -eq 0 ] && [ -z "$ONOISE1" ] \
+    && ok "N1 notification: a <task-notification>-shaped prompt injects NOTHING and exits 0" \
+    || no "N1 notification: exit=$RCNOISE1 out=[$ONOISE1]"
+[ "$( rowget "$HN1/routing.jsonl" 1 status )" = "skip-system" ] \
+    && ok "N2 notification: the row is still logged, status=skip-system (coverage stays measurable)" \
+    || no "N2 notification: row status=[$( rowget "$HN1/routing.jsonl" 1 status )]"
+[ ! -e "$HN1/routing-pending/$( printf '%s' noise1 | cksum | cut -d' ' -f1 ).json" ] \
+    && ok "N3 notification: no pending file is written (there is nothing to observe adoption of)" \
+    || no "N3 notification: a pending file was written for a skipped event"
+
+HN2="$TMP/hn2"; mkdir -p "$HN2"
+ONOISE2="$( route_run "$HN2" "$WITH_RIPWIRE" "$( promptjson noise2 "$NREPO" "$NOISE2" )" RIPWIRE_METER_ARM=treatment )"; RCNOISE2=$?
+[ "$RCNOISE2" -eq 0 ] && [ -z "$ONOISE2" ] \
+    && ok "N4 notification: a <system-reminder>-shaped prompt injects NOTHING and exits 0" \
+    || no "N4 notification: exit=$RCNOISE2 out=[$ONOISE2]"
+
+# LEADING WHITESPACE: the harness may deliver the marker after a blank line or indentation — only the
+# BYTES need to be positional once trimmed, never a ban on the words appearing mid-sentence.
+HN3="$TMP/hn3"; mkdir -p "$HN3"
+NOISE3="$( printf '  \n\t<task-notification>\nfoo\n</task-notification>' )"
+ONOISE3="$( route_run "$HN3" "$WITH_RIPWIRE" "$( promptjson noise3 "$NREPO" "$NOISE3" )" RIPWIRE_METER_ARM=treatment )"
+[ -z "$ONOISE3" ] \
+    && ok "N5 notification: leading whitespace before the marker still skips" \
+    || no "N5 notification: leading-whitespace variant still injected: [$ONOISE3]"
+# CodeRabbit PR #292 finding 4052087914: the guard's old `sed 's/^[[:space:]]*//'` strips leading
+# whitespace PER LINE (sed's `^` anchors each line of its pattern space), so a marker after a LEADING
+# BLANK LINE ("  \n\t<task-notification>…", exactly NOISE3's own shape) kept a leading newline and missed
+# the case match here. Nothing was ever injected (the classifier's own looksLikeSystemEvent guard, a
+# second independent layer, still abstained) — N5 above cannot see this — but the hook's guard fell
+# through to a real classifier subprocess call and logged status=abstain instead of status=skip-system.
+[ "$( rowget "$HN3/routing.jsonl" 1 status )" = "skip-system" ] \
+    && ok "N5b notification: the leading-blank-line variant logs status=skip-system, not a fallen-through abstain" \
+    || no "N5b notification: leading-blank-line variant logged status=[$( rowget "$HN3/routing.jsonl" 1 status )] (expected skip-system)"
+
+# STICKY PENDING FILE: the same fall-through reaches the LATER meter block, which deletes ANY existing
+# session pending file unconditionally (`rm -f "$pending"`, "written in BOTH arms" by design — see the
+# hook's own comment). A real adoption-window pending file, written by a genuine earlier recommend turn,
+# could be wiped out by an unrelated harness/system event that merely happens to share the session id.
+# Red against the pre-fix hook: the pending file the recommend call below writes does not survive the
+# leading-blank-line notification that follows it in the SAME session.
+HN5="$TMP/hn5"; mkdir -p "$HN5"
+STICKY_SESSION="noise5sticky"
+STICKY_HASH="$( printf '%s' "$STICKY_SESSION" | cksum | cut -d' ' -f1 )"
+STICKY_PENDING="$HN5/routing-pending/$STICKY_HASH.json"
+STICKPRIME="$( route_run "$HN5" "$WITH_RIPWIRE" "$( promptjson "$STICKY_SESSION" "$NREPO" 'Explain the implementation of alphaNode' )" RIPWIRE_METER_ARM=treatment )"
+[ -f "$STICKY_PENDING" ] \
+    && ok "N5c sticky-pending setup: a genuine recommend turn writes a pending file for the session" \
+    || no "N5c sticky-pending setup: no pending file written (out=[$STICKPRIME]) — cannot test the sticky-pending arm"
+NOISE3B="$( printf '  \n\t<task-notification>\nfoo\n</task-notification>' )"
+route_run "$HN5" "$WITH_RIPWIRE" "$( promptjson "$STICKY_SESSION" "$NREPO" "$NOISE3B" )" RIPWIRE_METER_ARM=treatment >/dev/null
+[ -f "$STICKY_PENDING" ] \
+    && ok "N5d sticky-pending: a leading-blank-line notification does not delete an existing session's pending file" \
+    || no "N5d sticky-pending: the pending file was deleted by a harness/system event sharing its session id"
+
+# THE NEGATIVE CONTROL: a real user prompt that merely MENTIONS the marker mid-sentence must still route
+# normally — this is a shape test on the harness's own wake-up marker, positional only, never a ban on
+# the words themselves appearing anywhere in a real prompt.
+HN4="$TMP/hn4"; mkdir -p "$HN4"
+MENTION="what does <task-notification> mean in the hook? also, help me understand the implementation of alphaNode"
+ONOISE4="$( route_run "$HN4" "$WITH_RIPWIRE" "$( promptjson noise4 "$NREPO" "$MENTION" )" RIPWIRE_METER_ARM=treatment )"
+printf '%s' "$ONOISE4" | grep -Fq -- '--expand' \
+    && ok "N6 notification: a real prompt merely MENTIONING the marker mid-sentence still routes normally" \
+    || no "N6 notification: the mid-sentence mention wrongly suppressed a real route: [$ONOISE4]"
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # O9 — rw_is_ripwire_call: ONE block, three files, and the shapes an agent actually types (PR #215 item 6)

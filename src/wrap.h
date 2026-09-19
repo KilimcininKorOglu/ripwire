@@ -19,6 +19,7 @@
 #include <cstring>    // std::strerror — the unreadable-folder WARN
 #include "skillscan.h"
 #include "infra/tablelookup.h"   // findByField — shared with ingest's lookupLang
+#include "infra/jsonesc.h"       // escapeMcp — the stanza command is a path, and a path is bytes JSON must escape
 
 #include <cstdio>
 #include <cstdlib>
@@ -377,13 +378,14 @@ inline void wrapPrintPathNote( const std::string& token )
 inline void wrapMcpJson( const char* configPath, const std::string& token )
 {
     wrapPrintPathNote( token );
+    const std::string escapedToken = rw::jsonesc::escapeMcp( token );
     rw::emitTo( stdout,
         "# ripwire -> add to {}\n"
         "{{\n"
         "  \"mcpServers\": {{\n"
         "    \"ripwire\": {{ \"command\": \"{}\", \"args\": [\"--mcp\"] }}\n"
         "  }}\n"
-        "}}\n", configPath, token.c_str() );
+        "}}\n", configPath, escapedToken.c_str() );
 }
 
 // opencode's config is a DIFFERENT shape, not a different path: the top-level key is `mcp` (not
@@ -395,13 +397,14 @@ inline void wrapMcpJson( const char* configPath, const std::string& token )
 // additionalProperties:false); test/opencodewrapcheck.sh checks this against the pinned copy.
 inline void wrapMcpJsonOpencode( const std::string& token )
 {
+    const std::string escapedToken = rw::jsonesc::escapeMcp( token );
     rw::emitTo( stdout,
         "{{\n"
         "  \"$schema\": \"https://opencode.ai/config.json\",\n"
         "  \"mcp\": {{\n"
         "    \"ripwire\": {{ \"type\": \"local\", \"command\": [\"{}\", \"--mcp\"] }}\n"
         "  }}\n"
-        "}}\n", token.c_str() );
+        "}}\n", escapedToken.c_str() );
 }
 
 // Agent configuration: name, config directory path (using ~ for home), and a lambda to

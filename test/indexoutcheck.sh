@@ -181,5 +181,44 @@ else
     printf '  SKIP  (d) self-heal (no python3 to doctor the arch byte)\n'
 fi
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# (e) --no-ignore REACHES the generate path. The generate ingest used to take respectGitignore's default,
+#     so `--index-out --no-ignore` silently built the IGNORE-honouring artifact: every ignored file was a
+#     cold parse for the consumer that asked for it. Restore-equivalence cannot see this (a missing record
+#     is just a miss), so the arms read the blob's file set and the consumer's reparse count instead.
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+if command -v git >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    PATH_E="$TMP/checkout_e/repo"
+    mkdir -p "$( dirname "$PATH_E" )"
+    cp -R "$FIXTURE" "$PATH_E"
+    ( cd "$PATH_E" && git init -q && printf 'ignoredgen/\n' >.gitignore && git add -A \
+        && git -c user.name=indexoutcheck -c user.email=indexoutcheck@example.invalid commit -q -m fixture ) >/dev/null 2>&1
+    # created AFTER the commit: an untracked file under an ignored dir (a tracked one would stay indexed)
+    mkdir -p "$PATH_E/ignoredgen"
+    printf 'def rw_indexout_ignored_probe():\n    return 1\n' >"$PATH_E/ignoredgen/hidden.py"
+    blobhas(){ python3 -c 'import sys; print( "HAS" if sys.argv[2].encode() in open( sys.argv[1], "rb" ).read() else "MISSING" )' "$1" "$2"; }
+
+    "$BIN" "$PATH_E" --index-out="$TMP/idx_def" >/dev/null 2>&1
+    "$BIN" "$PATH_E" --index-out="$TMP/idx_ni" --no-ignore >/dev/null 2>"$TMP/gen_ni.err"
+    rc_ni=$?
+    [ "$rc_ni" -eq 0 ] && [ -s "$TMP/idx_ni.lean.ripwirecache" ] && [ -s "$TMP/idx_def.lean.ripwirecache" ] \
+        && ok "(e) --index-out with and without --no-ignore both generated (exit 0)" \
+        || { no "(e) --index-out --no-ignore failed (exit $rc_ni)"; cat "$TMP/gen_ni.err"; }
+    [ "$( blobhas "$TMP/idx_def.lean.ripwirecache" ignoredgen/hidden.py )" = MISSING ] \
+        && ok "(e) control: the default artifact omits the gitignored file (the ignore rule is live in this fixture)" \
+        || no "(e) control: the default artifact holds the gitignored file — the fixture cannot tell the two apart"
+    [ "$( blobhas "$TMP/idx_ni.lean.ripwirecache" ignoredgen/hidden.py )" = HAS ] \
+        && ok "(e) --index-out --no-ignore artifact holds the gitignored file" \
+        || no "(e) --index-out dropped --no-ignore: the artifact omits the gitignored file it was told to keep"
+    cp "$TMP/idx_ni.lean.ripwirecache" "$TMP/committed_ni.lean"
+    RIPWIRE_CACHE_STATS=1 "$BIN" "$PATH_E" --cache="$TMP/committed_ni.lean" --no-ignore --no-stable >/dev/null 2>"$TMP/ni_consume.err"
+    REPARSED_NI="$( sed -n 's/.*cache-stats reparsed=\([0-9][0-9]*\).*/\1/p' "$TMP/ni_consume.err" | head -1 )"
+    [ "$REPARSED_NI" = 0 ] \
+        && ok "(e) a --no-ignore consumer of the --no-ignore artifact reparses nothing (reparsed=0)" \
+        || no "(e) a --no-ignore consumer reparsed '${REPARSED_NI:-no cache-stats line}' file(s) the artifact should have carried"
+else
+    printf '  SKIP  (e) --no-ignore generate: needs git and python3\n'
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "SOME CHECKS FAILED"; exit 1; fi

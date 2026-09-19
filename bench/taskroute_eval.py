@@ -42,6 +42,9 @@ int audit() { return prefix(); }
 int release() { return audit(); }
 int target() { return release(); }
 int binary() { return target(); }
+// Single-word CAPITALIZED classes, no camel seam: the routing-noise round's collision class (2026-09-19).
+class A {}; class E {}; class Fix {}; class Report {};
+class Summary {}; class Lane {}; class WORK {}; class Split {};
 """,
         encoding="utf-8",
     )

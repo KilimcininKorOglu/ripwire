@@ -165,5 +165,41 @@ else
     no "pinned schema changed (sha256 $got != $want) — update the pin AND re-read the assertions above"
 fi
 
+# ── 8. an absolute command token survives JSON ─────────────────────────────────────────────────
+# With no `ripwire` on PATH the stanza's command is this binary's absolute path, and a path is bytes: a
+# double quote or a backslash is legal in a POSIX filename and is every Windows path's separator. Run a copy
+# from a directory whose name carries both, with a PATH that holds no ripwire, and require that the
+# opencode stanza AND the mcpServers stanza (cursor) parse and name exactly that path.
+ODD_DIR="$TMP/quo\"te back\\slash"
+mkdir -p "$ODD_DIR"
+cp "$BIN" "$ODD_DIR/ripwire"
+# CodeRabbit PR #292 finding 4052087951: /usr/bin:/bin is not guaranteed empty of `ripwire` — a
+# system-installed copy there would let the wrapper resolve the bare name off PATH instead of emitting
+# this test's own odd absolute path, so a real bug (the wrapper failing to prefer/quote an odd path) could
+# pass silently. An EMPTY directory is the only PATH guaranteed to hold no `ripwire` anywhere.
+EMPTY_PATH="$TMP/empty-path"
+mkdir -p "$EMPTY_PATH"
+for agent in opencode cursor; do
+    PATH="$EMPTY_PATH" "$ODD_DIR/ripwire" wrap "$agent" --force >"$TMP/odd_$agent.txt" 2>/dev/null
+    awk '/^\{$/{f=1} f{print} /^\}$/{if(f)exit}' "$TMP/odd_$agent.txt" >"$TMP/odd_$agent.json"
+    verdict="$( python3 - "$TMP/odd_$agent.json" "$ODD_DIR/ripwire" "$agent" <<'PY'
+import json, os, sys
+path, want, agent = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    cfg = json.load( open( path ) )
+except Exception as e:
+    print( "FAIL the %s stanza is not valid JSON once the command is an odd absolute path: %s" % ( agent, e ) ); sys.exit( 0 )
+command = cfg[ "mcp" ][ "ripwire" ][ "command" ][ 0 ] if agent == "opencode" else cfg[ "mcpServers" ][ "ripwire" ][ "command" ]
+if os.path.realpath( command ) != os.path.realpath( want ):
+    print( "FAIL the %s stanza parses but names %r, not the running binary %r" % ( agent, command, want ) ); sys.exit( 0 )
+print( "PASS the %s stanza parses and names the running binary's quoted/backslashed path" % agent )
+PY
+)"
+    case "$verdict" in
+        PASS*) ok "${verdict#PASS }" ;;
+        *)     no "${verdict#FAIL }" ;;
+    esac
+done
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

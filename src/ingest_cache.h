@@ -249,7 +249,20 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 114;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 116;          // bump on any grammar/.scm/extraction change
+                                                      // 116 = 2026-09-18 (issue #287 round 2, review
+                                                      //   rv-p6.md HIGH: capturePythonRebindShadowDecls
+                                                      //   emits a LocalBindKind::VarDecl RawBind for every
+                                                      //   Python name-rebinding form — plain/augmented
+                                                      //   assignment, for-target, with/except-as, walrus,
+                                                      //   del, a nested def/class name, global/nonlocal —
+                                                      //   so Rule 2d's alias-receiver narrow can no longer
+                                                      //   mistake a rebound name for the still-live import)
+                                                      // 115 = 2026-09-18 (issue #287: capturePythonImportBinds
+                                                      //   now sets RawBind::importedName="module" iff the bound
+                                                      //   name IS the imported module (`import a.b`/`import
+                                                      //   a.b as c`), empty for `from m import x [as y]` — the
+                                                      //   module-alias receiver narrow reads this bit)
                                                       // 114 = 2026-09-17 (reference-returning definitions,
                                                       //    test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am
                                                       //    and q8): a C++/ObjC function definition returning `T&` or

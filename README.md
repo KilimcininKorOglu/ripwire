@@ -1817,10 +1817,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>639 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>641 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **639 gate scripts** and is the authoritative list; <!-- gatecount -->
-`python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
+`test/regression.sh` names **641 gate scripts** and is the authoritative list; <!-- gatecount -->`python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
 differential argv harness that runs a reference binary and the candidate over every argument vector
@@ -2388,7 +2387,10 @@ first column are not themselves valid arguments.
 
 Not sure which command answers the task? Run `ripwire . --help-task="<task in words>"`. The command
 returns one recommended command, or it abstains when the evidence is thin. The command gives advice
-only. It does not run the recommendation.
+only. It does not run the recommendation. A short bare word — a lone letter, a SCREAMING name, or an
+ordinary word that happens to match an indexed name (django's `F`, for instance) — does not resolve on
+its own; only genuine identifier shape does (camelCase, snake_case, `::`/`.`). Mark it as code in the
+task text — backtick it or write it in call form, e.g. `` `F` `` or `F()` — to route on it by name.
 
 ### 6. Output format
 

@@ -428,10 +428,13 @@ tsv("c.tsv", [(f, fn, k, n) for (f, fn, k), n in sorted(armC.items())])
 # ── (E) raw acquisitions crashsweepcheck's S2 does not name (fopen/open/popen/opendir/fdopen/open_memstream are its) ─
 # src/infra/os.h is THE seam (see its own header comment): socket/accept/pipe/dup/kqueue now reach a call site as
 # os::X or rw::os::X, so ACQ accepts that prefix on every name (accept keeps its own alternative since it is also
-# reached bare as ::accept4?). os.h's OWN wrapper DEFINITIONS are the one place the bare libc call still appears —
-# that is the seam working as designed, not an unregistered site — so this one file is exempt by name below.
+# reached bare as ::accept4?). dirwatch_open (kqueue()'s only caller) has no bare-libc name of its own, so it is
+# listed directly. os.h's OWN wrapper DEFINITIONS are the one place the bare libc call still appears — but ONLY
+# for the PURE PASSTHROUGH shape: a whole function body that is one `return (::)?NAME( args );`, forwarding its
+# own parameters and nothing else. That shape, and only that shape, is exempt inside os.h — the exemption is by
+# shape, not by file name, so a helper that does real work there is scanned like any other file.
 OS_SEAM_HEADER = "infra/os.h"
-ACQ = ("^(::|std::|os::|rw::os::)?(socket|pipe|pipe2|dup|kqueue|epoll_create|epoll_create1|inotify_init1|eventfd|mkstemp|mkdtemp|malloc|calloc|realloc|"
+ACQ = ("^(::|std::|os::|rw::os::)?(socket|pipe|pipe2|dup|kqueue|dirwatch_open|epoll_create|epoll_create1|inotify_init1|eventfd|mkstemp|mkdtemp|malloc|calloc|realloc|"
        "strdup|strndup|posix_memalign|aligned_alloc|ts_parser_new|ts_query_new|ts_query_cursor_new|ts_tree_copy|ts_parser_parse|"
        "ts_parser_parse_string|ts_parser_parse_string_encoding|ts_tree_cursor_new|ts_tree_cursor_copy)$|^(::|os::|rw::os::)accept4?$")
 destructorOf = {}
@@ -444,9 +447,26 @@ def has_destructor(f, typeName):
     return destructorOf[key]
 
 
+def _param_name(p):
+    m = re.search(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?$", p.strip())
+    return m.group(1) if m else p.strip()
+
+
+def os_seam_passthrough(f, ln):
+    if f != OS_SEAM_HEADER:
+        return False
+    line = code_of(f)[0].split("\n")[ln - 1]
+    m = re.search(r"\(([^()]*)\)\s*\{\s*return\s+(?:::)?[A-Za-z_]\w*\s*\(([^()]*)\)\s*;\s*\}\s*$", line.strip())
+    if not m:
+        return False
+    params = [_param_name(p) for p in m.group(1).split(",") if p.strip()]
+    args = [a.strip() for a in m.group(2).split(",") if a.strip()]
+    return params == args
+
+
 armE, owned = Counter(), 0
 for f, ln, fn, name in match('(call_expression function: [(identifier) (qualified_identifier)] @f (#match? @f "%s"))' % ACQ):
-    if f == OS_SEAM_HEADER:
+    if os_seam_passthrough(f, ln):
         continue
     if has_destructor(f, fn.split("::")[-1]):
         owned += 1      # acquired inside a type whose destructor releases it (the ParserGuard / ChildCursor shape)
@@ -512,6 +532,7 @@ ingest_crawl.h	compileQueryStandalone	ts_query_new	1	returned into the process-l
 ingest_parsepool.h	runParseWorker	ts_query_cursor_new	1	deleted at the end of the worker; the returns in between belong to lambdas
 ingest_sidecap.h	parseTree	ts_parser_parse_string	1	returned to the caller, which adopts it into TreeGuard
 main.cpp	runWithCompactLegend	dup	1	closed on the failure path and after the restore on the success path
+mcpindex.h	arm	dirwatch_open	1	owned	held by the FS watcher, closed by its reset and its destructor
 mcpserver.h	runMcpHttp	accept	1	each accepted connection is closed after its one request
 mcpserver.h	runMcpHttp	socket	1	the listening socket is closed before every return
 pattern.h	compileFor	ts_parser_new	1	deleted right after the parse, and on the null-language return

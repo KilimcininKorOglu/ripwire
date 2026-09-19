@@ -18,6 +18,7 @@
 #include "sarif.h"           // rootRelativeUri / rootPrefixOf — the ONE root-relative path rule the map emits with
 #include "verify.h"          // parseClaim — the SHIPPED claim grammar; the router never re-implements it
 #include "compactlegend.h"  // rw::legendCompactAppliesTo — ONE answer to "does --legend=compact apply here"
+#include "commentcoherence.h" // rw::isCommentStopword — the general-English stoplist, reused rather than duplicated
 
 namespace rw::taskroute
 {
@@ -141,6 +142,32 @@ inline int phraseScore( std::string_view lower, std::initializer_list<std::pair<
 inline int wordScore( std::string_view lower, std::initializer_list<std::pair<std::string_view, int>> words ) noexcept
 {
     return cueScore( lower, CueMatch::WordBounded, words );
+}
+
+// Is `task` a harness/system event rather than something a user typed — a background-task wake-up or an
+// injected reminder, delivered to UserPromptSubmit through the same channel as a real prompt (Claude Code
+// routes both `<task-notification>…</task-notification>` completions and `<system-reminder>…</system-reminder>`
+// blocks this way)? Both the Claude Code and Codex UserPromptSubmit router hooks (under hooks/, filenames
+// ending "-route.sh") skip calling this classifier at all on such input — a bash-level guard mirroring the
+// PreToolUse tool-call router's own pre-classification notification check (hooks/, filename ending
+// "-toolroute.sh") — but --help-task is also callable directly: by a test, by an MCP client, by a future
+// integration that does not go through either hook. So the same discipline lives here too, rather than
+// only at the shell layer. A background-task report is mostly prose quoting machine output (a sanitizer
+// excerpt, a diff, an XML `<result>` block): before this guard existed, that prose could mint a
+// `--from-trace=-`/`--grep=`/`--connect=` recommendation out of text that named no task at all (the
+// routing-noise round, docs/EVALS.md). Narrow and literal on purpose — this is a shape check on the
+// harness's own wake-up markers, not a guess at what a user prompt looks like: only the FIRST non-
+// whitespace bytes are tested, so a user prompt that happens to mention `<task-notification>` in the
+// middle of a sentence ("what does <task-notification> mean in the hook?") is unaffected.
+inline bool looksLikeSystemEvent( std::string_view task ) noexcept
+{
+    std::size_t i = 0;
+    while( i < task.size() && ( task[i] == ' ' || task[i] == '\t' || task[i] == '\n' || task[i] == '\r' ) )
+    {
+        ++i;
+    }
+    const std::string_view rest = task.substr( i );
+    return rest.starts_with( "<task-notification>" ) || rest.starts_with( "<system-reminder>" );
 }
 
 inline bool looksLikeTrace( std::string_view lower ) noexcept
@@ -291,10 +318,89 @@ inline std::size_t findInSymbolSlot( std::string_view lowerTask, std::string_vie
     return pos;
 }
 
+// A NAME that carries at least one of {uppercase, '_', ':', '$'} is a STRONG-mention CANDIDATE — but the
+// byte alone is not evidence, only the reason to look closer. Ripwire's own fixture corpora define
+// single-word symbols literally named `A`, `E`, `Fix`, `Summary`, `Report`, `Lane`, `Split` and `WORK`
+// (test fixtures written for unrelated rounds), and the old rule here — ANY uppercase/underscore/colon/
+// dollar byte anywhere in the name — let a bare leading capital through on shape alone. A background-task
+// report quoting prose like "Summary: A, Fix, Report" then satisfied it for four different names in one
+// sentence, minting a spurious `--connect=` recommendation (>=3 "resolved symbols") out of text that never
+// named a task at all — the routing-noise round (docs/EVALS.md). Genuine shape, checked in this order:
+//   1. The occurrence itself is explicitly marked as code IN THE PROMPT — wrapped in backticks, or
+//      immediately followed by "()" (a call). This overrides the name's own shape: a user who writes
+//      `` `Report` `` or `Report()` has said, unambiguously, "this is code".
+//   2. Otherwise the NAME must carry real identifier punctuation: an interior uppercase letter directly
+//      after a lowercase one (a camel/Pascal SEAM — "CacheNode" qualifies, a bare leading capital like
+//      "Report" does not), an underscore, a "::"/"." qualifier, or a "$". A SCREAMING word (uppercase
+//      throughout, no lowercase — "WORK") never qualifies here: it has no seam to test, and a short
+//      all-caps word is exactly the collision class step 1 exists to admit only when the prompt itself
+//      marks it as code — single letters and all-caps short words never count unless backticked.
+//   3. Failing both, the bare word still counts if it is at least 4 bytes, carries a lowercase letter (so
+//      SCREAMING is excluded here too), and is not an ordinary English word — reusing commentcoherence.h's
+//      isCommentStopword first (general reuse, mandatory before adding anything new), then a second,
+//      narrowly-scoped list (kShapelessCollisionWords, below) for the ordinary NOUNS a function-word list
+//      does not carry ("report", "summary", "split", "lane" — the routing-noise round's own noise text:
+//      "Summary: A, Fix, Report" and "...Lane E WORK"). Kept separate from kWeakSymbolStopWords on
+//      purpose: that list governs the ALL-LOWERCASE weak tier and has its own audited scope (2026-09-10),
+//      and folding this round's words into it would let an unrelated future round's behavior drift.
+inline bool identifierMentionShape( std::string_view task, std::size_t pos, std::string_view name ) noexcept
+{
+    // Precondition from the one call site: `name` was located AT `pos` by boundedFind( task, name )
+    // immediately before this call, so [pos, pos+name.size()) is inside `task` by construction. This is
+    // the caller's contract, not this function's own invariant, so EXPECTS rather than ASSUME.
+    EXPECTS( pos + name.size() <= task.size(), "the caller resolved name at pos via boundedFind first" );
+    const bool backticked = pos > 0 && pos + name.size() < task.size()
+                          && task[pos - 1] == '`' && task[pos + name.size()] == '`';
+    const bool calledForm = pos + name.size() + 1 < task.size()
+                          && task[pos + name.size()] == '(' && task[pos + name.size() + 1] == ')';
+    if( backticked || calledForm )
+    {
+        return true;
+    }
+
+    bool hasLower = false, hasUpper = false, camelSeam = false, hasUnderscore = false;
+    for( std::size_t i = 0; i < name.size(); ++i )
+    {
+        const unsigned char c = (unsigned char)name[i];
+        if( c == '_' ) { hasUnderscore = true; continue; }
+        if( std::islower( c ) ) { hasLower = true; }
+        if( std::isupper( c ) )
+        {
+            hasUpper = true;
+            if( i > 0 && std::islower( (unsigned char)name[i - 1] ) ) { camelSeam = true; }
+        }
+    }
+    const bool scoped = name.find( "::" ) != std::string_view::npos || name.find( '.' ) != std::string_view::npos;
+    const bool dollar = name.find( '$' ) != std::string_view::npos;
+    if( hasUnderscore || camelSeam || scoped || dollar )
+    {
+        return true;
+    }
+    if( !hasLower )
+    {
+        return false;   // SCREAMING or a lone capital letter — shape alone never counts (step 1 still can)
+    }
+    if( name.size() < 4 )
+    {
+        return false;
+    }
+    const std::string lowered = lowerAscii( name );
+    if( isCommentStopword( lowered ) )
+    {
+        return false;
+    }
+    // See step 3 above: ordinary nouns a general-English function-word stoplist does not carry, but that
+    // this round's own noise prompts used as report/notification prose. Extend here, narrowly, rather
+    // than in kWeakSymbolStopWords (a different tier's already-audited list).
+    static constexpr std::string_view kShapelessCollisionWords[] = { "lane", "report", "split", "summary" };
+    return !isOneOf( lowered, std::begin( kShapelessCollisionWords ), std::size( kShapelessCollisionWords ) );
+}
+
 // Where, and how strongly, one indexed name is mentioned in the task. Identifier shape
-// (camel/Pascal/snake/scoped) is a STRONG mention and counts wherever it appears. An all-lowercase name is
-// no longer discarded outright — a word-bounded exact hit on the real symbol table beats casing as
-// evidence — but it counts only from a symbol slot, and only as a WEAK mention.
+// (camel/Pascal/snake/scoped, see identifierMentionShape) is a STRONG mention and counts wherever it
+// appears. An all-lowercase name is no longer discarded outright — a word-bounded exact hit on the real
+// symbol table beats casing as evidence — but it counts only from a symbol slot, and only as a WEAK
+// mention.
 struct SymbolMention
 {
     bool        matched = false;
@@ -304,20 +410,45 @@ struct SymbolMention
 
 inline SymbolMention symbolMention( std::string_view task, std::string_view lowerTask, std::string_view name )
 {
-    const bool strong = std::any_of( name.begin(), name.end(), []( const unsigned char c )
+    // lowerTask is always lowerAscii( task ) at every call site (resolveTaskSymbols builds it once, byte
+    // for byte, ASCII-only): findInSymbolSlot's positions into lowerTask are handed straight back out as
+    // positions into task, and that substitution is only sound when the two strings are the same length.
+    ASSUME( lowerTask.size() == task.size(), "lowerTask is lowerAscii(task) — a position in one is a position in the other" );
+    // '.' is here for the same reason ':' is: identifierMentionShape treats a "::" OR "." qualifier as a
+    // scoped-name seam (see `scoped` there), so the gate that decides whether to even TRY that shape test
+    // must recognize both scope spellings, not just one. Missing this let an all-lowercase dotted name —
+    // a real indexed shape: TOML nested tables index as t="sec" symbols named literally "tool.poetry" —
+    // fall through to the weak tier, where Section-kind symbols are never weak evidence (weakEvidenceKind),
+    // so the name could not resolve even when explicitly backtick-marked in the task text (backticks are
+    // step 1 of identifierMentionShape, itself unreachable without this).
+    const bool hasMark = std::any_of( name.begin(), name.end(), []( const unsigned char c )
     {
-        return std::isupper( c ) || c == '_' || c == ':' || c == '$';
+        return std::isupper( c ) || c == '_' || c == ':' || c == '.' || c == '$';
     } );
-    if( !strong && !weakSymbolCandidate( name ) )
+    if( hasMark )
+    {
+        // A marked name that fails the shape test is never re-tried against the (all-lowercase) weak
+        // path below: findInSymbolSlot searches lowerTask, and a name that still carries a capital can
+        // never byte-match there, so falling through would only cost a wasted scan for an identical "no
+        // match" answer. This early return states that outcome explicitly instead of arriving at it by
+        // accident.
+        const std::size_t pos = boundedFind( task, name );
+        if( pos == std::string_view::npos || !identifierMentionShape( task, pos, name ) )
+        {
+            return {};
+        }
+        return { true, true, pos };
+    }
+    if( !weakSymbolCandidate( name ) )
     {
         return {};
     }
-    const std::size_t pos = strong ? boundedFind( task, name ) : findInSymbolSlot( lowerTask, name );
+    const std::size_t pos = findInSymbolSlot( lowerTask, name );
     if( pos == std::string_view::npos )
     {
         return {};
     }
-    return { true, strong, pos };
+    return { true, false, pos };
 }
 
 inline std::vector<std::string> resolveTaskSymbols( std::string_view task, const IngestResult& ing )
@@ -1225,8 +1356,15 @@ inline TaskRouteResult classifyRoutes( std::string_view task, const std::string&
                                        const RouterCaps& caps )
 {
     TaskRouteResult result;
-    result.facts.git             = git;
-    result.facts.dirty           = dirty;
+    result.facts.git = git;
+    result.facts.dirty = dirty;
+    // A harness/system event outranks every other read — never worth resolving symbols or trace shape out
+    // of a background-task report at all (see looksLikeSystemEvent). Facts stay at their defaults
+    // (trace=0, resolved_symbols=0): nothing below was evaluated, which is itself honest disclosure.
+    if( looksLikeSystemEvent( task ) )
+    {
+        return result;
+    }
     result.facts.trace           = looksLikeTrace( lowerAscii( task ) );
     result.facts.resolvedSymbols = resolveTaskSymbols( task, ing );
     const std::string lower      = lowerAscii( task );

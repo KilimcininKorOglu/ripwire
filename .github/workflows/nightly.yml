@@ -197,15 +197,33 @@ jobs:
           ./tsan/ripwire --version | grep -q 'emit=std::print'
 
       # A green TSan leg over an uninstrumented binary is the most expensive way to prove nothing. Every object of the
-      # ripwire target must call into the TSan runtime, and the runtime must be linked into the binary. grep -c, not -q:
-      # -q exits at the first match, and under pipefail the SIGPIPE it hands nm would read as "not instrumented".
+      # ripwire target that defines a function of its own must call into the TSan runtime, and the runtime must be
+      # linked into the binary. grep -c, not -q: -q exits at the first match, and under pipefail the SIGPIPE it hands
+      # nm would read as "not instrumented".
+      #
+      # A DATA-ONLY translation unit is a real, shipping case (build/generated/source_identity.cpp — one
+      # `extern const char[]` definition, no functions — see cmake/source_identity.cmake) and it can never call
+      # __tsan_func_entry, correctly compiled or not: there is no function body to instrument. Requiring the call
+      # unconditionally false-flagged it (issue #288). Instead of name-exempting that one file, ask what the check
+      # actually means: does this TU define any function of its own? `nm`'s defined text/weak symbols answer that,
+      # EXCEPT clang's own per-TU `tsan.module_ctor` — compiler-synthesized registration glue that -fsanitize=thread
+      # emits into every TU it touches, function or not, and itself the proof the flag reached this TU. Excluded from
+      # the "does it define a function" count, its presence (or a bare __tsan_init reference) is what a data-only TU
+      # is checked against instead: the flag must still have reached it, even though it has nothing for the flag to
+      # instrument. A TU with real functions still must show __tsan_func_entry, exactly as before.
       - name: ripwire's own objects are instrumented, and the binary carries the TSan runtime
         run: |
           total=0; bare=0
           while IFS= read -r obj; do
             total=$(( total + 1 ))
-            if ! nm "$obj" | grep -c '__tsan_func_entry' >/dev/null; then
-              echo "::error::not instrumented: $obj"
+            funcs=$( nm --defined-only "$obj" 2>/dev/null | awk '$2 ~ /^[TtWw]$/ && $3 !~ /\.module_ctor$/ { c++ } END { print c+0 }' )
+            if [ "$funcs" -gt 0 ]; then
+              if ! nm "$obj" | grep -c '__tsan_func_entry' >/dev/null; then
+                echo "::error::not instrumented: $obj"
+                bare=$(( bare + 1 ))
+              fi
+            elif ! nm "$obj" | grep -c 'module_ctor\|__tsan_init' >/dev/null; then
+              echo "::error::not instrumented (data-only, sanitizer flag never reached this TU): $obj"
               bare=$(( bare + 1 ))
             fi
           done < <( find tsan/CMakeFiles/ripwire.dir -name '*.o' | LC_ALL=C sort )
