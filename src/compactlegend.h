@@ -945,10 +945,11 @@ inline constexpr double kCompactRepriceDensestBytesPerToken = 2.36;
     EXPECTS( oldTokens > 0 && fullBytes > 0, "a priced document has bytes and a positive price" );
     if( compactBytes <= fullBytes )
     {
-        // The document's average rate, QUANTISED UP to 0.05 B/token: a price must not move with bytes the rewrite did not
-        // touch (runtracecheck (G2): duration_ms="9" vs "1064" is 3 bytes of digits, and an exact ratio turned that into a
-        // one-token price change). Rounding the rate UP removes fewer tokens, so the bound stays an upper bound.
-        const double    rate    = std::ceil( double( fullBytes ) / double( oldTokens ) * 20.0 ) / 20.0;
+        // The document's average rate, QUANTISED to the nearest 0.05 B/token: a price must not move with bytes the rewrite
+        // did not touch (runtracecheck (G2): duration_ms="9" vs "1064" is 3 bytes of digits, and an exact ratio turned that
+        // into a one-token price change). Nearest, not up: a document priced at exactly 2.50 (--pr-context) reprices exactly
+        // (prbudgetcheck #9 recounts to +/-1); the rounding moves the rate by at most 0.025, about 1%.
+        const double    rate    = std::round( double( fullBytes ) / double( oldTokens ) * 20.0 ) / 20.0;
         const double    removed = double( fullBytes - compactBytes ) / rate;
         const long long next    = oldTokens - static_cast<long long>( removed );   // floor: the fewest tokens removed
         return next > 0 ? next : 1;
