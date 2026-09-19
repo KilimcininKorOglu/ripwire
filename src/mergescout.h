@@ -137,13 +137,22 @@ struct Arm
     // HEAD. A subset of `changed`, key-sorted, and empty by construction for an arm that forked off current
     // HEAD (baseSha == headSha) or for the working-tree arm.
     std::vector<ChangedSym> headConflicts;
+    // false ⇒ the head-conflict lane could not diff this arm's base against HEAD (a side's tree unavailable):
+    // headConflicts is then UNKNOWN, not empty — the row says head_conflicts_ok="0". `changed` is unaffected.
+    bool                    headLaneOk = true;
     enum class DisclosureWhy : std::uint8_t
     {
         NoMergeBase,
-        TreeUnavailable,   // a side's tree could not be materialized or ingested
+        TreeUnavailable,       // a side's tree could not be materialized or ingested: arm ok="0", empty changed set
+        HeadTreeUnavailable,   // the head-conflict lane's base-vs-HEAD diff had no tree: head_conflicts_ok="0"
     };
-    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact: arm ok="0", empty changed set
+    void disclose( DisclosureWhy why ) noexcept
     {
+        if( why == DisclosureWhy::HeadTreeUnavailable )
+        {
+            headLaneOk = false;
+            return;
+        }
         ok = false;
     }
 };
@@ -444,21 +453,38 @@ inline Arm computeNamedArm( std::string_view ref, const std::string& refSha, con
 // sat unmerged. Key-sorted (diffTreeIndex's own contract), so the intersection below can binary-search it.
 // Empty — and, crucially, costing NO tree at all — when the arm forked off current HEAD (baseSha == headSha,
 // the common case) or when its merge-base never resolved.
-inline std::vector<std::uint64_t> headChangedKeysSince( const std::string& baseSha, const std::string& headSha, TreeIndexMemo& memo )
+// `isAvailable` false ⇒ one of the two trees could not be materialized or ingested (SymTreeIndex::isIndexed): the
+// keys are then UNKNOWN, and diffing the unavailable side as an empty tree would report every symbol of the other
+// as landed work — the same contract computeNamedArm refuses on.
+struct HeadChanged
 {
     std::vector<std::uint64_t> keys;
+    bool                       isAvailable = true;
+};
+
+inline HeadChanged headChangedKeysSince( const std::string& baseSha, const std::string& headSha, TreeIndexMemo& memo )
+{
+    HeadChanged out;
     if( baseSha.empty() || baseSha == headSha )
     {
-        return keys;
+        return out;
     }
 
-    const std::vector<ChangedSym> headChanged = diffTreeIndex( memo.get( baseSha ), memo.get( headSha ) );
-    keys.reserve( headChanged.size() );
+    const SymTreeIndex base = memo.get( baseSha );
+    const SymTreeIndex head = memo.get( headSha );
+    if( !base.isIndexed || !head.isIndexed )
+    {
+        out.isAvailable = false;
+        return out;
+    }
+    const std::vector<ChangedSym> headChanged = diffTreeIndex( base, head );
+    out.keys.reserve( headChanged.size() );
     for( const ChangedSym& s : headChanged )
     {
-        keys.push_back( s.key );
+        out.keys.push_back( s.key );
     }
-    return keys;   // already key-sorted (diffTreeIndex emits in key order)
+    ENSURES( std::is_sorted( out.keys.begin(), out.keys.end() ) );   // diffTreeIndex emits in key order; intersect binary-searches it
+    return out;
 }
 
 // The arm's own changed symbols that the live line ALSO changed since the arm forked. A subset of
@@ -483,7 +509,7 @@ inline std::vector<ChangedSym> intersectHeadChanged( const std::vector<ChangedSy
 
 // The lane's plan: merge-base sha -> the live line's changed keys since it, one entry per DISTINCT base that
 // is not HEAD's own sha (an arm forked off current HEAD cannot collide with landed work — there is none).
-using HeadChangedByBase = gtl::btree_map<std::string, std::vector<std::uint64_t>>;
+using HeadChangedByBase = gtl::btree_map<std::string, HeadChanged>;
 
 // Which bases the lane will actually diff. Empty on the common "everything forked off current HEAD" shape,
 // so that shape pays nothing: no extra tree, no extra diff, no extra memo reservation.
@@ -504,9 +530,9 @@ inline HeadChangedByBase planHeadConflictLane( const std::vector<std::string>& b
 // tree is materialized, so TreeIndexMemo still frees a tree right after its true LAST consumer (Y1).
 inline void reserveHeadConflictLane( const HeadChangedByBase& plan, const std::string& headSha, TreeIndexMemo& memo )
 {
-    for( const auto& [ baseSha, keys ] : plan )
+    for( const auto& [ baseSha, lane ] : plan )
     {
-        (void)keys;
+        (void)lane;
         memo.reserve( baseSha );
         memo.reserve( headSha );
     }
@@ -520,7 +546,14 @@ inline Arm computeWorkingTreeArm( const std::string& root, const std::string& he
     Arm arm;
     arm.ref     = kWorkingTreeRef;
     arm.baseSha = headSha;
-    arm.changed = diffTreeIndex( memo.get( headSha ), buildTreeIndex( workingIng, root ) );
+    const SymTreeIndex head = memo.get( headSha );
+    if( !head.isIndexed )
+    {
+        // an unavailable HEAD tree is not an empty one: diffing against it would report every working-tree symbol as new work
+        DISCLOSE( arm, Arm::DisclosureWhy::TreeUnavailable, "merge-scout: HEAD's tree could not be materialized or ingested — reporting an empty working-tree arm" );
+        return arm;
+    }
+    arm.changed = diffTreeIndex( head, buildTreeIndex( workingIng, root ) );
     return arm;
 }
 
@@ -584,9 +617,9 @@ inline ScoutResult computeMergeScout( const std::string& root, std::string_view 
 
     // The head-conflict diffs run FIRST: their reserves are already counted above, so a base tree they touch
     // stays memoized for the arm loop below instead of being materialized twice.
-    for( auto& [ baseSha, keys ] : headChangedByBase )
+    for( auto& [ baseSha, lane ] : headChangedByBase )
     {
-        keys = headChangedKeysSince( baseSha, result.headSha, memo );
+        lane = headChangedKeysSince( baseSha, result.headSha, memo );
     }
 
     for( std::size_t i = 0; i < refs.size(); ++i )
@@ -594,7 +627,14 @@ inline ScoutResult computeMergeScout( const std::string& root, std::string_view 
         Arm arm = computeNamedArm( refs[i], refShas[i], baseShas[i], memo );
         if( const auto it = headChangedByBase.find( arm.baseSha ); it != headChangedByBase.end() )
         {
-            arm.headConflicts = intersectHeadChanged( arm.changed, it->second );
+            if( it->second.isAvailable )
+            {
+                arm.headConflicts = intersectHeadChanged( arm.changed, it->second.keys );
+            }
+            else
+            {
+                DISCLOSE( arm, Arm::DisclosureWhy::HeadTreeUnavailable, "merge-scout: the base or HEAD tree could not be materialized or ingested — head conflicts unknown for this arm" );
+            }
         }
         result.arms.push_back( std::move( arm ) );
     }
@@ -753,8 +793,9 @@ inline void writeScoutArm( std::FILE* out, const Arm& arm, const XmlEscaper& ex 
     // §A10.4: base= is display-only here — 9-hex-char width, matching the at=/head= convention
     // (gitstamp.h) every other sha-bearing attribute in the tool uses. arm.baseSha itself stays full-length
     // (it is still used as a TreeIndexMemo key elsewhere); only the printed attribute is truncated.
-    rw::emitTo( out, "<arm ref=\"{}\" base=\"{}\" ok=\"{}\" changed=\"{}\" head_conflicts=\"{}\">",
-                  ex( arm.ref ).c_str(), ex( arm.baseSha.substr( 0, 9 ) ).c_str(), arm.ok ? 1 : 0, arm.changed.size(), arm.headConflicts.size() );
+    rw::emitTo( out, "<arm ref=\"{}\" base=\"{}\" ok=\"{}\" changed=\"{}\" head_conflicts=\"{}\"{}>",
+                  ex( arm.ref ).c_str(), ex( arm.baseSha.substr( 0, 9 ) ).c_str(), arm.ok ? 1 : 0, arm.changed.size(), arm.headConflicts.size(),
+                  arm.headLaneOk ? "" : " head_conflicts_ok=\"0\"" );
     // §P11.13: a changed="0" arm has no divergent work to LAND — it used to get a landing slot anyway
     // (landingOrder() below drops it now, see there), with nothing on this row saying why it's absent from
     // the list an agent would otherwise expect it in. A meaningfully-named child element carrying a `note=`
@@ -826,7 +867,9 @@ inline void writeMergeScout( std::FILE* out, const ScoutResult& result )
                        "against live HEAD — so a file an arm never opened can never appear here just because the "
                        "live line moved. head_conflicts= is the one thing that anchor hides, kept as its own row "
                        "class: symbols this arm changed that the LIVE LINE also changed since the arm forked, a "
-                       "merge fight no pairwise ARM comparison can see because HEAD is not an arm. A row carrying "
+                       "merge fight no pairwise ARM comparison can see because HEAD is not an arm; head_conflicts_ok=\"0\" "
+                       "(absent otherwise) means that lane could not run for the arm (its base or HEAD tree was unavailable), "
+                       "so head_conflicts= there is unknown, not zero. A row carrying "
                        "anchoring=file-level is a whole-file fallback for a file with zero real-body symbols (no "
                        "tree-sitter symbol spans it) — counted and conflict-checked like any other row, just not "
                        "attributed to a symbol inside it. at= is the git commit these numbers were computed at; a "
