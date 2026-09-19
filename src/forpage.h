@@ -39,6 +39,7 @@
 // keeps `--expand=FILE:NAME`. The thresholds are a registered hypothesis (PLAN_OUTPUT_ROUTING_LOOP §1.5 L-N),
 // not a tuned number: the routing-loop ladder measures them, and a later round moves them with a measured reason.
 
+#include "infra/tablelookup.h"  // rw::isOneOf / rw::isDigits — the shared table-membership predicates (L3 blend)
 #include "lexical.h"     // LexTermEvidence — the term masks + df the BM25 pass already accumulated
 #include "model.h"
 #include "nextverb.h"    // nextFlag / nextAttrXml / kNextAttrMaxBytes — the ONE next= spelling
@@ -290,25 +291,9 @@ inline constexpr std::string_view kForPageBlendStop[] =
     "for", "when", "rocksdb",
 };
 
-inline bool forPageBlendIsStop( std::string_view t ) noexcept
-{
-    for( const std::string_view w : kForPageBlendStop )
-    {
-        if( t == w ) { return true; }
-    }
-    return false;
-}
-
-// EXPECTS: called only on a non-empty token (forPageBlendToks's flush() short-circuits on cur.empty()).
-inline bool forPageBlendAllDigits( std::string_view t ) noexcept
-{
-    EXPECTS( !t.empty(), "forPageBlendToks flushes only non-empty tokens" );
-    for( const char c : t )
-    {
-        if( c < '0' || c > '9' ) { return false; }
-    }
-    return true;
-}
+// rw::isOneOf (infra/tablelookup.h) — the shared "string_view in a fixed table" membership check;
+// this used to be a hand-rolled loop here, which is a clone of the identical shape lintrules.h,
+// mcp.h, mcpverbs.h and skillscan.h each write out separately (quality-delta's finding, fix round 1).
 
 // The SAME tokenizer the registered simulator (pagesim.py's toks()) runs: a lowercase letter directly
 // followed by an uppercase one is a camelCase split (one rule — NOT the acronym-aware ladder
@@ -322,7 +307,7 @@ inline void forPageBlendToks( std::string_view s, std::vector<std::string>& out 
     char        prevRaw = 0;
     auto        flush = [ & ]()
     {
-        if( !cur.empty() && !forPageBlendIsStop( cur ) && !forPageBlendAllDigits( cur ) )
+        if( !cur.empty() && !isOneOf( cur, kForPageBlendStop ) && !isDigits( cur ) )
         {
             out.push_back( cur );
         }

@@ -24,6 +24,10 @@
 //     the handler refuses loudly rather than emitting an empty map).
 
 #include "infra/Diagnostics.h"   // ASSUME — the frames-seen tally's own invariant (§B10)
+#include "infra/tablelookup.h"   // rw::isDigits — moved here (routing-loop round 1 Amendment 1 fix
+                                  // round) once forpage.h needed the identical predicate; unqualified
+                                  // isDigits() calls below now resolve to rw::isDigits by ordinary
+                                  // enclosing-namespace lookup, unchanged at every call site.
 
 #include <cstdint>
 #include <optional>
@@ -76,21 +80,7 @@ struct ParsedFrame
 namespace detail
 {
 
-inline bool isDigits( std::string_view s ) noexcept
-{
-    if( s.empty() )
-    {
-        return false;
-    }
-    for( const char c : s )
-    {
-        if( c < '0' || c > '9' )
-        {
-            return false;
-        }
-    }
-    return true;
-}
+// isDigits moved to infra/tablelookup.h (rw::isDigits) — see the #include above.
 
 // F7: a hostile/garbled frame line number (e.g. a fuzzed or truncated trace) can exceed UINT32_MAX;
 // unchecked `v*10+d` wraps mod 2^32 (4294967297 -> 1), which then confidently maps to a REAL line in the
