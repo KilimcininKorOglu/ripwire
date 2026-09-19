@@ -30,7 +30,8 @@ though it's the tempting first instinct.
 ## Before you write a function / class / util
 1. **Find the building block first** — `ripwire <dir> --for="<what you're about to build>"` → ranked existing
    signatures (plus, when the code has them, the `<lego>` / `<compose>` HAS-A blocks — what a class already
-   owns). If you can name the helper you suspect exists, query it verbatim (`--for="parseByteSize"`) — `--for`
+   owns; a block that would cost more than its count arrives as a counted stub, `shown="0"` with a `next=`,
+   and `--sections=lego,compose` restores both in full). If you can name the helper you suspect exists, query it verbatim (`--for="parseByteSize"`) — `--for`
    auto-routes to name-exact retrieval and lands it at recall@1 ~99%. It also carries
    the quality lens (`cx`/`ccx`/`in`/`churn`/`amp`/`tested`) so you see which
    candidates are safe to extend. Often the thing exists — compose from it.

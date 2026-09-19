@@ -47,16 +47,19 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 echo "legocheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # ── 1) determinism (--for) + warm==cold ───────────────────────────────────────
+# L2 (round-1 lever B1, 2026-09-19): --sections=lego,compose opts back into the full <lego>…</lego> render
+# this gate's assertions 2/4 below inspect (the interface/impl/contract CAPTURE this file exists to test,
+# unaffected by the stub default: same post-filter data, see test/legobundlecheck.sh's identical note).
 FORQ="animal shape vehicle interface implementation factory"
-"$BIN" "$CORPUS" --no-cache --for="$FORQ" 2>/dev/null > "$TMP/for_a"
-"$BIN" "$CORPUS" --no-cache --for="$FORQ" 2>/dev/null > "$TMP/for_b"
+"$BIN" "$CORPUS" --no-cache --for="$FORQ" --sections=lego,compose 2>/dev/null > "$TMP/for_a"
+"$BIN" "$CORPUS" --no-cache --for="$FORQ" --sections=lego,compose 2>/dev/null > "$TMP/for_b"
 diff -q "$TMP/for_a" "$TMP/for_b" >/dev/null \
     && ok "determinism --for (byte-identical, $(wc -c <"$TMP/for_a" | tr -d ' ') B)" \
     || no "determinism --for (non-deterministic output)"
 
 # warm==cold: a cached run must match the no-cache run byte-for-byte.
-"$BIN" "$CORPUS" --cache="$TMP/idx.cache" --for="$FORQ" 2>/dev/null >/dev/null   # cold: populate
-"$BIN" "$CORPUS" --cache="$TMP/idx.cache" --for="$FORQ" 2>/dev/null > "$TMP/for_warm"   # warm: reuse
+"$BIN" "$CORPUS" --cache="$TMP/idx.cache" --for="$FORQ" --sections=lego,compose 2>/dev/null >/dev/null   # cold: populate
+"$BIN" "$CORPUS" --cache="$TMP/idx.cache" --for="$FORQ" --sections=lego,compose 2>/dev/null > "$TMP/for_warm"   # warm: reuse
 diff -q "$TMP/for_a" "$TMP/for_warm" >/dev/null \
     && ok "warm==cold --for (cache byte-identical to cold)" \
     || no "warm!=cold --for (cache perturbs output)"

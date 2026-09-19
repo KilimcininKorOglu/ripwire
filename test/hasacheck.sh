@@ -38,8 +38,11 @@ diff -q "$TMP/around_a" "$TMP/around_b" >/dev/null \
     && ok "determinism --around (byte-identical, $(wc -c <"$TMP/around_a" | tr -d ' ') B)" \
     || no "determinism --around (non-deterministic output)"
 
-"$BIN" "$CORPUS" --no-cache --for="member field composition" 2>/dev/null > "$TMP/for_a"
-"$BIN" "$CORPUS" --no-cache --for="member field composition" 2>/dev/null > "$TMP/for_b"
+# L2 (round-1 lever B1, 2026-09-19): --sections=lego,compose opts back into the full <compose>…</compose>
+# render this gate's assertions below inspect — --for collapses it to a counted stub by default (see
+# test/legobundlecheck.sh's identical note; unaffected: the SAME compose edges are what the stub counts).
+"$BIN" "$CORPUS" --no-cache --for="member field composition" --sections=lego,compose 2>/dev/null > "$TMP/for_a"
+"$BIN" "$CORPUS" --no-cache --for="member field composition" --sections=lego,compose 2>/dev/null > "$TMP/for_b"
 diff -q "$TMP/for_a" "$TMP/for_b" >/dev/null \
     && ok "determinism --for (byte-identical, $(wc -c <"$TMP/for_a" | tr -d ' ') B)" \
     || no "determinism --for (non-deterministic output)"

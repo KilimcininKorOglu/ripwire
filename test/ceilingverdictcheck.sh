@@ -245,9 +245,18 @@ case "$CV_FLAVOUR" in
         RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$ROOT/test/fixture" --max-tokens=3000 --json --no-cache 2>/dev/null | grep -q '"fit_bytes":[0-9]*,"fit_measured_in":"xml","over_ceiling":true,"fit_unmeasured":true' \
             && ok "(9) the JSON map carries over_ceiling:true AND fit_unmeasured:true on the same degrade (XML parity)" \
             || no "(9) the JSON map's unmeasured fit reads as a held cap, or as a measured overflow (no fit_unmeasured key)"
-        "$BIN" "$ROOT/test/fixture" --max-tokens=3000 --no-cache 2>/dev/null | grep -q 'fit_unmeasured\|max_tokens=3000 fit_bytes=[0-9]* over_ceiling' \
-            && no "(9) control: the unfaulted map carries fit_unmeasured/over_ceiling" \
-            || ok "(9) control: the unfaulted map carries neither (the cap is measured and held)" ;;
+        # CodeRabbit thread 4053600628 (test/ceilingverdictcheck.sh:250): grep -q against a command whose
+        # output was piped straight in passed vacuously if the unfaulted run failed or printed nothing at
+        # all — no marker in empty output is still "no match". Capture rc and stdout FIRST, require exit 0
+        # and the max_tokens=3000 stamp (proof the run actually produced this map), THEN assert absence.
+        m9out="$( "$BIN" "$ROOT/test/fixture" --max-tokens=3000 --no-cache 2>/dev/null )"; m9rc=$?
+        if [ "$m9rc" -eq 0 ] && printf '%s' "$m9out" | grep -q 'max_tokens=3000'; then
+            printf '%s' "$m9out" | grep -q 'fit_unmeasured\|max_tokens=3000 fit_bytes=[0-9]* over_ceiling' \
+                && no "(9) control: the unfaulted map carries fit_unmeasured/over_ceiling" \
+                || ok "(9) control: the unfaulted map carries neither (the cap is measured and held)"
+        else
+            no "(9) control: the unfaulted run did not produce a max_tokens=3000 map (rc=$m9rc) — the control proves nothing"
+        fi ;;
 esac
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "ceilingverdictcheck: FAILURES ABOVE"

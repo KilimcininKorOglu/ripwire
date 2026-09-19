@@ -1578,6 +1578,43 @@ inline std::string mentionsJson( const std::string& root, const std::string& sym
 // had, and the re-price after the insert is monotone — the clause widens a document that is already over
 // and can never bring it back under. A free function, not inline code: forTaskText is one of the largest
 // bodies in this file and this step is a whole contract of its own.
+// R2-L2p (independent review, 2026-09-19): the MCP twin of the CLI's sectionsStubNote splice (verbs_for.h
+// finishForLensHeaderPriced, `spliceBefore( header, " -->", /*fromEnd=*/true, … )`) — same shared clause text
+// (rw::kForSectionStubLegend), inserted into forTaskText's finished document iff `stubbed` (the caller's
+// mcpLegoWillStub || mcpComposeWillStub) is true. A free function for the same reason priceForTaskRoot just
+// below is one: forTaskText is already one of the largest bodies in this file, and every branch this needs
+// belongs in its own small contract rather than inline in that function — `stubbed` false is the overwhelmingly
+// common path and costs forTaskText nothing but a call.
+//
+// `doc` here is the FULLY ASSEMBLED document (header + sigs + lego/compose + routes + tail) — headerStr itself
+// was fwritten into the memstream long before mcpLegoWillStub/mcpComposeWillStub even exist, so there is no
+// header string left to mutate in place, only the flushed document. `doc.find( " -->" )` — first occurrence,
+// not last — is safe here for the same reason it is safe for priceForTaskRoot's own kOverCeilingLegend splice
+// just below: the header's own closing comment is the ONLY place "-->" can appear in this document at this
+// point (every rendered row's text is escapeXml'd, which turns '<'/'>' into entities, so raw "-->" cannot leak
+// in from a symbol name, path or task string), and nothing has spliced anything before it yet. The caller runs
+// this BEFORE priceForTaskRoot so the clause's bytes are part of the est_tokens price exactly as the CLI's own
+// version is (finishForLensHeaderPriced splices sectionsStubNote before its price fixpoint, not after).
+inline void spliceForSectionStubLegend( std::string& doc, bool stubbed )
+{
+    if( !stubbed )
+    {
+        return;
+    }
+    const std::size_t legendAt   = doc.find( " -->" );
+    const std::size_t sizeBefore = doc.size();
+    // ASSUME, not VALIDATE: not external input — `stubbed` is only ever true once the header above has
+    // already been fully built and fwritten (its closing " -->" is unconditionally emitted by ctxRootOpen's
+    // own comment), so the boundary is provably present, not merely hoped for.
+    ASSUME( legendAt != std::string::npos, "spliceForSectionStubLegend: a section stubbed but the header's closing \"-->\" was not found to carry the legend" );
+    if( legendAt != std::string::npos )
+    {
+        doc.insert( legendAt, rw::kForSectionStubLegend );
+    }
+    ENSURES( doc.size() == sizeBefore + rw::kForSectionStubLegend.size(),
+             "spliceForSectionStubLegend: a section stubbed but the legend clause was not spliced into the returned document" );
+}
+
 inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
 {
     if( doc.empty() )
@@ -1601,7 +1638,11 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
 
 inline std::optional<std::string> forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
                                 std::size_t budgetTokens = 0, bool noRoute = false,
-                                McpPageArgs page = {} )   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
+                                McpPageArgs page = {},   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
+                                const std::string& sections = std::string() )   // L2 (round-1 lever B1): the CLI --sections=
+                                                        // twin — "" (the default) collapses <lego>/<compose> to a counted
+                                                        // stub; "lego", "compose" or "lego,compose" opts back into the
+                                                        // pre-stub render (mcp.h validates the closed set before this call)
 {
     const std::size_t forBudgetBytes = budgetTokens > 0 ? budgetBytesForTokens( budgetTokens )
                                                         : kForPayloadBudgetBytes;
@@ -1898,6 +1939,10 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     }
     // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
     const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
+    // R2-AF (round 2, S4): the SAME resolver the CLI twin calls (rw::forNamedHeaderRows, mention.h) — one
+    // resolution, both surfaces. Rows are emitted right after headerStr is flushed, below; the legend
+    // clause (present-only, never ceiling-dropped — this dialect has no ceiling ladder at all) goes here.
+    const std::vector<rw::ForNamedHeaderRow> mcpForHdrRows = rw::forNamedHeaderRows( ing, task );
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
@@ -1913,6 +1958,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                             " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
                             " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens"
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
+                          + ( mcpForHdrRows.empty() ? std::string() : std::string( rw::kForHdrLegend ) )   // R2-AF: present-only
                           + " -->"
                           + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
     // W3-S item 5 (2026-08-19): both --for dialects now carry rw::kForRootRelPathsLegendShort (graphlegend.h)
@@ -1925,12 +1971,15 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // §P3: same scope + identity the CLI --for embeds — the MCP bundle must not carry wider scope (interfaces
     // this task never reached) or less identity (p= on every row) than its CLI twin.
     std::vector<std::vector<NodeId>> legoScoped = legoImplementorsOnSurface( ing, ix.g.implementors, lensSurfaceIds );
-    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg ); } );
+    // L2 (round-1 lever B1): each renderer's OWN pre-cap row count, captured by the SAME call that renders
+    // the real body — see verbs_for.h's identical CLI-twin comment for the full rationale.
+    std::size_t legoPreCapCount = 0, composePreCapCount = 0;
+    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount ); } );
     std::string composeStr, routeStr;
     if( !ix.g.composeEdges.empty() )
     {
         composeStr = renderToString( [ & ]( std::FILE* m2 )
-                                     { packCompose( m2, ing, ix.g.composeEdges, lensSurfaceIds ); } );
+                                     { packCompose( m2, ing, ix.g.composeEdges, lensSurfaceIds, &composePreCapCount ); } );
     }
     if( !ix.g.routeEdges.empty() )
     {
@@ -2019,13 +2068,106 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
             headerStr.insert( closeAt, " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]" );
         }
     }
+    // L3 follow-up (CodeRabbit 4053600616): same splice shape as dropped_positive=/budget_bytes= above — absent
+    // entirely on a clean read. `noteIndex.degraded` is read here (not through notesPtr, which is nulled on an
+    // EMPTY index even when the read itself was not clean — see notesPtr's own comment above).
+    if( noteIndex.degraded )
+    {
+        const std::size_t rootCloseAt = headerStr.find( "><!--" );
+        if( rootCloseAt != std::string::npos )
+        {
+            headerStr.insert( rootCloseAt, std::string( rw::notes::kNotesDegradedAttr ) );
+        }
+        const std::size_t closeAt = headerStr.rfind( " -->" );
+        if( closeAt != std::string::npos )
+        {
+            headerStr.insert( closeAt, " [" + std::string( rw::notes::kNotesDegradedReading ) + "]" );
+        }
+    }
     std::fwrite( headerStr.data(), 1, headerStr.size(), mem );
+    // R2-AF (round 2, S4): first rows inside the root, right after the legend — the CLI twin's exact rule
+    // (verbs_for.h renderForHdrRowsXml), duplicated here rather than shared because main.cpp includes this
+    // file (mcp.h, line 48) before verbs_for.h (line 525) — the render is ~10 lines over the SAME resolver
+    // (rw::forNamedHeaderRows, mention.h), which is the part a divergence would actually cost.
+    if( !mcpForHdrRows.empty() )
+    {
+        const std::string mcpHdrRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
+        const auto         mcpHdrRel        = [ & ]( std::uint32_t f ) -> std::string
+        {
+            return flRootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], mcpHdrRootPrefix ) );
+        };
+        std::vector<char> mcpHdrEsc;
+        std::string       mcpHdrXml;
+        for( const rw::ForNamedHeaderRow& row : mcpForHdrRows )
+        {
+            // same local invariant as the CLI twin's renderForHdrRowsXml (verbs_for.h): the resolver
+            // (rw::forNamedHeaderRows, mention.h) is the only producer of these ids.
+            ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
+            mcpHdrXml += "<hdr p=\"";
+            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.partnerFile ), mcpHdrEsc );
+            mcpHdrXml += "\" of=\"";
+            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.namedFile ), mcpHdrEsc );
+            mcpHdrXml += "\"/>";
+        }
+        std::fwrite( mcpHdrXml.data(), 1, mcpHdrXml.size(), mem );
+    }
     // §P3 × §P4 (parity with the CLI --for): narrow the lego block to the files the budget-trimmed sigs
     // actually kept and re-render (a byte-subset of what the budget already charged for) — reads sigsStr
     // directly now rather than re-slicing it back out of the flushed memstream buffer.
     if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsStr ) )
     {
-        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg ); } );   // R-R: the re-render dropped the root its first render (above) passed
+        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount ); } );   // R-R: the re-render dropped the root its first render (above) passed
+    }
+    // R2-L2' (round-2, priced re-registration of L2/B1): the CLI twin's exact stub substitution
+    // (verbs_for.h) — same rule, same restoring spelling (kept as the CLI flag form: this dialect's next=
+    // is already CLI-flag-shaped everywhere else, e.g. the r=1 row's --expand=FILE:NAME, so the two
+    // surfaces do not need two spellings), and the SAME shared size gate (rw::priceSectionStub,
+    // serialize.h). This surface has no buffered/degrade-path split (renderToString always renders whole),
+    // so hasRenderedBytes is always true here and the size gate always has a true length to price.
+    //
+    // R2-L2p (independent review, 2026-09-19): mcpLegoWillStub/mcpComposeWillStub decide the SAME collapse
+    // the CLI twin discloses via kForSectionStubLegend (verbs_for.h finishForLensHeaderPriced), but this
+    // block used to just swap legoStr/composeStr for their stubs and never carried that clause anywhere —
+    // an MCP caller got a stubbed section with no legend explaining the cut. mcpSectionsWillStub survives
+    // this block's scope so the splice below (after `out` is assembled, mirroring priceForTaskRoot's own
+    // late-insertion technique for kOverCeilingLegend) knows whether to add it.
+    bool mcpSectionsWillStub = false;
+    {
+        const bool mcpWantLego    = sectionsWant( sections, "lego" );
+        const bool mcpWantCompose = sectionsWant( sections, "compose" );
+        const bool mcpLegoCandidate    = !legoStr.empty()    && !mcpWantLego;
+        const bool mcpComposeCandidate = !composeStr.empty() && !mcpWantCompose;
+        if( mcpLegoCandidate || mcpComposeCandidate )
+        {
+            std::string sectionsNextMcp = nextFlag( "--for=", task );
+            sectionsNextMcp += ' ';
+            sectionsNextMcp += nextFlag( "--sections=", "lego,compose" );
+            const SectionStubPricing legoPricing    = mcpLegoCandidate
+                ? priceSectionStub( "lego",    legoPreCapCount,    sectionsNextMcp, /*hasRenderedBytes=*/true, legoStr.size() )
+                : SectionStubPricing{};
+            const SectionStubPricing composePricing = mcpComposeCandidate
+                ? priceSectionStub( "compose", composePreCapCount, sectionsNextMcp, /*hasRenderedBytes=*/true, composeStr.size() )
+                : SectionStubPricing{};
+            const bool mcpLegoWillStub    = mcpLegoCandidate    && legoPricing.collapse;
+            const bool mcpComposeWillStub = mcpComposeCandidate && composePricing.collapse;
+            // postcondition of the rule itself, checked BEFORE the swap below discards the original size:
+            // whichever section actually collapses is, by construction, smaller than what it replaced.
+            ENSURES( !mcpLegoWillStub    || legoPricing.stubXml.size()    < legoStr.size(),
+                     "R2-L2' MCP twin: a lego stub collapsed without being smaller than the section it replaced" );
+            ENSURES( !mcpComposeWillStub || composePricing.stubXml.size() < composeStr.size(),
+                     "R2-L2' MCP twin: a compose stub collapsed without being smaller than the section it replaced" );
+            if( mcpLegoWillStub )
+            {
+                legoStr = legoPricing.stubXml;
+            }
+            if( mcpComposeWillStub )
+            {
+                composeStr = composePricing.stubXml;
+            }
+            // R2-L2p: same truth table as the CLI's `if( legoWillStub || composeWillStub ) sectionsStubNote = …`
+            // (verbs_for.h ~2858): the legend rides iff at least one section actually collapsed.
+            mcpSectionsWillStub = mcpLegoWillStub || mcpComposeWillStub;
+        }
     }
     std::fwrite( sigsStr.data(), 1, sigsStr.size(), mem );
     std::fwrite( legoStr.data(), 1, legoStr.size(), mem );
@@ -2047,6 +2189,11 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
         return std::nullopt;   // the buffer lost bytes: the same internal error as the failed open above
     }
     std::string out = std::move( *answer );
+    // R2-L2p: the legend clause disclosing a stubbed lego/compose section (kForSectionStubLegend) — the
+    // whole contract lives in spliceForSectionStubLegend above; `stubbed` false (the overwhelming common
+    // path) returns immediately and costs this function nothing but the call. Done BEFORE priceForTaskRoot
+    // so the clause's bytes are part of the est_tokens price exactly as the CLI's own version is.
+    spliceForSectionStubLegend( out, mcpSectionsWillStub );
     // F5 (terminality round A 2026-09-05): PRICE the bundle instead of declaring it unpriced. The document is
     // complete here, so this is the same measurement the CLI twin makes over its own (deliberately different)
     // bytes: pricedRootAttr's ≤4-pass fixpoint at kBytesPerTokenDefault, spliced onto the <ctx> root by the
@@ -3772,6 +3919,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
     in.impure       = &impure;
     in.redact       = redact;
     in.notes        = notesPtr;
+    in.notesDegraded = noteIndex.degraded;   // L3 follow-up (CodeRabbit 4053600616): read before notesPtr's nulling
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h) — the
     // CLI twin (main.cpp runPackTask) sets the identical field so the two dialects cannot diverge.
     in.rootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();
@@ -3812,6 +3960,7 @@ inline FromTraceResult fromTraceText( const std::string& root, const std::string
     in.impure = &impure;
     in.redact = redact;
     in.notes  = notesPtr;
+    in.notesDegraded = noteIndex.degraded;   // L3 follow-up (CodeRabbit 4053600616): read before notesPtr's nulling
     in.rootArg = ing.realPaths.empty() ? std::string_view( root ) : std::string_view();   // R-R
 
     const FromTraceResult res = fromTraceBundleText( ing, g, trace, "mcp trace input", in );
@@ -4509,6 +4658,13 @@ inline FetchOutcome fetchBody( const std::string& root, const std::string& handl
                 first = false;
             }
             notesJson += "]";
+        }
+        // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker — absent on a clean read. `ni` is a local
+        // value here (never nulled for emptiness), so degraded() reaches this JSON body even when the sidecar
+        // matched nothing (every line unparsed, or the whole file refused).
+        if( ni.degraded )
+        {
+            notesJson += std::string( notes::kNotesDegradedJsonKey );
         }
     }
 

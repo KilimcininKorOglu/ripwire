@@ -122,8 +122,12 @@ inline bool isJsxIntrinsicTagIdentifier( TSNode roleNode, TSNode nameNode, std::
     {
         return false;
     }
+    // Only an ASCII-lowercase first letter is an intrinsic tag (react.dev's own convention: anything else is
+    // treated as a component). `_Widget` and `$Widget` start with legal, non-lowercase JS identifier
+    // characters, so the old test (`!( c is uppercase )`) wrongly kept them as intrinsic; testing lower-case
+    // directly keeps them — and any non-ASCII-letter name — as components instead.
     const unsigned char c = static_cast<unsigned char>( name.front() );
-    return !( c >= 'A' && c <= 'Z' );   // keep only a Capitalised tag name — react.dev's own component convention
+    return c >= 'a' && c <= 'z';
 }
 
 // using-declaration re-exports (r9 loss bucket 1): TRUE when a C++ `using_declaration` node is a grammar

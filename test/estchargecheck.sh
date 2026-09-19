@@ -1698,5 +1698,90 @@ else
     fi
 fi
 
+# ── #19 (CodeRabbit 4054594308, train 8): THE <hdr> ROWS ARE PRICED ─────────────────────────────────────
+#
+# THE DEFECT. --for's <hdr p= of=/> rows (R2-AF: the named file's decl/impl partner, printed first inside the
+# root) were rendered AFTER finishForLensHeader had computed est_tokens= and over_ceiling=, and were in none of
+# the budget sums — not est_tokens, not the ceiling ladder, not the residual the bodies/tail are sized from.
+# One row is ~50 B on a short path, so every existing fixture stayed inside its band; a task naming SIX files
+# under a long directory carried ~1.6 KB of rows its root never priced. MEASURED on the 71d27d07 binary with
+# this arm's fixture: --signatures-only printed est_tokens=2616 over 8183 B (round(bytes/2.50) = 3273), and at
+# --token-budget=1500 the root said est_tokens=1360 with no over_ceiling= over a 5043 B document (2017 tokens).
+# WHAT IS ASSERTED: the #11 identities (markup at 2.50, bodies at 3.80), exact, on three shapes of a document
+# that really carries six <hdr> rows — and under the explicit ceiling, est_tokens > budget iff over_ceiling="1".
+# Git-less and relative (#18's discipline): nothing from the live repo, a fixed root=.
+HX="$TMP/hdrprice"
+mkdir -p "$HX"
+python3 - "$HX" <<'PYHX'
+import os, sys
+d = os.path.join( sys.argv[ 1 ], "corpus", "very_long_subsystem_directory_name_alpha", "deeply_nested_component_module_path" )
+os.makedirs( d, exist_ok=True )
+for i in range( 6 ):
+    s = f"widget_pinger_component_number_{i}_with_a_long_stem"
+    open( os.path.join( d, s + ".h" ), "w" ).write( f"#pragma once\nint widgetPing{i}( int n );\n" )
+    open( os.path.join( d, s + ".cc" ), "w" ).write( f'#include "{s}.h"\nint widgetPing{i}( int n ) {{ return n + {i}; }}\n' )
+PYHX
+HX_DIR="corpus/very_long_subsystem_directory_name_alpha/deeply_nested_component_module_path"
+HX_TASK="fix widget ping in"
+for i in 0 1 2 3 4 5; do HX_TASK="$HX_TASK $HX_DIR/widget_pinger_component_number_${i}_with_a_long_stem.cc"; done
+hx_identity(){ python3 - "$1" <<'PYHXI'
+import sys, re
+d = open( sys.argv[1], 'rb' ).read()
+m = re.search( rb'est_tokens="(\d+)"', d )
+if not m: sys.exit( 2 )
+est = int( m.group( 1 ) )
+a = d.find( b'<bodies ' ); b = d.find( b'</bodies>' )
+span = ( b + 9 - a ) if a >= 0 and b >= 0 else 0
+expected = int( ( len( d ) - span ) / 2.50 + 0.5 ) + ( int( span / 3.80 + 0.5 ) if span else 0 )
+print( f"{len(d)} {span} {est} {expected} hdr={d.count(b'<hdr ')}" )
+sys.exit( 0 if est == expected and d.count( b'<hdr ' ) == 6 else 1 )
+PYHXI
+}
+for hx_mode in "--signatures-only" "" "--token-budget=1500"; do
+    ( cd "$HX" && "$BIN" corpus --for="$HX_TASK" $hx_mode --no-cache ) >"$HX/o.xml" 2>/dev/null
+    hx_label="${hx_mode:-default}"
+    if hx_out="$( hx_identity "$HX/o.xml" )"; then
+        ok "#19 <hdr> rows priced ($hx_label): est_tokens matches markup@2.50 + bodies@3.80 with six rows present — bytes/span/est/expected = $hx_out"
+    else
+        hx_out="$( hx_identity "$HX/o.xml" 2>/dev/null || true )"
+        no "#19 <hdr> rows unpriced ($hx_label): bytes/span/est/expected = ${hx_out:-unreadable} (six <hdr> rows required; a gap of ~bytes-of-rows/2.50 is the defect)"
+    fi
+    if [ "$hx_mode" = "--token-budget=1500" ]; then
+        HX_E="$( grep -aoE 'est_tokens="[0-9]+"' "$HX/o.xml" | head -1 | tr -dc '0-9' )"
+        HX_O=0; grep -aqF 'over_ceiling="1"' "$HX/o.xml" && HX_O=1
+        if [ -n "$HX_E" ] && { { [ "$HX_E" -gt 1500 ] && [ "$HX_O" = 1 ]; } || { [ "$HX_E" -le 1500 ] && [ "$HX_O" = 0 ]; }; }; then
+            ok "#19 --token-budget=1500: over_ceiling=$HX_O agrees with est_tokens=$HX_E (the ceiling verdict sees the <hdr> rows)"
+        else
+            no "#19 --token-budget=1500: over_ceiling=$HX_O disagrees with est_tokens=${HX_E:-unreadable} — the ceiling verdict was made without the <hdr> rows"
+        fi
+    fi
+done
+
+# …and the MCP `for` twin (mcpverbs.h forTaskText) on the same task: it prices the FINISHED document
+# (priceForTaskRoot), so it already counted the rows — pinned here so the two surfaces cannot drift apart.
+python3 - "$HX_TASK" "$HX/corpus" >"$HX/mcp.in" <<'PYHXM'
+import json, sys
+print( json.dumps( { "jsonrpc": "2.0", "id": 1, "method": "initialize" } ) )
+print( json.dumps( { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                     "params": { "name": "for", "arguments": { "path": sys.argv[2], "task": sys.argv[1] } } } ) )
+PYHXM
+"$BIN" --mcp <"$HX/mcp.in" >"$HX/mcp.json" 2>/dev/null
+HX_M="$( python3 - "$HX/mcp.json" <<'PYHXR'
+import json, re, sys
+try:
+    t = json.loads( [ l for l in open( sys.argv[1] ) if l.strip() ][-1] )["result"]["content"][0]["text"].encode()
+    e = int( re.search( rb'est_tokens="(\d+)"', t ).group( 1 ) )
+except Exception:
+    print( "unreadable" ); sys.exit( 0 )
+print( f"{len(t)} {e} {int( len( t ) / 2.50 + 0.5 )} hdr={t.count( b'<hdr ' )}" )
+PYHXR
+)"
+set -- $HX_M
+if [ "$#" = 4 ] && [ "$2" = "$3" ] && [ "$4" = "hdr=6" ]; then
+    ok "#19 MCP for twin: est_tokens = round(bytes/2.50) with six <hdr> rows — bytes/est/expected = $HX_M"
+else
+    no "#19 MCP for twin: bytes/est/expected = ${HX_M:-unreadable} (six <hdr> rows required and priced)"
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

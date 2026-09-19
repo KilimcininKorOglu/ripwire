@@ -505,6 +505,11 @@ struct MainDispatch
     rw::RedactCounts&                     redactCounts;
     rw::RedactCounts*                     redactPtr;
     const rw::notes::NoteIndex*           notesPtr;   // L3: field-notes surfacing index (nullptr ⇒ inert: no/empty file, or multi-root)
+    bool                                   notesDegraded = false;   // L3 follow-up (CodeRabbit 4053600616): the sidecar
+                                                                     //   read left something out this run — set once,
+                                                                     //   beside notesPtr, before notesPtr is nulled for
+                                                                     //   emptiness (so a fully-degraded, zero-note read
+                                                                     //   still reaches the map/--expand <ctx>/<r> roots)
     const GrepScanPhases*                 grepPhases = nullptr;   // §P4.1: prefetched grep scan (nullptr ⇒ compute inline)
     bool                                   valueUses  = false;     // card A1: the captureValueUses this run's ingest actually used, so the
                                                                     //   pre-apply preview re-parses its one spliced file the SAME way
@@ -1800,6 +1805,7 @@ int runDefaultMap( const MainDispatch& d )
                                 recentOf };
     mapAnn.recentMinedHistory = recentAnyHistory;   // the block rides on the FACT (serialize.h writeRecentRows)
     mapAnn.recentMergeBombsSkipped = recentMergeBombsSkipped;   // rides <recent> (the rows' own window), filled by assignment like seed
+    mapAnn.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616): onto every <r> this run emits
     // C1-b (2026-09-12): --in=DIR — the scoped block and the map stub, filled by assignment like seed. The two next= strings
     // outlive every serialize() call below (mapAnn holds views into them). The scoped next= is the SAME run at the next
     // offset, page size carried when the caller set one; the stub's next= is the same run without in= (the map it stubbed).
@@ -2302,7 +2308,16 @@ int runDefaultMap( const MainDispatch& d )
     // M11: with no map the <ctx> root also carries est_tokens="<payloadTokens>" — priced here so the M6
     // chooser's reason= figure is the document actually served (expandtopk0check G-b is that identity).
     const std::size_t  ctxEstBytesWhenNoMap  = ( mapTopK == 0 ) ? ( sizeof( " est_tokens=\"\"" ) - 1 ) + std::to_string( payloadTokens ).size() : 0;
-    const std::size_t  ctxRootBytesWhenNoMap = ( mapTopK == 0 ) ? ctxRootAttr.size() + ctxEstBytesWhenNoMap : 0;
+    // L3 follow-up (CodeRabbit 4053600616, review round): the notes sidecar's own read state, on the SAME two
+    // shapes ctxRootAttr covers — whole-file mode and a bare bundle with no map riding (mapTopK==0). When a
+    // map DOES ride (mapTopK>0), MapAnnotations::notesDegraded already puts the marker on the map's OWN <r>
+    // root (serialize.h), inside the bytes measureEmittedMapBytes below re-renders and measures for real — so
+    // charging it again on <ctx> here would double it. d.notesDegraded is set once, in MainDispatch, where
+    // d.notesPtr itself is built (before notesPtr is nulled for emptiness).
+    const std::string  ctxNotesDegradedAttr   = d.notesDegraded ? std::string( rw::notes::kNotesDegradedAttr ) : std::string();
+    const std::string  ctxNotesDegradedLegend = d.notesDegraded ? std::string( rw::notes::kNotesDegradedComment ) : std::string();
+    const std::size_t  ctxNotesDegradedBytes  = ctxNotesDegradedAttr.size() + ctxNotesDegradedLegend.size();
+    const std::size_t  ctxRootBytesWhenNoMap = ( mapTopK == 0 ) ? ctxRootAttr.size() + ctxEstBytesWhenNoMap + ctxNotesDegradedBytes : 0;
     // #289: the ride-along `note=` attribute's bytes, priced HERE — ahead of the M6 fixpoint below — because
     // the note is bundle-only (never printed in whole-file mode, exactly like the pre-existing stderr note
     // it doubles), so it must be counted as part of the BUNDLE CANDIDATE's price that chooseExpandServe
@@ -2351,7 +2366,7 @@ int runDefaultMap( const MainDispatch& d )
         bundleDoc.rootAttrBytes = ctxRootBytesWhenNoMap + topkDefaultBytes + noteBytes;   // root=/est_tokens= only where no map carries them; note= only where a map does
         ExpandServeDocument       fileDoc;
         fileDoc.payloadBytes  = wholeFile.xml.size();                         // as EMITTED, not the raw file bytes
-        fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes;        // whole-file mode always carries root= (no <r root=> rides with it)
+        fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes + ctxNotesDegradedBytes;   // whole-file mode always carries root= (no <r root=> rides with it) and, when degraded, the marker too
         fileDoc.legendBytes   = kExpandWholeFileLegend.size();
         fileDoc.selfPriceRate = rw::kBytesPerTokenBody;
         ExpandServeChoice choice = chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes );
@@ -2373,6 +2388,17 @@ int runDefaultMap( const MainDispatch& d )
     {
         ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
         ctxOpenStr.insert( 4, ctxRootAttr );
+    }
+    // L3 follow-up (CodeRabbit 4053600616, review round): same gate as ctxRootAttr just above — fires only on
+    // the two shapes with no <r> to carry the marker itself (whole-file, or a bare bundle with mapTopK==0);
+    // a map that rides already carries it via MapAnnotations::notesDegraded (serialize.h), so this and that
+    // path can never both fire for the same delivered document. Already priced into ctxRootBytesWhenNoMap /
+    // fileDoc.rootAttrBytes above, ahead of the M6 choice this condition itself depends on.
+    if( !ctxNotesDegradedAttr.empty() && ( serveWholeFile || mapTopK == 0 ) )
+    {
+        ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+        ctxOpenStr.insert( 4, ctxNotesDegradedAttr );
+        ctxOpenStr += ctxNotesDegradedLegend;
     }
     // H1: the residue rides the root in EVERY serving mode (whole-file, bundle with its map, bodies alone), and its clause
     // rides straight after the start tag, ahead of the map or the payload, so the reader meets it before the text it
@@ -4845,11 +4871,15 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     // contract. Retrieval handlers below read notesPtr; --note-add/--notes have their own handler.
     const rw::notes::NoteIndex noteIndex = multiRoot ? rw::notes::NoteIndex{} : rw::notes::loadNoteIndex( root );
     const rw::notes::NoteIndex* const notesPtr = ( !multiRoot && !noteIndex.empty() ) ? &noteIndex : nullptr;
+    // L3 follow-up (CodeRabbit 4053600616): read BEFORE notesPtr's emptiness nulling, so a sidecar that left
+    // EVERY line unparsed (notes empty, but the read was not clean) still reaches the map/--expand roots —
+    // the exact gap notesPtr's own nullptr would otherwise hide (see MainDispatch::notesDegraded).
+    const bool                        notesDegraded = noteIndex.degraded;
 
     // Phase B7.2: bundle the shared post-graph state; each verb handler below reads what it needs.
     const MainDispatch dsp{ cfg, ing, g, root, multiRoot, ws, fanIn, fanInPtr, qmetrics,
                            ampPtr, cboPtr, testedPtr, lcom4Ptr, impurePtr, forChurn, redactCounts, redactPtr, notesPtr,
-                           grepPhases.valid ? &grepPhases : nullptr, needsValueUses };
+                           notesDegraded, grepPhases.valid ? &grepPhases : nullptr, needsValueUses };
 
     if( std::optional<int> handled = runForLens( dsp ) )
     {

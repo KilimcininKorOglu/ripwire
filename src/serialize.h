@@ -1064,6 +1064,14 @@ inline constexpr std::string_view kForFileTailLegend =
     "shown=printed, capped=1 when they differ. r= on a ranked row is its 1-based rank in this lens ranking, "
     "rows in r= order, p= the file (a gap = a budget-trimmed row)";
 
+// R2-AF (round 2, S4): the legend clause defining `<hdr p= of=/>` — verbatim, round-2 amendment §R7. A
+// named constant, shared by the CLI --for header and the MCP `for` twin (rw::forNamedHeaderRows,
+// mention.h, is the ONE resolver both surfaces call), present-only: appended only on an answer that
+// actually carries a row. 198 B, priced and pinned (test/forhdrshapecheck.sh).
+inline constexpr std::string_view kForHdrLegend =
+    "; hdr p= of=: the file the task names (of=) has exactly one same-directory, same-stem declaration/"
+    "implementation partner (p=), listed first by name alone: a lookup, not a ranked or graph-derived row";
+
 // Explicit-budget row fit: the largest shown count whose rendered XML fits `budgetBytes` (0 rows always
 // "fits" — the shell is reserved by the caller). Walks down from the collected count; deterministic.
 inline std::size_t fileTailShownForBudget( const FileTail& t, std::size_t budgetBytes, std::vector<char>& esc )
@@ -1771,6 +1779,12 @@ struct MapAnnotations
     // An appended payload section the caller could not charge (its chargeSection degraded): the map's est_tokens then
     // leaves those bytes out, so serialize labels it est_measured="0". Set by the caller's DISCLOSE, never guessed.
     bool payloadUncharged = false;
+
+    // L3 follow-up (CodeRabbit 4053600616): the .ripwire_notes read that fed this map's NoteIndex left something
+    // out (a skipped line, or the sidecar refused) — notes::NoteIndex::degraded, read BEFORE the caller nulls its
+    // pointer for emptiness (main.cpp), so a fully-degraded read still reaches this root. Absent on a clean read,
+    // the L3 inertness contract's only permitted exception. Filled by assignment, like the trailing fields above.
+    bool notesDegraded = false;
 };
 
 // F3: the <recent> element — rank_by=churn-decay's file-level answer FIRST, paths + age in days at HEAD's clock +
@@ -2541,6 +2555,13 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     }
     const bool ignoreCut = ing.crawlSkips.ignoredFiles > 0 || ing.crawlSkips.ignoredDirs > 0;
     legend += ignoreCut ? kIgnoredLegend : "";   // §N6-C — charged to the map that carries it; see kIgnoredLegend
+    // L3 follow-up (CodeRabbit 4053600616): notes.h's ONE marker, spelled identically on every notes-surfacing
+    // emitter — absent on a clean read (no sidecar, or every line parsed), so a map with nothing to disclose
+    // stays byte-identical to before this lane.
+    if( ann.notesDegraded )
+    {
+        legend += std::string( notes::kNotesDegradedComment );
+    }
     // W2-F: the pr_iters= / pr_converged= definition, charged to the maps that carry the attributes — empty
     // for a lexical or HITS ordering, and the prose half only on the map whose iteration stopped short.
     legend += renderDisclosure( ann.prDisclosure, DiscloseAs::LegendComment );
@@ -2741,6 +2762,9 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // simply gone. lens= names what is missing, so "absent" reads as "not served here", never as "not
         // computed". Gate: test/mcpattrparitycheck.sh, whose lens= arm also fails on a stale name.
         if( stable ) { h += " lens=\"k,est_tokens\""; }
+        // L3 follow-up (CodeRabbit 4053600616): TRULY last, past every pre-existing attribute — same placement
+        // rule as lens= just above, so no attribute-adjacency assertion in test/ can break on it.
+        if( ann.notesDegraded ) { h += notes::kNotesDegradedAttr; }
         h += ">";
         return h;
     };
@@ -6191,8 +6215,13 @@ inline void packOutline( std::FILE* out, const IngestResult& ing, const std::vec
 // compose edges where the ownerSym is in the relevant set OR the typeSym is in the relevant set.
 inline void packCompose( std::FILE* out, const IngestResult& ing,
                          const std::vector<ComposeEdge>& composeEdges,
-                         const std::vector<NodeId>& relevantIds )
+                         const std::vector<NodeId>& relevantIds,
+                         std::size_t* outFieldCount = nullptr )   // L2 (round-1 lever B1): the STUB's total= — the
+                                                        // exact <field> row count this function itself emits (no
+                                                        // cap exists here, so "pre-cap" and "emitted" are the same
+                                                        // count; written whenever non-null)
 {
+    if( outFieldCount != nullptr ) { *outFieldCount = 0; }
     if( composeEdges.empty() || relevantIds.empty() )
     {
         return;
@@ -6222,6 +6251,7 @@ inline void packCompose( std::FILE* out, const IngestResult& ing,
         {
             continue;
         }
+        if( outFieldCount != nullptr ) { ++*outFieldCount; }
         if( !open ) { w.write( "<compose>" );  open = true; }
         w.write( "<field name=\"" );  w.write( escapeXml( ce.fieldName, esc ) );
         w.write( "\" type=\"" );      w.write( escapeXml( ce.typeName, esc ) );
@@ -6229,6 +6259,154 @@ inline void packCompose( std::FILE* out, const IngestResult& ing,
         w.write( "\" rel=\"" );       w.write( ce.rel );  w.write( "\"/>" );
     }
     if( open ) { w.write( "</compose>" );  w.flush(); }
+}
+
+// L2 (round-1 lever B1, §9.3 disclosed cut): does a comma-separated --sections=/`sections` value name this
+// section? Closed set {lego, compose}; validated upstream (cli.h validateSectionsModifier, mcp.h's sections
+// arm) — this reader is permissive on purpose (an already-validated value only), so it never has to refuse.
+inline bool sectionsWant( std::string_view sections, std::string_view name ) noexcept
+{
+    std::string_view rest = sections;
+    while( !rest.empty() )
+    {
+        const std::size_t comma = rest.find( ',' );
+        const std::string_view tok = comma == std::string_view::npos ? rest : rest.substr( 0, comma );
+        if( tok == name )
+        {
+            return true;
+        }
+        rest = comma == std::string_view::npos ? std::string_view() : rest.substr( comma + 1 );
+    }
+    return false;
+}
+
+// L2 (round-1 lever B1): the COUNTED STUB `<lego total="N" shown="0" capped="1" next="…"/>` (or `<compose …/>`) that
+// replaces a ranked --for/`for` section by DEFAULT — a §9.3 disclosed cut, not a silent one: total= is the
+// section's own pre-cap row count (packLego's post-dedup ifaces.size(), or packCompose's matched-edge
+// count — the SAME tally each renderer already computes for its real body, never a second guess), shown="0"
+// discloses that nothing was rendered here, and next= (E41 rule b: nextverb.h's ONE capped composer) carries
+// the restoring spelling that returns BOTH sections byte-identically to the un-stubbed render in ONE call —
+// named once, beside cli.h's --sections= flag: `--sections=lego,compose`. Called only when the section would
+// have been non-empty (an absent section stays absent — no stub invents a row that was never going to exist).
+// The legend clause defining the stub's own attributes, present-only (spliced in only on a run that actually
+// emitted one) so a run with nothing to stub pays nothing — the D2/confidence/tail-legend precedent this file
+// already follows for every other post-render disclosure. Deliberate rather than left to "total="/"shown="
+// happening to already appear elsewhere in the document (legendcoveragecheck arm F's "sole closure" warning,
+// the defect this clause was added to close): a reader meets `<lego total= shown= next=>` or `<compose …>`
+// and this sentence, in the SAME document, whichever dialect it is. No "--" anywhere (G4: a double hyphen is
+// ill-formed inside an XML comment) — named without its dashes, the kForCompactBundleLegend precedent
+// ("the auto-bodies flag", never "--auto-bodies") for exactly the same reason.
+inline constexpr std::string_view kForSectionStubLegend =
+    "; lego/compose collapse to a counted stub by default (a disclosed cut): total= that section's own "
+    "pre-cap row count, shown=\"0\" capped=\"1\" (nothing rendered here), next= names the sections=lego,compose flag "
+    "that restores both sections byte-identically in one call";
+
+// L2 fault-injection fix (independent review, 2026-09-19): packLego/packCompose's out-params give the stub
+// its total= on the buffered (memstream) path, but the ranked --for lens's OPEN_MEMSTREAM DEGRADE PATH
+// (verbs_for.h, legoPreRendered/composePreRendered==false — RIPWIRE_FAULT_CHARGE_BUFFER=1 forces it) never
+// buffers either section at all, so it had no count to build a stub from and fell back to emitting the FULL
+// section regardless of --sections= — a silent bypass of the default cut. These two functions compute the
+// SAME total= WITHOUT rendering or buffering anything (no FILE*, no allocation beyond one HashMap/sort), so
+// the degrade path can build a correct stub even when open_memstream itself is the thing that is failing.
+//
+// legoPreCapRowCount mirrors packLego's own RANKED-mode selection (has a non-empty implementors list, deduped
+// by name) exactly, and is provably interchangeable with it: packLego's dedup keeps the highest-RANKED
+// survivor per name, but the COUNT of distinct names is independent of which survivor is kept or what order
+// they are visited in, so this order-free walk yields the identical total= packLego's own render would have.
+// Focused mode (--lego=TYPE, focusId != kNoNode) is a different shape (exactly one row, even at
+// implementors=0) and is never routed through the ranked degrade path this exists for, so it is out of scope
+// here — callers only reach this from the ranked (--for) lens.
+inline std::size_t legoPreCapRowCount( const IngestResult& ing, const std::vector<std::vector<NodeId>>& implementors ) noexcept
+{
+    HashMap<std::string, char> seenName;
+    std::size_t                count = 0;
+    for( NodeId i = 0; i < implementors.size(); ++i )
+    {
+        if( i < ing.symbols.size() && !implementors[i].empty() && seenName.emplace( ing.symbols[i].name, char( 1 ) ).second )
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// composePreCapRowCount mirrors packCompose's own inSet/ownerSym membership test verbatim (no cap exists on
+// this section, so "pre-cap" and "emitted" are the same count, exactly as packCompose's own out-param
+// documents) — the degrade-path twin of legoPreCapRowCount above, for the same reason.
+inline std::size_t composePreCapRowCount( const IngestResult& ing, const std::vector<ComposeEdge>& composeEdges,
+                                          const std::vector<NodeId>& relevantIds )
+{
+    if( composeEdges.empty() || relevantIds.empty() )
+    {
+        return 0;
+    }
+    std::vector<NodeId> relevant( relevantIds );
+    std::sort( relevant.begin(), relevant.end() );
+    const auto inSet = [ &relevant ]( NodeId id ) noexcept -> bool
+    {
+        const auto it = std::lower_bound( relevant.begin(), relevant.end(), id );
+        return it != relevant.end() && *it == id;
+    };
+    std::size_t count = 0;
+    for( const ComposeEdge& ce : composeEdges )
+    {
+        if( ( inSet( ce.ownerSym ) || inSet( ce.typeSym ) ) && ce.ownerSym < ing.symbols.size() )
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+inline std::string sectionStubXml( const char* tag, std::size_t total, std::string_view nextInvocation )
+{
+    // true by construction at every call site: a stub is only ever built in place of a section that just
+    // rendered non-empty (packLego/packCompose return early, with *outPreCapCount == 0, on a genuinely
+    // empty section) — total=0 here would mean the caller is about to assert a stub the section never had.
+    ASSUME( total > 0, "sectionStubXml: called for a section whose own pre-cap count is 0 — the caller should have left it absent instead" );
+    std::string s;
+    s.reserve( 40 + std::string_view( tag ).size() * 2 + nextInvocation.size() );
+    s += '<';  s += tag;
+    s += " total=\"";  s += std::to_string( total );  s += "\" shown=\"0\" capped=\"1\"";
+    s += rw::nextAttrXml( nextInvocation );
+    s += "/>";
+    return s;
+}
+
+// R2-L2' (round-2, priced re-registration of L2/B1): the ONE size-gate decision both call sites (the CLI
+// --for lens, verbs_for.h; its MCP twin, mcpverbs.h) share — pulled out to a standalone function so the
+// price rule lives in exactly one place and neither caller's own (already long) function carries its
+// branching. Builds the candidate stub itself (the caller reuses it verbatim on a collapse, never a second,
+// differently-priced build) and decides: collapse iff the section is SMALLER than what would replace it —
+// stub bytes PLUS the unshared, whole charge for kForSectionStubLegend (never split between lego and
+// compose, even when both collapse in the same answer and the clause itself is spliced once) — the
+// pre-registered simplification (rv-prereg2 Amendment 1, R4). Posture-independent by construction:
+// kForSectionStubLegend is the one string both --legend=full and --legend=compact splice.
+//
+// hasRenderedBytes=false is the open_memstream DEGRADE PATH: no buffered render exists to measure, only a
+// row count (the caller's preCapTotal, computed by legoPreCapRowCount/composePreCapRowCount WITHOUT
+// rendering). Sizing a section this function never measured would be the undisclosed guess §9.3 forbids, and
+// the rule is "collapse ONLY WHEN CHEAPER" — so an unmeasured section never collapses: the caller streams the
+// full section directly, exactly what --sections= would restore (CodeRabbit 4054594306). Collapsing it anyway
+// (round 1's unconditional rule, which this path kept until then) replaced a section like test/hasafix's
+// two-row <compose> with a LARGER stub plus its legend clause, so the section's shape depended on whether an
+// allocation succeeded. That path already omits est_tokens= and says so (ForLensBlockCharge), so a full
+// section there is disclosed as unmeasured, never priced wrong.
+struct SectionStubPricing
+{
+    bool        collapse;
+    std::string stubXml;   // always built for a real candidate, whether or not collapse ends up true —
+                           // the caller's ENSURES prices it either way, and a collapse reuses it as-is.
+};
+
+inline SectionStubPricing priceSectionStub( const char* tag, std::size_t preCapTotal, std::string_view nextInvocation,
+                                            bool hasRenderedBytes, std::size_t renderedBytes )
+{
+    SectionStubPricing p{ .collapse = false, .stubXml = sectionStubXml( tag, preCapTotal, nextInvocation ) };
+    p.collapse = hasRenderedBytes && renderedBytes > p.stubXml.size() + kForSectionStubLegend.size();
+    ENSURES( !p.collapse || ( hasRenderedBytes && p.stubXml.size() < renderedBytes ),
+             "priceSectionStub: a collapse was decided without measured bytes, or the stub is not smaller than the section" );
+    return p;
 }
 
 // B6.3 HTTP-route cross-service view: for a set of relevant symbols, emit the synthesized route USE→DEF
@@ -6549,9 +6727,16 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
                       NodeId focusId = kNoNode, bool withPaths = false,
                       std::string_view rootArg = {},    // R-E (2026-08-17): same single-root-only root
                                                         // argument serialize() takes — see its comment.
-                      std::string_view graphCountFloorAttr = {} )   // M15: the TARGETED root's gauge + marker
+                      std::string_view graphCountFloorAttr = {},   // M15: the TARGETED root's gauge + marker
                                                         // (graphCountFloorAttrXml( g ) — the caller owns the graph);
                                                         // the ranked --for section passes nothing and keeps its shape
+                      std::size_t* outPreCapCount = nullptr )   // L2 (round-1 lever B1): the STUB's total= — this
+                                                        // function's OWN post-dedup ifaces.size(), before the topN
+                                                        // cut below. Written whenever non-null (both modes), so the
+                                                        // stub can never assert a count this function did not itself
+                                                        // compute (no second, drifting tally — the notes_total
+                                                        // precedent this repo already avoids: legoTotal at the JSON
+                                                        // call site is a DIFFERENT, pre-dedup count, on purpose).
 {
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
     const auto         pathRel   = [ & ]( std::uint32_t fileId ) -> std::string_view
@@ -6580,6 +6765,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
     }
     if( ifaces.empty() )
     {
+        if( outPreCapCount != nullptr ) { *outPreCapCount = 0; }
         return;
     }
 
@@ -6597,6 +6783,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
         }
     }
     ifaces.swap( uniq );
+    if( outPreCapCount != nullptr ) { *outPreCapCount = ifaces.size(); }   // L2: post-dedup, PRE-topN — the stub's total=
 
     const std::size_t keep = std::min<std::size_t>( topN > 0 ? std::size_t( topN ) : ifaces.size(), ifaces.size() );
 

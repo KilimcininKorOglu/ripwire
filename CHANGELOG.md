@@ -15,6 +15,70 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--for` lists a named file's one declaration/implementation partner first, and `--situ` puts partners before the blast radius
+
+When a `--for` task names a path that resolves to exactly one indexed file, and that file has exactly one
+same-directory, same-stem declaration/implementation partner (a source tries `.h`/`.hpp`/`.hh`; a header tries
+`.cc`/`.cpp`/`.c`), the answer now opens with `<hdr p="partner" of="named"/>`, right after the legend. It is a
+lookup by name, not a ranked or graph-derived row: an ambiguous, absent or convention-less named file gets no row
+and no reordering, and a partner the task already names is not repeated. The row's legend clause is present only
+when a row is, and is never dropped by the ceiling ladder. The MCP `for` verb serves the same row from the same
+resolver. The rows are counted in `est_tokens=`, in `over_ceiling=` and in the `--token-budget` ceiling like every
+other section, and they do not take space from the ranked signatures. `--situ` now prints its decl/def-partner and
+lexical-sibling blocks before the `[1] blast radius` line instead of after it; the lines themselves are unchanged,
+only their order. Gates: `test/forhdrshapecheck.sh` (new), `test/situshapecheck.sh` arm (13),
+`test/estchargecheck.sh` #19.
+
+### Changed — `--for` collapses a `<lego>`/`<compose>` section to a counted stub when the stub is smaller
+
+A `<lego>` or `<compose>` section in a `--for` answer is now replaced by a counted stub,
+`<lego total="N" shown="0" capped="1" next="…"/>`, but only when the stub plus its legend clause is smaller than the section
+it replaces; a small section stays whole. `total=` is the section's own pre-cap row count, and `next=` names the
+new `--sections=lego,compose` flag, which restores both sections byte-identically in one call. The legend clause
+is present only when a section was actually stubbed, in both legend dialects and on the MCP `for` verb
+(`sections` argument). An empty value, a trailing comma or an empty segment (`lego,`) is refused rather than read
+as a shorter list, on both surfaces. When the in-memory render that prices the section is unavailable, the section
+is emitted whole, because nothing shows that the stub would be smaller. Gate: `test/forsectioncollapsecheck.sh` (new).
+
+### Fixed — a `.ripwire_notes` file that could not be fully read looked the same as no notes file
+
+A sidecar with unparseable lines, or one refused because it is a symlink, was disclosed only by `--notes`
+itself (`lines_skipped=`/`refused=`). Every other reader answered as if the tree had no notes file at all. The
+map, `--expand` (including whole-file and `--top-k=0`), `--for` and `--pack-task` (XML and `--json`),
+`--edit-check`, `--handoff`, `--plan-lanes`, and the MCP `for`/`pack_task`/`from_trace`/`fetch_body` verbs now
+carry `notes_degraded="1"` (`"notes_degraded":true` in JSON) with a legend clause. The marker is absent on a
+clean read, so output for a tree with no sidecar, or one that fully parses, is unchanged. Gate:
+`test/notesdegradecheck.sh` (new). (CodeRabbit review on #295)
+
+### Fixed — a JSX tag starting with `_`/`$` lost its call edge, treated as an intrinsic HTML/SVG tag
+
+`isJsxIntrinsicTagIdentifier` (the filter that keeps `<div>`/`<h1>` from minting a phantom call edge to a
+symbol that is never defined) tested `!( c >= 'A' && c <= 'Z' )` — every non-uppercase-first-letter tag
+counted as intrinsic, so `<_Widget/>` and `<$Widget/>` (both legal, non-lowercase leading characters for a
+JS/TS component identifier) lost their call edge exactly like an ordinary HTML tag. The filter now tests
+ASCII-lowercase directly: only `a`-`z` is intrinsic. `--callers`/`--uses`/`--affected`/`--test-gate` on such
+a component now see the JSX call. kParserVer 117 → 118; a cache written before this under-counts their
+callers. (CodeRabbit review on #295)
+
+### Fixed — `--help-task` routed on "reach"/"reaches" as a plain substring, firing inside "outreach"/"unreachable"
+
+The reach-flow router (`--help-task`'s "how does A reach B" shape) scored its single-word "reach"/"reaches"
+cues with the same substring matcher its multi-word phrase cues use, so "reach" fired inside "outreach" and
+"unreachable", and "reaches" scored both cues at once (10 points from one word). A task naming two indexed
+files, an unrelated "reach"-containing word, and one cheap phrase cue ("how does") could cross the routing
+threshold and wrongly recommend `--for=task`. The two single-word cues now match word-bounded instead.
+(CodeRabbit review on #295)
+
+### Fixed — merge-scout refused a legal empty-tree merge-base as an unavailable one
+
+A `--merge-scout` arm whose merge-base is a genuinely empty tree (a fresh root commit, or an arm that
+deleted everything) ingested with zero files, indistinguishable — under the old check — from
+`materializeCommitTree`'s archive/extract pipeline silently producing nothing on a real failure. Both read as
+an unavailable tree, so the arm refused a perfectly legal comparison (`ok="0"`), and the SAME check marked
+`head_conflicts_ok="0"` for it too. Comparing the commit's own tree hash against the repository's empty-tree
+hash — asked of git directly, independent of the archive/extract pipeline — now tells the two apart.
+(CodeRabbit review on #295)
+
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 
 Reported by @mariadb-KyleHutchinson in #289: `--expand=SYM` on a name matching more than one definition, in a
@@ -2317,6 +2381,21 @@ output now says so:
 - When the token measurement fails, `est_tokens` keeps its modelled number and is labelled `est_measured="0"`.
 - `--layout` exits **3** when a definition's file cannot be read (2 still means drift, 0 means verified), so a CI
   gate on its exit code no longer passes an unverified mirror.
+- `--stray-content` (and its `--plan`) reports `refs_dropped=N` when a for-each-ref row's tip is not an object
+  name, instead of silently dropping it from `refs=` and every bucket with no sign a branch went unswept.
+- doc-drift's on-disk fallback walk (the one that keeps an existing-but-unindexed file from reading as
+  missing) reports `disk_walk_failed="1"` on a root it cannot list — libc++/libstdc++ swallow `EACCES` on the
+  root itself under `skip_permission_denied`, so an unlistable root used to read as an empty, successful walk.
+- `--flip`'s alias-chain walk discloses the DEPTH bound too, not only the fan-out cut: a gate reached only
+  past `kMaxChainDepth` links used to drop out with no `<capped>` row; it now carries
+  `<capped what="depth" at="N"/>`.
+- merge-scout's head-conflict lane and its working-tree arm now refuse an unavailable HEAD tree the same way
+  the named-arm lane already did — an arm whose lane could not run carries `head_conflicts_ok="0"` instead of
+  reading the missing tree as empty (every base symbol a false head conflict) or as entirely uncommitted (the
+  working-tree arm).
+- `--pack-task`'s ranking or bodies render failing no longer drops the section silently or writes an unkeyed
+  JSON value: the section stays and carries `render_failed="1"`, the root names every failed section
+  (`render_failed="ranking,bodies"`), and a failed body-cost probe prices that body out instead of free.
 
 Refusals whose only disclosure is the refusal itself (a non-zero exit, an MCP error, a query failure) are recorded
 through `answerRefused`. Ten guards that could not fire were removed after tracing each one: those guarded by our own

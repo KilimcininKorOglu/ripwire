@@ -145,6 +145,21 @@ struct Result
     double        score     = 0.0;
     std::uint64_t good      = 0;
     std::uint64_t bad       = 0;
+
+    // The DISCLOSE sink for a side (base or target) whose commit tree could not be materialized or ingested:
+    // the report still prints an answer here (available="0" dmm="UNAVAILABLE" reason="…", exit 0), so this is
+    // NOT a refusal (Diagnostics::answerRefused) — the emitter reads status/reason for exactly this fact.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        BaseTreeUnavailable,
+        TargetTreeUnavailable,
+    };
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        status = Status::MaterializeFailed;
+        reason = why == DisclosureWhy::BaseTreeUnavailable ? "the base commit's tree could not be materialized or parsed"
+                                                             : "the target commit's tree could not be materialized or parsed";
+    }
 };
 
 // Is this symbol a UNIT? A definition with a body, of a callable kind. A prototype, an abstract declaration
@@ -283,8 +298,8 @@ inline bool ingestCommitTree( const std::string& root, const std::string& sha, c
     out = ingest( tmpRoot.c_str(), excludes, cachePath.empty() ? std::string_view {} : std::string_view( cachePath ), maxFileBytes );
     if( out.symbols.empty() && out.files.empty() )
     {
-        DISCLOSE( Diagnostics::answerRefused, "the DMM report says available=0 dmm=UNAVAILABLE with the reason; nothing is scored",
-                  "dmm: a materialized commit tree ingested empty" );
+        // Not a refusal: the caller (computeDmm) still prints available="0" dmm="UNAVAILABLE" reason="…" for
+        // this — the disclosure belongs to the Result the caller owns, via Result::DisclosureWhy (below).
         return false;
     }
     return true;
@@ -331,8 +346,7 @@ inline Result computeDmm( const std::string& root, std::string_view spec, const 
     IngestResult baseIng;
     if( !ingestCommitTree( root, r.baseSha, excludes, maxFileBytes, baseIng ) )
     {
-        r.status = Status::MaterializeFailed;
-        r.reason = "the base commit's tree could not be materialized or parsed";
+        DISCLOSE( r, Result::DisclosureWhy::BaseTreeUnavailable, "dmm: the base commit's tree could not be materialized or parsed" );
         return r;
     }
     r.base = profileOf( baseIng );
@@ -346,8 +360,7 @@ inline Result computeDmm( const std::string& root, std::string_view spec, const 
         IngestResult targetIng;
         if( !ingestCommitTree( root, r.targetSha, excludes, maxFileBytes, targetIng ) )
         {
-            r.status = Status::MaterializeFailed;
-            r.reason = "the target commit's tree could not be materialized or parsed";
+            DISCLOSE( r, Result::DisclosureWhy::TargetTreeUnavailable, "dmm: the target commit's tree could not be materialized or parsed" );
             return r;
         }
         r.target = profileOf( targetIng );

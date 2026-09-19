@@ -249,7 +249,17 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 117;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 118;          // bump on any grammar/.scm/extraction change
+                                                      // 118 = 2026-09-19 (CodeRabbit follow-up, thread
+                                                      //   4053600599: isJsxIntrinsicTagIdentifier
+                                                      //   (src/ingest_names.h) tested `!isUppercase`, which kept
+                                                      //   any non-uppercase-first-letter tag as intrinsic — so
+                                                      //   `<_Widget/>`/`<$Widget/>` were wrongly treated as
+                                                      //   intrinsic tags and lost their call edge, exactly like
+                                                      //   `<div/>`. Fixed to test ASCII-lowercase directly: only
+                                                      //   `a`-`z` is intrinsic now, so `_Widget`/`$Widget` are
+                                                      //   kept as components. A cache written before this
+                                                      //   under-counts their callers.
                                                       // 117 = 2026-09-19 (train 7: one bump past main's 116 for
                                                       //   both members; each lane had bumped 114 -> 115)
                                                       //   (a) 2026-09-19 lane/disclose-sink-form (degrade disclosure, test/skipreasoncheck.sh

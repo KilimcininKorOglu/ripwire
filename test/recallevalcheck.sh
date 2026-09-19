@@ -363,20 +363,40 @@ APOL="$( grep -E $'^  CLASS\tranking\tadversarial\t' "$OUT" | sed -n 's/.*pollut
     && ok "ranking adversarial-class pollution@5 ($APOL%) <= ceiling 8% (pre-§P4 28.0%, post-§P4 0.0%)" \
     || no "ranking adversarial-class pollution@5 (${APOL:-missing}) over ceiling 8% — the §P4 class is regressing"
 
-# ── #6: §P4 direct XML assertions over the shipping binary at THIS repo root (the plan's cited repro +
-#    the two interactions the tier down-weight must NOT break). Paths asserted here are pinned by the
-#    label files, whose on-disk presence check #2 already enforces. ──────────────────────────────────────
+# ── #6: §P4 direct XML assertions over the shipping binary (the plan's cited repro + the two
+#    interactions the tier down-weight must NOT break). Paths asserted here are pinned by the label
+#    files, whose on-disk presence check #2 already enforces. ──────────────────────────────────────
 CAND="$TMP/cand.xml"
 
 # 6a — the plan's cited query: the real implementation must outrank every fixture/deck row (RED pre-§P4:
 #      a test/chafix stub held rank 1). Rank of pageRankDouble strictly above the best test/ or present/ row.
-"$BIN" . --for="pagerank power iteration" --format=candidates --top-k=10 >"$CAND" 2>/dev/null
-PRRANK="$( tr '<' '\n' <"$CAND" | sed -n 's/^cand r="\([0-9]*\)" [^>]*n="pageRankDouble".*/\1/p' | head -1 )"
-FIXRANK="$( tr '<' '\n' <"$CAND" | grep -E '^cand ' | grep -E 'p="(\./)?(test|present)/' | sed -n 's/^cand r="\([0-9]*\)".*/\1/p' | sort -n | head -1 )"
-if [ -n "$PRRANK" ] && { [ -z "$FIXRANK" ] || [ "$PRRANK" -lt "$FIXRANK" ]; }; then
-    ok "cited query ranks pageRankDouble (r=$PRRANK) above any test/present row (best fixture r=${FIXRANK:-none in top-10})"
+#      CodeRabbit review on #295: this arm used to rank against the LIVE repo root (".") — an unrelated
+#      comment landing anywhere in the tree (e.g. train 7's own pagerank.cpp doc-comment edits) can move
+#      BM25 length normalization and flip pageRankDouble across the rank-10 cutoff with the ranker
+#      provably neutral, exactly the corpus-composition defect check #0's FROZEN CORPORA header
+#      describes for the recall/ranking lanes above. Move it onto the SAME frozen "src" snapshot those
+#      lanes already score (bench/recalleval/snapshot.srcpack + srcsnapshot.lock), materialized via the
+#      harness's own materialize_snapshot() (run_recalleval.py) — no second unpacker, no second corpus.
+FROZEN_6A="$TMP/frozen_src_6a"
+mkdir -p "$FROZEN_6A"
+if ! FROZEN_6A_INFO="$( python3 -c "
+import sys
+sys.path.insert( 0, '$ROOT/bench/recalleval' )
+from run_recalleval import materialize_snapshot
+commit, count = materialize_snapshot( '$FROZEN_6A', 'src' )
+print( 'commit=%s files=%d' % ( commit, count ) )
+" 2>"$TMP/frozen6a.err" )"; then
+    no "6a: could not materialize the frozen src corpus for the cited-query arm: $( cat "$TMP/frozen6a.err" )"
 else
-    no "cited query: pageRankDouble r=${PRRANK:-absent} vs best fixture/deck row r=${FIXRANK:-none} — §P4 repro is back"
+    ok "6a: frozen src corpus materialized ($FROZEN_6A_INFO) — the cited query now scores this, not the live tree"
+    "$BIN" "$FROZEN_6A" --for="pagerank power iteration" --format=candidates --top-k=10 >"$CAND" 2>/dev/null
+    PRRANK="$( tr '<' '\n' <"$CAND" | sed -n 's/^cand r="\([0-9]*\)" [^>]*n="pageRankDouble".*/\1/p' | head -1 )"
+    FIXRANK="$( tr '<' '\n' <"$CAND" | grep -E '^cand ' | grep -E 'p="(\./)?(test|present)/' | sed -n 's/^cand r="\([0-9]*\)".*/\1/p' | sort -n | head -1 )"
+    if [ -n "$PRRANK" ] && { [ -z "$FIXRANK" ] || [ "$PRRANK" -lt "$FIXRANK" ]; }; then
+        ok "cited query (frozen corpus) ranks pageRankDouble (r=$PRRANK) above any test/present row (best fixture r=${FIXRANK:-none in top-10})"
+    else
+        no "cited query (frozen corpus): pageRankDouble r=${PRRANK:-absent} vs best fixture/deck row r=${FIXRANK:-none} — §P4 repro is back"
+    fi
 fi
 
 # 6b — mention anchor beats the tier penalty: a fixture file literally NAMED in the task keeps the anchor's PUBLISHED

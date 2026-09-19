@@ -227,6 +227,10 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
                                        // --connect alone, one verb paying full price for a fact the table
                                        // states in a third of the bytes.
 
+    "<!-- notes_degraded=",             // L3 follow-up (CodeRabbit 4053600616): the map/--expand root's standalone
+                                       // clause (serialize.h kNotesDegradedComment) — the graph_unindexed= precedent
+                                       // exactly. Every OTHER emitter splices the same reading as plain text inside
+                                       // its own "<!-- ripwire "-prefixed comment, already covered by that row above.
     "<!-- r:root=",                    // the map header's terse spelling of the same block
     "<!-- pr_iters=",                  // the PageRank convergence block on map-family roots
     "<!-- at= is the git commit",      // the churn/quality provenance block
@@ -544,6 +548,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "refs_dropped",      "refs_dropped=K: K listed branches could not be read, in no count or row" },
     { "head_conflicts_ok", "head_conflicts_ok=0: that arm's base or HEAD tree was unavailable, head_conflicts= unknown", true, "arm" },
     { "render_failed",     "render_failed=: sections whose render FAILED (empty, not budget-omitted)", true },
+    // notes.h follow-up round (CodeRabbit 4053600616, declined at train-7, landed here): the ONE marker every
+    // notes-surfacing emitter carries — the map, --expand, --for, pack-task, edit-check, handoff, lanes and the
+    // MCP verbs. Head term like disk_walk_failed=/refs_dropped= above; --notes itself is unaffected (its own
+    // lines_skipped=/refused= rows already have readings, further up this table).
+    { "notes_degraded",    "notes_degraded=1: the .ripwire_notes sidecar had unreadable lines or was refused this run (the notes verb's own listing names which)" },
 };
 
 // the paging window: these five mean the same on every element (L4's one-attribute-one-reading law), so they are

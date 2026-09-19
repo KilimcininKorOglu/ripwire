@@ -2109,7 +2109,8 @@ std::optional<int> runEditCheck( const MainDispatch& d )
     // editCheckRowWindow). cli.h's honorsPaging() lists this verb, so the pair reaches here rather than
     // being refused, and 0/0 — the un-spelled window — is the default cap, not "unbounded".
     const std::string xml = editCheckBundleText( ing, d.g, d.root, cfg.maxFileBytes, cfg.excludes, focus, d.notesPtr,
-                                                  /*preview=*/false, cfg.pageLimit, cfg.pageOffset, ecUnprovenDefs );
+                                                  /*preview=*/false, cfg.pageLimit, cfg.pageOffset, ecUnprovenDefs,
+                                                  d.notesDegraded );   // L3 follow-up (CodeRabbit 4053600616)
     std::fwrite( xml.data(), 1, xml.size(), stdout );
     return 0;
 }

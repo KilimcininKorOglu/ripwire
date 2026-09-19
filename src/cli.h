@@ -157,6 +157,7 @@ struct Config
     bool             signaturesOnly = false;                // --signatures-only (with --for): opt OUT of the T3 terminal-by-default bundle — no auto <bodies> section, no bundle="auto" disclosure; restores the pre-T3 signatures-only lens byte-identically. Contradicts --detail=N (the explicit body knob), refused together. Pre-registered: docs/EVALS.md §4, T3 round.
     bool             autoBodies = false;                    // --auto-bodies (with --for): opt OUT of COMPACT conceptual serving — restore the rank-first auto <bodies> walk on the subtoken+body route, which by default serves the ranked map plus a <hops> one-hop edge section and no body CDATA. A permanent posture flag, not a transition aid. Inert on the name-exact route (the allowance is already on there). Contradicts --signatures-only (no bodies at all) and --detail=N (the explicit body knob), refused with either. Pre-registered: docs/EVALS.md, the T3 route-narrowing round.
     std::string_view legoType;                             // --lego=TYPE: the interface→impls "Lego" view for ONE named interface/base (signature + method contract + every implementor, own-language only). file:name disambiguates a same-named type across languages.
+    std::string_view sections;                             // --sections=lego,compose (modifies --for=TASK only): opt IN to the full <lego>/<compose> render the ranked --for lens collapses to a counted stub by default (L2, round-1 lever B1, §9.3 disclosed cut) — restores BOTH sections byte-identically to the pre-stub render in ONE call. A closed, comma-separated, order-insensitive set; each name at most once.
     std::string_view exemplar;                             // --exemplar=TASK|KIND (Q7): the repo's best-in-class instance of what you're about to write (by ROLE, not text similarity). A plain TASK string infers KIND from the top match; a KIND token selects directly.
     std::string_view recall;                               // --recall=TASK: retrieve the most relevant DOCS (memory/notes) + emit their full bodies
     bool             mostImportantLast = false;            // --order=important-last (was --most-important-last, now a hidden alias): emit highest-rank content last (explicit; always honoured)
@@ -941,6 +942,21 @@ inline constexpr char kHelpHead[] =
         "                               --token-budget, --top-k …): each is refused beside --limit, never ignored. Measured\n"
         "                               on the routing-loop ladder (RocksDB, frozen 30): the follow-up that completes\n"
         "                               answers where a body cannot.\n"
+        "                               <lego>/<compose> COLLAPSE TO A COUNTED STUB BY DEFAULT (L2, a disclosed cut, never a\n"
+        "                               silent one): when the ranked set names an interface with implementors, or a HAS-A\n"
+        "                               field edge into/out of it, the bundle used to spend the full <iface>/<m>/<impl> method\n"
+        "                               contract or <field> row list on it — the STUB instead says only how many rows the\n"
+        "                               section held: <lego total=\"N\" shown=\"0\" capped=\"1\" next=\"…\"/> (same shape for <compose>).\n"
+        "                               No stub for a section that would be EMPTY (an absent section stays absent). total= is\n"
+        "                               that section's own pre-cap row count (packLego's post-dedup interface count; every\n"
+        "                               matched HAS-A edge for compose, which caps nothing). next= carries the one restoring\n"
+        "                               spelling that returns BOTH sections byte-identical to the un-stubbed render, in ONE\n"
+        "                               call: --sections=lego,compose.\n"
+        "    --sections=lego,compose    (with --for) opt back into the full <lego>/<compose> render the stub above replaces\n"
+        "                               (with --for=TASK) restore the <lego>/<compose> sections the ranked bundle collapses to\n"
+        "                               a counted stub by default — this IS the stub's own next= spelling, so pasting it back\n"
+        "                               unchanged is enough. A comma-separated, order-insensitive, closed set (lego and/or\n"
+        "                               compose, each named at most once); every other section of the bundle is unaffected.\n"
         "    --signatures-only          (with --for) signatures only: no automatic bodies in the bundle\n"
         "                               (with --for) opt out of the terminal-by-default bundle: no auto bodies, no bundle=\"auto\"\n"
         "                               attribute — the signatures-only lens exactly as before. Contradicts --detail=N (refused\n"
@@ -3046,6 +3062,7 @@ inline constexpr ViewFlag kViewFlags[] =
     { "--lint-select=", &Config::lintSelect      , EmptyValue::Refuse, "a comma-separated PREFIX list, or '*'",  "--lint-select=cache-,goto" },
     { "--lint-ignore=", &Config::lintIgnore      , EmptyValue::Refuse, "a comma-separated PREFIX list, or '*'",  "--lint-ignore=naming-" },
     { "--for=",         &Config::forTask         , EmptyValue::Refuse, "a task in words",                        "--for=\"add retry to the http client\"" },
+    { "--sections=",    &Config::sections        , EmptyValue::Refuse, "lego, compose, or lego,compose",         "--sections=lego,compose" },
     { "--lego=",        &Config::legoType        , EmptyValue::Refuse, "an interface or base-type name",         "--lego=Shape" },
     { "--exemplar=",    &Config::exemplar        , EmptyValue::Refuse, "what you are about to write",            "--exemplar=\"a JSON writer\"" },
     { "--recall=",      &Config::recall          , EmptyValue::Refuse, "a task in words",                        "--recall=\"how does the cache key work\"" },
@@ -3312,7 +3329,7 @@ inline constexpr IntFlag kIntFlags[] =
 //                              warn once per RUN, not per flag — state a BoolFlag row has nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
 inline constexpr std::size_t kHandWrittenFlagArms = 22;   // +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=)
-inline constexpr std::size_t kTotalFlagArms = 211;  // +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kTotalFlagArms = 212;  // +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -4087,6 +4104,45 @@ static inline void validateLegendModifier( Config& c ) noexcept
     }
 }
 
+// L2 (round-1 lever B1, lane/r1-for-sections-stub): --sections=lego,compose restores the <lego>/<compose>
+// sections the ranked --for lens collapses to a counted stub by default (src/serialize.h sectionStubXml) —
+// the disclosed §9.3 cut named in the stub's own next=. A CLOSED, comma-separated, order-insensitive set
+// (each name at most once) so a typo is refused rather than silently read as "nothing restored"; it
+// modifies --for=TASK only (the sections exist nowhere else).
+static inline void validateSectionsModifier( Config& c ) noexcept
+{
+    if( c.sections.empty() )
+    {
+        return;
+    }
+    if( c.forTask.empty() )
+    {
+        rw::emitRaw( stderr, "ripwire: --sections=lego,compose modifies --for=TASK — pass both (e.g. ripwire <dir> --for=\"…\" --sections=lego,compose)\n" );
+        c.ok = false;
+        return;
+    }
+    // EVERY segment is read, the empty one after a trailing comma included (CodeRabbit 4054594298): the loop
+    // ends on "no comma left", not on "nothing left", so `lego,` and `lego,,compose` reach the refusal below.
+    bool sawLego = false, sawCompose = false, bad = false;
+    std::string_view rest = c.sections;
+    for( bool more = true; more; )
+    {
+        const std::size_t comma = rest.find( ',' );
+        const std::string_view tok = comma == std::string_view::npos ? rest : rest.substr( 0, comma );
+        if( tok == "lego" )         { bad = bad || sawLego;     sawLego = true; }
+        else if( tok == "compose" ) { bad = bad || sawCompose;  sawCompose = true; }
+        else                        { bad = true; }
+        more = comma != std::string_view::npos;
+        rest = more ? rest.substr( comma + 1 ) : std::string_view();
+    }
+    if( bad || ( !sawLego && !sawCompose ) )
+    {
+        rw::emitTo( stderr, "ripwire: --sections needs a comma-separated list of lego and/or compose, each named once — got '{}', e.g. --sections=lego,compose\n",
+                    std::string_view( c.sections.data(), c.sections.size() ) );
+        c.ok = false;
+    }
+}
+
 // P4 (capture-audit 2026-09-04, L7): the two default-ceiling modifiers are inert without their verb — refused,
 // naming the pairing (M16's rule: a bare modifier never emits the default map at exit 0).
 static inline void validateDefaultCeilingModifiers( Config& c ) noexcept
@@ -4203,6 +4259,7 @@ inline void validateModifierGuards( Config& c ) noexcept
     validateLspShaping( c );         // the server transport refuses the shaping knobs outright — see its header
 
     validateLegendModifier( c );
+    validateSectionsModifier( c );   // L2 (round-1 lever B1): --sections= modifies --for only, closed set
     validateGrepHandleModifier( c );
     validateDefaultCeilingModifiers( c );   // P4 (L7): --zoom-levels / --include-builtins ride their verb only
 

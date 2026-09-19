@@ -319,8 +319,10 @@ inline void splitNoteTail( std::string_view rest, std::string& text, std::string
 //
 // What one read found BESIDE the notes: the two ways it comes back short. It is the DISCLOSE sink for this file's read
 // degrades — --notes prints both on <notes> (lines_skipped=, refused=), and addNote refuses to rewrite a sidecar holding
-// lines it could not parse, because the sorted rewrite would delete them. A reader with no channel for either (--for,
-// --expand, the MCP verbs, handoff) passes a local one: pathguard.h round 3 names that gap.
+// lines it could not parse, because the sorted rewrite would delete them. Every OTHER reader used to pass a local one
+// and drop it on the floor (readNotesRelative's channel-less overload, removed below) — degraded() now rides the
+// NoteIndex it built (loadNoteIndex), so --for/--expand/pack-task/edit-check/handoff/lanes/the MCP verbs all see it too,
+// as the one terse kNotesDegradedAttr marker rather than the detailed counts (CodeRabbit 4053600616 follow-up).
 struct NotesReadStats
 {
     enum class DisclosureWhy : std::uint8_t
@@ -340,7 +342,32 @@ struct NotesReadStats
             case DisclosureWhy::SymlinkRefused: symlinkRefused = true; break;
         }
     }
+    // true iff THIS read left something out (a skipped line, or the whole sidecar refused) — the one fact
+    // every notes-surfacing emitter besides --notes now carries (CodeRabbit 4053600616 follow-up). --notes
+    // still prints the detail (lines_skipped=/refused=); every other surface prints only this terse marker.
+    bool degraded() const noexcept { return linesSkipped != 0 || symlinkRefused; }
 };
+
+// THE ONE SPELLING OF THE L3 DEGRADE MARKER — identical on every notes-surfacing emitter: the map, --expand,
+// --for (XML and --json), pack-task (XML and --json), edit-check, handoff, lanes/landing-plan, and the MCP
+// verbs that surface notes (for, pack_task, from_trace, fetch_body). Present ONLY when NotesReadStats::degraded()
+// is true for the read that built the answer; absent on a clean read (no sidecar, or every line parsed) keeps
+// the INERTNESS CONTRACT above — zero added bytes. --notes alone keeps the detailed reading (lines_skipped=/
+// refused=); every other surface points back at it rather than repeating the counts.
+// const char* (not string_view): several call sites hand these straight to rw::emitRaw, whose std::fputs
+// backend needs a NUL-terminated pointer — the same reason every other legend constant in this tree is spelled
+// this way (kAtStampLegend, kIgnoredLegend, …).
+inline constexpr const char* kNotesDegradedAttr    = " notes_degraded=\"1\"";
+inline constexpr const char* kNotesDegradedJsonKey = ",\"notes_degraded\":true";
+// The plain-text reading, for a surface (packtask.h's `report` ledger) that splices into an EXISTING
+// `<!-- ripwire …` comment rather than opening a standalone one. No "--" anywhere in either spelling below —
+// a literal double hyphen is ill-formed inside an XML comment (G4), and "--notes" spelled that way once did
+// exactly that (measured: xmllint rejected the map, --for and pack-task roots alike).
+inline constexpr const char* kNotesDegradedReading =
+    "notes_degraded=\"1\": the .ripwire_notes sidecar had unreadable lines or was refused this run (the notes verb's own listing names which, lines_skipped=/refused=)";
+// The standalone-comment spelling, for a surface that appends its own `<!-- … -->` (same reading as above).
+inline constexpr const char* kNotesDegradedComment =
+    "<!-- notes_degraded=\"1\": the .ripwire_notes sidecar had unreadable lines or was refused this run (the notes verb's own listing names which, lines_skipped=/refused=) -->";
 
 inline rw::pathguard::NoFollowRead readNotesSidecar( const std::string& path, NotesReadStats& stats )
 {
@@ -399,12 +426,6 @@ inline std::vector<Note> readNotesRelative( const std::string& path, const std::
         n.target = normalizeNoteTarget( n.target, root, outsideRoot );
     }
     return notes;
-}
-
-inline std::vector<Note> readNotesRelative( const std::string& path, const std::string& root )
-{
-    NotesReadStats stats;   // no channel at this caller (see NotesReadStats)
-    return readNotesRelative( path, root, stats );
 }
 
 // the exact data line writeNotes emits for one Note — shared by writeNotes (per-line) and addNote (the
@@ -511,6 +532,10 @@ struct NoteIndex
     std::string                                      root;       // D5: the ingest root this index was loaded for
     std::vector<Note>                                notes;      // owns storage, sorted (byte-stable emit order)
     HashMap<std::string, std::vector<std::uint32_t>> byTarget;   // target → indices into `notes`
+    // the read that built `notes` left something out (NotesReadStats::degraded()) — carried alongside empty()
+    // rather than folded into it: a fully-degraded read (every line malformed, or the sidecar refused) leaves
+    // `notes` empty too, and the marker must still reach the caller, which is exactly the byte this lane adds.
+    bool                                              degraded = false;
 
     bool empty() const noexcept { return notes.empty(); }
 
@@ -522,12 +547,13 @@ struct NoteIndex
     }
 };
 
-inline NoteIndex buildNoteIndex( std::vector<Note> notes, std::string root = {} )
+inline NoteIndex buildNoteIndex( std::vector<Note> notes, std::string root = {}, bool degraded = false )
 {
     sortNotes( notes );
     NoteIndex idx;
-    idx.root = std::move( root );
-    idx.notes = std::move( notes );
+    idx.root     = std::move( root );
+    idx.notes    = std::move( notes );
+    idx.degraded = degraded;
     idx.byTarget.reserve( idx.notes.size() );   // reserve to expected size — skip the ankerl rehash cascade
     for( std::uint32_t i = 0; i < idx.notes.size(); ++i )
     {
@@ -538,7 +564,9 @@ inline NoteIndex buildNoteIndex( std::vector<Note> notes, std::string root = {} 
 
 inline NoteIndex loadNoteIndex( const std::string& root )
 {
-    return buildNoteIndex( readNotesRelative( notesPath( root ), root ), root );
+    NotesReadStats     stats;   // the channel every caller now has (the removed channel-less overload's gap)
+    std::vector<Note>  notes   = readNotesRelative( notesPath( root ), root, stats );
+    return buildNoteIndex( std::move( notes ), root, stats.degraded() );
 }
 
 }   // namespace rw::notes

@@ -688,6 +688,14 @@ case "$RF2" in *'intent="reach-flow"'*'--for='*) ok "S4 paraphrase (used by) -> 
 RF0="$( route 'how does targetSymbol reach the cache layer' )"
 case "$RF0" in *'intent="reach-flow"'*) no "reach-flow fired with fewer than two indexed files named: $RF0";; *) ok "reach-flow needs two indexed files, not reach/call-chain wording alone";; esac
 
+# CodeRabbit thread 4053600624 (src/taskroute.h:1417): reachScore used to match "reach" as a plain
+# SUBSTRING, so it fired inside "outreach" (and "unreachable") — a task about an "outreach loader" that
+# happens to name two indexed files, plus one other cheap phrase cue ("how does", weight 2), crossed the
+# reach-flow threshold (2 + the false "reach" hit's 5 = 7) and wrongly recommended --for=task. Word-bounded
+# matching ("reach" only as its own word) drops that to 2, below the threshold, so this now abstains.
+RF3="$( route 'how does the outreach loader connect db/write_batch.cc and cache/lru_cache.cc' )"
+case "$RF3" in *'intent="reach-flow"'*) no "'outreach' wrongly fired the substring 'reach' cue: $RF3";; *) ok "'outreach loader' names two indexed files but never fires reach-flow (\"reach\" is word-bounded)";; esac
+
 LI1="$( route 'Where is the write batch implemented?' )"
 case "$LI1" in *'status="recommend"'*'intent="locate-implementation"'*'--for='*) ok "S1 mining template -> --for=task";; *) no "locate-implementation route wrong: $LI1";; esac
 LI2="$( route 'which file implements the WRITE_STALL start time fix' )"
@@ -710,7 +718,8 @@ PARA_S1=( 'which file implements the WRITE_STALL start time fix'
           'find the code for MultiGet skip_memtable handling'
           'where does rocksdb record persist_user_defined_timestamps in the manifest' )
 PARA_S4=( 'call chain from db/db_iter.cc into db/wide/wide_columns_helper.h'
-          'how is util/heap.h used by table/iter_heap.h' )
+          'how is util/heap.h used by table/iter_heap.h'
+          'how does db/write_batch.cc reach cache/lru_cache.cc on the write path' )
 PARA_WRONG=0
 para_check(){
     local shape="$1" acceptRe="$2"; shift 2

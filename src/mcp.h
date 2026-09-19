@@ -874,6 +874,12 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             const std::string file    = strArg( "file" );
             const std::string task    = strArg( "task" );
             const std::string type    = strArg( "type" );     // lego verb: the interface/base name
+            const std::string sections = strArg( "sections" ); // L2: `for`'s <lego>/<compose> stub opt-back-in (CLI --sections= twin)
+            // F9/F11 (V2, mirrored from `legend` below): ABSENT and PRESENT-BUT-EMPTY are two different
+            // requests — `sections.empty()` alone collapses them, so `sections:""` was silently read as the
+            // default (no restore) instead of refusing the way the CLI's own `--sections=` (empty value)
+            // refuses. Caught by independent review before this ever shipped.
+            const bool sectionsIsPresent = mcpdetail::findRawValue( args, "sections" ).isPresent;
             const std::string files   = strArg( "files" );    // N11: schema-typed STRING (comma-separated paths), never an array
             const std::string diff    = strArg( "diff" );     // H5: same class as `files` — an array here answered about the wrong tree
             const std::string newBody = strArg( "new_body" ); // replace_symbol_body
@@ -1237,6 +1243,32 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 resp = errResultMsg( -32602, mcprefuse::badValueRefusal( "legend", legendArg ) );
                 pathsUsageError = true;
             }
+            // L2 (round-1 lever B1): `sections` is a CLOSED, comma-separated, order-insensitive set (lego
+            // and/or compose, each named at most once) — the same rule `legend` states just above, and for
+            // the same reason: a typo must not silently be read as "restore nothing". `sections:""` refuses
+            // here (the F9/F11 ABSENT-vs-PRESENT-BUT-EMPTY split), never silently defaulting.
+            if( !pathsUsageError && sectionsIsPresent )
+            {
+                bool sawLego = false, sawCompose = false, sectionsBad = sections.empty();
+                std::string_view rest = sections;
+                // every segment, the empty one after a trailing comma included — the CLI twin's rule
+                // (cli.h validateSectionsModifier, CodeRabbit 4054594302): `lego,` refuses, never reads as `lego`.
+                for( bool more = !sections.empty(); more; )
+                {
+                    const std::size_t comma = rest.find( ',' );
+                    const std::string_view tok = comma == std::string_view::npos ? rest : rest.substr( 0, comma );
+                    if( tok == "lego" )         { sectionsBad = sectionsBad || sawLego;    sawLego = true; }
+                    else if( tok == "compose" ) { sectionsBad = sectionsBad || sawCompose; sawCompose = true; }
+                    else                        { sectionsBad = true; }
+                    more = comma != std::string_view::npos;
+                    rest = more ? rest.substr( comma + 1 ) : std::string_view();
+                }
+                if( sectionsBad )
+                {
+                    resp = errResultMsg( -32602, mcprefuse::badValueRefusal( "sections", sections ) );
+                    pathsUsageError = true;
+                }
+            }
 
             // D3 / §B6 M7: the per-verb "missing required field" message. It used to be a hand-written
             // if-chain here, a SECOND hand-written chain in the batch arm ("missing pattern"), and a third,
@@ -1510,7 +1542,8 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                             return errResultMsg( -32602, "for: limit/offset select the file page, which has no token budget to shape against — drop budget_tokens, or drop limit/offset for the budgeted bundle" );
                         }
                         const std::optional<std::string> answer = forTaskText( path, task, redactPtr,
-                                                                                budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg );
+                                                                                budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg,
+                                                                                sections );   // L2: "" (default) = stub; the validated closed set otherwise
                         if( !answer )
                         {
                             return errResult( -32603, "internal error: the for answer buffer lost bytes — no answer served" );
