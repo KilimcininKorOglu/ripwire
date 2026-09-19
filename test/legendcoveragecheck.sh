@@ -247,6 +247,43 @@ ROSTER = withPostureTwins( ROSTER )
 # probed (the expand servings, the envelopes, the trace lens, the reports with their own roots).
 open( os.path.join( TMP, "trace.txt" ), "w" ).write( "#0 0x1 in escapeXml serialize.h:147\n#1 0x2 in main main.cpp:10\n" )
 open( os.path.join( TMP, "batch.txt" ), "w" ).write( "callers escapeXml\nuses escapeXml\n" )
+# …and the STATES a clean checkout reaches that a developer's does not (rv-r1-L1-2): a DETACHED HEAD (how CI checks out:
+# --handoff says detached=), a trace whose frames are stale or outside every root, an older --pr-context base with
+# author/partner/caller rows, a --quality-delta ref pair. The detached repo is built here, so the row does not depend on
+# how this tree happens to be checked out.
+DET = os.path.join( TMP, "detached" )
+os.makedirs( os.path.join( DET, "src" ), exist_ok = True )
+open( os.path.join( DET, "src", "a.c" ), "w" ).write( "int alpha( int n ) { return n + 1; }\n" )
+gitc = [ "git", "-c", "user.email=g@example.invalid", "-c", "user.name=g" ]
+subprocess.run( [ "git", "init", "-q", DET ], capture_output = True )
+subprocess.run( gitc + [ "-C", DET, "add", "-A" ], capture_output = True )
+subprocess.run( gitc + [ "-C", DET, "commit", "-qm", "one" ], capture_output = True )
+open( os.path.join( DET, "src", "a.c" ), "a" ).write( "int beta( int n ) { return alpha( n ) * 2; }\n" )
+subprocess.run( gitc + [ "-C", DET, "commit", "-qam", "two" ], capture_output = True )
+subprocess.run( [ "git", "-C", DET, "checkout", "-q", "--detach", "HEAD" ], capture_output = True )
+CYC = os.path.join( TMP, "cycle", "src" )
+os.makedirs( CYC, exist_ok = True )
+open( os.path.join( CYC, "a.h" ), "w" ).write( '#include "b.h"\nint fa();\n' )
+open( os.path.join( CYC, "b.h" ), "w" ).write( '#include "a.h"\nint fb();\n' )
+open( os.path.join( CYC, "c.py" ), "w" ).write( 'def f():\n    import json\n    return json\n' )
+open( os.path.join( TMP, "stale.txt" ), "w" ).write( "#0 0x1 in escapeXml serialize.h:900\n#1 0x2 in emitTo main.cpp:3\n#2 0x3 in nosuch /usr/lib/x.so:1\n" )
+ROSTER += [
+    ( "handoff-detached-default", [ DET,   "--handoff" ] ),
+    ( "deps-cycle-default",       [ CYC,   "--deps" ] ),
+    ( "pr-context-wide-default",  [ ROOT,  "--pr-context=HEAD~30", "--token-budget=60000" ] ),
+    ( "stale-line-trace-default", [ SMALL, "--from-trace=" + os.path.join( TMP, "stale.txt" ), "--token-budget=4000" ] ),
+    ( "from-trace-stale-default", [ SMALL, "--from-trace=" + os.path.join( TMP, "stale.txt" ) ] ),
+    ( "pr-context-old-default",   [ ROOT,  "--pr-context=HEAD~30" ] ),
+    ( "quality-delta-refs-default", [ ROOT, "--quality-delta=HEAD~5..HEAD" ] ),
+    ( "doctor-root-default",      [ ROOT,  "--doctor" ] ),
+    ( "quality-panel-default",    [ SMALL, "--quality-panel" ] ),
+    ( "comment-coherence-default",[ SMALL, "--comment-coherence" ] ),
+    ( "dmm-default",              [ ROOT,  "--dmm=HEAD~5" ] ),
+    ( "naming-calibration-default", [ SMALL, "--naming-calibration" ] ),
+    ( "query-default",            [ SMALL, "--query=rank symbols" ] ),
+    ( "regex-default",            [ SMALL, "--regex=esc.*Xml" ] ),
+    ( "expand-split-default",     [ os.path.join( ROOT, "test", "zoomfix" ), "--expand=mathStepF1" ] ),
+]
 ROSTER += [
     ( "expand-bundle-default",    [ SMALL, "--expand=pageWindow" ] ),
     ( "expand-file-default",      [ SMALL, "--expand=emitTo" ] ),
@@ -307,11 +344,20 @@ for name, args in ROSTER:
     doc = subprocess.run( [ BIN ] + args, capture_output = True ).stdout
     if not doc.strip():
         silent.append( name );  table.append( ( name, 0, [], [] ) );  continue
-    legend, seen, order = legendOf( doc, anyRoot = name.endswith( "-default" ) ), {}, []
-    for m in ATTR.finditer( doc ):
+    isDefault = name.endswith( "-default" )
+    legend, seen, order = legendOf( doc, anyRoot = isDefault ), {}, []
+    # A DEFAULT row reads EVERY instance of every element (rv-r1-L1-2: a rare conditional attribute on the second <c> row, or
+    # a row only a detached HEAD prints, escaped a first-instance sample), outside comments and CDATA. The full rows keep the
+    # first-instance window their floor was recorded with.
+    scan = re.sub( rb'<!--.*?-->', b'', re.sub( rb'<!\[CDATA\[.*?\]\]>', b'', doc, flags = re.S ), flags = re.S ) if isDefault else doc
+    for m in ATTR.finditer( scan ):
         tag = m.group( 1 ).decode()
-        if tag in seen: continue
-        seen[ tag ] = [ a.decode() for a in re.findall( rb'\s([\w:.-]+)="', m.group( 2 ) ) ]
+        attrs = [ a.decode() for a in re.findall( rb'\s([\w:.-]+)="', m.group( 2 ) ) ]
+        if tag in seen:
+            if isDefault:
+                seen[ tag ] += [ a for a in attrs if a not in seen[ tag ] ]
+            continue
+        seen[ tag ] = attrs
         order.append( tag )
     keys = sorted( { f"{tag}@{a}" for tag in order for a in seen[ tag ] if a not in CORE } )
     gm   = [ k for k in keys if not mentioned( k.split( '@', 1 )[1], legend ) ]

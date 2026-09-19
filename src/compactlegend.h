@@ -176,7 +176,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "naming-calibration","naming-calibration","naming lint rules scored against this repo's OWN rename history (a noisy proxy): <r n= old= new= fired= proxy=>" },
     { "naming-consistency","naming-consistency","the corpus's case-convention vote per (language, kind): <g lang= kind= style= agree= total=>, <f p= n= propose=> outliers" },
     { "comment_coherence","comment-coherence","two comment/name content measures per documented function, most name-restating first: <fn p= n= c_coeff= cic=>" },
-    { "doctor",       "doctor",       "setup health: <c name= ok=> checks; exit 1 when one fails" },
+    { "doctor",       "doctor",       "setup health: <c n= ok=> checks; exit 1 when one fails" },
     { "layout",       "layout",       "struct field layout vs cache lines: offsets, padding, hot/cold split candidates" },
     { "arch",         "arch",         "layering rules fit: allowed/denied file-to-file edges, each violation a row" },
     { "flip",         "flip",         "the blast radius of flipping one build gate: the regions and symbols it toggles" },
@@ -706,13 +706,13 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "sym", "sym=: the aggregate name asked for", false, "layout", MapHeaderRead::No, {}, "layout" },
     { "found", "found=1: a C-family struct/class/union body was located for sym=", false, "layout", MapHeaderRead::No, {}, "layout" },
     { "defs", "defs=N: same-name aggregate defs found; a more element counts any not shown", false, "layout", MapHeaderRead::No, {}, "layout" },
-    { "mirror", "mirror=: single, match, mismatch (byte drift, exits nonzero), stub or spelling, over same-name defs", false, "layout", MapHeaderRead::No, {}, "layout" },
+    { "mirror", "mirror=: single|match|mismatch (byte drift, exits nonzero)|stub|spelling, over same-name defs", false, "layout", MapHeaderRead::No, {}, "layout" },
     { "asserts", "asserts=N: static_assert tripwires in indexed files that mention sym=", false, "layout", MapHeaderRead::No, {}, "layout" },
-    { "conflicts", "conflicts=N: asserts the computed size contradicts (agree=0 rows); nonzero exits nonzero", false, "layout", MapHeaderRead::No, {}, "layout" },
+    { "conflicts", "conflicts=N: asserts contradicting the computed size (agree=0 rows); nonzero exits nonzero", false, "layout", MapHeaderRead::No, {}, "layout" },
     { "scanned", "scanned=N: indexed C-family files read for asserts", false, "layout", MapHeaderRead::No, {}, "layout" },
     { "agg", "agg=: struct, class or union", true, "def", MapHeaderRead::No, {}, "layout" },
     { "fields", "fields=N: member rows listed", true, "def", MapHeaderRead::No, {}, "layout" },
-    { "modeled", "modeled=0: size/align/tail pad not computed (see caveat rows); off= only up to the first unknown", true, "def", MapHeaderRead::No, {}, "layout" },
+    { "modeled", "modeled=0: size/align/tail pad not computed; off= only up to the first unknown", true, "def", MapHeaderRead::No, {}, "layout" },
     { "ty", "ty=: the field type as written, before macro expansion (as= gives the expansion)", true, "f", MapHeaderRead::No, {}, "layout" },
     { "sz", "sz=N: field bytes incl. array extent (LP64 model); sized=0 instead when unknown", true, "f", MapHeaderRead::No, {}, "layout" },
     { "al", "al=N: field alignment in bytes (LP64 model)", true, "f", MapHeaderRead::No, {}, "layout" },
@@ -800,6 +800,154 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "tests", "tests=/untested=: tests to run (t total) / impacted symbols no test reaches (u total)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     // uses: src/verbs_navigate.h
     { "count", "count=N: use-site rows in all (a floor)", false, "uses", MapHeaderRead::No, {}, "uses" },
+    { "run", "test run=: the command that runs that test file (run_unknown=1: none derivable)", true, "test", MapHeaderRead::No, {}, "pr-context" },
+    // …and the fixture states compactlegendcheck (UG) reaches: every XML flag of the universe, every instance.
+    // hotspots: src/verbs_report.h (the <hotspots> root emit)
+    { "files", "files=/ranked=: files in the window / those with both churn and complexity; ranked + unranked_no_churn + unranked_no_complexity = files", false, "hotspots", MapHeaderRead::No, {}, "hotspots" },   // also defines ranked=
+    { "unranked_no_churn", "unranked_no_churn=/unranked_no_complexity=: files left out for no commit in window= / no measured complexity", false, "hotspots", MapHeaderRead::No, {}, "hotspots" },   // also defines unranked_no_complexity=
+    // naming-consistency: src/namingconsistency.h
+    { "why", "g why=insufficient-sample|no-clear-convention: which bar a style=UNAVAILABLE group missed", true, "g", MapHeaderRead::No, {}, "naming-consistency" },
+    // quality-delta: src/verbs_quality.h (root)
+    { "acked", "acked=N: findings suppressed by the ack ledger, listed as sa rows; never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    // path: src/verbs_navigate.h (the no-path hint)
+    { "hint", "hint=: what to try when no directed path exists (connect for a shared caller, uses/impact for non-call references)", false, "path", MapHeaderRead::No, {}, "path" },
+    // connect: src/mcpverbs.h packConnect (terminal rows)
+    { "defs", "t defs=N: that terminal name has N defs in the index; all were searched (above 1, qualify file:name)", true, "t", MapHeaderRead::No, {}, "connect" },
+    // grep: src/verbs_grep.h (the enc row's def count)
+    { "defs", "enc defs=N: the enclosing name has N defs, the row unions them (only above 1)", true, "enc", MapHeaderRead::No, {}, "grep" },
+    // owners: src/verbs_report.h (the of= form)
+    { "of", "of=/defs=: the symbol asked for and how many defs it resolved to; rows are the files holding them", false, "owners", MapHeaderRead::No, {}, "owners" },   // also defines defs=
+    // doc-drift: src/docdrift.h
+    { "filter", "filter=: the path filter this run was narrowed to; docs outside it were not checked", false, "doc-drift", MapHeaderRead::No, {}, "doc-drift" },
+    // whereis: src/crossref.h (the exhaustiveness claim)
+    { "complete", "complete=1: the scan read every ref AND this page lists every hit (absent: one of the two is a floor)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
+    // plan-lint: src/planlint.h
+    { "file", "file=/dialect=: the plan read and whether the PLAN dialect was detected (dialect=0: nothing to lint)", false, "plan-lint", MapHeaderRead::No, {}, "plan-lint" },   // also defines dialect=
+    { "cards", "cards=/ledger=: card rows found / whether the doc carries a ledger (ledger_line= names its line)", false, "plan-lint", MapHeaderRead::No, {}, "plan-lint" },   // also defines ledger=
+    { "git", "git=1: git was available, so the staleness read ran; stale_commits=N: a waiting card N commits behind HEAD is stale", false, "plan-lint", MapHeaderRead::No, {}, "plan-lint" },   // also defines stale_commits=
+    { "gating", "gating=N: findings that fail the plan (exit 2); the rest are advisory", false, "plan-lint", MapHeaderRead::No, {}, "plan-lint" },
+    // field-affinity: src/fieldaffinity.h (the named-struct form)
+    { "sym", "sym=: the struct asked for; only its own fields and pairs are reported", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
+    // layout: src/layout.h (the modeled definition row)
+    { "size", "def size=/align=/tail_pad=: computed bytes, alignment, trailing padding (modeled=1 only)", true, "def", MapHeaderRead::No, {}, "layout" },   // also defines align= tail_pad=
+
+    // ── round 2 of the fix (rv-r1-L1-2): the verbs and states the first roster did not reach — doctor, quality-panel,
+    //    naming-calibration, dmm, comment-coherence, help-task facts.
+    // doctor: src/verbs_doctor.h runDoctor / doctorIndexCacheRow / doctorGitConfigTrustAttrs / doctorLayoutCheck / doctorAgentRows
+    { "n", "n=: the check's name (binary-path, grammars, cache-dir, git, tree-sitter, index-cache, layout ...)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "agent", "agent=: codex or claude; that agent's live-integration c rows follow the built-in checks", false, "doctor", MapHeaderRead::No, {}, "doctor" },
+    { "copied", "copied=1: the PATH binary is a byte-identical copy of this one, an ok copied install", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "loaded", "loaded=/expected=: grammars whose tags query compiled / grammars compiled in; a shortfall fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines expected=
+    { "dir", "dir=: the per-user cache directory scanned (TMPDIR/XDG_CACHE_HOME ladder); unwritable fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "blobs", "blobs=N: ripwire cache blobs in dir=; the scan stops at 4096 (blobs_floor=1 then)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "blobs_floor", "blobs_floor=1: the 4096-blob scan cap fired; blobs= and bytes= are FLOORS, not totals", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "bytes", "bytes=N: total size in bytes of the blobs counted (short when truncated=1)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "many", "many=1: more than 50 blobs; an eviction-sanity flag, informational, never fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "truncated", "truncated=1: cache-dir, blob scan cut (cap or I/O error); tracked-binaries, scan SKIPPED, stale=0 unmeasured", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "locks", "locks=N: advisory edit-lock files under locks/; unheld ones over a day old are swept on a cache write", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "volatile", "volatile=: this row's attributes that read LIVE machine state; a determinism diff strips them, never the row", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "git", "git=0|1: git runs from PATH; 0 fails the row (churn verbs need it)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "repo", "repo=0|1: the root is inside a git work tree; 0 is a diagnosis, not a failure", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "history", "history=0|1: the repo has at least one commit; head= prints only when it does", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "head", "head=: HEAD's short sha (9 hex, the at= width)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "shallow", "shallow=1: a depth-limited clone; every churn number counts only the commits present", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "core_abi", "core_abi=/cpp_grammar_abi=: tree-sitter core language ABI / the C++ grammar's ABI; informational", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines cpp_grammar_abi=
+    { "languages", "languages=N: distinct compiled-in grammars (the grammars row's expected=)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "tracked", "tracked=N: git ls-files count, printed even when truncated=1 (over 20000 files skips the scan)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "binaries", "binaries=N: tracked paths that sniff as binary content", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "non_git", "non_git=1: no git history to compare; the row passes unscanned", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "stale", "stale=N: tracked binaries committed before a same-dir same-stem source changed; any fails the row", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "p0", "p0=/src0=: one stale binary and its newer source (pairs p0..p7 at most; more= counts the rest)", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines src0=
+    { "more", "more=N: stale pairs past the 8 printed; all still counted in stale=", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "cache_version", "cache_version=/parser_ver_lean=/parser_ver_rich=/artifact_arch=: index identity; reuse needs all four", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines parser_ver_lean= parser_ver_rich= artifact_arch=
+    { "rich_verbs", "rich_verbs=: the verbs that consume the rich artifact (rich=); every other verb reads the lean one", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "source", "source=: auto (per-root blob), cache-flag (named by the cache flag) or disabled (no-cache: nothing read)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "lean_path", "lean_path=/rich_path=: the artifact files checked; one path when the cache flag named it", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines rich_path=
+    { "lean", "lean=/rich=: can THIS binary open that artifact (ok, absent, parser-version ...); format, never freshness", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines rich=
+    { "fsmonitor", "fsmonitor=: the checkout's core.fsmonitor at startup: unset, builtin, off, or hook (a command git runs)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "neutralised", "neutralised=1: a hook fsmonitor was overridden to false for this run; 0 when none was needed", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "state", "state=: layout records agree, disagree (mixed binary: rebuild clean-first), not-checked or no-records", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "checked", "checked=1: the cross-unit layout comparison ran; 0 = under two comparable records", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "units", "units=N: translation units that registered a layout record", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "types", "types=N: layout types recorded (only those registered in src/model.h); omitted on state=disagree", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "type", "type=: the first layout type whose two records differ (state=disagree)", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "unit0", "unit0=/unit1=/present0=/present1=/size0=/size1=/align0=/align1=: the two disagreeing records' values", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines unit1= present0= present1= size0= size1= align0= align1=
+    // quality-panel: src/qualitypanel.h writePanelReport (+ kPanelLegend)
+    { "preset", "preset=: strict (5 stable families, cut 2), default (6, cut 2), lenient (6, cut 1); selects, never weights", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "families", "families=6: evidence families: structural lexical confusion historical colocation state", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "enabled", "enabled=/enabled_n=: the families this preset COUNTS, and how many", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines enabled_n=
+    { "cut", "cut=N: distinct enabled families that must fire for a row to rank", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "cut_reachable", "cut_reachable=0: cut= exceeds the evaluable families (of=); a corpus fact, never a clean bill of health", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "eligible", "eligible=N: functions/methods with a body; ranked= + below_cut= + no_family= = eligible=, always", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "ranked", "ranked=N: rows that met the cut (total=); only shown= print, page with offset=", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "below_cut", "below_cut=N: fired at least one enabled family, but fewer than cut=", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "no_family", "no_family=N: no enabled family fired; unavailable= families were never measured", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "bar_ccx", "bar_ccx=/bar_loc=/bar_nest=/bar_params=: absolute bars: cognitive complexity, lines, nesting, params", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines bar_loc= bar_nest= bar_params=
+    { "rcut", "rcut=/rmeasured=: readability decile width (rrank= under it fires) / functions measured", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines rmeasured=
+    { "hcut", "hcut=/hranked=: file churn decile width / files with an in-window commit (hranked=0 voids historical)", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines hranked=
+    { "window", "window=: the git churn window hrank= and churn= are counted over (RELATIVE to this corpus)", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "ccut", "ccut=/cranked=: colocation decile width / functions reading any outside definition (0 voids it)", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines cranked=
+    { "cfiles", "cfiles=/cscope=: files the confusion atom rules read / eligible symbols in them", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines cscope=
+    { "lscope", "lscope=N: symbols the lexical naming rules read", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "sfiles", "sfiles=/sscope=: files the state lens reads / symbols in them", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines sscope=
+    { "cells", "cells=N: non-local mutable cells the state lens found", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "tested_scope", "tested_scope=N: symbols an indexed test reaches; at 0 no row can carry join=deep+untested", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "deep_untested", "deep_untested=N: rows carrying join=deep+untested across the WHOLE set, not just this page", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "unavailable", "unavailable=: families NOT evaluated at all; absence from fired= is not evidence of health", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "unavailable_why", "unavailable_why=: one reason per unavailable= family", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "unreadable_files", "unreadable_files=N: files readability could not read; rrank= is a floor", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "state_floor", "state_floor=1: the state lens hit its budget; state evidence is a FLOOR", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },
+    { "findings_capped", "findings_capped=1/floor_rules=: rules that spent their per-rule budget; those families are FLOORS", false, "quality_panel", MapHeaderRead::No, {}, "quality-panel" },   // also defines floor_rules=
+    { "uncounted", "uncounted=: families that fired on this row but this preset does not count", true, "s", MapHeaderRead::No, {}, "quality-panel" },
+    { "unavail", "unavail=: families not measurable here (the root's unavailable=); of= already excludes them", true, "s", MapHeaderRead::No, {}, "quality-panel" },
+    { "f", "e f=: the fired family this evidence row belongs to", true, "e", MapHeaderRead::No, {}, "quality-panel" },
+    { "counted", "counted=1: this preset counts the family toward fam=; 0 = fired, not counted", true, "e", MapHeaderRead::No, {}, "quality-panel" },
+    { "why", "why=: the measurements that crossed (rule*N fired N times; hrank=/churn= are the file's, inherited)", true, "e", MapHeaderRead::No, {}, "quality-panel" },
+    // naming-calibration: src/renamemine.h writeNamingCalibrationReport (+ kNamingCalibrationLegend)
+    { "probed", "probed=0: no history to mine, nothing scored (r= says why); 1 = the git walk ran", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "r", "r=: why probed=0: not-a-git-repo or probe-failed", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "pairs", "pairs=N: labelled rename pairs that survived the join, the SAMPLE SIZE; a small one means nothing", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "candidates", "candidates=N: raw substitutions mined from the patch stream before the join; FLOOR when truncated=1", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "commits", "commits=N: non-merge commits walked (the walk stops at 40000)", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "hunks", "hunks=N: diff hunks with content on both sides", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "wide_hunks", "wide_hunks=N: hunks DROPPED for exceeding the 24-line per-side pairing cap; never mined", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "drop_old_alive", "drop_old_alive=N: candidates dropped: the old spelling is still an indexed name", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "drop_new_absent", "drop_new_absent=N: candidates dropped: the new spelling is no eligible indexed symbol at HEAD", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "drop_ambiguous", "drop_ambiguous=N: candidates dropped: a name on both sides of several (split, rework, revert)", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "drop_old_skipped", "drop_old_skipped=N: candidates dropped: the lens skips the old spelling, no rule could fire", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "truncated", "truncated=1: a git walk bound was hit; candidates= is a FLOOR", false, "naming-calibration", MapHeaderRead::No, {}, "naming-calibration" },
+    { "scope", "scope=group-rule: the rule judges co-visible names, which one pair cannot evidence; unscored, not 0/0", true, "r", MapHeaderRead::No, {}, "naming-calibration" },
+    { "o", "o=/n=: one labelled pair's old (abandoned) and new (chosen) spelling", true, "p", MapHeaderRead::No, {}, "naming-calibration" },   // also defines n= on p
+    { "sup", "sup=N: distinct hunks that showed this substitution", true, "p", MapHeaderRead::No, {}, "naming-calibration" },
+    { "at", "p at=: path:line of the symbol the pair joined to, not a commit (the root at= is)", true, "p", MapHeaderRead::No, {}, "naming-calibration" },
+    { "old_fires", "old_fires=: rules that fired on the old spelling; absent when none", true, "p", MapHeaderRead::No, {}, "naming-calibration" },
+    { "new_fires", "new_fires=: rules that fired on the new spelling; absent when none", true, "p", MapHeaderRead::No, {}, "naming-calibration" },
+    // dmm: src/dmm.h writeDmmReport (+ kDmmLegend)
+    { "available", "available=0: no score at all (dmm=UNAVAILABLE, reason= says why); never read as 1.000 or 0.000", false, "dmm", MapHeaderRead::No, {}, "dmm" },
+    { "combine", "combine=pooled: root dmm= is summed good over summed good+bad of the 3 properties (ripwire's own)", false, "dmm", MapHeaderRead::No, {}, "dmm" },
+    { "low_loc", "low_loc=/low_cx=/low_params=: a unit is LOW risk at or under these lines / cyclomatic / params", false, "dmm", MapHeaderRead::No, {}, "dmm" },   // also defines low_cx= low_params=
+    { "base_units", "base_units=/base_volume=/target_units=/target_volume=: units with a body and their line span per side", false, "dmm", MapHeaderRead::No, {}, "dmm" },   // also defines base_volume= target_units= target_volume=
+    { "reason", "reason=: why no score (no unit's size, complexity or params moved; a tree failed to parse ...)", false, "dmm", MapHeaderRead::No, {}, "dmm" },
+    // comment-coherence: src/commentcoherence.h (the comment_coherence root and fn row emit)
+    { "documented", "documented=N: functions with a doc comment, measured (the rows); a FLOOR when unreadable_files= shows", false, "comment_coherence", MapHeaderRead::No, {}, "comment-coherence" },
+    { "no_comment", "no_comment=N: eligible symbols with no measurable comment; UNAVAILABLE, never scored as zero", false, "comment_coherence", MapHeaderRead::No, {}, "comment-coherence" },
+    { "unreadable_files", "unreadable_files=N: indexed files this pass could not read; their functions are absent", false, "comment_coherence", MapHeaderRead::No, {}, "comment-coherence" },
+    { "words", "words=/restate=: comment word count (c_coeff= denominator, stopwords kept) / words matching a name word", true, "fn", MapHeaderRead::No, {}, "comment-coherence" },   // also defines restate=
+    { "c_terms", "c_terms=/i_terms=/shared=: comment term set / identifiers the body uses / overlap; cic= shared over union", true, "fn", MapHeaderRead::No, {}, "comment-coherence" },   // also defines i_terms= shared=
+    // help-task: src/main.cpp runHelpTask (+ src/taskroute.h classifyRoutes)
+    { "git", "git=/dirty=: the root is a git repo / its tree differs from HEAD (the stamp's +dirty)", true, "facts", MapHeaderRead::No, {}, "help-task" },   // also defines dirty=
+    { "trace", "trace=1: the task text has a stack/sanitizer trace shape; it routes to from-trace", true, "facts", MapHeaderRead::No, {}, "help-task" },
+    { "resolved_symbols", "resolved_symbols=N: indexed names the task NAMES; a bare short/common word needs backticks or F()", true, "facts", MapHeaderRead::No, {}, "help-task" },
+    // doctor purpose line (compactlegend.h:179) spells c name= but the emitter writes n= (verbs_doctor.h row lambda, doctorAgentRows); the n row above defines it; consider fixing the purpose to c n= ok=.
+    // doctor truncated= means two different things on two c rows (cache-dir: scan cut, bytes/blobs short; tracked-binaries: scan skipped, stale=0 unmeasured); one KEY-qualified row carries both.
+    // doctor p0=/src0= are numbered: tracked-binaries emits p0..p7/src0..src7 (kShown=8); only p0/src0 get a reading, so p1..p7/src1..src7 stay undefined if a gate reads every name (needs 14 more rows or a prefix rule).
+    // doctor conditional rows not in today's output (present-only): agent (root, agent flag), copied, blobs_floor, shallow, p0, more, type, unit0 group; codex/claude agent rows append check-specific attrs from codexdoctor::Check.attrs, not audited here.
+    // quality-panel conditional rows not in today's output: unavailable, unavailable_why (split: not provably always co-emitted), unreadable_files, state_floor, findings_capped+floor_rules, s uncounted, s unavail.
+    // naming-calibration: p at= is a path:line, NOT the commit stamp; the existing tool-wide at=: commit+dirty+shallow term also fires on these answers, so the p at row disambiguates. Conditional: r (probed=0 root), truncated, new_fires.
+    // naming-calibration root r= and r row element share a name; the r row is onTag naming-calibration so it only fires on the probed=0 root.
+    // dmm error path (bad/no ref) emits only available=0 dmm=UNAVAILABLE reason= at=; base_units/low_loc groups are Ok-path only, where each is always co-emitted.
+    // help-task purpose says status=recommend|abstain but the emitter also writes ambiguous (confidence=low); outside this gap list.
+    // comment-coherence: c_coeff= is spelled only in the purpose, which does not say HIGH c_coeff is BAD (restates the name); outside this gap list.
     // quality-delta rows (src/verbs_quality.h): the row facets the purpose line does not spell, present-only.
     { "sev", "r sev=minor: a small numeric delta, counted in minor=, never gating (absent: major)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
     { "origin", "r origin=new-symbol: the finding is on NEW code, never gating (absent: preexisting-worse)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
@@ -906,17 +1054,17 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // field-affinity: src/fieldaffinity.h writeFieldAffinity / buildStructRow / computeFieldAffinity
     { "block", "block=64: ASSUMED cache-line bytes; all geometry (dist= wt= ln= lines= findings) is against it", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "model", "model=lp64-approx: sizes/offsets are the layout verb's LP64 standard-layout MODEL, not the real ABI", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
-    { "weighting", "weighting=fanin-floor: w= sums 1 + fan-in per co-accessing function; a reachability proxy, never a frequency", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
+    { "weighting", "weighting=fanin-floor: w= sums 1 + fan-in per co-accessing fn; a reachability proxy, not a frequency", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "aggregates", "aggregates=N: C-family structs/classes the layout model located a body for (the scanned universe)", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "files", "files=N: C-family files declaring at least one struct/class the modelling pass visited", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "fns_scanned", "fns_scanned=N: C-family functions/methods with a readable body scanned for dot/arrow member accesses", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
-    { "accesses", "accesses=N: member-access sites attributed to one aggregate's field (FLOOR: bare in-method names not counted)", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
+    { "accesses", "accesses=N: member-access sites tied to one aggregate field (FLOOR: bare in-method names uncounted)", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "amb_skipped", "amb_skipped=N: access sites REFUSED, not guessed: 2+ aggregates declare that field name; in no count here", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "structs", "structs=N: aggregates with 1+ attributed access; the top 20 by sepcost= print (shown=/capped=)", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "findings", "findings=N: split-line + straddle findings over ALL structs=, not just the printed rows", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "min_fns", "min_fns=2: a pair fires split-line only when co-accessed by this many distinct functions", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "as_loops", "as_loops=N: for-loops the static advance-shape pass classified corpus-wide; report-only, never ranks", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
-    { "as_index", "as_index=/as_chase=/as_mixed=/as_unknown=: as_loops= split by static advance shape (chase = pointer chase)", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },   // also defines as_chase= as_mixed= as_unknown=
+    { "as_index", "as_index=/as_chase=/as_mixed=/as_unknown=: as_loops= by advance shape (chase = pointer chase)", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },   // also defines as_chase= as_mixed= as_unknown=
     { "agg", "agg=: the aggregate keyword (struct, class ...)", true, "s", MapHeaderRead::No, {}, "field-affinity" },
     { "modeled", "modeled=1: layout model placed the fields; 0 = affinity only, no geometry, no finding (why= says why)", true, "s", MapHeaderRead::No, {}, "field-affinity" },
     { "fields", "fields=N: fields declared (before the touched-only filter)", true, "s", MapHeaderRead::No, {}, "field-affinity" },
@@ -932,7 +1080,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "wt", "wt=: separation weight (64 - dist)/64, 0.00 = the two can never share a line; measured=0 instead when unplaced", true, "pair", MapHeaderRead::No, {}, "field-affinity" },
     { "wt", "wt=0.00: split-line fires only when the pair can never share a 64-byte line", true, "finding", MapHeaderRead::No, {}, "field-affinity" },
     { "w", "w=: the split-line pair's 1 + fan-in weight sum (proxy); straddle rows carry none", true, "finding", MapHeaderRead::No, {}, "field-affinity" },
-    { "crosses", "off=/sz=/crosses=: straddle field offset, size, and the line index its last byte lands on (starts at off/64)", true, "finding", MapHeaderRead::No, {}, "field-affinity" },   // also defines off= sz= on <finding>
+    { "crosses", "off=/sz=/crosses=: straddle field offset, size, and the line its last byte lands on (lines start at off/64)", true, "finding", MapHeaderRead::No, {}, "field-affinity" },   // also defines off= sz= on <finding>
     { "fanin", "fanin=N: this function's caller count (the w= proxy input)", true, "fn", MapHeaderRead::No, {}, "field-affinity" },
     { "touched", "touched=N: distinct fields of this struct the function touches (named in f=); at most 8 fn rows of fns= print", true, "fn", MapHeaderRead::No, {}, "field-affinity" },
     { "scope", "scope=: the function's PROFILE_SCOPE description (first 120 chars), a counter to confirm with", true, "fn", MapHeaderRead::No, {}, "field-affinity" },
@@ -953,6 +1101,82 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "as_uncompiled", "as_uncompiled=N: shape queries that failed to compile; their loops are unclassified", false, "fieldaffinity", MapHeaderRead::No, {}, "field-affinity" },
     { "placed", "placed=0: the model gave no offset for this field; no off=/ln= and no geometry for its pairs", true, "f", MapHeaderRead::No, {}, "field-affinity" },
     { "measured", "measured=0: an endpoint is unplaced, so no dist=/wt= and no finding for this pair", true, "pair", MapHeaderRead::No, {}, "field-affinity" },
+    // …and doc-drift, deps (cycles), pr-context author/partner rows, a detached --handoff, --metrics rows, layer= on the
+    //    ranked keys, clones groups, quality-delta ref pairs and acks, from-trace stale/skipped frames, stray-content, grep.
+    // doc-drift: src/docdrift.h (writeDocDriftPage, writeAnchor, writeWeakDisclosures, writeTally)
+    { "unchecked", "unchecked=N: anchors not proved (the unchecked rows give each reason); checked + unchecked = anchors", false, "doc-drift", MapHeaderRead::No, {}, "doc-drift" },
+    { "shown_failed", "doc shown_failed=/failed_total=: a rows printed / all failed anchors (drift+dated); cut at 12, detail=1 lifts", true, "doc", MapHeaderRead::No, {}, "doc-drift" },   // also defines failed_total=
+    { "kind", "a kind=/rec=: dated-record, an author-dated failed anchor in dated= / its evidence: line|block|title|stamp", true, "a", MapHeaderRead::No, {}, "doc-drift" },   // also defines rec=
+    { "sym", "a sym=: the symbol the doc names on that file:line; line-moved = that symbol no longer spans the line", true, "a", MapHeaderRead::No, {}, "doc-drift" },
+    { "weak", "more weak=N: w rows of this group withheld; shown_weak + N = its n=; detail=1 lists all", true, "more", MapHeaderRead::No, {}, "doc-drift" },
+    { "shown_weak", "shown_weak=N: w rows printed of n= (cut at 12 a doc, weak_capped=1); detail=1 lists all", true, "weak-file-line", MapHeaderRead::No, {}, "doc-drift" },
+    { "resolves-to", "w resolves-to=: the indexed symbol spanning that line; not proof it is the one the doc meant", true, "w", MapHeaderRead::No, {}, "doc-drift" },
+    { "r", "unchecked r=/note=: why n= anchors were not proved, and what was still checked for them", true, "unchecked", MapHeaderRead::No, {}, "doc-drift" },   // also defines note=
+    { "r", "dated r=/note=: the dating mark that moved n= failed anchors into dated= instead of drift=", true, "dated", MapHeaderRead::No, {}, "doc-drift" },   // also defines note=
+    // deps: src/serialize.h packDeps (health, cycles, f rows); DepHealth in src/graph.h
+    { "dep_files", "health dep_files=N: dependency-capable files (dep_langs=), the ccd/acd/nccd denominator", true, "health", MapHeaderRead::No, {}, "deps" },
+    { "dep_langs", "health dep_langs=: the languages dep_files= counts; compare its numbers across builds only when equal", true, "health", MapHeaderRead::No, {}, "deps" },
+    { "ccd", "ccd=/acd=/nccd=: Lakos: sum of per-file transitive cones (self incl) / per file / over a balanced tree's", true, "health", MapHeaderRead::No, {}, "deps" },   // also defines acd= nccd=
+    { "shape", "health shape=: the nccd= verdict: horizontal below 1, vertical 1 to 2, tangled above 2 (a heuristic)", true, "health", MapHeaderRead::No, {}, "deps" },
+    { "lazy_edges", "health lazy_edges=N: in-closure (lazy) include pairs kept OUT of cones, cycles and ccd; absent at 0", true, "health", MapHeaderRead::No, {}, "deps" },
+    { "lazy_edges", "f lazy_edges=N: this file's lazy pairs; still in its inc rows, out of afferent=/instab=/transitive=", true, "f", MapHeaderRead::No, {}, "deps" },
+    { "size", "cycle size=/cost=: files in that include cycle / size squared, the cycle's share of ccd=", true, "cycle", MapHeaderRead::No, {}, "deps" },   // also defines cost=
+    { "cut", "cycle cut=/cutrefs=: SUGGESTED edge to break it (fewest directives) / that edge's directive count; nothing cut", true, "cycle", MapHeaderRead::No, {}, "deps" },   // also defines cutrefs=
+    // pr-context: src/prcontext.h (changed-symbols, cochange partner, owners author); coPairAttr in src/gitmine.h
+    { "email", "author email=/share=: a committer of this file / its fraction of the recency-weighted commits", true, "author", MapHeaderRead::No, {}, "pr-context" },   // also defines share=
+    { "deg", "partner deg=: of this file's commits in window=, the fraction that partner shares", true, "partner", MapHeaderRead::No, {}, "pr-context" },
+    { "surprising", "partner surprising=1: co-changes with no transitive static dependency either way (hidden coupling)", true, "partner", MapHeaderRead::No, {}, "pr-context" },
+    { "dep_capable", "partner dep_capable=0: a side cannot carry a static dependency, so surprising= is undefined", true, "partner", MapHeaderRead::No, {}, "pr-context" },
+    { "callers", "s callers=N: direct callers of that changed symbol; caller rows are its top shown= (callers verb: all)", true, "s", MapHeaderRead::No, {}, "pr-context" },
+    { "sections", "changed-symbols sections=N: doc headings folded into count=, no row each; count minus sections = rows", true, "changed-symbols", MapHeaderRead::No, {}, "pr-context" },
+    // handoff: src/handoff.h (root detached=, heuristic note rows)
+    { "detached", "detached=1: HEAD is detached, so branch= reads HEAD; the commit is at=; absent on a branch", false, "handoff", MapHeaderRead::No, {}, "handoff" },
+    { "target", "note target=/txt=: a committed notes row on this work (symbol id or path) and its text; a suggestion", true, "note", MapHeaderRead::No, {}, "handoff" },   // also defines txt=
+    // metrics: src/serialize.h (s row metrics, f layer= via builtinLayer in src/arch.h)
+    { "humps", "humps=/deep=: regions reaching the nesting bar / lines inside them; absent when nest= is under the bar", true, "s", MapHeaderRead::No, {}, "metrics" },   // also defines deep=
+    { "deep_floor", "deep_floor=1: deep= is a FLOOR; a line two humps share is billed once, so deep below humps is legal", true, "s", MapHeaderRead::No, {}, "metrics" },
+    { "ev", "ev=/ev_why=: essential complexity (2+: jumps block extract-method; absent: 1) / the jumps behind it, tag:count", true, "s", MapHeaderRead::No, {}, "metrics" },   // also defines ev_why=
+    { "ev_floor", "ev_floor=1: ev= is a FLOOR; noreturn calls, macro-hidden exits and unresolved gotos are unseen", true, "s", MapHeaderRead::No, {}, "metrics" },
+    { "ppalt", "ppalt=N: #else/#elif branches in the body; metrics sum ALL branches, no one build compiles them all", true, "s", MapHeaderRead::No, {}, "metrics" },
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "metrics" },
+    // query: src/serialize.h (f layer= via builtinLayer)
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "query" },
+    // around: src/serialize.h (f layer= via builtinLayer)
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "f", MapHeaderRead::No, {}, "around" },
+    // for: src/serialize.h lens rows (d p= layer= via builtinLayer)
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "d", MapHeaderRead::No, {}, "for" },
+    // pack-task: src/serialize.h lens rows (d p= layer= via builtinLayer)
+    { "layer", "layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none", true, "d", MapHeaderRead::No, {}, "pack-task" },
+    // clones: src/verbs_report.h emitClonesReport (groupExemptKind, cloneIdiomAttrs)
+    { "exempt", "group exempt=fixture|shell-runner: every member is on such a path; quality-delta duplication ignores it", true, "group", MapHeaderRead::No, {}, "clones" },
+    { "idiom", "group idiom=: the recognized shape every member spells: threshold-ladder, switch-name-table, builder-chain", true, "group", MapHeaderRead::No, {}, "clones" },
+    { "demoted", "group demoted=1: idiom collision (no shared identifier or context, under 80 tokens); quality-delta: minor", true, "group", MapHeaderRead::No, {}, "clones" },
+    // quality-delta: src/verbs_quality.h (range attrs, duplication r row); staleAcksXml in src/quality.h
+    { "key", "sa key=/why=: the stale ack's ledger hash / target-gone (names nothing now) or finding-gone (no longer fires)", true, "sa", MapHeaderRead::No, {}, "quality-delta" },   // also defines why=
+    { "members", "r members=/tokens=: a duplication row's clone group (member ids) / their shared normalized-token count", true, "r", MapHeaderRead::No, {}, "quality-delta" },   // also defines tokens=
+    { "base_ref", "base_ref=/target_ref=: the two resolved full shas a range compared (committed trees; at= omitted)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines target_ref=
+    { "churn", "churn=unavailable: range form; short-horizon-churn cannot be measured, so its silence is not no churn", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    // from-trace: src/tracelocus.h (frame and skipped rows)
+    { "line", "skipped line=: that frame's line; p= is its path, outside every root, so never ranked", true, "skipped", MapHeaderRead::No, {}, "from-trace" },
+    { "line_encloses", "frame line_encloses=: the other def today's line sits in; STALE trace, the name binding was kept", true, "frame", MapHeaderRead::No, {}, "from-trace" },
+    // stray-content: src/crossref.h (stray-content root)
+    { "unknown", "unknown=N: refs that could not be analysed (v=unknown, e.g. no merge base); never counted merged", false, "stray-content", MapHeaderRead::No, {}, "stray-content" },
+    // grep: src/verbs_grep.h grepCorpusAttrs / grepUnindexedAttrs (each absent at 0)
+    { "corpus_excluded", "corpus_excluded=N: files an exclude filter kept out of the index, never searched; skipped verb lists them", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "corpus_oversize", "corpus_oversize=N: files the crawl saw but dropped over the size ceiling, never searched; skipped verb lists", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "corpus_pruned_dirs", "corpus_pruned_dirs=N: DIRECTORIES the built-in crawl denylist pruned whole (vendor, build etc), unsearched", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "unindexed_files_skipped", "unindexed_files_skipped=N: off-index candidates not read: over max-file-size, binary, or unreadable", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "count", "unindexed count=N: off-index hits, equal to unindexed_hits=; paged by the same window as the f rows", true, "unindexed", MapHeaderRead::No, {}, "grep" },
+    { "unindexed_candidates_capped", "unindexed_candidates_capped=1: off-index candidates cut at 500 a class, a floor; skipped verb has all", false, "grep", MapHeaderRead::No, {}, "grep" },
+    // doc-drift unchecked= and stray-content unknown= pass the checker only by regex accident (checked + unchecked = anchors,
+    // doc-drift shown_failed=/failed_capped=/failed_total= are emitted together only when the a listing was cut (secondaryCutAttrs);
+    // deps cycle cut= is a SUGGESTED break edge (min include-directive count), not a truncation. BUT the cycles listing itself is
+    // deps: f lazy_edges= (per-row) was also undefined; row added beside health lazy_edges=.
+    // pr-context HEAD~1 default posture is trim_level=3 on this tree (per-symbol/cochange/owner rows dropped); author/partner/s callers
+    // clones: group demoted=1 added (not seen in this tree's output, same emitter as idiom=; demoted_groups= does not define it).
+    // grep: corpus_excluded=, unindexed_candidates_capped= and unindexed count= (repo-root operand) added beyond the listed three;
+    // from-trace line_encloses= reproduced with a frame naming escapeXml at serialize.h:141 (inside kXmlEscapeByteset): tmp/r1-L1-fix/stale3.txt.
+    // Existing house row (quality-delta r churn=) is longer than 110 chars; untouched.
 };
 
 // the paging window: these five mean the same on every element (L4's one-attribute-one-reading law), so they are

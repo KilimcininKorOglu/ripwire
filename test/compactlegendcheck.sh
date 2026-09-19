@@ -444,23 +444,27 @@ probeFor()
 # dialect had carried with no reading got one (compactlegend.h): locals_floor=1 on a --metrics <s> row (36 B) and
 # --pr-context's root truncated= (~100 B), present-only. Found by legendcoveragecheck's new default-posture rows; no
 # other schema moved.
+# RE-PINNED 2026-09-19 (fix round 2, rv-r1-L1-2): (G)/(UG) now check EVERY instance of every attribute a default answer
+# carries, over the verbs and states a clean detached checkout reaches (doctor, quality-panel, naming-calibration, dmm,
+# comment-coherence, plan-lint, the doc-drift/deps/pr-context/handoff/quality-delta row vocabularies). Same rule as above:
+# the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
 PIN_TABLE='
 ripwire.map/v1                   910   892
 ripwire.map-diff/v1              900   885
 ripwire.pack-signatures/v1       770   759
 ripwire.metrics/v1               1040  1021
-ripwire.deps/v1                   380   364
-ripwire.hotspots/v1              280   264
+ripwire.deps/v1                   780   764
+ripwire.hotspots/v1               530   518
 ripwire.clones/v1                 810   799
 ripwire.readability/v1            320   308
 ripwire.nonlocal-state/v1         570   556
 ripwire.ensemble/v1              1930  1920
 ripwire.context-ratio/v1         1780  1762
-ripwire.quality-panel/v1         290   271
-ripwire.naming-calibration/v1    220   206
-ripwire.naming-consistency/v1     550   531
-ripwire.comment-coherence/v1     260   241
+ripwire.quality-panel/v1         2200  2189
+ripwire.naming-calibration/v1    1180  1162
+ripwire.naming-consistency/v1     630   620
+ripwire.comment-coherence/v1      460   445
 ripwire.cochange/v1               540   521
 ripwire.communities/v1           820   807
 ripwire.zoom/v1                  410   394
@@ -468,30 +472,30 @@ ripwire.tree/v1                  250   238
 ripwire.seams/v1                  720   703
 ripwire.handoff/v1                600   589
 ripwire.test-gate/v1             1160  1144
-ripwire.field-affinity/v1        3090  3071
+ripwire.field-affinity/v1        3160  3143
 ripwire.skipped/v1               1510  1498
 ripwire.lint/v1                   340   324
 ripwire.lint-catalog/v1           220   204
 ripwire.external-surface/v1       250   234
 ripwire.scan-skills/v1            380   369
-ripwire.owners/v1                 330   315
+ripwire.owners/v1                 430   414
 ripwire.dead-code/v1              620   604
-ripwire.quality-delta/v1          690   674
-ripwire.dmm/v1                   200   189
-ripwire.pr-context/v1            2180  2168
-ripwire.stray-content/v1          710   697
+ripwire.quality-delta/v1          940   928
+ripwire.dmm/v1                    700   686
+ripwire.pr-context/v1            2370  2351
+ripwire.stray-content/v1          810   795
 ripwire.flags/v1                  470   459
-ripwire.doc-drift/v1              780   762
+ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
-ripwire.path/v1                   430   419
-ripwire.connect/v1                660   643
+ripwire.path/v1                   550   535
+ripwire.connect/v1                760   741
 ripwire.impact/v1                780   770
 ripwire.mentions/v1               260   243
 ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
-ripwire.help-task/v1             170   153
+ripwire.help-task/v1              440   429
 ripwire.query/v1                 720   707
-ripwire.grep/v1                  1200  1181
+ripwire.grep/v1                  1380  1368
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1               440   422
@@ -503,11 +507,11 @@ ripwire.batch/v1                  250   238
 ripwire.safe-delete/v1           720   708
 ripwire.at/v1                    180   161
 ripwire.from-trace/v1            1300  1281
-ripwire.plan-lint/v1             170   156
+ripwire.plan-lint/v1              570   551
 ripwire.merge-scout/v1            470   459
-ripwire.whereis/v1                520   508
+ripwire.whereis/v1                630   611
 ripwire.community/v1             730   719
-ripwire.layout/v1                1110  1091
+ripwire.layout/v1                1220  1203
 ripwire.pack-task/v1             990   974
 ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
@@ -519,6 +523,24 @@ pinFor()
     printf '%s\n' "$PIN_TABLE" | awk -v schema="$1" '$1 == schema { printf "%s", $2; exit }'
 }
 nXml=0; nXmlBad=0; nRefuse=0; nSkip=0; loopBytes=0; xmlVerbs=""; nDefBad=0
+# (UG) rv-r1-L1-2: EVERY XML verb the flag universe reaches, EVERY instance of every attribute its DEFAULT answer carries,
+# defined `name=` in that answer's own legend (legendcoveragecheck (G)'s predicate, on this gate's fixture). No floor.
+cat > "$TMP/ug.py" <<'PY'
+import re, sys
+doc = open( sys.argv[ 1 ], "rb" ).read()
+CORE = { "p", "n", "t", "id", "l", "k", "c" }
+m = re.match( rb"\A(?:\s*<!--.*?-->)+", doc, re.S ); lead = m.group( 0 ) if m else b""
+m2 = re.match( rb"\A\s*<[\w-]+\b[^>]*>((?:\s*<!--.*?-->)+)", doc[ len( lead ): ], re.S )
+legend = ( lead + ( m2.group( 1 ) if m2 else b"" ) ).decode( "utf-8", "replace" )
+body = re.sub( rb"<!--.*?-->", b"", re.sub( rb"<!\[CDATA\[.*?\]\]>", b"", doc, flags = re.S ), flags = re.S )
+keys = set()
+for e in re.finditer( rb"<([a-zA-Z][\w-]*)((?:\s+[\w:.-]+=\"[^\"]*\")*)\s*/?>", body ):
+    for a in re.findall( rb"\s([\w:.-]+)=\"", e.group( 2 ) ):
+        if a.decode() not in CORE: keys.add( ( e.group( 1 ).decode(), a.decode() ) )
+gaps = sorted( "%s@%s" % k for k in keys if re.search( r"(?<![\w:.-])" + re.escape( k[ 1 ] ) + r"\s*=", legend ) is None )
+print( len( keys ), " ".join( gaps ) )
+PY
+nUgKeys=0; ugBad=""
 while IFS="$( printf '\t' )" read -r flag kind example policy; do
     [ -n "$flag" ] || continue
     case "$kind" in int) probe="${flag}3" ;; *) probe="$( probeFor "$flag" )" || { nSkip=$(( nSkip + 1 )); continue; } ;; esac
@@ -546,6 +568,11 @@ while IFS="$( printf '\t' )" read -r flag kind example policy; do
     ( cd "$REPO" && "$BIN" . "$probe" --legend=compact >"$TMP/u.c" 2>"$TMP/u.cerr" </dev/null ); rcC=$?
     # the default IS the default posture, on every XML verb (posture-generic: DEFAULT_POSTURE read from cli.h in (A))
     if [ "$DEFAULT_POSTURE" = compact ]; then defRef="$TMP/u.c"; else defRef="$TMP/u.full"; fi
+    read -r ugN ugGaps <<UGEOF
+$( python3 "$TMP/ug.py" "$TMP/u.def" )
+UGEOF
+    nUgKeys=$(( nUgKeys + ${ugN:-0} ))
+    [ -z "${ugGaps:-}" ] || ugBad="$ugBad [$probe: $ugGaps]"
     cmp -s "$TMP/u.def" "$defRef" || { no "(U) $probe: the DEFAULT answer is not the --legend=$DEFAULT_POSTURE answer ($( wc -c <"$TMP/u.def" | tr -d ' ' ) B vs $( wc -c <"$defRef" | tr -d ' ' ) B, exit $rcDef)"; nDefBad=$(( nDefBad + 1 )); }
     if [ "$rcC" -ne "$rcFull" ] || [ ! -s "$TMP/u.c" ]; then
         no "(U) $probe --legend=compact: exit $rcC (full: $rcFull), $( wc -c <"$TMP/u.c" | tr -d ' ' ) B — stderr=[$( head -c 140 "$TMP/u.cerr" | tr '\n' ' ' )]"
@@ -614,6 +641,11 @@ done < "$UNIV"
 [ "$nXml" -ge 60 ] && [ "$nXmlBad" -eq 0 ] && ok "(U) $nXml XML flags answer under --legend=compact (schema id, legend within its per-verb pin, rows byte-identical, root attrs kept):$xmlVerbs" \
                    || no "(U) $nXml XML flags probed, $nXmlBad refused compact (want ≥ 60 probed, 0 refused — rows above name them):$xmlVerbs"
 [ "$nXml" -ge 60 ] && [ "$nDefBad" -eq 0 ] && ok "(U) every one of the $nXml XML flags answers at the DEFAULT with exactly its --legend=$DEFAULT_POSTURE bytes"
+if [ "$nXml" -ge 60 ] && [ "$nUgKeys" -ge 400 ] && [ -z "$ugBad" ]; then
+    ok "(UG) every attribute instance the DEFAULT answers of $nXml XML flags carry ($nUgKeys element@attr keys) is defined in its own legend"
+else
+    no "(UG) default answers carry undefined attributes (probed $nXml flags, $nUgKeys keys):$ugBad"
+fi
 [ "$nRefuse" -ge 60 ] && ok "(U) $nRefuse non-XML flags refuse --legend=compact (empty stdout, non-zero exit); $nSkip write/serve/exec flags not probed" \
                       || no "(U) only $nRefuse non-XML flags refused compact (want ≥ 60)"
 
@@ -873,9 +905,10 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 #   exemplar      260  measured 243 B; owner decision 2026-09-12: per-verb pins that fit honest definitions (METHODOLOGY §9)
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
+# Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
 for pair in "impact:780:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
-            "path_between:430:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
+            "path_between:540:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \
             "exemplar:350:{\"path\":\".\",\"kind\":\"fn\",\"task\":\"distance\",\"legend\":\"compact\"}"; do
     verb="${pair%%:*}"; rest="${pair#*:}"; mpin="${rest%%:*}"; args="${rest#*:}"
@@ -2157,6 +2190,26 @@ if [ -z "$fx7bad" ]; then
     ok "(FX7) --expand reason= names the delivered size (bundle and whole-file, default and full)"
 else
     no "(FX7)$fx7bad"
+fi
+# (FX9) rv-r1-L1-2 MED-7: where the default serves --expand's BUNDLE but --legend=full serves the WHOLE FILE (the postures
+#       price differently), the default root names the call that serves the file (next=), and its reason= stays the
+#       delivered size. test/zoomfix/util/math.cpp's mathStepF1 is a split measured on 8d32df03 (default bundle, full file).
+fx9bad=""; fx9split=0
+for sym in mathStepF1 mathStepF2 mathStepF3; do
+    "$BIN" "$ROOT/test/zoomfix" --no-cache --expand=$sym >"$FXT/x9d" 2>/dev/null
+    "$BIN" "$ROOT/test/zoomfix" --no-cache --expand=$sym --legend=full >"$FXT/x9f" 2>/dev/null
+    dm="$( head -c 600 "$FXT/x9d" | grep -oE ' mode="[a-z-]+"' | head -1 )"; fm="$( head -c 600 "$FXT/x9f" | grep -oE ' mode="[a-z-]+"' | head -1 )"
+    if [ "$dm" = ' mode="bundle"' ] && [ "$fm" = ' mode="whole-file"' ]; then
+        fx9split=$(( fx9split + 1 ))
+        head -c 600 "$FXT/x9d" | grep -qF " next=\"--expand=$sym --legend=full\"" || fx9bad="$fx9bad [$sym: default bundle, full whole-file, no next= to the file]"
+    elif head -c 600 "$FXT/x9d" | grep -qF -- '--legend=full"'; then
+        fx9bad="$fx9bad [$sym: next= to the full posture where the two postures serve the same mode]"
+    fi
+done
+if [ -z "$fx9bad" ] && [ "$fx9split" -gt 0 ]; then
+    ok "(FX9) --expand: on $fx9split posture split(s) the default bundle names the whole-file call (next=); none elsewhere"
+else
+    no "(FX9) --expand posture split: splits=$fx9split$fx9bad"
 fi
 # (FX8) --for=X --batch=F answers the batch envelope, in the default posture like every other verb (LOW-1).
 printf 'callers escapeXml\n' > "$FXT/batch.txt"

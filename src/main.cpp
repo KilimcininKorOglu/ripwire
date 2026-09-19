@@ -2402,6 +2402,22 @@ int runDefaultMap( const MainDispatch& d )
         // L1 fix round (rv-r1-L1 MED-7): under the compact posture each candidate is priced as the compact layer will deliver
         // it — the two documents, assembled with the same parts the fields above describe, compacted, and the difference
         // taken off each price. reason= then names the sizes of documents that exist, and the choice is made on them.
+        // MED-7 of rv-r1-L1-2: the two postures price differently, so they can serve differently — the compact default a
+        // BUNDLE (a body plus sibs= names) where --legend=full serves the whole FILE (every sibling's source). The choice is
+        // right for the bytes each delivers, but the default then carries less source with no way to get the rest. So when
+        // the full dialect's own comparison would serve the file, the default's bundle root carries next= naming the call
+        // that serves it; its bytes are priced into the bundle before the choice (it rides only if the bundle wins).
+        std::string wholeFileNext;
+        if( cfg.legend == "compact" && !cfg.json && chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes ).serveWholeFile )
+        {
+            std::string expandArg;
+            for( const std::string& e : cfg.expand )
+            {
+                expandArg += ( expandArg.empty() ? "" : "," ) + e;
+            }
+            wholeFileNext = rw::nextAttrXml( "--expand=" + expandArg + " --legend=full" );
+            bundleDoc.rootAttrBytes += wholeFileNext.size();
+        }
         if( cfg.legend == "compact" && !cfg.json )
         {
             const auto deltaOf = []( const std::string& candidate ) -> std::ptrdiff_t
@@ -2415,14 +2431,21 @@ int runDefaultMap( const MainDispatch& d )
             // candidates' own prices (the layer reprices them, and a placeholder of another digit count would move the delta).
             const std::string topk       = exactNameExpandDefault ? " topk_default=\"0\"" : "";
             const std::string fileEst    = std::to_string( static_cast<std::size_t>( double( wholeFile.xml.size() + kExpandWholeFileLegend.size() + ctxRootAttr.size() ) / rw::kBytesPerTokenBody ) + 1 );
-            const std::string bundleRoot = "<ctx" + ctxUnprovenAttr + ( mapTopK == 0 ? ctxRootAttr + " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" : std::string() ) + topk + noteBuf + " mode=\"bundle\">";
+            const std::string bundleRoot = "<ctx" + ctxUnprovenAttr + ( mapTopK == 0 ? ctxRootAttr + " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" : std::string() ) + topk + noteBuf + wholeFileNext + " mode=\"bundle\">";
             const std::string fileRoot   = "<ctx" + ctxUnprovenAttr + ctxRootAttr + topk + " mode=\"whole-file\" est_tokens=\"" + fileEst + "\">";
-            bundleDoc.compactDeltaBytes = deltaOf( bundleRoot + ctxUnprovenLegend + mapText + bodiesSection.xml + "</ctx>" );
+            // in the order the bundle is EMITTED — the bodies first, the ride-along map after them: the layer reads its
+            // head terms off the root's first child, so a map-first candidate priced a different legend (rv-r1-L1-2: 107 B)
+            bundleDoc.compactDeltaBytes = deltaOf( bundleRoot + ctxUnprovenLegend + bodiesSection.xml + mapText + "</ctx>" );
             fileDoc.compactDeltaBytes   = deltaOf( fileRoot + ctxUnprovenLegend + std::string( kExpandWholeFileLegend ) + wholeFile.xml + "</ctx>" );
         }
         ExpandServeChoice choice = chooseExpandServe( bundleDoc, fileDoc, ctxUnprovenBytes, wholeFile, cfg.packBudgetBytes );
         serveWholeFile = choice.serveWholeFile;
         ctxOpenStr     = std::move( choice.ctxOpen );
+        if( !serveWholeFile && !wholeFileNext.empty() )
+        {
+            ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
+            ctxOpenStr.insert( 4, wholeFileNext );
+        }
         if( exactNameExpandDefault )
         {
             // chooseExpandServe's four formatted opens all start "<ctx mode=\"...\" reason=\"...\">" — insert
