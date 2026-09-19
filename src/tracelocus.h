@@ -785,7 +785,6 @@ inline std::optional<std::string> renderTestHopBlock( const IngestResult& ing, c
     std::FILE* const m = stream.open();
     if( !m )
     {
-        DISCLOSE( "renderTestHopBlock: open_memstream failed — the bundle is withheld" );
         return std::nullopt;
     }
 
@@ -805,8 +804,7 @@ inline std::optional<std::string> renderTestHopBlock( const IngestResult& ing, c
     const rw::MemoryStreamBytes block = stream.finish();
     if( !block.isWhole )
     {
-        // a lost write left a hole in the block: never serve it, and never serve the bundle without it
-        DISCLOSE( "renderTestHopBlock: the buffer did not finish whole — the bundle is withheld" );
+        // a lost write left a hole in the block: never serve it, and never serve the bundle without it (the caller discloses)
         return std::nullopt;
     }
     return std::string( block.bytes );
@@ -826,7 +824,6 @@ inline std::optional<std::string> renderTraceBlock( const IngestResult& ing, tra
     std::FILE* const m = stream.open();
     if( !m )
     {
-        DISCLOSE( "renderTraceBlock: open_memstream failed — the bundle is withheld" );
         return std::nullopt;
     }
     rw::emitTo( m, "<trace src=\"{}\" format=\"{}\" frame_lines=\"{}\" parsed=\"{}\" in_corpus=\"{}\" skipped=\"{}\" merged=\"{}\" unresolved=\"{}\" suspects=\"{}\">",
@@ -868,7 +865,6 @@ inline std::optional<std::string> renderTraceBlock( const IngestResult& ing, tra
     const rw::MemoryStreamBytes block = stream.finish();
     if( !block.isWhole )
     {
-        DISCLOSE( "renderTraceBlock: the buffer did not finish whole — the bundle is withheld" );
         return std::nullopt;
     }
     return std::string( block.bytes );
@@ -935,6 +931,17 @@ struct FromTraceResult
     // another way, so it is WITHHELD rather than served without them: the caller says so on stderr / as an MCP error.
     // It used to omit the block and serve the rest, a bundle missing its trace map that no Release build disclosed.
     bool        isBufferLost = false;
+    // The DISCLOSE sink for those buffer failures: disclose() sets isBufferLost, which the CLI refuses on (stderr, exit 1)
+    // and MCP answers as an error — the withholding IS the disclosure, in every build flavour.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        BlockBufferLost,     // the <trace> map or the <test_hop> block
+        SectionBufferLost,   // the signature/body section
+    };
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
+    {
+        isBufferLost = true;
+    }
     std::size_t frameCount = 0;
     std::size_t inCorpus   = 0;
     std::string xml;                  // the <ctx>…</ctx> bundle; only meaningful when ok
@@ -1089,7 +1096,9 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
     const std::optional<std::string> hopBlock    = renderTestHopBlock( ing, hop, in.rootArg );   // LB-A; empty unless the hop fired
     if( !traceBlock || !hopBlock )
     {
-        res.isBufferLost = true;   // withheld, not served without the block (see FromTraceResult)
+        // withheld, not served without the block (see FromTraceResult)
+        DISCLOSE( res, FromTraceResult::DisclosureWhy::BlockBufferLost,
+                  "from-trace: the trace or test-hop block's buffer failed (at the open, or a lost write) — the bundle is withheld" );
         return res;
     }
     const std::string& traceStr = *traceBlock;
@@ -1129,10 +1138,10 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
             {
                 return std::string( section.bytes );
             }
-            DISCLOSE( "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
+            DISCLOSE( res, FromTraceResult::DisclosureWhy::SectionBufferLost, "from-trace: the signature/body buffer did not finish whole — the bundle is withheld" );
             return std::nullopt;
         }
-        DISCLOSE( "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
+        DISCLOSE( res, FromTraceResult::DisclosureWhy::SectionBufferLost, "from-trace: open_memstream failed for the signature/body section — the bundle is withheld" );
         return std::nullopt;
     };
     const std::string fixedHead = headerStr + std::string( in.preludeXml ) + traceStr + hopStr;
@@ -1153,8 +1162,7 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
     }
     if( !section )
     {
-        res.isBufferLost = true;
-        return res;
+        return res;   // withheld: renderSection disclosed the lost buffer on res (see FromTraceResult)
     }
     std::string whole = fixedHead + *section + "</ctx>";
 

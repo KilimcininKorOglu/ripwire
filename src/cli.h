@@ -2027,7 +2027,9 @@ inline constexpr char kHelpTail[] =
         "                               dual-compile uniform block needs on every edit). file:name disambiguates a same-named\n"
         "                               struct (like --around/--lego). Exit 2 when the contract is BROKEN: mirror=\"mismatch\"\n"
         "                               (two definitions of the name disagree) or agree=\"0\" (a sizeof tripwire contradicts the\n"
-        "                               computed size). Multi-root aware: the mirror check spans every merged root.\n"
+        "                               computed size). Exit 3 when it could not be VERIFIED: a same-name definition's file\n"
+        "                               was unreadable when this ran (unreadable=\"N\" on the root; 2 still wins when a readable\n"
+        "                               pair already disagrees). Multi-root aware: the mirror check spans every merged root.\n"
         "                               LIMITS, read them: the offsets are a MODEL, not the ABI — a lexical walk under standard-\n"
         "                               layout assumptions on a 64-bit Apple/LP64 target (natural alignment, interior padding,\n"
         "                               trailing pad to the aggregate's own alignment). It is NOT a compiler: #pragma pack,\n"
@@ -2437,14 +2439,14 @@ inline constexpr char kHelpTail[] =
         "                               ONE legend defining exactly the attributes the answer carries — the meanings live\n"
         "                               here and in the full legend. DATA comments stay (the map header, pack-task's\n"
         "                               body-omitted rows, +more). Per call this drops 2.8-5.8 KB on the navigation verbs\n"
-        "                               (--edit-check 6.3 KB -> 0.5 KB). --for compacts too (its own ripwire.for/v1 header);\n"
-        "                               under --token-budget its smaller legend buys rows and never costs one. The MCP twin\n"
+        "                               (--edit-check's legend 7.4 KB -> 0.9 KB). --for compacts too (ripwire.for/v1 header);\n"
+        "                               under --token-budget it never costs a row --legend=full would keep. The MCP twin\n"
         "                               is the argument legend, compact by default there as well, legend:\"full\" restores\n"
-        "                               the prose. Runs with nothing to compact ignore the default and refuse an ASKED\n"
-        "                               --legend, naming the verb: prose/markdown/JSON answers (--situ --recall --report\n"
-        "                               --mermaid --html --plan-lanes --sarif --eval* --json) and the writers and servers\n"
-        "                               (edit verbs, --note-add, --quality-baseline/--quality-ack, --index-out, --export) and\n"
-        "                               the server transports, which take the posture per request instead.\n"
+        "                               the prose. Runs with nothing to compact ignore the default; an ASKED --legend=compact\n"
+        "                               refuses there, naming the verb: prose/markdown/JSON answers (--situ --recall --report\n"
+        "                               --mermaid --html --plan-lanes --sarif --eval* --json), where --legend=full is a no-op,\n"
+        "                               and the writers and servers (edit verbs, --note-add, --quality-baseline/--quality-ack,\n"
+        "                               --index-out, --export, the server transports), which refuse either posture.\n"
         "    --json                     emit JSON instead of XML; keys mirror the XML attribute names one to one\n"
         "                               machine-parseable JSON instead of XML, keys mirror the XML attr names 1:1. Every\n"
         "                               ROOT attribute survives; a verb that serves fewer SECTIONS than its XML form NAMES\n"
@@ -4058,8 +4060,8 @@ inline void validateLintSelectionModifierGuards( Config& c ) noexcept
 // M1 (2026-09-05); the CLI was the one surface still paying ~1.4-5 KB of prose per call, and the callers who pay
 // it are agents, scripts and harnesses making repeated calls. `--legend=full` restores the full prose legend
 // byte-for-byte (compactlegendcheck (A) pins it against the pre-L1 bytes). --for is no longer exempt: its compact
-// header is its own dialect (verbs_for.h), and under a --token-budget the smaller legend buys rows, never loses
-// them (compactlegendcheck (R1) asserts rows(default) ⊇ rows(--legend=full)).
+// header is its own dialect (verbs_for.h), and under a --token-budget it never loses a row --legend=full keeps
+// (compactlegendcheck (P1) asserts rows(default) ⊇ rows(--legend=full)).
 inline constexpr std::string_view kLegendPostures[]     = { "full", "compact" };
 inline constexpr std::string_view kDefaultLegendPosture = "compact";
 static_assert( std::ranges::contains( kLegendPostures, kDefaultLegendPosture ), "the default is a registered posture" );

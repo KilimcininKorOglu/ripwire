@@ -18,30 +18,42 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 ### Changed — the CLI's default legend is compact; `--legend=full` restores the prose legend
 
 Every XML answer now leads with the compact legend unless `--legend=full` is passed — `--for` included, whose
-own `ripwire.for/v1` header is its compact dialect. The compact legend defines each verb's purpose and every
-completeness attribute the answer carries (`counts_floor=`, `shown=`/`total=`/`capped=`, the paging window,
-`est_tokens=`, `over_ceiling=`, the resolver gauges …); the full prose, which used to be the default, is one
-flag away and byte-identical to what 0.6.1 printed without it. Rows never change between the two. The MCP server
-has defaulted to compact since 0.4.0, so both surfaces now agree. Measured on this repository: `--callers`
-6,305 → 3,205 B, `--edit-check` 9,744 → 3,027 B, `--affected=src/cli.h` 2,103 → 747 B, `--for` 9,775 →
-8,693 B (method: the same argv, 0.6.1's bare output against this default, `wc -c`).
+own `ripwire.for/v1` header is its compact dialect. The compact legend defines every attribute the answer
+carries — each verb's purpose, the completeness vocabulary (`counts_floor=`, `shown=`/`total=`/`capped=`, the
+paging window, `est_tokens=`, `over_ceiling=`, the resolver gauges …) and every descriptive or cut attribute
+(`renames_window_truncated=`, `script_gates_unmodelled=`, `hcut=`/`rcut=`, …), each reading present only where
+the answer carries it. The full prose, which used to be the default, is one flag away and byte-identical to what
+0.6.1 printed without it. Rows never change between the two. The MCP server has defaulted to compact since
+0.4.0, so both surfaces now agree. Measured on this repository: `--callers` 6,305 → 3,212 B, `--edit-check`
+9,750 → 3,313 B, `--affected=src/cli.h` 2,103 → 1,234 B, `--for` 10,010 → 9,117 B (method: the same argv,
+`--legend=full` against this default, `wc -c`).
 
 What else moved with it, because a default has to be honest where an opt-in could be terse:
 
-- **A compacted answer is priced at the bytes it delivers.** `est_tokens=` used to keep the full legend's
-  price after compaction (`--connect` here: 1,200 tokens for 1,037 bytes); it is now moved by the removed bytes
-  at the document's own rate, an upper bound that no longer over-reads by ~3x on small answers. `over_ceiling="1"`
-  and `--pr-context`'s `budget-floor-exceeded` follow the repriced number, and the flagless map's
-  `--token-budget` gate decides on the compact price it prints, so a map that fits is no longer withheld.
-- **`--for` under `--token-budget` buys rows and never loses one.** Its compact sig ledger subtracted the full
-  dialect's enrichment clause (~450 B the compact header never carried), so a budgeted compact bundle overshot
-  its ceiling on 55 of 66 budgets of a 72-function fixture; 12 of 66 now, against 15 for the full legend.
+- **Nothing the default prints is undefined, and nothing it drops is a disclosure.** `--from-trace` keeps the
+  ceiling it applied (`<!-- ledger: budget=N bytes (allowance M bytes …) -->`), `--notes` keeps its
+  `notes= targets= dangling=` counts, `--pack-task` keeps its budget ledger, and the withheld-map record reads
+  as a withheld map.
+- **A compacted answer is priced at the bytes it delivers, and trimmed at that price.** `est_tokens=` used to
+  keep the full legend's price after compaction (`--connect` here: 1,200 tokens for 1,037 bytes); it is now
+  moved by the removed bytes at the document's own rate. `over_ceiling="1"` and `--pr-context`'s
+  `budget-floor-exceeded` follow the repriced number, the flagless map's `--token-budget` gate decides on the
+  compact price, and `--pr-context`, `--pack-task`, `--from-trace` and `--expand`'s serving choice decide their
+  cuts on the price the answer will print — `--pr-context` at `--token-budget=4000` here kept 22 changed files
+  where it had kept 10, with the same budget.
+- **`--for` under `--token-budget` never loses a row `--legend=full` keeps.** Its compact sig ledger subtracted
+  the full dialect's enrichment clause (~450 B the compact header never carried); the charge is now capped at
+  the full dialect's. Re-measured over 66 budgets (300..3550 step 50) on a 72- and a 12-function fixture: the
+  default lands over its budget on 15 and 15, `--legend=full` on 11 and 12; every overshoot is labelled
+  `over_ceiling="1"`.
 - **Nothing the default cannot shape fails because of it.** A run whose answer has no XML legend passes through
-  unchanged; only an asked `--legend=` still refuses there. `--pin-census` takes a posture (its map is the
-  answer). The servers (`--mcp`, `--listen`, `--lsp`) and `--json` keep no default.
-- **Readings the compact dialect lacked:** `locals_floor=` on `--metrics` rows and `--pr-context`'s `truncated=`;
-  `--query`'s `<!-- routed: … -->` note is kept where the root carries no `route=`.
-- The prompt-route hooks read `status=` as an attribute, so they route under either root attribute order.
+  unchanged. `--legend=full` is accepted, as a no-op, by the read answers that only have the full form (`--situ`,
+  `--recall`, `--report`, `--mermaid`, `--html`, `--plan-lanes`, `--sarif`, `--eval*`); an asked
+  `--legend=compact` still refuses there, and the writers and servers refuse either. `--pin-census` takes a
+  posture (its map is the answer). The servers (`--mcp`, `--listen`, `--lsp`) and `--json` keep no default.
+- `--query`'s `<!-- routed: … -->` note is kept where the root carries no `route=`; the router's generated
+  commands no longer append `--legend=compact`; the prompt-route hooks read `status=` as an attribute, so they
+  route under either root attribute order.
 
 Scripts that parse the full legend's prose, or match a root's first attribute byte for byte, should pass
 `--legend=full`.
@@ -119,6 +131,31 @@ rows in its output — the content assertions for corpus (c) never print at all.
 rule under the new fail-closed guards FAILs both blocks (`onefn: … is missing or empty`), which is what
 proves the old rule was truly vacuous rather than just differently spelled. `test/emptycorpuscheck.sh` is
 the gate: on main its one-function checks never ran; with this fix they run and pass.
+
+### Added — a JSX element invocation (`<Foo />`, `<Foo>…</Foo>`) is now a call edge in TS/TSX/JS (#285)
+
+`--callers`/`--uses`/`--test-gate` used to read a component invoked only via JSX as having zero callers —
+`<UniqueWidget />` sat in plain sight and `--callers=UniqueWidget` still answered `count="0"`, because
+`queries/typescript/tags.scm` and `queries/javascript/tags.scm` captured `call_expression`/`new_expression`
+only, never a JSX element name. Both query files now bind the OPENING tag's name (self-closing has no
+separate closing tag; a paired element's closing tag repeats the same name and is deliberately not
+captured, so one invocation mints exactly one edge) as a call reference, for a plain identifier
+(`<Foo />`) and a qualified one (`<Foo.Bar />`, which binds through `member_expression` exactly like
+`Foo.Bar()` and carries the same receiver). An intrinsic tag (`<div>`, `<h1>`) parses as the identical
+node shape a real component's tag has — the grammar carries no case distinction — so a new capture-time
+filter (`isJsxIntrinsicTagIdentifier`, `src/ingest_names.h`) drops any tag whose name does not start with
+an uppercase letter; a namespaced tag (`<svg:rect />`) needs no filter at all, because its name field is a
+different grammar node (`jsx_namespace_name`) that no pattern names, and a `<>…</>` fragment has no `name:`
+field to capture. `.tsx` moved to its own query (`queries/tsx/tags.scm`, `querySub` `"tsx"` rather than
+`"typescript"`): the plain TypeScript grammar has no JSX node types at all, and tree-sitter refuses a
+whole query the moment one pattern names a node type the grammar doesn't have, so sharing the query with
+the new JSX patterns would have silently dropped every `.ts` symbol and reference along with them — see
+that file's header for the measurement. `kParserVer` 116 → 117. Reported by
+@mariadb-KyleHutchinson in #285, with fixture files that dropped straight into `test/jsxcallfix/`
+(`test/jsxcallcheck.sh` is the gate — RED on the base binary, GREEN after). **Not covered**: the issue's
+secondary ask — a synthetic framework-caller edge for a Next.js App Router entry point (`page.tsx`)
+invoked by file-path convention with no in-repo call site at all — is a separate, smaller follow-up and is
+not part of this change.
 
 ### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
 
@@ -2300,6 +2337,45 @@ again within the same function. `--flags` could not tell a CMake root it failed 
 CMake: it now reports `cmake_scan_failed="1"` in every build (`test/flagscheck.sh` arm 11). Five
 `ASSUME_NO_ALIAS_BUF` promises on fresh local buffers state that separate storage to the compiler; each was
 checked against every caller.
+
+### Fixed — a degraded answer now says so in every build, including Release
+
+Before this change, 217 degrade paths recorded that an answer was incomplete only through a debug-build assertion.
+Release builds compile those checks out, so the binary users run printed a partial answer as if it were whole. The
+self-check `DISCLOSE( sink, why )` form now records the degrade into the output document in every build. 51
+one-argument sites remain, each listed with its reason. Where an answer was wrong rather than just incomplete, the
+output now says so:
+- `--note-add` refuses a sidecar line it cannot parse instead of deleting it, and `--notes` reports `lines_skipped=`.
+- A refused symlinked notes or arch sidecar is named.
+- `--grep` marks its hit count as a floor when a file could not be read or the scan stopped part-way.
+- `--for` reports `reason="degraded"` when it could not serve bodies.
+- `--max-tokens` reports `fit_unmeasured` when it could not measure the fit, in both XML and JSON.
+- `--whereis` no longer claims `complete="1"` after dropping a ref, and a failed git worker's refs read as unknown,
+  not merged.
+- `--slice` reports `reach_converged="0"` when its fixpoint stopped at the bound, and it refuses (and says why)
+  when git's answer for a date baseline is not an object name.
+- merge-scout no longer diffs against an unavailable tree as if it were empty.
+- A file whose extraction came back partial is listed under the new `--skipped` class `extract-partial`, is no
+  longer cached as complete, and older caches are invalidated.
+- When the token measurement fails, `est_tokens` keeps its modelled number and is labelled `est_measured="0"`.
+- `--layout` exits **3** when a definition's file cannot be read (2 still means drift, 0 means verified), so a CI
+  gate on its exit code no longer passes an unverified mirror.
+
+Refusals whose only disclosure is the refusal itself (a non-zero exit, an MCP error, a query failure) are recorded
+through `answerRefused`. Ten guards that could not fire were removed after tracing each one: those guarded by our own
+code became `ASSUME`/`EXPECTS`, and those touching external input kept a checked, disclosed path.
+`CONTRIBUTING.md`'s error ladder now says a degrade that still prints an answer must record into the document.
+
+### Changed — `--help-task` routes four more question shapes to a first verb
+
+`--help-task` used to abstain on four common question shapes. It now routes them:
+- which tests cover a file → `--affected`
+- what else changes with a file → `--situ`
+- how one named file reaches another → `--for`
+- where a named thing is implemented → `--for`
+
+On the labelled routing corpus none of the 254 decisions changed, and held-out precision stays 1.000 with harmful
+recommendations at 0.000. A 12-question paraphrase arm routes 10 correctly, with no wrong verb.
 
 ## [0.6.1] — 2026-09-14
 

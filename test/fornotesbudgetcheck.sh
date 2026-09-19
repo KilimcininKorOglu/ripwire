@@ -369,8 +369,10 @@ case "$bare" in *"<note "*) no "a tree with no .ripwire_notes still emitted a <n
 # L1 (2026-09-19): the 800-token fit was calibrated in the full legend, the default when it was written, and is asked
 # for by name. The DEFAULT (compact) answer on this tree carries more rows and lands over 800 at this one budget; that is
 # the --for sig ledger's exemption design (disclosure clauses exempt from the sig charge, recovered by rung zero, which
-# the compact dialect's shorter clauses rarely pay for), measured in the L1 lane report (8 of 66 budgets over on this
-# corpus vs 2 for full, 55 before the ledger fix). What the default MUST do there is say so — asserted below.
+# the compact dialect's shorter clauses rarely pay for). RE-MEASURED in the L1 fix round with a script, not a count typed
+# here: 66 budgets (300..3550 step 50) on the P4-shape fixtures, the default is over on 15 (72 functions) and 15 (12
+# functions), --legend=full on 11 and 12; the earlier "8 of 66 vs 2, 55 before" did not reproduce. What the default MUST do
+# there is say so — asserted below.
 bareFull="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=800 --legend=full 2>/dev/null )"
 bareEst="$( printf '%s' "$bareFull" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
 if [ -n "$bareEst" ] && [ "$bareEst" -le 800 ]; then ok "no-notes tree also fits the ceiling in the full legend (est_tokens=$bareEst)"

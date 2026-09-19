@@ -328,6 +328,15 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --regex's long-line disclosure (search.h grepScanText / regexguard.h maxEngineSubjectBytes): the count rides every
     // regex answer, the bound only beside a nonzero count.
     { "regex_lines_skipped", "regex_lines_skipped=N: N lines too long for the regex engine, never matched" },
+    // The degrade-disclosure lane's attributes (each set through a DISCLOSE( sink, why ) sink, present only on the degrade,
+    // so a clean answer's legend is unchanged). Element-qualified where the name alone is generic.
+    { "unread_files",      "unread_files=N: N indexed files unreadable when scanned (hits= is a floor)" },
+    { "scan_degraded",     "scan_degraded=1: the scan stopped part-way (hits= is a floor)" },
+    { "unreadable",        "unreadable=N: N same-name definitions unreadable when this ran, absent from defs=", false, "layout" },
+    { "lines_skipped",     "lines_skipped=N: N sidecar lines unparsed, absent from notes=", false, "notes" },
+    { "refused",           "refused=symlink: the sidecar is a symlink, refused unopened: no note was read", false, "notes" },
+    { "baseline",          "baseline=symlink-refused: the sidecar is a symlink, refused unopened: every violation is new", false, "arch",
+      MapHeaderRead::No, "symlink-refused" },
     { "regex_line_max",    "regex_line_max=: the longest line it could take" },
     { "regex_stack_bytes", "regex_stack_bytes=: the smaller stack every scan thread was held to" },
     // Both also ride the map header: est_tokens= alone there under order=stable (the root drops it), over_ceiling=1 there
@@ -373,6 +382,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "ignored_files",     "ignored_files=K: K files git's ignore rules dropped", false, {}, MapHeaderRead::Only },
     { "ignored_dirs",      "ignored_dirs=K: K subtrees git's ignore rules pruned, contents unknown", false, {}, MapHeaderRead::Only },
     { "max_tokens",        "max_tokens=/fit_bytes=: tokens asked/the byte cap applied", false, {}, MapHeaderRead::Only },
+    { "est_measured",      "est_measured=0: est_tokens is the MODELLED estimate (a charge buffer failed), typically below the emitted size", false, {}, MapHeaderRead::Also },
+    { "fit_unmeasured",    "fit_unmeasured=1: the fit probe could not measure the map; the cap is unverified", false, {}, MapHeaderRead::Only },
     // THE THIRD SWEEP (2026-09-12), the same defect on conditional fields the first two sweeps never produced. --zoom's
     // <module children=> rides only a module AT the levels_shown= cut, and a map's <recent> file rows only a single-root
     // rank_by=churn-decay (kChurnDecayRankLegend's `recent:` clause). Both clauses are prose. Both rows are ELEMENT-qualified:
@@ -512,6 +523,13 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // budget-floor-exceeded means the smallest renderable document is still over it. ELEMENT-qualified, present-only.
     { "locals_floor",      "locals_floor=1: locals= is a floor", true, "s" },
     { "truncated",         "truncated=: what the trim ladder dropped to fit budget_tokens= (budget-floor-exceeded: still over)", false, "pr-context" },
+    // train-7 fix round (CodeRabbit on #295): four present-only degrade disclosures whose full clauses ride only the
+    // answer that carries them, so the compact strip must put a reading back. Head terms, except head_conflicts_ok=
+    // (on each <arm>) and render_failed= (also on the <sigs>/<bodies> element it marks).
+    { "disk_walk_failed",  "disk_walk_failed=1: the root could not be listed, so a missing-file row may name an unindexed file that exists" },
+    { "refs_dropped",      "refs_dropped=K: K listed branches could not be read, in no count or row" },
+    { "head_conflicts_ok", "head_conflicts_ok=0: that arm's base or HEAD tree was unavailable, head_conflicts= unknown", true, "arm" },
+    { "render_failed",     "render_failed=: sections whose render FAILED (empty, not budget-omitted)", true },
     // ── EVERY ATTRIBUTE THE DEFAULT EMITS, DEFINED (L1 fix round, rv-r1-L1 HIGH-1) ─────────────────────────────────────
     // L1 made this dialect the CLI default and seeded legendcoverage_default_baseline.txt with 269 first-screen attributes
     // it left undefined — ~25 of them cut/floor/cap terms (renames_window_truncated=, script_gates_unmodelled=, hcut=/rcut=,
@@ -772,6 +790,14 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "tests", "tests=/untested=: tests to run (<t> total) / impacted symbols no test reaches (<u> total)", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     // uses: src/verbs_navigate.h
     { "count", "count=N: use-site rows in all (a floor)", false, "uses", MapHeaderRead::No, {}, "uses" },
+    // quality-delta rows (src/verbs_quality.h): the row facets the purpose line does not spell, present-only.
+    { "sev", "<r sev=minor>: a small numeric delta, counted in minor=, never gating (absent: major)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "origin", "<r origin=new-symbol>: the finding is on NEW code, never gating (absent: preexisting-worse)", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "churn", "<r churn=self|ambient>: the edit modifies lines committed inside the churn window (self) or only adds/touches older ones (ambient); informational", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    { "idiom", "<r idiom=>: the recognized clone-body shape of a duplication row", true, "r", MapHeaderRead::No, {}, "quality-delta" },
+    // --expand's bundle (src/main.cpp runDefaultMap): the ride-along note and the map it carries inside the <ctx>.
+    { "note", "note=: the ranked map rides along with the payload; top-k=0 serves the payload alone", false, "ctx", MapHeaderRead::No, {}, "expand" },
+    { "pr_iters", "<r root= pr_iters=>: the ride-along map; root= its p= base, pr_iters= PageRank iterations", true, "r", MapHeaderRead::No, {}, "expand" },   // also defines root= on <r>
     // handoff: src/handoff.h (the packet root, the heuristic block, its rows)
     { "branch", "branch=/subject=: the checked out branch and HEAD commit subject; gitok=0: the git diff probe failed, changed counts are floors", false, "handoff", MapHeaderRead::No, {}, "handoff" },   // also defines subject= gitok=
     { "cochange_window", "cochange_window=/cochange_commits=: the git window the cochange rows were mined in and the commits it held (0: could not look)", true, "heuristic", MapHeaderRead::No, {}, "handoff" },   // also defines cochange_commits=

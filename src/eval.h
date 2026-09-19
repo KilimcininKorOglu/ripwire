@@ -400,6 +400,25 @@ inline int runEval( const std::string& root, const IngestResult& ing, const Grap
 // which no ordering of the corpus can move. It is fractional by construction, so recall@k reads as
 // "the expected rank is within k" — a two-way tie at the top scores 1.5 and does NOT take recall@1
 // credit, which is the pessimistic-but-fair reading of a coin flip.
+//
+// test/knownitemcheck.sh arm 8, round 2: the id-based tie-break above was the FIRST-order fix; a second,
+// narrower one belongs here. `score` for the anchored ranker is anchoredLexicalRank's output — a PPR power
+// iteration (pagerank.cpp) run over a graph CSR that is indexed, and therefore iterated and summed, in
+// NodeId order. Renumbering an otherwise-identical graph (the exact "same probe file, different sort
+// position" case this gate exists for) changes THAT summation order, so two symbols the ranker treats as
+// equivalent can come back a few float32 ULPs apart even though pagerank.cpp already compiles with
+// -fno-fast-math — that flag stops the COMPILER reassociating sums, it cannot make the algorithm's own
+// id-ordered accumulation invariant to which ids a relabeling hands it. A bit-exact `==` read that noise as
+// a genuine ranking difference (measured: 0.696470201 vs 0.696470261, ~1 ULP at this magnitude, flipping a
+// symbol from "tied with a 38-way block" to "strictly better than it" and moving every member's rank by
+// exactly 1). kScoreTieAbsEps/kScoreTieRelEps bound comparisons to the same order of magnitude as
+// pagerank.h's own convergence tolerance (1e-6): requiring bit-exactness here would assert a precision the
+// power iteration never promises. This widens what counts as "tied" — it can only ADD midrank credit,
+// never remove a real ranking distinction (kScoreTieRelEps is four-plus orders of magnitude below any
+// meaningful score gap in this corpus).
+inline constexpr float kScoreTieAbsEps = 1e-6f;
+inline constexpr float kScoreTieRelEps = 1e-5f;
+
 inline double rankOfSymbol( const std::vector<float>& score, NodeId gold )
 {
     const float g = score[ gold ];
@@ -407,11 +426,13 @@ inline double rankOfSymbol( const std::vector<float>& score, NodeId gold )
     std::size_t tied   = 0;                                   // symbols scoring exactly gold, gold itself excluded
     for( NodeId i = 0; i < score.size(); ++i )
     {
-        if( score[i] > g )
+        const float eps  = std::max( kScoreTieAbsEps, kScoreTieRelEps * std::max( std::fabs( score[i] ), std::fabs( g ) ) );
+        const float diff = score[i] - g;
+        if( diff > eps )
         {
             ++better;
         }
-        else if( score[i] == g && i != gold )
+        else if( diff >= -eps && i != gold )
         {
             ++tied;
         }

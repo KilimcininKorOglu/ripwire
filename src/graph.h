@@ -4594,13 +4594,28 @@ inline std::vector<float> blendMaxNorm( const std::vector<float>& a, const std::
     return out;
 }
 
-// anchored rank: pick the top-kAnchorCount symbols by lexical score (score desc, id asc — deterministic),
-// seed the PPR personalization with each anchor's NORMALIZED lexical score (per-anchor confidence
-// weighting: a marginal 20th anchor teleports proportionally little mass, so the anchor-count is not a
-// cliff), run the EXISTING PPR machinery (rankGraphTeleport — the same biasPrior/det-gate seam every
-// teleport mode uses), and blend lexical + anchored-PPR in score space (blendMaxNorm, λ above).
+// anchored rank: pick the top-kAnchorCount symbols by lexical score (score desc, canonical-id asc —
+// content-based, never crawl order), seed the PPR personalization with each anchor's NORMALIZED lexical
+// score (per-anchor confidence weighting: a marginal 20th anchor teleports proportionally little mass, so
+// the anchor-count is not a cliff), run the EXISTING PPR machinery (rankGraphTeleport — the same
+// biasPrior/det-gate seam every teleport mode uses), and blend lexical + anchored-PPR in score space
+// (blendMaxNorm, λ above).
 // No lexical signal at all (empty query / no match) ⇒ returns `lex` unchanged (anchoring degrades to
 // plain lexical, never to noise).
+//
+// test/knownitemcheck.sh arm 8: this used to break a top-of-score tie by `a < b` — NodeId, i.e. CRAWL
+// order, i.e. PATH order. A cohort of many same-scoring candidates (e.g. several near-duplicate doc-
+// commented symbols answering the same doc-phrase query) is common enough that the top-kAnchorCount cut
+// regularly lands ON such a tie, so WHICH symbols became PPR anchors — and therefore the anchored score
+// for every OTHER symbol the PPR expansion reaches — depended on where an unrelated file happened to sort.
+// The comment here used to call `a < b` "deterministic", which is true for a FIXED id assignment but not
+// what the determinism contract (CLAUDE.md non-negotiable #2) requires: invariance to an id assignment
+// that itself depends only on crawl/path order. `g.localityKey[i]` (path::scope::name, buildGraph's own
+// canonical per-symbol string, already relied on for the S6-C tie-break) is a pure function of the
+// symbol's OWN identity, never of what sorts before it, so breaking the tie on it — falling back to the
+// numeric id only to give the comparator a strict total order over true full-duplicate qualified names,
+// which are indistinguishable by identity anyway — makes anchor selection, and everything downstream of
+// it, invariant to an irrelevant file's position in the crawl.
 inline std::vector<float> anchoredLexicalRank( const Graph& g, const std::vector<float>& lex )
 {
     const std::size_t N = lex.size();
@@ -4608,8 +4623,9 @@ inline std::vector<float> anchoredLexicalRank( const Graph& g, const std::vector
     {
         return lex;
     }
+    ASSUME( g.localityKey.size() == N, "buildGraph sizes localityKey to N in the same pass as wOutDeg" );
 
-    // top-K anchor candidates by (lex desc, id asc); positive scores only
+    // top-K anchor candidates by (lex desc, localityKey asc, id asc); positive scores only
     std::vector<NodeId> anchorIds( N );
     for( NodeId i = 0; i < N; ++i )
     {
@@ -4617,7 +4633,13 @@ inline std::vector<float> anchoredLexicalRank( const Graph& g, const std::vector
     }
     const std::size_t anchorCount = std::min( anchorcfg::kAnchorCount, N );
     std::partial_sort( anchorIds.begin(), anchorIds.begin() + anchorCount, anchorIds.end(),
-                       [ & ]( NodeId a, NodeId b ) { return lex[a] != lex[b] ? lex[a] > lex[b] : a < b; } );
+                       [ & ]( NodeId a, NodeId b )
+                       {
+                           if( lex[a] != lex[b] ) { return lex[a] > lex[b]; }
+                           const std::string& ka = g.localityKey[a];
+                           const std::string& kb = g.localityKey[b];
+                           return ka != kb ? ka < kb : a < b;   // id only disambiguates true duplicate identities
+                       } );
     anchorIds.resize( anchorCount );
     while( !anchorIds.empty() && !( lex[anchorIds.back()] > 0.f ) )
     {
