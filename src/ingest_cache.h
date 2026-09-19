@@ -249,7 +249,18 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 114;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 115;          // bump on any grammar/.scm/extraction change
+                                                      // 115 = 2026-09-18 (#285 JSX element invocation:
+                                                      //    queries/typescript/tags.scm's `<Foo/>`/`<Foo.Bar/>`
+                                                      //    patterns moved to a NEW queries/tsx/tags.scm — plain
+                                                      //    .ts's grammar has no jsx_*_element node types, so a
+                                                      //    shared query with them fails to compile AT ALL for
+                                                      //    .ts — kLangTable's .tsx row now uses querySub "tsx",
+                                                      //    not "typescript"; queries/javascript/tags.scm gained
+                                                      //    the same patterns in place, since .js/.jsx/.mjs/.cjs
+                                                      //    already share one grammar that has the nodes. New
+                                                      //    isJsxIntrinsicTagIdentifier (src/ingest_names.h) drops
+                                                      //    an intrinsic tag (`<div>`) at capture time.
                                                       // 114 = 2026-09-17 (reference-returning definitions,
                                                       //    test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am
                                                       //    and q8): a C++/ObjC function definition returning `T&` or

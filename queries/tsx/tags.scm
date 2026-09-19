@@ -1,24 +1,24 @@
-; ripwire TypeScript tags — written for ripwire.
-; The upstream tree-sitter-typescript tags.scm targets .d.ts declaration files
-; (function_signature / method_signature) and ships no @reference.call, so it extracts
-; almost nothing from ordinary .ts source. This set covers real source: concrete
-; declarations + arrow-function-bound consts + call/new references.
+; ripwire TSX tags — written for ripwire. .tsx ONLY.
 ;
-; .ts/.mts/.cts ONLY. tree-sitter-typescript ships two grammars: plain "typescript" (this
-; one — a .ts file cannot contain JSX, by the TypeScript language's own rule) and "tsx" (a
-; real superset that adds jsx_self_closing_element/jsx_opening_element/…). Until #285 the
-; plain grammar really was a strict subset of tsx for every node THIS file names, so one
-; query text served both (kLangTable's .tsx row pointed at this same "typescript" querySub,
-; the CUDA-on-cpp precedent: tree-sitter-cuda is a generated superset of tree-sitter-cpp and
-; the two share querySub "cpp" the same way). #285's JSX patterns broke that: tree-sitter's
-; ts_query_new refuses the WHOLE query when even one pattern names a node type the grammar
-; does not have (measured — adding jsx_self_closing_element here made `[ripwire] tags.scm
-; compile error for typescript at byte N (err 2) — skipping language` and took EVERY .ts
-; symbol/reference with it, not just the JSX ones). queries/tsx/tags.scm is this file's
-; content plus the JSX additions, kept in its own file for the grammar that actually has
-; those nodes — see its header. Keep the two in sync by hand for every pattern below, the
-; same duplication precedent queries/c/tags.scm vs queries/cpp/tags.scm already carries for
-; two related-but-diverging grammars.
+; tree-sitter-typescript ships two grammars: plain "typescript" (queries/typescript/tags.scm — a .ts
+; file cannot contain JSX, by the TypeScript language's own rule) and "tsx" (this one — a real
+; superset that adds jsx_self_closing_element/jsx_opening_element/jsx_closing_element/
+; jsx_namespace_name/…). Until #285 tsx really was a strict superset of typescript for every node
+; queries/typescript/tags.scm named, so kLangTable's .tsx row shared that ONE query text (the same
+; precedent .cu/.cuh still use: tree-sitter-cuda is a generated superset of tree-sitter-cpp, and both
+; share querySub "cpp"). #285 needed patterns naming JSX-only node types, and tree-sitter's
+; ts_query_new refuses the WHOLE query when even one pattern names a node type the grammar does not
+; have — adding those patterns to the shared file made the plain typescript grammar fail to compile
+; ANY pattern (measured: `[ripwire] tags.scm compile error for typescript at byte N (err 2) —
+; skipping language`, which silently dropped every .ts symbol and reference, not just JSX ones).
+;
+; So this file exists to hold what typescript/tags.scm has PLUS the JSX additions, compiled only
+; against the tsx grammar (kLangTable's .tsx row points at querySub "tsx", not "typescript"). Every
+; non-JSX pattern below is a byte-for-byte copy of queries/typescript/tags.scm and MUST be kept in
+; sync with it by hand — the same duplication precedent queries/c/tags.scm vs queries/cpp/tags.scm
+; already carries for two related-but-diverging grammars, and for the identical structural reason: no
+; include/import mechanism exists for tags.scm, and the two grammars now genuinely diverge (JSX nodes
+; exist in one, not the other).
 
 ; ---- definitions ----
 
@@ -141,4 +141,32 @@
 ; --match on fixtures/ts at 2 AND 3 segments, empirically, not just assumed from the grammar shape.
 (new_expression
   constructor: (member_expression
+    property: (property_identifier) @name)) @reference.call
+
+; #285: `<Foo />` / `<Foo>…</Foo>` invokes Foo exactly like `Foo()` — bind the OPENING tag's name only
+; (self-closing has no separate closing tag; a paired element's jsx_closing_element repeats the same
+; name and is deliberately NOT captured, so one JSX invocation mints exactly one edge, not two).
+; `<Foo.Bar />` binds through member_expression, the identical shape `Foo.Bar()` already captures two
+; rules up, so it carries a receiver the resolver narrows on the same as a member call (ingest_binds.h
+; receiverOf reads the parent of @name generically; it does not care whether the grandparent is a
+; call_expression or a jsx_*_element). An intrinsic tag (`<div>`, `<h1>`) parses as the SAME
+; (identifier) shape as a component tag — the grammar carries no case distinction — so the
+; lower-case-first-letter filter lives in C++ at capture time (isJsxIntrinsicTagIdentifier,
+; src/ingest_names.h): tags-pass predicates never run (`(#match? @name "^[A-Z]")` here would be
+; silently ignored — see isCppCastKeyword's note above, measured, not assumed). A namespaced tag
+; (`<svg:rect />`) needs no filter at all: verified with --match that its name field is a DIFFERENT
+; grammar node, jsx_namespace_name, which no pattern below names, so it is never captured in the
+; first place. A `<>…</>` fragment has no `name:` field and is likewise never captured.
+(jsx_self_closing_element
+  name: (identifier) @name) @reference.call
+
+(jsx_self_closing_element
+  name: (member_expression
+    property: (property_identifier) @name)) @reference.call
+
+(jsx_opening_element
+  name: (identifier) @name) @reference.call
+
+(jsx_opening_element
+  name: (member_expression
     property: (property_identifier) @name)) @reference.call

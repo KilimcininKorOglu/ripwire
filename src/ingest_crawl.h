@@ -155,7 +155,11 @@ constexpr std::array<LangEntry, 50> kLangTable = {{
     { ".go",   Lang::Go,         &tree_sitter_go,         "go"         },
     { ".rs",   Lang::Rust,       &tree_sitter_rust,       "rust"       },
     { ".ts",   Lang::TypeScript, &tree_sitter_typescript, "typescript" },
-    { ".tsx",  Lang::TypeScript, &tree_sitter_tsx,        "typescript" },
+    // #285: .tsx gets its OWN querySub ("tsx", queries/tsx/tags.scm), not "typescript" — the tsx
+    // grammar is a superset of the plain one, but a query naming a JSX-only node type (added for
+    // JSX element call edges) fails to compile against the plain grammar WHOLESALE, which would have
+    // taken every .ts symbol/reference down with it. See queries/typescript/tags.scm's header.
+    { ".tsx",  Lang::TypeScript, &tree_sitter_tsx,        "tsx"        },
     { ".mts",  Lang::TypeScript, &tree_sitter_typescript, "typescript" },
     { ".cts",  Lang::TypeScript, &tree_sitter_typescript, "typescript" },
     { ".swift", Lang::Swift,     &tree_sitter_swift,      "swift"      },
