@@ -395,6 +395,7 @@
 "propcostcheck.sh": 1.4,
 "prrefsafecheck.sh": 4.8,
 "prrenamecheck.sh": 2.5,
+"pyaliasincludecheck.sh": 0.3,
 "pyimportprecisecheck.sh": 1.2,
 "pyshapecheck.sh": 0.5,
 "qackconcurrencycheck.sh": 13.2,

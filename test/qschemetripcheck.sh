@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-18, ALIASED PYTHON IMPORT (test/pyaliasincludecheck.sh): kParserVer and its mirror 114 -> 116 (115 is held by
+#   lane/py-module-alias-ambiguous; whichever lands second re-bumps) — `import a.b as c` records the Include target `a.b`,
+#   not the aliased clause `a.b as c`. The extracted Include SET changes; kCacheVersion stays 24, kQSnapCacheScheme stays 14
+#   (no manifest function changes).
 # 2026-09-17, TRAIN 5 (integration/train-5 on main a6868f75: #282 ad7a9d56, lane/rule2b-assignment-veto 626810b3,
 #   lane/field-base-member 6b8f539e): RE-DERIVED ON THE FINAL MERGED TREE, carried from no side. kParserVer and its
 #   mirror in merge order over main's 112: #282 = 113, the veto lane = 114 (its ingest fix records a reference-returning

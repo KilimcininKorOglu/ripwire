@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — an aliased Python `import a.b as c` recorded no dependency on `a.b`
+
+tree-sitter-python puts the whole `aliased_import` node in an `import_statement`'s `name:` field, and the Include capture
+took that node's source span as the module specifier, so `import pkg.mod as pm` recorded the target `pkg.mod as pm`.
+No module is spelled that way, so the file lost its precise-include edge: `--deps` listed `<inc t="pkg.mod as pm"/>` with
+no edge behind it, and a bare call that only the include could disambiguate (Rule 3) was declined as ambiguous. The capture
+now reads the aliased import's own `name:` (the dotted module), so the target is `pkg.mod`, as `import pkg.mod` already
+recorded. `from a.b import x as y` reads `module_name:` and was never affected; the bound-name capture for the alias is
+unchanged. Gate: `test/pyaliasincludecheck.sh`. Parser version 116.
+
 ### Changed — the self-check macro vocabulary is renamed to the conventional spellings, and degrade paths gain a sink form
 
 `VERIFY` / `VERIFY_TEXT` → `ASSUME`; `VERIFY_DEBUG_ONLY(_TEXT)` → `DASSERT`; `VERIFY_NOT_REACHED(_TEXT)` →

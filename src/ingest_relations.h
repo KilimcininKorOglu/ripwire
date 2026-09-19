@@ -1866,6 +1866,20 @@ constexpr std::uint16_t kMaxImportContainerDepth = 256;
 // class/module index, never a path — see model.h Include::isSymbolic.
 struct DirectiveTarget { std::string target; bool isAngle; bool isLazy; bool isSymbolic; bool isReceiver; };
 
+// A Python import_statement's name: field → the MODULE node, or null when the field is absent (every non-Python
+// grammar). `import a.b as c` puts the WHOLE aliased_import in that field, whose span reads `a.b as c` — a module no
+// resolver can find, so the file lost its precise-include edge. Its own name:(dotted_name) is the module (kParserVer
+// 116); the alias is capturePythonImportBinds' business, not the Include record's.
+inline TSNode pythonImportModuleNode( TSNode stmt )
+{
+    const TSNode nm = fieldChild( stmt, NodeField::Name );
+    if( !ts_node_is_null( nm ) && kindIs( ts_node_type( nm ), "aliased_import" ) )
+    {
+        return fieldChild( nm, NodeField::Name );
+    }
+    return nm;
+}
+
 // `insideFn` exists for exactly the same one branch `lang` does: whether the call_expression being read
 // sits inside a TS/JS function body, per captureIncludes' walk — meaningless (and ignored) everywhere else.
 DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src, Lang lang, bool insideFn )
@@ -1896,7 +1910,7 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
         {
             target = importSpecifierText( src_, src );                    // TS/JS: strip the surrounding quotes
         }
-        else if( const TSNode nm = fieldChild( n, NodeField::Name );  !ts_node_is_null( nm ) )
+        else if( const TSNode nm = pythonImportModuleNode( n );  !ts_node_is_null( nm ) )
         {
             target = importSpecifierText( nm, src );                      // Python: the dotted module head
         }

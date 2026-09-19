@@ -249,7 +249,14 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 114;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 116;          // bump on any grammar/.scm/extraction change
+                                                      // 116 = 2026-09-18 (aliased Python import, test/pyaliasincludecheck.sh):
+                                                      //    `import a.b as c` records the Include target `a.b` — it recorded
+                                                      //    the whole aliased_import span `a.b as c`, which no resolver can
+                                                      //    find, so the file lost its precise-include edge (Rule 3, --deps,
+                                                      //    cycles, --arch). No record layout change (kCacheVersion stays 24).
+                                                      //    116, not 115: lane/py-module-alias-ambiguous holds 115; whichever
+                                                      //    lands second RE-BUMPS to the next free number.
                                                       // 114 = 2026-09-17 (reference-returning definitions,
                                                       //    test/narrowcheck.sh arms 61-63, test/shadowcheck.sh arms am
                                                       //    and q8): a C++/ObjC function definition returning `T&` or
