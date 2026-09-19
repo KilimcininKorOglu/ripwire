@@ -6385,9 +6385,13 @@ inline std::string sectionStubXml( const char* tag, std::size_t total, std::stri
 //
 // hasRenderedBytes=false is the open_memstream DEGRADE PATH: no buffered render exists to measure, only a
 // row count (the caller's preCapTotal, computed by legoPreCapRowCount/composePreCapRowCount WITHOUT
-// rendering) — sizing a section this function never measured would be the undisclosed guess §9.3 forbids,
-// so that case keeps round 1's unconditional rule (collapse whenever there is content), the conservative
-// direction: it never risks streaming an un-sized full section on the one path already failing.
+// rendering). Sizing a section this function never measured would be the undisclosed guess §9.3 forbids, and
+// the rule is "collapse ONLY WHEN CHEAPER" — so an unmeasured section never collapses: the caller streams the
+// full section directly, exactly what --sections= would restore (CodeRabbit 4054594306). Collapsing it anyway
+// (round 1's unconditional rule, which this path kept until then) replaced a section like test/hasafix's
+// two-row <compose> with a LARGER stub plus its legend clause, so the section's shape depended on whether an
+// allocation succeeded. That path already omits est_tokens= and says so (ForLensBlockCharge), so a full
+// section there is disclosed as unmeasured, never priced wrong.
 struct SectionStubPricing
 {
     bool        collapse;
@@ -6399,7 +6403,9 @@ inline SectionStubPricing priceSectionStub( const char* tag, std::size_t preCapT
                                             bool hasRenderedBytes, std::size_t renderedBytes )
 {
     SectionStubPricing p{ .collapse = false, .stubXml = sectionStubXml( tag, preCapTotal, nextInvocation ) };
-    p.collapse = !hasRenderedBytes || renderedBytes > p.stubXml.size() + kForSectionStubLegend.size();
+    p.collapse = hasRenderedBytes && renderedBytes > p.stubXml.size() + kForSectionStubLegend.size();
+    ENSURES( !p.collapse || ( hasRenderedBytes && p.stubXml.size() < renderedBytes ),
+             "priceSectionStub: a collapse was decided without measured bytes, or the stub is not smaller than the section" );
     return p;
 }
 

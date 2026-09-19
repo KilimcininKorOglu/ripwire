@@ -4121,16 +4121,19 @@ static inline void validateSectionsModifier( Config& c ) noexcept
         c.ok = false;
         return;
     }
+    // EVERY segment is read, the empty one after a trailing comma included (CodeRabbit 4054594298): the loop
+    // ends on "no comma left", not on "nothing left", so `lego,` and `lego,,compose` reach the refusal below.
     bool sawLego = false, sawCompose = false, bad = false;
     std::string_view rest = c.sections;
-    while( !rest.empty() )
+    for( bool more = true; more; )
     {
         const std::size_t comma = rest.find( ',' );
         const std::string_view tok = comma == std::string_view::npos ? rest : rest.substr( 0, comma );
         if( tok == "lego" )         { bad = bad || sawLego;     sawLego = true; }
         else if( tok == "compose" ) { bad = bad || sawCompose;  sawCompose = true; }
         else                        { bad = true; }
-        rest = comma == std::string_view::npos ? std::string_view() : rest.substr( comma + 1 );
+        more = comma != std::string_view::npos;
+        rest = more ? rest.substr( comma + 1 ) : std::string_view();
     }
     if( bad || ( !sawLego && !sawCompose ) )
     {

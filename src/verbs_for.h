@@ -2116,6 +2116,8 @@ inline std::string renderForHdrRowsXml( const rw::IngestResult& ing, const std::
         x += rw::escapeXml( rel( row.namedFile ), esc );
         x += "\"/>";
     }
+    // runForLens charges x.size() in every budget sum and emits x itself, so "no row" and "no bytes" must agree
+    ENSURES( !x.empty(), "renderForHdrRowsXml: rows resolved but nothing rendered" );
     return x;
 }
 
@@ -2397,18 +2399,24 @@ std::optional<int> runForLens( const MainDispatch& d )
         const std::string forAtAttrStr = forAtStamp.empty() ? std::string() : ( " at=\"" + forAtStamp + "\"" );
 
         // R2-AF (round 2, S4): resolved once, ahead of the header build below, so its legend clause can be
-        // present-only in BOTH dialects. The rows themselves are emitted later (right after headerStr is
-        // flushed, before <sigs>) and are NOT charged against the H1 payload budget below (fixedBytes/
-        // sigsBudget below never add forHdrXml's size) — a small, bounded lookup, not a trimmable list. What
-        // bounds it is forNamedHeaderRows' own ENSURES(out.size()<=allNamed.size()) (mention.h): at most one
-        // row per distinct file the task text names, deduplicated — not a byte limit anywhere in this code.
-        // The "+365 B" figure is this ROUND's own measurement rule (read by the external eval/scoring harness
-        // that grades this round, not by ripwire) and MUST NOT be enforced here: a runtime byte cap on these
-        // rows could drop a correct row or make a correct answer wrong, which owner policy forbids a cap from
-        // doing (caps are blow-up guards only — see owner-cap-can-make-answer-wrong,
-        // owner-quality-first-caps-are-blowup-guards). Not part of the --json dialect (that branch already
-        // returned above); the extra resolve on a --json call is cheap and unused, not wrong.
+        // present-only in BOTH dialects. The rows are RENDERED here too (forHdrXml) and emitted, as that same
+        // string, right after headerStr is flushed and before <sigs>. PRICED like every other emitted section
+        // (CodeRabbit 4054594308): its bytes join est_tokens (rootFinish.nonHeaderMarkupBytes), both halves of
+        // the ceiling ladder, and the residual the --detail bodies, the auto enrichment and the explicit-regime
+        // tail are sized from. Rendered after the ceiling decisions they used to be missing from every one of
+        // those sums, so a task naming several long paths printed an est_tokens that left out ~1.6 KB of rows.
+        // NOT charged against the <sigs> trim allowance (fixedBytes/sigsBudget below), which keeps the ranked
+        // head byte-identical with and without the rows and identical to the MCP twin's (mcpverbs.h forTaskText,
+        // whose sig ledger does not see them either): a lookup the task asked for by name is not paid for in
+        // ranked rows. What bounds it is forNamedHeaderRows' own ENSURES(out.size()<=allNamed.size())
+        // (mention.h): at most one row per distinct file the task text names, deduplicated. The "+365 B" figure
+        // is this ROUND's own measurement rule (read by the external eval/scoring harness that grades this
+        // round, not by ripwire) and MUST NOT be enforced here: a runtime byte cap on these rows could drop a
+        // correct row or make a correct answer wrong, which owner policy forbids a cap from doing (caps are
+        // blow-up guards only). Not part of the --json dialect (that branch returns above the emission); the
+        // extra resolve and render on a --json call are cheap and unused, not wrong.
         const std::vector<rw::ForNamedHeaderRow> forHdrRows = rw::forNamedHeaderRows( ing, cfg.forTask );
+        const std::string                        forHdrXml  = renderForHdrRowsXml( ing, forHdrRows, flRootArg );
 
         // H1 (B0 r2): the bundle is emitted under a GLOBAL payload budget (serialize.h kForPayloadBudgetBytes; an
         // EXPLICIT --token-budget=N overrides it at the same conservative byte rate the --max-tokens fitter uses).
@@ -2898,8 +2906,9 @@ std::optional<int> runForLens( const MainDispatch& d )
         // and the section is then emitted directly to stdout further down (the ORIGINAL degrade path, unaware
         // of --sections=). legoPreCapRowCount/composePreCapRowCount (serialize.h) compute the SAME count with
         // no FILE* and no buffering — provably identical to packLego/packCompose's own tally (see their own
-        // comments) — so both the happy path below and the degrade path further down make the identical
-        // decision from the identical number. legoScoped/g.composeEdges/lensSurfaceIds are read here in
+        // comments) — so both paths read the identical number. They no longer share the DECISION: the degrade
+        // path has no measured bytes, so priceSectionStub never collapses there and the section streams whole
+        // (CodeRabbit 4054594306 — a stub is taken only when it is proven cheaper). legoScoped/g.composeEdges/lensSurfaceIds are read here in
         // whichever state they are already in (post-narrow on the happy path, since narrowing already ran
         // above; un-narrowed on the degrade path, since narrowing never runs there either) — the same state
         // each path's own render (buffered or direct-to-stdout) would use.
@@ -2925,9 +2934,9 @@ std::optional<int> runForLens( const MainDispatch& d )
         }
         // R2-L2' (round-2, priced re-registration of L2/B1, rv-prereg2 Amendment 1 R4): a candidate collapses
         // ONLY WHEN CHEAPER — see rw::priceSectionStub (serialize.h) for the shared rule (posture-independent
-        // by construction) and the DEGRADE-path fallback it documents (no rendered bytes to gate on there, so
-        // it keeps round 1's unconditional collapse). Pulled into one small function so this already-long
-        // lens carries none of the pricing branching itself.
+        // by construction) and the DEGRADE path it documents: no rendered bytes to gate on there, so the
+        // section never collapses and is streamed whole below. Pulled into one small function so this
+        // already-long lens carries none of the pricing branching itself.
         const rw::SectionStubPricing legoPricing    = legoCandidate
             ? rw::priceSectionStub( "lego",    legoStubTotal,    sectionsNextInvocation, legoPreRendered,    legoStr.size() )
             : rw::SectionStubPricing{};
@@ -3016,7 +3025,7 @@ std::optional<int> runForLens( const MainDispatch& d )
                 : cfg.packBudgetBytes;
             if( cfg.tokenBudget > 0 )
             {
-                const std::size_t spentBytes = headerStr.size() + sigsStr.size() + legoStr.size() + composeStr.size()
+                const std::size_t spentBytes = headerStr.size() + forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size()
                                              + routeStr.size() + graphSection.xml.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve
                                              + rw::kForFileTailShellReserve;   // deep-tail: the shell's reserved bytes (explicit regime only — this branch)
                 const std::size_t leftBytes  = bundleBudget > spentBytes ? bundleBudget - spentBytes : 1;
@@ -3045,7 +3054,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         if( autoBundleMode && sigsPreRendered )
         {
             enrich = buildForEnrichment( cfg, ing, g, lensSurfaceIds, lensRank, plan, routeAnchorDefs, redactPtr,
-                                          headerStr.size() + sigsStr.size() + legoStr.size() + composeStr.size()
+                                          headerStr.size() + forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size()
                                               + routeStr.size() + graphSection.xml.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve
                                               + ( cfg.tokenBudget > 0 ? rw::kForFileTailShellReserve : 0u ),
                                           // deep-tail: under an explicit ceiling the tail SHELL's bytes are
@@ -3079,7 +3088,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // ladder rung can only SHRINK the header, so the fit stays conservative and deterministic).
         const FileTail    forFileTailShown = sigsPreRendered ? computeFileTail( ing, lensRank, shownSigIds, flRootArg ) : forFileTail;
         const std::string tailStr = renderForFileTailXml( forFileTailShown, cfg.tokenBudget, bundleBudget,
-                                                           headerStr.size() + sigsStr.size() + legoStr.size() + composeStr.size()
+                                                           headerStr.size() + forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size()
                                                                + routeStr.size() + graphSection.xml.size() + detailSection.xml.size()
                                                                + autoSection.xml.size() + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve );
 
@@ -3113,7 +3122,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             .overCeilingLegend    = kForOverCeilingLegend,
             // F2: everything OUTSIDE the header at the markup rate. enrich.markupBytes is the compact <hops> section,
             // folded in here rather than charged separately — one rate, one rounding (ForEnrichmentPlan).
-            .nonHeaderMarkupBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
+            .nonHeaderMarkupBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
                                   + enrich.markupBytes + tailStr.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
             // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above)
             .bodyTokens           = detailSection.tokens + enrich.bodyTokens,
@@ -3132,7 +3141,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             // §F1: the ladder prices what will actually be EMITTED, so the two sections charged above are in
             // this sum. headerSpliceReserve covers the est_tokens (and weak="1") attributes spliced in below —
             // see its definition for why a reserve rather than a measurement.
-            const std::size_t ladderPayloadBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size()
+            const std::size_t ladderPayloadBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size()
                                                  + detailSection.xml.size() + autoSection.xml.size() + graphSection.xml.size()
                                                  + tailStr.size()                               // deep-tail: the tail is priced like every other section
                                                  + autoAttr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve;   // + "</ctx>" + the header splices below (autoAttr exact-counted; A2's own reserve is exact too)
@@ -3144,7 +3153,7 @@ std::optional<int> runForLens( const MainDispatch& d )
             // cannot see: over_ceiling="1" and its legend clause (70 B), owed whenever est_tokens exceeds
             // budget_tokens. Both halves are BYTES, because the allowance is a byte bound; the exact ceiling below
             // is a token comparison and shares neither sum.
-            const std::size_t emittedNonHeaderBytes = sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + tailStr.size()
+            const std::size_t emittedNonHeaderBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + tailStr.size()
                                                     + detailSection.xml.size() + ( autoSection.isRendered ? autoSection.xml.size() : 0u )
                                                     + graphSection.xml.size() + 6;   // + "</ctx>"
             // The 70 B of over_ceiling="1" + the clause defining it are priced by finishForLensHeader itself, from
@@ -3251,11 +3260,8 @@ std::optional<int> runForLens( const MainDispatch& d )
 
         std::fwrite( headerStr.data(), 1, headerStr.size(), stdout );
         // R2-AF (round 2, S4): first rows inside the root, right after the legend — see forHdrRows above.
-        if( !forHdrRows.empty() )
-        {
-            const std::string forHdrXml = renderForHdrRowsXml( ing, forHdrRows, flRootArg );
-            std::fwrite( forHdrXml.data(), 1, forHdrXml.size(), stdout );
-        }
+        // The SAME string every sum above charged (rendered once, beside forHdrRows) — "" when there is no row.
+        std::fwrite( forHdrXml.data(), 1, forHdrXml.size(), stdout );
         if( sigsPreRendered )
         {
             std::fwrite( sigsStr.data(), 1, sigsStr.size(), stdout );
@@ -3271,39 +3277,24 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             std::fwrite( legoStr.data(), 1, legoStr.size(), stdout );
         }
-        else if( legoStubTotal == 0 )
+        else if( legoStubTotal > 0 )
         {
-            // nothing to emit — matches packLego's own no-op on an empty ifaces set (never a fabricated stub)
-        }
-        else if( sectionsWantLego )
-        {
-            packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg ); // same scope+identity on the degrade path (§P3; un-narrowed — sigs bytes unknown here)
-        }
-        else
-        {
-            // L2 fault-injection fix: the buffered render never ran, so there is no legoStr to stub in
-            // place — the same collapse the happy path applies above, built from legoStubTotal (computed
-            // without rendering) instead of a captured out-param.
-            const std::string legoStub = rw::sectionStubXml( "lego", legoStubTotal, sectionsNextInvocation );
-            std::fwrite( legoStub.data(), 1, legoStub.size(), stdout );
+            // the degrade path: the buffered render never ran, so the section was never measured and
+            // priceSectionStub refused to collapse it (serialize.h, CodeRabbit 4054594306) — streamed WHOLE,
+            // the same bytes --sections=lego would restore. Same scope+identity (§P3; un-narrowed — the sigs
+            // bytes are unknown here). legoStubTotal == 0 emits nothing, packLego's own no-op.
+            ASSUME( !legoWillStub, "runForLens: an unmeasured lego section was marked for collapse" );
+            packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg );
         }
         if( composePreRendered )
         {
             std::fwrite( composeStr.data(), 1, composeStr.size(), stdout );
         }
-        else if( composeStubTotal == 0 )
+        else if( composeStubTotal > 0 )
         {
-            // nothing to emit — matches packCompose's own no-op on no matched edges
-        }
-        else if( sectionsWantCompose )
-        {
+            // the degrade path, as for lego above: unmeasured, so never collapsed — streamed whole.
+            ASSUME( !composeWillStub, "runForLens: an unmeasured compose section was marked for collapse" );
             packCompose( stdout, ing, g.composeEdges, lensSurfaceIds );
-        }
-        else
-        {
-            // L2 fault-injection fix: same collapse as the lego arm above, on the compose degrade path.
-            const std::string composeStub = rw::sectionStubXml( "compose", composeStubTotal, sectionsNextInvocation );
-            std::fwrite( composeStub.data(), 1, composeStub.size(), stdout );
         }
         if( routePreRendered )
         {

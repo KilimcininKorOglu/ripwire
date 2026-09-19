@@ -1251,14 +1251,17 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             {
                 bool sawLego = false, sawCompose = false, sectionsBad = sections.empty();
                 std::string_view rest = sections;
-                while( !rest.empty() )
+                // every segment, the empty one after a trailing comma included — the CLI twin's rule
+                // (cli.h validateSectionsModifier, CodeRabbit 4054594302): `lego,` refuses, never reads as `lego`.
+                for( bool more = !sections.empty(); more; )
                 {
                     const std::size_t comma = rest.find( ',' );
                     const std::string_view tok = comma == std::string_view::npos ? rest : rest.substr( 0, comma );
                     if( tok == "lego" )         { sectionsBad = sectionsBad || sawLego;    sawLego = true; }
                     else if( tok == "compose" ) { sectionsBad = sectionsBad || sawCompose; sawCompose = true; }
                     else                        { sectionsBad = true; }
-                    rest = comma == std::string_view::npos ? std::string_view() : rest.substr( comma + 1 );
+                    more = comma != std::string_view::npos;
+                    rest = more ? rest.substr( comma + 1 ) : std::string_view();
                 }
                 if( sectionsBad )
                 {

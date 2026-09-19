@@ -23,9 +23,11 @@ same-directory, same-stem declaration/implementation partner (a source tries `.h
 lookup by name, not a ranked or graph-derived row: an ambiguous, absent or convention-less named file gets no row
 and no reordering, and a partner the task already names is not repeated. The row's legend clause is present only
 when a row is, and is never dropped by the ceiling ladder. The MCP `for` verb serves the same row from the same
-resolver. `--situ` now prints its decl/def-partner and lexical-sibling blocks before the `[1] blast radius` line
-instead of after it; the lines themselves are unchanged, only their order. Gates: `test/forhdrshapecheck.sh`
-(new), `test/situshapecheck.sh` arm (13).
+resolver. The rows are counted in `est_tokens=`, in `over_ceiling=` and in the `--token-budget` ceiling like every
+other section, and they do not take space from the ranked signatures. `--situ` now prints its decl/def-partner and
+lexical-sibling blocks before the `[1] blast radius` line instead of after it; the lines themselves are unchanged,
+only their order. Gates: `test/forhdrshapecheck.sh` (new), `test/situshapecheck.sh` arm (13),
+`test/estchargecheck.sh` #19.
 
 ### Changed — `--for` collapses a `<lego>`/`<compose>` section to a counted stub when the stub is smaller
 
@@ -34,9 +36,9 @@ A `<lego>` or `<compose>` section in a `--for` answer is now replaced by a count
 it replaces; a small section stays whole. `total=` is the section's own pre-cap row count, and `next=` names the
 new `--sections=lego,compose` flag, which restores both sections byte-identically in one call. The legend clause
 is present only when a section was actually stubbed, in both legend dialects and on the MCP `for` verb
-(`sections` argument; an empty string is refused rather than read as absent). When the in-memory render that
-prices the section is unavailable, the section is stubbed without a price comparison, which is the one
-unpriced case. Gate: `test/forsectioncollapsecheck.sh` (new).
+(`sections` argument). An empty value, a trailing comma or an empty segment (`lego,`) is refused rather than read
+as a shorter list, on both surfaces. When the in-memory render that prices the section is unavailable, the section
+is emitted whole, because nothing shows that the stub would be smaller. Gate: `test/forsectioncollapsecheck.sh` (new).
 
 ### Fixed — a `.ripwire_notes` file that could not be fully read looked the same as no notes file
 

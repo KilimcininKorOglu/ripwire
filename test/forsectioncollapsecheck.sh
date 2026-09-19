@@ -174,6 +174,15 @@ fi
     && ok "(6c) --sections without --for refuses, naming --for" \
     || no "(6c) --sections without --for did not refuse cleanly (exit $rc3): $( cat "$TMP/bad3.err" )"
 
+# (6d)/(6e) CodeRabbit 4054594298 (train 8): an EMPTY segment is a typo too. The parse loop used to stop on
+# "nothing left", so the empty segment after a trailing comma was never read and `lego,` passed as `lego`.
+for badv in 'lego,' 'lego,,compose'; do
+    "$BIN" . --no-cache --for="x" --sections="$badv" >"$TMP/bad4.out" 2>"$TMP/bad4.err"; rc4=$?
+    [ "$rc4" != 0 ] && grep -q 'sections' "$TMP/bad4.err" \
+        && ok "(6d) --sections=$badv (an empty segment) refuses (exit $rc4)" \
+        || no "(6d) --sections=$badv did not refuse (exit $rc4) — an empty segment was read as absent"
+done
+
 # ── (7) well-formed XML on every shape this gate rendered ────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then
     lint=1
@@ -213,16 +222,28 @@ sys.exit(0 if ('<lego total=' in t and '<iface' not in t) or '<lego' not in t el
     grep -q '"error"' "$TMP/mcp_empty.json" && grep -q 'sections' "$TMP/mcp_empty.json" \
         && ok "(8c) MCP for: sections=\"\" (present, empty) refuses — not silently read as absent" \
         || no "(8c) MCP for: sections=\"\" did not refuse — present-but-empty was read as absent: $( cat "$TMP/mcp_empty.json" )"
+
+    # (8d) CodeRabbit 4054594302 (train 8): the MCP twin of (6d) — an empty segment refuses here too.
+    for badv in 'lego,' 'lego,,compose'; do
+        MCPTRAIL='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/legofix","task":"shape interface implementors","sections":"'"$badv"'"}}}'
+        printf '%s\n' "$MCPTRAIL" | "$BIN" --mcp >"$TMP/mcp_trail.json" 2>/dev/null
+        grep -q '"error"' "$TMP/mcp_trail.json" && grep -q 'sections' "$TMP/mcp_trail.json" \
+            && ok "(8d) MCP for: sections=\"$badv\" (an empty segment) refuses" \
+            || no "(8d) MCP for: sections=\"$badv\" did not refuse: $( head -c 300 "$TMP/mcp_trail.json" )"
+    done
 else
     ok "(8) MCP arm skipped (python3 absent)"
 fi
 
-# ── (9) independent review, 2026-09-19: the OPEN_MEMSTREAM DEGRADE PATH must honour --sections= too ──────
-# The buffered stub-substitution above (arms 1-8) only ever runs when legoStr/composeStr were successfully
-# pre-rendered into memory. When that pre-render itself fails (open_memstream degrades — real allocation
-# failure in production, forced here the same way test/estchargecheck.sh's #14 family forces it), the
-# ORIGINAL code streamed the section straight to stdout from packLego/packCompose UNCONDITIONALLY — a
-# silent bypass of the default stub that this arm exists to catch red-first and keep caught.
+# ── (9) the OPEN_MEMSTREAM DEGRADE PATH: an UNMEASURED section is never collapsed ────────────────────
+# History. The independent review of 2026-09-19 found this path streaming the full section regardless of
+# --sections=, and made it collapse UNCONDITIONALLY (round 1's rule) from a row count computed without
+# rendering. CodeRabbit 4054594306 (train 8) found the other half: round 2's rule is "collapse ONLY WHEN
+# CHEAPER", and a section that was never rendered has no size to compare — collapsing it anyway replaced
+# test/hasafix's two-row <compose> (smaller than its own stub + clause, arm 10) with the LARGER stub plus its
+# legend clause, so the section's shape depended on whether an allocation succeeded. rw::priceSectionStub now
+# refuses to collapse without measured bytes, and the degrade path streams the section WHOLE — exactly what
+# --sections= restores. That path already omits est_tokens= and discloses why, so nothing is priced wrong.
 #
 # THE SWITCH EXISTS ONLY ON THE NON-NDEBUG FLAVOUR (serialize.h's own header comment on
 # RIPWIRE_FAULT_CHARGE_BUFFER): on a Release/NDEBUG binary the switch is compiled to constexpr-false and
@@ -234,32 +255,33 @@ fi
 printf 'not a scip index at all\n' > "$TMP/flavour.scip"
 "$BIN" test/fixture --scip="$TMP/flavour.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/flavour.err"
 if grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/flavour.err"; then
-    "$BIN" test/legofix --no-cache --legend=full --for="$LFQ" >"$TMP/fault_stub.xml" 2>"$TMP/fault_stub.err"
     RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/legofix --no-cache --legend=full --for="$LFQ" >"$TMP/fault_stub2.xml" 2>"$TMP/fault_stub2.err"
     if grep -q 'open_memstream failed' "$TMP/fault_stub2.err"; then
-        # NOTE on (9a)/(9d): RIPWIRE_FAULT_CHARGE_BUFFER fails EVERY openChargeStream call in the process
-        # (serialize.h's own header: "one seam for two reasons" — it is deliberately the whole est_tokens
-        # family, not lego/compose alone), so <sigs> ALSO degrades to direct emission under this switch and
-        # the WHOLE document takes a different shape (a different route/serving posture, no est_tokens=,
-        # etc.) — comparing the fault run to the buffered run byte-for-byte would fail for reasons that have
-        # nothing to do with this fix. These arms instead compare just the <lego>/<compose> FRAGMENT (or its
-        # total=), which is the one thing this fix controls and the one thing that must still agree.
-        FAULT_TOTAL="$( grep -o '<lego total="[0-9]*"' "$TMP/fault_stub2.xml" | grep -o '[0-9]*' )"
-        [ "$FAULT_TOTAL" = "3" ] \
-            && ok "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: stub total=\"3\" matches the buffered path's own count" \
-            || no "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: stub total=\"$FAULT_TOTAL\", expected \"3\" (the buffered path's count)"
-        grep -Eq '<lego total="[0-9]+" shown="0" capped="1" next="[^"]*"/>' "$TMP/fault_stub2.xml" \
-            && ok "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: default run still collapses to the counted stub (no bypass)" \
-            || no "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: no stub found on the degrade path — $( grep -o '<lego[^>]*' "$TMP/fault_stub2.xml" | head -1 )"
-        grep -q '<iface\|<impl' "$TMP/fault_stub2.xml" \
-            && no "(9c) RIPWIRE_FAULT_CHARGE_BUFFER=1: full <iface>/<impl> rows leaked past the stub on the degrade path" \
-            || ok "(9c) RIPWIRE_FAULT_CHARGE_BUFFER=1: no full <iface>/<impl> rows on the degrade path"
+        # NOTE: RIPWIRE_FAULT_CHARGE_BUFFER fails EVERY openChargeStream call in the process (serialize.h's own
+        # header: "one seam for two reasons"), so <sigs> ALSO degrades and the WHOLE document takes a different
+        # shape (no est_tokens=, etc.) — these arms compare just the <lego>/<compose> FRAGMENT, the one thing
+        # this rule controls.
+        grep -Eq '<(lego|compose) total="[0-9]+" shown="0"' "$TMP/fault_stub2.xml" \
+            && no "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: an unmeasured section collapsed to a stub — $( grep -Eo '<(lego|compose) total=[^>]*' "$TMP/fault_stub2.xml" | head -1 )" \
+            || ok "(9a) RIPWIRE_FAULT_CHARGE_BUFFER=1: no stub on the degrade path (nothing was measured, so nothing is claimed cheaper)"
+        [ "$( sections "$TMP/fault_stub2.xml" )" = "$( sections "$TMP/lf_restored.xml" )" ] && [ -n "$( sections "$TMP/fault_stub2.xml" )" ] \
+            && ok "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: the default run streams the WHOLE section, byte-identical to the buffered --sections=lego,compose restore" \
+            || no "(9b) RIPWIRE_FAULT_CHARGE_BUFFER=1: the degrade-path <lego>/<compose> fragment differs from the buffered restore"
+        grep -Fq 'lego/compose collapse to a counted stub' "$TMP/fault_stub2.xml" \
+            && no "(9c) RIPWIRE_FAULT_CHARGE_BUFFER=1: the stub legend clause rides a document with no stub" \
+            || ok "(9c) RIPWIRE_FAULT_CHARGE_BUFFER=1: no stub, no stub legend clause"
         RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/legofix --no-cache --legend=full --for="$LFQ" --sections=lego,compose >"$TMP/fault_restored.xml" 2>/dev/null
         [ "$( sections "$TMP/fault_restored.xml" )" = "$( sections "$TMP/lf_restored.xml" )" ] && [ -n "$( sections "$TMP/fault_restored.xml" )" ] \
             && ok "(9d) RIPWIRE_FAULT_CHARGE_BUFFER=1 + --sections=lego,compose: the <lego>/<compose> fragment matches the buffered restore" \
             || no "(9d) RIPWIRE_FAULT_CHARGE_BUFFER=1 + --sections=lego,compose: the <lego>/<compose> fragment differs from the buffered restore"
+        # (9f) the case CodeRabbit named: test/hasafix's <compose> stays WHOLE on the buffered path (arm 10)
+        # because it is smaller than its stub — and must stay whole on the degrade path too.
+        RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/hasafix --no-cache --legend=full --for="member field composition" >"$TMP/fault_hasa.xml" 2>/dev/null
+        grep -Fq '<compose><field' "$TMP/fault_hasa.xml" \
+            && ok "(9f) RIPWIRE_FAULT_CHARGE_BUFFER=1: test/hasafix's small <compose> stays WHOLE, as on the buffered path" \
+            || no "(9f) RIPWIRE_FAULT_CHARGE_BUFFER=1: test/hasafix's <compose> collapsed on the degrade path — $( grep -o '<compose[^>]*' "$TMP/fault_hasa.xml" | head -1 )"
         if command -v xmllint >/dev/null 2>&1; then
-            xmllint --noout "$TMP/fault_stub2.xml" 2>/dev/null && xmllint --noout "$TMP/fault_restored.xml" 2>/dev/null \
+            xmllint --noout "$TMP/fault_stub2.xml" 2>/dev/null && xmllint --noout "$TMP/fault_restored.xml" 2>/dev/null && xmllint --noout "$TMP/fault_hasa.xml" 2>/dev/null \
                 && ok "(9e) degrade-path shapes are well-formed XML" \
                 || no "(9e) degrade-path shapes are malformed XML"
         fi
