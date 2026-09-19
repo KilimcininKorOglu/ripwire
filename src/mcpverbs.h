@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os::open_memstream — the verb response buffers
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 

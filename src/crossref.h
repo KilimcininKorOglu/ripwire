@@ -109,7 +109,7 @@
 #include <string>
 #include <string_view>
 #include <thread>       // the git-spawn pool (fork/exec is the cost, not compute)
-#include <unistd.h>     // getpid / unlink — the blob-batch temp list
+#include "infra/os.h"   // rw::os::getpid / unlink / popen — the blob-batch temp list and its git reader
 #include <utility>
 #include <vector>
 
@@ -493,7 +493,7 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         return;
     }
 
-    const std::string listPath = quality::cacheDirLadder() + "/ripwire-crossref-" + std::to_string( ::getpid() ) + ".shas";
+    const std::string listPath = quality::cacheDirLadder() + "/ripwire-crossref-" + std::to_string( os::getpid() ) + ".shas";
     {
         std::FILE* lf = std::fopen( listPath.c_str(), "wb" );
         if( !lf )
@@ -510,10 +510,10 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
 
     const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " cat-file --batch < " + shSingleQuote( listPath ) + " 2>/dev/null";
-    std::FILE* pipe = popen( cmd.c_str(), "r" );
+    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
-        ::unlink( listPath.c_str() );
+        os::unlink( listPath.c_str() );
         DISCLOSE( st, StreamBlobStats::DisclosureWhy::BatchNotStarted, "crossref: git cat-file --batch failed to start — cross-branch content unavailable" );
         return;
     }
@@ -594,8 +594,8 @@ inline void streamBlobs( const std::string& root, const std::vector<std::string>
         }
     }
 
-    pclose( pipe );
-    ::unlink( listPath.c_str() );
+    os::pclose( pipe );
+    os::unlink( listPath.c_str() );
 }
 
 // The per-sha memo. `want()` registers a sha; `fill()` streams every not-yet-known sha through ONE batch and

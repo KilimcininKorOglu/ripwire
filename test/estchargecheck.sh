@@ -981,10 +981,22 @@ def region( rel, head, close ):
     start = next( ( i for i, l in enumerate( lines ) if re.match( head, l ) ), None )
     end   = next( ( i for i in range( start, len( lines ) ) if lines[i] == close ), None ) if start is not None else None
     return ( start, end )
+def region_oneline( rel, head ):
+    # a self-contained one-line definition ( `{ ... }` on its own line): the region is that single line.
+    lines = texts.get( rel, [] )
+    start = next( ( i for i, l in enumerate( lines ) if re.match( head, l ) ), None )
+    return ( start, start ) if start is not None else ( None, None )
 emit, ser = os.path.join( 'infra', 'emit.h' ), 'serialize.h'
 cls  = region( emit, r'class MemoryStream\b', '};' )
 opnr = region( ser, r'inline std::FILE\* openChargeBuffer\s*\(', '}' )
 strm = region( ser, r'inline std::FILE\* openChargeStream\s*\(', '}' )
+# src/infra/os.h is THE seam (infra/os.h's own header comment): its open_memstream is the ONE place the raw libc
+# call is still spelled bare — every other opener in this tree now goes through os::open_memstream / rw::os::open_memstream
+# (MemoryStream::open and serialize.h's openChargeBuffer both call it that way, so (A) never sees them). That one
+# wrapper definition is exempt by name, not by a widened pattern — a NEW hand-written open_memstream anywhere else,
+# os.h included, still fires.
+osh    = os.path.join( 'infra', 'os.h' )
+osOpen = region_oneline( osh, r'\[\[gnu::always_inline\]\] inline std::FILE\* open_memstream\(' )
 inside = lambda rel, i, r, want: rel == want and r[0] is not None and r[1] is not None and r[0] <= i <= r[1]
 finish = cls[1] is not None and any( re.search( r'\[\[nodiscard\]\]\s*MemoryStreamBytes\s+finish\s*\(', l ) for l in texts[ emit ][ cls[0]:cls[1] ] )
 holders, violations = 0, []
@@ -995,7 +1007,7 @@ for rel, lines in sorted( texts.items() ):
     closes = re.compile( r'\b(?:std::)?(fflush|fclose)\s*\(\s*(' + '|'.join( re.escape( n ) for n in sorted( names ) ) + r')\s*\)' ) if names else None
     for i, l in enumerate( lines ):
         c = code( l )
-        if re.search( r'\bopen_memstream\s*\(', c ) and not inside( rel, i, cls, emit ) and not inside( rel, i, opnr, ser ):
+        if re.search( r'\bopen_memstream\s*\(', c ) and not inside( rel, i, cls, emit ) and not inside( rel, i, opnr, ser ) and not inside( rel, i, osOpen, osh ):
             violations.append( f'{rel}:{i + 1}: (A) open_memstream outside MemoryStream' )
         if re.search( r'\bopenChargeBuffer\s*\(', c ) and not inside( rel, i, opnr, ser ) and not inside( rel, i, strm, ser ):
             violations.append( f'{rel}:{i + 1}: (B) openChargeBuffer called outside openChargeStream' )

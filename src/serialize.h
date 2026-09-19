@@ -4,6 +4,7 @@
 // buffer (no whole-document string), terse schema, every name/path XML-escaped.
 
 #include "infra/emit.h"  // rw::formatTo — snprintf's shape kept (stack buffer, snprintf's return)
+#include "infra/os.h"   // rw::os::open_memstream — the est_tokens charge buffers
 #include <format>          // std::format_to_n — the appendf lambdas append through it directly
 #include "model.h"
 #include "extentsuspect.h"   // extent honesty: extent_suspect= reason spellings (extent::extentSuspectReasons)
@@ -1284,7 +1285,7 @@ inline std::FILE* openChargeBuffer( char** bufOut, std::size_t* sizeOut ) noexce
     {
         return nullptr; // ENOMEM-class, on demand, non-release only
     }
-    return open_memstream( bufOut, sizeOut );
+    return os::open_memstream( bufOut, sizeOut );
 }
 
 // Open a MemoryStream through openChargeBuffer: the one way an est_tokens-family measurement opens its buffer, so the

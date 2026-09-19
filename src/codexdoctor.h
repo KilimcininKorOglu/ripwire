@@ -12,8 +12,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "infra/os.h"   // rw::os::access / stat — the PATH walk and the same-file check
 #include <vector>
 
 namespace rw::codexdoctor
@@ -50,7 +49,7 @@ inline std::string resolveExecutable( std::string_view command )
     if( command.empty() ) { return {}; }
     const auto executable = []( const std::string& path )
     {
-        return ::access( path.c_str(), X_OK ) == 0;
+        return os::access( path.c_str(), X_OK ) == 0;
     };
     if( command.find( '/' ) != std::string_view::npos )
     {
@@ -74,10 +73,10 @@ inline std::string resolveExecutable( std::string_view command )
 inline Check binaryCheck( const std::string& selfPath )
 {
     const std::string active = resolveExecutable( "ripwire" );
-    struct stat selfSt {};
-    struct stat activeSt {};
-    const bool haveSelf = !selfPath.empty() && ::stat( selfPath.c_str(), &selfSt ) == 0;
-    const bool haveActive = !active.empty() && ::stat( active.c_str(), &activeSt ) == 0;
+    os::stat_t selfSt {};
+    os::stat_t activeSt {};
+    const bool haveSelf = !selfPath.empty() && os::stat( selfPath.c_str(), &selfSt ) == 0;
+    const bool haveActive = !active.empty() && os::stat( active.c_str(), &activeSt ) == 0;
     const bool same = haveSelf && haveActive && selfSt.st_dev == activeSt.st_dev && selfSt.st_ino == activeSt.st_ino;
     const bool copied = haveSelf && haveActive && selfSt.st_mtime == activeSt.st_mtime && selfSt.st_size == activeSt.st_size;
     // `copied` is a HEURISTIC pass (mtime+size equality, the cp -p install shape) — it cannot prove byte

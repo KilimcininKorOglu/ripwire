@@ -30,7 +30,7 @@
 #include <string>
 #include <cstdlib>         // ::realpath — the workspace-pin canonicalization (mcpCanonRoot)
 #include <climits>         // PATH_MAX
-#include <unistd.h>        // ::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
+#include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
 
 namespace rw
 {
@@ -344,7 +344,7 @@ struct McpDispatchPolicy
 inline std::string mcpCanonRoot( const std::string& root )
 {
     char buf[ PATH_MAX ];
-    if( ::realpath( root.c_str(), buf ) )
+    if( os::realpath( root.c_str(), buf ) )
     {
         return std::string( buf );
     }
@@ -358,7 +358,7 @@ inline std::string mcpCanonRoot( const std::string& root )
 inline std::string mcpResolveAssumedRoot()
 {
     char cwdBuf[ PATH_MAX ];
-    if( ::getcwd( cwdBuf, sizeof( cwdBuf ) ) == nullptr )
+    if( os::getcwd( cwdBuf, sizeof( cwdBuf ) ) == nullptr )
     {
         return {};
     }

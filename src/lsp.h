@@ -33,20 +33,19 @@
 // UTF-16 columns, TCP transport, multi-root workspaceFolders, $/progress, reference end-byte persistence,
 // BM25 workspace ranking. Each has a stated reason in docs/LSP.md; do not "helpfully" add one here.
 
+#include "infra/os.h"        // rw::os::realpath / getcwd / stat — the root-is-a-directory check at initialize, the launch-cwd base for relative index paths
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <limits.h>          // PATH_MAX — lspReal's realpath buffer, ::getcwd's buffer
+#include <limits.h>          // PATH_MAX — lspReal's realpath buffer, os::getcwd's buffer
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <sys/stat.h>        // ::stat — the root-is-a-directory check at initialize
 #include <utility>
 #include <vector>
-#include <unistd.h>          // ::getcwd — the launch-cwd base for relative index paths
 
 namespace
 {
@@ -208,7 +207,7 @@ inline std::string lspCwdAbsolute( const std::string& cwd, std::string_view p )
 inline std::string lspReal( const std::string& p )
 {
     char buf[ PATH_MAX ];
-    return ::realpath( p.c_str(), buf ) ? std::string( buf ) : std::string();
+    return rw::os::realpath( p.c_str(), buf ) ? std::string( buf ) : std::string();
 }
 
 
@@ -881,7 +880,7 @@ inline std::string lspHover( const rw::IngestResult& ing, const rw::Graph& g, co
 inline std::string lspStartupCwd()
 {
     char buf[ PATH_MAX ];
-    if( ::getcwd( buf, sizeof( buf ) ) ) return std::string( buf );
+    if( rw::os::getcwd( buf, sizeof( buf ) ) ) return std::string( buf );
     return {};
 }
 
@@ -940,8 +939,8 @@ inline int runLsp( const std::string& cliRoot )
                 if( cand.empty() ) cand = cliRoot;
                 if( cand.empty() ) cand = rw::mcpResolveAssumedRoot();
                 const std::string canon = cand.empty() ? std::string() : rw::mcpCanonRoot( cand );
-                struct stat       st;
-                if( canon.empty() || ::stat( canon.c_str(), &st ) != 0 || !S_ISDIR( st.st_mode ) )
+                rw::os::stat_t    st;
+                if( canon.empty() || rw::os::stat( canon.c_str(), &st ) != 0 || !S_ISDIR( st.st_mode ) )
                 {
                     respond( -32002, "ripwire --lsp: no readable workspace root (initialize.rootUri, the command-line root, or the launch cwd)" );
                 }

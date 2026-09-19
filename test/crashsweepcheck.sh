@@ -190,9 +190,17 @@ with open(os.path.join(OUT, "s1.tsv"), "w") as out:
             out.write("%s\t%s\t%s\t%d\n" % (f, fn, unbounded[0], ln))
 
 # ── S2: raw stream/descriptor acquisitions, and a close hidden behind a short-circuit ────────────────────────
-OPENERS = "^(std::|::)?(fopen|open|fdopen|openat|opendir|open_memstream|popen)$"
+# src/infra/os.h is THE seam (see its own header comment): every call site elsewhere now spells these openers
+# os::X or rw::os::X, so the regex accepts that prefix too — a call keeps the same registry row (file, fn, opener
+# name) whichever spelling it uses, via the kind.split("::")[-1] normalisation below. os.h's OWN wrapper
+# DEFINITIONS are the one place the bare libc call still appears; that is the seam working as designed, not an
+# unregistered site, so this one file is exempt by name (not by widening the pattern that finds sites elsewhere).
+OS_SEAM_HEADER = "infra/os.h"
+OPENERS = "^(std::|::|os::|rw::os::)?(fopen|open|fdopen|openat|opendir|open_memstream|popen)$"
 sites = Counter()
 for f, ln, fn, kind, _call in pairs(match('(call_expression function: [(identifier) @f (qualified_identifier) @f] (#match? @f "%s")) @call' % OPENERS)):
+    if f == OS_SEAM_HEADER:
+        continue
     sites[(f, fn, kind.split("::")[-1])] += 1
 # An acquisition handed straight to an owner type needs no registry row: `OwnedFd fd( ::open( … ) )`,
 # `OwnedFile fp( ::fdopen( … ) )`, `return OwnedFile( std::fopen( … ) )`. The owner's destructor closes on every path.
@@ -203,6 +211,8 @@ for shape in ('(declaration type: [(type_identifier) (qualified_identifier)] @_t
               '(call_expression function: [(identifier) (qualified_identifier)] @_t arguments: (argument_list . '
               '(call_expression function: [(identifier) (qualified_identifier)] @f)) (#match? @_t "%s") (#match? @f "%s"))'):
     for f, ln, fn, _owner, kind in pairs(match(shape % (OWNERS, OPENERS))):
+        if f == OS_SEAM_HEADER:
+            continue
         owned[(f, fn, kind.split("::")[-1])] += 1
 for key, n in owned.items():
     sites[key] -= n
@@ -332,7 +342,6 @@ serialize.h	renderWholeFiles	fopen	1	closes	returns only on a failed open; fclos
 verbs_change.h	readBriefFile	fopen	1	closes	continue-only loop; fclose before the return
 verbs_change.h	readTraceText	fopen	1	closes	returns only on a failed open; fclose after the read loop
 verbs_change.h	runChangeViews	fopen	1	closes	returns only on a failed open; fclose after the write
-verbs_change.h	runCommandCapture	open	1	closes	in the forked child: dup2 onto stdin, close, then exec or _exit
 verbs_doctor.h	doctorSameFileBytes	fopen	2	closes	break-only loop; each stream is fclosed on every path
 verbs_doctor.h	runDoctor	fopen	1	closes	if-scoped fputs then fclose
 verbs_lint.h	lintSymbolLevelChecks	fopen	1	closes	if-scoped; fclose after the sized read
@@ -442,6 +451,12 @@ inline void probeOwnedDescriptor( const char* path )
 {
     const OwnedFd fd( ::open( path, 0 ) );   // handed straight to an owner: S2 must not count it
 }
+namespace os { std::FILE* fopen( const char* path, const char* mode ); }   // stands in for rw::os::fopen
+inline void probeOsSpelling( const char* path )
+{
+    std::FILE* fp = os::fopen( path, "rb" );   // os::-spelled site, unregistered: S2 must still catch it
+    (void)fp;
+}
 inline void probeThreads()
 {
     std::vector<std::thread> pool;
@@ -464,6 +479,9 @@ else
     grep -q 'probeOwnedDescriptor' "$TMP/probe_verdict.txt" \
         && { no "S2 probe: an open handed straight to OwnedFd was counted as raw"; cat "$TMP/probe_verdict.txt"; } \
         || ok "S2 probe: an open handed straight to an owner type (OwnedFd) is not counted"
+    grep -q 'S2	probe_reader.h probeOsSpelling: 1 raw fopen' "$TMP/probe_verdict.txt" \
+        && ok "S2 probe: an os::-spelled unregistered site still fires (the seam's own spelling is not a free pass)" \
+        || { no "S2 probe: an os::-spelled unregistered site did not fire"; cat "$TMP/probe_verdict.txt"; }
     [ "$( grep -c '^S3' "$TMP/probe_verdict.txt" )" -eq 1 ] \
         && ok "S3 probe: the bare thread body fires and its noexcept twin does not" \
         || { no "S3 probe: expected exactly one bare thread body"; cat "$TMP/probe_verdict.txt"; }

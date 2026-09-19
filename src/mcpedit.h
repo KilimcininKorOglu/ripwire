@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/os.h"   // rw::os — the edit lockfile (open/flock/close), the atomic write (open/write/fchmod/fsync/rename/unlink), realpath/getcwd
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -271,8 +272,8 @@ namespace mcpedit
                 return;
             }
             char buf[ PATH_MAX ];
-            hint = ::realpath( pathHint.c_str(), buf ) != nullptr ? std::string( buf ) : pathHint;
-            cwd  = ::getcwd( buf, sizeof( buf ) ) != nullptr ? std::string( buf ) : std::string();
+            hint = os::realpath( pathHint.c_str(), buf ) != nullptr ? std::string( buf ) : pathHint;
+            cwd  = os::getcwd( buf, sizeof( buf ) ) != nullptr ? std::string( buf ) : std::string();
         }
 
         bool matches( const IngestResult& ing, std::uint32_t fileId ) const
@@ -634,8 +635,8 @@ namespace mcpedit
         char name[ 64 ];
         rw::formatTo( name, sizeof( name ), "ripwire-edit-{:016x}.lock", (unsigned long long)h );
         const std::string lockDir = quality::cacheDirLadder() + "/locks";
-        ::mkdir( lockDir.c_str(), 0700 );
-        ::chmod( lockDir.c_str(), 0700 );
+        os::mkdir( lockDir.c_str(), 0700 );
+        os::chmod( lockDir.c_str(), 0700 );
         return quality::resolveCacheBlobPath( lockDir, name );
     }
 
@@ -657,7 +658,7 @@ namespace mcpedit
         explicit EditLock( const std::string& targetPath )
         {
             const std::string lockPath = editLockPath( targetPath );
-            fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
+            fd = os::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
             if( fd < 0 )
             {
                 DISCLOSE( Diagnostics::answerUnchanged, "the edit re-checks the file before its rename, which still refuses a stale write",
@@ -669,13 +670,13 @@ namespace mcpedit
             // the freshness re-check before rename is the correctness floor, the lock is only the fast path.
             for( int attempt = 0; attempt < 20; ++attempt )
             {
-                if( ::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
+                if( os::flock( fd, LOCK_EX | LOCK_NB ) == 0 ) { locked = true; break; }
                 if( errno != EWOULDBLOCK )
                 {
                     break;
                 }
                 struct timespec ts{ 0, 10 * 1000 * 1000 };   // 10 ms
-                ::nanosleep( &ts, nullptr );
+                os::nanosleep( &ts, nullptr );
             }
             if( !locked )
             {
@@ -690,9 +691,9 @@ namespace mcpedit
             {
                 if( locked )
                 {
-                    ::flock( fd, LOCK_UN );
+                    os::flock( fd, LOCK_UN );
                 }
-                ::close( fd );
+                os::close( fd );
             }
         }
 
@@ -716,8 +717,8 @@ namespace mcpedit
     inline bool atomicWrite( const std::string& path, const std::string& bytes )
     {
         // capture the original's mode (if it exists) so we can restore it onto the fresh temp inode.
-        struct stat orig{};
-        const bool  haveOrig = ( ::stat( path.c_str(), &orig ) == 0 );
+        os::stat_t orig{};
+        const bool  haveOrig = ( os::stat( path.c_str(), &orig ) == 0 );
 
         // The temp is created EXCLUSIVELY, without following a link, under an unpredictable name beside the
         // target (rw::pathguard round 5): the create refuses an existing entry at the temp name, so this
@@ -741,14 +742,14 @@ namespace mcpedit
         // (no original) keeps the umask default. fchmod failure is non-fatal — degrade to the default mode.
         if( haveOrig )
         {
-            if( ::fchmod( fd, orig.st_mode & 07777 ) != 0 )
+            if( os::fchmod( fd, orig.st_mode & 07777 ) != 0 )
             {
                 DISCLOSE( "atomicWrite: could not restore original file mode; wrote with default mode" );
             }
         }
 
         // A3-F7: fsync the data to disk BEFORE the atomic rename so a crash can't leave a renamed-but-empty file.
-        if( ::fsync( fd ) != 0 )
+        if( os::fsync( fd ) != 0 )
         {
             DISCLOSE( "atomicWrite: fsync failed; proceeding (bytes may not be durable across a crash)" );
         }

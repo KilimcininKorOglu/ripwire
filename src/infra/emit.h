@@ -22,6 +22,7 @@
 // copy would be a G3 regression.
 
 #include "Diagnostics.h"   // DISCLOSE — renderToString's open_memstream degrade, below
+#include "os.h"            // rw::os::open_memstream — the MemoryStream buffer
 
 #include <cstddef>
 #include <cstdint>        // std::uint8_t — Rendered::DisclosureWhy
@@ -304,7 +305,7 @@ public:
         std::free( m_buf );
     }
 
-    [[nodiscard]] std::FILE* open() noexcept { return openWith( []( char** buf, std::size_t* size ) noexcept { return open_memstream( buf, size ); } ); }
+    [[nodiscard]] std::FILE* open() noexcept { return openWith( []( char** buf, std::size_t* size ) noexcept { return os::open_memstream( buf, size ); } ); }
 
     template<class Opener>
     [[nodiscard]] std::FILE* openWith( Opener&& opener ) noexcept

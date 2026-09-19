@@ -33,12 +33,7 @@
 #include <cerrno>
 #include <chrono>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <sys/time.h>       // struct timeval — SO_RCVTIMEO (slow-loris guard)
+#include "infra/os.h"      // rw::os — socket/bind/listen/accept/recv/send/setsockopt; struct timeval for SO_RCVTIMEO (slow-loris guard)
 
 namespace rw
 {
@@ -115,19 +110,14 @@ inline std::string_view trim( std::string_view s ) noexcept
 // A peer that closed or reset its socket fails the write with EPIPE/ECONNRESET — an ordinary client disconnect, which
 // must never raise SIGPIPE: its default action ends the process, so ONE client that stopped reading took the listener
 // down for every client after it. The suppression is per socket, never process-wide, so the CLI's stdout keeps its
-// ordinary closed-pipe behaviour: MSG_NOSIGNAL on each send where the platform defines it (Linux), SO_NOSIGPIPE on each
-// accepted socket where that exists (macOS; see the accept loop). A platform with both gets both.
+// ordinary closed-pipe behaviour: MSG_NOSIGNAL on each send, and os::setsockopt_nosigpipe on each accepted socket
+// (see the accept loop).
 inline bool sendAll( int fd, const std::string& data ) noexcept
 {
-#ifdef MSG_NOSIGNAL
-    const int sendFlags = MSG_NOSIGNAL;
-#else
-    const int sendFlags = 0;
-#endif
     std::size_t sent = 0;
     while( sent < data.size() )
     {
-        const ssize_t n = ::send( fd, data.data() + sent, data.size() - sent, sendFlags );
+        const os::ssize_t n = os::send( fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL );
         if( n <= 0 )
         {
             return false;
@@ -206,7 +196,7 @@ inline Request readRequest( int fd, bool& tooManyHeaderBytes, bool& tooLargeBody
             break;
         }
         if( buf.size() > kMaxHeaderBytes ) { tooManyHeaderBytes = true; return req; }   // → 431
-        const ssize_t n = ::recv( fd, tmp, sizeof( tmp ), 0 );
+        const os::ssize_t n = os::recv( fd, tmp, sizeof( tmp ), 0 );
         if( n <= 0 )
         {
             return req; // EOF or SO_RCVTIMEO fired mid-headers (slow-loris) → drop, ok stays false but caller only 400s a *complete* malformed request; a stalled read just closes
@@ -324,7 +314,7 @@ inline Request readRequest( int fd, bool& tooManyHeaderBytes, bool& tooLargeBody
     req.body = buf.substr( bodyStart );
     while( req.body.size() < req.contentLength )
     {
-        const ssize_t n = ::recv( fd, tmp, sizeof( tmp ), 0 );
+        const os::ssize_t n = os::recv( fd, tmp, sizeof( tmp ), 0 );
         if( n <= 0 )
         {
             return req; // truncated body (stall/EOF) — ok stays false; caller 400s a request we couldn't complete
@@ -520,31 +510,31 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
                               && !gitRepoToplevel( pinnedRoot ).empty();
 
     // ── 4) open the listening socket ───────────────────────────────────────────────────────────────────
-    const int listenFd = ::socket( AF_INET, SOCK_STREAM, 0 );
+    const int listenFd = os::socket( AF_INET, SOCK_STREAM, 0 );
     if( listenFd < 0 ) { rw::emitTo( stderr, "ripwire: --listen: socket() failed: {}\n", std::strerror( errno ) ); return 1; }
     int one = 1;
-    ::setsockopt( listenFd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof( one ) );
+    os::setsockopt( listenFd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof( one ) );
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons( static_cast<uint16_t>( port ) );
     const std::string bindHost = ( host == "localhost" ) ? std::string( "127.0.0.1" ) : host;
-    if( ::inet_pton( AF_INET, bindHost.c_str(), &addr.sin_addr ) != 1 )
+    if( os::inet_pton( AF_INET, bindHost.c_str(), &addr.sin_addr ) != 1 )
     {
         rw::emitTo( stderr, "ripwire: --listen: '{}' is not a valid IPv4 bind address (IPv6 is not supported; reverse-proxy for that)\n", host.c_str() );
-        ::close( listenFd );
+        os::close( listenFd );
         return 1;
     }
-    if( ::bind( listenFd, reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) != 0 )
+    if( os::bind( listenFd, reinterpret_cast<sockaddr*>( &addr ), sizeof( addr ) ) != 0 )
     {
         rw::emitTo( stderr, "ripwire: --listen: bind {}:{} failed: {}\n", host.c_str(), port, std::strerror( errno ) );
-        ::close( listenFd );
+        os::close( listenFd );
         return 1;
     }
-    if( ::listen( listenFd, 16 ) != 0 )
+    if( os::listen( listenFd, 16 ) != 0 )
     {
         rw::emitTo( stderr, "ripwire: --listen: listen() failed: {}\n", std::strerror( errno ) );
-        ::close( listenFd );
+        os::close( listenFd );
         return 1;
     }
 
@@ -581,7 +571,7 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
     // ── 6) accept loop: single-threaded, one request per connection (Connection: close) — §2b serialize ─
     for( ;; )
     {
-        const int fd = ::accept( listenFd, nullptr, nullptr );
+        const int fd = os::accept( listenFd, nullptr, nullptr );
         if( fd < 0 )
         {
             if( errno == EINTR )
@@ -594,13 +584,11 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
         // slow-loris guard: a client that opens a connection and dribbles (or stalls) must not wedge the
         // single-threaded loop. SO_RCVTIMEO makes recv() return after kRecvTimeoutSec → readRequest drops it.
         timeval tv{ kRecvTimeoutSec, 0 };
-        ::setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
-        ::setsockopt( fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof( one ) );
-#ifdef SO_NOSIGPIPE
+        os::setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
+        os::setsockopt( fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof( one ) );
         // a client that drops mid-response costs only its own connection: a send() to a peer that is gone fails with EPIPE
-        // instead of raising SIGPIPE (macOS's per-socket switch; sendAll passes MSG_NOSIGNAL where the platform has that).
-        ::setsockopt( fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof( one ) );
-#endif
+        // instead of raising SIGPIPE (the per-socket switch; sendAll also passes MSG_NOSIGNAL on each send).
+        os::setsockopt_nosigpipe( fd, &one, sizeof( one ) );
 
         bool          tooManyHeaderBytes = false, tooLargeBody = false;
         const Request req = readRequest( fd, tooManyHeaderBytes, tooLargeBody );
@@ -687,11 +675,11 @@ inline int runMcpHttp( const McpHttpConfig& cfg )
             }
         }
 
-        ::close( fd );
+        os::close( fd );
     }
 
     // unreachable (the accept loop runs until the process is signalled) — kept for symmetry / future signal handling.
-    ::close( listenFd );
+    os::close( listenFd );
     return 0;
 }
 

@@ -1404,7 +1404,7 @@ struct ReadFd
     ReadFd( const ReadFd& )            = delete;
     ReadFd& operator=( const ReadFd& ) = delete;
     ReadFd( ReadFd&& other ) noexcept : fd( other.fd ) { other.fd = -1; }
-    ~ReadFd() { if( fd >= 0 ) { ::close( fd ); } }
+    ~ReadFd() { if( fd >= 0 ) { os::close( fd ); } }
 
     // openOnce, not a move-assignment: the only mutation this type needs is "fill an empty guard", and
     // a move-assign operator here would be a byte-for-byte clone of ingest_sidecap.h's TreeGuard one
@@ -1412,7 +1412,7 @@ struct ReadFd
     bool openOnce( const std::string& path ) noexcept
     {
         ASSUME( fd < 0 );
-        fd = ::open( path.c_str(), O_RDONLY | O_CLOEXEC );
+        fd = os::open( path.c_str(), O_RDONLY | O_CLOEXEC );
         return fd >= 0;
     }
     bool valid() const noexcept { return fd >= 0; }
@@ -1478,7 +1478,7 @@ inline bool preadExact( int fd, void* dst, std::size_t n, std::uint64_t off ) no
     char* out = static_cast<char*>( dst );
     while( n > 0 )
     {
-        const ssize_t got = ::pread( fd, out, n, ::off_t( off ) );
+        const os::ssize_t got = os::pread( fd, out, n, os::off_t( off ) );
         if( got <= 0 )
         {
             return false;
@@ -1511,8 +1511,8 @@ inline CacheFrame openCacheFrame( const std::string& path, bool captureValueUses
         return frame;
     }
 
-    struct stat st;
-    if( ::fstat( frame.blob.fd, &st ) != 0 || !S_ISREG( st.st_mode ) )
+    os::stat_t st;
+    if( os::fstat( frame.blob.fd, &st ) != 0 || !S_ISREG( st.st_mode ) )
     {
         frame.reason = CacheReject::NotRegular;
         return frame;
@@ -2788,13 +2788,13 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
     // it on every early return below; fdopen adopts the descriptor so fwrite/fclose keep their bookkeeping.
     rw::pathguard::ExclTempFile temp  = rw::pathguard::createExclTempFile( path + ".", ".tmp", 0666 );
     const int                   rawFd = temp.ok() ? temp.releaseFd() : -1;
-    std::FILE*                  fp    = rawFd >= 0 ? ::fdopen( rawFd, "wb" ) : nullptr;
+    std::FILE*                  fp    = rawFd >= 0 ? os::fdopen( rawFd, "wb" ) : nullptr;
     if( !fp )
     {
         const int openErr = errno;
         if( rawFd >= 0 )
         {
-            ::close( rawFd );   // fdopen did not adopt the descriptor; the holder still removes the temp name
+            os::close( rawFd );   // fdopen did not adopt the descriptor; the holder still removes the temp name
         }
         DISCLOSE( Diagnostics::answerUnchanged, "this answer is already computed in memory: only the next run starts cold",
                   "ingest: saveCache could not open temp file for write — cache left unchanged" );

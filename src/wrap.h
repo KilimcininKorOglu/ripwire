@@ -13,7 +13,7 @@
 // CRITICAL → stderr warning + return 1 (unless --force in argv). WARN → print + continue.
 
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
-#include <unistd.h>   // wrapCommandToken (2026-09-06); ::access — wrapScanSkillDir names a skills folder it cannot enter
+#include "infra/os.h"  // rw::os::access — wrapCommandToken (2026-09-06); wrapScanSkillDir names a skills folder it cannot enter
 #include <algorithm>
 #include <cerrno>
 #include <cstring>    // std::strerror — the unreadable-folder WARN
@@ -357,7 +357,7 @@ inline std::string wrapCommandToken( const std::string_view executablePath )
         }
         std::error_code ec;
         const fs::path  candidate = fs::path( std::string( dir ) ) / "ripwire";
-        if( fs::is_regular_file( candidate, ec ) && !ec && ::access( candidate.c_str(), X_OK ) == 0 )
+        if( fs::is_regular_file( candidate, ec ) && !ec && os::access( candidate.c_str(), X_OK ) == 0 )
         {
             return "ripwire";
         }
@@ -513,7 +513,7 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
     for( ; !ec && it != end; it.increment( ec ) )
     {
         std::error_code entryEc;
-        if( it->is_directory( entryEc ) && !entryEc && ::access( it->path().c_str(), R_OK | X_OK ) != 0 )
+        if( it->is_directory( entryEc ) && !entryEc && os::access( it->path().c_str(), R_OK | X_OK ) != 0 )
         {
             rw::emitTo( stderr, "ripwire wrap: WARN — cannot read skills folder {} ({}); the skills inside it were not scanned\n",
                         it->path().string(), std::strerror( errno ) );

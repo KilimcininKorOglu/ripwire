@@ -213,7 +213,8 @@ scip_read_mechanism(){
         no "F mechanism (m1): expected exactly one ::open carrying O_NONBLOCK in scipReadFile, found $openLines: $( grep -E 'open\(' "$code" | tr -s ' ' | head -c 200 )"
     fi
 
-    fdVar="$( sed -n -E 's/.*[^A-Za-z0-9_]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*::open\(.*/\1/p' "$code" | head -1 )"
+    # the open is spelled os::open since src/infra/os.h took the POSIX calls; `::open(` is a substring of both spellings
+    fdVar="$( sed -n -E 's/.*[^A-Za-z0-9_]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(os)?::open\(.*/\1/p' "$code" | head -1 )"
     regLine="$( grep -n 'S_ISREG' "$code" | head -1 | cut -d: -f1 )"
     readLine="$( grep -n -E 'fdopen\(|fread\(|::read\(' "$code" | head -1 | cut -d: -f1 )"
     if [ -n "$fdVar" ] && grep -q -E "::fstat\([[:space:]]*$fdVar[[:space:]]*," "$code" \
