@@ -114,14 +114,20 @@ cp -R "$REALCORPUS" "$CORPUS"
 # resize is deliberately kept (the brief names it the HONEST COUNTER-CASE: hits genuinely are code in
 # distinct symbols, few duplicates to fold) — a real median, not a cherry-picked one. langOfPathh (zero-hit)
 # belongs to G4's own gate, not here — a zero-hit answer has no "payload" to compare bytes on.
-QUERIES_CAPPED=(stale cache buffer resize DEGRADED_PATH_ALERT)
+QUERIES_CAPPED=(stale cache buffer resize DISCLOSE)
 
 # ── frozen fixture queries, UNCAPPED set (instrument fix 3) — every one of these resolves to fewer than the
 # 100-row default, so shown == hits and the answer is COMPLETE. Chosen as durable internal identifiers
 # spanning ~8 to ~64 hits, which is where the fixed legend cost is a large fraction of the payload. If a
 # rename ever takes one of these to zero hits its own guard fails loudly rather than quietly shrinking n.
-QUERIES_UNCAPPED=(appendCdataSafe truncateUtf8WithEllipsis kParserVer pageWindow PageWindow McpPageArgs
-                  GrepHit GrepRawHit lineStarts diskPath crawlSkips xmllint)
+# HEADROOM (#281's CI): a term must also stay at most UNCAPPED_HEADROOM hits, well under the 100-row cap, and
+# must not be one that every release notes or pins. kParserVer was: each parser bump adds note lines under
+# `--grep-in=any`, and train 3 took it to 107, capped. pageWindow and diskPath sat at 99, PageWindow at 80 and
+# crawlSkips at 75 on the same tree. All five were swapped for identifiers whose count held between main a5ce95e2
+# and train 3 (resolveAtSeed 21, langOfPath 31, RankedGraph 12, BindSite 19, findByField 10).
+UNCAPPED_HEADROOM=70
+QUERIES_UNCAPPED=(appendCdataSafe truncateUtf8WithEllipsis resolveAtSeed langOfPath RankedGraph McpPageArgs
+                  GrepHit GrepRawHit lineStarts BindSite findByField xmllint)
 
 # ── presence guards (CONTRIBUTING.md §2: a gate that cannot observe what it asserts is green for the
 #    wrong reason) — before trusting a byte count, prove the feature that is supposed to produce it fired ──
@@ -168,6 +174,8 @@ measure_set(){
         hits="$(  printf '%s' "$xml" | sed 's|^.*-->||' | "$GREP" -o ' hits="[0-9]*"'  | head -1 | tr -dc '0-9' )"
         if [ "$expect_capped" = no ] && [ "${shown:-0}" != "${hits:-1}" ]; then
             no "[$label] $q: expected an UNCAPPED answer but shown=$shown != hits=$hits — this query has outgrown the regime the set exists to measure"
+        elif [ "$expect_capped" = no ] && [ "${hits:-0}" -gt "$UNCAPPED_HEADROOM" ]; then
+            no "[$label] $q: hits=$hits is past the $UNCAPPED_HEADROOM-hit headroom — still uncapped, but one release of drift from the cap; swap it for a steadier identifier now"
         fi
         if [ "$expect_capped" = yes ] && [ "${shown:-0}" = "${hits:-0}" ]; then
             no "[$label] $q: expected a CAPPED answer but shown=$shown == hits=$hits — the capped set no longer measures the capped regime"

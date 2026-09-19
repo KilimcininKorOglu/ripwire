@@ -12,10 +12,13 @@ each rejection can be named instead of guessed:
   REF side  a SCIP *reference* occurrence whose symbol has a matched def is a covered call site iff
             ripwire holds a reference on EXACTLY that (file, line) — any role — inside a body, and the
             enclosing symbol is not the target itself.
-The census (`--pin-census`, format v2) carries what this needs and the map does not: `S` rows (every
+The census (`--pin-census`, format v3) carries what this needs and the map does not: `S` rows (every
 symbol with its def line), `C` rows (every DECIDED call site with its call-site line), `O` rows (the
-overlay's covered sites, under --scip). The SCIP index is read by a stdlib protobuf walk — no
-`google.protobuf` dependency, same as test/scipfix/make_index.py on the writing side.
+overlay's covered sites, under --scip). Its ids and callee names arrive ESCAPED (v3: a template scope
+spanning lines, a TAB, CR or `|` would otherwise split a row), and parse_census decodes them, because
+this harness reads files by an id's path and compares an id's name with SCIP descriptors. The SCIP
+index is read by a stdlib protobuf walk — no `google.protobuf` dependency, same as
+test/scipfix/make_index.py on the writing side.
 
 WHAT IS REPORTED (every figure with its n; nothing here is a precision number)
   1. DEF side, per SCIP descriptor class (method `().`, type `#`, term `.`, parameter `(x)`, local,
@@ -165,6 +168,16 @@ def run_census( binp, repo, out, extra ):
     return out, ( note[ 0 ] if note else "" )
 
 
+_CENSUS_ESCAPE = re.compile( r"\\(?:x([0-9a-f]{2})|(.))" )
+
+
+def census_field( text ):
+    """Undo the census v3 field escape (src/pincensus.h appendCensusField): \\\\ \\t \\n \\r \\xHH.
+    Call it AFTER splitting on TAB and `|`, never before — the escape exists so those splits stay exact."""
+    return _CENSUS_ESCAPE.sub( lambda m: chr( int( m.group( 1 ), 16 ) ) if m.group( 1 ) is not None
+                               else { "\\": "\\", "t": "\t", "n": "\n", "r": "\r" }[ m.group( 2 ) ], text )
+
+
 def id_path( cid ):
     """`path::scope::name#N` -> path (the first `::` ends the path segment; paths hold no `::`)."""
     return cid.split( "::", 1 )[ 0 ]
@@ -185,12 +198,12 @@ def parse_census( path ):
                 continue
             p = line.rstrip( "\n" ).split( "\t" )
             if p[ 0 ] == "S" and len( p ) >= 4:
-                syms.append( ( p[ 1 ], p[ 2 ], int( p[ 3 ] ) ) )
+                syms.append( ( census_field( p[ 1 ] ), p[ 2 ], int( p[ 3 ] ) ) )
             elif p[ 0 ] == "C" and len( p ) >= 9:
-                calls.append( { "mech": p[ 1 ], "caller": p[ 5 ], "callee": p[ 6 ],
-                                "targets": [ t for t in p[ 7 ].split( "|" ) if t ], "line": int( p[ 8 ] ) } )
+                calls.append( { "mech": p[ 1 ], "caller": census_field( p[ 5 ] ), "callee": census_field( p[ 6 ] ),
+                                "targets": [ census_field( t ) for t in p[ 7 ].split( "|" ) if t ], "line": int( p[ 8 ] ) } )
             elif p[ 0 ] == "O" and len( p ) >= 4:
-                oracle.add( ( p[ 1 ], p[ 2 ] ) )
+                oracle.add( ( census_field( p[ 1 ] ), census_field( p[ 2 ] ) ) )
     return syms, calls, oracle
 
 

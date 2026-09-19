@@ -11,7 +11,7 @@
 // best score of any symbol it holds (the markdown file-node, which indexes the whole body, dominates). The
 // graph half ([[links]]/PageRank) is intentionally NOT fused — the eval showed importance ≠ relatedness.
 
-#include "infra/Diagnostics.h" // VERIFY_NO_ALIAS_BUF — waterFillRecallShares reads demand[] while writing alloc[]
+#include "infra/Diagnostics.h" // ASSUME_NO_ALIAS_BUF — waterFillRecallShares reads demand[] while writing alloc[]
 #include "docparse.h"    // §P2b: the generated-document signals (marker / size+fences) + the ONE markdown
                          //       fence scanner — a doc-side property, computed from the file's own bytes
 #include "layout.h"      // §L4.3: layout::lineOf — the ONE byte-offset-to-line-number helper (reused, not
@@ -1445,13 +1445,13 @@ inline std::pair<std::string, std::string> composeRecallUnits( const RecallSecti
 // §RP4 — the note for the WHOLE selection: what `overhead` is charged at LOAD, and what EMIT prints
 // unchanged whenever the budget does not bind. It goes through the SAME assembler EMIT uses, over an
 // all-admitted mask, so the full lines= list cannot drift from a trimmed one by being written twice —
-// and the VERIFY states the byte-identity invariant the twelve standing recall gates rest on, at the
+// and the ASSUME states the byte-identity invariant the twelve standing recall gates rest on, at the
 // one seam where it could break.
 inline std::string fullRecallSectionNote( const RecallSectionBody& sec )
 {
     const std::vector<char> allAdmitted( sec.units.size(), 1 );
     const auto [ fullBody, fullLines ] = composeRecallUnits( sec, allAdmitted );
-    VERIFY( fullBody == sec.body );
+    ASSUME( fullBody == sec.body );
     return formatRecallSectionNote( sec.units.size(), sec.units.size(), sec.sectionCount, sec.wholeBytes, fullLines );
 }
 
@@ -1612,7 +1612,7 @@ inline std::size_t recallServedPrefix( const std::vector<std::size_t>& overhead,
 inline std::size_t waterFillRecallShares( const std::vector<std::size_t>& demand, std::size_t served, std::size_t avail,
                                           std::vector<char>& isSatisfied, std::vector<std::size_t>& alloc )
 {
-    VERIFY_NO_ALIAS_BUF( demand, alloc );   // read demand[i] / write alloc[i] in one loop; never resized here, so the buffer promise holds
+    ASSUME_NO_ALIAS_BUF( demand, alloc );   // read demand[i] / write alloc[i] in one loop; never resized here, so the buffer promise holds
     std::size_t remaining   = avail;
     std::size_t unsatisfied = served;
     std::size_t share       = 0;
@@ -1659,7 +1659,7 @@ inline std::size_t waterFillRecallShares( const std::vector<std::size_t>& demand
 inline RecallShares allocateRecallShares( const std::vector<std::size_t>& overhead,
                                           const std::vector<std::size_t>& demand, std::size_t payloadBudget )
 {
-    VERIFY( overhead.size() == demand.size() );
+    ASSUME( overhead.size() == demand.size() );
 
     RecallShares out;
     out.alloc.assign( demand.size(), 0 );
@@ -1757,10 +1757,10 @@ inline RecallBundle buildRecall( const IngestResult& ing, const std::vector<floa
     demand.reserve( top.size() );
     for( const Recalled& r : top )
     {
-        // V5: fileId is an INDEX into files[], and this VERIFY guards the NEAREST dereference — which is
+        // V5: fileId is an INDEX into files[], and this ASSUME guards the NEAREST dereference — which is
         // loadRecallBody's, not the separator's. It sat one call below, i.e. one dereference late: the
-        // invariant was true and correctly a VERIFY, but the first read it protected had already happened.
-        VERIFY( r.fileId < ing.files.size() );
+        // invariant was true and correctly an ASSUME, but the first read it protected had already happened.
+        ASSUME( r.fileId < ing.files.size() );
         LoadedDoc doc;
         if( auto granular = buildSectionGranularBody( ing, scores, r.fileId, redact, queryToks ) )
         {

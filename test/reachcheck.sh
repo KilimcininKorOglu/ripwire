@@ -64,14 +64,14 @@ Pd="$( run --path=d1,hot )"
 
 # ── 4) --impact=d4 : the full upstream set {d3,d2,d1}, and NOTHING else ───────────────────────────────
 I4="$( run --impact=d4 )"
-I4NAMES="$( names "$I4" | sort | tr '\n' ',' )"
+I4NAMES="$( names "$I4" | LC_ALL=C sort | tr '\n' ',' )"
 { [ "$( attr "$I4" reaches )" = 3 ] && [ "$I4NAMES" = "d1,d2,d3," ]; } \
     && ok "--impact=d4: reaches=3, exactly {d1,d2,d3} (all upstream of the leaf)" \
     || no "--impact=d4 wrong (reaches=$( attr "$I4" reaches ) set=$I4NAMES)"
 
 # ── 5) --impact=hot : exactly the two callers ────────────────────────────────────────────────────────
 Ih="$( run --impact=hot )"
-IhNAMES="$( names "$Ih" | sort | tr '\n' ',' )"
+IhNAMES="$( names "$Ih" | LC_ALL=C sort | tr '\n' ',' )"
 { [ "$( attr "$Ih" reaches )" = 2 ] && [ "$IhNAMES" = "caller_a,caller_b," ]; } \
     && ok "--impact=hot: reaches=2, exactly {caller_a,caller_b}" \
     || no "--impact=hot wrong (reaches=$( attr "$Ih" reaches ) set=$IhNAMES)"

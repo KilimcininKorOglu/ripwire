@@ -39,7 +39,7 @@ FIX="$WORK/fix"; mkdir -p "$FIX"
 echo "type3clonecheck: CXX=$CXX"
 
 # ── compile the harness against clones.h (header-only): infra + src on the include path ───────────────────────
-# diagnostics.cpp supplies Diagnostics::ConsoleLog::handleDegraded (the DEGRADED_PATH_ALERT seam) in debug builds —
+# diagnostics.cpp supplies Diagnostics::ConsoleLog::handleDegraded (the DISCLOSE seam) in debug builds —
 # link it exactly as the real ripwire target does, so the pair-cap degrade path resolves.
 if ! "$CXX" "$CXXSTD" -O2 -g -Wall -Wextra \
         -I"$ROOT/src/infra" -I"$ROOT/third_party" -I"$ROOT/src" \

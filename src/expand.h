@@ -25,7 +25,7 @@
 #include "model.h"
 #include "resolve.h"   // buildPreciseIncludeAdj — resolved file->file edges, not basename guesses
 #include "mention.h"   // kMentionTopGapStep / kMentionMaxSymbolsPerFile — the ONE slot-ladder vocabulary
-#include "infra/emit.h"          // rw::emitTo — a malformed/out-of-range RIPWIRE_EXPAND is REPORTED on stderr in every build flavour: a rejected user value is config feedback, not a degrade path (DEGRADED_PATH_ALERT compiles out under NDEBUG, so a Release binary would have gone silent again)
+#include "infra/emit.h"          // rw::emitTo — a malformed/out-of-range RIPWIRE_EXPAND is REPORTED on stderr in every build flavour: a rejected user value is config feedback, not a degrade path (DISCLOSE compiles out under NDEBUG, so a Release binary would have gone silent again)
 #include <algorithm>
 #include <cstdlib>
 #include <vector>

@@ -113,7 +113,7 @@ n_o="$( ls "$TMP"/gobj/*.o 2>/dev/null | wc -l | tr -d ' ' )"
 echo "  INFO  $n_g grammar source(s) + the core compiled once for the harness ($n_o objects, flavour-independent)"
 
 # ── harvest the field spellings FROM A PRISTINE HEADER ───────────────────────────────────────────────
-# Enumerator order and the { "spelling", len } rows, read as TEXT. The harness's reference side uses
+# Enumerator order and the { NodeField::X, "spelling", len } rows, read as TEXT. The harness's reference side uses
 # these literals, which is what lets arm D mutate the header under test without moving the reference.
 NAMES="$TMP/names.txt"
 python3 - "$HDR" > "$NAMES" <<'PYNAMES'
@@ -126,10 +126,12 @@ if members[ -1 ] != 'Count': sys.exit( "NodeField's last enumerator must be Coun
 members = members[ :-1 ]
 tbl = re.search( r'kNodeFieldNames\s*=\s*\{\s*\{(.*?)\}\s*\}\s*;', src, re.S )
 if tbl is None: sys.exit( "could not find kNodeFieldNames" )
-rows = re.findall( r'\{\s*"([^"\\]*)"\s*,\s*(\d+)\s*\}', tbl.group( 1 ) )
+rows = re.findall( r'\{\s*NodeField::(\w+)\s*,\s*"([^"\\]*)"\s*,\s*(\d+)\s*\}', tbl.group( 1 ) )
 if len( rows ) != len( members ):
     sys.exit( "kNodeFieldNames has %d rows for %d enumerators" % ( len( rows ), len( members ) ) )
-for ( name, length ), member in zip( rows, members ):
+for ( rowMember, name, length ), member in zip( rows, members ):
+    if rowMember != member:
+        sys.exit( 'kNodeFieldNames row names NodeField::%s at the index of NodeField::%s' % ( rowMember, member ) )
     if int( length ) != len( name ):
         sys.exit( 'declared length %s != len("%s")' % ( length, name ) )
     print( "%s\t%s" % ( member, name ) )
@@ -417,7 +419,7 @@ fi
 #     id (usually 0) in every grammar, and arms A and B must both see it. The reference side is unmoved
 #     because the harness's literals came from the pristine header above.
 mkdir -p "$TMP/mut1"
-sed 's/{ "name", 4 }/{ "nane", 4 }/' "$HDR" > "$TMP/mut1/fieldid.h"
+sed 's/{ NodeField::Name, "name", 4 }/{ NodeField::Name, "nane", 4 }/' "$HDR" > "$TMP/mut1/fieldid.h"
 if ! grep -q '"nane"' "$TMP/mut1/fieldid.h"; then
     no "D1: could not apply the misspelling mutation — kNodeFieldNames' row for \"name\" moved, so this arm proves nothing"
 elif ! gen_and_build "$TMP/mut1" "$TMP/mut1.bin" "$TMP/mut1.cc.log"; then

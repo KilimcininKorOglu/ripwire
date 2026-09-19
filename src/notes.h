@@ -44,7 +44,7 @@
 // lines) and self-heals to canonical order on the next write; a malformed line degrades+skips, never throws.
 
 #include "model.h"              // HashMap<> — the flat, cache-friendly lookup index (never std::unordered_map)
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — the degrade path for a malformed line / unwritable file
+#include "infra/Diagnostics.h"  // DISCLOSE — the degrade path for a malformed line / unwritable file
 #include "arch.h"               // D5: relForHash — the SAME lexical, no-I/O root-relative strip the baseline sidecars use
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — writeNotes truncates, so its open must refuse a link atomically
 #include "infra/blanktext.h"    // §S3: rw::hasVisibleContent — the ONE "present but carries nothing" predicate
@@ -298,7 +298,7 @@ inline std::string shortSha( std::string_view sha )
 // empty); a third but no fourth ⇒ a hand-edited 4-field oddity (sha only, degrade rather than reject).
 inline void splitNoteTail( std::string_view rest, std::string& text, std::string& sha, std::string& branch )
 {
-    VERIFY_NO_ALIAS3( text, sha, branch );
+    ASSUME_NO_ALIAS3( text, sha, branch );
     const std::size_t t3 = rest.find( '\t' );
     if( t3 == std::string_view::npos ) { text = std::string( rest ); return; }
     text = std::string( rest.substr( 0, t3 ) );
@@ -319,7 +319,7 @@ inline void splitNoteTail( std::string_view rest, std::string& text, std::string
 inline rw::pathguard::NoFollowRead readNotesSidecar( const std::string& path )
 {
     rw::pathguard::NoFollowRead sidecar = rw::pathguard::openNoFollowRead( "the field-notes sidecar", path );
-    if( sidecar.refused ) { DEGRADED_PATH_ALERT( "notes: refusing to read the notes sidecar through a symlink" ); }
+    if( sidecar.refused ) { DISCLOSE( "notes: refusing to read the notes sidecar through a symlink" ); }
     return sidecar;
 }
 
@@ -347,12 +347,12 @@ inline std::vector<Note> readNotes( const std::string& path )
         const std::size_t t1 = line.find( '\t' );
         const std::size_t t2 = ( t1 == std::string::npos ) ? std::string::npos : line.find( '\t', t1 + 1 );
         if( t1 == std::string::npos || t2 == std::string::npos )
-        { DEGRADED_PATH_ALERT( "notes: malformed line skipped (want <target>\\t<date>\\t<text>)" ); continue; }
+        { DISCLOSE( "notes: malformed line skipped (want <target>\\t<date>\\t<text>)" ); continue; }
         Note n;
         n.target = line.substr( 0, t1 );
         n.date   = line.substr( t1 + 1, t2 - t1 - 1 );
         splitNoteTail( std::string_view( line ).substr( t2 + 1 ), n.text, n.sha, n.branch );
-        if( n.target.empty() ) { DEGRADED_PATH_ALERT( "notes: empty-target line skipped" ); continue; }
+        if( n.target.empty() ) { DISCLOSE( "notes: empty-target line skipped" ); continue; }
         notes.push_back( std::move( n ) );
     }
     return notes;
@@ -402,8 +402,8 @@ inline int openNotesSidecar( const std::string& path )
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the field-notes sidecar", path );
     if( fd < 0 )
     {
-        if( openErr == ELOOP ) { DEGRADED_PATH_ALERT( "notes: refusing to write the notes sidecar through a symlink" ); }
-        else                   { DEGRADED_PATH_ALERT( "notes: cannot write notes file" ); }
+        if( openErr == ELOOP ) { DISCLOSE( "notes: refusing to write the notes sidecar through a symlink" ); }
+        else                   { DISCLOSE( "notes: cannot write notes file" ); }
     }
     return fd;
 }

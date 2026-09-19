@@ -60,7 +60,7 @@
 #include "docparse.h"           // docparse::detail::readWholeFile — the canonical whole-file byte read
 #include "serialize.h"          // docCommentBefore (L2 extractor) + escapeXml
 #include "pageview.h"           // pageWindow + pageDisclosure — THE TRUNCATION VOCABULARY
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — an unreadable file degrades the scan, never aborts it
+#include "infra/Diagnostics.h"  // DISCLOSE — an unreadable file degrades the scan, never aborts it
 
 #include <algorithm>
 #include <cstdint>
@@ -102,7 +102,7 @@ inline bool isCommentStopword( std::string_view w ) noexcept
 // splitIdentifier(...) lowercased, one call site — the ONE tokenizer this whole lens uses (header note).
 inline void lowerSplitInto( std::string_view text, std::vector<std::string>& scratch, std::vector<std::string>& out )
 {
-    VERIFY_NO_ALIAS( scratch, out );
+    ASSUME_NO_ALIAS( scratch, out );
     naminglens::splitIdentifier( text, scratch );
     out.reserve( out.size() + scratch.size() );
     for( const std::string& tok : scratch )
@@ -206,7 +206,7 @@ inline CommentCoherenceScan computeCommentCoherence( const IngestResult& ing )
             {
                 fileFailed[s.fileId] = 1;
                 ++scan.unreadableFileCount;
-                DEGRADED_PATH_ALERT( "comment-coherence: an indexed file could not be read — its functions are absent from the report" );
+                DISCLOSE( "comment-coherence: an indexed file could not be read — its functions are absent from the report" );
             }
             fileBytes[s.fileId] = std::move( bytes ).value_or( std::string() );
         }

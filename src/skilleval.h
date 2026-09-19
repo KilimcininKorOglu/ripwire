@@ -35,7 +35,7 @@
 #include "lexical.h"            // subtokens() / chooseForRanker / lexicalScores* — the shipping --for ranker
 #include "eval.h"               // maxPoolToFiles — the file-pooling convention shared with --eval-mined
 #include "search.h"             // normSet — sorted-unique for the query token set
-#include "infra/Diagnostics.h"  // VERIFY
+#include "infra/Diagnostics.h"  // ASSUME
 
 #include <algorithm>
 #include <cmath>
@@ -176,24 +176,43 @@ inline SkillSet discoverSkills( const std::string& root )
 {
     SkillSet        set;
     std::error_code ec;
-    for( const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator( root, ec ) )
+    // Every filesystem question here takes an error_code. The throwing forms — the range-for's operator++,
+    // directory_entry::is_directory(), filesystem::exists() — turned a symlink loop at SKILL.md, a mode-000 skill
+    // directory or a directory link loop into an uncaught filesystem_error: SIGABRT, exit 134, on a directory the
+    // caller names. Such an entry is not a readable skill: it is skipped, and stderr names it and why.
+    std::filesystem::directory_iterator it( root, ec ), end;
+    if( ec )
     {
-        if( ec )
+        rw::emitTo( stderr, "ripwire --eval-skills: cannot list '{}': {} — no skills were read\n", root, ec.message() );
+        return set;
+    }
+    for( ; !ec && it != end; it.increment( ec ) )
+    {
+        std::error_code entryEc;
+        const bool      isDirectory = it->is_directory( entryEc );
+        if( entryEc && entryEc != std::errc::no_such_file_or_directory )
         {
-            break;
+            // a directory symlink loop (ELOOP) or an entry that cannot be stat'd: not a readable skill, and said so
+            rw::emitTo( stderr, "ripwire --eval-skills: skipping '{}': {}\n", it->path().string(), entryEc.message() );
+            continue;
         }
-        if( !entry.is_directory() )
+        if( !isDirectory )
         {
             continue;
         }
-        const std::filesystem::path md = entry.path() / "SKILL.md";
-        if( !std::filesystem::exists( md ) )
+        const std::filesystem::path md       = it->path() / "SKILL.md";
+        const bool                  regular = std::filesystem::is_regular_file( md, entryEc );
+        if( entryEc && entryEc != std::errc::no_such_file_or_directory )
         {
-            continue;
+            rw::emitTo( stderr, "ripwire --eval-skills: skipping '{}': {}\n", md.string(), entryEc.message() );
+        }
+        if( !regular )
+        {
+            continue;   // absent, unreadable, or not a regular file (a FIFO would block the read below)
         }
 
         SkillDoc doc;
-        doc.dirName = entry.path().filename().string();
+        doc.dirName = it->path().filename().string();
         std::tie( doc.descText, doc.bodyText ) = parseSkillMd( readWholeFileText( md ) );
 
         if( doc.dirName == "ripwire-router" ) { set.router = std::move( doc ); set.hasRouter = true; }
@@ -201,6 +220,10 @@ inline SkillSet discoverSkills( const std::string& root )
         {
             set.candidates.push_back( std::move( doc ) );
         }
+    }
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire --eval-skills: stopped listing '{}' early: {} — the skills after that point were not read\n", root, ec.message() );
     }
     std::sort( set.candidates.begin(), set.candidates.end(),
                []( const SkillDoc& a, const SkillDoc& b ) { return a.dirName < b.dirName; } );
@@ -210,7 +233,10 @@ inline SkillSet discoverSkills( const std::string& root )
 // ── the labelled corpus: prompt<TAB>skill[,skill]|none<TAB>provenance<TAB>split ─────────────────────────
 
 enum class Prov : std::uint8_t { Router, Desc, Judged, Neg };
+inline constexpr std::size_t kProvCount = static_cast<std::size_t>( Prov::Neg ) + 1;
+static_assert( enumCountIsExact<Prov, kProvCount>(), "kProvCount must name the LAST Prov — move it with the append" );
 inline constexpr const char* kProvName[] = { "router", "desc", "judged", "neg" };
+static_assert( std::size( kProvName ) == kProvCount, "kProvName is indexed by Prov — one name per enumerator" );
 
 // split (added round r26): test = the FROZEN held-out benchmark (never tune a skill
 // description against these SAME rows and re-measure — train-on-test with extra steps); dev = rows
@@ -218,7 +244,10 @@ inline constexpr const char* kProvName[] = { "router", "desc", "judged", "neg" }
 // silently conflated. A row with no 4th column defaults to Test (back-compat for ad-hoc TSVs other
 // gates build on the fly) — the committed test/skillevalfix/prompts.tsv states it explicitly instead.
 enum class Split : std::uint8_t { Test, Dev };
+inline constexpr std::size_t kSplitCount = static_cast<std::size_t>( Split::Dev ) + 1;
+static_assert( enumCountIsExact<Split, kSplitCount>(), "kSplitCount must name the LAST Split — move it with the append" );
 inline constexpr const char* kSplitName[] = { "test", "dev" };
+static_assert( std::size( kSplitName ) == kSplitCount, "kSplitName is indexed by Split — one name per enumerator" );
 
 struct PromptRow
 {
@@ -457,7 +486,7 @@ struct RowOutcome
 inline RowOutcome outcomeOf( const std::vector<double>& score, const PromptRow& row )
 {
     const std::vector<std::uint32_t> order = rankCandidates( score );
-    VERIFY( !order.empty() );
+    ASSUME( !order.empty() );
     RowOutcome out;
     out.top1Index = order[0];
     out.top1Score = score[ order[0] ];
@@ -480,7 +509,8 @@ inline RowOutcome outcomeOf( const std::vector<double>& score, const PromptRow& 
 // The retrieval arms, in report order. Namespace scope (not function-local) so the per-split reporter below
 // can be a free function rather than a lambda capturing runEvalSkills' whole frame.
 inline constexpr std::size_t kArmCount = 5;
-inline constexpr const char* kArmName[kArmCount] = { "overlap", "name", "bm25-desc", "bm25-full", "for-routed" };
+inline constexpr const char* kArmName[] = { "overlap", "name", "bm25-desc", "bm25-full", "for-routed" };
+static_assert( std::size( kArmName ) == kArmCount, "kArmName: one name per retrieval arm — a spelled extent would zero-fill a missing one" );
 
 // AUC( positive top-1 scores vs negative top-1 scores ) — threshold-free fire/abstain separation.
 // 0.5 = no signal; < 0.5 = inverted (negatives outscore positives — the failure mode to fail loudly on).
@@ -598,7 +628,7 @@ struct OraclePoint { double acc = 0.0; double th = 0.0; };
 
 inline OraclePoint oracleFireAbstain( const std::vector<RowOutcome>& outcomes, const std::vector<PromptRow>& rows )
 {
-    VERIFY( outcomes.size() == rows.size() );
+    ASSUME( outcomes.size() == rows.size() );
     std::vector<double> thresholds;
     thresholds.push_back( -1.0 );                                  // "always fire" (every score is >= 0)
     for( const RowOutcome& o : outcomes )
@@ -846,7 +876,9 @@ inline int runEvalSkills( const std::string& root, const IngestResult& ing, cons
     // provenance split for the diagnostics arm — desc rows echo skill wording, so they are the EASY set;
     // judged rows share no description vocabulary by construction and are the number that matters.
     {
-        std::size_t provHit[3] = { 0, 0, 0 }, provN[3] = { 0, 0, 0 };
+        // sized by the enum, not by the three provenances the line below prints: a row's prov is indexed straight in,
+        // and a literal 3 left Prov::Neg one past the end with only a debug check in front of it
+        std::size_t provHit[kProvCount] = {}, provN[kProvCount] = {};
         for( std::size_t i = 0; i < rows.size(); ++i )
         {
             if( rows[i].permitted.empty() )
@@ -854,7 +886,7 @@ inline int runEvalSkills( const std::string& root, const IngestResult& ing, cons
                 continue;
             }
             const std::size_t p = std::size_t( rows[i].prov );
-            VERIFY( p < 3 );
+            ASSUME( p < kProvCount );
             ++provN[p];
             provHit[p] += outcomes[kDiagArm][i].hit1 ? 1 : 0;
         }

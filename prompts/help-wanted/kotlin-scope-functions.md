@@ -226,7 +226,7 @@ never a silent `continue`. The call really is bound outside the tree — to the 
 library — which is what the header's `external=` gauge counts, so route the refusal the way the
 external veto routes its own. #136 (merged into main on 2026-09-11) enforces this with a conservation
 line: every resolve-loop iteration ends in exactly one named disposition, and an exit that names none
-lands in `unaccounted` and raises `DEGRADED_PATH_ALERT` on plain builds. That line already caught one
+lands in `unaccounted` and raises `DISCLOSE` on plain builds. That line already caught one
 guard leaving the loop uncounted — #134's `std::` guard, 1,495 calls on ripwire's own tree.
 
 **Out of scope, and disclosed:**
@@ -252,7 +252,7 @@ enclosing function or file instead of the call site.
 - **Honesty in output.** A refused call is counted somewhere a reader can see; a zero means "none
   found"; counts that cannot be totals stay floors. Write every floor you leave into the gate header
   and the Kotlin paragraph of `docs/ARCHITECTURE.md`.
-- **`DEGRADED_PATH_ALERT`, never `VERIFY( false )`**, on any recoverable path.
+- **`DISCLOSE`, never `ASSUME( false )`**, on any recoverable path.
 - **No `std::map` or `std::unordered_map`** — `HashMap<>` (ankerl) or `gtl::btree_map`. The table is a
   sorted constexpr array with a binary search, like its neighbours.
 - **House style** (`CONTRIBUTING.md` §3): Allman braces, braces on every control body, spaces inside

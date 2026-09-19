@@ -258,20 +258,28 @@ if "$BIN" "$DEEP" --deps --no-cache >"$TMP/deep.out" 2>"$TMP/deep.err"; then
 else
     no "600-deep guard stack: non-zero exit"; head -3 "$TMP/deep.err"
 fi
-# …and the degrade is ANNOUNCED, not silent. DEGRADED_PATH_ALERT is compiled out under NDEBUG, so first
-# establish whether alerts are observable in THIS binary at all (probe an unrelated, always-degrading
-# path); a Release leg then SKIPs instead of failing, and the plain leg — which CI runs as a second job
-# for exactly this reason, CONTRIBUTING.md §5 — is what actually proves the alert fires.
-"$BIN" "$ROOT" --rank-by=churn --since=notadate >/dev/null 2>"$TMP/probe.err"
-if grep -q 'math degraded' "$TMP/probe.err"; then
-    if grep -q 'import-container nesting past the depth bound' "$TMP/deep.err"; then
-        ok "600-deep guard stack: the depth bound announces itself via DEGRADED_PATH_ALERT"
-    else
-        no "600-deep guard stack: depth bound hit SILENTLY — no DEGRADED_PATH_ALERT on stderr"
-    fi
-else
-    skip "600-deep guard stack: DEGRADED_PATH_ALERT compiled out of this binary (NDEBUG); the plain-flavour leg proves it"
-fi
+# …and the degrade is ANNOUNCED, not silent. DISCLOSE is compiled out under NDEBUG, and CMakeLists
+# defines NDEBUG for exactly the build types --version names Release / RelWithDebInfo / MinSizeRel, so that
+# token decides whether an alert is owed here (the reading kotlincheck §12 and estchargecheck share). A Release
+# leg SKIPs with its flavour named; every other flavour ASSERTS, and the plain leg — which CI runs as a second
+# job for exactly this reason, CONTRIBUTING.md §5 — is what proves the alert fires.
+#
+# RE-POINTED 2026-09-16. The decision used to be a probe: `--rank-by=churn --since=notadate`, skip if it printed
+# no alert. e7688981 (M8) made an unresolvable --since a refusal that exits 1 before any degrade path runs, so the
+# probe went silent on EVERY flavour and this arm printed its NDEBUG skip on the plain build, asserting nothing,
+# with the gate green. A probe borrows another feature's degrade path, and that path can be fixed away; the build
+# type is a property of the binary itself.
+DEEP_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+case "$DEEP_FLAVOUR" in
+    Release|RelWithDebInfo|MinSizeRel)
+        skip "600-deep guard stack: this $DEEP_FLAVOUR build defines NDEBUG, so DISCLOSE is compiled out; the plain-flavour leg proves it" ;;
+    *)
+        if grep -qF '[math degraded] ingest: import-container nesting past the depth bound' "$TMP/deep.err"; then
+            ok "600-deep guard stack: the depth bound announces itself via DISCLOSE on this '${DEEP_FLAVOUR:-unknown}' (non-NDEBUG) build"
+        else
+            no "600-deep guard stack: '${DEEP_FLAVOUR:-unknown}' is a non-NDEBUG build, yet the depth bound was hit SILENTLY — no DISCLOSE on stderr: $( head -c 200 "$TMP/deep.err" )"
+        fi ;;
+esac
 if command -v xmllint >/dev/null 2>&1; then
     if xmllint --noout "$TMP/deep.out" 2>/dev/null; then ok "600-deep guard stack: XML well-formed"; else no "600-deep guard stack: XML malformed"; fi
 else
