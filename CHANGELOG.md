@@ -15,6 +15,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — native Windows x64 (clang-cl, MSVC ABI), behind `src/infra/os.h` — thanks to @lennix1337 (#44)
+
+@lennix1337 ported ripwire to native Windows in #44 and then kept it alive through weeks of a moving main: UTF-8
+and long paths end to end, the no-follow sidecar opens against symlinks, junctions and OneDrive placeholders,
+`--run-trace` children inside a Job Object so a timeout ends the whole tree, Git Bash script bridges so `cmd.exe`
+never expands a `%`, the `LockFileEx` edit lock their race trials proved, the MCP directory watcher, the
+PATH/PATHEXT search, and an owner-and-Administrators ACL for the cache directory — plus a local validation run of
+the Windows gates on their own machine, and a snapshot (`win32-port-snapshot`) with the fixes that run turned up.
+Their commits are in this history as they wrote them.
+
+This release carries that work in the shape `os.h` set out: every Windows body is in
+`src/infra/os_win32.cpp` (the one translation unit that sees `<windows.h>`), declared by `os.h`'s Windows branch
+under the same POSIX names call sites already spell, and every piece of it that is not a Win32 call — the
+Win32→errno table, UTF-8/UTF-16, `CreateProcessW` quoting (adapted from libuv, notice in `THIRD_PARTY.md`),
+reparse-tag and wait-status decoding — is in `src/infra/os_win32_logic.h`, which every Linux and macOS leg now
+compiles and tests (`test/oswin32logiccheck.sh`: 27 cases, 4,480,640 assertions, a sanitizer arm and a mutant arm
+that must fail). A Windows build adds only `cmake/Windows.cmake`: `os_win32.cpp`, a manifest (`longPathAware`,
+UTF-8 active code page), `ws2_32`/`advapi32`/`shell32`, `/EHsc`. No force-include, no compat headers, no
+libc-renaming macros.
+
+Linux and macOS pay nothing for it. Measured on macOS arm64, Release, this branch against main `e54b688e`: no
+`rw::os` symbol in either binary, identical symbol sets (11,021), `__text` 9,172,004 B in both, and of 5,034
+functions 5,031 disassemble identically and 3 differ only by the build stamps (the source-identity hash in the
+quality snapshot's two serializers, the `built_from` length in `--doctor`). The same 71 cases the `os.h` refresh
+used (map, 25 verbs, `--run-trace`, MCP stdio and `--listen`, the sidecar and index writes) are byte-identical.
+
+Not yet proven on Windows by anyone who ran it: this exact branch still needs @lennix1337's build and gate run.
+
 ### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
 
 `src/infra/os.h`'s POSIX seam (below) was built on v0.6.1; this refresh carries it forward onto everything main
