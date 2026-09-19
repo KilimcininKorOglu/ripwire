@@ -66,7 +66,9 @@ printf 'temp-a'  >"$PRIVATECACHE/ripwire-temp-a/ripwire-decoy.bin"
 printf 'temp-b'  >"$PRIVATECACHE/ripwire-temp-b/ripwire-decoy.cache"
 printf 'nonhex'  >"$PRIVATECACHE/zz/ripwire-decoy.bin"
 
-OUT="$( PATH="$BINDIR:$PATH" TMPDIR="$HAPPYCACHE" "$BINDIR/ripwire" "$REPO" --doctor --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact (its root leads with schema= and its legend is the short form); the
+# arms reading $OUT/$GOUT/$VOUT match the full-posture root '<doctor checks=' or the FULL legend's prose, so those runs ask for it.
+OUT="$( PATH="$BINDIR:$PATH" TMPDIR="$HAPPYCACHE" "$BINDIR/ripwire" "$REPO" --doctor --legend=full --no-cache 2>/dev/null )"
 RC=$?
 echo "happy-path output:"; echo "$OUT"; echo "(exit=$RC)"; echo
 
@@ -232,7 +234,7 @@ echo "$TROW" | grep -q 'hint=' \
 #     state in which a stranger runs this binary by absolute path to ask what is wrong. Used to be ok="1"
 #     (passed=7/7) with `ripwire` a "command not found" at the prompt. Fails the row, names the fix. ──
 NOPATHCACHE="$TMP/nopathcache"; mkdir -p "$NOPATHCACHE"
-GOUT="$( PATH="/usr/bin:/bin" TMPDIR="$NOPATHCACHE" "$BIN" "$REPO" --doctor --no-cache 2>/dev/null )"
+GOUT="$( PATH="/usr/bin:/bin" TMPDIR="$NOPATHCACHE" "$BIN" "$REPO" --doctor --legend=full --no-cache 2>/dev/null )"
 GROW="$( echo "$GOUT" | grep -oE '<c n="binary-path"[^<]*/>' )"
 echo "$GROW" | grep -q ' ok="0"' && echo "$GROW" | grep -q 'on_path="0"' \
     && ok "(G) no ripwire on PATH -> binary-path row ok=\"0\" on_path=\"0\"" \
@@ -393,7 +395,7 @@ if printf '%s' "$HOUT" | xmllint --noout - 2>/dev/null; then ok "H: xmllint clea
 # one shared helper (test/lib/doctorvolatile.sh). See that file for why a hard-coded list was not enough.
 echo
 VOUT="$TMP/v_doctor.xml"
-"$BIN" "$REPO" --doctor >"$VOUT" 2>/dev/null
+"$BIN" "$REPO" --doctor --legend=full >"$VOUT" 2>/dev/null
 VLIST="$( grep -oE '<c n="cache-dir"[^>]*>' "$VOUT" | head -1 | grep -oE ' volatile="[^"]*"' | sed -E 's/.*="([^"]*)"/\1/' )"
 if [ -z "$VLIST" ]; then
     no "(V) the cache-dir row does not declare volatile= — the fields that read live machine state are unnamed, so every reader has to guess (and two gates guessed differently)"

@@ -110,7 +110,8 @@ grep -q 'timeout_s="' "$WORK/out/fail.xml" \
     || no "(B) timeout_s= missing from the failure document"
 
 # ── (C) the passing command: minimal record, NO bundle ─────────────────────────────────────────────────
-"$BIN" "$WORK" --run-trace="echo alpha; echo beta" >"$WORK/out/pass.xml" 2>"$WORK/out/pass.err"
+# L1 (2026-09-19): the CLI default legend is compact; (C) reads the FULL legend's "nothing to map" statement, so it asks for it.
+"$BIN" "$WORK" --run-trace="echo alpha; echo beta" --legend=full >"$WORK/out/pass.xml" 2>"$WORK/out/pass.err"
 rcC=$?
 [ "$rcC" = 0 ] && ok "(C) passing command: ripwire exits 0" \
               || no "(C) passing command: expected exit 0, got $rcC"
@@ -240,7 +241,9 @@ if diff -q "$WORK/out/padnorm0" "$WORK/out/padnorm3" >/dev/null && diff -q "$WOR
 else
     no "(G2) the three runs differ beyond duration_ms: $( cmp "$WORK/out/padnorm0" "$WORK/out/padnorm4" 2>&1 | head -c 200 )"
 fi
-grep -q 'fixed width' "$WORK/out/pad0.xml" \
+# L1 (2026-09-19): this arm reads the FULL legend's pricing clause, so it reads a full-legend twin of pad0.
+RTW_PAD=0    "$BIN" "$WORK" --run-trace="$PADCMD" --legend=full >"$WORK/out/pad0full.xml" 2>/dev/null
+grep -q 'fixed width' "$WORK/out/pad0full.xml" \
     && ok "(G2) the legend states that est_tokens= prices duration_ms at a fixed width" \
     || no "(G2) the legend does not say how the MEASURED duration_ms is priced"
 

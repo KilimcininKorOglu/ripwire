@@ -213,7 +213,9 @@ attr(){ printf '%s' "$( elem "$1" )" | grep -oE "^<slice [^>]*" | grep -oE "$2=\
 row(){ printf '%s' "$( elem "$1" )" | grep -oE "<s l=\"$2\"[^>]*>"; }
 
 # ── (1) C++ def/use classification on accumulate:count ──────────────────────────────────────────────
-OUT1="$( sl accumulate:count )"
+# L1 (2026-09-19): the CLI default legend is compact; (1) reads the FULL legend's prose off $OUT1, so this run asks for it
+# (the sl helper's exact invocation, plus --legend=full).
+OUT1="$( cd "$WORK" && "$BIN" . --slice=accumulate:count --no-cache --legend=full 2>/dev/null )"
 [ "$( attr "$OUT1" var )" = 'var="count"' ] \
     && ok "(1) accumulate:count — <slice var=\"count\"> element present" \
     || { no "(1) expected a <slice var=\"count\"> element"; printf '%s\n' "$OUT1"; }

@@ -247,7 +247,9 @@ attr(){ printf '%s' "$( elem "$1" )" | grep -oE "^<slice [^>]*" | grep -oE "$2=\
 frow(){ printf '%s' "$( elem "$1" )" | grep -oE "<s l=\"$3\"[^>]*v=\"$2\"[^>]*>"; }
 
 # ── (1) forward slice from the parameter seed ───────────────────────────────────────────────────────
-F="$( run --slice=pipeline:seed --slice-flow=fwd )"
+# L1 (2026-09-19): the CLI default legend is compact; every capture below whose LEGEND an arm reads ((10) (24) (26b)
+# (27d) (28f) (29b) (30a) (30b)) asks for --legend=full, the pre-change default. Rows are identical across postures.
+F="$( run --slice=pipeline:seed --slice-flow=fwd --legend=full )"
 [ "$( attr "$F" flow )" = 'flow="fwd"' ] && [ "$( attr "$F" depth )" = 'depth="8"' ] \
     && ok "(1) root carries flow=\"fwd\" and the disclosed default depth=\"8\"" \
     || { no "(1) expected flow=\"fwd\" depth=\"8\" on the root"; printf '%s\n' "$F"; }
@@ -375,7 +377,7 @@ fi
 # prints, the ABSENCE of the IGNORED warning) that the baseline cannot produce.
 
 # ── (11) --slice + --at compose: no IGNORED warning, and the seed line's ONE local is pre-picked ────
-S11="$( run --slice=pipeline --at=src/a.cpp:7 )"
+S11="$( run --slice=pipeline --at=src/a.cpp:7 --legend=full )"
 E11="$( err --slice=pipeline --at=src/a.cpp:7 )"
 if printf '%s' "$E11" | grep -q 'IGNORED this run'; then
     no "(11) --at beside --slice must SEED the slice, not be dropped with the precedence warning"
@@ -395,7 +397,7 @@ printf '%s' "$( elem "$S11" )" | grep -q '<s l="7" k="def"' && printf '%s' "$( e
     || { no "(12) expected stray's def/use rows"; printf '%s\n' "$S11"; }
 
 # ── (13) seed line naming TWO locals: inventory with the candidates marked, never a guess ───────────
-S13="$( run --slice=pipeline --at=src/a.cpp:5 )"
+S13="$( run --slice=pipeline --at=src/a.cpp:5 --legend=full )"
 [ "$( attr "$S13" seed_vars )" = 'seed_vars="2"' ] && [ -z "$( attr "$S13" var )" ] \
     && ok "(13) L5 names mid+seed: no var pre-picked, seed_vars=\"2\" disclosed" \
     || { no "(13) expected the inventory with seed_vars=\"2\" and no var="; printf '%s\n' "$S13"; }
@@ -481,7 +483,7 @@ E21="$( err --slice=@src/a.cpp:7 --at=src/a.cpp:5 )"
     || { no "(21) expected the two-seeds refusal"; printf '%s\n' "$E21"; }
 
 # ── (22) unseeded runs carry NONE of the seed vocabulary (purely additive) ──────────────────────────
-S22="$( run --slice=pipeline:out )"; S22b="$( run --slice=pipeline )"
+S22="$( run --slice=pipeline:out --legend=full )"; S22b="$( run --slice=pipeline )"
 if printf '%s' "$( elem "$S22" )$( elem "$S22b" )" | grep -qE 'seed=|seed_vars=|var_from='; then
     no "(22) plain --slice must not grow seed attributes (purely additive contract)"
 else
@@ -562,8 +564,8 @@ WC="$( run --slice=widecalc:delta --slice-flow=back )"
 #       counts of what the name-based classifier rowed, neither floors nor totals of the program's truth.
 # RED against the pre-fix binary on (b) and (c): the legend has no such clause and <slice> carried the
 # counts_floor= marker it could not honour. Arm (a) is GREEN before and after, deliberately — the control.
-R="$( run --slice=gather:bag )"
-RF="$( run --slice=gather:bag --slice-flow=back )"
+R="$( run --slice=gather:bag --legend=full )"
+RF="$( run --slice=gather:bag --slice-flow=back --legend=full )"
 [ "$( attr "$R" defs )" = 'defs="1"' ] && [ "$( attr "$RF" steps )" = 'steps="0"' ] \
     && ok "(26a) CONTROL: receiver mutation stays a read — defs=\"1\", steps=\"0\" (semantics unchanged)" \
     || { no "(26a) expected the declined semantics: defs=\"1\" and steps=\"0\""; printf '%s\n' "$R"; printf '%s\n' "$RF"; }
@@ -606,7 +608,7 @@ P0="$( run --slice=if0:w --slice-flow=back )"
 printf '%s' "$( elem "$P0" )" | grep -q 'v = 111' \
     && { no "(27a) the #if 0 def 'v = 111;' must NOT be a row — it is preprocessor-dead"; printf '%s\n' "$P0"; } \
     || ok "(27a) the #if 0 def is absent from the flow"
-P0V="$( run --slice=if0:v )"
+P0V="$( run --slice=if0:v --legend=full )"
 [ "$( attr "$P0V" defs )" = 'defs="1"' ] && [ "$( attr "$P0V" preproc_rows )" = 'preproc_rows="1"' ] \
     && ! printf '%s' "$( elem "$P0V" )" | grep -q '<s l="5"' \
     && ok "(27a) if0:v flat: defs=\"1\", the dropped row DISCLOSED as preproc_rows=\"1\", no l=5 row" \
@@ -655,7 +657,7 @@ printf '%s' "$( elem "$SC" )" | grep -qE '<s l="(5|6)"' \
     && { no "(28a) the inner block's v (l5/l6) must NOT be in r's backward slice — r never reads it"; printf '%s\n' "$SC"; } \
     || ok "(28a) the inner shadow is absent — scope-separated, not name-matched"
 # the flat rows of a shadowed name are LABELLED per binding, never merged
-SV="$( run --slice=scope.cpp:shadowing:v )"
+SV="$( run --slice=scope.cpp:shadowing:v --legend=full )"
 [ "$( attr "$SV" bindings )" = 'bindings="2"' ] \
     && printf '%s' "$( elem "$SV" )" | grep -q '<s l="3" k="def" t="decl" b="3">' \
     && printf '%s' "$( elem "$SV" )" | grep -q '<s l="5" k="def" t="decl" b="5">' \
@@ -709,7 +711,7 @@ else
 fi
 
 # ── (29) destructuring chains, and the under-count clause names every hidden-write shape ───────────
-DJ="$( run --slice=destructure:s --slice-flow=back )"
+DJ="$( run --slice=destructure:s --slice-flow=back --legend=full )"
 [ "$( attr "$DJ" steps )" = 'steps="3"' ] \
     && printf '%s' "$( frow "$DJ" x 2 )" | grep -q 'k="def" t="decl" v="x" d="1" f="3"' \
     && printf '%s' "$( frow "$DJ" y 2 )" | grep -q 'k="def" t="decl" v="y" d="1" f="3"' \
@@ -733,13 +735,13 @@ printf '%s' "$L29" | grep -q 'scope' && printf '%s' "$L29" | grep -q 'nonlocal' 
 # RED against the pre-fix binary: the flow run concatenated two full LIMITS paragraphs (audit F-11:
 # 2 340 + 2 013 B restating alias/shadowing/receiver), and --legend=compact refused the slice family.
 legbytes(){ printf '%s' "$( legend "$1" )" | wc -c | tr -d ' '; }
-FL="$( run --slice=pipeline:out --slice-flow=both )"; FV="$( run --slice=pipeline:out )"
+FL="$( run --slice=pipeline:out --slice-flow=both --legend=full )"; FV="$( run --slice=pipeline:out )"; FVL="$( run --slice=pipeline:out --legend=full )"
 nAlias="$( printf '%s' "$( legend "$FL" )" | grep -o 'alias analysis' | wc -l | tr -d ' ' )"
 nHidden="$( printf '%s' "$( legend "$FL" )" | grep -oi 'hidden behind a call' | wc -l | tr -d ' ' )"
 [ "$nAlias" = 1 ] && [ "$nHidden" = 1 ] \
     && ok "(30a) the flow run states the alias limit once and the hidden-write limit once — the flow block does not restate v1" \
     || no "(30a) the flow legend restates v1's limits (alias x$nAlias, hidden-write x$nHidden — each must appear exactly once)"
-v1b="$( legbytes "$FV" )"; flb="$( legbytes "$FL" )"; add=$(( flb - v1b ))
+v1b="$( legbytes "$FVL" )"; flb="$( legbytes "$FL" )"; add=$(( flb - v1b ))
 # 2026-09-03 (rung 3, docs/EVALS.md "Flow-sensitive slice in the small"): the v1 budget moved 3584 -> 4608 B in the
 # same commit that put rd=/reach= on the first screen. The registration's own band requires the legend to
 # state the reaching-definition rule AND name every construct the walk does not branch on (?:, short-circuit,

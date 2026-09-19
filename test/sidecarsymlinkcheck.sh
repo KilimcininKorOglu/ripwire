@@ -945,7 +945,9 @@ readArm()
 
 readNotesList(){ "$BIN" "$1" --notes --no-cache; }
 readQualityDelta(){ "$BIN" "$1" --quality-delta --legend=compact --no-cache; }
-readArchCheck(){ ( cd "$1" && "$BIN" "$1" --arch=rules.txt --no-cache ); }
+# L1 (2026-09-19): the CLI default legend is compact, whose root tag leads with schema=; the arch arms pin `<arch layers=`
+# (the full default's spelling), so this read asks for the full legend.
+readArchCheck(){ ( cd "$1" && "$BIN" "$1" --arch=rules.txt --no-cache --legend=full ); }
 
 # ── notes ─────────────────────────────────────────────────────────────────────────────────────────────────
 printf 'a.c\t2026-01-01\t%s\n' "$READ_SENTINEL" >"$TMP/payload_notes"

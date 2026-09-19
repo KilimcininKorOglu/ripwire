@@ -173,11 +173,16 @@ sys.stdout.write("\n".join(re.findall(r"<s\b[^>]*\bn=\"([^\"]*)\"",d)))' "$1"; }
 # Assert a capture is non-empty BEFORE anything is concluded from it.
 nonempty(){ [ -n "$2" ] && return 0; no "$1 (empty capture — the arm reading it would have been vacuous)"; return 1; }
 
+# L1 (2026-09-19): the CLI default legend is compact; the clause arms read the FULL legend's prose, so run()/run2() ask for it
+# (run2 leaves --json, which refuses a legend, and an explicit --legend= spelling alone).
 run(){ # run <corpus> <selector-flag>  → stdout to $2out
-    "$BIN" "$1" --no-cache "$2" 2>/dev/null; }
+    "$BIN" "$1" --no-cache "$2" --legend=full 2>/dev/null; }
 
 run2(){ # run <corpus> <selector-flag> <dialect-flag> — the --json / --format=columnar spellings of the same answer
-    "$BIN" "$1" --no-cache "$2" "$3" 2>/dev/null; }
+    case "$3" in
+        --json|--legend=*) "$BIN" "$1" --no-cache "$2" "$3" 2>/dev/null ;;
+        *)                 "$BIN" "$1" --no-cache "$2" "$3" --legend=full 2>/dev/null ;;
+    esac; }
 
 # The MCP twins: one JSON-RPC tools/call piped into `ripwire --mcp`, the TRANSCRIPT kept in a file so the reader that
 # decodes it can be shown able to fail on its own (arm F). <legend> is "full", or "" to leave the server's default.
@@ -1232,8 +1237,8 @@ echo "=== (E2n) --edit-check, its preview and MCP edit_check carry the residue b
 # same tree it flags the caller that passes one argument to a two-parameter helper.
 run "$TMP/ec" --edit-check=api.h:helper    >"$TMP/e2_ec.xml"
 run "$TMP/ec" --edit-check=impl.cpp:helper >"$TMP/e2_ec_def.xml"
-"$BIN" "$TMP/ecp" --no-cache --edit-check=api.h:helper    --edit-payload="$TMP/payload_decl.txt" --dry-run >"$TMP/e2_ecd.xml"     2>/dev/null
-"$BIN" "$TMP/ecp" --no-cache --edit-check=impl.cpp:helper --edit-payload="$TMP/payload_def.txt"  --dry-run >"$TMP/e2_ecd_def.xml" 2>/dev/null
+"$BIN" "$TMP/ecp" --no-cache --edit-check=api.h:helper    --edit-payload="$TMP/payload_decl.txt" --dry-run --legend=full >"$TMP/e2_ecd.xml"     2>/dev/null
+"$BIN" "$TMP/ecp" --no-cache --edit-check=impl.cpp:helper --edit-payload="$TMP/payload_def.txt"  --dry-run --legend=full >"$TMP/e2_ecd_def.xml" 2>/dev/null
 mcpText e2_mcp_ec      edit_check full "path=$TMP/mcp_ec"  "symbol=api.h:helper"
 mcpText e2_mcp_ec_def  edit_check full "path=$TMP/mcp_ec"  "symbol=impl.cpp:helper"
 mcpText e2_mcp_ecd     edit_check full "path=$TMP/mcp_ecp" "symbol=api.h:helper"    "new_body=$( cat "$TMP/payload_decl.txt" )"
@@ -1451,7 +1456,7 @@ echo
 echo "=== (E2v) --outline, alone and beside --expand on the root they share ==="
 run2 "$TMP/dord" --outline=api.h:helper --top-k=0 >"$TMP/e2_ol.xml"
 run2 "$TMP/dctl" --outline=api.h:helper --top-k=0 >"$TMP/e2_ol_ctl.xml"
-"$BIN" "$TMP/dord" --no-cache --expand=api.h:helper --outline=api.h:helper --top-k=0 >"$TMP/e2_exol.xml" 2>/dev/null
+"$BIN" "$TMP/dord" --no-cache --expand=api.h:helper --outline=api.h:helper --top-k=0 --legend=full >"$TMP/e2_exol.xml" 2>/dev/null
 exPresent "(E2v) --outline=api.h:helper --top-k=0"                            "$TMP/e2_ol.xml"     1 outline o "api.h"
 exPresent "(E2v) --expand=api.h:helper --outline=api.h:helper (one root, summed)" "$TMP/e2_exol.xml" 2 bodies b "api.h"
 exAbsent  "(E2v) --outline=api.h:helper --top-k=0, every candidate proven"    "$TMP/e2_ol_ctl.xml"   outline o a_impl.cpp

@@ -127,8 +127,10 @@ echo "pagingsweepcheck: BIN=$BIN  PREBIN=${PREBIN:-<none>}"
 # So the opening tag now has attributes, and this strip matches the tag rather than the byte string
 # `<unindexed>`; without the widening the block survived the strip and every grep row count doubled.
 stripUnindexed(){ sed -E 's#<unindexed[^>]*>.*</unindexed>##'; }
-run(){  "$BIN" "${PAGE_CORPUS:-$ROOT}" "$@" --cache="$( cacheFor "${PAGE_CORPUS:-$ROOT}" )" 2>/dev/null | stripUnindexed; }
-cold(){ "$BIN" "${PAGE_CORPUS:-$ROOT}" "$@" --no-cache 2>/dev/null | stripUnindexed; }
+# L1 (2026-09-19): the CLI default legend is compact and spells each verb's row shape ('<s t=', '<hit ', '<f p=' …) inside its
+# comment, which the row-element counts below would read as real rows; every capture here is an XML verb, so both helpers ask for the full legend.
+run(){  "$BIN" "${PAGE_CORPUS:-$ROOT}" "$@" --legend=full --cache="$( cacheFor "${PAGE_CORPUS:-$ROOT}" )" 2>/dev/null | stripUnindexed; }
+cold(){ "$BIN" "${PAGE_CORPUS:-$ROOT}" "$@" --legend=full --no-cache 2>/dev/null | stripUnindexed; }
 
 # ── one primed cache per corpus, and why that is not a weakening ──────────────────────────────────────
 # Every arm below invokes the binary five-to-eight times over a corpus that does not change for the

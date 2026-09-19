@@ -48,7 +48,8 @@ printf '# Index\n\nSee [the design](design.md) for details.\n' > "$FIX/README.md
 printf '# Design\n\nThe design.\n'                             > "$FIX/design.md"
 printf '{ "note": "not a dependency" }\n'                      > "$FIX/data.json"
 
-"$BIN" "$FIX" --deps --no-cache >"$TMP/deps" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; arm (F) reads the FULL legend's prose, so the runs it reads ask for it.
+"$BIN" "$FIX" --deps --no-cache --legend=full >"$TMP/deps" 2>/dev/null
 DEPS="$( cat "$TMP/deps" )"
 LANGS="$( printf '%s' "$DEPS" | grep -oE 'dep_langs="[^"]*"' | head -1 )"
 
@@ -163,7 +164,7 @@ printf '%s' "$DEPS" | grep -q 'dep_langs= names EXACTLY which languages that sub
 printf '%s' "$DEPS" | grep -q 'joined the set at parser version 81' \
     && ok "(F) the --deps legend names the version at which the denominator moved" \
     || no "(F) the --deps legend does not date the change"
-"$BIN" "$CO" --cochange --no-cache >"$TMP/colegend" 2>/dev/null || true
+"$BIN" "$CO" --cochange --no-cache --legend=full >"$TMP/colegend" 2>/dev/null || true
 grep -q 'resolve in the SAME dialect' "$TMP/colegend" \
     && ok "(F) the --cochange legend states the PAIR rule (both capable AND same dialect)" \
     || no "(F) the --cochange legend still describes a per-file capability rule"

@@ -76,7 +76,8 @@ mkcorpus(){
 mkcorpus "$TMP/hubfirst" a_hub.cpp z_mid.cpp     # hub sorts FIRST → the lower node id → the pre-fix winner
 mkcorpus "$TMP/midfirst" z_hub.cpp a_mid.cpp     # the mirror: only the file names differ
 
-HUBFIRST="$( "$BIN" "$TMP/hubfirst" --no-cache --connect=left,right 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells <s ...> row shapes inside its comment; (D) counts real rows, so this run asks for the full legend.
+HUBFIRST="$( "$BIN" "$TMP/hubfirst" --no-cache --connect=left,right --legend=full 2>/dev/null )"
 MIDFIRST="$( "$BIN" "$TMP/midfirst" --no-cache --connect=left,right 2>/dev/null )"
 
 steinerOf(){ printf '%s' "$1" | grep -o '<s n="[^"]*"' | sed 's/<s n="//;s/"//' | sort | tr '\n' ' ' | sed 's/ $//'; }

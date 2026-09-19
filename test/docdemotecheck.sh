@@ -153,8 +153,9 @@ PY
 # Verified before re-pinning: with est_tokens= and that one clause normalized out, old and new documents are
 # byte-identical — no ranking, demotion or route byte moved (gate: estchargecheck #15 d; same re-pin as
 # anchorcheck/routecheck the same day).
-"$BIN" docdemotefix --for="$CONCEPTQ" --no-cache >"$TMP/concept.xml"   2>/dev/null
-"$BIN" docdemotefix --for="$BUGQ" --no-route --no-cache >"$TMP/noroutefor.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; (f)/(h) compare against goldens recorded from the full default, so they ask for it.
+"$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/concept.xml"   2>/dev/null
+"$BIN" docdemotefix --for="$BUGQ" --no-route --no-cache --legend=full >"$TMP/noroutefor.xml" 2>/dev/null
 "$BIN" docdemotefix --recall="$BUGQ" --no-cache >"$TMP/recall.xml" 2>/dev/null
 
 # ── (a) presence guard — the documents this gate reasons about exist in the index ────────────────────────

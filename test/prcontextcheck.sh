@@ -60,7 +60,9 @@ int core() { return helper(); }
 EOF
 
 # ── Run --pr-context (working tree) ────────────────────────────────────────────────────────────────
-OUT="$( "$BIN" "$REPO" --pr-context --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; the run-clause and F-legend/F6 arms read the FULL legend's
+# clauses (present AND absent), so those runs and their controls ask for --legend=full, the pre-change default.
+OUT="$( "$BIN" "$REPO" --pr-context --no-cache --legend=full 2>/dev/null )"
 if [ -z "$OUT" ]; then no "pr-context: output is empty"; echo; echo "SOME CHECKS FAILED"; exit 1; fi
 echo "pr-context output:"; echo "$OUT"; echo
 
@@ -183,7 +185,7 @@ NT="$TMP/notests"; mkdir -p "$NT/src"; git -C "$NT" init -q
 git -C "$NT" config user.email a@x.com; git -C "$NT" config user.name A
 printf 'int g( int x ) { return x; }\n' >"$NT/src/a.cpp"; git -C "$NT" add -A; git -C "$NT" commit -qm init
 printf 'int h( int x ) { return g( x ) + 1; }\n' >>"$NT/src/a.cpp"
-NTOUT="$( "$BIN" "$NT" --pr-context --no-cache 2>/dev/null )"
+NTOUT="$( "$BIN" "$NT" --pr-context --no-cache --legend=full 2>/dev/null )"
 if echo "$NTOUT" | grep -q 'files="1"'; then
     echo "$NTOUT" | grep -q 'run_unknown=' \
         && no "run clause: a corpus with NO test file still pays for the run=/run_unknown=/<g> clause" \
@@ -456,11 +458,11 @@ fi
 INFRA_PROBE_ERR="$TMP/f_probe.err"
 RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$ROOT/src" --top-k=5 --pack-signatures --no-cache >/dev/null 2>"$INFRA_PROBE_ERR"
 if grep -aq 'open_memstream failed' "$INFRA_PROBE_ERR"; then PRC_ALERTS=1; else PRC_ALERTS=0; fi
-INFRA_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
+INFRA_FAULT_RENDER_EMIT_THROW=1 "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" --legend=full >"$PRC_FAULT_OUT" 2>"$PRC_FAULT_ERR"
 prc_f_rc=$?
 # and the range must actually name a file, or every assertion below is vacuous
 if [ "$( grep -aoc '<f ' "$PRC_FAULT_OUT" 2>/dev/null || echo 0 )" = "0" ] && ! grep -aq 'THREW' "$PRC_FAULT_ERR"; then
-    "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" 2>/dev/null | grep -aq '<f ' \
+    "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" --legend=full 2>/dev/null | grep -aq '<f ' \
         || no "(F) precondition: --pr-context over the fixture repo names no changed file, so the emitter-throw arm asserts nothing"
 fi
 #
@@ -476,7 +478,7 @@ fi
 # FLAVOUR-INDEPENDENT in the only form that is honest: a healthy document states no such fact and pays no
 # bytes for it, and (F6) below holds the defined-wherever-emitted rule that prbudgetcheck (#10) already
 # holds budget-floor-exceeded to.
-"$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$TMP/f_ctl_legend.out" 2>/dev/null
+"$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" --legend=full >"$TMP/f_ctl_legend.out" 2>/dev/null
 if grep -aq 'est-unmeasured' "$TMP/f_ctl_legend.out"; then
     no "(F-legend) an undegraded --pr-context document carries est-unmeasured — either a false disclosure or a clause charged to every reader who does not need it"
 else
@@ -548,7 +550,7 @@ else
     #      loses is the ESTIMATE; what it must never lose is content, and "same count" would assert the wrong
     #      invariant and fail on any tree whose control trims. Compared by ELEMENT COUNT, not bytes.
     f_files="$( grep -ao '<f ' "$PRC_FAULT_OUT" | wc -l | tr -d ' ' )"
-    "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" >"$TMP/f_ctl.out" 2>/dev/null
+    "$BIN" "$PRC_FIX" --pr-context="$PRC_FAULT_BASE" --legend=full >"$TMP/f_ctl.out" 2>/dev/null
     c_files="$( grep -ao '<f ' "$TMP/f_ctl.out" | wc -l | tr -d ' ' )"
     if [ "${f_files:-0}" -eq 0 ]; then
         no "(F4) the degraded document carries NO <f> row — the degrade lost the content it exists to keep"

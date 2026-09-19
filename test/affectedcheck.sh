@@ -80,7 +80,8 @@ tset(){ printf '%s' "$1" | python3 "$ROOT/test/testrowpaths.py" paths xml | sed 
 cnt(){  printf '%s' "$1" | grep -oE 'tests="[0-9]+"' | head -1 | grep -oE '[0-9]+'; }
 
 # ── 1) change core.cpp → exactly the two tests that reach its symbols ────────────────────────────────
-A="$( run --affected=src/core.cpp )"
+# L1 (2026-09-19): the CLI default legend is compact; $A and $COLL feed arms that read the FULL legend's prose, so they ask for it.
+A="$( run --affected=src/core.cpp --legend=full )"
 { [ "$( cnt "$A" )" = 2 ] && [ "$( tset "$A" )" = "test_leaf.cpp,test_mid.cpp," ]; } \
     && ok "--affected=src/core.cpp: exactly {test_leaf.cpp,test_mid.cpp}, tests=2" \
     || no "--affected=src/core.cpp wrong (tests=$( cnt "$A" ) set=$( tset "$A" ))"
@@ -227,7 +228,7 @@ printf '%s' "$A" | grep -q 'a path count; not every one invokes the binary' \
 # an agent which tests to run. A test file cannot "reach" a change it is part of; it is in the answer because
 # the argument MATCHED it, which is a different fact and is labelled as one.
 CTRL="$( run --affected=src/geo.cpp )"       # unambiguous: matches src/geo.cpp only
-COLL="$( run --affected=geo.cpp )"           # matches src/geo.cpp AND test/check_geo.cpp
+COLL="$( run --affected=geo.cpp --legend=full )"           # matches src/geo.cpp AND test/check_geo.cpp
 ONLYT="$( run --affected=check_geo.cpp )"    # matches the TEST file alone
 attr(){ printf '%s' "$2" | grep -oE "$1=\"[0-9]+\"" | head -1 | grep -oE '[0-9]+'; }
 

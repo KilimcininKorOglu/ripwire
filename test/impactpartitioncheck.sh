@@ -242,8 +242,10 @@ def legend_of(doc):
 CARRIES = [ ("--impact=isPublicApi",  "radius_tested="),
             ("--callers=buildGraph",  "hop_tested="),
             ("--callees=buildGraph",  "hop_tested=") ]
+# L1 (2026-09-19): the CLI default legend is compact; arms (4)/(5) read the FULL legend's caveat and row reading, so the XML
+# runs ask for it (the inertness arm too: the full legend is where a stray caveat would ride).
 for flag, partition_attr in CARRIES:
-    doc = run([flag])
+    doc = run([flag, "--legend=full"])
     lg  = legend_of(doc)
     if partition_attr not in doc:
         no("(4) %s no longer carries %s — this arm measured nothing" % (flag, partition_attr))
@@ -256,7 +258,7 @@ for flag, partition_attr in CARRIES:
 
 INERT = [ "--uses=rootRelPathsLegend", "--for=resolve call edges by name" ]
 for flag in INERT:
-    doc = run([flag])
+    doc = run([flag, "--legend=full"])
     if "radius_tested=" in doc or "hop_tested=" in doc:
         no("(4) %s unexpectedly carries a tested PARTITION — the inertness arm's premise is gone" % flag)
     elif any(a in doc for a in BLIND_ANCHORS):
@@ -295,7 +297,7 @@ for args in (["--callers=distance", "--format=columnar"], ["--callees=total_area
     else:
         ok("(5) %s: the legend reads the column it prints (<tested>%s</tested>)" % (label, col.group(1)))
 
-for args in (["--callers=distance"], ["--impact=distance"]):
+for args in (["--callers=distance", "--legend=full"], ["--impact=distance", "--legend=full"]):
     doc, label = run_fixture(args), " ".join(args)
     lg = legend_of(doc)
     if not re.search(r'<s [^>]*>', doc):

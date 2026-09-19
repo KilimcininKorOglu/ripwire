@@ -115,7 +115,9 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (1) the floor fires: the bundle holds the anchor's file and nothing else ==="
 # ═══════════════════════════════════════════════════════════════════════════
-A_OUT="$( rw --for=FLOORANCHOR_uniquefn )"
+# L1 (2026-09-19): the CLI default legend is compact (it spells the floor as "[floor: kept N of M]"); (3)/(5b) read
+# the FULL header's "relevance floor: kept" wording, so these runs ask for --legend=full, the pre-change default.
+A_OUT="$( rw --for=FLOORANCHOR_uniquefn --legend=full )"
 a_files="$( bundleFiles "$A_OUT" )"
 a_rows="$( printf '%s' "$A_OUT" | grep -o '<d ' | wc -l | tr -d ' ' )"
 if [ "$( printf '%s\n' "$a_files" | grep -c . )" = "1" ] && printf '%s' "$a_files" | grep -q '^src/anchor\.c$'; then
@@ -177,7 +179,7 @@ a_bytes="$( printf '%s' "$A_OUT" | wc -c | tr -d ' ' )"
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (5) nothing matched ⇒ nothing claimed ==="
 # ═══════════════════════════════════════════════════════════════════════════
-Z_OUT="$( rw --for=ZZQQNOSUCHTOKENXYZ )"
+Z_OUT="$( rw --for=ZZQQNOSUCHTOKENXYZ --legend=full )"
 z_rows="$( printf '%s' "$Z_OUT" | grep -o '<d ' | wc -l | tr -d ' ' )"
 z_bytes="$( printf '%s' "$Z_OUT" | wc -c | tr -d ' ' )"
 if [ "$z_rows" = "0" ] && printf '%s' "$Z_OUT" | grep -q '<sigs></sigs>'; then

@@ -110,7 +110,9 @@ est_of(){   "$BIN" "$@" --no-cache 2>/dev/null | grep -oE 'est_tokens=[0-9]+' | 
 # identical to this binary's `test/fixture` map, which arm #1b re-asserts. The fixture's emit ORDER is
 # unchanged (important-first) and the auto-flip threshold (16000) is still >18x this number, so only the
 # pin moved -- no contract did.
-EFIX="$( est_of test/fixture )"
+# L1 (2026-09-19): the CLI default legend is compact; the 863 pin and test/golden.xml were recorded from the full default, so
+# #1/#1b ask for the full legend (byte-identical to the old default); #8 counts real <s> rows, which the compact legend spells in its comment.
+EFIX="$( est_of test/fixture --legend=full )"
 OFIX="$( order_of test/fixture )"
 # RE-PIN 2026-09-12 (row 6, sc=): 884 -> 894. The map legend's sc= reading (the composition rule id = p::sc::n,
 # replacing the shorter id=canonical(...) clause) is +40 B on a fixture whose 14 rows carry ONE scoped symbol, so the
@@ -132,7 +134,7 @@ OFIX="$( order_of test/fixture )"
     || no "test/fixture unexpectedly changed order or est_tokens (est=$EFIX order=$OFIX)"
 
 # ── #1b: byte-identity against the committed golden ─────────────────────────────────────────────────────
-if diff -q <( "$BIN" test/fixture --no-cache 2>/dev/null ) "$ROOT/test/golden.xml" >/dev/null 2>&1; then
+if diff -q <( "$BIN" test/fixture --no-cache --legend=full 2>/dev/null ) "$ROOT/test/golden.xml" >/dev/null 2>&1; then
     ok "test/fixture output byte-identical to test/golden.xml"
 else
     no "test/fixture output DIFFERS from test/golden.xml — golden neutrality broken"
@@ -198,8 +200,8 @@ fi
 #    <s> emitted under auto-flip must equal the LAST <s> emitted under the un-flipped (--no-auto-order)
 #    run on the identical input, proving the auto path actually reverses emit order. A broken
 #    implementation that only rewrites the order= string (without reordering) would fail this. ───────────
-FIRST_AUTO="$( "$BIN" src --top-k=100000 --no-cache 2>/dev/null              | grep -oE '<s [^>]*' | head -1 )"
-LAST_PLAIN="$( "$BIN" src --top-k=100000 --no-auto-order --no-cache 2>/dev/null | grep -oE '<s [^>]*' | tail -1 )"
+FIRST_AUTO="$( "$BIN" src --top-k=100000 --no-cache --legend=full 2>/dev/null | grep -oE '<s [^>]*' | head -1 )"
+LAST_PLAIN="$( "$BIN" src --top-k=100000 --no-auto-order --no-cache --legend=full 2>/dev/null | grep -oE '<s [^>]*' | tail -1 )"
 { [ -n "$FIRST_AUTO" ] && [ "$FIRST_AUTO" = "$LAST_PLAIN" ]; } \
     && ok "self-mutation check: auto-flip is a REAL reorder (first-under-auto == last-under-plain)" \
     || no "self-mutation check FAILED: auto-flip did not actually reorder symbols (first-auto='$FIRST_AUTO' last-plain='$LAST_PLAIN')"

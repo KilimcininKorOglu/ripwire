@@ -77,13 +77,15 @@ run(){ "$BIN" "$@" 2>/dev/null; }
 # ---------------------------------------------------------------------------------------------------
 cap(){ local name="$1"; shift; run "$@" > "$TMP/sweep_$name.xml"; [ -s "$TMP/sweep_$name.xml" ] || rm -f "$TMP/sweep_$name.xml"; }
 
-cap communities   "$BIG" --communities
+# L1 (2026-09-19): the CLI default legend is compact and spells row shapes (<community <bridge <s <x <seam) inside its
+# comment; the (B)/(C) arithmetic arms count real rows, so the captures they read ask for --legend=full.
+cap communities   "$BIG" --communities --legend=full
 cap seams         "$ROOT" --seams
 cap query         "$BIG" --graph-query='kind(all,fn)'
-cap query_small   "$BIG" --graph-query='kind(all,fn)' --top-k=3
-cap impact        "$BIG" --impact=escapeXml
+cap query_small   "$BIG" --graph-query='kind(all,fn)' --top-k=3 --legend=full
+cap impact        "$BIG" --impact=escapeXml --legend=full
 cap extsurface    "$BIG" --external-surface
-cap extsurface_n  "$BIG" --external-surface --pack-top-n=2
+cap extsurface_n  "$BIG" --external-surface --pack-top-n=2 --legend=full
 cap grep          "$BIG" --grep=capped
 cap match         "$BIG" --match='(call_expression)'
 cap lint          "$BIG" --lint
@@ -208,7 +210,7 @@ while [ $i -lt 25 ]; do
     printf 'int callee%d( int x );\nint caller%d( int x ) { return callee%d( x ); }\n' "$i" "$i" "$i" > "$SEAMSRC/m$i/a.c"
     i=$(( i + 1 ))
 done
-run "$SEAMSRC" --seams > "$TMP/seams_big.xml"
+run "$SEAMSRC" --seams --legend=full > "$TMP/seams_big.xml"
 truncated "$TMP/seams_big.xml" seams seam_pairs shown capped seam "(B) --seams"
 
 # ---------------------------------------------------------------------------------------------------
@@ -284,10 +286,10 @@ untruncated(){
     fi
 }
 
-run "$TINY" --communities                    > "$TMP/tiny_communities.xml"
-run "$TINY" --graph-query='kind(all,fn)'     > "$TMP/tiny_query.xml"
-run "$TINY" --impact=leafOne                 > "$TMP/tiny_impact.xml"
-run "$TINY" --external-surface               > "$TMP/tiny_ext.xml"
+run "$TINY" --communities --legend=full      > "$TMP/tiny_communities.xml"
+run "$TINY" --graph-query='kind(all,fn)' --legend=full > "$TMP/tiny_query.xml"
+run "$TINY" --impact=leafOne --legend=full   > "$TMP/tiny_impact.xml"
+run "$TINY" --external-surface --legend=full > "$TMP/tiny_ext.xml"
 # The untruncated --seams case used to point at "$ROOT" on the assumption that this repo sits under the
 # 20-pair cap. That is a property of the tree, not of the tool, and it stopped holding the moment the
 # source layout grew another directory — the gate then reported a FALSE truncation alarm about itself.
@@ -301,7 +303,7 @@ while [ $i -lt 3 ]; do
     printf 'int callee%d( int x );\nint caller%d( int x ) { return callee%d( x ); }\n' "$i" "$i" "$i" > "$SEAMSMALL/m$i/a.c"
     i=$(( i + 1 ))
 done
-run "$SEAMSMALL" --seams                     > "$TMP/tiny_seams.xml"
+run "$SEAMSMALL" --seams --legend=full       > "$TMP/tiny_seams.xml"
 
 untruncated "$TMP/tiny_communities.xml" communities      shown_modules modules_capped community "(C) --communities modules"
 untruncated "$TMP/tiny_query.xml"       query            shown         capped         s         "(C) --graph-query"

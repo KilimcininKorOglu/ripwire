@@ -42,7 +42,9 @@ cd "$ROOT"
 
 echo "fieldaffinitycheck: BIN=$BIN  CORPUS=test/fieldaffinityfix"
 
-"$BIN" "$FIX" --field-affinity --no-cache >"$TMP/out.xml" 2>"$TMP/err.txt"; rc=$?
+# L1 (2026-09-19): the CLI default legend is compact; arm 9 reads the FULL legend's citations and arm 10 counts real
+# <finding rows (the compact legend spells that shape in its comment), so this run asks for the full legend.
+"$BIN" "$FIX" --field-affinity --no-cache --legend=full >"$TMP/out.xml" 2>"$TMP/err.txt"; rc=$?
 [ "$rc" = 0 ] || { echo "  FAIL  --field-affinity exited $rc"; cat "$TMP/err.txt"; exit 1; }
 OUT="$( cat "$TMP/out.xml" )"
 

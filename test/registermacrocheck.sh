@@ -317,7 +317,8 @@ printf '%s' "$DC7_ERR" | grep -q 'register_macrs' \
 printf '%s' "$DC7" | grep -q 'config-warnings="1"' \
     && ok "arm7: --dead-code root carries config-warnings=\"1\"" \
     || { no "arm7: no config-warnings= disclosure on the root"; printf '%s\n' "$DC7" | grep -oE '<dead-code[^>]*>'; }
-DC7_COMMENT="$( printf '%s' "$DC7" | sed -n 's/-->.*$//p' )"
+# L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL legend's definition of config-warnings=, so it asks for it.
+DC7_COMMENT="$( "$BIN" "$A7" --dead-code --no-cache --legend=full 2>/dev/null | sed -n 's/-->.*$//p' )"
 printf '%s' "$DC7_COMMENT" | grep -q 'config-warnings=' \
     && ok "arm7: the leading comment defines config-warnings=" \
     || no "arm7: the leading comment never defines config-warnings="

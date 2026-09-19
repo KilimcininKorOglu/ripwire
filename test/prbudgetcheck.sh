@@ -156,6 +156,9 @@ printf 'int probeEmptyRoot() { return 1; }\n' >> "$FIX/src/mod4.cpp"
 "$BIN" "$FIX" --pr-context --no-cache >"$TMP/wt_dirty" 2>/dev/null
 ( cd "$FIX" && git checkout -- src/mod4.cpp )
 "$BIN" "$FIX" --pr-context --no-cache >"$TMP/wt_clean" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; #9's definition arm reads the FULL legend prose, so it reads full-legend twins.
+"$BIN" "$FIX" --pr-context --no-cache --legend=full >"$TMP/wt_clean_full" 2>/dev/null
+"$BIN" "$FIX" --pr-context="$BASE" --no-cache --legend=full >"$TMP/unc_full" 2>/dev/null
 
 rootattrs(){ grep -oE '<pr-context [^>]*>' "$1" | head -1 | grep -oE '[a-z_]+="' | sed 's/="$//' | LC_ALL=C sort -u; }
 EXEMPT='^(shown|capped|total|has_more|next_offset|offset|limit|next)$'   # the page window: only when a cut happened
@@ -231,8 +234,8 @@ done
 
 # and the legend must DEFINE the attribute the way the recount reads it — a definition that is true of the
 # budgeted root and false of the empty one is the drift prRootOpenText exists to prevent (§B7 class).
-if grep -q 'est_tokens= prices the WHOLE document this bundle emits' "$TMP/wt_clean" \
-   && grep -q 'est_tokens= prices the WHOLE document this bundle emits' "$TMP/unc"; then
+if grep -q 'est_tokens= prices the WHOLE document this bundle emits' "$TMP/wt_clean_full" \
+   && grep -q 'est_tokens= prices the WHOLE document this bundle emits' "$TMP/unc_full"; then
     ok "(#9) both roots' legends define est_tokens as the price of the emitted document"
 else
     no "(#9) the legend does not define est_tokens as the price of the whole emitted document — the number and its definition disagree"
@@ -293,7 +296,8 @@ sweep_root "base root (=$BASE)"            --pr-context="$BASE"
     && ok "(#10) no root claims budget-floor-exceeded while it is inside its budget" \
     || no "(#10) a --pr-context root claimed budget-floor-exceeded on a document that fits its budget"
 # and the legend must DEFINE the label on the root that now carries it, or the attribute is undefined prose
-"$BIN" "$FIX" --pr-context --max-tokens=500 --no-cache >"$TMP/s_lbl" 2>/dev/null
+# L1 (2026-09-19): this arm reads the FULL legend's definition of budget-floor-exceeded, so it asks for the full legend.
+"$BIN" "$FIX" --pr-context --max-tokens=500 --no-cache --legend=full >"$TMP/s_lbl" 2>/dev/null
 if grep -q 'budget-floor-exceeded' "$TMP/s_lbl"; then
     grep -q 'budget-floor-exceeded' "$TMP/s_lbl" && grep -q 'structural floor of every changed file exceeds it' "$TMP/s_lbl" \
         && ok "(#10) the labelled empty-diff root ships the legend clause that defines budget-floor-exceeded" \

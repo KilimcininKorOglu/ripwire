@@ -59,12 +59,13 @@ printf '%s' "$TYPO_OUT" | grep -qE '<suggest[^/]*near="gremlinFn"' \
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (2)+(3) corpus_excluded=/corpus_oversize= — present and EXACT ==="
 # ═══════════════════════════════════════════════════════════════════════════
-EXCL_OUT="$( "$BIN" "$SB" --no-cache --exclude=oversized --grep=CORPUSTOKEN 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; arm (5) reads the FULL legend's prose, so the two runs it reads ask for it.
+EXCL_OUT="$( "$BIN" "$SB" --no-cache --exclude=oversized --grep=CORPUSTOKEN --legend=full 2>/dev/null )"
 printf '%s' "$EXCL_OUT" | grep -qE 'corpus_excluded="1"' \
     && ok "(2) corpus_excluded=\"1\" when --exclude= drops exactly 1 file" \
     || { no "(2) corpus_excluded= missing or wrong"; printf '%s' "$EXCL_OUT" | grep -o '<grep[^>]*>'; }
 
-SIZE_OUT="$( "$BIN" "$SB" --no-cache --max-file-size=64 --grep=CORPUSTOKEN 2>/dev/null )"
+SIZE_OUT="$( "$BIN" "$SB" --no-cache --max-file-size=64 --grep=CORPUSTOKEN --legend=full 2>/dev/null )"
 printf '%s' "$SIZE_OUT" | grep -qE 'corpus_oversize="1"' \
     && ok "(3) corpus_oversize=\"1\" when --max-file-size= drops exactly 1 file" \
     || { no "(3) corpus_oversize= missing or wrong"; printf '%s' "$SIZE_OUT" | grep -o '<grep[^>]*>'; }

@@ -101,8 +101,10 @@ mkrepo "$WORK/shifted" "$OLD_BASE"
 names(){ printf '%s' "$1" | grep -oE '<s [^>]*n="[^"]*"' | grep -oE 'n="[^"]*"' | sed 's/n="//;s/"//' | tr '\n' ' '; }
 
 # ── arm 1: accepted, non-empty, deterministic ────────────────────────────────────────────────────────
-A="$( "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache 2>"$WORK/e1" )"; ec=$?
-B="$( "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; arms 2/6/7 read the FULL legend's prose and the first <f>/<recent>
+# tags (the compact legend spells <f p=>/<recent n= of=> inside its comment), so these runs ask for the full legend.
+A="$( "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache --legend=full 2>"$WORK/e1" )"; ec=$?
+B="$( "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache --legend=full 2>/dev/null )"
 if [ "$ec" = 0 ] && [ -n "$A" ] && printf '%s' "$A" | grep -q '<s '; then
     ok "arm 1a: --rank-by=churn-decay accepted, non-empty (exit 0)"
 else
@@ -172,7 +174,7 @@ fi
 # (35 KB on rocksdb) and no file-level row at all. <recent> lists the n= files with the largest decayed weight
 # — new.py (2 commits at HEAD's day, weight ≈ 2.0) before old.py (6 commits 400 days back, ≈ 0.28) — with
 # age_d= on HEAD's clock and the weight the ranker used, and it precedes every <f> group.
-R6="$( perl -e 'alarm 20; exec @ARGV' "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache 2>/dev/null )"
+R6="$( perl -e 'alarm 20; exec @ARGV' "$BIN" "$WORK/recent" --rank-by=churn-decay --no-cache --legend=full 2>/dev/null )"
 # The CLOSED attribute set, not a prefix. This arm was loosened to a prefix match when merge_bombs_skipped=
 # landed, and a prefix cannot see an attribute ADDED after of= — which is exactly how the window's
 # merge_bombs_skipped= came to be stamped on the scoped block too, unnoticed by any arm here. arm 7h pins only
@@ -229,7 +231,7 @@ GIT_AUTHOR_DATE="$stamp +0000" GIT_COMMITTER_DATE="$stamp +0000" git -C "$BOMB" 
 bombfiles="$( git -C "$BOMB" show --name-only --format= HEAD 2>/dev/null | grep -c . )"
 [ "$bombfiles" = 101 ] && ok "arm 7 guard: the bomb commit touches 101 files (> the 100-file rule)" \
                        || no "arm 7 guard: the bomb commit touches $bombfiles files, not 101 — the arm below would be vacuous"
-R7="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$BOMB" --rank-by=churn-decay --no-cache 2>/dev/null )"
+R7="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$BOMB" --rank-by=churn-decay --no-cache --legend=full 2>/dev/null )"
 r7_recent="$( printf '%s' "$R7" | grep -oE '<recent [^>]*>' | head -1 )"
 [ -n "$r7_recent" ] && ok "arm 7 guard: the bomb fixture emits a <recent> block ($r7_recent)" \
                     || no "arm 7 guard: no <recent> block on the bomb fixture — nothing below can be asserted"

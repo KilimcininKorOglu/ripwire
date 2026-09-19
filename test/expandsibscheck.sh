@@ -39,7 +39,9 @@ echo "expandsibscheck: BIN=$BIN  FIX=$FIX"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
 # ── (A) basic.c: 2 siblings, 2 includes — present, exact, no cap disclosure ────────────────────────────
-"$BIN" "$FIX" --expand=alphaFn --top-k=0 --no-cache >"$TMP/basic.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and spells '<b t= … sibs= inc=>' inside its comment, which the first-'<b ' greps
+# below would read instead of the real row; (F) reads the FULL legend's prose. So these runs ask for the full legend.
+"$BIN" "$FIX" --expand=alphaFn --top-k=0 --no-cache --legend=full >"$TMP/basic.xml" 2>/dev/null
 BTAG="$( grep -oE '<b [^>]*>' "$TMP/basic.xml" | head -1 )"
 printf '%s' "$BTAG" | grep -q 'sibs="betaFn,gammaFn"' \
     && ok "(A) alphaFn's sibs= lists betaFn,gammaFn in source order" \
@@ -62,7 +64,7 @@ printf '%s' "$BTAG" | grep -q 'inc_capped=' \
 # lane) defines sibs=/inc= in PROSE right beside this element ('sibs="a,b,..."' as example syntax), and a
 # document-wide grep for the bare attribute spelling matches that prose too. Same tag-isolation technique
 # arm (A) already uses (BTAG) so the two arms drift together, not apart.
-"$BIN" "$FIX" --expand=lonelyFn --top-k=0 --no-cache >"$TMP/lonely.xml" 2>/dev/null
+"$BIN" "$FIX" --expand=lonelyFn --top-k=0 --no-cache --legend=full >"$TMP/lonely.xml" 2>/dev/null
 LONELY_BTAG="$( grep -oE '<b [^>]*>' "$TMP/lonely.xml" | head -1 )"
 if printf '%s' "$LONELY_BTAG" | grep -q 'sibs='; then
     no "(B) lonelyFn (the only def in its file) still carries sibs= — should be absent: $LONELY_BTAG"
@@ -76,7 +78,7 @@ else
 fi
 
 # ── (C) manyfn.c: 144 siblings (cap 100) / 30 includes (cap 24) — BOTH capped, BOTH totals true ─────────
-"$BIN" "$FIX" --expand=manyFn000 --top-k=0 --no-cache >"$TMP/many.xml" 2>/dev/null
+"$BIN" "$FIX" --expand=manyFn000 --top-k=0 --no-cache --legend=full >"$TMP/many.xml" 2>/dev/null
 MTAG="$( grep -oE '<b [^>]*>' "$TMP/many.xml" | head -1 )"
 printf '%s' "$MTAG" | grep -q 'sibs_total="144"' \
     && ok "(C) sibs_total=\"144\" — the TRUE count, unaffected by the cap" || no "(C) sibs_total wrong: $MTAG"
@@ -142,7 +144,7 @@ if command -v xmllint >/dev/null 2>&1; then
 else
     printf '  SKIP  xmllint not installed\n'
 fi
-"$BIN" "$FIX" --expand=manyFn000 --top-k=0 --no-cache >"$TMP/many2.xml" 2>/dev/null
+"$BIN" "$FIX" --expand=manyFn000 --top-k=0 --no-cache --legend=full >"$TMP/many2.xml" 2>/dev/null
 diff -q "$TMP/many.xml" "$TMP/many2.xml" >/dev/null \
     && ok "(E) sibs=/inc= output byte-identical across two runs" \
     || no "(E) sibs=/inc= output non-deterministic"
@@ -153,7 +155,7 @@ diff -q "$TMP/many.xml" "$TMP/many2.xml" >/dev/null \
 printf '%s' "$( cat "$TMP/basic.xml" )" | grep -q 'sibs_total=N' \
     && ok "(F) --top-k=0 payload-only mode carries the sibs=/inc=/calls legend" \
     || no "(F) --top-k=0 payload-only mode has no sibs=/inc=/calls legend (basic.xml)"
-WITHMAP_XML="$( "$BIN" "$FIX" --top-k=5 --expand=alphaFn --no-cache 2>/dev/null )"
+WITHMAP_XML="$( "$BIN" "$FIX" --top-k=5 --expand=alphaFn --no-cache --legend=full 2>/dev/null )"
 printf '%s' "$WITHMAP_XML" | grep -q 'sibs_total=N' \
     && ok "(F) with-map bundle mode ALSO carries the sibs=/inc=/calls legend" \
     || no "(F) with-map bundle mode has no sibs=/inc=/calls legend"

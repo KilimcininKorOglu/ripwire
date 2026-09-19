@@ -89,7 +89,8 @@ printf '%s' "$MSG" | grep -q -- '--pack-task' \
 
 # ─────────────────────────── §B1.5: the columnar legend ──────────────────────────────────────────────────
 for verb in "--callers=beta" "--callees=alpha" "--uses=beta" "--impact=beta"; do
-    OUT="$( "$BIN" "$SBX" "$verb" --format=columnar 2>/dev/null )"
+    # L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL legend's separate columnar comment, so it asks for it.
+    OUT="$( "$BIN" "$SBX" "$verb" --format=columnar --legend=full 2>/dev/null )"
     [ -n "$OUT" ] || { no "$verb --format=columnar produced no output"; continue; }
     # extract the columnar legend by delimiter, not by a `[^>]*` class: the legend legitimately NAMES the
     # elements it describes (<paths>, <cols>), and --uses ships its own verb legend ahead of it

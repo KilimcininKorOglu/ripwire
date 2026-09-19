@@ -136,7 +136,8 @@ fi
 # the numbers is misled — the R13 shape lifted one level. Swept over the WHOLE emitting family from source,
 # not from a remembered list: whatever spells untested= must carry the clause.
 UNIT_FAM="$( grep -rlF 'untested=\"' "$ROOT/src" 2>/dev/null | sed 's|.*/||' | sort | tr '\n' ' ' )"
-probe_unit(){ "$BIN" "$ROOT" $1 2>/dev/null | grep -oE '<!--.*?-->' | head -1; }
+# L1 (2026-09-19): the CLI default legend is compact; (g) reads the FULL legend's UNIT: prose, so probe_unit asks for it.
+probe_unit(){ "$BIN" "$ROOT" $1 --legend=full 2>/dev/null | grep -oE '<!--.*?-->' | head -1; }
 u_ok=1
 for spec in "--seams:EDGES" "--test-gate=src/editcheck.h:SYMBOLS" "--flags --flip=RIPWIRE_ASAN:HOSTS"; do
     _v="${spec%:*}"; _unit="${spec##*:}"

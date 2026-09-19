@@ -270,7 +270,9 @@ rm "$R2/docs_capture.md"
 git -C "$R2" commit -qam "drop the stale capture doc (the helper itself is untouched)"
 
 C6="$TMP/t6"; mkdir -p "$C6"
-TMPDIR="$C6" "$BIN" "$R2" --whereis=stableOnHeadHelper --with-history >"$TMP/w4" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; L10b reads the FULL legend's prose off w4 (and its w5 negative control
+# must be the same posture to mean anything), so both runs ask for it.
+TMPDIR="$C6" "$BIN" "$R2" --whereis=stableOnHeadHelper --with-history --legend=full >"$TMP/w4" 2>/dev/null
 grep -q 'on-head="1"' "$TMP/w4" \
     && ok "L10 fixture sanity: stableOnHeadHelper is on-head=1 (it is still defined in relief.h)" \
     || { no "L10 fixture broken: expected on-head=1"; cat "$TMP/w4"; }
@@ -299,7 +301,7 @@ fi
 grep -q 'history probed="1" means the git-log name-history walk ran' "$TMP/w4" \
     && ok "L10b: --whereis --with-history legend now DEFINES the <history> element" \
     || no "L10b: --whereis --with-history legend still does not define <history>"
-"$BIN" "$R2" --whereis=stableOnHeadHelper >"$TMP/w5" 2>/dev/null
+"$BIN" "$R2" --whereis=stableOnHeadHelper --legend=full >"$TMP/w5" 2>/dev/null
 grep -q 'history probed="1" means' "$TMP/w5" \
     && no "L10b: plain --whereis (no --with-history) carries the <history> legend clause it has no element for" \
     || ok "L10b: plain --whereis pays nothing for the <history> clause (no --with-history, no <history> element either)"

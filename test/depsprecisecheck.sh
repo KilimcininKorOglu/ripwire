@@ -123,7 +123,8 @@ fi
 # §A10.11: --deps emits three files=-family counts (root files=, <health files=>, <health dep_files=>)
 # under one attribute name in two different places — the legend must name all three denominators, the
 # same disclosure --owners already carries for its own files= DEPTH collision.
-DOUT="$( "$BIN" "$FIX" --deps --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL legend's prose, so it asks for it.
+DOUT="$( "$BIN" "$FIX" --deps --no-cache --legend=full 2>/dev/null )"
 printf '%s' "$DOUT" | grep -q 'health dep_files= = the dependency-CAPABLE subset' \
     && ok "--deps legend names all three files=-family denominators (§A10.11)" \
     || no "--deps legend does not disclose the three files=-family denominators"

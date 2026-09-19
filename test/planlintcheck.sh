@@ -228,7 +228,9 @@ rm -rf "$WORK"
 # real-dialect path); T5 is named by NEITHER — the genuine unlaunched-card catch, mid-wave, this verb
 # exists for; T7's own body names lettered sub-tasks T7a/T7b, and the ledger tracks THOSE ids, never
 # bare "T7" — proving the digit-fold does not require an exact spelling match to read as launched.
-LEDGER_OUT="$( cd "$ROOT" && "$BIN" . --plan-lint=test/planlintfix/wave_ledger.md --no-cache )"; LEDGER_RC=$?
+# L1 (2026-09-19): the CLI default legend is compact (its root leads with schema=); arm (9) greps the full-default
+# root start-tag byte for byte, so it asks for --legend=full.
+LEDGER_OUT="$( cd "$ROOT" && "$BIN" . --plan-lint=test/planlintfix/wave_ledger.md --no-cache --legend=full )"; LEDGER_RC=$?
 
 if printf '%s' "$LEDGER_OUT" | grep -q 'cards="4"'; then ok "(9) cards=\"4\" (T1, T2, T5, T7)"; else no "(9) cards=\"4\" missing"; fi
 

@@ -49,7 +49,9 @@ CORPUS=test/fixture
 root_of(){ grep -o "<$1 [^>]*>" | head -1; }
 
 # ── 1) a small literal scan claims: every hit printed, no ceiling, no cap ──────────────────────────────
-"$BIN" "$CORPUS" --grep=distance --grep-in=any >"$TMP/g1.xml" 2>/dev/null; rc=$?
+# L1 (2026-09-19): the CLI default legend is compact; arm 2 reads the FULL legend's complete= definition, so g1
+# (and its determinism twin g1b) ask for it.
+"$BIN" "$CORPUS" --grep=distance --grep-in=any --legend=full >"$TMP/g1.xml" 2>/dev/null; rc=$?
 G1ROOT="$( root_of grep <"$TMP/g1.xml" )"
 { [ $rc -eq 0 ] && printf '%s' "$G1ROOT" | grep -q 'complete="1"'; } \
     && ok 'grep: small literal scan carries complete="1" on the root' \
@@ -182,7 +184,7 @@ C1ROOT="$( root_of callers <"$TMP/c1.xml" )"
     || { no 'callers: complete= appeared beside a floored count, or the floor marker is gone'; printf '%s\n' "$C1ROOT"; }
 
 # ── 11) determinism + well-formedness of a claiming document ───────────────────────────────────────────
-"$BIN" "$CORPUS" --grep=distance --grep-in=any >"$TMP/g1b.xml" 2>/dev/null
+"$BIN" "$CORPUS" --grep=distance --grep-in=any --legend=full >"$TMP/g1b.xml" 2>/dev/null
 diff -q "$TMP/g1.xml" "$TMP/g1b.xml" >/dev/null \
     && ok 'grep: a claiming answer is byte-deterministic across runs' \
     || no 'grep: claiming answer differs across two runs'
@@ -222,7 +224,7 @@ if command -v git >/dev/null 2>&1; then
     g checkout -q main
 
     # ── 13) an uncut tree scan claims ──────────────────────────────────────────────────────────────────
-    "$BIN" "$R" --whereis=zqWhereToken --no-cache >"$TMP/w1.xml" 2>/dev/null; rc=$?
+    "$BIN" "$R" --whereis=zqWhereToken --no-cache --legend=full >"$TMP/w1.xml" 2>/dev/null; rc=$?
     W1ROOT="$( root_of whereis <"$TMP/w1.xml" )"
     { [ $rc -eq 0 ] && printf '%s' "$W1ROOT" | grep -q 'complete="1"'; } \
         && ok 'whereis: an uncut full-tree scan carries complete="1"' \

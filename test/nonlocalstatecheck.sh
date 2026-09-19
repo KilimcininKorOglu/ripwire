@@ -251,7 +251,8 @@ PY
 [ $? -eq 0 ] || fail=1
 
 # ── (I cont.) the legend must NAME the unsound cases rather than let the reader assume soundness ───────
-legend="$( "$BIN" "$FIXTURE" --nonlocal-state --no-cache 2>/dev/null | head -c 4000 )"
+# L1 (2026-09-19): the CLI default legend is compact; (I) reads the FULL legend's prose, so it asks for it.
+legend="$( "$BIN" "$FIXTURE" --nonlocal-state --no-cache --legend=full 2>/dev/null | head -c 4000 )"
 missing=""
 for phrase in "indirect" "alias" "shadow"; do
     printf '%s' "$legend" | grep -qi -- "$phrase" || missing="$missing $phrase"

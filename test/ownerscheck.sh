@@ -221,7 +221,8 @@ if command -v git >/dev/null 2>&1; then
     printf 'int twinned( double q ) { return 0; }\n'   > "$OF/b/two.h"
     ( cd "$OF" && git init -q && git config user.email t@t && git config user.name t \
       && git config commit.gpgsign false && git add -A && git commit -qm init ) >/dev/null 2>&1
-    OW="$( "$BIN" "$OF" --owners=twinned --no-cache 2>/dev/null )"
+    # L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL legend's defs= prose, so it asks for it.
+    OW="$( "$BIN" "$OF" --owners=twinned --no-cache --legend=full 2>/dev/null )"
     CD="$( "$BIN" "$OF" --callers=twinned --no-cache 2>/dev/null | grep -oE 'defs="[0-9]+"' | head -1 )"
     OD="$( printf '%s' "$OW" | grep -oE '<owners [^>]*' | grep -oE 'defs="[0-9]+"' | head -1 )"
     { [ -n "$OD" ] && [ "$OD" = "$CD" ]; } \

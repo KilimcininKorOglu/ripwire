@@ -125,7 +125,8 @@ grep -q '<b [^>]*><!\[CDATA\[' "$TMP/nofit" \
     || ok "no-fit case: no body bytes at all (never a truncated one — whole-body-or-nothing still holds)"
 
 # ── #4: --signatures-only opts out; guarded against misuse ──────────────────────────────────────────────
-"$BIN" src --for="$TASK" --signatures-only --no-cache >"$TMP/sigonly" 2>/dev/null; rc=$?
+# L1 (2026-09-19): the CLI default legend is compact and spells bundle= inside its comment; #4 greps for the attribute, so this run asks for the full legend.
+"$BIN" src --for="$TASK" --signatures-only --no-cache --legend=full >"$TMP/sigonly" 2>/dev/null; rc=$?
 { [ "$rc" = 0 ] && ! grep -q 'bundle=' "$TMP/sigonly" && ! grep -q '<bodies [^>]*>' "$TMP/sigonly"; } \
     && ok "--signatures-only restores the signatures-only bundle (no bundle= attr, no <bodies>)" \
     || no "--signatures-only did not restore the pre-T3 shape (rc=$rc)"

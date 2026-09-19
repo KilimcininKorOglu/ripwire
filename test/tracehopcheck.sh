@@ -108,7 +108,9 @@ ValueError: boom
 EOF
 
 R="$WORK/repo"
-"$BIN" "$R" --from-trace="$WORK/traces/callee.txt"   > "$WORK/out.callee"   2>"$WORK/err.callee"
+# L1 (2026-09-19): the CLI default legend is compact; (H3b)/(H3c) read the FULL legend's prose, so out.callee and its
+# determinism twins (H8a) ask for --legend=full, the pre-change default.
+"$BIN" "$R" --from-trace="$WORK/traces/callee.txt" --legend=full > "$WORK/out.callee"   2>"$WORK/err.callee"
 "$BIN" "$R" --from-trace="$WORK/traces/basename.txt" > "$WORK/out.basename" 2>/dev/null
 "$BIN" "$R" --from-trace="$WORK/traces/source.txt"   > "$WORK/out.source"   2>/dev/null
 
@@ -190,8 +192,8 @@ if [ -n "$callee" ] && [ -n "$basen" ] && [ -n "$capped" ] \
 else no "(H7b) callee='$callee' basename='$basen' rows='$actual' capped='$capped' do not close"; fi
 
 # ── (H8) determinism + well-formedness ─────────────────────────────────────────────────────────────
-"$BIN" "$R" --from-trace="$WORK/traces/callee.txt" > "$WORK/d2" 2>/dev/null
-"$BIN" "$R" --from-trace="$WORK/traces/callee.txt" > "$WORK/d3" 2>/dev/null
+"$BIN" "$R" --from-trace="$WORK/traces/callee.txt" --legend=full > "$WORK/d2" 2>/dev/null
+"$BIN" "$R" --from-trace="$WORK/traces/callee.txt" --legend=full > "$WORK/d3" 2>/dev/null
 if cmp -s "$WORK/out.callee" "$WORK/d2" && cmp -s "$WORK/out.callee" "$WORK/d3"; then ok "(H8a) the hop bundle is byte-identical across three runs"
 else no "(H8a) the hop bundle is byte-identical across three runs"; fi
 if command -v xmllint >/dev/null 2>&1; then

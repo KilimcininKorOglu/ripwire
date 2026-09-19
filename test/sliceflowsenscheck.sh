@@ -152,7 +152,9 @@ R="$( printf '%s' "$S" | grep -oE 'use_rows=[0-9]+' | cut -d= -f2 )"
     || no "(1) disappearances: unexplained=${U:-?} spurious=${P:-?}"
 
 # ── (2) reach= per family ───────────────────────────────────────────────────────────────────────────
-C="$( run --slice=joins.cpp:cj01:x )"
+# L1 (2026-09-19): the CLI default legend is compact; (3) reads the FULL legend and (4) compares compact rows to the
+# full tier, so this capture (and its determinism twin C2) ask for --legend=full, the pre-change default.
+C="$( run --slice=joins.cpp:cj01:x --legend=full )"
 Y="$( run --slice=joins.py:pj01:x )"
 J="$( run --slice=linear.js:lj01:x )"
 [ "$( attr "$C" reach )" = 'reach="cfg"' ] && [ "$( attr "$Y" reach )" = 'reach="cfg"' ] \
@@ -222,7 +224,7 @@ FBC="$( run --slice=joins.cpp:cj11:y --slice-flow=back --legend=compact )"
     || { no '(7) MCP and CLI slice payloads differ on the fixture'; printf '%s\n' "$MCP" | head -c 400; echo; }
 
 # ── (8) determinism ─────────────────────────────────────────────────────────────────────────────────
-C2="$( run --slice=joins.cpp:cj01:x )"; Y2="$( run --slice=joins.py:pj01:x )"
+C2="$( run --slice=joins.cpp:cj01:x --legend=full )"; Y2="$( run --slice=joins.py:pj01:x )"
 if [ "$C" = "$C2" ] && [ "$Y" = "$Y2" ]; then ok '(8) determinism x2 (C++ and Python runs byte-identical)'; else no '(8) output differs between runs'; fi
 
 # ── (9) well-formedness ─────────────────────────────────────────────────────────────────────────────

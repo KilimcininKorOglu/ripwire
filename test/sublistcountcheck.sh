@@ -195,14 +195,17 @@ read -r r1_root r1_count r1_shown r1_capped r1_rows <<<"$( sublist_facts "$TMP/r
 # ═══════════════════════════════════════════════════════════════════════════
 echo "=== (5) reconciliation from the root alone, and absent-means-none ==="
 # ═══════════════════════════════════════════════════════════════════════════
-"$BIN" "$ROOT/test/fixture" --no-cache --grep=int >"$TMP/fx.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and spells `<unindexed` inside its comment; (5b) greps for the real
+# element and (5c) reads the FULL legend, so those documents ask for the full legend.
+"$BIN" "$ROOT/test/fixture" --no-cache --grep=int --legend=full >"$TMP/fx.xml" 2>/dev/null
 grep -q 'unindexed_hits="0"' "$TMP/fx.xml" \
     && ok "(5a) unindexed_hits=\"0\" is stated even when nothing outside the index matched" \
     || { no "(5a) unindexed_hits= is missing on a corpus with no unindexed hits — a zero must be an answer, not an absence"; grep -o '<grep [^>]*>' "$TMP/fx.xml" | head -1; }
 grep -q '<unindexed' "$TMP/fx.xml" \
     && no "(5b) an empty <unindexed> element was emitted (absent-means-none is the convention)" \
     || ok "(5b) no <unindexed> element when there is nothing to list"
-python3 - "$TMP/d.xml" <<'PY' >"$TMP/legend.res" 2>&1
+"$BIN" "$ROOT" --grep=DISCLOSE --legend=full >"$TMP/d_full.xml" 2>/dev/null
+python3 - "$TMP/d_full.xml" <<'PY' >"$TMP/legend.res" 2>&1
 import sys, re
 t = open( sys.argv[1] ).read()
 legend = " ".join( re.findall( r"<!--(.*?)-->", t, re.S ) ).lower()

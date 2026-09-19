@@ -55,7 +55,9 @@ echo "=== R1a: zero hits — honest none-found PLUS the two suggestions ==="
 
 # (1) [red] a one-edit typo of a real fixture symbol: hits="0" preserved, near= names the real symbol,
 #     next= is the ready-to-paste --for fallback. Exit stays 0 (a zero is a measurement, not an error).
-"$BIN" "$FIX" --no-cache --grep=perimeterr >"$TMP/typo.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact (its root also carries schema=); (1a) pins the full-posture root and
+# (1c)/(10)/(10b) read the FULL legend's prose, so typo.xml/dist.xml and their determinism twins ask for the full legend.
+"$BIN" "$FIX" --no-cache --legend=full --grep=perimeterr >"$TMP/typo.xml" 2>/dev/null
 e=$?
 [ "$e" = 0 ] \
     && ok "(1) zero-hit grep still exits 0" \
@@ -110,8 +112,8 @@ fi
 xmllint --noout "$TMP/typo.xml" 2>/dev/null \
     && ok "(6) G4: zero-hit suggesting output is well-formed XML" \
     || no "(6) G4: zero-hit suggesting output is malformed XML"
-"$BIN" "$FIX" --no-cache --grep=perimeterr >"$TMP/det2.xml" 2>/dev/null
-"$BIN" "$FIX" --no-cache --grep=perimeterr >"$TMP/det3.xml" 2>/dev/null
+"$BIN" "$FIX" --no-cache --legend=full --grep=perimeterr >"$TMP/det2.xml" 2>/dev/null
+"$BIN" "$FIX" --no-cache --legend=full --grep=perimeterr >"$TMP/det3.xml" 2>/dev/null
 { diff -q "$TMP/typo.xml" "$TMP/det2.xml" >/dev/null && diff -q "$TMP/typo.xml" "$TMP/det3.xml" >/dev/null; } \
     && ok "(6b) determinism ×3: byte-identical zero-hit output" \
     || no "(6b) determinism ×3: zero-hit output differs across runs"
@@ -124,7 +126,7 @@ echo "=== R1b: non-zero hits — <enc> rows carry callers= + lens, page-bounded 
 # fixture ground truth (hand-verified): distance is declared in geometry.h and defined in geometry.cpp;
 # perimeter (geometry.cpp) and diagonal (sub/consumer.cpp) call it. Grep hits for "distance" therefore
 # enclose several DISTINCT symbols, and the geometry.cpp def's row must carry its 1-hop caller count.
-"$BIN" "$FIX" --no-cache --grep=distance >"$TMP/dist.xml" 2>/dev/null
+"$BIN" "$FIX" --no-cache --legend=full --grep=distance >"$TMP/dist.xml" 2>/dev/null
 
 # (7) [red] <enc> rows exist, and the def's row carries a positive callers= count
 grep -q '<enc n="distance" callers="' "$TMP/dist.xml" \
@@ -192,8 +194,8 @@ grep -q '<enc n="distance" callers="2" defs="2" cx="1" amp="' "$TMP/distm.xml" \
     || no "(12c) [red] metrics co-run: no amp= on the distance enc row: $( grep -o '<enc n="distance"[^>]*>' "$TMP/distm.xml" | head -1 )"
 
 # (13) determinism ×3 + G4 on the enriched output
-"$BIN" "$FIX" --no-cache --grep=distance >"$TMP/ddet2.xml" 2>/dev/null
-"$BIN" "$FIX" --no-cache --grep=distance >"$TMP/ddet3.xml" 2>/dev/null
+"$BIN" "$FIX" --no-cache --legend=full --grep=distance >"$TMP/ddet2.xml" 2>/dev/null
+"$BIN" "$FIX" --no-cache --legend=full --grep=distance >"$TMP/ddet3.xml" 2>/dev/null
 { diff -q "$TMP/dist.xml" "$TMP/ddet2.xml" >/dev/null && diff -q "$TMP/dist.xml" "$TMP/ddet3.xml" >/dev/null; } \
     && ok "(13) determinism ×3: byte-identical enriched output" \
     || no "(13) determinism ×3: enriched output differs across runs"

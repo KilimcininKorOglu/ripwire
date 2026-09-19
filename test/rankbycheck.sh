@@ -29,7 +29,9 @@ cd "$ROOT"
 
 echo "rankbycheck: BIN=$BIN  CORPUS=test/rankbyfix"
 
-r(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$FIX" --rank-by="$1" --no-cache 2>/dev/null; }
+# L1 (2026-09-19): the CLI default legend is compact and spells a <s row shape inside its comment; sym_count counts
+# real rows and L10 reads the FULL churn legend's mechanism clause, so those runs ask for --legend=full.
+r(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$FIX" --rank-by="$1" --no-cache --legend=full 2>/dev/null; }
 top_name(){ printf '%s' "$1" | grep -oE '<s [^>]*n="[^"]*"' | head -1 | grep -oE 'n="[^"]*"' | sed 's/n="//;s/"//'; }
 sym_count(){ printf '%s' "$1" | grep -oE '<s ' | wc -l | tr -d ' '; }
 
@@ -149,8 +151,8 @@ for i in $( seq 1 20 ); do
     commit_file leaf.py "2026-06-$(( 10 + i ))T00:00:00" "leaf edit $i"
 done
 
-PR_OUT2="$(    perl -e 'alarm 15; exec @ARGV' "$BIN" "$REPO" --rank-by=pagerank --no-cache 2>/dev/null )"
-CHURN_OUT2="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$REPO" --rank-by=churn    --no-cache 2>/dev/null )"
+PR_OUT2="$(    perl -e 'alarm 15; exec @ARGV' "$BIN" "$REPO" --rank-by=pagerank --no-cache --legend=full 2>/dev/null )"
+CHURN_OUT2="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$REPO" --rank-by=churn    --no-cache --legend=full 2>/dev/null )"
 pr_top2="$(    top_name "$PR_OUT2" )"
 churn_top2="$( top_name "$CHURN_OUT2" )"
 { [ "$pr_top2" != "leafFn" ] && [ "$churn_top2" = "leafFn" ] && [ "$pr_top2" != "$churn_top2" ]; } \

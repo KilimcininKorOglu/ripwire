@@ -60,7 +60,9 @@ cat > "$FIX/single.md" <<'EOF'
 Just one mention of `widget_pipeline_process` here.
 EOF
 
-OUT="$( "$BIN" "$FIX" --mentions=widget_pipeline_process --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; arm 3 reads the FULL legend's prose and arm 4 counts real <doc p= rows
+# (the compact legend spells row shapes inside its comment), so this document asks for the full legend.
+OUT="$( "$BIN" "$FIX" --mentions=widget_pipeline_process --no-cache --legend=full 2>/dev/null )"
 [ -n "$OUT" ] || { echo "no output — binary or fixture broken"; exit 2; }
 
 # ── 1) exactly ONE row per file — no duplicate p= (the 3x-overcount bug's most visible symptom) ────────
@@ -108,7 +110,7 @@ if command -v xmllint >/dev/null 2>&1; then
 else
     printf '  SKIP  xml well-formed (no xmllint)\n'
 fi
-OUT2="$( "$BIN" "$FIX" --mentions=widget_pipeline_process --no-cache 2>/dev/null )"
+OUT2="$( "$BIN" "$FIX" --mentions=widget_pipeline_process --no-cache --legend=full 2>/dev/null )"
 if [ "$OUT" = "$OUT2" ]; then ok "deterministic (byte-identical run-to-run)"; else no "non-deterministic output"; fi
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

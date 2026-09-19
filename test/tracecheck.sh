@@ -239,8 +239,10 @@ fi
 # M11 (2026-09-04): the root's est_tokens= prices the document INCLUDING the label's own bytes, so it is the
 # fourth (derived) place the label shows — normalised with it.
 norm(){ printf '%s' "$1" | sed -E 's/src="[^"]*"/src="X"/; s/trace-to-locus for "[^"]*"/trace-to-locus for "X"/; s/<ctx task="[^"]*"/<ctx task="X"/; s/ est_tokens="[0-9]+"//'; }
-STDIN_OUT="$( cd "$WORK" && "$BIN" . --from-trace=- --no-cache < "$WORK/traces/py.txt" 2>/dev/null )"
-FILE_OUT="$( tr_run py.txt )"
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema= (so norm's '<ctx task=' never fires) and whose
+# legend echoes the source label; both operands ask for the full legend (FILE_OUT is tr_run's exact invocation plus --legend=full).
+STDIN_OUT="$( cd "$WORK" && "$BIN" . --from-trace=- --no-cache --legend=full < "$WORK/traces/py.txt" 2>/dev/null )"
+FILE_OUT="$( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" --no-cache --legend=full 2>/dev/null )"
 [ "$( norm "$STDIN_OUT" )" = "$( norm "$FILE_OUT" )" ] \
     && ok "'-' reads the trace from stdin (identical bundle apart from the source label)" \
     || { no "stdin form differs from the file form beyond the source label"; diff <(norm "$STDIN_OUT") <(norm "$FILE_OUT") | head; }
@@ -354,7 +356,9 @@ cat > "$WORK/a2/traces/stale.txt" <<'EOF'
     #0 0x1 in alpha src/mod.cpp:8:1
     #1 0x2 in __libc_start_main /usr/lib/libc.so.6:0
 EOF
-STALE="$( a2_run stale.txt )"
+# L1 (2026-09-19): the CLI default legend is compact; (A2b/c) reads the FULL legend's prose off $STALE, so this run asks for it
+# (a2_run's exact invocation plus --legend=full).
+STALE="$( cd "$WORK/a2" && "$BIN" . --from-trace="traces/stale.txt" --no-cache --legend=full 2>/dev/null )"
 [ "$( a2_attr n frame "$STALE" )" = "alpha" ] \
     && ok "(A2a) a stale-line frame resolves to the symbol it NAMES (alpha), not the one squatting on the line" \
     || { no "(A2a) rank 1 is not alpha — the frame's own name was discarded"; printf '%s' "$STALE" | grep -oE '<frame[^>]*>'; }

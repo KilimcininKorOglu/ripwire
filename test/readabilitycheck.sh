@@ -205,7 +205,8 @@ fi
 # precision at 3 decimals for a high-volume function). The legend must say so, AND the ORDER must still be
 # real: among the saturated rows, vol= (the documented tie-break) must be non-increasing — proof the ranking
 # did not collapse into an arbitrary/ID-order tie just because P itself is illegible.
-REAL_OUT="$( "$BIN" "$ROOT" --readability --limit=10 --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; (G) reads the FULL legend's prose, so this run asks for it.
+REAL_OUT="$( "$BIN" "$ROOT" --readability --limit=10 --no-cache --legend=full 2>/dev/null )"
 printf '%s' "$REAL_OUT" | grep -q 'sigmoid SATURATES at the least-readable extreme' \
     && ok "(G) legend discloses sigmoid saturation at the least-readable extreme" \
     || no "(G) legend does not disclose sigmoid saturation"

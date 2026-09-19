@@ -108,7 +108,8 @@ for fx in cppqualfix nestedqualfix; do
         [ -n "$cid" ] || continue
         n=$(( n + 1 ))
         cpath="${cid%%::*}"; cname="${cid##*::}"
-        out="$( "$BIN" "test/$fx" --no-cache --top-k=0 "--expand=$cid" 2>&1 </dev/null )"; rc=$?
+        # L1 (2026-09-19): the CLI default legend is compact and spells <b ...> inside its comment; (C) counts real <b> rows, so it asks for the full legend.
+        out="$( "$BIN" "test/$fx" --no-cache --top-k=0 "--expand=$cid" --legend=full 2>&1 </dev/null )"; rc=$?
         nb="$( printf '%s' "$out" | grep -o '<b [^>]*>' | wc -l | tr -d ' ' )"
         nbmatch="$( printf '%s' "$out" | grep -o '<b [^>]*>' | grep -c " p=\"$cpath\"" )"
         nbname="$( printf '%s' "$out" | grep -o '<b [^>]*>' | grep -c " n=\"$cname\"" )"
@@ -134,7 +135,8 @@ done
 OLDID='qual.cpp::Widget::ping'
 out="$( "$BIN" test/cppqualfix --no-cache --top-k=0 "--expand=$OLDID" 2>&1 </dev/null )"; rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -o '<b [^>]*>' | grep -q ' p="qual.cpp"[^>]* n="ping"'; then ok "(D) --expand still accepts the path::scope::name spelling ($OLDID)"; else no "(D) --expand refused the old id= spelling (rc=$rc)"; fi
-out="$( "$BIN" test/cppqualfix --no-cache "--callers=$OLDID" 2>&1 </dev/null )"; rc=$?
+# L1 (2026-09-19): the compact root spells schema= before of=; this arm pins the full-default <callers of= spelling, so it asks for the full legend.
+out="$( "$BIN" test/cppqualfix --no-cache "--callers=$OLDID" --legend=full 2>&1 </dev/null )"; rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '<callers of='; then ok "(D) --callers still accepts the path::scope::name spelling"; else no "(D) --callers refused the old id= spelling (rc=$rc)"; fi
 
 # (F) the lens rows: <d p= n= sc=> compose with the row's OWN p= to an id that --expand resolves
@@ -152,7 +154,8 @@ if grep -q '"sc":"Widget"' "$TMP/map.json" && ! grep -q '"id":"qual.cpp::' "$TMP
 # --format=candidates export. The whole-file anchor rows kept id="PATH::SCOPE::NAME" inside a <src p="PATH">
 # that had just printed the path, on a document carrying no legend at all — a repetition AND an undefined
 # first-screen attribute on the one --expand shape with nothing else to read.
-"$BIN" test/nestedqualfix --expand=Outer --no-cache >"$TMP/wf.xml" 2>/dev/null </dev/null
+# L1 (2026-09-19): (E2) reads the FULL legend's composition prose, so this run asks for the full legend.
+"$BIN" test/nestedqualfix --expand=Outer --no-cache --legend=full >"$TMP/wf.xml" 2>/dev/null </dev/null
 if grep -q 'mode="whole-file"' "$TMP/wf.xml"; then
     if grep -q '<s n="Outer" sc="Outer" l=' "$TMP/wf.xml" && ! grep -q '<s [^>]*id="outer.hpp::' "$TMP/wf.xml"; then
         ok "(E2) whole-file --expand anchor rows carry sc= and no path-repeating id="

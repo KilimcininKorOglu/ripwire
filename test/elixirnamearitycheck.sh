@@ -117,7 +117,9 @@ header_unresolved(){ grep -oE 'unresolved=[0-9]+' "$1" | head -1; }
 [ "$( header_unresolved "$TMP/map.xml" )" = "unresolved=1" ] \
     && ok "(A) the map header counts the one use-delivered drop: unresolved=1 (missing/1's undefined call is not in it)" \
     || no "(A) the use-delivered drop is not disclosed in the header: $( header_unresolved "$TMP/map.xml" ) (expected unresolved=1)"
-"$BIN" "$F" --callers=text/2 --no-cache >"$TMP/callers_text.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact, whose root tags lead with schema=; the arms that pin a root tag's
+# leading attributes (`<callers of=`, `<path from=`, `<edit-check sym=`) were written against the full default, so they ask for it.
+"$BIN" "$F" --callers=text/2 --no-cache --legend=full >"$TMP/callers_text.xml" 2>/dev/null
 grep -q '<callers of="text/2" defs="1" count="0"' "$TMP/callers_text.xml" && grep -q 'graph_unresolved="1"' "$TMP/callers_text.xml" \
     && ok "(A) --callers=text/2: count=0 beside graph_unresolved=1 — the answer says a call was refused, not that none exists" \
     || no "(A) --callers=text/2 root wrong: $( grep -oE '<callers [^>]*>' "$TMP/callers_text.xml" )"
@@ -159,7 +161,7 @@ for fn in rhs/0 bare_rhs/0; do
         && ok "(B) control $fn: the right side of a body match is a call — the socket/0 edge stays" \
         || no "(B) control $fn lost its socket/0 edge: '$( callees "$TMP/map.xml" "::Channel::$fn" )'"
 done
-"$BIN" "$F" --callers=socket/0 --no-cache >"$TMP/callers_socket.xml" 2>/dev/null
+"$BIN" "$F" --callers=socket/0 --no-cache --legend=full >"$TMP/callers_socket.xml" 2>/dev/null
 grep -q '<callers of="socket/0" defs="1" count="2"' "$TMP/callers_socket.xml" \
     && ! grep -qE 'n="(join/2|pick/1|unwrap/1)"' "$TMP/callers_socket.xml" \
     && ok "(B) --callers=socket/0: count=2 (rhs/0, bare_rhs/0) — no pattern binding among the callers" \
@@ -168,7 +170,7 @@ grep -q '<callers of="socket/0" defs="1" count="2"' "$TMP/callers_socket.xml" \
 # ── (C) --edit-check across an arity change ─────────────────────────────────────────────────────────────
 W="$TMP/repo"; mkdir -p "$W"; cp -R "$F/lib" "$W/lib"
 ( cd "$W" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
-ec(){ ( cd "$W" && "$BIN" . --edit-check=run --no-cache 2>/dev/null ); }
+ec(){ ( cd "$W" && "$BIN" . --edit-check=run --no-cache --legend=full 2>/dev/null ); }
 rows(){ printf '%s' "$1" | grep -oE '<c [^>]*/>'; }
 OUT0="$( ec )"
 printf '%s' "$OUT0" | grep -q 'status="unchanged"' && printf '%s' "$OUT0" | grep -q 'callers="3" incompatible="0"' \
@@ -290,7 +292,7 @@ callee_ps(){ "$BIN" "$R" "--callees=$1" --no-cache 2>/dev/null | grep -oE '<s [^
 [ "$( callee_ps 'Shell::late/0' )" = 'p="lib/shell.ex:6"' ] \
     && ok "(H) Shell.late/0 (after the declaration): Ring.Core.spin() names the nested Shell.Ring.Core, not the top-level decoy" \
     || no "(H) Shell.late/0 reached the wrong spin/0: $( callee_ps 'Shell::late/0' ) (expected lib/shell.ex:6)"
-"$BIN" "$R" '--callers=lib/ring.ex:spin/0' --no-cache >"$TMP/callers_top_spin.xml" 2>/dev/null
+"$BIN" "$R" '--callers=lib/ring.ex:spin/0' --no-cache --legend=full >"$TMP/callers_top_spin.xml" 2>/dev/null
 grep -q '<callers of="lib/ring.ex:spin/0" defs="1" count="1"' "$TMP/callers_top_spin.xml" && grep -q 'n="early/0"' "$TMP/callers_top_spin.xml" \
     && ok "(H) the top-level Ring.Core.spin/0 keeps exactly one caller, early/0 — the call written before the declaration" \
     || no "(H) top-level spin/0 callers wrong: $( grep -oE '<callers [^>]*>|<s [^>]*/>' "$TMP/callers_top_spin.xml" | tr '\n' ' ' )"
@@ -328,7 +330,7 @@ use_ids "$TMP/uses_disc.xml" | grep -q '::Shape.Disc::literal/1"' && use_ids "$T
 [ "$( callees "$TMP/resolve.xml" '::Seeds::by_capture/0' )" = "_seed/0" ] \
     && ok "(J) by_capture/0: the bare capture &_seed/0 -> _seed/0" \
     || no "(J) by_capture/0 has no _seed/0 edge: '$( callees "$TMP/resolve.xml" '::Seeds::by_capture/0' )'"
-"$BIN" "$R" --callers=Seeds::_seed/0 --no-cache >"$TMP/callers_seed.xml" 2>/dev/null
+"$BIN" "$R" --callers=Seeds::_seed/0 --no-cache --legend=full >"$TMP/callers_seed.xml" 2>/dev/null
 grep -q '<callers of="Seeds::_seed/0" defs="1" count="3"' "$TMP/callers_seed.xml" && grep -q 'n="by_capture/0"' "$TMP/callers_seed.xml" \
     && ok "(J) --callers=Seeds::_seed/0: count=3 — the bare capture, the remote capture and the plain call" \
     || no "(J) --callers=Seeds::_seed/0 wrong: $( grep -oE '<callers [^>]*>|<s [^>]*/>' "$TMP/callers_seed.xml" | tr '\n' ' ' )"
@@ -340,7 +342,7 @@ grep -q '<callers of="Seeds::_seed/0" defs="1" count="3"' "$TMP/callers_seed.xml
     || no "(J) control: an underscore parameter read became a call: $( callees "$TMP/resolve.xml" '::Seeds::by_parameter/1' )"
 
 # ── (K) a call that omits a defaulted argument reaches the bodyless head ────────────────────────────────
-"$BIN" "$R" --path=caller/0,default/0 --no-cache >"$TMP/path_caller.xml" 2>/dev/null
+"$BIN" "$R" --path=caller/0,default/0 --no-cache --legend=full >"$TMP/path_caller.xml" 2>/dev/null
 grep -q '<path from="caller/0" to="default/0" [^>]*reachable="1"' "$TMP/path_caller.xml" \
     && ok "(K) --path=caller/0,default/0: f() omits the argument, so default/0 is reachable through the head" \
     || no "(K) --path=caller/0,default/0 unreachable: $( grep -oE '<path [^>]*>' "$TMP/path_caller.xml" | grep -oE 'reachable="[0-9]"' )"
@@ -354,8 +356,8 @@ grep -q 'n="caller/0"' "$TMP/impact_default.xml" && ! grep -q 'n="caller_explici
 [ "$( callee_ps 'Dflt::caller_explicit/0' )" = 'p="lib/dflt.ex:6" p="lib/dflt.ex:7"' ] \
     && ok "(K) control: caller_explicit/0's f(1) supplies the argument — the two clauses only, never the head" \
     || no "(K) control: caller_explicit/0 callees wrong: $( callee_ps 'Dflt::caller_explicit/0' )"
-"$BIN" "$R" --path=caller_explicit/0,default/0 --no-cache >"$TMP/path_explicit.xml" 2>/dev/null
-"$BIN" "$R" --path=caller_g/0,default/0 --no-cache >"$TMP/path_g.xml" 2>/dev/null
+"$BIN" "$R" --path=caller_explicit/0,default/0 --no-cache --legend=full >"$TMP/path_explicit.xml" 2>/dev/null
+"$BIN" "$R" --path=caller_g/0,default/0 --no-cache --legend=full >"$TMP/path_g.xml" 2>/dev/null
 grep -q '<path from="caller_explicit/0" to="default/0" [^>]*reachable="0"' "$TMP/path_explicit.xml" \
     && grep -q '<path from="caller_g/0" to="default/0" [^>]*reachable="1"' "$TMP/path_g.xml" \
     && ok "(K) control: no path from caller_explicit/0; caller_g/0 reaches default/0 through the head that has a body" \

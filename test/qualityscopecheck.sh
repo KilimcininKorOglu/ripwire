@@ -127,7 +127,9 @@ PLAIN_GATING="$( attr "$TMP/plain.xml" gating )"
 if [ "${PLAIN_GATING:-0}" -ge 2 ]; then ok "(0) …with $PLAIN_GATING gating rows to partition"; else no "(0) too few gating rows ($PLAIN_GATING) to tell the halves apart"; fi
 
 # ── 1) (A)+(B) PARTITION and DISCLOSURE ───────────────────────────────────────────────────────────────
-"$BIN" . --quality-delta --scope=alpha >"$TMP/alpha.xml" 2>/dev/null; a_rc=$?
+# L1 (2026-09-19): the CLI default legend is compact and spells '<r …>' inside its comment, which (7)'s rowcount would count
+# as a finding row; this run asks for the full legend so the count reads only real rows.
+"$BIN" . --quality-delta --scope=alpha --legend=full >"$TMP/alpha.xml" 2>/dev/null; a_rc=$?
 if grep -q 'scope="alpha"' "$TMP/alpha.xml"; then ok "(1) the report names the scope it was taken under"; else no "(1) no scope= on the report root"; fi
 inscope_part "$TMP/alpha.xml" >"$TMP/alpha.in"
 oos_part     "$TMP/alpha.xml" >"$TMP/alpha.out"
@@ -157,7 +159,7 @@ if command -v xmllint >/dev/null 2>&1; then
 else
     ok "(3) xmllint unavailable — well-formedness arm skipped (regression.sh runs it separately)"
 fi
-"$BIN" . --quality-delta --scope=alpha >"$TMP/alpha2.xml" 2>/dev/null
+"$BIN" . --quality-delta --scope=alpha --legend=full >"$TMP/alpha2.xml" 2>/dev/null
 if cmp -s "$TMP/alpha.xml" "$TMP/alpha2.xml"; then ok "(3) two scoped runs are byte-identical"; else no "(3) the scoped report is not deterministic"; fi
 
 # ── 4) (A) the CLONE rule: a group is in-scope iff ANY member matches ─────────────────────────────────

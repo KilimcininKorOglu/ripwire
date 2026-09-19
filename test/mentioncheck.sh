@@ -110,7 +110,8 @@ if [ "$ONX" = "$OFFX" ]; then ok "unmatched backtick stays inert"; else no "unma
 #    already score inside that same 5% band above it. Pin both halves so neither regresses silently: the
 #    wording says "score", and the rank gap the old wording got wrong is a real, reproduced fact here, not a
 #    one-off measurement on a different corpus.
-NOTE_ON="$( "$BIN" "$FIX" --for="widget pipeline process records — the fix belongs in pkg/beta.py" --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact; this arm reads the FULL header note's wording, so it asks for it.
+NOTE_ON="$( "$BIN" "$FIX" --for="widget pipeline process records — the fix belongs in pkg/beta.py" --no-cache --legend=full 2>/dev/null )"
 printf '%s' "$NOTE_ON" | grep -q 'score lifted to within 5% of the top score' \
     && ok "L10: mention-anchor note promises a SCORE lift, not a rank one" \
     || { no "L10: mention-anchor note does not carry the score-lift wording"; printf '%s' "$NOTE_ON" | grep -o '\[mention anchor:[^]]*\]'; }

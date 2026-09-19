@@ -194,8 +194,10 @@ grep -aq 'withheld_est_tokens=[0-9]* > budget=' "$TMP/wh.err" \
 #        tokens, so reporting est_tokens>N is the truth and over_ceiling= is what makes it readable.
 #    The small end is where fixed overhead dominates, which is exactly why it is swept: EVERY future byte
 #    added to the envelope or the legend shows up here first.
+# L1 (2026-09-19): the CLI default legend is compact; #5's legend arms read the FULL legend's max_tokens=/over_ceiling= prose
+# from this sweep, so it asks for the full legend (byte-identical to the old default, and the larger envelope).
 for N in 100 300 400 450 500 600 800 1200 1500 3000 6000; do
-    "$BIN" src --max-tokens=$N --no-cache >"$TMP/mt$N.out" 2>"$TMP/mt$N.err"
+    "$BIN" src --max-tokens=$N --no-cache --legend=full >"$TMP/mt$N.out" 2>"$TMP/mt$N.err"
     MB="$( bytes_of "$TMP/mt$N.out" )"
     ME="$( est_of "$TMP/mt$N.out" )"
     LIM="$( awk "BEGIN{printf \"%d\", $N*2.36*0.90}" )"
@@ -841,7 +843,8 @@ fi
 #        preamble's two independent readings tell them apart: either this is an NDEBUG build, where the
 #        arm is unobservable BY DESIGN and the plain-flavour CI leg is what proves it (→ SKIP, reason
 #        named), or the seam regressed on a flavour that CAN see alerts (→ FAILURE). ─────────────────────
-RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/dg.out" 2>"$TMP/dg.err"
+# L1 (2026-09-19): the compact legend spells <sigs> inside its comment, so #14c's find(<sigs) would start in the legend; both runs ask for the full legend.
+RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg.out" 2>"$TMP/dg.err"
 rc_dg=$?
 if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
     ok "#14a observability probe: this flavour CAN observe DISCLOSE (the fault switch is live)"
@@ -856,7 +859,7 @@ if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
 
     #    (c) THE BYTES ARE STILL COMPLETE AND CORRECT. The whole point of the degrade: the caller loses the
     #        charge, never the content. Byte-compare the payload against the undegraded run.
-    "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/dg_ctl.out" 2>/dev/null
+    "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_ctl.out" 2>/dev/null
     if python3 - "$TMP/dg_ctl.out" "$TMP/dg.out" <<'PY'
 import sys
 ctl = open( sys.argv[1], 'rb' ).read()
@@ -919,7 +922,7 @@ PY
     #        control (`$TMP/dg_ctl.out`, no switch in the environment) is the reference.
     g4fail=0
     for badval in 10 1x 1000000 11 '1 ' 0 true ''; do
-        RIPWIRE_FAULT_CHARGE_BUFFER="$badval" "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/dg_g4.out" 2>"$TMP/dg_g4.err"
+        RIPWIRE_FAULT_CHARGE_BUFFER="$badval" "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_g4.out" 2>"$TMP/dg_g4.err"
         if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg_g4.err"; then
             no "#14e RIPWIRE_FAULT_CHARGE_BUFFER='$badval' INJECTED the fault — only the exact value \"1\" may (prefix test, verifier G4)"
             g4fail=1
@@ -1517,7 +1520,8 @@ done
 # mutated — the identical extraction runs over both).
 printf -- '---\nconst x = 1;\n---\n<p>{x}</p>\n' >"$C17/unindexed_1/src/page.astro"
 for d in unindexed_0 unindexed_1; do
-    "$BIN" "$C17/$d" --connect=render,greet --no-cache >"$TMP/c17_$d.xml" 2>/dev/null
+    # L1 (2026-09-19): #17 measures the FULL legend's #66 comment (graph_unindexed= prose), so it asks for the full legend.
+    "$BIN" "$C17/$d" --connect=render,greet --no-cache --legend=full >"$TMP/c17_$d.xml" 2>/dev/null
 done
 C17_LEGEND='graph_unindexed=N is a third gauge'
 # (a) presence guards — assert the mutation TOOK before trusting any number derived from it. Without these
@@ -1604,7 +1608,8 @@ with open( os.path.join( out, "steps.py" ), "w" ) as fh:
     for j in range( 4 ):
         fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
 PYRZ
-rz_run(){ ( cd "$RZ" && "$BIN" corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache ) >"$RZ/o.xml" 2>/dev/null; }
+# L1 (2026-09-19): #18 counts the FULL legend's droppable clauses (confidence=/tail:/route= prose), so rz_run asks for the full legend.
+rz_run(){ ( cd "$RZ" && "$BIN" corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache --legend=full ) >"$RZ/o.xml" 2>/dev/null; }
 rz_est(){ grep -aoE 'est_tokens="[0-9]+"' "$RZ/o.xml" | head -1 | tr -dc '0-9'; }
 rz_note(){ grep -acF '[legend clauses:' "$RZ/o.xml"; }
 RZ_WIDE=1200

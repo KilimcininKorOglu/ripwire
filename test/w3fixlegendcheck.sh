@@ -61,7 +61,9 @@ print( s[ i : j + 3 ] if i >= 0 and j > i else "" )
 echo "── 1. partition root counters"
 PTASK="rank symbols by pagerank"
 for N in 2 3 4; do
-    "$BIN" "$ROOT" --pack-task="$PTASK" --partition=$N >"$TMP/p$N" 2>/dev/null
+    # L1 (2026-09-19): the CLI default legend is compact; this gate reads the FULL legends' prose, counts real rows (the compact
+    # legend spells row shapes inside its comment) and pins `<dead-code count=` (compact leads with schema=) — those runs ask for --legend=full.
+    "$BIN" "$ROOT" --pack-task="$PTASK" --partition=$N --legend=full >"$TMP/p$N" 2>/dev/null
 done
 P2ROOT="$( grep -oE '<ctx-partitions[^>]*>' "$TMP/p2" )"
 SH2="$( printf '%s' "$P2ROOT" | attr shared_symbols )"
@@ -202,7 +204,7 @@ DP="$( printf '%s' "$DR" | attr partitions )"; DQ="$( printf '%s' "$DR" | attr r
 
 # ══ 2. --doc-drift: corpus= is its own population; clean= satisfies its identity ═══════════════════════════
 echo "── 2. doc-drift counters"
-"$BIN" "$ROOT" --doc-drift >"$TMP/dd" 2>/dev/null
+"$BIN" "$ROOT" --doc-drift --legend=full >"$TMP/dd" 2>/dev/null
 DDROOT="$( grep -oE '<doc-drift[^>]*>' "$TMP/dd" )"
 DOCS="$( printf '%s' "$DDROOT" | attr docs )"; CLEAN="$( printf '%s' "$DDROOT" | attr clean )"
 # the output is MINIFIED (one line), so `grep -c` would count lines, not rows — count occurrences.
@@ -277,7 +279,7 @@ esac
 
 # ══ 3. --dead-code: the ./-anchor under an ABSOLUTE root spelling ══════════════════════════════════════════
 echo "── 3. dead-code ./-anchor is root-spelling independent"
-dcCount(){ "$BIN" "$1" --dead-code="$2" 2>/dev/null | grep -oE '<dead-code count="[0-9]+"' | grep -oE '[0-9]+'; }
+dcCount(){ "$BIN" "$1" --dead-code="$2" --legend=full 2>/dev/null | grep -oE '<dead-code count="[0-9]+"' | grep -oE '[0-9]+'; }
 for F in ./src ./test ./bench src test; do
     RELC="$( cd "$ROOT" && dcCount . "$F" )"
     ABSC="$( dcCount "$ROOT" "$F" )"
@@ -427,7 +429,7 @@ fi
 #       and says nothing about whether the call site binds to this definition at all (call edges are matched
 #       by NAME), so a legend promising "provably … never a guess" is making a claim the tool cannot keep —
 #       measured: a clean, compiling tree carries a nonzero incompatible= on several shared names.
-"$BIN" "$ROOT" --edit-check=rankGraphTeleport >"$TMP/ec" 2>/dev/null
+"$BIN" "$ROOT" --edit-check=rankGraphTeleport --legend=full >"$TMP/ec" 2>/dev/null
 if grep -q 'B2\.2' "$TMP/ec"; then
     no "--edit-check's legend still ships the 'B2.2' plan ID"
 elif ! grep -q 'FIXED arity' "$TMP/ec"; then
@@ -601,7 +603,7 @@ case "$( refuse "--grep=x" "--limit=0" )" in
 esac
 # in-band definition on the two adopting verbs.
 for V in "--grep=DISCLOSE" "--impact=rankGraphTeleport"; do
-    "$BIN" "$ROOT" $V >"$TMP/inband" 2>/dev/null;  L="$( firstComment "$TMP/inband" )"
+    "$BIN" "$ROOT" $V --legend=full >"$TMP/inband" 2>/dev/null;  L="$( firstComment "$TMP/inband" )"
     case "$L" in
         *'limit="0" means no explicit limit'*) ok "${V%%=*}: the legend DEFINES limit=\"0\" on the first screen";;
         *) no "${V%%=*}: limit=\"0\" is still undefined in band";;
@@ -615,7 +617,7 @@ TF="$( printf '%s' "$TU" | attr files )"; TUL="$( printf '%s' "$TU" | attr files
 # RE-PINNED 2026-09-05 (capture-audit P4, lane L7): the default --tree is an 80-row window, so the identity reads
 # files_unlisted + total (the listable set the root now discloses) == files; the rows are shown= of that total.
 TTOT="$( printf '%s' "$TU" | attr total )"; TSHOWN="$( printf '%s' "$TU" | attr shown )"
-TROWS="$( "$BIN" "$ROOT" --tree 2>/dev/null | grep -o '<file p=' | wc -l | tr -d ' ' )"   # minified: count occurrences
+TROWS="$( "$BIN" "$ROOT" --tree --legend=full 2>/dev/null | grep -o '<file p=' | wc -l | tr -d ' ' )"   # minified: count occurrences
 [ -n "$TTOT" ] && [ "$(( TUL + TTOT ))" = "$TF" ] && [ "$TROWS" = "$TSHOWN" ] \
     && ok "default window: files_unlisted($TUL) + total($TTOT) == files($TF); rows($TROWS) == shown($TSHOWN)" \
     || no "default tree identity broken: $TUL + ${TTOT:-<none>} != $TF or rows $TROWS != shown ${TSHOWN:-<none>}"
@@ -626,7 +628,7 @@ if [ "$(( TUL + TPT ))" = "$TF" ] && [ "${TPS:-0}" = 2 ]; then
 else
     no "paged tree: $TUL + ${TPT:-0} != $TF (or shown=${TPS:-0} != 2)"
 fi
-"$BIN" "$ROOT" --tree >"$TMP/treeleg" 2>/dev/null;  TREELEG="$( firstComment "$TMP/treeleg" )"
+"$BIN" "$ROOT" --tree --legend=full >"$TMP/treeleg" 2>/dev/null;  TREELEG="$( firstComment "$TMP/treeleg" )"
 case "$TREELEG" in
     *"files equals the listed rows plus files_unlisted on every run"*) no "the tree legend still claims the rows-based identity 'on every run'";;
     *"LISTABLE file set"*) ok "the tree legend states the identity over the LISTABLE set, not the printed rows";;

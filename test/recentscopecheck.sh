@@ -130,14 +130,16 @@ scopedTag(){   printf '%s' "$1" | grep -oE '<recent scope="[^>]*>' | head -1; } 
 scopedRows(){  printf '%s' "$1" | sed -E 's#.*(<recent scope="[^>]*>)#\1#' | sed -E 's#</recent>.*##' | grep -oE '<rc p="[^"]*"' | sed 's/<rc p="//;s/"$//'; }
 globalRows(){  firstBlock "$1" | grep -oE '<rc p="[^"]*"' | sed 's/<rc p="//;s/"$//'; }
 
-BARE="$( run --rank-by=churn-decay 2>"$WORK/e0" )"; ec=$?
+# L1 (2026-09-19): the CLI default legend is compact and spells '<recent n= of=>' and '<s ' inside its comment, which firstBlock,
+# the '<recent n=' greps and the '<s ' row counts would read as real elements; BARE/IN/M1/uns.xml ask for the full legend.
+BARE="$( run --rank-by=churn-decay --legend=full 2>"$WORK/e0" )"; ec=$?
 [ "$ec" = 0 ] && printf '%s' "$BARE" | grep -q '<recent n="40" of="53"' \
     && ok "arm 0c: the bare run emits <recent n=\"40\" of=\"53\"> (exit 0)" \
     || no "arm 0c: bare run exit=$ec, recent tag: $( printf '%s' "$BARE" | grep -oE '<recent [^>]*>' | head -1 )"
 printf '%s' "$BARE" | grep -q '<recent scope="' && no "arm 0d: the bare run must NOT carry a scoped block" || ok "arm 0d: the bare run carries no scoped block"
 
 # ── arm 1: --in=db adds a second, scoped block; every row is root-relative under db/ ─────────────────
-IN="$( run --rank-by=churn-decay --in=db 2>"$WORK/e1" )"; ec=$?
+IN="$( run --rank-by=churn-decay --legend=full --in=db 2>"$WORK/e1" )"; ec=$?
 if [ "$ec" = 0 ] && [ -n "$IN" ]; then
     ok "arm 1a: --rank-by=churn-decay --in=db accepted (exit 0, $( printf '%s' "$IN" | wc -c | tr -d ' ' ) B)"
 else
@@ -467,7 +469,7 @@ printf '%s' "$tag" | grep -q 'merge_bombs_skipped=' \
     || ok "arm 8b: the scoped block carries no merge_bombs_skipped= (the window's count rides the global block alone)"
 
 # ── arm 9: determinism, well-formedness, legends ────────────────────────────────────────────────────
-IN2="$( run --rank-by=churn-decay --in=db 2>/dev/null )"
+IN2="$( run --rank-by=churn-decay --legend=full --in=db 2>/dev/null )"
 [ -n "$IN" ] && [ "$IN" = "$IN2" ] \
     && ok "arm 9a: two --in=db runs are byte-identical ($inBytes B)" \
     || no "arm 9a: two --in=db runs differ"
@@ -630,7 +632,7 @@ wTouched="$( git -C "$MINED" log --name-only --format= "$SINCE"..HEAD 2>/dev/nul
 [ "$wCommits" = 1 ] && [ "$wTouched" = 1 ] && [ -z "$( git -C "$MINED" ls-files gone.py )" ] \
     && ok "arm 13 guard: the window holds 1 commit touching 1 path (gone.py), and gone.py is NOT in the index" \
     || no "arm 13 guard: window has $wCommits commit(s)/$wTouched path(s), gone.py tracked='$( git -C "$MINED" ls-files gone.py )' — arms 13a-13d are vacuous"
-M1="$( runAt "$MINED" --rank-by=churn-decay --since="$SINCE" 2>/dev/null )"
+M1="$( runAt "$MINED" --rank-by=churn-decay --legend=full --since="$SINCE" 2>/dev/null )"
 gTag="$( printf '%s' "$M1" | grep -oE '<recent [^>]*>' | head -1 )"
 printf '%s' "$gTag" | grep -q '^<recent n="0" of="0" merge_bombs_skipped="0">' \
     && ok "arm 13a: a window that MINED a commit but touched no indexed file says n=\"0\" of=\"0\" ($gTag)" \
@@ -708,7 +710,7 @@ wsFor(){   # $1 = corpus dir -> "would_show rows surplus"
     local dir="$1"
     local ws rows surplus
     ws="$( runAt "$dir" --rank-by=churn-decay --in="$2" 2>/dev/null | sed -n 's/.*would_show="\([0-9]*\)".*/\1/p' )"
-    runAt "$dir" --rank-by=churn-decay >"$WORK/uns.xml" 2>/dev/null
+    runAt "$dir" --rank-by=churn-decay --legend=full >"$WORK/uns.xml" 2>/dev/null
     rows="$( grep -o '<s ' "$WORK/uns.xml" | wc -l | tr -d ' ' )"
     surplus="$( grep -o 'overloads="[0-9]*"' "$WORK/uns.xml" | grep -o '[0-9]*' | awk '{s+=$1-1} END{print s+0}' )"
     printf '%s %s %s\n' "${ws:-NONE}" "$rows" "$surplus"

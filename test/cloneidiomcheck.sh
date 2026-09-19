@@ -59,7 +59,9 @@ cp -R "$FIX/." "$CORPUS/"
 echo "cloneidiomcheck: BIN=$BIN"
 
 # One <group ...> row per line, for grep-per-row assertions.
-rows(){ "$BIN" "$CORPUS/$1" --clones --no-cache 2>/dev/null | sed 's|<group |\n<group |g' | grep '^<group'; }
+# L1 (2026-09-19): the CLI default legend is compact and spells <group ...> row shapes inside its comment; rows()
+# counts real rows and (M) reads the FULL legend's definitions, so both ask for --legend=full.
+rows(){ "$BIN" "$CORPUS/$1" --clones --no-cache --legend=full 2>/dev/null | sed 's|<group |\n<group |g' | grep '^<group'; }
 
 # ── (A)-(F) the conjunction, one fixture per condition ────────────────────────────────────────────────
 # expect_row <dir> <memberA> <memberB> <idiom-or-NONE> <demoted:yes|no>
@@ -143,7 +145,7 @@ check_counter nonidiom      demoted_groups 0
 # ── (M) the legend defines both new attributes ────────────────────────────────────────────────────────
 # The DEFINITIONAL predicate legendcoveragecheck uses for a closure: the attribute name followed by `=`.
 # The legend is everything ahead of the root element, which is where a reader meets it.
-LEG="$( "$BIN" "$CORPUS/ladder_demote" --clones --no-cache 2>/dev/null | sed 's/<clones .*//' )"
+LEG="$( "$BIN" "$CORPUS/ladder_demote" --clones --no-cache --legend=full 2>/dev/null | sed 's/<clones .*//' )"
 for a in idiom demoted idiom_groups demoted_groups; do
     case "$LEG" in
         *"$a="*) ok "legend defines $a=";;

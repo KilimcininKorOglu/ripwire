@@ -117,7 +117,8 @@ git -C "$REPO" add alone.py
 GIT_AUTHOR_DATE="2026-06-01T15:00:00" GIT_COMMITTER_DATE="2026-06-01T15:00:00" \
     git -C "$REPO" commit -qm "unrelated root"
 git -C "$REPO" checkout -qf feature
-"$BIN" "$REPO" --pr-context=orphanline >"$ORPHAN" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; the §L10b arms read the FULL legend's anchoring prose, so this run asks for it.
+"$BIN" "$REPO" --pr-context=orphanline --legend=full >"$ORPHAN" 2>/dev/null
 grep -q 'anchor="ref-tip-two-dot"' "$ORPHAN" && ok 'unrelated history degrades to anchor="ref-tip-two-dot"' \
                                              || no 'unrelated history degrades to anchor="ref-tip-two-dot"'
 

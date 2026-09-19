@@ -153,7 +153,8 @@ fi
 # landing made packLego's p= root-relative and disclosed the root NOWHERE, so this document served relative
 # paths against a root it never named — the one thing --lego's p= exists to let you do (open the file) is
 # undoable without it. Every other byte of the reference is unchanged, which is what this arm is for.
-"$BIN" test/legofix --no-cache --lego=Shape >"$TMP/standalone" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact; the embedded golden below was recorded from the full default, so this run asks for it.
+"$BIN" test/legofix --no-cache --legend=full --lego=Shape >"$TMP/standalone" 2>/dev/null
 # RE-PINNED 2026-09-04 (capture-audit H5, floormarkcheck arm (9)): the reference gained the shared lego legend
 # (graphlegend.h kLegoLegend — the verb shipped with none) and counts_floor="1" on <lego> (implementors= is read
 # off the name-based extends/implements edges) plus the M15 gauge pair (0/0 on this fixture: every call resolves).
@@ -191,7 +192,8 @@ printf '%s' "$ONLEGO" | grep -q '<impl n="Triangle"' \
 # ── 8) §L10b LOW tail: --lego=Vehicle (a Rust trait) prints caveat="not-extracted-for-lang" with no
 #      clause anywhere defining that value — fixed by the legend addition this arm's LEGO_LEGEND above
 #      already pins; this arm checks the VALUE actually fires on the fixture and that the legend defines it.
-"$BIN" test/legofix --no-cache --lego=Vehicle >"$TMP/vehicle" 2>/dev/null
+# L1 (2026-09-19): the legend-definition arm below reads the FULL legend's prose, so this run asks for it.
+"$BIN" test/legofix --no-cache --legend=full --lego=Vehicle >"$TMP/vehicle" 2>/dev/null
 grep -q 'caveat="not-extracted-for-lang"' "$TMP/vehicle" \
     && ok "--lego=Vehicle (Rust trait): caveat=\"not-extracted-for-lang\" fires" \
     || no "--lego=Vehicle did not carry the expected caveat (fixture or extraction changed)"
