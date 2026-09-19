@@ -2991,7 +2991,12 @@ struct CoBoostInfo
 inline bool applyCoChangeBoost( const IngestResult& ing, const std::vector<std::vector<std::uint32_t>>& sets, std::vector<float>& lensRank, CoBoostInfo* outInfo = nullptr,
                                 const CommitWindowCensus* census = nullptr )
 {
-    ASSUME( lensRank.size() == ing.symbols.size() );
+    // DASSERT, not ASSUME: the very next block is a runtime fallback for exactly this equality being false
+    // (a caller-owned lensRank that no longer matches ing.symbols after the symbol set changed underneath
+    // it). ASSUME here would entitle the optimizer to fold the != re-test below to always-false in release
+    // and delete the early return that makes a mismatch survivable — the shipped-bug trap Diagnostics.h
+    // warns about. Debug still catches a genuine internal bug; release keeps the guard live.
+    DASSERT( lensRank.size() == ing.symbols.size() );
     if( outInfo && census )
     {
         outInfo->caps.note( "coboost_commits_capped", "coboost_commits_total", census->bulkDropped > 0, census->commits );

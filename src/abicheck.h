@@ -561,7 +561,10 @@ inline void modelRefBlobs( const std::string& root, layout::ModelCtx& ctx, const
             {
                 continue;
             }
-            ASSUME( mit->second.size() == pit->second.size() );
+            // DASSERT, not ASSUME: the loop bound right below double-guards both sizes, which only makes
+            // sense if the equality can genuinely fail at runtime — an ASSUME would tell the optimizer the
+            // shorter bound never binds and license deleting the very guard the loop is written to need.
+            DASSERT( mit->second.size() == pit->second.size() );
 
             for( std::size_t ci = 0; ci < pit->second.size() && ci < mit->second.size(); ++ci )
             {

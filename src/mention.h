@@ -586,7 +586,10 @@ inline std::vector<RawMention> extractMentions( std::string_view task, std::uint
 inline bool applyMentionBoost( const IngestResult& ing, std::string_view task, std::vector<float>& lensRank, MentionBoostInfo* outInfo = nullptr )
 {
     using namespace mention_detail;
-    ASSUME( lensRank.size() == ing.symbols.size() );
+    // DASSERT, not ASSUME: same shape as gitmine.h's applyCoChangeBoost — the next line is a runtime
+    // fallback for this exact equality being false, so an ASSUME would let release fold the != re-test to
+    // always-false and delete the early return it exists to reach.
+    DASSERT( lensRank.size() == ing.symbols.size() );
     if( task.empty() || lensRank.empty() || lensRank.size() != ing.symbols.size() )
     {
         return false;
