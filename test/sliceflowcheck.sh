@@ -772,9 +772,12 @@ if command -v xmllint >/dev/null 2>&1; then
         && ok "(30c) xmllint: compact output (flow + inventory) is well-formed XML" \
         || no "(30c) xmllint: compact output is NOT well-formed XML (a '--' inside the legend comment?)"
 fi
-[ "$( run --slice=pipeline:out --legend=full )" = "$FV" ] && [ "$( rc --slice=pipeline --legend=compact )" = 0 ] \
-    && ok "(30c) explicit --legend=full is byte-identical to the default; compact serves the bare inventory too" \
-    || no "(30c) --legend=full must not change output, and compact must serve the inventory form"
+# L1 (2026-09-19): the CLI default legend is compact, so the default (FV) is the compact form and --legend=full is the
+# one that differs — the inverse of the pre-L1 assertion, which read "explicit --legend=full is the default".
+[ "$( run --slice=pipeline:out --legend=compact )" = "$FV" ] && [ "$( run --slice=pipeline:out --legend=full )" != "$FV" ] \
+    && [ "$( rc --slice=pipeline --legend=compact )" = 0 ] \
+    && ok "(30c) the default is byte-identical to explicit --legend=compact, --legend=full differs; compact serves the bare inventory too" \
+    || no "(30c) the default must be the compact form (and --legend=full must not be), and compact must serve the inventory form"
 # P1 (capture-audit 2026-09-04, lane L7): --legend=compact is honored by EVERY XML verb — --callers now answers
 # with schema="ripwire.callers/v1" — and the refusal contract belongs to the verbs with nothing to compact
 # (text/markdown/JSON answers, writers). Re-pinned to that contract: callers serves, --situ refuses naming --legend.

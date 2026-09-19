@@ -492,10 +492,14 @@ fi
 #                 = tokens x 2.36 x 1.15  == ceilingAllowanceBytes( tokens )   [serialize.h]
 # Every arm below is red on base_w3 and green on the fixed binary.
 tb_run(){ ( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" ${1:+--token-budget=$1} --no-cache 2>/dev/null ); }
+# L1 (2026-09-19): the CLI default legend is compact. (T1)/(T2) read the budget LEDGER sentence and (T5) the root's
+# first attribute, both of the full legend's form (compact drops the prose ledger and leads the root with schema=), so
+# those three arms ask for it; (T3)/(T4)/(T6) keep reading the default posture's labels and bytes.
+tb_full(){ ( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" ${1:+--token-budget=$1} --no-cache --legend=full 2>/dev/null ); }
 allowance_of(){ python3 -c "import sys; print(int(int(sys.argv[1])*2.36*0.90*(1.15/0.90)))" "$1"; }
 
 # (T1) the ledger EXISTS and states both numbers, at every budget including the default.
-T1_DEF="$( tb_run '' )"
+T1_DEF="$( tb_full '' )"
 printf '%s' "$T1_DEF" | grep -qE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' \
     && ok "(T1) --from-trace states a budget ledger (budget= + allowance=)" \
     || { no "(T1) no budget ledger in the --from-trace header"; printf '%s\n' "$T1_DEF" | head -c 400; }
@@ -503,7 +507,7 @@ printf '%s' "$T1_DEF" | grep -qE 'budget=[0-9]+ bytes \(allowance [0-9]+ bytes' 
 # (T2) the ledger's arithmetic is the family's, not a second constant — re-derived here from the tokens.
 for tb in 50 500 2000; do
     want="$( allowance_of "$tb" )"
-    got="$( tb_run "$tb" | grep -oE 'allowance [0-9]+ bytes' | head -1 | grep -oE '[0-9]+' )"
+    got="$( tb_full "$tb" | grep -oE 'allowance [0-9]+ bytes' | head -1 | grep -oE '[0-9]+' )"
     [ "$got" = "$want" ] \
         && ok "(T2) --token-budget=$tb allowance=$got == tokens x 2.36 x 1.15 (== ceilingAllowanceBytes)" \
         || no "(T2) --token-budget=$tb allowance=$got, expected $want — the lens drifted off the shared arithmetic"

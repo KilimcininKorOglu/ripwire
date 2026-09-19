@@ -429,12 +429,17 @@ probeFor()
 # RE-PINNED 2026-09-17 (lane/regex-long-lines): ripwire.grep/v1 360 -> 440 (measured 422, the --regex=dist.* probe). Every
 # --regex answer now carries regex_lines_skipped= — how many lines were too long for the regex engine's stack and never
 # matched, 0 included — so its compact reading rides every regex probe (73 B). The literal --grep probe does not move.
+# RE-PINNED 2026-09-19 (L1, compact became the CLI default): ripwire.metrics/v1 810 -> 850 (measured 834, the --metrics
+# probe) and ripwire.pr-context/v1 410 -> 510 (measured 499, --pr-context=HEAD~1). Two honesty attributes the compact
+# dialect had carried with no reading got one (compactlegend.h): locals_floor=1 on a --metrics <s> row (36 B) and
+# --pr-context's root truncated= (~100 B), present-only. Found by legendcoveragecheck's new default-posture rows; no
+# other schema moved.
 # schema                      pin  measured
 PIN_TABLE='
 ripwire.map/v1                   910   892
 ripwire.map-diff/v1              900   885
 ripwire.pack-signatures/v1       770   759
-ripwire.metrics/v1               810   798
+ripwire.metrics/v1               850   834
 ripwire.deps/v1                  260   245
 ripwire.hotspots/v1              280   264
 ripwire.clones/v1                290   280
@@ -463,7 +468,7 @@ ripwire.owners/v1                220   207
 ripwire.dead-code/v1             310   297
 ripwire.quality-delta/v1         230   212
 ripwire.dmm/v1                   200   189
-ripwire.pr-context/v1            410   399
+ripwire.pr-context/v1            510   499
 ripwire.stray-content/v1         190   179
 ripwire.flags/v1                 170   159
 ripwire.doc-drift/v1             220   205

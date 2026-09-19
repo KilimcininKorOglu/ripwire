@@ -375,7 +375,8 @@ case "$OR" in *'status="recommend"'*'intent="opt-remark"'*'skill="ripwire-opt-re
 # Execution check: the two catalog commands that carry a COMPOSED value are not placeholders. Unquote
 # what the router emitted and run it through the real verb, the same way the SYM:VAR arm above does.
 GQEXPR="$( printf '%s' "$GQ" | sed -n 's|.*--graph-query=&apos;\(.*\)&apos;\( --legend=compact\)\{0,1\}</run>.*|\1|p' | sed 's/&quot;/"/g' )"
-GQRUN="$( "$BIN" "$REPO" --no-cache --graph-query="$GQEXPR" )"; rc=$?
+# L1 (2026-09-19): the default root is compact (<query schema=… expr=…>); this arm pins the full root's `<query expr=`.
+GQRUN="$( "$BIN" "$REPO" --no-cache --graph-query="$GQEXPR" --legend=full )"; rc=$?
 { [ $rc -eq 0 ] && printf '%s' "$GQRUN" | grep -q '<query expr='; } \
     && ok "the emitted --graph-query expression runs and returns a <query> root" \
     || no "the emitted --graph-query expression failed to run (rc=$rc, expr=[$GQEXPR])"
@@ -625,7 +626,9 @@ if [ "$rc" -eq 0 ]; then ok "held-out command-routing floors ($EVAL)"; else no "
 # The default dialect carried NO legend: every attribute on its only screen was undefined, and the compact
 # layer's present-only legend was the only place any of them was explained. RED against a pre-change
 # binary: the document begins with "<task-route", not with a comment.
-LG="$( routeRaw 'Find the code responsible for this retry timeout bug' | python3 -c 'import sys
+# L1 (2026-09-19): the CLI default legend is compact, whose present-only reading is not this arm's subject; the FULL
+# legend's definitions are, so the document is asked for in that posture.
+LG="$( "$BIN" "$REPO" --no-cache --help-task='Find the code responsible for this retry timeout bug' --legend=full 2>"$TMP/err" | python3 -c 'import sys
 s=sys.stdin.read(); a=s.find("<!--"); b=s.find("-->", a)
 sys.stdout.write(s[a+4:b] if a>=0 and b>=0 else "")' )"
 [ -n "$LG" ] \

@@ -120,7 +120,9 @@ for u in uses.iter( "u" ):
 PY
 }
 
-"$BIN" . --no-cache --pin-census="$TMP/c.tsv" >"$TMP/map.xml" 2>"$TMP/err" || { no "the map run exited non-zero"; sed 's/^/          /' "$TMP/err"; }
+# L1 (2026-09-19): the CLI default legend is compact; arm (D) reads the FULL map legend's hdr:declined= clause, so the
+# census run asks for it (--pin-census takes a posture since L1).
+"$BIN" . --no-cache --pin-census="$TMP/c.tsv" --legend=full >"$TMP/map.xml" 2>"$TMP/err" || { no "the map run exited non-zero"; sed 's/^/          /' "$TMP/err"; }
 HDR="$( stats "$TMP/map.xml" )"
 
 # ── (A) the decline, disclosed where the zero is read ─────────────────────────────────────────────────────────
@@ -458,7 +460,7 @@ is_bare_next "$R" jbody \
 
 # ── (H) determinism, well-formedness, no degrade alert ────────────────────────────────────────────────────────
 echo "=== (H) determinism + well-formedness ==="
-"$BIN" . --no-cache --pin-census="$TMP/c2.tsv" >"$TMP/map2.xml" 2>/dev/null
+"$BIN" . --no-cache --pin-census="$TMP/c2.tsv" --legend=full >"$TMP/map2.xml" 2>/dev/null
 cmp -s "$TMP/map.xml" "$TMP/map2.xml" && cmp -s "$TMP/c.tsv" "$TMP/c2.tsv" && ok "(H) map + census byte-identical across two runs" \
     || no "(H) map or census differs between two runs"
 if command -v xmllint >/dev/null 2>&1; then
