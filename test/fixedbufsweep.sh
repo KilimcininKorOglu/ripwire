@@ -157,6 +157,7 @@ TABLE = {
     # ── src/main.cpp ─────────────────────────────────────────────────────────────────────────────────────
     ( "src/main.cpp", "fileOpen" ): ( 1, "safe", "fileOpen[200] in chooseExpandServe (PR #215 review): '<ctx mode=\"whole-file\" reason=\"file {}B &lt; bundle {}B\">' — 53 B of literal and TWO std::size_t byte counts, 20 digits each at absolute most, so 93 B against 199 usable + NUL: 106 B of margin. No string interpolation at all, so no escaper can sit on either side of the buffer; the &lt; is written as an entity IN THE LITERAL, not produced by escapeXml. The bound matters twice here, because the caller reads std::strlen of this buffer back as the disclosure's own byte length — a truncated write would make the price it charges wrong as well as the document malformed, which is why the row states the margin rather than just the class. It is a TABLE row and not NUMERIC_ONLY for arch.h hex[17]'s reason: a buffer that never existed before the std::print conversion has no pre-conversion format to derive a class from." ),
     ( "src/main.cpp", "bundleOpen" ): ( 1, "safe", "bundleOpen[200] in chooseExpandServe (PR #215 review): '<ctx mode=\"bundle\" reason=\"bundle {}B &lt;= file {}B\">' — fileOpen's exact twin, the same two std::size_t and no string: 50 B of literal + 40 digits = 90 B against 199 usable + NUL, 109 B of margin. Same strlen-read-back, same reason for being a row rather than a derivation." ),
+    ( "src/main.cpp", "noteBuf" ): ( 1, "safe", "noteBuf[220] in runDefaultMap (issue #289, the ride-along note= attribute): ' note=\"the ranked top-{} map below rides along with these bodies; --top-k=0 for bodies alone (--top-k=1 for a minimal map)\"' — 121 B of fixed literal plus ONE interpoland, mapTopK (an int: 11 digits worst case including a sign), so 132 B against 219 usable + NUL: 87 B of margin. No string interpolation at all — mapTopK is a count, not caller text — so no escaper can sit on either side of the buffer; nothing here is markup composed from user input. It is a TABLE row and not NUMERIC_ONLY for arch.h hex[17]'s reason: a buffer that never existed before the std::print conversion has no pre-conversion format to derive a class from." ),
     ( "src/main.cpp", "tail" ): ( 1, "not-markup", "tail[48]: the shallow-clone cache DIR suffix (\"/ripwire-remote-\" + a fixed-width 16-hex). Bounded and never emitted. Was 2 sites: defaultCachePath's cache FILENAME left this buffer when the root-key unification moved its assembly into quality.h::rootKeyedCachePath, which is where its row now lives." ),
     ( "src/verbs_for.h", "nb" ): ( 14, "safe",       "nb[160] x2: the mention/doc-mention/siblift/expand header notes. Every %s is the plural '' or 's'; everything else is %u." ),
     ( "src/verbs_report.h", "exemptAttr" ): ( 1, "safe",       "exemptAttr[40]: ' exempt=\"%s\"' with groupExemptKind's fixed vocabulary (longest 'fixture' = 7 B, total 19 B)." ),
@@ -521,7 +522,14 @@ if not bad:
 #            (hdr: 40 B max in 63 usable; buf: 101 B max in 127 usable; both integer-only, no %s, nothing
 #            escaped). Not printf conversions at 4c10be9d — they are new code, rowed for their shape, and
 #            (S1) re-derives the member set from source rather than from this arithmetic.
-EXPECTED = { "mentions": 333, "calls": 225, "sites": 225, "rows": 98, "widthforms": 0 }
+#            2026-09-18 (train-6, lane/expand-ambiguous-bodies, issue #289): +1 call/+1 mention/+1 site/+1 row
+#            (333 -> 334 mentions, 225 -> 226 calls/sites, 98 -> 99 rows) — runDefaultMap's new ride-along
+#            `note=` attribute, formatted into `char noteBuf[220]`: 121 B of fixed literal plus ONE int
+#            (mapTopK, 11 digits worst case) = 132 B against 219 usable + NUL, 87 B of margin. No %s, nothing
+#            escaped, nothing user-supplied — a TABLE row (main.cpp noteBuf) for the same reason fileOpen/
+#            bundleOpen are rows and not NUMERIC_ONLY: the buffer is new, so there is no pre-conversion printf
+#            format to derive a class from.
+EXPECTED = { "mentions": 334, "calls": 226, "sites": 226, "rows": 99, "widthforms": 0 }
 #            2026-09-04 (capture-audit L6, H9): +1 call/+1 mention, sites/rows UNCHANGED — re-read, not
 #            re-counted. packConnect gained ONE snprintf into a new `char connectCeiling[32]` for the
 #            H9 ` max_tokens="%d"` ceiling disclosure: a single %d of a caller-supplied INTEGER, no %s,
