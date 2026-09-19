@@ -462,6 +462,27 @@ inline std::vector<std::uint32_t> forPageExtendRows( const IngestResult& ing, co
     return cand;
 }
 
+// extend-3's XML: one <f p= score=/> row per chosen index, appended in order. Split out of
+// renderForFilePageXml on its own (not inlined into that function's row loop) so the lever's own row shape
+// — deliberately narrower than the ranked rows' p= score= n= sym= — reads as one small, nameable unit rather
+// than a second branch buried inside the bigger function's control flow.
+inline void appendForPageExtendRowsXml( std::string& x, std::vector<char>& esc, const IngestResult& ing,
+                                         const ForFilePage& page, const std::vector<std::uint32_t>& extendRows, std::string_view rootArg )
+{
+    for( const std::uint32_t idx : extendRows )
+    {
+        const ForFileRow& row = page.rows[idx];
+        x += "<f p=\"";  x += escapeXml( lensRowPath( ing, row.fileId, rootArg ), esc );
+        x += "\" score=\"" + std::to_string( int( row.share * 100.0 + 0.5 ) ) + "\"/>";
+    }
+}
+
+// The root's extra="K" attribute text: present-only (K==0 says nothing a reader needs — see the header).
+inline std::string forPageExtendAttrXml( std::size_t extendRowCount )
+{
+    return extendRowCount > 0 ? ( " extra=\"" + std::to_string( extendRowCount ) + "\"" ) : std::string();
+}
+
 // What the page document is rendered from, beside the rows: the task and the lens root's own open tag (ctxRootOpen's
 // output — task=/route=/root= and the scrub tells — re-tagged <files>, so the two roots spell and escape their shared
 // attributes identically), the coverage= gauge, the window, and the dialect.
@@ -499,10 +520,7 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     {
         x += " coverage=\"" + std::to_string( p.coveragePct ) + "\"";
     }
-    if( !extendRows.empty() )
-    {
-        x += " extra=\"" + std::to_string( extendRows.size() ) + "\"";   // present-only: 0 says nothing a reader needs
-    }
+    x += forPageExtendAttrXml( extendRows.size() );
     char disc[ kPageDisclosureCap ];
     x += pageDisclosure( disc, sizeof( disc ), shown, total, window.end, p.limit, p.offset, /*discloseCap=*/true );
     if( window.end < total )
@@ -529,12 +547,7 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     }
     // extend-3: appended AFTER every ranked row, p= score= only (never n=/sym= — these rows were picked by
     // path-word overlap, not absorbed into the union-coverage ranking pass the other rows carry evidence of).
-    for( const std::uint32_t idx : extendRows )
-    {
-        const ForFileRow& row = page.rows[idx];
-        x += "<f p=\"";  x += escapeXml( lensRowPath( ing, row.fileId, p.rootArg ), esc );
-        x += "\" score=\"" + std::to_string( int( row.share * 100.0 + 0.5 ) ) + "\"/>";
-    }
+    appendForPageExtendRowsXml( x, esc, ing, page, extendRows, p.rootArg );
     x += "</files>";
     return x;
 }
