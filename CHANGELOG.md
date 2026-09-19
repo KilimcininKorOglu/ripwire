@@ -115,15 +115,20 @@ files, an unrelated "reach"-containing word, and one cheap phrase cue ("how does
 threshold and wrongly recommend `--for=task`. The two single-word cues now match word-bounded instead.
 (CodeRabbit review on #295)
 
-### Fixed — merge-scout refused a legal empty-tree merge-base as an unavailable one
+### Fixed — merge-scout refused a legal empty ingest as an unavailable tree, and never said why
 
-A `--merge-scout` arm whose merge-base is a genuinely empty tree (a fresh root commit, or an arm that
-deleted everything) ingested with zero files, indistinguishable — under the old check — from
-`materializeCommitTree`'s archive/extract pipeline silently producing nothing on a real failure. Both read as
-an unavailable tree, so the arm refused a perfectly legal comparison (`ok="0"`), and the SAME check marked
-`head_conflicts_ok="0"` for it too. Comparing the commit's own tree hash against the repository's empty-tree
-hash — asked of git directly, independent of the archive/extract pipeline — now tells the two apart.
-(CodeRabbit review on #295)
+A `--merge-scout` arm whose base ingested zero files — a fresh root commit, a base whose every path is
+excluded, or one with no file of a supported extension — was refused as `ok="0"` (unavailable tree), the same
+answer a real failure gets, and the same check marked `head_conflicts_ok="0"` for it too. The cause was
+upstream: `materializeCommitTree` piped `git archive` into `tar -x`, so the pipeline reported only `tar`'s
+exit status, which is 0 on an empty stream whether the tree was genuinely empty or `git archive` failed and
+piped nothing. It now archives to a file and extracts that file as a second command, so an archive failure and
+an extract failure are each reported from the exit code of the command that had it. With materialize
+trustworthy, a verified-successful materialize whose ingest is empty becomes a real, indexed, empty tree and
+the arm compares normally. When an arm is still refused, the root carries `reason="no_merge_base"` or
+`reason="tree_unavailable"` — present only when `ok="0"`, and written in every build flavour, not only in a
+debug trace. Both `ok=` postures and `reason=` are defined in the legend. Gates:
+`test/scoutheadconflictcheck.sh` arms T9(a)–(e), `test/mergescoutcheck.sh`. (CodeRabbit review on #295)
 
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 
