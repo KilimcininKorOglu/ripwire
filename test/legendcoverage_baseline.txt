@@ -153,10 +153,6 @@ external-surface | external-surface@capped
 external-surface | external-surface@shown
 external-surface | x@lang
 for | ctx@task
-for | field@name
-for | field@owner
-for | field@rel
-for | field@type
 for-auto | ctx@task
 grep | grep@pattern
 hotspots | f@top_ccx
@@ -222,14 +218,14 @@ test-gate | test-gate@untested_capped
 whereis | hit@date
 whereis | hit@tip
 zoom | zoom@levels
-# P3 (L7, 2026-09-05): the r=1 <d> row's next= (a pasteable --expand=FILE:NAME) is defined in --help and the compact
-# vocabulary, NOT in the --for header: every header byte is un-charged by the token ladder and fornotesbudgetcheck's
-# rungs leave ~0 tokens of headroom (V1 N1) — a 115 B clause blew --token-budget=950 by 29 tokens.
-for-auto | d@next
-# P7 (lane R, 2026-09-05): the lens rows are served in RANK order now, so the r=1 row (next=) and a pure="1" row
-# land on the conceptual roster document's FIRST SCREEN too; same definitions (next= in --help and the compact
-# vocabulary; pure= in the map legend), same un-charged-header reason as the for-auto line above.
-for | d@next
+# P3/P7's for-auto|d@next and for|d@next lines (ELEMENT-BLINDNESS closure, 2026-09-19, L2 round-1 lever B1):
+# both DELETED. kForSectionStubLegend (serialize.h) — the <lego>/<compose> counted-stub clause, present-only
+# whenever this run's ranked set actually stubbed one of them — spells "next= --sections=lego,compose restores
+# both sections…" in the SAME document, and the `defined` predicate is per-ATTRIBUTE-NAME across the whole
+# legend, not per-element (the gate header's own ELEMENT-BLINDNESS block): it cannot tell "next= on <lego>" from
+# "next= on <d>" apart, so one clause closes both. Real prose, not an accident — this document's SIGS r=1 row's
+# own next= is still, separately, un-charged-header undefined (P3/P7's original reason stands); the closure
+# rides a DIFFERENT clause that happens to share the word.
 for | d@pure
 # L1 (0.6.1): the for-budgeted row is NEW WINDOW, not new debt — the roster had no budgeted --for at all, so no
 # run in it ever climbed a rung of the ceiling ladder, which is where --for legend clauses get dropped. The ten
@@ -255,12 +251,7 @@ for | d@pure
 for-budgeted | ctx@bodies
 for-budgeted | ctx@reason
 for-budgeted | ctx@task
-for-budgeted | d@next
 for-budgeted | d@pure
-for-budgeted | field@name
-for-budgeted | field@owner
-for-budgeted | field@rel
-for-budgeted | field@type
 # L1 (0.6.1), the COMPACT dialect at the same rung. The roster had no --legend=compact row of any kind, so every
 # string in that dialect's legend inventory was outside the ratchet. Seven lines, and six of them are the same
 # gaps the default-dialect --for rows already record (d@next / d@pure / field@* above, same reasons). The new one:
@@ -269,9 +260,4 @@ for-budgeted | field@type
 #   so a reader does meet the value, but `schema=` is never spelled — grey by intent, recorded as debt, not
 #   closed by pretending the opening words are a definition.
 for-budgeted-compact | ctx@schema
-for-budgeted-compact | d@next
 for-budgeted-compact | d@pure
-for-budgeted-compact | field@name
-for-budgeted-compact | field@owner
-for-budgeted-compact | field@rel
-for-budgeted-compact | field@type

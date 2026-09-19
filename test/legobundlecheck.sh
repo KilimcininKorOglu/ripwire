@@ -63,9 +63,14 @@ echo "legobundlecheck: BIN=$BIN"
 OFFTASK="cache invalidation"
 ONTASK="Circle Square shape area implementors"
 
-"$BIN" . --no-cache --for="$OFFTASK" >"$TMP/off.xml"  2>/dev/null
-"$BIN" . --no-cache --for="$ONTASK"  >"$TMP/on.xml"   2>/dev/null
-"$BIN" . --no-cache --for="$ONTASK"  >"$TMP/on2.xml"  2>/dev/null
+# L2 (round-1 lever B1, 2026-09-19): --sections=lego,compose opts back into the full <lego>…</lego> render
+# these assertions test — the §P3 scope/identity mechanism this gate exists for is unchanged by the stub
+# default (the stub is built from the SAME post-filter legoScoped, after this gate's own machinery runs);
+# without the flag every row below would see the counted stub instead (test/forsectioncollapsecheck.sh owns
+# THAT shape). Byte-identical to the pre-L2 default otherwise.
+"$BIN" . --no-cache --for="$OFFTASK" --sections=lego,compose >"$TMP/off.xml"  2>/dev/null
+"$BIN" . --no-cache --for="$ONTASK"  --sections=lego,compose >"$TMP/on.xml"   2>/dev/null
+"$BIN" . --no-cache --for="$ONTASK"  --sections=lego,compose >"$TMP/on2.xml"  2>/dev/null
 
 for f in off on; do
     [ -s "$TMP/$f.xml" ] || no "bundle $f.xml is empty — the rest of this gate is meaningless"

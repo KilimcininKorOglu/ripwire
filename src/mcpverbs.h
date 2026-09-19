@@ -1600,7 +1600,11 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
 
 inline std::optional<std::string> forTaskText( const std::string& root, const std::string& task, RedactCounts* redact = nullptr,
                                 std::size_t budgetTokens = 0, bool noRoute = false,
-                                McpPageArgs page = {} )   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
+                                McpPageArgs page = {},   // L-W: limit/offset select the FILE PAGE (forpage.h), the CLI --for --limit twin
+                                const std::string& sections = std::string() )   // L2 (round-1 lever B1): the CLI --sections=
+                                                        // twin — "" (the default) collapses <lego>/<compose> to a counted
+                                                        // stub; "lego", "compose" or "lego,compose" opts back into the
+                                                        // pre-stub render (mcp.h validates the closed set before this call)
 {
     const std::size_t forBudgetBytes = budgetTokens > 0 ? budgetBytesForTokens( budgetTokens )
                                                         : kForPayloadBudgetBytes;
@@ -1924,12 +1928,15 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // §P3: same scope + identity the CLI --for embeds — the MCP bundle must not carry wider scope (interfaces
     // this task never reached) or less identity (p= on every row) than its CLI twin.
     std::vector<std::vector<NodeId>> legoScoped = legoImplementorsOnSurface( ing, ix.g.implementors, lensSurfaceIds );
-    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg ); } );
+    // L2 (round-1 lever B1): each renderer's OWN pre-cap row count, captured by the SAME call that renders
+    // the real body — see verbs_for.h's identical CLI-twin comment for the full rationale.
+    std::size_t legoPreCapCount = 0, composePreCapCount = 0;
+    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount ); } );
     std::string composeStr, routeStr;
     if( !ix.g.composeEdges.empty() )
     {
         composeStr = renderToString( [ & ]( std::FILE* m2 )
-                                     { packCompose( m2, ing, ix.g.composeEdges, lensSurfaceIds ); } );
+                                     { packCompose( m2, ing, ix.g.composeEdges, lensSurfaceIds, &composePreCapCount ); } );
     }
     if( !ix.g.routeEdges.empty() )
     {
@@ -2024,7 +2031,28 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // directly now rather than re-slicing it back out of the flushed memstream buffer.
     if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsStr ) )
     {
-        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg ); } );   // R-R: the re-render dropped the root its first render (above) passed
+        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount ); } );   // R-R: the re-render dropped the root its first render (above) passed
+    }
+    // L2 (round-1 lever B1): the CLI twin's exact stub substitution (verbs_for.h) — same rule, same
+    // restoring spelling (kept as the CLI flag form: this dialect's next= is already CLI-flag-shaped
+    // everywhere else, e.g. the r=1 row's --expand=FILE:NAME, so the two surfaces do not need two spellings).
+    {
+        const bool mcpWantLego    = sectionsWant( sections, "lego" );
+        const bool mcpWantCompose = sectionsWant( sections, "compose" );
+        if( ( !legoStr.empty() && !mcpWantLego ) || ( !composeStr.empty() && !mcpWantCompose ) )
+        {
+            std::string sectionsNextMcp = nextFlag( "--for=", task );
+            sectionsNextMcp += ' ';
+            sectionsNextMcp += nextFlag( "--sections=", "lego,compose" );
+            if( !legoStr.empty() && !mcpWantLego )
+            {
+                legoStr = sectionStubXml( "lego", legoPreCapCount, sectionsNextMcp );
+            }
+            if( !composeStr.empty() && !mcpWantCompose )
+            {
+                composeStr = sectionStubXml( "compose", composePreCapCount, sectionsNextMcp );
+            }
+        }
     }
     std::fwrite( sigsStr.data(), 1, sigsStr.size(), mem );
     std::fwrite( legoStr.data(), 1, legoStr.size(), mem );

@@ -307,7 +307,11 @@ LON_LEGO="$( printf '%s' "$LON" | jget lego_total )"
     || no "§B1.4: on-task lego_total is '$LON_LEGO', expected > 0 — Shape/Circle/Square exist in test/legofix"
 # lego_total is deliberately PRE-dedup/pre-cap (the notes_total "what matched" convention) — packLego then
 # dedups same-named interfaces and caps at topN=12, so it must be >= the XML sibling's own row count, never <.
-XML_IFACES="$( "$BIN" "$ROOT" --for="Circle Square shape area implementors" --no-cache 2>/dev/null | grep -oE '<iface ' | wc -l | tr -d ' ' )"
+# L2 (round-1 lever B1, 2026-09-19): --sections=lego,compose opts back into the full <iface> render this
+# arm counts — --for collapses it to a counted stub by default, and the stub's own total= is a DIFFERENT
+# (post-dedup) count than lego_total by design (serialize.h sectionStubXml's own comment), so counting the
+# stub's total= here instead of the real <iface> rows would compare the wrong two numbers.
+XML_IFACES="$( "$BIN" "$ROOT" --for="Circle Square shape area implementors" --sections=lego,compose --no-cache 2>/dev/null | grep -oE '<iface ' | wc -l | tr -d ' ' )"
 # >0 guard on the XML side (2026-08-23 serving-shape sweep): without it this arm degrades to N>=0 the
 # moment the XML sibling stops emitting <iface> rows at all — an under-count is unobservable against an
 # empty roster, so the comparison must first prove the roster is non-empty (the routes arm below already
@@ -321,7 +325,10 @@ XML_IFACES="$( "$BIN" "$ROOT" --for="Circle Square shape area implementors" --no
 
 CJ2="$( "$BIN" "$ROOT/src" --for="parse arguments" --json --no-cache 2>/dev/null | jsonok "--for --json (compose surface)" )"
 COMPOSE_TOTAL="$( printf '%s' "$CJ2" | jget compose_total )"
-XML_FIELDS="$( "$BIN" "$ROOT/src" --for="parse arguments" --no-cache 2>/dev/null | grep -oE '<field name=' | wc -l | tr -d ' ' )"
+# L2 (round-1 lever B1, 2026-09-19): --sections=lego,compose opts back into the full <field> render this
+# arm counts (the lego-arm note above applies here too — compose_total has no cap, so it IS the exact
+# <field> count, but only against the un-stubbed render).
+XML_FIELDS="$( "$BIN" "$ROOT/src" --for="parse arguments" --sections=lego,compose --no-cache 2>/dev/null | grep -oE '<field name=' | wc -l | tr -d ' ' )"
 # same >0 guard as the lego arm above: 0==0 is parity of two absences, not parity of a surface.
 { [ -n "$COMPOSE_TOTAL" ] && [ "$COMPOSE_TOTAL" = "$XML_FIELDS" ] && [ "$COMPOSE_TOTAL" -gt 0 ]; } 2>/dev/null \
     && ok "§B1.4: compose_total ($COMPOSE_TOTAL) matches the XML sibling's <field> row count exactly, and is > 0" \
