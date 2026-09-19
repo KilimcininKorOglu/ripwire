@@ -1241,6 +1241,19 @@ struct ChargedSection
     std::string xml;                 // the rendered bytes — empty when the section emits nothing, or on degrade
     std::size_t tokens     = 0;      // tokensForEmittedBytes( xml.size(), the section's own rate )
     bool        isRendered = false;  // false ⇒ open_memstream failed; the caller must emit this section directly
+    // The DISCLOSE sink for the section's own charge failure: it leaves isRendered false, which every caller reads —
+    // it streams the section directly, and labels (or, the --for lens, omits) the est_tokens that left it out.
+    enum class DisclosureWhy : std::uint8_t
+    {
+        BufferOpenFailed,
+        BufferLostWrite,
+    };
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
+    {
+        isRendered = false;
+        xml.clear();
+        tokens = 0;
+    }
 };
 
 // ── THE est_tokens FAMILY'S ONE BUFFER SEAM, and the fault switch that makes its degrade path REACHABLE ──
@@ -1344,7 +1357,7 @@ inline ChargedSection chargeSection( RenderFn&& render, double bytesPerToken )
     std::FILE* const mem = openChargeStream( stream );
     if( !mem )
     {
-        DISCLOSE( "chargeSection: open_memstream failed — this payload section streams uncharged" );
+        DISCLOSE( sec, ChargedSection::DisclosureWhy::BufferOpenFailed, "chargeSection: open_memstream failed — this payload section streams uncharged" );
         return sec;
     }
     render( mem );
@@ -1353,7 +1366,7 @@ inline ChargedSection chargeSection( RenderFn&& render, double bytesPerToken )
     {
         // the same answer as a failed open: isRendered stays false, so emitChargedSection renders the section straight
         // to the sink, whole and uncharged, instead of writing bytes a lost write left a hole in
-        DISCLOSE( "chargeSection: the charge buffer did not finish whole — this payload section streams uncharged" );
+        DISCLOSE( sec, ChargedSection::DisclosureWhy::BufferLostWrite, "chargeSection: the charge buffer did not finish whole — this payload section streams uncharged" );
         return sec;
     }
     sec.xml.assign( rendered.bytes );
@@ -1604,6 +1617,30 @@ inline std::string overloadsAttr( std::uint32_t n )
 // Head-to-head vs Graft on rocksdb, the six "what changed recently in <dir>" questions: the verb emitted 35 KB
 // of symbols on every one and a random path list at the same budget named more of the gold. A file with the
 // newest decayed weight is the answer's natural grain; the symbol map stays, this rides in front of it.
+// The DISCLOSE sink for the map's own est_tokens measurement. When a charge buffer fails, the map keeps printing the
+// MODELLED number (the pre-§H7 estimate — no worse than before, never a fabricated one) and says so: est_measured="0"
+// on the root (and est_measured=0 in the header comment, "est_measured":false in JSON), defined in the same document.
+// The model prices neither decoration nor payload, so the number is typically BELOW the emitted size.
+struct MapEstimate
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        ChargeBufferFailed,    // the map's own children/rows buffer did not open or did not finish whole
+        HeaderProbeFailed,     // JSON: the header size probe failed; the header is charged at the modelled envelope
+        PayloadUncharged,      // an appended payload section streamed uncharged (its chargeSection degraded)
+    };
+    bool isModelled = false;
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact
+    {
+        isModelled = true;
+    }
+};
+
+// est_measured= is defined only in a document that carries it.
+inline constexpr const char* kEstModelledLegend =
+    "<!-- est_measured=0: a charge buffer failed, so est_tokens is the MODELLED estimate, not the emitted bytes (typically BELOW the "
+    "document's real size); a token-budget verdict on this run rests on that model -->";
+
 struct MapAnnotations
 {
     // NOTE — the three fields below are initialized POSITIONALLY at the call site (main.cpp's mapAnn), so any
@@ -1728,6 +1765,10 @@ struct MapAnnotations
     std::string_view               scopedNext;          // the next page's invocation; empty ⇒ no next page fits or exists
     bool                           stubSymbols    = false;
     std::string_view               stubNext;            // the same run without in= — the map the stub stands for
+
+    // An appended payload section the caller could not charge (its chargeSection degraded): the map's est_tokens then
+    // leaves those bytes out, so serialize labels it est_measured="0". Set by the caller's DISCLOSE, never guessed.
+    bool payloadUncharged = false;
 };
 
 // F3: the <recent> element — rank_by=churn-decay's file-level answer FIRST, paths + age in days at HEAD's clock +
@@ -2589,6 +2630,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     // feeds back into the number: PHASE 2 below iterates these to a fixpoint. buildRecall (recall.h) has the
     // identical fixpoint for the identical reason — "the header, last: it REPORTS est_tokens, so it can only
     // be written once the payload is measured". Pure functions of estTokens + the attrs computed above.
+    MapEstimate estimate{ ann.payloadUncharged };   // the est_tokens measurement's DISCLOSE sink — read by the head builders below
     const auto buildStats = [ & ]( std::size_t estTokens ) -> std::string
     {
         // summary preamble: counts so the agent knows the map's scope + est size. §B14 — was `char stats[480]`,
@@ -2604,6 +2646,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         stats += " edges=";      stats += std::to_string( outTargets.size() );
         stats += " shown=";      stats += std::to_string( ann.stubSymbols ? std::size_t( 0 ) : keep );   // C1-b: the stub prints no row
         stats += " est_tokens="; stats += std::to_string( estTokens );
+        if( estimate.isModelled )
+        {
+            stats += " est_measured=0";   // the number beside it is the model (MapEstimate); absent ⇒ measured
+        }
         stats += " ambiguous=";  stats += std::to_string( ambTotal );
         stats += " unresolved="; stats += std::to_string( unresolvedTotal );
         if( locPinTotal > 0 )                                  // absent when 0 — zero bytes on a pin-free corpus
@@ -2640,6 +2686,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const auto buildHead = [ & ]( std::size_t estTokens ) -> std::string
     {
         std::string h = legend;
+        if( estimate.isModelled )
+        {
+            h += kEstModelledLegend;
+        }
         if( !stable || statsFirstScreen )
         {
             h += buildStats( estTokens );
@@ -2674,6 +2724,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // (one estimator). --stable omits it on the precedent of the k= rank attribute below: --stable buys a
         // byte-stable PREFIX, the root element is that prefix, and est_tokens is globally volatile.
         if( !stable ) { char estAttr[ 40 ];  rw::formatTo( estAttr, sizeof( estAttr ), " est_tokens=\"{}\"", estTokens );  h += estAttr; }
+        if( !stable && estimate.isModelled ) { h += " est_measured=\"0\""; }   // beside the number it qualifies (MapEstimate)
         // W2-F: LAST on the root, after est_tokens — the same placement rule counts_floor= follows, so no
         // existing attribute-ADJACENCY assertion in test/ can break on it. Unlike est_tokens this is NOT
         // suppressed under --stable: the iteration count is a property of the CORPUS and the ranker, not of
@@ -2709,7 +2760,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     std::FILE* const childMem = openChargeStream( childStream );
     if( !childMem )
     {
-        DISCLOSE( "serialize: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
+        DISCLOSE( estimate, MapEstimate::DisclosureWhy::ChargeBufferFailed, "serialize: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
     }
 
     const std::size_t modelledTokens = mapEstTokens + extraPayloadTokens;
@@ -3042,7 +3093,8 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const rw::MemoryStreamBytes children = childStream.finish();
     if( !children.isWhole )
     {
-        DISCLOSE( "serialize: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
+        DISCLOSE( estimate, MapEstimate::DisclosureWhy::ChargeBufferFailed,
+                  "serialize: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
         emitModelled();
         return;
     }
@@ -7147,6 +7199,7 @@ struct JsonMapHeader
     std::size_t                      declinedCount = 0;         // tier 3's declines — "declined":N, absent when 0
     std::size_t                      extentSuspectCount = 0;    // extent honesty: "extent_suspect_syms":N, absent when 0
     std::size_t                      macroBlankedCount  = 0;    // member-macro re-parse: "macro_blanked_files":N, absent when 0
+    bool                             isEstModelled      = false;   // MapEstimate: "est_measured":false, absent when measured
 };
 
 // §B1.2: the PROVENANCE stamp — the JSON half of the XML `<r at= rank_by= window=>` attributes. Without it
@@ -7273,6 +7326,10 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
     rw::formatTo( hdr, sizeof( hdr ), "{{\"files\":{},\"symbols\":{},\"edges\":{},\"shown\":{},\"est_tokens\":{},\"ambiguous\":{},\"unresolved\":{},",
                    h.ing.files.size(), h.symbolCount, h.edgeCount, h.shownCount, h.estTokens, h.ambiguousCount, h.unresolvedCount );
     w.write( hdr );
+    if( h.isEstModelled )
+    {
+        w.write( "\"est_measured\":false," );   // the XML est_measured="0" twin: est_tokens above is the model
+    }
     // Phase 4: the S6-C locality-pin gauge — same absent-when-zero rule as the XML `locality_pinned=`.
     if( h.localityPinnedCount > 0 )
     {
@@ -7500,9 +7557,10 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     // MODELLED estimate (the pre-§H7 number, never a fabricated one) and streams the array behind it.
     rw::MemoryStream rowsStream;
     std::FILE* const rowsMem = openChargeStream( rowsStream );
+    MapEstimate      estimate{ ann.payloadUncharged };
     if( !rowsMem )
     {
-        DISCLOSE( "serializeJson: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
+        DISCLOSE( estimate, MapEstimate::DisclosureWhy::ChargeBufferFailed, "serializeJson: open_memstream failed — est_tokens reports the MODELLED bytes, not the emitted ones" );
     }
 
     // ONE header emitter, used by the degrade write, the size probe and the real write, so the three can
@@ -7513,7 +7571,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         JsonWriter hw( dst );
         writeJsonMapHeader( hw, esc, JsonMapHeader{ ing, S, outTargets.size(), keep, estTokens, ambTotal,
                                                     unresolvedTotal, orderAttr, outProv, &ann, rootArg, locPinTotal, externalCalls, declinedTotal,
-                                                    extentSuspectTotal, macroBlankedFileCount( ing ) } );
+                                                    extentSuspectTotal, macroBlankedFileCount( ing ), estimate.isModelled } );
         hw.write( ",\"r\":[" );
     };
 
@@ -7635,7 +7693,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
     if( !rows.isWhole )
     {
         // a write was lost inside the rows: never print them — write the whole document again, on the modelled path
-        DISCLOSE( "serializeJson: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
+        DISCLOSE( estimate, MapEstimate::DisclosureWhy::ChargeBufferFailed,
+                  "serializeJson: the charge buffer did not finish whole — the map is rendered again, est_tokens reports the MODELLED bytes" );
         emitModelled();
         return;
     }
@@ -7661,12 +7720,14 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
             }
             else
             {
-                DISCLOSE( "serializeJson: the header size probe's buffer did not finish whole — est_tokens charges the modelled envelope instead" );
+                DISCLOSE( estimate, MapEstimate::DisclosureWhy::HeaderProbeFailed,
+                          "serializeJson: the header size probe's buffer did not finish whole — est_tokens charges the modelled envelope instead" );
             }
         }
         else
         {
-            DISCLOSE( "serializeJson: open_memstream failed for the header size probe — est_tokens charges the modelled envelope instead" );
+            DISCLOSE( estimate, MapEstimate::DisclosureWhy::HeaderProbeFailed,
+                      "serializeJson: open_memstream failed for the header size probe — est_tokens charges the modelled envelope instead" );
         }
     }
 

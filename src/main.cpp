@@ -2219,6 +2219,10 @@ int runDefaultMap( const MainDispatch& d )
                                             expandRanges.empty() ? nullptr : &expandRanges )
                 : bodiesSection.tokens )
         + ( ctxUnprovenBytes > 0 ? rw::tokensForEmittedBytes( ctxUnprovenBytes, rw::kBytesPerTokenDefault ) : 0 );   // H1: charged at the markup rate
+    // A requested section whose chargeSection degraded (its sink cleared isRendered) streams uncharged, or is priced by the
+    // --expand model: the est_tokens this run prints then labels itself est_measured="0" (serialize's MapEstimate).
+    mapAnn.payloadUncharged = ( cfg.packSignatures && !sigsSection.isRendered ) || ( !cfg.packSignatures && cfg.packTopN > 0 && !srcSection.isRendered )
+                           || ( !expandNodes.empty() && !bodiesSection.isRendered ) || ( !outlineNodes.empty() && !outlineSection.isRendered );
 
     // ── M6 (density audit 2026-08-08, owner directive: ONE call does the smart thing, no two-step) ──────
     // CHEAPEST-COMPLETE-ANSWER SERVING for a BARE --expand. The verb could always serve three forms:
@@ -2433,8 +2437,13 @@ int runDefaultMap( const MainDispatch& d )
         {
             // M11: the <ctx> root prices the payload-only document — the SAME number --token-budget gates on
             // (mapEstTokens below), so a parser reads the price the map's <r> header would otherwise carry.
-            rw::spliceRootAttrs( ctxOpenStr, " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" );
+            rw::spliceRootAttrs( ctxOpenStr, " est_tokens=\"" + std::to_string( payloadTokens ) + "\""
+                                              + ( mapAnn.payloadUncharged ? " est_measured=\"0\"" : "" ) );
             std::fwrite( ctxOpenStr.data(), 1, ctxOpenStr.size(), out );
+            if( mapAnn.payloadUncharged )
+            {
+                rw::emitRaw( out, rw::kEstModelledLegend );   // the attribute is defined where it is met
+            }
         }
         mapEstTokens = payloadTokens;
     }

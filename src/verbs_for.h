@@ -2809,6 +2809,11 @@ std::optional<int> runForLens( const MainDispatch& d )
         {
             graphSection = rw::chargeSection( [ & ]( std::FILE* f ) { packGraphBlock( f, ing, lensRank, g.outOff, g.outTargets ); },
                                                rw::kBytesPerTokenDefault );
+            if( !graphSection.isRendered )
+            {
+                // the block streams uncharged below: the lens's own contract omits an est_tokens that left it out
+                DISCLOSE( blockCharge, ForLensBlockCharge::DisclosureWhy::SiblingBlockUnmeasured, "runForLens: the graph block streams uncharged — est_tokens omitted" );
+            }
         }
 
         // both kept alive past the render so the isRendered=false degrade path below re-emits the SAME set at
@@ -2855,6 +2860,10 @@ std::optional<int> runForLens( const MainDispatch& d )
                               /*ranges=*/nullptr, notesPtr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                               /*withFileContext=*/false, flRootArg, &lensRank ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
                 rw::kBytesPerTokenBody );
+            if( !detailSection.isRendered )
+            {
+                DISCLOSE( blockCharge, ForLensBlockCharge::DisclosureWhy::SiblingBlockUnmeasured, "runForLens: the --detail bodies stream uncharged — est_tokens omitted" );
+            }
         }
 
         // ── T3: the terminal-by-default auto <bodies> section (pre-registered: docs/EVALS.md §4) ────────────
@@ -3443,6 +3452,7 @@ std::optional<int> runPackTask( const MainDispatch& d )
         graphSection        = rw::chargeSection( [ & ]( std::FILE* f ) { packGraphBlock( f, ing, lr.rank, g.outOff, g.outTargets ); },
                                                   rw::kBytesPerTokenDefault );
         in.trailingSectionBytes = graphSection.xml.size();   // 0 on the degrade path — the pre-§F1 accounting for that one run
+        in.isTrailingUncharged  = !graphSection.isRendered;  // that degrade was disclosed by the section's sink; the root says so
     }
 
     std::string bundle = packTaskBundleText( ing, g, task, lr, in );
