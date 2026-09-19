@@ -978,7 +978,10 @@ inline std::optional<std::string> renderTraceSectionAtPrice( const RenderFn& ren
     {
         return section;
     }
-    return renderSection( sigsBudgetFor( delivered - section->size() ) );
+    // the second render only ever gets MORE room than the first: the rows(default) ⊇ rows(full) claim rests on it
+    const std::size_t fixedDelivered = delivered - section->size();
+    ASSUME( fixedDelivered < fixedBytes, "the delivered fixed part is smaller, so the sig budget only grows" );
+    return renderSection( sigsBudgetFor( fixedDelivered ) );
 }
 
 // The ceiling ladder judged on the delivered document: every rung's candidate header, followed by the rest of the bundle,

@@ -1737,6 +1737,7 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
 // layer would print (not XML, no compact dialect, no est_tokens=): the caller then keeps its own number.
 [[nodiscard]] inline std::size_t compactDeliveredEstTokens( std::string_view candidate, std::string_view hint )
 {
+    EXPECTS( !candidate.empty(), "a trim ladder prices a rendered candidate, never an empty one" );
     std::string doc( candidate );
     if( applyCompactDialect( doc, hint ) != CompactOutcome::Rewritten )
     {
