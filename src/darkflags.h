@@ -787,8 +787,18 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
     namespace fs = std::filesystem;
     CMakeScan       out;
     std::error_code ec;
+    // libc++ AND libstdc++ swallow EACCES on the ROOT itself under skip_permission_denied below (the flag is
+    // meant for subdirectories encountered mid-walk, not the root the walk starts from): an unreadable root
+    // then reads as an EMPTY successful walk with `ec` clear — exactly the false zero rootWalkFailed exists
+    // to disclose (measured: `ec=0 atEnd=1` with the flag, `ec=13 Permission denied` without it, both libc++
+    // and libstdc++). Probe the root without the flag first, mirroring main.cpp's rootIsReadable shape, which
+    // this walk cannot rely on: `--flags` reaches this walk on a warm index even after the root's mode
+    // changed out from under it, a path rootIsReadable's own one-shot CLI check never revisits. One combined
+    // check below (not two DISCLOSE sites) so a TOCTOU between the two constructions is still caught.
+    std::error_code pec;
+    { const fs::directory_iterator probe( root, pec ); }
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( ec ) { DISCLOSE( "flags: cannot walk root for CMake files — cmake gates omitted" ); out.rootWalkFailed = true; return out; }
+    if( pec || ec ) { DISCLOSE( "flags: cannot walk root for CMake files — cmake gates omitted" ); out.rootWalkFailed = true; return out; }
     const std::string rootReal = canonicalCrawlRoot( root );
 
     const fs::recursive_directory_iterator end;
