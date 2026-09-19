@@ -773,6 +773,12 @@ struct CMakeScan
     // exactly like a healthy repo with zero CMake presence — that is the lie this flag exists to prevent:
     // the caller must disclose that cmake= and escaped_root= are floors, not totals, for this run.
     bool                      rootWalkFailed = false;
+
+    // rv-s2 review LOW-4: CMakeScan IS the field the caller already reads for this answer, so it models
+    // Diagnostics::DisclosureSink directly rather than the flag being set beside a sink-less DISCLOSE — the
+    // flag-setting becomes the disclosure itself, and disclose() is the ONE place rootWalkFailed is written.
+    enum class DisclosureWhy : std::uint8_t { RootWalkFailed };
+    void disclose( DisclosureWhy ) noexcept { rootWalkFailed = true; }
 };
 
 // The CMake files under `root`, sorted. ingest() never collects these (CMake is not one of the indexed
@@ -798,7 +804,7 @@ inline CMakeScan collectCMakeFiles( const std::string& root, const std::vector<s
     std::error_code pec;
     { const fs::directory_iterator probe( root, pec ); }
     fs::recursive_directory_iterator it( root, fs::directory_options::skip_permission_denied, ec );
-    if( pec || ec ) { DISCLOSE( "flags: cannot walk root for CMake files — cmake gates omitted" ); out.rootWalkFailed = true; return out; }
+    if( pec || ec ) { DISCLOSE( out, CMakeScan::DisclosureWhy::RootWalkFailed, "flags: cannot walk root for CMake files — cmake gates omitted" ); return out; }
     const std::string rootReal = canonicalCrawlRoot( root );
 
     const fs::recursive_directory_iterator end;

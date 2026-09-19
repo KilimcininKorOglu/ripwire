@@ -75,7 +75,10 @@ BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 # regexguard.h/lsp.h/resolve.h show none currently — and lost 3 to unrelated fixes in skillscan.h/verbs_for.h; see
 # the landing report for the per-site classification of the 25). LOWER THIS NUMBER, never raise it. At landing, set
 # it to what (R) prints.
-DISCLOSE_SINKLESS_PIN=217
+# rv-s2 review LOW-4 (2026-09-19): darkflags.h's collectCMakeFiles root-walk-failure site converted to the sink
+# form — CMakeScan now models Diagnostics::DisclosureSink directly (disclose() sets rootWalkFailed itself) —
+# retiring its one sink-less DISCLOSE( msg ) site. 217 -> 216.
+DISCLOSE_SINKLESS_PIN=216
 WORK="$( mktemp -d "${TMPDIR:-/tmp}/selfcheck.XXXXXX" )"
 trap 'rm -rf "$WORK"' EXIT
 T=$'\t'
