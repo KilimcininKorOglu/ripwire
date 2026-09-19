@@ -87,7 +87,7 @@ origin/main, the gate exits 0 with zero `onefn: map contains …` / `onefn: --gr
 rows in its output — the content assertions for corpus (c) never print at all. Restoring the old `tr -d ' '`
 rule under the new fail-closed guards FAILs both blocks (`onefn: … is missing or empty`), which is what
 proves the old rule was truly vacuous rather than just differently spelled. `test/emptycorpuscheck.sh` is
-the gate, red before this fix and green after.
+the gate: on main its one-function checks never ran; with this fix they run and pass.
 
 ### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
 
@@ -2189,7 +2189,8 @@ fact vectors. It is a body-only change; no signature moves and no output changes
 Measured on an llvm + clang checkout (10,266 files, 8,837 of them C/C++, 644 MB), `--no-cache`, five runs per binary:
 peak RSS went from 2,380–2,476 MiB to 2,223–2,248 MiB. The two ranges do not overlap; the drop averages about
 174 MiB (7%). This is a subset of the full llvm-project monorepo, which was not re-measured. Output was byte-identical
-in 14 of 14 comparisons (cold and warm map and `--for`, on that corpus and on this repository). No gate guards it:
+in 14 of 14 comparisons: 8 for this change (cold and warm map and `--for`, on that corpus and on this repository)
+plus 6 from the earlier investigation. No gate guards it:
 peak memory is recorded as a measurement, not enforced as a budget. Split out of #44 (native Windows port).
 Thanks to @lennix1337.
 
@@ -2201,8 +2202,9 @@ probe is its one caller), reusing one buffer per worker across every file it sam
 error indicator. A `fread()` that returned fewer bytes than requested because the underlying read failed partway,
 not because the file was actually that short, still satisfied `got > 0`, so the truncated bytes went back as though
 they were the whole prefix and the sniff judged a header it never fully read. `readFile`, a few lines above it in
-`src/ingest_crawl.h`, already fails on any `got != want`; `readFilePrefix` now reads the same standard-library
-disambiguator that function relies on: `ferror( fp ) == 0 && ( got > 0 || feof( fp ) != 0 )`, so a live error
+`src/ingest_crawl.h`, compares the byte count against the size it expects and fails on any `got != want`;
+`readFilePrefix` has no expected size (a file shorter than the prefix is a clean short read), so it now consults
+the stream's error indicator instead: `ferror( fp ) == 0 && ( got > 0 || feof( fp ) != 0 )`, so a live error
 indicator fails the read regardless of how many bytes made it through. Effect is limited to the prewarm hint —
 parsing itself is unchanged either way, which is why this is neutral on output.
 
