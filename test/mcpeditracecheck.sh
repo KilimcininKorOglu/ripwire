@@ -151,6 +151,51 @@ COOP_SER="$( printf '%s' "$COOP" | python3 -c 'import sys,json;print(json.load(s
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo
+echo "=== 1b. F1 — a lock HELD past the bounded acquire refuses the edit; it never applies lock-free ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# Check 1's writer blocks on the edit, so it can only prove the edit's OWN lock serializes. Here the cooperating
+# holder takes the lock FIRST and keeps it well past the ~200 ms acquire. Proceeding lock-free would report
+# "applied" and let the holder commit over it afterwards, so the edit must refuse ("edit lock unavailable") and
+# leave the file byte-identical; once the holder releases, the same edit applies. Deterministic: the holder's
+# lock is taken and confirmed before the edit is sent.
+python3 - "$BIN" "$TMP/held" <<PYEOF > "$TMP/held.out" 2>/dev/null
+$PREAMBLE
+WORK = sys.argv[2]; os.makedirs(WORK, exist_ok=True)
+refused = applied_while_held = changed_while_held = retry_applied = 0
+TRIALS = 3
+for t in range(TRIALS):
+    d = os.path.join(WORK, "t%03d" % t); os.makedirs(d, exist_ok=True)
+    tgt = os.path.join(d, "big.cpp"); atomic_write(tgt, src(0))
+    s = spawn()
+    send(s, {"jsonrpc":"2.0","id":1,"method":"initialize"}); recv(s, 1)
+    send(s, {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_symbol","arguments":{"path":d,"symbol":"target"}}}); recv(s, 2)
+    lf = open(edit_lock_path(tgt), "a+")
+    fcntl.flock(lf, fcntl.LOCK_EX)                     # the holder is live before the edit is sent
+    before = open(tgt).read()
+    send(s, {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"replace_symbol_body","arguments":{"path":d,"symbol":"target","new_body":"int target() { return 999999; }"}}})
+    txt = inner_text(recv(s, 3))
+    if "edit lock unavailable" in txt: refused += 1
+    if '"applied"' in txt: applied_while_held += 1
+    if open(tgt).read() != before: changed_while_held += 1
+    fcntl.flock(lf, fcntl.LOCK_UN); lf.close()
+    send(s, {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"replace_symbol_body","arguments":{"path":d,"symbol":"target","new_body":"int target() { return 999999; }"}}})
+    if '"applied"' in inner_text(recv(s, 4)): retry_applied += 1
+    kill(s)
+print(json.dumps({"trials": TRIALS, "refused": refused, "applied_while_held": applied_while_held,
+                  "changed_while_held": changed_while_held, "retry_applied": retry_applied}))
+PYEOF
+HELD="$( tail -1 "$TMP/held.out" )"
+echo "  held-lock summary: $HELD"
+held_field(){ printf '%s' "$HELD" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"$1\"])" 2>/dev/null; }
+[ "$( held_field refused )" = 3 ] && [ "$( held_field applied_while_held )" = 0 ] && [ "$( held_field changed_while_held )" = 0 ] \
+    && ok "F1b: every edit against a held lock refused and left the file byte-identical" \
+    || no "F1b: an edit against a held lock did not refuse cleanly ($HELD)"
+[ "$( held_field retry_applied )" = 3 ] \
+    && ok "F1b: once the holder released, the same edit applied (the refusal is transient, not a wedge)" \
+    || no "F1b: the edit did not apply after the holder released ($HELD)"
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo
 echo "=== 2. F1 — a NON-cooperating external writer is DETECTED (re-check), never a torn file (quantified) ==="
 # ═══════════════════════════════════════════════════════════════════════════
 # The audit harness: a forked writer that does NOT take the lock, committing at a fixed delay into the window.

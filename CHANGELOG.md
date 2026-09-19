@@ -15,6 +15,20 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — an edit could be reported "applied" while a concurrent writer silently undid it
+
+The per-file advisory edit lock tried the lock for ~200 ms and then always proceeded lock-free once it gave up
+— including when a live cooperating writer was still holding it. That writer could commit its own change after
+this edit's rename, so the edit was reported `applied` for bytes that no longer existed on disk. The lock now
+distinguishes *why* it never got in: only when every bounded attempt saw `EWOULDBLOCK` — another writer proven
+live and holding it — does the edit refuse (`-32603`, "edit lock unavailable ... file left unchanged") instead of
+racing it. A lockfile that cannot be opened, or a filesystem with no `flock`, proves no live holder and keeps
+the existing lock-free degrade; refusing there would block every edit on such a machine without serializing
+anything. `test/mcpeditracecheck.sh` arm F1b takes the lock from a separate process first and proves both the
+refusal and that the same edit applies once the holder releases. Split out of #44 (native Windows port); the
+original commit refused on every acquire failure, which this narrows to the proven-contention case. Thanks to
+@lennix1337.
+
 ### Fixed — `sliceBodyLines`'s UTF-8 back-off read one byte past a slice ending on the body's last line
 
 `--expand=SYM:START-END`'s continuation-byte back-off, which trims a split multi-byte codepoint off a slice
