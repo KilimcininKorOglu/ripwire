@@ -3293,7 +3293,7 @@ int runHelpTask( const rw::Config& cfg, const rw::IngestResult& ing, const std::
     // asserted here: the router composes the directory scope only on a binary that has the row for it.
     rw::taskroute::RouterCaps caps;
     caps.dirScope = rw::shipsViewFlag( rw::taskroute::kDirScopeFlag );
-    const rw::taskroute::TaskRouteResult route = rw::taskroute::classify( cfg.helpTask, root, ing, git, dirty, caps );
+    const rw::taskroute::TaskRouteResult route = rw::taskroute::classifyRoutes( cfg.helpTask, root, ing, git, dirty, caps );
 
     std::vector<char> esc;
     const auto ex = [&]( std::string_view s ) { return std::string( rw::escapeXml( s, esc ) ); };
@@ -3721,11 +3721,8 @@ static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 {
     // L1 fix round (rv-r1-L1 LOW-1): --batch outranks --for in dispatch, so `--for=X --batch=F` answers the batch envelope —
     // an answer this layer shapes. Only a run --for actually answers is skipped.
-    if( !c.batchFile.empty() )
-    {
-        return false;   // the batch envelope answers, and this layer shapes it
-    }
-    return !c.forTask.empty();
+    const bool batchAnswers = !c.batchFile.empty();   // the batch envelope answers, and this layer shapes it
+    return !batchAnswers && !c.forTask.empty();
 }
 
 // L1 fix round (rv-r1-L1 LOW-3): a DEFAULTED posture captured every run through a tmpfile, a 1.28 MB `--lint --sarif`
