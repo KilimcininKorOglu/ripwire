@@ -2056,6 +2056,15 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     continue;
                 }
 
+                // #285: an intrinsic JSX tag (`<div>`, `<h1>`) is not a call — see isJsxIntrinsicTagIdentifier.
+                // Valid input, skipped, no alert; a qualified (`<Foo.Bar />`) or namespaced (`<svg:rect />`)
+                // tag never reaches this test (see that function's note for why).
+                if( ( le.lang == Lang::TypeScript || le.lang == Lang::JavaScript )
+                    && isJsxIntrinsicTagIdentifier( roleNode, nameNode, nameTxt ) )
+                {
+                    continue;
+                }
+
                 // using-declaration re-exports (r9 loss bucket 1): @reference.import marks the C++
                 // `using ns::name;` tags pattern. The site becomes a role="import" use-site of the target
                 // (never a call edge — graph.h admits Call+Macro only), and the grammar KEYWORD forms

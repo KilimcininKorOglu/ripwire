@@ -1974,8 +1974,8 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 24;   // MUST equal ingest.cpp's kCacheVersion (gated)
 constexpr std::uint32_t kIngestParserVerMirror    = 117;  // MUST equal ingest.cpp's kParserVer   (gated)
-                                                          // 117 = 2026-09-19 (train 7: extract-partial
-                                                          //    re-extraction; see src/ingest_cache.h)
+                                                          // 117 = 2026-09-19 (train 7, both members: extract-partial
+                                                          //    re-extraction; #285 JSX element calls + the .tsx query; see src/ingest_cache.h)
                                                           // 116 = 2026-09-18 (issue #287 round 2:
                                                           //    capturePythonRebindShadowDecls' rebind
                                                           //    veto evidence; see src/ingest_cache.h)

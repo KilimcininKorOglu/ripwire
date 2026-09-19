@@ -89,6 +89,31 @@ rule under the new fail-closed guards FAILs both blocks (`onefn: … is missing 
 proves the old rule was truly vacuous rather than just differently spelled. `test/emptycorpuscheck.sh` is
 the gate: on main its one-function checks never ran; with this fix they run and pass.
 
+### Added — a JSX element invocation (`<Foo />`, `<Foo>…</Foo>`) is now a call edge in TS/TSX/JS (#285)
+
+`--callers`/`--uses`/`--test-gate` used to read a component invoked only via JSX as having zero callers —
+`<UniqueWidget />` sat in plain sight and `--callers=UniqueWidget` still answered `count="0"`, because
+`queries/typescript/tags.scm` and `queries/javascript/tags.scm` captured `call_expression`/`new_expression`
+only, never a JSX element name. Both query files now bind the OPENING tag's name (self-closing has no
+separate closing tag; a paired element's closing tag repeats the same name and is deliberately not
+captured, so one invocation mints exactly one edge) as a call reference, for a plain identifier
+(`<Foo />`) and a qualified one (`<Foo.Bar />`, which binds through `member_expression` exactly like
+`Foo.Bar()` and carries the same receiver). An intrinsic tag (`<div>`, `<h1>`) parses as the identical
+node shape a real component's tag has — the grammar carries no case distinction — so a new capture-time
+filter (`isJsxIntrinsicTagIdentifier`, `src/ingest_names.h`) drops any tag whose name does not start with
+an uppercase letter; a namespaced tag (`<svg:rect />`) needs no filter at all, because its name field is a
+different grammar node (`jsx_namespace_name`) that no pattern names, and a `<>…</>` fragment has no `name:`
+field to capture. `.tsx` moved to its own query (`queries/tsx/tags.scm`, `querySub` `"tsx"` rather than
+`"typescript"`): the plain TypeScript grammar has no JSX node types at all, and tree-sitter refuses a
+whole query the moment one pattern names a node type the grammar doesn't have, so sharing the query with
+the new JSX patterns would have silently dropped every `.ts` symbol and reference along with them — see
+that file's header for the measurement. `kParserVer` 116 → 117. Reported by
+@mariadb-KyleHutchinson in #285, with fixture files that dropped straight into `test/jsxcallfix/`
+(`test/jsxcallcheck.sh` is the gate — RED on the base binary, GREEN after). **Not covered**: the issue's
+secondary ask — a synthetic framework-caller edge for a Next.js App Router entry point (`page.tsx`)
+invoked by file-path convention with no in-repo call site at all — is a separate, smaller follow-up and is
+not part of this change.
+
 ### Changed — `lane/os-header` refreshed onto main (~1,400 commits, `30f14a27` → `57d713dd`)
 
 `src/infra/os.h`'s POSIX seam (below) was built on v0.6.1; this refresh carries it forward onto everything main

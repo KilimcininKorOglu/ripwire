@@ -252,13 +252,24 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
 constexpr std::uint32_t kParserVer    = 117;          // bump on any grammar/.scm/extraction change
                                                       // 117 = 2026-09-19 (train 7: one bump past main's 116 for
                                                       //   both members; each lane had bumped 114 -> 115)
-                                                      //   117 a) 2026-09-19 (degrade disclosure, test/skipreasoncheck.sh
+                                                      //   (a) 2026-09-19 lane/disclose-sink-form (degrade disclosure, test/skipreasoncheck.sh
                                                       //    arm 10): a PARTIALLY extracted file (an ExtractShortfall — a
                                                       //    nesting bound, an unavailable tags query, a throw part-way) is
                                                       //    itemized why="extract-partial" and written to the cache as
                                                       //    UNKNOWN. A cache written before this stored such a file's
                                                       //    partial facts under its real hash, which a warm run would
                                                       //    serve as whole: every such cache must be re-extracted.
+                                                      //   (b) 2026-09-18 lane/jsx-element-calls (#285 JSX element invocation:
+                                                      //    queries/typescript/tags.scm's `<Foo/>`/`<Foo.Bar/>`
+                                                      //    patterns moved to a NEW queries/tsx/tags.scm — plain
+                                                      //    .ts's grammar has no jsx_*_element node types, so a
+                                                      //    shared query with them fails to compile AT ALL for
+                                                      //    .ts — kLangTable's .tsx row now uses querySub "tsx",
+                                                      //    not "typescript"; queries/javascript/tags.scm gained
+                                                      //    the same patterns in place, since .js/.jsx/.mjs/.cjs
+                                                      //    already share one grammar that has the nodes. New
+                                                      //    isJsxIntrinsicTagIdentifier (src/ingest_names.h) drops
+                                                      //    an intrinsic tag (`<div>`) at capture time.
                                                       // 116 = 2026-09-18 (issue #287 round 2, review
                                                       //   rv-p6.md HIGH: capturePythonRebindShadowDecls
                                                       //   emits a LocalBindKind::VarDecl RawBind for every
