@@ -983,6 +983,37 @@ inline bool repriceEstTokensIn( std::string& doc, std::size_t begin, std::size_t
     return true;
 }
 
+// ── THE BUDGET LEDGER IS DATA (L1, 2026-09-19) ──────────────────────────────────────────────────────────────────
+// --pack-task ends its legend comment with a pipe-separated LEDGER of what the budget did to each section:
+// "budget=3186 bytes (1500-token target, ceiling 3540) | ranking: capped | bodies: kept 1 of 6 (capped) | callers:
+// omitted (budget) | notes: none | tests: none | far: omitted (budget) | task_echo: dropped (ceiling)". Some of those
+// facts ride attributes too (<sigs capped=>, <bodies shown= total=>), but "callers: omitted (budget)" and "far: omitted
+// (budget)" are a SECTION the budget cut whole, and no attribute states it — dropping the ledger with the prose would
+// have hidden a cut (METHODOLOGY §9.3: never cut silently). So when a prose comment carries the ledger, its ledger
+// survives compaction verbatim as its own data comment, `<!-- ledger: budget=… -->`, in the comment's place. The shape
+// is --pack-task's (packtask.h builds it: "budget=N bytes (T-token target, ceiling C) | …" to the comment's end);
+// a comment without it contributes nothing.
+inline std::string compactKeptLedger( std::string_view comment )
+{
+    constexpr std::string_view kOpen = " budget=";
+    constexpr std::string_view kClose = " -->";
+    for( std::size_t at = comment.find( kOpen ); at != std::string_view::npos; at = comment.find( kOpen, at + 1 ) )
+    {
+        std::size_t d = at + kOpen.size();
+        const std::size_t digits = d;
+        while( d < comment.size() && std::isdigit( static_cast<unsigned char>( comment[ d ] ) ) ) { ++d; }
+        const std::string_view rest = comment.substr( d );
+        const std::size_t shape = rest.find( "-token target, ceiling " );
+        if( d == digits || !rest.starts_with( " bytes (" ) || shape == std::string_view::npos || shape > 40 || !comment.ends_with( kClose ) )
+        {
+            continue;
+        }
+        const std::string_view ledger = comment.substr( at + 1, comment.size() - kClose.size() - ( at + 1 ) );
+        return "<!-- ledger: " + std::string( ledger ) + " -->";
+    }
+    return {};
+}
+
 // `priceBasisBytes`: the size of the document its est_tokens= was PRICED for, when that is not `doc` itself — the
 // over_ceiling settle below removes a label from the original after its emitter priced it (0 = doc.size()).
 inline CompactOutcome applyCompactDialectOnce( std::string& doc, std::string_view hint, std::size_t priceBasisBytes = 0 )
@@ -1040,6 +1071,7 @@ inline CompactOutcome applyCompactDialectOnce( std::string& doc, std::string_vie
             if( isCompactProseComment( comment ) && !soleRouteCarrier )
             {
                 if( firstProseAt == std::string::npos ) { firstProseAt = out.size(); }
+                out += compactKeptLedger( comment );   // the budget ledger's FACTS survive the prose (empty when none)
             }
             else
             {

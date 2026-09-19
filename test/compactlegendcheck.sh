@@ -118,7 +118,10 @@ elif op == "prose":    # PROSE legend bytes: comments this document carries that
     full = open( sys.argv[3], encoding = "utf-8", errors = "replace" ).read()
     unpriced = lambda c: re.sub( r"(?<= )est_tokens=[0-9]+", "est_tokens=N", c )
     fleg, _ = split( full ); fset = set( unpriced( x ) for x in fleg )
-    print( sum( len( x ) for x in leg if unpriced( x ) not in fset ) )
+    # …and --pack-task's budget LEDGER (compactlegend.h compactKeptLedger) is DATA the full dialect states inside its prose
+    # comment: kept verbatim as `<!-- ledger: … -->`, so it is prose only if its text is NOT in the full document.
+    isKeptLedger = lambda c: c.startswith( "<!-- ledger: " ) and c[ 13:-4 ] in full
+    print( sum( len( x ) for x in leg if unpriced( x ) not in fset and not isKeptLedger( x ) ) )
 elif op == "headattrs":  # attribute names on the root and its first child (where the completeness terms are read)
     names = set( re.findall( r'([\w:.-]+)="', m.group( 2 ) ) ) if m else set()
     if m:
@@ -726,6 +729,40 @@ for tb in 850 1000 1100 1200; do
     fi
 done
 [ "$p4bad" -eq 0 ] && ok "(P4) at --token-budget 850/1000/1100/1200 the compact --for answer is inside its budget or no further over it than the full one"
+
+# (P5) the BUDGET LEDGER survives compaction (orchestrator rule, METHODOLOGY §9.3/§9.4: never cut silently). --pack-task's
+# full legend ends with "budget=N bytes (T-token target, ceiling C) | ranking: … | bodies: … | callers: … | notes: … | tests:
+# … | far: … [| task_echo: …]"; "callers: omitted (budget)" and "far: omitted (budget)" are whole sections the budget cut, and
+# no attribute states them. So every `section: value` FACT the full ledger states must appear, verbatim, in the DEFAULT
+# answer's `<!-- ledger: … -->` data comment — at budgets that cut sections and at one that cuts nothing. Red on the
+# pre-change posture handling: compaction dropped the ledger with the prose.
+p5bad=0; p5n=0; p5cut=0
+for tb in 800 1500 3000 ""; do
+    "$BIN" "$ROOT/src" --pack-task="rank symbols by pagerank" ${tb:+--token-budget=$tb} --legend=full >"$TMP/p5.full" 2>/dev/null
+    "$BIN" "$ROOT/src" --pack-task="rank symbols by pagerank" ${tb:+--token-budget=$tb} >"$TMP/p5.def" 2>/dev/null
+    verdict="$( python3 - "$TMP/p5.full" "$TMP/p5.def" <<'PY'
+import re, sys
+full = open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read()
+dflt = open( sys.argv[2], encoding = "utf-8", errors = "replace" ).read()
+m = re.search( r" (budget=\d+ bytes \(\d+-token target, ceiling \d+\)(?: \| [^|]*?)*) -->", full )
+if not m:
+    print( "NOLEDGER" ); sys.exit()
+facts = [ f.strip() for f in m.group( 1 ).split( " | " ) ]
+kept  = re.search( r"<!-- ledger: (.*?) -->", dflt )
+missing = [ f for f in facts if not kept or f not in kept.group( 1 ).split( " | " ) ]
+cut = sum( 1 for f in facts if "omitted" in f or "capped" in f or "dropped" in f )
+print( "OK %d %d" % ( len( facts ), cut ) if not missing else "MISSING " + " ; ".join( missing ) )
+PY
+)"
+    p5n=$(( p5n + 1 ))
+    case "$verdict" in
+        OK*) set -- $verdict; p5cut=$(( p5cut + $3 ));;
+        *)   p5bad=$(( p5bad + 1 )); no "(P5) --pack-task ${tb:+--token-budget=$tb }default answer: $verdict" ;;
+    esac
+done
+[ "$p5bad" -eq 0 ] && [ "$p5n" -eq 4 ] && ok "(P5) every --pack-task budget-ledger fact (4 budgets incl. unbudgeted) rides the default answer verbatim in <!-- ledger: -->"
+[ "$p5cut" -gt 0 ] && ok "(P5) the arm binds: $p5cut cut facts (omitted/capped/dropped) were among those carried" \
+                   || no "(P5) no budget cut anything — the ledger arm proved nothing"
 
 echo
 # RE-ANCHORED 2026-09-10 (--edit-check answer-safe window): 4,000 → 4,100 B, measured 4,056 (from 4,000-56).
