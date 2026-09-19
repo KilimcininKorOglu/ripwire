@@ -3,9 +3,13 @@
 # Amendment 1 §R2, approved rv-prereg2.md 2026-09-19): the `--for` ranking-to-gold append.
 #
 # THE CONTRACT THIS PINS (src/namehits.h, src/verbs_for.h):
-#   (1) <namehits n="K"><nh p=…/>…</namehits> appears on a default-regime --for answer, IS the last child
-#       of the root (right before </ctx>), and is NEVER inside <tail> (whose shown=/total= count a
-#       different population — trimmed rows, not unnamed files).
+#   (1) <namehits n="K"><nh p=…/>…</namehits> appears on a default-regime --for answer, and is NEVER inside
+#       <tail> (whose shown=/total= count a different population — trimmed rows, not unnamed files). It is
+#       the last child of the root EXCEPT when --with-graph is also on — R8's own standing contract
+#       (withgraphcheck.sh) is that <graph> sits immediately before </ctx>, predating this lever, so
+#       namehits rides immediately BEFORE <graph> in that combination and is otherwise the true last child
+#       (fixed 2026-09-19, r2-LB3x closing batch: the CLI first shipped this element AFTER <graph>, which
+#       broke withgraphcheck's "last child" arm — see (1b) below and src/verbs_for.h's ordering comment).
 #   (2) APPEND-ONLY + DEDUPED: every <nh p=> names a file this SAME answer did not already emit a p= row
 #       for (sigs + the deep tail); no existing row is re-ranked or reordered.
 #   (3) HONESTY: n= is the count actually served (0..3), never padded — fewer than 3 qualifying files says
@@ -54,6 +58,15 @@ case "$out1" in
     *'namehits/nh p=: <=3 unnamed files by file-name/path word match (not graph evidence); n= shown'*)
         ok "(4) compact legend defines namehits/nh/n=" ;;
     *) no "(4) compact legend missing the namehits clause" ;;
+esac
+# (1b) --with-graph: <graph> is R8's own last-child contract (withgraphcheck.sh) and predates this lever —
+# namehits must ride immediately BEFORE <graph>, never after it (fixed 2026-09-19: the CLI originally
+# streamed <graph> then <namehits>, which put <namehits> last and broke withgraphcheck's own arm).
+outg="$( "$BIN" test/fixture --for='geometry area of a shape' --with-graph 2>/dev/null )"
+case "$outg" in
+    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits><graph '*'</graph></ctx>'*)
+        ok "(1b) --with-graph: <namehits> rides immediately before <graph>, which stays the true last child" ;;
+    *) no "(1b) --with-graph: namehits/graph ordering wrong: $( printf '%s' "$outg" | grep -o '<namehits.*graph[^>]*>' | head -c 200 )" ;;
 esac
 if printf '%s' "$out1" | xmllint --noout - 2>"$TMP/xml1.err"; then
     ok "(1) fixture answer is well-formed XML"
@@ -250,6 +263,84 @@ PYEOF
         no "(8) PARITY: at least one query's file list diverged from lb3_sim.py's formula — see FAILs above"
     fi
 fi
+
+# ── (9) MCP TWIN: forTaskText (src/mcpverbs.h) carries the SAME <namehits> element ─────────────────────
+# Wired in for lane r2-LB3x (review base 14a2539c): the CLI --for lens had <namehits> from round 2's own
+# landing, but the MCP `for` verb (forTaskText) had ZERO occurrences of namehits/kNameHits until this fix
+# — RED at 14a2539c by construction, no rebuild needed to prove it (grep the base commit's mcpverbs.h).
+cat > "$TMP/mcptext.py" <<'PY'
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try: d = json.loads( line )
+    except Exception: continue
+    c = d.get( "result", {} ).get( "content" )
+    if c: print( c[0].get( "text", "" ) )
+PY
+mcp_for(){
+    local root="$1" task="$2" extra="${3:-}"
+    printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s"%s}}}\n' \
+           "$root" "$task" "$extra" | "$BIN" --mcp 2>/dev/null | python3 "$TMP/mcptext.py"
+}
+
+mcp1="$( mcp_for test/fixture 'geometry area of a shape' )"
+case "$mcp1" in
+    *'<namehits n="2"><nh p="geometry.h"/><nh p="geometry.cpp"/></namehits></ctx>'*)
+        ok "(9) MCP for: namehits n=\"2\" (geometry.h/.cpp), last child, right before </ctx> — same as the CLI" ;;
+    *) no "(9) MCP for: unexpected namehits shape: $( printf '%s' "$mcp1" | grep -o '<namehits.*' | tail -c 200 )" ;;
+esac
+case "$mcp1" in
+    *'<namehits n=> = up to 3 files this answer did not already name, ranked ONLY by how many query words their file name (x3) and directory path (x2) contain (BM25); a lookup, NOT graph evidence; n= rows shown'*)
+        ok "(9) MCP for: legend defines <namehits n=> verbatim — byte-identical clause to the CLI's" ;;
+    *) no "(9) MCP for: legend missing the namehits clause" ;;
+esac
+
+# absence under an explicit budget_tokens — the MCP twin of the CLI's --token-budget scope rule (5)
+mcpb="$( mcp_for . 'lexical resolve pattern packtask' ', "budget_tokens":900' )"
+if ! printf '%s' "$mcpb" | grep -q namehits; then
+    ok "(9) MCP for budget_tokens=900: no namehits anywhere (same unpriced-ceiling rule as the CLI)"
+else
+    no "(9) MCP for budget_tokens=900: namehits leaked in under an explicit budget"
+fi
+
+# ── CLI/MCP byte-parity of the <namehits> element itself, on 3 representative --for tasks (review item) ──
+# Extracts ONLY the <namehits …>…</namehits> (or self-closed <namehits …/>) substring from each side's
+# document and asserts the two are byte-identical — paths, ranking and n= must all agree, not just "both
+# have one". rpartition mirrors (8) PARITY's own reasoning: the FULL dialect's legend spells the literal
+# text "<namehits n=>" near the top, so the real element is the LAST "<namehits" in the string.
+cat > "$TMP/nhparity.py" <<'PY'
+import sys
+def nh_block( doc ):
+    _, marker, rest = doc.rpartition( "<namehits" )
+    if not marker:
+        return None
+    tag_end = rest.find( ">" )
+    if tag_end == -1:
+        return None
+    if rest[ :tag_end ].endswith( "/" ):
+        return "<namehits" + rest[ :tag_end + 1 ]          # self-closed: <namehits n="0"/>
+    close = rest.find( "</namehits>" )
+    if close == -1:
+        return None
+    return "<namehits" + rest[ :close + len( "</namehits>" ) ]
+cli_doc, mcp_doc = open( sys.argv[1] ).read(), open( sys.argv[2] ).read()
+cli_nh, mcp_nh   = nh_block( cli_doc ), nh_block( mcp_doc )
+if cli_nh is None or mcp_nh is None:
+    print( f"MISSING cli={cli_nh!r} mcp={mcp_nh!r}" ); sys.exit( 1 )
+if cli_nh != mcp_nh:
+    print( f"DIFFER cli={cli_nh!r} mcp={mcp_nh!r}" ); sys.exit( 1 )
+print( cli_nh )
+PY
+for q in "geometry area of a shape" "geometry consumer app" "call a native function from python"; do
+    "$BIN" test/fixture --for="$q" 2>/dev/null > "$TMP/nhp_cli.xml"
+    mcp_for test/fixture "$q" > "$TMP/nhp_mcp.xml"
+    if nhout="$( python3 "$TMP/nhparity.py" "$TMP/nhp_cli.xml" "$TMP/nhp_mcp.xml" )"; then
+        ok "(9) PARITY CLI/MCP <namehits> byte-identical for '$q': $nhout"
+    else
+        no "(9) PARITY CLI/MCP <namehits> DIFFERS for '$q': $nhout"
+    fi
+done
 
 [ "$fail" -eq 0 ] && echo "namehitscheck: ALL PASS" || echo "namehitscheck: FAILURES ABOVE"
 exit "$fail"

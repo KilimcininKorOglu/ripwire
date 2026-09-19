@@ -19,6 +19,7 @@
 #include "filter.h"        // §P4: rankTierSymbolMultipliers — the fixture/present tier down-weight the CLI ranking lenses apply
 #include "redact.h"        // RedactCounts — the per-request redaction tally threaded through the body/doc verbs
 #include "forpage.h"    // L-W: the --for file page, coverage= and the thin rule — shared with the CLI twin
+#include "namehits.h"   // LB3x: the <namehits> append — MCP twin of the CLI --for lever (verbs_for.h)
 #include "packtask.h"      // L4: the shared --pack-task / MCP explore+pack_task bundle assembler (packTaskBundleText)
 #include "partition.h"     // the explore verb's `partition` argument (packTaskPartitionText)
 #include "tracelocus.h"    // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
@@ -1898,6 +1899,11 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     }
     // ONE decision, read twice below: appended into the header here, subtracted from the sigs charge there.
     const rw::ForIdRouteLegendParts mcpIdRouteParts = rw::forIdRouteLegendParts( /*legendOn=*/true, mcpForScPresent, mcpForRouteAttrOn );
+    // LB3x: the <namehits> element rides only in the default regime — no explicit budget_tokens — mirroring
+    // the CLI twin's forNameHitsOn (verbs_for.h) exactly: an explicit ceiling wants every byte spent on
+    // ranked evidence, and neither dialect's ceiling handling prices this element yet (namehits.h's scope
+    // note). The legend clause below is present exactly when the element itself will be.
+    const bool forNameHitsOn = budgetTokens == 0;
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + ": reusable building blocks (cx=complexity, in=reuse-count) — prefer composing/reusing these over reimplementing"
@@ -1913,6 +1919,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                             " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
                             " means NOT MEASURED, never measured-and-zero; est_tokens= prices this bundle in tokens"
                           + std::string( rw::kForFileTailLegend )   // deep-tail: r= + <tail> definitions, the CLI twin's exact clause (sigs-charge-exempt below)
+                          + ( forNameHitsOn ? std::string( rw::kForFullLegendNameHits ) : std::string() )   // LB3x: defines <namehits> — present-only, same rule as the CLI twin (verbs_for.h)
                           + " -->"
                           + rw::forRootRelPathsLegendShort( !flRootArg.empty() );   // W3-S item 5: closes the gap this comment used to record
     // W3-S item 5 (2026-08-19): both --for dialects now carry rw::kForRootRelPathsLegendShort (graphlegend.h)
@@ -2034,12 +2041,46 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // DEEP-TAIL d2, MCP twin: the same shared walk + renderer the CLI --for uses (serialize.h), from the
     // same resolved surface — the fixed default budget regime, so the tail rides on top (default row cap)
     // and the ranked head above stays byte-identical to a tail-less bundle.
+    // LB3x: the FileTail is kept (not just its rendered XML) — the namehits dedup set below needs its
+    // .paths the same way the CLI twin's forFileTailShown.paths does (verbs_for.h).
+    const FileTail mcpFileTail = computeFileTail( ing, lensRank, mcpShownIds, flRootArg );
     {
         std::vector<char> tailEsc;
-        const std::string tailStr = renderFileTailXml( computeFileTail( ing, lensRank, mcpShownIds, flRootArg ),
-                                                       kForFileTailShownCap, tailEsc );
+        const std::string tailStr = renderFileTailXml( mcpFileTail, kForFileTailShownCap, tailEsc );
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
+    // LB3x — the <namehits> append, MCP twin of the CLI --for lever (verbs_for.h, namehits.h): OWN element,
+    // LAST child of the root, APPEND-ONLY, default regime only (forNameHitsOn — see its declaration above).
+    // Written into `mem` BEFORE </ctx>, so priceForTaskRoot's doc.size()-based fixpoint below (run on the
+    // fully captured document) prices these bytes the same way it prices every other byte on this surface —
+    // no separate header-splice reserve is needed here, unlike the CLI's own fixpoint, because this dialect
+    // re-measures the WHOLE captured document after it is built rather than pricing the header in flight.
+    std::string nameHitsStr;   // LB3x: stays "" under an explicit budget_tokens — ENSURES below checks it
+    if( forNameHitsOn )
+    {
+        // same dedup set the CLI twin builds (verbs_for.h nhNamed): the sigs rows actually shown (mcpShownIds,
+        // this dialect's shownSigIds) plus the file-tail's shown paths — every p= row this SAME answer emits.
+        HashMap<std::string, std::uint8_t> nhNamed;
+        for( NodeId sid : mcpShownIds )
+        {
+            if( sid < ing.symbols.size() )
+            {
+                nhNamed[ lensRowPath( ing, ing.symbols[ sid ].fileId, flRootArg ) ] = 1;
+            }
+        }
+        for( const std::string& p : mcpFileTail.paths )
+        {
+            nhNamed[ p ] = 1;
+        }
+        const std::vector<NameHitsRanked> nhRanked = rankNameHits( ing, nameHitsToks( task ) );
+        std::vector<char>                 nhEsc;
+        nameHitsStr = renderNameHitsXml( ing, nhRanked, nhNamed, flRootArg, nhEsc );
+    }
+    // ENSURES, not ASSUME: this function's own postcondition on the branch just above, not an invariant
+    // some OTHER code establishes — the honesty contract (namehits.h) is that an explicit ceiling never
+    // carries this element's bytes at all, not even a self-closed "n=0" one.
+    ENSURES( forNameHitsOn || nameHitsStr.empty(), "forTaskText: namehits must stay unrendered under an explicit budget_tokens (unpriced-ceiling regime, namehits.h's scope note)" );
+    std::fwrite( nameHitsStr.data(), 1, nameHitsStr.size(), mem );
     rw::emitRaw( mem, "</ctx>" );
     std::optional<std::string> answer = mcpAnswerText( stream );
     if( !answer )

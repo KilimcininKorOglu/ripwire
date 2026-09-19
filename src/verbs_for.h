@@ -3184,19 +3184,24 @@ std::optional<int> runForLens( const MainDispatch& d )
             std::fwrite( autoSection.xml.data(), 1, autoSection.xml.size(), stdout );
         }
 
-        // R8: --with-graph — a compact mermaid flowchart of the ranked bundle's anchor neighborhood,
-        // right before </ctx>. Off by default (G5): omitted, this is a no-op and output is byte-identical.
-        if( cfg.withGraph )
-        {
-            rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
-        }
-
-        // LB3x — the <namehits> append: OWN element, LAST child of the root, APPEND-ONLY (namehits.h),
-        // rendered earlier (nameHitsStr) so its bytes are part of est_tokens' fixpoint above; this site only
-        // streams the bytes already priced. Empty ("") on the explicit-budget regime — a no-op write.
+        // LB3x — the <namehits> append: rendered earlier (nameHitsStr) so its bytes are part of est_tokens'
+        // fixpoint above; this site only streams the bytes already priced. Empty ("") on the explicit-budget
+        // regime — a no-op write. ORDERING (withgraphcheck.sh): --with-graph's own contract is that <graph>
+        // sits immediately before </ctx>, predating this element (R8) — so namehits rides BEFORE <graph>
+        // when the flag is on, and is otherwise the true last child. "LAST child" in namehits.h's own header
+        // comment means "last of THIS element's own family (sigs/lego/compose/tail)", not "after every
+        // opt-in section a later flag might append" — R8's contract was never renegotiated by this lever.
         if( !nameHitsStr.empty() )
         {
             std::fwrite( nameHitsStr.data(), 1, nameHitsStr.size(), stdout );
+        }
+
+        // R8: --with-graph — a compact mermaid flowchart of the ranked bundle's anchor neighborhood,
+        // right before </ctx> (its own standing contract — withgraphcheck.sh). Off by default (G5): omitted,
+        // this is a no-op and output is byte-identical.
+        if( cfg.withGraph )
+        {
+            rw::emitChargedSection( stdout, graphSection, [ & ]{ packGraphBlock( stdout, ing, lensRank, g.outOff, g.outTargets ); } );
         }
 
         rw::emitRaw( stdout, "</ctx>" );
