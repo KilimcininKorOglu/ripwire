@@ -480,6 +480,54 @@ inline const JsRuntimeSourceExt* jsRuntimeSourceExtOf( std::string_view specifie
     return nullptr;
 }
 
+// The two-tier probe `kJsRuntimeSourceExts` exists for: `runtimeExt`'s SOURCE alternates first
+// (unique-or-degrade among `sources`), then — ONLY when the source tier found NOTHING at all, never when
+// it is ambiguous — its single DECLARATION fallback. `seedHit` folds in a caller's own already-resolved
+// candidate (an exact/literal probe of the specifier itself) under the SAME unique-or-degrade rule, so a
+// caller needs no separate merge step: the returned `fileId` already accounts for it. Shared by
+// resolveTsImport (below) and graph.h's resolveJsNamedImportFile, so the two-tier precedence — source
+// before declaration, tsc live-verified (see kJsRuntimeSourceExts above) — and the underlying lookup
+// (joinNormalizeLookup) cannot drift between the include tier and the named-import binder.
+//
+// Returns { fileId, ambiguous }: fileId is kNoFile on EITHER "nothing answered" or "ambiguous" — ambiguous
+// says which, the same two-outcome contract resolveJsNamedImportFile already promised its own callers.
+inline std::pair<std::uint32_t, bool> probeJsRuntimeSourceExt( std::string_view dir, std::string_view target,
+                                                                const JsRuntimeSourceExt& runtimeExt,
+                                                                const HashMap<std::string, std::uint32_t>& fileIndex,
+                                                                const WsIncludeCtx* ws, std::uint32_t includerFileId,
+                                                                std::uint32_t seedHit = kNoFile )
+{
+    // `runtimeExt` must be the row `jsRuntimeSourceExtOf( target )` itself returned — its own size guard
+    // (`specifier.size() > row.runtime.size()`, just above) is what makes forming `stem` safe below; this
+    // function does not re-derive `runtimeExt` from `target`, so that contract is the CALLER's to keep.
+    // `seedHit` must not already be the `kNoFile - 1` ambiguous marker: it is folded in as an ordinary
+    // candidate, not as a pre-existing ambiguity, and no caller has a reason to pass that sentinel in.
+    EXPECTS( target.size() > runtimeExt.runtime.size(), "caller must pass runtimeExt from jsRuntimeSourceExtOf( target )" );
+    EXPECTS( seedHit != kNoFile - 1, "seedHit is an ordinary candidate, never the ambiguous marker" );
+    const std::string stem( target.substr( 0, target.size() - runtimeExt.runtime.size() ) );
+    std::uint32_t hit = seedHit;
+    bool ambiguous = false;
+    const auto probe = [ & ]( std::string_view extension )
+    {
+        const std::uint32_t candidate = joinNormalizeLookup( dir, stem + std::string( extension ), fileIndex, ws, includerFileId );
+        if( candidate == kNoFile ) { return; }
+        if( hit != kNoFile && hit != candidate ) { ambiguous = true; }
+        hit = candidate;
+    };
+    for( const std::string_view source : runtimeExt.sources )
+    {
+        if( !source.empty() )
+        {
+            probe( source );
+        }
+    }
+    if( !ambiguous && hit == kNoFile && !runtimeExt.decl.empty() )
+    {
+        probe( runtimeExt.decl );
+    }
+    return { ambiguous ? kNoFile : hit, ambiguous };
+}
+
 // ── TS/JS Step-A — SOUND (closest to C quote-includes). Relative specifier `./x` / `../a/b` → probe a
 // FIXED extension list then index files, relative-to-includer; a BARE specifier (`react`, `lodash` — no
 // leading dot) is node_modules/external → kNoFile (unresolved, never matched). Resolve IFF exactly ONE
@@ -591,33 +639,15 @@ inline std::uint32_t resolveTsImport( std::string_view includerPath, std::string
         }
     };
     // FIRST an exact hit (specifier already has an extension, e.g. `./x.js`), then the source file a runtime spelling
-    // names (kJsRuntimeSourceExts), then extension-appended, then index. One accumulator for all of them, so a tree
-    // holding BOTH api.js and api.ts leaves `./api.js` unresolved rather than guessing which module was meant.
+    // names (kJsRuntimeSourceExts, both tiers — probeJsRuntimeSourceExt above), then extension-appended, then
+    // index. One accumulator for all of them (probeJsRuntimeSourceExt is SEEDED with it and folds its own
+    // result back in), so a tree holding BOTH api.js and api.ts leaves `./api.js` unresolved rather than
+    // guessing which module was meant.
     probe( std::string( target ) );
     if( const JsRuntimeSourceExt* const runtimeExt = jsRuntimeSourceExtOf( target ) )
     {
-        // jsRuntimeSourceExtOf only ever returns a row whose `runtime` suffix is STRICTLY shorter than
-        // `target` (its own `specifier.size() > row.runtime.size()` guard, just above) — this code makes
-        // that hold by construction, so the subtraction below can never underflow.
-        ASSUME( target.size() > runtimeExt->runtime.size(), "jsRuntimeSourceExtOf's own size guard" );
-        const std::string stem( target.substr( 0, target.size() - runtimeExt->runtime.size() ) );
-        for( const std::string_view source : runtimeExt->sources )
-        {
-            if( !source.empty() )
-            {
-                probe( stem + std::string( source ) );
-            }
-        }
-        // Declaration fallback, second tier: `hit == kNoFile` here means the exact probe above AND every
-        // source alternate found NOTHING — not the `kNoFile - 1` ambiguous marker, which this check
-        // deliberately excludes, so two conflicting source hits still degrade rather than fall through to a
-        // declaration neither of them needed. tsc, live: `./both.js` with both `both.ts` and `both.d.ts` on
-        // disk resolves to `both.ts` and never touches the declaration; `./d.js` with only `d.d.ts` resolves
-        // to it.
-        if( hit == kNoFile && !runtimeExt->decl.empty() )
-        {
-            probe( stem + std::string( runtimeExt->decl ) );
-        }
+        const auto [ extHit, extAmbiguous ] = probeJsRuntimeSourceExt( dir, target, *runtimeExt, fileIndex, ws, includerFileId, hit );
+        hit = extAmbiguous ? ( kNoFile - 1 ) : extHit;
     }
     for( std::string_view e : kFileExt )
     {

@@ -1806,36 +1806,12 @@ inline std::pair<std::uint32_t, bool> resolveJsNamedImportFile( std::string_view
     {
         return { resolvePreciseInclude( importer, module, false, files, {}, false, workspace, importerFileId ), false };
     }
-    std::uint32_t hit = joinNormalizeLookup( includerDir( importer ), std::string( module ), files, workspace, importerFileId );
-    bool ambiguous = false;
-    const auto probe = [ & ]( std::string_view extension, std::size_t suffixLength )
-    {
-        // Every call site passes runtimeExt->runtime.size(): jsRuntimeSourceExtOf only ever returns a row
-        // whose `runtime` suffix is STRICTLY shorter than `module` (its own size guard, above) — this
-        // function makes that hold by construction, so the subtraction below can never underflow.
-        ASSUME( module.size() > suffixLength, "jsRuntimeSourceExtOf's own size guard" );
-        const auto candidate = joinNormalizeLookup( includerDir( importer ), std::string( module.substr( 0, module.size() - suffixLength ) )
-                                                   + std::string( extension ), files, workspace, importerFileId );
-        if( candidate == kNoFile ) { return; }
-        if( hit != kNoFile && hit != candidate ) { ambiguous = true; }
-        hit = candidate;
-    };
-    for( const std::string_view source : runtimeExt->sources )
-    {
-        if( !source.empty() )
-        {
-            probe( source, runtimeExt->runtime.size() );
-        }
-    }
-    // Declaration fallback, second tier (resolve.h::kJsRuntimeSourceExts — source before declaration, tsc
-    // live-verified): tried ONLY when the exact probe and every source alternate above found NOTHING —
-    // `!ambiguous && hit == kNoFile` excludes the case where two source alternates both hit (that stays a
-    // degrade, never falls through to guess a declaration neither source needed).
-    if( !ambiguous && hit == kNoFile && !runtimeExt->decl.empty() )
-    {
-        probe( runtimeExt->decl, runtimeExt->runtime.size() );
-    }
-    return { ambiguous ? kNoFile : hit, ambiguous };
+    // resolve.h::probeJsRuntimeSourceExt runs both tiers (source alternates, then the declaration fallback
+    // iff the source tier found nothing) and folds in this exact/literal probe as its seed, so a tree
+    // carrying BOTH a literal `module` file and a source/declaration alternate still degrades to ambiguous
+    // exactly as it did before this shared out.
+    const std::uint32_t seedHit = joinNormalizeLookup( includerDir( importer ), std::string( module ), files, workspace, importerFileId );
+    return probeJsRuntimeSourceExt( includerDir( importer ), module, *runtimeExt, files, workspace, importerFileId, seedHit );
 }
 
 // WHERE a named import's module lands, and — when it lands nowhere — WHICH kind of nowhere. The three
