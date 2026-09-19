@@ -140,8 +140,9 @@ struct Arm
     enum class DisclosureWhy : std::uint8_t
     {
         NoMergeBase,
+        TreeUnavailable,   // a side's tree could not be materialized or ingested
     };
-    void disclose( DisclosureWhy ) noexcept   // the DISCLOSE sink: the field the emitter reads
+    void disclose( DisclosureWhy ) noexcept   // every reason records the same fact: arm ok="0", empty changed set
     {
         ok = false;
     }
@@ -154,6 +155,9 @@ struct SymTreeIndex
 {
     gtl::btree_map<std::uint64_t, std::uint64_t> bodyHash;
     gtl::btree_map<std::uint64_t, ChangedSym>     identity;
+    // false ⇒ the committish's tree could not be materialized or ingested: this is NOT an empty tree, and an arm diffed
+    // against it must not read every symbol as changed (computeNamedArm refuses it through the arm's sink).
+    bool                                          isIndexed = false;
 };
 
 // The file-level fallback lane (see this file's FILE-LEVEL FALLBACK header comment): fold a whole-file
@@ -258,7 +262,9 @@ inline SymTreeIndex indexCommittish( const std::string& root, const std::string&
     {
         return {};
     }
-    return buildTreeIndex( ing, tmpRoot );
+    SymTreeIndex index = buildTreeIndex( ing, tmpRoot );
+    index.isIndexed    = true;
+    return index;
 }
 
 // Diff `ref` against `base`: every key present in either with a DIFFERENT (or one-sided) body hash —
@@ -420,7 +426,15 @@ inline Arm computeNamedArm( std::string_view ref, const std::string& refSha, con
         DISCLOSE( arm, Arm::DisclosureWhy::NoMergeBase, "merge-scout: no merge-base for ref (unrelated history?) — reporting an empty arm" );
         return arm;
     }
-    arm.changed = diffTreeIndex( memo.get( arm.baseSha ), memo.get( refSha ) );
+    const SymTreeIndex base = memo.get( arm.baseSha );
+    const SymTreeIndex tip  = memo.get( refSha );
+    if( !base.isIndexed || !tip.isIndexed )
+    {
+        // an unavailable tree is not an empty one: diffing against it would report every symbol as this arm's work
+        DISCLOSE( arm, Arm::DisclosureWhy::TreeUnavailable, "merge-scout: a side's tree could not be materialized or ingested — reporting an empty arm" );
+        return arm;
+    }
+    arm.changed = diffTreeIndex( base, tip );
     return arm;
 }
 

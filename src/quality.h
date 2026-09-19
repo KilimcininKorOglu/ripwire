@@ -3303,9 +3303,27 @@ struct TmpTreeGuard
 // Materialize `committish`'s committed tree into a fresh pid-suffixed temp dir under the hardened cache
 // ladder (per-user; never the repo) via `git archive | tar -x`. Returns the temp root, or "" on any failure
 // (degrade-alerted; a half-made dir is cleaned up here — on success the CALLER owns cleanup via TmpTreeGuard).
+// What materializeCommitTree hands back: the temp root, or EMPTY — the one field every caller reads as "no tree". It is
+// the DISCLOSE sink for the three ways the tree is not made; each caller then refuses, or marks its own answer.
+struct MaterializedTree
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        RevisionUnresolved,
+        TempDirUnavailable,
+        ArchiveFailed,
+    };
+    std::string root;
+    void disclose( DisclosureWhy ) noexcept
+    {
+        root.clear();
+    }
+};
+
 inline std::string materializeCommitTree( const std::string& root, const std::string& committish, const char* tag )
 {
     namespace fs = std::filesystem;
+    MaterializedTree tree;
 
     // r27 (Lane C routing) — RESOLVE THE REVISION FIRST. `git archive --output=FILE` really does write a file
     // (measured), so this is the P0.1 shape one careless caller away from being the same data-loss bug. Every
@@ -3316,22 +3334,28 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // the separator goes AFTER the revision.
     const std::string rev = gitResolveCommitSha( root, committish );
     if( rev.empty() )
-    { DISCLOSE( "quality: commit-tree revision does not resolve to a commit — refusing to archive" ); return {}; }
+    {
+        DISCLOSE( tree, MaterializedTree::DisclosureWhy::RevisionUnresolved, "quality: commit-tree revision does not resolve to a commit — refusing to archive" );
+        return tree.root;
+    }
 
     std::error_code ec;
     std::string tmpRoot = cacheDirLadder() + "/ripwire-" + tag + "-" + std::to_string( ::getpid() );   // not const: moved out on return
     fs::remove_all( fs::path( tmpRoot ), ec );                 // stale leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
-    { DISCLOSE( "quality: cannot create commit-tree temp dir" ); return {}; }
+    {
+        DISCLOSE( tree, MaterializedTree::DisclosureWhy::TempDirUnavailable, "quality: cannot create commit-tree temp dir" );
+        return tree.root;
+    }
 
     const std::string extract = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
     if( std::system( extract.c_str() ) != 0 )
     {
-        DISCLOSE( "quality: git archive failed — committed tree unavailable" );
+        DISCLOSE( tree, MaterializedTree::DisclosureWhy::ArchiveFailed, "quality: git archive failed — committed tree unavailable" );
         std::error_code e;
         fs::remove_all( fs::path( tmpRoot ), e );
-        return {};
+        return tree.root;
     }
     return tmpRoot;
 }

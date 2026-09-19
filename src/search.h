@@ -1104,7 +1104,8 @@ struct GrepScanVerdict
         } );
         if( scan.verdict == RegexVerdict::Exhausted )
         {
-            DISCLOSE( "grep: the regex engine abandoned a match (catastrophic backtracking?) — the verb refuses the answer" );
+            DISCLOSE( Diagnostics::answerRefused, "the verdict makes --regex refuse by name (the file and the cause on stderr, exit 1); no hit is reported",
+                      "grep: the regex engine abandoned a match (catastrophic backtracking?) — the verb refuses the answer" );
         }
         scanned = text.size();   // the literal branch's cursor is not shared with this one; keep it honest
         return { scan.verdict == RegexVerdict::Exhausted, scan.skippedLineCount };

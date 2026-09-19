@@ -387,7 +387,8 @@ inline std::optional<std::string> mcpAnswerText( rw::MemoryStream& stream )
     const rw::MemoryStreamBytes answer = stream.finish();
     if( !answer.isWhole )
     {
-        DISCLOSE( "mcp: an answer buffer did not finish whole — this verb answers as if the buffer never opened" );
+        DISCLOSE( Diagnostics::answerRefused, "every caller answers the MCP internal error (-32603) it gives a failed open; no short answer is served",
+                  "mcp: an answer buffer did not finish whole — this verb answers as if the buffer never opened" );
         return std::nullopt;
     }
     return std::string( answer.bytes );
