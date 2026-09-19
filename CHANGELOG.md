@@ -2089,6 +2089,20 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
+### Fixed — `--index-out` dropped `--no-ignore` on the generated artifact
+
+The generate path called `ingest()` without the `respectGitignore` argument, so `--index-out`'s artifact always
+honoured `.gitignore` even when `--no-ignore` was also on the command line; every other `ingest()` call site
+already passes `!cfg.noIgnore`. A `--no-ignore` consumer of that artifact found the ignored files missing and
+reparsed each one cold, which defeats the artifact's point — its whole value is that the consumer does not
+reparse. `--index-out` now threads `!cfg.noIgnore` through to the generate ingest, matching the other call sites.
+`test/indexoutcheck.sh` arm (e) is the gate: in a git fixture with an untracked file under an ignored directory,
+it reads the artifact's own file set rather than relying on restore-equivalence (which can't see a dropped
+argument — a missing record just looks like a miss) — a control default artifact must omit the file, a
+`--no-ignore` artifact must hold it, and a `--no-ignore` consumer of that artifact must report `reparsed=0`.
+Split out of #44 (the native Windows port), where the argument rode inside one bundled commit next to an
+unrelated cache-directory parameter. Thanks to @lennix1337.
+
 ## [0.6.1] — 2026-09-14
 
 **A header selector answers only with the definitions it can tie to that header, every number a compact answer prints

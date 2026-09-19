@@ -4371,7 +4371,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             const std::string path = base + fam.suffix;
             rw::os::remove( path.c_str() );                     // force-rebuild: a stale warm file must not shadow the generate
 
-            IngestResult r = ingest( root.c_str(), cfg.excludes, path, cfg.maxFileBytes, fam.rich );
+            IngestResult r = ingest( root.c_str(), cfg.excludes, path, cfg.maxFileBytes, fam.rich, {}, !cfg.noIgnore );
             (void)r;
 
             std::error_code       ec;
