@@ -357,7 +357,8 @@ if [ "$( count_rows "$TMP/a_slicepp.xml" '<v n="acc"' )" = 1 ]; then
 else
     no "(A2) sliceWalkPreproc: --slice=target lost acc across the flooded \`#if\` block"
 fi
-"$BIN" "$TMP/span/n1000" --no-cache --grep=needle_marker >"$TMP/a_grep.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and spells <hit l= in=> inside its comment; (A3) counts real rows, so it asks for the full legend.
+"$BIN" "$TMP/span/n1000" --no-cache --grep=needle_marker --legend=full >"$TMP/a_grep.xml" 2>/dev/null
 if [ "$( count_rows "$TMP/a_grep.xml" 'tier="comment"' )" = 1 ] && [ "$( count_rows "$TMP/a_grep.xml" '<hit ' )" = 1 ]; then
     ok "(A3) collectSpanTiers: --grep still finds the hit AND still classifies it tier=comment"
 else

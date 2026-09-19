@@ -27,7 +27,9 @@ echo "expandcallscheck: BIN=$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
 # ── #1: a large-fanout symbol (ingest) — <calls> carries total=, and total= equals --callees=ingest's count=
-EXP_XML="$( "$BIN" . --top-k=0 --expand=ingest --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells `<calls><c n= l=>` inside its comment; the
+# <calls>/<c n= reads count real elements, so the --expand runs ask for the full legend (rows identical).
+EXP_XML="$( "$BIN" . --top-k=0 --expand=ingest --no-cache --legend=full 2>/dev/null )"
 CALLS_TAG="$( printf '%s' "$EXP_XML" | grep -oE '<calls[^>]*>' | head -1 )"
 CALLEES_COUNT="$( "$BIN" . --callees=ingest --no-cache 2>/dev/null | grep -oE 'count="[0-9]+"' | head -1 | grep -oE '[0-9]+' )"
 EXP_TOTAL="$( printf '%s' "$CALLS_TAG" | grep -oE 'total="[0-9]+"' | grep -oE '[0-9]+' )"
@@ -58,7 +60,7 @@ ACTUAL_C="$( printf '%s' "$EXP_XML" | grep -oE '<c n=' | wc -l | tr -d ' ' )"
     || no "shown=\"$EXP_SHOWN\" does not match the actual emitted <c> row count ($ACTUAL_C)"
 
 # ── #3: a small-fanout symbol shows total==shown with NO capped= (the listing is complete — no phantom cut)
-SMALL_XML="$( "$BIN" . --top-k=0 --expand=isDocExtension --no-cache 2>/dev/null )"
+SMALL_XML="$( "$BIN" . --top-k=0 --expand=isDocExtension --no-cache --legend=full 2>/dev/null )"
 SMALL_TAG="$( printf '%s' "$SMALL_XML" | grep -oE '<calls[^>]*>' | head -1 )"
 SMALL_CALLEES="$( "$BIN" . --callees=isDocExtension --no-cache 2>/dev/null | grep -oE 'count="[0-9]+"' | head -1 | grep -oE '[0-9]+' )"
 SMALL_TOTAL="$( printf '%s' "$SMALL_TAG" | grep -oE 'total="[0-9]+"' | grep -oE '[0-9]+' )"

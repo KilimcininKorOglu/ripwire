@@ -80,7 +80,8 @@ printf '// a translation unit with no symbols at all\n' > "$E/empty.cpp"
 commit "$E" init
 mkdir -p "$E/inc"
 gnarly > "$E/inc/new.h"
-OUT="$( cd "$E" && "$BIN" . --quality-delta --no-cache 2>"$WORK/e_err" )"; rce=$?
+# L1 (2026-09-19): the CLI default legend is compact and spells `<r kind= sym= …>` inside its comment; this counts real rows, so it asks for the full legend.
+OUT="$( cd "$E" && "$BIN" . --quality-delta --no-cache --legend=full 2>"$WORK/e_err" )"; rce=$?
 NROWS="$( printf '%s' "$OUT" | tr '<' '\n' | grep -c '^r kind=' )"
 [ "$NROWS" -gt 0 ] && ok "empty-HEAD fixture reports $NROWS findings (non-vacuous)" \
                    || { no "empty-HEAD fixture reported nothing"; printf '%s\n' "$OUT" | head -c 400; }

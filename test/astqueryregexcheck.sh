@@ -111,7 +111,8 @@ FN_DEF='(function_definition declarator: (function_declarator declarator: (ident
 probe(){                                      # $1 = label, rest = argv after the corpus
     local label="$1"; shift
     printf '===== %s\n' "$label"
-    "$BIN" "$FIX" --no-cache "$@" 2>/dev/null | sed "s#$FIX#<ROOT>#g"
+    # L1 (2026-09-19): the CLI default legend is compact; the golden was recorded from the full default, so every probe asks for it.
+    "$BIN" "$FIX" --no-cache "$@" --legend=full 2>/dev/null | sed "s#$FIX#<ROOT>#g"
     # An EXPLICIT terminator, not a blank line: the map output carries no trailing newline (G4), so a
     # blank-line delimiter would not exist and every per-section `sed` range below would silently run to
     # end of file — which is exactly the shape of a differential arm that compares two identical

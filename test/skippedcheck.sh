@@ -94,7 +94,8 @@ grep -q 'p="big.cpp"' "$TMP/two.xml" \
 if grep -q 'oversize="1"' "$TMP/two.xml"; then ok "(2) root reports oversize=\"1\""; else no "(2) root does not report oversize=\"1\""; fi
 
 # ── (3) accounting join: verb count == map header count, and files= + oversize= = population ─────────────
-"$BIN" corpus --max-file-size=1K --no-cache > "$TMP/map.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and defines `files=`/`skipped_oversize=` in its comment ahead of the header; (3) reads the header's values, so it asks for the full legend.
+"$BIN" corpus --max-file-size=1K --no-cache --legend=full > "$TMP/map.xml" 2>/dev/null
 mapSkipped="$( grep -o 'skipped_oversize=[0-9]*' "$TMP/map.xml" | head -1 | cut -d= -f2 )"
 mapFiles="$(   grep -o 'files=[0-9]*'            "$TMP/map.xml" | head -1 | cut -d= -f2 )"
 [ "${mapSkipped:-}" = "2" ] && ok "(3) map header says skipped_oversize=2 — same count the verb itemizes" \

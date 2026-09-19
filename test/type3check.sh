@@ -206,7 +206,8 @@ CLTOTAL="$(  printf '%s' "$CL" | grep -oE '<clones[^>]*>' | grep -oE ' total="[0
 
 # a --limit run reaching every row: total= (from the paging half) must equal the SAME value, and the
 # row count it walks toward must equal groups+type3 too (the "true row total" the audit item names).
-CLPAGED="$( "$BIN" . --clones --limit=100000 --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells `<group …>` inside its comment; CLP_ROWS counts real rows, so it asks for the full legend.
+CLPAGED="$( "$BIN" . --clones --limit=100000 --no-cache --legend=full 2>/dev/null )"
 CLP_TOTAL="$( printf '%s' "$CLPAGED" | grep -oE '<clones[^>]*>' | grep -oE ' total="[0-9]+"' | grep -oE '"[0-9]+"' | tr -d '"' )"
 CLP_SHOWN="$( printf '%s' "$CLPAGED" | grep -oE '<clones[^>]*>' | grep -oE ' shown="[0-9]+"' | grep -oE '"[0-9]+"' | tr -d '"' )"
 CLP_ROWS="$(  printf '%s' "$CLPAGED" | grep -o '<group '  | wc -l | tr -d ' ' )"

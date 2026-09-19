@@ -57,7 +57,8 @@ else
 fi
 
 # ── (d) --edit-check accepts the spelling it itself prints as sym= ──────────────────────────────────
-OUTD="$( cd "$ROOT" && "$BIN" test/selectorscopefix --no-cache --edit-check=Box::lid 2>&1 )"
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema=; (d) reads sym= as the root's first attribute, so it asks for the full legend.
+OUTD="$( cd "$ROOT" && "$BIN" test/selectorscopefix --no-cache --edit-check=Box::lid --legend=full 2>&1 )"
 if printf '%s' "$OUTD" | grep -q '<edit-check sym="lid"' && printf '%s' "$OUTD" | grep -q 'box.h'; then
     ok "(d) --edit-check=Box::lid resolves to box.h's lid"
 else

@@ -131,7 +131,9 @@ EXPECT_NODEID=""
 for i in $( seq -w 0 15 ); do EXPECT_NODEID="${EXPECT_NODEID:+$EXPECT_NODEID }leaf_$i"; done
 
 # ── (1) --pack-task keeps the callee the task NAMES ───────────────────────────────────────────────────────
-PT="$( "$BIN" "$FX" --pack-task="$TASK" --token-budget=9000 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells <calls ...> inside its comment; arms (1)/(4) read the
+# real <calls> element, so those two runs ask for the full legend.
+PT="$( "$BIN" "$FX" --pack-task="$TASK" --token-budget=9000 --legend=full 2>/dev/null )"
 V="$( rows_of "$PT" )"
 if [ -z "$V" ] || [ "${V#OK}" = "$V" ]; then
     no "(1) --pack-task: $V"
@@ -169,7 +171,7 @@ fi
 # ── (4) THE CENSUS ARM: --expand has no query — byte-identical node-id order, target still absent ─────────
 # --top-k=0 is only there to take the bundle route: an --expand this small auto-serves the whole file
 # (mode="whole-file"), which emits no <calls> at all and would measure nothing.
-EX="$( "$BIN" "$FX" --expand=hub_dispatch --top-k=0 2>/dev/null )"
+EX="$( "$BIN" "$FX" --expand=hub_dispatch --top-k=0 --legend=full 2>/dev/null )"
 V="$( rows_of "$EX" )"
 if [ -z "$V" ] || [ "${V#OK}" = "$V" ]; then
     no "(4) --expand: $V"

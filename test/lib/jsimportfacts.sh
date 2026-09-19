@@ -196,7 +196,8 @@ with tempfile.TemporaryDirectory(prefix='rw-jsimport-facts-') as directory:
         "import { pick } from './owner.js';\n"
         'export function callPick() { return pick(); }\n')
     check('(E) an import-resolved edge carries prov="import"', provOf(prov, 'callPick', 'pick'), 'import')
-    legend = run(prov).split('-->')[0]
+    # L1 (2026-09-19): the CLI default legend is compact; this reads the FULL legend's prov= definition, so it asks for it.
+    legend = run(prov, '--legend=full').split('-->')[0]
     if 'prov=' not in legend or 'import(' not in legend:
         failures.append('(E) the legend does not define the prov= value the map just emitted: ' + legend[-220:])
     mechs = [row for row in census(prov) if row[1] == 'pick']

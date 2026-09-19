@@ -71,26 +71,27 @@ R="$TMP/repo"; mkdir -p "$R/src"
 # The arms below therefore read the NOUN-PREFIXED names; every quantity they assert is unchanged, and two
 # new arms pin the two facts the rename exists to state (the <t> count is separate, and it is page-invariant).
 # ── (a) default page: shown_untested="25" untested_capped="1"; root's own untested= is the true total (30) ──
-A="$( run "$R" --test-gate=src/lib.cpp )"; AEC="$( rc "$R" --test-gate=src/lib.cpp )"
+# L1 (2026-09-19): the CLI default legend is compact and spells row shapes (`<u …>`, `<t …>`) inside its comment; these arms count real rows, so the XML runs ask for the full legend.
+A="$( run "$R" --test-gate=src/lib.cpp --legend=full )"; AEC="$( rc "$R" --test-gate=src/lib.cpp )"
 AROWS="$( printf '%s' "$A" | grep -o '<u ' | wc -l | tr -d ' ' )"
 { [ "$AEC" = 4 ] && [ "$( attr "$A" untested )" = 30 ] && [ "$( attr "$A" shown_untested )" = 25 ] && [ "$( attr "$A" untested_capped )" = 1 ] && [ "$AROWS" = 25 ]; } \
     && ok "(a) default page: untested=30 shown_untested=25 untested_capped=1, exactly 25 <u> rows emitted" \
     || no "(a) wrong (exit=$AEC untested=$( attr "$A" untested ) shown_untested=$( attr "$A" shown_untested ) untested_capped=$( attr "$A" untested_capped ) rows=$AROWS)"
 
 # ── (a') --limit=100 no longer REFUSES and emits ALL 30 rows with capped="0" ────────────────────────────────
-B="$( run "$R" --test-gate=src/lib.cpp --limit=100 )"; BEC="$( rc "$R" --test-gate=src/lib.cpp --limit=100 )"
+B="$( run "$R" --test-gate=src/lib.cpp --limit=100 --legend=full )"; BEC="$( rc "$R" --test-gate=src/lib.cpp --limit=100 )"
 BROWS="$( printf '%s' "$B" | grep -o '<u ' | wc -l | tr -d ' ' )"
 { [ "$BEC" = 4 ] && [ -n "$B" ] && [ "$( attr "$B" shown_untested )" = 30 ] && [ "$( attr "$B" untested_capped )" = 0 ] && [ "$( attr "$B" total )" = 30 ] && [ "$( attr "$B" has_more )" = 0 ] && [ "$BROWS" = 30 ]; } \
     && ok "(a') --limit=100: not refused, shown_untested=30 untested_capped=0 total=30 has_more=0, all 30 rows walked" \
     || no "(a') wrong (exit=$BEC empty=$( [ -z "$B" ] && echo y || echo n ) shown_untested=$( attr "$B" shown_untested ) untested_capped=$( attr "$B" untested_capped ) total=$( attr "$B" total ) has_more=$( attr "$B" has_more ) rows=$BROWS)"
 
 # ── (b) row count == shown= at EVERY page, including a mid-listing --offset window ──────────────────────────
-C="$( run "$R" --test-gate=src/lib.cpp --limit=12 --offset=12 )"
+C="$( run "$R" --test-gate=src/lib.cpp --limit=12 --offset=12 --legend=full )"
 CROWS="$( printf '%s' "$C" | grep -o '<u ' | wc -l | tr -d ' ' )"
 { [ "$( attr "$C" shown_untested )" = 12 ] && [ "$CROWS" = 12 ] && [ "$( attr "$C" untested_capped )" = 1 ] && [ "$( attr "$C" has_more )" = 1 ] && [ "$( attr "$C" next_offset )" = 24 ]; } \
     && ok "(b) mid-listing page (--limit=12 --offset=12): shown_untested=12, 12 rows, has_more=1 next_offset=24" \
     || no "(b) wrong (shown_untested=$( attr "$C" shown_untested ) rows=$CROWS untested_capped=$( attr "$C" untested_capped ) has_more=$( attr "$C" has_more ) next_offset=$( attr "$C" next_offset ))"
-LAST="$( run "$R" --test-gate=src/lib.cpp --limit=12 --offset=24 )"
+LAST="$( run "$R" --test-gate=src/lib.cpp --limit=12 --offset=24 --legend=full )"
 LROWS="$( printf '%s' "$LAST" | grep -o '<u ' | wc -l | tr -d ' ' )"
 { [ "$( attr "$LAST" shown_untested )" = 6 ] && [ "$LROWS" = 6 ] && [ "$( attr "$LAST" has_more )" = 0 ]; } \
     && ok "(b') final page (--offset=24): shown_untested=6 (the remainder), has_more=0" \
@@ -208,7 +209,7 @@ TG="$TMP/tgrepo"; mkdir -p "$TG/src" "$TG/test"
 printf 'int lib0() { return 0; }\nint lib1() { return 1; }\nint lib2() { return 2; }\n' > "$TG/src/lib.cpp"
 printf '#include "../src/lib.cpp"\nint test_lib0() { return lib0(); }\n' > "$TG/test/lib0_test.cpp"
 printf '#include "../src/lib.cpp"\nint test_lib1() { return lib1(); }\n' > "$TG/test/lib1_test.cpp"
-D="$( run "$TG" --test-gate=src/lib.cpp )"
+D="$( run "$TG" --test-gate=src/lib.cpp --legend=full )"
 # E1 (2026-09-12): runner-less rows sharing their evidence ride ONE <g … n= p="a,b"/> row, so the emitted
 # count is FILES: the single <t> rows plus every <g> row's n= — shown_tests= must still equal that number.
 DTROWS="$( { printf '%s' "$D" | grep -o '<t ' | wc -l | tr -d ' '; printf '%s' "$D" | grep -oE '<g [^>]*/>' | grep -oE ' n="[0-9]+"' | grep -oE '[0-9]+'; } | awk '{ s += $1 } END { print s + 0 }' )"

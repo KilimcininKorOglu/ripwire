@@ -145,7 +145,9 @@ morecheck(){
     w add hits.c
     w commit -qm hits
 
-    "$BIN" "$W" --whereis=boundaryProbeSym >"$TMP/more.$hitcount.xml" 2>/dev/null
+    # L1 (2026-09-19): the CLI default legend is compact and spells `<hit ...>` inside its comment, which the tr split
+    # hands count_of as a row; these runs count real <hit> elements, so they ask for the full legend (rows identical).
+    "$BIN" "$W" --whereis=boundaryProbeSym --legend=full >"$TMP/more.$hitcount.xml" 2>/dev/null
     MX="$( cat "$TMP/more.$hitcount.xml" )"
     H="$( printf '%s' "$MX" | attr hits )"
     SHOWN="$( printf '%s' "$MX" | count_of hit )"
@@ -164,7 +166,7 @@ morecheck 61 "whereis <more> at the cap+1 boundary"
 morecheck 82 "whereis <more> in the general case"
 
 # --detail lifts the cap: every row present, and NO <more/> claiming a phantom drop
-"$BIN" "$TMP/w82" --whereis=boundaryProbeSym --detail=1 >"$TMP/more.detail.xml" 2>/dev/null
+"$BIN" "$TMP/w82" --whereis=boundaryProbeSym --detail=1 --legend=full >"$TMP/more.detail.xml" 2>/dev/null
 DX="$( cat "$TMP/more.detail.xml" )"
 D_SHOWN="$( printf '%s' "$DX" | count_of hit )"
 D_HITS="$(  printf '%s' "$DX" | attr hits )"

@@ -40,7 +40,8 @@ echo "qualityorigincheck: BIN=$BIN  (temp git corpora)"
 ifs(){ n=$1; s=''; i=1; while [ "$i" -le "$n" ]; do s="$s if(a>$i){ s++; }"; i=$(( i + 1 )); done; printf '%s' "$s"; }
 newrepo(){ mkdir -p "$1/src"; ( cd "$1" && git init -q && git config user.email t@t && git config user.name t ); }
 commitall(){ ( cd "$1" && git add -A >/dev/null 2>&1 && git commit -qm "$2" >/dev/null 2>&1 ); }
-dq(){  ( cd "$1" && "$BIN" . --quality-delta --no-cache 2>/dev/null ); }
+# L1 (2026-09-19): the CLI default legend is compact and spells `<r kind= sym= …>` inside its comment; rowsplit reads real rows, so dq asks for the full legend.
+dq(){  ( cd "$1" && "$BIN" . --quality-delta --no-cache --legend=full 2>/dev/null ); }
 ecq(){ ( cd "$1" && "$BIN" . --quality-delta --no-cache >/dev/null 2>&1; echo $? ); }
 # hattr OUT NAME → the header's NAME="…" value (header counters are numeric, so the [0-9] class cannot
 # collide with a row's origin="new-symbol"/surface="new-symbol" facet value).

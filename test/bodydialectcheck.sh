@@ -221,7 +221,9 @@ tally_and_markers(){ # <label> <extra args...>
     marks="$( grep -o 'REDACTED:' "$TMP/r.out" | wc -l | tr -d ' ' )"
     printf '%s %s' "${claimed:-none}" "$marks"
 }
-read -r XML_CLAIM XML_MARK <<<"$( tally_and_markers xml )"
+# L1 (2026-09-19): the CLI default legend is compact and spells `[REDACTED:kind]` inside its comment; this arm counts
+# the markers in the delivered bodies, so the XML run asks for the full legend (rows identical across postures).
+read -r XML_CLAIM XML_MARK <<<"$( tally_and_markers xml --legend=full )"
 read -r JSN_CLAIM JSN_MARK <<<"$( tally_and_markers json --json )"
 if [ "$XML_CLAIM" = "$XML_MARK" ] && [ "$JSN_CLAIM" = "$JSN_MARK" ] && [ "$XML_CLAIM" = "$JSN_CLAIM" ]; then
     ok "(D) §B10.2: tally == markers in BOTH dialects and agrees across them (xml $XML_CLAIM/$XML_MARK, json $JSN_CLAIM/$JSN_MARK)"

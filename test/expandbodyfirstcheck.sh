@@ -34,7 +34,9 @@ echo "expandbodyfirstcheck: BIN=$BIN  FIX=$FIX"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
-"$BIN" "$FIX" --expand=dupTarget --pack-budget-bytes=10 --no-cache >"$TMP/dup.xml" 2>"$TMP/dup.err"
+# L1 (2026-09-19): the CLI default legend is compact and spells <bodies >/<r > inside its comment; these arms measure the
+# byte offsets and counts of the REAL elements, so the three runs ask for the full legend.
+"$BIN" "$FIX" --expand=dupTarget --pack-budget-bytes=10 --no-cache --legend=full >"$TMP/dup.xml" 2>"$TMP/dup.err"
 
 # ── sanity: the fixture really landed in bundle mode (map+bodies both ride) — otherwise every arm below
 #    proves nothing (identical to expandtopk0check.sh (B)'s own sanity arm, same fixture, same forcing flag).
@@ -110,7 +112,7 @@ fi
 #     serialize() ahead of the §H7 bodies append. RED on f738e13d (the early-bodies block was gated only on
 #     `!expandNodes.empty()`, so it also fired here); GREEN once the guard also requires
 #     `noteAppliesToBundle` (which carries `!cfg.topKExplicit`).
-"$BIN" "$FIX" --expand=uniqueTarget --top-k=5 --no-cache >"$TMP/uniq_tk5.xml" 2>"$TMP/uniq_tk5.err"
+"$BIN" "$FIX" --expand=uniqueTarget --top-k=5 --no-cache --legend=full >"$TMP/uniq_tk5.xml" 2>"$TMP/uniq_tk5.err"
 uMapOff="$(    grep -bo '<r '     "$TMP/uniq_tk5.xml" | head -1 | cut -d: -f1 )"
 uBodiesOff="$( grep -bo '<bodies' "$TMP/uniq_tk5.xml" | head -1 | cut -d: -f1 )"
 if [ -z "$uMapOff" ] || [ -z "$uBodiesOff" ]; then
@@ -124,7 +126,7 @@ grep -q 'note="the ranked top-' "$TMP/uniq_tk5.xml" \
     && no "(I) unique symbol + explicit --top-k=5 wrongly carries the note= disclosure (explicit --top-k opts out of it too)" \
     || ok "(I) unique symbol + explicit --top-k=5 carries no note= (explicit --top-k opts out)"
 
-"$BIN" "$FIX" --expand=dupTarget --top-k=5 --pack-budget-bytes=10 --no-cache >"$TMP/dup_tk5.xml" 2>"$TMP/dup_tk5.err"
+"$BIN" "$FIX" --expand=dupTarget --top-k=5 --pack-budget-bytes=10 --no-cache --legend=full >"$TMP/dup_tk5.xml" 2>"$TMP/dup_tk5.err"
 aMapOff="$(    grep -bo '<r '     "$TMP/dup_tk5.xml" | head -1 | cut -d: -f1 )"
 aBodiesOff="$( grep -bo '<bodies' "$TMP/dup_tk5.xml" | head -1 | cut -d: -f1 )"
 if [ -z "$aMapOff" ] || [ -z "$aBodiesOff" ]; then

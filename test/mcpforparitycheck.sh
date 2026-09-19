@@ -319,9 +319,11 @@ FLATSRC
 mcp_for_at(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s"}}}\n' \
                      "$1" "$2" | "$BIN" --mcp 2>/dev/null | python3 "$TMP/mcptext.py"; }
 FLAT_Q="widget ping route"
-"$BIN" "$FLAT" --for="$FLAT_Q" --no-cache >"$TMP/sc_flat_cli.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and words the scope reading differently; this arm reads the
+# FULL legend's sc= clause (the MCP twin serves that wording), so both CLI runs ask for --legend=full.
+"$BIN" "$FLAT" --for="$FLAT_Q" --no-cache --legend=full >"$TMP/sc_flat_cli.xml" 2>/dev/null
 mcp_for_at "$FLAT" "$FLAT_Q"                >"$TMP/sc_flat_mcp.xml"
-cli_for "$INERT_Q" >"$TMP/sc_scoped_cli.xml"
+cli_for "$INERT_Q" --legend=full >"$TMP/sc_scoped_cli.xml"
 mcp_for "$INERT_Q" >"$TMP/sc_scoped_mcp.xml"
 sc_has(){ grep -qF "$SC_CLAUSE" "$1" && echo 1 || echo 0; }
 # the premise: both fixtures must have produced a bundle with a header at all

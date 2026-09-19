@@ -117,7 +117,8 @@ mcp_err="$( printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
             | "$BIN" --mcp 2>&1 1>/dev/null )"
 [ -z "$mcp_err" ] && ok "R3 incident shape: the MCP stale path prints no stderr either (no warning spam on either arm)" \
     || no "R3 incident shape: the MCP stale path printed stderr: $mcp_err"
-cli_out="$("$BIN" "$MREPO" --quality-delta --no-cache 2>/dev/null)"
+# L1 (2026-09-19): the CLI default legend is compact, whose root leads with schema=; cli_regs reads the full-default root by position, so it asks for the full legend (MCP arm untouched).
+cli_out="$("$BIN" "$MREPO" --quality-delta --no-cache --legend=full 2>/dev/null)"
 cli_regs="$( printf '%s' "$cli_out" | sed -n 's/.*<quality-delta baseline="[^"]*" regressions="\([0-9]*\)".*/\1/p' )"
 printf '%s' "$cli_out" | grep -q 'baseline="git-HEAD (stale sidecar removed)"' \
     && ok "R3 incident shape: the CLI calls the SAME sidecar stale (\"removed\")" \

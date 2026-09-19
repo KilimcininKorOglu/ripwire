@@ -95,7 +95,8 @@ LANGFIX="$ROOT/test/extsurflangfix"
 # RE-PINNED 2026-09-05 (capture-audit P4, lane L7): printf is a sh BUILTIN, and the default --external-surface now
 # drops the sh builtin rows (counted as builtins_excluded=). The per-language SPLIT contract below is asserted with
 # --include-builtins (the flag that keeps them); the default's drop is asserted right after it.
-LSURF="$( "$BIN" "$LANGFIX" --external-surface --include-builtins --no-cache 2>/dev/null )"
+# L1 (2026-09-19): the CLI default legend is compact and spells `<x …>` inside its comment; LROWS counts real rows, so LSURF asks for the full legend.
+LSURF="$( "$BIN" "$LANGFIX" --external-surface --include-builtins --no-cache --legend=full 2>/dev/null )"
 LDEF="$( "$BIN" "$LANGFIX" --external-surface --no-cache 2>/dev/null )"
 printf '%s' "$LDEF" | grep -q '<x n="printf" lang="sh"' && no "--external-surface (default): the sh builtin printf row is still listed" \
                                                        || ok "--external-surface (default): the sh builtin printf row is dropped (P4)"

@@ -152,7 +152,8 @@ else
 fi
 
 # ── (3) NO-REGRESSION — a corpus with zero unsupported-ext files stays silent about the new tier ──────────
-"$BIN" test/fixture --grep=perimeter >"$TMP/fix.xml" 2>/dev/null
+# L1 (2026-09-19): the CLI default legend is compact and names `<unindexed>` inside its comment; (3b) looks for a real element, so it asks for the full legend.
+"$BIN" test/fixture --grep=perimeter --legend=full >"$TMP/fix.xml" 2>/dev/null
 grep -q 'unindexed_files_scanned="0"' "$TMP/fix.xml" \
     && ok "(3a) test/fixture (no unsupported-ext files) reports unindexed_files_scanned=\"0\"" \
     || { no "(3a) test/fixture did not report unindexed_files_scanned=\"0\""; grep -o '<grep[^>]*>' "$TMP/fix.xml"; }

@@ -23,7 +23,8 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN"; exit 2; }
 echo "scoutkeycheck: BIN=$BIN"
 
-pairline(){ "$BIN" "$1" --merge-scout=laneA,laneB 2>/dev/null | grep -oE '<pair [^>]*>' | head -1; }
+# L1 (2026-09-19): the CLI default legend is compact and spells `<pair a= b= conflicts= risks=>` inside its comment; pairline reads the real row, so it asks for the full legend.
+pairline(){ "$BIN" "$1" --merge-scout=laneA,laneB --legend=full 2>/dev/null | grep -oE '<pair [^>]*>' | head -1; }
 attr(){ printf '%s' "$1" | grep -oE "$2=\"[0-9]+\"" | grep -oE '[0-9]+' | head -1; }
 
 # ── 1) THE NEGATIVE CASE: disjoint files, same scope-less function name ───────────────────────────────
