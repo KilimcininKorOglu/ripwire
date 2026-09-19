@@ -2198,6 +2198,9 @@ inline std::vector<float> churnDecayTeleportWorkspace( const std::vector<std::st
         {
             anyHistory = true;
         }
+        // weights is allocated once outside the root loop; w is a fresh return-by-value local each
+        // iteration — never the same storage.
+        ASSUME_NO_ALIAS_BUF( weights, w );
         for( std::size_t f = 0; f < weights.size(); ++f )
         {
             weights[f] += w[f];
@@ -3285,6 +3288,10 @@ inline bool mineChurnPerFile( const rw::IngestResult& ing, const std::string& ro
             continue;
         }
         churnOk = true;
+        // churn is the caller's out-param; rootChurn is a fresh per-iteration local (line above) — never
+        // the same storage. The "nothing to do" case (this root's gitChurnCounts failing) already
+        // `continue`d above.
+        ASSUME_NO_ALIAS_BUF( churn, rootChurn );
         for( std::size_t f = 0; f < churn.size(); ++f )
         {
             churn[f] += rootChurn[f];
