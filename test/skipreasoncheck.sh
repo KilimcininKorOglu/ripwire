@@ -285,6 +285,21 @@ grep -q 'p="clean.c" why="extract-partial"' "$XP/cold.xml" \
 command -v xmllint >/dev/null 2>&1 && { xmllint --noout "$XP/cold.xml" 2>/dev/null \
     && ok "(10) the disclosing document is well-formed" || no "(10) the disclosing document fails xmllint"; }
 
+# ── (10a) THE PARSER-VERSION FLOOR — the CI half of (10b), which runs without a base binary ─────────────────────
+# (10b) needs RIPWIRE_BASE and SKIPs in CI. What makes it true everywhere is the bump itself: a cache whose header names
+# an older kParserVer is refused (test/cacheidentitycheck.sh forges one and asserts reason="parser-version"), so every
+# cache written before extract-partial existed (kParserVer <= 114) is re-extracted. This pins the floor, from source:
+# kParserVer >= 115 and quality.h's mirror equal to it. THE LANDING TRAIN raises this floor when it re-derives kParserVer
+# past other members — a later bump keeps it green; only a revert below 115 reds it.
+PV_FLOOR=115
+PV="$( sed -nE 's/^constexpr std::uint32_t kParserVer +=[ ]*([0-9]+);.*/\1/p' "$ROOT/src/ingest_cache.h" )"
+PVM="$( sed -nE 's/^constexpr std::uint32_t kIngestParserVerMirror +=[ ]*([0-9]+);.*/\1/p' "$ROOT/src/quality.h" )"
+if [ -n "$PV" ] && [ "$PV" -ge "$PV_FLOOR" ] && [ "$PVM" = "$PV" ]; then
+    ok "(10a) kParserVer=$PV >= $PV_FLOOR and quality.h's mirror agrees — a pre-extract-partial cache cannot be served warm"
+else
+    no "(10a) kParserVer='$PV' (mirror '$PVM'): below the extract-partial floor $PV_FLOOR, or the mirror disagrees — a cache holding partial facts as whole would be trusted"
+fi
+
 # ── (10b) THE UPGRADE LADDER: a cache written by a PRE-extract-partial binary is not trusted as whole ──────────
 # Before this class existed, the partial facts of such a file were cached under its real content hash, and a warm
 # run served them as the whole answer. kParserVer's bump (ingest_cache.h) is what rejects every such cache: the
