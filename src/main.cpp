@@ -4368,6 +4368,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     {
         bool sinceResolvesSomewhere = false;
         bool sinceHasBaseline       = false;   // N4: some root's history reaches the value (SinceScope::baselineSha)
+        bool sinceBaselineRefused   = false;   // some root's git answered that baseline with a non-object-name (SinceScope's sink)
         if( multiRoot )
         {
             for( const WorkspaceRoot& r : ws )
@@ -4375,6 +4376,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 const SinceScope scope = resolveSinceScope( r.arg, cfg.since );
                 sinceResolvesSomewhere = sinceResolvesSomewhere || scope.active;
                 sinceHasBaseline       = sinceHasBaseline || !scope.baselineSha.empty();
+                sinceBaselineRefused   = sinceBaselineRefused || scope.baselineRefused;
             }
         }
         else
@@ -4382,6 +4384,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             const SinceScope scope = resolveSinceScope( root, cfg.since );
             sinceResolvesSomewhere = scope.active;
             sinceHasBaseline       = !scope.baselineSha.empty();
+            sinceBaselineRefused   = scope.baselineRefused;
         }
         if( !sinceResolvesSomewhere )
         {
@@ -4400,7 +4403,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         const bool sinceHostNeedsBaseline = activeSinceHostNeedsBaseline( cfg );
         if( sinceHostNeedsBaseline && !sinceHasBaseline && gitRepoHasHistory( multiRoot ? ws[0].arg : root ) )
         {
-            rw::emitTo( stderr, "{}\n", sinceNoBaselineRefusal( cfg.since, multiRoot ? ws[0].arg : root ).c_str() );
+            rw::emitTo( stderr, "{}\n", sinceNoBaselineRefusal( cfg.since, multiRoot ? ws[0].arg : root, sinceBaselineRefused ).c_str() );
             return 1;
         }
     }
