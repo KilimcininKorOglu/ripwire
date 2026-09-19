@@ -246,11 +246,20 @@ grep -aq 'over_ceiling=floor-alone-exceeded-fit_bytes' "$TMP/mt400.out" \
 #                        section grows the map's own digit count (+5 B at N=6000 --pack-signatures)
 #    The third is measured on the MAP PORTION (through `</r>`), because fit_bytes has only ever been the
 #    map's ceiling — the appended payload is charged to est_tokens, not to fit_bytes. ────────────────────────
+#    An ambiguous --expand bundle (issue #289) serves its <bodies> BEFORE the map, so "through `</r>`" would
+#    count the bodies and their legend as map bytes. The map portion is then the root's open tag plus
+#    everything after `</bodies>` through `</r>` — the same bytes the appended shape measures (measured on
+#    --expand=estimateTokens at N=6000: the map legend and the <r> element are byte-identical in both orders).
 mapbytes_of(){ python3 - "$1" <<'PY'
 import sys
 d = open( sys.argv[1], 'rb' ).read()
 i = d.find( b'</r>' )
-print( i + 4 if i >= 0 else len( d ) )
+end = i + 4 if i >= 0 else len( d )
+b0, r0, b1 = d.find( b'<bodies' ), d.find( b'<r ' ), d.find( b'</bodies>' )
+if 0 <= b0 < r0 and b0 < b1 < r0:
+    rootTagEnd = d.find( b'>' ) + 1          # the <ctx ...> open tag stays in the map portion, as it does when appended
+    end -= ( b1 + len( b'</bodies>' ) ) - rootTagEnd
+print( end )
 PY
 }
 for entry in "mapdiff:3000:--map-diff" "mapdiff2:12000:--map-diff" "churn:800:--rank-by=churn" "churn2:1200:--rank-by=churn" "payload:6000:--pack-signatures" "payload2:6000:--expand=$SYM"; do
