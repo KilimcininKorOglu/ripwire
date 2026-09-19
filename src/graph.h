@@ -1462,9 +1462,14 @@ struct ExternalVetoTables
 // importBindFile's doc comment on ExternalVetoTables for the WHY; this is purely the "how" of one entry.
 // `resolved` is Step-A's fileId for `b.typeName` (kNoFile if Step-A missed) — the caller already computed
 // it once for the verdict ladder, so this reuses rather than re-resolving.
+// `fileRoot` is `ing.fileRoot` (empty on a single-root run) — threaded through to resolvePythonModuleSuffix
+// so its whole-corpus suffix scan stays inside `b.fileId`'s own labeled root in a merged multi-root
+// workspace (CodeRabbit PR #292 finding 4052087919: an unscoped scan could bind an absolute Python import
+// to a same-named file in a WHOLLY UNRELATED root with no import path connecting them).
 inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, const HashMap<std::string, std::uint32_t>& fileIndex,
                                   const HashMap<std::string, char>& pythonModuleRebind, std::string& key,
-                                  HashMap<std::string, std::uint32_t>& importBindFile )
+                                  HashMap<std::string, std::uint32_t>& importBindFile,
+                                  const std::vector<std::uint32_t>* fileRoot = nullptr )
 {
     // Both are the SAME filter buildExternalVetoTables' own loop already applies before calling this (kind
     // != Import, an empty var or an empty typeName all `continue` there) — restated here because `.front()`
@@ -1483,7 +1488,8 @@ inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, cons
     std::uint32_t moduleFile = resolved;
     if( moduleFile == kNoFile && b.typeName.front() != '.' )
     {
-        moduleFile = resolvePythonModuleSuffix( b.typeName, fileIndex );   // absolute spec only (never relative)
+        // absolute spec only (never relative); root-scoped to b.fileId's own root in a multi-root workspace
+        moduleFile = resolvePythonModuleSuffix( b.typeName, fileIndex, fileRoot, b.fileId );
     }
     // issue #287 round 3 (review rv-p6.md HIGH): try_emplace runs even when THIS import is unresolved
     // (moduleFile==kNoFile) — an import whose target is outside the indexed tree (stdlib/third-party/
@@ -1585,7 +1591,8 @@ inline PythonImportVetoes buildPythonImportVetoes( const IngestResult& ing, cons
                 verdict = 'u';
             }
         }
-        recordImportBindFile( b, resolved, fileIndex, pythonModuleRebind, key, t.importBindFile );
+        recordImportBindFile( b, resolved, fileIndex, pythonModuleRebind, key, t.importBindFile,
+                              ing.fileRoot.empty() ? nullptr : &ing.fileRoot );
         key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
         const auto [ it, inserted ] = t.importBind.try_emplace( key, verdict );
         if( !inserted && it->second == 'x' && verdict != 'x' )

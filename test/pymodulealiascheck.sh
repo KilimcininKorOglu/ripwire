@@ -237,6 +237,44 @@ monotonic_check()
 }
 monotonic_check
 
+# ── multi-root cross-root safety (CodeRabbit PR #292 finding 4052087919) ──────────────────────────
+# resolvePythonModuleSuffix (Step-A's absolute-spec fallback, resolve.h) used to scan the WHOLE
+# fileIndex with no per-root restriction. In a merged multi-root workspace (`ripwire dir1 dir2 <verb>`)
+# that let an import in one root bind to a same-named module in an UNRELATED root, with no import path
+# or workspace configuration connecting them — Rule 2d (graph.h) then narrowed the bare-name candidates
+# onto that cross-root file and emitted a call edge no evidence justified.
+#
+# Root A's caller imports `target_mod` (absolute spec) but root A itself has NO target_mod.py — Step-A's
+# two direct bases (relative-to-file, relative-to-crawl-root) both miss, same as issue #287's own
+# fixture. Root B, an UNRELATED root with no import path connecting it to A, happens to define
+# `target_mod.py:run`. Root A also carries its own decoy `run` (decoy.py) so the callee name is NOT
+# globally unique — without that, the bare-name ladder's own accidental-uniqueness win would bind
+# correctly regardless of Rule 2d, and the cross-root defect would stay invisible (the same reason
+# run_arms above needs a K>1 callee name, not issue #287's original K=1 sanity case).
+MRA="$TMP/mroot_a"; MRB="$TMP/mroot_b"
+mkdir -p "$MRA" "$MRB"
+cat >"$MRA/caller.py" <<'PY'
+import target_mod as tm
+
+def uses_module_alias():
+    return tm.run({})
+PY
+cat >"$MRA/decoy.py" <<'PY'
+def run(x):
+    return x
+PY
+cat >"$MRB/target_mod.py" <<'PY'
+def run(x):
+    return x
+PY
+_n=$(( _n + 1 )); "$BIN" "$MRA" "$MRB" --callers=target_mod.py:run --no-cache --legend=compact >"$TMP/o$_n" 2>/dev/null
+if bound_in_last uses_module_alias; then
+    no "multi-root: root A's caller wrongly bound to root B's UNRELATED target_mod.py:run (no import path connects the roots)"
+    sed 's/^/        | /' "$TMP/o$_n"
+else
+    ok "multi-root: root A's caller does NOT bind root B's unrelated target_mod.py:run (no evidence-free cross-root edge)"
+fi
+
 # ── determinism + warm==cold (the fixture, binary under test) ─────────────────────────────────────
 "$BIN" "$FIX" --no-cache >"$TMP/d1" 2>/dev/null
 "$BIN" "$FIX" --no-cache >"$TMP/d2" 2>/dev/null

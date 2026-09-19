@@ -542,12 +542,26 @@ inline std::pair<std::uint32_t, bool> probeJsRuntimeSourceExt( std::string_view 
 // suffix-scanning it would be a real loosening (matching some unrelated same-named file elsewhere in the
 // tree), not a mirror of Step-A. Guarded here too (kNoFile on a relative/empty target) so a future call
 // site can't skip the gate silently.
-inline std::uint32_t resolvePythonModuleSuffix( std::string_view target, const HashMap<std::string, std::uint32_t>& fileIndex )
+//
+// CodeRabbit PR #292 finding 4052087919: this scans the WHOLE `fileIndex`, which in a MERGED multi-root
+// workspace (`ripwire dir1 dir2 …`) spans every labeled root, not just the importer's own. Without a
+// same-root restriction, `import target_mod` in root A could bind to the only `target_mod.py` in an
+// unrelated root B — a cross-root edge with no import path or workspace configuration connecting the two
+// roots, the exact kind of evidence-free cross-root hit `sameRoot()` exists elsewhere in graph.h to
+// refuse. `fileRoot`/`importerFileId` are optional (both default to "no restriction") so a single-root
+// caller — `fileRoot` is empty there, same convention as graph.h's own `sameRoot` — pays nothing and
+// changes nothing; a multi-root caller passes both and every candidate outside the importer's root is
+// filtered OUT before the unique-or-degrade count, exactly as if it were never indexed (never counted as
+// the ambiguity that makes a genuinely unique same-root hit degrade to kNoFile).
+inline std::uint32_t resolvePythonModuleSuffix( std::string_view target, const HashMap<std::string, std::uint32_t>& fileIndex,
+                                                 const std::vector<std::uint32_t>* fileRoot = nullptr, std::uint32_t importerFileId = kNoFile )
 {
     if( target.empty() || target.front() == '.' )
     {
         return kNoFile;
     }
+    const bool         rootScoped = fileRoot != nullptr && !fileRoot->empty() && importerFileId < fileRoot->size();
+    const std::uint32_t importerRoot = rootScoped ? ( *fileRoot )[ importerFileId ] : 0u;
     std::string modPath;
     modPath.reserve( target.size() );
     for( const char c : target )
@@ -562,6 +576,10 @@ inline std::uint32_t resolvePythonModuleSuffix( std::string_view target, const H
     {
         if( samePathTail( kv.first, tailPy ) || samePathTail( kv.first, tailInit ) )
         {
+            if( rootScoped && ( kv.second >= fileRoot->size() || ( *fileRoot )[ kv.second ] != importerRoot ) )
+            {
+                continue;   // a real path-tail hit, but in an unrelated labeled root — no import evidence connects them
+            }
             if( hit == kNoFile )
             {
                 hit = kv.second; // first distinct hit
