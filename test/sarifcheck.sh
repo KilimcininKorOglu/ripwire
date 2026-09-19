@@ -452,7 +452,7 @@ CPP
     loadFlagWords "$FLAGS_MK" CXX_FLAGS    && CXX_FLAGS=(    ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
     loadFlagWords "$FLAGS_MK" CXX_DEFINES  && CXX_DEFINES=(  ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
     loadFlagWords "$FLAGS_MK" CXX_INCLUDES && CXX_INCLUDES=( ${FLAG_WORDS[@]+"${FLAG_WORDS[@]}"} )
-    # VERIFY's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
+    # ASSUME's debug arm reports through the diagnostics TU, so the driver links that one object (when present).
     DIAG_OBJ="$BUILD_DIR/CMakeFiles/ripwire.dir/src/infra/diagnostics.cpp.o"
     DIAG_LINK=(); [ -f "$DIAG_OBJ" ] && DIAG_LINK=( "$DIAG_OBJ" )
     if "$CXX" ${CXX_FLAGS[@]+"${CXX_FLAGS[@]}"} ${CXX_DEFINES[@]+"${CXX_DEFINES[@]}"} ${CXX_INCLUDES[@]+"${CXX_INCLUDES[@]}"} -I"$ROOT/src" \

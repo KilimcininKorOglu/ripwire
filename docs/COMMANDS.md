@@ -16,9 +16,9 @@ current shape.
 > ripwire — the "ripgrep of AI context": parse a codebase, rank symbols by Personalized PageRank,
 > stream a deterministic minified XML map to stdout. Zero runtime deps. Languages: C++, C, ObjC/ObjC++,
 > Metal (MSL, .metal — C++ grammar), CUDA (.cu/.cuh — tree-sitter-cuda, <<<>>> launches are call edges),
-> Python, TypeScript, JavaScript, Java, Ruby, PHP (.php/.phtml), Lua, Elixir (.ex/.exs), Dart (.dart), Kotlin (.kt), Bash, Go, Rust, Swift, C#;
+> Python, TypeScript, JavaScript, Java, Ruby, PHP (.php/.phtml), Lua, Elixir (.ex/.exs), Dart (.dart), Kotlin (.kt), Bash, Go, Rust, Swift, C#,
+> GDScript (.gd — Godot; .tscn/.tres/.gdshader are NOT indexed);
 > JSON, TOML, YAML (config keys); Markdown (.md/.markdown — headings are section symbols with spans).
-> usage: ripwire <dir> [flags]            # default = the ranked map of <dir> on stdout
 
 ## How to read a section
 
@@ -50,7 +50,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **security — scan skill files for injection / exfiltration patterns (exit 2 = CRITICAL, 1 = WARN,** — [`--scan-skill`](#--scan-skillfile) · [`--scan-skills`](#--scan-skillsdir) · [`--force`](#--force)
 
-**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
+**knobs / modes** — [`--rank-by`](#--rank-bypagerankauthorityhubrrfchurnchurn-decay) · [`--in`](#--indir) · [`--format`](#--formatxmlcolumnarrows) · [`--format`](#--formatcandidates) · [`--legend`](#--legendfullcompact) · [`--json`](#--json) · [`--limit`](#--limitn---offsetm) · [`--exclude`](#--excludesubstr) · [`--map-diff`](#--map-diff) · [`--cache`](#--cachepath) · [`--index-out`](#--index-outbase) · [`--no-cache`](#--no-cache) · [`--no-ignore`](#--no-ignore) · [`--max-file-size`](#--max-file-sizenkmg) · [`--refetch`](#--refetch) · [`--scip`](#--scipindexscip) · [`--pin-census`](#--pin-censusfile) · [`--mcp`](#--mcp) · [`--lsp`](#--lsp) · [`--listen`](#--listenhostport) · [`--mcp-token`](#--mcp-tokent) · [`--allow-remote-edits`](#--allow-remote-edits) · [`--eval-stray`](#--eval-strayfile) · [`--eval`](#--eval) · [`--eval-retrieval`](#--eval-retrieval) · [`--eval-mined`](#--eval-minedfile) · [`--eval-skills`](#--eval-skillsfile) · [`-h`](#-h---help) · [`-v`](#-v---version)
 
 ---
 
@@ -785,7 +785,7 @@ $ ./build/ripwire . --callees=rankGraphTeleport
 
 **Answers:** show every place SYM is used, not just called — reads, writes, imports, extends the statically resolvable use-sites of SYM (role=call|macro|read|write|import|extends|type, file:line);
 
-external="1" if SYM has no in-corpus def. file:name narrows defs= AND the role="call" sites (kept only where the call RESOLVES to a chosen def — --callers' own narrowing); read/write/import/extends carry no resolution and stay name-matched. narrowed_roles=/defs_of_name=/call_sites_of_name= (file: qualifier only) disclose what narrowed and the un-narrowed totals; a file: qualifier naming a file with no such def REFUSES, like --callers/--impact Owner.field (also Owner::field, or the id=) — a MEMBER VARIABLE's own use-sites, RESOLVED per site: this->f/self.f/bare f inside the owner pin; v.f pins through v's recorded type, else every owner is a candidate and the row carries amb=K (never a silent pin); write = assignment/compound/++ (address-of and by-reference passing are NOT claimed). A bare field name shared by several owners REFUSES with the Owner.field spellings; C/C++/Python fields only, others refuse
+external="1" if SYM has no in-corpus def. file:name or a "::" spelling narrows defs= AND the role="call" sites (kept only where the call RESOLVES to a chosen def — --callers' own narrowing); read/write/import/extends carry no resolution and stay name-matched. narrowed_roles=/defs_of_name=/call_sites_of_name= (qualifier only) disclose what narrowed and the un-narrowed totals; a file: qualifier naming a file with no such def REFUSES, like --callers/--impact Owner.field (also Owner::field, or the id=) — a MEMBER VARIABLE's own use-sites, RESOLVED per site: this->f/self.f/bare f inside the owner pin; v.f pins through v's recorded type, else every owner is a candidate and the row carries amb=K (never a silent pin); write = assignment/compound/++ (address-of and by-reference passing are NOT claimed). A bare field name shared by several owners REFUSES with the Owner.field spellings; C/C++/Python fields only, others refuse
 
 **Try it**
 
@@ -820,7 +820,7 @@ $ ./build/ripwire . --uses=rankGraphTeleport
 
 **Answers:** query the call graph directly: pick a node set, filter it, walk it, combine the results composable node-set query over the call graph: sources name("X")/all;
 
-filters kind|cx|fanin|file|layer; bounded closure callers|callees(SET[,depth]); joins and|or|not.  e.g. and(callers(name("foo"),2),kind(all,fn)); file() regex example: file("src/.*\\.cpp") (or in bash, use single quotes: file('src/.*\.cpp')) layer(SET,NAME) keeps the architecture layer NAME (game|infra|render|math|audio|ai|test) — the SAME built-in directory-name taxonomy the map prints as layer= on a file node, so the two cannot disagree. It does NOT read a --arch=FILE rules file: --arch is a verb and outranks --graph-query, so the two never run together. An unknown layer word, or ANY layer() against a tree where no path names a layer, is REFUSED (exit 1) rather than answered count="0" — 0 there would read as "no such code". a name("X") literal matching NO indexed symbol refuses with a did-you-mean (a typo is not a count=0); a query whose names all resolve but that selects nothing still reports count="0" — that IS a measurement (including a VALID layer with no members in a tree that does have layers). Ranked result set is capped at --top-k (default 200); --limit overrides that cap (raise or lower it), --offset pages past it — see --limit=N --offset=M above
+filters kind|cx|fanin|file|layer; bounded closure callers|callees(SET[,depth]); joins and|or|not.  e.g. and(callers(name("foo"),2),kind(all,fn)); file() regex example: file("src/.*\\.cpp") (or in bash, use single quotes: file('src/.*\.cpp')) layer(SET,NAME) keeps the architecture layer NAME (game|infra|render|math|audio|ai|test) — the SAME built-in directory-name taxonomy the map prints as layer= on a file node, so the two cannot disagree. It does NOT read a --arch=FILE rules file: --arch is a verb and outranks --graph-query, so the two never run together. An unknown layer word, or ANY layer() against a tree where no path names a layer, is REFUSED (exit 1) rather than answered count="0" — 0 there would read as "no such code". a name("X") literal matching NO indexed symbol refuses with a did-you-mean (a typo is not a count=0); a query whose names all resolve but that selects nothing still reports count="0" — that IS a measurement (including a VALID layer with no members in a tree that does have layers). file() matches the ROOT-RELATIVE path that p= prints, so ^src/ anchors at the root and the directories the tree was cloned into never match. A file() regex that cannot be screened, compiled or finished (the engine abandons the match) is REFUSED at exit 1, never answered with a count. Ranked result set is capped at --top-k (default 200); --limit overrides that cap (raise or lower it), --offset pages past it — see --limit=N --offset=M above
 
 **Try it**
 
@@ -2785,7 +2785,7 @@ $ ./build/ripwire . --dead-code=src
 
 **Answers:** snapshot today's complexity, clones and dead code as the floor to measure against snapshot ccx/clones/dead-code to .ripwire_quality_baseline (run BEFORE a change, on a CLEAN tree).
 
-On a tree that DIFFERS from HEAD it computes the HEAD delta FIRST and REFUSES (exit 1) rather than pin the debt already in the tree as the floor — it names how many gating findings it would absorb and the first of them. Commit, or pass --allow-dirty.
+On a tree that DIFFERS from HEAD it computes the HEAD delta FIRST and REFUSES (exit 1) rather than pin the debt already in the tree as the floor — it names how many gating findings it would absorb and the first of them. Commit, or pass --allow-dirty. The pin is stamped with HEAD and with THIS build's identity, and only this build honors it.
 
 **Try it**
 
@@ -2824,7 +2824,7 @@ $ ./build/ripwire . --quality-baseline --allow-dirty
 
 **Answers:** before a PR: report ONLY what your change made worse, across 10 kinds agent self-check before a PR (pair with --test-gate): report ONLY what a change made worse vs the baseline (10 kinds: complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/reuse-decline);
 
-every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse="N", no attribute on the row) vs one that exists only because the code is NEW (new-symbol="N", origin="new-symbol" on the row). A small numeric delta is additionally sev="minor". EXIT 2 ONLY on preexisting-worse AND major AND unacked — the gating="N" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means "nothing that already existed got worse", not "clean". Clone kinds classify by member set (new-symbol only if EVERY member is new); short-horizon-churn is preexisting by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate. Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone WHICH FLOOR IT COMPARES AGAINST, and a side effect: the sidecar is honored only when the sha it was pinned at EQUALS the current git HEAD (strict equality — an ancestor commit describes a DIFFERENT tree, so everything committed since would read as your regression). A sidecar pinned anywhere else is STALE: this verb then DELETES it from your working tree (self-heal, so the next run does not rediscover the dead pin) and auto-compares the working tree vs git HEAD instead. Re-pin with --quality-baseline. The read-only MCP quality_delta verb applies the SAME staleness test but never deletes. Which floor was actually used is on every report as baseline=: sidecar | git-HEAD | git-HEAD (stale sidecar removed) | git-HEAD (stale sidecar ignored) — the last two say a stale sidecar existed, and 'removed' means the file is gone. A non-git root has no HEAD to fall back to, so its sidecar is always honored; without one there, the verb exits 1.
+every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse="N", no attribute on the row) vs one that exists only because the code is NEW (new-symbol="N", origin="new-symbol" on the row). A small numeric delta is additionally sev="minor". EXIT 2 ONLY on preexisting-worse AND major AND unacked — the gating="N" header count. New-symbol rows are still PRINTED (they are the debt you are adding — read them), they just never gate; exit 0 means "nothing that already existed got worse", not "clean". Clone kinds classify by member set (new-symbol only if EVERY member is new); short-horizon-churn is preexisting by construction. LIMIT: origin is canonId (path::scope::name) identity, so a RENAMED/MOVED symbol reads as new and a regression carried in with the move will not gate. Test-fixture dirs + doc sections are exempt from dead-code/churn; churn needs COMMITTED thrash evidence (rewritten across recent commits AND again by this diff), never the current edit alone WHICH FLOOR IT COMPARES AGAINST, and a side effect: the sidecar is honored only when the sha it was pinned at EQUALS the current git HEAD (strict equality — an ancestor commit describes a DIFFERENT tree, so everything committed since would read as your regression). A sidecar pinned anywhere else is STALE: this verb then DELETES it from your working tree (self-heal, so the next run does not rediscover the dead pin) and auto-compares the working tree vs git HEAD instead. Re-pin with --quality-baseline. The read-only MCP quality_delta verb applies the SAME staleness test but never deletes. A sidecar at the current HEAD that ANOTHER ripwire build pinned (its producer stamp names other sources — a dead set depends on how calls were resolved) is FOREIGN: both arms ignore it, never delete it, and auto-compare vs git HEAD. Which floor was actually used is on every report as baseline=: sidecar | git-HEAD | git-HEAD (stale sidecar removed) | git-HEAD (stale sidecar ignored) | git-HEAD (foreign sidecar ignored) — the stale two say a stale sidecar existed, and 'removed' means the file is gone. A non-git root has no HEAD to fall back to, so its sidecar is honored whenever this build pinned it; without one there, or with another build's, the verb exits 1.
 
 **Try it**
 
@@ -3333,11 +3333,11 @@ $ ./build/ripwire . --slice-depth=3
 _Hold a LOCATION, not a name: the enclosing-definition chain at FILE:LINE (a compiler error, a diff hunk, a stack frame), outermost -> innermost._
 
 ```
-$ ./build/ripwire . --at=src/graph.h:3406
+$ ./build/ripwire . --at=src/graph.h:3764
 <!-- ripwire at: the ENCLOSING-DEFINITION CHAIN at one FILE:LINE seed. p= the resolved file, l= the 1-based seed line, sym= the innermost enclosing definition's name (what the same seed resolves to in a selector position), chain= the row count. Rows are INDEXED definitions only, outermost first, innermost last: n= the definition's name, t= its kind tag, l= its own start line, el= its end line (1-based, inclusive). A namespace or any construct the index does not carry is NOT a row, so an outer scope can be absent rather than misnamed; a seed line inside no indexed definition is refused, never served as an empty chain. The same seed composes into any SYM selector as @FILE:LINE (callers, callees, impact, around, expand, uses, edit-check, slice, safe-delete, path, connect) and resolves to the innermost row. -->
 <!-- root= on this element is the crawl root every p= below is RELATIVE to (single-root runs only; absent => p= is the path ingest itself used, unchanged). -->
-<at p="src/graph.h" l="3406" sym="rankGraphTeleport" chain="1" root=".">
-<s n="rankGraphTeleport" t="fn" l="3404" el="3432"/>
+<at p="src/graph.h" l="3764" sym="rankGraphTeleport" chain="1" root=".">
+<s n="rankGraphTeleport" t="fn" l="3762" el="3790"/>
 </at>
 ```
 
@@ -3825,7 +3825,7 @@ $ ./build/ripwire . --from-trace=-
 AddressSanitizer:DEADLYSIGNAL
 =================================================================
 ==41337==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000018 (pc 0x000102f4a1c8 bp 0x00016d2f1a40 sp 0x00016d2f19e0 T0)
-    #0 0x102f4a1c8 in rw::rankGraphTeleport(Graph const&, std::vector<float> const&, float) src/graph.h:3406
+    #0 0x102f4a1c8 in rw::rankGraphTeleport(Graph const&, std::vector<float> const&, float) src/graph.h:3764
     #1 0x102f3e884 in rw::rankGraph(Graph const&, float) src/graph.h:3447
     #2 0x102e11f30 in runDefaultMap(MainDispatch const&) src/main.cpp:1441
     #3 0x102e01a44 in main src/main.cpp:3475
@@ -4082,7 +4082,7 @@ lego:Vehicle
 
 **Answers:** check the environment: stale binary, grammars, cache health, git, index identity environment self-check: binary-vs-PATH staleness, grammar tags.scm compile, cache-dir health, git reachability, tree-sitter version, INDEX IDENTITY, and TRACKED-BINARY staleness (a committed binary whose last commit is a git-history ANCESTOR of a same-directory/same-stem source's last commit — never mtime, which a fresh clone stamps at checkout time).
 
-"Dependent source" is a NAMING heuristic (same dir, same filename stem, e.g. tool <-> tool.cpp) — ripwire parses no build system, so a binary built from a differently-named or differently-located source is silently out of scope, neither flagged nor cleared. Single-root only. DIAGNOSTIC, not deterministic (env-dependent by design); exit 0 iff all ok, else 1. Root reports <doctor checks=N passed=M ...>; each <c/> child row carries the BOOLEAN ok="0|1". passed= is the root's count (it was spelled ok= until the vocabulary pass, which collided with the child bool). A FAILING row (ok="0") also carries hint=, the derived verdict (which of self=/which= is stale and the fix, which grammar(s) failed to compile, why the cache dir isn't writable, ...) — a passing row never carries hint=. The index-cache row states the INDEX-VERSION CONTRACT — cache_version=, parser_ver_lean=, parser_ver_rich=, artifact_arch= — the four numbers that decide whether a committed --index-out artifact is reusable at all, and which appear in no other output. lean=/rich= then say whether THIS binary can open the artifact this root would consume (source="auto" its per-root blob, "cache-flag" the file you named, "disabled" under --no-cache), naming WHICH guard refused it: ok | absent | not-regular | unreadable | truncated | not-a-cache | format-version | parser-version | artifact-arch | checksum | corrupt-frame. BOTH families are reported because a team that commits only the lean artifact gets no warm hit on --for/--exemplar/--metrics/--uses. This is a FORMAT verdict about an artifact, never a freshness verdict about an index: every invocation re-validates each file, so a non-ok lean= costs speed, never correctness — the run cold-parses instead. Only an artifact you NAMED with --cache= and this binary cannot read is ok="0" (a missing auto blob is the ordinary cold-start miss, not sickness). The root carries TWO shas, and they answer different questions: at= is the TREE's HEAD (+dirty) right now, built_from= is the commit THIS BINARY was compiled from (byte-identical to --version's own built_from=). They differ from the moment you commit until the next build — normal, so a mismatch is reported, never gated; a stale PATH copy shadowing a fresh build is the binary-path row's job and is decided on inode/mtime/size, not on this sha. The git-config-trust row reads the checkout's OWN core.fsmonitor as this process saw it at startup (fsmonitor="hook|builtin|off|unset"): a HOOK-form value is a command git would run on every read-only call ripwire makes, so the process appends core.fsmonitor=false to git's GIT_CONFIG_COUNT override for its own git children (neutralised="1", and a stderr line carrying git_harden=fsmonitor-hook); the boolean forms are git's builtin daemon and are left alone. Not a verdict on your setup — ok="1" always; the neutralisation is the verdict.
+"Dependent source" is a NAMING heuristic (same dir, same filename stem, e.g. tool <-> tool.cpp) — ripwire parses no build system, so a binary built from a differently-named or differently-located source is silently out of scope, neither flagged nor cleared. Single-root only. DIAGNOSTIC, not deterministic (env-dependent by design); exit 0 iff all ok, else 1. Root reports <doctor checks=N passed=M ...>; each <c/> child row carries the BOOLEAN ok="0|1". passed= is the root's count (it was spelled ok= until the vocabulary pass, which collided with the child bool). A FAILING row (ok="0") also carries hint=, the derived verdict (which of self=/which= is stale and the fix, which grammar(s) failed to compile, why the cache dir isn't writable, ...) — a passing row never carries hint=. The index-cache row states the INDEX-VERSION CONTRACT — cache_version=, parser_ver_lean=, parser_ver_rich=, artifact_arch= — the four numbers that decide whether a committed --index-out artifact is reusable at all, and which appear in no other output. lean=/rich= then say whether THIS binary can open the artifact this root would consume (source="auto" its per-root blob, "cache-flag" the file you named, "disabled" under --no-cache), naming WHICH guard refused it: ok | absent | not-regular | unreadable | truncated | not-a-cache | format-version | parser-version | artifact-arch | checksum | corrupt-frame. BOTH families are reported because a team that commits only the lean artifact gets no warm hit on --for/--exemplar/--metrics/--uses. This is a FORMAT verdict about an artifact, never a freshness verdict about an index: every invocation re-validates each file, so a non-ok lean= costs speed, never correctness — the run cold-parses instead. Only an artifact you NAMED with --cache= and this binary cannot read is ok="0" (a missing auto blob is the ordinary cold-start miss, not sickness). The root carries TWO shas, and they answer different questions: at= is the TREE's HEAD (+dirty) right now, built_from= is the commit THIS BINARY was compiled from (byte-identical to --version's own built_from=). They differ from the moment you commit until the next build — normal, so a mismatch is reported, never gated; a stale PATH copy shadowing a fresh build is the binary-path row's job and is decided on inode/mtime/size, not on this sha. The git-config-trust row reads the checkout's OWN core.fsmonitor as this process saw it at startup (fsmonitor="hook|builtin|off|unset"): a HOOK-form value is a command git would run on every read-only call ripwire makes, so the process appends core.fsmonitor=false to git's GIT_CONFIG_COUNT override for its own git children (neutralised="1", and a stderr line carrying git_harden=fsmonitor-hook); the boolean forms need no override (neutralised="0"). Independently of this row, every git command ripwire runs carries git's no-optional-locks and core.fsmonitor=false so no monitor of either form runs for its read-only calls. Not a verdict on your setup — ok="1" always; the neutralisation is the verdict.
 
 **Try it**
 
@@ -4710,7 +4710,18 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 ... [28 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--listen`
+**Shaped by:** `--no-stable`, `--no-redact`, `--agent`, `--lsp`, `--listen`
+
+### `--lsp`
+
+**Answers:** read-only navigation LSP server over stdio (definition/references/symbols/hover) off the warm index;
+
+saved-state answers, UTF-8 positions, counts are floors. Refuses --mcp/--listen (one protocol per stdin).
+
+**Caveats (stated by the binary):**
+
+- saved-state answers, UTF-8 positions, counts are floors.
+- Refuses --mcp/--listen (one protocol per stdin).
 
 ### `--listen=HOST:PORT`
 
@@ -4718,7 +4729,7 @@ $ ./build/ripwire '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jso
 
 Binds 127.0.0.1 by default (bare PORT = loopback); one listener serves ONE workspace fixed at startup. A non-loopback host (e.g. 0.0.0.0:8080) REQUIRES --mcp-token and refuses to start without it. No TLS — reverse-proxy it.
 
-**Shaped by:** `--no-stable`, `--allow-remote-edits`
+**Shaped by:** `--no-stable`, `--lsp`, `--allow-remote-edits`
 
 **Caveats (stated by the binary):**
 

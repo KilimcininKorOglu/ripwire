@@ -13,7 +13,10 @@
 // CRITICAL → stderr warning + return 1 (unless --force in argv). WARN → print + continue.
 
 #include "mcp.h"       // kMcpVerbTable / kMcpVerbCount — the single source of truth for the MCP verb list (A4-S2)
-#include <unistd.h>   // wrapCommandToken (2026-09-06)
+#include <unistd.h>   // wrapCommandToken (2026-09-06); ::access — wrapScanSkillDir names a skills folder it cannot enter
+#include <algorithm>
+#include <cerrno>
+#include <cstring>    // std::strerror — the unreadable-folder WARN
 #include "skillscan.h"
 #include "infra/tablelookup.h"   // findByField — shared with ingest's lookupLang
 #include "infra/jsonesc.h"       // escapeMcp — the stanza command is a path, and a path is bytes JSON must escape
@@ -504,39 +507,52 @@ inline int wrapScanSkillDir( const std::string& dir, bool force ) noexcept
         return 0;
     }
 
-    // Collect + sort .md paths for determinism.
+    // Collect + sort .md paths for determinism. The walk advances with increment(ec): the throwing range-for
+    // operator++ made an undescendable tree std::terminate (exit 134) before this fix. A stopped walk is
+    // disclosed below (CRITICAL: F-B3); a directory the scan cannot ENTER (mode-000, WARN) is different.
     std::vector<std::string> mdPaths;
-    for( const auto& entry : fs::recursive_directory_iterator( dir, fs::directory_options::skip_permission_denied, ec ) )
+    int                      maxSev = 0;
+    fs::recursive_directory_iterator it( dir, fs::directory_options::none, ec ), end;
+    for( ; !ec && it != end; it.increment( ec ) )
     {
-        if( !ec && entry.is_regular_file( ec ) && !ec && entry.path().extension() == ".md" )
+        std::error_code entryEc;
+        if( it->is_directory( entryEc ) && !entryEc && ::access( it->path().c_str(), R_OK | X_OK ) != 0 )
         {
-            mdPaths.push_back( entry.path().string() );
+            rw::emitTo( stderr, "ripwire wrap: WARN — cannot read skills folder {} ({}); the skills inside it were not scanned\n",
+                        it->path().string(), std::strerror( errno ) );
+            maxSev = std::max( maxSev, 1 );
+            it.disable_recursion_pending();
+            continue;
         }
-        ec.clear();
+        if( it->is_regular_file( entryEc ) && !entryEc && it->path().extension() == ".md" )
+        {
+            mdPaths.push_back( it->path().string() );
+        }
     }
     std::sort( mdPaths.begin(), mdPaths.end() );
 
-    int maxSev = 0;
+    // F-B3: unlike the WARN above, files past a stopped walk are still COPYABLE — this fails CLOSED (ruling 3).
+    if( !ec && rw::faultSwitchOn( "RIPWIRE_FAULT_SKILL_WALK_STOP" ) ) { ec = std::make_error_code( std::errc::too_many_files_open ); }
+    if( ec )
+    {
+        rw::emitTo( stderr, "ripwire wrap: CRITICAL — the skill scan of {} stopped early ({}); skills past that point were not scanned and may still be installed\n", dir, ec.message() );
+        maxSev = std::max( maxSev, 2 );
+    }
     for( const std::string& p : mdPaths )
     {
-        const std::vector<SkillFinding> findings = scanSkillFile( p );
-        const int code = skillScanExitCode( findings );
-        if( code <= 0 )
+        const SkillFileReadResult res = scanSkillFileChecked( p );
+        if( !res.readable )   // the folder was enterable, so the file is copyable: CRITICAL by name, as --scan-skills scores it
         {
-            continue;
+            rw::emitTo( stderr, "ripwire wrap: CRITICAL — cannot read skill file {}; it was not scanned and may still be installed\n", p );
         }
-        if( code > maxSev )
+        maxSev = std::max( maxSev, res.readable ? skillScanExitCode( res.findings ) : 2 );
+        for( const SkillFinding& f : res.findings )
         {
-            maxSev = code;
-        }
-        for( const SkillFinding& f : findings )
-        {
-            if( f.sev == SkillSeverity::Info )
+            if( f.sev != SkillSeverity::Info )   // silent on INFO
             {
-                continue; // silent on INFO
+                rw::emitTo( stderr, "ripwire wrap: {}  {}:{}  {}  — \"{}\"\n",
+                              skillSeverityStr( f.sev ), p.c_str(), f.line, f.rule, f.excerpt.c_str() );
             }
-            rw::emitTo( stderr, "ripwire wrap: {}  {}:{}  {}  — \"{}\"\n",
-                          skillSeverityStr( f.sev ), p.c_str(), f.line, f.rule, f.excerpt.c_str() );
         }
     }
     return maxSev;

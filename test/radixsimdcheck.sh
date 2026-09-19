@@ -51,7 +51,7 @@ run_pass()
 
     # G1 sanitizer set — the kernels are exactly where a bad lane width or misaligned load hides;
     # -fno-sanitize-recover=all is the linchpin (a UB run must not exit 0). diagnostics.cpp supplies
-    # the VERIFY handlers, linked exactly as the real target does.
+    # the ASSUME handlers, linked exactly as the real target does.
     if ! "$CXX" "$CXXSTD" -O2 -g -Wall -Wextra "$@" \
             $SAN -fno-sanitize-recover=all \
             -I"$ROOT/src/infra" -I"$ROOT/src" -I"$ROOT/third_party" \

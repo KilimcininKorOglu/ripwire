@@ -35,6 +35,20 @@ std::string noBaselineFatalMessage( const std::string& baselineFile, const rw::q
         return "ripwire: " + baselineFile + " is a symlink, which is refused on read exactly as on write (it was not opened), and there is no git HEAD to auto-compare against — "
                "replace the link with a regular copy of its target, or remove it and run `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
     }
+    if( sel.sidecarUnreadable )
+    {
+        // Same "no <file>" falsehood about a file that is there — reached by every pre-v6 sidecar in a non-git root.
+        return "ripwire: " + baselineFile + " exists but is not a readable baseline (unrecognizable, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc "
+               "records) and there is no git HEAD to auto-compare against — re-pin it with `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
+    }
+    if( sel.isSidecarForeign() )
+    {
+        // The producer rule (quality.h BaselineSource): the file is there and is a real floor, just not this
+        // build's — "no <file>" would be false, and so would "delete it", since the build that pinned it may run.
+        return "ripwire: " + baselineFile + " was pinned by another ripwire build (its producer stamp does not name this binary's sources, and a dead set depends on how "
+               "calls were resolved) and there is no git HEAD to auto-compare against — it was left on disk: run --quality-delta with the build that pinned it, "
+               "or re-pin on a clean tree (commit or stash first) with `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
+    }
     if( !sel.isSidecarStale() )
     {
         return "ripwire: no " + baselineFile + " and no git HEAD to auto-compare against — run `ripwire <dir> --quality-baseline` BEFORE the change you want to measure\n";
@@ -227,7 +241,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
     // and the ONLY record is the `baseline=` XML attribute ("git-HEAD (stale sidecar removed)") — no stderr
     // spam, which is the B10.1b noise fix that survives the ruling intact. The read-only MCP arm passes false
     // and reports "…ignored" instead. When the unlink FAILS (read-only parent dir) this arm degrades to the
-    // read-only story — marker "…ignored", one DEGRADED_PATH_ALERT from the seam — because the pin is still
+    // read-only story — marker "…ignored", one DISCLOSE from the seam — because the pin is still
     // on disk; `isStaleFileOnDisk()` is the fact, and the fatal message words itself from it, not the intent.
     out.deltaRoot = std::string( cfg.rootPath );
     out.baseSel   = quality::selectBaseline( root, baselineFile, /*removeStaleFile=*/true );
@@ -247,8 +261,16 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         if( out.baseSel.sidecarUnreadable )
         {
             // 2026-09-06 stranger audit: this used to print "no <file>" about a file sitting on disk.
-            rw::emitTo( stderr, "ripwire: {} exists but is not a readable baseline (unrecognizable, or a pre-Q1 sidecar without per-symbol loc records) — IGNORED; "
+            rw::emitTo( stderr, "ripwire: {} exists but is not a readable baseline (unrecognizable, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc records) — IGNORED; "
                                   "auto-comparing the working tree vs git HEAD; re-pin it with --quality-baseline\n", baselineFile.c_str() );
+        }
+        else if( out.baseSel.isSidecarForeign() )
+        {
+            // Said on stderr like the unreadable case above and unlike the stale one: a stale pin is removed, so its
+            // silence costs one run, while a foreign pin stays on disk and is ignored on every run until re-pinned.
+            rw::emitTo( stderr, "ripwire: {} was pinned by another ripwire build (its producer stamp does not name this binary's sources, and a dead set depends on how "
+                                  "calls were resolved) — IGNORED and left on disk; auto-comparing the working tree vs git HEAD; run --quality-delta with the build that "
+                                  "pinned it, or re-pin on a clean tree (commit or stash first) with --quality-baseline\n", baselineFile.c_str() );
         }
         else if( !out.baseSel.isSidecarStale() && !out.baseSel.sidecarSymlinkRefused )
         { // the stale/healed case is silent by design — only the true "never baselined" case is informative. A refused
@@ -379,7 +401,7 @@ std::size_t partitionByScope( const rw::quality::Scope& scope, std::vector<rw::q
                               std::vector<rw::quality::Regression>& outOfScope,
                               const gtl::btree_map<std::string, rw::quality::AckRecord>& acks )
 {
-    VERIFY_NO_ALIAS( regs, outOfScope );   // push_back into outOfScope while iterating regs: the same vector twice is UB
+    ASSUME_NO_ALIAS( regs, outOfScope );   // push_back into outOfScope while iterating regs: the same vector twice is UB
     if( !scope.active() )
     {
         return 0;
@@ -538,8 +560,9 @@ inline constexpr const char* kQdBaseHeadRemoved =
     "quality-baseline) — so anything already committed cannot appear. ";
 inline constexpr const char* kQdBaseHeadUnreadable =
     "baseline=\"git-HEAD (sidecar unreadable)\" means a .ripwire_quality_baseline EXISTS but could not be read as one "
-    "(no recognizable structure, or a pre-Q1 sidecar without per-symbol loc records), so it was IGNORED and the "
-    "working tree was compared against the HEAD tree — re-pin it with quality-baseline. baseline_bad_lines= and "
+    "(no recognizable structure, an older sidecar format, or a pre-Q1 sidecar without per-symbol loc records), so it was IGNORED and the "
+    "working tree was compared against the HEAD tree, and an allow-dirty pin's absorbed findings are not in force — re-pin it on a "
+    "clean tree (commit or stash first) with quality-baseline. baseline_bad_lines= and "
     "acks_bad_lines=, when present, count sidecar lines of a known kind whose payload did not parse and were "
     "skipped (absent means none). ";
 inline constexpr const char* kQdBaseHeadSymlinkRefused =
@@ -550,6 +573,15 @@ inline constexpr const char* kQdBaseHeadIgnored =
     "baseline=\"git-HEAD (stale sidecar ignored)\" is the same staleness verdict, but the file was left on "
     "disk (the read-only MCP arm, or an unlink that failed), and the comparison fell back to the HEAD "
     "tree — so anything already committed cannot appear. ";
+// The producer rule (quality.h BaselineSource). Spelled for a reader who pinned on purpose and is looking at a
+// floor they did not choose: why their file was not used, that it is still there, and the two ways back.
+inline constexpr const char* kQdBaseHeadForeign =
+    "baseline=\"git-HEAD (foreign sidecar ignored)\" means a .ripwire_quality_baseline pinned at the CURRENT HEAD was "
+    "written by ANOTHER ripwire build: its producer stamp does not name this binary's sources, or it has none. A dead "
+    "set depends on how calls were resolved, so that floor could invent a dead-code regression or hide a real one; it "
+    "was IGNORED, left on disk, and the working tree was compared against the HEAD tree this build computed — so "
+    "anything already committed cannot appear, and an allow-dirty pin's absorbed findings are not in force. Run the "
+    "delta with the build that pinned it, or re-pin on a clean tree (commit or stash first) with quality-baseline. ";
 // H11 — emitted ONLY when baseline_absorbed= is on the root, i.e. when the honored sidecar was pinned with
 // --allow-dirty on a tree that already gated. NB: the sentence itself spells the flag WITHOUT its leading
 // dashes, because this text lands inside an XML comment and G4 forbids a literal double-hyphen there (the
@@ -734,6 +766,7 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
     else if( p.marker == "git-HEAD (stale sidecar ignored)" ) { std::fputs( kQdBaseHeadIgnored, stdout ); }
     else if( p.marker == "git-HEAD (sidecar unreadable)"     ) { std::fputs( kQdBaseHeadUnreadable, stdout ); }
     else if( p.marker == "git-HEAD (symlinked sidecar refused)" ) { std::fputs( kQdBaseHeadSymlinkRefused, stdout ); }
+    else if( p.marker == "git-HEAD (foreign sidecar ignored)"   ) { std::fputs( kQdBaseHeadForeign, stdout ); }
     else                                                      { std::fputs( kQdBaseHead,        stdout ); }
     if( p.baselineAbsorbed > 0 )
     {
@@ -843,8 +876,8 @@ inline std::string registerMacroConfigWarningAttr( const rw::quality::RegisterMa
 int ackNothingToAccept( const std::string& acksFile, const gtl::btree_map<std::string, rw::quality::AckRecord>& acks,
                         const rw::quality::Scope& scope, std::size_t outOfScopeCount )
 {
-    const std::string onDisk = rw::docparse::detail::readWholeFile( acksFile ).value_or( std::string() );   // absent file ⇒ "" ⇒ never equal to a rendered ledger
-    if( acks.empty() || rw::quality::renderAckRecords( acks ) == onDisk )
+    // `acks.empty()` first, so a ledger that is not a regular file (already refused on read) is not read and disclosed twice.
+    if( acks.empty() || rw::quality::renderAckRecords( acks ) == rw::docparse::detail::readRegularFile( "the quality-acks ledger", acksFile ).value_or( std::string() ) )
     {
         if( scope.active() && outOfScopeCount > 0 )
         {
@@ -1022,7 +1055,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // same dead pin, and the ONLY record is the `baseline=` XML attribute ("git-HEAD (stale sidecar
         // removed)") — no stderr spam, which is the B10.1b noise fix that survives the ruling intact. The
         // read-only MCP arm passes false and reports "…ignored" instead. When the unlink FAILS (read-only
-        // parent dir) this arm degrades to the read-only story — marker "…ignored", one DEGRADED_PATH_ALERT
+        // parent dir) this arm degrades to the read-only story — marker "…ignored", one DISCLOSE
         // from the seam — because the pin is still on disk; `baseSel.isStaleFileOnDisk()` is the fact, and the
         // fatal message below words itself from it rather than from the intent.
         // `refs` is declared HERE because it owns both materialized trees' teardown and they must outlive
@@ -1978,7 +2011,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
 //   unchanged         — SYM existed at baseline and none of the three moved (a body-only edit is unchanged by
 //                       design: this checks the CONTRACT, not the body — that is --quality-delta's
 //                       short-horizon-churn kind's job).
-// A non-git root / no HEAD degrades to new-symbol (nothing to compare against) with a DEGRADED_PATH_ALERT —
+// A non-git root / no HEAD degrades to new-symbol (nothing to compare against) with a DISCLOSE —
 // never a crash; only an unresolvable SYM refuses loudly (below).
 //
 // 1-hop callers (reuse the --callers 1-hop in-edge walk, unioned over the whole overload set) are listed with

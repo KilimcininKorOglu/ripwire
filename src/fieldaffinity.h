@@ -113,7 +113,7 @@
 #include "serialize.h"          // escapeXml
 #include "mention.h"            // isIdentChar
 #include "accessshape.h"        // Phase A — access-shape classification, consumed report-only (see addendum above)
-#include "infra/Diagnostics.h"  // VERIFY / DEGRADED_PATH_ALERT
+#include "infra/Diagnostics.h"  // ASSUME / DISCLOSE
 
 #include "btree.hpp"      // gtl::btree_map — sorted iteration (house rule: never std::map)
 

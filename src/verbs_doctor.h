@@ -9,6 +9,7 @@
 // linkage it had inside main.cpp, so the split adds zero API surface) and leans on main.cpp's own
 // top-of-file #includes and preamble helpers. The RIPWIRE_MAIN_TU guard turns a second includer into
 #include "gitstamp.h"          // isShallow — the git row's shallow="1" (2026-09-06 stranger audit)
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 // a compile error instead of a silent per-TU-copy ODR trap.
 
 namespace
@@ -51,6 +52,7 @@ extern "C"
     const TSLanguage* tree_sitter_elixir( void );
     const TSLanguage* tree_sitter_dart( void );
     const TSLanguage* tree_sitter_kotlin( void );
+    const TSLanguage* tree_sitter_gdscript( void );
 }
 
 // This process's own executable path, realpath'd. macOS uses _NSGetExecutablePath and Linux uses
@@ -281,7 +283,18 @@ inline const char* doctorLegendComment()
                        "git-config-trust reads the checkout's OWN core.fsmonitor as this process saw it at startup: hook is a "
                        "COMMAND git would run on every read-only call, and neutralised=\"1\" says core.fsmonitor=false was "
                        "appended to git's environment override for this run (stderr said so as git_harden=fsmonitor-hook); "
-                       "builtin, off and unset are left untouched and neutralised=\"0\". "
+                       "builtin, off and unset need no override and read neutralised=\"0\". Independently of this row, every git command "
+                       "ripwire runs carries no-optional-locks and core.fsmonitor=false, so no monitor of either form runs for its "
+                       "read-only calls. "
+                       "layout's state=\"agree\" means the layout records match; agree compares only the types= registered in src/model.h; "
+                       "a same-size layout change or a stale constant is invisible, so agree does not rule out a mixed binary; "
+                       "checked=\"1\" means the comparison ran; "
+                       "units=\"N\" counts translation units and types=\"N\" counts recorded types. On state=\"disagree\", types= is omitted, because the "
+                       "disagreeing records need not register the same types and no one count is a total; "
+                       "type= names the first differing type, unit0=/unit1= name the two records, and "
+                       "present0=/present1=, size0=/size1=, and align0=/align1= disclose their values; the row gives the rebuild action; "
+                       "state=\"not-checked\" means records exist but fewer than two records with a recorded type could be compared; "
+                       "state=\"no-records\" means no layout record was registered. "
                        "NB no flag below is spelled with its leading dashes: an XML comment may not contain a "
                        "double hyphen, and this legend is one comment. -->";
 }
@@ -463,6 +476,7 @@ inline DoctorGrammarProbe doctorProbeGrammars()
         { "elixir",     &tree_sitter_elixir,     "elixir"     },
         { "dart",       &tree_sitter_dart,       "dart"       },
         { "kotlin",     &tree_sitter_kotlin,     "kotlin"     },
+        { "gdscript",   &tree_sitter_gdscript,   "gdscript"   },
         // markdown carries NO tags.scm — ingest extracts sections by a custom tree walk, so the honest
         // probe is the pairing ingest actually uses: set_language + a real parse, not a query compile.
         { nullptr,      &tree_sitter_markdown,   "markdown"   },
@@ -644,6 +658,59 @@ inline std::string doctorGitConfigTrustAttrs( const rw::Config& cfg )
     return attrs;
 }
 
+struct DoctorLayoutCheck
+{
+    bool        ok = false;
+    std::string attrs;
+};
+
+inline DoctorLayoutCheck doctorLayoutCheck( std::vector<char>& esc )
+{
+    using namespace rw::layout_registry;
+    const LayoutCheck check = compare();
+    DoctorLayoutCheck out;
+    const auto escaped = [ &esc ]( const char* value )
+    {
+        return std::string( rw::escapeXml( std::string_view( value == nullptr ? "" : value ), esc ) );
+    };
+
+    switch( check.state )
+    {
+        case CheckState::Agree:
+        {
+            out.ok = true;
+            out.attrs = "state=\"agree\" checked=\"1\" units=\"" + std::to_string( check.unitCount )
+                      + "\" types=\"" + std::to_string( check.typeCount ) + "\"";
+            break;
+        }
+        case CheckState::Disagree:
+        {
+            // No types= here (CodeRabbit on #283): compare() takes typeCount from the first sorted record, and records
+            // that disagree may not register the same types, so that one record's count is not a total.
+            const LayoutMismatch& mismatch = check.mismatch;
+            out.attrs = "state=\"disagree\" checked=\"1\" units=\"" + std::to_string( check.unitCount )
+                      + "\" type=\"" + escaped( mismatch.typeName )
+                      + "\" unit0=\"" + escaped( mismatch.unit0 ) + "\" unit1=\"" + escaped( mismatch.unit1 )
+                      + "\" present0=\"" + std::string( mismatch.present0 ? "1" : "0" )
+                      + "\" present1=\"" + std::string( mismatch.present1 ? "1" : "0" )
+                      + "\" size0=\"" + std::to_string( mismatch.size0 ) + "\" size1=\"" + std::to_string( mismatch.size1 )
+                      + "\" align0=\"" + std::to_string( mismatch.align0 ) + "\" align1=\"" + std::to_string( mismatch.align1 )
+                      + "\" hint=\"mixed translation-unit layouts detected — rebuild with cmake --build build --clean-first -j\"";
+            break;
+        }
+        case CheckState::NoRecords:
+        case CheckState::NotChecked:
+        {
+            const char* const state = check.state == CheckState::NoRecords ? "no-records" : "not-checked";
+            out.attrs = "state=\"" + std::string( state ) + "\" checked=\"0\" units=\"" + std::to_string( check.unitCount )
+                      + "\" types=\"" + std::to_string( check.typeCount )
+                      + "\" hint=\"not checked: layout records from at least two translation units are required\"";
+            break;
+        }
+    }
+    return out;
+}
+
 int runDoctor( const rw::Config& cfg, const char* argv0 )
 {
     using namespace rw;
@@ -774,13 +841,13 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // ---- check 4: git reachability — `git` on PATH + the target dir's repo status; degrades
     // gracefully on non-repos (ok=1, repo="0" — doctor diagnoses, non-repo isn't sickness) ----
     {
-        const std::string gitVer       = doctorPopenTrim( "git --version 2>/dev/null" );
+        const std::string gitVer       = doctorPopenTrim( gitCmd( " --version 2>/dev/null" ) );
         const bool        gitAvailable = !gitVer.empty();
         std::string        attrs        = "git=\"" + std::string( gitAvailable ? "1" : "0" ) + "\"";
         if( gitAvailable )
         {
             const std::string root   = std::string( cfg.rootPath );
-            const std::string isRepo = doctorPopenTrim( "git -c core.quotepath=false -C " + shSingleQuote( root )
+            const std::string isRepo = doctorPopenTrim( gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                                                           + " rev-parse --is-inside-work-tree 2>/dev/null" );
             const bool repo = ( isRepo == "true" );
             attrs += " repo=\"" + std::string( repo ? "1" : "0" ) + "\"";
@@ -857,6 +924,14 @@ int runDoctor( const rw::Config& cfg, const char* argv0 )
     // ---- check 8: the git-config trust boundary — body in doctorGitConfigTrustAttrs above, for the same reason
     // check 7's lives in doctorIndexCacheRow: runDoctor is a dispatcher, and every check body it absorbs lands there.
     row( "git-config-trust", true, doctorGitConfigTrustAttrs( cfg ) );
+
+    // ---- check 9: cross-translation-unit layout agreement — this is the one check that can identify a
+    // binary no single source tree could produce. A single record is deliberately not a pass: there is no
+    // second compiler view against which to compare it.
+    {
+        const DoctorLayoutCheck layout = doctorLayoutCheck( esc );
+        row( "layout", layout.ok, layout.attrs );
+    }
 
     const DoctorAgentRows agentRows = doctorAgentRows( cfg, argv0 );
     checks += agentRows.checks;

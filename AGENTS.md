@@ -12,8 +12,8 @@ Personalized PageRank, and streams a deterministic minified XML map to stdout.
 cmake -S . -B build && cmake --build build -j
 ```
 
-No build type. `-DCMAKE_BUILD_TYPE=Release` defines `NDEBUG`, which compiles `DEGRADED_PATH_ALERT`
-out and blinds every degrade-path gate. CI builds both flavours; locally, use the plain one.
+No build type. `-DCMAKE_BUILD_TYPE=Release` defines `NDEBUG`, which compiles the
+`DISCLOSE( msg )` trace out and blinds every degrade-path gate. CI builds both flavours; locally, use the plain one.
 
 ## Test
 
@@ -40,8 +40,8 @@ A new `test/*check.sh` must be added to `test/regression.sh` in the same commit,
   order; no floating-point reassociation in the PageRank translation unit.
 - **Honest output.** Floors are labelled `counts_floor="1"`; a zero is "none found", not "none
   exists"; every truncation is disclosed. Do not add a surface that rounds or guesses silently.
-- **`VERIFY( cond )` for invariants; `DEGRADED_PATH_ALERT` for recoverable errors; `PANIC` for
-  corruption.** Never `VERIFY( false )` on a degrade path — release deletes the fallback behind it.
+- **`ASSUME( cond )` for invariants; `DISCLOSE( sink, why )` for recoverable errors (the sink sets the output field that tells the reader; `DISCLOSE( msg )` alone ships nothing); `PANIC` for
+  corruption.** Never `ASSUME( false )` on a degrade path — release deletes the fallback behind it.
 - **No `std::map` / `std::unordered_map`** — `HashMap<>` for hash lookup, `gtl::btree_map` for
   ordered iteration, `dynamic_map` for bounded hot paths.
 - **Allman braces, spaces inside parens** (`f( x )`), ~160–200 column wraps, index-vs-count naming

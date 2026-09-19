@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "gitcmd.h"         // rw::gitCmd — every git child starts with --no-optional-locks -c core.fsmonitor=false
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
 
@@ -29,8 +30,9 @@
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
 #include "docparse.h"           // docparse::detail::readWholeFile — THE canonical whole-file byte read (commentcoherence.h names it that); reused rather than re-rolled, see forEachSymbolBody
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
-#include "infra/Diagnostics.h"  // DEGRADED_PATH_ALERT — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
+#include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
+#include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
 
 #include "btree.hpp"              // gtl btree_map — sorted like std::map, cache-friendly nodes (house rule: never std::map)
 #include "infra/dynamic_map.hpp"  // S+tree scratch maps — bounded, no per-operation allocation in hot seen-set paths
@@ -43,7 +45,7 @@
 #include <ctime>       // ::nanosleep — the lock's bounded 10 ms poll
 
 #include <algorithm>
-#include <atomic>       // Phase-M: the tmp-name sequence counter (atomicWriteFile); also the A5 process-once cache-sweep guard
+#include <atomic>       // the A5 process-once cache-sweep guard
 #include <cctype>       // std::isxdigit/std::isdigit — B10.2d churn-blame porcelain parsing
 #include <chrono>       // A5: the 30-day cache-blob age cutoff (evictOldCacheFamily)
 #include <cstdio>
@@ -155,7 +157,7 @@ inline bool insertScratchSeen( ScratchMap<std::uint8_t>& seen, std::uint64_t key
     const auto [ it, inserted ] = seen.insert( { key, 1 } );
     if( it == seen.end() )
     {
-        DEGRADED_PATH_ALERT( capacityMsg );
+        DISCLOSE( capacityMsg );
         return false;
     }
     return inserted;
@@ -393,7 +395,8 @@ inline void appendConfigValueTokens( std::string_view rest, bool isVendor, Regis
 inline RegisterMacrosConfig readRegisterMacrosConfig( std::string_view root )
 {
     RegisterMacrosConfig out;
-    const std::string    text = docparse::detail::readWholeFile( configPath( root ) ).value_or( std::string() );
+    // readRegularFile: a FIFO at the name hung every --quality-delta, and a directory there aborted on Linux (docparse.h).
+    const std::string    text = docparse::detail::readRegularFile( ".ripwire_config", configPath( root ) ).value_or( std::string() );
     if( text.empty() )
     {
         return out;   // absent/unreadable/empty — inert, never a refusal
@@ -682,7 +685,7 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
     {
         return false; // Q-DIAL-2: the LANGUAGE calls it — see languageInvokedSymbol (this replaced a blanket header exclusion)
     }
-    const std::string& p = ing.files[ s.fileId ];
+    const std::string_view p = rootRelPath( ing, s.fileId );   // #228: a directory above the root never decides this
     if( isFixturePath( p ) )
     {
         return false; // fixtures are dead by design (noise rules)
@@ -1070,7 +1073,7 @@ inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, c
 inline bool langUsesHashComment( Lang l ) noexcept
 {
     return l == Lang::Python || l == Lang::Bash || l == Lang::Ruby || l == Lang::Elixir
-        || l == Lang::Toml   || l == Lang::Yaml;
+        || l == Lang::Toml   || l == Lang::Yaml || l == Lang::GDScript;
 }
 
 inline std::uint32_t codeLinesInBody( std::string_view body, Lang lang ) noexcept
@@ -1570,7 +1573,7 @@ using rw::gitResolveCommitSha;
 // `git -C <root>` INCLUDING redirects (so a caller can pipe, e.g. "rev-list HEAD 2>/dev/null | tail -1").
 inline std::string gitOneLine( const std::string& root, const std::string& tail )
 {
-    return popenTrimmed( "git -c core.quotepath=false -C " + shSingleQuote( root ) + " " + tail );
+    return popenTrimmed( gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + tail );
 }
 
 // ─── R1 IDENTITY: the GIT-RECORDED RENAME MAP ──────────────────────────────────────────────────────────
@@ -1698,7 +1701,7 @@ inline RenameMap gitRenameMap( const std::string& root, const std::string& span 
         }
     };
 
-    const std::string pinned = "git -c core.quotepath=false -c diff.renames=true -C " + shSingleQuote( root ) + " ";
+    const std::string pinned = gitCmd( " -c core.quotepath=false -c diff.renames=true -C " ) + shSingleQuote( root ) + " ";
     if( span.empty() )
     {
         // Uncommitted first (a staged `git mv` is the single moment an agent is most likely to run this),
@@ -1774,10 +1777,10 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
     // than the P0.1 data-loss bug — the shape is identical. Refuse anything that is not a bare object name.
     if( !isBareCommitSha( ancestor ) || !isBareCommitSha( descendant ) )
     {
-        DEGRADED_PATH_ALERT( "quality: refusing a non-sha revision token on the merge-base path" );
+        DISCLOSE( "quality: refusing a non-sha revision token on the merge-base path" );
         return false;                                          // degrade: "not reachable" → the caller self-heals the pin
     }
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " merge-base --is-ancestor " + shSingleQuote( ancestor ) + " " + shSingleQuote( descendant )
                           + " >/dev/null 2>&1";
     return std::system( cmd.c_str() ) == 0;
@@ -1819,7 +1822,7 @@ inline std::string gitWindowRefSha( const std::string& root, std::uint32_t days 
 // exists, but a --since window matched zero commits". popen failure degrades to false.
 inline bool gitRepoHasHistory( const std::string& root )
 {
-    const std::string cmd = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                           + " rev-parse --verify --quiet HEAD 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -1969,10 +1972,73 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // suite the moment the two disagree, and `test/qschemetripcheck.sh` (which previously hashed only quality.h
 // functions and never looked at ingest.cpp — precisely why this shipped) now hashes the ingest-side constant
 // lines too. Bumping kParserVer without updating these two lines is a hard gate failure, not a silent miss.
-// FOLLOW-UP for whoever owns ingest.{h,cpp}: promote the two constants into ingest.h and turn the gate into a
-// `static_assert` — this lane's file boundary forbade editing those files.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 22;   // MUST equal ingest.cpp's kCacheVersion (gated)
-constexpr std::uint32_t kIngestParserVerMirror    = 96;   // MUST equal ingest.cpp's kParserVer   (gated)
+// The FOLLOW-UP this note asked for is done the other way round: ingest_cache.h holds
+// `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
+// not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
+// that broke that fails the build on the undeclared name rather than passing.
+constexpr std::uint32_t kIngestCacheVersionMirror   = 24;   // MUST equal ingest.cpp's kCacheVersion (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 114;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 114 = 2026-09-17 (reference-returning definitions, test/narrowcheck.sh
+                                                          //    arms 61-63): a definition returning `T&`/`T&&` records its
+                                                          //    parameters; an attributed declarator its VarDecl. The
+                                                          //    full note sits beside ingest_cache.h's declaration.
+                                                          // 113 = 2026-09-17 (smart-pointer members, PR #282): a std smart
+                                                          //    pointer member records its pointee, a call records `->`;
+                                                          //    the ref record grows a u8 (cache version 24 above).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 112 = 2026-09-17 (type aliases, PR #280): a typedef / using alias
+                                                          //    of a named class records its target for the base walk.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 111 = 2026-09-17 (block-scope direct-initialized locals,
+                                                          //    test/narrowcheck.sh arms 52-60). See ingest_cache.h's kParserVer note.
+                                                          // 110 = 2026-09-17 (Java catch/enhanced-for/resource shadows, #235
+                                                          //    follow-up). See ingest_cache.h's kParserVer note.
+                                                          // 109 = 2026-09-17 (Ruby constant receivers, PR #267): a constant or
+                                                          //    scope_resolution receiver is NamedVar with its final segment.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 108 = 2026-09-17 (GDScript, PR #233): a new grammar, tags.scm and
+                                                          //    `.gd` crawl row. See ingest_cache.h's kParserVer note.
+                                                          // 107 = 2026-09-17 (Java Type::method, issue #74, PR #235): its two
+                                                          //    steps below (declared 97, 98) land as one on integration/train-3.
+                                                          //    PR step 98, 2026-09-15 (Java Type::method review):
+                                                          //    Java shadow binds carry lexical spans and inferred
+                                                          //    lambda parameters are captured. See ingest_cache.h.
+                                                          //    PR step 97, 2026-09-15 (Java Type::method candidates):
+                                                          //    method_reference member capture plus indexed-class +
+                                                          //    no-shadow resolver gating. #216 spent 96, so this
+                                                          //    RE-BUMPS. See ingest_cache.h's kParserVer note.
+                                                          // 106 = 2026-09-17 (assignment types, PR #278): a C++ assignment's bind
+                                                          //    record carries isFromAssignment (cache version 23).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 105 = 2026-09-17 (A4, found-items 2026-09-17): `.hxx`
+                                                          //    gained a kLangTable row (src/ingest_crawl.h), so a
+                                                          //    tree that spells its headers `.hxx` now yields NEW
+                                                          //    files/symbols/edges a pre-bump cache never saw.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 104 = 2026-09-17 (template arguments in a receiver's type): a
+                                                          //    declaration records its type's last name through the
+                                                          //    grammar's fields. See ingest_cache.h's kParserVer note.
+                                                          // 103 = 2026-09-17 (TS/JS signed numeric literal receivers, train 1b
+                                                          //    #277). See ingest_cache.h's kParserVer note.
+                                                          // 102 = 2026-09-17 (C++ template scopes, test/cpptmplscopecheck.sh,
+                                                          //    PR #256). See ingest_cache.h's kParserVer note.
+                                                          // 101 = 2026-09-17 (member template calls, test/cppqualcheck.sh
+                                                          //    §12, PR #243): `r.f<T>()` / `x.template f<T>()` mint call
+                                                          //    references; the `template` disambiguator leaves names and
+                                                          //    qualifiers. See ingest_cache.h's kParserVer note.
+                                                          // 100 = 2026-09-17 (TS/JS literal receivers, issue #163, PR #244): RecvKind
+                                                          //    Lit* appended; extraction identity moves, cache format does not.
+                                                          // 99 = 2026-09-16 (std-typed member fields): a field's compose
+                                                          //    record carries its written namespace as its qualifier.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 98 = 2026-09-16 (std-qualified receivers): a C++ assignment's
+                                                          //    constructor records its qualified text too.
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 97 = 2026-09-16 (parameter receivers): a declaration's qualified
+                                                          //    written type rides its Type/ParamType RawBind (importedName).
+                                                          //    See ingest_cache.h's kParserVer note.
+                                                          // 96 = 2026-09-13 (internal linkage, test/decltodefcheck.sh arm B2):
+                                                          //    See ingest_cache.h's kParserVer note.
                                                           // 95 = 2026-09-12 (Elixir module/name/arity resolution, PR #81):
                                                           //    RE-BUMPED from the branch's 87 over #139's 93 and #172's 94.
                                                           //    See ingest_cache.h's kParserVer note.
@@ -2144,6 +2210,41 @@ constexpr std::uint32_t kIngestParserVerMirror    = 96;   // MUST equal ingest.c
 inline std::string extractionIdentityTag()
 {
     return "x" + std::to_string( kIngestCacheVersionMirror ) + "." + std::to_string( kIngestParserVerMirror );
+}
+
+// ─── the PRODUCER IDENTITY — which build computed a cached Snapshot ─────────────────────────────────────
+//
+// THE BUG THIS CLOSES. A qsnap blob's dead set is a function of CALL RESOLUTION, not only of extraction:
+// isDeadCandidate reads g.inEdges, and pythonDispatchedMethodIds reads the graph. The key above holds the
+// extraction identity, and a resolution change moves none of it — by rule, since a resolver runs over cached
+// ingest facts (d39554dd's std::-qualified call guard said so in its own message: "no graph or edge blob is
+// cached"). So two builds that resolve differently, sharing one cache dir on one repo HEAD, served each other's
+// dead set. Measured on main a55b118e with that guard switched off in a second build, over a two-file fixture:
+// a cold run reports regressions="0"; the same run after the unguarded build warmed the cache reports a GATING
+// dead-code row on an untouched symbol and exits 2. The other order HIDES a real gating regression (exit 2
+// cold, exit 0 warm). test/qsnapproducercheck.sh pins both directions.
+//
+// WHY DERIVED, NOT A kResolverVer TO BUMP. A constant holds only while every lane remembers it, and this cache's
+// record says how that goes: B10.1a's isDeadCandidate exemption (retired late, at v3) and 28c7d32's kParserVer
+// bump (P0.2) each changed what a blob means without the bump that would have retired it, and none of the twelve
+// scheme versions below cites a resolution change — d39554dd weighed the caches and still missed this one. The
+// identity is instead the SHA-256 of every file under src/ and queries/ (cmake/source_identity.cmake, computed on
+// every build), so ANY change to what a Snapshot means — resolution, the dead predicate, clone identity, a key
+// rule the qschemetrip manifest does not list — names a new blob without anyone deciding to. The price is that an
+// edit which changes no meaning renames the blob too: one cold HEAD snapshot after a rebuild that touched a source
+// file. The ingest blob underneath (qheadsnap) stays on the extraction identity alone, because it holds
+// extraction facts only, so that cold snapshot re-reads a warm ingest.
+//
+// Folded into the qsnap and qbody filename keys (qsnapExclHex, qbodyExclHex) and carried in the shared blob
+// header, the same two guards P0.2 gave the extraction identity: never NAMED again, and REFUSED if reached.
+inline std::string_view producerIdentity() noexcept
+{
+    return std::string_view( rw::kRipwireSourceIdentity );
+}
+
+inline std::uint64_t producerIdentityHash() noexcept
+{
+    return fnv1a64( producerIdentity() );
 }
 
 // The 16-hex EXCLUDES-config key: fnv1a64 of the exact exclude set + the family's scheme tag + the extraction
@@ -2381,7 +2482,7 @@ struct CacheBlobStat
 // DISCLOSURE, and the reason P1-1 stayed invisible: all four measured 250 s runs wrote 0 bytes to stderr.
 // Conditional by construction — a sweep that frees nothing and is not over budget on its pinned set alone
 // says nothing at all, so no ordinary run, and no gate that compares stderr, grows a line. Plain emits,
-// NEVER DEGRADED_PATH_ALERT: NDEBUG compiles that out, and a Release binary is exactly where a 10x
+// NEVER DISCLOSE: NDEBUG compiles that out, and a Release binary is exactly where a 10x
 // slowdown needs to be visible.
 inline std::vector<CacheBlobStat> evictBySizeBudget( std::vector<CacheBlobStat>& mine, const std::string& dir,
                                                      const std::string& keepPath, std::uintmax_t maxTotalBytes )
@@ -2704,8 +2805,10 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // working-tree side legitimately still pays its own clone pass + ingest (it changes between runs).
 //
 // NEVER-STALE, on the same two independent guards the ingest cache uses:
-//  1) FILENAME key = (realpath repo-root, HEAD sha, excludes, a qsnap scheme tag) — a different HEAD / repo /
-//     --exclude set / scheme names a different file → the wrong Snapshot can never be loaded.
+//  1) FILENAME key = (realpath repo-root, HEAD sha, excludes, a qsnap scheme tag, the extraction identity, the
+//     producer identity) — a different HEAD / repo / --exclude set / scheme / BUILD names a different file → the
+//     wrong Snapshot can never be loaded. The producer identity (v14) is what keeps two builds that resolve
+//     calls differently apart; see producerIdentity.
 //  2) Blob self-validation: a magic + scheme-version header, an embedded fnv1a64(headSha) that must match the
 //     live HEAD, and an fnv1a64 content checksum trailer over the whole body. Any mismatch/truncation → the blob
 //     is rejected and the full compute runs (which then rewrites a correct blob) — a stale/foreign blob can
@@ -2820,15 +2923,29 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // lookup this binary makes, so each Elixir symbol would read as new. Extraction is unchanged (parser version
 // 95 stays), so kParserVer and its mirror deliberately did NOT move. Bumped 10 -> 11.
 // v12 — Python inherited self/cls dispatch excludes possible overrides from the dead set on both sides.
-constexpr std::uint32_t kQSnapCacheScheme = 12;
+// v13 (#228, root-spelling invariance) — the HEAD side always ingests at an absolute temp root, and until this
+// round that spelling decided answers: Python's root-relative import probe was inert there (the name ladder bound
+// a same-directory def instead), and isFixturePath / isTestScriptPath read the directories ABOVE the temp root.
+// Both now read model.h::rootRelPath, so the dead set and every call edge a v12 blob was computed from can differ
+// for an UNCHANGED sha — and served to this binary, the pre-fix Snapshot is exactly the phantom row #228 reported
+// (test/rootspellingcheck.sh arm 5 watched it served: exit 2 on an unchanged four-file tree). No extraction
+// change: parser version and its mirror stay. Bumped 12 -> 13.
+// v14 (2026-09-16) — the blob header gained the PRODUCER IDENTITY after the extraction identity, and
+// qsnapExclHex folds it: a HEADER SHAPE change, so bumped by the v4 rule. The defect it closes is one this
+// rule could not have caught: a dead set is a function of call resolution, no version in the key moved with
+// resolution, and so two builds that resolve differently served each other's dead set (see producerIdentity).
+// Since v14 a bump is no longer what keeps two builds' blobs apart — any source change renames every blob — so
+// a semantics change that lands without one leaves this history incomplete, not a wrong answer across builds.
+constexpr std::uint32_t kQSnapCacheScheme = 14;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
 // so a qsnap-format bump renames every file → old-scheme blobs are simply never named again. It also folds the
 // extraction identity + maxFileBytes (see exclConfigHex).
+// v14: and the PRODUCER identity, because a Snapshot's dead set depends on call resolution (producerIdentity).
 inline std::string qsnapExclHex( const std::vector<std::string>& excludes, std::size_t maxFileBytes = kDefaultMaxFileBytes )
 {
-    return exclConfigHex( excludes, "qsnap" + std::to_string( kQSnapCacheScheme ), maxFileBytes );
+    return exclConfigHex( excludes, "qsnap" + std::to_string( kQSnapCacheScheme ) + '\x1f' + std::string( producerIdentity() ), maxFileBytes );
 }
 
 // a distinct "qsnap" family prefix so the ingest and Snapshot families never collide and evict independently.
@@ -2855,11 +2972,15 @@ inline void evictOldQSnapCaches( const std::string& dir, const std::string& repo
 // v3 (W1-S2): bodyHashBySym keys became pathQualifiedKey (see kQSnapCacheScheme v6). The blob header's
 // scheme check would already reject a v2 blob — but as CORRUPT (alert + stderr), not a clean miss; bumping
 // the family renames every file so old blobs are simply never named again.
-constexpr std::uint32_t kQBodyCacheScheme = 3;
+// v4 (2026-09-16): the shared blob header gained the producer identity (kQSnapCacheScheme v14), so this family
+// retires with it, as it did at v2. Its facts are extraction-only, yet the key folds the producer identity too:
+// deserializeSnapshot refuses a foreign producer for BOTH families, and a key without it would turn every
+// rebuild's first read into a "corrupt" alert instead of a clean miss.
+constexpr std::uint32_t kQBodyCacheScheme = 4;
 
 inline std::string qbodyExclHex( const std::vector<std::string>& excludes, std::size_t maxFileBytes = kDefaultMaxFileBytes )
 {
-    return exclConfigHex( excludes, "qbody" + std::to_string( kQBodyCacheScheme ), maxFileBytes );
+    return exclConfigHex( excludes, "qbody" + std::to_string( kQBodyCacheScheme ) + '\x1f' + std::string( producerIdentity() ), maxFileBytes );
 }
 
 inline std::string qbodyCachePath( const std::string& repoHex, const std::string& exclHex, const std::string& refSha )
@@ -2867,11 +2988,15 @@ inline std::string qbodyCachePath( const std::string& repoHex, const std::string
     return shaKeyedCachePath( "qbody", repoHex, exclHex, refSha );
 }
 
-// append one trivially-copyable POD to the blob buffer (native layout; see the determinism note above).
+// append one POD to the blob buffer (native layout; see the determinism note above). CONSTRAINED, not merely asserted
+// trivially copyable: a trivially copyable struct can still carry padding bytes, whose values are indeterminate, and a
+// float has more than one byte spelling of one value (-0.0 beside 0.0, many NaNs). Either would write a blob whose
+// bytes differ between two runs over the same facts. Every call site passes a fixed-width integer, and the constraint
+// keeps it that way: has_unique_object_representations is false for any type with padding or a floating-point member.
 template<class T>
+    requires std::has_unique_object_representations_v<T>
 inline void qsnapPut( std::string& buf, const T& v )
 {
-    static_assert( std::is_trivially_copyable_v<T>, "qsnap serializes PODs only" );
     buf.append( reinterpret_cast<const char*>( &v ), sizeof( T ) );
 }
 
@@ -2888,12 +3013,29 @@ inline bool qsnapGet( const char*& p, const char* end, T& out )
     return true;
 }
 
-// Serialize a Snapshot to a self-validating blob: [magic][scheme][cacheVer][parserVer][fnv(headSha)] then each
+// A record COUNT read out of a blob is the blob's claim, not a fact: bound it by the bytes that remain BEFORE
+// anything is sized from it. `minRecordBytes` is the smallest encoding one record can have, so a count that
+// passes cannot reserve more records than the blob could possibly hold. Without it a checksum-valid blob
+// whose count reads 0xFFFFFFFF reached `reserve` — 32 GiB for a u64 vector — and on a host that will not
+// overcommit that is std::bad_alloc, which nothing on the CLI path catches: SIGABRT on every run until the
+// blob was evicted. The twin of loadCache's countFits (ingest_cache.h), for the qsnap-format readers.
+inline bool qsnapCountFits( const char* p, const char* end, std::uint32_t count, std::size_t minRecordBytes ) noexcept
+{
+    if( count <= static_cast<std::size_t>( end - p ) / minRecordBytes )
+    {
+        return true;
+    }
+    DISCLOSE( "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
+    return false;
+}
+
+// Serialize a Snapshot to a self-validating blob: [magic][scheme][cacheVer][parserVer][producer][fnv(headSha)] then each
 // of the 9 fields as a uint32 count followed by its flat records (btree maps in sorted key order, vectors
 // as-is), then an fnv1a64 checksum over all preceding bytes. Byte-stable for a fixed Snapshot.
 // P0.2 (r27): cacheVer/parserVer are the EXTRACTION IDENTITY every field below is a function of — see the note
 // at kIngestCacheVersionMirror. They are in the filename key too; carrying them here as well means a blob
 // reached by any other route (hand-copied, collided) is REJECTED rather than believed.
+// v14: `producer` is fnv1a64 of the producer identity — the build that computed the dead set (producerIdentity).
 inline std::string serializeSnapshot( const Snapshot& s, const std::string& headSha )
 {
     std::string buf;
@@ -2901,6 +3043,7 @@ inline std::string serializeSnapshot( const Snapshot& s, const std::string& head
     qsnapPut( buf, kQSnapCacheScheme );
     qsnapPut( buf, kIngestCacheVersionMirror );
     qsnapPut( buf, kIngestParserVerMirror );
+    qsnapPut( buf, producerIdentityHash() );
     qsnapPut( buf, fnv1a64( headSha ) );
 
     const auto putValMap = [ & ]( const gtl::btree_map<std::uint64_t, std::uint32_t>& m )
@@ -2931,9 +3074,9 @@ inline std::string serializeSnapshot( const Snapshot& s, const std::string& head
 // miss. Vectors are re-sorted so computeDelta's binary_search invariant holds regardless of on-disk order.
 inline bool deserializeSnapshot( const std::string& blob, const std::string& headSha, Snapshot& out )
 {
-    if( blob.size() < 4 + 3 * sizeof( std::uint32_t ) + sizeof( std::uint64_t ) + sizeof( std::uint64_t ) )
+    if( blob.size() < 4 + 3 * sizeof( std::uint32_t ) + 3 * sizeof( std::uint64_t ) )
     {
-        return false;                                          // smaller than magic+scheme+cacheVer+parserVer+sha+trailer
+        return false;                                          // smaller than magic+scheme+cacheVer+parserVer+producer+sha+trailer
     }
     const char*       data    = blob.data();
     const std::size_t bodyLen = blob.size() - sizeof( std::uint64_t );   // trailer = last 8 bytes
@@ -2966,6 +3109,15 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
         return false;
     }
     if( !qsnapGet( p, end, blobParserVer ) || blobParserVer != kIngestParserVerMirror )
+    {
+        return false;
+    }
+
+    // v14 — the PRODUCER guard. The dead set is a function of call resolution as well as extraction, so a blob
+    // another build computed describes a different graph; the key already never names one, this refuses one
+    // reached any other way (see producerIdentity).
+    std::uint64_t blobProducer = 0;
+    if( !qsnapGet( p, end, blobProducer ) || blobProducer != producerIdentityHash() )
     {
         return false;
     }
@@ -3017,9 +3169,9 @@ inline bool deserializeSnapshot( const std::string& blob, const std::string& hea
     const auto getVec = [ & ]( std::vector<std::uint64_t>& v ) -> bool
     {
         std::uint32_t n = 0;
-        if( !qsnapGet( p, end, n ) )
+        if( !qsnapGet( p, end, n ) || !qsnapCountFits( p, end, n, sizeof( std::uint64_t ) ) )
         {
-            return false;
+            return false;   // a corrupt blob: the caller's "cache corrupt — recomputing" path
         }
         v.reserve( n );
         for( std::uint32_t i = 0; i < n; ++i )
@@ -3112,22 +3264,18 @@ inline std::mutex& headSnapshotIngestMutex()
 // and degrade rules to drift, which is the clone kind --quality-delta gates on.
 inline bool atomicWriteFile( const std::string& path, const std::string& blob )
 {
-    static std::atomic<std::uint64_t> seq{ 0 };
-    const std::string tmp = path + ".tmp." + std::to_string( ::getpid() )
-                          + "." + std::to_string( seq.fetch_add( 1, std::memory_order_relaxed ) );
+    // Round 5 (rw::pathguard): the temp is created EXCLUSIVELY and WITHOUT following a link, under an
+    // unpredictable name beside the target, refusing an existing entry at that name. The RAII holder removes
+    // the temp on any failure
+    // path below; commit() renames it into place. The name keeps its `.tmp.` infix (a *.tmp.* residue glob
+    // still matches) and 0666 preserves the ofstream default mode; the kernel applies the umask exactly as
+    // the stream did. The fd-based write replaces the ofstream, which cannot express O_EXCL.
+    rw::pathguard::ExclTempFile temp = rw::pathguard::createExclTempFile( path + ".tmp.", "", 0666 );
+    if( !temp.ok() || !temp.write( blob ) )
     {
-        std::ofstream of( tmp, std::ios::binary | std::ios::trunc );
-        if( !of )
-        {
-            return false;
-        }
-        of.write( blob.data(), static_cast<std::streamsize>( blob.size() ) );
-        of.flush();
-        if( !of ) { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
+        return false;   // temp removed by the holder's destructor
     }
-    if( std::rename( tmp.c_str(), path.c_str() ) != 0 )
-    { std::error_code e; std::filesystem::remove( std::filesystem::path( tmp ), e ); return false; }
-    return true;
+    return temp.commit( path );
 }
 
 // ─── shared plumbing for the two archived-tree consumers (HEAD snapshot / churn window-ref) ─────────────
@@ -3167,19 +3315,19 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
     // the separator goes AFTER the revision.
     const std::string rev = gitResolveCommitSha( root, committish );
     if( rev.empty() )
-    { DEGRADED_PATH_ALERT( "quality: commit-tree revision does not resolve to a commit — refusing to archive" ); return {}; }
+    { DISCLOSE( "quality: commit-tree revision does not resolve to a commit — refusing to archive" ); return {}; }
 
     std::error_code ec;
     std::string tmpRoot = cacheDirLadder() + "/ripwire-" + tag + "-" + std::to_string( ::getpid() );   // not const: moved out on return
     fs::remove_all( fs::path( tmpRoot ), ec );                 // stale leftover from a crashed prior run
     if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
-    { DEGRADED_PATH_ALERT( "quality: cannot create commit-tree temp dir" ); return {}; }
+    { DISCLOSE( "quality: cannot create commit-tree temp dir" ); return {}; }
 
-    const std::string extract = "git -c core.quotepath=false -C " + shSingleQuote( root )
+    const std::string extract = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
                               + " archive --format=tar " + shSingleQuote( rev ) + " -- 2>/dev/null | tar -x -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
     if( std::system( extract.c_str() ) != 0 )
     {
-        DEGRADED_PATH_ALERT( "quality: git archive failed — committed tree unavailable" );
+        DISCLOSE( "quality: git archive failed — committed tree unavailable" );
         std::error_code e;
         fs::remove_all( fs::path( tmpRoot ), e );
         return {};
@@ -3340,9 +3488,9 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
         if( hit == -1 )
         {
             // the fprintf is the visible line in ALL build types (test/qsnapcachecheck.sh (e) gates on it);
-            // DEGRADED_PATH_ALERT compiles out under NDEBUG.
+            // DISCLOSE compiles out under NDEBUG.
             rw::emitRaw( stderr, "ripwire: quality: HEAD Snapshot cache corrupt — recomputing\n" );
-            DEGRADED_PATH_ALERT( "quality: HEAD Snapshot cache corrupt — recomputing" );
+            DISCLOSE( "quality: HEAD Snapshot cache corrupt — recomputing" );
         }
     }
 
@@ -3389,7 +3537,7 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
         evictOldHeadSnapCaches( cacheDirLadder(), repoHex, exclHex, cachePath, 2 );
     }
     if( headIng.symbols.empty() && headIng.files.empty() )
-    { DEGRADED_PATH_ALERT( "quality: HEAD tree ingested empty — falling back to run --quality-baseline first" ); return { Snapshot{}, false }; }
+    { DISCLOSE( "quality: HEAD tree ingested empty — falling back to run --quality-baseline first" ); return { Snapshot{}, false }; }
     const Graph headG = buildGraph( headIng, nullptr );
 
     // root = tmpRoot so keys are root-relative and match the working-tree side key-for-key (S2).
@@ -3445,7 +3593,7 @@ struct RefTree
 inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, const std::vector<std::string>& excludes,
                          std::size_t maxFileBytes, const char* tag, TmpTreeGuard& guard, RefTree& out )
 {
-    VERIFY( tag != nullptr && *tag != '\0' );
+    ASSUME( tag != nullptr && *tag != '\0' );
     const std::string tmpRoot = materializeCommitTree( repoRoot, sha, tag );
     if( tmpRoot.empty() )
     {
@@ -3468,7 +3616,7 @@ inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, co
     }
     if( out.ing.symbols.empty() && out.ing.files.empty() )
     {
-        DEGRADED_PATH_ALERT( "quality: a materialized commit tree ingested empty" );
+        DISCLOSE( "quality: a materialized commit tree ingested empty" );
         return false;
     }
     out.g    = buildGraph( out.ing, nullptr );
@@ -3515,7 +3663,7 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
         if( hit == -1 )
         {
             rw::emitRaw( stderr, "ripwire: quality: window-ref body cache corrupt — recomputing\n" );
-            DEGRADED_PATH_ALERT( "quality: window-ref body cache corrupt — recomputing" );
+            DISCLOSE( "quality: window-ref body cache corrupt — recomputing" );
         }
     }
 
@@ -3544,7 +3692,7 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
     IngestResult refIng = ingest( tmpRoot.c_str(), excludes, std::string_view( ingestCachePath ), maxFileBytes );
     evictOldHeadSnapCaches( cacheDirLadder(), repoHex, exclHex, ingestCachePath, 2 );
     if( refIng.symbols.empty() && refIng.files.empty() )
-    { DEGRADED_PATH_ALERT( "quality: churn-window ref tree ingested empty — churn evidence unavailable" ); return { {}, false }; }
+    { DISCLOSE( "quality: churn-window ref tree ingested empty — churn evidence unavailable" ); return { {}, false }; }
 
     Snapshot bodyOnly;
     bodyOnly.bodyHashBySym = bodyHashesBySym( refIng, tmpRoot );   // pathQualifiedKey on EVERY side of the churn join (baseline, this ref, working tree, per-node lookup) — a one-sided keying change makes every symbol read as rewritten   // root = tmpRoot → root-relative keys (S2)
@@ -3644,8 +3792,12 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
         return false;
     }
 
+    // Every commit record is at least its epoch plus its path count, and every path at least its length prefix;
+    // both counts are measured against the bytes left before either sizes a reserve (qsnapCountFits).
+    constexpr std::size_t kMinCommitRecordBytes = sizeof( RawCommitStream::Commit::epoch ) + sizeof( std::uint32_t );
+    constexpr std::size_t kMinPathRecordBytes   = sizeof( std::uint32_t );
     std::uint32_t nCommits = 0;
-    if( !qsnapGet( p, end, nCommits ) )
+    if( !qsnapGet( p, end, nCommits ) || !qsnapCountFits( p, end, nCommits, kMinCommitRecordBytes ) )
     {
         return false;
     }
@@ -3659,7 +3811,7 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
             return false;
         }
         std::uint32_t nPaths = 0;
-        if( !qsnapGet( p, end, nPaths ) )
+        if( !qsnapGet( p, end, nPaths ) || !qsnapCountFits( p, end, nPaths, kMinPathRecordBytes ) )
         {
             return false;
         }
@@ -3814,8 +3966,8 @@ inline int openBaselineSidecar( const std::string& path )
     auto [ fd, openErr ] = rw::pathguard::openNoFollowTruncate( "the quality baseline sidecar", path );
     if( fd < 0 )
     {
-        if( openErr == ELOOP ) { DEGRADED_PATH_ALERT( "quality: refusing to write the baseline sidecar through a symlink" ); }
-        else                   { DEGRADED_PATH_ALERT( "quality: cannot write baseline file" ); }
+        if( openErr == ELOOP ) { DISCLOSE( "quality: refusing to write the baseline sidecar through a symlink" ); }
+        else                   { DISCLOSE( "quality: cannot write baseline file" ); }
     }
     return fd;
 }
@@ -3853,7 +4005,16 @@ inline bool writeBaseline( const Snapshot& s, const std::string& path, std::stri
     // direction only: its loc values are larger, every symbol reads as having SHRUNK, and the verbosity kind
     // silently reports nothing at all. A kind that quietly stops firing is the worst of the three outcomes, so
     // this is a version refusal like v4's, not a graceful skip.
-    f << "# ripwire quality baseline v5 — regenerate with --quality-baseline; do not hand-edit\n";
+    // v6 (2026-09-16): the `producer` record below. Its absence is not a graceful skip either: a v5 sidecar can
+    // only have been written by a build that predates the stamp, so it is foreign to every build that reads the
+    // record, and an OLD binary reading a v6 sidecar refuses it rather than skipping the stamp it cannot check.
+    f << "# ripwire quality baseline v6 — regenerate with --quality-baseline; do not hand-edit\n";
+    // PRODUCER STAMP: the identity of the build that computed this snapshot (producerIdentity). The `dead`
+    // records are a function of CALL RESOLUTION, which the head stamp below says nothing about, so at one HEAD
+    // a floor pinned by one build and a working tree judged by another disagreed about which symbols had
+    // callers: a gating dead-code row on an untouched symbol, or a real one hidden. selectBaseline honors the
+    // sidecar only for the build this names (test/qbaselineproducercheck.sh).
+    f << "producer " << producerIdentity() << '\n';
     // STALENESS STAMP: the HEAD commit the baseline was pinned at. --quality-delta compares this to the
     // current HEAD and, if they differ (a baseline left by an abandoned/parallel session, or from before a
     // commit), IGNORES the sidecar and falls back to the git-HEAD auto-baseline instead of reporting a wall
@@ -3931,9 +4092,12 @@ inline bool writeBaseline( const Snapshot& s, const std::string& path, std::stri
 // the honest degrade — an unrecognizable baseline makes the caller fall back to git HEAD, and that fallback is
 // already named on every report through `baseline=`. The sidecar is generated and gitignored, so the whole
 // cost of refusing is one `--quality-baseline` re-pin.
+//
+// v6 moved the accepted version for the producer stamp (see writeBaseline), and the refusal carries it: a v5
+// sidecar has no stamp to check, and the build that wrote it cannot be this one.
 inline bool baselineHeaderIsForeign( const std::string& line ) noexcept
 {
-    return line.rfind( "# ripwire quality baseline v", 0 ) == 0 && line.find( " v5 " ) == std::string::npos;
+    return line.rfind( "# ripwire quality baseline v", 0 ) == 0 && line.find( " v6 " ) == std::string::npos;
 }
 
 // 2026-09-06 stranger audit: the sidecar readers dropped what they could not parse with no trace a Release
@@ -3945,9 +4109,32 @@ struct BaselineReadStats
     bool        present        = false;   // the file opened
     bool        symlinkRefused = false;   // a SYMLINK sits at the name: refused unopened (pathguard.h round 3), so `present` stays false
     bool        unrecognizable = false;   // opened, but no line of the format's structure in it
+    bool        olderFormat    = false;   // opened, and its header names another format version: refused unread
     bool        preQ1          = false;   // structure, but no per-symbol loc records: origin cannot be classified
     std::size_t badLines       = 0;       // lines of a known kind whose payload did not parse — skipped
+    std::string producer;                 // the `producer` record: 64 lowercase hex, or "" when absent or malformed
 };
+
+// The v6 `producer` record's payload, into `stats.producer` when it is identity-shaped (64 lowercase hex). Only the
+// SHAPE is judged here — whether it names THIS build is selectBaseline's question. The file is committed DATA, so a
+// payload of any other shape is a bad line and leaves `producer` empty, which no build's identity equals; the first
+// well-formed record wins, as the head stamp's does.
+inline void readProducerRecord( std::istream& is, BaselineReadStats& stats )
+{
+    std::string value;
+    is >> value;
+    const auto isLowerHexDigit = []( char c ) { return ( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' ); };
+    if( value.size() != 64 || !std::all_of( value.begin(), value.end(), isLowerHexDigit ) )
+    {
+        DISCLOSE( "quality: malformed baseline producer line skipped" );
+        ++stats.badLines;
+        return;
+    }
+    if( stats.producer.empty() )
+    {
+        stats.producer = std::move( value );
+    }
+}
 
 // THE ONE PLACE THE BASELINE SIDECAR IS READ — shared by readBaseline, readBaselineHeadSha and
 // readBaselineAbsorbed, and openBaselineSidecar's other half with the same answer to a link: O_NOFOLLOW, refused
@@ -3956,7 +4143,7 @@ struct BaselineReadStats
 inline rw::pathguard::NoFollowRead readBaselineSidecar( const std::string& path )
 {
     rw::pathguard::NoFollowRead sidecar = rw::pathguard::openNoFollowRead( "the quality baseline sidecar", path );
-    if( sidecar.refused ) { DEGRADED_PATH_ALERT( "quality: refusing to read the baseline sidecar through a symlink" ); }
+    if( sidecar.refused ) { DISCLOSE( "quality: refusing to read the baseline sidecar through a symlink" ); }
     return sidecar;
 }
 
@@ -3981,9 +4168,13 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         if( baselineHeaderIsForeign( line ) )   // pre-pathQualifiedKey sidecar — refused, see above
         {
             // The refusal is a USER-FACING disclosure, so it must survive NDEBUG: behind only a
-            // DEGRADED_PATH_ALERT a Release binary refuses SILENTLY and the caller reads "no baseline
+            // DISCLOSE a Release binary refuses SILENTLY and the caller reads "no baseline
             // found" — a refusal that hides its reason misleads exactly like the misread it prevents.
             rw::emitRaw( stderr, "ripwire: quality: baseline sidecar predates this binary's baseline format — refused, re-pin with --quality-baseline\n" );
+            // ...and the caller's marker has to say a sidecar is THERE. Without this flag the refusal read as
+            // Absent, so the CLI reported baseline="git-HEAD" ("no sidecar existed") and printed "no <file>"
+            // one line under the refusal that named it. Since v6 every pre-stamp sidecar lands here.
+            stats.olderFormat = true;
             out = Snapshot{};
             return false;
         }
@@ -3996,16 +4187,17 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         // gracefully so forward/backward baseline versions never crash.
         const auto readValMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint32_t>& m, const char* what )
         { std::uint64_t h = 0; std::uint32_t v = 0; is >> std::hex >> h >> std::dec >> v;
-          if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } m[h] = v; };
+          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } m[h] = v; };
         const auto readSet = [ & ]( std::vector<std::uint64_t>& v, const char* what )
         { std::uint64_t h = 0; is >> std::hex >> h;
-          if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } v.push_back( h ); };
+          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } v.push_back( h ); };
         // "<kind> <hexkey> <hexval>" — both 64-bit hex (the raw-body-hash map). Malformed → degrade + skip.
         const auto readHashMap = [ & ]( gtl::btree_map<std::uint64_t, std::uint64_t>& m, const char* what )
         { std::uint64_t h = 0, v = 0; is >> std::hex >> h >> v;
-          if( is.fail() ) { DEGRADED_PATH_ALERT( what ); ++stats.badLines; return; } m[h] = v; };
+          if( is.fail() ) { DISCLOSE( what ); ++stats.badLines; return; } m[h] = v; };
 
-        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs" )
+        if( kind == "ccx" || kind == "loc" || kind == "nest" || kind == "params" || kind == "mask" || kind == "body" || kind == "clone" || kind == "dead" || kind == "api" || kind == "head" || kind == "defs"
+         || kind == "producer" )
         {
             ++recognizedLineCount;                                    // structure seen — this file IS a baseline
         }
@@ -4050,11 +4242,15 @@ inline bool readBaseline( const std::string& path, Snapshot& out, BaselineReadSt
         {
             readSet( out.publicApi, "quality: malformed baseline api line skipped" );
         }
+        else if( kind == "producer" )
+        {
+            readProducerRecord( is, stats );
+        }
         // else: unknown kind (older/newer format) → skip silently, do not crash.
     }
     if( recognizedLineCount == 0 )
     {
-        DEGRADED_PATH_ALERT( "quality: baseline file is empty/unrecognizable — treating it as absent" );
+        DISCLOSE( "quality: baseline file is empty/unrecognizable — treating it as absent" );
         stats.unrecognizable = true;
         out = Snapshot{};
         return false;
@@ -4110,7 +4306,7 @@ inline std::string readBaselineHeadSha( const std::string& path )
             {
                 return sha;
             }
-            DEGRADED_PATH_ALERT( "quality: baseline head stamp is not a bare commit sha — ignoring the pin" );
+            DISCLOSE( "quality: baseline head stamp is not a bare commit sha — ignoring the pin" );
             return {};
         }
     }
@@ -4178,13 +4374,26 @@ inline std::size_t readBaselineAbsorbed( const std::string& path )
 // Both cases are recorded ONLY in the `baseline=`/`"baseline"` marker — no stderr spam, which is the B10.1b
 // noise fix that survives the ruling intact.
 //
-// NON-GIT ROOTS are unaffected: `gitHeadSha` returns "" and an unstamped sidecar's pin reads "", so ""=="" and
-// the sidecar is honored — the only floor such a tree can have (there is no HEAD to fall back to).
+// NON-GIT ROOTS: `gitHeadSha` returns "" and an unstamped sidecar's pin reads "", so ""=="" and the sidecar is
+// honored — the only floor such a tree can have (there is no HEAD to fall back to) — provided THIS build pinned it.
+//
+// THE PRODUCER RULE (v6, 2026-09-16) — the head stamp's twin, for the other thing a floor depends on. A sidecar's
+// `dead` records are a function of CALL RESOLUTION, so at one HEAD a floor pinned by one build and a working tree
+// judged by another disagreed about which symbols had callers. Measured with two real builds (the std::-qualified
+// call guard on and off) over one fixture: a gating dead-code row on an untouched symbol (exit 2 where the same
+// build reports 0), and in the other direction a real gating regression hidden (exit 0 where the same build
+// reports 2). The qsnap cache had the same defect (producerIdentity); this is the file a user writes on purpose.
+// So the sidecar is honored only when its `producer` record equals this build's identity, and one that does not
+// is FOREIGN. Its policy differs from Stale's on purpose: a stale pin can never describe this HEAD again, while
+// a foreign one is still the right floor for the build that wrote it (a PATH binary and ./build/ripwire in turn),
+// so NEITHER arm deletes it. Demoting the dead-code rows instead of falling back was weighed and rejected: it
+// cannot un-hide a regression whose row never appears, and a different build can compute any kind differently.
 enum class BaselineSource : std::uint8_t
 {
-    Sidecar = 0,      // a readable sidecar pinned at the CURRENT HEAD sha (or a non-git root) — honored as the floor
+    Sidecar = 0,      // a readable sidecar pinned at the CURRENT HEAD sha (or a non-git root) by THIS build — honored as the floor
     Stale   = 1,      // a readable sidecar pinned at ANY other sha — dropped (R3); the caller falls back to git HEAD
     Absent  = 2,      // no readable sidecar (missing, or empty/unrecognizable per readBaseline) — caller falls back
+    Foreign = 3,      // a readable sidecar pinned at the CURRENT HEAD by ANOTHER build (or unstamped) — ignored, never removed; caller falls back
 };
 
 // The seam's answer. `snapshot` carries the pinned floor and is EMPTY unless `source == Sidecar`; `marker` is
@@ -4206,23 +4415,41 @@ struct BaselineSelection
 
     bool isSidecarHonored() const noexcept { return source == BaselineSource::Sidecar; }
     bool isSidecarStale()   const noexcept { return source == BaselineSource::Stale; }
+    bool isSidecarForeign() const noexcept { return source == BaselineSource::Foreign; }
     // "the stale pin is STILL sitting there" — true on the read-only arm, and on the CLI arm when the unlink
     // failed. This is the predicate a caller's user-facing wording must branch on (never `removeStaleFile`).
     bool isStaleFileOnDisk() const noexcept { return source == BaselineSource::Stale && !staleFileRemoved; }
 };
 
+// A readable sidecar pinned at the CURRENT HEAD: the floor for the build that pinned it, FOREIGN to every other (the
+// producer rule — see BaselineSource). Asked only once the head matches, because a pin at another sha is stale for
+// EVERY build, and the stale verdict and its self-heal take precedence. A foreign pin is never unlinked, on either arm.
+inline BaselineSelection selectPinnedAtHead( BaselineSelection sel, std::string_view producer )
+{
+    if( producer == producerIdentity() )
+    {
+        sel.source = BaselineSource::Sidecar;
+        sel.marker = "sidecar";
+        return sel;
+    }
+    sel.snapshot = Snapshot{};
+    sel.source   = BaselineSource::Foreign;
+    sel.marker   = "git-HEAD (foreign sidecar ignored)";
+    return sel;
+}
+
 // Read `sidecarPath` and decide whether it is still a valid floor for `root`'s CURRENT HEAD. `removeStaleFile`
 // = the CLI's self-heal policy: a best-effort unlink of a stale sidecar. The unlink can FAIL (read-only parent
 // dir, permissions, a racing sibling run) and the marker then tells the truth about the DISK rather than the
 // intent — "git-HEAD (stale sidecar ignored)", the same honest string the read-only arm uses, because
-// ignored-not-removed is exactly what happened — plus one DEGRADED_PATH_ALERT so the plain build can observe
+// ignored-not-removed is exactly what happened — plus one DISCLOSE so the plain build can observe
 // the degrade. `staleFileRemoved` carries the same fact to the caller, which needs it to word its own fatal
 // message (a "no <file>" message is false while the file is still on disk). `sidecarPath` must already be
 // ROOT-QUALIFIED by the caller (baselinePath) — this function can DELETE it, and a bare relative name would
 // resolve against the process CWD (D1).
 inline BaselineSelection selectBaseline( const std::string& root, const std::string& sidecarPath, bool removeStaleFile )
 {
-    VERIFY( !sidecarPath.empty() );
+    ASSUME( !sidecarPath.empty() );
 
     BaselineSelection sel;
     BaselineReadStats readStats;
@@ -4239,7 +4466,7 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
             sel.sidecarSymlinkRefused = true;
             sel.marker                = "git-HEAD (symlinked sidecar refused)";
         }
-        else if( readStats.present && ( readStats.unrecognizable || readStats.preQ1 ) )
+        else if( readStats.present && ( readStats.unrecognizable || readStats.olderFormat || readStats.preQ1 ) )
         {
             sel.sidecarUnreadable = true;                      // 2026-09-06: never "no sidecar existed" about a file that is right there
             sel.marker            = "git-HEAD (sidecar unreadable)";
@@ -4254,9 +4481,7 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
     const std::string headSha   = gitHeadSha( root );
     if( pinnedSha == headSha )
     {
-        sel.source = BaselineSource::Sidecar;
-        sel.marker = "sidecar";
-        return sel;
+        return selectPinnedAtHead( std::move( sel ), readStats.producer );
     }
 
     // Stale. The DEFAULT marker is the read-only truth ("ignored") and the self-heal upgrades it to "removed"
@@ -4288,11 +4513,11 @@ inline BaselineSelection selectBaseline( const std::string& root, const std::str
         // today — but the alert itself should not assert a fallback that does not exist.
         else if( headSha.empty() )
         {
-            DEGRADED_PATH_ALERT( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; this tree has no git HEAD to fall back to either, so this run has no baseline floor at all" );
+            DISCLOSE( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; this tree has no git HEAD to fall back to either, so this run has no baseline floor at all" );
         }
         else
         {
-            DEGRADED_PATH_ALERT( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; the baseline still falls back to git HEAD" );
+            DISCLOSE( "quality: could not unlink the stale .ripwire_quality_baseline sidecar — it STAYS on disk and is merely IGNORED this run; the baseline still falls back to git HEAD" );
         }
     }
     return sel;
@@ -4379,7 +4604,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
     {
         return;
     }
-    const std::string cmd = "git -c core.quotepath=false" + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false" ) + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
                           + " blame --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
                           + " HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
@@ -4453,10 +4678,10 @@ using DiffHunkMemo = HashMap<std::string, std::vector<DiffHunk>>;
 inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const std::string& relPath )
 {
     std::vector<DiffHunk> hunks;
-    const std::string cmd = "git -c core.quotepath=false -c diff.algorithm=myers -C " + shSingleQuote( root )
+    const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
                           + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = popen( cmd.c_str(), "r" );
-    if( !pipe ) { DEGRADED_PATH_ALERT( "quality: churn hunk diff could not be spawned" ); return hunks; }
+    if( !pipe ) { DISCLOSE( "quality: churn hunk diff could not be spawned" ); return hunks; }
 
     char buf[ 4096 ];
     while( std::fgets( buf, sizeof( buf ), pipe ) )
@@ -4999,7 +5224,7 @@ inline std::string normalizeLegacyAckKind( const std::string& kind, std::uint32_
 // different language, and a caller that rejects the value restores `reason` itself.
 inline bool takeAckNamedToken( std::string& reason, std::string_view name, std::string& valueOut )
 {
-    VERIFY_NO_ALIAS( reason, valueOut );
+    ASSUME_NO_ALIAS( reason, valueOut );
     if( reason.size() < name.size() || reason.compare( 0, name.size(), name ) != 0 )
     {
         return false;
@@ -5026,7 +5251,7 @@ inline std::uint64_t takeAckCidPrefix( std::string& reason )
     const auto v    = std::strtoull( hex.c_str(), &stop, 16 );
     if( hex.empty() || stop == nullptr || *stop != '\0' )
     {
-        DEGRADED_PATH_ALERT( "quality: unparseable cid= on an ack line — kept as reason text, content identity unavailable for that row" );
+        DISCLOSE( "quality: unparseable cid= on an ack line — kept as reason text, content identity unavailable for that row" );
         reason = untouched;
         return 0;
     }
@@ -5048,7 +5273,7 @@ inline std::string takeAckByPrefix( std::string& reason )
     }
     if( val.empty() || !scopeSpecIsSpellable( val ) )
     {
-        DEGRADED_PATH_ALERT( "quality: unspellable by= on an ack line — kept as reason text, provenance unavailable for that row" );
+        DISCLOSE( "quality: unspellable by= on an ack line — kept as reason text, provenance unavailable for that row" );
         reason = untouched;
         return {};
     }
@@ -5093,13 +5318,13 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 {
     badLines = 0;
     gtl::btree_map<std::string, AckRecord> out;
-    std::ifstream f( path );
-    if( !f )
-    {
-        return out;
-    }
-    std::string line;
-    while( std::getline( f, line ) )
+    // openRegularFileStream, not a stream opened on the name: a FIFO planted at the ledger's name blocked that open until
+    // a writer appeared, so --quality-delta hung before any output, and a link to /dev/zero never reached end of file.
+    // Anything that is not a regular file now reads as no ledger, and stderr says so (docparse.h). Still one line at a
+    // time, as the std::ifstream it replaces read it: a large ledger is never held whole.
+    rw::pathguard::NoFollowRead ledger = docparse::detail::openRegularFileStream( "the quality-acks ledger", path );
+    std::string                 line;
+    while( ledger.readLine( line ) )
     {
         while( !line.empty() && ( line.back() == '\r' || line.back() == '\n' ) )
         {
@@ -5114,7 +5339,7 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
         std::uint64_t key = 0;
         std::uint32_t ackNow = 0;
         is >> tag >> kind >> std::hex >> key >> std::dec >> ackNow;
-        if( tag != "ack" || is.fail() ) { DEGRADED_PATH_ALERT( "quality: malformed ack line skipped" ); ++badLines; continue; }
+        if( tag != "ack" || is.fail() ) { DISCLOSE( "quality: malformed ack line skipped" ); ++badLines; continue; }
         kind = normalizeLegacyAckKind( kind, ackNow );               // P0.3 migration — see the note at ackKindToken
         std::string reason;
         std::getline( is, reason );
@@ -5178,7 +5403,7 @@ inline gtl::btree_map<std::string, AckRecord> readAckRecords( const std::string&
 //
 // WHY THE WAIT IS LONG. The critical section spans a whole delta computation (seconds, cold), not a splice,
 // so mcpedit's ~200 ms budget would time out on essentially every real contention and degrade straight back
-// into the bug. 60 s of 10 ms polls, then DEGRADED_PATH_ALERT and proceed lock-free: the pre-fix behavior is
+// into the bug. 60 s of 10 ms polls, then DISCLOSE and proceed lock-free: the pre-fix behavior is
 // the floor, never a hang. flock is released by the kernel when the fd closes, so a crashed peer cannot
 // wedge the ledger.
 //
@@ -5208,7 +5433,7 @@ struct SidecarWriteLock
         fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
         if( fd < 0 )
         {
-            DEGRADED_PATH_ALERT( "quality: ack-ledger lockfile open failed; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
+            DISCLOSE( "quality: ack-ledger lockfile open failed; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
             return;
         }
         for( int waitedMs = 0; ; waitedMs += 10 )
@@ -5223,7 +5448,7 @@ struct SidecarWriteLock
         }
         if( !locked )
         {
-            DEGRADED_PATH_ALERT( "quality: ack-ledger lock contended past the wait budget; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
+            DISCLOSE( "quality: ack-ledger lock contended past the wait budget; proceeding lock-free (a concurrent --quality-ack can lose rows)" );
         }
     }
 
@@ -5286,7 +5511,7 @@ inline bool writeAckRecords( const std::string& path, const gtl::btree_map<std::
     // concurrent run in eight left a single stray character on its own line in the committed ledger.
     if( !atomicWriteFile( path, renderAckRecords( acks ) ) )
     {
-        DEGRADED_PATH_ALERT( "quality: cannot write acks file" );
+        DISCLOSE( "quality: cannot write acks file" );
         return false;
     }
     return true;
@@ -6294,7 +6519,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              std::size_t* registerMacroExcludedOut = nullptr,   // P2.2: honest disclosure count, additive+optional — see isDeadCandidate
                                              std::size_t* apiNewSurfaceOut = nullptr )          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
 {
-    VERIFY_TEXT( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
+    ASSUME( registerMacroExcludedOut == nullptr || registerMacroExcludedOut != apiNewSurfaceOut,
                  "computeDelta: registerMacroExcludedOut and apiNewSurfaceOut must be distinct" );   // both default to nullptr, so the object form would dereference null
     std::vector<Regression> regs;
     if( registerMacroExcludedOut )
@@ -6382,7 +6607,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     const bool originOracleOk = !base.locBySym.empty() || baselineIsWhollyEmpty;
     if( !originOracleOk )
     {
-        DEGRADED_PATH_ALERT( "quality: baseline has no per-symbol loc map (pre-Q1 format) — origin unclassifiable, gating every finding" );
+        DISCLOSE( "quality: baseline has no per-symbol loc map (pre-Q1 format) — origin unclassifiable, gating every finding" );
     }
 
     const auto existedAtBaseline = [ & ]( std::uint64_t symKey )
@@ -6421,7 +6646,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // relForHash spelling every sidecar key already uses) + the symbol's own 1-based start line.
     const auto stampLoc = [ & ]( NodeId i )
     {
-        VERIFY( !regs.empty() );
+        ASSUME( !regs.empty() );
         if( i >= ing.symbols.size() )
         {
             return; // degrade: no locator rather than a wrong one
@@ -6646,7 +6871,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
             bool allTestScript = !cg.members.empty();
             for( NodeId m : cg.members )
             {
-                if( m >= ing.symbols.size() || !isTestScriptPath( ing.files[ ing.symbols[m].fileId ] ) ) { allTestScript = false; break; }
+                if( m >= ing.symbols.size() || !isTestScriptPath( rootRelPath( ing, ing.symbols[m].fileId ) ) ) { allTestScript = false; break; }
             }
             if( allTestScript )
             {
@@ -6900,7 +7125,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                 std::vector<std::uint8_t> fixtureByFile( ing.files.size(), 0 );
                 for( std::uint32_t f = 0; f < ing.files.size(); ++f )
                 {
-                    fixtureByFile[f] = isFixturePath( ing.files[f] ) ? 1 : 0;
+                    fixtureByFile[f] = isFixturePath( rootRelPath( ing, f ) ) ? 1 : 0;
                 }
 
                 // B10.2d — SELF-vs-AMBIENT window cutoff, same basis as gates 1/3 (HEAD's own committer epoch

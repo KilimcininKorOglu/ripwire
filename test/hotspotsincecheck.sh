@@ -9,7 +9,7 @@
 #   --hotspots --since="2 weeks ago" -> window="2 weeks ago" but the header comment still said (window=12mo)
 #
 # A false NON-zero: the churn numbers are real, the window they are labelled with is not, and the only
-# honest signal was a DEGRADED_PATH_ALERT on stderr — invisible to every MCP client.
+# honest signal was a DISCLOSE on stderr — invisible to every MCP client.
 #
 #   RIPWIRE_BIN=build/ripwire      bash test/hotspotsincecheck.sh
 #   RIPWIRE_BIN=build_base/ripwire bash test/hotspotsincecheck.sh   # must FAIL (pre-fix binary)

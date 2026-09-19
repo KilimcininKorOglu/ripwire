@@ -99,6 +99,13 @@ struct LexTermEvidence
     std::size_t                maskWords   = 0;
     std::size_t                symbolCount = 0;
 
+    // input blow-up disclosure (dedupeQueryTerms / kMaxUniqueQueryTerms): terms.size() is the KEPT unique
+    // term count; termsSeenTotal is every distinct term the query actually contained. Equal unless the
+    // query was capped, in which case termsCapped is true and terms.size() < termsSeenTotal — the header
+    // must say so rather than let a truncated term list read as a complete one.
+    std::size_t                termsSeenTotal = 0;
+    bool                       termsCapped    = false;
+
     const std::uint64_t* anyMaskOf( std::size_t sym ) const noexcept { return anyMask.data() + sym * maskWords; }
     static bool          hasBit( const std::uint64_t* mask, std::size_t u ) noexcept { return ( mask[ u / 64 ] >> ( u % 64 ) ) & 1u; }
 
@@ -214,6 +221,77 @@ inline Bm25Params resolveBm25Params() noexcept
 inline double bm25ImpactBound( double idf, double T, const Bm25Params& p ) noexcept
 {
     return idf * ( T * ( p.k1 + 1.0 ) ) / ( T + p.k1 * ( 1.0 - p.b ) ) * ( 1.0 + 1e-9 );
+}
+
+// ── input blow-up guard: bound the UNIQUE term count a query can spend on tfFlat's S×terms allocation ────
+// --for/--pack-task's task string is agent-supplied text, not a hand-typed query — an agent can (and one
+// round did) paste a whole file/log/issue body. A 480 KB task string measured 5.2 GB RSS in ONE tfFlat
+// allocation (S symbols × that many unique query terms × 4 bytes) before this guard existed: a single
+// request pushed the process past the host's memory ceiling. Deduping to unique terms (below) was ALREADY
+// correct — the gap was that "unique" had no ceiling of its own, so a query with little internal repetition
+// (natural-language prose, a pasted diff, a stack trace) stayed as big as the input.
+//
+// The longest REAL --for/--pack-task query on record in this repo (grep -rhoE -- '--for="[^"]{1,}"'
+// bench/ docs/, ranked by word count) is 10 words: "per connection state that holds the active
+// transaction and query" (docs/EVALS.md). This cap sits at ~102× that — the owner's "caps are blow-up
+// guards, not budgets to hug; set them at the pathological tail, not the typical case" ruling (memory
+// owner-quality-first-caps-are-blowup-guards.md) — so an ordinary task description, even an unusually long
+// one, never meets it; only a pathological paste does.
+inline constexpr std::size_t kMaxUniqueQueryTerms = 1024;
+
+// The historical dedupe (first-wins index into the unique-term list, one df/tf row per unique term, every
+// OCCURRENCE still contributing once via uniqueIndexOfQtok), now capped at maxUnique. Byte-identical to the
+// uncapped dedupe for any query with <= maxUnique unique terms — every real query on record clears that by
+// a wide margin — so this only ever changes behaviour on the tail the cap exists for. A term seen after the
+// cap fills gets kDroppedTerm: it owns no tf row, so it scores like any subtoken absent from the match
+// table (zero contribution) rather than growing the S×terms allocation further. Disclosed via .capped /
+// .uniqueSeenTotal so a truncated query never reads as a complete one.
+struct DedupedQueryTerms
+{
+    static constexpr std::size_t kDroppedTerm = std::size_t( -1 );
+
+    std::vector<std::string> uniqueToks;                // size() <= maxUnique passed to dedupeQueryTerms
+    std::vector<std::size_t> uniqueIndexOfQtok;          // one entry per input token; kDroppedTerm past the cap
+    std::size_t              uniqueSeenTotal = 0;        // every DISTINCT term seen, kept or dropped — exact, never an occurrence count
+    bool                     capped          = false;    // uniqueSeenTotal > uniqueToks.size()
+};
+
+inline DedupedQueryTerms dedupeQueryTerms( const std::vector<std::string>& qToks, std::size_t maxUnique )
+{
+    DedupedQueryTerms out;
+    out.uniqueIndexOfQtok.resize( qToks.size() );
+    out.uniqueToks.reserve( std::min( qToks.size(), maxUnique ) );
+    // The spellings the cap DROPPED, so a repeat of one is not counted as a new distinct term (the kept-terms scan
+    // below only sees what was kept: every repeat of a dropped term used to miss it and count again, turning the
+    // disclosed terms_total into an occurrence count — CodeRabbit on #277). Views into qToks, which outlives the
+    // loop, so the set costs no copy and never holds more entries than the query has tokens: no memory beyond the
+    // input already in hand, and O(1) per dropped token where the capped linear scan stays bounded by maxUnique.
+    ankerl::unordered_dense::set<std::string_view> droppedSpellings;
+    for( std::size_t qi = 0; qi < qToks.size(); ++qi )
+    {
+        const auto found = std::find( out.uniqueToks.begin(), out.uniqueToks.end(), qToks[qi] );
+        if( found != out.uniqueToks.end() )
+        {
+            out.uniqueIndexOfQtok[qi] = std::size_t( found - out.uniqueToks.begin() );
+            continue;
+        }
+        if( out.uniqueToks.size() < maxUnique )
+        {
+            ++out.uniqueSeenTotal;                        // a genuinely new distinct term, kept
+            out.uniqueIndexOfQtok[qi] = out.uniqueToks.size();
+            out.uniqueToks.push_back( qToks[qi] );
+        }
+        else
+        {
+            out.uniqueIndexOfQtok[qi] = DedupedQueryTerms::kDroppedTerm;
+            out.capped               = true;
+            if( droppedSpellings.insert( std::string_view( qToks[qi] ) ).second )
+            {
+                ++out.uniqueSeenTotal;                    // a genuinely new distinct term, dropped — counted once
+            }
+        }
+    }
+    return out;
 }
 
 // BM25 score of `query` against each symbol's doc (name subtokens + callees' names + DOC-COMMENT & BODY
@@ -413,19 +491,13 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
     }
 
     // dedupe to the unique terms whose statistics we need — a duplicated query word must not double-count
-    // tf, but still contributes once PER OCCURRENCE in the scoring loop (uniqueIndexOfQtok maps back)
-    std::vector<std::string> uniqueToks;
-    std::vector<std::size_t> uniqueIndexOfQtok( qToks.size() );
-    for( std::size_t qi = 0; qi < qToks.size(); ++qi )
-    {
-        const auto found      = std::find( uniqueToks.begin(), uniqueToks.end(), qToks[qi] );
-        uniqueIndexOfQtok[qi] = std::size_t( found - uniqueToks.begin() );
-        if( found == uniqueToks.end() )
-        {
-            uniqueToks.push_back( qToks[qi] );
-        }
-    }
-    const std::size_t uniqueCount = uniqueToks.size();
+    // tf, but still contributes once PER OCCURRENCE in the scoring loop (uniqueIndexOfQtok maps back) —
+    // capped (see dedupeQueryTerms above) so a pathologically term-rich query cannot blow up tfFlat's S×terms
+    // allocation below.
+    DedupedQueryTerms         dedup = dedupeQueryTerms( qToks, kMaxUniqueQueryTerms );
+    std::vector<std::string>& uniqueToks         = dedup.uniqueToks;
+    std::vector<std::size_t>& uniqueIndexOfQtok  = dedup.uniqueIndexOfQtok;
+    const std::size_t         uniqueCount        = uniqueToks.size();
 
     // ── LB-3 arm S: conservative query-side stem variants ─────────────────────────────────────────────
     // A plural/participle query token ("splits", "resolved", "hoisting") cannot exact-match the singular
@@ -932,7 +1004,7 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
             }
         };
         std::atomic<std::size_t> nextFileIndex { 0 };
-        const auto               fileWorker = [ & ]
+        const auto               fileWorker = [ & ]() noexcept
         {
             try
             {
@@ -1043,6 +1115,8 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
     // — one S×U integer scan, the same "tf > 0" fact dfreq counts in both scoring branches below.
     if( evidenceOut )
     {
+        evidenceOut->termsSeenTotal = dedup.uniqueSeenTotal;
+        evidenceOut->termsCapped    = dedup.capped;
         evidenceOut->terms.assign( uniqueToks.begin(), uniqueToks.end() );
         evidenceOut->df.assign( uniqueCount, 0u );
         evidenceOut->anyMask.assign( S * evidenceWords, 0u );
@@ -1224,6 +1298,10 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
             std::vector<int> occCount( uniqueCount, 0 );
             for( std::size_t qi = 0; qi < qToks.size(); ++qi )
             {
+                if( uniqueIndexOfQtok[qi] == DedupedQueryTerms::kDroppedTerm )
+                {
+                    continue;               // capped past kMaxUniqueQueryTerms — owns no row, no contribution
+                }
                 ++occCount[uniqueIndexOfQtok[qi]];
             }
             for( std::size_t u = 0; u < uniqueCount; ++u )
@@ -1272,6 +1350,10 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
             for( std::size_t qi = 0; qi < qToks.size(); ++qi )
             {
                 const std::size_t u  = uniqueIndexOfQtok[qi];
+                if( u == DedupedQueryTerms::kDroppedTerm )
+                {
+                    continue;               // capped past kMaxUniqueQueryTerms — owns no row, no contribution
+                }
                 const int         tf = tfRow[u];
                 if( tf == 0 || termKept[u] == 0 )
                 {
@@ -1329,6 +1411,10 @@ inline std::vector<float> lexicalScoresTiered( const IngestResult& ing, const st
         for( std::size_t qi = 0; qi < qToks.size(); ++qi )
         {
             const std::size_t u  = uniqueIndexOfQtok[qi];
+            if( u == DedupedQueryTerms::kDroppedTerm )
+            {
+                continue;                   // capped past kMaxUniqueQueryTerms — owns no row, no contribution
+            }
             const int         tf = tfFlat[ i * uniqueCount + u ];
             if( tf == 0 || termKept[u] == 0 )
             {
@@ -1407,19 +1493,12 @@ inline std::vector<float> lexicalScoresNameExactTiered( const IngestResult& ing,
         return std::vector<float>( S, 0.f );
     }
 
-    // dedupe to unique terms (one df/tf statistic each); each occurrence still contributes in the loop
-    std::vector<std::string> uniqueToks;
-    std::vector<std::size_t> uniqueIndexOfQtok( qToks.size() );
-    for( std::size_t qi = 0; qi < qToks.size(); ++qi )
-    {
-        const auto found      = std::find( uniqueToks.begin(), uniqueToks.end(), qToks[qi] );
-        uniqueIndexOfQtok[qi] = std::size_t( found - uniqueToks.begin() );
-        if( found == uniqueToks.end() )
-        {
-            uniqueToks.push_back( qToks[qi] );
-        }
-    }
-    const std::size_t uniqueCount = uniqueToks.size();
+    // dedupe to unique terms (one df/tf statistic each); each occurrence still contributes in the loop —
+    // capped (dedupeQueryTerms, kMaxUniqueQueryTerms above) against the same S×terms blow-up.
+    DedupedQueryTerms         dedup               = dedupeQueryTerms( qToks, kMaxUniqueQueryTerms );
+    std::vector<std::string>& uniqueToks          = dedup.uniqueToks;
+    std::vector<std::size_t>& uniqueIndexOfQtok   = dedup.uniqueIndexOfQtok;
+    const std::size_t         uniqueCount         = uniqueToks.size();
 
     // per-doc integer stats (SoA): dl[i] = whole-name token count (1, or 2 with a scope), tfFlat = weighted tf
     std::vector<int> dl( S, 0 );
@@ -1518,6 +1597,10 @@ inline std::vector<float> lexicalScoresNameExactTiered( const IngestResult& ing,
         for( std::size_t qi = 0; qi < qToks.size(); ++qi )
         {
             const std::size_t u  = uniqueIndexOfQtok[qi];
+            if( u == DedupedQueryTerms::kDroppedTerm )
+            {
+                continue;                   // capped past kMaxUniqueQueryTerms — owns no row, no contribution
+            }
             const int         tf = tfFlat[ i * uniqueCount + u ];
             if( tf == 0 )
             {
@@ -1832,7 +1915,7 @@ inline std::string routeAnchorEvidence( const IngestResult& ing, const HashMap<s
     {
         return "syntax";                               // carrier-only entries count commonness, they name nothing
     }
-    std::string evidence = routeAnchorPath( ing.files[at->second.fileId] );
+    std::string evidence = routeAnchorPath( rootRelPath( ing, at->second.fileId ) );   // #228: "/.../x.h" was every absolute root's anchor
     if( at->second.extraDefs != 0 )
     {
         evidence += "+" + std::to_string( at->second.extraDefs );
