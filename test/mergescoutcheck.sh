@@ -506,8 +506,9 @@ rm -rf "$PERFTMP" "$PERF_ISOTMP"
 # materializeCommitTree (quality.h) returns no tree when `git archive` fails. indexCommittish used to hand back an EMPTY
 # index for it, and computeNamedArm diffed the other side against that under ok="1": every symbol on the base side
 # reported as the arm's own work (base_fn below). The tree's DISCLOSE sink now marks the index unavailable and the arm's
-# sink refuses it — ok="0" changed="0", the unrelated-history shape. The fault is a PATH shim around the real git that
-# fails `git archive <lane tip>` — a seam that reaches the Release binary too. Control: the pass-through shim.
+# sink refuses it — ok="0" reason="tree_unavailable" changed="0", disclosed in-band on the row itself (T9,
+# 2026-09-19), not only on stderr. The fault is a PATH shim around the real git that fails `git archive <lane
+# tip>` — a seam that reaches the Release binary too. Control: the pass-through shim.
 TU="$TMP/treeunavail"; mkdir -p "$TU/repo" "$TU/shim" "$TU/cache"
 tu(){ git -C "$TU/repo" "$@" >/dev/null 2>&1; }
 tu init -q -b main; tu config user.email t@t; tu config user.name t; tu config commit.gpgsign false
@@ -529,9 +530,9 @@ PATH="$TU/shim:$PATH" TMPDIR="$TU/cache" XDG_CACHE_HOME="$TU/cache" RW_SHIM_MANG
 TUCTL="$( grep -o '<arm ref="lane"[^>]*>' "$TU/ctl.xml" )"; TUMUT="$( grep -o '<arm ref="lane"[^>]*>' "$TU/mut.xml" )"
 if printf '%s' "$TUCTL" | grep -q 'ok="1" changed="1"'; then
     ok "tree unavailable (control): the pass-through shim scouts the lane — ok=\"1\" changed=\"1\" (lane_fn)"
-    printf '%s' "$TUMUT" | grep -q 'ok="0" changed="0"' \
-        && ok "tree unavailable: an arm whose tree git could not archive is refused — ok=\"0\" changed=\"0\", nothing fabricated" \
-        || no "tree unavailable: the arm was diffed against an EMPTY tree — $TUMUT (the base's own symbols reported as the arm's work)"
+    printf '%s' "$TUMUT" | grep -q 'ok="0" reason="tree_unavailable" changed="0"' \
+        && ok "tree unavailable: an arm whose tree git could not archive is refused — ok=\"0\" reason=\"tree_unavailable\" changed=\"0\", nothing fabricated, reason disclosed in-band" \
+        || no "tree unavailable: the arm was diffed against an EMPTY tree, or the reason= disclosure is missing — $TUMUT (the base's own symbols reported as the arm's work)"
 else
     no "tree unavailable (control): the pass-through shim did not scout the lane as ok=1 changed=1 — the arm is void: $TUCTL"
 fi
