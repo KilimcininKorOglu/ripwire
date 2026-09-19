@@ -2115,6 +2115,20 @@ records a local binding, and the local-shadow veto refuses the member; a fixture
 floor are red on the previous commit. The refusals were each shown red on a mutated build: counting only typed
 members as declared reds w6 and w7, taking the first declaring base reds w8, and probing a level the cap cut instead of refusing reds w10w.
 
+### Changed — ingest releases each raw-fact family as soon as its last consumer has run
+
+Ingest used to hold every raw-fact container until the end of the run, so the peak held all of them at once. They
+are now released as soon as their last consumer has run: the parse cache map, `refOrder`, the raw references,
+definitions, bindings and route uses, the field definitions, the `DefSpanIndex`, and the parse pool's per-thread
+fact vectors. It is a body-only change; no signature moves and no output changes.
+
+Measured on an llvm + clang checkout (10,266 files, 8,837 of them C/C++, 644 MB), `--no-cache`, five runs per binary:
+peak RSS went from 2,380–2,476 MiB to 2,223–2,248 MiB. The two ranges do not overlap; the drop averages about
+174 MiB (7%). This is a subset of the full llvm-project monorepo, which was not re-measured. Output was byte-identical
+in 14 of 14 comparisons (cold and warm map and `--for`, on that corpus and on this repository). No gate guards it:
+peak memory is recorded as a measurement, not enforced as a budget. Split out of #44 (native Windows port).
+Thanks to @lennix1337.
+
 ### Fixed — `readFilePrefix` reported success on a prefix a read error had truncated
 
 `readFilePrefix` reads the first `maxBytes` of a file for the prewarm grammar-sniffing heuristics (the ObjC-header
