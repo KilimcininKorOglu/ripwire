@@ -1892,13 +1892,7 @@ struct ForEnrichmentPlan
 // Every input the decision needs, so the CALLER states facts and this function does the deciding — the
 // alternative (a caller-side `autoBundleMode && conceptualRoute && !cfg.autoBodies`) puts the rule in the
 // one function in this file that can least afford another branch.
-// L1 (2026-09-19): legendBytes is the legend THIS DIALECT puts on the header (appendCompactForLegend's hops/bodies
-// clause under --legend=compact, the full enrichment legend otherwise). It was the full legend's size in both, and the
-// sig ledger subtracts it from the emitted header as an exemption — so under compact it subtracted ~450 B the header
-// never carried, handed them to <sigs>, and a budgeted compact bundle shipped over its ceiling with over_ceiling="1"
-// (fornotesbudgetcheck at --token-budget=1100: est_tokens=1272; forrootlegendcheck at 850: 1120). Latent while
-// compact was opt-in; the default since L1. The same exemption rule the confidence/tail/route clauses follow above.
-inline ForEnrichmentPlan planForEnrichment( bool autoBundleMode, bool conceptualRoute, bool autoBodiesFlag, bool compactLegendOn )
+inline ForEnrichmentPlan planForEnrichment( bool autoBundleMode, bool conceptualRoute, bool autoBodiesFlag )
 {
     if( !autoBundleMode )
     {
@@ -1906,9 +1900,25 @@ inline ForEnrichmentPlan planForEnrichment( bool autoBundleMode, bool conceptual
     }
     if( conceptualRoute && !autoBodiesFlag )
     {
-        return ForEnrichmentPlan{ true, false, compactLegendOn ? kForCompactLegendHops.size() : kForCompactBundleLegend.size(), kCompactAttrReserve };
+        return ForEnrichmentPlan{ true, false, kForCompactBundleLegend.size(), kCompactAttrReserve };
     }
-    return ForEnrichmentPlan{ false, true, compactLegendOn ? kForCompactLegendBodies.size() : kForAutoBundleLegend.size(), kAutoAttrReserve };
+    return ForEnrichmentPlan{ false, true, kForAutoBundleLegend.size(), kAutoAttrReserve };
+}
+
+// L1 (2026-09-19): the enrichment legend THIS DIALECT puts on the header — appendCompactForLegend's hops/bodies clause
+// under --legend=compact, the plan's full enrichment legend otherwise. The sig ledger subtracts it from the emitted
+// header as an exemption, and it used plan.legendBytes (the FULL size) in both dialects — so under compact it
+// subtracted ~450 B the header never carried, handed them to <sigs>, and a budgeted compact bundle shipped over its
+// ceiling with over_ceiling="1" (fornotesbudgetcheck at --token-budget=1100: est_tokens=1272; forrootlegendcheck at
+// 850: 1120). Latent while compact was opt-in; the default since L1. The same rule the confidence/tail/route
+// exemptions already follow: subtract what was EMITTED.
+inline std::size_t enrichmentLegendBytesEmitted( const ForEnrichmentPlan& plan, bool compactLegendOn ) noexcept
+{
+    if( !compactLegendOn || ( !plan.compact && !plan.autoBodies ) )
+    {
+        return plan.legendBytes;
+    }
+    return plan.compact ? kForCompactLegendHops.size() : kForCompactLegendBodies.size();
 }
 
 ForAutoBodiesResult buildForCompactHops( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
@@ -2319,7 +2329,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // --json returns before it below), so this mode is an XML-bundle fact only.
         const bool         autoBundleMode = cfg.detail == 0 && !cfg.signaturesOnly;
         // COMPACT conceptual serving (docs/EVALS.md, the T3 route-narrowing round) — see planForEnrichment.
-        const ForEnrichmentPlan plan = planForEnrichment( autoBundleMode, conceptualRoute, cfg.autoBodies, cfg.legend == "compact" );
+        const ForEnrichmentPlan plan = planForEnrichment( autoBundleMode, conceptualRoute, cfg.autoBodies );
         // NOT const: the enrichment block below may drop the LEGEND (autoBundle/compactBundle=false) and
         // rebuild the header without it — the ladder's later rebuilds read this struct through
         // buildForHeader and must honor that decision. Two distinct causes reach it: the chargeSection
@@ -2549,7 +2559,7 @@ std::optional<int> runForLens( const MainDispatch& d )
         // COMPACT: the same exemption, for whichever of the two legends is actually on the header — the
         // contract "the ranked map is byte-identical with and without the enrichment" has to hold for the
         // compact shape too, or the round would be changing signatures while claiming to change only bodies.
-        const std::size_t autoLegendBytes = plan.legendBytes;
+        const std::size_t autoLegendBytes = enrichmentLegendBytesEmitted( plan, cfg.legend == "compact" );
         // CONFIDENCE: the same exemption a third time, for the same reason as D2's adaptiveNote — the
         // disclosure's contract is DISCLOSURE ONLY, and charging its bytes made the default-budget compact
         // bundle drop a tail <d> row (measured on this repo's own src, the "rank symbols by pagerank"

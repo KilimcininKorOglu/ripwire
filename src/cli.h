@@ -4065,7 +4065,7 @@ inline constexpr std::string_view kDefaultLegendPosture = "compact";
 
 [[nodiscard]] inline bool isLegendPosture( std::string_view v ) noexcept
 {
-    return std::ranges::find( kLegendPostures, v ) != std::ranges::end( kLegendPostures );
+    return std::ranges::contains( kLegendPostures, v );
 }
 
 // The runs with no XML legend to shape: text/markdown/JSON-native answers, the runs that WRITE, and the servers.

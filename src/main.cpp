@@ -3612,6 +3612,50 @@ static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
 // fails. A capture that cannot be set up degrades to the full legend in both cases, disclosed on stderr.
 static_assert( rw::kCompactRepriceDensestBytesPerToken == rw::kMinBytesPerToken, "the compact reprice prices added markup at the densest rate the estimator knows" );
 
+// The captured run's answer, compacted and written — or, when the dialect cannot shape it, passed through (the DEFAULT
+// posture) or refused (an ASKED --legend=compact). `rc` is the run's own exit code, returned unchanged on every path that
+// emits the answer.
+static int finishCompactCapture( const rw::Config& cfg, std::string& doc, int rc )
+{
+    EXPECTS( cfg.legend == "compact", "only a compact-posture run is captured" );
+    if( doc.empty() )
+    {
+        return rc;   // a refusal (or an empty answer) — nothing to rewrite, the exit code says what happened
+    }
+    const auto emitCaptured = [&doc, rc]()
+    {
+        std::fwrite( doc.data(), 1, doc.size(), stdout );
+        std::fflush( stdout );
+        return rc;
+    };
+    // the DEFAULT posture shapes what it can and leaves the rest exactly as it was emitted (cfg.legendDefaulted);
+    // only an ASKED --legend=compact refuses an answer the dialect cannot shape
+    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
+    {
+        case rw::CompactOutcome::Rewritten:
+        case rw::CompactOutcome::AlreadyCompact:
+            return emitCaptured();
+        case rw::CompactOutcome::NotXml:
+            if( cfg.legendDefaulted )
+            {
+                return emitCaptured();
+            }
+            std::fputs( "ripwire: --legend=compact applies to the XML verbs only — this run's output carries no XML legend to compact "
+                        "(text/JSON/markdown); rerun with --legend=full (e.g. ripwire <dir> --callers=SYM --legend=compact)\n", stderr );
+            return 1;
+        case rw::CompactOutcome::UnknownRoot:
+            if( cfg.legendDefaulted )
+            {
+                return emitCaptured();
+            }
+            break;
+    }
+    const rw::CompactRootInfo root = rw::findCompactRoot( doc );
+    rw::emitTo( stderr, "ripwire: --legend=compact has no compact legend for this verb's root element <{}> yet — rerun with "
+                          "--legend=full (the full legend is the documented form; add the root to kCompactLegendSpecs to extend the dialect)\n", std::string_view( root.tag.data(), root.tag.size() ) );
+    return 1;
+}
+
 static int runWithCompactLegend( const rw::Config& cfg, char** argv )
 {
     EXPECTS( !cfg.legendDefaulted || cfg.legend == rw::kDefaultLegendPosture, "a defaulted posture is the registered default" );
@@ -3649,42 +3693,7 @@ static int runWithCompactLegend( const rw::Config& cfg, char** argv )
         doc.append( buf, got );
     }
     std::fclose( capture );
-    if( doc.empty() )
-    {
-        return rc;   // a refusal (or an empty answer) — nothing to rewrite, the exit code says what happened
-    }
-    const auto emitCaptured = [&doc, rc]()
-    {
-        std::fwrite( doc.data(), 1, doc.size(), stdout );
-        std::fflush( stdout );
-        return rc;
-    };
-    // the DEFAULT posture shapes what it can and leaves the rest exactly as it was emitted (cfg.legendDefaulted);
-    // only an ASKED --legend=compact refuses an answer the dialect cannot shape
-    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
-    {
-        case rw::CompactOutcome::Rewritten:
-        case rw::CompactOutcome::AlreadyCompact:
-            return emitCaptured();
-        case rw::CompactOutcome::NotXml:
-            if( cfg.legendDefaulted )
-            {
-                return emitCaptured();
-            }
-            std::fputs( "ripwire: --legend=compact applies to the XML verbs only — this run's output carries no XML legend to compact "
-                        "(text/JSON/markdown); rerun with --legend=full (e.g. ripwire <dir> --callers=SYM --legend=compact)\n", stderr );
-            return 1;
-        case rw::CompactOutcome::UnknownRoot:
-            if( cfg.legendDefaulted )
-            {
-                return emitCaptured();
-            }
-            break;
-    }
-    const rw::CompactRootInfo root = rw::findCompactRoot( doc );
-    rw::emitTo( stderr, "ripwire: --legend=compact has no compact legend for this verb's root element <{}> yet — rerun with "
-                          "--legend=full (the full legend is the documented form; add the root to kCompactLegendSpecs to extend the dialect)\n", std::string_view( root.tag.data(), root.tag.size() ) );
-    return 1;
+    return finishCompactCapture( cfg, doc, rc );
 }
 
 int main( int argc, char** argv )
