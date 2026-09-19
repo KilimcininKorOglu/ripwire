@@ -658,7 +658,12 @@ namespace mcpedit
         {
             const std::string lockPath = editLockPath( targetPath );
             fd = ::open( lockPath.c_str(), O_RDWR | O_CREAT, 0644 );
-            if( fd < 0 ) { DISCLOSE( "edit lockfile open failed; proceeding lock-free (re-check still guards)" ); return; }
+            if( fd < 0 )
+            {
+                DISCLOSE( Diagnostics::answerUnchanged, "the edit re-checks the file before its rename, which still refuses a stale write",
+                          "edit lockfile open failed; proceeding lock-free (re-check still guards)" );
+                return;
+            }
 
             // ~200 ms bounded acquire: 20 tries × 10 ms. If a peer holds it longer, degrade rather than hang —
             // the freshness re-check before rename is the correctness floor, the lock is only the fast path.
@@ -674,7 +679,8 @@ namespace mcpedit
             }
             if( !locked )
             {
-                DISCLOSE( "edit lock contended past timeout; proceeding lock-free (re-check still guards)" );
+                DISCLOSE( Diagnostics::answerUnchanged, "the edit re-checks the file before its rename, which still refuses a stale write",
+                          "edit lock contended past timeout; proceeding lock-free (re-check still guards)" );
             }
         }
 

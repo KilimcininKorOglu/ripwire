@@ -1886,7 +1886,8 @@ inline bool isReadableCacheBlob( const std::string& path ) noexcept
     const PathShape shape = shapeOfPath( path );
     if( shape == PathShape::Other )
     {
-        DISCLOSE( "ingest: cache path is not a regular file (directory/device/fifo) — cache treated as corrupt (full reparse)" );
+        DISCLOSE( Diagnostics::answerUnchanged, "a rejected cache is rebuilt from source: this run parses and answers byte-identically",
+                  "ingest: cache path is not a regular file (directory/device/fifo) — cache treated as corrupt (full reparse)" );
     }
     return shape == PathShape::RegularFile;
 }

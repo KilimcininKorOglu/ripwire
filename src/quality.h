@@ -3025,7 +3025,8 @@ inline bool qsnapCountFits( const char* p, const char* end, std::uint32_t count,
     {
         return true;
     }
-    DISCLOSE( "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
+    DISCLOSE( Diagnostics::answerUnchanged, "the rejected blob is recomputed from the tree: same answer, slower",
+              "quality: a cache blob's record count exceeds its remaining bytes — blob rejected" );
     return false;
 }
 
@@ -3490,7 +3491,7 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
             // the fprintf is the visible line in ALL build types (test/qsnapcachecheck.sh (e) gates on it);
             // DISCLOSE compiles out under NDEBUG.
             rw::emitRaw( stderr, "ripwire: quality: HEAD Snapshot cache corrupt — recomputing\n" );
-            DISCLOSE( "quality: HEAD Snapshot cache corrupt — recomputing" );
+            DISCLOSE( Diagnostics::answerUnchanged, "the corrupt cache is recomputed from the tree: same answer, slower", "quality: HEAD Snapshot cache corrupt — recomputing" );
         }
     }
 
@@ -3663,7 +3664,7 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
         if( hit == -1 )
         {
             rw::emitRaw( stderr, "ripwire: quality: window-ref body cache corrupt — recomputing\n" );
-            DISCLOSE( "quality: window-ref body cache corrupt — recomputing" );
+            DISCLOSE( Diagnostics::answerUnchanged, "the corrupt cache is recomputed from the tree: same answer, slower", "quality: window-ref body cache corrupt — recomputing" );
         }
     }
 

@@ -334,14 +334,16 @@ inline bool saveOracleCache( const std::string& path, const HistoryIndex& idx )
     if( !fp )
     {
         if( rawFd >= 0 ) { ::close( rawFd ); }
-        DISCLOSE( "gitoracle: cannot write the history cache — the probe stays correct but re-runs cold" );
+        DISCLOSE( Diagnostics::answerUnchanged, "the probe's answer is already computed: only the next run re-probes cold",
+                  "gitoracle: cannot write the history cache — the probe stays correct but re-runs cold" );
         return false;
     }
     const bool wrote  = std::fwrite( body.data(), 1, body.size(), fp ) == body.size();
     const bool closed = std::fclose( fp ) == 0;
     if( !wrote || !closed || !temp.commit( path ) )
     {
-        DISCLOSE( "gitoracle: history cache write/rename failed — the probe stays correct but re-runs cold" );
+        DISCLOSE( Diagnostics::answerUnchanged, "the probe's answer is already computed: only the next run re-probes cold",
+                  "gitoracle: history cache write/rename failed — the probe stays correct but re-runs cold" );
         return false;
     }
     return true;

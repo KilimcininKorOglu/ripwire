@@ -284,7 +284,12 @@ namespace mcpdetail
             (void) dirs; return;
 #else
             kq = ::kqueue();
-            if( kq < 0 ) { DISCLOSE( "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" ); return; }
+            if( kq < 0 )
+            {
+                DISCLOSE( Diagnostics::answerUnchanged, "the full stat sweep keeps the index exactly as fresh: only slower",
+                          "mcp watcher: kqueue() unavailable — falling back to stat-sweep freshness" );
+                return;
+            }
 
             dirFds.reserve( dirs.size() );
             for( const std::string& d : dirs )
@@ -301,7 +306,8 @@ namespace mcpdetail
                 }
                 if( !isRegistered )                                     // fd limit / unopenable dir → degrade whole
                 {
-                    DISCLOSE( "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
+                    DISCLOSE( Diagnostics::answerUnchanged, "the full stat sweep keeps the index exactly as fresh: only slower",
+                              "mcp watcher: dir watch failed (fd limit or unopenable dir) — falling back to stat-sweep freshness" );
                     reset();
                     return;
                 }
