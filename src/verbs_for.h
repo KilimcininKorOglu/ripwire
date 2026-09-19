@@ -2378,9 +2378,15 @@ std::optional<int> runForLens( const MainDispatch& d )
 
         // R2-AF (round 2, S4): resolved once, ahead of the header build below, so its legend clause can be
         // present-only in BOTH dialects. The rows themselves are emitted later (right after headerStr is
-        // flushed, before <sigs>) and are NOT charged against the H1 payload budget below — a small, bounded
-        // lookup, not a trimmable list; §R7's own clause bounds their bytes directly (any held-out row
-        // rising more than +365 B self-rejects). Not part of the --json dialect (that branch already
+        // flushed, before <sigs>) and are NOT charged against the H1 payload budget below (fixedBytes/
+        // sigsBudget below never add forHdrXml's size) — a small, bounded lookup, not a trimmable list. What
+        // bounds it is forNamedHeaderRows' own ENSURES(out.size()<=allNamed.size()) (mention.h): at most one
+        // row per distinct file the task text names, deduplicated — not a byte limit anywhere in this code.
+        // The "+365 B" figure is this ROUND's own measurement rule (read by the external eval/scoring harness
+        // that grades this round, not by ripwire) and MUST NOT be enforced here: a runtime byte cap on these
+        // rows could drop a correct row or make a correct answer wrong, which owner policy forbids a cap from
+        // doing (caps are blow-up guards only — see owner-cap-can-make-answer-wrong,
+        // owner-quality-first-caps-are-blowup-guards). Not part of the --json dialect (that branch already
         // returned above); the extra resolve on a --json call is cheap and unused, not wrong.
         const std::vector<rw::ForNamedHeaderRow> forHdrRows = rw::forNamedHeaderRows( ing, cfg.forTask );
 
