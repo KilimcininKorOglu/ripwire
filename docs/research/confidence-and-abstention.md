@@ -108,8 +108,9 @@ mapping, not the tool. What *can* be measured without inventing anything:
 
 The script imports that score's AUROC, confusion and sweep straight from
 `bench/arb/score_abstention_calibration.py`, and imports the split and the gold/hit definitions from
-`bench/locbench/run_locbench.py`, so a LocBench number and an ARB number cannot mean different things
-by "the registered rule". It owns no definition another artifact also owns.
+`bench/locbench/run_locbench.py`, and it invokes the binary through `run_arb.py`'s own `run_bin`, so
+a LocBench row and an ARB row are produced by the same call and cannot mean different things by "the
+registered rule" or by "how we run the tool". It owns no definition another artifact also owns.
 
 ### 3.2 Corpus, invocation and honesty boundaries
 
@@ -121,8 +122,9 @@ by "the registered rule". It owns no definition another artifact also owns.
   instance's own `base_commit`, proved by the checkout marker `run_locbench.py` writes. **214
   held-out rows were skipped because their snapshot is not on this disk** — a disclosed floor, not a
   filtered sample. Nothing was fetched.
-- **Zero silent skips otherwise:** `for_fail 0`, `index_fail 0`, `parse_fail 0`,
-  `non_ripwire_language 0`, `no_gold 0`.
+- **Zero silent skips otherwise:** `for_fail 0`, `index_fail 0`, `parse_fail 0`, `timeout 0`,
+  `non_ripwire_language 0`, `no_gold 0`. Every one of the 560 dataset rows lands in exactly one of
+  those buckets or in the 92.
 - **Invocation:** `ripwire <repo> --for="<first 1200 chars of the issue>"` — default flags. No
   `--top-k`, no `--adaptive`, no budget. That is the bundle an agent is actually handed. (Checked on
   two instances: neither `--top-k` nor `--pack-top-n` moved `confidence=`/`margin_pct=` on this
