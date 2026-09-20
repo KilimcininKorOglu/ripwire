@@ -15,6 +15,45 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `affected` and `rank_by` over MCP, so an agent can ask which tests to run and re-rank the map without leaving the server
+
+The MCP server exposed 31 tools and neither of these two, so an agent mid-task had to shell out to the CLI for
+"which tests reach what I just changed" and for a second ranking of the same graph. It now exposes 33.
+Both serve the CLI's own renderer rather than a second implementation of it:
+
+- **`affected`** — the twin of `--affected=F1,F2|SYM`. `--affected`'s resolve-and-render body moved out of the
+  CLI arm into `testmap.h::writeAffectedReport`, which both surfaces now call; the CLI arm is a wrapper that
+  adds its own stderr wording on the two failure returns. The payload is byte-identical to the CLI's at the
+  same legend posture, modulo `root=` (`.` on a relative CLI invocation against the absolute MCP `path`) —
+  measured on this repository over four selectors and three postures.
+- **`rank_by`** — the twin of `--rank-by=pagerank|authority|hub|rrf`, through the same `serialize()` call
+  `analyze` uses, varying the rank vector alone. `churn` and `churn-decay` are refused **by name**, with the
+  CLI command that answers them, rather than read as an unknown value or quietly served as `pagerank`: they
+  mine git history through the CLI's parsed-argument path, which this server does not build.
+
+Both declare `legend`, so they take their posture per request like the rest of the family — absent means
+compact, `legend:"full"` restores the prose legend byte-for-byte, and the rows do not move between the two.
+The `tools/list` manifest grows 43,500 → 46,371 B (method: `test/mcpmanifestcheck.sh`'s own formula — the
+compact JSON length of the served `tools` array — over one `tools/list` response on this repository's binary
+before and after; its 46,600 B ceiling is unmoved, with 229 B of headroom).
+
+### Fixed — `rank_by` over MCP no longer answers a different ranking than `--rank-by` on a tree with uncommitted changes
+
+The warm MCP index caches a rank vector that is deliberately personalized toward the uncommitted diff, which is
+right for `analyze` and wrong for a verb whose CLI twin runs an unbiased `rankGraph`. Reusing it made
+`rank_by` diverge from `--rank-by` on any dirty tree — same document size, different bytes, so nothing that
+compared lengths would have seen it. `rank_by` now computes a fresh unpersonalized rank unconditionally.
+Measured on this repository with two tracked files edited and uncommitted: the personalization really is live
+(`analyze` converges in 27 power iterations against the CLI map's 37), and all four `rank_by` modes are
+byte-identical to their CLI twins in every posture on that same tree.
+
+### Fixed — an MCP call that omits a required `files` argument is told which argument is missing
+
+The generic missing-required-field composer had no case for `files`, so it could not tell the field was absent
+and fell through to the unknown-tool path — which answered with the tool's own name as the thing it did not
+recognise. `affected` is the first tool whose required argument is `files`, which is where this surfaced.
+`affected` with no arguments now refuses with `-32602` and names the field and what it wants.
+
 ### Changed — the CLI's default legend is compact; `--legend=full` restores the prose legend
 
 Every XML answer now leads with the compact legend unless `--legend=full` is passed — `--for` included, whose
