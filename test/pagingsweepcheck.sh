@@ -95,6 +95,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 PREBIN="${RIPWIRE_PREBIN:-}"
@@ -104,10 +105,12 @@ ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write th
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
-# Inherited from a hook running the suite, these would aim every git and ripwire call below at the caller's
-# repository (GIT_COMMON_DIR too: it redirects refs even when GIT_DIR is unset): the paging fixture's own init/commit/branch calls, and the ref scans of the --whereis and
-# --stray-content rows, which must read ONLY the refs that fixture holds (see mkPagingFixture).
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+# Inherited from a hook running the suite, GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR would aim
+# every git and ripwire call below at the caller's repository (GIT_COMMON_DIR too: it redirects refs even
+# when GIT_DIR is unset) — the paging fixture's own init/commit/branch calls, and the ref scans of the
+# --whereis and --stray-content rows, which must read ONLY the refs that fixture holds (see
+# mkPagingFixture). The clearing this gate used to hand-roll here is now test/lib/clean-env.sh's, sourced
+# at the top, which also carries the object-directory names neither hand-rolled copy had.
 cd "$ROOT" || exit 2
 
 echo "pagingsweepcheck: BIN=$BIN  PREBIN=${PREBIN:-<none>}"

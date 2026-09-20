@@ -20,6 +20,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 FIX="$ROOT/test/fixture"

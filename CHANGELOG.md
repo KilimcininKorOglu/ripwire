@@ -362,6 +362,25 @@ Linux. Sixteen gates each hand-rolled the same detect-once-and-redefine fix inde
 `tempfilesymlinkcheck.sh` all now source the new shared `test/lib/statcompat.sh` instead — one place defines
 the GNU-vs-BSD `stat` compat logic, not seventeen. Centralised by **@s0undt3ch** in #298.
 
+### Fixed — a gate that builds a throwaway git repository could be aimed at the caller's repository instead
+
+`git -C DIR` changes the working directory; it does not override the environment, and `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_PREFIX` all outrank it. A gate that builds a fixture repo and
+asks it a question therefore answered from somebody else's repository whenever one of those was exported —
+by a git hook running the suite, a CI job, or a `git rebase` running the suite per commit — and then
+passed or failed on data it never
+selected. Measured at the reported call shape: with `GIT_DIR` set, `git -C "$REPO" init` created no `.git`
+under `$REPO` at all, the gate's own commit landed **in the ambient repository**, and `git -C "$REPO"
+rev-parse HEAD` read that foreign sha back, with the gate still reporting ALL PASS. The clearing joins the
+agent-home names in the shared `test/lib/clean-env.sh` rather than becoming a 156th call-site copy: **155
+gates** build a repo and were exposed, and the two that had already found this independently
+(`dispatchordercheck.sh`, `pagingsweepcheck.sh`) had hand-rolled partial lists that each missed names the
+other had. New gate `test/gitenvhermeticcheck.sh` proves the defect is live on this git, proves the helper
+fixes it, pins the variable list against the helper, and sweeps the tree for a repo-building gate that does
+not source it — with a control that strips the source line from a real gate and requires the sweep to flag
+the copy. (CodeRabbit review on the train-13 branch)
+
 ### Fixed — a gate that varies `HOME=` per invocation could still leak into an ambiently-set agent-home variable
 
 `CODEX_HOME`/`AGENTS_HOME`/`HERMES_HOME`/`CLAUDE_CONFIG_DIR`/`RIPWIRE_DATA_HOME` override the default an

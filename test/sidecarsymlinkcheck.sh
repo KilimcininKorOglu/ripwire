@@ -166,6 +166,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 . "$ROOT/test/lib/statcompat.sh"
 # BOTH seams: regression.sh and every differential run pass the binary POSITIONALLY; RIPWIRE_BIN is the
 # env form. A gate reading only one of them comes back ALL PASS against whatever is in build/ during a

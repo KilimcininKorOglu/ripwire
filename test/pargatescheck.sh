@@ -25,6 +25,7 @@
 #                                       binary under test)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 PARGATES="$ROOT/test/pargates.py"
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }

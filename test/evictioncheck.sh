@@ -48,6 +48,7 @@
 # Usage:  test/evictioncheck.sh   |   RIPWIRE_BIN=build_r2a1/ripwire test/evictioncheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 . "$ROOT/test/lib/statcompat.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"

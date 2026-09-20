@@ -45,6 +45,7 @@
 #         RIPWIRE_BIN=asan/ripwire test/churnjoincheck.sh   # env seam
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"       # BOTH seams — positional and env
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0

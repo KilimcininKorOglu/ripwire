@@ -32,6 +32,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 # BOTH seams. This gate took RIPWIRE_BIN only, so `bash test/multirootcheck.sh <base>/ripwire` SILENTLY ran
 # against build/ripwire — a red-first run against a pre-fix binary passed for the wrong reason (trap #20).
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"

@@ -16,6 +16,7 @@
 set -u
 
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 fail=0
 

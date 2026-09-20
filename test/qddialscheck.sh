@@ -22,6 +22,7 @@
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/qddialscheck.sh
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"   # BOTH seams: positional AND env (a red-first run hands the pre-change binary in)
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0

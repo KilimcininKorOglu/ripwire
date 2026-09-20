@@ -2,6 +2,7 @@
 # codexdoctorcheck.sh — isolated active-surface gate for `--doctor --agent=codex`.
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
