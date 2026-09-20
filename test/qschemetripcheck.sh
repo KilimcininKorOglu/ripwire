@@ -34,6 +34,25 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-09-20, TRAIN 13 (integration/train-13 on main ae6e3e7a: lane/t13-contrib-finish a7281dea,
+#   lane/t13-honesty-fixes 0cf97744): RE-DERIVED ON THE FINAL MERGED TREE with UPDATE_GOLDEN=1.
+#   TWO manifest inputs move, both from the honesty lane:
+#     (a) ingest_cache.h's kParserVer 118 -> 119 (fix 3 re-captures a Java/Kotlin `import` as
+#         @reference.import instead of @reference.call — an extraction-shape change, so the bump is
+#         mandatory), mirrored in quality.h's kIngestParserVerMirror in the same commit (static_assert).
+#     (b) computeDelta gains reportReusedClones's two clone-group demotions (fix 2): the all-test-script
+#         skip and the idiom -> minor demotion, both copied verbatim from its sibling reportNewClones.
+#   NO kQSnapCacheScheme BUMP (stays 14). Neither input changes what a cached Snapshot MEANS: (b) is a
+#   report-time demotion inside computeDelta — the clone groups it reads, their identity, the dead set and
+#   the serialized fields are all untouched, and a blob written before it holds exactly the same entries.
+#   (a) changes extraction, which is precisely what kParserVer exists to invalidate, and it does so at a
+#   coarser grain than the scheme would: MEASURED on test/kotlinfix with RIPWIRE_DATA_HOME pointed at a
+#   scratch dir, a blob written by ae6e3e7a is REFUSED by this build, cold and warm alike --
+#     ripwire: cache .../ripwire-85882b163b917aea-lean.bin: parser-version — not used; this run parses
+#              from source and rewrites it
+#     [math degraded] ingest: cache blob parserVer mismatch (older binary ...) — rejected and rebuilt
+#   and both runs answer files=3 symbols=31 edges=14, against ae6e3e7a's 32/15. So no stale blob survives
+#   to be believed, and the scheme number would add nothing the parser version has not already refused.
 # 2026-09-20, TRAIN 12 (integration/train-12 on main 755f9026: lane/t12-filescope-calls 31d96f40,
 #   lane/t12-qd-noop-diff d54ce3da, lane/t12-lineage-graft 9a756bb6): RE-DERIVED ON THE FINAL MERGED TREE with
 #   UPDATE_GOLDEN=1. TWO members move manifest text, not one. The qd-noop lane's own entry is below; the

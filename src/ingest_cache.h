@@ -249,7 +249,21 @@ constexpr std::uint32_t kCacheVersion = 24;           // 24: RawRef gains `viaAr
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 118;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 119;          // bump on any grammar/.scm/extraction change
+                                                      // 119 = 2026-09-20 (T13/fix3): queries/java/tags.scm
+                                                      //   and queries/kotlin/tags.scm's import captures were
+                                                      //   @reference.call — an import is a dependency edge,
+                                                      //   not a call, and since #60 gave top-level statements
+                                                      //   a <file-scope> owner, an import line got a REAL
+                                                      //   caller edge: --callers=/--impact= fan-in on a
+                                                      //   Java/Kotlin symbol was inflated by one phantom
+                                                      //   "caller" per importing file. Both now spell
+                                                      //   @reference.import (RefRole::Import), the same
+                                                      //   mechanism C++'s `using ns::name;` already uses —
+                                                      //   still a role="import" --uses site, never a call-
+                                                      //   graph edge (graph.h isResolvableCallReference is
+                                                      //   Call+Macro only). A cache written before this
+                                                      //   double-counts every JVM import as a caller.
                                                       // 118 = 2026-09-19 (CodeRabbit follow-up, thread
                                                       //   4053600599: isJsxIntrinsicTagIdentifier
                                                       //   (src/ingest_names.h) tested `!isUppercase`, which kept

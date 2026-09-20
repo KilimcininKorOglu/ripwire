@@ -18,6 +18,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 # Both seams: a positional argument wins, then RIPWIRE_BIN, then the dev build. The positional form is what
 # a red-first run uses (`bash test/notescheck.sh <scratch>/base_w3`) and this gate only had the env one.
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"

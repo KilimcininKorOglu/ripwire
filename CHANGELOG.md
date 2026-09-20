@@ -15,6 +15,55 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--dead-code` no longer claims a confidence its evidence cannot support
+
+Every `--dead-code` root carried `confidence="high"`, hardcoded: nothing in the candidate loop — internal
+linkage plus zero indexed callers — varied it, so the attribute was a constant wearing the shape of a
+finding. The claim is also the one most likely to be acted on destructively, since the row an agent deletes
+on a false "high" is live code reached by a virtual call, a reflection hook or a macro-generated caller,
+none of which a name-based graph can see. The attribute is **removed** rather than replaced by a derived
+number: there is no per-finding signal to derive one from, and `evidence="internal-linkage+zero-callers"`
+already states the one thing the code actually knows. The full and compact legends, `--help` for
+`--dead-code` and for `--safe-delete`'s `dead_code_candidate=`, and four skills that asserted the
+confidence in prose all say the same thing now. `test/deadprecisioncheck.sh` asserts the attribute is
+absent — the arm that used to pin the bug.
+
+### Fixed — `reuse-decline` fired on clone groups `duplication` already exempts
+
+`reportReusedClones` (kind `new-clone-of-reused-helper`) reads the same clone vectors as its sibling
+`reportNewClones` (kind `duplication`) but carried neither of that sibling's two demotions: the
+all-test-script skip, which exempts a group of sibling gate scripts repeating the house harness
+boilerplate by convention, and the idiom→minor demotion. So a shell gate script cloning the house test
+helper was exempt as `duplication` and gating as `reuse-decline`, from the same input — and that shape is
+where the kind's one real-history firing came from. Both demotions are now applied identically in both
+reporters.
+
+### Fixed — a Java or Kotlin `import` is a dependency edge, not a call
+
+`queries/java/tags.scm` and `queries/kotlin/tags.scm` captured an `import_declaration`/`import_header` as
+`@reference.call`. That was inert while nothing owned a reference written outside every named definition;
+once a top-level statement gained a `<file-scope>` owner (#60), an import line minted a real caller edge
+and inflated `--callers=`/`--impact=` fan-in by one phantom caller per importing file. Both queries now
+capture `@reference.import`, which routes to the existing `RefRole::Import` the C++ `using ns::name;` form
+already used: the import stays fully visible on `--uses` as a `role="import"` use-site, and is excluded from
+the call-graph CSR. No new C++ — the two query files are the whole change. `kParserVer` moves 118 → 119, so
+any cache written by an earlier binary is refused and reparsed. Every other indexed language was checked:
+Java and Kotlin were the only two that captured an import-shaped construct as a call.
+
+A .kt file has no executable top level, so with this the Kotlin fixture correctly carries **no** module-scope
+owner at all; `test/kotlincheck.sh` §1a pins that whole chain — no owner minted, the import still visible
+with `role="import"`, and `square`'s fan-in counting real functions only.
+
+### Fixed — unseeded `--slice-flow=both` now says that it adds nothing the flat rows do not
+
+Unioned over a function's whole variable inventory, `--slice-flow=both`'s reach is byte-identical to the
+union of the flat rows, which holds by construction: every flow row at depth ≥ 1 lands on an occurrence of
+some other sliceable local, and that is already a row of *that* local's flat slice. Seeded with `--at=`, the
+same analysis adds real reach. The unseeded case is not refused — the answer it returns is correct, just no
+more informative — it is **disclosed**: the `<slice>` root carries `flow_redundant="1"` exactly when
+`--slice-flow=both` runs with no `--at=` seed, never on `back`/`fwd` alone and never on a seeded run, with
+one line in the legend pointing at the seed.
+
 ### Fixed — a call written outside every named function now has a caller, so `callers`, `impact`, `affected` and `test-gate` stop answering one short (#60)
 
 A reference was attributed to the innermost definition whose span contains it, so a call written where no
@@ -300,6 +349,68 @@ the arm compares normally. When an arm is still refused, the root carries `reaso
 `reason="tree_unavailable"` — present only when `ok="0"`, and written in every build flavour, not only in a
 debug trace. Both `ok=` postures and `reason=` are defined in the legend. Gates:
 `test/scoutheadconflictcheck.sh` arms T9(a)–(e), `test/mergescoutcheck.sh`. (CodeRabbit review on #295)
+
+### Fixed — sixteen gates now share one GNU/BSD `stat` compat helper instead of a per-gate copy
+
+`stat -f` is GNU coreutils' filesystem-stat flag, not BSD's format-string flag, so it succeeds with junk
+instead of failing — a caller-local `stat -f ... || stat -c ...` one-liner never reaches its own fallback on
+Linux. Sixteen gates each hand-rolled the same detect-once-and-redefine fix independently:
+`cachehashcheck.sh`, `cachesplitcheck.sh`, `clonecachecheck.sh`, `codexpromptroutecheck.sh`,
+`evictioncheck.sh`, `g1freshcheck.sh`, `headsnapcachecheck.sh`, `mcpeditmodecheck.sh`,
+`portablecachecheck.sh`, `prcontextcheck.sh`, `qsnapcachecheck.sh`, `qsnapprefetchcheck.sh`,
+`statgatecheck.sh`, `cacheisolationcheck.sh`, `qsnapproducercheck.sh`, `sidecarsymlinkcheck.sh` and
+`tempfilesymlinkcheck.sh` all now source the new shared `test/lib/statcompat.sh` instead — one place defines
+the GNU-vs-BSD `stat` compat logic, not seventeen. Centralised by **@s0undt3ch** in #298.
+
+### Fixed — a gate that builds a throwaway git repository could be aimed at the caller's repository instead
+
+`git -C DIR` changes the working directory; it does not override the environment, and `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_PREFIX` all outrank it. A gate that builds a fixture repo and
+asks it a question therefore answered from somebody else's repository whenever one of those was exported —
+by a git hook running the suite, a CI job, or a `git rebase` running the suite per commit — and then
+passed or failed on data it never
+selected. Measured at the reported call shape: with `GIT_DIR` set, `git -C "$REPO" init` created no `.git`
+under `$REPO` at all, the gate's own commit landed **in the ambient repository**, and `git -C "$REPO"
+rev-parse HEAD` read that foreign sha back, with the gate still reporting ALL PASS. The clearing joins the
+agent-home names in the shared `test/lib/clean-env.sh` rather than becoming a 156th call-site copy: **155
+gates** build a repo and were exposed, and the two that had already found this independently
+(`dispatchordercheck.sh`, `pagingsweepcheck.sh`) had hand-rolled partial lists that each missed names the
+other had. New gate `test/gitenvhermeticcheck.sh` proves the defect is live on this git, proves the helper
+fixes it, pins the variable list against the helper, and sweeps the tree for a repo-building gate that does
+not source it — with a control that strips the source line from a real gate and requires the sweep to flag
+the copy. (CodeRabbit review on the train-13 branch)
+
+### Fixed — a gate that varies `HOME=` per invocation could still leak into an ambiently-set agent-home variable
+
+`CODEX_HOME`/`AGENTS_HOME`/`HERMES_HOME`/`CLAUDE_CONFIG_DIR`/`RIPWIRE_DATA_HOME` override the default an
+agent's tools derive from `HOME`, so a gate that only sets `HOME=` per invocation is not actually sandboxed
+on a machine where any of these is already exported ambiently. `codexpromptroutecheck.sh`,
+`claudeconfigdircheck.sh`, `skillinstallcheck.sh` and `hermesinstallcheck.sh` now source the new shared
+`test/lib/clean-env.sh` before varying `HOME=`, closing that leak in each. `claudeconfigdircheck.sh` — the
+gate that exists specifically to test `CLAUDE_CONFIG_DIR` relocation — was the one this hit hardest: with
+`CLAUDE_CONFIG_DIR` exported ambiently (a developer whose real Claude Code config is relocated, exactly the
+case this gate tests for), its "unset" baseline arm wrote real files into that directory and then failed
+comparing against its own contaminated baseline. Found and closed by **@s0undt3ch** in #298; carrying the
+same shape through the rest of the suite closed six more — `hookcheck.sh`, `routehookcheck.sh`,
+`agenttablecheck.sh`, `codexinstallhonestycheck.sh`, `meterdisclosurecheck.sh` and `releaseinstallcheck.sh`.
+
+### Added — the advertised MCP verb roster is pinned by deriving it, so a count-preserving rename cannot slip through
+
+`test/mcpverbscheck.sh` checked that `tools/list` advertises the expected *number* of verbs, which a rename
+that swaps one name for another passes unchanged — and a renamed verb is a silently broken contract for every
+agent that had wired up the old name. The gate now derives the roster from a live `tools/list` call and
+compares the **names**, all 33 of them. Proved against the mutation it exists for: planting an added verb, a
+removed verb and a count-preserving rename in the served stanza all redden the new arm, and the rename case
+leaves the old count-only check green — which is the gap. Contributed by **@pt-act** in #291.
+
+### Fixed — two documentation claims that described behaviour the binary does not have
+
+`--expand=SYM` on an ambiguous name was documented without the scoping the disclosed `topk_default="0"`
+actually applies, and the directory-of-repos row described a guard that does not exist, where the real
+behaviour is a silent merge. Both corrected in `README.md` and in the `ripwire-navigate` and `ripwire-orient`
+skills, against a built binary rather than from reading the source. Contributed by **@llvm-x86** in #302,
+who built the Flask fixture that found them.
 
 ### Fixed — an ambiguous `--expand` buried its body behind the ranked map, and the escape hatch was stderr-only
 

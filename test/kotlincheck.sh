@@ -141,7 +141,7 @@ command -v xmllint >/dev/null 2>&1 && { if xmllint --noout "$MAP_OUT"; then ok "
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo
-echo "=== 1. STRUCTURE: 3 files / 32 symbols / 15 edges, and no ambiguity left ==="
+echo "=== 1. STRUCTURE: 3 files / 31 symbols / 14 edges, and no ambiguity left ==="
 # ═══════════════════════════════════════════════════════════════════════════
 # symbols=31: the original port's 26, §11's bodyless Taggable collision pair (Kotlin's interface, Java's class and its one
 # method: 3, and no call edges, since neither is constructed or invoked), and §3's Java-only bridge pair (useJavaOnly, javaOnly). edges=14: the helper
@@ -155,37 +155,38 @@ echo "=== 1. STRUCTURE: 3 files / 32 symbols / 15 edges, and no ambiguity left =
 # `grep -o 'edges=[0-9]*'` matches the legend's bare `edges=` FIRST and a failure message reports an empty
 # count for an attribute the document states correctly. Every diagnostic below reads the one run of
 # `files=N symbols=N edges=N ... ambiguous=N unresolved=N` instead (train-12: the empty `edges=` in the
-# #60 re-pin round came from this grep, not from the binary, which said edges=15 throughout).
+# #60 re-pin round came from this grep, not from the binary, which stated its edge count throughout).
 hdrCounts(){ grep -oE 'files=[0-9]+ symbols=[0-9]+ edges=[0-9]+[^>]*' "$MAP_OUT" | head -1; }
-if grep -q 'files=3 symbols=32 ' "$MAP_OUT"; then ok "header: files=3 symbols=32"; else no "header: expected files=3 symbols=32: $( hdrCounts )"; fi
-if grep -q ' edges=15 ' "$MAP_OUT"; then ok "header: edges=15"; else no "header: expected edges=15: $( hdrCounts )"; fi
+if grep -q 'files=3 symbols=31 ' "$MAP_OUT"; then ok "header: files=3 symbols=31"; else no "header: expected files=3 symbols=31: $( hdrCounts )"; fi
+if grep -q ' edges=14 ' "$MAP_OUT"; then ok "header: edges=14"; else no "header: expected edges=14: $( hdrCounts )"; fi
 if grep -q ' ambiguous=0 ' "$MAP_OUT"; then ok "header: ambiguous=0"; else no "header: expected ambiguous=0: $( hdrCounts )"; fi
 if grep -q 'unresolved=0' "$MAP_OUT"; then ok "header: unresolved=0"; else no "header: expected unresolved=0: $( hdrCounts )"; fi
 
-# ── §1a. WHY THE 32nd SYMBOL EXISTS — and why a .kt file has a module scope at all ─────────────────
+# ── §1a. WHY A .kt FILE HAS NO MODULE SCOPE — the control on "an import is not a caller" ──────────
 # Kotlin has NO executable top level. Every statement lives in a function, a class or an initialiser, so a
-# t="modscope" owner in a .kt file cannot come from top-level code — and if #60's mint were simply wrong
-# for Kotlin, this is where it would show. It is not wrong: it owns exactly one reference, Greeter.kt:3's
-# `import com.example.util.square`, which queries/kotlin/tags.scm captures as @reference.call ON PURPOSE
-# (mirroring queries/java/tags.scm, whose note carries the full reasoning). An import sits outside every
-# named definition, so it gets the file's owner, and `square` gains a second caller.
+# t="modscope" owner in a .kt file can only come from a reference captured OUTSIDE every named definition.
+# The one such reference in this fixture is Greeter.kt:3's `import com.example.util.square`, and T13/fix3
+# re-captured it as @reference.import in queries/kotlin/tags.scm: an import is a dependency edge, not a
+# call, so graph.h's isResolvableCallReference (Call+Macro only) keeps it out of the call-graph CSR and
+# #60's mint has nothing to own. The fixture therefore carries ZERO module-scope owners — which is the
+# right answer for a language with no top-level code, and the reason symbols/edges read 31/14 and not
+# 32/15.
 #
-# THE PIN IS THE WHOLE CHAIN, not the count: the owner exists, it owns the IMPORT LINE and nothing else,
-# and the resulting caller is the owner rather than any real Kotlin function. If someone later decides an
-# import is not a caller and re-captures it as @reference.import, this arm goes red and names the decision
-# instead of a number quietly moving. It predates #60 — on 755f9026 the same reference already read
-# role="call" — so the count that moved is a consequence, not a regression.
+# THE PIN IS THE WHOLE CHAIN, not the count: no owner is minted, the import is STILL VISIBLE on --uses
+# with role="import" (recategorized, never dropped), and `square`'s fan-in counts real functions only.
+# If someone re-captures the import as @reference.call, all three arms go red and name the decision
+# instead of a number quietly moving.
 KT_MS="$( "$BIN" "$FIX" --no-cache '--graph-query=kind(all,modscope)' 2>/dev/null )"
-printf '%s' "$KT_MS" | grep -q 'count="1"' && printf '%s' "$KT_MS" | grep -q 'p="Greeter.kt:1"' \
-    && ok '(1a) exactly ONE module-scope owner, in Greeter.kt (Kotlin has no executable top level)' \
-    || no "(1a) module-scope owners in the Kotlin fixture are not the expected single Greeter.kt one: $( printf '%s' "$KT_MS" | grep -o '<s [^>]*>' | tr '\n' ' ' )"
-KT_MSU="$( "$BIN" "$FIX" --no-cache --uses=square 2>/dev/null | grep -o '<u [^>]*in_id="&lt;file-scope&gt;"[^>]*>' )"
-printf '%s' "$KT_MSU" | grep -q 'p="Greeter.kt:3"' && printf '%s' "$KT_MSU" | grep -q 'role="call"' \
-    && ok '(1a) the owner owns the IMPORT line (Greeter.kt:3, role="call" by tags.scm design), not executable code' \
-    || no "(1a) the file-scope-owned use of square is not Greeter.kt:3's import: $KT_MSU"
-[ "$( printf '%s' "$KT_MSU" | grep -c 'in_id' )" = 1 ] \
-    && ok '(1a) the import is the ONLY reference the owner owns — no real Kotlin statement was re-parented' \
-    || no "(1a) the owner owns more than the import line: $KT_MSU"
+printf '%s' "$KT_MS" | grep -q 'count="0"' \
+    && ok '(1a) ZERO module-scope owners in the Kotlin fixture (no top-level code, and an import is not a call)' \
+    || no "(1a) the Kotlin fixture minted a module-scope owner it has no top-level code for: $( printf '%s' "$KT_MS" | grep -o '<s [^>]*>' | tr '\n' ' ' )"
+KT_USES="$( "$BIN" "$FIX" --no-cache --uses=square 2>/dev/null )"
+printf '%s' "$KT_USES" | grep -q '<u role="import" p="Greeter.kt:3"' \
+    && ok '(1a) the import is still VISIBLE on --uses, as role="import" at Greeter.kt:3 — recategorized, not dropped' \
+    || no "(1a) Greeter.kt:3's import is missing or not role=\"import\" on --uses=square: $( printf '%s' "$KT_USES" | grep -o '<u [^>]*>' | tr '\n' ' ' )"
+printf '%s' "$KT_USES" | grep -q 'in_id="&lt;file-scope&gt;"' \
+    && no "(1a) a file-scope owner still owns a reference in a .kt file: $( printf '%s' "$KT_USES" | grep -o '<u [^>]*in_id="&lt;file-scope&gt;"[^>]*>' )" \
+    || ok '(1a) no reference in the Kotlin fixture is owned by a <file-scope> owner'
 
 grep -q 'n="of" sc="Greeter"' "$MAP_OUT" && ok 'scope: companion-object factory carries sc=Greeter (id Greeter.kt::Greeter::of)' \
     || no "scope: Greeter::of id missing — kotlinEnclosingScopeOf regressed: $( grep -o 'n="of"[^>]*' "$MAP_OUT" )"
@@ -252,7 +253,7 @@ echo "$DEPS" | grep -qE 'dep_langs="[^"]*,kt[,"]' && ok '--deps health: dep_lang
 SK="$( "$BIN" "$FIX" --skipped --no-cache 2>/dev/null )"
 echo "$SK" | grep -q 'unsupported_ext="0"' && ok '--skipped: unsupported_ext=0 (no .kt/.java falls out of the index)' \
     || no "--skipped: expected unsupported_ext=0: $( echo "$SK" | grep -o 'unsupported_ext="[0-9]*"' )"
-echo "$SK" | grep -q '<lang n="kt" files="2" symbols="24"/>' && ok '--skipped: <lang n="kt" files="2" symbols="24"/> census row' \
+echo "$SK" | grep -q '<lang n="kt" files="2" symbols="23"/>' && ok '--skipped: <lang n="kt" files="2" symbols="23"/> census row' \
     || no "--skipped: kotlin census row missing/wrong: $( echo "$SK" | grep -o '<lang n="kt"[^/]*/>' )"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -396,14 +397,14 @@ open(p, "w").write(s.replace(old, new, 1))
 # 7a. rename the cross-file call target (greet -> square) — the edge must vanish, proving §1's
 #     --callers=square assertion is not a tautology.
 mutate
-# RE-AIMED 2026-09-20 (train-12, issue #60). This arm asked "is there ANY <c n=\"square\"/> left in the
-# document", which was a correct proxy while `greet` was square's only caller. It is not one now: §1a's
-# import reference is a second, independent caller, so the old form went red on a mutation that worked
-# perfectly — the arm had stopped measuring the edge it names. It now asserts the NAMED edge through the
-# same verb §1 uses: greet must be gone from --callers=square, and the count must fall by exactly one.
-# Both halves matter. "greet absent" alone would pass on a binary that lost every edge; "count=1" alone
-# would pass if the WRONG caller had dropped out. Together they still fail on the bug this arm was
-# written for — an edge that survives a renamed call site.
+# RE-AIMED 2026-09-20 (train-12, issue #60), RE-DERIVED 2026-09-20 (train-13, fix 3). Train 12 re-aimed
+# this arm at the NAMED edge because §1a's import had become a second caller and the old "is there ANY
+# <c n=\"square\"/> left" form went red on a mutation that worked perfectly. Fix 3 removed that second
+# caller again — an import is no longer a call — so `greet` is once more square's ONLY caller and the
+# count falls 1 -> 0. The named-edge form is kept, because it is the better arm either way: "greet absent"
+# alone would pass on a binary that lost every edge, and a bare count alone would pass if the WRONG caller
+# had dropped out. Together they still fail on the bug this arm was written for — an edge that survives a
+# renamed call site.
 pyedit "$TMP/mut/Greeter.kt" 'val doubled = square(2)' 'val doubled = squareX(2)' \
     && { "$BIN" "$TMP/mut" --no-cache >"$TMP/mut.xml" 2>/dev/null; MUT_RC=$?
          MUT_CR="$( "$BIN" "$TMP/mut" --no-cache --callers=square 2>/dev/null )"
@@ -411,10 +412,10 @@ pyedit "$TMP/mut/Greeter.kt" 'val doubled = square(2)' 'val doubled = squareX(2)
              no "mutation 7a: binary exited $MUT_RC on the mutated fixture — absent output means a crash, not proof the edge vanished"
          elif printf '%s' "$MUT_CR" | grep -q 'n="greet"'; then
              no "mutation: greet -> square edge survived a renamed call site (tautology): $( printf '%s' "$MUT_CR" | grep -o '<callers [^>]*>' )"
-         elif ! printf '%s' "$MUT_CR" | grep -q 'count="1"'; then
-             no "mutation: --callers=square should fall 2 -> 1 (greet gone, §1a's import owner left), got: $( printf '%s' "$MUT_CR" | grep -o 'count="[0-9]*"' | head -1 )"
+         elif ! printf '%s' "$MUT_CR" | grep -q 'count="0"'; then
+             no "mutation: --callers=square should fall 1 -> 0 (greet was its only caller; an import is not one), got: $( printf '%s' "$MUT_CR" | grep -o 'count="[0-9]*"' | head -1 )"
          else
-             ok "mutation: renamed square() call site -> greet -> square edge vanished (--callers=square 2 -> 1, only the file-scope import owner left)"
+             ok "mutation: renamed square() call site -> greet -> square edge vanished (--callers=square 1 -> 0)"
          fi; } \
     || no "mutation 7a: the call-site rename did not apply — the arm would have been inert"
 

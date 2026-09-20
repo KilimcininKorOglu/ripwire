@@ -297,7 +297,7 @@ struct Config
     bool             compress        = false;              // --compress: strip comments + blank runs from --expand/--outline body output (P2-B)
     bool             baseline        = false;              // --baseline: write .ripwire_arch_baseline sidecar (accept current debt), exit 0
     bool             baselineUpdate  = false;              // --baseline-update: merge current violations into baseline (accept new debt), exit 0
-    bool             deadCode        = false;              // --dead-code[=DIR]: internal source functions with zero indexed callers (high-confidence candidates)
+    bool             deadCode        = false;              // --dead-code[=DIR]: internal source functions with zero indexed callers (a name-based graph reading, not a confidence score)
     std::string_view deadCodeDir;                          // --dead-code=DIR: restrict scan to DIR — matched as WHOLE path components (a dir, a nested dir, or a filename); a filter naming nothing indexed REFUSES (§P0.3). Leading ./ anchors DIR at the repo root instead of matching that component anywhere (§A10.6)
     bool             qualityBaseline = false;              // --quality-baseline: snapshot ccx/clones/dead to .ripwire_quality_baseline
     bool             allowDirty      = false;              // --allow-dirty: let --quality-baseline pin on a tree that DIFFERS from HEAD (H11) — the sidecar is
@@ -327,7 +327,7 @@ struct Config
     std::string_view safeDeleteSym;                        // --safe-delete=SYM: "can I delete this?" composed from signals the tool already
                                                             // computes — 1-hop callers, the transitive --impact blast radius, every --uses
                                                             // read/write/import/call/extends site, how much of the radius the tested= lens
-                                                            // covers, and --dead-code's own high-confidence shape at defs=1. FACTS only:
+                                                            // covers, and --dead-code's own zero-caller/internal-linkage shape at defs=1. FACTS only:
                                                             // risk= names what was found (none-found/uses-exist/untested-radius), never a
                                                             // go/no-go verdict. file:name disambiguates like --around/--lego.
     std::string_view sliceSpec;                            // --slice=SYM[:VAR] (lane/paper-slice): NAME-BASED intra-procedural def-use
@@ -1609,7 +1609,7 @@ inline constexpr char kHelpHead[] =
         "                               An @FILE:LINE seed rebinds to the innermost enclosing definition (sym= names it) and\n"
         "                               analyses exactly that definition's file\n"
         "    --dead-code[=DIR]          list internal functions with no caller anywhere in the indexed tree\n"
-        "                               high-confidence internal source functions with no caller in the indexed tree; =DIR scopes to whole path components (dir or filename) and REFUSES a filter that names nothing indexed.\n"
+        "                               internal source functions with no caller found in the indexed tree — a name-based graph reading, not a confidence score (dynamic dispatch, reflection and macro-generated callers are invisible to it); =DIR scopes to whole path components (dir or filename) and REFUSES a filter that names nothing indexed.\n"
         "                               A symbol whose definition is produced by a SELF-REGISTERING test/benchmark macro is never reported: doctest TEST_CASE/\n"
         "                               TEST_CASE_FIXTURE/SCENARIO, gtest TEST/TEST_F/TEST_P, Catch2, Google Benchmark — a static initializer registers them, so a\n"
         "                               name-based call graph cannot see the caller and every one of them would be a false positive. Extend the list for your own\n"
@@ -1801,7 +1801,7 @@ inline constexpr char kHelpHead[] =
         "                               already-resolved SYM: 1-hop callers=, the transitive --impact blast radius (impact_reaches=),\n"
         "                               every --uses read/write/import/call/extends site (uses=), how much of the blast radius the\n"
         "                               tested= lens covers (tested_self=/radius_tested=/radius_untested=), and --dead-code's own\n"
-        "                               high-confidence shape at defs=1 (dead_code_candidate=). ambiguous_callers= names callers\n"
+        "                               zero-caller/internal-linkage shape at defs=1 (dead_code_candidate=). ambiguous_callers= names callers\n"
         "                               whose own calls include an ambiguously-resolved one (g.ambOut) — a caveat, not a count of\n"
         "                               proven-wrong edges. FACTS only: risk= names what was found — none-found (zero callers AND\n"
         "                               zero uses), untested-radius (a radius exists and none of it is test-covered), or\n"
@@ -1867,6 +1867,10 @@ inline constexpr char kHelpHead[] =
         "                               CHAINING (a multi-LINE statement chains as ONE unit), a shadowed name's bindings walk\n"
         "                               separately (never into each other's block), data dependence only — no control\n"
         "                               dependence (the guard deciding whether a def executes is never a row).\n"
+        "                               both= is UNSEEDED-REDUNDANT: unioned over a function's whole variable inventory, an\n"
+        "                               unseeded both reaches no line the flat rows (bare --slice=SYM lists them) do not —\n"
+        "                               disclosed as flow_redundant=\"1\", never gated. Seed it (--at=FILE:LINE) for flow to\n"
+        "                               add real reach beyond the flat inventory (measured, docs/research).\n"
         "    --slice-depth=N            (with --slice-flow) bound the walk at N hops; 1..32, default 8\n"
         "                               the --slice-flow BFS depth bound, 1..32 (default 8, always disclosed as depth= on the\n"
         "                               root). A bound that cuts a live frontier is disclosed as flow_truncated=\"1\" — a short\n"

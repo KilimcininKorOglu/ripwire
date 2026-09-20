@@ -1984,7 +1984,8 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             return sa.name < sb.name;
         } );
 
-        rw::emitTo( stdout, "<!-- ripwire dead-code: high-confidence source functions with internal linkage and no caller in the indexed tree. "
+        rw::emitTo( stdout, "<!-- ripwire dead-code: source functions with internal linkage and no caller found in the indexed tree — a name-based "
+                     "graph reading, not a confidence judgement (dynamic dispatch, reflection and macro-generated callers are invisible to it). "
                      "A bare-name filter matches by path COMPONENT: filter=\"src\" keeps any path with a src segment at any depth "
                      "(test/x/src/y.cpp included); anchor with ./ (filter=\"./src\") to pin the root-level directory only. "
                      "register-macro-excluded= counts symbols excluded because their OWN definition is a registered "
@@ -2010,7 +2011,7 @@ std::optional<int> runQualityViews( const MainDispatch& d )
             std::vector<char> dcFiltEsc;
             dcFilterAttr = " filter=\"" + std::string( escapeXml( cfg.deadCodeDir, dcFiltEsc ) ) + "\"";
         }
-        rw::emitTo( stdout, "<dead-code count=\"{}\" confidence=\"high\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}>",
+        rw::emitTo( stdout, "<dead-code count=\"{}\" evidence=\"internal-linkage+zero-callers\" register-macro-excluded=\"{}\"{}{}{}{}{}>",
                      candidates.size(), registerMacroExcluded,
                      dcFilterAttr.c_str(),
                      pageDisclosure( dcAb, sizeof( dcAb ), dcPw.end - dcPw.begin, candidates.size(), dcPw.end,

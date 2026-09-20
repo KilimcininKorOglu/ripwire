@@ -10,6 +10,7 @@
 # Usage:  test/sincewindowcheck.sh   |   RIPWIRE_BIN=asan/ripwire test/sincewindowcheck.sh
 # Exits non-zero on any failure. Self-contained (own temp dirs). Does NOT edit test/regression.sh. Needs git.
 set -u
+. "$( cd "$( dirname "$0" )" && pwd )/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-./build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$PWD/$BIN"
 fail=0
